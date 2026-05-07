@@ -5,6 +5,21 @@
 //!
 //! See: docs/specs/2026-05-07-buiy-foundation/architecture.md § 2.3 and
 //! accessibility.md (Focus management).
+//!
+//! # Phase 0 deferred behavior
+//!
+//! - **Auto tab order is `entity.index()`-based, not full "document order".**
+//!   Bevy reuses entity indices after despawn; for two `Focusable`s with
+//!   `tab_order = 0`, the resolved order depends on entity-index allocation,
+//!   not insertion order. Insertion-order stability is owned by
+//!   `buiy-focus-model-design`.
+//! - **`FocusVisible` is set to `true` on Tab and never reset to `false`.**
+//!   Pointer-driven focus paths (which clear `FocusVisible`) live in
+//!   `buiy-focus-model-design`; Phase 0 is keyboard-only so the always-true
+//!   state is correct for Phase 0 consumers.
+//! - **Shift detection covers `ShiftLeft`/`ShiftRight` only.** Sticky-keys /
+//!   accessibility-shell remappings of Shift to other key codes are out of
+//!   scope; full key-binding abstraction lives in `buiy-input-events-design`.
 
 use crate::BuiySet;
 use bevy::prelude::*;
