@@ -1,0 +1,41 @@
+[package]
+name = "buiy_workspace"
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Workspace root package; exists only to host workspace-level integration tests."
+
+[lib]
+path = "src/lib.rs"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/buiy",
+    "crates/buiy_core",
+    "crates/buiy_widgets",
+    "crates/buiy_verify",
+    "examples/hello_button",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/intendednull/buiy"
+rust-version = "1.85"
+
+[workspace.dependencies]
+bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "x11", "wayland"] }
+bevy_picking = "0.18"
+taffy = "0.10"
+accesskit = "0.24"
+accesskit_winit = "0.32"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = "0.25"
+image-compare = "0.6"
+proptest = "1"
+thiserror = "2"
+tracing = "0.1"

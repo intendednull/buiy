@@ -5,3 +5,6 @@
 .worktrees/
 
 .superpowers/
+
+target/
+Cargo.lock
