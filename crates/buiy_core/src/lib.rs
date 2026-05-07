@@ -10,6 +10,7 @@ pub mod components;
 pub mod focus;
 pub mod layout;
 pub mod picking;
+pub mod render;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
