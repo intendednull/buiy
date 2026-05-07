@@ -12,12 +12,14 @@ use bevy::prelude::*;
 /// `bevy_picking::backend::PickingBackend` registration lives in v0.x.
 pub struct PickingPlugin;
 
-#[derive(Resource, Default, Clone, Debug)]
+#[derive(Resource, Reflect, Default, Clone, Debug)]
+#[reflect(Resource)]
 pub struct Hovered(pub Option<Entity>);
 
 impl Plugin for PickingPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Hovered>()
+        app.register_type::<Hovered>()
+            .init_resource::<Hovered>()
             .add_systems(Update, update_hovered.in_set(crate::BuiySet::Picking));
     }
 }
