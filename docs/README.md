@@ -44,6 +44,10 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Buiy foundation design](specs/2026-05-07-buiy-foundation/README.md) — feature inventory, architectural foundation, sub-spec roadmap (multi-file). `[draft]`
 
+**Plans**
+
+- [Phase 0 foundations](plans/2026-05-07-buiy-phase-0-foundations.md) — workspace, BuiyPlugin, system sets, minimal render/layout/a11y/focus/picking/theme, verification harness skeleton, hello-world Button. `[draft]`
+
 ### Docs infrastructure
 
 **Specs**
