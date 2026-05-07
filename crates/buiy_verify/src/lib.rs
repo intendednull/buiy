@@ -1,1 +1,9 @@
-pub fn _placeholder() {}
+//! Buiy verification harness. Phase 0 ships visual regression, AccessKit
+//! tree snapshot, and WCAG 2 contrast linter. Full harness (15 CI gates)
+//! lives in `buiy-verification-design`.
+//!
+//! See: docs/specs/2026-05-07-buiy-foundation/verification.md.
+
+pub mod a11y;
+pub mod contrast;
+pub mod visual;
