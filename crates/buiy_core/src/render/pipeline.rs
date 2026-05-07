@@ -10,15 +10,21 @@ use bevy::asset::uuid::Uuid;
 use bevy::mesh::VertexBufferLayout;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    BlendState, CachedRenderPipelineId, ColorTargetState, ColorWrites, Face, FragmentState,
-    FrontFace, MultisampleState, PipelineCache, PolygonMode, PrimitiveState, PrimitiveTopology,
+    BlendState, CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, FrontFace,
+    MultisampleState, PipelineCache, PolygonMode, PrimitiveState, PrimitiveTopology,
     RenderPipelineDescriptor, TextureFormat, VertexAttribute, VertexFormat, VertexState,
     VertexStepMode,
 };
 use bevy::shader::Shader;
 
-/// Stable UUID for the rounded-rect shader asset. Random u128 generated for
-/// Phase 0 — keep it constant so the asset ID is stable across runs.
+/// Stable UUID for the rounded-rect shader asset.
+///
+/// **Buiy render-asset UUID convention.** All render-asset UUIDs in `buiy_core`
+/// use the prefix `0xB01A_01XX_..` ("BUIY 01") with the trailing octet
+/// distinguishing the asset (01 = rounded-rect shader). When future tasks add
+/// shader / atlas / pipeline assets, increment the trailing octet and document
+/// in this comment block. Reserved range: `0xB01A_0100_0000_0000_0000_0000_0000_0001`
+/// through `0xB01A_01FF_..._FFFF`.
 const SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0100_0000_0000_0000_0000_0000_0001u128);
 
 /// Returns the stable weak handle to the rounded-rect WGSL shader.
@@ -31,7 +37,7 @@ pub struct BuiyPipeline {
     pub id: CachedRenderPipelineId,
 }
 
-pub fn register(render_app: &mut SubApp) {
+pub(crate) fn register(render_app: &mut SubApp) {
     let world = render_app.world_mut();
 
     // Load WGSL shader into the render world's Shader asset store.
@@ -102,7 +108,11 @@ pub fn register(render_app: &mut SubApp) {
         primitive: PrimitiveState {
             topology: PrimitiveTopology::TriangleStrip,
             front_face: FrontFace::Ccw,
-            cull_mode: Some(Face::Back),
+            // Phase 0: cull_mode = None until Task 11 fixes the unit-quad
+            // emission order. A naive `(0,0),(1,0),(0,1),(1,1)` strip mixes
+            // CCW and CW windings; back-face culling would silently drop the
+            // quad. Tighten to Some(Face::Back) once Task 11 verifies winding.
+            cull_mode: None,
             polygon_mode: PolygonMode::Fill,
             ..default()
         },
