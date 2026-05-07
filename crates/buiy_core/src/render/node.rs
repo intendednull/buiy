@@ -2,6 +2,12 @@
 //! main 2D pass (`Node2d::EndMainPass`) and before tonemapping. Phase 0
 //! draws Buiy entities directly into the 2D-pass color attachment.
 //!
+//! Why pre-tonemap: Buiy widgets share the same color pipeline as 2D scene
+//! content, so widget output participates in tonemapping when HDR / advanced
+//! color management is enabled in v0.x. Inserting after tonemapping would
+//! force Buiy to manage its own color-space matching with the rest of the
+//! frame, which is unnecessary complexity for Phase 0.
+//!
 //! IMPORTANT (clip-space conversion): the extract phase (in `mod.rs`) emits
 //! `DrawData.position / size` in **logical pixels** (from `ResolvedLayout`),
 //! but the rounded-rect shader (in `shader.wgsl`) consumes them as
@@ -57,6 +63,10 @@ impl ViewNode for BuiyNode {
 
         let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("buiy_pass"),
+            // `get_color_attachment()` returns the post-MSAA-resolve target
+            // (when MSAA is enabled) and respects ViewTarget's ping-pong
+            // logic. Using `main_texture_view()` directly would bypass that
+            // and break post-processing composition.
             color_attachments: &[Some(view_target.get_color_attachment())],
             depth_stencil_attachment: None,
             timestamp_writes: None,
