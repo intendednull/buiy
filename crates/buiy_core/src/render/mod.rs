@@ -35,7 +35,8 @@ pub struct BuiyRenderPlugin;
 
 impl Plugin for BuiyRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ExtractedDraws>();
+        // ExtractedDraws is render-world only — the main world does not read it.
+        // Initialization lives below inside the RenderApp branch.
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -49,6 +50,12 @@ impl Plugin for BuiyRenderPlugin {
     }
 }
 
+/// Sentinel color for missing theme tokens (magenta = "missing", visible at a
+/// glance in screenshots). The accompanying `warn!` surfaces the typo'd token
+/// name in dev. Phase 0 has a small, known token set; v0.x can promote to an
+/// `error!` once tokens are typed.
+const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
+
 fn extract_buiy_draws(
     mut commands: Commands,
     main_world_q: Extract<Query<(&Style, &ResolvedLayout), With<Node>>>,
@@ -56,9 +63,16 @@ fn extract_buiy_draws(
 ) {
     let mut draws = ExtractedDraws::default();
     for (style, layout) in main_world_q.iter() {
-        let color = main_world_theme
-            .color(&style.background_token)
-            .unwrap_or(Color::WHITE);
+        let color = match main_world_theme.color(&style.background_token) {
+            Some(c) => c,
+            None => {
+                tracing::warn!(
+                    token = %style.background_token,
+                    "missing theme color token; falling back to magenta sentinel"
+                );
+                MISSING_TOKEN_FALLBACK
+            }
+        };
         draws.draws.push(DrawData {
             position: layout.position,
             size: layout.size,
@@ -66,5 +80,7 @@ fn extract_buiy_draws(
             radius: style.border_radius,
         });
     }
+    // TODO(v0.x): reuse ExtractedDraws via ResMut + clear/extend instead of
+    // reallocating the inner Vec each frame. See `buiy-render-pipeline-design`.
     commands.insert_resource(draws);
 }
