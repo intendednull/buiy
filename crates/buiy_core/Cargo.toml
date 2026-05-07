@@ -3,5 +3,12 @@ name = "buiy_core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-repository.workspace = true
-rust-version.workspace = true
+
+[dependencies]
+bevy.workspace = true
+taffy.workspace = true
+accesskit.workspace = true
+accesskit_winit.workspace = true
+bevy_picking.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
