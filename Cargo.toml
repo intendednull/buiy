@@ -27,7 +27,7 @@ repository = "https://github.com/intendednull/buiy"
 rust-version = "1.85"
 
 [workspace.dependencies]
-bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "x11", "wayland"] }
+bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "x11", "wayland"] }
 bevy_picking = "0.18"
 taffy = "0.10"
 accesskit = "0.24"

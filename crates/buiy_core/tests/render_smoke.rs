@@ -37,3 +37,36 @@ fn pipeline_registers_in_render_app() {
         .get_resource::<buiy_core::render::pipeline::BuiyPipeline>();
     assert!(pipeline.is_some(), "BuiyPipeline registered");
 }
+
+// Same RenderApp/wgpu-adapter caveat as `pipeline_registers_in_render_app`.
+// We assert that the Buiy node is present in the Core2d sub-graph after the
+// main 2D pass has been wired up by Bevy's Core2dPlugin.
+//
+// Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
+fn render_graph_node_inserted_after_main_2d_pass() {
+    use bevy::core_pipeline::core_2d::graph::Core2d;
+    use bevy::render::render_graph::RenderGraph;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::render::RenderPlugin::default());
+    app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
+    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+
+    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
+    let render_graph = render_app
+        .world()
+        .get_resource::<RenderGraph>()
+        .expect("RenderGraph resource");
+    let sub = render_graph
+        .get_sub_graph(Core2d)
+        .expect("Core2d sub-graph present");
+    assert!(
+        sub.get_node_state(buiy_core::render::node::BuiyRenderLabel)
+            .is_ok(),
+        "BuiyRenderLabel registered in Core2d"
+    );
+}
