@@ -6,10 +6,12 @@
 use bevy::prelude::*;
 
 pub mod components;
+pub mod focus;
 pub mod layout;
 pub mod theme;
 
 pub use components::{Node, ResolvedLayout, Style};
+pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::LayoutPlugin;
 
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
