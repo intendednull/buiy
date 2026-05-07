@@ -27,7 +27,7 @@ The spec was written during a brainstorming session that consumed three deep-res
 
 6. **Game and app, both.** Buiy is the UI layer for anything built on Bevy. Productivity-app concerns (IME, complex text, screen readers, complex forms) and game concerns (gamepad nav, in-world UI anchoring, animation polish) are both in scope.
 
-7. **Verifiable.** Every machine-testable claim Buiy makes (every widget behavior with a defined keyboard contract, every AccessKit tree shape, every theme variant's visual output, every layout primitive's resolved geometry, every machine-testable WCAG SC) is covered by automated tests that run in CI without a human approval gate. Claims that depend on human judgment, real OS subsystems, or physical devices (real-SR utterance verification, full OS-IME conformance, real-device mobile coverage, content-quality SCs, subjective visual quality) are documented as **manual release gates** with explicit owners and cadence — not CI gates. Section 3.15 enumerates which tests live in CI vs at the manual release gate.
+7. **Verifiable.** Every machine-testable claim Buiy makes (every widget behavior with a defined keyboard contract, every AccessKit tree shape, every theme variant's visual output, every layout primitive's resolved geometry, every machine-testable WCAG SC) is covered by automated tests that run in CI without a human approval gate. Claims that depend on human judgment, real OS subsystems, or physical devices (real-SR utterance verification, full OS-IME conformance, real-device mobile coverage, content-quality SCs, subjective visual quality) are documented as **manual release gates** with explicit owners, cadence, and release-blocking sign-off documents — not CI gates. Section 3.15 enumerates which tests live in CI vs at the manual release gate. Tradeoff acknowledgment: several user-experience claims (what an AT actually says, what real devices do, content quality, polish) sit at the manual tier; "fully automated verification pipeline" describes the CI tier specifically.
 
 ### Non-goals
 
@@ -113,7 +113,7 @@ These constraints follow from BSN's reflection-driven asset format (PR #20158) a
 - ACCNAME 1.2 name computation lives in `buiy_core`.
 - Each widget's APG keyboard contract is part of the widget's contract.
 
-**Adapter ownership.** AccessKit allows exactly one tree per `accesskit_winit::Adapter` per window. Buiy owns the adapter handle on any window where Buiy is present. Buiy does *not* layer over `bevy_a11y` — it replaces `bevy_a11y` for windows it owns. `ActionRequest` events from the adapter are routed to Buiy entities via Buiy's own action plumbing, not bevy_a11y's. See Section 3.18 for coexistence rules with bevy_ui.
+**Adapter ownership.** AccessKit allows exactly one tree per `accesskit_winit::Adapter` per window. Buiy owns the adapter handle on any window where Buiy is present, keyed by winit `WindowId` (not Bevy `Entity`). Buiy does *not* layer over `bevy_a11y` — it replaces `bevy_a11y` for windows it owns. `ActionRequest` events from the adapter are routed to Buiy entities via Buiy's own action plumbing, not bevy_a11y's. See Section 3.18 for coexistence rules with bevy_ui.
 
 ### 2.7 Reactivity
 
@@ -121,10 +121,10 @@ Observers + change detection only. No signal/computed/effect layer in this spec.
 
 ### 2.8 Module organization
 
-Buiy ships as a workspace of focused crates. Final crate split is an open question (Section 5); the principle is committed:
+Buiy ships as a workspace of focused crates. The principle is **modular subsystems with clean boundaries, opt-in surface area**. The exact partition below is an indicative starting point; final partition is an open question (Section 5):
 
 - `buiy` — meta-crate, re-exports common API, ships top-level `BuiyPlugin`.
-- `buiy_core` — components, render pipeline, layout integration, focus model, theme tokens, a11y primitives, plugin scaffolding.
+- `buiy_core` — components, render pipeline, layout integration, focus model, theme tokens, a11y primitives, plugin scaffolding (may split further per Section 5 open question).
 - `buiy_text` — rich text + IME-correct text editing on cosmic-text.
 - `buiy_widgets` — APG widget catalog.
 - `buiy_animation` — transitions, keyframes, layout transitions, reduced-motion gating.
@@ -134,9 +134,20 @@ Buiy ships as a workspace of focused crates. Final crate split is an open questi
 - `buiy_bsn` — BSN authoring helpers when on Bevy 0.18+.
 - `buiy_verify` — verification harness; consumed as `dev-dependency` by every other crate; usable by downstream Buiy users.
 
+**`BuiyPlugin` sub-plugin order.** The top-level plugin adds sub-plugins in this order so dependents see their dependencies on construction: `core` → `theme` → `a11y` → `focus` → `input` → `text` → `widgets` → `animation` → `forms` → `devtools`. Render registration happens in `Plugin::finish` (after `RenderApp` exists).
+
+**System-set partitioning.** Per-frame Buiy work is partitioned into named `SystemSet`s, ordered:
+
+```
+BuiySet::Layout → BuiySet::Style → BuiySet::Input → BuiySet::Animate
+              → BuiySet::Picking → BuiySet::A11yUpdate → BuiySet::Render
+```
+
+Sub-specs hang their systems off these labels. UI animations advance in the `Update` schedule against `Time<Virtual>` (not `FixedUpdate`, which is for game logic). Render-app data is extracted via Bevy's standard `ExtractSchedule` from the main world after `BuiySet::Render` completes.
+
 ### 2.9 Compatibility & policy
 
-- **Rolling latest-stable Bevy.** Bevy minor releases drive migration events for underlying primitives (Bevy + wgpu, since wgpu is re-exported and version-pinned by Bevy). AccessKit releases on its own cadence; an AccessKit major release between Bevy minors triggers a Buiy patch release. No back-compat across Bevy minors or AccessKit majors.
+- **Rolling latest-stable Bevy.** Bevy minor releases drive migration events for underlying primitives. wgpu is a version-pinned dependency of Bevy (Bevy re-exports many wgpu types but the wgpu crate is owned upstream); we follow Bevy's pin. AccessKit releases on its own cadence and is **the open question** of Section 5: the policy proposed here is "AccessKit major release between Bevy minors triggers a Buiy patch release with a documented migration note," but this is not yet committed. No back-compat across Bevy minors.
 - **MSRV** tracks Bevy's MSRV.
 - **`std` only.** AccessKit requires it.
 - **Platform support — staged.** Desktop (Windows / macOS / Linux) is committed for v1 with full CI coverage. Android (TalkBack), iOS (UIAccessibility — currently in-progress upstream in AccessKit), and web (AccessKit web adapter — not yet shipped) are deferred until each platform's AccessKit adapter exposes a headless harness usable in CI; until then they live as manual-release-gate platforms.
@@ -381,12 +392,7 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 - CJK punctuation, vertical metrics, full-width/half-width. **C**
 - Emoji, ZWJ sequences, variation selectors (UTS #51). **C**
 
-**Pseudo-elements for text**
-- First-letter / first-line equivalent (drop caps). **E**
-- Selection styling (`::selection` analogue). **F**
-- Marker styling (list bullets). **C**
-- Placeholder styling. **C**
-- Spelling/grammar error decorations. **E**
+**Pseudo-elements for text** — see canonical enumeration in Section 3.7. Cross-references for text-specific pseudo-elements: `::selection` (**F**), `::placeholder` (**F**), `::marker` (**C**), `::first-letter` / `::first-line` (**E**), `::spelling-error` / `::grammar-error` (**E**).
 
 ### 3.5 Text editing
 
@@ -467,10 +473,10 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 - Suggestion / fix proposal (3.3.3) is an authoring concern; Buiy provides the slot + aria wiring. **C**
 
 **WCAG 2.2 form-specific SCs**
-- 3.3.7 Redundant Entry — form-state machine retains values across navigation; per-field "remember me" hooks. **C**
-- 3.3.8 Accessible Authentication (Minimum) — Buiy provides paste-friendly password fields, optional copy from clipboard, and avoids cognitive-only verification UIs by default. **C**
-- 3.3.9 Accessible Authentication (Enhanced) — strict no-cognitive-test mode opt-in. **E**
-- 3.2.6 Consistent Help — apps own help placement; Buiy widget catalog ensures Help / Tooltip / Disclosure widgets render consistently. **C**
+- WCAG 3.3.7 Redundant Entry (**Level A**) — form-state machine retains values across navigation; per-field "remember me" hooks. **C**
+- WCAG 3.3.8 Accessible Authentication (Minimum, **Level AA**) — Buiy provides paste-friendly password fields, optional copy from clipboard, and avoids cognitive-only verification UIs by default. Paste-not-blocked is a CI gate. **F**
+- WCAG 3.3.9 Accessible Authentication (Enhanced, **Level AAA**) — strict no-cognitive-test mode opt-in. **E**
+- WCAG 3.2.6 Consistent Help (**Level A**) — apps own help placement; Buiy widget catalog ensures Help / Tooltip / Disclosure widgets render consistently. **C**
 
 **State**
 - `disabled`, `readonly`, `autofocus`, `name`, `value`, `placeholder`. **F**
@@ -512,6 +518,8 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 - Logical key (`KeyboardEvent.key`), physical code (`code`), repeat, location, modifiers, `isComposing`. **F**
 - IME composition events. **F**
 - Keyboard shortcut binding (`aria-keyshortcuts` analogue). **F** — every menu / button-with-shortcut widget needs it for APG conformance and WCAG 2.1.4.
+- Global keyboard shortcut activation (`accesskey` analogue + window-level chord registration; OS-conflict policy: shortcuts that collide with OS / IME modifiers are rejected at registration time). **F**
+- Single-key shortcut remap policy (per WCAG 2.1.4): every single-key shortcut is opt-in or remappable, suppressible while a textbox has focus. **F**
 - `InputEvent.inputType` taxonomy (`insertText`, `deleteContentBackward`, `historyUndo`, `formatBold`, etc.) for editing semantics. **C**
 - Keyboard layout map (logical-to-physical, locale-aware). **E**
 
@@ -560,6 +568,9 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 - `:is()`, `:where()`, `:not()`. **C**
 - `:dir(ltr | rtl)`, `:lang(<code>)`. **F** — required given RTL is a foundation goal.
 - `:state(<custom>)` — Custom State Pseudo-class API for form-associated custom widgets. **C**
+- `:fullscreen` — true when subtree is the active fullscreen surface. **C**
+- `:modal` — true when subtree is an open modal `Dialog` or `AlertDialog`. **C**
+- `:popover-open` — true when popover element is open (auto / manual / hint). **C**
 
 **Pseudo-class state surface (structural)**
 - `:nth-child(<an+b>)`, `:nth-of-type(<an+b>)`, `:nth-last-child`, `:nth-last-of-type`. **C**
@@ -570,7 +581,10 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 **Pseudo-elements**
 - `::before`, `::after` — generated content / decorative inserts. **C**
 - `::backdrop` — modal / dialog / fullscreen backdrop styling. **F**
-- `::placeholder`, `::marker`, `::selection`. **F / C** (per text section 3.4)
+- `::selection`. **F**
+- `::placeholder`. **F**
+- `::marker` (list bullets). **C**
+- `::highlight(<name>)` — Custom Highlight API for collaborative highlights, find-in-page, custom underline ranges. **E**
 - `::file-selector-button`. **C**
 - `::part(<name>)`, `::slotted(<selector>)` — Shadow-DOM-style component-encapsulation pseudo-elements. **E**
 - `::details-content` — disclosure / `<details>` open state content. **C**
@@ -587,13 +601,16 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 
 **At-rules / cascade primitives**
 - Token cascade is Buiy-native; CSS at-rules (`@media`, `@supports`, `@layer`, `@scope`, `@import`) are not the primary expression. The features they expose are reified differently:
-  - Media-query equivalents (`prefers-color-scheme`, `prefers-contrast`, `forced-colors`, `prefers-reduced-motion`, `pointer`, `hover`, `color-gamut`, `dynamic-range`, container-query units) live in the `UserPreferences` resource and theme variant binding (Section 3.14). **F / C**
+  - User-preference media-query equivalents (`prefers-color-scheme`, `prefers-contrast`, `forced-colors`, `prefers-reduced-motion`, `prefers-reduced-transparency`, `inverted-colors`) live in the `UserPreferences` resource. **F**
+  - Capability media-query equivalents (`pointer: none|coarse|fine`, `hover: none|hover`). **C**
+  - Display media-query equivalents (`color-gamut: srgb|p3|rec2020`, `dynamic-range: standard|high`). **C**
+  - Container-query units (`cqw / cqh / cqi / cqb / cqmin / cqmax`). **C** — see Section 3.2.
   - Feature-detection (`@supports`) reifies as runtime capability resources (e.g., `RenderCapabilities`). **C**
   - Cascade layering (`@layer`) is unnecessary because Buiy doesn't ship a stylesheet language; theme override priority is explicit (subtree `Theme` component). **O**
   - `@scope` is unnecessary for the same reason. **O**
   - CSS nesting (`& selector`) — irrelevant without a stylesheet. **O**
 
-**Out:** deprecated DOM mutation events, trusted-vs-synthetic distinction, hashchange / popstate. **O**
+**Out:** deprecated DOM mutation events, web's `Event.isTrusted` security flag (Buiy events are all in-process; the verification harness in Section 3.15 *does* synthesize input events for testing — this is unrelated to the web's trusted-vs-synthetic distinction), hashchange / popstate. **O**
 
 ### 3.8 Animation and motion
 
@@ -667,7 +684,7 @@ Powered by Taffy directly. Buiy extends Taffy where Taffy doesn't yet cover some
 
 ### 3.10 Widget catalog (APG patterns)
 
-Every widget below ships, by default, with: APG keyboard contract, AccessKit role + name source + states, theme-token consumption, `:focus-visible` behavior, forced-colors fallback (no shadow-only affordances), reduced-motion fallback, RTL mirroring, ≥24×24 hit target (WCAG 2.5.8), per-widget verification suite (Section 3.15).
+Every widget below ships, by default, with: APG keyboard contract, AccessKit role + name source + states, theme-token consumption, `:focus-visible` behavior, forced-colors fallback (no shadow-only affordances), reduced-motion fallback, RTL mirroring, ≥24×24 hit target (WCAG 2.5.8), and coverage by the verification fixture matrix in Section 3.15 (gates 2 — visual regression, 3 — AccessKit tree snapshot, 4 — announcement output, 7 — APG keyboard contract). Per-widget detail (exact keyboard contract, `aria-haspopup` / `aria-current` value emitted, name source) lives in `buiy-widget-catalog-design`.
 
 **Foundational widgets**
 - Button (incl. toggle button via `aria-pressed`). **F**
@@ -726,8 +743,8 @@ Every widget below ships, by default, with: APG keyboard contract, AccessKit rol
 - Toast / Snackbar (live region with auto-dismiss + WCAG 2.2.3 compliance — pause / stop / extend). **F**
 - Carousel — full APG pattern with auto-rotation controls, pause / stop, manual-advance contract, tied to WCAG 2.2.2. **C**
 - Feed (live-loading list, tied to WCAG 2.2.2 pause/stop). **C**
-- Card (composite container with optional clickable surface + interactive children). **C**
-- Rating (1–N stars with keyboard increment/decrement). **C**
+- Card (composite container; if the entire surface is clickable, exposes `role="button"` or `role="link"` per the canonical "card" pattern; otherwise `role="group"` with internal interactive children). **C**
+- Rating (reuses the APG `slider` pattern with discrete steps; arrow keys increment / decrement, Home / End set min / max). **C**
 
 **Tabular data**
 - Table (semantic). **C**
@@ -741,7 +758,8 @@ Each widget's APG keyboard contract is enumerated in the per-widget sub-spec (Se
 **ARIA roles taxonomy** — full enumeration, mapped to AccessKit `Role`.
 
 - **Landmarks (8):** banner, complementary, contentinfo, form, main, navigation, region, search. **F**
-- **Document structure (~38):** article, blockquote, caption, cell, columnheader, definition, deletion, document, emphasis, feed, figure, generic, group, heading, img, insertion, list, listitem, mark, math, meter, none/presentation, note, paragraph, row, rowgroup, rowheader, separator (non-focusable), strong, subscript, superscript, suggestion, table, term, time, toolbar, tooltip. **F**
+- **Document structure (38):** article, blockquote, caption, cell, code, columnheader, definition, deletion, document, emphasis, feed, figure, generic, group, heading, img / image (`img` and `image` are interchangeable tokens in ARIA 1.2), insertion, list, listitem, mark, math, meter, none / presentation, note, paragraph, row, rowgroup, rowheader, separator (non-focusable), strong, subscript, superscript, suggestion, table, term, time, toolbar, tooltip. **F**
+- **Deprecated and not implemented:** `directory` (deprecated in ARIA 1.2). **O**
 - **Standalone widgets (20):** button, checkbox, gridcell, link, menuitem, menuitemcheckbox, menuitemradio, option, progressbar, radio, scrollbar, searchbox, separator (focusable), slider, spinbutton, switch, tab, tabpanel, textbox, treeitem. **F**
 - **Composite widgets (9):** combobox, grid, listbox, menu, menubar, radiogroup, tablist, tree, treegrid. **F**
 - **Live region — alert, log, status, timer.** **F**
@@ -755,7 +773,8 @@ Each widget's APG keyboard contract is enumerated in the per-widget sub-spec (Se
 - **Live region:** `aria-live` (`off` / `polite` / `assertive`), `aria-atomic`, `aria-relevant` (`additions` / `removals` / `text` / `all`), `aria-busy`. **F**
 - **Drag/drop ARIA:** `aria-grabbed`, `aria-dropeffect` deprecated in ARIA 1.2 — **not implemented**. **O** Replacement contract: every drag-driven widget exposes (a) a `Move-to`-style action via AccessKit (`Increment` / `Decrement` for ordered lists, custom action for arbitrary positioning), (b) a keyboard alternative per WCAG 2.5.7, (c) a polite live-region announcement on drag start / drag end / drop / cancel. Spec'd in `buiy-input-events-design`.
 - **Relationships:** `aria-activedescendant`, `aria-colcount`, `aria-colindex`, `aria-colindextext`, `aria-colspan`, `aria-controls`, `aria-describedby`, `aria-description`, `aria-details`, `aria-errormessage`, `aria-flowto`, `aria-labelledby`, `aria-owns`, `aria-posinset`, `aria-rowcount`, `aria-rowindex`, `aria-rowindextext`, `aria-rowspan`, `aria-setsize`. **F**
-- **Global:** `aria-current` (`page` / `step` / `location` / `date` / `time` / `true` / `false`), `aria-keyshortcuts` (**F** — required for menu / button-with-shortcut widgets), `aria-roledescription`, `aria-braillelabel`, `aria-brailleroledescription`. **F / C** (most are **F** for widget contracts; braille labels are **C**)
+- **Global (foundation):** `aria-current` (`page` / `step` / `location` / `date` / `time` / `true` / `false`), `aria-keyshortcuts` (required for menu / button-with-shortcut widgets and WCAG 2.1.4), `aria-roledescription`. **F**
+- **Global (core):** `aria-braillelabel`, `aria-brailleroledescription` (only emitted when AT requests braille; AccessKit-supported). **C**
 - **`aria-details` vs `aria-describedby` policy** — `aria-describedby` is for short flat text references (descriptive labels). `aria-details` is for rich / structured supporting content (long descriptions, tables, footnotes). Per-widget contracts in `buiy-widget-catalog-design` specify which to emit.
 
 **Accessible Name and Description Computation (ACCNAME 1.2)**
@@ -861,6 +880,7 @@ Each SC is mapped to one of four enforcement strategies. **CI** = automated chec
 | 2.4.6 | Headings and Labels | AA | LR | Linter advises on missing / generic headings + labels. |
 | 2.4.7 | Focus Visible | AA | CI | Focus-ring rendering verified on every focusable widget. |
 | 2.4.11 | Focus Not Obscured (Minimum) | AA | CI | Sticky toolbar + modal fixtures verify focused element clear. |
+| 2.4.12 | Focus Not Obscured (Enhanced) | AAA | CI (aspirational) | Focused element fully unobscured (vs Minimum's "not entirely hidden"). |
 | 2.4.13 | Focus Appearance | AAA | CI (aspirational) | ≥2 px perimeter, ≥3:1 contrast vs unfocused. |
 | 2.5.1 | Pointer Gestures | A | CI | Multi-pointer / path gestures all have single-pointer fallback. |
 | 2.5.2 | Pointer Cancellation | A | CI | Activation on up-event with drag-off-cancel verified. |
@@ -874,17 +894,17 @@ Each SC is mapped to one of four enforcement strategies. **CI** = automated chec
 | 3.2.2 | On Input | A | CI | Input events do not auto-submit / navigate (linter). |
 | 3.2.3 | Consistent Navigation | AA | DC | App owns layout consistency. |
 | 3.2.4 | Consistent Identification | AA | DC | Buiy widget catalog provides consistent identifiers. |
-| 3.2.6 | Consistent Help | AA | DC | App places Help widget; Buiy renders it consistently. |
+| 3.2.6 | Consistent Help | A | DC | App places Help widget; Buiy renders it consistently. |
 | 3.3.1 | Error Identification | A | CI | Error-message model per Section 3.6; verified per form fixture. |
 | 3.3.2 | Labels or Instructions | A | LR | Linter advises on missing labels. |
 | 3.3.3 | Error Suggestion | AA | DC | App provides; Buiy renders via error-message slot. |
 | 3.3.4 | Error Prevention (Legal/Financial/Data) | AA | DC | App owns the policy; Buiy provides confirmation widgets. |
-| 3.3.7 | Redundant Entry | AA | RT | Form state retains values across navigation; verified. |
-| 3.3.8 | Accessible Authentication (Minimum) | AA | DC | Buiy provides paste-friendly password fields, no cognitive-only verification widgets by default. |
+| 3.3.7 | Redundant Entry | A | RT | Form state retains values across navigation; verified. |
+| 3.3.8 | Accessible Authentication (Minimum) | AA | CI + DC | CI verifies paste-allowed (no `paste` block) on password / authentication input types and absence of cognitive-puzzle widgets in the default catalog; the SC's spirit (avoid forcing memory / transcription / cognitive tests) is also a design constraint on app authoring. |
 | 4.1.2 | Name, Role, Value | A | CI | AccessKit tree snapshot — the central SC. |
 | 4.1.3 | Status Messages | AA | CI | Live-region announcer + role=status verified. |
 
-**AAA aspirational** — implemented as opt-in or noted as future work: 1.4.6 (7:1 contrast), 2.1.3 (Keyboard No Exception), 2.2.3 (No Timing), 2.3.3 (Animation from Interactions), 2.4.8 (Location), 2.4.9 (Link Purpose Alone), 2.4.10 (Section Headings), **2.4.12 (Focus Not Obscured Enhanced)**, **2.4.13 (Focus Appearance)** as listed above, **2.5.5 (Target Size Enhanced — 44×44)**, 3.1.3-6 (cognitive), 3.3.5-6 (help / error prevention all), 3.3.9 (Accessible Authentication Enhanced).
+**AAA aspirational** — implemented as opt-in or noted as future work: 1.4.6 (7:1 contrast), 1.4.7 (Low or No Background Audio — DC), 1.4.8 (Visual Presentation), 1.4.9 (Images of Text No Exception), 2.1.3 (Keyboard No Exception), 2.2.3 (No Timing), 2.3.3 (Animation from Interactions), 2.4.8 (Location), 2.4.9 (Link Purpose Alone), 2.4.10 (Section Headings), 2.5.5 (Target Size Enhanced — 44×44), 2.5.6 (Concurrent Input Mechanisms — relevant given Buiy's gamepad / keyboard / pointer concurrency goal; aspirational rather than gated), 3.1.3-6 (cognitive content), 3.3.5-6 (help / error prevention all), 3.3.9 (Accessible Authentication Enhanced). 2.4.12 and 2.4.13 are in the main table at AAA tier.
 
 The strategy / coverage details (fixtures, tolerances, runner) live in `buiy-verification-design`. This table is the authoritative SC roster; that sub-spec realizes it.
 
@@ -915,7 +935,7 @@ The strategy / coverage details (fixtures, tolerances, runner) live in `buiy-ver
 - Drag state. **C**
 - Pseudo-class state surface (Section 3.7). **F**
 - Reactivity primitive: Bevy observers + change detection. **F**
-- Signal / computed / effect layer — deferred to a future sub-spec; not part of foundation. **O** (deferred — out of v1, may return as a follow-up sub-spec)
+- Signal / computed / effect layer. **O** — explicitly excluded from the foundation. May return as a follow-up sub-spec if usage demands it; the spec does not commit to that.
 - **Out:** History API / URL routing, `localStorage` / `sessionStorage` / `IndexedDB`. UI does not own persistence or routing. **O**
 
 ### 3.14 Theming and user preferences
@@ -959,7 +979,7 @@ The pipeline has two tiers: **CI gates** (every PR; failure blocks merge; no hum
 | 11 | Forced-colors compatibility scan | F | Two checks: (a) no widget paints a color outside the system-color token set when `forced-colors: active`; (b) no shadow-only affordance — every focusable / state-bearing widget has a non-shadow visual cue (border, fill, outline). | Token-flow analyzer + golden visual diff under forced-colors. |
 | 12 | Property tests / fuzzing | F | Generators for hierarchies (max-depth N, max-breadth M, shrink-to-minimal-failing-tree), input streams, theme-variant matrices. Invariants: "focus tree reachable from any starting node," "AccessKit tree has no orphans," "every focusable node has an accessible name," "BiDi caret round-trip equals identity." | `proptest` with named strategies. |
 | 13 | Hot-reload validation | F | Reload `.bsn` file or theme asset; assert live entity diff over stable IDs equals expected diff; no entity / atlas leaks. | Equality predicate is "stable-ID-keyed entity-state diff"; spec'd in `buiy-verification-design`. |
-| 14 | Performance regression | F | Per-frame layout time + render time + AccessKit-update time relative to main-branch baseline on a fixed self-hosted runner. | Relative budgets, not absolute, to handle CI machine variance. Threshold: configurable per-fixture; default ±10% slack with regression alarms. |
+| 14 | Performance regression | F | Per-frame layout time + render time + AccessKit-update time relative to main-branch baseline on a fixed self-hosted runner. | The CI gate's *mechanism* (relative-to-main, fixed runner, ±10% default slack) is committed. The *actual budget numbers* per fixture are an open question (Section 5) owned by `buiy-verification-design`. The gate exists at v1; the numbers calibrate over time. |
 | 15 | Memory leak tests | F | RSS slope and atlas-entry count return to baseline after a defined long-running fixture (~10 minutes of scripted activity, then idle). | Threshold: RSS slope < 1 MB / minute after warmup; atlas entries return within ε of baseline. |
 
 #### CI platform matrix
@@ -979,12 +999,22 @@ Open question on platform staging: Section 5.
 
 #### Manual release gates (NOT CI gates; required at every release)
 
-These gate releases, not PRs. Each has an owner and a documented cadence.
+These gate releases, not PRs. Each has an owner, a documented cadence, and a release-blocking sign-off mechanism: each gate produces a checked-in sign-off document at `docs/release-notes/<version>/manual-gate-<gate>-signoff.md`. Tagging a release is gated on all four sign-off documents being present and approved on the release branch.
 
 1. **Real-SR output sanity sweep** — run a curated fixture suite under NVDA + Firefox-equivalent host (Windows), VoiceOver (macOS), Orca (Linux GNOME), TalkBack (Android emulator). Verify utterances against expected-output strings. Owner: a11y maintainer. Cadence: every minor release. (May graduate to a CI gate if a headless real-SR harness becomes practical — open question.)
 2. **Real-device mobile sweep** — Android + iOS on physical or simulated devices; verify TalkBack / VoiceOver behavior, IME composition with real OS IMEs (IBus, fcitx, macOS Japanese IM, Windows TSF), gesture recognizers under real touch. Owner: platform maintainer. Cadence: every minor release.
-3. **Subjective visual review** — design lead reviews default theme(s), widget gallery, animation polish. Cadence: every minor release.
+3. **Subjective visual review** — design lead reviews default theme(s), widget gallery, animation polish. Cadence: every minor release. Note: WCAG 1.4.3 / 1.4.11 contrast is *not* in this gate (it's CI #9); this gate covers polish and brand alignment.
 4. **Content-quality SC review** — alt-text quality, link-purpose, label clarity in shipping examples and docs. WCAG 1.1.1 / 1.4.5 / 2.4.4 / 2.4.6 / 3.3.2. Owner: docs maintainer. Cadence: every minor release.
+
+**Coverage tradeoff acknowledgment (cross-reference Section 1):** these four gates collectively cover real-AT speech, real-device behavior, subjective polish, and content quality. Several user-experience claims sit at the manual tier rather than the CI tier. Goal #7 is honest about this — "every machine-testable claim" — but readers should understand that "Buiy's verification pipeline is fully automated" only refers to the CI tier, not to all things end-users experience.
+
+#### Multi-window verification
+
+All CI gates run per-window where applicable. AccessKit tree snapshots, focus tree state, IME consumer state, and picking results are keyed by `WindowId`. Multi-window fixtures verify per-window stack ownership (Section 3.18).
+
+#### Hot-reload trigger flow
+
+Asset hot-reload tests (gate #13) drive the verification harness through Bevy's standard `AssetEvent::Modified` for `BsnAsset`, `ThemeAsset`, and `FontAsset`. Buiy's reload systems observe these events and apply the diff; the harness then asserts the post-reload entity-state diff equals the expected diff. Asset graph and `AssetServer` integration is owned by `buiy-asset-pipeline-design`.
 
 #### Tooling
 
@@ -1037,9 +1067,12 @@ Coexistence with bevy_ui is **per-window**, not per-app-shared-window. AccessKit
 
 **Coexistence rules — committed:**
 - One stack per window. **F**
+- Window stack assignment is fixed at window creation; **no runtime stack switching** for an existing window in v1. **F**
 - Buiy components do not extend `bevy_ui::Node`. **F**
 - Migration from bevy_ui → Buiy is by per-window replacement. **F**
+- Per-window state keyed by winit `WindowId`: AccessKit adapter, IME consumer, focus tree root, render-graph node group, `bevy_picking` backend filter. **F**
 - Render-graph node ordering, `bevy_picking` backend priority, IME consumer selection, focus arbitration: per-window stack owns these unilaterally on its own window. **F**
+- **`UiPickingPlugin` interaction:** when a Buiy window is present, Buiy's picking backend is filtered to that window via `bevy_picking`'s window-filter. Bevy's default `UiPickingPlugin` (added by `DefaultPlugins`) operates on bevy_ui-owned windows only. If an app is Buiy-only and adds `DefaultPlugins`, `UiPickingPlugin` runs on no windows and is a no-op. **F**
 
 **Excluded entirely**
 - Networking, fetch, XHR, WebSocket, WebRTC, WebTransport. **O**
@@ -1094,7 +1127,7 @@ Each sub-spec gets one or more plans (`docs/plans/`) for implementation.
 - **WCAG 2.2 SC enforcement strategy.** Per-SC: automated CI check, runtime-honored constraint, or documented design constraint. The mapping table is owned by `buiy-verification-design`.
 - **3D-anchored UI prioritization.** The renderer is ours and `Transform` works, so it's unblocked. Whether `buiy_3d` is concurrent with foundation work or strictly deferred is a planning choice.
 - **Coexistence policy with `bevy_feathers` / `bevy_ui_widgets`.** Coexistence at the app level is committed; whether Buiy ships migration adapters from bevy_ui widgets is open.
-- **Performance budgets.** What frame-time budget Buiy is allowed for layout + render + AccessKit update is open and lives in `buiy-verification-design`.
+- **Performance budgets — concrete numbers.** The CI gate (Section 3.15 #14) is committed; the per-fixture *budget numbers* (target frame-time per fixture, allowed regression slack) calibrate over time and live in `buiy-verification-design`.
 - **Platform support staging.** All platforms (Windows / macOS / Linux / Android / iOS / web) at v1, or staged?
 - **Hot-reload of components (not just themes).** In scope as part of `buiy-bsn-integration-design`?
 - **Render-to-texture surface API contract.** Feeds `buiy_3d`; the boundary is open.
