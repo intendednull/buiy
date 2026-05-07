@@ -8,7 +8,7 @@ For build/test/dev commands, see `../CLAUDE.md`. This file does not duplicate th
 
 Reading order for newcomers:
 
-1. [Buiy foundation design](specs/2026-05-07-buiy-foundation-design.md) — the target shape of the library: feature inventory, architectural foundation, sub-spec roadmap.
+1. [Buiy foundation design](specs/2026-05-07-buiy-foundation/README.md) — the target shape of the library: feature inventory, architectural foundation, sub-spec roadmap. Multi-file folder; start at the README, then read children in the order it lists.
 2. [Docs organization design](specs/2026-05-07-docs-organization-design.md) — how this docs tree is structured.
 
 ## Document types
@@ -42,7 +42,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 **Specs**
 
-- [Buiy foundation design](specs/2026-05-07-buiy-foundation-design.md) — feature inventory, architectural foundation, sub-spec roadmap. `[draft]`
+- [Buiy foundation design](specs/2026-05-07-buiy-foundation/README.md) — feature inventory, architectural foundation, sub-spec roadmap (multi-file). `[draft]`
 
 ### Docs infrastructure
 
