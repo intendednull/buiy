@@ -1,0 +1,43 @@
+# CLAUDE.md — Buiy Development Guide
+
+## Project Overview
+
+_TODO: one-paragraph description of Buiy — what it is, the language/stack, the core concepts. Replace this placeholder before merging real work._
+
+## Dev Guidelines
+
+Quality + longevity beat speed + convenience.
+
+- **Choose right solution, not easy one.** Ask: which approach makes most sense long-term, causes least future confusion, lasts? Pick that.
+- **No hacky workarounds, no shortcuts.** If obvious fix is band-aid, keep digging for real fix.
+- **Root-cause every bug.** No patching symptoms. No disabling failing tests. No swallowing errors. Find why, fix why.
+- **Scope creep OK when warranted, not speculative.** Doing it right means touching more files / refactoring abstraction — do it. Don't add features, abstractions, error handling task didn't ask for.
+- **Answer not obvious? Stop, design.** Two+ reasonable approaches? Brief note in `docs/specs/YYYY-MM-DD-<name>-design.md` before coding. Plan in `docs/plans/YYYY-MM-DD-<name>.md`. Cheap up front, expensive later.
+- **Surface tradeoffs explicit.** Picking between approaches, name runner-up + why rejected. Commit body or PR description. Future-you needs reasoning, not just result.
+- **Mechanical rigor before commit.** Run the project's check command (lint + format + tests) and resolve every warning before committing. Fill in the exact command under `## Build & Test` once it exists.
+- **Semantic rigor: verify before claiming done.** Run actual test, hit actual UI, read actual output. No "should work" assertions. See `superpowers:verification-before-completion`.
+- **Process skills before implementation skills.** Brainstorming + debugging determine *how*. Don't skip to feel productive.
+- **Tests at lowest tier covering behavior.** Unit before integration before end-to-end.
+
+## Repository Structure
+
+```
+docs/
+├── README.md           — Master index of specs, plans, and reports (start here)
+├── specs/              — Target state — what we are building toward (YYYY-MM-DD-<name>-design.md)
+├── plans/              — Migration steps — how we get to the target (YYYY-MM-DD-<name>.md)
+├── reports/            — One-shot audits and investigations
+└── reference-designs/  — Archived design bundles (immutable)
+```
+
+_TODO: add the source-tree layout (e.g. `src/`, `crates/`, `packages/`) once Buiy has code._
+
+## Build & Test
+
+_TODO: list the project's check, build, test, and dev commands once they exist. The Dev Guidelines above assume there is a single "run all checks" command — name it here so contributors can find it._
+
+## Code Conventions
+
+- **Docs entry point:** `docs/README.md` is the master index of specs and plans, grouped by feature area. Read it before adding any new spec or plan, or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
+
+_TODO: add language- and project-specific conventions (naming, error handling, testing, serialization, etc.) as they are established._

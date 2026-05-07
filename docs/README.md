@@ -1,0 +1,78 @@
+# Buiy docs
+
+Master index of Buiy's design specs, implementation plans, and reports. Grouped by feature area for discovery and onboarding.
+
+For build/test/dev commands, see `../CLAUDE.md`. This file does not duplicate that content.
+
+## Where to start (new agents and humans)
+
+The catalog is empty until the first specs land. As foundational specs are added, link them from this section in reading order so a newcomer can build a conceptual map of the project from the top.
+
+## Document types
+
+Three document types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
+
+- **Spec** (`specs/`) — *what we are building toward.* Target shape of the code: types, traits, invariants, public API. Long-lived, canonical.
+- **Plan** (`plans/`) — *how we get from current code to the target.* Migration steps, file-by-file changes, PR breakdown. Cites the spec it realizes. Goes stale once shipped.
+- **Report** (`reports/`) — *findings from a one-shot investigation.* Audits, post-mortems. Dated, immutable.
+
+## Status tags
+
+Every entry below carries one of:
+
+- `[draft]` — being written, target not yet stable.
+- `[active]` — current target / in-flight migration.
+- `[landed]` — realized in code; canonical reference.
+- `[superseded]` — replaced; entry links to successor.
+
+## Catalog
+
+Areas appear here as soon as there is a real doc to slot under them. Each area is a `### ` header with **Specs** and **Plans** subsections; entries are one line each:
+
+```markdown
+- [Title](specs/YYYY-MM-DD-name-design.md) — 5–15 word summary. `[draft]`
+```
+
+If a doc spans areas, file it under its primary area only. Reference any adjacent topics in the summary.
+
+## Reference designs
+
+Archived design bundles (immutable inputs to specs, not specs themselves) live in [`reference-designs/`](reference-designs/) when they exist.
+
+## Conventions
+
+Cemented in [`specs/2026-05-07-docs-organization-design.md`](specs/2026-05-07-docs-organization-design.md). Mirrored on demand by the `organizing-buiy-docs` skill. Summary:
+
+### Naming
+
+| Type | Pattern | Example |
+|---|---|---|
+| Spec | `specs/YYYY-MM-DD-<kebab>-design.md` | `2026-05-07-docs-organization-design.md` |
+| Multi-file spec | `specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-05-07-example-design/README.md` |
+| Plan | `plans/YYYY-MM-DD-<kebab>.md` | `2026-05-07-example-plan.md` |
+| Report | `reports/YYYY-MM-DD-<kebab>.md` | `2026-05-07-example-audit.md` |
+
+The date is when the doc was written, not the implementation target. The `-design.md` suffix on specs is what visually distinguishes specs from plans in `ls` output.
+
+### Document headers
+
+Every new spec, plan, and report opens with:
+
+```
+**Date:** YYYY-MM-DD
+**Status:** draft | active | landed | superseded
+**Spec:** specs/...      (plans only — REQUIRED, points at the spec being realized)
+**Supersedes:** specs/... (if applicable)
+```
+
+### Nested folders
+
+Use a folder (`specs/YYYY-MM-DD-<topic>/README.md` + children) only when one logical document is too large for a single file *and* the children are tightly coupled. Children use kebab-case topic names (no date prefix — they inherit the parent's date). Maximum one level deep. Multiple independent docs sharing a topic stay flat.
+
+### Adding a new spec, plan, or report
+
+1. Pick the right type (spec = target, plan = migration, report = audit).
+2. Name with `YYYY-MM-DD-<kebab>-design.md` (spec) or `YYYY-MM-DD-<kebab>.md` (plan/report).
+3. Add a one-line entry to this README under the right area, with a 5–15 word summary and `[draft]` tag.
+4. Plans must include `**Spec:** specs/...` in their header.
+5. Multi-file specs nest under `YYYY-MM-DD-<topic>/` with a required `README.md`.
