@@ -91,14 +91,14 @@ version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/intendednull/buiy"
-rust-version = "1.83"
+rust-version = "1.85"
 
 [workspace.dependencies]
 bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "x11", "wayland"] }
 bevy_picking = "0.18"
 taffy = "0.10"
 accesskit = "0.24"
-accesskit_winit = "0.30"
+accesskit_winit = "0.32"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = "0.25"
@@ -122,8 +122,9 @@ Create `rustfmt.toml`:
 
 ```toml
 edition = "2024"
-imports_granularity = "Module"
-group_imports = "StdExternalCrate"
+# imports_granularity = "Module" and group_imports = "StdExternalCrate" are
+# nightly-only on rustfmt as of stable 1.x. Re-enable if the project later
+# moves fmt to nightly.
 ```
 
 Create `clippy.toml`:
