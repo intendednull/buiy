@@ -33,6 +33,12 @@ impl Button {
         (
             Button,
             Node,
+            // TODO(buiy-widget-catalog-design): replace hardcoded sizes
+            // (width 120, height 32, padding 8) with size tokens
+            // (e.g. `space.button.width`, `space.2`). The token surface
+            // already exists in buiy_core::theme; Phase 0 keeps numeric
+            // literals only because per-widget size tokens aren't shipped
+            // yet. Hit target 120x32 already meets WCAG 2.5.8 (>=24x24).
             Style {
                 width: 120.0,
                 height: 32.0,
@@ -49,6 +55,16 @@ impl Button {
     }
 }
 
+// TODO(buiy-widget-catalog-design): Phase 0 fires OnPress on mouse-down
+// (`just_pressed`). WAI-ARIA APG and the web platform fire on mouse-up
+// after press-on-target so users can drag-cancel. Switch to press-down
+// → set "armed" state → release-on-target = OnPress, release-off-target
+// = cancel, in the widget catalog spec.
+//
+// TODO(buiy-widget-catalog-design): Phase 0 ships only mouse activation.
+// APG button contract requires Enter and Space (key down) to also fire
+// OnPress when the button is focused. Wire keyboard activation alongside
+// the full APG keyboard contract in the widget catalog spec.
 pub(crate) fn emit_on_press_on_click(
     // Both `Hovered` (from `PickingPlugin`) and `ButtonInput<MouseButton>`
     // (from bevy_input's `InputPlugin`) are owned by sibling plugins that
