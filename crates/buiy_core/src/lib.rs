@@ -5,6 +5,10 @@
 
 use bevy::prelude::*;
 
+pub mod components;
+
+pub use components::{Node, ResolvedLayout, Style};
+
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
 /// → Picking → A11yUpdate → Render.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -25,18 +29,21 @@ pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(
-            Update,
-            (
-                BuiySet::Layout,
-                BuiySet::Style,
-                BuiySet::Input,
-                BuiySet::Animate,
-                BuiySet::Picking,
-                BuiySet::A11yUpdate,
-                BuiySet::Render,
-            )
-                .chain(),
-        );
+        app.register_type::<Node>()
+            .register_type::<Style>()
+            .register_type::<ResolvedLayout>()
+            .configure_sets(
+                Update,
+                (
+                    BuiySet::Layout,
+                    BuiySet::Style,
+                    BuiySet::Input,
+                    BuiySet::Animate,
+                    BuiySet::Picking,
+                    BuiySet::A11yUpdate,
+                    BuiySet::Render,
+                )
+                    .chain(),
+            );
     }
 }
