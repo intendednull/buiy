@@ -6,9 +6,11 @@
 use bevy::prelude::*;
 
 pub mod components;
+pub mod layout;
 pub mod theme;
 
 pub use components::{Node, ResolvedLayout, Style};
+pub use layout::LayoutPlugin;
 
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
 /// → Picking → A11yUpdate → Render.
