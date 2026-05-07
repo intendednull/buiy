@@ -6,7 +6,10 @@ For build/test/dev commands, see `../CLAUDE.md`. This file does not duplicate th
 
 ## Where to start (new agents and humans)
 
-The catalog is empty until the first specs land. As foundational specs are added, link them from this section in reading order so a newcomer can build a conceptual map of the project from the top.
+Reading order for newcomers:
+
+1. [Buiy foundation design](specs/2026-05-07-buiy-foundation-design.md) — the target shape of the library: feature inventory, architectural foundation, sub-spec roadmap.
+2. [Docs organization design](specs/2026-05-07-docs-organization-design.md) — how this docs tree is structured.
 
 ## Document types
 
@@ -34,6 +37,18 @@ Areas appear here as soon as there is a real doc to slot under them. Each area i
 ```
 
 If a doc spans areas, file it under its primary area only. Reference any adjacent topics in the summary.
+
+### Foundation
+
+**Specs**
+
+- [Buiy foundation design](specs/2026-05-07-buiy-foundation-design.md) — feature inventory, architectural foundation, sub-spec roadmap. `[draft]`
+
+### Docs infrastructure
+
+**Specs**
+
+- [Docs organization design](specs/2026-05-07-docs-organization-design.md) — target structure of `docs/`, naming, headers, nesting. `[draft]`
 
 ## Reference designs
 
