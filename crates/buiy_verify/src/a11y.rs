@@ -45,7 +45,16 @@ pub fn snapshot_tree(nodes: &[A11yNodeView]) -> String {
             focusable: n.focusable,
         })
         .collect();
-    serde_json::to_string(&wire).expect("snapshot serializes")
+    // `serde_json::to_string` on a `Vec<WireNode>` cannot fail: WireNode is
+    // a fixed-shape struct of `u64 + &str + &str + &str + bool`, and
+    // serde_json only errors on map keys that aren't strings, custom
+    // Serialize impls that fail, or recursion-limit overruns. None apply
+    // here. If WireNode ever grows a non-trivial Serialize, return a
+    // `Result` from this fn instead of `unreachable!`.
+    match serde_json::to_string(&wire) {
+        Ok(s) => s,
+        Err(e) => unreachable!("WireNode serialization is infallible by construction; got: {e}"),
+    }
 }
 
 /// Returns `None` if identical, `Some(diff_text)` otherwise. Phase 0

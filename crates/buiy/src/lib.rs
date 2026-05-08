@@ -7,7 +7,7 @@ use bevy::prelude::*;
 pub use buiy_core::{
     BuiySet, CorePlugin,
     a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder},
-    components::{Node, ResolvedLayout, Style},
+    components::{FlexDirection, Node, ResolvedLayout, Style},
     focus::{FocusVisible, Focusable, FocusedEntity},
     picking::Hovered,
     theme::{Theme, UserPreferences, default_light_theme},

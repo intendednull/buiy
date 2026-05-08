@@ -14,7 +14,7 @@ pub mod render;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
-pub use components::{Node, ResolvedLayout, Style};
+pub use components::{FlexDirection, Node, ResolvedLayout, Style};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::LayoutPlugin;
 pub use picking::{Hovered, PickingPlugin, hit_test};

@@ -14,7 +14,7 @@
 
 use crate::{
     BuiySet,
-    components::{Node, ResolvedLayout, Style},
+    components::{FlexDirection as BuiyFlexDirection, Node, ResolvedLayout, Style},
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -26,6 +26,11 @@ use taffy::{
 /// Maps Bevy `Entity` to Taffy node IDs. Reused across frames to keep
 /// Taffy's internal cache warm. Stored as a `NonSend` resource because
 /// Taffy's compact-length representation contains a `*const ()`.
+//
+// TODO(buiy-layout-design): garbage-collect entries when their `Entity`
+// is despawned. Currently `by_entity` and the underlying `TaffyTree`
+// grow monotonically across despawns. v0.x adds a `RemovedComponents<Node>`
+// reader system in `BuiySet::Layout` that drops the matching entries.
 #[derive(Default)]
 pub struct LayoutTree {
     tree: TaffyTree<()>,
@@ -55,10 +60,9 @@ fn style_to_taffy(style: &Style) -> TaffyStyle {
                 Dimension::auto()
             },
         },
-        flex_direction: if style.flex_direction == 1 {
-            FlexDirection::Column
-        } else {
-            FlexDirection::Row
+        flex_direction: match style.flex_direction {
+            BuiyFlexDirection::Row => FlexDirection::Row,
+            BuiyFlexDirection::Column => FlexDirection::Column,
         },
         ..Default::default()
     }
@@ -81,12 +85,22 @@ fn sync_and_compute_layout(
         let taffy_style = style_to_taffy(style);
         match tree.by_entity.get(&entity).copied() {
             Some(id) => {
-                let _ = tree.tree.set_style(id, taffy_style);
+                if let Err(err) = tree.tree.set_style(id, taffy_style) {
+                    warn!(?entity, ?err, "buiy: layout set_style failed");
+                }
             }
-            None => {
-                let id = tree.tree.new_leaf(taffy_style).expect("new_leaf");
-                tree.by_entity.insert(entity, id);
-            }
+            None => match tree.tree.new_leaf(taffy_style) {
+                Ok(id) => {
+                    tree.by_entity.insert(entity, id);
+                }
+                Err(err) => {
+                    warn!(
+                        ?entity,
+                        ?err,
+                        "buiy: layout new_leaf failed; entity will be skipped this frame"
+                    );
+                }
+            },
         }
     }
 

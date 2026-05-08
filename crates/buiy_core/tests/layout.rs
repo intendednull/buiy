@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
-    components::{Node, ResolvedLayout, Style},
+    components::{FlexDirection, Node, ResolvedLayout, Style},
     layout::LayoutPlugin,
 };
 
@@ -19,7 +19,7 @@ fn layout_resolves_a_simple_flex_row() {
             Style {
                 width: 200.0,
                 height: 100.0,
-                flex_direction: 0,
+                flex_direction: FlexDirection::Row,
                 ..default()
             },
         ))

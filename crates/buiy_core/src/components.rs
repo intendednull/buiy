@@ -7,6 +7,16 @@
 
 use bevy::prelude::*;
 
+/// Flex layout direction. Mirrors Taffy's `FlexDirection` for the
+/// row / column subset used in Phase 0; v0.x layout-design will widen
+/// this to include `RowReverse` / `ColumnReverse` when needed.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexDirection {
+    #[default]
+    Row,
+    Column,
+}
+
 /// A Buiy node — the parallel-to-bevy_ui::Node primitive. Marker that this
 /// entity participates in Buiy's layout / render / a11y trees.
 #[derive(Component, Reflect, Default, Clone, Debug)]
@@ -28,8 +38,8 @@ pub struct Style {
     pub margin: f32,
     /// Border radius (uniform; per-corner is a later sub-spec).
     pub border_radius: f32,
-    /// Flex direction. 0 = Row, 1 = Column. Mapped to Taffy in `layout.rs`.
-    pub flex_direction: u8,
+    /// Flex direction. Mapped to Taffy in `layout.rs`.
+    pub flex_direction: FlexDirection,
     /// Token reference for background color (e.g., "color.surface.primary").
     pub background_token: String,
     /// Token reference for foreground/text color.
