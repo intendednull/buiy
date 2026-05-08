@@ -34,7 +34,27 @@ _TODO: add the source-tree layout (e.g. `src/`, `crates/`, `packages/`) once Bui
 
 ## Build & Test
 
-_TODO: list the project's check, build, test, and dev commands once they exist. The Dev Guidelines above assume there is a single "run all checks" command — name it here so contributors can find it._
+The "run all checks" command (mirrors what CI runs):
+
+```sh
+cargo fmt --all -- --check && \
+  cargo clippy --workspace --all-targets -- -D warnings && \
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && \
+  xvfb-run -a cargo test --workspace
+```
+
+On macOS / Windows drop the `xvfb-run -a` prefix; tests run headlessly without it.
+
+Supply-chain check (run before bumping any dep):
+
+```sh
+cargo deny check
+```
+
+Other useful one-offs:
+
+- `cargo test -p buiy_core` — fast loop on the core crate.
+- `cargo run --example hello_button` — visual smoke test of the Phase 0 widget.
 
 ## Code Conventions
 

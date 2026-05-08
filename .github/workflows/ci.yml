@@ -60,9 +60,11 @@ jobs:
       # stays in sync with the binary; bump in a dedicated PR that also
       # re-runs the check. `cargo audit` is intentionally not added —
       # `cargo deny check advisories` reads the same RustSec database,
-      # so adding both would be redundant.
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked --version 0.19.4
+      # so adding both would be redundant. taiki-e/install-action pulls
+      # a prebuilt binary in seconds rather than rebuilding from source.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.4
       # Runs all four checks (advisories, bans, licenses, sources).
       # The advisories check fails CI on RustSec vulnerabilities and on
       # `unmaintained` advisories that we have not explicitly ignored
