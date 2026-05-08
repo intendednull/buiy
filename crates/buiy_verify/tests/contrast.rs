@@ -44,10 +44,7 @@ fn linter_reports_violations_for_failing_pair() {
     assert_eq!(violations[0].severity, ContrastSeverity::Fail);
 }
 
-// Suppress unused-import warning for `lint_theme` — kept in scope to match
-// the public-API contract documented in the task spec.
-#[allow(dead_code)]
-fn _lint_theme_kept_in_scope() {
-    let theme = default_light_theme();
-    let _ = lint_theme(&theme);
+#[test]
+fn lint_theme_passes_for_default_light() {
+    assert!(lint_theme(&default_light_theme()).is_ok());
 }

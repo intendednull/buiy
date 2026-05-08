@@ -14,6 +14,9 @@ pub const WCAG_AAA_LARGE: f64 = 4.5;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContrastSeverity {
     Pass,
+    /// Reserved for advisory tiers (e.g., near-AA, APCA Lc). Phase 0 doesn't
+    /// emit `Warn`; v0.x will use it for ratios in the borderline band when
+    /// APCA support lands.
     Warn,
     Fail,
 }
@@ -27,6 +30,8 @@ pub struct ContrastViolation {
     pub severity: ContrastSeverity,
 }
 
+/// WCAG 2.1 §1.4.3 contrast ratio: `(L_lighter + 0.05) / (L_darker + 0.05)`.
+/// Returns a value in [1, 21]; identical colors yield 1.0, black-on-white yields 21.0.
 pub fn wcag2_ratio(fg: Color, bg: Color) -> f64 {
     let l1 = relative_luminance(fg);
     let l2 = relative_luminance(bg);
@@ -34,6 +39,9 @@ pub fn wcag2_ratio(fg: Color, bg: Color) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
+/// Relative luminance per WCAG 2.1 (Rec.709 weights on linear-light channels).
+/// Bevy's `Color::to_linear()` performs the sRGB→linear gamma transform; this
+/// fn must NOT re-apply it. See WCAG 2.1 §1.4.3 "relative luminance" definition.
 fn relative_luminance(c: Color) -> f64 {
     let lin = c.to_linear();
     let lin_r = lin.red as f64;
@@ -76,7 +84,13 @@ pub fn contrast_violations(
         .collect()
 }
 
-/// Lint the canonical text-on-surface pairs in any theme. Returns Ok if all pass.
+/// Lint the canonical text-on-surface pairs in any theme at WCAG 2 AA.
+/// Returns Ok if all pass.
+///
+/// Phase 0 walks 3 hand-picked canonical pairs only.
+/// TODO(buiy-theme-tokens-design): expand to an exhaustive `surface.*` ×
+/// `text.*` cartesian walk once typed token enums replace the
+/// string-keyed `Theme` HashMap.
 pub fn lint_theme(theme: &Theme) -> Result<(), Vec<ContrastViolation>> {
     let pairs = [
         ("color.surface.primary", "color.text.primary"),
