@@ -74,3 +74,39 @@ pub fn diff_snapshots(left: &str, right: &str) -> Option<String> {
         Some(format!("LEFT:\n{}\n\nRIGHT:\n{}\n", left, right))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hardcoded list of every Phase 0 `A11yRole` variant. The test
+    /// below checks each maps to a non-`"Unknown"` string. New variants
+    /// added to `buiy_core::a11y::A11yRole` MUST also be added here AND
+    /// to `role_to_str` — renaming a variant will break this test at
+    /// compile time, which is the forcing function. (The reverse
+    /// direction — adding to A11yRole without updating role_to_str — is
+    /// caught downstream by snapshot golden-file diffs surfacing
+    /// `"Unknown"`.)
+    const KNOWN_ROLES: &[A11yRole] = &[
+        A11yRole::Generic,
+        A11yRole::Button,
+        A11yRole::Link,
+        A11yRole::Image,
+        A11yRole::Text,
+        A11yRole::Heading,
+        A11yRole::Dialog,
+        A11yRole::AlertDialog,
+        A11yRole::Tooltip,
+    ];
+
+    #[test]
+    fn role_to_str_handles_every_known_variant() {
+        for role in KNOWN_ROLES {
+            let s = role_to_str(*role);
+            assert_ne!(
+                s, "Unknown",
+                "role {role:?} stringifies to Unknown — add it to role_to_str",
+            );
+        }
+    }
+}
