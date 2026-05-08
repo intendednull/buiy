@@ -1,16 +1,5 @@
-// Buiy Phase 0 rounded-rect shader. Vertex stage emits a unit quad (one
-// quad per draw). Fragment stage computes signed distance from the
-// rounded rect interior and outputs the per-instance color, with anti-
-// aliased edges.
-//
-// TODO(Task 11): rect_pos / rect_size are currently fed in clip-space
-// units (-1..+1) but the layout system produces logical pixels. Either
-// (a) Task 11 pre-multiplies by the inverse window size on the CPU
-// before writing the instance buffer, or (b) introduce a view uniform
-// (window-size or full view-projection matrix) and apply the transform
-// here in the vertex stage. Decide before instance-buffer construction
-// lands. The pipeline descriptor's `layout: vec![]` will need to grow
-// to include the bind-group layout if (b) is chosen.
+// Buiy rounded-rect shader. Inputs are clip-space units; CPU-side
+// conversion lives in `render::instance::to_instance`.
 
 struct Vertex {
     @location(0) position: vec2<f32>,
@@ -18,7 +7,7 @@ struct Vertex {
 };
 
 struct Instance {
-    @location(2) rect_pos: vec2<f32>,    // see TODO above re: units
+    @location(2) rect_pos: vec2<f32>,
     @location(3) rect_size: vec2<f32>,
     @location(4) color: vec4<f32>,
     @location(5) radius: f32,
