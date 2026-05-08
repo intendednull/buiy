@@ -15,8 +15,11 @@ tagged release.
 - Render pipeline now produces real pixels for Buiy nodes (instance-buffer
   construction, clip-space conversion, draw call). Closes the Phase 0
   render deferral.
-- Per-window AccessKit adapter map. Real screen readers attached to a
-  Buiy window receive a tree update each frame. Closes the Phase 0 a11y
+- Per-window AccessKit tree-update bridge. Buiy translates its widget tree
+  to `accesskit::TreeUpdate` each frame and pushes it through bevy_winit's
+  `ACCESS_KIT_ADAPTERS` so real screen readers attached to a Buiy window
+  see the live tree. (Bevy 0.18 owns adapter creation, so Buiy bridges
+  rather than owning `Adapter` objects directly.) Closes the Phase 0 a11y
   deferral.
 - `bevy_picking` backend. `Hovered` becomes a thin layer over the standard
   `PointerHits` event flow. Closes the Phase 0 picking deferral.

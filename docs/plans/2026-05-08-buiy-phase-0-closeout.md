@@ -1488,8 +1488,8 @@ PR description should cite the three Phase 0 deferrals being closed and link to 
 
 Cross-checked against the foundation spec self-review (foundations plan lines 2784–2790):
 
-- ✅ `bevy_picking` real backend implementation — Task 5.
-- ✅ AccessKit `accesskit_winit::Adapter` per-window wiring — Task 4 (full `HashMap<WindowId, Adapter>` per the user's PR-shape pick).
+- ✅ `bevy_picking` real backend implementation — Task 5. Forced API adjustments: `PointerHits` is a `Message` (not `Event`) in Bevy 0.18 → `MessageWriter`/`MessageReader`; `PickingSystems::Backend` (not `PickSet::Backend`); `bevy::picking::PickingPlugin` had to be added to `BuiyPlugin` because it's the sole registrar of `PickingSystems` sets and `Messages<PointerHits>`.
+- ✅ AccessKit `accesskit_winit::Adapter` per-window wiring — Task 4. **Architectural deviation from this plan's body:** Bevy 0.18 owns adapter creation (`accesskit_winit::Adapter::*` constructors all require `&ActiveEventLoop` which only exists inside the winit runner; bevy_winit creates adapters in `prepare_accessibility_for_window` and stores them in `ACCESS_KIT_ADAPTERS`). Buiy could not own a `HashMap<WindowId, Adapter>` resource as the plan body described. Implemented as a *bridge*: `push_tree_updates` reaches into `bevy::winit::accessibility::ACCESS_KIT_ADAPTERS` each frame and pushes Buiy's `TreeUpdate`. The per-window outcome (one `Adapter` per window, fed our tree) is preserved; ownership is delegated to bevy_winit. See `crates/buiy_core/src/a11y/adapter.rs` module doc-comment for the reasoning. The `AccessKitAdapters` resource was dropped during the Task 4 review loop as it was dead weight under the bridge model.
 - ✅ Render pipeline draws (instance-buffer construction) — Task 3.
 - ⚠️ Cosmic-text / glyph rendering — **explicitly out of scope** per "Out of scope" header. Closeout's hello_button still shows a colored rect with no glyph rendering; the architecture-proof bar remains the right one for Phase 0.
 - ⚠️ BSN authoring / hot-reload — **explicitly out of scope**.
