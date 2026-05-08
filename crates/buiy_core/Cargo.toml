@@ -8,3 +8,6 @@ license.workspace = true
 bevy.workspace = true
 taffy.workspace = true
 tracing.workspace = true
+bytemuck.workspace = true
+accesskit.workspace = true
+accesskit_winit.workspace = true
