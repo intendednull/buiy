@@ -33,8 +33,10 @@ pub struct ExtractedDraws {
 
 /// One rectangle in the Phase 0 render queue. Marked `#[non_exhaustive]`
 /// because the full pipeline (clip-path, filters, blend modes, etc.)
-/// will add per-draw fields pre-1.0.
-#[derive(Clone, Copy, Debug)]
+/// will add per-draw fields pre-1.0. `Default` is derived so external
+/// authors can construct via the `..Default::default()` shim referenced
+/// in `ExtractedDraws` above.
+#[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct DrawData {
     pub position: Vec2,
