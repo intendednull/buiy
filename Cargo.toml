@@ -1,0 +1,47 @@
+[package]
+name = "buiy_workspace"
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Workspace root package; exists only to host workspace-level integration tests."
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_winit", "x11", "wayland"] }
+buiy = { path = "crates/buiy" }
+buiy_core = { path = "crates/buiy_core" }
+buiy_verify = { path = "crates/buiy_verify" }
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/buiy",
+    "crates/buiy_core",
+    "crates/buiy_widgets",
+    "crates/buiy_verify",
+    "examples/hello_button",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/intendednull/buiy"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Phase 0 keeps the workspace dep set minimal: only crates that have a
+# `use` in `src/` are listed. Speculative deps (accesskit, accesskit_winit,
+# bevy_picking backend, image-compare for SSIM, thiserror for typed errors)
+# return when the consuming task lands. See review notes in
+# docs/plans/2026-05-07-buiy-phase-0-foundations.md.
+bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "x11", "wayland"] }
+taffy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = "0.25"
+proptest = "1"
+tracing = "0.1"

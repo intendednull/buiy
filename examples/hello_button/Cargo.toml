@@ -1,0 +1,12 @@
+[package]
+name = "hello_button"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_winit", "x11", "wayland"] }
+buiy = { path = "../../crates/buiy" }

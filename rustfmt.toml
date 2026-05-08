@@ -1,0 +1,5 @@
+edition = "2024"
+# imports_granularity = "Module" and group_imports = "StdExternalCrate" are
+# nightly-only as of rustfmt 1.x on stable. Re-enable when the project moves
+# fmt to nightly (see open question in docs/plans/2026-05-07-buiy-phase-0-foundations.md
+# and follow-ups).

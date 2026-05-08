@@ -1,0 +1,10 @@
+[package]
+name = "buiy_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy.workspace = true
+taffy.workspace = true
+tracing.workspace = true

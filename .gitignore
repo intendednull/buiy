@@ -3,3 +3,8 @@
 .claude/worktrees/
 
 .worktrees/
+
+.superpowers/
+
+target/
+Cargo.lock
