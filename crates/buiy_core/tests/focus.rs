@@ -81,7 +81,10 @@ fn shift_tab_steps_backward() {
     press_tab(&mut app, true);
     press_tab(&mut app, true);
     let prev = app.world().resource::<FocusedEntity>().0;
-    assert!(prev.is_some() && prev != Some(c), "Shift+Tab moves backward");
+    assert!(
+        prev.is_some() && prev != Some(c),
+        "Shift+Tab moves backward"
+    );
 }
 
 #[test]
