@@ -26,23 +26,52 @@ use taffy::{
 /// Maps Bevy `Entity` to Taffy node IDs. Reused across frames to keep
 /// Taffy's internal cache warm. Stored as a `NonSend` resource because
 /// Taffy's compact-length representation contains a `*const ()`.
-//
-// TODO(buiy-layout-design): garbage-collect entries when their `Entity`
-// is despawned. Currently `by_entity` and the underlying `TaffyTree`
-// grow monotonically across despawns. v0.x adds a `RemovedComponents<Node>`
-// reader system in `BuiySet::Layout` that drops the matching entries.
 #[derive(Default)]
 pub struct LayoutTree {
     tree: TaffyTree<()>,
     by_entity: HashMap<Entity, TaffyNodeId>,
 }
 
+impl LayoutTree {
+    /// Number of entity-to-Taffy-node mappings currently held. Exposed for
+    /// tests that need to assert GC actually freed orphan entries.
+    pub fn len(&self) -> usize {
+        self.by_entity.len()
+    }
+
+    /// Whether the tracker holds no entity-to-Taffy-node mappings.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 pub struct LayoutPlugin;
 
 impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
-        app.init_non_send_resource::<LayoutTree>()
-            .add_systems(Update, sync_and_compute_layout.in_set(BuiySet::Layout));
+        app.init_non_send_resource::<LayoutTree>().add_systems(
+            Update,
+            // GC must run before sync so the same tick's despawns don't
+            // leave dangling parent/child refs visible to Taffy's
+            // set_children call.
+            (gc_removed_nodes, sync_and_compute_layout)
+                .chain()
+                .in_set(BuiySet::Layout),
+        );
+    }
+}
+
+/// Drop Taffy nodes for entities whose `Node` component was removed
+/// (despawn or component-remove). Without this, `by_entity` and the
+/// underlying `TaffyTree` grow monotonically across despawns.
+fn gc_removed_nodes(mut tree: NonSendMut<LayoutTree>, mut removed: RemovedComponents<Node>) {
+    let tree = &mut *tree;
+    for entity in removed.read() {
+        if let Some(id) = tree.by_entity.remove(&entity)
+            && let Err(err) = tree.tree.remove(id)
+        {
+            warn!(?entity, ?err, "buiy: layout gc remove failed");
+        }
     }
 }
 
