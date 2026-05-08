@@ -18,12 +18,24 @@ pub mod pipeline;
 
 /// What the render world needs from the main world per frame: a list of
 /// (rect, color, radius) tuples in window-local logical pixels.
+///
+/// `#[non_exhaustive]` — the full pipeline (top-layer compositing,
+/// clip-path, filters, blend modes, atlasing per
+/// `buiy-render-pipeline-design`) will add fields here. The render
+/// world does not re-export this for main-world consumers, so the only
+/// out-of-crate audience is render-graph plugin authors who already
+/// know to update through `..Default::default()` shims.
 #[derive(Resource, Default, Clone)]
+#[non_exhaustive]
 pub struct ExtractedDraws {
     pub draws: Vec<DrawData>,
 }
 
+/// One rectangle in the Phase 0 render queue. Marked `#[non_exhaustive]`
+/// because the full pipeline (clip-path, filters, blend modes, etc.)
+/// will add per-draw fields pre-1.0.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct DrawData {
     pub position: Vec2,
     pub size: Vec2,

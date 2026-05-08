@@ -10,8 +10,14 @@ use std::collections::HashMap;
 /// A single theme variant. Phase 0 stores tokens as flat string-keyed maps.
 /// The full token system replaces this with typed scales in
 /// `buiy-theme-tokens-design`.
+///
+/// Marked `#[non_exhaustive]` because the field set is explicitly Phase 0
+/// minimal — typed token scales (typography, motion, elevation, etc.) will
+/// add fields pre-1.0. External callers should use `Theme::default()` or
+/// `default_light_theme()` and mutate fields rather than struct literals.
 #[derive(Resource, Reflect, Clone, Debug, Default)]
 #[reflect(Resource)]
+#[non_exhaustive]
 pub struct Theme {
     pub colors: HashMap<String, Color>,
     pub spaces: HashMap<String, f32>,
@@ -33,8 +39,15 @@ impl Theme {
 /// OS preference resource. Updated by a system in BuiySet::Input that reads
 /// from winit (or platform-specific sources). Phase 0 populates with
 /// defaults; full OS-pref plumbing is `buiy-clipboard-and-os-integration-design`.
+///
+/// Marked `#[non_exhaustive]` because additional preferences (caret
+/// blink, pointer fine/coarse, prefers-color-scheme states beyond
+/// dark/light, NVDA / VoiceOver-specific hints) will be added pre-1.0.
+/// External callers should construct via `UserPreferences::default()`
+/// and override fields rather than using struct literals.
 #[derive(Resource, Reflect, Clone, Debug, Default)]
 #[reflect(Resource)]
+#[non_exhaustive]
 pub struct UserPreferences {
     pub prefers_dark: bool,
     pub prefers_reduced_motion: bool,

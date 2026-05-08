@@ -1,0 +1,102 @@
+# cargo-deny configuration for the Buiy workspace.
+#
+# This config uses the cargo-deny v2 schema (no `[licenses.unlicensed]` /
+# `copyleft` keys; only `allow` lists). cargo-deny >= 0.16 understands it.
+# CI pins to a specific cargo-deny version so the format stays in sync
+# with the binary.
+#
+# Goals (kept minimal on purpose):
+#   - Catch RustSec advisories (vulnerabilities + unmaintained) so we
+#     notice supply-chain issues without standing up a separate
+#     `cargo audit` job. `cargo deny check advisories` covers the same
+#     RustSec database that `cargo audit` reads.
+#   - Allow only the licenses already present in the dep graph
+#     (Bevy + Taffy + image + serde et al.). Adding a new dep with an
+#     unlisted license fails CI; that is the intended forcing function.
+#   - No license / SPDX exception hacks — every license is listed by its
+#     short SPDX identifier.
+#   - `[bans]` is intentionally empty: Bevy ships many duplicated
+#     transitive deps (multiple versions of `windows-sys`, `bitflags`,
+#     etc.) and pre-emptively banning duplicates would just be noise.
+#     Re-evaluate when the dep tree stabilizes.
+
+[graph]
+# Match the workspace's supported targets so we don't audit deps that
+# only ship for platforms we don't build for.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+
+[advisories]
+# Use the latest RustSec advisory DB; CI fetches it fresh on every run.
+version = 2
+# `yanked` defaults to "warn"; promote to "deny" so a yanked dep fails
+# CI (we should not ship dependencies the upstream author pulled).
+yanked = "deny"
+# `ignore` is the escape hatch for advisories we have explicitly
+# triaged. Add an entry only after eyeballing the advisory and deciding
+# we accept the risk; do not bulk-suppress.
+ignore = [
+    # `paste` is archived upstream (RUSTSEC-2024-0436). It reaches us
+    # transitively via wgpu-hal's metal backend and via image's AV1 codec
+    # (rav1e). There is no safe upgrade — the fix has to come from those
+    # upstreams switching to `pastey` or similar. Re-evaluate when Bevy
+    # bumps wgpu past the metal/paste boundary or when image drops rav1e.
+    { id = "RUSTSEC-2024-0436", reason = "transitive via Bevy/wgpu-hal and image/rav1e; no upstream fix available, tracked as advisory drift" },
+]
+
+[licenses]
+version = 2
+# License set assembled from the current Cargo.lock (Bevy 0.18, Taffy
+# 0.10, image 0.25, proptest, serde, tracing, and their transitive
+# graph). Every entry is an SPDX short identifier.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+# Confidence threshold for license-text matching. 0.93 is cargo-deny's
+# default; lowering produces false positives, raising rejects valid
+# licenses with whitespace drift.
+confidence-threshold = 0.93
+# Don't warn when an allowed license isn't actually present in the dep
+# graph. We over-allow a few licenses on purpose (MPL-2.0, BSL-1.0,
+# Unicode-DFS-2016) so that adding a new dep with one of those
+# licenses doesn't fail CI for a reason unrelated to the change.
+unused-allowed-license = "allow"
+
+[bans]
+# Intentionally permissive. See file header for the rationale; revisit
+# once the dep graph stabilizes.
+multiple-versions = "allow"
+# `wildcards = "warn"` instead of `"deny"`: cargo-deny emits a wildcard
+# error for our own intra-workspace `path = "..."` deps because those
+# get an implicit `*` version requirement, and `allow-wildcard-paths`
+# only suppresses that for non-publishable crates (the buiy_* crates
+# don't yet set `publish = false`). Promoting wildcards back to "deny"
+# is the right move once we either publish-gate the crates or pin
+# explicit `version = "=0.0.1"` next to each path dep — both of which
+# are out of scope for the v0.1-readiness pass.
+wildcards = "warn"
+allow-wildcard-paths = true
+
+[sources]
+# Crates.io is the only source we trust by default. If we ever pull a
+# dep from a git URL the unknown-registry / unknown-git rules will
+# force a config update, which is the right friction.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
