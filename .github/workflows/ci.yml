@@ -19,6 +19,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Bevy's wayland/x11/udev features pull crates whose build.rs runs
+      # pkg-config; clippy still drives those build scripts even though it
+      # doesn't link, so the lint job needs the same system libs as test.
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
