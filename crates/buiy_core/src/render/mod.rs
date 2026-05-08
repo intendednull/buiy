@@ -21,7 +21,7 @@ pub mod pipeline;
 /// (rect, color, radius) tuples in window-local logical pixels, plus the
 /// primary window size used to convert them to clip space.
 ///
-/// Populated only by [`extract_buiy_draws`] inside `ExtractSchedule`; this
+/// Populated only by `extract_buiy_draws` inside `ExtractSchedule`; this
 /// resource is not part of the main-world public API and external authors
 /// should not construct it directly. `#[non_exhaustive]` keeps additions
 /// (top-layer compositing, clip-path, filters, blend modes, atlasing per

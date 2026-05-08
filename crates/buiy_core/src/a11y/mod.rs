@@ -9,6 +9,12 @@
 use crate::{BuiySet, focus::Focusable};
 use bevy::prelude::*;
 
+pub mod adapter;
+pub mod translate;
+
+pub use adapter::{AccessKitAdapterPlugin, AccessKitAdapters};
+pub use translate::{build_tree_update, to_accesskit_node};
+
 /// Decomposed AccessKit role component.
 ///
 /// Marked `#[non_exhaustive]` because the v0.x full ARIA taxonomy

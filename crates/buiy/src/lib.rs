@@ -6,7 +6,10 @@ use bevy::prelude::*;
 
 pub use buiy_core::{
     BuiySet, CorePlugin,
-    a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder},
+    a11y::{
+        A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin,
+        AccessKitAdapters,
+    },
     components::{FlexDirection, Node, ResolvedLayout, Style},
     focus::{FocusVisible, Focusable, FocusedEntity},
     picking::Hovered,
@@ -69,6 +72,7 @@ impl Plugin for BuiyPlugin {
             CorePlugin,
             buiy_core::theme::ThemePlugin,
             buiy_core::a11y::A11yPlugin,
+            buiy_core::a11y::AccessKitAdapterPlugin,
             buiy_core::focus::FocusPlugin,
             buiy_core::layout::LayoutPlugin,
             buiy_core::picking::PickingPlugin,
