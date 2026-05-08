@@ -27,7 +27,13 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
     let world = i.rect_pos + v.uv * i.rect_size;
     out.clip_position = vec4<f32>(world, 0.0, 1.0);
     out.local_uv = v.uv * 2.0 - 1.0;
-    out.half_size = i.rect_size * 0.5;
+    // SDF expects a positive half-extent. `i.rect_size.y` is intentionally
+    // negative (CPU-side y-flip in `render::instance::to_instance`); without
+    // the abs, the SDF would treat every interior fragment as outside the
+    // rect and the alpha collapses to 0. The signed `rect_size` is still
+    // load-bearing for `world` above and for `local_uv * half_size` in the
+    // fragment stage, where both factors flip sign together.
+    out.half_size = abs(i.rect_size) * 0.5;
     out.color = i.color;
     out.radius = i.radius;
     return out;

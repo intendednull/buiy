@@ -8,20 +8,13 @@
 //! force Buiy to manage its own color-space matching with the rest of the
 //! frame, which is unnecessary complexity for Phase 0.
 //!
-//! IMPORTANT (clip-space conversion): the extract phase (in `mod.rs`) emits
-//! `DrawData.position / size` in **logical pixels** (from `ResolvedLayout`),
-//! but the rounded-rect shader (in `shader.wgsl`) consumes them as
-//! **clip-space units**. The Phase 0 conversion happens HERE on the CPU
-//! before the instance buffer is written: we compute
-//!   clip = (px / window_size) * 2.0 - 1.0   (with y-flip)
-//! per-element. Future Phase 1+ may move this to a view uniform; flag in
-//! `buiy-render-pipeline-design`.
-//!
-//! Phase 0 closeout (2026-05-08): this node now builds the instance buffer
-//! per-frame from `ExtractedDraws` and issues an instanced `draw(0..4, 0..n)`
-//! against the static unit-quad VBO held on `BuiyPipeline`. v0.x upgrades to
-//! persistent buffers + bind groups for filters / atlas
-//! (`buiy-render-pipeline-design`).
+//! Phase 0 closeout (2026-05-08): this node builds the instance buffer
+//! per-frame from `ExtractedDraws` (logical-pixel → clip-space conversion
+//! lives in `render::instance::to_instance`) and issues an instanced
+//! `draw(0..4, 0..n)` against the static unit-quad VBO held on
+//! `BuiyPipeline`. v0.x upgrades to persistent buffers + bind groups for
+//! filters / atlas (`buiy-render-pipeline-design`); the conversion will
+//! move to a view uniform at that point.
 
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::query::QueryItem;

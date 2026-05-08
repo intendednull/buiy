@@ -17,7 +17,7 @@ pub const INSTANCE_STRIDE_BYTES: usize = 36;
 
 /// One instance record. Fields match `Instance` in `shader.wgsl` 1:1.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct InstanceData {
     /// Top-left in clip space (-1..+1, y up).
     pub rect_pos: [f32; 2],

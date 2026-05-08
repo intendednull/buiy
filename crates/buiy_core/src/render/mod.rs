@@ -18,14 +18,14 @@ pub mod node;
 pub mod pipeline;
 
 /// What the render world needs from the main world per frame: a list of
-/// (rect, color, radius) tuples in window-local logical pixels.
+/// (rect, color, radius) tuples in window-local logical pixels, plus the
+/// primary window size used to convert them to clip space.
 ///
-/// `#[non_exhaustive]` — the full pipeline (top-layer compositing,
-/// clip-path, filters, blend modes, atlasing per
-/// `buiy-render-pipeline-design`) will add fields here. The render
-/// world does not re-export this for main-world consumers, so the only
-/// out-of-crate audience is render-graph plugin authors who already
-/// know to update through `..Default::default()` shims.
+/// Populated only by [`extract_buiy_draws`] inside `ExtractSchedule`; this
+/// resource is not part of the main-world public API and external authors
+/// should not construct it directly. `#[non_exhaustive]` keeps additions
+/// (top-layer compositing, clip-path, filters, blend modes, atlasing per
+/// `buiy-render-pipeline-design`) non-breaking.
 #[derive(Resource, Default, Clone)]
 #[non_exhaustive]
 pub struct ExtractedDraws {

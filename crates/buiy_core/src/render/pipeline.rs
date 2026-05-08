@@ -117,10 +117,9 @@ pub(crate) fn register(render_app: &mut SubApp) {
         primitive: PrimitiveState {
             topology: PrimitiveTopology::TriangleStrip,
             front_face: FrontFace::Ccw,
-            // Phase 0: cull_mode = None until Task 11 fixes the unit-quad
-            // emission order. A naive `(0,0),(1,0),(0,1),(1,1)` strip mixes
-            // CCW and CW windings; back-face culling would silently drop the
-            // quad. Tighten to Some(Face::Back) once Task 11 verifies winding.
+            // cull_mode: None — Phase 0 closeout deliberate choice. The
+            // TL/BL/TR/BR strip order produces consistent winding; tightening
+            // to Some(Face::Back) is deferred to v0.x.
             cull_mode: None,
             polygon_mode: PolygonMode::Fill,
             ..default()
