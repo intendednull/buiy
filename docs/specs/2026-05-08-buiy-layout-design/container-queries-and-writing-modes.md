@@ -30,8 +30,8 @@ An entity with `Container { container_type: ContainerType::InlineSize, .. }` bec
 ### 1.2 `ContainerQuery` — the rule
 
 ```rust
-#[derive(Component, Reflect, Clone)]
-#[reflect(Component)]
+#[derive(Component, Reflect, Clone, Default)]
+#[reflect(Component, Default)]
 pub struct ContainerQuery {
     pub container: Option<SmolStr>,             // None = nearest queried ancestor; Some = named lookup
     pub conditions: Vec<QueryCondition>,        // ALL must hold for activation

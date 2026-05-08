@@ -110,7 +110,7 @@ pub struct Containment {
 }
 
 bitflags::bitflags! {
-    #[derive(Reflect, Clone, Copy, Default)]
+    #[derive(Clone, Copy, Default, PartialEq, Eq)]
     pub struct ContainFlags: u8 {
         const LAYOUT     = 1 << 0;       // descendants don't affect ancestor layout
         const PAINT      = 1 << 1;       // descendants are clipped to box; opacity etc. doesn't bleed
@@ -121,6 +121,9 @@ bitflags::bitflags! {
         const STRICT     = 1 << 6;       // shorthand: LAYOUT | PAINT | SIZE | STYLE
     }
 }
+
+// `bitflags!` doesn't compose with `#[derive(Reflect)]` — register manually.
+impl_reflect_value!(ContainFlags(Default, PartialEq));
 
 pub enum ContentVisibility {
     Visible,                            // default

@@ -21,6 +21,24 @@ pub struct FlexParams {
     pub align_content: AlignContent,     // FlexStart | FlexEnd | Center | SpaceBetween | SpaceAround | SpaceEvenly | Stretch
     pub gap: FlexGap,                    // { row, column }
 }
+
+#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+pub enum FlexAxis { #[default] Row, Column, RowReverse, ColumnReverse }
+
+#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+pub enum FlexWrap { #[default] NoWrap, Wrap, WrapReverse }
+
+#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+pub enum JustifyContent { #[default] FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly }
+
+#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+pub enum AlignItems { #[default] Stretch, FlexStart, FlexEnd, Center, Baseline }
+
+#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+pub enum AlignContent { #[default] Stretch, FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly }
+
+#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+pub struct FlexGap { pub row: Length, pub column: Length }
 ```
 
 `FlexParams` only takes effect when the entity's `Display` is `Display::Flex(_)` or `Display::InlineFlex(_)`. Otherwise it's ignored (no `warn!` — non-flex entities can carry `FlexParams` for future-display switches).
@@ -154,7 +172,7 @@ pub struct MultiColumn {
 A multi-column container's layout is computed in two stages:
 
 1. **Determine column count** — from explicit `column_count`, or computed from `column_width` + container width + `column_gap`.
-2. **Lay out children into columns** — Buiy walks children and packs them into columns, respecting `break-*` properties. Implementation detail: this runs as a Buiy pass between system pipeline steps 5 and 6 ([architecture.md § 3](architecture.md#3-system-pipeline)) — call it step 5c, after table layout (5b) and before anchor resolution. Children's `ResolvedLayout.position` is overwritten.
+2. **Lay out children into columns** — Buiy walks children and packs them into columns, respecting `break-*` properties. This runs as sub-pass 6c of the post-Taffy-overrides phase ([architecture.md § 3](architecture.md#3-system-pipeline)), after table layout (6b) and before anchor resolution (6d). Children's `ResolvedLayout.position` is overwritten.
 
 Multi-column is tier-E; v1 ships the API but the algorithm is a stub that produces single-column layout with `warn!` once per session. Prioritization waits on user demand.
 

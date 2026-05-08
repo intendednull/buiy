@@ -15,6 +15,9 @@ pub struct Overflow {
     pub scrollbar_gutter:  ScrollbarGutter,
     pub scrollbar_width:   ScrollbarWidth,
     pub scrollbar_color:   Option<ScrollbarColor>,
+    pub scroll_behavior:   ScrollBehavior,
+    pub overscroll_x:      OverscrollBehavior,
+    pub overscroll_y:      OverscrollBehavior,
 }
 
 pub enum OverflowMode {
@@ -71,7 +74,7 @@ pub struct ScrollOffset {
 }
 ```
 
-Author-mutable. The scroll system in `buiy-input-events-design` writes to it in response to scroll events; the layout system *reads* it during step 6 (anchor + sticky resolution) and step 7 (writing the displayed positions).
+Author-mutable. The scroll system in `buiy-input-events-design` writes to it in response to scroll events; the layout system *reads* it during sub-pass 6a (sticky offset) and step 7 (writing the displayed positions).
 
 ### 2.1 Effect on `ResolvedLayout`
 
@@ -86,7 +89,7 @@ Author-mutable. The scroll system in `buiy-input-events-design` writes to it in 
 pub enum ScrollBehavior { Auto, Smooth }
 ```
 
-Stored on `Overflow` as `pub scroll_behavior: ScrollBehavior`. Programmatic scroll APIs (e.g. `entity.scroll_to(...)`) honor `Smooth` by interpolating `ScrollOffset` over a configurable duration. The interpolation system runs in `BuiySet::Animate`; layout doesn't care.
+Lives on `Overflow.scroll_behavior` (see § 1 struct definition). Programmatic scroll APIs (e.g. `entity.scroll_to(...)`) honor `Smooth` by interpolating `ScrollOffset` over a configurable duration. The interpolation system runs in `BuiySet::Animate`; layout doesn't care.
 
 ### 2.3 `overscroll-behavior`
 
@@ -94,7 +97,7 @@ Stored on `Overflow` as `pub scroll_behavior: ScrollBehavior`. Programmatic scro
 pub enum OverscrollBehavior { Auto, Contain, None }
 ```
 
-Per-axis. `Contain` prevents scroll-chaining to ancestors; `None` additionally disables overscroll glow / bounce. Honored by `buiy-input-events-design`'s scroll handler. Layout stores it; doesn't act on it.
+Per-axis. Lives on `Overflow.overscroll_x` / `overscroll_y` (see § 1 struct definition). `Contain` prevents scroll-chaining to ancestors; `None` additionally disables overscroll glow / bounce. Honored by `buiy-input-events-design`'s scroll handler. Layout stores it; doesn't act on it.
 
 ## 3. Scroll snap
 

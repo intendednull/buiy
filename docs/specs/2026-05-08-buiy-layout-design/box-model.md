@@ -73,7 +73,12 @@ pub struct Edges {
 }
 
 impl Edges {
-    pub const ZERO: Self = Self { top: Length::ZERO, .. };
+    pub const ZERO: Self = Self {
+        top: Length::ZERO,
+        right: Length::ZERO,
+        bottom: Length::ZERO,
+        left: Length::ZERO,
+    };
     pub fn all(v: f32) -> Self;
     pub fn axis(x: f32, y: f32) -> Self;
     pub fn logical(start: f32, end: f32, block_start: f32, block_end: f32) -> LogicalEdges;

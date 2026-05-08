@@ -30,6 +30,24 @@ A free function `style_to_taffy(components: BundleView) -> TaffyStyle` collects 
 
 Translation is a pure function. Taffy's compute step is the only thing that mutates the tree.
 
+#### Change-detection trigger set
+
+`SyncStyles` (step 1) re-translates an entity when *any* of the following changed since last frame:
+
+```rust
+Or<(
+    Changed<BoxModel>, Changed<Display>, Changed<Position>, Changed<Anchor>,
+    Changed<FlexParams>, Changed<FlexItem>, Changed<GridParams>, Changed<GridItem>,
+    Changed<Container>, Changed<WritingMode>, Changed<Overflow>, Changed<Scroll>,
+    Changed<Stacking>, Changed<Transform>, Changed<Containment>, Changed<MultiColumn>,
+    Changed<Children>, Changed<ChildOf>,
+)>
+```
+
+The `Children` / `ChildOf` triggers cover hierarchy mutations (re-parenting, sibling insertion, despawn). The `LayoutTree` GC (step 0) handles the despawn case via `RemovedComponents<Node>`; `SyncStyles`'s `Changed<Children>` covers the *parent-side* invalidation.
+
+Two private cache components — `WritingModeResolved` (set by an inheritance pass before step 1) and `ContainingBlock` (set by `SyncStyles` itself) — are themselves invalidated when their feeders change: `WritingModeResolved` recomputes when an ancestor's `WritingMode` changed; `ContainingBlock` recomputes when an ancestor's `Position` flipped between `Static` and non-`Static`. Both invalidations re-trigger `SyncStyles` for the affected subtree.
+
 ## 2. Public API: hybrid builder + decomposed
 
 Two layers, distinct roles.
@@ -110,9 +128,15 @@ One ordered chain runs in `BuiySet::Layout`:
 3. TaffyCompute         — call tree.compute_layout from each root
 4. CqFlipCheck          — re-evaluate queries against fresh sizes
 5. (conditional) re-run 1+3 if any query flipped
-6. AnchorResolution     — override ResolvedLayout.position for anchored elements
+6. PostTaffyOverrides   — phase composed of sub-passes (in order):
+                            6a. StickyOffset      — apply sticky displacement
+                            6b. TableLayout       — Buiy-side table algorithm
+                            6c. MulticolPack      — multi-column packing
+                            6d. AnchorResolution  — anchor + position-try
 7. WriteResolvedLayout  — push positions+sizes to Bevy components
 ```
+
+Each sub-pass of step 6 mutates `ResolvedLayout` for entities matching its concern; sub-passes are independent (sticky doesn't read tables, multi-column doesn't read anchors), so the relative order is the order in which their writes get composed for entities that hit more than one. Sub-passes that have no work (no sticky elements, no `Display::Table*`, no `MultiColumn`, no `Anchor`) are no-ops.
 
 Steps 0, 1, 2, 3, 6, 7 always run. Steps 4-5 run only when `Container` components exist on any entity.
 

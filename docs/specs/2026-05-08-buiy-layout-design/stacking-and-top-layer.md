@@ -18,8 +18,8 @@ pub struct Stacking {
 }
 
 pub enum ZIndex {
-    Auto,                // CSS `z-index: auto` — does not form a stacking context on its own
-    Layer(i32),          // explicit; forms a stacking context
+    Auto,                // CSS `z-index: auto` — does not form a stacking context
+    Layer(i32),          // explicit; forms a stacking context iff `Position::Kind != Static` (CSS rule)
 }
 
 pub enum Isolation {
@@ -39,7 +39,7 @@ pub enum TopLayer {
 
 An entity forms a *stacking context* — a sub-tree painted as one unit, ordered against siblings by `z_index` — when **any** of:
 
-1. `Position::Static` AND `Stacking::z_index = Layer(_)` → CSS quirk: positioned-with-z-index forms a stacking context, but pure `z_index` on `Static` does *not*. So this rule actually requires `Position::Kind != Static` AND `z_index = Layer(_)`.
+1. `Position::Kind != Static` AND `Stacking::z_index = Layer(_)`. (CSS quirk: positioned-with-explicit-z-index forms a stacking context; `z_index` on a `Static` entity does *not*.)
 2. `Stacking::isolation = Isolate`.
 3. `Transform` is non-identity. (Detailed in [transforms-and-containment.md § 3](transforms-and-containment.md#3-stacking-context-formation).)
 4. `Containment::contain` includes `Paint` or `Strict`. (Detailed in [transforms-and-containment.md § 5](transforms-and-containment.md#5-containment).)

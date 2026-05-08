@@ -7,9 +7,10 @@ How an entity participates in layout (`Display`), how its box is placed relative
 ## 1. `Display`
 
 ```rust
-#[derive(Component, Reflect, Clone, PartialEq)]
+#[derive(Component, Reflect, Clone, PartialEq, Default)]
 #[reflect(Component, Default)]
 pub enum Display {
+    #[default]
     Block,
     Inline,
     InlineBlock,
@@ -65,7 +66,7 @@ Taffy 0.10 doesn't ship table layout. v1 implements semantic table layout (rows,
 2. Computes column widths via Taffy on a synthetic flex container per row group.
 3. Writes corrected positions back to `ResolvedLayout`.
 
-This is one of the larger v1 deliverables. The pass runs between [architecture.md § 3 step 5 and step 6](architecture.md#3-system-pipeline) — call it step 5b. Until table layout ships, `Display::Table*` falls back to `Block` with a `warn!` once per session.
+This is one of the larger v1 deliverables. The pass runs as sub-pass 6b ([architecture.md § 3](architecture.md#3-system-pipeline)) inside the post-Taffy-overrides phase. Until table layout ships, `Display::Table*` falls back to `Block` with a `warn!` once per session.
 
 ### 1.3 `Display::None` vs `Visibility::Hidden`
 
@@ -135,7 +136,7 @@ Taffy 0.10 supports `position: absolute` (and `relative` via offsets); `fixed` i
 
 ### 2.3 Sticky positioning
 
-A sticky element behaves as `Relative` until its scroll container's scroll offset crosses the inset threshold, then it sticks to the threshold edge until the element's parent leaves the threshold range. The pass runs during step 6 ([architecture.md § 3 system pipeline](architecture.md#3-system-pipeline)) so it sees fresh `ResolvedLayout` from Taffy plus current scroll offsets from the entity's nearest scroll container.
+A sticky element behaves as `Relative` until its scroll container's scroll offset crosses the inset threshold, then it sticks to the threshold edge until the element's parent leaves the threshold range. The pass runs as sub-pass 6a ([architecture.md § 3](architecture.md#3-system-pipeline)) so it sees fresh `ResolvedLayout` from Taffy plus current scroll offsets from the entity's nearest scroll container.
 
 Sticky offsets *do not* invalidate Taffy. The element's contribution to its parent's flow is computed as `Relative`; the sticky displacement is a render-time visual offset baked into `ResolvedLayout.position` after Taffy.
 
@@ -182,7 +183,7 @@ pub enum AnchorRef {
 
 ### 3.2 Resolution
 
-Step 6 of the pipeline ([architecture.md § 3](architecture.md#3-system-pipeline)) walks every entity with `Anchor.position_anchor.is_some()`:
+Sub-pass 6d of the pipeline ([architecture.md § 3](architecture.md#3-system-pipeline)) walks every entity with `Anchor.position_anchor.is_some()`:
 
 1. **Resolve anchor target.** Look up the anchor's `Entity` (by reference or named lookup) and read its `ResolvedLayout`.
 2. **Try fallbacks in order.** For each `PositionTry` in `position_try`, compute the anchored entity's would-be box (using `inset` relative to the anchor) and evaluate every condition. The first try whose conditions all pass wins.
