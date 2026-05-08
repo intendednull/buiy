@@ -9,6 +9,12 @@ description = "Workspace root package; exists only to host workspace-level integ
 [lib]
 path = "src/lib.rs"
 
+[dev-dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_winit", "x11", "wayland"] }
+buiy = { path = "crates/buiy" }
+buiy_core = { path = "crates/buiy_core" }
+buiy_verify = { path = "crates/buiy_verify" }
+
 [workspace]
 resolver = "2"
 members = [
