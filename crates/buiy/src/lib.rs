@@ -44,6 +44,16 @@ pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};
 /// `Button` click handler reads `Res<ButtonInput<MouseButton>>`. Bevy
 /// 0.18 panics when a `Res<T>` system param is missing, so the plugin
 /// must be present.
+///
+/// # Plugin order
+///
+/// Add `BuiyPlugin` **after** Bevy's render plugin (i.e., after
+/// `DefaultPlugins`). `BuiyPlugin::finish` registers `BuiyRenderPlugin`,
+/// whose `build` reads `PipelineCache` — a resource that
+/// `RenderPlugin::finish` inserts. Plugin `finish` runs in registration
+/// order, so adding `BuiyPlugin` before `DefaultPlugins` flips the order
+/// and panics when `BuiyRenderPlugin` reaches for the missing
+/// `PipelineCache`.
 pub struct BuiyPlugin;
 
 impl Plugin for BuiyPlugin {

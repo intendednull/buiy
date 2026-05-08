@@ -41,9 +41,12 @@ pub(crate) fn register(render_app: &mut SubApp) {
     let world = render_app.world_mut();
 
     // Load WGSL shader into the render world's Shader asset store.
+    // `Assets::insert` returns the previous asset at this id (always `None`
+    // here — `register` runs once during plugin finish). Explicit `_prev`
+    // documents that we are knowingly discarding it, not a fallible result.
     {
         let mut shaders = world.resource_mut::<Assets<Shader>>();
-        let _ = shaders.insert(
+        let _prev = shaders.insert(
             shader_handle().id(),
             Shader::from_wgsl(include_str!("shader.wgsl"), "buiy/render/shader.wgsl"),
         );

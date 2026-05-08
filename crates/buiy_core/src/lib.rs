@@ -42,6 +42,7 @@ impl Plugin for CorePlugin {
         app.register_type::<Node>()
             .register_type::<Style>()
             .register_type::<ResolvedLayout>()
+            .register_type::<FlexDirection>()
             .configure_sets(
                 Update,
                 (

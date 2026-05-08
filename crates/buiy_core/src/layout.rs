@@ -115,7 +115,9 @@ fn sync_and_compute_layout(
             .flatten()
             .filter_map(|c| tree.by_entity.get(c).copied())
             .collect();
-        let _ = tree.tree.set_children(parent_id, &child_ids);
+        if let Err(err) = tree.tree.set_children(parent_id, &child_ids) {
+            warn!(?entity, ?err, "buiy: layout set_children failed");
+        }
     }
 
     // Compute layout for roots (entities with Node and no Buiy parent).
@@ -132,14 +134,16 @@ fn sync_and_compute_layout(
         if !is_root {
             continue;
         }
-        if let Some(id) = tree.by_entity.get(&entity).copied() {
-            let _ = tree.tree.compute_layout(
+        if let Some(id) = tree.by_entity.get(&entity).copied()
+            && let Err(err) = tree.tree.compute_layout(
                 id,
                 Size {
                     width: AvailableSpace::Definite(window_size.x),
                     height: AvailableSpace::Definite(window_size.y),
                 },
-            );
+            )
+        {
+            warn!(?entity, ?err, "buiy: layout compute_layout failed");
         }
     }
 

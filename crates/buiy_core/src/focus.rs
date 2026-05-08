@@ -72,21 +72,6 @@ fn handle_tab(
     visible.0 = true;
 }
 
-/// Test-friendly helper: advance focus without needing an input event loop.
-pub fn advance_focus_for_test(app: &mut App, forward: bool) {
-    let focusables: Vec<(Entity, Focusable)> = app
-        .world_mut()
-        .query::<(Entity, &Focusable)>()
-        .iter(app.world())
-        .map(|(e, f)| (e, f.clone()))
-        .collect();
-    let mut focused = app.world_mut().resource_mut::<FocusedEntity>();
-    let prev = focused.0;
-    let next = compute_next_focus(&focusables, prev, forward);
-    focused.0 = next;
-    app.world_mut().resource_mut::<FocusVisible>().0 = true;
-}
-
 fn advance_focus(
     focusables: &Query<(Entity, &Focusable)>,
     focused: &mut FocusedEntity,

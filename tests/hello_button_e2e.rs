@@ -19,16 +19,28 @@
 
 use bevy::prelude::*;
 use buiy::*;
-use buiy_core::focus::advance_focus_for_test;
 use buiy_verify::a11y::{diff_snapshots, snapshot_tree};
 
 fn setup_scene(app: &mut App) {
-    // BuiyPlugin requires InputPlugin (which DefaultPlugins includes but
-    // MinimalPlugins doesn't). See `BuiyPlugin` doc in crates/buiy/src/lib.rs.
+    // BuiyPlugin reads `ButtonInput<KeyCode>` + `ButtonInput<MouseButton>`;
+    // init the resources directly instead of pulling in InputPlugin so the
+    // PreUpdate clear-system doesn't wipe test-driven presses before
+    // `handle_tab` runs in `BuiySet::Input`.
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::input::InputPlugin);
+    app.init_resource::<ButtonInput<KeyCode>>();
+    app.init_resource::<ButtonInput<MouseButton>>();
     app.add_plugins(BuiyPlugin);
     app.world_mut().spawn(Button::new("Save"));
+}
+
+fn press_tab(app: &mut App) {
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release_all();
+        keys.clear();
+        keys.press(KeyCode::Tab);
+    }
+    app.update();
 }
 
 #[test]
@@ -56,7 +68,7 @@ fn e2e_tab_focuses_button() {
     let mut app = App::new();
     setup_scene(&mut app);
     app.update();
-    advance_focus_for_test(&mut app, true);
+    press_tab(&mut app);
     let focused = app.world().resource::<FocusedEntity>().0;
     assert!(focused.is_some(), "Tab focuses the Button");
     assert!(
