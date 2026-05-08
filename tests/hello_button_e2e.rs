@@ -1,19 +1,30 @@
 //! Phase 0 end-to-end verification fixture. Exercises the full Buiy
 //! pipeline against the hello_button example scene:
 //!  - layout resolves
-//!  - render pipeline draws (no panic)
+//!  - render pipeline plugin loads (no panic on app.update())
 //!  - AccessKit tree snapshot matches golden
 //!  - Tab focuses the Button (FocusVisible = true)
-//!  - simulated click emits OnPress
-//!  - default theme passes WCAG 2 contrast lint
+//!
+//! Coverage NOT in this file:
+//! - Visual regression (CI gate #2): requires a wgpu adapter; covered by
+//!   `crates/buiy_verify/tests/visual.rs` for the diff primitive and by
+//!   the (currently `#[ignore]`d) `pipeline_registers_in_render_app` test
+//!   in `crates/buiy_core/tests/render_smoke.rs`. Real screenshot e2e
+//!   lands when CI runners with lavapipe / a real GPU come online.
+//! - Click → OnPress: covered in `crates/buiy_widgets/tests/button.rs`.
+//!   Driving a real click here would need synthetic pointer events;
+//!   v0.x work per `buiy-input-events-design`.
+//! - Contrast linter: covered in `crates/buiy_verify/tests/contrast.rs`
+//!   (`lint_theme_passes_for_default_light`). Not duplicated here.
 
 use bevy::prelude::*;
 use buiy::*;
 use buiy_core::focus::advance_focus_for_test;
 use buiy_verify::a11y::{diff_snapshots, snapshot_tree};
-use buiy_verify::contrast::lint_theme;
 
 fn setup_scene(app: &mut App) {
+    // BuiyPlugin requires InputPlugin (which DefaultPlugins includes but
+    // MinimalPlugins doesn't). See `BuiyPlugin` doc in crates/buiy/src/lib.rs.
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(BuiyPlugin);
@@ -54,16 +65,14 @@ fn e2e_tab_focuses_button() {
     );
 }
 
-#[test]
-fn e2e_default_theme_passes_aa_contrast() {
-    let theme = default_light_theme();
-    if let Err(violations) = lint_theme(&theme) {
-        panic!("default theme fails AA contrast: {violations:?}");
-    }
-}
-
 /// Replace entity-bit fields with a stable placeholder so goldens don't
 /// drift across test runs (entities are allocated dynamically).
+///
+/// LINT: Naive scanner. Assumes `"entity"` values in the snapshot are
+/// scalars (currently `u64` per `buiy_verify::a11y::WireNode`). Nested
+/// objects or strings containing `,`/`}` would corrupt the output. If
+/// the wire format ever grows non-scalar entity values, replace this
+/// with a `serde_json::Value` round-trip.
 fn canonicalize_entity_ids(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
