@@ -10,8 +10,15 @@ use crate::{BuiySet, focus::Focusable};
 use bevy::prelude::*;
 
 /// Decomposed AccessKit role component.
+///
+/// Marked `#[non_exhaustive]` because the v0.x full ARIA taxonomy
+/// expansion (38+ roles, see foundation spec accessibility.md § 3.11)
+/// will add variants pre-1.0. External matches must include a wildcard
+/// arm; the in-tree `buiy_verify::a11y::role_to_str` is structured this
+/// way already.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[reflect(Component)]
+#[non_exhaustive]
 pub enum A11yRole {
     #[default]
     Generic,

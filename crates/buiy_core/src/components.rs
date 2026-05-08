@@ -10,7 +10,11 @@ use bevy::prelude::*;
 /// Flex layout direction. Mirrors Taffy's `FlexDirection` for the
 /// row / column subset used in Phase 0; v0.x layout-design will widen
 /// this to include `RowReverse` / `ColumnReverse` when needed.
+///
+/// Marked `#[non_exhaustive]` because new variants are expected pre-1.0
+/// and external matches must opt in to handling them.
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FlexDirection {
     #[default]
     Row,

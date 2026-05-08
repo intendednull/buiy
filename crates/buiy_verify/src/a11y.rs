@@ -16,10 +16,15 @@ struct WireNode<'a> {
     focusable: bool,
 }
 
-// LINT: Keep this match in sync with `buiy_core::a11y::A11yRole`. When
-// the v0.x full ARIA taxonomy expansion lands (38+ roles per
-// accessibility.md § 3.11), Rust's exhaustiveness check will force
-// new arms — add them here in the same PR.
+// LINT: Keep this match in sync with `buiy_core::a11y::A11yRole`.
+// `A11yRole` is `#[non_exhaustive]`, so Rust requires a wildcard arm and
+// the compiler will *not* surface unhandled variants for us. When new
+// roles land in `buiy_core::a11y` (e.g. the v0.x full ARIA taxonomy per
+// accessibility.md § 3.11) the unknown stringification below shows up
+// in snapshot goldens and PRs touching that file must add the named
+// arms in the same PR. The fallback exists so external snapshots stay
+// well-formed across version skew, not as a substitute for keeping this
+// table current.
 fn role_to_str(r: A11yRole) -> &'static str {
     match r {
         A11yRole::Generic => "Generic",
@@ -31,6 +36,7 @@ fn role_to_str(r: A11yRole) -> &'static str {
         A11yRole::Dialog => "Dialog",
         A11yRole::AlertDialog => "AlertDialog",
         A11yRole::Tooltip => "Tooltip",
+        _ => "Unknown",
     }
 }
 
