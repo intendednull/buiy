@@ -1,7 +1,7 @@
 # Buiy Phase 0 Foundations Implementation Plan
 
 **Date:** 2026-05-07
-**Status:** draft
+**Status:** landed
 **Spec:** [specs/2026-05-07-buiy-foundation/README.md](../specs/2026-05-07-buiy-foundation/README.md)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -2751,11 +2751,11 @@ git commit -m "ci: lint + test workflow on Linux / macOS / Windows"
 
 This isn't a code task — it's the executor's checklist before merging Phase 0.
 
-- [ ] **Step 1:** Re-read the foundation spec [README](../specs/2026-05-07-buiy-foundation/README.md) and confirm every Phase 0 commitment in the **Spec coverage map** above is realized in code or explicitly deferred with a sub-spec reference.
-- [ ] **Step 2:** Run `cargo doc --workspace --no-deps --open` and skim the public API. Each crate should have a single-paragraph crate-level doc and per-item docs. Add missing docs.
-- [ ] **Step 3:** Run `cargo deny check` if `deny.toml` is configured (license + advisory check). Defer to v0.x if `cargo-deny` isn't yet installed.
-- [ ] **Step 4:** Run a final `cargo test --workspace` locally. Fix any flake by re-running once and root-causing if it persists; do NOT mark the test ignored.
-- [ ] **Step 5:** Update `docs/README.md` index if Phase 0 introduces new conventions worth surfacing (it should not, since the spec already commits them).
+- [x] **Step 1:** Re-read the foundation spec [README](../specs/2026-05-07-buiy-foundation/README.md) and confirm every Phase 0 commitment in the **Spec coverage map** above is realized in code or explicitly deferred with a sub-spec reference.
+- [x] **Step 2:** Run `cargo doc --workspace --no-deps --open` and skim the public API. Each crate should have a single-paragraph crate-level doc and per-item docs. Add missing docs.
+- [x] **Step 3:** Run `cargo deny check` if `deny.toml` is configured (license + advisory check). Defer to v0.x if `cargo-deny` isn't yet installed.
+- [x] **Step 4:** Run a final `cargo test --workspace` locally. Fix any flake by re-running once and root-causing if it persists; do NOT mark the test ignored.
+- [x] **Step 5:** Update `docs/README.md` index if Phase 0 introduces new conventions worth surfacing (it should not, since the spec already commits them).
 
 ---
 

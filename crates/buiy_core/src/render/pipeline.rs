@@ -10,11 +10,12 @@ use bevy::asset::uuid::Uuid;
 use bevy::mesh::VertexBufferLayout;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    BlendState, CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, FrontFace,
-    MultisampleState, PipelineCache, PolygonMode, PrimitiveState, PrimitiveTopology,
-    RenderPipelineDescriptor, TextureFormat, VertexAttribute, VertexFormat, VertexState,
-    VertexStepMode,
+    BlendState, Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
+    ColorTargetState, ColorWrites, FragmentState, FrontFace, MultisampleState, PipelineCache,
+    PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipelineDescriptor, TextureFormat,
+    VertexAttribute, VertexFormat, VertexState, VertexStepMode,
 };
+use bevy::render::renderer::RenderDevice;
 use bevy::shader::Shader;
 
 /// Stable UUID for the rounded-rect shader asset.
@@ -35,6 +36,11 @@ pub fn shader_handle() -> Handle<Shader> {
 #[derive(Resource)]
 pub struct BuiyPipeline {
     pub id: CachedRenderPipelineId,
+    /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
+    /// at pipeline registration and reused every frame. Phase 0 closeout
+    /// scope: vertex emission order matches the `cull_mode: None` setting in
+    /// the descriptor; v0.x tightens to back-face culling.
+    pub vertex_buffer: Buffer,
 }
 
 pub(crate) fn register(render_app: &mut SubApp) {
@@ -111,10 +117,9 @@ pub(crate) fn register(render_app: &mut SubApp) {
         primitive: PrimitiveState {
             topology: PrimitiveTopology::TriangleStrip,
             front_face: FrontFace::Ccw,
-            // Phase 0: cull_mode = None until Task 11 fixes the unit-quad
-            // emission order. A naive `(0,0),(1,0),(0,1),(1,1)` strip mixes
-            // CCW and CW windings; back-face culling would silently drop the
-            // quad. Tighten to Some(Face::Back) once Task 11 verifies winding.
+            // cull_mode: None — Phase 0 closeout deliberate choice. The
+            // TL/BL/TR/BR strip order produces consistent winding; tightening
+            // to Some(Face::Back) is deferred to v0.x.
             cull_mode: None,
             polygon_mode: PolygonMode::Fill,
             ..default()
@@ -134,6 +139,44 @@ pub(crate) fn register(render_app: &mut SubApp) {
         zero_initialize_workgroup_memory: false,
     };
 
+    let render_device = world.resource::<RenderDevice>();
+
+    // Unit quad in (pos, uv) interleaved layout, matching the vertex-buffer
+    // layout in `descriptor.vertex.buffers[0]`. TriangleStrip order: TL, BL,
+    // TR, BR — both triangles wind consistently, which the v0.x backface-cull
+    // tightening will rely on.
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+    struct QuadVertex {
+        pos: [f32; 2],
+        uv: [f32; 2],
+    }
+
+    let quad: [QuadVertex; 4] = [
+        QuadVertex {
+            pos: [0.0, 0.0],
+            uv: [0.0, 0.0],
+        }, // TL
+        QuadVertex {
+            pos: [0.0, 1.0],
+            uv: [0.0, 1.0],
+        }, // BL
+        QuadVertex {
+            pos: [1.0, 0.0],
+            uv: [1.0, 0.0],
+        }, // TR
+        QuadVertex {
+            pos: [1.0, 1.0],
+            uv: [1.0, 1.0],
+        }, // BR
+    ];
+
+    let vertex_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("buiy_unit_quad_vbo"),
+        contents: bytemuck::cast_slice(&quad),
+        usage: BufferUsages::VERTEX,
+    });
+
     let id = pipeline_cache.queue_render_pipeline(descriptor);
-    world.insert_resource(BuiyPipeline { id });
+    world.insert_resource(BuiyPipeline { id, vertex_buffer });
 }

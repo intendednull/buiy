@@ -13,29 +13,38 @@ use crate::{
 use bevy::prelude::*;
 use bevy::render::{Extract, ExtractSchedule, RenderApp};
 
+pub mod instance;
 pub mod node;
 pub mod pipeline;
 
 /// What the render world needs from the main world per frame: a list of
-/// (rect, color, radius) tuples in window-local logical pixels.
+/// (rect, color, radius) tuples in window-local logical pixels, plus the
+/// primary window size used to convert them to clip space.
 ///
-/// `#[non_exhaustive]` — the full pipeline (top-layer compositing,
-/// clip-path, filters, blend modes, atlasing per
-/// `buiy-render-pipeline-design`) will add fields here. The render
-/// world does not re-export this for main-world consumers, so the only
-/// out-of-crate audience is render-graph plugin authors who already
-/// know to update through `..Default::default()` shims.
+/// Populated only by `extract_buiy_draws` inside `ExtractSchedule`; this
+/// resource is not part of the main-world public API and external authors
+/// should not construct it directly. `#[non_exhaustive]` keeps additions
+/// (top-layer compositing, clip-path, filters, blend modes, atlasing per
+/// `buiy-render-pipeline-design`) non-breaking.
 #[derive(Resource, Default, Clone)]
 #[non_exhaustive]
 pub struct ExtractedDraws {
     pub draws: Vec<DrawData>,
+    /// Logical-pixel size of the primary window this frame. Populated by the
+    /// extract system. Render-graph nodes use this to convert
+    /// `DrawData` (px) → `InstanceData` (clip) per the Phase 0 closeout
+    /// design. Zero on frames where no window exists; the render node
+    /// must skip drawing in that case.
+    pub window_size: Vec2,
 }
 
 /// One rectangle in the Phase 0 render queue. Marked `#[non_exhaustive]`
 /// because the full pipeline (clip-path, filters, blend modes, etc.)
-/// will add per-draw fields pre-1.0. `Default` is derived so external
-/// authors can construct via the `..Default::default()` shim referenced
-/// in `ExtractedDraws` above.
+/// will add per-draw fields pre-1.0.
+///
+/// External callers construct via [`DrawData::new`]; the `#[non_exhaustive]`
+/// attribute prevents struct-literal construction from outside the crate so
+/// new fields added here remain non-breaking per SemVer.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct DrawData {
@@ -43,6 +52,22 @@ pub struct DrawData {
     pub size: Vec2,
     pub color: Color,
     pub radius: f32,
+}
+
+impl DrawData {
+    /// Construct a [`DrawData`] with all Phase 0 fields.
+    ///
+    /// Using a constructor rather than struct literal syntax is required by the
+    /// `#[non_exhaustive]` attribute when constructing from outside the crate.
+    /// Future fields are added here with default values to remain non-breaking.
+    pub fn new(position: Vec2, size: Vec2, color: Color, radius: f32) -> Self {
+        Self {
+            position,
+            size,
+            color,
+            radius,
+        }
+    }
 }
 
 pub struct BuiyRenderPlugin;
@@ -74,8 +99,13 @@ fn extract_buiy_draws(
     mut commands: Commands,
     main_world_q: Extract<Query<(&Style, &ResolvedLayout), With<Node>>>,
     main_world_theme: Extract<Res<Theme>>,
+    main_world_windows: Extract<Query<&Window, With<bevy::window::PrimaryWindow>>>,
 ) {
     let mut draws = ExtractedDraws::default();
+    if let Ok(window) = main_world_windows.single() {
+        let res = window.resolution.size();
+        draws.window_size = Vec2::new(res.x, res.y);
+    }
     for (style, layout) in main_world_q.iter() {
         let color = match main_world_theme.color(&style.background_token) {
             Some(c) => c,

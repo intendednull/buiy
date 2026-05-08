@@ -17,7 +17,7 @@ pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A
 pub use components::{FlexDirection, Node, ResolvedLayout, Style};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::LayoutPlugin;
-pub use picking::{Hovered, PickingPlugin, hit_test};
+pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
 /// → Picking → A11yUpdate → Render.

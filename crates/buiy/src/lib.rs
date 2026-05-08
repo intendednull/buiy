@@ -6,10 +6,10 @@ use bevy::prelude::*;
 
 pub use buiy_core::{
     BuiySet, CorePlugin,
-    a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder},
+    a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin},
     components::{FlexDirection, Node, ResolvedLayout, Style},
     focus::{FocusVisible, Focusable, FocusedEntity},
-    picking::Hovered,
+    picking::{BuiyPickingBackendPlugin, Hovered},
     theme::{Theme, UserPreferences, default_light_theme},
 };
 pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};
@@ -45,6 +45,11 @@ pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};
 /// 0.18 panics when a `Res<T>` system param is missing, so the plugin
 /// must be present.
 ///
+/// `BuiyPlugin` also composes `bevy::picking::PickingPlugin` (the core
+/// bevy_picking infrastructure), so you do not need to add it separately.
+/// If you are using `DefaultPlugins`, bevy_picking is not included by
+/// default; `BuiyPlugin` adds it for you.
+///
 /// # Plugin order
 ///
 /// Add `BuiyPlugin` **after** Bevy's render plugin (i.e., after
@@ -58,20 +63,27 @@ pub struct BuiyPlugin;
 
 impl Plugin for BuiyPlugin {
     fn build(&self, app: &mut App) {
-        // Sub-plugin order matches architecture.md § 2.8 documented order:
-        // core → theme → a11y → focus → input → text → widgets → ...
-        // Phase 0 omits text / animation / forms / devtools; LayoutPlugin
-        // and PickingPlugin (which aren't enumerated as sub-plugins in § 2.8
-        // because their work lives in BuiySet::Layout and BuiySet::Picking)
-        // are slotted between Focus and Widgets so widgets see resolved
-        // layout + hit-test results when they run in the same frame.
+        // Sub-plugin order matches architecture.md § 2.8: core → theme → a11y →
+        // focus → input → text → widgets. Phase 0 omits text/animation/forms/
+        // devtools. LayoutPlugin, bevy::picking::PickingPlugin, Buiy's
+        // PickingPlugin, and BuiyPickingBackendPlugin slot between Focus and
+        // Widgets so widgets see resolved layout + hit-test results in the same
+        // frame. bevy_picking must come first because it registers PickingSystems
+        // sets + Messages<PointerHits>; the two Buiy plugins consume both.
         app.add_plugins((
             CorePlugin,
             buiy_core::theme::ThemePlugin,
             buiy_core::a11y::A11yPlugin,
+            buiy_core::a11y::AccessKitAdapterPlugin,
             buiy_core::focus::FocusPlugin,
             buiy_core::layout::LayoutPlugin,
+            // bevy_picking::PickingPlugin registers PickingSystems system sets
+            // and the Messages<PointerHits> message resource that both
+            // PickingPlugin and BuiyPickingBackendPlugin depend on. Must come
+            // before the two Buiy picking plugins.
+            bevy::picking::PickingPlugin,
             buiy_core::picking::PickingPlugin,
+            buiy_core::picking::BuiyPickingBackendPlugin,
             WidgetsPlugin,
         ));
     }

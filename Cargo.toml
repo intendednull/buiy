@@ -38,10 +38,18 @@ rust-version = "1.85"
 # bevy_picking backend, image-compare for SSIM, thiserror for typed errors)
 # return when the consuming task lands. See review notes in
 # docs/plans/2026-05-07-buiy-phase-0-foundations.md.
-bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "x11", "wayland"] }
+# Phase 0 closeout (2026-05-08) added: bytemuck (instance buffer POD),
+# accesskit + accesskit_winit (per-window adapter), bevy_picking feature
+# on bevy. Still deferred: image-compare (visual harness upgrade is v0.x
+# verification work), thiserror (no error-typing pressure yet).
+bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "bevy_picking", "x11", "wayland"] }
 taffy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = "0.25"
 proptest = "1"
 tracing = "0.1"
+# Phase 0 closeout deps (closeout plan 2026-05-08).
+bytemuck = { version = "1", features = ["derive"] }
+accesskit = "0.21"
+accesskit_winit = "0.29"

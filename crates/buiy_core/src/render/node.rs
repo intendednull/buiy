@@ -8,19 +8,13 @@
 //! force Buiy to manage its own color-space matching with the rest of the
 //! frame, which is unnecessary complexity for Phase 0.
 //!
-//! IMPORTANT (clip-space conversion): the extract phase (in `mod.rs`) emits
-//! `DrawData.position / size` in **logical pixels** (from `ResolvedLayout`),
-//! but the rounded-rect shader (in `shader.wgsl`) consumes them as
-//! **clip-space units**. The Phase 0 conversion happens HERE on the CPU
-//! before the instance buffer is written: we compute
-//!   clip = (px / window_size) * 2.0 - 1.0   (with y-flip)
-//! per-element. Future Phase 1+ may move this to a view uniform; flag in
-//! `buiy-render-pipeline-design`.
-//!
-//! Phase 0 status: this node ships the *render-graph wiring* + a
-//! `set_render_pipeline` call so the pass exists and the pipeline is bound,
-//! but vertex / instance buffer construction is deferred to v0.x. Task 19
-//! (the e2e screenshot harness) is responsible for end-to-end verification.
+//! Phase 0 closeout (2026-05-08): this node builds the instance buffer
+//! per-frame from `ExtractedDraws` (logical-pixel → clip-space conversion
+//! lives in `render::instance::to_instance`) and issues an instanced
+//! `draw(0..4, 0..n)` against the static unit-quad VBO held on
+//! `BuiyPipeline`. v0.x upgrades to persistent buffers + bind groups for
+//! filters / atlas (`buiy-render-pipeline-design`); the conversion will
+//! move to a view uniform at that point.
 
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::query::QueryItem;
@@ -29,12 +23,12 @@ use bevy::render::{
     render_graph::{
         NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
     },
-    render_resource::{PipelineCache, RenderPassDescriptor},
+    render_resource::{BufferInitDescriptor, BufferUsages, PipelineCache, RenderPassDescriptor},
     renderer::RenderContext,
     view::ViewTarget,
 };
 
-use super::{ExtractedDraws, pipeline::BuiyPipeline};
+use super::{ExtractedDraws, instance::to_instance, pipeline::BuiyPipeline};
 
 #[derive(Default)]
 pub struct BuiyNode;
@@ -52,32 +46,39 @@ impl ViewNode for BuiyNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let buiy_pipeline = world.resource::<BuiyPipeline>();
         let Some(pipeline) = pipeline_cache.get_render_pipeline(buiy_pipeline.id) else {
-            // Pipeline still compiling; skip this frame. The next frame will
-            // either succeed or surface an error from the pipeline cache.
             return Ok(());
         };
         let draws = world.resource::<ExtractedDraws>();
-        if draws.draws.is_empty() {
+        if draws.draws.is_empty() || draws.window_size.x <= 0.0 || draws.window_size.y <= 0.0 {
             return Ok(());
         }
 
+        // Pack instances. Phase 0 closeout: per-frame allocation; v0.x
+        // (`buiy-render-pipeline-design`) introduces persistent buffers.
+        let instances: Vec<_> = draws
+            .draws
+            .iter()
+            .map(|d| to_instance(d, draws.window_size))
+            .collect();
+
+        let render_device = render_context.render_device();
+        let instance_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("buiy_instance_vbo"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: BufferUsages::VERTEX,
+        });
+
         let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("buiy_pass"),
-            // `get_color_attachment()` returns the post-MSAA-resolve target
-            // (when MSAA is enabled) and respects ViewTarget's ping-pong
-            // logic. Using `main_texture_view()` directly would bypass that
-            // and break post-processing composition.
             color_attachments: &[Some(view_target.get_color_attachment())],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
         });
         pass.set_render_pipeline(pipeline);
-        // Phase 0: vertex + instance buffers built per-frame here. v0.x
-        // upgrades to persistent buffers + bind groups for filters / atlas.
-        // The buffer-construction code is deferred to a follow-up task — this
-        // task ships the *render-graph wiring* so the node is present and
-        // running, even if the actual draw-call encoding is a TODO.
+        pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        pass.draw(0..4, 0..instances.len() as u32);
         Ok(())
     }
 }

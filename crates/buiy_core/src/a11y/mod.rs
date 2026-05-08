@@ -9,6 +9,12 @@
 use crate::{BuiySet, focus::Focusable};
 use bevy::prelude::*;
 
+pub mod adapter;
+pub mod translate;
+
+pub use adapter::AccessKitAdapterPlugin;
+pub use translate::{build_tree_update, to_accesskit_node};
+
 /// Decomposed AccessKit role component.
 ///
 /// Marked `#[non_exhaustive]` because the v0.x full ARIA taxonomy
@@ -81,7 +87,7 @@ impl Plugin for A11yPlugin {
 }
 
 #[allow(clippy::type_complexity)]
-fn build_tree(
+pub(crate) fn build_tree(
     mut builder: ResMut<A11yTreeBuilder>,
     q: Query<(
         Entity,
