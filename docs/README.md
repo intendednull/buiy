@@ -48,6 +48,12 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Phase 0 foundations](plans/2026-05-07-buiy-phase-0-foundations.md) — workspace, BuiyPlugin, system sets, minimal render/layout/a11y/focus/picking/theme, verification harness skeleton, hello-world Button. `[draft]`
 
+### Layout
+
+**Specs**
+
+- [Buiy layout design](specs/2026-05-08-buiy-layout-design.md) — Taffy integration, decomposed components, `Length`, container queries, anchor positioning, writing-mode. `[draft]`
+
 ### Docs infrastructure
 
 **Specs**
