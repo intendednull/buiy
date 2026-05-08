@@ -50,6 +50,26 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
 
+  deny:
+    name: Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Pin cargo-deny to a known version so the config schema (v2)
+      # stays in sync with the binary; bump in a dedicated PR that also
+      # re-runs the check. `cargo audit` is intentionally not added —
+      # `cargo deny check advisories` reads the same RustSec database,
+      # so adding both would be redundant.
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.19.4
+      # Runs all four checks (advisories, bans, licenses, sources).
+      # The advisories check fails CI on RustSec vulnerabilities and on
+      # `unmaintained` advisories that we have not explicitly ignored
+      # in deny.toml.
+      - name: cargo deny check
+        run: cargo deny check
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
