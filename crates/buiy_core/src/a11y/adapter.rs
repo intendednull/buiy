@@ -26,59 +26,47 @@ use crate::a11y::translate::build_tree_update;
 use crate::focus::FocusedEntity;
 use bevy::prelude::*;
 use bevy::winit::accessibility::ACCESS_KIT_ADAPTERS;
-use std::collections::HashMap;
-
-/// Registry of window entities that Buiy has successfully pushed at least one
-/// tree update to. This is a `NonSend` resource for API symmetry with
-/// bevy_winit's internal adapter storage; the actual `Adapter` objects live
-/// in bevy_winit's `ACCESS_KIT_ADAPTERS` thread-local.
-///
-/// Phase 0 closeout: the map is populated during `push_tree_updates` and
-/// exposed so callers can observe which windows received a tree update.
-/// The `adapters` field mirrors the plan's naming (the plan assumed we'd
-/// own the adapters directly; in Bevy 0.18 the adapter lifecycle belongs to
-/// `bevy_winit::prepare_accessibility_for_window`).
-#[derive(Default)]
-pub struct AccessKitAdapters {
-    /// Windows that have received at least one `TreeUpdate` this session.
-    /// Empty when no winit windows are present (e.g. in tests with MinimalPlugins).
-    pub adapters: HashMap<Entity, ()>,
-}
 
 /// Plugin that wires `A11yTreeBuilder` → bevy_winit's per-window
 /// AccessKit adapters each frame.
+///
+/// `push_tree_updates` is ordered `.after(crate::a11y::build_tree)` so it
+/// observes the freshly built snapshot for the current frame, not the
+/// previous one. Both systems live in `BuiySet::A11yUpdate`; without the
+/// explicit dependency Bevy's scheduler is free to reorder them
+/// (ambiguity-detection defaults to `LogLevel::Ignore`).
 pub struct AccessKitAdapterPlugin;
 
 impl Plugin for AccessKitAdapterPlugin {
     fn build(&self, app: &mut App) {
-        app.init_non_send_resource::<AccessKitAdapters>()
-            .add_systems(Update, push_tree_updates.in_set(BuiySet::A11yUpdate));
+        app.add_systems(
+            Update,
+            push_tree_updates
+                .in_set(BuiySet::A11yUpdate)
+                .after(crate::a11y::build_tree),
+        );
     }
 }
 
-fn push_tree_updates(
-    builder: Res<A11yTreeBuilder>,
-    focused: Res<FocusedEntity>,
-    mut adapters: NonSendMut<AccessKitAdapters>,
-) {
+fn push_tree_updates(builder: Res<A11yTreeBuilder>, focused: Res<FocusedEntity>) {
     use crate::a11y::translate::node_id_for;
 
     let focused_id = focused.0.map(node_id_for);
     let snapshot = builder.snapshot();
-    if snapshot.is_empty() && focused_id.is_none() {
-        return;
-    }
 
-    // Build the update once; `TreeUpdate` derives `Clone` in accesskit 0.21
-    // so cloning per adapter is cheap for the typical single-window case.
+    // Always build and push, even when the snapshot is empty. An empty
+    // TreeUpdate (root-only) is the correct signal for the AT to clear
+    // stale state when all widgets are removed (dialog close, scene
+    // transition, etc.). `accesskit_unix::Adapter::update_if_active` diffs
+    // and emits `ChildRemoved` events when given a root-only TreeUpdate.
+    // The `with_borrow_mut` loop is a no-op when no winit windows exist
+    // (e.g. tests with `MinimalPlugins`).
     let update = build_tree_update(snapshot, focused_id);
 
     ACCESS_KIT_ADAPTERS.with_borrow_mut(|ak_adapters| {
-        for (window_id, adapter) in ak_adapters.iter_mut() {
+        for (_window_id, adapter) in ak_adapters.iter_mut() {
             let cloned = update.clone();
             adapter.update_if_active(|| cloned);
-            // Record that we've pushed to this window.
-            adapters.adapters.entry(*window_id).or_insert(());
         }
     });
 }

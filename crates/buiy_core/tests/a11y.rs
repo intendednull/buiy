@@ -7,7 +7,8 @@ use buiy_core::{
 
 #[test]
 fn adapter_plugin_loads_without_panic() {
-    use buiy_core::a11y::{AccessKitAdapterPlugin, AccessKitAdapters};
+    use bevy::winit::accessibility::ACCESS_KIT_ADAPTERS;
+    use buiy_core::a11y::AccessKitAdapterPlugin;
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -19,15 +20,17 @@ fn adapter_plugin_loads_without_panic() {
     // doesn't include `InputPlugin`, so we seed the resource manually —
     // same pattern used in `tests/focus.rs`.
     app.init_resource::<ButtonInput<KeyCode>>();
+    // The plugin must install `push_tree_updates` without panicking, even
+    // when no winit windows exist. Real adapter creation is exercised by
+    // running the `hello_button` example end-to-end.
     app.update();
-    // No winit windows present → adapter map stays empty. The plugin still
-    // installs its lifecycle systems without panicking. Real adapter
-    // creation is exercised by running the `hello_button` example end-to-end.
-    let adapters = app.world().get_non_send_resource::<AccessKitAdapters>();
-    assert!(adapters.is_some(), "AccessKitAdapters resource present");
+    // bevy_winit's `ACCESS_KIT_ADAPTERS` thread-local is the source of truth
+    // for which windows have AccessKit adapters. Under MinimalPlugins no
+    // winit windows are spawned, so the map stays empty.
+    let bevy_adapters_empty = ACCESS_KIT_ADAPTERS.with_borrow(|m| m.0.is_empty());
     assert!(
-        adapters.unwrap().adapters.is_empty(),
-        "no adapters created without winit windows"
+        bevy_adapters_empty,
+        "no bevy_winit adapters created under MinimalPlugins"
     );
 }
 

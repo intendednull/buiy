@@ -61,3 +61,39 @@ fn focused_node_id_round_trips() {
     let update = build_tree_update(&views, Some(focused_id));
     assert_eq!(update.focus, focused_id);
 }
+
+#[test]
+fn description_round_trips() {
+    let view = A11yNodeView {
+        entity: Entity::from_raw_u32(1).unwrap(),
+        role: A11yRole::Button,
+        name: "Save".into(),
+        description: "Saves the document".into(),
+        focusable: true,
+    };
+    let node = to_accesskit_node(&view);
+    assert_eq!(node.description(), Some("Saves the document"));
+}
+
+#[test]
+fn focusable_view_has_focus_action() {
+    let focusable = A11yNodeView {
+        entity: Entity::from_raw_u32(1).unwrap(),
+        role: A11yRole::Button,
+        name: "Click".into(),
+        description: String::new(),
+        focusable: true,
+    };
+    let node = to_accesskit_node(&focusable);
+    assert!(node.supports_action(accesskit::Action::Focus));
+
+    let non_focusable = A11yNodeView {
+        entity: Entity::from_raw_u32(2).unwrap(),
+        role: A11yRole::Generic,
+        name: "Container".into(),
+        description: String::new(),
+        focusable: false,
+    };
+    let node = to_accesskit_node(&non_focusable);
+    assert!(!node.supports_action(accesskit::Action::Focus));
+}

@@ -6,10 +6,7 @@ use bevy::prelude::*;
 
 pub use buiy_core::{
     BuiySet, CorePlugin,
-    a11y::{
-        A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin,
-        AccessKitAdapters,
-    },
+    a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin},
     components::{FlexDirection, Node, ResolvedLayout, Style},
     focus::{FocusVisible, Focusable, FocusedEntity},
     picking::Hovered,
