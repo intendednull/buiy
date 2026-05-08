@@ -128,9 +128,11 @@ pub enum TextOrientation { Mixed, Upright, Sideways }
 pub enum UnicodeBidi { Normal, Embed, Isolate, BidiOverride, IsolateOverride, Plaintext }
 ```
 
+`text_orientation` is foundation tier-E ([visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout)) — the value is stored on `WritingMode` for forward compatibility, but the glyph-rotation that consumes it lives in `buiy-text-rendering-design` and is not shipped in v1. v1 layout treats every `TextOrientation` as `Mixed` for glyph orientation; vertical layout itself (the part this spec owns) honors `mode` regardless.
+
 ### 2.2 Inheritance
 
-`WritingMode` *inherits down the entity hierarchy*. The effective writing-mode for an entity is its own `WritingMode` if set, else the nearest ancestor's. A `WritingModeResolved` private component is synced during step 1 (`SyncStyles`) so downstream logical→physical translation is `O(1)` per entity.
+`WritingMode` *inherits down the entity hierarchy*. The effective writing-mode for an entity is its own `WritingMode` if set, else the nearest ancestor's. A `WritingModeResolved` private component is synced by an inheritance pass that runs *before* step 1 ([architecture.md § 1.2](architecture.md#change-detection-trigger-set)) so step 1's logical→physical translation is `O(1)` per entity.
 
 Changing `WritingMode` on a parent invalidates `WritingModeResolved` on every descendant via Bevy change detection. The walking is `O(subtree size)`; mass theme switches are absorbed because writing-mode changes are rare relative to other layout mutations.
 

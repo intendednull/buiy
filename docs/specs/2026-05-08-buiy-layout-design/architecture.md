@@ -54,21 +54,22 @@ Two layers, distinct roles.
 
 ### 2.1 Decomposed components — canonical storage
 
-Per the project convention (foundation goal §1.3, `buiy-bsn-integration-design` issue #19), each layout property lives in a small public-fielded `Component`. Default lists (numbers indicative of the file that owns each):
+Per the project convention (foundation goal §1.3, `buiy-bsn-integration-design` issue #19), each layout property lives in a small public-fielded `Component`. The table below lists the *author-set styling* components — the surface a Bundle expansion or BSN file writes. Rule-carriers (`ContainerQuery`), runtime state (`ScrollOffset`), longhand transforms (`Translate` / `Rotate` / `Scale`), and per-item child-side styling (`ScrollSnapItem`) live in their owning files but are not on this table.
 
 | Component | Owner file | Concerns |
 |---|---|---|
 | `BoxModel` | [box-model.md](box-model.md) | width/height + min/max, padding, margin, border, box-sizing, aspect-ratio, logical aliases |
 | `Display` | [display-and-positioning.md](display-and-positioning.md) | Display enum (Block, Inline, Flex, Grid, Table*, FlowRoot, Contents, ListItem, Ruby, None) |
 | `Position` | [display-and-positioning.md](display-and-positioning.md) | static/relative/absolute/fixed/sticky + inset (logical+physical) |
-| `Anchor` | [display-and-positioning.md](display-and-positioning.md) | anchor-name, position-anchor, anchor()/anchor-size(), position-try chain |
+| `Anchor` | [display-and-positioning.md](display-and-positioning.md) | anchor-name, position-anchor, position-try chain (anchor-size() deferred to v1.x) |
 | `FlexParams` | [flex-and-grid.md](flex-and-grid.md) | flex-direction, wrap, justify, align, gap |
 | `FlexItem` | [flex-and-grid.md](flex-and-grid.md) | flex-grow/shrink/basis, order, align-self |
 | `GridParams` | [flex-and-grid.md](flex-and-grid.md) | grid-template-{columns,rows,areas}, auto-flow, gap |
 | `GridItem` | [flex-and-grid.md](flex-and-grid.md) | grid-{column,row,area}, justify-self, align-self |
+| `MultiColumn` | [flex-and-grid.md](flex-and-grid.md) | column-count/width/gap/rule/span/fill, break-{inside,before,after} (tier-E, stub in v1) |
 | `Container` | [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) | container-type, container-name |
 | `WritingMode` | [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) | writing-mode, direction, text-orientation, unicode-bidi |
-| `Overflow` | [overflow-and-scrolling.md](overflow-and-scrolling.md) | overflow per axis, scrollbar-gutter, scroll-behavior |
+| `Overflow` | [overflow-and-scrolling.md](overflow-and-scrolling.md) | overflow per axis, scrollbar-gutter, scroll-behavior, overscroll-behavior |
 | `Scroll` | [overflow-and-scrolling.md](overflow-and-scrolling.md) | snap-type/align/stop, snap padding/margin |
 | `Stacking` | [stacking-and-top-layer.md](stacking-and-top-layer.md) | z-index, isolation, top-layer marker |
 | `Transform` | [transforms-and-containment.md](transforms-and-containment.md) | transform, translate/rotate/scale longhands, transform-origin, perspective |
@@ -113,7 +114,28 @@ The fluent methods are sugar; each one writes the same field the struct literal 
 
 Re-inserting `Style` replaces every component it would produce. To partially update layout, insert the decomposed component directly — `commands.entity(e).insert(BoxModel { padding: Edges::all(8.0), ..default() })`.
 
-### 2.4 BSN authoring
+### 2.4 Child-side components: decomposed-only
+
+`Style` covers an entity's *self-styling* — properties that describe the entity's own box (`BoxModel`, `Display`, `Position`, `Overflow`, etc.) and the *container side* of layout algorithms it participates in (`FlexParams` when it's a flex container, `GridParams` when it's a grid container, `Container` when it's a query container).
+
+The *child side* — properties that only make sense on a child of a particular container (`FlexItem`, `GridItem`, `ScrollSnapItem`) — and `Anchor` (which describes a relationship to another entity) live as decomposed components only. They are spawned alongside `Style` rather than nested inside it:
+
+```rust
+commands.spawn((
+    Style::default().flex_row().justify_content(JustifyContent::SpaceBetween),
+    /* container's own self-styling above */,
+)).with_children(|p| {
+    p.spawn((Style::default(), FlexItem { grow: 1.0, ..default() }));
+    p.spawn((Style::default(), FlexItem { grow: 2.0, ..default() }));
+    p.spawn((Style::default(), FlexItem { grow: 1.0, ..default() }));
+});
+```
+
+Rationale: `Style`'s field set is bounded by an entity's self-shape, not by the cross-product with every algorithm an ancestor might run. Folding `FlexItem` / `GridItem` into `Style` would either explode `Style`'s schema or require it to know which container algorithm is active in scope (which it can't at insert time). Keeping these decomposed sidesteps the question.
+
+For `Anchor` specifically: anchored elements are typically rare (tooltips, popovers, dropdowns) and each carries a non-trivial `position_try` chain. The decomposed-only convention keeps `Style`'s authoring surface focused on the 95% case.
+
+### 2.5 BSN authoring
 
 BSN files reference decomposed components by name, not the `Style` builder. The builder is a Rust-API convenience; BSN is the portable serialization layer.
 
@@ -138,6 +160,8 @@ One ordered chain runs in `BuiySet::Layout`:
 
 Each sub-pass of step 6 mutates `ResolvedLayout` for entities matching its concern; sub-passes are independent (sticky doesn't read tables, multi-column doesn't read anchors), so the relative order is the order in which their writes get composed for entities that hit more than one. Sub-passes that have no work (no sticky elements, no `Display::Table*`, no `MultiColumn`, no `Anchor`) are no-ops.
 
+**Commands-flush boundary.** All eight steps run as a single chained system set inside `BuiySet::Layout`; the sub-passes of step 6 (6a-6d) share one `Commands` buffer and one query state with steps 1, 2, 3, 4, 5, 7. The buffer is applied at `BuiySet::Layout`'s end (step 7's completion). This means a despawn issued by sub-pass 6c is **not visible** to sub-pass 6d's queries — both see the same world snapshot established at step 0. Authors must not depend on intra-pipeline despawn visibility; if a despawn must take effect mid-pipeline, schedule it in an earlier `BuiySet`.
+
 Steps 0, 1, 2, 3, 6, 7 always run. Steps 4-5 run only when `Container` components exist on any entity.
 
 ### 3.1 Scheduling
@@ -148,7 +172,7 @@ The chain composes with the rest of `BuiySet`: layout runs after `BuiySet::Anima
 
 ### 3.2 Container query re-layout
 
-Step 4 evaluates each `@container` rule against the resolved size of its query container, computed in step 3. If any rule's *activation* state flipped (`@container (min-width: 600px)` was inactive last frame and is active now, or vice versa), the entities subject to that rule have a marker component toggled. Step 1 and step 3 then re-run.
+Step 4 evaluates each `@container` rule against the resolved size of its query container, computed in step 3. The size source is **`tree.layout(node_id)`** — Taffy's per-node layout result, which holds step 3's just-computed values; it is *not* the entity-side `ResolvedLayout` (that's written in step 7 and stale at this point in the chain). If any rule's *activation* state flipped (`@container (min-width: 600px)` was inactive last frame and is active now, or vice versa), the entities subject to that rule have a marker component toggled. Step 1 and step 3 then re-run.
 
 The re-layout fires **at most once per frame**. If a query flipped, ran steps 1+3 again, and a *transitive* query now also flips, the transitive flip applies on the *next* frame. This is the documented limit of the same-frame re-layout strategy ([README § 2 pillar 4](README.md#2-architectural-pillars-one-line-summaries)). [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details the algorithm.
 
@@ -172,6 +196,8 @@ Step 0 reads `RemovedComponents<Node>` and:
 
 1. Removes the orphan from `by_entity`.
 2. Calls `tree.remove(node_id)` on the inner `TaffyTree`.
+
+`tree.remove` returning `Err(NotFound)` is **silently swallowed** — this absorbs the case where Taffy already detached the node as a side-effect of removing its parent earlier in the same step. `RemovedComponents<Node>` ordering is not guaranteed by Bevy across a parent/child despawn pair, so step 0 must tolerate either order: parent-first leaves children orphaned in Taffy (step 0 cleans them up by entity), child-first leaves the parent's `set_children` reference dangling (Taffy's `remove(parent)` cleans that up). Net: every despawn produces exactly one removal per affected entity, in arbitrary order.
 
 Without step 0, both `by_entity` and the `TaffyTree` grow monotonically across despawns. (This is the gap described in the `TODO(buiy-layout-design)` block on `LayoutTree` in `crates/buiy_core/src/layout.rs`; the v0.1 backlog implements it.)
 

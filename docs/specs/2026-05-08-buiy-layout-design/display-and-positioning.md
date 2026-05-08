@@ -34,8 +34,6 @@ pub enum Display {
     None,
 }
 
-impl Default for Display { fn default() -> Self { Self::Block } }
-
 impl Display {
     pub fn flex_row()    -> Self { Self::Flex(FlexAxis::Row) }
     pub fn flex_column() -> Self { Self::Flex(FlexAxis::Column) }
@@ -49,7 +47,7 @@ impl Display {
 |---|---|
 | `Block` | `Block` |
 | `Inline`, `InlineBlock` | `Block` (Taffy 0.10 doesn't model inline-flow; Buiy text shaper handles inline-level participation) |
-| `Flex(_)`, `InlineFlex(_)` | `Flex` (Buiy passes the axis through `FlexParams.flex_direction`) |
+| `Flex(_)`, `InlineFlex(_)` | `Flex` (Buiy passes the axis through `FlexParams.direction`) |
 | `Grid`, `InlineGrid` | `Grid` |
 | `FlowRoot` | `Block` with internal containment marker (Taffy doesn't have a distinct flow-root) |
 | `Contents` | Skipped during tree build; children re-parented to grandparent |
@@ -60,13 +58,17 @@ impl Display {
 
 ### 1.2 Table layout status
 
-Taffy 0.10 doesn't ship table layout. v1 implements semantic table layout (rows, cells, captions) as a Buiy-side post-Taffy pass that:
+Taffy 0.10 doesn't ship table layout. **v1 ships only the API surface and the fallback path; the full algorithm is deferred to a v1.x point release.** The deferred algorithm is described here so the API stays stable across the cutover; the fallback path is what actually runs in v1.
 
-1. Gathers entities by `Display::Table*` family.
-2. Computes column widths via Taffy on a synthetic flex container per row group.
-3. Writes corrected positions back to `ResolvedLayout`.
+When the algorithm lands, sub-pass 6b ([architecture.md § 3](architecture.md#3-system-pipeline)) will:
 
-This is one of the larger v1 deliverables. The pass runs as sub-pass 6b ([architecture.md § 3](architecture.md#3-system-pipeline)) inside the post-Taffy-overrides phase. Until table layout ships, `Display::Table*` falls back to `Block` with a `warn!` once per session.
+1. Gather entities by `Display::Table*` family.
+2. Compute column widths via Taffy on a synthetic flex container per row group.
+3. Write corrected positions back to `ResolvedLayout`.
+
+**Fallback behavior in v1** (the path actually shipping): `Display::Table*` translates to `Display::Block` for Taffy purposes; sub-pass 6b is a no-op. A `warn!` fires once per (entity, session) the first time each `Display::Table*` value is encountered, naming the entity. Authors who need correct table layout in v1 should use `Display::Grid` with row/column templates instead.
+
+Tier per [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout): tier-C (the algorithm). The v1 fallback path covers the API stability commitment; the algorithm itself is tracked as a v1.x deliverable in the migration plan.
 
 ### 1.3 `Display::None` vs `Visibility::Hidden`
 
@@ -132,7 +134,7 @@ Taffy 0.10 supports `position: absolute` (and `relative` via offsets); `fixed` i
 | `Relative` | `taffy::Position::Relative` with `inset` as offset. |
 | `Absolute` | `taffy::Position::Absolute` with `inset`; child of `ContainingBlock`. |
 | `Fixed` | `taffy::Position::Absolute` with `inset`; child of layout root. |
-| `Sticky` | `taffy::Position::Relative`; sticky offsets applied in step 6 (anchor resolution shares the pass). |
+| `Sticky` | `taffy::Position::Relative`; sticky offsets applied in sub-pass 6a ([architecture.md § 3](architecture.md#3-system-pipeline)). |
 
 ### 2.3 Sticky positioning
 
@@ -171,7 +173,7 @@ pub enum TryCondition {
 #[derive(Reflect, Clone)]
 pub enum AnchorName {
     Implicit,                                   // referenced by Entity ID alone
-    Named(SmolStr),                             // CSS-style name lookup (registered in NameRegistry resource)
+    Named(SmolStr),                             // CSS-style name lookup (registered in AnchorNameRegistry)
 }
 
 #[derive(Reflect, Clone)]
@@ -179,16 +181,26 @@ pub enum AnchorRef {
     Entity(Entity),
     Name(SmolStr),
 }
+
+/// Resource: maps `AnchorName::Named` strings to the entity that declared
+/// that name. Maintained by an observer on `Anchor` insert/remove —
+/// authors do not write to it directly. Multiple entities declaring the
+/// same name produce a `warn!` once per (name, frame); the most-recently-
+/// inserted entity wins (registry stores `Vec<Entity>`, last wins).
+#[derive(Resource, Default)]
+pub struct AnchorNameRegistry {
+    by_name: HashMap<SmolStr, Vec<Entity>>,
+}
 ```
 
 ### 3.2 Resolution
 
 Sub-pass 6d of the pipeline ([architecture.md § 3](architecture.md#3-system-pipeline)) walks every entity with `Anchor.position_anchor.is_some()`:
 
-1. **Resolve anchor target.** Look up the anchor's `Entity` (by reference or named lookup) and read its `ResolvedLayout`.
+1. **Resolve anchor target.** Look up the anchor's `Entity` — either directly (`AnchorRef::Entity`) or via `AnchorNameRegistry` (`AnchorRef::Name`); read its `ResolvedLayout`. If the target is missing, despawned, or carries `Display::None`, the lookup fails and falls through to step 4 below. The "stale `ResolvedLayout` from before `Display::None` flipped" case is treated as missing — `Display::None` clears the entity's stored `ResolvedLayout` in step 7.
 2. **Try fallbacks in order.** For each `PositionTry` in `position_try`, compute the anchored entity's would-be box (using `inset` relative to the anchor) and evaluate every condition. The first try whose conditions all pass wins.
 3. **Apply.** Override `ResolvedLayout.position` with the chosen try's resolved coordinates.
-4. **Fallback failure.** If every try fails, position defaults to `(0, 0)` and the entity gets a `LayoutAnchorBroken` marker for devtools. A `warn!` fires once per (entity, frame).
+4. **Fallback failure.** If every try fails (or the anchor target was missing), position defaults to `(0, 0)` and the entity gets a `LayoutAnchorBroken` marker for devtools. A `warn!` fires once per (entity, frame).
 
 ### 3.3 Authoring example
 
@@ -213,9 +225,10 @@ commands.spawn((
 
 ### 3.4 Performance and ordering
 
-- An anchor target must resolve before its dependent. Step 6 is single-pass topological — anchors that point at other anchored entities form a DAG; cycles are detected and broken with `warn!` (the cyclic edge is dropped).
-- Cost: `O(anchored entities × tries)`. Usually small — most anchored elements have 1-3 fallbacks.
-- Anchor resolution does **not** trigger Taffy re-layout. The anchor's *size* is fixed by the time anchor resolution runs; only its position changes. (Anchor *size* affecting layout — `anchor-size()` in CSS — is a tier-C feature deferred to v1.x; see open questions in [README § 5](README.md#5-open-questions).)
+- An anchor target must resolve before its dependent. Sub-pass 6d builds a Kahn topological sort over the (anchored → anchor) DAG: `O(V + E)` where V = anchored entities, E = anchor edges (= V, since each anchored entity has exactly one anchor target).
+- **Cycle handling.** Edges that would close a cycle are dropped — the dropped edge is `(child anchored, anchor)` for the *most-recently-inserted* anchored entity in the cycle (tracked by the `AnchorNameRegistry` insertion epoch and an analogous epoch on `AnchorRef::Entity`). Both endpoints get `LayoutAnchorBroken` markers; one `warn!` fires per cycle per frame naming the dropped edge. Result: every cycle resolves deterministically; tests can assert exact membership.
+- Cost: `O(anchored entities × tries + V + E)`. Usually small — most anchored elements have 1-3 fallbacks.
+- Anchor resolution does **not** trigger Taffy re-layout. The anchor's *size* is fixed by the time anchor resolution runs; only its position changes. (Anchor *size* affecting layout — `anchor-size()` in CSS — is a tier-C feature deferred to v1.x; see open questions in [README § 5](README.md#5-open-questions). Author code that uses `anchor-size()` in a `PositionTry::inset` before v1.x ships compiles fine but the size term resolves to zero with one `warn!` per (entity, frame).)
 
 ### 3.5 Open question: `position-try` chain depth
 

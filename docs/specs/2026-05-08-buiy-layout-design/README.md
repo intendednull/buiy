@@ -79,10 +79,14 @@ This spec is a leaf — it does not spawn further sub-specs. Per-feature depth l
 | `buiy-window-and-surface-design` | Layout root sizing pulls from `bevy::window::Window`; multi-window and render-target sizing contracts live there. |
 | `buiy-3d-anchored-ui-design` | Worldspace UI uses the same `ResolvedLayout` produced by this pipeline; the 3D-anchor spec defines how worldspace transforms feed back into layout root sizing. |
 
+## 4.1 Migration
+
+This spec is target-state. The Phase 0 → target migration (15-component decomposition, hybrid `Style` builder, 8-step pipeline, anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer per-window, `LogicalBoxModel` insert-helper) lives in a follow-up plan at `docs/plans/YYYY-MM-DD-buiy-layout-migration.md` (TBC). The plan will sequence the work into reviewable PRs; nothing in this spec depends on the plan landing.
+
 ## 5. Open questions
 
 - **Crate placement.** Whether layout lives in `buiy_core` (Phase 0 location) long-term, or splits into `buiy_layout` per [foundation README § 5 — crate-split refinement](../2026-05-07-buiy-foundation/README.md#5-open-questions). Resolution waits on the foundation open question; this spec assumes either.
-- **Anchor positioning fallback chain (`@position-try`).** CSS spec allows multiple anchor fallbacks. Whether v1 ships the full fallback chain or one anchor + one fallback is open. [display-and-positioning.md](display-and-positioning.md) details.
+- **Anchor positioning fallback-chain depth cap.** v1 supports any chain length (resolved per [display-and-positioning.md § 3.1](display-and-positioning.md#31-anchor-component)). Open: whether to cap depth via a `position_try_max_depth` resource if profiling surfaces deeply-nested fallback hot paths.
 - **Container query unit semantics in nested containers.** `cqi` / `cqb` resolve against the nearest *queried* ancestor, but the interaction with `container-type: inline-size` vs `size` is subtle when nested. v1 implements the common case (single query container per axis); complex nesting is deferred to a follow-up. [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details.
 - **Subgrid availability.** Tracks Taffy upstream — Buiy ships subgrid when Taffy ships it. v1 surface includes the API stubs but the implementation returns `Display::Grid` semantics until upstream lands.
 - **Masonry availability.** Tracks Taffy and CSS-WG. Currently flux. v1 marks it tier-E and does not ship.

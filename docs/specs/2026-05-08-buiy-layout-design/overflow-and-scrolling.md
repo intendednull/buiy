@@ -157,3 +157,7 @@ Render-side concern; layout stores the value. `buiy-render-pipeline-design` cons
 ## 6. Open: virtual scrolling
 
 CSS doesn't define a "virtual scroll" primitive; it's implemented above layout. `buiy-widget-catalog-design` covers a virtual-list widget. This spec is only concerned with the scroll-container primitive.
+
+## 7. Scroll-driven animations — deferred
+
+CSS scroll-driven animations (`animation-timeline`, `scroll-timeline`, `view-timeline`) are foundation tier-E ([visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout)). They consume `ScrollOffset` (defined in § 2 above) but don't add layout-side state — the timeline plumbing lives in `buiy-animation-design`. This spec exposes the data scroll-driven animations need (`ScrollOffset` per scroll container, scroll bounds derivable from `ResolvedLayout`); the timeline machinery is deferred.
