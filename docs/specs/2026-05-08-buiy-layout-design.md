@@ -82,6 +82,8 @@ pub struct Position {
 }
 ```
 
+`Sticky` is supported via a Buiy-owned post-Taffy adjustment pass (Stage E.5) — see § 3 and open question § 10.4.
+
 `Edges<T>` is `{ top, right, bottom, left }` plus logical accessors that resolve via `WritingMode`:
 
 ```rust
@@ -141,6 +143,9 @@ pub struct WritingMode {
     pub mode: WritingModeKind,    // HorizontalTb (only working variant in v1)
     pub direction: Direction,     // Ltr | Rtl
 }
+
+// An entity without `WritingMode` is treated as { HorizontalTb, Ltr }. Layout
+// system uses `WritingMode::default()` for resolution when the component is absent.
 
 #[derive(Component, Reflect)]
 pub struct AnchorName(pub SmolStr);
@@ -235,9 +240,13 @@ Runs in `BuiySet::Layout`. Multi-stage because container queries can require re-
 
 ### Stage A — Length resolution (layout-independent)
 
-For every `LayoutNode` entity, resolve every `Length` whose value does not depend on the layout pass itself: `Px`, `Em` (parent-resolved font size — read from theme), `Rem` (root font size), `Vw`/`Vh`/`Vmin`/`Vmax` (window), `Percent`, `Fr` (passed verbatim to Taffy), `Auto`, `FitContent`/`MinContent`/`MaxContent`, `Token` (theme lookup), `Calc` (recurse — the calc tree's leaves resolve here, then arithmetic).
+For every `LayoutNode` entity, resolve every `Length` whose value does not depend on the layout pass itself: `Px`, `Em` (parent-resolved font size — read from theme), `Rem` (root font size), `Vw`/`Vh`/`Vmin`/`Vmax` (window), `Auto`, `FitContent`/`MinContent`/`MaxContent`, `Token` (theme lookup).
 
-Defer: `Cqw`/`Cqh`/`Cqi`/`Cqb` — container-query units need the parent container's resolved size. Marked "deferred" in an internal `LengthResolutionState` and revisited in Stage D.
+`Percent` and `Fr` are **passed verbatim to Taffy** — Taffy resolves percent against the containing block during compute and `fr` during grid track sizing. Stage A does not pre-evaluate them.
+
+`Calc` resolution is split: a calc tree whose leaves are all context-free (`Px`, `Em`, `Rem`, `Vw`/`Vh`/`Vmin`/`Vmax`, `Token`) is fully evaluated to a single `Px` in Stage A. A calc tree containing `Percent`, `Fr`, or `Cq*` is evaluated through Taffy's compact-length representation (`taffy::Dimension::calc` when the `calc` feature is enabled) — Stage A flattens the tree into Taffy's representation but defers numeric evaluation to Taffy's compute step. If Taffy cannot represent the expression (e.g., `min`/`max`/`clamp` mixing percent and px in v1), Stage A coerces to the first context-free term and emits `warn!(target: "buiy::layout::calc_unsupported", ...)`.
+
+Defer: `Cqw`/`Cqh`/`Cqi`/`Cqb` — container-query units need the parent container's resolved size, and the inline-/block-axis swap depends on the entity's `WritingMode`. Marked "deferred" in an internal `LengthResolutionState` and revisited in Stage D.
 
 ### Stage B — Sync to Taffy
 
@@ -266,7 +275,7 @@ Skip if no entity carries `ContainerContext`. Otherwise:
 3. For queries that became active (or inactive) since the last frame, apply their `ContainerQueryEffect` (see § 4) — typically inserting/removing components.
 4. Resolve any `Cqw`/`Cqh`/`Cqi`/`Cqb` lengths that depended on a now-known container size.
 5. If any effect changed an entity's layout-relevant components OR any deferred `cq*` length now has a value, re-run Stages A–C.
-6. Cap iterations at **3**. On overflow, emit `warn!(target: "buiy::layout::container_query_iteration", entity = ?), freeze the next iteration's state, and continue.
+6. Cap iterations at **3**. On overflow, emit `warn!(target: "buiy::layout::container_query_iteration", entity = ?)`, freeze the next iteration's state, and continue.
 
 ### Stage E — Anchor resolution
 
@@ -275,14 +284,22 @@ For each `AnchorTo`:
 2. Compute the candidate rect for the default placement (`side` + `align` + `inset_offset`) relative to the anchor's `ResolvedLayout`.
 3. Containing-block check: `Position::Fixed` → window; otherwise nearest positioned ancestor.
 4. If the candidate rect overflows its containing block, walk `fallbacks` until one fits. If none fit, use the last fallback and emit `debug!(target: "buiy::layout::anchor_fallback_exhausted", ...)`.
-5. Insert/update `AnchorResolved { fallback_index, absolute_rect }` on the entity.
-6. Override the entity's `ResolvedLayout` with `absolute_rect`.
+5. Compute the entity's containing-block-relative position from the absolute rect and the containing-block origin.
+6. Insert/update `AnchorResolved { fallback_index, absolute_rect }` on the entity (`absolute_rect` is in window coordinates, for renderer/picking convenience).
 
 Anchor resolution does **not** trigger another Stage C — anchored elements are positioned out-of-flow; their absolute rect does not feed back into sibling layout.
 
+### Stage E.5 — Sticky offset
+
+For each entity with `Position::kind == Sticky`, compute the offset to keep the box inside its scroll container's visible region (clamped by `inset` thresholds). Adjusts `ResolvedLayout::position` directly; runs after anchor resolution because anchored elements never use sticky.
+
+Skipped entirely if no entity carries `Position::kind == Sticky` and skipped per-entity if the entity has no scrollable ancestor (in which case Sticky degrades to Relative). The full sticky algorithm lives in `buiy-overflow-and-scrolling-design`; this spec commits to running the offset adjustment in this stage.
+
 ### Stage F — Writeback
 
-Walk `LayoutTree.by_entity`; for each entity, read the Taffy layout and insert/update `ResolvedLayout`. Anchor-overridden entities skip this (Stage E already wrote them).
+Walk `LayoutTree.by_entity`. For each entity:
+- If the entity has `AnchorResolved`, the layout system already wrote `ResolvedLayout` in Stage E — skip Taffy writeback for that entity (Taffy's output for an anchored element is meaningless because anchor placement is out-of-flow).
+- Otherwise read the Taffy layout and insert/update `ResolvedLayout` (CB-relative coordinates per § 1.3).
 
 ### Stage G — Garbage collection
 
@@ -309,7 +326,7 @@ pub enum ContainerCondition {
 }
 
 pub enum ContainerQueryEffect {
-    InsertBundle(Box<dyn Reflect + Send + Sync>),    // typed bundle, reflection-driven
+    InsertReflected(Box<dyn PartialReflect + Send + Sync>),  // type must have ReflectComponent in the type registry
     RemoveComponent(ComponentId),
     SetClass(SmolStr),
     Compound(Vec<ContainerQueryEffect>),
@@ -317,6 +334,10 @@ pub enum ContainerQueryEffect {
 ```
 
 **Tradeoff.** A `Box<dyn Fn(&mut EntityCommands)>` effect would be maximally expressive but unreflectable, hostile to BSN, and unserializable. The typed-effect form is BSN-friendly and serializable, at the cost of expressiveness — apps that need arbitrary code in response to container size run a normal Bevy system gated on `Changed<ResolvedLayout>` instead.
+
+**Insertion mechanism.** `InsertReflected` requires the component's type to have `ReflectComponent` registered in the world's `AppTypeRegistry`. Stage D looks up the registration by `TypeId` and uses `ReflectComponent::insert` to apply the value. Components that don't register `ReflectComponent` cannot be inserted via container queries — emit `warn!(target: "buiy::layout::container_query_unregistered", ...)` and skip.
+
+**Selector resolution.** `ContainerSelector::Type(t)` matches the **nearest** ancestor with `ContainerContext { kind: t, .. }`. `ContainerSelector::Named(n)` matches the nearest ancestor with `ContainerContext { name: Some(n), .. }`. `ContainerSelector::Nearest` matches any ancestor with a `ContainerContext`.
 
 `SetClass` is Buiy's analogue of CSS class toggling; a `Class` component (defined in `buiy-theme-tokens-design`) holds the active class set, and theme resolution reads it.
 
@@ -394,11 +415,12 @@ pub struct Style { pub width: f32, pub height: f32, pub flex_direction: FlexDire
 
 The migration:
 
-1. Delete `Style`. Introduce the components in § 1.1 and § 1.2.
-2. Update `crates/buiy_core/src/layout.rs` to query the decomposed components instead of `Style`. The single-pass `sync_and_compute_layout` becomes the multi-stage pipeline of § 3.
-3. Update `tests/hello_button_e2e.rs` and any other internal call site to insert `LayoutNode + Display + Size + (FlexLayout)` instead of `Style`.
-4. Add the `gc_layout_tree` system (§ 3 Stage G).
-5. Register reflection for every new component (`CorePlugin::build` already calls `register_type::<FlexDirection>()`; extend the list).
+1. Rename Phase 0's `Node` marker to `LayoutNode` everywhere (`crates/buiy_core/src/components.rs`, `layout.rs`, the focus and a11y queries that filter `With<Node>`, tests). The new name avoids collision with `taffy::Node` and is clearer about what the marker actually marks. Phase 0's `Node` was an internal placeholder, no public-API deprecation.
+2. Delete `Style`. Introduce the components in § 1.1 and § 1.2.
+3. Update `crates/buiy_core/src/layout.rs` to query the decomposed components instead of `Style`. The single-pass `sync_and_compute_layout` becomes the multi-stage pipeline of § 3.
+4. Update `tests/hello_button_e2e.rs` and any other internal call site to insert `LayoutNode + Display + Size + (FlexLayout)` instead of `Style`.
+5. Add the `gc_layout_tree` system (§ 3 Stage G).
+6. Register reflection for every new component (`CorePlugin::build` already calls `register_type::<FlexDirection>()`; extend the list).
 
 Pre-0.1, no public-API deprecation surface to manage. The plan that realizes this spec breaks the change into reviewable chunks.
 
