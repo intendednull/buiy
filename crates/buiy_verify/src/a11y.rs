@@ -5,6 +5,8 @@
 use buiy_core::a11y::{A11yNodeView, A11yRole};
 use serde::Serialize;
 
+// LINT: Field order here is the snapshot wire format. Do not reorder
+// without coordinating golden-file regeneration in every consumer.
 #[derive(Serialize)]
 struct WireNode<'a> {
     entity: u64,
@@ -14,6 +16,10 @@ struct WireNode<'a> {
     focusable: bool,
 }
 
+// LINT: Keep this match in sync with `buiy_core::a11y::A11yRole`. When
+// the v0.x full ARIA taxonomy expansion lands (38+ roles per
+// accessibility.md § 3.11), Rust's exhaustiveness check will force
+// new arms — add them here in the same PR.
 fn role_to_str(r: A11yRole) -> &'static str {
     match r {
         A11yRole::Generic => "Generic",
@@ -42,7 +48,10 @@ pub fn snapshot_tree(nodes: &[A11yNodeView]) -> String {
     serde_json::to_string(&wire).expect("snapshot serializes")
 }
 
-/// Returns `None` if identical, `Some(unified_diff_text)` otherwise.
+/// Returns `None` if identical, `Some(diff_text)` otherwise. Phase 0
+/// emits a coarse `LEFT:\n…RIGHT:\n…` dump; v0.x will swap to a unified
+/// diff via the `similar` crate when the AT-consumer harness (gate #15)
+/// lands.
 pub fn diff_snapshots(left: &str, right: &str) -> Option<String> {
     if left == right {
         None

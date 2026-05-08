@@ -43,3 +43,11 @@ fn diff_returns_none_for_identical_snapshots() {
     let snap = snapshot_tree(&nodes);
     assert!(diff_snapshots(&snap, &snap).is_none());
 }
+
+#[test]
+fn diff_returns_some_for_different_snapshots() {
+    let result = diff_snapshots("a", "b");
+    assert!(result.is_some());
+    let text = result.unwrap();
+    assert!(text.contains("LEFT") && text.contains("RIGHT"));
+}
