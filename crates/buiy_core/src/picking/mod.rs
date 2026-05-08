@@ -74,6 +74,9 @@ fn update_hovered(mut hovered: ResMut<Hovered>, mut events: MessageReader<Pointe
     if saw_event {
         hovered.0 = latest;
     }
-    // No events this frame ⇒ leave `Hovered` as-is. Cursor-leaving-window
-    // produces an empty `picks` event (see emit_picks) which clears it.
+    // Phase 0 closeout limitation: `emit_picks` skips emission when no Buiy
+    // node is under the cursor (see `backend::emit_picks`). When the cursor
+    // leaves all Buiy nodes (or the window), no event arrives and `Hovered`
+    // retains its last value. v0.x `buiy-input-events-design` widens the
+    // backend to emit "no hit" events so `Hovered` can clear correctly.
 }

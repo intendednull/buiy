@@ -63,13 +63,13 @@ pub struct BuiyPlugin;
 
 impl Plugin for BuiyPlugin {
     fn build(&self, app: &mut App) {
-        // Sub-plugin order matches architecture.md § 2.8 documented order:
-        // core → theme → a11y → focus → input → text → widgets → ...
-        // Phase 0 omits text / animation / forms / devtools; LayoutPlugin
-        // and PickingPlugin (which aren't enumerated as sub-plugins in § 2.8
-        // because their work lives in BuiySet::Layout and BuiySet::Picking)
-        // are slotted between Focus and Widgets so widgets see resolved
-        // layout + hit-test results when they run in the same frame.
+        // Sub-plugin order matches architecture.md § 2.8: core → theme → a11y →
+        // focus → input → text → widgets. Phase 0 omits text/animation/forms/
+        // devtools. LayoutPlugin, bevy::picking::PickingPlugin, Buiy's
+        // PickingPlugin, and BuiyPickingBackendPlugin slot between Focus and
+        // Widgets so widgets see resolved layout + hit-test results in the same
+        // frame. bevy_picking must come first because it registers PickingSystems
+        // sets + Messages<PointerHits>; the two Buiy plugins consume both.
         app.add_plugins((
             CorePlugin,
             buiy_core::theme::ThemePlugin,
