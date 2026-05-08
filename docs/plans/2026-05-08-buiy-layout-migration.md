@@ -1247,24 +1247,9 @@ let entity = app.world_mut().spawn((
 
 - [ ] **Step 4: Update `crates/buiy_core/tests/components.rs`**
 
-The existing test that asserts `Style` is registered must become an assertion about `Display + Size`:
+Delete the existing test that asserts `Style` is registered (since `Style` is going away in Task 13 and isn't even registered after Task 12).
 
-```rust
-#[test]
-fn layout_components_are_reflection_registered() {
-    use bevy::reflect::AppTypeRegistry;
-    use buiy_core::components::{Display, Size};
-    use buiy_core::CorePlugin;
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    let registry = app.world().resource::<AppTypeRegistry>().read();
-    assert!(registry.get(std::any::TypeId::of::<Display>()).is_some(), "Display not registered");
-    assert!(registry.get(std::any::TypeId::of::<Size>()).is_some(), "Size not registered");
-}
-```
-
-Delete the old `Style` registration test. The previously `#[ignore]`'d `size_is_reflection_registered` test from Task 6 is now subsumed by this combined test — delete the ignored placeholder.
+Leave the `#[ignore]`'d `size_is_reflection_registered` test from Task 6 in place. Task 12 replaces it with the combined `Display + Size` assertion once registrations are wired. Adding the combined assertion now would fail Task 11's full-workspace test run, since Task 12 hasn't registered the new types yet.
 
 The spawn smoke test that did `world.spawn((Node::default(), Style::default()))` becomes:
 
@@ -1354,7 +1339,34 @@ pub use length::{IntoLength, Length};
 
 In `crates/buiy/src/lib.rs`, mirror the same re-exports (the umbrella crate re-exports from `buiy_core`).
 
-- [ ] **Step 3: Build, test**
+- [ ] **Step 3: Replace the `#[ignore]`'d reflection test with a combined assertion**
+
+In `crates/buiy_core/tests/components.rs`, find the `#[ignore]`'d `size_is_reflection_registered` test from Task 6 and replace it with:
+
+```rust
+#[test]
+fn layout_components_are_reflection_registered() {
+    use bevy::reflect::AppTypeRegistry;
+    use buiy_core::components::{BoxSpace, Display, FlexLayout, LayoutNode, Size, VisualStyle};
+    use buiy_core::CorePlugin;
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    for (name, id) in [
+        ("LayoutNode", std::any::TypeId::of::<LayoutNode>()),
+        ("Display", std::any::TypeId::of::<Display>()),
+        ("Size", std::any::TypeId::of::<Size>()),
+        ("BoxSpace", std::any::TypeId::of::<BoxSpace>()),
+        ("FlexLayout", std::any::TypeId::of::<FlexLayout>()),
+        ("VisualStyle", std::any::TypeId::of::<VisualStyle>()),
+    ] {
+        assert!(registry.get(id).is_some(), "{name} not registered");
+    }
+}
+```
+
+- [ ] **Step 4: Build, test**
 
 Run:
 ```
@@ -1363,12 +1375,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 xvfb-run -a cargo test --workspace
 ```
 
-Expected: all green. The `layout_components_are_reflection_registered` test from Task 11 should pass.
+Expected: all green. The new `layout_components_are_reflection_registered` test passes.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```
-git add crates/buiy_core/src/lib.rs crates/buiy/src/lib.rs
+git add crates/buiy_core/src/lib.rs crates/buiy/src/lib.rs crates/buiy_core/tests/components.rs
 git commit -m "feat(layout): register reflection for decomposed layout components
 
 LayoutNode, Display, DisplayKind, Size, BoxSpace, BoxSizing, FlexLayout,
