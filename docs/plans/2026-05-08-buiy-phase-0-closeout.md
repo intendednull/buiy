@@ -1,7 +1,7 @@
 # Buiy Phase 0 Closeout Implementation Plan
 
 **Date:** 2026-05-08
-**Status:** draft
+**Status:** landed
 **Spec:** [specs/2026-05-07-buiy-foundation/README.md](../specs/2026-05-07-buiy-foundation/README.md)
 **Realizes:** Deferred items from [plans/2026-05-07-buiy-phase-0-foundations.md](2026-05-07-buiy-phase-0-foundations.md) self-review (lines 2784–2790).
 
