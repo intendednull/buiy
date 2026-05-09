@@ -41,19 +41,20 @@ Phase 1's pipeline scaffold has hooks (`CqActivate`, `CqFlipCheck`, `PostTaffyOv
 
 ```
 crates/buiy_core/src/layout/
-├── mod.rs           — LayoutPlugin, public re-exports for the layout module
 ├── types.rs         — Length, Sizing, Edges, BoxSizing, AspectRatio, FlexAxis,
 │                      FlexWrap, JustifyContent, AlignItems, AlignContent, FlexGap,
-│                      PositionKind, Inset
-├── components.rs    — BoxModel, Display, Position, FlexParams, FlexItem
+│                      PositionKind, Inset                                  (Task 1)
+├── components.rs    — BoxModel, Display, Position, FlexParams, FlexItem    (Task 2)
 ├── style.rs         — Style (builder struct), Style::default(), fluent methods,
-│                      impl Bundle for Style
-├── tree.rs          — LayoutTree (bridge state), pub fn len/is_empty
-├── translate.rs     — style_to_taffy(StyleView<'_>) -> taffy::Style
-├── pipeline.rs      — BuiyLayoutStep enum (system-set sub-sets of BuiySet::Layout)
+│                      impl Bundle for Style                                (Task 3)
+├── translate.rs     — style_to_taffy(StyleView<'_>) -> taffy::Style        (Task 4)
+├── pipeline.rs      — BuiyLayoutStep enum (system-set sub-sets of BuiySet::Layout) (Task 5)
+├── tree.rs          — LayoutTree (bridge state), pub fn len/is_empty       (Task 6)
 └── systems.rs       — gc_removed_nodes (step 0), sync_styles (step 1),
-                       taffy_compute (step 3), write_resolved_layout (step 7)
+                       taffy_compute (step 3), write_resolved_layout (step 7) (Task 7)
 ```
+
+`crates/buiy_core/src/layout/mod.rs` is **not** created until Task 7. Rust's E0761 disallows both `layout.rs` and `layout/mod.rs` coexisting under one `pub mod layout;`, so Tasks 1–6 work by adding `mod <name>;` declarations inside the existing flat `layout.rs`. Task 7 deletes `layout.rs` and creates `layout/mod.rs` simultaneously, transitioning the module structure.
 
 ### New tests
 
@@ -132,25 +133,19 @@ Every Phase 1 spec requirement maps to a task below. Items marked **deferred** a
 
 **Files:**
 - Create: `crates/buiy_core/src/layout/types.rs`
-- Create: `crates/buiy_core/src/layout/mod.rs` (initial — declares the new submodule + re-exports)
+- Modify: `crates/buiy_core/src/layout.rs` (add a `mod types;` declaration; do **not** create `crates/buiy_core/src/layout/mod.rs` — Rust E0761 disallows both files under one `pub mod layout;`)
 
-This task introduces the unit / axis / box-shape value types so subsequent tasks can build components on top of them. The module is dead code until Task 2 references it.
+This task introduces the unit / axis / box-shape value types so subsequent tasks can build components on top of them. The submodule's items are referenced only from Task 1's own tests until Task 2 lands components built on these types — `#[allow(dead_code)]` keeps clippy `-D warnings` clean (Step 1.4).
 
-- [ ] **Step 1.1: Create `crates/buiy_core/src/layout/mod.rs` with the initial module declarations**
+- [ ] **Step 1.1: Add `mod types;` to the existing `crates/buiy_core/src/layout.rs`**
+
+Open `crates/buiy_core/src/layout.rs` and add a `mod types;` declaration near the top (right after the `use` block is conventional — common Rust style is module declarations after imports, before items):
 
 ```rust
-//! Buiy layout subsystem.
-//!
-//! Spec: docs/specs/2026-05-08-buiy-layout-design/.
-//!
-//! Phase 1 (foundation): pipeline skeleton, decomposed components for the
-//! Phase-0-equivalent surface, hybrid `Style` builder. Later phases fill in
-//! the deferred surface (overflow, grid, writing-mode, container queries,
-//! anchors, sticky/table/multicol, stacking, transforms, full unit
-//! resolution).
-
 mod types;
 ```
+
+Do not modify any other line in `layout.rs`. Phase 0's `LayoutTree`, `LayoutPlugin`, and the `gc_removed_nodes` / `sync_and_compute_layout` systems stay in place; subsequent tasks accumulate more `mod <name>;` declarations alongside until Task 7 transitions the module to a directory.
 
 - [ ] **Step 1.2: Write the failing test for `Length::px` / `percent` constructors**
 
@@ -240,6 +235,7 @@ pub enum Length {
     Percent(f32),
 }
 
+#[allow(dead_code)] // Removed by Task 3 once Style builder calls these constructors.
 impl Length {
     pub const ZERO: Self = Self::Px(0.0);
 
@@ -261,8 +257,9 @@ impl Default for Length {
 /// Width / height / min / max value type. Phase 1 ships `Auto`, `None`
 /// (max-only), `Length`, and `Stretch`. Intrinsic keywords ship as
 /// variants but resolve to `Auto` until Phase 10 + text rendering land.
-#[derive(Reflect, Clone, Copy, Debug, PartialEq)]
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
 pub enum Sizing {
+    #[default]
     Auto,
     /// Valid only on `max-*` (semantics: no upper bound).
     None,
@@ -277,12 +274,6 @@ pub enum Sizing {
     Stretch,
 }
 
-impl Default for Sizing {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
 /// Per-edge length values for padding, margin, border, inset.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Edges {
@@ -292,6 +283,7 @@ pub struct Edges {
     pub left: Length,
 }
 
+#[allow(dead_code)] // Removed by Task 3 once consumers reference Edges::all/axis.
 impl Edges {
     pub const ZERO: Self = Self {
         top: Length::ZERO,
@@ -360,6 +352,7 @@ pub enum FlexWrap {
     WrapReverse,
 }
 
+/// Main-axis distribution of flex / grid items. CSS `justify-content`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum JustifyContent {
     #[default]
@@ -371,6 +364,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
+/// Cross-axis alignment of flex / grid items within their line. CSS `align-items`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlignItems {
     #[default]
@@ -381,6 +375,8 @@ pub enum AlignItems {
     Baseline,
 }
 
+/// Cross-axis distribution of flex / grid lines (multi-line containers).
+/// CSS `align-content`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlignContent {
     #[default]
@@ -489,17 +485,22 @@ Expected: clean (warnings about unused `layout::types::*` items are OK at this s
 - [ ] **Step 1.7: Commit**
 
 ```sh
-git add crates/buiy_core/src/layout/mod.rs crates/buiy_core/src/layout/types.rs
-git commit -m "feat(buiy_core): add layout/types — Length, Sizing, Edges, axis enums
+git add crates/buiy_core/src/layout.rs crates/buiy_core/src/layout/types.rs
+git commit -m "feat(buiy_core): add layout::types submodule — Length, Sizing, Edges, axis enums
 
 Spec: docs/specs/2026-05-08-buiy-layout-design/{box-model,display-and-positioning,flex-and-grid}.md.
 Phase 1 of the layout migration. Ships only Length::Px/Percent and
 the Sizing/Edges/BoxSizing/FlexAxis/PositionKind shapes; richer
 unit resolution (em/rem/viewport/container/calc) lands in Phase 10.
 
-The new layout/ directory module is not yet wired into lib.rs; the
-existing flat layout.rs still drives the LayoutPlugin. Subsequent
-tasks finish the migration and delete the flat module."
+The new submodule lands via 'mod types;' inside the existing flat
+layout.rs (Rust E0761 forbids both layout.rs and layout/mod.rs).
+Task 7 transitions to a directory module by deleting layout.rs and
+creating layout/mod.rs simultaneously.
+
+Two impl blocks (Length, Edges) carry a narrow #[allow(dead_code)]
+until Task 3 wires the Style builder; comments mark when the allows
+come off."
 ```
 
 ---
