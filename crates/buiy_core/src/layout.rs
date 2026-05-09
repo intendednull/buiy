@@ -12,6 +12,10 @@
 //! single-threaded pass over the tree, so storing it as a non-send
 //! resource is both correct and free of `unsafe`.
 
+// Phase 1 layout-foundation submodules (dead code until Task 2 wires them in).
+// Spec: docs/specs/2026-05-08-buiy-layout-design/.
+mod types;
+
 use crate::{
     BuiySet,
     components::{FlexDirection as BuiyFlexDirection, Node, ResolvedLayout, Style},
