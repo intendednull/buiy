@@ -237,17 +237,23 @@ mod tests {
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
 
-    fn spawn_and_extract(
-        style: Style,
-    ) -> (Display, BoxModel, Position, FlexParams) {
+    fn spawn_and_extract(style: Style) -> (Display, BoxModel, Position, FlexParams) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let entity = app.world_mut().spawn(style).id();
         let world = app.world();
         let display = *world.get::<Display>(entity).expect("Display inserted");
-        let box_model = world.get::<BoxModel>(entity).expect("BoxModel inserted").clone();
-        let position = world.get::<Position>(entity).expect("Position inserted").clone();
-        let flex_params = *world.get::<FlexParams>(entity).expect("FlexParams inserted");
+        let box_model = world
+            .get::<BoxModel>(entity)
+            .expect("BoxModel inserted")
+            .clone();
+        let position = world
+            .get::<Position>(entity)
+            .expect("Position inserted")
+            .clone();
+        let flex_params = *world
+            .get::<FlexParams>(entity)
+            .expect("FlexParams inserted");
         (display, box_model, position, flex_params)
     }
 

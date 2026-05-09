@@ -212,8 +212,12 @@ fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
 
 fn sizing_to_lpa(s: Sizing) -> taffy::LengthPercentageAuto {
     match s {
-        Sizing::Auto | Sizing::None | Sizing::MinContent | Sizing::MaxContent
-        | Sizing::FitContent(_) | Sizing::Stretch => taffy::LengthPercentageAuto::auto(),
+        Sizing::Auto
+        | Sizing::None
+        | Sizing::MinContent
+        | Sizing::MaxContent
+        | Sizing::FitContent(_)
+        | Sizing::Stretch => taffy::LengthPercentageAuto::auto(),
         Sizing::Length(l) => length_to_lpa(l),
     }
 }
