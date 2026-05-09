@@ -45,15 +45,15 @@ crates/buiy_core/src/layout/
 │                       wire taffy.overflow + taffy.scrollbar_width         (Task 5)
 ├── systems.rs        — widen sync_styles query: add `&Overflow`; widen
 │                       trigger filter: Or now includes Changed<Overflow>
-│                       and Changed<Scroll>                                  (Task 6)
+│                       and Changed<Scroll>                                  (Task 5)
 └── mod.rs            — register Overflow, Scroll, ScrollOffset,
                         ScrollSnapItem with reflection; re-export new
-                        component types and 9 enums                          (Task 7)
+                        component types and 9 enums                          (Task 6)
 ```
 
 ```
-crates/buiy_core/src/lib.rs    — re-export new types from buiy_core         (Task 7)
-crates/buiy/src/lib.rs         — re-export from buiy facade                  (Task 7)
+crates/buiy_core/src/lib.rs    — re-export new types from buiy_core         (Task 6)
+crates/buiy/src/lib.rs         — re-export from buiy facade                  (Task 6)
 ```
 
 ### New tests
@@ -64,16 +64,16 @@ crates/buiy_core/tests/
 │                                            variant produces the right
 │                                            taffy::Overflow value;
 │                                            ScrollbarWidth maps to f32;
-│                                            scroll-container predicate     (Task 8)
+│                                            scroll-container predicate     (Task 7)
 └── layout_scroll_offset_no_invalidate.rs  — invariant: mutating
                                              ScrollOffset (or ScrollSnapItem)
-                                             does NOT trigger sync_styles    (Task 9)
+                                             does NOT trigger sync_styles    (Task 8)
 ```
 
 ### Modified docs / non-code files
 
-- `CHANGELOG.md` — `[Unreleased]` `### Added` and `### Changed` entries (Task 10).
-- `docs/README.md` — add Phase 2 plan entry under Layout > Plans with `[active]` tag (Task 10).
+- `CHANGELOG.md` — `[Unreleased]` `### Added` and `### Changed` entries (Task 9).
+- `docs/README.md` — entry already added under Layout > Plans with `[active]` tag during the plan-write commit; flipped to `[landed]` post-merge.
 
 ### No deletions
 
@@ -112,7 +112,7 @@ Every Phase 2 spec requirement maps to a task below. Items marked **deferred** a
 | overflow-and-scrolling.md § 5 test — logical alias translation | **Deferred to Phase 4.** | — |
 | overflow-and-scrolling.md § 6 — virtual scrolling | **Out of scope (widget catalog).** | — |
 | overflow-and-scrolling.md § 7 — scroll-driven animations | **Deferred to `buiy-animation-design`.** | — |
-| architecture.md § 1.2 — sync_styles trigger set widening | Add `Changed<Overflow>`, `Changed<Scroll>`. **Do NOT add `Changed<ScrollOffset>` or `Changed<ScrollSnapItem>`.** Verified by Task 9 test. | 6, 9 |
+| architecture.md § 1.2 — sync_styles trigger set widening | Add `Changed<Overflow>`, `Changed<Scroll>`. **Do NOT add `Changed<ScrollOffset>` or `Changed<ScrollSnapItem>`.** Verified by Task 8 test. | 5, 8 |
 | architecture.md § 2.1 — decomposed component derive convention (`Component, Reflect, Default, Clone` + `#[reflect(Component, Default)]`) | Applied to all four new components. | 2, 3 |
 | architecture.md § 2.4 — child-side components are decomposed-only | `ScrollSnapItem` follows `FlexItem`'s pattern: not in `Style` builder. `ScrollOffset` is *runtime state*, similarly excluded from the builder (and from the change-detection filter). | 3, 4 |
 
@@ -350,6 +350,8 @@ EOF
 
 `Overflow::is_scroll_container(&self)` is added in this task because the predicate is part of the component's documented API per spec § 1.2; later phases (sticky, picking) consume it.
 
+**Reflection-attribute convention:** every component in this task uses `#[reflect(Component, Default)]` (matching `BoxModel` / `Position` / `FlexParams` from Phase 1). Phase 1's `Display` enum uses `#[reflect(Component)]` without `Default` despite deriving `Default` (a Phase 1 oversight); do *not* propagate that omission to Phase 2 components. The `Default` reflect tag enables BSN / inspector defaulting; omitting it silently degrades inspector UX.
+
 - [ ] **Step 2.1: Write failing tests for `Overflow` and `Scroll` defaults and `is_scroll_container`**
 
 Append to the existing `mod tests` block in `crates/buiy_core/src/layout/components.rs`, right before its closing `}` (currently line 188). Note the existing imports at the top of the test module already cover `super::*`; add what's missing.
@@ -527,7 +529,7 @@ EOF
 **Files:**
 - Modify: `crates/buiy_core/src/layout/components.rs` (append after the `Scroll` component added in Task 2, before the `#[cfg(test)]` block; also extend the `use super::types::{...}` import to include `SnapAlign` and `SnapStop`)
 
-`ScrollOffset` is *runtime state* — the input system writes to it in response to scroll events; layout reads it (Phase 7 sub-pass 6a) and rendering / picking apply it during draw / hit-test. **It is not in `Style`'s Bundle, and `Changed<ScrollOffset>` is intentionally excluded from `sync_styles`'s trigger filter** (Task 6). Mutating `ScrollOffset` must not invalidate Taffy.
+`ScrollOffset` is *runtime state* — the input system writes to it in response to scroll events; layout reads it (Phase 7 sub-pass 6a) and rendering / picking apply it during draw / hit-test. **It is not in `Style`'s Bundle, and `Changed<ScrollOffset>` is intentionally excluded from `sync_styles`'s trigger filter** (Task 5). Mutating `ScrollOffset` must not invalidate Taffy.
 
 `ScrollSnapItem` is *child-side* — analogous to `FlexItem`, it's spawned alongside `Style` rather than nested. Per [architecture.md § 2.4](../specs/2026-05-08-buiy-layout-design/architecture.md#24-child-side-components-decomposed-only), child-side components stay decomposed-only.
 
@@ -636,7 +638,7 @@ feat(buiy_core): add ScrollOffset + ScrollSnapItem decomposed components
 ScrollOffset is runtime state — mutating it must not invalidate
 ResolvedLayout. ScrollSnapItem is child-side, like FlexItem; both stay
 decomposed-only (not in Style Bundle). Their exclusion from sync_styles'
-change-detection filter is enforced in Task 6.
+change-detection filter is enforced in Task 5.
 
 Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md
 Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 3
@@ -936,18 +938,78 @@ EOF
 
 ---
 
-### Task 5: Wire `Overflow` to Taffy in `translate.rs`
+### Task 5: Wire `Overflow` to Taffy and widen `sync_styles` (atomic)
 
 **Files:**
 - Modify: `crates/buiy_core/src/layout/translate.rs` (extend `StyleView` struct, extend `style_to_taffy`, add `map_overflow_mode` and `map_scrollbar_width` helpers, extend tests)
+- Modify: `crates/buiy_core/src/layout/systems.rs` (extend imports, doc comment, query, filter, destructuring)
 
-Per spec § 1.1, `OverflowMode → taffy::Overflow`: `Visible→Visible, Hidden→Hidden, Clip→Hidden, Scroll→Scroll, Auto→Scroll`. Per Phase 2 plan: `ScrollbarWidth::{Auto, Thin, None}` → `taffy::Style.scrollbar_width: f32` of `12.0 / 8.0 / 0.0`.
+**Atomic.** `StyleView` is the bridge between `sync_styles`'s query and `style_to_taffy`. Widening one without the other breaks the lib build (the call site in `systems.rs` would still construct the old shape). This task combines both edits in one commit so the workspace compiles continuously.
 
-`Scroll`, `ScrollOffset`, `ScrollSnapItem` have no Taffy mapping — they're consumed by render / input / Phase 7 systems. They are deliberately *not* added to `StyleView`.
+Per spec § 1.1, `OverflowMode → taffy::Overflow`: `Visible→Visible, Hidden→Hidden, Clip→Hidden, Scroll→Scroll, Auto→Scroll`. The plan picks `ScrollbarWidth::{Auto, Thin, None}` → `taffy::Style.scrollbar_width: f32` of `12.0 / 8.0 / 0.0` — values chosen to approximate common platform scrollbar widths (macOS overlay ~15 px, GTK ~12 px, Windows ~17 px; Thin matches typical "reduce-scrollbar-width" overlay widths). The spec is silent on exact pixel values; revisit when `buiy-render-pipeline-design` settles on canonical widths.
 
-- [ ] **Step 5.1: Write failing tests for the new mapping**
+`Scroll`, `ScrollOffset`, `ScrollSnapItem` have no Taffy mapping — they're consumed by render / input / Phase 7 systems. `Scroll` is added to `StyleView` (so `Changed<Scroll>` flows through the same pipeline) but `style_to_taffy` does not consume it. `ScrollOffset` and `ScrollSnapItem` are deliberately not in `StyleView` *or* the trigger filter.
 
-Append to the existing test module in `crates/buiy_core/src/layout/translate.rs` (i.e., before its closing `}` at line 368):
+This is the **central correctness step** of Phase 2. Adding `Changed<Overflow>` is required because `Overflow` affects `taffy::Style`. Adding `Changed<Scroll>` matches [architecture.md § 1.2](../specs/2026-05-08-buiy-layout-design/architecture.md#change-detection-trigger-set)'s documented trigger set — Phase 7 (sticky) reads `Scroll` and the spec scopes it as layout-relevant. **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are deliberately excluded**; the exclusion is asserted by Task 8's test.
+
+- [ ] **Step 5.1a: Migrate the four pre-existing `translate.rs` tests to the new `StyleView` shape**
+
+Open `crates/buiy_core/src/layout/translate.rs`. Locate the four pre-existing tests (`translate_default_components_to_taffy_default`, `translate_flex_row_with_dimensions`, `translate_position_absolute_emits_absolute_with_inset`, `translate_flex_item_basis_grow_shrink`). Each currently calls:
+
+```rust
+let taffy = style_to_taffy(StyleView {
+    display: &display,
+    box_model: &bm,
+    position: &position,
+    flex_params: &flex,
+    flex_item: ...,
+});
+```
+
+For each of the four tests, **before** the `style_to_taffy` call, add the two component constructions:
+
+```rust
+let overflow = Overflow::default();
+let scroll = Scroll::default();
+```
+
+Then replace the `StyleView { ... }` literal so it includes both new fields:
+
+```rust
+let taffy = style_to_taffy(StyleView {
+    display: &display,
+    box_model: &bm,
+    position: &position,
+    flex_params: &flex,
+    flex_item: ...,
+    overflow: &overflow,
+    scroll: &scroll,
+});
+```
+
+Then update the test module's imports. The existing test-module imports (lines 251-255) read:
+
+```rust
+    use crate::layout::components::{BoxModel, Display, FlexItem, FlexParams, Position};
+    use crate::layout::types::{
+        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, JustifyContent, Length,
+        PositionKind, Sizing,
+    };
+```
+
+Replace them with:
+
+```rust
+    use crate::layout::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
+    use crate::layout::types::{
+        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, JustifyContent, Length,
+        OverflowMode, PositionKind, ScrollbarWidth, Sizing,
+    };
+```
+
+- [ ] **Step 5.1b: Append the two new failing tests to the test module**
+
+Append before the test module's closing `}` at line 368:
 
 ```rust
     #[test]
@@ -1045,53 +1107,15 @@ Append to the existing test module in `crates/buiy_core/src/layout/translate.rs`
     }
 ```
 
-Update the four pre-existing translate tests (`translate_default_components_to_taffy_default`, `translate_flex_row_with_dimensions`, `translate_position_absolute_emits_absolute_with_inset`, `translate_flex_item_basis_grow_shrink`) to construct `Overflow::default()` and `Scroll::default()` and pass them through `StyleView`. Each currently calls:
-
-```rust
-let taffy = style_to_taffy(StyleView {
-    display: &display,
-    box_model: &bm,
-    position: &position,
-    flex_params: &flex,
-    flex_item: ...,
-});
-```
-
-Replace each call with the version that adds the two new fields:
-
-```rust
-let overflow = Overflow::default();
-let scroll = Scroll::default();
-let taffy = style_to_taffy(StyleView {
-    display: &display,
-    box_model: &bm,
-    position: &position,
-    flex_params: &flex,
-    flex_item: ...,
-    overflow: &overflow,
-    scroll: &scroll,
-});
-```
-
-Also extend the test module's existing `use crate::layout::components::{BoxModel, Display, FlexItem, FlexParams, Position};` (line 251) to include `Overflow` and `Scroll`, and the existing `use crate::layout::types::{...}` (lines 252-255) to include `OverflowMode` and `ScrollbarWidth`:
-
-```rust
-    use crate::layout::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
-    use crate::layout::types::{
-        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, JustifyContent, Length,
-        OverflowMode, PositionKind, ScrollbarWidth, Sizing,
-    };
-```
-
 - [ ] **Step 5.2: Run tests to verify failure**
 
 ```sh
-cargo test -p buiy_core --lib layout::translate
+cargo test -p buiy_core --lib layout
 ```
 
-Expected: compilation error — `StyleView` has no `overflow` / `scroll` fields; `style_to_taffy` doesn't write `taffy.overflow` or `taffy.scrollbar_width`.
+Expected: lib compilation error — `StyleView` has no `overflow` / `scroll` fields; the migrated test calls fail. The lib won't build, so all `--lib` tests fail. This is the failing-test red state for the combined translate.rs+systems.rs implementation in Step 5.3.
 
-- [ ] **Step 5.3: Extend `StyleView` and `style_to_taffy`**
+- [ ] **Step 5.3a: Extend `translate.rs` — imports, `StyleView`, `style_to_taffy`, helpers**
 
 In `crates/buiy_core/src/layout/translate.rs`, replace the existing `StyleView` struct (currently lines 17-23) with:
 
@@ -1143,9 +1167,12 @@ fn map_overflow_mode(o: OverflowMode) -> taffy::Overflow {
     use OverflowMode::*;
     match o {
         Visible => taffy::Overflow::Visible,
-        // Spec § 1.1 maps both Hidden and Clip to taffy Hidden. Taffy 0.10
-        // exposes a distinct `Clip` variant whose sizing semantics differ
-        // from CSS Hidden; the spec's CSS-faithful mapping wins.
+        // Spec § 1.1 maps both Hidden and Clip to taffy::Hidden. Taffy 0.10
+        // distinguishes Hidden (clips and reserves scrollbar gutter via
+        // scrollbar_width) from Clip (clips with no gutter); the spec
+        // chose CSS-faithful: both CSS Hidden and CSS Clip route through
+        // taffy::Hidden so ScrollbarGutter::Stable can later reserve a
+        // gutter consistently when the author opts in.
         Hidden | Clip => taffy::Overflow::Hidden,
         // Auto (conditional scrollbar) is a render-time distinction;
         // layout treats it as Scroll so children may exceed the box.
@@ -1154,6 +1181,10 @@ fn map_overflow_mode(o: OverflowMode) -> taffy::Overflow {
 }
 
 fn map_scrollbar_width(w: ScrollbarWidth) -> f32 {
+    // Approximate common platform scrollbar widths. Auto = ~12 px (GTK /
+    // overlay style), Thin = ~8 px (CSS `scrollbar-width: thin` typical
+    // rendering), None = 0 px (no gutter reserved). Revisit when
+    // buiy-render-pipeline-design picks canonical widths.
     match w {
         ScrollbarWidth::Auto => 12.0,
         ScrollbarWidth::Thin => 8.0,
@@ -1162,56 +1193,15 @@ fn map_scrollbar_width(w: ScrollbarWidth) -> f32 {
 }
 ```
 
-- [ ] **Step 5.4: Run tests to verify pass**
+- [ ] **Step 5.3b: Extend `systems.rs` — doc comment, imports, query, filter, destructuring**
 
-```sh
-cargo test -p buiy_core --lib layout::translate
+In `crates/buiy_core/src/layout/systems.rs`, replace the existing `use super::components::{BoxModel, Display, FlexItem, FlexParams, Position};` (line 14) with:
+
+```rust
+use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
 ```
 
-Expected: all tests pass (4 pre-existing migrated + 2 new = 6).
-
-- [ ] **Step 5.5: Run clippy and fmt**
-
-```sh
-cargo fmt --all -- --check && \
-  cargo clippy -p buiy_core --all-targets -- -D warnings
-```
-
-Expected: clean.
-
-- [ ] **Step 5.6: Commit**
-
-```sh
-git add crates/buiy_core/src/layout/translate.rs
-git commit -m "$(cat <<'EOF'
-feat(buiy_core): map Overflow + ScrollbarWidth to Taffy 0.10
-
-OverflowMode {Visible, Hidden, Clip, Scroll, Auto} →
-taffy::Overflow {Visible, Hidden, Hidden, Scroll, Scroll}.
-ScrollbarWidth {Auto, Thin, None} → 12.0 / 8.0 / 0.0 (f32).
-Scroll component is kept in StyleView for trigger-set coverage but
-its data flows to render/input, not Taffy.
-
-Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 1.1
-Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 5
-EOF
-)"
-```
-
----
-
-### Task 6: Widen `sync_styles` change-detection trigger set + query
-
-**Files:**
-- Modify: `crates/buiy_core/src/layout/systems.rs` (extend the import block, extend the `nodes` query inside `sync_styles`, extend the `Or<...>` filter; do NOT include `Changed<ScrollOffset>` or `Changed<ScrollSnapItem>`)
-
-This is the **central correctness step** of Phase 2. Adding `Changed<Overflow>` is required because `Overflow` affects `taffy::Style`. Adding `Changed<Scroll>` matches the spec's documented trigger set ([architecture.md § 1.2](../specs/2026-05-08-buiy-layout-design/architecture.md#change-detection-trigger-set)) — even though `Scroll` doesn't currently affect Taffy, future phases (Phase 7's sticky-positioning sub-pass) read it and the spec scopes it as a layout-relevant change.
-
-`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are **deliberately excluded** — `ScrollOffset` is runtime state (mutating it is the scroll-input handler's whole job) and `ScrollSnapItem` is consumed by the snap-point math in input, not layout. The exclusion is asserted by Task 9's test.
-
-- [ ] **Step 6.1: Update the docs comment on `sync_styles`**
-
-In `crates/buiy_core/src/layout/systems.rs`, the existing doc comment (lines 48-61) lists the Phase 1 trigger set. Replace lines 56-61 (from `Phase 1 trigger set:` to `components land.`) with:
+The existing doc comment on `sync_styles` (lines 48-61) lists the Phase 1 trigger set. Replace lines 56-61 (from `Phase 1 trigger set:` to `components land.`) with:
 
 ```rust
 /// Phase 2 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
@@ -1226,17 +1216,7 @@ In `crates/buiy_core/src/layout/systems.rs`, the existing doc comment (lines 48-
 /// exclusion is asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
 ```
 
-- [ ] **Step 6.2: Extend the import block at the top of the file**
-
-Replace the existing `use super::components::{BoxModel, Display, FlexItem, FlexParams, Position};` (line 14) with:
-
-```rust
-use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
-```
-
-- [ ] **Step 6.3: Extend the `sync_styles` query and filter**
-
-Replace the existing `nodes: Query<...>` parameter (currently lines 65-87) with:
+Replace the existing `nodes: Query<...>` parameter (currently lines 65-87) with the widened query that adds `&Overflow` / `&Scroll` and the two new `Changed<...>` filter clauses:
 
 ```rust
     nodes: Query<
@@ -1268,9 +1248,7 @@ Replace the existing `nodes: Query<...>` parameter (currently lines 65-87) with:
     >,
 ```
 
-- [ ] **Step 6.4: Update the destructuring inside `sync_styles`**
-
-The existing two `for` loops destructure 7 fields. Replace each loop's destructuring tuple to include the two new components.
+The existing two `for` loops in `sync_styles` destructure 7 fields. Replace each loop's destructuring tuple to include the two new components.
 
 The first loop (currently lines 95-123) — replace its `for ... in nodes.iter() { ... }` header at line 95 with:
 
@@ -1304,45 +1282,50 @@ The second loop (currently lines 126-139) — replace its `for ... in nodes.iter
 
 (All the unused destructured fields are prefixed with `_`. The leading `_overflow` / `_scroll` are required because the query tuple ordering must match the parameter ordering exactly.)
 
-- [ ] **Step 6.5: Run the existing test suite to verify nothing regressed**
+- [ ] **Step 5.4: Run the full lib test suite to verify pass**
 
 ```sh
 xvfb-run -a cargo test -p buiy_core
 ```
 
-Expected: all pre-existing tests pass. Phase 1's `layout_pipeline_order.rs`, `layout_topology.rs`, `layout_style_equivalence.rs`, `layout_box_sizing.rs`, `layout.rs`, `components.rs` tests carry forward unchanged because Task 4 (`Style` Bundle) ensures every `Style::default()` insert still produces a Buiy entity with the full decomposed component set.
+Expected: every test passes. The 6 translate tests (4 pre-existing migrated + 2 new) plus every other Phase 1 test (`layout_pipeline_order.rs`, `layout_topology.rs`, `layout_style_equivalence.rs`, `layout_box_sizing.rs`, `layout.rs`, `components.rs`) all green. The Phase 1 tests carry forward unchanged because Task 4 ensures every `Style::default()` spawn produces an entity with the full Phase-2-extended component set.
 
-- [ ] **Step 6.6: Run clippy and fmt**
+- [ ] **Step 5.5: Run clippy and fmt**
 
 ```sh
 cargo fmt --all -- --check && \
   cargo clippy -p buiy_core --all-targets -- -D warnings
 ```
 
-Expected: clean. The `clippy::type_complexity` allow at line 62 still covers the now-9-element query tuple.
+Expected: clean. The `clippy::type_complexity` allow at `systems.rs` line 62 still covers the now-9-element query tuple.
 
-- [ ] **Step 6.7: Commit**
+- [ ] **Step 5.6: Commit**
 
 ```sh
-git add crates/buiy_core/src/layout/systems.rs
+git add crates/buiy_core/src/layout/translate.rs crates/buiy_core/src/layout/systems.rs
 git commit -m "$(cat <<'EOF'
-feat(buiy_core): widen sync_styles trigger set with Overflow + Scroll
+feat(buiy_core): wire Overflow to Taffy + widen sync_styles trigger set
 
-Adds Changed<Overflow> and Changed<Scroll> to the change-detection
-filter, matching architecture.md § 1.2's documented trigger set.
+Atomic. Extends StyleView with `overflow` + `scroll`; maps OverflowMode
+{Visible, Hidden, Clip, Scroll, Auto} → taffy::Overflow {Visible,
+Hidden, Hidden, Scroll, Scroll} per spec § 1.1; ScrollbarWidth
+{Auto, Thin, None} → 12.0 / 8.0 / 0.0 (f32).
+
+Widens sync_styles' Or<(Changed<...>)> filter to include
+Changed<Overflow> + Changed<Scroll>, matching architecture.md § 1.2.
 Changed<ScrollOffset> and Changed<ScrollSnapItem> are intentionally
-excluded — runtime state and child-side respectively. Task 9 asserts
-the exclusion via a fixture.
+excluded — runtime state and child-side respectively (Task 8 asserts).
 
+Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 1.1
 Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 1.2
-Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 6
+Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 5
 EOF
 )"
 ```
 
 ---
 
-### Task 7: Register types in `LayoutPlugin`; update workspace re-exports
+### Task 6: Register types in `LayoutPlugin`; update workspace re-exports
 
 **Files:**
 - Modify: `crates/buiy_core/src/layout/mod.rs` (extend `pub use ...` lines and `register_type::<...>()` calls)
@@ -1351,7 +1334,7 @@ EOF
 
 This task makes the new types reachable from the public API and visible to reflection / BSN / inspectors. No behavior change — type registration only.
 
-- [ ] **Step 7.1: Extend re-exports and registration in `layout/mod.rs`**
+- [ ] **Step 6.1: Extend re-exports and registration in `layout/mod.rs`**
 
 Replace the existing `pub use components::{...}` line (line 13) with:
 
@@ -1392,7 +1375,7 @@ Inside `LayoutPlugin::build` (currently lines 27-53), the existing `register_typ
             .register_type::<Inset>();
 ```
 
-- [ ] **Step 7.2: Extend `crates/buiy_core/src/lib.rs` re-export block**
+- [ ] **Step 6.2: Extend `crates/buiy_core/src/lib.rs` re-export block**
 
 Open `crates/buiy_core/src/lib.rs`. Find the layout re-export block (search for `pub use layout::` — there should be a single `pub use layout::{...};` line that re-exports the layout surface for buiy_core consumers). Add the new types to it.
 
@@ -1420,7 +1403,7 @@ pub use layout::{
 
 If the actual export shape on disk differs (e.g., split into multiple `pub use` lines), match the existing convention — append the new symbols in the same style.
 
-- [ ] **Step 7.3: Extend `crates/buiy/src/lib.rs` facade re-export**
+- [ ] **Step 6.3: Extend `crates/buiy/src/lib.rs` facade re-export**
 
 Open `crates/buiy/src/lib.rs`. Find the layout re-exports surfaced through the `buiy` facade. Phase 1 added the types (BoxModel, Display, Position, FlexParams, FlexItem, Style, etc.) into the facade.
 
@@ -1428,7 +1411,7 @@ Search for `BoxModel` or `Style` in `crates/buiy/src/lib.rs` — that block need
 
 Specifically, append to the `pub use buiy_core::{...}` block (or equivalent) the symbols: `Overflow, OverflowMode, OverscrollBehavior, Scroll, ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, SnapAlign, SnapStop, SnapType` (plus any of the 9 enum types not yet surfaced). Keep alphabetical order.
 
-- [ ] **Step 7.4: Run the workspace test suite**
+- [ ] **Step 6.4: Run the workspace test suite**
 
 ```sh
 xvfb-run -a cargo test --workspace
@@ -1436,7 +1419,7 @@ xvfb-run -a cargo test --workspace
 
 Expected: all tests pass.
 
-- [ ] **Step 7.5: Run the full check command**
+- [ ] **Step 6.5: Run the full check command**
 
 ```sh
 cargo fmt --all -- --check && \
@@ -1446,7 +1429,7 @@ cargo fmt --all -- --check && \
 
 Expected: clean.
 
-- [ ] **Step 7.6: Commit**
+- [ ] **Step 6.6: Commit**
 
 ```sh
 git add crates/buiy_core/src/layout/mod.rs crates/buiy_core/src/lib.rs crates/buiy/src/lib.rs
@@ -1457,21 +1440,23 @@ LayoutPlugin now reflects Overflow / Scroll / ScrollOffset /
 ScrollSnapItem; the four components and 9 supporting enums are
 re-exported from buiy_core and the buiy facade.
 
-Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 7
+Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 6
 EOF
 )"
 ```
 
 ---
 
-### Task 8: Integration test — Taffy overflow mapping + scroll-container detection
+### Task 7: Integration test — Taffy overflow mapping + scroll-container detection
 
 **Files:**
 - Create: `crates/buiy_core/tests/layout_overflow.rs`
 
 End-to-end test that spawns Buiy entities with various `Overflow` configurations, runs `LayoutPlugin`, and verifies (a) the resulting `taffy::Style` reads back as expected via Taffy's introspection, and (b) `Overflow::is_scroll_container()` matches the spec § 1.2 predicate. The Taffy-style assertion goes through `LayoutTree`, exercising the full Phase 2 chain (Bundle expansion → sync_styles → translate → Taffy storage).
 
-- [ ] **Step 8.1: Write the failing tests**
+The test uses `taffy::Overflow` directly. Cargo's integration-test compilation in this workspace does expose the lib's regular `[dependencies]` to the `tests/` binary (verified empirically against `taffy.workspace = true` in `crates/buiy_core/Cargo.toml`'s `[dependencies]`), so no dev-dep addition is needed.
+
+- [ ] **Step 7.1: Write the failing tests**
 
 Create `crates/buiy_core/tests/layout_overflow.rs` with the following content:
 
@@ -1585,7 +1570,7 @@ fn is_scroll_container_matches_spec() {
 }
 ```
 
-- [ ] **Step 8.2: Run the test to verify failure**
+- [ ] **Step 7.2: Run the test to verify failure**
 
 ```sh
 xvfb-run -a cargo test -p buiy_core --test layout_overflow
@@ -1593,7 +1578,7 @@ xvfb-run -a cargo test -p buiy_core --test layout_overflow
 
 Expected: compilation error — `LayoutTree::by_entity()` and `LayoutTree::tree_ref()` don't yet exist. The `LayoutTree` struct's fields are `pub(crate)` per Phase 1's `tree.rs` line 4: `pub(crate) tree: TaffyTree<()>` and `pub(crate) by_entity: HashMap<Entity, TaffyNodeId>`. Tests in `crates/buiy_core/tests/` are *integration tests* (separate crate), so they cannot reach `pub(crate)` items. We need read-only accessors for tests.
 
-- [ ] **Step 8.3: Add public read-only accessors to `LayoutTree`**
+- [ ] **Step 7.3: Add public read-only accessors to `LayoutTree`**
 
 Open `crates/buiy_core/src/layout/tree.rs`. Add the following two methods after the existing `len` / `is_empty` impl block:
 
@@ -1617,7 +1602,7 @@ The `#[doc(hidden)]` plus the `_ref` suffix marks these as internal — used by 
 
 If the existing `tree.rs` `impl LayoutTree { ... }` block already exists, append both methods there instead of creating a second `impl` block.
 
-- [ ] **Step 8.4: Run the tests to verify pass**
+- [ ] **Step 7.4: Run the tests to verify pass**
 
 ```sh
 xvfb-run -a cargo test -p buiy_core --test layout_overflow
@@ -1625,7 +1610,7 @@ xvfb-run -a cargo test -p buiy_core --test layout_overflow
 
 Expected: all 4 tests pass.
 
-- [ ] **Step 8.5: Run clippy and fmt**
+- [ ] **Step 7.5: Run clippy and fmt**
 
 ```sh
 cargo fmt --all -- --check && \
@@ -1634,7 +1619,7 @@ cargo fmt --all -- --check && \
 
 Expected: clean.
 
-- [ ] **Step 8.6: Commit**
+- [ ] **Step 7.6: Commit**
 
 ```sh
 git add crates/buiy_core/tests/layout_overflow.rs crates/buiy_core/src/layout/tree.rs
@@ -1647,14 +1632,14 @@ Adds doc-hidden by_entity / tree_ref accessors on LayoutTree to enable
 integration-test inspection of the Taffy bridge state.
 
 Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 1, § 5
-Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 8
+Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 7
 EOF
 )"
 ```
 
 ---
 
-### Task 9: Integration test — `ScrollOffset` mutation does not invalidate layout
+### Task 8: Integration test — `ScrollOffset` mutation does not invalidate layout
 
 **Files:**
 - Create: `crates/buiy_core/tests/layout_scroll_offset_no_invalidate.rs`
@@ -1663,7 +1648,7 @@ This test pins the Phase 2 correctness invariant. The test runs `LayoutPlugin`, 
 
 A second assertion verifies `ResolvedLayout` is byte-equal across the mutation frame (the user-visible consequence of the trigger-set design).
 
-- [ ] **Step 9.1: Write the failing test**
+- [ ] **Step 8.1: Write the failing test**
 
 Create `crates/buiy_core/tests/layout_scroll_offset_no_invalidate.rs`:
 
@@ -1734,11 +1719,20 @@ fn mutating_scroll_offset_does_not_trigger_sync_styles() {
         .id();
 
     // Frame 1: spawn frame; everything is `Changed`. sync_styles fired.
+    // Snapshot ResolvedLayout's fields (Vec2 is Copy + PartialEq;
+    // ResolvedLayout itself derives only Clone, not Copy or PartialEq —
+    // see crates/buiy_core/src/components.rs).
     app.update();
-    let layout_after_first_frame = *app
+    let pos_after_first_frame = app
         .world()
         .get::<ResolvedLayout>(entity)
-        .expect("ResolvedLayout written on frame 1");
+        .expect("ResolvedLayout written on frame 1")
+        .position;
+    let size_after_first_frame = app
+        .world()
+        .get::<ResolvedLayout>(entity)
+        .expect("ResolvedLayout written on frame 1")
+        .size;
 
     // Frame 2: nothing has changed since frame 1. sync_styles trigger
     // query must yield zero entities.
@@ -1766,15 +1760,25 @@ fn mutating_scroll_offset_does_not_trigger_sync_styles() {
         "ScrollOffset mutation must not enter sync_styles' trigger set"
     );
 
-    // Run frame 3 and verify ResolvedLayout is byte-equal to frame 1's.
+    // Run frame 3 and verify ResolvedLayout fields are unchanged from frame 1.
     app.update();
-    let layout_after_offset_mutation = *app
+    let pos_after_offset_mutation = app
         .world()
         .get::<ResolvedLayout>(entity)
-        .expect("ResolvedLayout still present");
+        .expect("ResolvedLayout still present")
+        .position;
+    let size_after_offset_mutation = app
+        .world()
+        .get::<ResolvedLayout>(entity)
+        .expect("ResolvedLayout still present")
+        .size;
     assert_eq!(
-        layout_after_first_frame, layout_after_offset_mutation,
-        "ResolvedLayout must be byte-equal across a scroll-only frame"
+        pos_after_first_frame, pos_after_offset_mutation,
+        "ResolvedLayout.position must be unchanged across a scroll-only frame"
+    );
+    assert_eq!(
+        size_after_first_frame, size_after_offset_mutation,
+        "ResolvedLayout.size must be unchanged across a scroll-only frame"
     );
 }
 
@@ -1836,25 +1840,25 @@ fn mutating_scroll_snap_item_does_not_trigger_sync_styles() {
 }
 ```
 
-- [ ] **Step 9.2: Run the test to verify it fails (and *why* it fails)**
+- [ ] **Step 8.2: Run the test to verify it fails (and *why* it fails)**
 
 ```sh
 xvfb-run -a cargo test -p buiy_core --test layout_scroll_offset_no_invalidate
 ```
 
-Expected behavior depends on Task 6's correctness:
+Expected behavior depends on Task 5's correctness:
 
-- If Task 6's trigger filter does NOT include `Changed<ScrollOffset>`: the test compiles and passes immediately. Confirm pass output:
+- If Task 5's trigger filter does NOT include `Changed<ScrollOffset>`: the test compiles and passes immediately. Confirm pass output:
   ```
   test result: ok. 2 passed
   ```
 - If a future contributor accidentally adds `Changed<ScrollOffset>` to the filter: this test fails the third assertion (`count_after_offset_mutation` would be 1).
 
-If the test fails to compile, expect a missing-symbol error — likely `ResolvedLayout` not re-exported. If so, verify Task 7's re-export of `ResolvedLayout` (which is from `buiy_core::components`, not `layout`). The Phase 1 re-export of `ResolvedLayout` from `buiy_core::lib` should already cover it.
+If the test fails to compile, expect a missing-symbol error — likely `ResolvedLayout` not re-exported. If so, verify Task 6's re-export of `ResolvedLayout` (which is from `buiy_core::components`, not `layout`). The Phase 1 re-export of `ResolvedLayout` from `buiy_core::lib` should already cover it.
 
-- [ ] **Step 9.3: If the test passes, no implementation step is needed — the invariant is held by Task 6**
+- [ ] **Step 8.3: If the test passes, no implementation step is needed — the invariant is held by Task 5**
 
-This task is a *codification* of an invariant established earlier. The "test → fail → implement → pass" rhythm collapses to "test → pass" because Task 6 already excluded the problematic triggers. That's correct for an invariant test; the value is *future regression detection* if someone widens the filter wrongly.
+This task is a *codification* of an invariant established earlier. The "test → fail → implement → pass" rhythm collapses to "test → pass" because Task 5 already excluded the problematic triggers. That's correct for an invariant test; the value is *future regression detection* if someone widens the filter wrongly.
 
 If the test does fail unexpectedly, debug as follows:
 
@@ -1862,7 +1866,7 @@ If the test does fail unexpectedly, debug as follows:
 2. If `Changed<ScrollOffset>` or `Changed<ScrollSnapItem>` is in the filter, remove it.
 3. Re-run the test.
 
-- [ ] **Step 9.4: Run clippy and fmt**
+- [ ] **Step 8.4: Run clippy and fmt**
 
 ```sh
 cargo fmt --all -- --check && \
@@ -1871,7 +1875,7 @@ cargo fmt --all -- --check && \
 
 Expected: clean.
 
-- [ ] **Step 9.5: Commit**
+- [ ] **Step 8.5: Commit**
 
 ```sh
 git add crates/buiy_core/tests/layout_scroll_offset_no_invalidate.rs
@@ -1884,21 +1888,21 @@ mirrors the filter directly so future filter widenings against this
 contract surface in CI.
 
 Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 2.1
-Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 9
+Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 8
 EOF
 )"
 ```
 
 ---
 
-### Task 10: Update CHANGELOG and run final verification
+### Task 9: Update CHANGELOG and run final verification
 
 **Files:**
 - Modify: `CHANGELOG.md`
 
 `docs/README.md`'s Layout > Plans section was updated to include this plan when the plan itself was written (see git log for the plan-write commit). The `[active]` tag stays through Phase 2 execution and PR review; flip to `[landed]` happens in a small follow-up commit on `main` after merge.
 
-- [ ] **Step 10.1: Update `CHANGELOG.md`**
+- [ ] **Step 9.1: Update `CHANGELOG.md`**
 
 Open `CHANGELOG.md`. Find the `## [Unreleased]` section. Add the following under it (creating `### Added` and `### Changed` subsections if not present, or appending to existing ones):
 
@@ -1934,7 +1938,7 @@ Open `CHANGELOG.md`. Find the `## [Unreleased]` section. Add the following under
   `Changed<ScrollOffset>` and `Changed<ScrollSnapItem>`.
 ```
 
-- [ ] **Step 10.2: Run the full check command (the project's CI mirror)**
+- [ ] **Step 9.2: Run the full check command (the project's CI mirror)**
 
 ```sh
 cargo fmt --all -- --check && \
@@ -1947,7 +1951,7 @@ Expected: clean across the board. All Phase 1 tests still pass; all Phase 2 test
 
 If anything fails, fix in place before committing — do NOT skip / suppress.
 
-- [ ] **Step 10.3: Verify `cargo deny` passes (no dep changes, but routine)**
+- [ ] **Step 9.3: Verify `cargo deny` passes (no dep changes, but routine)**
 
 ```sh
 cargo deny check
@@ -1955,7 +1959,7 @@ cargo deny check
 
 Expected: clean.
 
-- [ ] **Step 10.4: Commit**
+- [ ] **Step 9.4: Commit**
 
 ```sh
 git add CHANGELOG.md
@@ -1965,7 +1969,7 @@ docs: changelog entries for Phase 2 (overflow + scrolling)
 Adds Unreleased entries for the four new components, 9 enum types,
 Style Bundle extension, and the sync_styles trigger-set widening.
 
-Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 10
+Plan: docs/plans/2026-05-08-buiy-layout-overflow-and-scrolling.md task 9
 EOF
 )"
 ```
@@ -1974,9 +1978,9 @@ EOF
 
 ## Final note for executors
 
-Phase 2 is purely additive — no Phase 1 contract changes. After Task 10:
+Phase 2 is purely additive — no Phase 1 contract changes. After Task 9:
 
-- Branch should have 11 commits (one per task plus the plan-write commit).
+- Branch should have 10 commits (one per task plus the plan-write commit).
 - `git diff main...HEAD --stat` should show: `crates/buiy_core/src/layout/{components,mod,style,systems,translate,tree,types}.rs`, `crates/buiy_core/src/lib.rs`, `crates/buiy/src/lib.rs`, two new test files, `CHANGELOG.md`, `docs/README.md` (catalog entry from plan-write), and the plan file itself.
 - All Phase 1 tests pass unchanged.
 - The two new integration tests (`layout_overflow.rs`, `layout_scroll_offset_no_invalidate.rs`) pass.
