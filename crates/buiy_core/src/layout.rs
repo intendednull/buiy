@@ -15,9 +15,10 @@
 // Phase 1 layout-foundation submodules.
 // Spec: docs/specs/2026-05-08-buiy-layout-design/.
 pub mod components;
+pub mod pipeline;
 pub mod style;
-pub mod types;
 pub(crate) mod translate;
+pub mod types;
 
 use crate::{
     BuiySet,
