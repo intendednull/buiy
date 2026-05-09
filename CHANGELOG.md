@@ -23,3 +23,32 @@ tagged release.
   deferral.
 - `bevy_picking` backend. `Hovered` becomes a thin layer over the standard
   `PointerHits` event flow. Closes the Phase 0 picking deferral.
+- `buiy_core::components::Visual` component (`background_token`,
+  `foreground_token`, `border_radius`) carrying the render-side surface
+  formerly mixed into the Phase 0 mega-`Style`. Authors who want themed
+  widgets insert `Visual` alongside the new layout `Style` builder.
+  Eventual home is `buiy-render-pipeline-design`.
+- `buiy_core::layout` module: 8-step layout pipeline (`BuiyLayoutStep`
+  system sets), decomposed `BoxModel` / `Display` / `Position` /
+  `FlexParams` / `FlexItem` components, hybrid `Style` builder that
+  expands to a `Bundle` on spawn.
+
+### Changed
+- Layout subsystem foundation rewritten. Phase 0's flat `layout.rs` is
+  replaced by a `layout/` directory module. The pipeline is an 8-step
+  ordered chain (`BuiyLayoutStep` system sets) inside `BuiySet::Layout`;
+  Phase 1 implements steps 0/1/3/7 and stubs the remaining four for
+  later phase plans.
+- `Style` is now a `Bundle` that decomposes on insert, not a reflectable
+  `Component`. Reflection / inspectors / BSN see the decomposed
+  components (`BoxModel`, `Display`, `Position`, `FlexParams`).
+- The render extract now queries `(&Visual, &ResolvedLayout)` instead
+  of `(&Style, &ResolvedLayout)`; entities without `Visual` are skipped
+  by render. `Button::new` inserts a `Visual` carrying the same theme
+  tokens Phase 0's `Style` did, so visual appearance is preserved.
+
+### Removed
+- `buiy_core::components::Style` (the Phase 0 mega-component) and
+  `buiy_core::components::FlexDirection`. Their roles are taken by
+  `buiy_core::layout::Style` (the hybrid builder) and
+  `buiy_core::layout::FlexAxis` (the four-variant axis enum).

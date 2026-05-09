@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
-    components::{FlexDirection, Node, ResolvedLayout, Style},
-    layout::{LayoutPlugin, LayoutTree},
+    components::{Node, ResolvedLayout},
+    layout::{LayoutPlugin, LayoutTree, Style},
 };
 
 #[test]
@@ -16,30 +16,18 @@ fn layout_resolves_a_simple_flex_row() {
         .world_mut()
         .spawn((
             Node,
-            Style {
-                width: 200.0,
-                height: 100.0,
-                flex_direction: FlexDirection::Row,
-                ..default()
-            },
+            Style::default().flex_row().width_px(200.0).height_px(100.0),
         ))
         .id();
 
     let child = app
         .world_mut()
-        .spawn((
-            Node,
-            Style {
-                width: 50.0,
-                height: 50.0,
-                ..default()
-            },
-        ))
+        .spawn((Node, Style::default().width_px(50.0).height_px(50.0)))
         .id();
 
     app.world_mut().entity_mut(parent).add_child(child);
 
-    app.update(); // run BuiySet::Layout
+    app.update();
 
     let layout = app
         .world()
@@ -58,14 +46,7 @@ fn layout_tree_garbage_collects_despawned_entities() {
 
     let entity = app
         .world_mut()
-        .spawn((
-            Node,
-            Style {
-                width: 100.0,
-                height: 100.0,
-                ..default()
-            },
-        ))
+        .spawn((Node, Style::default().width_px(100.0).height_px(100.0)))
         .id();
 
     app.update();
@@ -84,11 +65,6 @@ fn layout_tree_garbage_collects_despawned_entities() {
     );
 }
 
-/// Same-tick despawn+respawn pins the GC-before-sync ordering inside
-/// `BuiySet::Layout`. If GC ran *after* sync, the surviving LayoutTree
-/// could grow to two entries (the despawned ghost plus the new entity)
-/// or `set_children` could fan out to a stale Taffy NodeId for the
-/// despawned entity.
 #[test]
 fn layout_tree_garbage_collects_within_a_single_tick() {
     let mut app = App::new();
@@ -98,14 +74,7 @@ fn layout_tree_garbage_collects_within_a_single_tick() {
 
     let first = app
         .world_mut()
-        .spawn((
-            Node,
-            Style {
-                width: 100.0,
-                height: 100.0,
-                ..default()
-            },
-        ))
+        .spawn((Node, Style::default().width_px(100.0).height_px(100.0)))
         .id();
 
     app.update();
@@ -115,20 +84,10 @@ fn layout_tree_garbage_collects_within_a_single_tick() {
         "first entity registered after first update",
     );
 
-    // Despawn first AND spawn second between the same pair of updates.
-    // GC must observe `RemovedComponents<Node>` and remove `first` before
-    // sync inserts `second`.
     app.world_mut().entity_mut(first).despawn();
     let second = app
         .world_mut()
-        .spawn((
-            Node,
-            Style {
-                width: 50.0,
-                height: 50.0,
-                ..default()
-            },
-        ))
+        .spawn((Node, Style::default().width_px(50.0).height_px(50.0)))
         .id();
 
     app.update();

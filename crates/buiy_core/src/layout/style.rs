@@ -1,0 +1,306 @@
+//! `Style` — the hybrid builder over decomposed layout components.
+//!
+//! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 2.2-2.4.
+//!
+//! Two equally valid authoring forms write the same fields; on insert,
+//! Bundle expansion produces the four decomposed components Phase 1
+//! ships (`Display`, `BoxModel`, `Position`, `FlexParams`). Defaulted
+//! fields produce defaulted components — the Phase 1 simplification is
+//! that components are always inserted, not skipped on default.
+//! Phase 4's `LogicalBoxModel` revisit will switch to skip-on-default.
+//!
+//! `FlexItem` is decomposed-only (per spec § 2.4); it is not included in
+//! `Style`.
+
+use super::components::{BoxModel, Display, FlexParams, Position};
+use super::types::{
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
+    JustifyContent, Length, PositionKind, Sizing,
+};
+use bevy::ecs::bundle::Bundle;
+
+/// Hybrid builder over an entity's self-styling layout components.
+///
+/// Two authoring forms over the same fields:
+///
+/// ```ignore
+/// // Struct-literal form.
+/// let s = Style { display: Display::flex_row(), ..Default::default() };
+///
+/// // Fluent form.
+/// let s = Style::default().flex_row();
+/// ```
+///
+/// On `commands.spawn(s)` (or `entity.insert(s)`), expands into a Bundle
+/// of `Display`, `BoxModel`, `Position`, `FlexParams`. Decomposed
+/// components are canonical; the builder is sugar.
+#[derive(Bundle, Clone, Debug, Default)]
+pub struct Style {
+    pub display: Display,
+    pub box_model: BoxModel,
+    pub position: Position,
+    pub flex_params: FlexParams,
+}
+
+impl Style {
+    // ---- Display ----
+
+    pub fn block(mut self) -> Self {
+        self.display = Display::Block;
+        self
+    }
+
+    pub fn flex_row(mut self) -> Self {
+        self.display = Display::flex_row();
+        self.flex_params.direction = FlexAxis::Row;
+        self
+    }
+
+    pub fn flex_column(mut self) -> Self {
+        self.display = Display::flex_column();
+        self.flex_params.direction = FlexAxis::Column;
+        self
+    }
+
+    pub fn flex_axis(mut self, axis: FlexAxis) -> Self {
+        self.display = Display::Flex(axis);
+        self.flex_params.direction = axis;
+        self
+    }
+
+    pub fn display(mut self, d: Display) -> Self {
+        self.display = d;
+        if let Display::Flex(axis) | Display::InlineFlex(axis) = d {
+            self.flex_params.direction = axis;
+        }
+        self
+    }
+
+    // ---- BoxModel: dimensions ----
+
+    pub fn width(mut self, w: Sizing) -> Self {
+        self.box_model.width = w;
+        self
+    }
+
+    pub fn height(mut self, h: Sizing) -> Self {
+        self.box_model.height = h;
+        self
+    }
+
+    pub fn width_px(self, px: f32) -> Self {
+        self.width(Sizing::Length(Length::Px(px)))
+    }
+
+    pub fn height_px(self, px: f32) -> Self {
+        self.height(Sizing::Length(Length::Px(px)))
+    }
+
+    pub fn min_width(mut self, w: Sizing) -> Self {
+        self.box_model.min_width = w;
+        self
+    }
+
+    pub fn min_height(mut self, h: Sizing) -> Self {
+        self.box_model.min_height = h;
+        self
+    }
+
+    pub fn max_width(mut self, w: Sizing) -> Self {
+        self.box_model.max_width = w;
+        self
+    }
+
+    pub fn max_height(mut self, h: Sizing) -> Self {
+        self.box_model.max_height = h;
+        self
+    }
+
+    pub fn aspect_ratio(mut self, ratio: AspectRatio) -> Self {
+        self.box_model.aspect_ratio = Some(ratio);
+        self
+    }
+
+    // ---- BoxModel: edges ----
+
+    pub fn padding(mut self, px: f32) -> Self {
+        self.box_model.padding = Edges::all(px);
+        self
+    }
+
+    pub fn padding_edges(mut self, e: Edges) -> Self {
+        self.box_model.padding = e;
+        self
+    }
+
+    pub fn margin(mut self, px: f32) -> Self {
+        self.box_model.margin = Edges::all(px);
+        self
+    }
+
+    pub fn margin_edges(mut self, e: Edges) -> Self {
+        self.box_model.margin = e;
+        self
+    }
+
+    pub fn border(mut self, px: f32) -> Self {
+        self.box_model.border = Edges::all(px);
+        self
+    }
+
+    pub fn border_edges(mut self, e: Edges) -> Self {
+        self.box_model.border = e;
+        self
+    }
+
+    // ---- BoxModel: box-sizing ----
+
+    pub fn content_box(mut self) -> Self {
+        self.box_model.box_sizing = BoxSizing::ContentBox;
+        self
+    }
+
+    pub fn border_box(mut self) -> Self {
+        self.box_model.box_sizing = BoxSizing::BorderBox;
+        self
+    }
+
+    pub fn box_sizing(mut self, b: BoxSizing) -> Self {
+        self.box_model.box_sizing = b;
+        self
+    }
+
+    // ---- Gap (Phase 1 surfaces gap exclusively via FlexParams.gap;
+    //           BoxModel.gap is deferred — see Task 2 doc comment) ----
+
+    pub fn gap_px(mut self, px: f32) -> Self {
+        self.flex_params.gap = FlexGap {
+            row: Length::Px(px),
+            column: Length::Px(px),
+        };
+        self
+    }
+
+    // ---- Position ----
+
+    pub fn position(mut self, kind: PositionKind) -> Self {
+        self.position.kind = kind;
+        self
+    }
+
+    pub fn relative(mut self) -> Self {
+        self.position.kind = PositionKind::Relative;
+        self
+    }
+
+    pub fn absolute(mut self) -> Self {
+        self.position.kind = PositionKind::Absolute;
+        self
+    }
+
+    pub fn inset(mut self, i: Inset) -> Self {
+        self.position.inset = i;
+        self
+    }
+
+    // ---- FlexParams ----
+
+    pub fn flex_wrap(mut self, w: FlexWrap) -> Self {
+        self.flex_params.wrap = w;
+        self
+    }
+
+    pub fn justify_content(mut self, j: JustifyContent) -> Self {
+        self.flex_params.justify_content = j;
+        self
+    }
+
+    pub fn align_items(mut self, a: AlignItems) -> Self {
+        self.flex_params.align_items = a;
+        self
+    }
+
+    pub fn align_content(mut self, a: AlignContent) -> Self {
+        self.flex_params.align_content = a;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::components::{BoxModel, Display, FlexParams, Position};
+    use crate::layout::types::{
+        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, JustifyContent, Length, Sizing,
+    };
+    use bevy::app::App;
+    use bevy::prelude::MinimalPlugins;
+
+    fn spawn_and_extract(style: Style) -> (Display, BoxModel, Position, FlexParams) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(style).id();
+        let world = app.world();
+        let display = *world.get::<Display>(entity).expect("Display inserted");
+        let box_model = world
+            .get::<BoxModel>(entity)
+            .expect("BoxModel inserted")
+            .clone();
+        let position = world
+            .get::<Position>(entity)
+            .expect("Position inserted")
+            .clone();
+        let flex_params = *world
+            .get::<FlexParams>(entity)
+            .expect("FlexParams inserted");
+        (display, box_model, position, flex_params)
+    }
+
+    #[test]
+    fn struct_literal_and_fluent_produce_identical_components() {
+        let literal = Style {
+            display: Display::Flex(FlexAxis::Column),
+            box_model: BoxModel {
+                padding: Edges::all(16.0),
+                box_sizing: BoxSizing::BorderBox,
+                width: Sizing::Length(Length::Px(200.0)),
+                height: Sizing::Length(Length::Px(100.0)),
+                ..Default::default()
+            },
+            flex_params: FlexParams {
+                direction: FlexAxis::Column,
+                gap: FlexGap {
+                    row: Length::Px(8.0),
+                    column: Length::Px(8.0),
+                },
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let fluent = Style::default()
+            .flex_column()
+            .padding(16.0)
+            .border_box()
+            .width_px(200.0)
+            .height_px(100.0)
+            .gap_px(8.0)
+            .justify_content(JustifyContent::SpaceBetween)
+            .align_items(AlignItems::Center);
+
+        assert_eq!(spawn_and_extract(literal), spawn_and_extract(fluent));
+    }
+
+    #[test]
+    fn default_style_inserts_every_decomposed_component() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(Style::default()).id();
+        let world = app.world();
+        assert!(world.get::<Display>(entity).is_some());
+        assert!(world.get::<BoxModel>(entity).is_some());
+        assert!(world.get::<Position>(entity).is_some());
+        assert!(world.get::<FlexParams>(entity).is_some());
+    }
+}

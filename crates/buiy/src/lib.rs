@@ -7,8 +7,13 @@ use bevy::prelude::*;
 pub use buiy_core::{
     BuiySet, CorePlugin,
     a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin},
-    components::{FlexDirection, Node, ResolvedLayout, Style},
+    components::{Node, ResolvedLayout, Visual},
     focus::{FocusVisible, Focusable, FocusedEntity},
+    layout::{
+        AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Display, Edges,
+        FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset, JustifyContent, LayoutPlugin,
+        Length, Position, PositionKind, Sizing, Style,
+    },
     picking::{BuiyPickingBackendPlugin, Hovered},
     theme::{Theme, UserPreferences, default_light_theme},
 };

@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use bevy::window::WindowRef;
 use buiy_core::{
     CorePlugin,
-    components::{Node, ResolvedLayout, Style},
+    components::{Node, ResolvedLayout},
     picking::{BuiyPickingBackendPlugin, PickingPlugin},
 };
 
@@ -37,7 +37,6 @@ fn pointer_over_buiy_node_emits_hit() {
         .world_mut()
         .spawn((
             Node,
-            Style::default(),
             ResolvedLayout {
                 position: Vec2::new(10.0, 10.0),
                 size: Vec2::new(100.0, 50.0),

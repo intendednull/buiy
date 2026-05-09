@@ -1,12 +1,9 @@
 use bevy::prelude::*;
-use buiy_core::{CorePlugin, components::*};
+use buiy_core::{CorePlugin, components::*, layout::Style};
 
 #[test]
-// `Node::default()` is intentional: the test asserts default-constructibility
-// per the architecture commitment (Reflect + Default + Clone + Component on
-// every Buiy component), even though `Node` is currently a unit struct.
 #[allow(clippy::default_constructed_unit_structs)]
-fn node_and_style_are_registered_and_default_constructible() {
+fn node_resolved_layout_and_visual_are_registered_and_default_constructible() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(CorePlugin);
@@ -18,19 +15,24 @@ fn node_and_style_are_registered_and_default_constructible() {
         "Node not registered"
     );
     assert!(
-        registry.get(std::any::TypeId::of::<Style>()).is_some(),
-        "Style not registered"
-    );
-    assert!(
         registry
             .get(std::any::TypeId::of::<ResolvedLayout>())
             .is_some(),
         "ResolvedLayout not registered"
+    );
+    assert!(
+        registry.get(std::any::TypeId::of::<Visual>()).is_some(),
+        "Visual not registered"
     );
 
     drop(registry);
     let world = app.world_mut();
     let entity = world.spawn((Node::default(), Style::default())).id();
     assert!(world.get::<Node>(entity).is_some());
-    assert!(world.get::<Style>(entity).is_some());
+    // Style is a Bundle (not a reflectable Component); the underlying
+    // decomposed components are visible post-spawn.
+    assert!(
+        world.get::<buiy_core::layout::BoxModel>(entity).is_some(),
+        "BoxModel inserted via Style::default()"
+    );
 }
