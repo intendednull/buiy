@@ -10,8 +10,9 @@
 use bevy::prelude::*;
 use buiy_core::{
     a11y::{A11yLabel, A11yRole},
-    components::{Node, Style},
+    components::{Node, Visual},
     focus::Focusable,
+    layout::Style,
     picking::Hovered,
 };
 
@@ -34,19 +35,16 @@ impl Button {
             Button,
             Node,
             // TODO(buiy-widget-catalog-design): replace hardcoded sizes
-            // (width 120, height 32, padding 8) with size tokens
-            // (e.g. `space.button.width`, `space.2`). The token surface
-            // already exists in buiy_core::theme; Phase 0 keeps numeric
-            // literals only because per-widget size tokens aren't shipped
-            // yet. Hit target 120x32 already meets WCAG 2.5.8 (>=24x24).
-            Style {
-                width: 120.0,
-                height: 32.0,
-                padding: 8.0,
-                border_radius: 6.0, // matches "radius.md"
+            // with size tokens (space.button.width, space.2). Hit target
+            // 120x32 already meets WCAG 2.5.8 (>=24x24).
+            Style::default()
+                .width_px(120.0)
+                .height_px(32.0)
+                .padding(8.0),
+            Visual {
                 background_token: "color.surface.secondary".into(),
                 foreground_token: "color.text.primary".into(),
-                ..default()
+                border_radius: 6.0, // matches "radius.md"
             },
             Focusable::default(),
             A11yRole::Button,

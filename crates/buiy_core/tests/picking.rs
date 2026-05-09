@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
-    components::{Node, ResolvedLayout, Style},
+    components::{Node, ResolvedLayout},
     picking::{PickingPlugin, hit_test},
 };
 
@@ -16,7 +16,6 @@ fn hit_test_returns_entity_under_point() {
         .world_mut()
         .spawn((
             Node,
-            Style::default(),
             ResolvedLayout {
                 position: Vec2::new(10.0, 10.0),
                 size: Vec2::new(100.0, 50.0),

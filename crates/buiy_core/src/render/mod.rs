@@ -7,7 +7,7 @@
 //! architecture.md § 2.3.
 
 use crate::{
-    components::{Node, ResolvedLayout, Style},
+    components::{Node, ResolvedLayout, Visual},
     theme::Theme,
 };
 use bevy::prelude::*;
@@ -97,7 +97,7 @@ const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
 
 fn extract_buiy_draws(
     mut commands: Commands,
-    main_world_q: Extract<Query<(&Style, &ResolvedLayout), With<Node>>>,
+    main_world_q: Extract<Query<(&Visual, &ResolvedLayout), With<Node>>>,
     main_world_theme: Extract<Res<Theme>>,
     main_world_windows: Extract<Query<&Window, With<bevy::window::PrimaryWindow>>>,
 ) {
@@ -106,12 +106,12 @@ fn extract_buiy_draws(
         let res = window.resolution.size();
         draws.window_size = Vec2::new(res.x, res.y);
     }
-    for (style, layout) in main_world_q.iter() {
-        let color = match main_world_theme.color(&style.background_token) {
+    for (visual, layout) in main_world_q.iter() {
+        let color = match main_world_theme.color(&visual.background_token) {
             Some(c) => c,
             None => {
                 tracing::warn!(
-                    token = %style.background_token,
+                    token = %visual.background_token,
                     "missing theme color token; falling back to magenta sentinel"
                 );
                 MISSING_TOKEN_FALLBACK
@@ -121,7 +121,7 @@ fn extract_buiy_draws(
             position: layout.position,
             size: layout.size,
             color,
-            radius: style.border_radius,
+            radius: visual.border_radius,
         });
     }
     // TODO(v0.x): reuse ExtractedDraws via ResMut + clear/extend instead of

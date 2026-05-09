@@ -14,9 +14,13 @@ pub mod render;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
-pub use components::{FlexDirection, Node, ResolvedLayout, Style};
+pub use components::{Node, ResolvedLayout, Visual};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
-pub use layout::LayoutPlugin;
+pub use layout::{
+    AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Display, Edges,
+    FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset, JustifyContent, LayoutPlugin,
+    LayoutTree, Length, Position, PositionKind, Sizing, Style,
+};
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
@@ -40,9 +44,8 @@ pub struct CorePlugin;
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<Node>()
-            .register_type::<Style>()
             .register_type::<ResolvedLayout>()
-            .register_type::<FlexDirection>()
+            .register_type::<Visual>()
             .configure_sets(
                 Update,
                 (
