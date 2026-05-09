@@ -17,6 +17,7 @@
 pub mod components;
 pub mod style;
 pub mod types;
+pub(crate) mod translate;
 
 use crate::{
     BuiySet,
