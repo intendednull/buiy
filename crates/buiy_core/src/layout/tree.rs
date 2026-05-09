@@ -7,9 +7,6 @@
 //! `!Send + !Sync`. Reused frame-to-frame so Taffy's internal cache stays
 //! warm. GC handled by `systems::gc_removed_nodes`.
 
-// Entire module is unreachable until Task 7's LayoutPlugin consumes it.
-#![allow(dead_code)]
-
 use bevy::prelude::Entity;
 use std::collections::HashMap;
 use taffy::{NodeId as TaffyNodeId, TaffyTree};
@@ -27,9 +24,5 @@ impl LayoutTree {
 
     pub fn is_empty(&self) -> bool {
         self.by_entity.is_empty()
-    }
-
-    pub(crate) fn taffy_node_for(&self, entity: Entity) -> Option<TaffyNodeId> {
-        self.by_entity.get(&entity).copied()
     }
 }

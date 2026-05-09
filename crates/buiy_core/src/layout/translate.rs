@@ -6,10 +6,6 @@
 //! resolves `Length::Px` and `Length::Percent` — every other variant
 //! lands in Phase 10 (`buiy-layout-units-calc`).
 
-// `StyleView`, `style_to_taffy`, and all helpers are unused until Task 7
-// wires `sync_styles`. Remove this allow once that system is implemented.
-#![allow(dead_code)]
-
 use super::components::{BoxModel, Display, FlexItem, FlexParams, Position};
 use super::types::{
     AlignContent, AlignItems, BoxSizing, Edges, FlexAxis, FlexWrap, Inset, JustifyContent, Length,

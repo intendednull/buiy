@@ -37,7 +37,6 @@ pub enum BuiyLayoutStep {
 }
 
 /// Configure the 8-step chain inside `BuiySet::Layout`.
-#[allow(dead_code)] // Removed once Task 7's LayoutPlugin::build calls this.
 pub fn configure_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
