@@ -203,6 +203,113 @@ pub struct Inset {
     pub left: Sizing,
 }
 
+/// Per-axis overflow handling. CSS `overflow`.
+///
+/// `Visible` (default) lets children render outside the box. `Hidden` and
+/// `Clip` clip without scrolling; the difference is render-side (per spec
+/// § 1.1, both map to `taffy::Overflow::Hidden`). `Scroll` always shows a
+/// scrollbar; `Auto` shows one only when content overflows. Layout
+/// treats `Scroll` and `Auto` identically (both produce a scroll
+/// container per § 1.2); the distinction is rendering's.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverflowMode {
+    #[default]
+    Visible,
+    Hidden,
+    Clip,
+    Scroll,
+    Auto,
+}
+
+/// CSS `scrollbar-gutter`. `Stable` reserves space even when not
+/// scrolling; `StableBothEdges` reserves on both inline edges (useful
+/// for centering). Phase 2 stores the value but does not yet enforce
+/// `Stable` on non-scrolling containers — see plan coverage map.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollbarGutter {
+    #[default]
+    Auto,
+    Stable,
+    StableBothEdges,
+}
+
+/// CSS `scrollbar-width`. Drives `taffy::Style.scrollbar_width`:
+/// `Auto → 12.0`, `Thin → 8.0`, `None → 0.0`.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    #[default]
+    Auto,
+    Thin,
+    None,
+}
+
+/// CSS `scrollbar-color`. Render-side concern; layout stores only.
+///
+/// `Color` derives `Reflect` but not `Eq` (it contains `f32`), so this
+/// enum derives `PartialEq` only — matching the rest of the file's
+/// convention for types that contain floats.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
+pub enum ScrollbarColor {
+    #[default]
+    Auto,
+    Custom {
+        thumb: Color,
+        track: Color,
+    },
+}
+
+/// CSS `scroll-behavior`. Honored by `BuiySet::Animate` for programmatic
+/// scrolls; layout doesn't act on it.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollBehavior {
+    #[default]
+    Auto,
+    Smooth,
+}
+
+/// CSS `overscroll-behavior`, per axis. Honored by
+/// `buiy-input-events-design`'s scroll handler; layout stores only.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    #[default]
+    Auto,
+    Contain,
+    None,
+}
+
+/// CSS `scroll-snap-type`. `*Mandatory` means snap is required after
+/// scroll ends; `*Proximity` only snaps when close enough.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapType {
+    #[default]
+    None,
+    XMandatory,
+    XProximity,
+    YMandatory,
+    YProximity,
+    BothMandatory,
+    BothProximity,
+}
+
+/// CSS `scroll-snap-align`. Per-item alignment to the snap viewport.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapAlign {
+    #[default]
+    None,
+    Start,
+    End,
+    Center,
+}
+
+/// CSS `scroll-snap-stop`. `Always` forces snap to land on this item
+/// even if a fast fling would skip past.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapStop {
+    #[default]
+    Normal,
+    Always,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +352,50 @@ mod tests {
     #[test]
     fn sizing_default_is_auto() {
         assert_eq!(Sizing::default(), Sizing::Auto);
+    }
+
+    #[test]
+    fn overflow_mode_default_is_visible() {
+        assert_eq!(OverflowMode::default(), OverflowMode::Visible);
+    }
+
+    #[test]
+    fn scrollbar_gutter_default_is_auto() {
+        assert_eq!(ScrollbarGutter::default(), ScrollbarGutter::Auto);
+    }
+
+    #[test]
+    fn scrollbar_width_default_is_auto() {
+        assert_eq!(ScrollbarWidth::default(), ScrollbarWidth::Auto);
+    }
+
+    #[test]
+    fn scrollbar_color_default_is_auto() {
+        assert_eq!(ScrollbarColor::default(), ScrollbarColor::Auto);
+    }
+
+    #[test]
+    fn scroll_behavior_default_is_auto() {
+        assert_eq!(ScrollBehavior::default(), ScrollBehavior::Auto);
+    }
+
+    #[test]
+    fn overscroll_behavior_default_is_auto() {
+        assert_eq!(OverscrollBehavior::default(), OverscrollBehavior::Auto);
+    }
+
+    #[test]
+    fn snap_type_default_is_none() {
+        assert_eq!(SnapType::default(), SnapType::None);
+    }
+
+    #[test]
+    fn snap_align_default_is_none() {
+        assert_eq!(SnapAlign::default(), SnapAlign::None);
+    }
+
+    #[test]
+    fn snap_stop_default_is_normal() {
+        assert_eq!(SnapStop::default(), SnapStop::Normal);
     }
 }
