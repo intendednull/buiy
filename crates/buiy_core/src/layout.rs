@@ -20,6 +20,10 @@ pub mod style;
 pub(crate) mod translate;
 pub mod types;
 
+pub use pipeline::BuiyLayoutStep;
+#[allow(unused_imports)] // Removed once Task 7's LayoutPlugin::build calls this.
+pub(crate) use pipeline::configure_pipeline;
+
 use crate::{
     BuiySet,
     components::{FlexDirection as BuiyFlexDirection, Node, ResolvedLayout, Style},
