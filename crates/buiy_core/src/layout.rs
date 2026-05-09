@@ -18,6 +18,7 @@ pub mod components;
 pub mod pipeline;
 pub mod style;
 pub(crate) mod translate;
+pub mod tree;
 pub mod types;
 
 pub use pipeline::BuiyLayoutStep;
