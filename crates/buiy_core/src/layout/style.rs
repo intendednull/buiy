@@ -12,10 +12,11 @@
 //! `FlexItem` is decomposed-only (per spec § 2.4); it is not included in
 //! `Style`.
 
-use super::components::{BoxModel, Display, FlexParams, Position};
+use super::components::{BoxModel, Display, FlexParams, Overflow, Position, Scroll};
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
-    JustifyContent, Length, PositionKind, Sizing,
+    JustifyContent, Length, OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter,
+    ScrollbarWidth, Sizing, SnapType,
 };
 use bevy::ecs::bundle::Bundle;
 
@@ -32,14 +33,19 @@ use bevy::ecs::bundle::Bundle;
 /// ```
 ///
 /// On `commands.spawn(s)` (or `entity.insert(s)`), expands into a Bundle
-/// of `Display`, `BoxModel`, `Position`, `FlexParams`. Decomposed
-/// components are canonical; the builder is sugar.
+/// of `Display`, `BoxModel`, `Position`, `FlexParams`, `Overflow`,
+/// `Scroll`. Decomposed components are canonical; the builder is sugar.
+/// `ScrollOffset` (runtime state) and `ScrollSnapItem` (child-side) are
+/// NOT in this Bundle — spawn them alongside `Style` per
+/// `architecture.md § 2.4`.
 #[derive(Bundle, Clone, Debug, Default)]
 pub struct Style {
     pub display: Display,
     pub box_model: BoxModel,
     pub position: Position,
     pub flex_params: FlexParams,
+    pub overflow: Overflow,
+    pub scroll: Scroll,
 }
 
 impl Style {
@@ -224,19 +230,84 @@ impl Style {
         self.flex_params.align_content = a;
         self
     }
+
+    // ---- Overflow ----
+
+    pub fn overflow_x(mut self, mode: OverflowMode) -> Self {
+        self.overflow.x = mode;
+        self
+    }
+
+    pub fn overflow_y(mut self, mode: OverflowMode) -> Self {
+        self.overflow.y = mode;
+        self
+    }
+
+    pub fn overflow(mut self, x: OverflowMode, y: OverflowMode) -> Self {
+        self.overflow.x = x;
+        self.overflow.y = y;
+        self
+    }
+
+    pub fn overflow_hidden(self) -> Self {
+        self.overflow(OverflowMode::Hidden, OverflowMode::Hidden)
+    }
+
+    pub fn overflow_y_scroll(self) -> Self {
+        self.overflow_y(OverflowMode::Scroll)
+    }
+
+    pub fn overflow_x_scroll(self) -> Self {
+        self.overflow_x(OverflowMode::Scroll)
+    }
+
+    pub fn scrollbar_gutter(mut self, g: ScrollbarGutter) -> Self {
+        self.overflow.scrollbar_gutter = g;
+        self
+    }
+
+    pub fn scrollbar_width(mut self, w: ScrollbarWidth) -> Self {
+        self.overflow.scrollbar_width = w;
+        self
+    }
+
+    pub fn scroll_behavior(mut self, b: ScrollBehavior) -> Self {
+        self.overflow.scroll_behavior = b;
+        self
+    }
+
+    // ---- Scroll snap ----
+
+    pub fn snap_type(mut self, t: SnapType) -> Self {
+        self.scroll.snap_type = t;
+        self
+    }
+
+    pub fn snap_padding(mut self, e: Edges) -> Self {
+        self.scroll.snap_padding = e;
+        self
+    }
+
+    pub fn snap_margin(mut self, e: Edges) -> Self {
+        self.scroll.snap_margin = e;
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::components::{BoxModel, Display, FlexParams, Position};
+    use crate::layout::components::{BoxModel, Display, FlexParams, Overflow, Position, Scroll};
     use crate::layout::types::{
-        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, JustifyContent, Length, Sizing,
+        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, JustifyContent, Length, OverflowMode,
+        ScrollbarWidth, Sizing, SnapType,
     };
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
 
-    fn spawn_and_extract(style: Style) -> (Display, BoxModel, Position, FlexParams) {
+    fn spawn_and_extract(
+        style: Style,
+    ) -> (Display, BoxModel, Position, FlexParams, Overflow, Scroll) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let entity = app.world_mut().spawn(style).id();
@@ -253,7 +324,15 @@ mod tests {
         let flex_params = *world
             .get::<FlexParams>(entity)
             .expect("FlexParams inserted");
-        (display, box_model, position, flex_params)
+        let overflow = world
+            .get::<Overflow>(entity)
+            .expect("Overflow inserted")
+            .clone();
+        let scroll = world
+            .get::<Scroll>(entity)
+            .expect("Scroll inserted")
+            .clone();
+        (display, box_model, position, flex_params, overflow, scroll)
     }
 
     #[test]
@@ -277,6 +356,17 @@ mod tests {
                 align_items: AlignItems::Center,
                 ..Default::default()
             },
+            overflow: Overflow {
+                x: OverflowMode::Hidden,
+                y: OverflowMode::Auto,
+                scrollbar_width: ScrollbarWidth::Thin,
+                ..Default::default()
+            },
+            scroll: Scroll {
+                snap_type: SnapType::YMandatory,
+                snap_padding: Edges::all(4.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let fluent = Style::default()
@@ -287,7 +377,12 @@ mod tests {
             .height_px(100.0)
             .gap_px(8.0)
             .justify_content(JustifyContent::SpaceBetween)
-            .align_items(AlignItems::Center);
+            .align_items(AlignItems::Center)
+            .overflow_x(OverflowMode::Hidden)
+            .overflow_y(OverflowMode::Auto)
+            .scrollbar_width(ScrollbarWidth::Thin)
+            .snap_type(SnapType::YMandatory)
+            .snap_padding(Edges::all(4.0));
 
         assert_eq!(spawn_and_extract(literal), spawn_and_extract(fluent));
     }
@@ -302,5 +397,7 @@ mod tests {
         assert!(world.get::<BoxModel>(entity).is_some());
         assert!(world.get::<Position>(entity).is_some());
         assert!(world.get::<FlexParams>(entity).is_some());
+        assert!(world.get::<Overflow>(entity).is_some());
+        assert!(world.get::<Scroll>(entity).is_some());
     }
 }

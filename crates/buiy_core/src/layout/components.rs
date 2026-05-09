@@ -12,7 +12,8 @@
 
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
-    JustifyContent, PositionKind, Sizing,
+    JustifyContent, OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
 };
 use bevy::prelude::*;
 
@@ -134,6 +135,93 @@ impl Default for FlexItem {
     }
 }
 
+/// Per-axis overflow handling and scroll/scrollbar configuration. CSS
+/// `overflow`, `scrollbar-*`, `scroll-behavior`, `overscroll-behavior`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 1.
+///
+/// Phase 2 wires `x` / `y` and `scrollbar_width` to Taffy. The other
+/// fields are stored for downstream consumers (render: `scrollbar_color`,
+/// animate: `scroll_behavior`, input: `overscroll_*`). `scrollbar_gutter`
+/// is stored but `Stable` does not yet reserve space on non-scrolling
+/// containers — see plan coverage map.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct Overflow {
+    pub x: OverflowMode,
+    pub y: OverflowMode,
+    pub scrollbar_gutter: ScrollbarGutter,
+    pub scrollbar_width: ScrollbarWidth,
+    pub scrollbar_color: ScrollbarColor,
+    pub scroll_behavior: ScrollBehavior,
+    pub overscroll_x: OverscrollBehavior,
+    pub overscroll_y: OverscrollBehavior,
+}
+
+impl Overflow {
+    /// True iff either axis is `Scroll` or `Auto`. Scroll containers
+    /// establish a scroll viewport and a containing block for descendants
+    /// with `Position::Sticky` (consumer: Phase 7 sub-pass 6a).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 1.2.
+    // Called by Phase 7 sticky-positioning pass; unused until that phase lands.
+    #[allow(dead_code)]
+    pub fn is_scroll_container(&self) -> bool {
+        matches!(self.x, OverflowMode::Scroll | OverflowMode::Auto)
+            || matches!(self.y, OverflowMode::Scroll | OverflowMode::Auto)
+    }
+}
+
+/// Scroll-snap container settings. CSS `scroll-snap-type`,
+/// `scroll-padding`, `scroll-margin`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 3.
+///
+/// Phase 2 stores; the snap-point math runs in
+/// `buiy-input-events-design`'s scroll handler.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct Scroll {
+    pub snap_type: SnapType,
+    pub snap_padding: Edges,
+    pub snap_margin: Edges,
+}
+
+/// Runtime scroll position of a scroll container. Mutated by the
+/// scroll-input handler in `buiy-input-events-design`. Read by render
+/// (drawing) and picking (hit-testing) at consume time, and by Phase 7
+/// sub-pass 6a (`StickyOffset`).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 2.
+///
+/// **Mutating `ScrollOffset` must NOT invalidate `ResolvedLayout`.** The
+/// invariant is enforced by excluding `Changed<ScrollOffset>` from
+/// `sync_styles`'s trigger filter (see `systems.rs` line ~80) and
+/// asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct ScrollOffset {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Per-snap-item child-side configuration. Lives on each child of a
+/// scroll container that participates in snap.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 3.
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 2.4 (decomposed-only convention).
+///
+/// Decomposed-only — not in `Style`'s Bundle. Following the `FlexItem`
+/// pattern: spawn alongside `Style` rather than nested. The snap-point
+/// math runs in `buiy-input-events-design`'s scroll handler at consume
+/// time; this component stores the per-item declaration.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct ScrollSnapItem {
+    pub align: SnapAlign,
+    pub stop: SnapStop,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +272,75 @@ mod tests {
     fn display_helpers_produce_flex_axis() {
         assert_eq!(Display::flex_row(), Display::Flex(FlexAxis::Row));
         assert_eq!(Display::flex_column(), Display::Flex(FlexAxis::Column));
+    }
+
+    #[test]
+    fn overflow_default_is_visible_both_axes() {
+        let o = Overflow::default();
+        assert_eq!(o.x, OverflowMode::Visible);
+        assert_eq!(o.y, OverflowMode::Visible);
+        assert_eq!(o.scrollbar_gutter, ScrollbarGutter::Auto);
+        assert_eq!(o.scrollbar_width, ScrollbarWidth::Auto);
+        assert_eq!(o.scrollbar_color, ScrollbarColor::Auto);
+        assert_eq!(o.scroll_behavior, ScrollBehavior::Auto);
+        assert_eq!(o.overscroll_x, OverscrollBehavior::Auto);
+        assert_eq!(o.overscroll_y, OverscrollBehavior::Auto);
+    }
+
+    #[test]
+    fn overflow_is_scroll_container_only_when_either_axis_scrolls() {
+        assert!(!Overflow::default().is_scroll_container());
+        assert!(
+            !Overflow {
+                x: OverflowMode::Hidden,
+                y: OverflowMode::Hidden,
+                ..Default::default()
+            }
+            .is_scroll_container()
+        );
+        assert!(
+            Overflow {
+                x: OverflowMode::Scroll,
+                ..Default::default()
+            }
+            .is_scroll_container()
+        );
+        assert!(
+            Overflow {
+                y: OverflowMode::Auto,
+                ..Default::default()
+            }
+            .is_scroll_container()
+        );
+        assert!(
+            Overflow {
+                x: OverflowMode::Auto,
+                y: OverflowMode::Scroll,
+                ..Default::default()
+            }
+            .is_scroll_container()
+        );
+    }
+
+    #[test]
+    fn scroll_default_is_no_snap_zero_padding() {
+        let s = Scroll::default();
+        assert_eq!(s.snap_type, SnapType::None);
+        assert_eq!(s.snap_padding, Edges::ZERO);
+        assert_eq!(s.snap_margin, Edges::ZERO);
+    }
+
+    #[test]
+    fn scroll_offset_default_is_origin() {
+        let s = ScrollOffset::default();
+        assert_eq!(s.x, 0.0);
+        assert_eq!(s.y, 0.0);
+    }
+
+    #[test]
+    fn scroll_snap_item_default_is_none_normal() {
+        let s = ScrollSnapItem::default();
+        assert_eq!(s.align, SnapAlign::None);
+        assert_eq!(s.stop, SnapStop::Normal);
     }
 }

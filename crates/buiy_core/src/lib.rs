@@ -19,7 +19,9 @@ pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::{
     AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Display, Edges,
     FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset, JustifyContent, LayoutPlugin,
-    LayoutTree, Length, Position, PositionKind, Sizing, Style,
+    LayoutTree, Length, Overflow, OverflowMode, OverscrollBehavior, Position, PositionKind, Scroll,
+    ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
+    Sizing, SnapAlign, SnapStop, SnapType, Style,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 

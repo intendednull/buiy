@@ -44,6 +44,7 @@ fn struct_literal_and_fluent_have_identical_resolved_layout() {
             ..default()
         },
         position: Position::default(),
+        ..default()
     };
 
     let make_fluent = || {

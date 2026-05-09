@@ -25,4 +25,16 @@ impl LayoutTree {
     pub fn is_empty(&self) -> bool {
         self.by_entity.is_empty()
     }
+
+    /// Test-only access to the entity-to-Taffy mapping. Read-only.
+    #[doc(hidden)]
+    pub fn by_entity(&self) -> &std::collections::HashMap<bevy::prelude::Entity, taffy::NodeId> {
+        &self.by_entity
+    }
+
+    /// Test-only access to the inner Taffy tree. Read-only.
+    #[doc(hidden)]
+    pub fn tree_ref(&self) -> &taffy::TaffyTree<()> {
+        &self.tree
+    }
 }

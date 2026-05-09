@@ -10,13 +10,17 @@ pub(crate) mod translate;
 mod tree;
 mod types;
 
-pub use components::{BoxModel, Display, FlexItem, FlexParams, Position};
+pub use components::{
+    BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll, ScrollOffset,
+    ScrollSnapItem,
+};
 pub use pipeline::BuiyLayoutStep;
 pub use style::Style;
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
-    JustifyContent, Length, PositionKind, Sizing,
+    JustifyContent, Length, OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior,
+    ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
 };
 
 use bevy::prelude::*;
@@ -33,6 +37,10 @@ impl Plugin for LayoutPlugin {
             .register_type::<Position>()
             .register_type::<FlexParams>()
             .register_type::<FlexItem>()
+            .register_type::<Overflow>()
+            .register_type::<Scroll>()
+            .register_type::<ScrollOffset>()
+            .register_type::<ScrollSnapItem>()
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
