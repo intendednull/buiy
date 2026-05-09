@@ -11,7 +11,7 @@
 //! Steps 2/4/5/6 are empty sub-sets in Phase 1; later phases attach
 //! systems to them.
 
-use super::components::{BoxModel, Display, FlexItem, FlexParams, Position};
+use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
 use super::translate::{StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use crate::components::{Node, ResolvedLayout};
@@ -55,10 +55,16 @@ pub(super) fn gc_removed_nodes(
 /// `Changed<T>` triggers on insertion as well as modification, so newly
 /// spawned entities are picked up on their first frame.
 ///
-/// Phase 1 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
+/// Phase 2 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
 /// `Changed<Position>`, `Changed<FlexParams>`, `Changed<FlexItem>`,
-/// `Changed<Children>`, `Changed<ChildOf>`. Phase 4–9 widen it as new
-/// components land.
+/// `Changed<Overflow>`, `Changed<Scroll>`, `Changed<Children>`,
+/// `Changed<ChildOf>`. Phases 4–9 widen it as new components land.
+///
+/// **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are
+/// intentionally excluded.** `ScrollOffset` is runtime state (mutated
+/// every scroll-input frame) and `ScrollSnapItem` is consumed by the
+/// snap-point math in `buiy-input-events-design`, not by layout. Their
+/// exclusion is asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
 #[allow(clippy::type_complexity)]
 pub(super) fn sync_styles(
     mut tree: NonSendMut<LayoutTree>,
@@ -70,6 +76,8 @@ pub(super) fn sync_styles(
             &Position,
             &FlexParams,
             Option<&FlexItem>,
+            &Overflow,
+            &Scroll,
             Option<&Children>,
         ),
         (
@@ -80,6 +88,8 @@ pub(super) fn sync_styles(
                 Changed<Position>,
                 Changed<FlexParams>,
                 Changed<FlexItem>,
+                Changed<Overflow>,
+                Changed<Scroll>,
                 Changed<Children>,
                 Changed<ChildOf>,
             )>,
@@ -92,13 +102,17 @@ pub(super) fn sync_styles(
     // happens for entities new this frame (Changed<T> triggers on insert);
     // existing entities run set_style only when something in the trigger
     // set actually changed — see foundation/architecture.md § 1.2.
-    for (entity, display, bm, position, flex, flex_item, _children) in nodes.iter() {
+    for (entity, display, bm, position, flex, flex_item, overflow, scroll, _children) in
+        nodes.iter()
+    {
         let view = StyleView {
             display,
             box_model: bm,
             position,
             flex_params: flex,
             flex_item,
+            overflow,
+            scroll,
         };
         let taffy_style = style_to_taffy(view);
         match tree.by_entity.get(&entity).copied() {
@@ -123,7 +137,9 @@ pub(super) fn sync_styles(
     }
 
     // Sync child relationships for each Buiy entity.
-    for (entity, _display, _bm, _position, _flex, _flex_item, children) in nodes.iter() {
+    for (entity, _display, _bm, _position, _flex, _flex_item, _overflow, _scroll, children) in
+        nodes.iter()
+    {
         let parent_id = match tree.by_entity.get(&entity).copied() {
             Some(id) => id,
             None => continue,

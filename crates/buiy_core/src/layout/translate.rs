@@ -6,20 +6,22 @@
 //! resolves `Length::Px` and `Length::Percent` — every other variant
 //! lands in Phase 10 (`buiy-layout-units-calc`).
 
-use super::components::{BoxModel, Display, FlexItem, FlexParams, Position};
+use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
 use super::types::{
     AlignContent, AlignItems, BoxSizing, Edges, FlexAxis, FlexWrap, Inset, JustifyContent, Length,
-    PositionKind, Sizing,
+    OverflowMode, PositionKind, ScrollbarWidth, Sizing,
 };
 
-/// View into the Phase 1 decomposed-component set for one entity. Built
-/// by `sync_styles`'s query and passed to `style_to_taffy`.
+/// View into the decomposed-component set for one entity. Built by
+/// `sync_styles`'s query and passed to `style_to_taffy`.
 pub struct StyleView<'a> {
     pub display: &'a Display,
     pub box_model: &'a BoxModel,
     pub position: &'a Position,
     pub flex_params: &'a FlexParams,
     pub flex_item: Option<&'a FlexItem>,
+    pub overflow: &'a Overflow,
+    pub scroll: &'a Scroll,
 }
 
 pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
@@ -52,8 +54,22 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
             width: length_to_lp(view.flex_params.gap.column),
             height: length_to_lp(view.flex_params.gap.row),
         },
+        overflow: taffy::Point {
+            x: map_overflow_mode(view.overflow.x),
+            y: map_overflow_mode(view.overflow.y),
+        },
+        scrollbar_width: map_scrollbar_width(view.overflow.scrollbar_width),
         ..Default::default()
     };
+
+    // `Scroll` is included in `StyleView` so `Changed<Scroll>` flows
+    // through `sync_styles`'s trigger filter (architecture.md § 1.2),
+    // but it has no Taffy mapping — its data is consumed by render /
+    // input / Phase 7 sticky systems, not by layout. Touch the field
+    // here so it is unambiguously "read" and dead-code lints stay
+    // honest. Phase 7 (sticky) and the input pipeline will replace
+    // this no-op with real consumers.
+    let _scroll_unused_in_layout = view.scroll;
 
     if let Some(item) = view.flex_item {
         s.flex_grow = item.grow;
@@ -171,6 +187,35 @@ fn map_align_content(a: AlignContent) -> taffy::AlignContent {
     }
 }
 
+fn map_overflow_mode(o: OverflowMode) -> taffy::Overflow {
+    use OverflowMode::*;
+    match o {
+        Visible => taffy::Overflow::Visible,
+        // Spec § 1.1 maps both Hidden and Clip to taffy::Hidden. Taffy 0.10
+        // distinguishes Hidden (clips and reserves scrollbar gutter via
+        // scrollbar_width) from Clip (clips with no gutter); the spec
+        // chose CSS-faithful: both CSS Hidden and CSS Clip route through
+        // taffy::Hidden so ScrollbarGutter::Stable can later reserve a
+        // gutter consistently when the author opts in.
+        Hidden | Clip => taffy::Overflow::Hidden,
+        // Auto (conditional scrollbar) is a render-time distinction;
+        // layout treats it as Scroll so children may exceed the box.
+        Scroll | Auto => taffy::Overflow::Scroll,
+    }
+}
+
+fn map_scrollbar_width(w: ScrollbarWidth) -> f32 {
+    // Approximate common platform scrollbar widths. Auto = ~12 px (GTK /
+    // overlay style), Thin = ~8 px (CSS `scrollbar-width: thin` typical
+    // rendering), None = 0 px (no gutter reserved). Revisit when
+    // buiy-render-pipeline-design picks canonical widths.
+    match w {
+        ScrollbarWidth::Auto => 12.0,
+        ScrollbarWidth::Thin => 8.0,
+        ScrollbarWidth::None => 0.0,
+    }
+}
+
 fn sizing_to_dim(s: Sizing) -> taffy::Dimension {
     // Phase 1 ships Auto / None / Length / Stretch as the "real" surface;
     // intrinsic keywords resolve silently to Auto until Phase 10 + text
@@ -248,10 +293,12 @@ fn inset_to_lpa(i: Inset) -> taffy::Rect<taffy::LengthPercentageAuto> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::components::{BoxModel, Display, FlexItem, FlexParams, Position};
+    use crate::layout::components::{
+        BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll,
+    };
     use crate::layout::types::{
         AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, JustifyContent, Length,
-        PositionKind, Sizing,
+        OverflowMode, PositionKind, ScrollbarWidth, Sizing,
     };
 
     #[test]
@@ -261,12 +308,16 @@ mod tests {
         let position = Position::default();
         let flex = FlexParams::default();
         let item: Option<&FlexItem> = None;
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
             position: &position,
             flex_params: &flex,
             flex_item: item,
+            overflow: &overflow,
+            scroll: &scroll,
         });
         // Default Display::Block + ContentBox + everything Auto produces taffy default Display::Block.
         assert_eq!(taffy.display, taffy::Display::Block);
@@ -296,12 +347,16 @@ mod tests {
             wrap: FlexWrap::NoWrap,
             ..Default::default()
         };
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
             position: &position,
             flex_params: &flex,
             flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
         });
         assert_eq!(taffy.display, taffy::Display::Flex);
         assert_eq!(taffy.flex_direction, taffy::FlexDirection::Row);
@@ -325,12 +380,16 @@ mod tests {
             },
         };
         let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
             position: &position,
             flex_params: &flex,
             flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
         });
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(10.0));
@@ -350,12 +409,16 @@ mod tests {
             order: 3,
             align_self: Some(AlignItems::Center),
         };
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
             position: &position,
             flex_params: &flex,
             flex_item: Some(&item),
+            overflow: &overflow,
+            scroll: &scroll,
         });
         assert_eq!(taffy.flex_grow, 2.0);
         assert_eq!(taffy.flex_shrink, 0.5);
@@ -364,5 +427,99 @@ mod tests {
         // FlexItem.order is stored but Taffy 0.10 has no `order` on
         // Style; Phase 1 does not honor it. Documented as a Phase 1
         // limitation in the translation module's doc comment.
+    }
+
+    #[test]
+    fn translate_overflow_modes_to_taffy() {
+        let display = Display::default();
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let cases: &[(OverflowMode, OverflowMode, taffy::Overflow, taffy::Overflow)] = &[
+            (
+                OverflowMode::Visible,
+                OverflowMode::Visible,
+                taffy::Overflow::Visible,
+                taffy::Overflow::Visible,
+            ),
+            (
+                OverflowMode::Hidden,
+                OverflowMode::Hidden,
+                taffy::Overflow::Hidden,
+                taffy::Overflow::Hidden,
+            ),
+            (
+                OverflowMode::Clip,
+                OverflowMode::Clip,
+                taffy::Overflow::Hidden,
+                taffy::Overflow::Hidden,
+            ),
+            (
+                OverflowMode::Scroll,
+                OverflowMode::Auto,
+                taffy::Overflow::Scroll,
+                taffy::Overflow::Scroll,
+            ),
+            (
+                OverflowMode::Auto,
+                OverflowMode::Visible,
+                taffy::Overflow::Scroll,
+                taffy::Overflow::Visible,
+            ),
+        ];
+        for (x_in, y_in, x_expected, y_expected) in cases.iter().copied() {
+            let overflow = Overflow {
+                x: x_in,
+                y: y_in,
+                ..Default::default()
+            };
+            let scroll = Scroll::default();
+            let taffy = style_to_taffy(StyleView {
+                display: &display,
+                box_model: &bm,
+                position: &position,
+                flex_params: &flex,
+                flex_item: None,
+                overflow: &overflow,
+                scroll: &scroll,
+            });
+            assert_eq!(
+                taffy.overflow.x, x_expected,
+                "x {x_in:?} → expected {x_expected:?}"
+            );
+            assert_eq!(
+                taffy.overflow.y, y_expected,
+                "y {y_in:?} → expected {y_expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn translate_scrollbar_width_to_taffy_f32() {
+        let display = Display::default();
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let scroll = Scroll::default();
+        for (input, expected) in [
+            (ScrollbarWidth::Auto, 12.0_f32),
+            (ScrollbarWidth::Thin, 8.0),
+            (ScrollbarWidth::None, 0.0),
+        ] {
+            let overflow = Overflow {
+                scrollbar_width: input,
+                ..Default::default()
+            };
+            let taffy = style_to_taffy(StyleView {
+                display: &display,
+                box_model: &bm,
+                position: &position,
+                flex_params: &flex,
+                flex_item: None,
+                overflow: &overflow,
+                scroll: &scroll,
+            });
+            assert_eq!(taffy.scrollbar_width, expected, "{input:?}");
+        }
     }
 }
