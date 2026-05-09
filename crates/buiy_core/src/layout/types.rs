@@ -139,6 +139,7 @@ pub enum FlexWrap {
     WrapReverse,
 }
 
+/// Main-axis distribution of flex / grid items. CSS `justify-content`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum JustifyContent {
     #[default]
@@ -150,6 +151,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
+/// Cross-axis alignment of flex / grid items within their line. CSS `align-items`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlignItems {
     #[default]
@@ -160,6 +162,8 @@ pub enum AlignItems {
     Baseline,
 }
 
+/// Cross-axis distribution of flex / grid lines (multi-line containers).
+/// CSS `align-content`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlignContent {
     #[default]
