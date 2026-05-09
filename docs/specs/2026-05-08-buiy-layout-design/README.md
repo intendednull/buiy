@@ -1,7 +1,7 @@
 # Buiy — layout design
 
 **Date:** 2026-05-08
-**Status:** draft
+**Status:** active
 **Parent:** [`2026-05-07-buiy-foundation`](../2026-05-07-buiy-foundation/README.md) — sub-spec graduated from [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout) and the foundation roadmap row [`buiy-layout-design`](../2026-05-07-buiy-foundation/README.md#4-sub-spec-roadmap).
 
 ## Purpose
@@ -81,7 +81,7 @@ This spec is a leaf — it does not spawn further sub-specs. Per-feature depth l
 
 ## 4.1 Migration
 
-This spec is target-state. The Phase 0 → target migration (15-component decomposition, hybrid `Style` builder, 8-step pipeline, anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer per-window, `LogicalBoxModel` insert-helper) lives in a follow-up plan at `docs/plans/YYYY-MM-DD-buiy-layout-migration.md` (TBC). The plan will sequence the work into reviewable PRs; nothing in this spec depends on the plan landing.
+This spec is target-state. The Phase 0 → target migration (15-component decomposition, hybrid `Style` builder, 8-step pipeline, anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer per-window, `LogicalBoxModel` insert-helper) lives in a series of follow-up plans, the first of which is [Phase 1 — Foundation](../../plans/2026-05-08-buiy-layout-foundation.md). The plans sequence the work into reviewable PRs; nothing in this spec depends on the plans landing.
 
 ## 5. Open questions
 
