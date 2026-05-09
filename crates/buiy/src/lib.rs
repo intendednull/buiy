@@ -12,7 +12,9 @@ pub use buiy_core::{
     layout::{
         AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Display, Edges,
         FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset, JustifyContent, LayoutPlugin,
-        Length, Position, PositionKind, Sizing, Style,
+        Length, Overflow, OverflowMode, OverscrollBehavior, Position, PositionKind, Scroll,
+        ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter,
+        ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, Style,
     },
     picking::{BuiyPickingBackendPlugin, Hovered},
     theme::{Theme, UserPreferences, default_light_theme},
