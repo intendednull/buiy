@@ -44,7 +44,7 @@ impl Default for Length {
 /// Width / height / min / max value type. Phase 1 ships `Auto`, `None`
 /// (max-only), `Length`, and `Stretch`. Intrinsic keywords ship as
 /// variants but resolve to `Auto` until Phase 10 + text rendering land.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub enum Sizing {
     #[default]
     Auto,
@@ -62,7 +62,7 @@ pub enum Sizing {
 }
 
 /// Per-edge length values for padding, margin, border, inset.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct Edges {
     pub top: Length,
     pub right: Length,
@@ -103,7 +103,7 @@ impl Edges {
 /// `box-sizing` policy. CSS default is `ContentBox`; app UIs typically prefer
 /// `BorderBox`. The Buiy default theme does not override the component
 /// default — authors opt in.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxSizing {
     #[default]
     ContentBox,
@@ -115,13 +115,13 @@ pub enum BoxSizing {
 /// represented by *not setting* `BoxModel.aspect_ratio` (the field is
 /// `Option<AspectRatio>`). Stored on `BoxModel` only when the author
 /// explicitly opts in.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct AspectRatio {
     pub ratio: f32,
 }
 
 /// Flex / inline-flex main axis.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlexAxis {
     #[default]
     Row,
@@ -131,7 +131,7 @@ pub enum FlexAxis {
 }
 
 /// Flex wrap mode.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlexWrap {
     #[default]
     NoWrap,
@@ -140,7 +140,7 @@ pub enum FlexWrap {
 }
 
 /// Main-axis distribution of flex / grid items. CSS `justify-content`.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JustifyContent {
     #[default]
     FlexStart,
@@ -152,7 +152,7 @@ pub enum JustifyContent {
 }
 
 /// Cross-axis alignment of flex / grid items within their line. CSS `align-items`.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlignItems {
     #[default]
     Stretch,
@@ -164,7 +164,7 @@ pub enum AlignItems {
 
 /// Cross-axis distribution of flex / grid lines (multi-line containers).
 /// CSS `align-content`.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlignContent {
     #[default]
     Stretch,
@@ -177,7 +177,7 @@ pub enum AlignContent {
 }
 
 /// Flex / grid gap, distinguished by axis.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct FlexGap {
     pub row: Length,
     pub column: Length,
@@ -186,7 +186,7 @@ pub struct FlexGap {
 /// Position kind. Phase 1 implements `Static`, `Relative`, `Absolute`;
 /// `Fixed` and `Sticky` ship as variants but emit a one-shot `warn!` and
 /// translate to `Absolute` / `Relative` respectively until Phases 7/8 land.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositionKind {
     #[default]
     Static,
@@ -197,7 +197,7 @@ pub enum PositionKind {
 }
 
 /// Inset values (`top`/`right`/`bottom`/`left`).
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct Inset {
     pub top: Sizing,
     pub right: Sizing,

@@ -25,7 +25,7 @@ use bevy::prelude::*;
 /// they are not yet wired to Taffy and `FlexParams.gap` carries the
 /// flex-gap surface in this phase. A follow-up phase that wires
 /// block-layout gap to Taffy adds them back.
-#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct BoxModel {
     pub width: Sizing,
@@ -45,7 +45,7 @@ pub struct BoxModel {
 /// variants are reserved and translate to `Block` (Taffy default).
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.
-#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component)]
 pub enum Display {
     #[default]
@@ -87,7 +87,7 @@ impl Display {
 /// translate to `Absolute` / `Relative`; Phases 7/8 wire the real semantics.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.
-#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct Position {
     pub kind: PositionKind,
@@ -98,7 +98,7 @@ pub struct Position {
 /// `Display::Flex(_)` or `Display::InlineFlex(_)`; otherwise ignored.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 1.1.
-#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct FlexParams {
     pub direction: FlexAxis,
