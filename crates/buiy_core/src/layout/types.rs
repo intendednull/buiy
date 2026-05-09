@@ -22,7 +22,6 @@ pub enum Length {
     Percent(f32),
 }
 
-#[allow(dead_code)] // Removed by Task 3 once Style builder calls these constructors.
 impl Length {
     pub const ZERO: Self = Self::Px(0.0);
 
@@ -70,7 +69,6 @@ pub struct Edges {
     pub left: Length,
 }
 
-#[allow(dead_code)] // Removed by Task 3 once consumers reference Edges::all/axis.
 impl Edges {
     pub const ZERO: Self = Self {
         top: Length::ZERO,

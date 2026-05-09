@@ -42,7 +42,6 @@ pub struct Style {
     pub flex_params: FlexParams,
 }
 
-#[allow(dead_code)] // Removed once widgets/examples consume the setter surface.
 impl Style {
     // ---- Display ----
 
