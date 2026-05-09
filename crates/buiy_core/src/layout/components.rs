@@ -13,7 +13,7 @@
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
     JustifyContent, OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor,
-    ScrollbarGutter, ScrollbarWidth, Sizing, SnapType,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
 };
 use bevy::prelude::*;
 
@@ -187,6 +187,41 @@ pub struct Scroll {
     pub snap_margin: Edges,
 }
 
+/// Runtime scroll position of a scroll container. Mutated by the
+/// scroll-input handler in `buiy-input-events-design`. Read by render
+/// (drawing) and picking (hit-testing) at consume time, and by Phase 7
+/// sub-pass 6a (`StickyOffset`).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 2.
+///
+/// **Mutating `ScrollOffset` must NOT invalidate `ResolvedLayout`.** The
+/// invariant is enforced by excluding `Changed<ScrollOffset>` from
+/// `sync_styles`'s trigger filter (see `systems.rs` line ~80) and
+/// asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct ScrollOffset {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Per-snap-item child-side configuration. Lives on each child of a
+/// scroll container that participates in snap.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 3.
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 2.4 (decomposed-only convention).
+///
+/// Decomposed-only — not in `Style`'s Bundle. Following the `FlexItem`
+/// pattern: spawn alongside `Style` rather than nested. The snap-point
+/// math runs in `buiy-input-events-design`'s scroll handler at consume
+/// time; this component stores the per-item declaration.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct ScrollSnapItem {
+    pub align: SnapAlign,
+    pub stop: SnapStop,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +328,19 @@ mod tests {
         assert_eq!(s.snap_type, SnapType::None);
         assert_eq!(s.snap_padding, Edges::ZERO);
         assert_eq!(s.snap_margin, Edges::ZERO);
+    }
+
+    #[test]
+    fn scroll_offset_default_is_origin() {
+        let s = ScrollOffset::default();
+        assert_eq!(s.x, 0.0);
+        assert_eq!(s.y, 0.0);
+    }
+
+    #[test]
+    fn scroll_snap_item_default_is_none_normal() {
+        let s = ScrollSnapItem::default();
+        assert_eq!(s.align, SnapAlign::None);
+        assert_eq!(s.stop, SnapStop::Normal);
     }
 }
