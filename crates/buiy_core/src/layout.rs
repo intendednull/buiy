@@ -12,9 +12,10 @@
 //! single-threaded pass over the tree, so storing it as a non-send
 //! resource is both correct and free of `unsafe`.
 
-// Phase 1 layout-foundation submodules (dead code until Task 2 wires them in).
+// Phase 1 layout-foundation submodules.
 // Spec: docs/specs/2026-05-08-buiy-layout-design/.
-mod types;
+pub mod components;
+pub mod types;
 
 use crate::{
     BuiySet,

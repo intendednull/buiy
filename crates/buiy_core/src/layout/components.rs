@@ -1,0 +1,188 @@
+//! Decomposed layout components.
+//!
+//! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 2.1.
+//!
+//! Each component is small, public-fielded, and derives
+//! `Reflect + Default + Clone + Component`. Phase 1 covers the surface
+//! Phase 0's mega-`Style` reaches: `BoxModel`, `Display`, `Position`,
+//! `FlexParams`, `FlexItem`. Other components (`Anchor`, `GridParams`,
+//! `Container`, `WritingMode`, `Overflow`, `Scroll`, `Stacking`,
+//! `Transform`, `Containment`, `MultiColumn`, `GridItem`) land in their
+//! respective phase plans (see foundation plan §"Phasing strategy").
+
+use super::types::{
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
+    JustifyContent, PositionKind, Sizing,
+};
+use bevy::prelude::*;
+
+/// Box-model dimensions: width / height (incl. min/max), padding, margin,
+/// border, box-sizing, aspect-ratio.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/box-model.md § 2.
+///
+/// Phase 1 omits the spec's `gap` / `row_gap` / `column_gap` fields —
+/// they are not yet wired to Taffy and `FlexParams.gap` carries the
+/// flex-gap surface in this phase. A follow-up phase that wires
+/// block-layout gap to Taffy adds them back.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Component, Default)]
+pub struct BoxModel {
+    pub width: Sizing,
+    pub height: Sizing,
+    pub min_width: Sizing,
+    pub min_height: Sizing,
+    pub max_width: Sizing,
+    pub max_height: Sizing,
+    pub padding: Edges,
+    pub margin: Edges,
+    pub border: Edges,
+    pub box_sizing: BoxSizing,
+    pub aspect_ratio: Option<AspectRatio>,
+}
+
+/// `display` value. Phase 1 implements `Block` and `Flex(FlexAxis)`; other
+/// variants are reserved and translate to `Block` (Taffy default).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[reflect(Component)]
+pub enum Display {
+    #[default]
+    Block,
+    Inline,
+    InlineBlock,
+    Flex(FlexAxis),
+    InlineFlex(FlexAxis),
+    Grid,
+    InlineGrid,
+    FlowRoot,
+    Contents,
+    Table,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableRow,
+    TableCell,
+    TableCaption,
+    TableColumnGroup,
+    TableColumn,
+    ListItem,
+    Ruby,
+    None,
+}
+
+impl Display {
+    pub const fn flex_row() -> Self {
+        Self::Flex(FlexAxis::Row)
+    }
+
+    pub const fn flex_column() -> Self {
+        Self::Flex(FlexAxis::Column)
+    }
+}
+
+/// `position` + `inset`. Phase 1 implements `Static`, `Relative`,
+/// `Absolute`. `Fixed` and `Sticky` ship as variants but currently
+/// translate to `Absolute` / `Relative`; Phases 7/8 wire the real semantics.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Component, Default)]
+pub struct Position {
+    pub kind: PositionKind,
+    pub inset: Inset,
+}
+
+/// Flex container parameters. Active when the entity's `Display` is
+/// `Display::Flex(_)` or `Display::InlineFlex(_)`; otherwise ignored.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 1.1.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[reflect(Component, Default)]
+pub struct FlexParams {
+    pub direction: FlexAxis,
+    pub wrap: FlexWrap,
+    pub justify_content: JustifyContent,
+    pub align_items: AlignItems,
+    pub align_content: AlignContent,
+    pub gap: FlexGap,
+}
+
+/// Per-child flex parameters.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 1.2.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct FlexItem {
+    pub grow: f32,
+    pub shrink: f32,
+    pub basis: Sizing,
+    pub order: i32,
+    pub align_self: Option<AlignItems>,
+}
+
+impl Default for FlexItem {
+    fn default() -> Self {
+        Self {
+            grow: 0.0,
+            shrink: 1.0,
+            basis: Sizing::Auto,
+            order: 0,
+            align_self: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn box_model_default_is_auto_zero_padding() {
+        let bm = BoxModel::default();
+        assert_eq!(bm.width, Sizing::Auto);
+        assert_eq!(bm.height, Sizing::Auto);
+        assert_eq!(bm.padding, Edges::ZERO);
+        assert_eq!(bm.margin, Edges::ZERO);
+        assert_eq!(bm.border, Edges::ZERO);
+        assert_eq!(bm.box_sizing, BoxSizing::ContentBox);
+        assert_eq!(bm.aspect_ratio, None);
+    }
+
+    #[test]
+    fn display_default_is_block() {
+        assert_eq!(Display::default(), Display::Block);
+    }
+
+    #[test]
+    fn position_default_is_static_with_auto_inset() {
+        let pos = Position::default();
+        assert_eq!(pos.kind, PositionKind::Static);
+        assert_eq!(pos.inset, Inset::default());
+    }
+
+    #[test]
+    fn flex_params_and_item_defaults_match_spec() {
+        let fp = FlexParams::default();
+        assert_eq!(fp.direction, FlexAxis::Row);
+        assert_eq!(fp.wrap, FlexWrap::NoWrap);
+        assert_eq!(fp.justify_content, JustifyContent::FlexStart);
+        assert_eq!(fp.align_items, AlignItems::Stretch);
+        assert_eq!(fp.align_content, AlignContent::Stretch);
+        assert_eq!(fp.gap, FlexGap::default());
+
+        let fi = FlexItem::default();
+        assert_eq!(fi.grow, 0.0);
+        assert_eq!(fi.shrink, 1.0);
+        assert_eq!(fi.basis, Sizing::Auto);
+        assert_eq!(fi.order, 0);
+        assert_eq!(fi.align_self, None);
+    }
+
+    #[test]
+    fn display_helpers_produce_flex_axis() {
+        assert_eq!(Display::flex_row(), Display::Flex(FlexAxis::Row));
+        assert_eq!(Display::flex_column(), Display::Flex(FlexAxis::Column));
+    }
+}
