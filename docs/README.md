@@ -55,6 +55,10 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Buiy layout design](specs/2026-05-08-buiy-layout-design/README.md) — Taffy bridge, hybrid `Style` builder + decomposed components, anchor positioning, container queries, writing modes, stacking + top layer, transforms + containment (multi-file). `[draft]`
 
+**Plans**
+
+- [Buiy layout foundation](plans/2026-05-08-buiy-layout-foundation.md) — Phase 1: 8-step pipeline skeleton, decomposed components for the Phase-0 surface, hybrid `Style` builder, `Button` migration. `[draft]`
+
 ### Docs infrastructure
 
 **Specs**
