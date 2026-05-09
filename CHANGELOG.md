@@ -32,6 +32,27 @@ tagged release.
   system sets), decomposed `BoxModel` / `Display` / `Position` /
   `FlexParams` / `FlexItem` components, hybrid `Style` builder that
   expands to a `Bundle` on spawn.
+- Doc-hidden read-only accessors on `LayoutTree`: `by_entity()` and
+  `tree_ref()` for integration-test introspection.
+- Layout `Overflow` component (per-axis `OverflowMode` + `scrollbar_*`,
+  `scroll_behavior`, `overscroll_*`). Wired into `taffy::Style.overflow`
+  and `taffy::Style.scrollbar_width`. Spec:
+  `docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md`.
+- Layout `Scroll` component (snap-type, snap padding, snap margin) for
+  scroll-snap container declaration.
+- Layout `ScrollOffset` runtime-state component (per-axis scroll
+  position). Mutation does not invalidate `ResolvedLayout` (asserted by
+  `tests/layout_scroll_offset_no_invalidate.rs`).
+- Layout `ScrollSnapItem` decomposed-only child-side component.
+- `Overflow::is_scroll_container()` predicate (spec § 1.2).
+- 9 supporting layout enum types: `OverflowMode`, `ScrollbarGutter`,
+  `ScrollbarWidth`, `ScrollbarColor`, `ScrollBehavior`,
+  `OverscrollBehavior`, `SnapType`, `SnapAlign`, `SnapStop`.
+- `Style` builder: `Overflow` and `Scroll` fields; 12 fluent setters
+  (`.overflow_x()`, `.overflow_y()`, `.overflow()`, `.overflow_hidden()`,
+  `.overflow_y_scroll()`, `.overflow_x_scroll()`, `.scrollbar_gutter()`,
+  `.scrollbar_width()`, `.scroll_behavior()`, `.snap_type()`,
+  `.snap_padding()`, `.snap_margin()`).
 
 ### Changed
 - Layout subsystem foundation rewritten. Phase 0's flat `layout.rs` is
@@ -46,6 +67,9 @@ tagged release.
   of `(&Style, &ResolvedLayout)`; entities without `Visual` are skipped
   by render. `Button::new` inserts a `Visual` carrying the same theme
   tokens Phase 0's `Style` did, so visual appearance is preserved.
+- `sync_styles`' change-detection trigger set widens to include
+  `Changed<Overflow>` and `Changed<Scroll>`; remains exclusive of
+  `Changed<ScrollOffset>` and `Changed<ScrollSnapItem>`.
 
 ### Removed
 - `buiy_core::components::Style` (the Phase 0 mega-component) and
