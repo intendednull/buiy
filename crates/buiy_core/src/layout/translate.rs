@@ -6,11 +6,42 @@
 //! resolves `Length::Px` and `Length::Percent` — every other variant
 //! lands in Phase 10 (`buiy-layout-units-calc`).
 
-use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
-use super::types::{
-    AlignContent, AlignItems, BoxSizing, Edges, FlexAxis, FlexWrap, Inset, JustifyContent, Length,
-    OverflowMode, PositionKind, ScrollbarWidth, Sizing,
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use bevy::prelude::warn;
+
+use super::components::{
+    BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
 };
+use super::types::{
+    AlignContent, AlignItems, BoxSizing, Edges, FlexAxis, FlexWrap, GridAreas, GridAutoFlow,
+    GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode, PositionKind, RepeatCount,
+    ScrollbarWidth, Sizing, TrackSize,
+};
+// Bring helper free functions and grid-specific types from `taffy::prelude`
+// into scope. The compiler infers each helper's return type from the
+// function-return / binding annotation. See ~/.cargo/registry/.../taffy-0.10.1/src/prelude.rs.
+//
+// We selectively import only the helpers + grid types we need (rather than
+// `prelude::*`) to avoid clashes with `super::components::Display`,
+// `super::types::JustifyContent`, `JustifyItems`, etc., which the file
+// already brings in by name.
+use taffy::prelude::{
+    GridPlacement, GridTemplateComponent, MaxTrackSizingFunction, MinTrackSizingFunction,
+    TrackSizingFunction, auto, fit_content, fr, length, max_content, min_content, minmax, percent,
+};
+
+static WARNED_FR_OUTSIDE_GRID: AtomicBool = AtomicBool::new(false);
+
+fn warn_once_fr_outside_grid() {
+    if !WARNED_FR_OUTSIDE_GRID.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: Length::Fr is only meaningful inside TrackSize::Length \
+             in a grid template; outside grid it falls back to 0 px / Auto \
+             (warned once)"
+        );
+    }
+}
 
 /// View into the decomposed-component set for one entity. Built by
 /// `sync_styles`'s query and passed to `style_to_taffy`.
@@ -22,6 +53,13 @@ pub struct StyleView<'a> {
     pub flex_item: Option<&'a FlexItem>,
     pub overflow: &'a Overflow,
     pub scroll: &'a Scroll,
+    pub grid_params: &'a GridParams,
+    pub grid_item: Option<&'a GridItem>,
+    /// Parent's `template_areas` if the parent is a grid container.
+    /// Required to resolve `GridLine::Area(name)` because Taffy 0.10 has
+    /// no native named-area placement — only named lines. `sync_styles`
+    /// precomputes a per-entity map and feeds the lookup result here.
+    pub parent_areas: Option<&'a GridAreas>,
 }
 
 pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
@@ -88,23 +126,104 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
         s.aspect_ratio = Some(ar.ratio);
     }
 
+    // Grid container fields. Only meaningful when display is Grid /
+    // InlineGrid, but Taffy ignores them otherwise — so unconditional
+    // population is safe and removes a branch.
+    s.grid_template_columns = view
+        .grid_params
+        .template_columns
+        .iter()
+        .map(track_to_template)
+        .collect();
+    s.grid_template_rows = view
+        .grid_params
+        .template_rows
+        .iter()
+        .map(track_to_template)
+        .collect();
+    s.grid_auto_columns = view
+        .grid_params
+        .auto_columns
+        .iter()
+        .map(track_to_sizing)
+        .collect();
+    s.grid_auto_rows = view
+        .grid_params
+        .auto_rows
+        .iter()
+        .map(track_to_sizing)
+        .collect();
+    s.grid_auto_flow = map_grid_auto_flow(view.grid_params.auto_flow);
+    if let Some(areas) = &view.grid_params.template_areas {
+        s.grid_template_areas = areas
+            .areas
+            .iter()
+            .map(|a| taffy::GridTemplateArea {
+                // S = String (Taffy's DefaultCheapStr); clone the owned
+                // String. Do not `.as_str().into()` — that requires a
+                // 'static borrow that the runtime String doesn't have.
+                name: a.name.clone(),
+                row_start: a.row_start + 1,
+                row_end: a.row_end + 1,
+                column_start: a.column_start + 1,
+                column_end: a.column_end + 1,
+            })
+            .collect();
+    }
+
+    // Grid item fields. Only honored when the parent is a grid container,
+    // but Taffy ignores otherwise — so unconditional population is safe.
+    if let Some(item) = view.grid_item {
+        s.grid_column = grid_line_to_taffy(&item.column, GridAxis::Column, view.parent_areas);
+        s.grid_row = grid_line_to_taffy(&item.row, GridAxis::Row, view.parent_areas);
+    }
+
+    // Grid alignment overrides. Taffy 0.10 has *one* shared set of
+    // justify_items / align_items / justify_content / align_content fields
+    // used by both flex and grid algorithms; the flex path above already
+    // populated align_items / justify_content / align_content from
+    // FlexParams. When the entity is a grid container, override these from
+    // GridParams so grid alignment honors the grid-side surface.
+    if matches!(view.display, Display::Grid | Display::InlineGrid) {
+        s.justify_items = Some(map_justify_items(view.grid_params.justify_items));
+        s.align_items = Some(map_align_items(view.grid_params.align_items));
+        s.justify_content = Some(map_justify_content(view.grid_params.justify_content));
+        s.align_content = Some(map_align_content(view.grid_params.align_content));
+        s.gap = taffy::Size {
+            width: length_to_lp(view.grid_params.gap.column),
+            height: length_to_lp(view.grid_params.gap.row),
+        };
+    }
+
+    if let Some(item) = view.grid_item
+        && let Some(j) = item.justify_self
+    {
+        s.justify_self = Some(map_justify_items_as_self(j));
+    }
+    // GridItem has its own align_self, distinct from FlexItem.align_self
+    // (the flex path above only fires when flex_item is Some). Honor it
+    // when the grid item provides one.
+    if let Some(item) = view.grid_item
+        && let Some(a) = item.align_self
+    {
+        s.align_self = Some(map_align_items_as_self(a));
+    }
+
     s
 }
 
 fn map_display(d: &Display) -> taffy::Display {
     use Display::*;
-    // Phase 1 maps Grid/InlineGrid to Block. Translating them to
-    // taffy::Display::Grid without GridParams/GridItem would silently
-    // create templateless grid containers and tempt premature reliance
-    // on Grid before Phase 3 ships the components. Phase 3 replaces
-    // this row with `Grid | InlineGrid => taffy::Display::Grid`.
+    // Phase 3 routes Grid / InlineGrid to taffy::Display::Grid. Taffy
+    // 0.10 has no inline-grid variant, so InlineGrid translates to the
+    // same thing (Phase 4 writing-modes may revisit if line-box context
+    // distinction matters; layout-side it doesn't).
     match d {
         Block | Inline | InlineBlock | FlowRoot | Contents | ListItem | Ruby | Table
         | TableRowGroup | TableHeaderGroup | TableFooterGroup | TableRow | TableCell
-        | TableCaption | TableColumnGroup | TableColumn | Grid | InlineGrid => {
-            taffy::Display::Block
-        }
+        | TableCaption | TableColumnGroup | TableColumn => taffy::Display::Block,
         Flex(_) | InlineFlex(_) => taffy::Display::Flex,
+        Grid | InlineGrid => taffy::Display::Grid,
         None => taffy::Display::None,
     }
 }
@@ -234,6 +353,10 @@ fn length_to_dim(l: Length) -> taffy::Dimension {
     match l {
         Length::Px(v) => taffy::Dimension::length(v),
         Length::Percent(p) => taffy::Dimension::percent(p / 100.0),
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::Dimension::auto()
+        }
     }
 }
 
@@ -241,6 +364,12 @@ fn length_to_lp(l: Length) -> taffy::LengthPercentage {
     match l {
         Length::Px(v) => taffy::LengthPercentage::length(v),
         Length::Percent(p) => taffy::LengthPercentage::percent(p / 100.0),
+        // taffy::LengthPercentage has no Auto variant — fall back to 0
+        // (CSS-equivalent for Fr-in-non-grid: undefined, ill-formed).
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::LengthPercentage::length(0.0)
+        }
     }
 }
 
@@ -248,6 +377,10 @@ fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
     match l {
         Length::Px(v) => taffy::LengthPercentageAuto::length(v),
         Length::Percent(p) => taffy::LengthPercentageAuto::percent(p / 100.0),
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::LengthPercentageAuto::auto()
+        }
     }
 }
 
@@ -290,15 +423,282 @@ fn inset_to_lpa(i: Inset) -> taffy::Rect<taffy::LengthPercentageAuto> {
     }
 }
 
+// --- Grid mapping helpers (Phase 3) -------------------------------------
+
+fn map_grid_auto_flow(f: GridAutoFlow) -> taffy::GridAutoFlow {
+    use GridAutoFlow::*;
+    match f {
+        Row => taffy::GridAutoFlow::Row,
+        Column => taffy::GridAutoFlow::Column,
+        RowDense => taffy::GridAutoFlow::RowDense,
+        ColumnDense => taffy::GridAutoFlow::ColumnDense,
+        // Masonry is reserved (CSS-WG flux) — Taffy 0.10 has no
+        // GridAutoFlow::Masonry, so we degrade to Row and emit one warn!
+        // per session naming the limitation.
+        Masonry => {
+            warn_once_masonry();
+            taffy::GridAutoFlow::Row
+        }
+    }
+}
+
+fn map_repeat_count(c: RepeatCount) -> taffy::RepetitionCount {
+    match c {
+        RepeatCount::AutoFill => taffy::RepetitionCount::AutoFill,
+        RepeatCount::AutoFit => taffy::RepetitionCount::AutoFit,
+        RepeatCount::Count(n) => taffy::RepetitionCount::Count(n),
+    }
+}
+
+fn map_justify_items(j: JustifyItems) -> taffy::JustifyItems {
+    use JustifyItems::*;
+    // Note: in Taffy 0.10, `JustifyItems = AlignItems` (a type alias) —
+    // so we map onto `taffy::AlignItems` variants here.
+    match j {
+        Stretch => taffy::AlignItems::Stretch,
+        Start => taffy::AlignItems::Start,
+        End => taffy::AlignItems::End,
+        Center => taffy::AlignItems::Center,
+        Baseline => taffy::AlignItems::Baseline,
+    }
+}
+
+fn map_justify_items_as_self(j: JustifyItems) -> taffy::JustifySelf {
+    use JustifyItems::*;
+    // `taffy::JustifySelf = AlignItems` (type alias) — same pattern as
+    // `map_justify_items` above.
+    match j {
+        Stretch => taffy::AlignItems::Stretch,
+        Start => taffy::AlignItems::Start,
+        End => taffy::AlignItems::End,
+        Center => taffy::AlignItems::Center,
+        Baseline => taffy::AlignItems::Baseline,
+    }
+}
+
+/// Convert a `TrackSize` into a single `taffy::TrackSizingFunction`.
+/// Used inside `Repeat`'s tracks list and inside `MinMax`'s arms — both
+/// CSS contexts where a `Repeat` or another `MinMax` is invalid. If
+/// callers pass an invalid nested `Repeat`/`Subgrid`/`MinMax`, we warn
+/// once and return `auto`.
+///
+/// `auto()`, `length(_)`, `percent(_)`, `fr(_)`, `fit_content(_)`,
+/// `min_content()`, `max_content()`, `minmax(_, _)` come from
+/// `taffy::prelude`; the compiler infers the output type from the
+/// function-return / binding annotation.
+fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
+    match t {
+        TrackSize::Auto => auto(),
+        TrackSize::MinContent => min_content(),
+        TrackSize::MaxContent => max_content(),
+        TrackSize::FitContent(l) => fit_content(length_to_lp(*l)),
+        TrackSize::Length(Length::Fr(v)) => fr(*v),
+        TrackSize::Length(Length::Px(v)) => length(*v),
+        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        // `MinMax` carries a Vec<TrackSize>; spec/Phase3 invariant is
+        // exactly 2 elements [min, max]. Other arities warn-once and
+        // degrade to Auto. (Bevy 0.18 Reflect lacks a Box<T> impl, so we
+        // can't store this as `(Box<TrackSize>, Box<TrackSize>)`.)
+        TrackSize::MinMax(parts) if parts.len() == 2 => {
+            minmax(track_to_min(&parts[0]), track_to_max(&parts[1]))
+        }
+        TrackSize::MinMax(_) => {
+            warn_once_invalid_track_nesting();
+            auto()
+        }
+        TrackSize::Repeat(_, _) => {
+            warn_once_invalid_track_nesting();
+            auto()
+        }
+        TrackSize::Subgrid => {
+            warn_once_subgrid();
+            auto()
+        }
+    }
+}
+
+fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
+    match t {
+        TrackSize::Auto => auto(),
+        TrackSize::MinContent => min_content(),
+        TrackSize::MaxContent => max_content(),
+        TrackSize::Length(Length::Px(v)) => length(*v),
+        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        // CSS forbids these in MinMax's min slot:
+        // - Fr (fr-in-min is grammar-invalid)
+        // - FitContent (Min has no TaffyFitContent impl in Taffy 0.10)
+        // - MinMax / Repeat / Subgrid (recursion-invalid)
+        TrackSize::Length(Length::Fr(_))
+        | TrackSize::FitContent(_)
+        | TrackSize::MinMax(_)
+        | TrackSize::Repeat(_, _)
+        | TrackSize::Subgrid => {
+            warn_once_invalid_track_nesting();
+            auto()
+        }
+    }
+}
+
+fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
+    match t {
+        TrackSize::Auto => auto(),
+        TrackSize::MinContent => min_content(),
+        TrackSize::MaxContent => max_content(),
+        // MaxTrackSizingFunction has TaffyFitContent impl (Taffy 0.10
+        // grid.rs:700) — fit_content() from prelude resolves to it.
+        TrackSize::FitContent(l) => fit_content(length_to_lp(*l)),
+        TrackSize::Length(Length::Fr(v)) => fr(*v),
+        TrackSize::Length(Length::Px(v)) => length(*v),
+        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::MinMax(_) | TrackSize::Repeat(_, _) | TrackSize::Subgrid => {
+            warn_once_invalid_track_nesting();
+            auto()
+        }
+    }
+}
+
+/// Convert a top-level `TrackSize` (in `template_columns` / `template_rows`)
+/// into a `taffy::GridTemplateComponent`. `Repeat` is permitted at this
+/// level (but not nested inside another `Repeat` or `MinMax`).
+///
+/// Return type uses the default `<S>` (= `String` via `DefaultCheapStr`),
+/// matching `taffy::Style`'s default. Annotating `<&'static str>` would
+/// fail because runtime `String` has no 'static lifetime.
+fn track_to_template(t: &TrackSize) -> GridTemplateComponent<String> {
+    match t {
+        TrackSize::Repeat(count, tracks) => {
+            GridTemplateComponent::Repeat(taffy::GridTemplateRepetition {
+                count: map_repeat_count(*count),
+                tracks: tracks.iter().map(track_to_sizing).collect(),
+                // line_names is Vec<Vec<S>>; an empty outer Vec means
+                // no named lines are declared on this repeat.
+                line_names: Vec::new(),
+            })
+        }
+        other => GridTemplateComponent::Single(track_to_sizing(other)),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GridAxis {
+    Column,
+    Row,
+}
+
+/// Convert a `GridLine` plus optional parent named-area registry into a
+/// `taffy::Line<GridPlacement>`. `axis` selects column vs row resolution
+/// when the line is `Area(name)`.
+///
+/// Note on indexing: `NamedArea`'s coordinates are 0-indexed (CSS
+/// authoring convention 0..N maps to grid cells 0..N), while Taffy's
+/// `GridPlacement::Line` uses CSS Grid's 1-indexed line coordinates
+/// (line 1 is the start of the explicit grid). We add 1 when emitting.
+fn grid_line_to_taffy(
+    line: &GridLine,
+    axis: GridAxis,
+    parent_areas: Option<&GridAreas>,
+) -> taffy::Line<GridPlacement<String>> {
+    match line {
+        GridLine::Auto => taffy::Line {
+            start: GridPlacement::Auto,
+            end: GridPlacement::Auto,
+        },
+        GridLine::Start(i) => taffy::Line {
+            start: GridPlacement::Line((*i).into()),
+            end: GridPlacement::Auto,
+        },
+        GridLine::Span(n) => taffy::Line {
+            start: GridPlacement::Span(*n),
+            end: GridPlacement::Auto,
+        },
+        GridLine::StartEnd(s, e) => taffy::Line {
+            start: GridPlacement::Line((*s).into()),
+            end: GridPlacement::Line((*e).into()),
+        },
+        GridLine::Area(name) => {
+            match parent_areas.and_then(|areas| areas.areas.iter().find(|a| a.name == *name)) {
+                Some(a) => match axis {
+                    GridAxis::Column => taffy::Line {
+                        // CSS named-area resolution: column_start (0-indexed)
+                        // becomes line (column_start + 1) in 1-indexed CSS,
+                        // and column_end becomes line (column_end + 1).
+                        start: GridPlacement::Line(((a.column_start as i16) + 1).into()),
+                        end: GridPlacement::Line(((a.column_end as i16) + 1).into()),
+                    },
+                    GridAxis::Row => taffy::Line {
+                        start: GridPlacement::Line(((a.row_start as i16) + 1).into()),
+                        end: GridPlacement::Line(((a.row_end as i16) + 1).into()),
+                    },
+                },
+                None => {
+                    warn_once_unresolved_area(name);
+                    taffy::Line {
+                        start: GridPlacement::Auto,
+                        end: GridPlacement::Auto,
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Warn-once gates for invalid track nesting + unresolved named areas +
+// Subgrid + Masonry. The Fr-outside-grid gate `WARNED_FR_OUTSIDE_GRID` is
+// declared at the top of the file and is shared with the length_to_*
+// helpers.
+static WARNED_INVALID_TRACK_NESTING: AtomicBool = AtomicBool::new(false);
+static WARNED_UNRESOLVED_AREA: AtomicBool = AtomicBool::new(false);
+static WARNED_SUBGRID: AtomicBool = AtomicBool::new(false);
+static WARNED_MASONRY: AtomicBool = AtomicBool::new(false);
+
+fn warn_once_invalid_track_nesting() {
+    if !WARNED_INVALID_TRACK_NESTING.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: invalid TrackSize nesting (Repeat inside Repeat/MinMax, \
+             non-leaf inside MinMax slot, or MinMax with arity != 2) — \
+             falling back to Auto (warned once)"
+        );
+    }
+}
+
+fn warn_once_unresolved_area(name: &str) {
+    if !WARNED_UNRESOLVED_AREA.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: GridLine::Area({:?}) did not match any name in the parent's \
+             template_areas; falling back to Auto (warned once)",
+            name
+        );
+    }
+}
+
+fn warn_once_subgrid() {
+    if !WARNED_SUBGRID.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: TrackSize::Subgrid is reserved — Taffy 0.10 has no subgrid \
+             support; falling back to Auto (warned once)"
+        );
+    }
+}
+
+fn warn_once_masonry() {
+    if !WARNED_MASONRY.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: GridAutoFlow::Masonry is reserved — CSS-WG flux + no Taffy \
+             support; falling back to Row (warned once)"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::layout::components::{
-        BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll,
+        BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
     };
     use crate::layout::types::{
-        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, JustifyContent, Length,
-        OverflowMode, PositionKind, ScrollbarWidth, Sizing,
+        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridLine,
+        JustifyContent, Length, NamedArea, OverflowMode, PositionKind, RepeatCount, ScrollbarWidth,
+        Sizing, TrackSize,
     };
 
     #[test]
@@ -310,6 +710,7 @@ mod tests {
         let item: Option<&FlexItem> = None;
         let overflow = Overflow::default();
         let scroll = Scroll::default();
+        let grid_params = GridParams::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -318,6 +719,9 @@ mod tests {
             flex_item: item,
             overflow: &overflow,
             scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
         });
         // Default Display::Block + ContentBox + everything Auto produces taffy default Display::Block.
         assert_eq!(taffy.display, taffy::Display::Block);
@@ -349,6 +753,7 @@ mod tests {
         };
         let overflow = Overflow::default();
         let scroll = Scroll::default();
+        let grid_params = GridParams::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -357,6 +762,9 @@ mod tests {
             flex_item: None,
             overflow: &overflow,
             scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
         });
         assert_eq!(taffy.display, taffy::Display::Flex);
         assert_eq!(taffy.flex_direction, taffy::FlexDirection::Row);
@@ -382,6 +790,7 @@ mod tests {
         let flex = FlexParams::default();
         let overflow = Overflow::default();
         let scroll = Scroll::default();
+        let grid_params = GridParams::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -390,6 +799,9 @@ mod tests {
             flex_item: None,
             overflow: &overflow,
             scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
         });
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(10.0));
@@ -411,6 +823,7 @@ mod tests {
         };
         let overflow = Overflow::default();
         let scroll = Scroll::default();
+        let grid_params = GridParams::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -419,6 +832,9 @@ mod tests {
             flex_item: Some(&item),
             overflow: &overflow,
             scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
         });
         assert_eq!(taffy.flex_grow, 2.0);
         assert_eq!(taffy.flex_shrink, 0.5);
@@ -467,6 +883,7 @@ mod tests {
                 taffy::Overflow::Visible,
             ),
         ];
+        let grid_params = GridParams::default();
         for (x_in, y_in, x_expected, y_expected) in cases.iter().copied() {
             let overflow = Overflow {
                 x: x_in,
@@ -482,6 +899,9 @@ mod tests {
                 flex_item: None,
                 overflow: &overflow,
                 scroll: &scroll,
+                grid_params: &grid_params,
+                grid_item: None,
+                parent_areas: None,
             });
             assert_eq!(
                 taffy.overflow.x, x_expected,
@@ -501,6 +921,7 @@ mod tests {
         let position = Position::default();
         let flex = FlexParams::default();
         let scroll = Scroll::default();
+        let grid_params = GridParams::default();
         for (input, expected) in [
             (ScrollbarWidth::Auto, 12.0_f32),
             (ScrollbarWidth::Thin, 8.0),
@@ -518,8 +939,199 @@ mod tests {
                 flex_item: None,
                 overflow: &overflow,
                 scroll: &scroll,
+                grid_params: &grid_params,
+                grid_item: None,
+                parent_areas: None,
             });
             assert_eq!(taffy.scrollbar_width, expected, "{input:?}");
         }
+    }
+
+    #[test]
+    fn map_display_grid_routes_to_taffy_grid() {
+        // Direct unit test of the helper. The full StyleView path is
+        // tested in `translate_display_grid_to_taffy_grid` below now
+        // that the view is widened with grid fields.
+        assert_eq!(map_display(&Display::Grid), taffy::Display::Grid);
+        assert_eq!(map_display(&Display::InlineGrid), taffy::Display::Grid);
+    }
+
+    #[test]
+    fn translate_display_grid_to_taffy_grid() {
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        for display in [Display::Grid, Display::InlineGrid] {
+            let taffy = style_to_taffy(StyleView {
+                display: &display,
+                box_model: &bm,
+                position: &position,
+                flex_params: &flex,
+                flex_item: None,
+                overflow: &overflow,
+                scroll: &scroll,
+                grid_params: &grid_params,
+                grid_item: None,
+                parent_areas: None,
+            });
+            assert_eq!(taffy.display, taffy::Display::Grid, "{display:?}");
+        }
+    }
+
+    #[test]
+    fn translate_grid_template_columns_to_taffy() {
+        let display = Display::Grid;
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams {
+            template_columns: vec![
+                TrackSize::Length(Length::Fr(1.0)),
+                TrackSize::Length(Length::Fr(2.0)),
+            ],
+            ..Default::default()
+        };
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+        });
+        assert_eq!(taffy.grid_template_columns.len(), 2);
+        assert!(matches!(
+            &taffy.grid_template_columns[0],
+            taffy::GridTemplateComponent::Single(_)
+        ));
+    }
+
+    #[test]
+    fn translate_grid_repeat_to_taffy() {
+        let display = Display::Grid;
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams {
+            template_columns: vec![TrackSize::Repeat(
+                RepeatCount::AutoFill,
+                vec![TrackSize::Length(Length::Px(100.0))],
+            )],
+            ..Default::default()
+        };
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+        });
+        assert_eq!(taffy.grid_template_columns.len(), 1);
+        assert!(matches!(
+            &taffy.grid_template_columns[0],
+            taffy::GridTemplateComponent::Repeat(_)
+        ));
+    }
+
+    #[test]
+    fn translate_grid_line_start_end_to_taffy() {
+        let display = Display::Grid;
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let item = GridItem {
+            column: GridLine::StartEnd(1, 4),
+            row: GridLine::Auto,
+            ..Default::default()
+        };
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: Some(&item),
+            parent_areas: None,
+        });
+        // Line(1) and Line(4) — the values are GridPlacement variants.
+        // Pin the discriminants by construction.
+        assert!(matches!(
+            taffy.grid_column.start,
+            taffy::GridPlacement::Line(_)
+        ));
+        assert!(matches!(
+            taffy.grid_column.end,
+            taffy::GridPlacement::Line(_)
+        ));
+    }
+
+    #[test]
+    fn translate_grid_line_area_resolved_via_parent_areas() {
+        let display = Display::Grid;
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let item = GridItem {
+            column: GridLine::Area("header".to_string()),
+            row: GridLine::Area("header".to_string()),
+            ..Default::default()
+        };
+        let parent_areas = GridAreas {
+            areas: vec![NamedArea {
+                name: "header".to_string(),
+                row_start: 0,
+                row_end: 1,
+                column_start: 0,
+                column_end: 2,
+            }],
+        };
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: Some(&item),
+            parent_areas: Some(&parent_areas),
+        });
+        // Column resolves to Line(1)..Line(3) (1-indexed, end is exclusive
+        // in CSS spec terms — column_start 0 → Line(1), column_end 2 →
+        // Line(3), spanning 2 cells).
+        assert!(matches!(
+            taffy.grid_column.start,
+            taffy::GridPlacement::Line(_)
+        ));
+        assert!(matches!(
+            taffy.grid_column.end,
+            taffy::GridPlacement::Line(_)
+        ));
     }
 }

@@ -12,11 +12,11 @@
 //! `FlexItem` is decomposed-only (per spec § 2.4); it is not included in
 //! `Style`.
 
-use super::components::{BoxModel, Display, FlexParams, Overflow, Position, Scroll};
+use super::components::{BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll};
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
-    JustifyContent, Length, OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter,
-    ScrollbarWidth, Sizing, SnapType,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
+    GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
+    PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, Sizing, SnapType, TrackSize,
 };
 use bevy::ecs::bundle::Bundle;
 
@@ -46,6 +46,7 @@ pub struct Style {
     pub flex_params: FlexParams,
     pub overflow: Overflow,
     pub scroll: Scroll,
+    pub grid_params: GridParams,
 }
 
 impl Style {
@@ -292,22 +293,107 @@ impl Style {
         self.scroll.snap_margin = e;
         self
     }
+
+    // ---- Grid ----
+
+    /// Set `Display::Grid`. Other grid setters operate on `grid_params`.
+    pub fn grid(mut self) -> Self {
+        self.display = Display::Grid;
+        self
+    }
+
+    pub fn inline_grid(mut self) -> Self {
+        self.display = Display::InlineGrid;
+        self
+    }
+
+    pub fn grid_template_columns(mut self, tracks: Vec<TrackSize>) -> Self {
+        self.grid_params.template_columns = tracks;
+        self
+    }
+
+    pub fn grid_template_rows(mut self, tracks: Vec<TrackSize>) -> Self {
+        self.grid_params.template_rows = tracks;
+        self
+    }
+
+    pub fn grid_template_areas(mut self, areas: GridAreas) -> Self {
+        self.grid_params.template_areas = Some(areas);
+        self
+    }
+
+    pub fn grid_auto_columns(mut self, tracks: Vec<TrackSize>) -> Self {
+        self.grid_params.auto_columns = tracks;
+        self
+    }
+
+    pub fn grid_auto_rows(mut self, tracks: Vec<TrackSize>) -> Self {
+        self.grid_params.auto_rows = tracks;
+        self
+    }
+
+    pub fn grid_auto_flow(mut self, flow: GridAutoFlow) -> Self {
+        self.grid_params.auto_flow = flow;
+        self
+    }
+
+    pub fn grid_justify_items(mut self, j: JustifyItems) -> Self {
+        self.grid_params.justify_items = j;
+        self
+    }
+
+    pub fn grid_align_items(mut self, a: AlignItems) -> Self {
+        self.grid_params.align_items = a;
+        self
+    }
+
+    pub fn grid_justify_content(mut self, j: JustifyContent) -> Self {
+        self.grid_params.justify_content = j;
+        self
+    }
+
+    pub fn grid_align_content(mut self, a: AlignContent) -> Self {
+        self.grid_params.align_content = a;
+        self
+    }
+
+    /// Set both row and column gap on `GridParams.gap`. Distinct from
+    /// `gap_px` (which sets `FlexParams.gap`); when an entity is a flex
+    /// container, only `FlexParams.gap` is honored, and conversely for
+    /// grid. CSS-faithful unified gap is a follow-up plan.
+    pub fn grid_gap_px(mut self, px: f32) -> Self {
+        self.grid_params.gap = FlexGap {
+            row: Length::Px(px),
+            column: Length::Px(px),
+        };
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::components::{BoxModel, Display, FlexParams, Overflow, Position, Scroll};
+    use crate::layout::components::{
+        BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll,
+    };
     use crate::layout::types::{
-        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, JustifyContent, Length, OverflowMode,
-        ScrollbarWidth, Sizing, SnapType,
+        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, GridAutoFlow, JustifyContent, Length,
+        OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize,
     };
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
 
     fn spawn_and_extract(
         style: Style,
-    ) -> (Display, BoxModel, Position, FlexParams, Overflow, Scroll) {
+    ) -> (
+        Display,
+        BoxModel,
+        Position,
+        FlexParams,
+        Overflow,
+        Scroll,
+        GridParams,
+    ) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let entity = app.world_mut().spawn(style).id();
@@ -332,7 +418,19 @@ mod tests {
             .get::<Scroll>(entity)
             .expect("Scroll inserted")
             .clone();
-        (display, box_model, position, flex_params, overflow, scroll)
+        let grid_params = world
+            .get::<GridParams>(entity)
+            .expect("GridParams inserted")
+            .clone();
+        (
+            display,
+            box_model,
+            position,
+            flex_params,
+            overflow,
+            scroll,
+            grid_params,
+        )
     }
 
     #[test]
@@ -367,6 +465,14 @@ mod tests {
                 snap_padding: Edges::all(4.0),
                 ..Default::default()
             },
+            grid_params: GridParams {
+                template_columns: vec![
+                    TrackSize::Length(Length::Fr(1.0)),
+                    TrackSize::Length(Length::Fr(2.0)),
+                ],
+                auto_flow: GridAutoFlow::Column,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let fluent = Style::default()
@@ -382,7 +488,12 @@ mod tests {
             .overflow_y(OverflowMode::Auto)
             .scrollbar_width(ScrollbarWidth::Thin)
             .snap_type(SnapType::YMandatory)
-            .snap_padding(Edges::all(4.0));
+            .snap_padding(Edges::all(4.0))
+            .grid_template_columns(vec![
+                TrackSize::Length(Length::Fr(1.0)),
+                TrackSize::Length(Length::Fr(2.0)),
+            ])
+            .grid_auto_flow(GridAutoFlow::Column);
 
         assert_eq!(spawn_and_extract(literal), spawn_and_extract(fluent));
     }
@@ -399,5 +510,40 @@ mod tests {
         assert!(world.get::<FlexParams>(entity).is_some());
         assert!(world.get::<Overflow>(entity).is_some());
         assert!(world.get::<Scroll>(entity).is_some());
+        assert!(world.get::<GridParams>(entity).is_some());
+    }
+
+    #[test]
+    fn grid_template_columns_setter_overrides() {
+        let s = Style::default().grid().grid_template_columns(vec![
+            TrackSize::Length(Length::Fr(1.0)),
+            TrackSize::Length(Length::Fr(2.0)),
+        ]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(s).id();
+        let g = app
+            .world()
+            .get::<GridParams>(entity)
+            .expect("GridParams inserted");
+        assert_eq!(g.template_columns.len(), 2);
+        assert!(matches!(
+            g.template_columns[0],
+            TrackSize::Length(Length::Fr(_))
+        ));
+    }
+
+    #[test]
+    fn grid_helpers_set_display_grid() {
+        let s = Style::default().grid();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(s).id();
+        let d = app
+            .world()
+            .get::<Display>(entity)
+            .copied()
+            .expect("Display inserted");
+        assert_eq!(d, Display::Grid);
     }
 }

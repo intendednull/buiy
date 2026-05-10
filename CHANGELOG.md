@@ -53,6 +53,46 @@ tagged release.
   `.overflow_y_scroll()`, `.overflow_x_scroll()`, `.scrollbar_gutter()`,
   `.scrollbar_width()`, `.scroll_behavior()`, `.snap_type()`,
   `.snap_padding()`, `.snap_margin()`).
+- **Layout grid (Phase 3 of the layout migration).**
+  - `GridParams` component (container, joins `Style`'s Bundle):
+    `template_columns`, `template_rows`, `template_areas`,
+    `auto_columns`, `auto_rows`, `auto_flow`, `justify_items`,
+    `align_items`, `justify_content`, `align_content`, `gap`.
+  - `GridItem` component (decomposed-only, like `FlexItem` /
+    `ScrollSnapItem`): `column`, `row`, `justify_self`, `align_self`.
+  - `TrackSize` enum: `Auto`, `Length`, `MinContent`, `MaxContent`,
+    `FitContent`, `MinMax(Vec<TrackSize>)` (arity-2 invariant
+    enforced at translate time — the spec's `Box<TrackSize>` shape
+    can't be reflected by Bevy 0.18), `Repeat`, `Subgrid` (reserved).
+  - `RepeatCount` enum: `AutoFill`, `AutoFit`, `Count(u16)`.
+  - `GridLine` enum: `Auto`, `Start(i16)`, `Span(u16)`,
+    `StartEnd(i16, i16)`, `Area(String)`.
+  - `GridAreas` + `NamedArea`: explicit-rectangle named-area registry
+    plus `GridAreas::from_lines(&[&str])` CSS-syntax convenience parser.
+  - `GridAutoFlow` enum: `Row`, `Column`, `RowDense`, `ColumnDense`,
+    `Masonry` (reserved).
+  - `JustifyItems` enum: `Stretch` (default), `Start`, `End`, `Center`,
+    `Baseline`.
+  - 13 fluent setters on `Style`: `.grid()`, `.inline_grid()`,
+    `.grid_template_columns(_)`, `.grid_template_rows(_)`,
+    `.grid_template_areas(_)`, `.grid_auto_columns(_)`,
+    `.grid_auto_rows(_)`, `.grid_auto_flow(_)`,
+    `.grid_justify_items(_)`, `.grid_align_items(_)`,
+    `.grid_justify_content(_)`, `.grid_align_content(_)`,
+    `.grid_gap_px(_)`.
+  - `GridParams` + `GridItem` + 7 value types registered for reflection
+    in `LayoutPlugin`.
+
+### Breaking
+- `Length` gains an `Fr(f32)` variant. Downstream code that pattern-matches
+  `Length` exhaustively must add an `Fr` arm. The `Fr` variant is only
+  meaningful inside `TrackSize::Length(Length::Fr(_))` in a grid template;
+  outside grid contexts it warns once and falls back to `0 px` (in
+  `LengthPercentage` contexts — Taffy's type has no Auto) or `Auto`
+  (in `Dimension` / `LengthPercentageAuto` contexts). `Length` is *not*
+  marked `#[non_exhaustive]` — the next planned `Length` change is
+  Phase 10's full unit set, which is similarly breaking; callers will
+  adapt once and the type stabilizes.
 
 ### Changed
 - Layout subsystem foundation rewritten. Phase 0's flat `layout.rs` is
@@ -70,6 +110,21 @@ tagged release.
 - `sync_styles`' change-detection trigger set widens to include
   `Changed<Overflow>` and `Changed<Scroll>`; remains exclusive of
   `Changed<ScrollOffset>` and `Changed<ScrollSnapItem>`.
+- `Display::Grid` and `Display::InlineGrid` now translate to
+  `taffy::Display::Grid` (Phase 1 routed both to Block).
+- `sync_styles`'s `Or<(Changed<...>)>` trigger filter widens with
+  `Changed<GridParams>` and `Changed<GridItem>`. `Changed<ChildOf>`
+  remains in the filter from Phase 2 — re-parenting a grid item under
+  a different grid container picks up the new `template_areas` via
+  the existing clause.
+- Reserved variants emit one `warn!` per session and degrade:
+  `TrackSize::Subgrid → Auto`; `GridAutoFlow::Masonry → Row`.
+- `RepeatCount::Count` carries `u16`; `GridLine::Start` / `Span` /
+  `StartEnd` carry `i16` / `u16`. Spec used `i32` / `u32`; Phase 3
+  matches Taffy 0.10 directly to avoid a lossy conversion at translate
+  time.
+- `GridLine::Area` uses `String` for area names. Spec used `SmolStr`;
+  Phase 3 uses `String` to avoid a new direct supply-chain dep.
 
 ### Removed
 - `buiy_core::components::Style` (the Phase 0 mega-component) and

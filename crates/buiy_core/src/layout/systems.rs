@@ -11,11 +11,15 @@
 //! Steps 2/4/5/6 are empty sub-sets in Phase 1; later phases attach
 //! systems to them.
 
-use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
+use super::components::{
+    BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
+};
 use super::translate::{StyleView, style_to_taffy};
 use super::tree::LayoutTree;
+use super::types::GridAreas;
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
+use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
 
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
@@ -55,10 +59,13 @@ pub(super) fn gc_removed_nodes(
 /// `Changed<T>` triggers on insertion as well as modification, so newly
 /// spawned entities are picked up on their first frame.
 ///
-/// Phase 2 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
+/// Phase 3 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
 /// `Changed<Position>`, `Changed<FlexParams>`, `Changed<FlexItem>`,
-/// `Changed<Overflow>`, `Changed<Scroll>`, `Changed<Children>`,
-/// `Changed<ChildOf>`. Phases 4–9 widen it as new components land.
+/// `Changed<Overflow>`, `Changed<Scroll>`, `Changed<GridParams>`,
+/// `Changed<GridItem>`, `Changed<Children>`, `Changed<ChildOf>`.
+/// Phases 4–9 widen it as new components land. `Changed<ChildOf>` is
+/// included so that re-parenting a grid item under a different grid
+/// container picks up the new container's `template_areas`.
 ///
 /// **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are
 /// intentionally excluded.** `ScrollOffset` is runtime state (mutated
@@ -78,7 +85,10 @@ pub(super) fn sync_styles(
             Option<&FlexItem>,
             &Overflow,
             &Scroll,
+            &GridParams,
+            Option<&GridItem>,
             Option<&Children>,
+            Option<&ChildOf>,
         ),
         (
             With<Node>,
@@ -90,20 +100,51 @@ pub(super) fn sync_styles(
                 Changed<FlexItem>,
                 Changed<Overflow>,
                 Changed<Scroll>,
+                Changed<GridParams>,
+                Changed<GridItem>,
                 Changed<Children>,
                 Changed<ChildOf>,
             )>,
         ),
     >,
+    parent_grid_lookup: Query<&GridParams>,
 ) {
     let tree = &mut *tree;
+
+    // Precompute parent-areas: for every entity in the changed set, look
+    // up its parent's `GridParams.template_areas` (if any). This map is
+    // small — one entry per entity in the changed set with a parent that
+    // declares template_areas — and avoids a per-entity query inside the
+    // iteration. ChildOf is followed once. The second `Query<&GridParams>`
+    // parameter is read-only and therefore conflict-free with the main
+    // (filtered) query under Bevy 0.18.
+    let parent_areas_for: HashMap<Entity, GridAreas> = nodes
+        .iter()
+        .filter_map(|(entity, _, _, _, _, _, _, _, _, _, _, parent)| {
+            let p = parent?;
+            let grid = parent_grid_lookup.get(p.parent()).ok()?;
+            grid.template_areas.clone().map(|a| (entity, a))
+        })
+        .collect();
 
     // Ensure every Buiy entity has a Taffy node + current style. Insert
     // happens for entities new this frame (Changed<T> triggers on insert);
     // existing entities run set_style only when something in the trigger
     // set actually changed — see foundation/architecture.md § 1.2.
-    for (entity, display, bm, position, flex, flex_item, overflow, scroll, _children) in
-        nodes.iter()
+    for (
+        entity,
+        display,
+        bm,
+        position,
+        flex,
+        flex_item,
+        overflow,
+        scroll,
+        grid_params,
+        grid_item,
+        _children,
+        _parent,
+    ) in nodes.iter()
     {
         let view = StyleView {
             display,
@@ -113,6 +154,9 @@ pub(super) fn sync_styles(
             flex_item,
             overflow,
             scroll,
+            grid_params,
+            grid_item,
+            parent_areas: parent_areas_for.get(&entity),
         };
         let taffy_style = style_to_taffy(view);
         match tree.by_entity.get(&entity).copied() {
@@ -137,8 +181,20 @@ pub(super) fn sync_styles(
     }
 
     // Sync child relationships for each Buiy entity.
-    for (entity, _display, _bm, _position, _flex, _flex_item, _overflow, _scroll, children) in
-        nodes.iter()
+    for (
+        entity,
+        _display,
+        _bm,
+        _position,
+        _flex,
+        _flex_item,
+        _overflow,
+        _scroll,
+        _grid_params,
+        _grid_item,
+        children,
+        _parent,
+    ) in nodes.iter()
     {
         let parent_id = match tree.by_entity.get(&entity).copied() {
             Some(id) => id,

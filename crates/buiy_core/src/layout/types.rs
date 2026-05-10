@@ -20,6 +20,9 @@ pub enum Length {
     Px(f32),
     /// Percentage of the containing block dimension on the relevant axis.
     Percent(f32),
+    /// CSS `<flex>` unit — only meaningful inside `TrackSize::Length(Length::Fr(_))`.
+    /// Outside grid templates, `Fr` warns once and resolves to `Auto`.
+    Fr(f32),
 }
 
 impl Length {
@@ -310,6 +313,219 @@ pub enum SnapStop {
     Always,
 }
 
+/// CSS `repeat(<count>, ...)` repetition count.
+///
+/// Spec uses `u32`; Phase 3 uses `u16` to match Taffy 0.10's
+/// `RepetitionCount::Count(u16)` directly without a lossy conversion at
+/// translate time. 65 535 repetitions is well above any realistic UI grid.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepeatCount {
+    #[default]
+    AutoFill,
+    AutoFit,
+    Count(u16),
+}
+
+/// A CSS Grid track sizing function — what one column or row of a grid
+/// template can be. Used inside `GridParams.template_columns` /
+/// `template_rows` (where `Repeat` is permitted) and recursively inside
+/// `MinMax` (where it's not — see translation gates in `translate.rs`).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.1.
+///
+/// Recursion is permitted by the type but constrained by CSS grammar:
+/// `MinMax(Repeat(...), _)` and `Repeat(_, [Subgrid])` are invalid CSS;
+/// `style_to_taffy` emits `warn!` once per session and falls back to
+/// `Auto` for these.
+///
+/// Implementation note: `MinMax`'s two arguments are stored as a
+/// `Vec<TrackSize>` (expected `len() == 2`) rather than the spec's
+/// `(Box<TrackSize>, Box<TrackSize>)` because `bevy_reflect` 0.18 has
+/// no `Reflect` impl for `Box<T>`. Translation validates the arity and
+/// emits `warn!` once per session if it isn't exactly 2.
+#[derive(Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(no_field_bounds)]
+pub enum TrackSize {
+    #[default]
+    Auto,
+    Length(Length),
+    MinContent,
+    MaxContent,
+    FitContent(Length),
+    /// CSS `minmax(<min>, <max>)`. Vec is expected to contain exactly
+    /// 2 elements `[min, max]`; other arities warn-once and fall back
+    /// to `Auto` at translation time.
+    MinMax(Vec<TrackSize>),
+    /// CSS `repeat(<count>, <tracks>)`. Only valid at the top of a
+    /// template list (not inside another `Repeat` or inside `MinMax`).
+    Repeat(RepeatCount, Vec<TrackSize>),
+    /// CSS `subgrid`. Reserved — Taffy 0.10 has no subgrid support.
+    /// Phase 3 emits one `warn!` per session and falls back to `Auto`.
+    Subgrid,
+}
+
+/// A CSS Grid placement on the `grid-row` or `grid-column` axis.
+///
+/// Spec uses `i32` / `u32`; Phase 3 uses `i16` / `u16` to match Taffy
+/// 0.10's `GridLine` / `Span` underlying types. Spec uses `SmolStr` for
+/// area names; Phase 3 uses `String` to avoid a new direct dep — area
+/// names are set once per spawn and never on a hot path.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.2.
+#[derive(Reflect, Default, Clone, Debug, PartialEq, Eq)]
+pub enum GridLine {
+    #[default]
+    Auto,
+    /// 1-indexed line; negative counts from the end (per CSS).
+    Start(i16),
+    /// Span N tracks from the auto-placed origin.
+    Span(u16),
+    /// Explicit `<start> / <end>`.
+    StartEnd(i16, i16),
+    /// Resolved against the parent container's `GridParams.template_areas`.
+    /// If the name doesn't match any area, `style_to_taffy` warns and
+    /// falls back to `Auto`.
+    Area(String),
+}
+
+/// One named cell rectangle inside a `GridAreas`. CSS `grid-template-areas`
+/// requires every named region to be a rectangle; `GridAreas::from_lines`
+/// validates that.
+///
+/// Coordinates are zero-based and exclusive on the end side
+/// (`row_end - row_start` is the span height in rows).
+#[derive(Reflect, Default, Clone, Debug, PartialEq, Eq)]
+pub struct NamedArea {
+    pub name: String,
+    pub row_start: u16,
+    pub row_end: u16,
+    pub column_start: u16,
+    pub column_end: u16,
+}
+
+/// CSS `grid-template-areas` — a registry of named rectangular regions
+/// laid out across the container's grid.
+///
+/// Construct from explicit rectangles via `area(...)` calls, or from CSS
+/// string-grid syntax via `from_lines`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.1.
+#[derive(Reflect, Default, Clone, Debug, PartialEq, Eq)]
+pub struct GridAreas {
+    pub areas: Vec<NamedArea>,
+}
+
+impl GridAreas {
+    // Consumed by Phase 3 Task 7 (re-exports) and downstream Style /
+    // GridParams builders introduced in Task 3; unused until those tasks land.
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append one explicit area. `rows` and `cols` are exclusive-end ranges.
+    // Consumed by Phase 3 Task 3 (Style fluent setters); unused until then.
+    #[allow(dead_code)]
+    pub fn area(
+        mut self,
+        name: impl Into<String>,
+        rows: std::ops::Range<u16>,
+        cols: std::ops::Range<u16>,
+    ) -> Self {
+        self.areas.push(NamedArea {
+            name: name.into(),
+            row_start: rows.start,
+            row_end: rows.end,
+            column_start: cols.start,
+            column_end: cols.end,
+        });
+        self
+    }
+
+    /// Parse CSS-style `grid-template-areas` lines: each `&str` is one row,
+    /// space-separated cells. The literal `.` (period) is an empty cell.
+    /// Identical adjacent cells form one named region; the parser groups
+    /// them into the smallest enclosing rectangle.
+    ///
+    /// CSS requires every named area to be rectangular. If a name appears
+    /// in non-rectangular cells, the parser still emits the bounding
+    /// rectangle and a `warn!` is emitted once at translation time when
+    /// the area is referenced (by `style_to_taffy`'s area-resolution
+    /// helper, not here — `from_lines` does no logging).
+    // Consumed by Phase 3 Task 3 (Style fluent setters) and the test below;
+    // unused at lib build until Task 3 lands (test-only consumers don't
+    // count toward dead_code at lib level).
+    #[allow(dead_code)]
+    pub fn from_lines(lines: &[&str]) -> Self {
+        use std::collections::BTreeMap;
+        // Parse into a 2D grid.
+        let rows: Vec<Vec<&str>> = lines
+            .iter()
+            .map(|l| l.split_whitespace().collect())
+            .collect();
+        // Group by name, accumulating bounding rectangle.
+        let mut bounds: BTreeMap<String, (u16, u16, u16, u16)> = BTreeMap::new();
+        for (r, row) in rows.iter().enumerate() {
+            for (c, &cell) in row.iter().enumerate() {
+                if cell == "." {
+                    continue;
+                }
+                let name = cell.to_string();
+                let entry = bounds.entry(name).or_insert((
+                    r as u16,
+                    (r + 1) as u16,
+                    c as u16,
+                    (c + 1) as u16,
+                ));
+                entry.0 = entry.0.min(r as u16);
+                entry.1 = entry.1.max((r + 1) as u16);
+                entry.2 = entry.2.min(c as u16);
+                entry.3 = entry.3.max((c + 1) as u16);
+            }
+        }
+        let areas = bounds
+            .into_iter()
+            .map(|(name, (rs, re, cs, ce))| NamedArea {
+                name,
+                row_start: rs,
+                row_end: re,
+                column_start: cs,
+                column_end: ce,
+            })
+            .collect();
+        Self { areas }
+    }
+}
+
+/// CSS `grid-auto-flow`. `*Dense` lets the placement algorithm backfill
+/// earlier tracks. `Masonry` is reserved (CSS-WG flux) — Phase 3 emits one
+/// `warn!` per session and falls back to `Row`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.4.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridAutoFlow {
+    #[default]
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
+    /// Reserved for forward compatibility — CSS Masonry Layout. Currently
+    /// degrades to `Row` with one `warn!` per session.
+    Masonry,
+}
+
+/// CSS `justify-items` — main-axis alignment of grid items within their
+/// cell. (Distinct from `JustifyContent`, which distributes whole tracks.)
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JustifyItems {
+    #[default]
+    Stretch,
+    Start,
+    End,
+    Center,
+    Baseline,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +613,56 @@ mod tests {
     #[test]
     fn snap_stop_default_is_normal() {
         assert_eq!(SnapStop::default(), SnapStop::Normal);
+    }
+
+    #[test]
+    fn length_fr_constructor_round_trip() {
+        // Pin the Fr variant. Used inside TrackSize::Length(Length::Fr(_));
+        // outside grid contexts it warns and falls back to Auto.
+        let fr = Length::Fr(1.5);
+        match fr {
+            Length::Fr(v) => assert_eq!(v, 1.5),
+            _ => panic!("expected Fr"),
+        }
+    }
+
+    #[test]
+    fn track_size_default_is_auto() {
+        assert_eq!(TrackSize::default(), TrackSize::Auto);
+    }
+
+    #[test]
+    fn repeat_count_count_carries_u16() {
+        let _: RepeatCount = RepeatCount::Count(3u16);
+        assert_eq!(RepeatCount::default(), RepeatCount::AutoFill);
+    }
+
+    #[test]
+    fn grid_line_default_is_auto() {
+        assert_eq!(GridLine::default(), GridLine::Auto);
+    }
+
+    #[test]
+    fn grid_areas_from_lines_parses_simple_grid() {
+        let g = GridAreas::from_lines(&["a a", "b ."]);
+        let mut by_name: std::collections::BTreeMap<&str, &NamedArea> =
+            g.areas.iter().map(|a| (a.name.as_str(), a)).collect();
+        let a = by_name.remove("a").expect("area `a`");
+        assert_eq!((a.row_start, a.row_end), (0, 1));
+        assert_eq!((a.column_start, a.column_end), (0, 2));
+        let b = by_name.remove("b").expect("area `b`");
+        assert_eq!((b.row_start, b.row_end), (1, 2));
+        assert_eq!((b.column_start, b.column_end), (0, 1));
+        assert!(by_name.is_empty(), "no extra areas");
+    }
+
+    #[test]
+    fn grid_auto_flow_default_is_row() {
+        assert_eq!(GridAutoFlow::default(), GridAutoFlow::Row);
+    }
+
+    #[test]
+    fn justify_items_default_is_stretch() {
+        assert_eq!(JustifyItems::default(), JustifyItems::Stretch);
     }
 }
