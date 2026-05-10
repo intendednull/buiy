@@ -526,6 +526,55 @@ pub enum JustifyItems {
     Baseline,
 }
 
+/// CSS `writing-mode`.
+///
+/// `Sideways{Rl,Lr}` are tier-C polish modes that rotate text glyphs but
+/// otherwise behave like `Vertical{Rl,Lr}` for layout. Glyph rotation is
+/// `buiy-text-rendering-design`'s concern; layout treats them as their
+/// non-sideways equivalents and emits one `warn!` per session.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.1.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WritingModeKind {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
+/// CSS `direction`. Maps directly to `taffy::Direction`.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+/// CSS `text-orientation`. Stored on `WritingMode`; consumed by
+/// `buiy-text-rendering-design`, not layout.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextOrientation {
+    #[default]
+    Mixed,
+    Upright,
+    Sideways,
+}
+
+/// CSS `unicode-bidi`. Stored on `WritingMode`; resolution lives in
+/// `buiy-i18n-design`.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnicodeBidi {
+    #[default]
+    Normal,
+    Embed,
+    Isolate,
+    BidiOverride,
+    IsolateOverride,
+    Plaintext,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +713,25 @@ mod tests {
     #[test]
     fn justify_items_default_is_stretch() {
         assert_eq!(JustifyItems::default(), JustifyItems::Stretch);
+    }
+
+    #[test]
+    fn writing_mode_kind_default_is_horizontal_tb() {
+        assert_eq!(WritingModeKind::default(), WritingModeKind::HorizontalTb);
+    }
+
+    #[test]
+    fn direction_default_is_ltr() {
+        assert_eq!(Direction::default(), Direction::Ltr);
+    }
+
+    #[test]
+    fn text_orientation_default_is_mixed() {
+        assert_eq!(TextOrientation::default(), TextOrientation::Mixed);
+    }
+
+    #[test]
+    fn unicode_bidi_default_is_normal() {
+        assert_eq!(UnicodeBidi::default(), UnicodeBidi::Normal);
     }
 }
