@@ -60,6 +60,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Buiy layout foundation](plans/2026-05-08-buiy-layout-foundation.md) — Phase 1: 8-step pipeline skeleton, decomposed components for the Phase-0 surface, hybrid `Style` builder, `Button` migration. `[landed]`
 - [Buiy layout overflow and scrolling](plans/2026-05-08-buiy-layout-overflow-and-scrolling.md) — Phase 2: `Overflow` / `Scroll` / `ScrollOffset` / `ScrollSnapItem` components, Taffy overflow mapping, scroll-position-doesn't-invalidate invariant. `[landed]`
 - [Buiy layout grid](plans/2026-05-09-buiy-layout-grid.md) — Phase 3: `GridParams` + `GridItem`, `TrackSize` / `GridLine` / `GridAreas` value types, `Display::Grid` → Taffy, Subgrid + Masonry warn-once stubs. `[landed]`
+- [Buiy layout writing modes](plans/2026-05-10-buiy-layout-writing-modes.md) — Phase 4: `WritingMode` + `WritingModeResolved`, inheritance pass, `LogicalBoxModel` / `LogicalInset` builders, sideways-* warn-once stubs. `[active]`
 
 ### Docs infrastructure
 
