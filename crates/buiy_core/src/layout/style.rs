@@ -12,11 +12,14 @@
 //! `FlexItem` is decomposed-only (per spec § 2.4); it is not included in
 //! `Style`.
 
-use super::components::{BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll};
+use super::components::{
+    BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
+};
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
-    GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
-    PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, Sizing, SnapType, TrackSize,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
+    FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length, LogicalEdges,
+    OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, Sizing, SnapType,
+    TrackSize, WritingModeKind,
 };
 use bevy::ecs::bundle::Bundle;
 
@@ -370,15 +373,149 @@ impl Style {
     }
 }
 
+/// Builder for the box-model surface using logical (writing-mode-aware)
+/// dimensions. **Not stored** — call `.to_box_model(&WritingMode)` to
+/// produce a `BoxModel` and pass that into your `Style`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/box-model.md § 4.
+// Author-side helper consumed via re-export. Lib-level `dead_code` fires
+// until Phase 4 Tasks 6-7 wire `Style` setters and the public re-export.
+#[allow(dead_code)]
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct LogicalBoxModel {
+    pub inline_size: Sizing,
+    pub block_size: Sizing,
+    pub min_inline_size: Sizing,
+    pub min_block_size: Sizing,
+    pub max_inline_size: Sizing,
+    pub max_block_size: Sizing,
+    pub padding: LogicalEdges,
+    pub margin: LogicalEdges,
+    pub border: LogicalEdges,
+    pub box_sizing: BoxSizing,
+    pub aspect_ratio: Option<AspectRatio>,
+}
+
+impl LogicalBoxModel {
+    /// Translate to a physical `BoxModel` honoring the given writing-mode.
+    /// Vertical modes swap inline ↔ block onto width ↔ height; physical
+    /// edges follow the LogicalEdges 6-row table.
+    #[allow(dead_code)]
+    pub fn to_box_model(&self, wm: &WritingMode) -> BoxModel {
+        let is_vertical = matches!(
+            wm.mode,
+            WritingModeKind::VerticalRl
+                | WritingModeKind::VerticalLr
+                | WritingModeKind::SidewaysRl
+                | WritingModeKind::SidewaysLr
+        );
+        let (width, height) = if is_vertical {
+            (self.block_size, self.inline_size)
+        } else {
+            (self.inline_size, self.block_size)
+        };
+        let (min_width, min_height) = if is_vertical {
+            (self.min_block_size, self.min_inline_size)
+        } else {
+            (self.min_inline_size, self.min_block_size)
+        };
+        let (max_width, max_height) = if is_vertical {
+            (self.max_block_size, self.max_inline_size)
+        } else {
+            (self.max_inline_size, self.max_block_size)
+        };
+        BoxModel {
+            width,
+            height,
+            min_width,
+            min_height,
+            max_width,
+            max_height,
+            padding: self.padding.to_edges(wm.mode, wm.direction),
+            margin: self.margin.to_edges(wm.mode, wm.direction),
+            border: self.border.to_edges(wm.mode, wm.direction),
+            box_sizing: self.box_sizing,
+            aspect_ratio: self.aspect_ratio,
+        }
+    }
+}
+
+/// Builder for the inset surface using logical (writing-mode-aware)
+/// edges. **Not stored** — call `.to_inset(&WritingMode)` to produce an
+/// `Inset`.
+// Author-side helper consumed via re-export. Lib-level `dead_code` fires
+// until Phase 4 Tasks 6-7 wire `Style` setters and the public re-export.
+#[allow(dead_code)]
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct LogicalInset {
+    pub inline_start: Sizing,
+    pub inline_end: Sizing,
+    pub block_start: Sizing,
+    pub block_end: Sizing,
+}
+
+impl LogicalInset {
+    #[allow(dead_code)]
+    pub fn to_inset(self, wm: &WritingMode) -> Inset {
+        // Inset uses Sizing (not Length), so we duplicate the 6-row
+        // mapping rather than reusing LogicalEdges::to_edges.
+        use WritingModeKind::*;
+        let mode = match wm.mode {
+            SidewaysRl => VerticalRl,
+            SidewaysLr => VerticalLr,
+            other => other,
+        };
+        match (mode, wm.direction) {
+            (HorizontalTb, Direction::Ltr) => Inset {
+                left: self.inline_start,
+                right: self.inline_end,
+                top: self.block_start,
+                bottom: self.block_end,
+            },
+            (HorizontalTb, Direction::Rtl) => Inset {
+                right: self.inline_start,
+                left: self.inline_end,
+                top: self.block_start,
+                bottom: self.block_end,
+            },
+            (VerticalRl, Direction::Ltr) => Inset {
+                top: self.inline_start,
+                bottom: self.inline_end,
+                right: self.block_start,
+                left: self.block_end,
+            },
+            (VerticalRl, Direction::Rtl) => Inset {
+                bottom: self.inline_start,
+                top: self.inline_end,
+                right: self.block_start,
+                left: self.block_end,
+            },
+            (VerticalLr, Direction::Ltr) => Inset {
+                top: self.inline_start,
+                bottom: self.inline_end,
+                left: self.block_start,
+                right: self.block_end,
+            },
+            (VerticalLr, Direction::Rtl) => Inset {
+                bottom: self.inline_start,
+                top: self.inline_end,
+                left: self.block_start,
+                right: self.block_end,
+            },
+            (SidewaysRl, _) | (SidewaysLr, _) => unreachable!("sideways normalized"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::layout::components::{
-        BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll,
+        BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
     };
     use crate::layout::types::{
         AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, GridAutoFlow, JustifyContent, Length,
-        OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize,
+        OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize, WritingModeKind,
     };
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
@@ -545,5 +682,48 @@ mod tests {
             .copied()
             .expect("Display inserted");
         assert_eq!(d, Display::Grid);
+    }
+
+    #[test]
+    fn logical_box_model_inline_size_under_horizontal_tb_is_width() {
+        let logical = LogicalBoxModel {
+            inline_size: Sizing::Length(Length::Px(100.0)),
+            block_size: Sizing::Length(Length::Px(50.0)),
+            ..Default::default()
+        };
+        let wm = WritingMode::default(); // horizontal-tb + ltr
+        let bm = logical.to_box_model(&wm);
+        assert_eq!(bm.width, Sizing::Length(Length::Px(100.0)));
+        assert_eq!(bm.height, Sizing::Length(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn logical_box_model_inline_size_under_vertical_rl_is_height() {
+        let logical = LogicalBoxModel {
+            inline_size: Sizing::Length(Length::Px(100.0)),
+            block_size: Sizing::Length(Length::Px(50.0)),
+            ..Default::default()
+        };
+        let wm = WritingMode {
+            mode: WritingModeKind::VerticalRl,
+            ..Default::default()
+        };
+        let bm = logical.to_box_model(&wm);
+        assert_eq!(bm.height, Sizing::Length(Length::Px(100.0)));
+        assert_eq!(bm.width, Sizing::Length(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn logical_inset_inline_start_under_vertical_rl_is_top() {
+        let logical = LogicalInset {
+            inline_start: Sizing::Length(Length::Px(8.0)),
+            ..Default::default()
+        };
+        let wm = WritingMode {
+            mode: WritingModeKind::VerticalRl,
+            ..Default::default()
+        };
+        let inset = logical.to_inset(&wm);
+        assert_eq!(inset.top, Sizing::Length(Length::Px(8.0)));
     }
 }
