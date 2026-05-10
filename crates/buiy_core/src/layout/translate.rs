@@ -12,11 +12,12 @@ use bevy::prelude::warn;
 
 use super::components::{
     BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
+    WritingModeResolved,
 };
 use super::types::{
-    AlignContent, AlignItems, BoxSizing, Edges, FlexAxis, FlexWrap, GridAreas, GridAutoFlow,
-    GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode, PositionKind, RepeatCount,
-    ScrollbarWidth, Sizing, TrackSize,
+    AlignContent, AlignItems, BoxSizing, Direction, Edges, FlexAxis, FlexWrap, GridAreas,
+    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
+    PositionKind, RepeatCount, ScrollbarWidth, Sizing, TrackSize, WritingModeKind,
 };
 // Bring helper free functions and grid-specific types from `taffy::prelude`
 // into scope. The compiler infers each helper's return type from the
@@ -60,6 +61,13 @@ pub struct StyleView<'a> {
     /// no native named-area placement — only named lines. `sync_styles`
     /// precomputes a per-entity map and feeds the lookup result here.
     pub parent_areas: Option<&'a GridAreas>,
+    /// Resolved writing-mode (mode + direction + text-orientation +
+    /// unicode-bidi). Populated by `inherit_writing_mode` (pipeline step
+    /// `BuiyLayoutStep::WritingModeInherit`) and read here to drive
+    /// `taffy::Style.direction`. Sideways-* modes hit a warn-once gate
+    /// because their glyph rotation lives in `buiy-text-rendering-design`,
+    /// not layout — layout treats them as their non-sideways equivalents.
+    pub writing_mode_resolved: &'a WritingModeResolved,
 }
 
 pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
@@ -99,6 +107,28 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
         scrollbar_width: map_scrollbar_width(view.overflow.scrollbar_width),
         ..Default::default()
     };
+
+    // Writing-mode → Taffy `direction`. `WritingModeResolved.direction`
+    // is populated by `inherit_writing_mode` (pipeline step
+    // `BuiyLayoutStep::WritingModeInherit`); RTL flips Taffy's main-axis
+    // start/end. The `mode` field (HorizontalTb / VerticalRl / VerticalLr
+    // / SidewaysRl / SidewaysLr) is NOT wired to Taffy in Phase 4 — Taffy
+    // 0.10 has no writing-mode field; vertical layout is achieved on the
+    // glyph-rendering side. The sideways-* fallback below names that
+    // owner explicitly.
+    s.direction = match view.writing_mode_resolved.direction {
+        Direction::Ltr => taffy::Direction::Ltr,
+        Direction::Rtl => taffy::Direction::Rtl,
+    };
+
+    // Sideways-* warn-once: layout treats them as their non-sideways
+    // vertical equivalents; the glyph-rotation pass owns rotation.
+    if matches!(
+        view.writing_mode_resolved.mode,
+        WritingModeKind::SidewaysRl | WritingModeKind::SidewaysLr
+    ) {
+        warn_once_sideways_layout_fallback();
+    }
 
     // `Scroll` is included in `StyleView` so `Changed<Scroll>` flows
     // through `sync_styles`'s trigger filter (architecture.md § 1.2),
@@ -689,14 +719,27 @@ fn warn_once_masonry() {
     }
 }
 
+static WARNED_SIDEWAYS_FALLBACK: AtomicBool = AtomicBool::new(false);
+
+fn warn_once_sideways_layout_fallback() {
+    if !WARNED_SIDEWAYS_FALLBACK.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: WritingModeKind::Sideways{{Rl,Lr}} glyph rotation lives in \
+             buiy-text-rendering-design; layout treats them as VerticalRl / \
+             VerticalLr (warned once)"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::layout::components::{
         BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
+        WritingModeResolved,
     };
     use crate::layout::types::{
-        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridLine,
+        AlignItems, BoxSizing, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridLine,
         JustifyContent, Length, NamedArea, OverflowMode, PositionKind, RepeatCount, ScrollbarWidth,
         Sizing, TrackSize,
     };
@@ -711,6 +754,7 @@ mod tests {
         let overflow = Overflow::default();
         let scroll = Scroll::default();
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -722,6 +766,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: None,
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         // Default Display::Block + ContentBox + everything Auto produces taffy default Display::Block.
         assert_eq!(taffy.display, taffy::Display::Block);
@@ -754,6 +799,7 @@ mod tests {
         let overflow = Overflow::default();
         let scroll = Scroll::default();
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -765,6 +811,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: None,
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         assert_eq!(taffy.display, taffy::Display::Flex);
         assert_eq!(taffy.flex_direction, taffy::FlexDirection::Row);
@@ -791,6 +838,7 @@ mod tests {
         let overflow = Overflow::default();
         let scroll = Scroll::default();
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -802,6 +850,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: None,
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(10.0));
@@ -824,6 +873,7 @@ mod tests {
         let overflow = Overflow::default();
         let scroll = Scroll::default();
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -835,6 +885,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: None,
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         assert_eq!(taffy.flex_grow, 2.0);
         assert_eq!(taffy.flex_shrink, 0.5);
@@ -884,6 +935,7 @@ mod tests {
             ),
         ];
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         for (x_in, y_in, x_expected, y_expected) in cases.iter().copied() {
             let overflow = Overflow {
                 x: x_in,
@@ -902,6 +954,7 @@ mod tests {
                 grid_params: &grid_params,
                 grid_item: None,
                 parent_areas: None,
+                writing_mode_resolved: &writing_mode_resolved,
             });
             assert_eq!(
                 taffy.overflow.x, x_expected,
@@ -922,6 +975,7 @@ mod tests {
         let flex = FlexParams::default();
         let scroll = Scroll::default();
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         for (input, expected) in [
             (ScrollbarWidth::Auto, 12.0_f32),
             (ScrollbarWidth::Thin, 8.0),
@@ -942,6 +996,7 @@ mod tests {
                 grid_params: &grid_params,
                 grid_item: None,
                 parent_areas: None,
+                writing_mode_resolved: &writing_mode_resolved,
             });
             assert_eq!(taffy.scrollbar_width, expected, "{input:?}");
         }
@@ -964,6 +1019,7 @@ mod tests {
         let overflow = Overflow::default();
         let scroll = Scroll::default();
         let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
         for display in [Display::Grid, Display::InlineGrid] {
             let taffy = style_to_taffy(StyleView {
                 display: &display,
@@ -976,6 +1032,7 @@ mod tests {
                 grid_params: &grid_params,
                 grid_item: None,
                 parent_areas: None,
+                writing_mode_resolved: &writing_mode_resolved,
             });
             assert_eq!(taffy.display, taffy::Display::Grid, "{display:?}");
         }
@@ -996,6 +1053,7 @@ mod tests {
             ],
             ..Default::default()
         };
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -1007,6 +1065,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: None,
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         assert_eq!(taffy.grid_template_columns.len(), 2);
         assert!(matches!(
@@ -1030,6 +1089,7 @@ mod tests {
             )],
             ..Default::default()
         };
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -1041,6 +1101,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: None,
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         assert_eq!(taffy.grid_template_columns.len(), 1);
         assert!(matches!(
@@ -1063,6 +1124,7 @@ mod tests {
             row: GridLine::Auto,
             ..Default::default()
         };
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -1074,6 +1136,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: Some(&item),
             parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
         });
         // Line(1) and Line(4) — the values are GridPlacement variants.
         // Pin the discriminants by construction.
@@ -1110,6 +1173,7 @@ mod tests {
                 column_end: 2,
             }],
         };
+        let writing_mode_resolved = WritingModeResolved::default();
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
@@ -1121,6 +1185,7 @@ mod tests {
             grid_params: &grid_params,
             grid_item: Some(&item),
             parent_areas: Some(&parent_areas),
+            writing_mode_resolved: &writing_mode_resolved,
         });
         // Column resolves to Line(1)..Line(3) (1-indexed, end is exclusive
         // in CSS spec terms — column_start 0 → Line(1), column_end 2 →
@@ -1133,5 +1198,60 @@ mod tests {
             taffy.grid_column.end,
             taffy::GridPlacement::Line(_)
         ));
+    }
+
+    #[test]
+    fn translate_direction_rtl_to_taffy_rtl() {
+        let display = Display::default();
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let wmr = WritingModeResolved {
+            direction: Direction::Rtl,
+            ..Default::default()
+        };
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+            writing_mode_resolved: &wmr,
+        });
+        assert!(matches!(taffy.direction, taffy::Direction::Rtl));
+    }
+
+    #[test]
+    fn translate_direction_ltr_to_taffy_ltr() {
+        let display = Display::default();
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let wmr = WritingModeResolved::default();
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+            writing_mode_resolved: &wmr,
+        });
+        assert!(matches!(taffy.direction, taffy::Direction::Ltr));
     }
 }

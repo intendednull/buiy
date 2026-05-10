@@ -64,13 +64,19 @@ pub(super) fn gc_removed_nodes(
 /// `Changed<T>` triggers on insertion as well as modification, so newly
 /// spawned entities are picked up on their first frame.
 ///
-/// Phase 3 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
+/// Phase 4 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
 /// `Changed<Position>`, `Changed<FlexParams>`, `Changed<FlexItem>`,
 /// `Changed<Overflow>`, `Changed<Scroll>`, `Changed<GridParams>`,
-/// `Changed<GridItem>`, `Changed<Children>`, `Changed<ChildOf>`.
-/// Phases 4–9 widen it as new components land. `Changed<ChildOf>` is
-/// included so that re-parenting a grid item under a different grid
-/// container picks up the new container's `template_areas`.
+/// `Changed<GridItem>`, `Changed<WritingMode>`, `Changed<WritingModeResolved>`,
+/// `Changed<Children>`, `Changed<ChildOf>`. Phases 5–9 widen it as new
+/// components land. `Changed<ChildOf>` is included so that re-parenting a
+/// grid item under a different grid container picks up the new container's
+/// `template_areas`. `Changed<WritingMode>` triggers when an author edits
+/// the entity's own writing mode; `Changed<WritingModeResolved>` triggers
+/// after `inherit_writing_mode` (pre-step-1) re-derives the resolved cache
+/// for an entity whose effective writing mode actually changed (the
+/// inherit system is careful to skip writes when the value is unchanged,
+/// preserving the O(0) steady-state contract).
 ///
 /// **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are
 /// intentionally excluded.** `ScrollOffset` is runtime state (mutated
@@ -92,6 +98,7 @@ pub(super) fn sync_styles(
             &Scroll,
             &GridParams,
             Option<&GridItem>,
+            &WritingModeResolved,
             Option<&Children>,
             Option<&ChildOf>,
         ),
@@ -107,6 +114,8 @@ pub(super) fn sync_styles(
                 Changed<Scroll>,
                 Changed<GridParams>,
                 Changed<GridItem>,
+                Changed<WritingMode>,
+                Changed<WritingModeResolved>,
                 Changed<Children>,
                 Changed<ChildOf>,
             )>,
@@ -125,7 +134,7 @@ pub(super) fn sync_styles(
     // (filtered) query under Bevy 0.18.
     let parent_areas_for: HashMap<Entity, GridAreas> = nodes
         .iter()
-        .filter_map(|(entity, _, _, _, _, _, _, _, _, _, _, parent)| {
+        .filter_map(|(entity, _, _, _, _, _, _, _, _, _, _, _, parent)| {
             let p = parent?;
             let grid = parent_grid_lookup.get(p.parent()).ok()?;
             grid.template_areas.clone().map(|a| (entity, a))
@@ -147,6 +156,7 @@ pub(super) fn sync_styles(
         scroll,
         grid_params,
         grid_item,
+        writing_mode_resolved,
         _children,
         _parent,
     ) in nodes.iter()
@@ -162,6 +172,7 @@ pub(super) fn sync_styles(
             grid_params,
             grid_item,
             parent_areas: parent_areas_for.get(&entity),
+            writing_mode_resolved,
         };
         let taffy_style = style_to_taffy(view);
         match tree.by_entity.get(&entity).copied() {
@@ -197,6 +208,7 @@ pub(super) fn sync_styles(
         _scroll,
         _grid_params,
         _grid_item,
+        _writing_mode_resolved,
         children,
         _parent,
     ) in nodes.iter()
