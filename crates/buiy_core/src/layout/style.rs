@@ -19,7 +19,7 @@ use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
     FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length, LogicalEdges,
     OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, Sizing, SnapType,
-    TrackSize, WritingModeKind,
+    TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
 };
 use bevy::ecs::bundle::Bundle;
 
@@ -50,6 +50,7 @@ pub struct Style {
     pub overflow: Overflow,
     pub scroll: Scroll,
     pub grid_params: GridParams,
+    pub writing_mode: WritingMode,
 }
 
 impl Style {
@@ -371,6 +372,43 @@ impl Style {
         };
         self
     }
+
+    // ---- WritingMode ----
+
+    pub fn writing_mode(mut self, wm: WritingMode) -> Self {
+        self.writing_mode = wm;
+        self
+    }
+
+    pub fn writing_mode_kind(mut self, kind: WritingModeKind) -> Self {
+        self.writing_mode.mode = kind;
+        self
+    }
+
+    pub fn direction(mut self, d: Direction) -> Self {
+        self.writing_mode.direction = d;
+        self
+    }
+
+    pub fn ltr(mut self) -> Self {
+        self.writing_mode.direction = Direction::Ltr;
+        self
+    }
+
+    pub fn rtl(mut self) -> Self {
+        self.writing_mode.direction = Direction::Rtl;
+        self
+    }
+
+    pub fn text_orientation(mut self, t: TextOrientation) -> Self {
+        self.writing_mode.text_orientation = t;
+        self
+    }
+
+    pub fn unicode_bidi(mut self, u: UnicodeBidi) -> Self {
+        self.writing_mode.unicode_bidi = u;
+        self
+    }
 }
 
 /// Builder for the box-model surface using logical (writing-mode-aware)
@@ -514,8 +552,8 @@ mod tests {
         BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
     };
     use crate::layout::types::{
-        AlignItems, BoxSizing, Edges, FlexAxis, FlexGap, GridAutoFlow, JustifyContent, Length,
-        OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize, WritingModeKind,
+        AlignItems, BoxSizing, Direction, Edges, FlexAxis, FlexGap, GridAutoFlow, JustifyContent,
+        Length, OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize, WritingModeKind,
     };
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
@@ -530,6 +568,7 @@ mod tests {
         Overflow,
         Scroll,
         GridParams,
+        WritingMode,
     ) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -559,6 +598,9 @@ mod tests {
             .get::<GridParams>(entity)
             .expect("GridParams inserted")
             .clone();
+        let writing_mode = *world
+            .get::<WritingMode>(entity)
+            .expect("WritingMode inserted");
         (
             display,
             box_model,
@@ -567,6 +609,7 @@ mod tests {
             overflow,
             scroll,
             grid_params,
+            writing_mode,
         )
     }
 
@@ -648,6 +691,7 @@ mod tests {
         assert!(world.get::<Overflow>(entity).is_some());
         assert!(world.get::<Scroll>(entity).is_some());
         assert!(world.get::<GridParams>(entity).is_some());
+        assert!(world.get::<WritingMode>(entity).is_some());
     }
 
     #[test]
@@ -725,5 +769,36 @@ mod tests {
         };
         let inset = logical.to_inset(&wm);
         assert_eq!(inset.top, Sizing::Length(Length::Px(8.0)));
+    }
+
+    #[test]
+    fn writing_mode_setter_overrides() {
+        let s = Style::default().writing_mode(WritingMode {
+            mode: WritingModeKind::VerticalRl,
+            ..Default::default()
+        });
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(s).id();
+        let wm = app
+            .world()
+            .get::<WritingMode>(entity)
+            .copied()
+            .expect("WritingMode inserted");
+        assert_eq!(wm.mode, WritingModeKind::VerticalRl);
+    }
+
+    #[test]
+    fn rtl_setter_flips_direction() {
+        let s = Style::default().rtl();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(s).id();
+        let wm = app
+            .world()
+            .get::<WritingMode>(entity)
+            .copied()
+            .expect("WritingMode inserted");
+        assert_eq!(wm.direction, Direction::Rtl);
     }
 }
