@@ -109,18 +109,16 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
 
 fn map_display(d: &Display) -> taffy::Display {
     use Display::*;
-    // Phase 1 maps Grid/InlineGrid to Block. Translating them to
-    // taffy::Display::Grid without GridParams/GridItem would silently
-    // create templateless grid containers and tempt premature reliance
-    // on Grid before Phase 3 ships the components. Phase 3 replaces
-    // this row with `Grid | InlineGrid => taffy::Display::Grid`.
+    // Phase 3 routes Grid / InlineGrid to taffy::Display::Grid. Taffy
+    // 0.10 has no inline-grid variant, so InlineGrid translates to the
+    // same thing (Phase 4 writing-modes may revisit if line-box context
+    // distinction matters; layout-side it doesn't).
     match d {
         Block | Inline | InlineBlock | FlowRoot | Contents | ListItem | Ruby | Table
         | TableRowGroup | TableHeaderGroup | TableFooterGroup | TableRow | TableCell
-        | TableCaption | TableColumnGroup | TableColumn | Grid | InlineGrid => {
-            taffy::Display::Block
-        }
+        | TableCaption | TableColumnGroup | TableColumn => taffy::Display::Block,
         Flex(_) | InlineFlex(_) => taffy::Display::Flex,
+        Grid | InlineGrid => taffy::Display::Grid,
         None => taffy::Display::None,
     }
 }
@@ -551,5 +549,14 @@ mod tests {
             });
             assert_eq!(taffy.scrollbar_width, expected, "{input:?}");
         }
+    }
+
+    #[test]
+    fn map_display_grid_routes_to_taffy_grid() {
+        // Direct unit test of the helper. The full StyleView path is
+        // tested in `translate_display_grid_to_taffy_grid` which lands
+        // in Task 5 once the view is widened.
+        assert_eq!(map_display(&Display::Grid), taffy::Display::Grid);
+        assert_eq!(map_display(&Display::InlineGrid), taffy::Display::Grid);
     }
 }
