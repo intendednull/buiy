@@ -125,6 +125,67 @@ tagged release.
   time.
 - `GridLine::Area` uses `String` for area names. Spec used `SmolStr`;
   Phase 3 uses `String` to avoid a new direct supply-chain dep.
+- **Layout writing modes (Phase 4 of the layout migration).**
+  - `WritingMode` component (joins `Style`'s Bundle): `mode`,
+    `direction`, `text_orientation`, `unicode_bidi`. CSS-faithful surface
+    for writing-mode + direction + text-orientation + unicode-bidi.
+  - `WritingModeResolved` private cache component, populated by the new
+    `BuiyLayoutStep::WritingModeInherit` pipeline step. Memoized
+    multi-level ancestor walk; idempotent insert preserves Phase 1's
+    O(0) steady-state contract.
+  - 4 supporting enums: `WritingModeKind` (HorizontalTb / VerticalRl /
+    VerticalLr / SidewaysRl / SidewaysLr), `Direction` (Ltr / Rtl),
+    `TextOrientation` (Mixed / Upright / Sideways), `UnicodeBidi`
+    (Normal / Embed / Isolate / BidiOverride / IsolateOverride / Plaintext).
+  - `LogicalEdges` value type with `to_edges(WritingModeKind, Direction)`.
+  - `LogicalBoxModel` and `LogicalInset` author-ergonomic builder
+    structs (non-component, non-Bundle) with `.to_box_model(&WritingMode)`
+    and `.to_inset(&WritingMode)` methods. Vertical modes swap inline ↔
+    block onto width ↔ height.
+  - 7 fluent setters on `Style`: `.writing_mode(_)`,
+    `.writing_mode_kind(_)`, `.direction(_)`, `.ltr()`, `.rtl()`,
+    `.text_orientation(_)`, `.unicode_bidi(_)`.
+  - `WritingMode` + `WritingModeResolved` + 5 value types registered
+    for reflection in `LayoutPlugin`.
+  - New `BuiyLayoutStep::WritingModeInherit` pipeline step inserted
+    between `RemovedNodesGc` and `SyncStyles`. The 8-step layout chain
+    becomes 9. `tests/layout_pipeline_order.rs` widens to assert all 9.
+  - `Direction::Rtl` flows through `taffy::Style.direction`, mirroring
+    flex children under RTL.
+  - `WritingModeKind::Sideways{Rl,Lr}` emit one `warn!` per session and
+    fall back to their non-sideways vertical equivalent for layout
+    purposes. Glyph rotation is `buiy-text-rendering-design`'s concern.
+
+### Changed (Phase 4)
+- `inherit_writing_mode`'s ancestor walk treats `WritingMode::default()`
+  as "unset" (CSS `initial`-like). Without this, every `Style`-spawned
+  entity's bundled `WritingMode::default()` would short-circuit the
+  walk so descendants of a non-default ancestor would resolve to
+  default instead of inheriting. Trade-off: an author cannot explicitly
+  pin `WritingMode::default()` as an override against a non-default
+  ancestor; the result is observationally identical to inheriting the
+  root default.
+- `sync_styles`'s `Or<>` trigger filter widens with `Changed<WritingMode>`
+  and `Changed<WritingModeResolved>`. **Phase 2 invariant intact:**
+  `Changed<ScrollOffset>` / `Changed<ScrollSnapItem>` remain excluded.
+- Pipeline gains a 9th step (`WritingModeInherit`); the layout chain
+  is now 0 → wmi → 1 → ... → 7 in declared order.
+
+### Deferred (Phase 4)
+- `ContainingBlock` cache — deferred to Phase 6 (anchor positioning)
+  where it has a real consumer.
+- Dynamic writing-mode switches (CSS `Changed<WritingMode>` →
+  re-translation pass) — Phase 4 v1 ships construct-time-only
+  `LogicalBoxModel` / `LogicalInset` translation; runtime flips
+  require re-spawn / re-insert. Re-translation pass is a v1.x feature
+  contingent on resolving spec § 4.1 vs § 4.2 internal inconsistency.
+- Vertical-mode Taffy axis-swap — Taffy 0.10 has no writing-mode
+  awareness. Vertical modes are honored only by the logical builders;
+  Taffy still flows the main axis horizontally. Authors who want
+  top-to-bottom flow under vertical-rl use `Display::Flex(Column)`.
+- Sideways glyph rotation — owned by `buiy-text-rendering-design`.
+- BiDi resolution algorithm for `unicode_bidi` — owned by
+  `buiy-i18n-design`. Phase 4 stores the value only.
 
 ### Removed
 - `buiy_core::components::Style` (the Phase 0 mega-component) and
