@@ -11,9 +11,10 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
-    JustifyContent, OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor,
-    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
+    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, OverflowMode,
+    OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
+    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TrackSize,
 };
 use bevy::prelude::*;
 
@@ -187,6 +188,51 @@ pub struct Scroll {
     pub snap_margin: Edges,
 }
 
+/// Grid container parameters. Active when the entity's `Display` is
+/// `Display::Grid` or `Display::InlineGrid`; otherwise ignored.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.1.
+///
+/// `template_areas` carries explicit rectangles plus an optional CSS-string
+/// constructor (`GridAreas::from_lines`). Named-area resolution for child
+/// `GridLine::Area(name)` happens Buiy-side at `sync_styles` time —
+/// Taffy 0.10 has no native named-area placement, only named lines.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct GridParams {
+    pub template_columns: Vec<TrackSize>,
+    pub template_rows: Vec<TrackSize>,
+    pub template_areas: Option<GridAreas>,
+    pub auto_columns: Vec<TrackSize>,
+    pub auto_rows: Vec<TrackSize>,
+    pub auto_flow: GridAutoFlow,
+    pub justify_items: JustifyItems,
+    pub align_items: AlignItems,
+    pub justify_content: JustifyContent,
+    pub align_content: AlignContent,
+    pub gap: FlexGap,
+}
+
+/// Per-child grid placement and self-alignment.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.2.
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 2.4
+/// (decomposed-only convention).
+///
+/// Decomposed-only — not in `Style`'s Bundle. Following the `FlexItem` /
+/// `ScrollSnapItem` pattern: spawn alongside `Style` rather than nested.
+/// `column.Area(name)` and `row.Area(name)` resolve against the parent's
+/// `GridParams.template_areas`; mismatched names emit one `warn!` and
+/// fall back to `GridLine::Auto`.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct GridItem {
+    pub column: GridLine,
+    pub row: GridLine,
+    pub justify_self: Option<JustifyItems>,
+    pub align_self: Option<AlignItems>,
+}
+
 /// Runtime scroll position of a scroll container. Mutated by the
 /// scroll-input handler in `buiy-input-events-design`. Read by render
 /// (drawing) and picking (hit-testing) at consume time, and by Phase 7
@@ -342,5 +388,30 @@ mod tests {
         let s = ScrollSnapItem::default();
         assert_eq!(s.align, SnapAlign::None);
         assert_eq!(s.stop, SnapStop::Normal);
+    }
+
+    #[test]
+    fn grid_params_default_is_empty_templates_row_flow() {
+        let g = GridParams::default();
+        assert!(g.template_columns.is_empty());
+        assert!(g.template_rows.is_empty());
+        assert!(g.template_areas.is_none());
+        assert!(g.auto_columns.is_empty());
+        assert!(g.auto_rows.is_empty());
+        assert_eq!(g.auto_flow, GridAutoFlow::Row);
+        assert_eq!(g.justify_items, JustifyItems::Stretch);
+        assert_eq!(g.align_items, AlignItems::Stretch);
+        assert_eq!(g.justify_content, JustifyContent::FlexStart);
+        assert_eq!(g.align_content, AlignContent::Stretch);
+        assert_eq!(g.gap, FlexGap::default());
+    }
+
+    #[test]
+    fn grid_item_default_is_auto_lines_no_self() {
+        let g = GridItem::default();
+        assert_eq!(g.column, GridLine::Auto);
+        assert_eq!(g.row, GridLine::Auto);
+        assert_eq!(g.justify_self, None);
+        assert_eq!(g.align_self, None);
     }
 }
