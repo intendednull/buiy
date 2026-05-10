@@ -107,9 +107,10 @@ Every Phase 3 spec requirement maps to a task below. Items marked **deferred** a
 | flex-and-grid.md § 5 — Test surface: `repeat(auto-fill, 100px)` in 350 px | Integration test asserts 3 columns + 50 px slack. | 8 |
 | flex-and-grid.md § 5 — Test surface: Subgrid stub warns | Test in `layout_grid_stubs.rs`. | 6 |
 | flex-and-grid.md § 5 — Test surface: Masonry stub warns | Test in `layout_grid_stubs.rs`. | 6 |
-| flex-and-grid.md § 5 — Test surface: Mixed flex-in-grid | **Deferred.** Phase 1 already covers flex-row + flex-column inside flex containers; the cross-algorithm composition for `Display::Flex` inside a `Display::Grid` cell is exercised implicitly by the named-areas integration test (the area child has its own children laid out in flex). Adding a separate fixture is YAGNI churn. | 8 (implicit) |
+| flex-and-grid.md § 5 — Test surface: Mixed flex-in-grid | **Explicit fixture in Task 8.** A separate fixture (`grid_cell_hosts_flex_row_with_two_children`) nests `Display::Flex(Row)` inside a grid cell with two flex children and asserts each child's resolved x-position relative to the cell. | 8 |
 | flex-and-grid.md § 5 — Test surface: `repeat(auto-fit, ...)` | **Deferred.** Difference from `auto-fill` is collapsing empty tracks; not load-bearing for Phase 3 correctness. The translation table covers both equally; a follow-up plan can add a fixture if needed. | — |
-| Per-child styles via `BuiySet::Layout` (architecture.md § 1.2) | `Changed<GridParams>` / `Changed<GridItem>` added to `sync_styles`'s `Or` trigger filter. | 5 |
+| flex-and-grid.md § 5 — Test surface: Multi-column stub warns | **Deferred to Phase 7** (`*-buiy-layout-sticky-table-multicol.md`) — multi-column is owned by Phase 7, not Phase 3. Phase 3 ships only Grid; the spec test is on Phase 7's plate. | — |
+| Per-child styles via `BuiySet::Layout` (architecture.md § 1.2) | `Changed<GridParams>` / `Changed<GridItem>` added to `sync_styles`'s `Or` trigger filter (Phase 2 already added `Changed<ChildOf>`; Phase 3 widens with the two grid components only). | 5 |
 | Reflection registration for inspectors / BSN (architecture.md § 1.3) | `register_type::<GridParams>()` + `register_type::<GridItem>()` + new value types added to `LayoutPlugin::build`. | 7 |
 
 ---
@@ -125,6 +126,10 @@ These decisions are committed in this plan and need not be re-litigated during i
 5. **Phase 3 does *not* implement `BoxModel.gap`.** Phase 1 deferred BoxModel.gap; Phase 3 keeps it deferred and adds `GridParams.gap` parallel to `FlexParams.gap`. The `Style` builder gets `.grid_gap_px(_)` separate from `.gap_px(_)` (which still sets FlexParams.gap). Unifying gap is a separate plan touching BoxModel — out of Phase 3 scope.
 6. **`GridAreas` shape: explicit-rectangles vs CSS-string.** Spec is loose. CSS uses string-grid-template-areas like `"header header" "main side"`. We ship the explicit-rectangles API: `GridAreas { areas: Vec<NamedArea { name, row_start, row_end, column_start, column_end }> }` plus a `from_lines(&[&str])` parser convenience that converts the string form to the explicit form. Authors get both the API ergonomic and the CSS-faithful syntax; translation just walks the explicit form. The string parser is a stretch goal — if it ships in Phase 3 it lands as a Task 1 step; if removed for scope, the explicit form is sufficient.
 7. **`GridAreas::from_lines` *does* ship in Phase 3.** Decision: include it. Without it, the named-areas integration test (Task 8) is awkward — every author copying CSS would have to translate it manually. The parser is small (~30 lines) and self-contained.
+8. **`Length::Fr` outside grid templates falls back to `0 px`, not `Auto`, in `LengthPercentage` contexts.** The spec text says "Fr outside grid is a `warn!` and falls back to `Auto`". Taffy's `LengthPercentage` type has *no* `Auto` variant — only `Length` and `Percent`. So `length_to_dim` (width / height — has Auto, falls back to Auto) and `length_to_lpa` (margin / inset — has Auto, falls back to Auto) honor the spec, but `length_to_lp` (padding / border / gap) is forced to fall back to `length(0.0)`. This is a **Taffy-imposed deviation** from the spec; the warn-once gate fires and the visible signal is the warning, not the fallback magnitude. Authors using `Length::Fr` outside grid templates have already misused the unit — getting 0 px or Auto in that case is equally "ill-defined".
+9. **`Length`'s addition of `Fr` is a breaking change.** `pub enum Length` is not `#[non_exhaustive]`. Adding `Fr` breaks downstream exhaustive matches. Phase 3 ships the change; the CHANGELOG flags it explicitly under `### Breaking`. Phase 3 does not also `#[non_exhaustive]`-mark `Length` because that is *also* breaking (just via wildcard) and adds zero forward-compat value when the next planned `Length` change is Phase 10's `Em` / `Rem` / `Calc` (a similarly breaking addition). Callers will adapt once and the type stabilizes.
+10. **All Taffy helper imports come via `use taffy::prelude::*`.** The grid wiring in Task 5 calls `auto()`, `length(v)`, `percent(p)`, `fr(v)`, `fit_content(_)`, `min_content()`, `max_content()`, `minmax(min, max)` as free functions whose return type the compiler infers from the call site. These helpers are exposed through `taffy::prelude` (verified against `taffy-0.10.1/src/prelude.rs:11-26`). The `<S>` type parameter on `taffy::Style`, `GridTemplateComponent<S>`, `GridPlacement<S>`, etc. defaults to `String` (`DefaultCheapStr`); Phase 3 does not annotate `S` anywhere — the default is correct. **Do not** use `&'static str` for `S` (it doesn't impl `CheapCloneStr`). **Do not** call inherent or trait constructors per-type (`TrackSizingFunction::auto()` etc.) without first checking which trait is in scope; the prelude bundles them.
+11. **Task 1 must update `translate.rs`'s `length_to_*` helpers in the same commit that adds `Length::Fr`.** Without the cross-file update, `cargo build` fails with E0004 (non-exhaustive patterns) on `length_to_dim` / `length_to_lp` / `length_to_lpa`. Task 1 is therefore a 2-file commit (types.rs + translate.rs) — the same atomic-commit reasoning that applies to Task 5 also applies here.
 
 ---
 
@@ -132,11 +137,14 @@ These decisions are committed in this plan and need not be re-litigated during i
 
 The plan is 9 tasks. Each task is self-contained: passes `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && xvfb-run -a cargo test --workspace` before commit. Two-stage review (spec compliance → code quality) per task per `subagent-driven-development` skill.
 
-### Task 1: Grid value types in `types.rs`
+### Task 1: Grid value types in `types.rs` (atomic with `translate.rs` Fr arms)
 
 **Files:**
 - Modify: `crates/buiy_core/src/layout/types.rs` — append 1 `Length` variant + 6 new types
+- Modify: `crates/buiy_core/src/layout/translate.rs` — add `Length::Fr(_)` arms to `length_to_dim` (→ `auto()`, warn), `length_to_lp` (→ `length(0.0)`, warn — Taffy `LengthPercentage` has no Auto variant), `length_to_lpa` (→ `auto()`, warn). One shared `WARNED_FR_OUTSIDE_GRID: AtomicBool` static gates the warn so a single misused Fr doesn't spam logs once per helper.
 - Test: `crates/buiy_core/src/layout/types.rs` (`#[cfg(test)] mod tests`)
+
+**Atomic commit reasoning:** `Length` is not `#[non_exhaustive]`, and `translate.rs`'s three `match l { Px => ..., Percent => ... }` blocks would fail E0004 the moment `Fr` lands in `Length`. Splitting types.rs and translate.rs into separate commits leaves the lib uncompilable in between.
 
 **Test surface (added at the bottom of the existing tests module):**
 
@@ -469,28 +477,99 @@ cargo test -p buiy_core --lib types::tests 2>&1 | tail -30
 
 Expected: every test in `types::tests` passes (the existing 12 + the 7 new = 19 tests).
 
-- [ ] **Step 11: Run lint + format**
+- [ ] **Step 11: Update `translate.rs` `length_to_*` helpers with `Fr` arms**
 
-```sh
-cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -20
+In `translate.rs`, locate the three helpers and add a `Length::Fr(_)` arm to each. Add a module-private warn gate at the top of the helpers section:
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static WARNED_FR_OUTSIDE_GRID: AtomicBool = AtomicBool::new(false);
+
+fn warn_once_fr_outside_grid() {
+    if !WARNED_FR_OUTSIDE_GRID.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: Length::Fr is only meaningful inside TrackSize::Length \
+             in a grid template; outside grid it falls back to 0 px / Auto \
+             (warned once)"
+        );
+    }
+}
 ```
 
-Expected: clean.
+Update the helpers:
 
-- [ ] **Step 12: Commit**
+```rust
+fn length_to_dim(l: Length) -> taffy::Dimension {
+    match l {
+        Length::Px(v) => taffy::Dimension::length(v),
+        Length::Percent(p) => taffy::Dimension::percent(p / 100.0),
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::Dimension::auto()
+        }
+    }
+}
+
+fn length_to_lp(l: Length) -> taffy::LengthPercentage {
+    match l {
+        Length::Px(v) => taffy::LengthPercentage::length(v),
+        Length::Percent(p) => taffy::LengthPercentage::percent(p / 100.0),
+        // taffy::LengthPercentage has no Auto variant — fall back to 0
+        // (CSS-equivalent for Fr-in-non-grid: undefined, ill-formed).
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::LengthPercentage::length(0.0)
+        }
+    }
+}
+
+fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
+    match l {
+        Length::Px(v) => taffy::LengthPercentageAuto::length(v),
+        Length::Percent(p) => taffy::LengthPercentageAuto::percent(p / 100.0),
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::LengthPercentageAuto::auto()
+        }
+    }
+}
+```
+
+(`warn!` here is the macro re-exported by `bevy::prelude` — `systems.rs` already uses it the same way, and `translate.rs` will pick it up via `use bevy::prelude::*;` if it isn't already there. If translate.rs lacks the import, add `use bevy::prelude::warn;` at the top.)
+
+- [ ] **Step 12: Run lint + format + lib tests**
 
 ```sh
-git add crates/buiy_core/src/layout/types.rs
-git commit -m "feat(buiy_core): add grid value types (TrackSize, GridLine, GridAreas, etc.)
+cargo fmt --all -- --check \
+  && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -10 \
+  && cargo test -p buiy_core --lib 2>&1 | tail -20
+```
 
-Adds Length::Fr, RepeatCount, TrackSize, GridLine, GridAreas + NamedArea,
-GridAutoFlow, and JustifyItems. Subgrid + Masonry land as reserved
-variants (warn-once + fallback in Phase 3 Task 6). Width discipline:
-RepeatCount::Count and GridLine::Start/Span/StartEnd use u16/i16 to match
-Taffy 0.10 directly; GridLine::Area uses String to avoid a smol_str dep.
+Expected: every existing translate test still passes (no `Length::Fr` is constructed by any pre-Phase-3 test, so no warn fires). New types tests pass.
 
-GridAreas::from_lines is the CSS-syntax convenience parser that converts
-[\"a a\", \"b .\"] into NamedArea rectangles."
+- [ ] **Step 13: Commit (atomic: types.rs + translate.rs)**
+
+```sh
+git add crates/buiy_core/src/layout/types.rs crates/buiy_core/src/layout/translate.rs
+git commit -m "feat(buiy_core): add grid value types + wire Length::Fr in translate
+
+Atomic: types.rs adds Length::Fr, RepeatCount, TrackSize, GridLine,
+GridAreas + NamedArea, GridAutoFlow, JustifyItems; translate.rs grows
+a Length::Fr arm in length_to_dim / length_to_lp / length_to_lpa with
+a single shared warn-once gate. Splitting these into two commits leaves
+the lib uncompilable (E0004 on the three exhaustive matches).
+
+Subgrid + Masonry land as reserved TrackSize / GridAutoFlow variants
+(warn-once + fallback wired in Phase 3 Task 6). Width discipline:
+RepeatCount::Count and GridLine::Start/Span/StartEnd use u16/i16 to
+match Taffy 0.10 directly; GridLine::Area uses String to avoid a
+smol_str dep. GridAreas::from_lines is the CSS-syntax convenience
+parser that converts [\"a a\", \"b .\"] into NamedArea rectangles.
+
+Note: Length gains a variant — this is a breaking change for
+exhaustive Length matchers downstream. CHANGELOG flags this under
+### Breaking in Task 9."
 ```
 
 ---
@@ -621,7 +700,7 @@ pub struct GridItem {
 cargo test -p buiy_core --lib components::tests 2>&1 | tail -20
 ```
 
-Expected: existing 9 tests + the 2 new = 11 tests pass.
+Expected: existing 10 tests + the 2 new = 12 tests pass.
 
 - [ ] **Step 7: Run lint + format**
 
@@ -1225,7 +1304,16 @@ Append to `translate::tests` (replace the placeholder `translate_display_grid_to
     }
 ```
 
-Note: the existing `translate_*` tests in `translate::tests` use `StyleView { display, box_model, position, flex_params, flex_item, overflow, scroll }` — they need `grid_params: &GridParams::default(), grid_item: None, parent_areas: None` added to keep compiling. Update each existing test.
+Note: the existing `translate_*` tests in `translate::tests` use `StyleView { display, box_model, position, flex_params, flex_item, overflow, scroll }` — they need `grid_params: &GridParams::default(), grid_item: None, parent_areas: None` added to keep compiling. **The 6 sites are:**
+
+1. `translate_default_components_to_taffy_default`
+2. `translate_flex_row_with_dimensions`
+3. `translate_position_absolute_emits_absolute_with_inset`
+4. `translate_flex_item_basis_grow_shrink`
+5. `translate_overflow_modes_to_taffy` (note: this test loops over a `cases` slice and constructs `StyleView` inside the loop; update the single in-loop literal)
+6. `translate_scrollbar_width_to_taffy_f32` (same in-loop pattern)
+
+Each gets a binding `let grid_params = GridParams::default();` near the existing `let scroll = Scroll::default();` and the three new fields appended to the `StyleView { ... }` literal. Add `use crate::layout::components::{GridParams, GridItem};` at the top of `tests` if missing.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1268,7 +1356,23 @@ pub struct StyleView<'a> {
 
 - [ ] **Step 4: Add grid mapping helpers**
 
-Append to `translate.rs` (after the existing `map_*` helpers):
+First, ensure the `use` block at the top of `translate.rs` brings in the Taffy prelude (so the helper free functions `auto`, `length`, `percent`, `fr`, `fit_content`, `min_content`, `max_content`, `minmax` are in scope). The existing `translate.rs` does `use taffy::{...};` — replace that with the prelude glob plus the few non-prelude items used:
+
+```rust
+// Bring all the helper free fns + commonly-used types into scope.
+// `taffy::prelude` exposes auto / length / percent / fr / fit_content /
+// min_content / max_content / minmax (for grid) as well as the
+// JustifySelf / AlignSelf / GridAutoFlow / GridPlacement /
+// GridTemplateComponent / TrackSizingFunction / Min/MaxTrackSizingFunction
+// types. See ~/.cargo/registry/.../taffy-0.10.1/src/prelude.rs.
+use taffy::prelude::*;
+// Items not in the prelude that we still touch:
+use taffy::{Overflow as TaffyOverflow, Point};
+```
+
+(Adjust the second line to whatever the file currently imports from the bare `taffy::` namespace; the goal is "prelude + whatever else is already used".)
+
+Then append after the existing `map_*` helpers:
 
 ```rust
 fn map_grid_auto_flow(f: GridAutoFlow) -> taffy::GridAutoFlow {
@@ -1293,114 +1397,106 @@ fn map_repeat_count(c: RepeatCount) -> taffy::RepetitionCount {
     }
 }
 
-/// Map a `Length` value into a `taffy::LengthPercentage`. Used inside
-/// grid sizing-function helpers below. `Fr` is invalid here — outside a
-/// `TrackSize::Length(_)` context — and falls back to zero with one
-/// warn per session.
-fn length_to_lp_or_warn_fr(l: Length) -> taffy::LengthPercentage {
-    match l {
-        Length::Px(v) => taffy::LengthPercentage::length(v),
-        Length::Percent(p) => taffy::LengthPercentage::percent(p / 100.0),
-        Length::Fr(_) => {
-            warn_once_fr_outside_grid();
-            taffy::LengthPercentage::length(0.0)
-        }
-    }
-}
-
 /// Convert a `TrackSize` into a single `taffy::TrackSizingFunction`.
 /// Used inside `Repeat`'s tracks list and inside `MinMax`'s arms — both
 /// CSS contexts where a `Repeat` or another `MinMax` is invalid. If
 /// callers pass an invalid nested `Repeat`/`Subgrid`/`MinMax`, we warn
 /// once and return `auto`.
-fn track_to_sizing(t: &TrackSize) -> taffy::TrackSizingFunction {
+///
+/// `auto()`, `length(_)`, `percent(_)`, `fr(_)`, `fit_content(_)`,
+/// `min_content()`, `max_content()`, `minmax(_, _)` come from
+/// `taffy::prelude`; the compiler infers the output type from the
+/// function return / binding annotation.
+fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
     match t {
-        TrackSize::Auto => taffy::TrackSizingFunction::auto(),
-        TrackSize::MinContent => taffy::TrackSizingFunction::min_content(),
-        TrackSize::MaxContent => taffy::TrackSizingFunction::max_content(),
-        TrackSize::FitContent(l) => {
-            taffy::TrackSizingFunction::fit_content(length_to_lp_or_warn_fr(*l))
-        }
-        TrackSize::Length(Length::Fr(v)) => taffy::TrackSizingFunction::fr(*v),
-        TrackSize::Length(Length::Px(v)) => taffy::TrackSizingFunction::length(*v),
-        TrackSize::Length(Length::Percent(p)) => taffy::TrackSizingFunction::percent(p / 100.0),
-        TrackSize::MinMax(min, max) => taffy::minmax(track_to_min(min), track_to_max(max)),
+        TrackSize::Auto => auto(),
+        TrackSize::MinContent => min_content(),
+        TrackSize::MaxContent => max_content(),
+        TrackSize::FitContent(l) => fit_content(length_to_lp(*l)),
+        TrackSize::Length(Length::Fr(v)) => fr(*v),
+        TrackSize::Length(Length::Px(v)) => length(*v),
+        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::MinMax(min, max) => minmax(track_to_min(min), track_to_max(max)),
         TrackSize::Repeat(_, _) => {
             warn_once_invalid_track_nesting();
-            taffy::TrackSizingFunction::auto()
+            auto()
         }
         TrackSize::Subgrid => {
             warn_once_subgrid();
-            taffy::TrackSizingFunction::auto()
+            auto()
         }
     }
 }
 
-fn track_to_min(t: &TrackSize) -> taffy::MinTrackSizingFunction {
+fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
     match t {
-        TrackSize::Auto => taffy::MinTrackSizingFunction::auto(),
-        TrackSize::MinContent => taffy::MinTrackSizingFunction::min_content(),
-        TrackSize::MaxContent => taffy::MinTrackSizingFunction::max_content(),
-        TrackSize::Length(Length::Px(v)) => taffy::MinTrackSizingFunction::length(*v),
-        TrackSize::Length(Length::Percent(p)) => {
-            taffy::MinTrackSizingFunction::percent(p / 100.0)
-        }
+        TrackSize::Auto => auto(),
+        TrackSize::MinContent => min_content(),
+        TrackSize::MaxContent => max_content(),
+        TrackSize::Length(Length::Px(v)) => length(*v),
+        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        // CSS forbids these in MinMax's min slot:
+        // - Fr (fr-in-min is grammar-invalid)
+        // - FitContent (Min has no TaffyFitContent impl in Taffy 0.10)
+        // - MinMax / Repeat / Subgrid (recursion-invalid)
         TrackSize::Length(Length::Fr(_))
         | TrackSize::FitContent(_)
         | TrackSize::MinMax(_, _)
         | TrackSize::Repeat(_, _)
         | TrackSize::Subgrid => {
-            // CSS forbids these in MinMax's min slot. Warn and degrade.
             warn_once_invalid_track_nesting();
-            taffy::MinTrackSizingFunction::auto()
+            auto()
         }
     }
 }
 
-fn track_to_max(t: &TrackSize) -> taffy::MaxTrackSizingFunction {
+fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
     match t {
-        TrackSize::Auto => taffy::MaxTrackSizingFunction::auto(),
-        TrackSize::MinContent => taffy::MaxTrackSizingFunction::min_content(),
-        TrackSize::MaxContent => taffy::MaxTrackSizingFunction::max_content(),
-        TrackSize::FitContent(l) => {
-            taffy::MaxTrackSizingFunction::fit_content(length_to_lp_or_warn_fr(*l))
-        }
-        TrackSize::Length(Length::Fr(v)) => taffy::MaxTrackSizingFunction::fr(*v),
-        TrackSize::Length(Length::Px(v)) => taffy::MaxTrackSizingFunction::length(*v),
-        TrackSize::Length(Length::Percent(p)) => {
-            taffy::MaxTrackSizingFunction::percent(p / 100.0)
-        }
+        TrackSize::Auto => auto(),
+        TrackSize::MinContent => min_content(),
+        TrackSize::MaxContent => max_content(),
+        // MaxTrackSizingFunction has TaffyFitContent impl (Taffy 0.10
+        // grid.rs:700) — fit_content() from prelude resolves to it.
+        TrackSize::FitContent(l) => fit_content(length_to_lp(*l)),
+        TrackSize::Length(Length::Fr(v)) => fr(*v),
+        TrackSize::Length(Length::Px(v)) => length(*v),
+        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
         TrackSize::MinMax(_, _) | TrackSize::Repeat(_, _) | TrackSize::Subgrid => {
             warn_once_invalid_track_nesting();
-            taffy::MaxTrackSizingFunction::auto()
+            auto()
         }
     }
 }
 
 /// Convert a top-level `TrackSize` (in `template_columns` / `template_rows`)
 /// into a `taffy::GridTemplateComponent`. `Repeat` is permitted here.
-fn track_to_template(t: &TrackSize) -> taffy::GridTemplateComponent<&'static str> {
+///
+/// Return type uses the default `<S>` (= `String` via `DefaultCheapStr`),
+/// matching `taffy::Style`'s default. The compiler infers it from the
+/// `Style.grid_template_columns: GridTrackVec<GridTemplateComponent<S>>`
+/// field's `S` when this iterator's output is collected into the field.
+fn track_to_template(t: &TrackSize) -> GridTemplateComponent<String> {
     match t {
         TrackSize::Repeat(count, tracks) => {
-            taffy::GridTemplateComponent::Repeat(taffy::GridTemplateRepetition {
+            GridTemplateComponent::Repeat(taffy::GridTemplateRepetition {
                 count: map_repeat_count(*count),
                 tracks: tracks.iter().map(track_to_sizing).collect(),
+                // line_names is Vec<Vec<S>>; an empty outer Vec means
+                // no named lines are declared on this repeat.
                 line_names: Vec::new(),
             })
         }
-        other => taffy::GridTemplateComponent::Single(track_to_sizing(other)),
+        other => GridTemplateComponent::Single(track_to_sizing(other)),
     }
 }
 
 /// Convert a `GridLine` plus optional parent named-area registry into a
-/// `taffy::Line<GridPlacement>`. `axis` is `0` for the column axis (used
-/// for `NamedArea.column_*`) or `1` for the row axis.
+/// `taffy::Line<GridPlacement>`. `axis` selects column vs row resolution.
 fn grid_line_to_taffy(
     line: &GridLine,
     axis: GridAxis,
     parent_areas: Option<&GridAreas>,
-) -> taffy::Line<taffy::GridPlacement<&'static str>> {
-    use taffy::GridPlacement;
+) -> taffy::Line<GridPlacement<String>> {
     match line {
         GridLine::Auto => taffy::Line {
             start: GridPlacement::Auto,
@@ -1451,27 +1547,16 @@ enum GridAxis {
     Row,
 }
 
-// Warn-once gates. One AtomicBool per gate (Phase 3 Task 6 owns the
-// Subgrid + Masonry gates; the area-not-found and Fr-outside-grid gates
-// are local to this module).
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static WARNED_FR_OUTSIDE_GRID: AtomicBool = AtomicBool::new(false);
+// Warn-once gates for invalid track nesting + unresolved named areas +
+// Subgrid (Masonry's gate lives in Task 6 alongside `map_grid_auto_flow`'s
+// Masonry arm). The Fr-outside-grid gate is shared with Task 1's
+// length_to_* helpers — defined once at the top of the helpers section.
 static WARNED_INVALID_TRACK_NESTING: AtomicBool = AtomicBool::new(false);
 static WARNED_UNRESOLVED_AREA: AtomicBool = AtomicBool::new(false);
 
-fn warn_once_fr_outside_grid() {
-    if !WARNED_FR_OUTSIDE_GRID.swap(true, Ordering::Relaxed) {
-        bevy::log::warn!(
-            "buiy: Length::Fr is only meaningful inside TrackSize::Length \
-             in a grid template; outside grid it falls back to 0 px (warned once)"
-        );
-    }
-}
-
 fn warn_once_invalid_track_nesting() {
     if !WARNED_INVALID_TRACK_NESTING.swap(true, Ordering::Relaxed) {
-        bevy::log::warn!(
+        warn!(
             "buiy: invalid TrackSize nesting (Repeat inside Repeat/MinMax, \
              or non-leaf inside MinMax slot) — falling back to Auto (warned once)"
         );
@@ -1480,7 +1565,7 @@ fn warn_once_invalid_track_nesting() {
 
 fn warn_once_unresolved_area(name: &str) {
     if !WARNED_UNRESOLVED_AREA.swap(true, Ordering::Relaxed) {
-        bevy::log::warn!(
+        warn!(
             "buiy: GridLine::Area({:?}) did not match any name in the parent's \
              template_areas; falling back to Auto (warned once)",
             name
@@ -1488,11 +1573,11 @@ fn warn_once_unresolved_area(name: &str) {
     }
 }
 
-// Subgrid + Masonry warn-gates land in Task 6.
+// Subgrid warn-gate (Masonry warn-gate lands in Task 6).
 fn warn_once_subgrid() {
     static WARNED: AtomicBool = AtomicBool::new(false);
     if !WARNED.swap(true, Ordering::Relaxed) {
-        bevy::log::warn!(
+        warn!(
             "buiy: TrackSize::Subgrid is reserved — Taffy 0.10 has no subgrid \
              support; falling back to Auto (warned once)"
         );
@@ -1500,7 +1585,7 @@ fn warn_once_subgrid() {
 }
 ```
 
-(Note: `bevy::log::warn!` is the canonical log macro in Bevy. If `warn!` is already imported via the `bevy::prelude::*` glob in this module, use that — adjust for the module's existing `use` lines. The existing `systems.rs` uses `warn!(...)` from prelude.)
+(`AtomicBool` and `Ordering` are already imported at the top of `translate.rs` after Task 1; no additional `use` line needed. `warn!` is the Bevy prelude macro.)
 
 - [ ] **Step 5: Wire grid into `style_to_taffy`**
 
@@ -1540,7 +1625,10 @@ Inside `style_to_taffy`, after the existing `let mut s = taffy::Style { ... };` 
             .areas
             .iter()
             .map(|a| taffy::GridTemplateArea {
-                name: a.name.as_str().into(),
+                // S = String (Taffy's DefaultCheapStr); clone the owned
+                // String. Do not `.as_str().into()` — that requires a
+                // 'static borrow that the runtime String doesn't have.
+                name: a.name.clone(),
                 row_start: a.row_start + 1,
                 row_end: a.row_end + 1,
                 column_start: a.column_start + 1,
@@ -2066,6 +2154,7 @@ facade alongside the Phase 2 surface."
 - `grid_template_1fr_2fr_1fr_in_400px_row_lays_out_100_200_100` — fixture: container `Display::Grid`, `width = 400 px`, `template_columns = vec![TrackSize::Length(Length::Fr(1.0)), TrackSize::Length(Length::Fr(2.0)), TrackSize::Length(Length::Fr(1.0))]`, with three children. Assert child positions / sizes.
 - `grid_named_areas_resolve_child_to_correct_cell` — fixture: container with `template_areas = GridAreas::from_lines(&["a a", "b ."])` and `template_columns = vec![Fr(1), Fr(1)]`, `template_rows = vec![Px(50), Px(50)]`, child with `GridItem.column = GridLine::Area("a".into())`. Assert child resolves to the `a` rectangle.
 - `grid_repeat_auto_fill_in_350px_produces_three_columns` — fixture: `template_columns = vec![TrackSize::Repeat(RepeatCount::AutoFill, vec![TrackSize::Length(Length::Px(100.0))])]`, container width 350, 3 children. Assert exactly 3 columns formed, totaling 300 px (50 px slack).
+- `grid_cell_hosts_flex_row_with_two_children` — fixture: a `Display::Grid` parent with one cell that contains a `Display::Flex(Row)` child (a "row inside a cell"); that flex child has two flex children of its own. Assert the inner flex children's resolved x positions reflect flex distribution within the cell. Pins spec § 5 "Mixed flex-in-grid" composition.
 
 These tests use the integration-test pattern from Phase 2's `layout_overflow.rs`: spawn entities through `LayoutPlugin`, run one `app.update()` cycle, then read `ResolvedLayout` per child. ResolvedLayout doesn't impl PartialEq (Phase 2 noted this) — assert per-field via `Vec2` (which is Copy + PartialEq).
 
@@ -2272,6 +2361,60 @@ fn grid_repeat_auto_fill_in_350px_produces_three_columns() {
         layouts[2].0.x
     );
 }
+
+#[test]
+fn grid_cell_hosts_flex_row_with_two_children() {
+    // Mixed flex-in-grid: a grid parent with one cell whose child is a
+    // flex-row container that has two flex children of its own. Pins
+    // spec § 5 "Mixed flex-in-grid" composition.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins).add_plugins(LayoutPlugin);
+
+    let parent_style = Style::default()
+        .grid()
+        .width_px(200.0)
+        .height_px(100.0)
+        .grid_template_columns(vec![TrackSize::Length(Length::Fr(1.0))])
+        .grid_template_rows(vec![TrackSize::Length(Length::Px(100.0))]);
+
+    let parent = app.world_mut().spawn((parent_style, Node)).id();
+
+    // Inner: flex-row container (auto-placed into the only grid cell).
+    let flex_inner = app
+        .world_mut()
+        .spawn((Style::default().flex_row().width_px(200.0).height_px(100.0), Node))
+        .id();
+    // Two flex children at width 50px each.
+    let f1 = app
+        .world_mut()
+        .spawn((Style::default().width_px(50.0).height_px(100.0), Node))
+        .id();
+    let f2 = app
+        .world_mut()
+        .spawn((Style::default().width_px(50.0).height_px(100.0), Node))
+        .id();
+    app.world_mut().entity_mut(flex_inner).add_children(&[f1, f2]);
+    app.world_mut().entity_mut(parent).add_children(&[flex_inner]);
+
+    app.update();
+
+    let r1 = app.world().get::<ResolvedLayout>(f1).expect("f1 layout");
+    let r2 = app.world().get::<ResolvedLayout>(f2).expect("f2 layout");
+
+    // Within the flex-row's local origin, child 1 starts at x=0 and
+    // child 2 at x=50. Their global x is identical because the grid
+    // cell hosts the flex-row at x=0.
+    assert!(
+        (r1.position.x - 0.0).abs() < 0.5,
+        "flex child 1 x = {}",
+        r1.position.x
+    );
+    assert!(
+        (r2.position.x - 50.0).abs() < 0.5,
+        "flex child 2 x = {}",
+        r2.position.x
+    );
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they pass**
@@ -2280,7 +2423,7 @@ fn grid_repeat_auto_fill_in_350px_produces_three_columns() {
 xvfb-run -a cargo test -p buiy_core --test layout_grid 2>&1 | tail -30
 ```
 
-Expected: 3 tests pass. If any fails, the failure is in the wiring from Tasks 4/5/6 — root-cause and fix in those tasks rather than working around in the test (per CLAUDE.md "root-cause every bug").
+Expected: 4 tests pass. If any fails, the failure is in the wiring from Tasks 4/5/6 — root-cause and fix in those tasks rather than working around in the test (per CLAUDE.md "root-cause every bug").
 
 - [ ] **Step 3: Run the full workspace test**
 
@@ -2355,22 +2498,34 @@ In `CHANGELOG.md`, under the existing `[Unreleased]` heading, add (creating sect
   - `GridParams` + `GridItem` registered for reflection in
     `LayoutPlugin`.
 
+### Breaking
+
+- `Length` gains an `Fr(f32)` variant. Downstream code that pattern-matches
+  `Length` exhaustively must add an `Fr` arm. The `Fr` variant is only
+  meaningful inside `TrackSize::Length(Length::Fr(_))` in a grid template;
+  outside grid contexts it warns once and falls back to `0 px` (in
+  `LengthPercentage` contexts — Taffy's type has no Auto) or `Auto`
+  (in `Dimension` / `LengthPercentageAuto` contexts). `Length` is *not*
+  marked `#[non_exhaustive]` — the next planned `Length` change is
+  Phase 10's full unit set, which is similarly breaking.
+
 ### Changed
 
 - `Display::Grid` and `Display::InlineGrid` now translate to
   `taffy::Display::Grid` (Phase 1 routed both to Block).
-- `sync_styles`'s `Or<(Changed<...>)>` trigger filter widened to include
-  `Changed<GridParams>` and `Changed<GridItem>`. `ChildOf` is also in
-  the filter so re-parenting a grid item under a different grid
-  container picks up the new `template_areas`. `Changed<ScrollOffset>`
-  and `Changed<ScrollSnapItem>` remain excluded (Phase 2 invariant).
+- `sync_styles`'s `Or<(Changed<...>)>` trigger filter widens with two
+  new clauses: `Changed<GridParams>` and `Changed<GridItem>`.
+  `Changed<ChildOf>` was already in the Phase 2 filter and remains so
+  — re-parenting a grid item under a different grid container picks
+  up the new `template_areas` via the existing clause.
+  `Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` remain excluded
+  (Phase 2 invariant).
 - Reserved variants emit one `warn!` per session and degrade:
   `TrackSize::Subgrid → Auto`; `GridAutoFlow::Masonry → Row`.
-  `Length::Fr` outside grid templates also warns once and falls back
-  to 0 px / Auto.
-- `Length::Fr` and `RepeatCount::Count` use `i16` / `u16` widths to
-  match Taffy 0.10 directly. Spec used `i32` / `u32`; Phase 3
-  documents the divergence in the type doc-comment.
+- `RepeatCount::Count` carries `u16`; `GridLine::Start` / `Span` /
+  `StartEnd` carry `i16` / `u16`. Spec used `i32` / `u32`; Phase 3
+  matches Taffy 0.10 directly to avoid a lossy conversion at translate
+  time. Documented in each type's doc comment.
 - `GridLine::Area` uses `String` for area names. Spec used `SmolStr`;
   Phase 3 uses `String` to avoid a new direct supply-chain dep.
 ```
