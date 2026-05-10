@@ -433,9 +433,12 @@ fn map_grid_auto_flow(f: GridAutoFlow) -> taffy::GridAutoFlow {
         RowDense => taffy::GridAutoFlow::RowDense,
         ColumnDense => taffy::GridAutoFlow::ColumnDense,
         // Masonry is reserved (CSS-WG flux) — Taffy 0.10 has no
-        // GridAutoFlow::Masonry, so we degrade to Row. Phase 3 Task 6
-        // wires the warn-once gate for the Masonry arm.
-        Masonry => taffy::GridAutoFlow::Row,
+        // GridAutoFlow::Masonry, so we degrade to Row and emit one warn!
+        // per session naming the limitation.
+        Masonry => {
+            warn_once_masonry();
+            taffy::GridAutoFlow::Row
+        }
     }
 }
 
@@ -640,13 +643,13 @@ fn grid_line_to_taffy(
 }
 
 // Warn-once gates for invalid track nesting + unresolved named areas +
-// Subgrid (Masonry's gate lives in Task 6 alongside `map_grid_auto_flow`'s
-// Masonry arm). The Fr-outside-grid gate `WARNED_FR_OUTSIDE_GRID` is
+// Subgrid + Masonry. The Fr-outside-grid gate `WARNED_FR_OUTSIDE_GRID` is
 // declared at the top of the file and is shared with the length_to_*
 // helpers.
 static WARNED_INVALID_TRACK_NESTING: AtomicBool = AtomicBool::new(false);
 static WARNED_UNRESOLVED_AREA: AtomicBool = AtomicBool::new(false);
 static WARNED_SUBGRID: AtomicBool = AtomicBool::new(false);
+static WARNED_MASONRY: AtomicBool = AtomicBool::new(false);
 
 fn warn_once_invalid_track_nesting() {
     if !WARNED_INVALID_TRACK_NESTING.swap(true, Ordering::Relaxed) {
@@ -673,6 +676,15 @@ fn warn_once_subgrid() {
         warn!(
             "buiy: TrackSize::Subgrid is reserved — Taffy 0.10 has no subgrid \
              support; falling back to Auto (warned once)"
+        );
+    }
+}
+
+fn warn_once_masonry() {
+    if !WARNED_MASONRY.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: GridAutoFlow::Masonry is reserved — CSS-WG flux + no Taffy \
+             support; falling back to Row (warned once)"
         );
     }
 }

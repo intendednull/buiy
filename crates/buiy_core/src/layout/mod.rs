@@ -11,16 +11,17 @@ mod tree;
 mod types;
 
 pub use components::{
-    BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll, ScrollOffset,
+    BoxModel, Display, FlexItem, FlexParams, GridParams, Overflow, Position, Scroll, ScrollOffset,
     ScrollSnapItem,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::Style;
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap, Inset,
-    JustifyContent, Length, OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior,
-    ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
+    GridAutoFlow, Inset, JustifyContent, Length, OverflowMode, OverscrollBehavior, PositionKind,
+    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
+    SnapType, TrackSize,
 };
 
 use bevy::prelude::*;
