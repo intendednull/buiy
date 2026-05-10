@@ -325,6 +325,21 @@ pub(super) fn inherit_writing_mode(
 /// Walk up the `ChildOf` chain memoizing each ancestor's effective
 /// `WritingMode`. Recursive on the parent path; depth bounded by the
 /// hierarchy depth.
+///
+/// CSS-faithful "default = inherit" semantic: a `WritingMode` whose
+/// fields are all default (`HorizontalTb + Ltr + Mixed + Normal`) is
+/// treated as **unset** for inheritance purposes. This matters because
+/// `Style` (Task 6) inserts `WritingMode::default()` into every
+/// Style-spawned entity's Bundle — without the default-equals-unset
+/// rule, no descendant would ever inherit (every entity would
+/// short-circuit on its own default-valued component). Spec § 2.2:
+/// "its own `WritingMode` if set, else the nearest ancestor's".
+///
+/// Trade-off: an author cannot explicitly *override* an ancestor with
+/// the all-defaults value — the override is observationally identical
+/// to inheriting whatever defaults bubble up from the root. Since the
+/// root's fallback is also `WritingMode::default()`, this is a
+/// no-observable-difference distinction.
 fn resolve_writing_mode(
     entity: Entity,
     memo: &mut HashMap<Entity, WritingMode>,
@@ -334,12 +349,13 @@ fn resolve_writing_mode(
     if let Some(cached) = memo.get(&entity) {
         return *cached;
     }
-    let effective = if let Ok(wm) = wm_lookup.get(entity) {
-        *wm
-    } else if let Ok(p) = parent_chain.get(entity) {
-        resolve_writing_mode(p.parent(), memo, wm_lookup, parent_chain)
-    } else {
-        WritingMode::default()
+    let own = wm_lookup.get(entity).ok().copied();
+    let effective = match own {
+        Some(wm) if wm != WritingMode::default() => wm,
+        _ => match parent_chain.get(entity) {
+            Ok(p) => resolve_writing_mode(p.parent(), memo, wm_lookup, parent_chain),
+            Err(_) => WritingMode::default(),
+        },
     };
     memo.insert(entity, effective);
     effective
