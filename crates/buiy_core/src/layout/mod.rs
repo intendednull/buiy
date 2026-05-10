@@ -11,17 +11,17 @@ mod tree;
 mod types;
 
 pub use components::{
-    BoxModel, Display, FlexItem, FlexParams, GridParams, Overflow, Position, Scroll, ScrollOffset,
-    ScrollSnapItem,
+    BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
+    ScrollOffset, ScrollSnapItem,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::Style;
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
-    GridAutoFlow, Inset, JustifyContent, Length, OverflowMode, OverscrollBehavior, PositionKind,
-    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
-    SnapType, TrackSize,
+    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, NamedArea,
+    OverflowMode, OverscrollBehavior, PositionKind, RepeatCount, ScrollBehavior, ScrollbarColor,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TrackSize,
 };
 
 use bevy::prelude::*;
@@ -42,11 +42,20 @@ impl Plugin for LayoutPlugin {
             .register_type::<Scroll>()
             .register_type::<ScrollOffset>()
             .register_type::<ScrollSnapItem>()
+            .register_type::<GridParams>()
+            .register_type::<GridItem>()
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
             .register_type::<AspectRatio>()
-            .register_type::<Inset>();
+            .register_type::<Inset>()
+            .register_type::<TrackSize>()
+            .register_type::<RepeatCount>()
+            .register_type::<GridLine>()
+            .register_type::<GridAreas>()
+            .register_type::<NamedArea>()
+            .register_type::<GridAutoFlow>()
+            .register_type::<JustifyItems>();
 
         pipeline::configure_pipeline(app);
 

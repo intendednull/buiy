@@ -18,10 +18,11 @@ pub use components::{Node, ResolvedLayout, Visual};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::{
     AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Display, Edges,
-    FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset, JustifyContent, LayoutPlugin,
-    LayoutTree, Length, Overflow, OverflowMode, OverscrollBehavior, Position, PositionKind, Scroll,
+    FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, GridAreas, GridAutoFlow, GridItem, GridLine,
+    GridParams, Inset, JustifyContent, JustifyItems, LayoutPlugin, LayoutTree, Length, NamedArea,
+    Overflow, OverflowMode, OverscrollBehavior, Position, PositionKind, RepeatCount, Scroll,
     ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapAlign, SnapStop, SnapType, Style,
+    Sizing, SnapAlign, SnapStop, SnapType, Style, TrackSize,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 
