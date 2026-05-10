@@ -106,6 +106,7 @@ Every Phase 4 spec requirement maps to a row below. **Deferred** items are expli
 | § 2.3 — Logical → physical translation table | Implemented in `LogicalBoxModel::to_box_model(&WritingMode)` and `LogicalInset::to_inset(&WritingMode)`. The 6-row mapping table from the spec (horizontal-tb + ltr/rtl, vertical-rl + ltr/rtl, vertical-lr + ltr/rtl) lives in one helper that's exercised by every translation. | 4 |
 | § 2.4 — Taffy integration: route `direction` through Taffy | `taffy::Style.direction = match WritingModeResolved.direction { Ltr => Direction::Ltr, Rtl => Direction::Rtl }`. Phase 4 wiring lives in `style_to_taffy`. | 5 |
 | § 2.4 — Taffy integration: route logical insets through Taffy | **Simplified vs spec.** Spec hints at routing through `taffy::Style.inset.start/end`; Taffy 0.10 has no `inline-start`/`inline-end` field surface for inset (the geometry is `taffy::Rect<LengthPercentageAuto>` with `top/right/bottom/left`). Phase 4 instead translates logical insets to physical at `LogicalInset::to_inset(&WritingMode)` construct time. The author-side surface is still logical (CSS-faithful); Taffy gets physical. | 4 |
+| box-model.md § 4.2 — `Changed<WritingMode>` propagating to a re-translation pass | **Deferred to v1.x.** Spec says writing-mode switches should re-derive physical `BoxModel` for entities whose source was a `LogicalBoxModel`. Phase 4 v1 ships construct-time-only translation: dynamic switches require re-spawn / re-insert of `Style`. The deferral is justified by spec § 4.1 ("not stored — insert-time transform") which is internally inconsistent with § 4.2; Phase 4 picks § 4.1's reading. See plan § Decisions made #13. | — |
 | § 2.5 — `Sideways{Rl,Lr}` open question | **Deferred to `buiy-text-rendering-design`.** Layout side (this plan) treats them as `Vertical{Rl,Lr}` and emits one `warn!` per session naming the limitation. | 1, 5 |
 | § 2.6 — `unicode-bidi` resolution | **Deferred to `buiy-i18n-design`.** Phase 4 stores the value only. | 1 |
 | § 2.7 — Test surface: `direction: rtl` flips flex | Integration test pins flex-row child x-positions inverted under `Direction::Rtl`. | 8 |
@@ -139,6 +140,9 @@ These commitments are documented up front so future-me / reviewer can see the re
 8. **`WritingMode` derives include `Copy` because every field is a small enum.** Matches `FlexParams` and `Display` precedent.
 9. **`WritingModeResolved` is `Default = HorizontalTb + Ltr + Mixed + Normal`.** Same defaults as `WritingMode`. Entities without a `WritingMode` ancestor get the all-defaults resolved value.
 10. **No `#[non_exhaustive]` on the new enums.** Phase 4 doesn't anticipate adding variants; if a future phase needs to (e.g., new CSS writing-mode keyword), it's a breaking change documented in the CHANGELOG. Same precedent as Phases 1-3.
+11. **Inheritance is a true ancestor walk with memoization, not single-level.** Spec § 2.2 says "the nearest ancestor's" — Phase 4 honors this with a memoized recursive lookup that walks up the `ChildOf` chain until a `WritingMode` is found or the root is reached. Memoization makes the per-frame cost O(N) regardless of tree depth (each entity's effective value is resolved at most once per frame).
+12. **Inheritance system writes `WritingModeResolved` only when the value actually changes.** Plan Task 3 reads the entity's current `WritingModeResolved` and skips the `insert` when the new value matches. This matters because Task 5 widens `sync_styles`'s trigger filter to include `Changed<WritingModeResolved>`; an unconditional re-insert every frame would void the O(0) steady-state contract that Phase 1 + Phase 2 carefully preserve.
+13. **Dynamic writing-mode switches require re-spawn / re-insert in v1.** Spec box-model.md § 4.2 mentions a "re-translation pass" that recomputes physical `BoxModel` when an entity's source `LogicalBoxModel` is re-evaluated against a new `WritingMode`. Phase 4 v1 does **not** ship this pass — `LogicalBoxModel` is a non-component builder, so the physical `BoxModel` is computed once at construct time. **Documented limitation:** apps that flip writing-mode at runtime (e.g., LTR/RTL locale toggle) must re-spawn or re-insert `Style` to pick up the new physical box. The re-translation pass is deferred to v1.x; making `LogicalBoxModel` a stored component conflicts with spec § 4.1's "not stored" wording, and the spec text itself is internally fuzzy on this point. Phase 4's choice is to honor § 4.1 and document the trade-off; § 4.2's pass lands when the spec is tightened.
 
 ---
 
@@ -412,7 +416,28 @@ Expected: existing 12 + 2 new = 14 tests pass.
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -10
 ```
 
-Expected: clean. (`#[allow(dead_code)]` may be required on `WritingMode` and the `from_writing_mode` helper until Task 3 wires the inheritance system that consumes them — annotate with a comment naming Task 3.)
+Expected: clean **after** the `#[allow(dead_code)]` annotations described below. With `-D warnings`, `pub(crate) fn from_writing_mode` triggers `dead_code` because no module reads it until Task 3 lands. `WritingMode` itself is `pub`, re-exported in Task 7, so it's exempt.
+
+Before running clippy, annotate the helper:
+
+```rust
+impl WritingModeResolved {
+    /// Construct from a parent `WritingMode`. Used by the inheritance
+    /// system to copy fields one-to-one.
+    // Consumed by `inherit_writing_mode` system in Phase 4 Task 3.
+    #[allow(dead_code)]
+    pub(crate) fn from_writing_mode(wm: &WritingMode) -> Self {
+        Self {
+            mode: wm.mode,
+            direction: wm.direction,
+            text_orientation: wm.text_orientation,
+            unicode_bidi: wm.unicode_bidi,
+        }
+    }
+}
+```
+
+The allow can be removed in Task 3 once the inheritance system consumes the helper.
 
 - [ ] **Step 8: Commit**
 
@@ -424,7 +449,11 @@ WritingMode (author-set, will join Style Bundle in Task 6) carries the
 full CSS writing-mode + direction + text-orientation + unicode-bidi
 surface. WritingModeResolved (private cache, synced by Task 3's
 inheritance pass) carries the inherited effective value used by
-translate.rs in Task 5."
+translate.rs in Task 5.
+
+#[allow(dead_code)] on WritingModeResolved::from_writing_mode pending
+Task 3's consumer; clippy -D warnings would otherwise reject the
+unused pub(crate) helper."
 ```
 
 ---
@@ -441,32 +470,48 @@ translate.rs in Task 5."
 
 The existing test checks that the 8 pipeline steps run in order. Phase 4 widens it to expect 9 — `WritingModeInherit` between `RemovedNodesGc` and `SyncStyles`.
 
-- [ ] **Step 1: Read current `tests/layout_pipeline_order.rs`** to see the exact assertion form.
+- [ ] **Step 1: Read current `tests/layout_pipeline_order.rs`** to see the exact tracker pattern.
 
-```sh
-cat crates/buiy_core/tests/layout_pipeline_order.rs
-```
+The test wires a tracker closure into each `BuiyLayoutStep` set, runs `app.update()`, and asserts the recorded order matches a string vector. The current shape (8 trackers labeled "0".."7"):
 
-The test fingerprints the chain via `app.world().resource::<Schedules>().get(&Update).unwrap()` or similar. Mirror the existing approach when widening the expectation.
-
-- [ ] **Step 2: Update the test to expect the new step ordering**
-
-The expected ordering becomes:
 ```rust
-&[
-    BuiyLayoutStep::RemovedNodesGc,
-    BuiyLayoutStep::WritingModeInherit,
-    BuiyLayoutStep::SyncStyles,
-    BuiyLayoutStep::CqActivate,
-    BuiyLayoutStep::TaffyCompute,
-    BuiyLayoutStep::CqFlipCheck,
-    BuiyLayoutStep::CqFlipReRun,
-    BuiyLayoutStep::PostTaffyOverrides,
-    BuiyLayoutStep::WriteResolvedLayout,
-]
+app.add_systems(Update, make_tracker(o.clone(), "0").in_set(BuiyLayoutStep::RemovedNodesGc));
+app.add_systems(Update, make_tracker(o.clone(), "1").in_set(BuiyLayoutStep::SyncStyles));
+// ... up to "7"
+assert_eq!(observed, vec!["0", "1", "2", "3", "4", "5", "6", "7"]);
 ```
 
-Run the test and confirm it FAILS (`WritingModeInherit` doesn't exist yet).
+Phase 4 inserts a 9th tracker for `WritingModeInherit` between RemovedNodesGc and SyncStyles. **Re-label by enum order, not spec-step number, so the labels are visually unambiguous:** "gc", "wmi" (writing-mode inherit), "sync", "cq_activate", "taffy", "cq_flip", "cq_rerun", "post_taffy", "write".
+
+- [ ] **Step 2: Update the test to expect the new ordering**
+
+Replace the 8-tracker block with 9, re-labeled:
+
+```rust
+let o = order.clone();
+app.add_systems(Update, make_tracker(o.clone(), "gc").in_set(BuiyLayoutStep::RemovedNodesGc));
+app.add_systems(Update, make_tracker(o.clone(), "wmi").in_set(BuiyLayoutStep::WritingModeInherit));
+app.add_systems(Update, make_tracker(o.clone(), "sync").in_set(BuiyLayoutStep::SyncStyles));
+app.add_systems(Update, make_tracker(o.clone(), "cq_activate").in_set(BuiyLayoutStep::CqActivate));
+app.add_systems(Update, make_tracker(o.clone(), "taffy").in_set(BuiyLayoutStep::TaffyCompute));
+app.add_systems(Update, make_tracker(o.clone(), "cq_flip").in_set(BuiyLayoutStep::CqFlipCheck));
+app.add_systems(Update, make_tracker(o.clone(), "cq_rerun").in_set(BuiyLayoutStep::CqFlipReRun));
+app.add_systems(Update, make_tracker(o.clone(), "post_taffy").in_set(BuiyLayoutStep::PostTaffyOverrides));
+app.add_systems(Update, make_tracker(o.clone(), "write").in_set(BuiyLayoutStep::WriteResolvedLayout));
+
+app.update();
+
+let observed = order.lock().unwrap().clone();
+assert_eq!(
+    observed,
+    vec!["gc", "wmi", "sync", "cq_activate", "taffy", "cq_flip", "cq_rerun", "post_taffy", "write"],
+    "BuiyLayoutStep sets did not run in declared order",
+);
+```
+
+Update the file's top doc-comment from "8-step pipeline order" to "9-step pipeline order".
+
+Run the test and confirm it FAILS (`WritingModeInherit` doesn't exist yet on `BuiyLayoutStep`).
 
 - [ ] **Step 3: Add `BuiyLayoutStep::WritingModeInherit` variant**
 
@@ -489,6 +534,8 @@ pub enum BuiyLayoutStep {
 }
 ```
 
+Update the file-level doc comment from "Eight ordered sub-sets" to "Nine ordered sub-sets" and adjust the "Phase 1 wires all eight" line to mention the Phase 4 widening.
+
 In `configure_pipeline`, insert `WritingModeInherit` between `RemovedNodesGc` and `SyncStyles`.
 
 - [ ] **Step 4: Add the `inherit_writing_mode` system in `systems.rs`**
@@ -496,45 +543,69 @@ In `configure_pipeline`, insert `WritingModeInherit` between `RemovedNodesGc` an
 Append to `systems.rs`:
 
 ```rust
-/// Step (pre-1) — populate `WritingModeResolved` for every `Node` entity
+use std::collections::HashMap;
+
+/// Pre-step-1 — populate `WritingModeResolved` for every `Node` entity
 /// from the nearest ancestor with `WritingMode`, falling back to default
-/// when no ancestor sets it. `Changed<WritingMode>` on an ancestor
-/// invalidates `WritingModeResolved` on the whole subtree via Bevy's
-/// hierarchy traversal.
+/// when no ancestor sets it.
 ///
-/// Implementation: walk from each root (entity without `ChildOf` or with
-/// a `ChildOf` whose target lacks `Node`) downward, propagating the
-/// effective `WritingMode` to each descendant's `WritingModeResolved`.
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.2.
 ///
-/// Phase 4 keeps the walk simple — every frame, recompute for every
-/// `Node`. Bevy change-detection would let us walk only `Changed<WritingMode>`
-/// subtrees, but the simple walk is `O(N)` per frame and writing-mode
-/// changes are rare; the trade-off is a fixed cost vs. a complex
-/// invalidation graph. Documented limitation; revisit if profiling
-/// flags it.
+/// Implementation:
+/// 1. Resolve each entity's effective `WritingMode` by walking up the
+///    `ChildOf` chain until a `WritingMode` is found (or the root is
+///    reached, falling back to `default`).
+/// 2. Memoize the resolution: each entity's effective value is computed
+///    at most once per frame, even when many descendants share an
+///    ancestor — total cost O(N), not O(N × depth).
+/// 3. Compare against the entity's current `WritingModeResolved`. Only
+///    `commands.insert(...)` when the value actually changes — avoids
+///    cascading `Changed<WritingModeResolved>` to `sync_styles` every
+///    frame, which would void the O(0) steady-state contract.
 pub(super) fn inherit_writing_mode(
     mut commands: Commands,
-    nodes: Query<(Entity, Option<&WritingMode>, Option<&ChildOf>), With<Node>>,
-    parent_lookup: Query<&WritingMode>,
+    nodes: Query<(Entity, Option<&WritingModeResolved>), With<Node>>,
+    wm_lookup: Query<&WritingMode>,
+    parent_chain: Query<&ChildOf>,
 ) {
-    for (entity, own_wm, parent) in nodes.iter() {
-        let effective = if let Some(wm) = own_wm {
-            *wm
-        } else if let Some(parent) = parent
-            && let Ok(p_wm) = parent_lookup.get(parent.parent())
-        {
-            *p_wm
-        } else {
-            WritingMode::default()
-        };
-        commands
-            .entity(entity)
-            .insert(WritingModeResolved::from_writing_mode(&effective));
+    let mut memo: HashMap<Entity, WritingMode> = HashMap::new();
+
+    for (entity, current) in nodes.iter() {
+        let effective = resolve_writing_mode(entity, &mut memo, &wm_lookup, &parent_chain);
+        let new_resolved = WritingModeResolved::from_writing_mode(&effective);
+        if current.copied() != Some(new_resolved) {
+            commands.entity(entity).insert(new_resolved);
+        }
     }
+}
+
+/// Walk up the `ChildOf` chain memoizing each ancestor's effective
+/// `WritingMode`. Recursive on the parent path; depth bounded by the
+/// hierarchy depth.
+fn resolve_writing_mode(
+    entity: Entity,
+    memo: &mut HashMap<Entity, WritingMode>,
+    wm_lookup: &Query<&WritingMode>,
+    parent_chain: &Query<&ChildOf>,
+) -> WritingMode {
+    if let Some(cached) = memo.get(&entity) {
+        return *cached;
+    }
+    let effective = if let Ok(wm) = wm_lookup.get(entity) {
+        *wm
+    } else if let Ok(p) = parent_chain.get(entity) {
+        resolve_writing_mode(p.parent(), memo, wm_lookup, parent_chain)
+    } else {
+        WritingMode::default()
+    };
+    memo.insert(entity, effective);
+    effective
 }
 ```
 
-**Note:** This is a single-level lookup, not a true ancestor walk. For correctness with deep hierarchies where the writing-mode-setting ancestor is multiple levels up, a follow-up pass refines this. Phase 4 v1 ships single-level lookup with a doc comment naming the limitation; the integration test in Task 8 covers single-level inheritance which matches the spec's primary use case.
+**Why memoization matters:** without it, a chain of N descendants under one writing-mode-bearing root each walks up to that root, costing O(N × depth) total. Memoization caps this at O(N). The cost of an extra `HashMap` allocation per `inherit_writing_mode` call is dominated by the avoided redundant walks once trees get deeper than 3-4 levels. **Steady-state idempotence:** the `if current.copied() != Some(new_resolved)` guard means repeat frames with no `WritingMode` mutation produce zero `commands.insert(...)` calls, so `Changed<WritingModeResolved>` does not cascade — a hard requirement to preserve Phase 1's O(0) steady-state contract.
+
+Drop the `#[allow(dead_code)]` on `WritingModeResolved::from_writing_mode` in `components.rs` now that it has a consumer.
 
 - [ ] **Step 5: Wire the system into `LayoutPlugin::build`**
 
@@ -609,6 +680,8 @@ Pipeline test widens from 8 to 9 expected steps."
 - `logical_box_model_inline_size_under_vertical_rl_is_height` — same input, vertical-rl produces `height: Px(100)`.
 - `logical_inset_inline_start_under_vertical_rl_is_top` — `LogicalInset { inline_start: Px(8), .. }.to_inset(&vertical_rl)` produces `Inset { top: Px(8), .. }`.
 
+**Resolved API shape:** `LogicalEdges::to_edges(&self, mode: WritingModeKind, direction: Direction) -> Edges` — takes the two enum values directly, lives in `types.rs`. Avoids a backward `types → components` dependency. Callers that have a `&WritingMode` pass `wm.mode, wm.direction`.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `types.rs::tests`:
@@ -622,12 +695,7 @@ Append to `types.rs::tests`:
             block_start: Length::Px(3.0),
             block_end: Length::Px(4.0),
         };
-        let wm = WritingMode {
-            mode: WritingModeKind::HorizontalTb,
-            direction: Direction::Ltr,
-            ..Default::default()
-        };
-        let physical = logical.to_edges(&wm);
+        let physical = logical.to_edges(WritingModeKind::HorizontalTb, Direction::Ltr);
         assert_eq!(physical.left, Length::Px(1.0));
         assert_eq!(physical.right, Length::Px(2.0));
         assert_eq!(physical.top, Length::Px(3.0));
@@ -642,12 +710,7 @@ Append to `types.rs::tests`:
             block_start: Length::Px(3.0),
             block_end: Length::Px(4.0),
         };
-        let wm = WritingMode {
-            mode: WritingModeKind::VerticalRl,
-            direction: Direction::Ltr,
-            ..Default::default()
-        };
-        let physical = logical.to_edges(&wm);
+        let physical = logical.to_edges(WritingModeKind::VerticalRl, Direction::Ltr);
         // vertical-rl + ltr: inline-start = top, block-start = right
         assert_eq!(physical.top, Length::Px(1.0));
         assert_eq!(physical.bottom, Length::Px(2.0));
@@ -663,12 +726,7 @@ Append to `types.rs::tests`:
             block_start: Length::Px(3.0),
             block_end: Length::Px(4.0),
         };
-        let wm = WritingMode {
-            mode: WritingModeKind::VerticalLr,
-            direction: Direction::Ltr,
-            ..Default::default()
-        };
-        let physical = logical.to_edges(&wm);
+        let physical = logical.to_edges(WritingModeKind::VerticalLr, Direction::Ltr);
         // vertical-lr + ltr: inline-start = top, block-start = left
         assert_eq!(physical.top, Length::Px(1.0));
         assert_eq!(physical.bottom, Length::Px(2.0));
@@ -747,23 +805,26 @@ pub struct LogicalEdges {
 }
 
 impl LogicalEdges {
-    /// Translate to physical `Edges` honoring the given `WritingMode`.
-    /// 6-row mapping table (writing-mode + direction → physical):
+    /// Translate to physical `Edges` honoring the given writing-mode + direction.
+    /// 6-row mapping table:
     /// - horizontal-tb + ltr: inline-start = left, block-start = top
     /// - horizontal-tb + rtl: inline-start = right, block-start = top
     /// - vertical-rl + ltr: inline-start = top, block-start = right
     /// - vertical-rl + rtl: inline-start = bottom, block-start = right
     /// - vertical-lr + ltr: inline-start = top, block-start = left
     /// - vertical-lr + rtl: inline-start = bottom, block-start = left
-    pub fn to_edges(&self, wm: &super::components::WritingMode) -> Edges {
+    ///
+    /// Sideways modes (`SidewaysRl` / `SidewaysLr`) are normalized to
+    /// their non-sideways vertical equivalents — glyph rotation lives
+    /// in `buiy-text-rendering-design`, layout treats them identically.
+    pub fn to_edges(&self, mode: WritingModeKind, direction: Direction) -> Edges {
         use WritingModeKind::*;
-        let mode = match wm.mode {
-            // Sideways modes layout-equivalent to non-sideways verticals.
+        let mode = match mode {
             SidewaysRl => VerticalRl,
             SidewaysLr => VerticalLr,
             other => other,
         };
-        match (mode, wm.direction) {
+        match (mode, direction) {
             (HorizontalTb, Direction::Ltr) => Edges {
                 left: self.inline_start,
                 right: self.inline_end,
@@ -807,25 +868,7 @@ impl LogicalEdges {
 }
 ```
 
-The `super::components::WritingMode` reference is OK because `types.rs` and `components.rs` are sibling modules under `layout`; the dependency direction is types → components → style, but for this method specifically the dependency goes back the other way. **Resolution:** put `to_edges` in a separate `impl` block on `LogicalEdges` defined in `components.rs` instead, or pass a tuple `(WritingModeKind, Direction)` to avoid the cross-module dep. Simpler: define `to_edges(mode: WritingModeKind, direction: Direction)` taking the two enum values directly:
-
-```rust
-impl LogicalEdges {
-    pub fn to_edges(&self, mode: WritingModeKind, direction: Direction) -> Edges {
-        // ... same body but `mode` and `direction` instead of `wm.mode` and `wm.direction`
-    }
-}
-```
-
-The wrapper that takes `&WritingMode` can then live in `style.rs` next to `LogicalBoxModel`/`LogicalInset`.
-
-**Adopt this resolution.** Update the test signatures accordingly:
-
-```rust
-let physical = logical.to_edges(wm.mode, wm.direction);
-```
-
-(or define a thin wrapper `pub fn to_edges_for(&self, wm: &WritingMode) -> Edges` in `style.rs`.)
+This signature takes `WritingModeKind` and `Direction` directly (not `&WritingMode`), which keeps the `types.rs → components.rs` dependency direction one-way. Callers in `style.rs` (`LogicalBoxModel`, `LogicalInset`) hold a `&WritingMode` and pass `wm.mode, wm.direction` through.
 
 - [ ] **Step 4: Add `LogicalBoxModel` + `LogicalInset` builders in `style.rs`**
 
