@@ -1,4 +1,4 @@
-//! 8-step pipeline order asserted at the integration level.
+//! 9-step pipeline order asserted at the integration level.
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 
@@ -43,35 +43,39 @@ fn layout_steps_are_chained_in_declared_order() {
     let o = order.clone();
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "0").in_set(BuiyLayoutStep::RemovedNodesGc),
+        make_tracker(o.clone(), "gc").in_set(BuiyLayoutStep::RemovedNodesGc),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "1").in_set(BuiyLayoutStep::SyncStyles),
+        make_tracker(o.clone(), "wmi").in_set(BuiyLayoutStep::WritingModeInherit),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "2").in_set(BuiyLayoutStep::CqActivate),
+        make_tracker(o.clone(), "sync").in_set(BuiyLayoutStep::SyncStyles),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "3").in_set(BuiyLayoutStep::TaffyCompute),
+        make_tracker(o.clone(), "cq_activate").in_set(BuiyLayoutStep::CqActivate),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "4").in_set(BuiyLayoutStep::CqFlipCheck),
+        make_tracker(o.clone(), "taffy").in_set(BuiyLayoutStep::TaffyCompute),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "5").in_set(BuiyLayoutStep::CqFlipReRun),
+        make_tracker(o.clone(), "cq_flip").in_set(BuiyLayoutStep::CqFlipCheck),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "6").in_set(BuiyLayoutStep::PostTaffyOverrides),
+        make_tracker(o.clone(), "cq_rerun").in_set(BuiyLayoutStep::CqFlipReRun),
     );
     app.add_systems(
         Update,
-        make_tracker(o.clone(), "7").in_set(BuiyLayoutStep::WriteResolvedLayout),
+        make_tracker(o.clone(), "post_taffy").in_set(BuiyLayoutStep::PostTaffyOverrides),
+    );
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "write").in_set(BuiyLayoutStep::WriteResolvedLayout),
     );
 
     app.update();
@@ -79,7 +83,17 @@ fn layout_steps_are_chained_in_declared_order() {
     let observed = order.lock().unwrap().clone();
     assert_eq!(
         observed,
-        vec!["0", "1", "2", "3", "4", "5", "6", "7"],
+        vec![
+            "gc",
+            "wmi",
+            "sync",
+            "cq_activate",
+            "taffy",
+            "cq_flip",
+            "cq_rerun",
+            "post_taffy",
+            "write",
+        ],
         "BuiyLayoutStep sets did not run in declared order",
     );
 }

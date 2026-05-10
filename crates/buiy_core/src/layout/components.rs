@@ -280,8 +280,6 @@ pub struct WritingModeResolved {
 impl WritingModeResolved {
     /// Construct from a parent `WritingMode`. Used by the inheritance
     /// system to copy fields one-to-one.
-    // Consumed by `inherit_writing_mode` system in Phase 4 Task 3.
-    #[allow(dead_code)]
     pub(crate) fn from_writing_mode(wm: &WritingMode) -> Self {
         Self {
             mode: wm.mode,

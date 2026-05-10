@@ -63,6 +63,7 @@ impl Plugin for LayoutPlugin {
             Update,
             (
                 systems::gc_removed_nodes.in_set(BuiyLayoutStep::RemovedNodesGc),
+                systems::inherit_writing_mode.in_set(BuiyLayoutStep::WritingModeInherit),
                 systems::sync_styles.in_set(BuiyLayoutStep::SyncStyles),
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),

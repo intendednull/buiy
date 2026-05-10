@@ -8,11 +8,16 @@
 //!   - Step 3 `taffy_compute` — `tree.compute_layout` from each root.
 //!   - Step 7 `write_resolved_layout` — write `ResolvedLayout` back to entities.
 //!
+//! Phase 4 adds:
+//!   - Pre-step-1 `inherit_writing_mode` — walk ancestors to populate
+//!     `WritingModeResolved` on every Node.
+//!
 //! Steps 2/4/5/6 are empty sub-sets in Phase 1; later phases attach
 //! systems to them.
 
 use super::components::{
     BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
+    WritingMode, WritingModeResolved,
 };
 use super::translate::{StyleView, style_to_taffy};
 use super::tree::LayoutTree;
@@ -269,4 +274,61 @@ pub(super) fn write_resolved_layout(mut commands: Commands, tree: NonSend<Layout
     for (e, rl) in to_write {
         commands.entity(e).insert(rl);
     }
+}
+
+/// Pre-step-1 — populate `WritingModeResolved` for every `Node` entity
+/// from the nearest ancestor with `WritingMode`, falling back to default
+/// when no ancestor sets it.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.2.
+///
+/// Implementation:
+/// 1. Resolve each entity's effective `WritingMode` by walking up the
+///    `ChildOf` chain until a `WritingMode` is found (or the root is
+///    reached, falling back to `default`).
+/// 2. Memoize the resolution: each entity's effective value is computed
+///    at most once per frame, even when many descendants share an
+///    ancestor — total cost O(N), not O(N × depth).
+/// 3. Compare against the entity's current `WritingModeResolved`. Only
+///    `commands.insert(...)` when the value actually changes — avoids
+///    cascading `Changed<WritingModeResolved>` to `sync_styles` every
+///    frame, which would void the O(0) steady-state contract.
+pub(super) fn inherit_writing_mode(
+    mut commands: Commands,
+    nodes: Query<(Entity, Option<&WritingModeResolved>), With<Node>>,
+    wm_lookup: Query<&WritingMode>,
+    parent_chain: Query<&ChildOf>,
+) {
+    let mut memo: HashMap<Entity, WritingMode> = HashMap::new();
+
+    for (entity, current) in nodes.iter() {
+        let effective = resolve_writing_mode(entity, &mut memo, &wm_lookup, &parent_chain);
+        let new_resolved = WritingModeResolved::from_writing_mode(&effective);
+        if current.copied() != Some(new_resolved) {
+            commands.entity(entity).insert(new_resolved);
+        }
+    }
+}
+
+/// Walk up the `ChildOf` chain memoizing each ancestor's effective
+/// `WritingMode`. Recursive on the parent path; depth bounded by the
+/// hierarchy depth.
+fn resolve_writing_mode(
+    entity: Entity,
+    memo: &mut HashMap<Entity, WritingMode>,
+    wm_lookup: &Query<&WritingMode>,
+    parent_chain: &Query<&ChildOf>,
+) -> WritingMode {
+    if let Some(cached) = memo.get(&entity) {
+        return *cached;
+    }
+    let effective = if let Ok(wm) = wm_lookup.get(entity) {
+        *wm
+    } else if let Ok(p) = parent_chain.get(entity) {
+        resolve_writing_mode(p.parent(), memo, wm_lookup, parent_chain)
+    } else {
+        WritingMode::default()
+    };
+    memo.insert(entity, effective);
+    effective
 }
