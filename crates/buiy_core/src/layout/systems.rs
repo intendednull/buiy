@@ -8,11 +8,16 @@
 //!   - Step 3 `taffy_compute` — `tree.compute_layout` from each root.
 //!   - Step 7 `write_resolved_layout` — write `ResolvedLayout` back to entities.
 //!
+//! Phase 4 adds:
+//!   - Pre-step-1 `inherit_writing_mode` — walk ancestors to populate
+//!     `WritingModeResolved` on every Node.
+//!
 //! Steps 2/4/5/6 are empty sub-sets in Phase 1; later phases attach
 //! systems to them.
 
 use super::components::{
     BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
+    WritingMode, WritingModeResolved,
 };
 use super::translate::{StyleView, style_to_taffy};
 use super::tree::LayoutTree;
@@ -59,13 +64,19 @@ pub(super) fn gc_removed_nodes(
 /// `Changed<T>` triggers on insertion as well as modification, so newly
 /// spawned entities are picked up on their first frame.
 ///
-/// Phase 3 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
+/// Phase 4 trigger set: `Changed<BoxModel>`, `Changed<Display>`,
 /// `Changed<Position>`, `Changed<FlexParams>`, `Changed<FlexItem>`,
 /// `Changed<Overflow>`, `Changed<Scroll>`, `Changed<GridParams>`,
-/// `Changed<GridItem>`, `Changed<Children>`, `Changed<ChildOf>`.
-/// Phases 4–9 widen it as new components land. `Changed<ChildOf>` is
-/// included so that re-parenting a grid item under a different grid
-/// container picks up the new container's `template_areas`.
+/// `Changed<GridItem>`, `Changed<WritingMode>`, `Changed<WritingModeResolved>`,
+/// `Changed<Children>`, `Changed<ChildOf>`. Phases 5–9 widen it as new
+/// components land. `Changed<ChildOf>` is included so that re-parenting a
+/// grid item under a different grid container picks up the new container's
+/// `template_areas`. `Changed<WritingMode>` triggers when an author edits
+/// the entity's own writing mode; `Changed<WritingModeResolved>` triggers
+/// after `inherit_writing_mode` (pre-step-1) re-derives the resolved cache
+/// for an entity whose effective writing mode actually changed (the
+/// inherit system is careful to skip writes when the value is unchanged,
+/// preserving the O(0) steady-state contract).
 ///
 /// **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are
 /// intentionally excluded.** `ScrollOffset` is runtime state (mutated
@@ -87,6 +98,7 @@ pub(super) fn sync_styles(
             &Scroll,
             &GridParams,
             Option<&GridItem>,
+            &WritingModeResolved,
             Option<&Children>,
             Option<&ChildOf>,
         ),
@@ -102,6 +114,8 @@ pub(super) fn sync_styles(
                 Changed<Scroll>,
                 Changed<GridParams>,
                 Changed<GridItem>,
+                Changed<WritingMode>,
+                Changed<WritingModeResolved>,
                 Changed<Children>,
                 Changed<ChildOf>,
             )>,
@@ -120,7 +134,7 @@ pub(super) fn sync_styles(
     // (filtered) query under Bevy 0.18.
     let parent_areas_for: HashMap<Entity, GridAreas> = nodes
         .iter()
-        .filter_map(|(entity, _, _, _, _, _, _, _, _, _, _, parent)| {
+        .filter_map(|(entity, _, _, _, _, _, _, _, _, _, _, _, parent)| {
             let p = parent?;
             let grid = parent_grid_lookup.get(p.parent()).ok()?;
             grid.template_areas.clone().map(|a| (entity, a))
@@ -142,6 +156,7 @@ pub(super) fn sync_styles(
         scroll,
         grid_params,
         grid_item,
+        writing_mode_resolved,
         _children,
         _parent,
     ) in nodes.iter()
@@ -157,6 +172,7 @@ pub(super) fn sync_styles(
             grid_params,
             grid_item,
             parent_areas: parent_areas_for.get(&entity),
+            writing_mode_resolved,
         };
         let taffy_style = style_to_taffy(view);
         match tree.by_entity.get(&entity).copied() {
@@ -192,6 +208,7 @@ pub(super) fn sync_styles(
         _scroll,
         _grid_params,
         _grid_item,
+        _writing_mode_resolved,
         children,
         _parent,
     ) in nodes.iter()
@@ -269,4 +286,77 @@ pub(super) fn write_resolved_layout(mut commands: Commands, tree: NonSend<Layout
     for (e, rl) in to_write {
         commands.entity(e).insert(rl);
     }
+}
+
+/// Pre-step-1 — populate `WritingModeResolved` for every `Node` entity
+/// from the nearest ancestor with `WritingMode`, falling back to default
+/// when no ancestor sets it.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.2.
+///
+/// Implementation:
+/// 1. Resolve each entity's effective `WritingMode` by walking up the
+///    `ChildOf` chain until a `WritingMode` is found (or the root is
+///    reached, falling back to `default`).
+/// 2. Memoize the resolution: each entity's effective value is computed
+///    at most once per frame, even when many descendants share an
+///    ancestor — total cost O(N), not O(N × depth).
+/// 3. Compare against the entity's current `WritingModeResolved`. Only
+///    `commands.insert(...)` when the value actually changes — avoids
+///    cascading `Changed<WritingModeResolved>` to `sync_styles` every
+///    frame, which would void the O(0) steady-state contract.
+pub(super) fn inherit_writing_mode(
+    mut commands: Commands,
+    nodes: Query<(Entity, Option<&WritingModeResolved>), With<Node>>,
+    wm_lookup: Query<&WritingMode>,
+    parent_chain: Query<&ChildOf>,
+) {
+    let mut memo: HashMap<Entity, WritingMode> = HashMap::new();
+
+    for (entity, current) in nodes.iter() {
+        let effective = resolve_writing_mode(entity, &mut memo, &wm_lookup, &parent_chain);
+        let new_resolved = WritingModeResolved::from_writing_mode(&effective);
+        if current.copied() != Some(new_resolved) {
+            commands.entity(entity).insert(new_resolved);
+        }
+    }
+}
+
+/// Walk up the `ChildOf` chain memoizing each ancestor's effective
+/// `WritingMode`. Recursive on the parent path; depth bounded by the
+/// hierarchy depth.
+///
+/// CSS-faithful "default = inherit" semantic: a `WritingMode` whose
+/// fields are all default (`HorizontalTb + Ltr + Mixed + Normal`) is
+/// treated as **unset** for inheritance purposes. This matters because
+/// `Style` (Task 6) inserts `WritingMode::default()` into every
+/// Style-spawned entity's Bundle — without the default-equals-unset
+/// rule, no descendant would ever inherit (every entity would
+/// short-circuit on its own default-valued component). Spec § 2.2:
+/// "its own `WritingMode` if set, else the nearest ancestor's".
+///
+/// Trade-off: an author cannot explicitly *override* an ancestor with
+/// the all-defaults value — the override is observationally identical
+/// to inheriting whatever defaults bubble up from the root. Since the
+/// root's fallback is also `WritingMode::default()`, this is a
+/// no-observable-difference distinction.
+fn resolve_writing_mode(
+    entity: Entity,
+    memo: &mut HashMap<Entity, WritingMode>,
+    wm_lookup: &Query<&WritingMode>,
+    parent_chain: &Query<&ChildOf>,
+) -> WritingMode {
+    if let Some(cached) = memo.get(&entity) {
+        return *cached;
+    }
+    let own = wm_lookup.get(entity).ok().copied();
+    let effective = match own {
+        Some(wm) if wm != WritingMode::default() => wm,
+        _ => match parent_chain.get(entity) {
+            Ok(p) => resolve_writing_mode(p.parent(), memo, wm_lookup, parent_chain),
+            Err(_) => WritingMode::default(),
+        },
+    };
+    memo.insert(entity, effective);
+    effective
 }

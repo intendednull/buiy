@@ -2,10 +2,12 @@
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 //!
-//! Eight ordered sub-sets of `BuiySet::Layout`. Phase 1 wires all eight;
-//! steps 2 (`CqActivate`), 4 (`CqFlipCheck`), 5 (`CqFlipReRun`), and 6
-//! (`PostTaffyOverrides`) are no-ops in Phase 1. Later phases attach
-//! systems to those sub-sets without reordering.
+//! Nine ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the original
+//! eight; Phase 4 inserts `WritingModeInherit` between `RemovedNodesGc`
+//! and `SyncStyles` so step 1 sees the effective inherited writing-mode
+//! for every entity. Steps 2 (`CqActivate`), 4 (`CqFlipCheck`), 5
+//! (`CqFlipReRun`), and 6 (`PostTaffyOverrides`) remain no-ops in Phase 1.
+//! Later phases attach systems to those sub-sets without reordering.
 
 use bevy::prelude::*;
 
@@ -15,6 +17,11 @@ use bevy::prelude::*;
 pub enum BuiyLayoutStep {
     /// Step 0 — drop despawned entities from `LayoutTree`.
     RemovedNodesGc,
+    /// Pre-step-1 — populate `WritingModeResolved` by walking the
+    /// hierarchy. Runs before `SyncStyles` so step 1 sees the effective
+    /// inherited writing-mode for every entity.
+    /// **Phase 4.**
+    WritingModeInherit,
     /// Step 1 — translate changed Buiy components → `taffy::Style` and
     /// sync hierarchy.
     SyncStyles,
@@ -36,12 +43,13 @@ pub enum BuiyLayoutStep {
     WriteResolvedLayout,
 }
 
-/// Configure the 8-step chain inside `BuiySet::Layout`.
+/// Configure the 9-step chain inside `BuiySet::Layout`.
 pub fn configure_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
             BuiyLayoutStep::RemovedNodesGc,
+            BuiyLayoutStep::WritingModeInherit,
             BuiyLayoutStep::SyncStyles,
             BuiyLayoutStep::CqActivate,
             BuiyLayoutStep::TaffyCompute,

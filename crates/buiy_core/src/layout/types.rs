@@ -526,6 +526,131 @@ pub enum JustifyItems {
     Baseline,
 }
 
+/// CSS `writing-mode`.
+///
+/// `Sideways{Rl,Lr}` are tier-C polish modes that rotate text glyphs but
+/// otherwise behave like `Vertical{Rl,Lr}` for layout. Glyph rotation is
+/// `buiy-text-rendering-design`'s concern; layout treats them as their
+/// non-sideways equivalents and emits one `warn!` per session.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.1.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WritingModeKind {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
+/// CSS `direction`. Maps directly to `taffy::Direction`.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+/// CSS `text-orientation`. Stored on `WritingMode`; consumed by
+/// `buiy-text-rendering-design`, not layout.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextOrientation {
+    #[default]
+    Mixed,
+    Upright,
+    Sideways,
+}
+
+/// CSS `unicode-bidi`. Stored on `WritingMode`; resolution lives in
+/// `buiy-i18n-design`.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnicodeBidi {
+    #[default]
+    Normal,
+    Embed,
+    Isolate,
+    BidiOverride,
+    IsolateOverride,
+    Plaintext,
+}
+
+/// Logical-edge values (writing-mode-aware). Construct + call `to_edges`
+/// to get a physical `Edges` for layout consumption.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/box-model.md § 4 +
+/// docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.3.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
+pub struct LogicalEdges {
+    pub inline_start: Length,
+    pub inline_end: Length,
+    pub block_start: Length,
+    pub block_end: Length,
+}
+
+impl LogicalEdges {
+    /// Translate to physical `Edges` honoring the given writing-mode + direction.
+    /// 6-row mapping table:
+    /// - horizontal-tb + ltr: inline-start = left, block-start = top
+    /// - horizontal-tb + rtl: inline-start = right, block-start = top
+    /// - vertical-rl + ltr: inline-start = top, block-start = right
+    /// - vertical-rl + rtl: inline-start = bottom, block-start = right
+    /// - vertical-lr + ltr: inline-start = top, block-start = left
+    /// - vertical-lr + rtl: inline-start = bottom, block-start = left
+    ///
+    /// Sideways modes (`SidewaysRl` / `SidewaysLr`) are normalized to
+    /// their non-sideways vertical equivalents — glyph rotation lives
+    /// in `buiy-text-rendering-design`, layout treats them identically.
+    pub fn to_edges(self, mode: WritingModeKind, direction: Direction) -> Edges {
+        use WritingModeKind::*;
+        let mode = match mode {
+            SidewaysRl => VerticalRl,
+            SidewaysLr => VerticalLr,
+            other => other,
+        };
+        match (mode, direction) {
+            (HorizontalTb, Direction::Ltr) => Edges {
+                left: self.inline_start,
+                right: self.inline_end,
+                top: self.block_start,
+                bottom: self.block_end,
+            },
+            (HorizontalTb, Direction::Rtl) => Edges {
+                right: self.inline_start,
+                left: self.inline_end,
+                top: self.block_start,
+                bottom: self.block_end,
+            },
+            (VerticalRl, Direction::Ltr) => Edges {
+                top: self.inline_start,
+                bottom: self.inline_end,
+                right: self.block_start,
+                left: self.block_end,
+            },
+            (VerticalRl, Direction::Rtl) => Edges {
+                bottom: self.inline_start,
+                top: self.inline_end,
+                right: self.block_start,
+                left: self.block_end,
+            },
+            (VerticalLr, Direction::Ltr) => Edges {
+                top: self.inline_start,
+                bottom: self.inline_end,
+                left: self.block_start,
+                right: self.block_end,
+            },
+            (VerticalLr, Direction::Rtl) => Edges {
+                bottom: self.inline_start,
+                top: self.inline_end,
+                left: self.block_start,
+                right: self.block_end,
+            },
+            // Sideways modes were normalized above; this is unreachable.
+            (SidewaysRl, _) | (SidewaysLr, _) => unreachable!("sideways normalized to vertical"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +789,72 @@ mod tests {
     #[test]
     fn justify_items_default_is_stretch() {
         assert_eq!(JustifyItems::default(), JustifyItems::Stretch);
+    }
+
+    #[test]
+    fn writing_mode_kind_default_is_horizontal_tb() {
+        assert_eq!(WritingModeKind::default(), WritingModeKind::HorizontalTb);
+    }
+
+    #[test]
+    fn direction_default_is_ltr() {
+        assert_eq!(Direction::default(), Direction::Ltr);
+    }
+
+    #[test]
+    fn text_orientation_default_is_mixed() {
+        assert_eq!(TextOrientation::default(), TextOrientation::Mixed);
+    }
+
+    #[test]
+    fn unicode_bidi_default_is_normal() {
+        assert_eq!(UnicodeBidi::default(), UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn logical_edges_to_edges_horizontal_tb_ltr() {
+        let logical = LogicalEdges {
+            inline_start: Length::Px(1.0),
+            inline_end: Length::Px(2.0),
+            block_start: Length::Px(3.0),
+            block_end: Length::Px(4.0),
+        };
+        let physical = logical.to_edges(WritingModeKind::HorizontalTb, Direction::Ltr);
+        assert_eq!(physical.left, Length::Px(1.0));
+        assert_eq!(physical.right, Length::Px(2.0));
+        assert_eq!(physical.top, Length::Px(3.0));
+        assert_eq!(physical.bottom, Length::Px(4.0));
+    }
+
+    #[test]
+    fn logical_edges_to_edges_vertical_rl_ltr() {
+        let logical = LogicalEdges {
+            inline_start: Length::Px(1.0),
+            inline_end: Length::Px(2.0),
+            block_start: Length::Px(3.0),
+            block_end: Length::Px(4.0),
+        };
+        let physical = logical.to_edges(WritingModeKind::VerticalRl, Direction::Ltr);
+        // vertical-rl + ltr: inline-start = top, block-start = right
+        assert_eq!(physical.top, Length::Px(1.0));
+        assert_eq!(physical.bottom, Length::Px(2.0));
+        assert_eq!(physical.right, Length::Px(3.0));
+        assert_eq!(physical.left, Length::Px(4.0));
+    }
+
+    #[test]
+    fn logical_edges_to_edges_vertical_lr_ltr() {
+        let logical = LogicalEdges {
+            inline_start: Length::Px(1.0),
+            inline_end: Length::Px(2.0),
+            block_start: Length::Px(3.0),
+            block_end: Length::Px(4.0),
+        };
+        let physical = logical.to_edges(WritingModeKind::VerticalLr, Direction::Ltr);
+        // vertical-lr + ltr: inline-start = top, block-start = left
+        assert_eq!(physical.top, Length::Px(1.0));
+        assert_eq!(physical.bottom, Length::Px(2.0));
+        assert_eq!(physical.left, Length::Px(3.0));
+        assert_eq!(physical.right, Length::Px(4.0));
     }
 }
