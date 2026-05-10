@@ -6,11 +6,27 @@
 //! resolves `Length::Px` and `Length::Percent` — every other variant
 //! lands in Phase 10 (`buiy-layout-units-calc`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use bevy::prelude::warn;
+
 use super::components::{BoxModel, Display, FlexItem, FlexParams, Overflow, Position, Scroll};
 use super::types::{
     AlignContent, AlignItems, BoxSizing, Edges, FlexAxis, FlexWrap, Inset, JustifyContent, Length,
     OverflowMode, PositionKind, ScrollbarWidth, Sizing,
 };
+
+static WARNED_FR_OUTSIDE_GRID: AtomicBool = AtomicBool::new(false);
+
+fn warn_once_fr_outside_grid() {
+    if !WARNED_FR_OUTSIDE_GRID.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: Length::Fr is only meaningful inside TrackSize::Length \
+             in a grid template; outside grid it falls back to 0 px / Auto \
+             (warned once)"
+        );
+    }
+}
 
 /// View into the decomposed-component set for one entity. Built by
 /// `sync_styles`'s query and passed to `style_to_taffy`.
@@ -234,6 +250,10 @@ fn length_to_dim(l: Length) -> taffy::Dimension {
     match l {
         Length::Px(v) => taffy::Dimension::length(v),
         Length::Percent(p) => taffy::Dimension::percent(p / 100.0),
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::Dimension::auto()
+        }
     }
 }
 
@@ -241,6 +261,12 @@ fn length_to_lp(l: Length) -> taffy::LengthPercentage {
     match l {
         Length::Px(v) => taffy::LengthPercentage::length(v),
         Length::Percent(p) => taffy::LengthPercentage::percent(p / 100.0),
+        // taffy::LengthPercentage has no Auto variant — fall back to 0
+        // (CSS-equivalent for Fr-in-non-grid: undefined, ill-formed).
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::LengthPercentage::length(0.0)
+        }
     }
 }
 
@@ -248,6 +274,10 @@ fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
     match l {
         Length::Px(v) => taffy::LengthPercentageAuto::length(v),
         Length::Percent(p) => taffy::LengthPercentageAuto::percent(p / 100.0),
+        Length::Fr(_) => {
+            warn_once_fr_outside_grid();
+            taffy::LengthPercentageAuto::auto()
+        }
     }
 }
 
