@@ -11,10 +11,11 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
-    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, OverflowMode,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
+    FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, OverflowMode,
     OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
-    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TrackSize,
+    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
+    WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -233,6 +234,64 @@ pub struct GridItem {
     pub align_self: Option<AlignItems>,
 }
 
+/// CSS writing-mode + direction + text-orientation + unicode-bidi, all on
+/// one component because they're authored together. Joins `Style`'s
+/// Bundle. The inherited effective value is computed by the
+/// `inherit_writing_mode` system and stored in `WritingModeResolved`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.1.
+///
+/// Note: vertical writing-modes (`VerticalRl` / `VerticalLr`) do *not*
+/// reorient the Taffy main axis — Taffy 0.10 has no writing-mode
+/// awareness at the layout-engine level. Vertical modes are honored only
+/// by the `LogicalBoxModel` / `LogicalInset` ergonomic builders. Authors
+/// who want top-to-bottom flow under vertical-rl use
+/// `Display::Flex(Column)` explicitly. See plan § Decisions made #5.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct WritingMode {
+    pub mode: WritingModeKind,
+    pub direction: Direction,
+    pub text_orientation: TextOrientation,
+    pub unicode_bidi: UnicodeBidi,
+}
+
+/// Inherited effective writing-mode for an entity. Synced by the
+/// `inherit_writing_mode` system in `BuiyLayoutStep::WritingModeInherit`,
+/// run before `SyncStyles`. **Private cache — not author-set, not in
+/// `Style`'s Bundle.**
+///
+/// The translation layer (`style_to_taffy`) reads this value to wire
+/// `Direction::Rtl` to `taffy::Style.direction` and to gate `Sideways{Rl,Lr}`
+/// through the warn-once fallback. The `LogicalBoxModel` and `LogicalInset`
+/// builders take a `&WritingMode` directly (not the Resolved cache),
+/// because they translate at construct time on the author's side.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.2.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct WritingModeResolved {
+    pub mode: WritingModeKind,
+    pub direction: Direction,
+    pub text_orientation: TextOrientation,
+    pub unicode_bidi: UnicodeBidi,
+}
+
+impl WritingModeResolved {
+    /// Construct from a parent `WritingMode`. Used by the inheritance
+    /// system to copy fields one-to-one.
+    // Consumed by `inherit_writing_mode` system in Phase 4 Task 3.
+    #[allow(dead_code)]
+    pub(crate) fn from_writing_mode(wm: &WritingMode) -> Self {
+        Self {
+            mode: wm.mode,
+            direction: wm.direction,
+            text_orientation: wm.text_orientation,
+            unicode_bidi: wm.unicode_bidi,
+        }
+    }
+}
+
 /// Runtime scroll position of a scroll container. Mutated by the
 /// scroll-input handler in `buiy-input-events-design`. Read by render
 /// (drawing) and picking (hit-testing) at consume time, and by Phase 7
@@ -413,5 +472,23 @@ mod tests {
         assert_eq!(g.row, GridLine::Auto);
         assert_eq!(g.justify_self, None);
         assert_eq!(g.align_self, None);
+    }
+
+    #[test]
+    fn writing_mode_default_is_horizontal_tb_ltr_mixed_normal() {
+        let wm = WritingMode::default();
+        assert_eq!(wm.mode, WritingModeKind::HorizontalTb);
+        assert_eq!(wm.direction, Direction::Ltr);
+        assert_eq!(wm.text_orientation, TextOrientation::Mixed);
+        assert_eq!(wm.unicode_bidi, UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn writing_mode_resolved_default_is_horizontal_tb_ltr_mixed_normal() {
+        let wm = WritingModeResolved::default();
+        assert_eq!(wm.mode, WritingModeKind::HorizontalTb);
+        assert_eq!(wm.direction, Direction::Ltr);
+        assert_eq!(wm.text_orientation, TextOrientation::Mixed);
+        assert_eq!(wm.unicode_bidi, UnicodeBidi::Normal);
     }
 }
