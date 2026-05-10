@@ -580,11 +580,6 @@ pub enum UnicodeBidi {
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/box-model.md § 4 +
 /// docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 2.3.
-// `LogicalEdges` is a public author-side helper. Used by `LogicalBoxModel`
-// internally and by authors directly; no in-crate consumer until Phase 4
-// Tasks 6-7 wire `Style` setters and re-exports. Until then, lib-level
-// dead_code fires.
-#[allow(dead_code)]
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct LogicalEdges {
     pub inline_start: Length,
@@ -606,10 +601,6 @@ impl LogicalEdges {
     /// Sideways modes (`SidewaysRl` / `SidewaysLr`) are normalized to
     /// their non-sideways vertical equivalents — glyph rotation lives
     /// in `buiy-text-rendering-design`, layout treats them identically.
-    // Consumed by `LogicalBoxModel::to_box_model` and `LogicalInset::to_inset`
-    // (forward-declared in style.rs) plus tests below. Lib-level `dead_code`
-    // fires until Phase 4 Tasks 6-7 add `Style` setters and re-exports.
-    #[allow(dead_code)]
     pub fn to_edges(self, mode: WritingModeKind, direction: Direction) -> Edges {
         use WritingModeKind::*;
         let mode = match mode {

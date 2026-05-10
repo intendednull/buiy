@@ -12,16 +12,17 @@ mod types;
 
 pub use components::{
     BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
-    ScrollOffset, ScrollSnapItem,
+    ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
-pub use style::Style;
+pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Edges, FlexAxis, FlexGap, FlexWrap,
-    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, NamedArea,
-    OverflowMode, OverscrollBehavior, PositionKind, RepeatCount, ScrollBehavior, ScrollbarColor,
-    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TrackSize,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
+    FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length,
+    LogicalEdges, NamedArea, OverflowMode, OverscrollBehavior, PositionKind, RepeatCount,
+    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
+    SnapType, TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -44,6 +45,8 @@ impl Plugin for LayoutPlugin {
             .register_type::<ScrollSnapItem>()
             .register_type::<GridParams>()
             .register_type::<GridItem>()
+            .register_type::<WritingMode>()
+            .register_type::<WritingModeResolved>()
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
@@ -55,7 +58,12 @@ impl Plugin for LayoutPlugin {
             .register_type::<GridAreas>()
             .register_type::<NamedArea>()
             .register_type::<GridAutoFlow>()
-            .register_type::<JustifyItems>();
+            .register_type::<JustifyItems>()
+            .register_type::<WritingModeKind>()
+            .register_type::<Direction>()
+            .register_type::<TextOrientation>()
+            .register_type::<UnicodeBidi>()
+            .register_type::<LogicalEdges>();
 
         pipeline::configure_pipeline(app);
 

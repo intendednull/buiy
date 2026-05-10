@@ -416,9 +416,6 @@ impl Style {
 /// produce a `BoxModel` and pass that into your `Style`.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/box-model.md § 4.
-// Author-side helper consumed via re-export. Lib-level `dead_code` fires
-// until Phase 4 Tasks 6-7 wire `Style` setters and the public re-export.
-#[allow(dead_code)]
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct LogicalBoxModel {
     pub inline_size: Sizing,
@@ -438,7 +435,6 @@ impl LogicalBoxModel {
     /// Translate to a physical `BoxModel` honoring the given writing-mode.
     /// Vertical modes swap inline ↔ block onto width ↔ height; physical
     /// edges follow the LogicalEdges 6-row table.
-    #[allow(dead_code)]
     pub fn to_box_model(&self, wm: &WritingMode) -> BoxModel {
         let is_vertical = matches!(
             wm.mode,
@@ -481,9 +477,6 @@ impl LogicalBoxModel {
 /// Builder for the inset surface using logical (writing-mode-aware)
 /// edges. **Not stored** — call `.to_inset(&WritingMode)` to produce an
 /// `Inset`.
-// Author-side helper consumed via re-export. Lib-level `dead_code` fires
-// until Phase 4 Tasks 6-7 wire `Style` setters and the public re-export.
-#[allow(dead_code)]
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub struct LogicalInset {
     pub inline_start: Sizing,
@@ -493,7 +486,6 @@ pub struct LogicalInset {
 }
 
 impl LogicalInset {
-    #[allow(dead_code)]
     pub fn to_inset(self, wm: &WritingMode) -> Inset {
         // Inset uses Sizing (not Length), so we duplicate the 6-row
         // mapping rather than reusing LogicalEdges::to_edges.
