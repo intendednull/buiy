@@ -4,8 +4,8 @@
 
 use bevy::prelude::*;
 use buiy_core::{
-    CorePlugin,
-    layout::{BuiyLayoutStep, LayoutPlugin},
+    CorePlugin, Node,
+    layout::{BuiyLayoutStep, ContainerQuery, LayoutPlugin, Length, QueryCondition, Sizing, Style},
 };
 
 #[test]
@@ -77,6 +77,35 @@ fn layout_steps_are_chained_in_declared_order() {
         Update,
         make_tracker(o.clone(), "write").in_set(BuiyLayoutStep::WriteResolvedLayout),
     );
+
+    // Phase 5 Task 10: spawn one Container + one ContainerQuery + one
+    // descendant with Cqw so cq_activate / cq_flip_check / cq_flip_rerun
+    // (and `translate_one_entity`'s `Cq*` resolution) all have reachable
+    // work. The order assertion below stays unchanged; this addition
+    // makes the order test also a smoke test that the cq systems
+    // compile and run with realistic data.
+    let parent = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(800.0)
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width(Sizing::Length(Length::Cqw(50.0))),
+            ContainerQuery {
+                container: None,
+                conditions: vec![QueryCondition::MinWidth(Length::Px(600.0))],
+            },
+        ))
+        .id();
+    app.world_mut().entity_mut(parent).add_children(&[child]);
 
     app.update();
 
