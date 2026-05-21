@@ -568,6 +568,35 @@ pub enum WritingModeKind {
     SidewaysLr,
 }
 
+/// CSS `container-type`. Determines whether an entity is a query
+/// container (i.e., whether descendant `@container` rules and container
+/// units resolve against it).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.1.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerType {
+    /// Not a query container. The default.
+    #[default]
+    Normal,
+    /// Both axes queryable; `cqw/cqh/cqi/cqb` all resolve.
+    Size,
+    /// Only inline axis queryable; `cqb` against this container falls
+    /// back to viewport-block with warn-once.
+    InlineSize,
+}
+
+/// CSS `@container (orientation: ...)` condition value.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.2.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Orientation {
+    /// Container's inline axis is shorter than its block axis.
+    #[default]
+    Portrait,
+    /// Container's inline axis is longer than its block axis.
+    Landscape,
+}
+
 /// CSS `direction`. Maps directly to `taffy::Direction`.
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -843,6 +872,19 @@ mod tests {
     #[test]
     fn writing_mode_kind_default_is_horizontal_tb() {
         assert_eq!(WritingModeKind::default(), WritingModeKind::HorizontalTb);
+    }
+
+    #[test]
+    fn container_type_default_is_normal() {
+        assert_eq!(ContainerType::default(), ContainerType::Normal);
+    }
+
+    #[test]
+    fn orientation_default_is_portrait() {
+        // Width <= height -> portrait. CSS default ambiguous; we pick
+        // Portrait so the default `Orientation(Portrait)` condition is
+        // a useful sentinel.
+        assert_eq!(Orientation::default(), Orientation::Portrait);
     }
 
     #[test]

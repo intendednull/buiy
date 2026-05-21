@@ -11,11 +11,11 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
-    FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, OverflowMode,
-    OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
-    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
-    WritingModeKind,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
+    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
+    OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation,
+    TrackSize, UnicodeBidi, WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -290,6 +290,26 @@ impl WritingModeResolved {
     }
 }
 
+/// Marks an entity as a CSS container (or not). Descendants resolve
+/// `@container` rules and container units (`cqw`, `cqi`, ...) against
+/// the nearest ancestor whose `container_type` is `Size` or `InlineSize`.
+///
+/// `container_name` is an optional opaque label (CSS `container-name`).
+/// When set, descendant `ContainerQuery` rules with `container:
+/// Some(name)` match this container by name; rules with `container: None`
+/// match the nearest queried ancestor regardless of name. `String` is used
+/// for the same reason as `GridLine::Area` (Phase 3): avoids a new direct
+/// `SmolStr` dep, and container names are set at spawn time, not on a hot
+/// path.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.1.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct Container {
+    pub container_type: ContainerType,
+    pub container_name: Option<String>,
+}
+
 /// Runtime scroll position of a scroll container. Mutated by the
 /// scroll-input handler in `buiy-input-events-design`. Read by render
 /// (drawing) and picking (hit-testing) at consume time, and by Phase 7
@@ -488,5 +508,12 @@ mod tests {
         assert_eq!(wm.direction, Direction::Ltr);
         assert_eq!(wm.text_orientation, TextOrientation::Mixed);
         assert_eq!(wm.unicode_bidi, UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn container_default_is_normal_unnamed() {
+        let c = Container::default();
+        assert_eq!(c.container_type, ContainerType::Normal);
+        assert_eq!(c.container_name, None);
     }
 }
