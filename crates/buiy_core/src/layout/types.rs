@@ -597,6 +597,29 @@ pub enum Orientation {
     Landscape,
 }
 
+/// One `@container` condition — a single predicate on the resolved size
+/// of the query container. A `ContainerQuery` AND-combines multiple of
+/// these.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.2.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq)]
+pub enum QueryCondition {
+    /// Activates when container `width >= value`.
+    MinWidth(Length),
+    /// Activates when container `width <= value`.
+    MaxWidth(Length),
+    /// Activates when container `height >= value`.
+    MinHeight(Length),
+    /// Activates when container `height <= value`.
+    MaxHeight(Length),
+    /// Activates when container `width/height >= ratio`.
+    MinAspectRatio(f32),
+    /// Activates when container `width/height <= ratio`.
+    MaxAspectRatio(f32),
+    /// Activates when container orientation matches.
+    Orientation(Orientation),
+}
+
 /// CSS `direction`. Maps directly to `taffy::Direction`.
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -885,6 +908,19 @@ mod tests {
         // Portrait so the default `Orientation(Portrait)` condition is
         // a useful sentinel.
         assert_eq!(Orientation::default(), Orientation::Portrait);
+    }
+
+    #[test]
+    fn query_condition_variants_construct() {
+        let c1 = QueryCondition::MinWidth(Length::Px(600.0));
+        let c2 = QueryCondition::MaxAspectRatio(1.5);
+        let c3 = QueryCondition::Orientation(Orientation::Landscape);
+        // PartialEq derive covers structural equality.
+        assert_ne!(c1, c2);
+        assert_ne!(c2, c3);
+        // Copy bound — implicit copy through assignment.
+        let c4 = c1;
+        assert_eq!(c4, c1);
     }
 
     #[test]

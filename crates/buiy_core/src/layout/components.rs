@@ -13,7 +13,7 @@
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
     FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
-    OverflowMode, OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor,
+    OverflowMode, OverscrollBehavior, PositionKind, QueryCondition, ScrollBehavior, ScrollbarColor,
     ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation,
     TrackSize, UnicodeBidi, WritingModeKind,
 };
@@ -310,6 +310,34 @@ pub struct Container {
     pub container_name: Option<String>,
 }
 
+/// A `@container` rule pinned to a single entity. The rule activates
+/// when *all* `conditions` hold against the resolved size of the
+/// matched query container (by name, or nearest queried ancestor when
+/// `container` is `None`).
+///
+/// When the rule's activation state flips, `cq_activate` toggles
+/// `ContainerQueryActive` <-> `ContainerQueryInactive` on this same
+/// entity. Authors observe those markers and react however they want —
+/// the spec calls out (§ 1.2 last paragraph) that style-bundle
+/// application is consumer-responsibility.
+///
+/// v1 stores at most one `ContainerQuery` per entity (Bevy's
+/// `Component` is single-instance).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.2.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct ContainerQuery {
+    /// `None` = nearest queried ancestor. `Some(name)` = nearest
+    /// ancestor with `Container { container_name: Some(name), .. }`.
+    pub container: Option<String>,
+    /// All conditions must hold for the rule to be active. Empty list
+    /// = always active (matches CSS `@container (width)` which is
+    /// always true if there's a container at all — Phase 5 simplifies
+    /// to "always active").
+    pub conditions: Vec<QueryCondition>,
+}
+
 /// Runtime scroll position of a scroll container. Mutated by the
 /// scroll-input handler in `buiy-input-events-design`. Read by render
 /// (drawing) and picking (hit-testing) at consume time, and by Phase 7
@@ -515,5 +543,12 @@ mod tests {
         let c = Container::default();
         assert_eq!(c.container_type, ContainerType::Normal);
         assert_eq!(c.container_name, None);
+    }
+
+    #[test]
+    fn container_query_default_is_anonymous_and_empty() {
+        let q = ContainerQuery::default();
+        assert_eq!(q.container, None);
+        assert!(q.conditions.is_empty());
     }
 }
