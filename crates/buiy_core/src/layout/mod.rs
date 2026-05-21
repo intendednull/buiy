@@ -11,18 +11,20 @@ mod tree;
 mod types;
 
 pub use components::{
-    BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
-    ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
+    BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive, Display,
+    FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, ScrollOffset,
+    ScrollSnapItem, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
-    FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length,
-    LogicalEdges, NamedArea, OverflowMode, OverscrollBehavior, PositionKind, RepeatCount,
-    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
-    SnapType, TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
+    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
+    Length, LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
+    QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
+    Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
+    WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -47,6 +49,10 @@ impl Plugin for LayoutPlugin {
             .register_type::<GridItem>()
             .register_type::<WritingMode>()
             .register_type::<WritingModeResolved>()
+            .register_type::<Container>()
+            .register_type::<ContainerQuery>()
+            .register_type::<ContainerQueryActive>()
+            .register_type::<ContainerQueryInactive>()
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
@@ -63,7 +69,10 @@ impl Plugin for LayoutPlugin {
             .register_type::<Direction>()
             .register_type::<TextOrientation>()
             .register_type::<UnicodeBidi>()
-            .register_type::<LogicalEdges>();
+            .register_type::<LogicalEdges>()
+            .register_type::<ContainerType>()
+            .register_type::<Orientation>()
+            .register_type::<QueryCondition>();
 
         pipeline::configure_pipeline(app);
 
@@ -73,6 +82,7 @@ impl Plugin for LayoutPlugin {
                 systems::gc_removed_nodes.in_set(BuiyLayoutStep::RemovedNodesGc),
                 systems::inherit_writing_mode.in_set(BuiyLayoutStep::WritingModeInherit),
                 systems::sync_styles.in_set(BuiyLayoutStep::SyncStyles),
+                systems::cq_activate.in_set(BuiyLayoutStep::CqActivate),
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
             ),

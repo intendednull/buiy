@@ -16,12 +16,13 @@
 //! systems to them.
 
 use super::components::{
-    BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
-    WritingMode, WritingModeResolved,
+    BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive, Display,
+    FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, WritingMode,
+    WritingModeResolved,
 };
 use super::translate::{StyleView, style_to_taffy};
 use super::tree::LayoutTree;
-use super::types::GridAreas;
+use super::types::{ContainerType, GridAreas, Length, QueryCondition};
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -359,4 +360,216 @@ fn resolve_writing_mode(
     };
     memo.insert(entity, effective);
     effective
+}
+
+/// Pure evaluation of a `ContainerQuery`'s condition list against a
+/// resolved container size. Returns `true` iff *every* condition holds
+/// (CSS `@container` is AND-combined). Empty `conditions` = always
+/// active (matches `@container (width)` which holds iff a container
+/// exists at all).
+///
+/// Length units inside `MinWidth`/`MaxWidth`/`MinHeight`/`MaxHeight`
+/// are resolved to absolute pixels:
+/// - `Px(v)` → `v`.
+/// - `Percent(p)` → `p%` of the container's own resolved size on the
+///   relevant axis (CSS-faithful — percentage in a `@container` query
+///   resolves against the container).
+/// - `Fr` / `Cq*` → 0 (warn-once at translate time, not here; this
+///   helper is pure and the `Length::Px` case is the common path).
+pub(super) fn evaluate_conditions(conds: &[QueryCondition], container: Vec2) -> bool {
+    use QueryCondition::*;
+    conds.iter().all(|c| match *c {
+        MinWidth(len) => container.x >= length_to_px(len, container.x),
+        MaxWidth(len) => container.x <= length_to_px(len, container.x),
+        MinHeight(len) => container.y >= length_to_px(len, container.y),
+        MaxHeight(len) => container.y <= length_to_px(len, container.y),
+        MinAspectRatio(r) => {
+            if container.y == 0.0 {
+                0.0 >= r
+            } else {
+                (container.x / container.y) >= r
+            }
+        }
+        MaxAspectRatio(r) => {
+            if container.y == 0.0 {
+                // h == 0 → undefined; do not match.
+                false
+            } else {
+                (container.x / container.y) <= r
+            }
+        }
+        Orientation(o) => match o {
+            crate::layout::types::Orientation::Portrait => container.x <= container.y,
+            crate::layout::types::Orientation::Landscape => container.x > container.y,
+        },
+    })
+}
+
+fn length_to_px(len: Length, axis_basis: f32) -> f32 {
+    match len {
+        Length::Px(v) => v,
+        Length::Percent(p) => p * 0.01 * axis_basis,
+        // Phase 5 container queries don't recurse — Cq* inside a
+        // condition value would be a degenerate case (a rule about
+        // a container, sized in units of that same container). Warn
+        // is unnecessary because authors compose with Length::Px.
+        // Fr is a grid-only unit; degrades to 0 here.
+        Length::Fr(_)
+        | Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => 0.0,
+    }
+}
+
+/// Step 2 (`BuiyLayoutStep::CqActivate`) — for each entity with
+/// `ContainerQuery`, find the matching container ancestor and toggle
+/// `ContainerQueryActive` / `ContainerQueryInactive` based on whether
+/// every condition holds against the ancestor's *previous frame*
+/// resolved size.
+///
+/// Memoization mirrors `inherit_writing_mode`'s ancestor walk
+/// (systems.rs:308-362): one `HashMap<Entity, Option<Entity>>` per
+/// system call; entries cached as the walk descends and reused by
+/// siblings sharing an ancestor. Per spec § 1.3 step 2, the read is
+/// of *previous frame's* `ResolvedLayout` — at `CqActivate` time
+/// (between `SyncStyles` and `TaffyCompute`) the `ResolvedLayout`
+/// component still holds what step 7 wrote last frame.
+///
+/// Idempotent flip — only `commands.insert(...)` when the marker would
+/// change. Avoids `Changed<ContainerQueryActive>` cascading into
+/// `sync_styles` every frame, which would void the O(0) steady-state
+/// contract (Phase 2 invariant; mirror of Phase 4 systems.rs:319-321).
+#[allow(clippy::type_complexity)]
+pub(super) fn cq_activate(
+    mut commands: Commands,
+    rules: Query<
+        (
+            Entity,
+            &ContainerQuery,
+            Option<&ContainerQueryActive>,
+            Option<&ContainerQueryInactive>,
+        ),
+        With<Node>,
+    >,
+    containers: Query<(&Container, &ResolvedLayout)>,
+    parent_chain: Query<&ChildOf>,
+) {
+    let mut memo: HashMap<Entity, Option<Entity>> = HashMap::new();
+
+    for (entity, rule, was_active, was_inactive) in rules.iter() {
+        let container_entity = resolve_nearest_container(
+            entity,
+            &rule.container,
+            &mut memo,
+            &containers,
+            &parent_chain,
+        );
+
+        let active = match container_entity {
+            Some(c) => match containers.get(c) {
+                Ok((_container, layout)) => evaluate_conditions(&rule.conditions, layout.size),
+                Err(_) => false,
+            },
+            None => {
+                // No container ancestor → rule cannot activate.
+                false
+            }
+        };
+
+        // Idempotent flip.
+        if active && was_active.is_none() {
+            commands
+                .entity(entity)
+                .insert(ContainerQueryActive)
+                .remove::<ContainerQueryInactive>();
+        } else if !active && was_inactive.is_none() {
+            commands
+                .entity(entity)
+                .insert(ContainerQueryInactive)
+                .remove::<ContainerQueryActive>();
+        }
+    }
+}
+
+/// Walk up `ChildOf` from `entity`, returning the first ancestor that
+/// is a query container (`Container::container_type != Normal`) and,
+/// if `name` is `Some(n)`, has matching `container_name`. Memoized.
+pub(super) fn resolve_nearest_container(
+    entity: Entity,
+    name: &Option<String>,
+    memo: &mut HashMap<Entity, Option<Entity>>,
+    containers: &Query<(&Container, &ResolvedLayout)>,
+    parent_chain: &Query<&ChildOf>,
+) -> Option<Entity> {
+    if let Some(cached) = memo.get(&entity) {
+        return *cached;
+    }
+    let result = match parent_chain.get(entity) {
+        Ok(p) => {
+            let parent = p.parent();
+            let matches = containers.get(parent).ok().and_then(|(c, _)| {
+                if c.container_type == ContainerType::Normal {
+                    return None;
+                }
+                match (name, &c.container_name) {
+                    (None, _) => Some(parent), // any queried ancestor
+                    (Some(want), Some(have)) if want == have => Some(parent),
+                    _ => None,
+                }
+            });
+            match matches {
+                Some(e) => Some(e),
+                None => resolve_nearest_container(parent, name, memo, containers, parent_chain),
+            }
+        }
+        Err(_) => None, // no parent → no container ancestor
+    };
+    memo.insert(entity, result);
+    result
+}
+
+#[cfg(test)]
+mod cq_tests {
+    use super::*;
+    use crate::layout::types::Orientation;
+
+    /// `evaluate_conditions` is a pure helper — tested without spawning
+    /// an App. Phase 5 keeps the helper `pub(super) fn` so this test
+    /// can reach it.
+    #[test]
+    fn evaluate_conditions_min_width_threshold() {
+        let conds = [QueryCondition::MinWidth(Length::Px(600.0))];
+        // Container is 700 px wide → MinWidth(600) holds.
+        assert!(evaluate_conditions(&conds, Vec2::new(700.0, 400.0)));
+        // Container is 500 px wide → MinWidth(600) fails.
+        assert!(!evaluate_conditions(&conds, Vec2::new(500.0, 400.0)));
+    }
+
+    #[test]
+    fn evaluate_conditions_aspect_ratio() {
+        let landscape_min = [QueryCondition::MinAspectRatio(1.5)];
+        assert!(evaluate_conditions(&landscape_min, Vec2::new(800.0, 400.0))); // 2.0
+        assert!(!evaluate_conditions(
+            &landscape_min,
+            Vec2::new(400.0, 800.0)
+        )); // 0.5
+    }
+
+    #[test]
+    fn evaluate_conditions_orientation() {
+        let portrait = [QueryCondition::Orientation(Orientation::Portrait)];
+        assert!(evaluate_conditions(&portrait, Vec2::new(300.0, 600.0)));
+        assert!(!evaluate_conditions(&portrait, Vec2::new(600.0, 300.0)));
+    }
+
+    #[test]
+    fn evaluate_conditions_zero_height_does_not_panic_on_aspect() {
+        // Defensive — h == 0 produces inf or nan. Specify: treat as 0.0
+        // aspect (never landscape, never satisfies MinAspectRatio>0).
+        let conds = [QueryCondition::MinAspectRatio(1.0)];
+        assert!(!evaluate_conditions(&conds, Vec2::new(300.0, 0.0)));
+    }
 }
