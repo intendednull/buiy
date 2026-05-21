@@ -4,9 +4,10 @@
 
 use bevy::prelude::*;
 use buiy_core::Node;
+use buiy_core::ResolvedLayout;
 use buiy_core::layout::{
     ContainerQuery, ContainerQueryActive, ContainerQueryInactive, LayoutPlugin, Length,
-    QueryCondition, Style,
+    QueryCondition, Sizing, Style,
 };
 
 fn app() -> App {
@@ -55,4 +56,39 @@ fn cq_activate_marks_active_when_container_meets_min_width() {
         "child should be marked active because parent width 700 >= 600"
     );
     assert!(world.get::<ContainerQueryInactive>(child).is_none());
+}
+
+#[test]
+fn container_unit_cqw_resolves_against_queried_ancestor() {
+    let mut app = app();
+    let parent = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(800.0)
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width(Sizing::Length(Length::Cqw(50.0))),
+        ))
+        .id();
+    app.world_mut().entity_mut(parent).add_children(&[child]);
+
+    // Two frames: 1) parent ResolvedLayout populated. 2) child reads
+    // it for Cqw resolution.
+    app.update();
+    app.update();
+
+    let child_layout = app.world().get::<ResolvedLayout>(child).unwrap();
+    assert!(
+        (child_layout.size.x - 400.0).abs() < 0.5,
+        "child width should resolve to 50% of parent width 800 = 400, got {}",
+        child_layout.size.x
+    );
 }

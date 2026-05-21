@@ -44,18 +44,172 @@ fn warn_once_fr_outside_grid() {
     }
 }
 
-/// Phase 5 Task 1 *temporary* fallback: container units resolve to
-/// 0 px until Task 7 wires the real ancestor-driven path. The only
-/// purpose of this helper is to keep the `Length` match exhaustive
-/// in this commit (Phase 3 Task 1 prior art — atomic types.rs +
-/// translate.rs).
+/// Per-entity snapshot threaded into `StyleView::nearest_container`.
+/// `sync_styles` resolves the nearest queried ancestor for each
+/// entity in the changed-set and writes this snapshot into the
+/// view; `style_to_taffy` consumes it for `Length::Cq*` resolution.
 ///
-/// **Task 7 deletes this function.** No warn is emitted here because
-/// the warn-once gating lives in Task 7's real resolver
-/// (`warn_once_cq_no_ancestor`). A temporary 0-px fallback is a
-/// build-bridge, not behavior worth advertising.
-fn cq_unit_fallback_px(_p: f32) -> f32 {
-    0.0
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.4.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ContainerSnapshot {
+    pub container_type: super::types::ContainerType,
+    pub size: bevy::math::Vec2,
+}
+
+static WARNED_CQ_NO_ANCESTOR: AtomicBool = AtomicBool::new(false);
+static WARNED_CQB_AGAINST_INLINE: AtomicBool = AtomicBool::new(false);
+
+fn warn_once_cq_no_ancestor() {
+    if !WARNED_CQ_NO_ANCESTOR.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: container unit (cqw/cqh/cqi/cqb/cqmin/cqmax) used \
+             without a queried ancestor — falling back to viewport size \
+             (warned once)"
+        );
+    }
+}
+
+fn warn_once_cqb_against_inline_size() {
+    if !WARNED_CQB_AGAINST_INLINE.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: Length::Cqb against a container-type:inline-size — \
+             only inline axis is queryable; falling back to viewport \
+             block-axis (warned once)"
+        );
+    }
+}
+
+/// Resolve any `Length::Cq*` variant to absolute pixels using the
+/// ancestor snapshot (or viewport fallback) and the entity's
+/// writing-mode-derived inline/block axes.
+///
+/// Sideways modes are normalized to their non-sideways vertical
+/// equivalents — `SidewaysRl` is layout-equivalent to `VerticalRl`,
+/// `SidewaysLr` to `VerticalLr` (glyph rotation lives in
+/// `buiy-text-rendering-design`; layout treats them identically).
+/// Prior art: `crates/buiy_core/src/layout/types.rs:604-650`
+/// (`LogicalEdges::to_edges` does the same normalization).
+pub(super) fn resolve_cq_unit_px(
+    unit: Length,
+    nearest: Option<ContainerSnapshot>,
+    viewport: bevy::math::Vec2,
+    wmr: &WritingModeResolved,
+) -> f32 {
+    let (axis_x, axis_y, container_type) = match nearest {
+        Some(snap) => (snap.size.x, snap.size.y, Some(snap.container_type)),
+        None => {
+            warn_once_cq_no_ancestor();
+            (viewport.x, viewport.y, None)
+        }
+    };
+
+    // Writing-mode axis swap. Both vertical AND sideways modes have
+    // inline = y (block = x). HorizontalTb has inline = x. Phase 4
+    // normalizes sideways → vertical for layout; mirror that here
+    // (prior art: types.rs LogicalEdges::to_edges).
+    let mode_for_axis = match wmr.mode {
+        WritingModeKind::SidewaysRl => WritingModeKind::VerticalRl,
+        WritingModeKind::SidewaysLr => WritingModeKind::VerticalLr,
+        other => other,
+    };
+    let (inline_axis, block_axis) = match mode_for_axis {
+        WritingModeKind::HorizontalTb => (axis_x, axis_y),
+        WritingModeKind::VerticalRl | WritingModeKind::VerticalLr => (axis_y, axis_x),
+        // Sideways normalized above; arms exhaustive but explicit.
+        WritingModeKind::SidewaysRl | WritingModeKind::SidewaysLr => {
+            unreachable!("sideways normalized above")
+        }
+    };
+
+    let (pct, basis) = match unit {
+        Length::Cqw(p) => (p, axis_x),
+        Length::Cqh(p) => (p, axis_y),
+        Length::Cqi(p) => (p, inline_axis),
+        Length::Cqb(p) => {
+            // `container-type: inline-size` can't answer block-axis.
+            let basis = match container_type {
+                Some(super::types::ContainerType::InlineSize) => {
+                    warn_once_cqb_against_inline_size();
+                    viewport.y
+                }
+                _ => block_axis,
+            };
+            (p, basis)
+        }
+        Length::Cqmin(p) => (p, inline_axis.min(block_axis)),
+        Length::Cqmax(p) => (p, inline_axis.max(block_axis)),
+        _ => return 0.0,
+    };
+    pct * 0.01 * basis
+}
+
+/// Pre-normalize `Length::Cq*` to `Length::Px(resolved)` so the
+/// per-axis helpers (`length_to_lp` / `length_to_lpa` / `length_to_dim`)
+/// receive only their existing Px / Percent / Fr arms. Non-Cq inputs
+/// pass through unchanged.
+fn normalize_cq(v: Length, view: &StyleView<'_>) -> Length {
+    match v {
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => Length::Px(resolve_cq_unit_px(
+            v,
+            view.nearest_container,
+            view.viewport_size,
+            view.writing_mode_resolved,
+        )),
+        other => other,
+    }
+}
+
+/// Pre-normalize the inner `Length` of a `Sizing::Length(_)` carrier
+/// to swap any `Length::Cq*` for `Length::Px(resolved)`. Non-`Length`
+/// sizing variants pass through unchanged.
+fn normalize_cq_sizing(s: Sizing, view: &StyleView<'_>) -> Sizing {
+    match s {
+        Sizing::Length(l) => Sizing::Length(normalize_cq(l, view)),
+        other => other,
+    }
+}
+
+/// Pre-normalize every `Length` in an `Edges` quartet.
+fn normalize_cq_edges(e: Edges, view: &StyleView<'_>) -> Edges {
+    Edges {
+        top: normalize_cq(e.top, view),
+        right: normalize_cq(e.right, view),
+        bottom: normalize_cq(e.bottom, view),
+        left: normalize_cq(e.left, view),
+    }
+}
+
+/// Pre-normalize every `Sizing` in an `Inset` quartet.
+fn normalize_cq_inset(i: Inset, view: &StyleView<'_>) -> Inset {
+    Inset {
+        top: normalize_cq_sizing(i.top, view),
+        right: normalize_cq_sizing(i.right, view),
+        bottom: normalize_cq_sizing(i.bottom, view),
+        left: normalize_cq_sizing(i.left, view),
+    }
+}
+
+/// Pre-normalize any `Length::Cq*` inside a `TrackSize` tree. Recurses
+/// into `Repeat` and `MinMax` so nested Cq* track entries also resolve
+/// at the boundary.
+fn normalize_cq_track(t: &TrackSize, view: &StyleView<'_>) -> TrackSize {
+    match t {
+        TrackSize::Length(l) => TrackSize::Length(normalize_cq(*l, view)),
+        TrackSize::FitContent(l) => TrackSize::FitContent(normalize_cq(*l, view)),
+        TrackSize::MinMax(parts) => {
+            TrackSize::MinMax(parts.iter().map(|p| normalize_cq_track(p, view)).collect())
+        }
+        TrackSize::Repeat(count, tracks) => TrackSize::Repeat(
+            *count,
+            tracks.iter().map(|p| normalize_cq_track(p, view)).collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// View into the decomposed-component set for one entity. Built by
@@ -82,37 +236,58 @@ pub struct StyleView<'a> {
     /// because their glyph rotation lives in `buiy-text-rendering-design`,
     /// not layout — layout treats them as their non-sideways equivalents.
     pub writing_mode_resolved: &'a WritingModeResolved,
+    /// Snapshot of this entity's nearest queried ancestor (size +
+    /// container-type), or `None` if no queried ancestor exists. Set
+    /// by `sync_styles` via the per-entity ancestor walk; consumed by
+    /// `normalize_cq` when `Length::Cq*` is encountered. Spec § 1.4.
+    ///
+    /// Visibility `pub(super)` mirrors `ContainerSnapshot` — both are
+    /// crate-internal helpers. Tests inside the `layout` module
+    /// (this file's `#[cfg(test)] mod tests`) construct `StyleView`
+    /// directly and can supply `None`.
+    pub(super) nearest_container: Option<ContainerSnapshot>,
+    /// Fallback viewport size when `nearest_container` is `None`.
+    /// Sourced from `bevy::window::Window`. Phase 5 reads this
+    /// inline; Phase 10's `Length::Vw/Vh` infrastructure will
+    /// replace the inline read.
+    pub(super) viewport_size: bevy::math::Vec2,
 }
 
 pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
+    // Pre-normalize every `Length::Cq*` to `Length::Px(resolved)` at the
+    // `style_to_taffy` boundary. Downstream helpers
+    // (`sizing_to_dim` / `edges_to_lp` / `length_to_lp` / `length_to_lpa`)
+    // then see only Px / Percent / Fr — Cq* arms in those helpers are a
+    // defensive fallback that never fires when this normalization is in
+    // place. Spec: container-queries-and-writing-modes.md § 1.4.
     let mut s = taffy::Style {
         display: map_display(view.display),
         box_sizing: map_box_sizing(view.box_model.box_sizing),
         position: map_position_kind(view.position.kind),
         size: taffy::Size {
-            width: sizing_to_dim(view.box_model.width),
-            height: sizing_to_dim(view.box_model.height),
+            width: sizing_to_dim(normalize_cq_sizing(view.box_model.width, &view)),
+            height: sizing_to_dim(normalize_cq_sizing(view.box_model.height, &view)),
         },
         min_size: taffy::Size {
-            width: sizing_to_dim(view.box_model.min_width),
-            height: sizing_to_dim(view.box_model.min_height),
+            width: sizing_to_dim(normalize_cq_sizing(view.box_model.min_width, &view)),
+            height: sizing_to_dim(normalize_cq_sizing(view.box_model.min_height, &view)),
         },
         max_size: taffy::Size {
-            width: sizing_to_dim(view.box_model.max_width),
-            height: sizing_to_dim(view.box_model.max_height),
+            width: sizing_to_dim(normalize_cq_sizing(view.box_model.max_width, &view)),
+            height: sizing_to_dim(normalize_cq_sizing(view.box_model.max_height, &view)),
         },
-        padding: edges_to_lp(view.box_model.padding),
-        margin: edges_to_lpa(view.box_model.margin),
-        border: edges_to_lp(view.box_model.border),
-        inset: inset_to_lpa(view.position.inset),
+        padding: edges_to_lp(normalize_cq_edges(view.box_model.padding, &view)),
+        margin: edges_to_lpa(normalize_cq_edges(view.box_model.margin, &view)),
+        border: edges_to_lp(normalize_cq_edges(view.box_model.border, &view)),
+        inset: inset_to_lpa(normalize_cq_inset(view.position.inset, &view)),
         flex_direction: map_flex_axis(view.flex_params.direction),
         flex_wrap: map_flex_wrap(view.flex_params.wrap),
         justify_content: Some(map_justify_content(view.flex_params.justify_content)),
         align_items: Some(map_align_items(view.flex_params.align_items)),
         align_content: Some(map_align_content(view.flex_params.align_content)),
         gap: taffy::Size {
-            width: length_to_lp(view.flex_params.gap.column),
-            height: length_to_lp(view.flex_params.gap.row),
+            width: length_to_lp(normalize_cq(view.flex_params.gap.column, &view)),
+            height: length_to_lp(normalize_cq(view.flex_params.gap.row, &view)),
         },
         overflow: taffy::Point {
             x: map_overflow_mode(view.overflow.x),
@@ -156,7 +331,7 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
     if let Some(item) = view.flex_item {
         s.flex_grow = item.grow;
         s.flex_shrink = item.shrink;
-        s.flex_basis = sizing_to_dim(item.basis);
+        s.flex_basis = sizing_to_dim(normalize_cq_sizing(item.basis, &view));
         // Taffy 0.10 has no `order` field on Style. CSS `order` would
         // need a Buiy-side sibling sort before `set_children`; that
         // lands later (tracked under flex-and-grid follow-ups). Phase 1
@@ -172,30 +347,31 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
 
     // Grid container fields. Only meaningful when display is Grid /
     // InlineGrid, but Taffy ignores them otherwise — so unconditional
-    // population is safe and removes a branch.
+    // population is safe and removes a branch. Pre-normalize Cq* in
+    // every track before mapping into Taffy types.
     s.grid_template_columns = view
         .grid_params
         .template_columns
         .iter()
-        .map(track_to_template)
+        .map(|t| track_to_template(&normalize_cq_track(t, &view)))
         .collect();
     s.grid_template_rows = view
         .grid_params
         .template_rows
         .iter()
-        .map(track_to_template)
+        .map(|t| track_to_template(&normalize_cq_track(t, &view)))
         .collect();
     s.grid_auto_columns = view
         .grid_params
         .auto_columns
         .iter()
-        .map(track_to_sizing)
+        .map(|t| track_to_sizing(&normalize_cq_track(t, &view)))
         .collect();
     s.grid_auto_rows = view
         .grid_params
         .auto_rows
         .iter()
-        .map(track_to_sizing)
+        .map(|t| track_to_sizing(&normalize_cq_track(t, &view)))
         .collect();
     s.grid_auto_flow = map_grid_auto_flow(view.grid_params.auto_flow);
     if let Some(areas) = &view.grid_params.template_areas {
@@ -234,8 +410,8 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
         s.justify_content = Some(map_justify_content(view.grid_params.justify_content));
         s.align_content = Some(map_align_content(view.grid_params.align_content));
         s.gap = taffy::Size {
-            width: length_to_lp(view.grid_params.gap.column),
-            height: length_to_lp(view.grid_params.gap.row),
+            width: length_to_lp(normalize_cq(view.grid_params.gap.column, &view)),
+            height: length_to_lp(normalize_cq(view.grid_params.gap.row, &view)),
         };
     }
 
@@ -401,12 +577,15 @@ fn length_to_dim(l: Length) -> taffy::Dimension {
             warn_once_fr_outside_grid();
             taffy::Dimension::auto()
         }
-        Length::Cqw(p)
-        | Length::Cqh(p)
-        | Length::Cqi(p)
-        | Length::Cqb(p)
-        | Length::Cqmin(p)
-        | Length::Cqmax(p) => taffy::Dimension::length(cq_unit_fallback_px(p)),
+        // Cq* should have been pre-normalized by `normalize_cq` at the
+        // `style_to_taffy` boundary; reaching this arm means a caller
+        // skipped normalization. Resolve to 0 as a defensive fallback.
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => taffy::Dimension::length(0.0),
     }
 }
 
@@ -420,12 +599,15 @@ fn length_to_lp(l: Length) -> taffy::LengthPercentage {
             warn_once_fr_outside_grid();
             taffy::LengthPercentage::length(0.0)
         }
-        Length::Cqw(p)
-        | Length::Cqh(p)
-        | Length::Cqi(p)
-        | Length::Cqb(p)
-        | Length::Cqmin(p)
-        | Length::Cqmax(p) => taffy::LengthPercentage::length(cq_unit_fallback_px(p)),
+        // Cq* should have been pre-normalized by `normalize_cq` at the
+        // `style_to_taffy` boundary; reaching this arm means a caller
+        // skipped normalization. Resolve to 0 as a defensive fallback.
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => taffy::LengthPercentage::length(0.0),
     }
 }
 
@@ -437,12 +619,15 @@ fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
             warn_once_fr_outside_grid();
             taffy::LengthPercentageAuto::auto()
         }
-        Length::Cqw(p)
-        | Length::Cqh(p)
-        | Length::Cqi(p)
-        | Length::Cqb(p)
-        | Length::Cqmin(p)
-        | Length::Cqmax(p) => taffy::LengthPercentageAuto::length(cq_unit_fallback_px(p)),
+        // Cq* should have been pre-normalized by `normalize_cq` at the
+        // `style_to_taffy` boundary; reaching this arm means a caller
+        // skipped normalization. Resolve to 0 as a defensive fallback.
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => taffy::LengthPercentageAuto::length(0.0),
     }
 }
 
@@ -557,14 +742,17 @@ fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
         TrackSize::Length(Length::Fr(v)) => fr(*v),
         TrackSize::Length(Length::Px(v)) => length(*v),
         TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        // Cq* should have been pre-normalized by `normalize_cq_track` at
+        // the `style_to_taffy` boundary; reaching this arm means a caller
+        // skipped normalization. Resolve to 0 as a defensive fallback.
         TrackSize::Length(
-            Length::Cqw(p)
-            | Length::Cqh(p)
-            | Length::Cqi(p)
-            | Length::Cqb(p)
-            | Length::Cqmin(p)
-            | Length::Cqmax(p),
-        ) => length(cq_unit_fallback_px(*p)),
+            Length::Cqw(_)
+            | Length::Cqh(_)
+            | Length::Cqi(_)
+            | Length::Cqb(_)
+            | Length::Cqmin(_)
+            | Length::Cqmax(_),
+        ) => length(0.0),
         // `MinMax` carries a Vec<TrackSize>; spec/Phase3 invariant is
         // exactly 2 elements [min, max]. Other arities warn-once and
         // degrade to Auto. (Bevy 0.18 Reflect lacks a Box<T> impl, so we
@@ -594,14 +782,17 @@ fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
         TrackSize::MaxContent => max_content(),
         TrackSize::Length(Length::Px(v)) => length(*v),
         TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        // Cq* should have been pre-normalized at the `style_to_taffy`
+        // boundary; reaching this arm means a caller skipped
+        // normalization. Resolve to 0 as a defensive fallback.
         TrackSize::Length(
-            Length::Cqw(p)
-            | Length::Cqh(p)
-            | Length::Cqi(p)
-            | Length::Cqb(p)
-            | Length::Cqmin(p)
-            | Length::Cqmax(p),
-        ) => length(cq_unit_fallback_px(*p)),
+            Length::Cqw(_)
+            | Length::Cqh(_)
+            | Length::Cqi(_)
+            | Length::Cqb(_)
+            | Length::Cqmin(_)
+            | Length::Cqmax(_),
+        ) => length(0.0),
         // CSS forbids these in MinMax's min slot:
         // - Fr (fr-in-min is grammar-invalid)
         // - FitContent (Min has no TaffyFitContent impl in Taffy 0.10)
@@ -628,14 +819,17 @@ fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
         TrackSize::Length(Length::Fr(v)) => fr(*v),
         TrackSize::Length(Length::Px(v)) => length(*v),
         TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        // Cq* should have been pre-normalized at the `style_to_taffy`
+        // boundary; reaching this arm means a caller skipped
+        // normalization. Resolve to 0 as a defensive fallback.
         TrackSize::Length(
-            Length::Cqw(p)
-            | Length::Cqh(p)
-            | Length::Cqi(p)
-            | Length::Cqb(p)
-            | Length::Cqmin(p)
-            | Length::Cqmax(p),
-        ) => length(cq_unit_fallback_px(*p)),
+            Length::Cqw(_)
+            | Length::Cqh(_)
+            | Length::Cqi(_)
+            | Length::Cqb(_)
+            | Length::Cqmin(_)
+            | Length::Cqmax(_),
+        ) => length(0.0),
         TrackSize::MinMax(_) | TrackSize::Repeat(_, _) | TrackSize::Subgrid => {
             warn_once_invalid_track_nesting();
             auto()
@@ -823,6 +1017,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         // Default Display::Block + ContentBox + everything Auto produces taffy default Display::Block.
         assert_eq!(taffy.display, taffy::Display::Block);
@@ -868,6 +1064,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert_eq!(taffy.display, taffy::Display::Flex);
         assert_eq!(taffy.flex_direction, taffy::FlexDirection::Row);
@@ -907,6 +1105,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(10.0));
@@ -942,6 +1142,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert_eq!(taffy.flex_grow, 2.0);
         assert_eq!(taffy.flex_shrink, 0.5);
@@ -1011,6 +1213,8 @@ mod tests {
                 grid_item: None,
                 parent_areas: None,
                 writing_mode_resolved: &writing_mode_resolved,
+                nearest_container: None,
+                viewport_size: bevy::math::Vec2::ZERO,
             });
             assert_eq!(
                 taffy.overflow.x, x_expected,
@@ -1053,6 +1257,8 @@ mod tests {
                 grid_item: None,
                 parent_areas: None,
                 writing_mode_resolved: &writing_mode_resolved,
+                nearest_container: None,
+                viewport_size: bevy::math::Vec2::ZERO,
             });
             assert_eq!(taffy.scrollbar_width, expected, "{input:?}");
         }
@@ -1089,6 +1295,8 @@ mod tests {
                 grid_item: None,
                 parent_areas: None,
                 writing_mode_resolved: &writing_mode_resolved,
+                nearest_container: None,
+                viewport_size: bevy::math::Vec2::ZERO,
             });
             assert_eq!(taffy.display, taffy::Display::Grid, "{display:?}");
         }
@@ -1122,6 +1330,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert_eq!(taffy.grid_template_columns.len(), 2);
         assert!(matches!(
@@ -1158,6 +1368,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert_eq!(taffy.grid_template_columns.len(), 1);
         assert!(matches!(
@@ -1193,6 +1405,8 @@ mod tests {
             grid_item: Some(&item),
             parent_areas: None,
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         // Line(1) and Line(4) — the values are GridPlacement variants.
         // Pin the discriminants by construction.
@@ -1242,6 +1456,8 @@ mod tests {
             grid_item: Some(&item),
             parent_areas: Some(&parent_areas),
             writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         // Column resolves to Line(1)..Line(3) (1-indexed, end is exclusive
         // in CSS spec terms — column_start 0 → Line(1), column_end 2 →
@@ -1281,6 +1497,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &wmr,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert!(matches!(taffy.direction, taffy::Direction::Rtl));
     }
@@ -1307,6 +1525,8 @@ mod tests {
             grid_item: None,
             parent_areas: None,
             writing_mode_resolved: &wmr,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
         });
         assert!(matches!(taffy.direction, taffy::Direction::Ltr));
     }

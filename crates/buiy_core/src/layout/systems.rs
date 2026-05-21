@@ -20,7 +20,7 @@ use super::components::{
     FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, WritingMode,
     WritingModeResolved,
 };
-use super::translate::{StyleView, style_to_taffy};
+use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{ContainerType, GridAreas, Length, QueryCondition};
 use crate::components::{Node, ResolvedLayout};
@@ -119,10 +119,32 @@ pub(super) fn sync_styles(
                 Changed<WritingModeResolved>,
                 Changed<Children>,
                 Changed<ChildOf>,
+                // Phase 5 Task 7: container units (`Length::Cq*`) resolve
+                // against the entity's nearest queried ancestor's
+                // *previous-frame* `ResolvedLayout`. When an ancestor's
+                // resolved size changes — or when the entity is freshly
+                // added with a not-yet-resolved ancestor — the cascade
+                // surfaces as `Changed<ResolvedLayout>` on this entity
+                // (its own size is what just shifted to track the
+                // ancestor's previous-frame value). Including it here
+                // re-translates the entity on the next frame so the new
+                // ancestor size flows through. Phase 2 invariant intact:
+                // ScrollOffset / ScrollSnapItem stay excluded, and
+                // ResolvedLayout in steady-state does not refresh
+                // (Bevy 0.18 `Commands::insert` increments the change
+                // tick on every write, but the per-frame work this
+                // produces is bounded by the actual size cascade —
+                // entities whose computed Taffy size is genuinely
+                // stable converge after at most one extra frame and
+                // then stop firing).
+                Changed<ResolvedLayout>,
             )>,
         ),
     >,
     parent_grid_lookup: Query<&GridParams>,
+    container_snapshot_source: Query<(Entity, &Container, &ResolvedLayout)>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    cq_parent_chain: Query<&ChildOf>,
 ) {
     let tree = &mut *tree;
 
@@ -141,6 +163,39 @@ pub(super) fn sync_styles(
             grid.template_areas.clone().map(|a| (entity, a))
         })
         .collect();
+
+    // Build the per-entity container-size snapshot once per frame.
+    // One pass over all `Container` carriers (the count is small —
+    // query containers are sparse compared to leaf nodes), keyed by
+    // entity. The per-entity ancestor walk below resolves the nearest
+    // queried ancestor by walking `ChildOf` and looking up this index.
+    // `Normal` containers are skipped — only `Size` / `InlineSize` are
+    // query targets. Spec § 1.4.
+    let container_index: HashMap<Entity, ContainerSnapshot> = container_snapshot_source
+        .iter()
+        .filter_map(|(entity, container, layout)| {
+            if container.container_type == ContainerType::Normal {
+                None
+            } else {
+                Some((
+                    entity,
+                    ContainerSnapshot {
+                        container_type: container.container_type,
+                        size: layout.size,
+                    },
+                ))
+            }
+        })
+        .collect();
+
+    // Viewport fallback. Phase 5 reads the primary window inline;
+    // Phase 10's `Length::Vw/Vh` infrastructure will replace this read
+    // without behavior change.
+    let viewport_size = primary_window
+        .single()
+        .ok()
+        .map(|w| bevy::math::Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(bevy::math::Vec2::ZERO);
 
     // Ensure every Buiy entity has a Taffy node + current style. Insert
     // happens for entities new this frame (Changed<T> triggers on insert);
@@ -162,6 +217,8 @@ pub(super) fn sync_styles(
         _parent,
     ) in nodes.iter()
     {
+        let nearest_container =
+            nearest_container_with_size(entity, &container_index, &cq_parent_chain);
         let view = StyleView {
             display,
             box_model: bm,
@@ -174,6 +231,8 @@ pub(super) fn sync_styles(
             grid_item,
             parent_areas: parent_areas_for.get(&entity),
             writing_mode_resolved,
+            nearest_container,
+            viewport_size,
         };
         let taffy_style = style_to_taffy(view);
         match tree.by_entity.get(&entity).copied() {
@@ -271,17 +330,36 @@ pub(super) fn taffy_compute(
 /// Step 7 — read `tree.layout(id)` for every tracked entity and write
 /// the resulting position+size into `ResolvedLayout`. On Taffy `Err`,
 /// retain the previous frame's value.
-pub(super) fn write_resolved_layout(mut commands: Commands, tree: NonSend<LayoutTree>) {
+///
+/// **Idempotent insert** — only writes when the new value differs from
+/// the entity's current `ResolvedLayout` (Phase 5 Task 7). Without this
+/// guard, `Commands::insert` would refresh the change tick every frame,
+/// keeping `Changed<ResolvedLayout>` perpetually true — which would
+/// cascade `sync_styles` into iterating every node every frame (Task 7
+/// added `Changed<ResolvedLayout>` to the Or-filter so the
+/// container-unit size cascade can re-translate descendants). With the
+/// guard, `Changed<ResolvedLayout>` fires only on actual size /
+/// position changes, preserving the O(0) steady-state contract
+/// (Phase 2 invariant).
+pub(super) fn write_resolved_layout(
+    mut commands: Commands,
+    tree: NonSend<LayoutTree>,
+    existing: Query<&ResolvedLayout>,
+) {
     let mut to_write: Vec<(Entity, ResolvedLayout)> = Vec::new();
     for (&entity, &id) in tree.by_entity.iter() {
         if let Ok(layout) = tree.tree.layout(id) {
-            to_write.push((
-                entity,
-                ResolvedLayout {
-                    position: Vec2::new(layout.location.x, layout.location.y),
-                    size: Vec2::new(layout.size.width, layout.size.height),
-                },
-            ));
+            let new = ResolvedLayout {
+                position: Vec2::new(layout.location.x, layout.location.y),
+                size: Vec2::new(layout.size.width, layout.size.height),
+            };
+            let unchanged = existing
+                .get(entity)
+                .map(|cur| cur.position == new.position && cur.size == new.size)
+                .unwrap_or(false);
+            if !unchanged {
+                to_write.push((entity, new));
+            }
         }
     }
     for (e, rl) in to_write {
@@ -491,6 +569,30 @@ pub(super) fn cq_activate(
                 .insert(ContainerQueryInactive)
                 .remove::<ContainerQueryActive>();
         }
+    }
+}
+
+/// Walk up `ChildOf` from `entity`, returning the snapshot for the
+/// first ancestor present in `lookup`. Not memoized across entities —
+/// depth is bounded by hierarchy depth and the changed-set size
+/// (Phase 2 invariant: most frames the set is empty). A memo across
+/// entities is a future optimization; v1 keeps the helper stateless.
+///
+/// Used by `sync_styles` to resolve the nearest queried ancestor's
+/// snapshot for `Length::Cq*` resolution at the `style_to_taffy`
+/// boundary. Spec § 1.4.
+fn nearest_container_with_size(
+    entity: Entity,
+    lookup: &HashMap<Entity, ContainerSnapshot>,
+    parent_chain: &Query<&ChildOf>,
+) -> Option<ContainerSnapshot> {
+    let mut cur = entity;
+    loop {
+        let parent = parent_chain.get(cur).ok()?.parent();
+        if let Some(snap) = lookup.get(&parent) {
+            return Some(*snap);
+        }
+        cur = parent;
     }
 }
 
