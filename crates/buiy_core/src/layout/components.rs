@@ -338,6 +338,23 @@ pub struct ContainerQuery {
     pub conditions: Vec<QueryCondition>,
 }
 
+/// Marker — set by `cq_activate` when the entity's `ContainerQuery`
+/// matched its container's resolved size on the current activation
+/// pass. Mutually exclusive with `ContainerQueryInactive`.
+///
+/// Authors observe `With<ContainerQueryActive>` to apply whatever
+/// behavior they want on activation. Spec § 1.2: style-bundle
+/// application is consumer-responsibility.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct ContainerQueryActive;
+
+/// Marker — set by `cq_activate` when the entity's `ContainerQuery`
+/// did *not* match. Mutually exclusive with `ContainerQueryActive`.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct ContainerQueryInactive;
+
 /// Runtime scroll position of a scroll container. Mutated by the
 /// scroll-input handler in `buiy-input-events-design`. Read by render
 /// (drawing) and picking (hit-testing) at consume time, and by Phase 7
@@ -550,5 +567,11 @@ mod tests {
         let q = ContainerQuery::default();
         assert_eq!(q.container, None);
         assert!(q.conditions.is_empty());
+    }
+
+    #[test]
+    fn container_query_active_inactive_are_distinct_markers() {
+        let _a = ContainerQueryActive;
+        let _i = ContainerQueryInactive;
     }
 }
