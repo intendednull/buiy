@@ -28,6 +28,30 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
 
+/// Resource — set by `cq_flip_check` (step 4) when one or more
+/// `ContainerQuery` activation states differ from this frame's
+/// step-2 result. Consumed by `cq_flip_rerun` (step 5), which gates
+/// its body on the flag and clears it after re-running. Cleared
+/// implicitly at the next frame's step 4 (which overwrites the
+/// flag with its own decision).
+///
+/// Architecture: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.2.
+#[derive(Resource, Default, Debug)]
+pub struct CqReRunRequested(pub bool);
+
+/// Resource — per-frame counter of how many times Taffy's
+/// `compute_layout` was invoked. Reset to zero at the start of each
+/// `taffy_compute` invocation (i.e. once per frame), then bumped
+/// after each compute (once per layout root). `cq_flip_rerun` also
+/// bumps the counter when it re-runs Taffy, so a flip frame ends
+/// with `count == 2 * roots` and a non-flip frame ends with
+/// `count == roots`.
+///
+/// Used by `tests/layout_container_queries.rs` to assert the
+/// architecture.md § 3.2 "cap at 2× Taffy per frame" contract.
+#[derive(Resource, Default, Debug)]
+pub struct LayoutTaffyComputeCount(pub u32);
+
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
 /// removed (despawn or component-remove). `RemovedComponents<Node>`
 /// ordering across a parent/child despawn pair is not guaranteed by
@@ -201,7 +225,67 @@ pub(super) fn sync_styles(
     // happens for entities new this frame (Changed<T> triggers on insert);
     // existing entities run set_style only when something in the trigger
     // set actually changed — see foundation/architecture.md § 1.2.
-    for (
+    for item in nodes.iter() {
+        translate_one_entity(
+            item,
+            &parent_areas_for,
+            &container_index,
+            &cq_parent_chain,
+            viewport_size,
+            tree,
+        );
+    }
+
+    // Sync child relationships for each Buiy entity.
+    for (entity, .., children, _parent) in nodes.iter() {
+        sync_children_for_entity(entity, children, tree);
+    }
+}
+
+/// Per-entity tuple emitted by `sync_styles`'s (and `cq_flip_rerun`'s)
+/// main filtered query. Aliased so both systems share one tuple shape
+/// — change the alias if the filter widens.
+#[allow(clippy::type_complexity)]
+type NodeQueryItem<'w> = (
+    Entity,
+    &'w Display,
+    &'w BoxModel,
+    &'w Position,
+    &'w FlexParams,
+    Option<&'w FlexItem>,
+    &'w Overflow,
+    &'w Scroll,
+    &'w GridParams,
+    Option<&'w GridItem>,
+    &'w WritingModeResolved,
+    Option<&'w Children>,
+    Option<&'w ChildOf>,
+);
+
+/// Per-entity translation work — build a `StyleView`, call
+/// `style_to_taffy`, and either `set_style` (existing node) or
+/// `new_leaf` + register (new node) on the `LayoutTree`.
+///
+/// Factored out of `sync_styles` so `cq_flip_rerun` (Phase 5 step 5)
+/// reuses the exact same per-entity translation when re-running after
+/// a same-frame activation flip. Approach B from the plan: a normal
+/// system with the union of `sync_styles` + `taffy_compute` params,
+/// delegating per-entity work to this helper instead of `&mut World`
+/// + `SystemState`.
+///
+/// The children-sync pass is intentionally NOT here — Taffy's
+/// `set_children` requires all child nodes to exist first, so it
+/// must run in a second pass after every entity has been translated.
+/// `sync_children_for_entity` is the matching helper.
+pub(super) fn translate_one_entity(
+    item: NodeQueryItem<'_>,
+    parent_areas_for: &HashMap<Entity, GridAreas>,
+    container_index: &HashMap<Entity, ContainerSnapshot>,
+    cq_parent_chain: &Query<&ChildOf>,
+    viewport_size: bevy::math::Vec2,
+    tree: &mut LayoutTree,
+) {
+    let (
         entity,
         display,
         bm,
@@ -215,88 +299,88 @@ pub(super) fn sync_styles(
         writing_mode_resolved,
         _children,
         _parent,
-    ) in nodes.iter()
-    {
-        let nearest_container =
-            nearest_container_with_size(entity, &container_index, &cq_parent_chain);
-        let view = StyleView {
-            display,
-            box_model: bm,
-            position,
-            flex_params: flex,
-            flex_item,
-            overflow,
-            scroll,
-            grid_params,
-            grid_item,
-            parent_areas: parent_areas_for.get(&entity),
-            writing_mode_resolved,
-            nearest_container,
-            viewport_size,
-        };
-        let taffy_style = style_to_taffy(view);
-        match tree.by_entity.get(&entity).copied() {
-            Some(id) => {
-                if let Err(err) = tree.tree.set_style(id, taffy_style) {
-                    warn!(?entity, ?err, "buiy: layout set_style failed");
-                }
-            }
-            None => match tree.tree.new_leaf(taffy_style) {
-                Ok(id) => {
-                    tree.by_entity.insert(entity, id);
-                }
-                Err(err) => {
-                    warn!(
-                        ?entity,
-                        ?err,
-                        "buiy: layout new_leaf failed; entity will be skipped this frame"
-                    );
-                }
-            },
-        }
-    }
+    ) = item;
 
-    // Sync child relationships for each Buiy entity.
-    for (
-        entity,
-        _display,
-        _bm,
-        _position,
-        _flex,
-        _flex_item,
-        _overflow,
-        _scroll,
-        _grid_params,
-        _grid_item,
-        _writing_mode_resolved,
-        children,
-        _parent,
-    ) in nodes.iter()
-    {
-        let parent_id = match tree.by_entity.get(&entity).copied() {
-            Some(id) => id,
-            None => continue,
-        };
-        let child_ids: Vec<TaffyNodeId> = children
-            .into_iter()
-            .flatten()
-            .filter_map(|c| tree.by_entity.get(c).copied())
-            .collect();
-        if let Err(err) = tree.tree.set_children(parent_id, &child_ids) {
-            warn!(?entity, ?err, "buiy: layout set_children failed");
+    let nearest_container = nearest_container_with_size(entity, container_index, cq_parent_chain);
+    let view = StyleView {
+        display,
+        box_model: bm,
+        position,
+        flex_params: flex,
+        flex_item,
+        overflow,
+        scroll,
+        grid_params,
+        grid_item,
+        parent_areas: parent_areas_for.get(&entity),
+        writing_mode_resolved,
+        nearest_container,
+        viewport_size,
+    };
+    let taffy_style = style_to_taffy(view);
+    match tree.by_entity.get(&entity).copied() {
+        Some(id) => {
+            if let Err(err) = tree.tree.set_style(id, taffy_style) {
+                warn!(?entity, ?err, "buiy: layout set_style failed");
+            }
         }
+        None => match tree.tree.new_leaf(taffy_style) {
+            Ok(id) => {
+                tree.by_entity.insert(entity, id);
+            }
+            Err(err) => {
+                warn!(
+                    ?entity,
+                    ?err,
+                    "buiy: layout new_leaf failed; entity will be skipped this frame"
+                );
+            }
+        },
+    }
+}
+
+/// Per-entity child-sync — second-pass companion to
+/// `translate_one_entity`. Taffy's `set_children` requires all child
+/// nodes to exist first, so this must run after every entity has been
+/// translated. Factored out so `cq_flip_rerun` can re-use it.
+fn sync_children_for_entity(entity: Entity, children: Option<&Children>, tree: &mut LayoutTree) {
+    let parent_id = match tree.by_entity.get(&entity).copied() {
+        Some(id) => id,
+        None => return,
+    };
+    let child_ids: Vec<TaffyNodeId> = children
+        .into_iter()
+        .flatten()
+        .filter_map(|c| tree.by_entity.get(c).copied())
+        .collect();
+    if let Err(err) = tree.tree.set_children(parent_id, &child_ids) {
+        warn!(?entity, ?err, "buiy: layout set_children failed");
     }
 }
 
 /// Step 3 — call `tree.compute_layout` from each root. A root is an
 /// entity with `Node` and either no `ChildOf`, or a `ChildOf` whose
 /// target is not in `LayoutTree` (i.e., a non-Buiy parent).
+///
+/// Resets `LayoutTaffyComputeCount` to zero at the start of each
+/// invocation (i.e. once per frame) and bumps it after every
+/// successful `compute_layout`. `cq_flip_rerun` (step 5) bumps the
+/// same counter when it re-runs, so a flip frame ends with
+/// `count == 2 * roots` and a non-flip frame with `count == roots`.
+/// The Phase 5 "cap at 2× Taffy per frame" architecture invariant
+/// is asserted by `tests/layout_container_queries.rs`.
 pub(super) fn taffy_compute(
     mut tree: NonSendMut<LayoutTree>,
     nodes: Query<(Entity, Option<&ChildOf>), With<Node>>,
     windows: Query<&bevy::window::Window>,
+    mut compute_count: ResMut<LayoutTaffyComputeCount>,
 ) {
     let tree = &mut *tree;
+
+    // Frame-start reset. `cq_flip_rerun` increments without resetting,
+    // so the counter ends each frame at exactly the number of Taffy
+    // invocations (1 for non-flip, 2 for flip).
+    compute_count.0 = 0;
 
     // Layout root sizing falls back to 800x600 if no Window exists (test
     // harnesses with MinimalPlugins). Phase 0 used the same default.
@@ -313,16 +397,21 @@ pub(super) fn taffy_compute(
         if !is_root {
             continue;
         }
-        if let Some(id) = tree.by_entity.get(&entity).copied()
-            && let Err(err) = tree.tree.compute_layout(
+        if let Some(id) = tree.by_entity.get(&entity).copied() {
+            match tree.tree.compute_layout(
                 id,
                 Size {
                     width: AvailableSpace::Definite(window_size.x),
                     height: AvailableSpace::Definite(window_size.y),
                 },
-            )
-        {
-            warn!(?entity, ?err, "buiy: layout compute_layout failed");
+            ) {
+                Ok(_) => {
+                    compute_count.0 += 1;
+                }
+                Err(err) => {
+                    warn!(?entity, ?err, "buiy: layout compute_layout failed");
+                }
+            }
         }
     }
 }
@@ -599,6 +688,17 @@ fn nearest_container_with_size(
 /// Walk up `ChildOf` from `entity`, returning the first ancestor that
 /// is a query container (`Container::container_type != Normal`) and,
 /// if `name` is `Some(n)`, has matching `container_name`. Memoized.
+///
+/// `cq_activate` (Task 6) reads previous-frame `ResolvedLayout` from
+/// the container ancestor, which is why this version takes the wider
+/// `Query<(&Container, &ResolvedLayout)>`. `cq_flip_check` reads
+/// instead from `tree.layout(node_id)` (architecture.md § 3.2
+/// explicit pinning) and uses the narrower `Query<&Container>` via
+/// `resolve_nearest_container_by_name`. Both helpers are kept
+/// separate because Bevy 0.18 query parameters are structural — the
+/// wider query cannot be passed where the narrower one is expected
+/// without an adapter, and adding the adapter just to share one walk
+/// would obscure the per-site read-set.
 pub(super) fn resolve_nearest_container(
     entity: Entity,
     name: &Option<String>,
@@ -631,6 +731,283 @@ pub(super) fn resolve_nearest_container(
     };
     memo.insert(entity, result);
     result
+}
+
+/// Name-aware ancestor walk used by `cq_flip_check`. Same shape as
+/// `resolve_nearest_container` (Task 6) minus the `&ResolvedLayout`
+/// read — `cq_flip_check` reads sizes from `tree.layout(node_id)`
+/// (architecture.md § 3.2 explicit pinning), so the broader
+/// `Query<(&Container, &ResolvedLayout)>` would over-claim what this
+/// helper actually needs.
+pub(super) fn resolve_nearest_container_by_name(
+    entity: Entity,
+    name: &Option<String>,
+    memo: &mut HashMap<Entity, Option<Entity>>,
+    containers: &Query<&Container>,
+    parent_chain: &Query<&ChildOf>,
+) -> Option<Entity> {
+    if let Some(cached) = memo.get(&entity) {
+        return *cached;
+    }
+    let result = match parent_chain.get(entity) {
+        Ok(p) => {
+            let parent = p.parent();
+            let matches = containers.get(parent).ok().and_then(|c| {
+                if c.container_type == ContainerType::Normal {
+                    return None;
+                }
+                match (name, &c.container_name) {
+                    (None, _) => Some(parent),
+                    (Some(want), Some(have)) if want == have => Some(parent),
+                    _ => None,
+                }
+            });
+            match matches {
+                Some(e) => Some(e),
+                None => {
+                    resolve_nearest_container_by_name(parent, name, memo, containers, parent_chain)
+                }
+            }
+        }
+        Err(_) => None,
+    };
+    memo.insert(entity, result);
+    result
+}
+
+/// Step 4 (`BuiyLayoutStep::CqFlipCheck`) — re-evaluate every
+/// `ContainerQuery` against this frame's fresh Taffy output. The size
+/// source per architecture.md § 3.2 is **`tree.layout(node_id)`**,
+/// NOT entity-side `ResolvedLayout` (which is still last-frame's
+/// value because step 7 hasn't written yet this frame).
+///
+/// If any rule's activation differs from what `cq_activate` (step 2)
+/// settled on this frame, toggle markers and set
+/// `CqReRunRequested(true)`. Entities with no resolvable container
+/// ancestor are treated as `active_now = false`, mirroring
+/// `cq_activate`'s handling (a previously-active rule whose
+/// ancestor became unavailable must be allowed to flip back).
+///
+/// **No `Without<ContainerQuery>` filter** on the `containers` query
+/// — an entity can legitimately be both a query container AND carry a
+/// `ContainerQuery` (mid-tree container reacting to its own
+/// ancestor). Excluding such entities silently breaks descendant
+/// resolution. Read-side concern only; `&Container` and
+/// `&ContainerQuery` are disjoint components, so Bevy 0.18's borrow
+/// checker doesn't require the filter.
+#[allow(clippy::type_complexity)]
+pub(super) fn cq_flip_check(
+    mut commands: Commands,
+    tree: NonSend<LayoutTree>,
+    rules: Query<(Entity, &ContainerQuery, Option<&ContainerQueryActive>), With<Node>>,
+    containers: Query<&Container>,
+    parent_chain: Query<&ChildOf>,
+    mut rerun: ResMut<CqReRunRequested>,
+) {
+    let mut memo: HashMap<Entity, Option<Entity>> = HashMap::new();
+    let mut any_flipped = false;
+
+    for (entity, rule, was_active) in rules.iter() {
+        let container_entity = resolve_nearest_container_by_name(
+            entity,
+            &rule.container,
+            &mut memo,
+            &containers,
+            &parent_chain,
+        );
+
+        let active_now = match container_entity {
+            Some(c) => match tree.by_entity.get(&c) {
+                Some(node_id) => match tree.tree.layout(*node_id) {
+                    Ok(layout) => evaluate_conditions(
+                        &rule.conditions,
+                        Vec2::new(layout.size.width, layout.size.height),
+                    ),
+                    // Taffy doesn't know this node yet (entity hasn't
+                    // been translated this frame). Treat as inactive
+                    // — mirrors no-ancestor handling so a
+                    // previously-active rule whose container was
+                    // never translated this frame can flip back.
+                    Err(_) => false,
+                },
+                None => false,
+            },
+            None => false,
+        };
+
+        let was_active_b = was_active.is_some();
+        if active_now != was_active_b {
+            any_flipped = true;
+            if active_now {
+                commands
+                    .entity(entity)
+                    .insert(ContainerQueryActive)
+                    .remove::<ContainerQueryInactive>();
+            } else {
+                commands
+                    .entity(entity)
+                    .insert(ContainerQueryInactive)
+                    .remove::<ContainerQueryActive>();
+            }
+        }
+    }
+
+    rerun.0 = any_flipped;
+}
+
+/// Step 5 (`BuiyLayoutStep::CqFlipReRun`) — when `cq_flip_check`
+/// signaled a flip in step 4, re-run the inner work of `sync_styles`
+/// and `taffy_compute` once. Cap at one re-run per frame
+/// (architecture.md § 3.2: "step 4 does not re-run; transitive flips
+/// wait until next frame"). At most 2× Taffy per frame.
+///
+/// Approach B (committed in the plan): a normal Bevy system with the
+/// union of `sync_styles` + `taffy_compute` params. The
+/// `SystemState`-on-`&mut World` approach is rejected because the
+/// existing `sync_styles` declares `NonSendMut<LayoutTree>` and many
+/// `Query<...>` params — leaving it as a "trivial wrapper" while
+/// moving the body into an `&mut World` inner doesn't compose.
+///
+/// The work is INTENTIONALLY duplicative with `sync_styles` +
+/// `taffy_compute`. The plan accepted this trade-off so the body
+/// stays an ordinary system the compiler can borrow-check.
+/// `translate_one_entity` is the per-entity sharing point; the
+/// container-snapshot + viewport + children passes are inlined here
+/// because their input shape is straightforward.
+///
+/// Body is gated on `CqReRunRequested.0`; when false, the system
+/// returns immediately (the common, no-flip case). Bumps
+/// `LayoutTaffyComputeCount` for each Taffy re-invocation so the
+/// "cap at 2× Taffy" architecture invariant is observable in tests.
+///
+/// `clippy::too_many_arguments` is silenced because the param set is
+/// the (intentional) union of `sync_styles` + `taffy_compute` — not
+/// a function that could meaningfully be split. Bevy systems are
+/// allowed up to 16 params; this one uses 10.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(super) fn cq_flip_rerun(
+    mut rerun: ResMut<CqReRunRequested>,
+    mut compute_count: ResMut<LayoutTaffyComputeCount>,
+    mut tree: NonSendMut<LayoutTree>,
+    nodes: Query<
+        NodeQueryItem<'_>,
+        (
+            With<Node>,
+            Or<(
+                Changed<Display>,
+                Changed<BoxModel>,
+                Changed<Position>,
+                Changed<FlexParams>,
+                Changed<FlexItem>,
+                Changed<Overflow>,
+                Changed<Scroll>,
+                Changed<GridParams>,
+                Changed<GridItem>,
+                Changed<WritingMode>,
+                Changed<WritingModeResolved>,
+                Changed<Children>,
+                Changed<ChildOf>,
+                Changed<ResolvedLayout>,
+            )>,
+        ),
+    >,
+    parent_grid_lookup: Query<&GridParams>,
+    container_snapshot_source: Query<(Entity, &Container, &ResolvedLayout)>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    cq_parent_chain: Query<&ChildOf>,
+    roots: Query<(Entity, Option<&ChildOf>), With<Node>>,
+    windows: Query<&bevy::window::Window>,
+) {
+    if !rerun.0 {
+        return;
+    }
+    rerun.0 = false;
+
+    let tree = &mut *tree;
+
+    // Rebuild the parent-areas + container-index + viewport snapshots
+    // for the re-run. Same shape as `sync_styles`'s setup; we cannot
+    // hand those off from the first pass because they're stack-local.
+    // The re-run cost is bounded by the changed-set, which is small.
+    let parent_areas_for: HashMap<Entity, GridAreas> = nodes
+        .iter()
+        .filter_map(|(entity, .., parent)| {
+            let p = parent?;
+            let grid = parent_grid_lookup.get(p.parent()).ok()?;
+            grid.template_areas.clone().map(|a| (entity, a))
+        })
+        .collect();
+
+    let container_index: HashMap<Entity, ContainerSnapshot> = container_snapshot_source
+        .iter()
+        .filter_map(|(entity, container, layout)| {
+            if container.container_type == ContainerType::Normal {
+                None
+            } else {
+                Some((
+                    entity,
+                    ContainerSnapshot {
+                        container_type: container.container_type,
+                        size: layout.size,
+                    },
+                ))
+            }
+        })
+        .collect();
+
+    let viewport_size = primary_window
+        .single()
+        .ok()
+        .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(Vec2::ZERO);
+
+    for item in nodes.iter() {
+        translate_one_entity(
+            item,
+            &parent_areas_for,
+            &container_index,
+            &cq_parent_chain,
+            viewport_size,
+            tree,
+        );
+    }
+    for (entity, .., children, _parent) in nodes.iter() {
+        sync_children_for_entity(entity, children, tree);
+    }
+
+    // Re-invoke Taffy compute. Same code shape as `taffy_compute`,
+    // but WITHOUT the `compute_count.0 = 0` frame-reset (that lives
+    // only in `taffy_compute`, so a flip frame ends at `count == 2`,
+    // not `count == 1`).
+    let window_size = windows
+        .iter()
+        .next()
+        .map(|w| Vec2::new(w.width(), w.height()))
+        .unwrap_or(Vec2::new(800.0, 600.0));
+    for (entity, parent) in roots.iter() {
+        let is_root = parent
+            .map(|p| !tree.by_entity.contains_key(&p.parent()))
+            .unwrap_or(true);
+        if !is_root {
+            continue;
+        }
+        if let Some(id) = tree.by_entity.get(&entity).copied() {
+            match tree.tree.compute_layout(
+                id,
+                Size {
+                    width: AvailableSpace::Definite(window_size.x),
+                    height: AvailableSpace::Definite(window_size.y),
+                },
+            ) {
+                Ok(_) => {
+                    compute_count.0 += 1;
+                }
+                Err(err) => {
+                    warn!(?entity, ?err, "buiy: layout compute_layout (re-run) failed");
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

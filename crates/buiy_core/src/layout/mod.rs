@@ -17,6 +17,7 @@ pub use components::{
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
+pub use systems::LayoutTaffyComputeCount;
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
@@ -34,6 +35,12 @@ pub struct LayoutPlugin;
 impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_non_send_resource::<LayoutTree>();
+        // Phase 5 Task 8: re-run flag set by step 4 and observed/cleared
+        // by step 5. `LayoutTaffyComputeCount` is a per-frame instrument
+        // used by tests to assert the "cap at 2× Taffy per frame"
+        // architecture invariant (architecture.md § 3.2).
+        app.init_resource::<systems::CqReRunRequested>();
+        app.init_resource::<systems::LayoutTaffyComputeCount>();
 
         // Register decomposed components for reflection / BSN / inspectors.
         app.register_type::<BoxModel>()
@@ -84,6 +91,8 @@ impl Plugin for LayoutPlugin {
                 systems::sync_styles.in_set(BuiyLayoutStep::SyncStyles),
                 systems::cq_activate.in_set(BuiyLayoutStep::CqActivate),
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
+                systems::cq_flip_check.in_set(BuiyLayoutStep::CqFlipCheck),
+                systems::cq_flip_rerun.in_set(BuiyLayoutStep::CqFlipReRun),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
             ),
         );
