@@ -17,7 +17,7 @@ pub use components::{
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
-pub use systems::LayoutTaffyComputeCount;
+pub use systems::{LayoutTaffyComputeCount, SyncStylesIterCount};
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
@@ -39,10 +39,18 @@ impl Plugin for LayoutPlugin {
         // by step 5. `LayoutTaffyComputeCount` is a per-frame instrument
         // used by tests to assert the "cap at 2× Taffy per frame"
         // architecture invariant (architecture.md § 3.2).
+        // `SyncStylesIterCount` (Task 9) is the per-frame iter-count
+        // instrument used by the Phase 2 O(0) steady-state assertion in
+        // `tests/layout_container_queries.rs`.
         app.init_resource::<systems::CqReRunRequested>();
         app.init_resource::<systems::LayoutTaffyComputeCount>();
+        app.init_resource::<systems::SyncStylesIterCount>();
 
         // Register decomposed components for reflection / BSN / inspectors.
+        // Grouped by phase / feature area: Phase 1-2 layout primitives,
+        // then Phase 3 grid types, then Phase 4 writing-mode types, then
+        // Phase 5 container-query types (Container/ContainerQuery markers
+        // alongside ContainerType/Orientation/QueryCondition enums).
         app.register_type::<BoxModel>()
             .register_type::<Display>()
             .register_type::<Position>()
@@ -56,10 +64,6 @@ impl Plugin for LayoutPlugin {
             .register_type::<GridItem>()
             .register_type::<WritingMode>()
             .register_type::<WritingModeResolved>()
-            .register_type::<Container>()
-            .register_type::<ContainerQuery>()
-            .register_type::<ContainerQueryActive>()
-            .register_type::<ContainerQueryInactive>()
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
@@ -77,6 +81,11 @@ impl Plugin for LayoutPlugin {
             .register_type::<TextOrientation>()
             .register_type::<UnicodeBidi>()
             .register_type::<LogicalEdges>()
+            // Phase 5 — container queries.
+            .register_type::<Container>()
+            .register_type::<ContainerQuery>()
+            .register_type::<ContainerQueryActive>()
+            .register_type::<ContainerQueryInactive>()
             .register_type::<ContainerType>()
             .register_type::<Orientation>()
             .register_type::<QueryCondition>();

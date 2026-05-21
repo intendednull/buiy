@@ -52,6 +52,16 @@ pub struct CqReRunRequested(pub bool);
 #[derive(Resource, Default, Debug)]
 pub struct LayoutTaffyComputeCount(pub u32);
 
+/// Resource — per-frame count of entities the `sync_styles` Or-filter
+/// matched for re-translation. Set at the top of every `sync_styles`
+/// invocation (overwritten, not accumulated). Used by
+/// `tests/layout_container_queries.rs` to assert the Phase 2 O(0)
+/// steady-state invariant: in a steady-state frame the iter count is
+/// zero, and mutating components excluded from the filter (notably
+/// `ScrollOffset` / `ScrollSnapItem`) keeps it zero.
+#[derive(Resource, Default, Debug)]
+pub struct SyncStylesIterCount(pub usize);
+
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
 /// removed (despawn or component-remove). `RemovedComponents<Node>`
 /// ordering across a parent/child despawn pair is not guaranteed by
@@ -93,15 +103,23 @@ pub(super) fn gc_removed_nodes(
 /// `Changed<Position>`, `Changed<FlexParams>`, `Changed<FlexItem>`,
 /// `Changed<Overflow>`, `Changed<Scroll>`, `Changed<GridParams>`,
 /// `Changed<GridItem>`, `Changed<WritingMode>`, `Changed<WritingModeResolved>`,
-/// `Changed<Children>`, `Changed<ChildOf>`. Phases 5–9 widen it as new
-/// components land. `Changed<ChildOf>` is included so that re-parenting a
-/// grid item under a different grid container picks up the new container's
-/// `template_areas`. `Changed<WritingMode>` triggers when an author edits
-/// the entity's own writing mode; `Changed<WritingModeResolved>` triggers
-/// after `inherit_writing_mode` (pre-step-1) re-derives the resolved cache
+/// `Changed<Children>`, `Changed<ChildOf>`. Phase 5 widens with
+/// `Changed<Container>`, `Changed<ContainerQuery>`,
+/// `Changed<ContainerQueryActive>`, `Changed<ContainerQueryInactive>`,
+/// and `Changed<ResolvedLayout>` (Task 7 — see the inline comment on
+/// the filter for the container-unit cascade rationale). Phases 6–9
+/// widen further as new components land. `Changed<ChildOf>` is
+/// included so that re-parenting a grid item under a different grid
+/// container picks up the new container's `template_areas`.
+/// `Changed<WritingMode>` triggers when an author edits the entity's
+/// own writing mode; `Changed<WritingModeResolved>` triggers after
+/// `inherit_writing_mode` (pre-step-1) re-derives the resolved cache
 /// for an entity whose effective writing mode actually changed (the
-/// inherit system is careful to skip writes when the value is unchanged,
-/// preserving the O(0) steady-state contract).
+/// inherit system is careful to skip writes when the value is
+/// unchanged, preserving the O(0) steady-state contract). The four
+/// new Phase 5 container/CQ entries are nested under a single inner
+/// `Or<(..)>` to stay under Bevy 0.18's 15-element tuple cap on the
+/// outer `Or`; a nested `Or` counts as a single outer entry.
 ///
 /// **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are
 /// intentionally excluded.** `ScrollOffset` is runtime state (mutated
@@ -162,6 +180,18 @@ pub(super) fn sync_styles(
                 // stable converge after at most one extra frame and
                 // then stop firing).
                 Changed<ResolvedLayout>,
+                // Phase 5 Task 9: container/CQ change set. Nested under
+                // a single inner `Or` so the outer tuple stays at 15
+                // entries (Bevy 0.18 caps `Or` tuples at 15). The
+                // semantics are identical to spelling the four entries
+                // at the top level — `Or<(A, Or<(B, C)>)>` matches
+                // exactly when `A || B || C`.
+                Or<(
+                    Changed<Container>,
+                    Changed<ContainerQuery>,
+                    Changed<ContainerQueryActive>,
+                    Changed<ContainerQueryInactive>,
+                )>,
             )>,
         ),
     >,
@@ -169,8 +199,16 @@ pub(super) fn sync_styles(
     container_snapshot_source: Query<(Entity, &Container, &ResolvedLayout)>,
     primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     cq_parent_chain: Query<&ChildOf>,
+    mut iter_count: ResMut<SyncStylesIterCount>,
 ) {
     let tree = &mut *tree;
+
+    // Phase 5 Task 9 — publish the per-frame iter count for the Phase 2
+    // O(0) steady-state invariant assertion in
+    // `tests/layout_container_queries.rs`. Cheap: iter is just over the
+    // matched archetypes, and in steady state the filter matches zero
+    // entities (which is the entire point of the assertion).
+    iter_count.0 = nodes.iter().count();
 
     // Precompute parent-areas: for every entity in the changed set, look
     // up its parent's `GridParams.template_areas` (if any). This map is
@@ -908,6 +946,15 @@ pub(super) fn cq_flip_rerun(
                 Changed<Children>,
                 Changed<ChildOf>,
                 Changed<ResolvedLayout>,
+                // Phase 5 Task 9: same widening as `sync_styles` — kept
+                // in sync via the shared `NodeQueryItem` shape. See the
+                // sync_styles inline comment for the nested-Or rationale.
+                Or<(
+                    Changed<Container>,
+                    Changed<ContainerQuery>,
+                    Changed<ContainerQueryActive>,
+                    Changed<ContainerQueryInactive>,
+                )>,
             )>,
         ),
     >,

@@ -17,14 +17,15 @@ pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A
 pub use components::{Node, ResolvedLayout, Visual};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::{
-    AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Direction, Display,
-    Edges, FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, GridAreas, GridAutoFlow, GridItem,
-    GridLine, GridParams, Inset, JustifyContent, JustifyItems, LayoutPlugin, LayoutTree, Length,
-    LogicalBoxModel, LogicalEdges, LogicalInset, NamedArea, Overflow, OverflowMode,
-    OverscrollBehavior, Position, PositionKind, RepeatCount, Scroll, ScrollBehavior, ScrollOffset,
-    ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
-    SnapType, Style, TextOrientation, TrackSize, UnicodeBidi, WritingMode, WritingModeKind,
-    WritingModeResolved,
+    AlignContent, AlignItems, AspectRatio, BoxModel, BoxSizing, BuiyLayoutStep, Container,
+    ContainerQuery, ContainerQueryActive, ContainerQueryInactive, ContainerType, Direction,
+    Display, Edges, FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, GridAreas, GridAutoFlow,
+    GridItem, GridLine, GridParams, Inset, JustifyContent, JustifyItems, LayoutPlugin, LayoutTree,
+    Length, LogicalBoxModel, LogicalEdges, LogicalInset, NamedArea, Orientation, Overflow,
+    OverflowMode, OverscrollBehavior, Position, PositionKind, QueryCondition, RepeatCount, Scroll,
+    ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
+    Sizing, SnapAlign, SnapStop, SnapType, Style, TextOrientation, TrackSize, UnicodeBidi,
+    WritingMode, WritingModeKind, WritingModeResolved,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 
