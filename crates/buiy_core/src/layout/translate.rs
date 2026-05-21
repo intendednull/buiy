@@ -44,6 +44,20 @@ fn warn_once_fr_outside_grid() {
     }
 }
 
+/// Phase 5 Task 1 *temporary* fallback: container units resolve to
+/// 0 px until Task 7 wires the real ancestor-driven path. The only
+/// purpose of this helper is to keep the `Length` match exhaustive
+/// in this commit (Phase 3 Task 1 prior art — atomic types.rs +
+/// translate.rs).
+///
+/// **Task 7 deletes this function.** No warn is emitted here because
+/// the warn-once gating lives in Task 7's real resolver
+/// (`warn_once_cq_no_ancestor`). A temporary 0-px fallback is a
+/// build-bridge, not behavior worth advertising.
+fn cq_unit_fallback_px(_p: f32) -> f32 {
+    0.0
+}
+
 /// View into the decomposed-component set for one entity. Built by
 /// `sync_styles`'s query and passed to `style_to_taffy`.
 pub struct StyleView<'a> {
@@ -387,6 +401,12 @@ fn length_to_dim(l: Length) -> taffy::Dimension {
             warn_once_fr_outside_grid();
             taffy::Dimension::auto()
         }
+        Length::Cqw(p)
+        | Length::Cqh(p)
+        | Length::Cqi(p)
+        | Length::Cqb(p)
+        | Length::Cqmin(p)
+        | Length::Cqmax(p) => taffy::Dimension::length(cq_unit_fallback_px(p)),
     }
 }
 
@@ -400,6 +420,12 @@ fn length_to_lp(l: Length) -> taffy::LengthPercentage {
             warn_once_fr_outside_grid();
             taffy::LengthPercentage::length(0.0)
         }
+        Length::Cqw(p)
+        | Length::Cqh(p)
+        | Length::Cqi(p)
+        | Length::Cqb(p)
+        | Length::Cqmin(p)
+        | Length::Cqmax(p) => taffy::LengthPercentage::length(cq_unit_fallback_px(p)),
     }
 }
 
@@ -411,6 +437,12 @@ fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
             warn_once_fr_outside_grid();
             taffy::LengthPercentageAuto::auto()
         }
+        Length::Cqw(p)
+        | Length::Cqh(p)
+        | Length::Cqi(p)
+        | Length::Cqb(p)
+        | Length::Cqmin(p)
+        | Length::Cqmax(p) => taffy::LengthPercentageAuto::length(cq_unit_fallback_px(p)),
     }
 }
 
@@ -525,6 +557,14 @@ fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
         TrackSize::Length(Length::Fr(v)) => fr(*v),
         TrackSize::Length(Length::Px(v)) => length(*v),
         TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::Length(
+            Length::Cqw(p)
+            | Length::Cqh(p)
+            | Length::Cqi(p)
+            | Length::Cqb(p)
+            | Length::Cqmin(p)
+            | Length::Cqmax(p),
+        ) => length(cq_unit_fallback_px(*p)),
         // `MinMax` carries a Vec<TrackSize>; spec/Phase3 invariant is
         // exactly 2 elements [min, max]. Other arities warn-once and
         // degrade to Auto. (Bevy 0.18 Reflect lacks a Box<T> impl, so we
@@ -554,6 +594,14 @@ fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
         TrackSize::MaxContent => max_content(),
         TrackSize::Length(Length::Px(v)) => length(*v),
         TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::Length(
+            Length::Cqw(p)
+            | Length::Cqh(p)
+            | Length::Cqi(p)
+            | Length::Cqb(p)
+            | Length::Cqmin(p)
+            | Length::Cqmax(p),
+        ) => length(cq_unit_fallback_px(*p)),
         // CSS forbids these in MinMax's min slot:
         // - Fr (fr-in-min is grammar-invalid)
         // - FitContent (Min has no TaffyFitContent impl in Taffy 0.10)
@@ -580,6 +628,14 @@ fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
         TrackSize::Length(Length::Fr(v)) => fr(*v),
         TrackSize::Length(Length::Px(v)) => length(*v),
         TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::Length(
+            Length::Cqw(p)
+            | Length::Cqh(p)
+            | Length::Cqi(p)
+            | Length::Cqb(p)
+            | Length::Cqmin(p)
+            | Length::Cqmax(p),
+        ) => length(cq_unit_fallback_px(*p)),
         TrackSize::MinMax(_) | TrackSize::Repeat(_, _) | TrackSize::Subgrid => {
             warn_once_invalid_track_nesting();
             auto()

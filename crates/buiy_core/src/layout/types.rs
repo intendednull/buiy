@@ -10,10 +10,21 @@
 
 use bevy::prelude::*;
 
-/// CSS-style length value. Phase 1 ships only `Px` and `Percent`; other
-/// variants are reserved for later phases. The variants present here cover
-/// every value the Phase 1 translation layer can emit to Taffy without
-/// further resolution.
+/// CSS-style length value.
+///
+/// Phase 1 shipped `Px`, `Percent`. Phase 3 added `Fr` (grid-only).
+/// Phase 5 adds the container-query unit family (`Cqw`/`Cqh`/`Cqi`/`Cqb`/
+/// `Cqmin`/`Cqmax`). Em / Rem / viewport / Calc resolution remains
+/// deferred to Phase 10 (`buiy-layout-units-calc`).
+///
+/// Container units resolve in `style_to_taffy` against the entity's
+/// nearest *queried* ancestor's previous-frame `ResolvedLayout` (an
+/// ancestor whose `Container.container_type != Normal`). When no
+/// queried ancestor exists, container units fall back to viewport
+/// dimensions (resolved directly from `bevy::window::Window` until
+/// Phase 10's `Length::Vw/Vh` infrastructure lands) with one `warn!`
+/// per (entity, unit) pair per session. Spec:
+/// docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.4.
 #[derive(Reflect, Clone, Copy, Debug, PartialEq)]
 pub enum Length {
     /// Absolute logical pixels.
@@ -23,6 +34,19 @@ pub enum Length {
     /// CSS `<flex>` unit — only meaningful inside `TrackSize::Length(Length::Fr(_))`.
     /// Outside grid templates, `Fr` warns once and resolves to `Auto`.
     Fr(f32),
+    /// `cqw` — percentage of nearest queried ancestor's *width*.
+    Cqw(f32),
+    /// `cqh` — percentage of nearest queried ancestor's *height*.
+    Cqh(f32),
+    /// `cqi` — percentage of nearest queried ancestor's *inline* axis
+    /// (depends on writing-mode).
+    Cqi(f32),
+    /// `cqb` — percentage of nearest queried ancestor's *block* axis.
+    Cqb(f32),
+    /// `cqmin` — percentage of `min(cqi, cqb)`.
+    Cqmin(f32),
+    /// `cqmax` — percentage of `max(cqi, cqb)`.
+    Cqmax(f32),
 }
 
 impl Length {
@@ -749,6 +773,25 @@ mod tests {
             Length::Fr(v) => assert_eq!(v, 1.5),
             _ => panic!("expected Fr"),
         }
+    }
+
+    #[test]
+    fn length_container_unit_variants_round_trip() {
+        let cases = [
+            Length::Cqw(50.0),
+            Length::Cqh(25.0),
+            Length::Cqi(50.0),
+            Length::Cqb(25.0),
+            Length::Cqmin(10.0),
+            Length::Cqmax(90.0),
+        ];
+        for case in cases {
+            let copied = case;
+            assert_eq!(case, copied);
+        }
+        // Round-trip via Default doesn't apply (default is ZERO = Px(0.0));
+        // the round-trip we care about is just discriminant equality, which
+        // PartialEq covers via the derive.
     }
 
     #[test]
