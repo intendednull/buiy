@@ -776,22 +776,28 @@ mod tests {
     }
 
     #[test]
-    fn length_container_unit_variants_round_trip() {
-        let cases = [
-            Length::Cqw(50.0),
-            Length::Cqh(25.0),
-            Length::Cqi(50.0),
-            Length::Cqb(25.0),
-            Length::Cqmin(10.0),
-            Length::Cqmax(90.0),
-        ];
-        for case in cases {
-            let copied = case;
-            assert_eq!(case, copied);
-        }
-        // Round-trip via Default doesn't apply (default is ZERO = Px(0.0));
-        // the round-trip we care about is just discriminant equality, which
-        // PartialEq covers via the derive.
+    fn length_container_unit_variants_distinct_and_round_trip() {
+        // Same variant + same payload compares equal (exercises the
+        // derived `PartialEq` end-to-end).
+        assert_eq!(Length::Cqw(50.0), Length::Cqw(50.0));
+        assert_eq!(Length::Cqh(25.0), Length::Cqh(25.0));
+        assert_eq!(Length::Cqi(50.0), Length::Cqi(50.0));
+        assert_eq!(Length::Cqb(25.0), Length::Cqb(25.0));
+        assert_eq!(Length::Cqmin(10.0), Length::Cqmin(10.0));
+        assert_eq!(Length::Cqmax(90.0), Length::Cqmax(90.0));
+
+        // Different variants with the same payload compare *not* equal —
+        // guards against a hand-written `PartialEq` impl that collapses
+        // all `Cq*` variants together (would silently break container-
+        // unit resolution while keeping these tests green).
+        assert_ne!(Length::Cqw(50.0), Length::Cqh(50.0));
+        assert_ne!(Length::Cqi(50.0), Length::Cqb(50.0));
+        assert_ne!(Length::Cqmin(50.0), Length::Cqmax(50.0));
+        assert_ne!(Length::Cqw(50.0), Length::Cqi(50.0));
+        assert_ne!(Length::Cqh(50.0), Length::Cqb(50.0));
+
+        // Different payload, same variant compare *not* equal.
+        assert_ne!(Length::Cqw(50.0), Length::Cqw(51.0));
     }
 
     #[test]
