@@ -11,11 +11,11 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
-    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
-    OverflowMode, OverscrollBehavior, PositionKind, QueryCondition, ScrollBehavior, ScrollbarColor,
-    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation,
-    TrackSize, UnicodeBidi, WritingModeKind,
+    AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BoxSizing, ContainerType,
+    Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
+    JustifyContent, JustifyItems, OverflowMode, OverscrollBehavior, PositionKind, PositionTry,
+    QueryCondition, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing,
+    SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -390,6 +390,59 @@ pub struct ScrollSnapItem {
     pub stop: SnapStop,
 }
 
+/// CSS anchor positioning — declares this entity as an anchor target
+/// (via `anchor_name`) and/or anchors this entity TO another (via
+/// `position_anchor`). When `position_anchor.is_some()`, the
+/// `anchor_resolution` system (sub-pass 6d) overrides this entity's
+/// `ResolvedLayout.position` by walking the `position_try` chain and
+/// applying the first try whose conditions all pass.
+///
+/// Decomposed-only by spec § 2.4: not folded into the `Style` Bundle
+/// because anchored elements are rare (tooltips, popovers) and each
+/// carries a non-trivial `position_try` chain. Spawn alongside `Style`:
+///
+/// ```ignore
+/// commands.spawn((
+///     Style::default(),
+///     Anchor {
+///         position_anchor: Some(AnchorRef::Name("submit-btn".into())),
+///         position_try: vec![PositionTry { /* ... */ }],
+///         ..default()
+///     },
+/// ));
+/// ```
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct Anchor {
+    /// Names this entity AS an anchor (so other entities can reference
+    /// it via `AnchorRef::Name`). `None` means the entity is not a
+    /// named anchor target (but can still be a target via direct
+    /// `AnchorRef::Entity(_)` references).
+    pub anchor_name: Option<AnchorName>,
+    /// Declares that this entity is anchored TO another. `None` means
+    /// the entity participates in normal layout. `Some(_)` triggers
+    /// the anchor-resolution pass for this entity.
+    pub position_anchor: Option<AnchorRef>,
+    /// Ordered fallback chain. The first try whose `conditions` all
+    /// pass wins; if every try fails, the entity gets a
+    /// `LayoutAnchorBroken` marker and `ResolvedLayout.position`
+    /// defaults to `(0, 0)`.
+    pub position_try: Vec<PositionTry>,
+}
+
+/// Devtools marker — present when this entity's anchor resolution
+/// failed this frame (target missing, every fallback failed, or in a
+/// cycle whose edge was dropped). Idempotent: present iff broken,
+/// absent iff resolved. Authors observe `With<LayoutAnchorBroken>` to
+/// surface broken anchors in inspectors.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2 step 4.
+#[derive(Component, Reflect, Default, Clone, Debug)]
+#[reflect(Component)]
+pub struct LayoutAnchorBroken;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +626,38 @@ mod tests {
     fn container_query_active_inactive_are_distinct_markers() {
         let _a = ContainerQueryActive;
         let _i = ContainerQueryInactive;
+    }
+
+    #[test]
+    fn anchor_default_is_empty() {
+        let a = Anchor::default();
+        assert_eq!(a.anchor_name, None);
+        assert_eq!(a.position_anchor, None);
+        assert!(a.position_try.is_empty());
+    }
+
+    #[test]
+    fn anchor_full_round_trips_partial_eq() {
+        let a = Anchor {
+            anchor_name: Some(AnchorName::Named("btn".into())),
+            position_anchor: Some(AnchorRef::Name("other".into())),
+            position_try: vec![PositionTry::default()],
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn anchor_differs_when_position_try_diverges() {
+        let a = Anchor { position_try: vec![PositionTry::default()], ..default() };
+        let b = Anchor { position_try: vec![], ..default() };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn layout_anchor_broken_is_unit_marker() {
+        let _m = LayoutAnchorBroken;
+        // existence + Default suffice; the marker carries no data.
+        let _d = LayoutAnchorBroken;
     }
 }
