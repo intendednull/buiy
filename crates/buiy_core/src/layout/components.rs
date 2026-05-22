@@ -165,11 +165,10 @@ pub struct Overflow {
 impl Overflow {
     /// True iff either axis is `Scroll` or `Auto`. Scroll containers
     /// establish a scroll viewport and a containing block for descendants
-    /// with `Position::Sticky` (consumer: Phase 7 sub-pass 6a).
+    /// with `Position::Sticky` (consumer: Phase 7 sub-pass 6a, called via
+    /// `nearest_scroll_container` in `systems.rs`).
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 1.2.
-    // Called by Phase 7 sticky-positioning pass; unused until that phase lands.
-    #[allow(dead_code)]
     pub fn is_scroll_container(&self) -> bool {
         matches!(self.x, OverflowMode::Scroll | OverflowMode::Auto)
             || matches!(self.y, OverflowMode::Scroll | OverflowMode::Auto)

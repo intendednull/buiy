@@ -181,3 +181,133 @@ when Phase 7 extends the sub-pass set.
 **Implementation sketch:** split into `build_anchor_edge_map`,
 `apply_anchor_broken_markers`, `emit_anchor_warns`. No behavior change;
 makes future extension cleaner.
+
+## Layout — `Position::Fixed` implementation
+
+**Originated:** Phase 7 (D13 — explicit deferral).
+
+**Symptom:** `PositionKind::Fixed` still emits a Phase-1 warn-once;
+`translate.rs::map_position` does not yet emit `taffy::Position::Absolute`
+for Fixed.
+
+**Implementation sketch:** change `translate.rs::map_position` to emit
+`taffy::Position::Absolute` for `Fixed`; override the `ContainingBlock`
+resolution to point at the layout root regardless of nearest-positioned-
+ancestor. Single `sync_styles` change + a private `is_fixed_root` flag on
+the entity's translation state.
+
+**Spec touchpoint:** `display-and-positioning.md § 2.2` (Position type,
+Taffy mapping for Fixed).
+
+## Layout — full table layout algorithm
+
+**Originated:** Phase 7 (Task 6 stub).
+
+**Symptom:** Entities with `Display::Table*` warn-once and fall back to
+`Display::Block` semantics. No row/column geometry.
+
+**Implementation sketch:** replace `table_layout` stub with the algorithm
+described in `display-and-positioning.md § 1.2` ("Gather entities by
+`Display::Table*` family. Compute column widths via Taffy on a synthetic
+flex container per row group. Write corrected positions back to
+`PostTaffyPositionOverrides`").
+
+**Spec touchpoint:** `display-and-positioning.md § 1.2`.
+
+## Layout — full multi-column layout algorithm
+
+**Originated:** Phase 7 (Task 7 stub).
+
+**Symptom:** Entities with `MultiColumn` warn-once-per-session and fall
+back to single-column layout.
+
+**Implementation sketch:** replace `multicol_pack` stub with a packing
+pass that respects `column_count` / `column_width` + `break-*`
+properties. Write each child's `PostTaffyPositionOverrides` entry.
+
+**Spec touchpoint:** `flex-and-grid.md § 3` (multi-column).
+
+## Layout — sticky `Length::Cq*` inset resolution
+
+**Originated:** Phase 7 (D3 deferral).
+
+**Symptom:** Sticky entity with `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax`
+inset emits `LayoutWarnOnceKey::StickyCqDeferred(Entity)` and resolves to
+0.0.
+
+**Implementation sketch:** port Phase 6's `length_inset_to_px` cq-context
+resolver. Sticky's reference frame is the sticky entity's own nearest CQ
+ancestor (distinct from anchor's "anchor target box" frame). Multi-axis
+fixture needed (Cqi/Cqb resolve against writing-mode inline/block axes).
+
+**Spec touchpoint:** `display-and-positioning.md § 2.3`,
+`container-queries-and-writing-modes.md § 1`.
+
+## Layout — sticky em/rem/Vh/Vw/Vmin/Vmax inset support
+
+**Originated:** Phase 7 (D3 — these `Length` variants don't exist yet).
+
+**Symptom:** Authors cannot use em/rem/V*-typed insets on sticky elements
+because `Length::Em / Rem / Vh / Vw / Vmin / Vmax` are not (yet) variants
+of `Length`.
+
+**Implementation sketch:** when Phase 10 (or a font-rendering phase) adds
+these `Length` variants, extend `resolve_sticky_inset` with new arms
+(currently a closed match so the compiler will force the change).
+
+**Spec touchpoint:** Phase 10 — viewport units; future font-rendering
+spec — em/rem.
+
+## Layout — sticky both-top-and-bottom dual clamp
+
+**Originated:** Phase 7 (D4 — v1 "top wins" deviation).
+
+**Symptom:** Sticky element with both `inset_top` and `inset_bottom` set
+ignores the bottom inset (top wins). CSS spec § 6.3 implies dual-clamp
+behavior where the element sticks to whichever edge the scroll position
+is closer to.
+
+**Implementation sketch:** implement dual-clamp in
+`compute_sticky_displacement` — likely requires storing both upper and
+lower sticky thresholds and computing midpoint logic. The v2 test
+`sticky_both_top_and_bottom_inset_top_wins` (in `tests/layout_sticky.rs`)
+is the regression test for the v1 "top wins" behavior — flipping it
+documents the algorithm upgrade.
+
+**Spec touchpoint:** CSS spec § 6.3 (positioned layout).
+
+## Layout — sticky inside sticky
+
+**Originated:** Phase 7 (documented v1 limitation).
+
+**Symptom:** When entity A is sticky-displaced and entity B is a sticky
+child of A, B's `world_position` walks Taffy positions (un-displaced);
+B's threshold computation uses A's *natural* position, not displaced.
+Rare authoring case.
+
+**Implementation sketch:** consult `PostTaffyPositionOverrides`
+(just-written by 6a) when walking the ancestor chain in
+`world_position`, so inner sticky sees displaced outer. Requires careful
+ordering (inner sticky must run after outer; topological pre-pass or
+two-frame eventual-consistency are both options).
+
+**Spec touchpoint:** `display-and-positioning.md § 2.3` (does not
+explicitly address nested-sticky).
+
+## Layout — `clear_warned_once_on_exit` lifecycle wire-up
+
+**Originated:** Phase 7 (D7 — `BuiyState` / `BuiyExit` lifecycle states
+don't exist in `buiy_core` yet).
+
+**Symptom:** `clear_warned_once_on_exit` system exists but is
+`#[allow(dead_code)]`. Repeat `App::new()` cycles within a process
+accumulate state across instances (won't matter in production where the
+binary exits; matters in tests / hot-reload).
+
+**Implementation sketch:** once foundation lifecycle states are settled,
+wire the clear via
+`app.add_systems(OnExit(BuiyState::Active), clear_warned_once_on_exit)`.
+Until then, the function is exposed but never called — tests can invoke
+directly via `world.run_system_once(clear_warned_once_on_exit)`.
+
+**Spec touchpoint:** `architecture.md § 6`.

@@ -2147,9 +2147,10 @@ pub(super) fn cq_flip_rerun(
                 Changed<Children>,
                 Changed<ChildOf>,
                 Changed<ResolvedLayout>,
-                // Phase 5 Task 9: same widening as `sync_styles` — kept
-                // in sync via the shared `NodeQueryItem` shape. See the
-                // sync_styles inline comment for the nested-Or rationale.
+                // CQ-only entries — Changed<Anchor> (Phase 6) and Changed<MultiColumn>
+                // (Phase 7) are intentionally excluded from the CQ flip pass because
+                // neither feeds Taffy in v1; adding them here would be misleading
+                // forward-compat (sync_styles has them for correctness/forward-compat).
                 Or<(
                     Changed<Container>,
                     Changed<ContainerQuery>,
