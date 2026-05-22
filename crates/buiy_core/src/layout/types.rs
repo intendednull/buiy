@@ -230,6 +230,54 @@ pub struct Inset {
     pub left: Sizing,
 }
 
+impl Inset {
+    /// Place the anchored entity ABOVE the anchor: anchored box's bottom
+    /// edge is `dist` above the anchor's top edge.
+    ///
+    /// Sets `bottom = Sizing::Length(dist)` and leaves the other three
+    /// sides at `Sizing::default()` (`Auto`). Spec authoring example:
+    /// docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.3.
+    pub fn above(dist: Length) -> Self {
+        Self {
+            bottom: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+
+    /// Place the anchored entity BELOW the anchor: anchored box's top
+    /// edge is `dist` below the anchor's bottom edge.
+    ///
+    /// Sets `top = Sizing::Length(dist)`.
+    pub fn below(dist: Length) -> Self {
+        Self {
+            top: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+
+    /// Place the anchored entity to the LEFT of the anchor: anchored
+    /// box's right edge is `dist` left of the anchor's left edge.
+    ///
+    /// Sets `right = Sizing::Length(dist)`.
+    pub fn left_of(dist: Length) -> Self {
+        Self {
+            right: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+
+    /// Place the anchored entity to the RIGHT of the anchor: anchored
+    /// box's left edge is `dist` right of the anchor's right edge.
+    ///
+    /// Sets `left = Sizing::Length(dist)`.
+    pub fn right_of(dist: Length) -> Self {
+        Self {
+            left: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+}
+
 /// Per-axis overflow handling. CSS `overflow`.
 ///
 /// `Visible` (default) lets children render outside the box. `Hidden` and

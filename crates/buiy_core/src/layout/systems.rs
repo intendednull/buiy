@@ -17,12 +17,15 @@
 
 use super::components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, WritingMode,
-    WritingModeResolved,
+    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, Overflow, Position,
+    Scroll, WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
-use super::types::{AnchorErrorKind, AnchorName, ContainerType, GridAreas, Length, QueryCondition};
+use super::types::{
+    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, Length, QueryCondition,
+    Sizing, TryCondition,
+};
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -319,6 +322,431 @@ fn kahn_anchor_sort(
             *entry = None;
         }
         dropped.insert(drop_from);
+    }
+}
+
+/// Resolve a `Length` for inset use. `Px` → its value; `Percent` →
+/// percent of the relevant axis. `Fr` → 0 (grid-only unit). `Cq*` → 0
+/// (container units in `PositionTry::inset` are tier-C deferred and
+/// tracked in follow-ups).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+fn length_inset_to_px(l: Length, axis: f32, _viewport: Vec2) -> f32 {
+    match l {
+        Length::Px(v) => v,
+        Length::Percent(p) => axis * (p / 100.0),
+        Length::Fr(_) => 0.0,
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => 0.0,
+    }
+}
+
+/// Compute the anchored entity's would-be top-left from the anchor's
+/// resolved box and the try's inset.
+///
+/// Convention: `inset` is interpreted relative to the anchor's box edges.
+/// - `inset.top != 0`: place anchored entity BELOW anchor
+///   (`anchored.top = anchor.bottom + top`).
+/// - `inset.bottom != 0`: place anchored entity ABOVE anchor
+///   (`anchored.bottom = anchor.top - bottom`).
+/// - `inset.left != 0`: place anchored entity to the RIGHT of anchor
+///   (`anchored.left = anchor.right + left`).
+/// - `inset.right != 0`: place anchored entity to the LEFT of anchor
+///   (`anchored.right = anchor.left - right`).
+///
+/// When `top == bottom == 0`, anchored.top = anchor.top (vertically aligned).
+/// When `left == right == 0`, anchored.left = anchor.left (horizontally
+/// aligned).
+///
+/// `Sizing::Auto`, intrinsic keywords, and `Stretch` → 0.0 (no offset).
+/// `Sizing::Length(_)` → resolve via `length_inset_to_px`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+fn try_anchored_position(
+    anchor_pos: Vec2,
+    anchor_size: Vec2,
+    anchored_size: Vec2,
+    inset: &Inset,
+    viewport: Vec2,
+) -> Vec2 {
+    let to_px = |s: &Sizing, axis: f32| -> f32 {
+        match s {
+            Sizing::Auto => 0.0,
+            Sizing::None => 0.0,
+            Sizing::Length(l) => length_inset_to_px(*l, axis, viewport),
+            // B4: `FitContent` is a tuple variant `FitContent(Length)`;
+            // the wildcard `(_)` discards the inner Length (no
+            // fit-content semantics in inset position resolution).
+            Sizing::MinContent | Sizing::MaxContent | Sizing::FitContent(_) => 0.0,
+            Sizing::Stretch => 0.0,
+        }
+    };
+    let top = to_px(&inset.top, anchor_size.y);
+    let bottom = to_px(&inset.bottom, anchor_size.y);
+    let left = to_px(&inset.left, anchor_size.x);
+    let right = to_px(&inset.right, anchor_size.x);
+
+    let x = if right > 0.0 {
+        anchor_pos.x - right - anchored_size.x
+    } else if left > 0.0 {
+        anchor_pos.x + anchor_size.x + left
+    } else {
+        anchor_pos.x
+    };
+    let y = if bottom > 0.0 {
+        anchor_pos.y - bottom - anchored_size.y
+    } else if top > 0.0 {
+        anchor_pos.y + anchor_size.y + top
+    } else {
+        anchor_pos.y
+    };
+    Vec2::new(x, y)
+}
+
+/// Evaluate `[TryCondition]` against this frame's Taffy output.
+///
+/// `FitsInViewport`: anchored box rect must lie entirely within
+/// `(0,0,viewport.x,viewport.y)`.
+/// `FitsInContainer(ref)`: resolve the referenced container's box from
+/// Taffy and check containment (`Display::None` containers always fail
+/// per D9).
+/// `AnchorVisible`: the anchor's resolved box must intersect the
+/// viewport rect.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+fn try_conditions_pass(
+    conditions: &[TryCondition],
+    anchored_rect: (Vec2, Vec2), // (pos, size)
+    anchor_rect: (Vec2, Vec2),
+    viewport: Vec2,
+    tree: &LayoutTree,
+    reg: &AnchorNameRegistry,
+    display_query: &Query<&Display>,
+) -> bool {
+    conditions.iter().all(|c| match c {
+        TryCondition::FitsInViewport => {
+            let (pos, size) = anchored_rect;
+            pos.x >= 0.0
+                && pos.y >= 0.0
+                && pos.x + size.x <= viewport.x
+                && pos.y + size.y <= viewport.y
+        }
+        TryCondition::FitsInContainer(r) => {
+            let container = match r {
+                AnchorRef::Entity(e) => Some(*e),
+                AnchorRef::Name(n) => reg.find_entity_by_name(n),
+            };
+            let Some(c) = container else { return false };
+            // D9 — Display::None containers fail the condition.
+            if let Ok(Display::None) = display_query.get(c) {
+                return false;
+            }
+            let Some(taffy) = tree.by_entity.get(&c).copied() else {
+                return false;
+            };
+            let Ok(layout) = tree.tree.layout(taffy) else {
+                return false;
+            };
+            let cpos = Vec2::new(layout.location.x, layout.location.y);
+            let csize = Vec2::new(layout.size.width, layout.size.height);
+            let (apos, asize) = anchored_rect;
+            apos.x >= cpos.x
+                && apos.y >= cpos.y
+                && apos.x + asize.x <= cpos.x + csize.x
+                && apos.y + asize.y <= cpos.y + csize.y
+        }
+        TryCondition::AnchorVisible => {
+            let (pos, size) = anchor_rect;
+            // Intersection of anchor rect with viewport rect
+            // (0,0,viewport.x,viewport.y).
+            pos.x + size.x > 0.0
+                && pos.y + size.y > 0.0
+                && pos.x < viewport.x
+                && pos.y < viewport.y
+        }
+    })
+}
+
+/// Step 6 sub-pass 6d — anchor resolution.
+///
+/// Algorithm:
+/// 1. Clear `overrides.by_entity` and `warned.set` (frame-local state).
+/// 2. Build the (anchored → anchor_target) edge map from
+///    `anchored_query`. Targets are resolved by `AnchorRef::Entity(e)`
+///    or `AnchorRef::Name(n) → AnchorNameRegistry::find_entity_by_name`
+///    honoring `Display::None` per D9.
+/// 3. `kahn_anchor_sort` topo-sorts the DAG, dropping a (cycle-source,
+///    target) edge from the most-recently-inserted node in each cycle
+///    (D4). Per D8 both endpoints of every dropped edge get
+///    `LayoutAnchorBroken`.
+/// 4. Detect `DuplicateName` (D11) by scanning
+///    `AnchorNameRegistry::iter_buckets` for `bucket.len() > 1`.
+/// 5. Walk the topological order. For each anchored entity, evaluate
+///    `position_try` against this frame's Taffy output + viewport. The
+///    first try whose conditions all pass wins. If every try fails,
+///    write `Vec2::ZERO` and mark `LayoutAnchorBroken`.
+/// 6. Idempotent `LayoutAnchorBroken` marker management — insert only
+///    when missing, remove only when present (Phase 5 precedent).
+///    Covers anchored entities AND non-anchor cycle targets (D8).
+/// 7. Emit one `warn!` per unique `(entity, kind)` per frame (D5).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2 + § 3.4.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(super) fn anchor_resolution(
+    mut commands: Commands,
+    tree: NonSend<LayoutTree>,
+    anchored_query: Query<(Entity, &Anchor, Option<&LayoutAnchorBroken>), With<Node>>,
+    display_query: Query<&Display>,
+    broken_query: Query<(Entity, Option<&LayoutAnchorBroken>)>,
+    reg: Res<AnchorNameRegistry>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    mut overrides: ResMut<AnchorOverrides>,
+    mut warned: ResMut<LayoutAnchorWarnedThisFrame>,
+) {
+    // 1. Clear frame-local state. Observers do NOT contribute to
+    // `warned.set` (D11) — they only update the registry. Duplicates
+    // are re-detected from the registry below.
+    overrides.by_entity.clear();
+    warned.set.clear();
+
+    // When no primary window is present (headless tests, multi-window
+    // before the primary attaches), treat the viewport as effectively
+    // unbounded. `FitsInViewport` passes trivially (no upper bound),
+    // `AnchorVisible` reads the anchor box against (0, 0, MAX, MAX)
+    // which is always an intersection for non-degenerate boxes.
+    let viewport = primary_window
+        .single()
+        .ok()
+        .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(Vec2::splat(f32::MAX));
+
+    // 2. Build edge map. The Kahn helper does its own pre-pass for
+    // external target nodes (D10), so we don't insert plain-Node
+    // targets here.
+    let mut edges: std::collections::HashMap<Entity, Option<Entity>> =
+        std::collections::HashMap::new();
+    let mut new_warns: Vec<(Entity, AnchorErrorKind)> = Vec::new();
+
+    // Helper: target resolution honoring Display::None (D9). Returns
+    // Some(entity) only when the target is name-resolvable AND not
+    // Display::None.
+    let resolve_target = |r: &AnchorRef| -> Option<Entity> {
+        let candidate = match r {
+            AnchorRef::Entity(t) => Some(*t),
+            AnchorRef::Name(n) => reg.find_entity_by_name(n),
+        }?;
+        if let Ok(Display::None) = display_query.get(candidate) {
+            return None;
+        }
+        Some(candidate)
+    };
+
+    for (e, anchor, _) in anchored_query.iter() {
+        let target = anchor.position_anchor.as_ref().and_then(&resolve_target);
+        edges.insert(e, target);
+        if anchor.position_anchor.is_some() && target.is_none() {
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+        }
+    }
+
+    // 3. Kahn sort. The helper handles external-target pre-pass and
+    // cycle-edge dropping.
+    let entity_epochs_fn = |e: Entity| reg.entity_epoch(e);
+    let (order, dropped) = kahn_anchor_sort(&edges, &entity_epochs_fn);
+
+    // D8 — both endpoints of a dropped cycle edge get
+    // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
+    // other end of each dropped edge (read from the pre-drop edges
+    // map).
+    let mut dropped_targets: std::collections::HashSet<Entity> =
+        std::collections::HashSet::new();
+    for d in &dropped {
+        new_warns.push((*d, AnchorErrorKind::InCycle));
+        if let Some(Some(target)) = edges.get(d).copied() {
+            dropped_targets.insert(target);
+        }
+    }
+
+    // 4. DuplicateName detection (D11). Scan registry buckets;
+    // `bucket.len() > 1` means duplicate; the last entry is the
+    // late-inserter / warn target.
+    for (_name, bucket) in reg.iter_buckets() {
+        if bucket.len() > 1
+            && let Some(&(late_entity, _)) = bucket.last()
+        {
+            new_warns.push((late_entity, AnchorErrorKind::DuplicateName));
+        }
+    }
+
+    // 5. Walk topological order. Resolve position-try chain per entity.
+    let mut broken_set: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    // Cycle endpoints are broken regardless of try-chain outcome.
+    for d in &dropped {
+        broken_set.insert(*d);
+    }
+    for t in &dropped_targets {
+        broken_set.insert(*t);
+    }
+
+    for &e in &order {
+        let Some((_, anchor, _existing_broken)) = anchored_query.get(e).ok() else {
+            continue;
+        };
+        if anchor.position_anchor.as_ref().is_none() {
+            continue;
+        }
+
+        if dropped.contains(&e) {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            // `broken_set` already contains `e`.
+            continue;
+        }
+
+        let target = edges.get(&e).copied().flatten();
+        let Some(target_entity) = target else {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            broken_set.insert(e);
+            continue;
+        };
+
+        // Read anchor target's box from Taffy.
+        let Some(target_taffy) = tree.by_entity.get(&target_entity).copied() else {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            broken_set.insert(e);
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+            continue;
+        };
+        let Ok(target_layout) = tree.tree.layout(target_taffy) else {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            broken_set.insert(e);
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+            continue;
+        };
+        let anchor_pos = Vec2::new(target_layout.location.x, target_layout.location.y);
+        let anchor_size = Vec2::new(target_layout.size.width, target_layout.size.height);
+
+        // Anchored entity's own size (from Taffy).
+        let anchored_size = tree
+            .by_entity
+            .get(&e)
+            .copied()
+            .and_then(|id| tree.tree.layout(id).ok())
+            .map(|l| Vec2::new(l.size.width, l.size.height))
+            .unwrap_or(Vec2::ZERO);
+
+        // Iterate `position_try`; first passing wins.
+        let mut resolved_position: Option<Vec2> = None;
+        for try_ in &anchor.position_try {
+            let candidate = try_anchored_position(
+                anchor_pos,
+                anchor_size,
+                anchored_size,
+                &try_.inset,
+                viewport,
+            );
+            let candidate_rect = (candidate, anchored_size);
+            let anchor_rect = (anchor_pos, anchor_size);
+            if try_conditions_pass(
+                &try_.conditions,
+                candidate_rect,
+                anchor_rect,
+                viewport,
+                &tree,
+                &reg,
+                &display_query,
+            ) {
+                resolved_position = Some(candidate);
+                break;
+            }
+        }
+
+        match resolved_position {
+            Some(pos) => {
+                overrides.by_entity.insert(e, pos);
+                // `broken_set` does NOT contain `e` — idempotent
+                // remove fires below.
+            }
+            None => {
+                overrides.by_entity.insert(e, Vec2::ZERO);
+                broken_set.insert(e);
+                new_warns.push((e, AnchorErrorKind::AllFallbacksFailed));
+            }
+        }
+    }
+
+    // 6. Idempotent `LayoutAnchorBroken` marker management. Iterate
+    // over every entity that could currently have or need the marker —
+    // anchored entities (anchored_query) AND dropped_targets (which
+    // may be plain Nodes without Anchor). Use `broken_query` to read
+    // the current marker state for the non-anchored set.
+    for (e, _, existing_broken) in anchored_query.iter() {
+        let is_broken = broken_set.contains(&e);
+        if is_broken && existing_broken.is_none() {
+            commands.entity(e).insert(LayoutAnchorBroken);
+        } else if !is_broken && existing_broken.is_some() {
+            commands.entity(e).remove::<LayoutAnchorBroken>();
+        }
+    }
+    // Also handle plain-Node targets in `dropped_targets` (they may not
+    // be in anchored_query but still need the marker per D8).
+    for &t in &dropped_targets {
+        if let Ok((_, existing_broken)) = broken_query.get(t)
+            && existing_broken.is_none()
+        {
+            commands.entity(t).insert(LayoutAnchorBroken);
+        }
+    }
+    // Cleanup: remove `LayoutAnchorBroken` from entities NOT in
+    // `broken_set` but currently carrying the marker AND not in
+    // `anchored_query` (anchored case handled above). Covers the case
+    // where a previously cycle-broken plain-Node target becomes
+    // un-broken.
+    for (t, existing_broken) in broken_query.iter() {
+        if existing_broken.is_some()
+            && !broken_set.contains(&t)
+            && anchored_query.get(t).is_err()
+        {
+            commands.entity(t).remove::<LayoutAnchorBroken>();
+        }
+    }
+
+    // 7. Emit warns (one per unique `(entity, kind)` per frame).
+    for (entity, kind) in new_warns {
+        if warned.set.insert((entity, kind)) {
+            match kind {
+                AnchorErrorKind::TargetMissing => {
+                    warn!(
+                        ?entity,
+                        "buiy: anchor target missing or has Display::None"
+                    );
+                }
+                AnchorErrorKind::AllFallbacksFailed => {
+                    warn!(?entity, "buiy: every position_try fallback failed");
+                }
+                AnchorErrorKind::InCycle => {
+                    warn!(
+                        ?entity,
+                        "buiy: anchor cycle detected; dropped this entity's outgoing edge (both cycle endpoints marked LayoutAnchorBroken)"
+                    );
+                }
+                AnchorErrorKind::DuplicateName => {
+                    warn!(
+                        ?entity,
+                        "buiy: duplicate anchor_name — late inserter wins, shadowed entries lose name lookup"
+                    );
+                }
+                AnchorErrorKind::AnchorSizeUsed => {
+                    warn!(
+                        ?entity,
+                        "buiy: anchor-size() in PositionTry::inset is deferred to v1.x; resolving to 0"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -732,12 +1160,21 @@ pub(super) fn write_resolved_layout(
     mut commands: Commands,
     tree: NonSend<LayoutTree>,
     existing: Query<&ResolvedLayout>,
+    overrides: Res<AnchorOverrides>,
 ) {
     let mut to_write: Vec<(Entity, ResolvedLayout)> = Vec::new();
     for (&entity, &id) in tree.by_entity.iter() {
         if let Ok(layout) = tree.tree.layout(id) {
+            // Phase 6 — anchor resolution may have written a position
+            // override for this entity. Size is always from Taffy; only
+            // position is overridden.
+            let position = overrides
+                .by_entity
+                .get(&entity)
+                .copied()
+                .unwrap_or_else(|| Vec2::new(layout.location.x, layout.location.y));
             let new = ResolvedLayout {
-                position: Vec2::new(layout.location.x, layout.location.y),
+                position,
                 size: Vec2::new(layout.size.width, layout.size.height),
             };
             let unchanged = existing
