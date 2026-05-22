@@ -1535,7 +1535,6 @@ mod tests {
 #[cfg(test)]
 mod observer_tests {
     use super::*;
-    use crate::components::Node;
     use crate::layout::components::Anchor;
     use crate::layout::types::AnchorName;
     use bevy::prelude::*;
