@@ -18,8 +18,8 @@ pub use components::{
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
-    AnchorNameRegistry, AnchorOverrides, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
-    SyncStylesIterCount,
+    AnchorNameRegistry, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
+    PostTaffyPositionOverrides, SyncStylesIterCount,
 };
 pub use tree::LayoutTree;
 pub use types::{
@@ -49,12 +49,15 @@ impl Plugin for LayoutPlugin {
         app.init_resource::<systems::LayoutTaffyComputeCount>();
         app.init_resource::<systems::SyncStylesIterCount>();
 
-        // Phase 6 — anchor-positioning resources. `AnchorNameRegistry`
-        // is maintained by the observers below; `AnchorOverrides` and
-        // `LayoutAnchorWarnedThisFrame` are cleared + populated by
-        // `anchor_resolution` each frame.
+        // Phase 6/7 — anchor-positioning + shared override-map resources.
+        // `AnchorNameRegistry` is maintained by the observers below;
+        // `PostTaffyPositionOverrides` is cleared by
+        // `clear_post_taffy_overrides` (Phase 7) and populated by every
+        // sub-pass of `BuiyLayoutStep::PostTaffyOverrides`;
+        // `LayoutAnchorWarnedThisFrame` is cleared + populated by
+        // `anchor_resolution` each frame (anchor-specific).
         app.init_resource::<systems::AnchorNameRegistry>();
-        app.init_resource::<systems::AnchorOverrides>();
+        app.init_resource::<systems::PostTaffyPositionOverrides>();
         app.init_resource::<systems::LayoutAnchorWarnedThisFrame>();
 
         // Phase 6 — observers register as closures per Decision D12:

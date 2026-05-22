@@ -163,16 +163,16 @@ impl AnchorNameRegistry {
     }
 }
 
-/// Phase 6 — frame-local map of anchor-resolution position overrides.
-/// `anchor_resolution` clears this at the top of each call and populates
-/// it for every entity with `Anchor.position_anchor.is_some()`. Step 7
-/// (`write_resolved_layout`) consults the map per entity and uses the
-/// override position (with size still from `tree.tree.layout()`) when
-/// present.
+/// Phase 6/7 — transient override map populated by every sub-pass of
+/// `BuiyLayoutStep::PostTaffyOverrides` (`sticky_offset` 6a,
+/// `table_layout` 6b no-op, `multicol_pack` 6c no-op, and
+/// `anchor_resolution` 6d) and consumed by `write_resolved_layout`
+/// (step 7). Cleared by `clear_post_taffy_overrides` which runs first
+/// in the sub-pass chain.
 ///
-/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2.
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 #[derive(Resource, Default, Debug)]
-pub struct AnchorOverrides {
+pub struct PostTaffyPositionOverrides {
     pub by_entity: std::collections::HashMap<Entity, Vec2>,
 }
 
@@ -185,6 +185,24 @@ pub struct AnchorOverrides {
 #[derive(Resource, Default, Debug)]
 pub struct LayoutAnchorWarnedThisFrame {
     pub set: std::collections::HashSet<(Entity, AnchorErrorKind)>,
+}
+
+/// Phase 7 — the sole site that clears `PostTaffyPositionOverrides`
+/// each frame. Runs first in `BuiyLayoutStep::PostTaffyOverrides`.
+/// Decouples per-frame clear from any one sub-pass so future
+/// sub-passes can be inserted without ordering surprises.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
+//
+// `allow(dead_code)` — Phase 7 Task 2 lands this system but defers the
+// chained `.in_set(BuiyLayoutStep::PostTaffyOverrides)` wiring to
+// Task 8 (which rewires the single Phase 6 `anchor_resolution` attach
+// into the full 6a→6b→6c→6d chain after `clear_post_taffy_overrides`).
+// The test in `mod tests` exercises the function; this attribute
+// silences the lib-build dead-code lint until Task 8 wires it in.
+#[allow(dead_code)]
+pub(super) fn clear_post_taffy_overrides(mut overrides: ResMut<PostTaffyPositionOverrides>) {
+    overrides.by_entity.clear();
 }
 
 /// Private helper invoked by the `On<Insert, Anchor>` observer closure
@@ -500,13 +518,18 @@ pub(super) fn anchor_resolution(
     broken_query: Query<(Entity, Option<&LayoutAnchorBroken>)>,
     reg: Res<AnchorNameRegistry>,
     primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
-    mut overrides: ResMut<AnchorOverrides>,
+    mut overrides: ResMut<PostTaffyPositionOverrides>,
     mut warned: ResMut<LayoutAnchorWarnedThisFrame>,
 ) {
     // 1. Clear frame-local state. Observers do NOT contribute to
     // `warned.set` (D11) — they only update the registry. Duplicates
     // are re-detected from the registry below.
-    overrides.by_entity.clear();
+    //
+    // Phase 7 — `PostTaffyPositionOverrides` is cleared by
+    // `clear_post_taffy_overrides` (the first link in the
+    // `BuiyLayoutStep::PostTaffyOverrides` chain), NOT here. Only the
+    // anchor-specific per-frame warn set stays under this system's
+    // ownership.
     warned.set.clear();
 
     // When no primary window is present (headless tests, multi-window
@@ -1159,12 +1182,13 @@ pub(super) fn write_resolved_layout(
     mut commands: Commands,
     tree: NonSend<LayoutTree>,
     existing: Query<&ResolvedLayout>,
-    overrides: Res<AnchorOverrides>,
+    overrides: Res<PostTaffyPositionOverrides>,
 ) {
     let mut to_write: Vec<(Entity, ResolvedLayout)> = Vec::new();
     for (&entity, &id) in tree.by_entity.iter() {
         if let Ok(layout) = tree.tree.layout(id) {
-            // Phase 6 — anchor resolution may have written a position
+            // Phase 6/7 — any `PostTaffyOverrides` sub-pass (sticky,
+            // table, multicol, anchor) may have written a position
             // override for this entity. Size is always from Taffy; only
             // position is overridden.
             let position = overrides
@@ -1838,9 +1862,26 @@ mod tests {
     }
 
     #[test]
-    fn anchor_overrides_default_empty() {
-        let o = AnchorOverrides::default();
+    fn post_taffy_position_overrides_default_empty() {
+        let o = PostTaffyPositionOverrides::default();
         assert!(o.by_entity.is_empty());
+    }
+
+    #[test]
+    fn clear_post_taffy_overrides_clears_by_entity() {
+        let mut app = App::new();
+        app.init_resource::<PostTaffyPositionOverrides>();
+        app.add_systems(Update, clear_post_taffy_overrides);
+        app.world_mut()
+            .resource_mut::<PostTaffyPositionOverrides>()
+            .by_entity
+            .insert(Entity::from_raw_u32(42).unwrap(), Vec2::new(10.0, 20.0));
+        app.update();
+        let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+        assert!(
+            overrides.by_entity.is_empty(),
+            "clear system did not empty the map"
+        );
     }
 
     #[test]
