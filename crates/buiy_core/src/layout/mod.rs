@@ -143,7 +143,18 @@ impl Plugin for LayoutPlugin {
             .register_type::<AnchorRef>()
             .register_type::<PositionTry>()
             .register_type::<TryCondition>()
-            .register_type::<AnchorErrorKind>();
+            .register_type::<AnchorErrorKind>()
+            // Phase 7 — multi-column + warn-once key (Tasks 3, 4, 7).
+            .register_type::<MultiColumn>()
+            .register_type::<ColumnCount>()
+            .register_type::<ColumnRule>()
+            .register_type::<ColumnRuleStyle>()
+            .register_type::<ColumnSpan>()
+            .register_type::<ColumnFill>()
+            .register_type::<BreakInside>()
+            .register_type::<BreakBefore>()
+            .register_type::<BreakAfter>()
+            .register_type::<LayoutWarnOnceKey>();
 
         pipeline::configure_pipeline(app);
 
@@ -157,16 +168,24 @@ impl Plugin for LayoutPlugin {
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
                 systems::cq_flip_check.in_set(BuiyLayoutStep::CqFlipCheck),
                 systems::cq_flip_rerun.in_set(BuiyLayoutStep::CqFlipReRun),
-                // Phase 6/7 — sub-pass 6d (anchor_resolution) preceded by
-                // the canonical clear (`clear_post_taffy_overrides`) so
-                // the override map empties each frame. Task 8 will REPLACE
-                // this two-line attach with the full 5-element `.chain()`
-                // tuple (clear → sticky 6a → table 6b → multicol 6c →
-                // anchor 6d) once sub-passes 6a/6b/6c land.
-                systems::clear_post_taffy_overrides
-                    .in_set(BuiyLayoutStep::PostTaffyOverrides)
-                    .before(systems::anchor_resolution),
-                systems::anchor_resolution.in_set(BuiyLayoutStep::PostTaffyOverrides),
+                // Phase 7 — PostTaffyOverrides chain: clear → sticky 6a →
+                // table 6b → multicol 6c → anchor 6d. All four sub-passes
+                // share `PostTaffyPositionOverrides`; the clear runs first
+                // so each pass writes into an empty map (architecture.md
+                // § 3, plan Task 8 + D2). `.chain()` over the tuple gives
+                // the explicit deterministic order Phase 7's review
+                // demanded; in-set membership lets external systems
+                // hook between Taffy and write_resolved_layout without
+                // depending on individual sub-pass labels.
+                (
+                    systems::clear_post_taffy_overrides,
+                    systems::sticky_offset,
+                    systems::table_layout,
+                    systems::multicol_pack,
+                    systems::anchor_resolution,
+                )
+                    .chain()
+                    .in_set(BuiyLayoutStep::PostTaffyOverrides),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
             ),
         );

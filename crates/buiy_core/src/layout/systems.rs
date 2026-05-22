@@ -242,13 +242,11 @@ pub(super) fn clear_warned_once_on_exit(mut warned: ResMut<LayoutWarnedOnceSessi
 // The four helpers below (`nearest_scroll_container`, `world_position`,
 // `resolve_sticky_inset`, `compute_sticky_displacement`) plus the
 // `sticky_offset` system implement the CSS § 6.3 sticky-positioning
-// algorithm.
-//
-// Wired into `BuiyLayoutStep::PostTaffyOverrides` by Task 8; carries
-// `#[allow(dead_code)]` until then. The pure helper
-// `compute_sticky_displacement` is covered by unit tests in
-// `mod tests`; integration coverage of the full pipeline lands in
-// Task 10.
+// algorithm. `sticky_offset` is wired into
+// `BuiyLayoutStep::PostTaffyOverrides` (Task 8); the helpers are
+// reachable transitively. The pure helper `compute_sticky_displacement`
+// is covered by unit tests in `mod tests`; integration coverage of the
+// full pipeline lands in Task 10.
 //
 // Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.3.
 
@@ -260,7 +258,6 @@ pub(super) fn clear_warned_once_on_exit(mut warned: ResMut<LayoutWarnedOnceSessi
 /// reference frame for sticky displacement (innermost wins, per D9).
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.1.
-#[allow(dead_code)] // Wired into the pipeline in Task 8.
 fn nearest_scroll_container(
     entity: Entity,
     parent_chain: &Query<&ChildOf>,
@@ -293,7 +290,6 @@ fn nearest_scroll_container(
 /// (c) a `tree.tree.layout()` read fails.
 ///
 /// Phase 7 — sub-pass 6a (`sticky_offset`).
-#[allow(dead_code)] // Wired into the pipeline in Task 8.
 fn world_position(
     entity: Entity,
     ancestor: Entity,
@@ -332,7 +328,6 @@ fn world_position(
 /// deliberate decision per future variant.
 ///
 /// Phase 7 — sub-pass 6a (`sticky_offset`).
-#[allow(dead_code)] // Wired into the pipeline in Task 8.
 fn resolve_sticky_inset(
     s: &Sizing,
     scroll_container_axis_size: f32,
@@ -492,7 +487,6 @@ fn compute_sticky_displacement(
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.3.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)] // Wired into BuiyLayoutStep::PostTaffyOverrides in Task 8.
 pub(super) fn sticky_offset(
     tree: NonSend<LayoutTree>,
     sticky_query: Query<(Entity, &Position, &Display), With<Node>>,
@@ -612,7 +606,6 @@ pub(super) fn sticky_offset(
 /// encountered.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
-#[allow(dead_code)] // Wired into BuiyLayoutStep::PostTaffyOverrides in Task 8.
 pub(super) fn table_layout(
     table_q: Query<(Entity, &Display), With<Node>>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
@@ -653,7 +646,6 @@ fn is_table_display(d: &Display) -> bool {
 /// single warn — no per-entity tracking.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
-#[allow(dead_code)] // Wired into BuiyLayoutStep::PostTaffyOverrides in Task 8.
 pub(super) fn multicol_pack(
     multicol_q: Query<&MultiColumn>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
