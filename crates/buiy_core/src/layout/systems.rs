@@ -602,6 +602,49 @@ pub(super) fn sticky_offset(
     }
 }
 
+/// Sub-pass 6b — table layout stub.
+///
+/// Spec § 1.2: "v1 ships only the API surface and the fallback path;
+/// the full algorithm is deferred to a v1.x point release." The
+/// fallback path (Table → Block) is handled by `translate.rs`. This
+/// sub-pass exists solely to emit a `warn!` once per (entity,
+/// session) the first time each `Display::Table*` value is
+/// encountered.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+#[allow(dead_code)] // Wired into BuiyLayoutStep::PostTaffyOverrides in Task 8.
+pub(super) fn table_layout(
+    table_q: Query<(Entity, &Display), With<Node>>,
+    mut warned: ResMut<LayoutWarnedOnceSession>,
+) {
+    for (e, d) in table_q.iter() {
+        if !is_table_display(d) {
+            continue;
+        }
+        if warned.set.insert(LayoutWarnOnceKey::TableUnsupported(e)) {
+            bevy::log::warn!(
+                "Layout: Display::Table* on entity {:?} — table layout algorithm is deferred to v1.x (spec § 1.2). Falling back to Display::Block. Use Display::Grid for v1 table-like layouts.",
+                e,
+            );
+        }
+    }
+}
+
+fn is_table_display(d: &Display) -> bool {
+    matches!(
+        d,
+        Display::Table
+            | Display::TableRowGroup
+            | Display::TableHeaderGroup
+            | Display::TableFooterGroup
+            | Display::TableRow
+            | Display::TableCell
+            | Display::TableCaption
+            | Display::TableColumnGroup
+            | Display::TableColumn
+    )
+}
+
 /// Private helper invoked by the `On<Insert, Anchor>` observer closure
 /// registered in `LayoutPlugin::build` (D12). Adds the entity to the
 /// registry under its `anchor_name` if any; otherwise tracks just the
@@ -2612,6 +2655,32 @@ mod tests {
         // max(50, 110)=110. Clamped by parent_bottom - e_h = 970 → 110.
         // Displacement = 60. Bottom inset is ignored.
         assert_eq!(d, Vec2::new(0.0, 60.0));
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 7 Task 6 — `table_layout` system tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn table_layout_warns_once_per_entity() {
+        let mut app = App::new();
+        app.init_resource::<LayoutWarnedOnceSession>();
+        app.add_systems(Update, table_layout);
+        let e = app.world_mut().spawn((Node, Display::Table)).id();
+        app.update();
+        let warned = app.world().resource::<LayoutWarnedOnceSession>();
+        assert!(warned.set.contains(&LayoutWarnOnceKey::TableUnsupported(e)));
+
+        app.update();
+        let warned = app.world().resource::<LayoutWarnedOnceSession>();
+        assert_eq!(
+            warned
+                .set
+                .iter()
+                .filter(|k| matches!(k, LayoutWarnOnceKey::TableUnsupported(_)))
+                .count(),
+            1,
+        );
     }
 }
 
