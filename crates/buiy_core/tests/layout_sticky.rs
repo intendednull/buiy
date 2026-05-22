@@ -297,18 +297,15 @@ fn sticky_bottom_clamped_by_parent_top() {
     // max(parent_top=100) → 100. min(parent_bottom-h=270) → 100.
     // displacement = 100 - 100 = 0.
     //
-    // To force the parent-top clamp branch, we need
-    // (threshold - h) < parent_top. E.g. with a very small scroll
-    // container of S.height=50, scroll_offset.y=0: visible_bottom=50,
-    // inset=10, threshold=40, threshold-h=10. min(natural=200, 10)=10.
-    // max(parent_top=100) → 100 (clamp fires). min(parent_bottom-h=270)
-    // → 100. displacement = 100 - 200 = -100.
-    //
-    // But the scroll container needs to be large enough that taffy
-    // gives the parent its requested height. We can use 100 height —
-    // taffy will still resolve the inner block layout. The reads in
-    // the sticky pass come from Taffy's computed layout, so as long
-    // as Taffy assigns the expected sizes everything lines up.
+    // Concrete fixture: S.height=100, scroll_offset=0, inset=10.
+    // visible_bottom = 0 + 100 = 100, threshold = 100 - 10 = 90,
+    // threshold - h = 60. Parent box: spacer block of 100, then 200-tall
+    // parent → parent_top_in_S = 100, parent_bottom_in_S = 300, h=30,
+    // natural_in_S = 200 (parent_top + 100 spacer). min(natural=200, 60)
+    // = 60. max(parent_top=100, 60) → 100 (clamp fires). min(parent_bottom
+    // - h = 270, 100) → 100. desired_in_S = 100; displacement_in_S =
+    // 100 - 200 = -100. In the parent-relative override frame: override.y
+    // = 100 (natural_in_parent) + (-100) = 0.
     let mut app = app();
     // Small scroll container so visible_bottom is tiny.
     let scroll = app
@@ -721,14 +718,15 @@ fn anchor_target_is_sticky_anchored_tracks_displaced_position() {
     // to y=100 in block frame.
     assert_eq!(target_pos.y, 100.0, "target displaced by sticky pass");
 
-    // Anchored entity is in the same parent (the root) — its override
-    // is the absolute anchor position. Anchor resolution uses
-    // target's box (taffy size 100x30 at Taffy-position (X, 50) — but
-    // anchor_resolution reads the OVERRIDDEN position from
-    // PostTaffyPositionOverrides per Task 9's D1 fix). Target's
-    // displaced position in scroll-container frame = block_top
-    // (0) + 100 = 100. Anchored entity sits at target_y + target_h +
-    // 5 = 100 + 30 + 5 = 135.
+    // Anchored entity is a sibling of the scroll-container at the
+    // root, so its parent-relative override is in the *root* frame —
+    // which equals the scroll-container's parent frame in this
+    // fixture (single-child-of-root layout). Anchor resolution reads
+    // the target's position via the new D1 fix (PostTaffyPositionOverrides
+    // → falls back to Taffy when empty). Target's displaced position
+    // is y=100 in the parent-relative override frame, which equals the
+    // root frame here. Anchored entity sits below the target with a
+    // 5px gap: anchored_y = target_y (100) + target_h (30) + 5 = 135.
     let anchored_pos = overrides
         .by_entity
         .get(&anchored)
