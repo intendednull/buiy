@@ -127,7 +127,9 @@ fn sticky_pins_to_top_during_scroll() {
     let _spacer = content_block(&mut app, block, 50.0);
     let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_top(0.0));
 
-    app.update();
+    // Single update suffices: `sticky_offset` (6a) writes the override,
+    // and `write_resolved_layout` (step 7) consumes it, all on the same
+    // frame.
     app.update();
 
     let overrides = app.world().resource::<PostTaffyPositionOverrides>();
@@ -702,10 +704,11 @@ fn anchor_target_is_sticky_anchored_tracks_displaced_position() {
         ))
         .id();
 
-    // Two updates: sticky pass writes displaced position on frame 1,
-    // anchor pass on frame 1 reads it. Run an extra frame for
-    // settling.
-    app.update();
+    // Single update suffices: `sticky_offset` (6a) and
+    // `anchor_resolution` (6d) are chained in `PostTaffyOverrides` via
+    // `.chain()` (see layout/mod.rs ~line 180), so the anchor pass
+    // reads the displacement the sticky pass just wrote, on the same
+    // frame.
     app.update();
 
     let overrides = app.world().resource::<PostTaffyPositionOverrides>();

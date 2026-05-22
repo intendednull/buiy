@@ -225,24 +225,22 @@ fn layout_steps_are_chained_in_declared_order() {
     // Sub-pass 6c — MultiColumn entity (warns once per session total).
     let _multicol_entity = app.world_mut().spawn((Node, MultiColumn::default())).id();
 
-    // Two updates: sticky pass writes displaced position on frame 1,
-    // anchor pass on frame 1 reads it. Run an extra frame for
-    // settling (mirrors layout_sticky's cross-phase test).
-    app.update();
+    // Single update is sufficient: sticky_offset (6a) and
+    // anchor_resolution (6d) are chained in `PostTaffyOverrides` via
+    // `.chain()` (see layout/mod.rs ~line 180), so the anchor pass
+    // reads the displacement the sticky pass just wrote, on the same
+    // frame.
     app.update();
 
-    // Order assertion — the 9-step chain ran in declared order on both
-    // frames. The tracker accumulates labels across both updates; we
-    // only check the last 9 entries to keep the assertion stable.
+    // Order assertion — the 9-step chain ran in declared order.
     let observed_full = order.lock().unwrap().clone();
     let n = observed_full.len();
-    assert!(
-        n >= 9,
-        "expected at least one full pipeline cycle; got {} entries: {:?}",
-        n,
-        observed_full,
+    assert_eq!(
+        n, 9,
+        "expected exactly one full pipeline cycle ({} entries); got {} entries: {:?}",
+        9, n, observed_full,
     );
-    let observed = &observed_full[n - 9..];
+    let observed = &observed_full[..];
     assert_eq!(
         observed,
         &[
