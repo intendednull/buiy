@@ -148,9 +148,15 @@ impl Plugin for LayoutPlugin {
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
                 systems::cq_flip_check.in_set(BuiyLayoutStep::CqFlipCheck),
                 systems::cq_flip_rerun.in_set(BuiyLayoutStep::CqFlipReRun),
-                // Phase 6 — sub-pass 6d. Future phases (sticky 6a,
-                // table 6b, multicol 6c) attach with `.before(...)` to
-                // preserve the declared 6a→6b→6c→6d order.
+                // Phase 6/7 — sub-pass 6d (anchor_resolution) preceded by
+                // the canonical clear (`clear_post_taffy_overrides`) so
+                // the override map empties each frame. Task 8 will REPLACE
+                // this two-line attach with the full 5-element `.chain()`
+                // tuple (clear → sticky 6a → table 6b → multicol 6c →
+                // anchor 6d) once sub-passes 6a/6b/6c land.
+                systems::clear_post_taffy_overrides
+                    .in_set(BuiyLayoutStep::PostTaffyOverrides)
+                    .before(systems::anchor_resolution),
                 systems::anchor_resolution.in_set(BuiyLayoutStep::PostTaffyOverrides),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
             ),

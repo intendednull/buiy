@@ -193,14 +193,6 @@ pub struct LayoutAnchorWarnedThisFrame {
 /// sub-passes can be inserted without ordering surprises.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
-//
-// `allow(dead_code)` — Phase 7 Task 2 lands this system but defers the
-// chained `.in_set(BuiyLayoutStep::PostTaffyOverrides)` wiring to
-// Task 8 (which rewires the single Phase 6 `anchor_resolution` attach
-// into the full 6a→6b→6c→6d chain after `clear_post_taffy_overrides`).
-// The test in `mod tests` exercises the function; this attribute
-// silences the lib-build dead-code lint until Task 8 wires it in.
-#[allow(dead_code)]
 pub(super) fn clear_post_taffy_overrides(mut overrides: ResMut<PostTaffyPositionOverrides>) {
     overrides.by_entity.clear();
 }
@@ -488,7 +480,9 @@ fn try_conditions_pass(
 /// Step 6 sub-pass 6d — anchor resolution.
 ///
 /// Algorithm:
-/// 1. Clear `overrides.by_entity` and `warned.set` (frame-local state).
+/// 1. Clear `warned.set` (anchor-specific per-frame warn-dedup state;
+///    `overrides.by_entity` is cleared by `clear_post_taffy_overrides`,
+///    which runs first in the `PostTaffyOverrides` chain).
 /// 2. Build the (anchored → anchor_target) edge map from
 ///    `anchored_query`. Targets are resolved by `AnchorRef::Entity(e)`
 ///    or `AnchorRef::Name(n) → AnchorNameRegistry::find_entity_by_name`

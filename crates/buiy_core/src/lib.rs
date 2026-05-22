@@ -23,10 +23,11 @@ pub use layout::{
     FlexParams, FlexWrap, GridAreas, GridAutoFlow, GridItem, GridLine, GridParams, Inset,
     JustifyContent, JustifyItems, LayoutAnchorBroken, LayoutPlugin, LayoutTree, Length,
     LogicalBoxModel, LogicalEdges, LogicalInset, NamedArea, Orientation, Overflow, OverflowMode,
-    OverscrollBehavior, Position, PositionKind, PositionTry, QueryCondition, RepeatCount, Scroll,
-    ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapAlign, SnapStop, SnapType, Style, TextOrientation, TrackSize, TryCondition,
-    UnicodeBidi, WritingMode, WritingModeKind, WritingModeResolved,
+    OverscrollBehavior, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
+    QueryCondition, RepeatCount, Scroll, ScrollBehavior, ScrollOffset, ScrollSnapItem,
+    ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, Style,
+    TextOrientation, TrackSize, TryCondition, UnicodeBidi, WritingMode, WritingModeKind,
+    WritingModeResolved,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 
