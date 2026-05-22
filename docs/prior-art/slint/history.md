@@ -14,7 +14,7 @@ The three co-founders all worked together on Qt at Trolltech in Oslo (the compan
 - **Simon Hausmann** — lead developer + maintainer of the QtQml engine at The Qt Company; one of the canonical authors of QML's reactive bindings.
 - **Aurindam Jana** — Qt engineering manager; technical and partner-relationship background. Listed as Slint co-founder per Rust Foundation member spotlight and Slint about-us.
 
-Brief correction from the seed brief: **Tobias Hunger** is a Software Engineer at Slint Software GmbH, *not* a co-founder. The brief's "Hunger + Goffart" framing was wrong; verified via the company about-us page which lists Goffart / Hausmann / Jana as Co-Founders and Hunger as Software Engineer. Tobias Hunger (GitHub `@hunger`) is one of the most active engineering contributors. The initial AccessKit integration PR ([#2865](https://github.com/slint-ui/slint/pull/2865)) was authored by co-founder **Simon Hausmann** (GitHub `@tronical`) with collaboration from Matt Campbell.
+Brief correction from the seed brief: **Tobias Hunger** is a Software Engineer at SixtyFPS GmbH, *not* a co-founder. The brief's "Hunger + Goffart" framing was wrong; verified via the company about-us page which lists Goffart / Hausmann / Jana as Co-Founders and Hunger as Software Engineer. Tobias Hunger (GitHub `@hunger`) is one of the most active engineering contributors. The initial AccessKit integration PR ([#2865](https://github.com/slint-ui/slint/pull/2865)) was authored by co-founder **Simon Hausmann** (GitHub `@tronical`) with collaboration from Matt Campbell.
 
 ## Major milestones
 

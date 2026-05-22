@@ -45,7 +45,7 @@ This commercial structure resembles `redox-os`'s structure (System76 also funds 
 Verified from crates.io publish dates (see [history.md](history.md) for the full table):
 
 - Pre-0.14: rough 3–6 month cadence with hot-fix point releases between.
-- 0.14 → 0.18 (March 2025 → February 2026, ~11 months): **six minor releases**, ~7–10 week minor cadence with same-day or same-week patch releases when regressions surface.
+- 0.14 → 0.18 (March 2025 → February 2026, ~11 months): **five minor releases** (0.14, 0.15, 0.16, 0.17, 0.18), ~7–10 week minor cadence with same-day or same-week patch releases when regressions surface.
 - 0.18 → 0.19 (February → April 2026): two-month gap.
 - 0.18.1 + 0.18.2 both published 2026-02-20, same day as 0.18.0 — a same-day double-hotfix pattern that indicates the maintainer is responsive but also that 0.x releases sometimes ship with surface defects the embedders find immediately.
 

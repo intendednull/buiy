@@ -50,7 +50,7 @@ Slint is a **mid-sized open-source product** by Rust GUI standards:
 
 By comparison: egui ~25k stars; Iced ~25k stars; Bevy ~37k stars; Dioxus ~22k stars. Slint sits in the comparable band of "established Rust GUI projects with several thousand commits and a working 1.0 product."
 
-**Production-deployment scale is harder to quantify.** OTIV is named; KDAB's clients aren't all named; LibrePCB is in-progress. There is no published "X apps shipping Slint" count. The embedded / safety-critical focus means many deployments are internal industrial systems that don't advertise their UI toolkit publicly.
+**Production-deployment scale is harder to quantify.** OTIV is named; KDAB's clients aren't all named; LibrePCB shipped 2.0 in 2025 and 2.0.1 in Feb 2026. There is no published "X apps shipping Slint" count. The embedded / safety-critical focus means many deployments are internal industrial systems that don't advertise their UI toolkit publicly.
 
 ## Comparisons
 
@@ -145,7 +145,7 @@ Slint and Buiy are not direct competitors and don't substitute for each other. A
 - **AccessKit-adopter cohort is small and worth keeping aligned with.** Slint + egui + Freya + Xilem/Masonry + Bevy. Each has production AccessKit producer code; each can be a check on whether Buiy's producer-side decisions are reasonable.
 - **License is what keeps Slint out of the Buiy decision tree.** Even if Slint's technical fit were perfect (it's not — Bevy ECS + Slint runtime can't easily share a window), the GPL+commercial gate would. Buiy's MIT OR Apache-2.0 is non-negotiable for the Bevy ecosystem.
 - **Embedded toolkit revenue model doesn't translate to game-UI library.** Slint's commercial-license + partner-ecosystem revenue stream depends on industrial / medical / automotive customers paying for safety-critical HMI software. Game studios don't pay for UI libraries the same way; the business model would have to be entirely different (e.g., engine-level sponsorship, foundation grants, individual-maintainer GitHub Sponsors). Buiy's foundation-style governance doesn't try.
-- **Production-deployment proof is patchy across the Rust UI ecosystem.** Slint has OTIV + KDAB clients + LibrePCB-in-progress; egui has a long tail of small apps; Iced has Cosmic Desktop; Dioxus has internal Cloudflare deployment + early adopters. None of them have a flagship game studio deployment. Buiy aiming for "Bevy ecosystem UI" puts it in a niche no Rust GUI toolkit has flagship-shipped to yet.
+- **Production-deployment proof is patchy across the Rust UI ecosystem.** Slint has OTIV + KDAB clients + LibrePCB (2.0 shipped 2025); egui has a long tail of small apps; Iced has Cosmic Desktop; Dioxus has internal Cloudflare deployment + early adopters. None of them have a flagship game studio deployment. Buiy aiming for "Bevy ecosystem UI" puts it in a niche no Rust GUI toolkit has flagship-shipped to yet.
 
 ## Sources
 

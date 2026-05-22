@@ -77,7 +77,7 @@ Cross-link prior-art:
 ## Files in this folder
 
 - **`README.md`** (this file) — overview, framing disclosure, key facts
-- [`patterns-catalog.md`](patterns-catalog.md) — full catalog of the 32 APG patterns; keyboard contract summary, ARIA roles/states/properties, name+description requirements. The **lookup reference**.
+- [`patterns-catalog.md`](patterns-catalog.md) — full catalog of the 30 APG patterns; keyboard contract summary, ARIA roles/states/properties, name+description requirements. The **lookup reference**.
 - [`keyboard-contracts.md`](keyboard-contracts.md) — cross-cutting keyboard conventions: Tab traversal, arrow-key family conventions, Home/End/PgUp/PgDn, Enter/Space, Escape, type-ahead. Per-widget overrides.
 - [`roles-states-properties.md`](roles-states-properties.md) — ARIA vocabulary: roles, states, properties; how AccessKit maps them.
 - [`name-computation.md`](name-computation.md) — ACCNAME 1.2 algorithm: precedence rules, recursive descent, labelling chain, hidden-subtree exclusion.

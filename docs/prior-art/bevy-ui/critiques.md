@@ -49,7 +49,7 @@ The implicit critique: as of late 2023, **no Bevy UI framework had cleanly demon
 
 ## The megacomponent problem (#17644)
 
-Issue [**#17644**](https://github.com/bevyengine/bevy/issues/17644) — "Design of bevy_a11y is BSN-unfriendly." Author: **@viridia**, opened ~2025-02-02. **Partially mitigated by PR #24308 (added `AccessibleLabel` sibling that mirrors into the unchanged `AccessibilityNode`); the megacomponent itself remains as of Bevy 0.19.0-rc.2.** Core argument:
+Issue [**#17644**](https://github.com/bevyengine/bevy/issues/17644) — "Design of bevy_a11y is BSN-unfriendly." Author: **@viridia**, opened ~2025-02-02. **Partially mitigated by PR #24308 (added `AccessibleLabel` sibling that mirrors into the unchanged `AccessibilityNode`); the megacomponent itself remains as of Bevy 0.19.0-rc.1.** Core argument:
 
 > "Because of this, I can well imagine wanting to merge together multiple BSN templates, each of which has opinions about various accessibility attributes."
 
