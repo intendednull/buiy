@@ -96,9 +96,9 @@ External systems we learn from. Living documents — update on revision, archive
 
 ### Game engine UI systems
 
-*(Unity UGUI, Unity UI Toolkit, Unreal Slate, Unreal UMG, Godot Control, NoesisGUI, RmlUi, Coherent Gameface, Scaleform, Flutter-in-Flame, Defold GUI — pending Wave 6)*
+- [NoesisGUI](prior-art/noesisgui/) — commercial XAML-based UI middleware by Noesis Technologies S.L. (Madrid, ~2-9 staff, founded ~2013); native C++ runtime with bindings to Unity (2020.2+), Unreal (UE 5.7), and custom C++ engines; latest 3.2.13 released 2026-04-27. Proprietary tiered licensing (Indie €195 < €100K rev / Pro €9K / Premium €18K / Enterprise; March 2024 license restructure). GPU-tessellated vector renderer, MVVM data binding, console support (Xbox One/Series, PS4/PS5, Switch/Switch 2), Rive + Lottie + variable fonts + complex-script shaping (3.2+). **No accessibility / AccessKit story.** Verified AAA customers: Baldur's Gate 3 (Larian, uses 3.1.6), Hellblade 2 (Ninja Theory), Age of Wonders 4 (Triumph), TopSpin 2K25 (Hangar 13), Hytale (Hypixel), Cricket 24, iRacing; ~100 studios across simulation + industrial sectors. Canonical existing-art for "proprietary commercial cross-engine UI middleware shipped in AAA games." Validates: GPU-vector custom-render pipeline ships at AAA scale (foundation § 2.3); comprehensive UI library + engine bindings is a viable product surface; MVVM separation scales to BG3 complexity. Avoid: proprietary lock-in (Buiy is MIT/Apache); no a11y (Buiy is AccessKit-first); per-engine binding tax (Buiy is Bevy-only); dependency-property runtime cost; Windows-only Blend tooling chain. Borrow: Framework/Integration API conceptual split, MVVM separation pattern, per-frame tessellation w/ atlas-only caching, single-pass stereo for VR, `BackgroundEffect` backdrop-blur, template hot-reload w/ instance state preservation (3.2.11+), Rive + Lottie native embedding. Consult before any spec on render pipeline, widget catalog scope, data binding / reactivity layer (foundation § 5 open question), 3D-anchored UI, console support disposition, or framing Buiy against "what AAA studios use today." `[active]`
 
-_(empty)_
+*(Unity UGUI, Unity UI Toolkit, Godot Control, RmlUi, Coherent Gameface, Scaleform, Flutter-in-Flame, Defold GUI — pending; Unreal Slate/UMG covered in `prior-art/unreal-slate-umg/`)*
 
 ### Substrate primitives
 
