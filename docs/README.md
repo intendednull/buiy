@@ -78,27 +78,24 @@ External systems we learn from. Living documents — update on revision, archive
 
 ### Bevy UI ecosystem
 
-*(closest relatives — bevy_ui, bevy_feathers, bevy_ui_widgets, bevy_lunex, sickle_ui, woodpecker_ui, kayak_ui, belly, bevy_egui, bevy_flair, bevy_cosmic_edit, bevy_a11y, bevy_picking, iyes_ui_navigation, quill, polako)*
-
-_(empty)_
+- [bevy_ui](prior-art/bevy-ui/) — official Bevy UI crate, the system Buiy is parallel to; Taffy + cosmic-text (until 0.19) + AccessKit substrate. Consult before any spec on render pipeline, component decomposition, layout integration, or BSN-friendly authoring. `[active]`
+- [bevy_picking](prior-art/bevy-picking/) — official Bevy hit-testing primitive; Buiy registers its own backend. Consult before any spec on input, pointer events, drag-and-drop, or focus/picking interaction. `[active]`
 
 ### Non-Bevy Rust GUI
 
-*(egui, iced, slint, dioxus, leptos, gpui, freya, makepad, xilem/masonry, druid, cushy, floem, vello-gui, relm4, gtk-rs, fltk-rs, tauri)*
-
-_(empty)_
+_(empty — pending Wave 3+)_
 
 ### Game engine UI systems
 
-*(Unity UGUI, Unity UI Toolkit, Unreal Slate, Unreal UMG, Godot Control, NoesisGUI, RmlUi, Coherent Gameface, Scaleform, Flutter-in-Flame, Defold GUI)*
+*(Unity UGUI, Unity UI Toolkit, Unreal Slate, Unreal UMG, Godot Control, NoesisGUI, RmlUi, Coherent Gameface, Scaleform, Flutter-in-Flame, Defold GUI — pending Wave 6)*
 
 _(empty)_
 
 ### Substrate primitives
 
-*(load-bearing dependencies — Taffy, Yoga, Stretch, cosmic-text, Parley, AccessKit, AT-SPI / UIA / NSAccessibility, WAI-ARIA APG, CSS Houdini)*
-
-_(empty)_
+- [Taffy](prior-art/taffy/) — load-bearing Rust layout engine (Flexbox + Grid + Block + Float since 0.10); DioxusLabs-org, Nico Burns-maintained. MIT, bus-factor risk. Consult before any spec on layout primitives, sticky/anchor/container-queries (which Buiy implements ABOVE Taffy), or `Style` decomposition. `[active]`
+- [cosmic-text](prior-art/cosmic-text/) — load-bearing Rust text engine; harfrust (since 0.15.0, NOT rustybuzz) + swash + skrifa + unicode-bidi. System76-stewarded. Bevy 0.19-dev migrated to parley+swash — post-0.19 Buiy diverges from bevy_ui on text shaper. Consult before any spec on text shaping, BiDi, editing, IME, color emoji, or font fallback. `[active]`
+- [AccessKit](prior-art/accesskit/) — load-bearing cross-platform a11y bridge; Pneuma Solutions-stewarded. Windows / macOS / Linux production; Android pre-1.0; **iOS adapter shipped 2026-05-11** (Buiy spec needs update); web adapter NOT yet shipped. Buiy is the *producer*, `accesskit_consumer` is for adapter-side code. Consult before any spec on a11y tree construction, AccessKit integration, ACCNAME 1.2, focus model, or per-window adapter ownership. `[active]`
 
 ## Reference designs
 
