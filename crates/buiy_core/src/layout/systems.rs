@@ -23,8 +23,8 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, Length,
-    QueryCondition, Sizing, TryCondition,
+    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, LayoutWarnOnceKey,
+    Length, QueryCondition, Sizing, TryCondition,
 };
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
@@ -187,6 +187,22 @@ pub struct LayoutAnchorWarnedThisFrame {
     pub set: std::collections::HashSet<(Entity, AnchorErrorKind)>,
 }
 
+/// Phase 7 — session-scoped warn-dedup set. Cleared only on
+/// `BuiyExit` (see `clear_warned_once_on_exit` below). Used by the
+/// Phase-7 sticky / table / multicol sub-passes (Tasks 5-7) to
+/// emit each `LayoutWarnOnceKey` at most once per `App` lifetime.
+///
+/// Phase 6's `LayoutAnchorWarnedThisFrame` per-frame resource is
+/// preserved unchanged — that anchor-specific divergence from
+/// spec § 6 stays in place (see Phase 6 CHANGELOG).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 6
+/// ("deduplicated via a `HashSet` resource cleared on `BuiyExit`").
+#[derive(Resource, Default, Debug)]
+pub struct LayoutWarnedOnceSession {
+    pub set: std::collections::HashSet<LayoutWarnOnceKey>,
+}
+
 /// Phase 7 — the sole site that clears `PostTaffyPositionOverrides`
 /// each frame. Runs first in `BuiyLayoutStep::PostTaffyOverrides`.
 /// Decouples per-frame clear from any one sub-pass so future
@@ -195,6 +211,29 @@ pub struct LayoutAnchorWarnedThisFrame {
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 pub(super) fn clear_post_taffy_overrides(mut overrides: ResMut<PostTaffyPositionOverrides>) {
     overrides.by_entity.clear();
+}
+
+/// Phase 7 — clears the session-scoped warn-dedup set on app
+/// shutdown. Spec § 6: "deduplicated via a `HashSet` resource
+/// cleared on `BuiyExit`."
+///
+/// Carries `#[allow(dead_code)]` because `buiy_core` does not yet
+/// expose a `BuiyState` / `BuiyExit` lifecycle enum, so there is
+/// no `OnExit(...)` hook to register against (plan decision D7 —
+/// the wire-up is deferred until the foundation lifecycle states
+/// are settled). The contract — "warn-once persists for the
+/// lifetime of one `App` instance; recreating `App` resets the
+/// warns" — is currently satisfied by `init_resource` constructing
+/// a fresh empty `LayoutWarnedOnceSession` on every `App::new()`;
+/// tests that need to reset mid-session call this function
+/// directly.
+///
+/// Pattern mirrors the deferred `clear_post_taffy_overrides` that
+/// was added unwired in 89d8fe8 and later wired in 286bb6c once
+/// `BuiyLayoutStep::PostTaffyOverrides` had downstream consumers.
+#[allow(dead_code)]
+pub(super) fn clear_warned_once_on_exit(mut warned: ResMut<LayoutWarnedOnceSession>) {
+    warned.set.clear();
 }
 
 /// Private helper invoked by the `On<Insert, Anchor>` observer closure
@@ -1891,6 +1930,25 @@ mod tests {
     fn layout_anchor_warned_default_empty() {
         let w = LayoutAnchorWarnedThisFrame::default();
         assert!(w.set.is_empty());
+    }
+
+    #[test]
+    fn warned_once_session_default_empty() {
+        let r = LayoutWarnedOnceSession::default();
+        assert!(r.set.is_empty());
+    }
+
+    #[test]
+    fn warned_once_session_dedup() {
+        let mut r = LayoutWarnedOnceSession::default();
+        let key = LayoutWarnOnceKey::TableUnsupported(Entity::from_raw_u32(1).unwrap());
+        let first = r.set.insert(key);
+        let second = r.set.insert(key);
+        assert!(first, "first insert should report true (newly added)");
+        assert!(
+            !second,
+            "second insert should report false (already present)"
+        );
     }
 
     #[test]

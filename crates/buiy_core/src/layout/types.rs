@@ -954,6 +954,53 @@ pub enum AnchorErrorKind {
     AnchorSizeUsed,
 }
 
+/// Phase 7 — session-scoped warn-once dedup key. Variants cover the
+/// non-anchor layout error/stub conditions introduced in Phase 7.
+///
+/// Anchor errors continue to use the per-frame
+/// `LayoutAnchorWarnedThisFrame` resource — that divergence from
+/// spec § 6 is preserved by Phase 7 (see Phase 6 CHANGELOG).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 6
+/// ("deduplicated via a `HashSet` resource cleared on `BuiyExit`")
+/// and plan decision D3 (sticky inset semantics) +
+/// D6 (per-session warn dedup) in
+/// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LayoutWarnOnceKey {
+    /// `Display::Table*` entity encountered. Sub-pass 6b emits one
+    /// warn per (entity, session) — the table algorithm is deferred
+    /// to v1.x.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+    TableUnsupported(Entity),
+
+    /// `MultiColumn` entity encountered. Sub-pass 6c emits one warn
+    /// per session (no Entity payload — first multicol entity triggers,
+    /// all subsequent are silent) — the multicol algorithm is
+    /// deferred to v1.x.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
+    MulticolUnsupported,
+
+    /// Sticky entity uses `Length::Fr` inset. `fr` is grid-only;
+    /// applying it as a sticky inset is semantically invalid. Warn
+    /// once per (entity, session); inset resolves to 0.0.
+    ///
+    /// Spec: plan decision D3 in
+    /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
+    StickyFrUnsupported(Entity),
+
+    /// Sticky entity uses a `Length::Cq*` inset (container query
+    /// unit). Full cq-context resolution for sticky is deferred to
+    /// a Phase 7.x follow-up (port from Phase 6 `length_inset_to_px`).
+    /// v1 resolves to 0.0. One warn per (entity, session).
+    ///
+    /// Spec: plan decision D3 in
+    /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
+    StickyCqDeferred(Entity),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

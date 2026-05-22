@@ -19,18 +19,18 @@ pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
     AnchorNameRegistry, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
-    PostTaffyPositionOverrides, SyncStylesIterCount,
+    LayoutWarnedOnceSession, PostTaffyPositionOverrides, SyncStylesIterCount,
 };
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
     BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnRuleStyle,
     ColumnSpan, ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas,
-    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, LogicalEdges, NamedArea,
-    Orientation, OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition,
-    RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing,
-    SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, TryCondition, UnicodeBidi,
-    WritingModeKind,
+    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, LayoutWarnOnceKey, Length,
+    LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
+    PositionTry, QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
+    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
+    TryCondition, UnicodeBidi, WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -57,10 +57,17 @@ impl Plugin for LayoutPlugin {
         // `clear_post_taffy_overrides` (Phase 7) and populated by every
         // sub-pass of `BuiyLayoutStep::PostTaffyOverrides`;
         // `LayoutAnchorWarnedThisFrame` is cleared + populated by
-        // `anchor_resolution` each frame (anchor-specific).
+        // `anchor_resolution` each frame (anchor-specific);
+        // `LayoutWarnedOnceSession` is the canonical per-session
+        // warn-dedup HashSet used by sticky/table/multicol sub-passes
+        // (spec § 6). It starts empty on every `App::new()`; the
+        // matching `clear_warned_once_on_exit` system is defined but
+        // not yet wired because `buiy_core` has no `BuiyState` /
+        // `BuiyExit` lifecycle states (plan D7).
         app.init_resource::<systems::AnchorNameRegistry>();
         app.init_resource::<systems::PostTaffyPositionOverrides>();
         app.init_resource::<systems::LayoutAnchorWarnedThisFrame>();
+        app.init_resource::<systems::LayoutWarnedOnceSession>();
 
         // Phase 6 — observers register as closures per Decision D12:
         // `On<'w, 't, E, B>` carries two lifetimes without defaults and
