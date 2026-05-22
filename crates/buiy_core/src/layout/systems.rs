@@ -16,13 +16,16 @@
 //! systems to them.
 
 use super::components::{
-    BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive, Display,
-    FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, WritingMode,
-    WritingModeResolved,
+    Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
+    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, Overflow, Position,
+    Scroll, WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
-use super::types::{ContainerType, GridAreas, Length, QueryCondition};
+use super::types::{
+    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, Length,
+    QueryCondition, Sizing, TryCondition,
+};
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -61,6 +64,680 @@ pub struct LayoutTaffyComputeCount(pub u32);
 /// `ScrollOffset` / `ScrollSnapItem`) keeps it zero.
 #[derive(Resource, Default, Debug)]
 pub struct SyncStylesIterCount(pub usize);
+
+/// Phase 6 — anchor-name lookup table maintained by observers on
+/// `On<Insert, Anchor>` / `On<Replace, Anchor>` / `On<Remove, Anchor>`.
+///
+/// Storage:
+/// - `by_name`: anchor name → ordered `Vec<(Entity, u64)>`. Last entry
+///   is the current winner (spec: "most-recently-inserted wins").
+/// - `entity_epochs`: every `Anchor`-bearing entity's monotonic insertion
+///   epoch. Used by `anchor_resolution`'s Kahn-cycle-edge-drop algorithm
+///   to identify the most-recently-inserted entity in a cycle.
+/// - `next_epoch`: monotonic counter bumped on every observer-driven
+///   insert. Never decrements.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+#[derive(Resource, Debug)]
+pub struct AnchorNameRegistry {
+    by_name: std::collections::HashMap<String, Vec<(Entity, u64)>>,
+    entity_epochs: std::collections::HashMap<Entity, u64>,
+    next_epoch: u64,
+}
+
+impl Default for AnchorNameRegistry {
+    fn default() -> Self {
+        Self {
+            by_name: std::collections::HashMap::new(),
+            entity_epochs: std::collections::HashMap::new(),
+            // Start at 1 so `entity_epoch(e) > 0` is a faithful
+            // "tracked" predicate (epoch 0 is reserved for the
+            // `unwrap_or(0)` fallback in `entity_epoch` — i.e.
+            // "no entry for this entity").
+            next_epoch: 1,
+        }
+    }
+}
+
+impl AnchorNameRegistry {
+    /// Insert an entity under a name, bumping the epoch. If the same
+    /// `(name, entity)` pair already exists, this is a *re*-insert
+    /// (e.g. component replaced) — the epoch bumps so the cycle tiebreaker
+    /// considers this entry the most recent.
+    ///
+    /// Use [`Self::track_epoch`] for unnamed anchors — `insert` is for
+    /// the named case only.
+    pub fn insert(&mut self, name: String, entity: Entity) {
+        let epoch = self.bump_epoch_for(entity);
+        let bucket = self.by_name.entry(name).or_default();
+        bucket.retain(|(e, _)| *e != entity);
+        bucket.push((entity, epoch));
+    }
+
+    /// Track the entity's insertion epoch without inserting into any
+    /// name bucket. Used by the `On<Insert, Anchor>` observer for
+    /// `Anchor.anchor_name == None` cases — the entity still needs an
+    /// epoch entry (for the Kahn cycle-edge-drop tiebreaker) but should
+    /// NOT pollute `by_name` with sentinel buckets.
+    pub fn track_epoch(&mut self, entity: Entity) {
+        let _ = self.bump_epoch_for(entity);
+    }
+
+    fn bump_epoch_for(&mut self, entity: Entity) -> u64 {
+        let epoch = self.next_epoch;
+        self.next_epoch += 1;
+        self.entity_epochs.insert(entity, epoch);
+        epoch
+    }
+
+    /// Remove every entry for this entity from every name bucket and
+    /// from `entity_epochs`. Called on `On<Remove, Anchor>` and
+    /// `On<Replace, Anchor>` (the replace path removes then re-inserts
+    /// using the new anchor_name).
+    pub fn remove(&mut self, entity: Entity) {
+        for bucket in self.by_name.values_mut() {
+            bucket.retain(|(e, _)| *e != entity);
+        }
+        // Drop emptied buckets to avoid unbounded growth.
+        self.by_name.retain(|_, bucket| !bucket.is_empty());
+        self.entity_epochs.remove(&entity);
+    }
+
+    /// Most-recently-inserted entity claiming this name (spec § 3.1
+    /// last-wins semantics), or `None` if no entity claims it.
+    pub fn find_entity_by_name(&self, name: &str) -> Option<Entity> {
+        self.by_name.get(name)?.last().map(|(e, _)| *e)
+    }
+
+    /// Entity's most-recent insertion epoch. Used by the Kahn
+    /// cycle-edge-drop algorithm.
+    pub fn entity_epoch(&self, entity: Entity) -> u64 {
+        self.entity_epochs.get(&entity).copied().unwrap_or(0)
+    }
+
+    /// Iterate `(name, bucket)` pairs for `DuplicateName` detection
+    /// (D11). `bucket.len() > 1` means duplicate; the last entry is
+    /// the late-inserter / warn target.
+    pub(super) fn iter_buckets(&self) -> impl Iterator<Item = (&str, &[(Entity, u64)])> {
+        self.by_name.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
+    }
+}
+
+/// Phase 6 — frame-local map of anchor-resolution position overrides.
+/// `anchor_resolution` clears this at the top of each call and populates
+/// it for every entity with `Anchor.position_anchor.is_some()`. Step 7
+/// (`write_resolved_layout`) consults the map per entity and uses the
+/// override position (with size still from `tree.tree.layout()`) when
+/// present.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2.
+#[derive(Resource, Default, Debug)]
+pub struct AnchorOverrides {
+    pub by_entity: std::collections::HashMap<Entity, Vec2>,
+}
+
+/// Phase 6 — per-frame warn-dedup set. Cleared at the top of
+/// `anchor_resolution` and populated solely by `anchor_resolution`
+/// itself (all kinds, including `DuplicateName` which is re-detected
+/// each frame by scanning `AnchorNameRegistry::iter_buckets` — see
+/// Decision D11). Observers do NOT touch this set.
+/// Spec § 3.2 step 4: "warn fires once per (entity, frame)".
+#[derive(Resource, Default, Debug)]
+pub struct LayoutAnchorWarnedThisFrame {
+    pub set: std::collections::HashSet<(Entity, AnchorErrorKind)>,
+}
+
+/// Private helper invoked by the `On<Insert, Anchor>` observer closure
+/// registered in `LayoutPlugin::build` (D12). Adds the entity to the
+/// registry under its `anchor_name` if any; otherwise tracks just the
+/// epoch (D11/B2 — no empty-string sentinel bucket).
+///
+/// Duplicate-name detection is NOT done here; it happens in
+/// `anchor_resolution` via `reg.iter_buckets()` (D11). Observers run
+/// between frames; clearing `LayoutAnchorWarnedThisFrame` at the top
+/// of `anchor_resolution` would otherwise lose any observer-recorded
+/// warns.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+pub(super) fn handle_anchor_insert(
+    entity: Entity,
+    q: &Query<&Anchor>,
+    reg: &mut AnchorNameRegistry,
+) {
+    let Ok(anchor) = q.get(entity) else {
+        return; // entity may have been despawned mid-flush
+    };
+    match &anchor.anchor_name {
+        Some(AnchorName::Named(name)) => {
+            reg.insert(name.clone(), entity);
+        }
+        Some(AnchorName::Implicit) | None => {
+            // Track the epoch only — D11/B2 — never put unnamed
+            // anchors into `by_name` (would pollute the registry
+            // and corrupt `find_entity_by_name("")` semantics).
+            reg.track_epoch(entity);
+        }
+    }
+}
+
+/// Kahn topological sort over the (anchored → anchor) DAG. Returns the
+/// resolved topological order (anchor targets first, anchored last) and
+/// the set of entities whose outgoing edge was dropped to break a cycle.
+///
+/// On cycle: identifies the remaining cycle-bound nodes (post-Kahn nodes
+/// with in_degree > 0), finds the one with the highest insertion epoch
+/// via `epochs(entity)`, drops its outgoing edge, and re-runs Kahn from
+/// scratch. Repeats until all nodes are placed.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+///
+/// `edges`: anchored entity → `Some(anchor_target)` or `None` (entity is
+/// only an anchor target, no outgoing edge). Returns: (order, dropped).
+fn kahn_anchor_sort(
+    edges: &std::collections::HashMap<Entity, Option<Entity>>,
+    epochs: &dyn Fn(Entity) -> u64,
+) -> (Vec<Entity>, std::collections::HashSet<Entity>) {
+    let mut current_edges: std::collections::HashMap<Entity, Option<Entity>> = edges.clone();
+    let mut dropped: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+
+    // D10 — pre-pass: ensure every target of a `Some(t)` edge is also a
+    // key in `current_edges` (with `None` outgoing). Without this, a
+    // target Entity that has no Anchor component (e.g. a plain Node
+    // pointed at via AnchorRef::Entity(e)) ends up with in_degree > 0
+    // but is never dequeued — Kahn flags it as a cycle node and the
+    // edge-drop is a no-op, looping forever. Pre-populating these
+    // "external target" nodes gives the algorithm a well-defined
+    // termination check.
+    let external_targets: Vec<Entity> = current_edges
+        .values()
+        .filter_map(|t| t.as_ref().copied())
+        .filter(|t| !current_edges.contains_key(t))
+        .collect();
+    for t in external_targets {
+        current_edges.insert(t, None);
+    }
+
+    loop {
+        // Build in_degree map: number of edges ending at each node.
+        let mut in_degree: std::collections::HashMap<Entity, usize> =
+            std::collections::HashMap::new();
+        for &e in current_edges.keys() {
+            in_degree.entry(e).or_insert(0);
+        }
+        for t in current_edges.values().flatten() {
+            *in_degree.entry(*t).or_insert(0) += 1;
+        }
+
+        // Queue of zero-in-degree nodes.
+        let mut queue: std::collections::VecDeque<Entity> = in_degree
+            .iter()
+            .filter(|&(_, &d)| d == 0)
+            .map(|(e, _)| *e)
+            .collect();
+
+        let mut order: Vec<Entity> = Vec::with_capacity(current_edges.len());
+        while let Some(n) = queue.pop_front() {
+            order.push(n);
+            // Decrement in_degree of the node n points at (if any).
+            if let Some(Some(target)) = current_edges.get(&n).copied() {
+                let d = in_degree.entry(target).or_insert(1);
+                *d = d.saturating_sub(1);
+                if *d == 0 {
+                    queue.push_back(target);
+                }
+            }
+        }
+
+        if order.len() == current_edges.len() {
+            // Kahn over (anchored → anchor_target) yields sources first
+            // (anchored before target). Anchor resolution requires
+            // targets first (the anchor's box must be resolved before
+            // the anchored entity reads it), so reverse the order.
+            order.reverse();
+            return (order, dropped);
+        }
+
+        // Cycle detected. Find the remaining cycle-bound nodes
+        // (in_degree > 0 at termination), pick the one with the highest
+        // epoch, drop its outgoing edge, re-run.
+        let cycle_nodes: Vec<Entity> = in_degree
+            .iter()
+            .filter(|&(_, &d)| d > 0)
+            .map(|(e, _)| *e)
+            .collect();
+
+        if cycle_nodes.is_empty() {
+            // Defensive: should not happen if order.len() != edges.len()
+            return (order, dropped);
+        }
+
+        let &drop_from = cycle_nodes
+            .iter()
+            .max_by_key(|&&e| epochs(e))
+            .expect("cycle_nodes non-empty");
+
+        // Drop the outgoing edge from this node.
+        if let Some(entry) = current_edges.get_mut(&drop_from) {
+            *entry = None;
+        }
+        dropped.insert(drop_from);
+    }
+}
+
+/// Resolve a `Length` for inset use. `Px` → its value; `Percent` →
+/// percent of the relevant axis. `Fr` → 0 (grid-only unit). `Cq*` → 0
+/// (container units in `PositionTry::inset` are tier-C deferred and
+/// tracked in follow-ups).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+fn length_inset_to_px(l: Length, axis: f32, _viewport: Vec2) -> f32 {
+    match l {
+        Length::Px(v) => v,
+        Length::Percent(p) => axis * (p / 100.0),
+        Length::Fr(_) => 0.0,
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => 0.0,
+    }
+}
+
+/// Compute the anchored entity's would-be top-left from the anchor's
+/// resolved box and the try's inset.
+///
+/// Convention: `inset` is interpreted relative to the anchor's box edges.
+/// - `inset.top != 0`: place anchored entity BELOW anchor
+///   (`anchored.top = anchor.bottom + top`).
+/// - `inset.bottom != 0`: place anchored entity ABOVE anchor
+///   (`anchored.bottom = anchor.top - bottom`).
+/// - `inset.left != 0`: place anchored entity to the RIGHT of anchor
+///   (`anchored.left = anchor.right + left`).
+/// - `inset.right != 0`: place anchored entity to the LEFT of anchor
+///   (`anchored.right = anchor.left - right`).
+///
+/// When `top == bottom == 0`, anchored.top = anchor.top (vertically aligned).
+/// When `left == right == 0`, anchored.left = anchor.left (horizontally
+/// aligned).
+///
+/// `Sizing::Auto`, intrinsic keywords, and `Stretch` → 0.0 (no offset).
+/// `Sizing::Length(_)` → resolve via `length_inset_to_px`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+fn try_anchored_position(
+    anchor_pos: Vec2,
+    anchor_size: Vec2,
+    anchored_size: Vec2,
+    inset: &Inset,
+    viewport: Vec2,
+) -> Vec2 {
+    let to_px = |s: &Sizing, axis: f32| -> f32 {
+        match s {
+            Sizing::Auto => 0.0,
+            Sizing::None => 0.0,
+            Sizing::Length(l) => length_inset_to_px(*l, axis, viewport),
+            // B4: `FitContent` is a tuple variant `FitContent(Length)`;
+            // the wildcard `(_)` discards the inner Length (no
+            // fit-content semantics in inset position resolution).
+            Sizing::MinContent | Sizing::MaxContent | Sizing::FitContent(_) => 0.0,
+            Sizing::Stretch => 0.0,
+        }
+    };
+    let top = to_px(&inset.top, anchor_size.y);
+    let bottom = to_px(&inset.bottom, anchor_size.y);
+    let left = to_px(&inset.left, anchor_size.x);
+    let right = to_px(&inset.right, anchor_size.x);
+
+    let x = if right > 0.0 {
+        anchor_pos.x - right - anchored_size.x
+    } else if left > 0.0 {
+        anchor_pos.x + anchor_size.x + left
+    } else {
+        anchor_pos.x
+    };
+    let y = if bottom > 0.0 {
+        anchor_pos.y - bottom - anchored_size.y
+    } else if top > 0.0 {
+        anchor_pos.y + anchor_size.y + top
+    } else {
+        anchor_pos.y
+    };
+    Vec2::new(x, y)
+}
+
+/// Evaluate `[TryCondition]` against this frame's Taffy output.
+///
+/// `FitsInViewport`: anchored box rect must lie entirely within
+/// `(0,0,viewport.x,viewport.y)`.
+/// `FitsInContainer(ref)`: resolve the referenced container's box from
+/// Taffy and check containment (`Display::None` containers always fail
+/// per D9).
+/// `AnchorVisible`: the anchor's resolved box must intersect the
+/// viewport rect.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+fn try_conditions_pass(
+    conditions: &[TryCondition],
+    anchored_rect: (Vec2, Vec2), // (pos, size)
+    anchor_rect: (Vec2, Vec2),
+    viewport: Vec2,
+    tree: &LayoutTree,
+    reg: &AnchorNameRegistry,
+    display_query: &Query<&Display>,
+) -> bool {
+    conditions.iter().all(|c| match c {
+        TryCondition::FitsInViewport => {
+            let (pos, size) = anchored_rect;
+            pos.x >= 0.0
+                && pos.y >= 0.0
+                && pos.x + size.x <= viewport.x
+                && pos.y + size.y <= viewport.y
+        }
+        TryCondition::FitsInContainer(r) => {
+            let container = match r {
+                AnchorRef::Entity(e) => Some(*e),
+                AnchorRef::Name(n) => reg.find_entity_by_name(n),
+            };
+            let Some(c) = container else { return false };
+            // D9 — Display::None containers fail the condition.
+            if let Ok(Display::None) = display_query.get(c) {
+                return false;
+            }
+            let Some(taffy) = tree.by_entity.get(&c).copied() else {
+                return false;
+            };
+            let Ok(layout) = tree.tree.layout(taffy) else {
+                return false;
+            };
+            let cpos = Vec2::new(layout.location.x, layout.location.y);
+            let csize = Vec2::new(layout.size.width, layout.size.height);
+            let (apos, asize) = anchored_rect;
+            apos.x >= cpos.x
+                && apos.y >= cpos.y
+                && apos.x + asize.x <= cpos.x + csize.x
+                && apos.y + asize.y <= cpos.y + csize.y
+        }
+        TryCondition::AnchorVisible => {
+            let (pos, size) = anchor_rect;
+            // Intersection of anchor rect with viewport rect
+            // (0,0,viewport.x,viewport.y).
+            pos.x + size.x > 0.0 && pos.y + size.y > 0.0 && pos.x < viewport.x && pos.y < viewport.y
+        }
+    })
+}
+
+/// Step 6 sub-pass 6d — anchor resolution.
+///
+/// Algorithm:
+/// 1. Clear `overrides.by_entity` and `warned.set` (frame-local state).
+/// 2. Build the (anchored → anchor_target) edge map from
+///    `anchored_query`. Targets are resolved by `AnchorRef::Entity(e)`
+///    or `AnchorRef::Name(n) → AnchorNameRegistry::find_entity_by_name`
+///    honoring `Display::None` per D9.
+/// 3. `kahn_anchor_sort` topo-sorts the DAG, dropping a (cycle-source,
+///    target) edge from the most-recently-inserted node in each cycle
+///    (D4). Per D8 both endpoints of every dropped edge get
+///    `LayoutAnchorBroken`.
+/// 4. Detect `DuplicateName` (D11) by scanning
+///    `AnchorNameRegistry::iter_buckets` for `bucket.len() > 1`.
+/// 5. Walk the topological order. For each anchored entity, evaluate
+///    `position_try` against this frame's Taffy output + viewport. The
+///    first try whose conditions all pass wins. If every try fails,
+///    write `Vec2::ZERO` and mark `LayoutAnchorBroken`.
+/// 6. Idempotent `LayoutAnchorBroken` marker management — insert only
+///    when missing, remove only when present (Phase 5 precedent).
+///    Covers anchored entities AND non-anchor cycle targets (D8).
+/// 7. Emit one `warn!` per unique `(entity, kind)` per frame (D5).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2 + § 3.4.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(super) fn anchor_resolution(
+    mut commands: Commands,
+    tree: NonSend<LayoutTree>,
+    anchored_query: Query<(Entity, &Anchor, Option<&LayoutAnchorBroken>), With<Node>>,
+    display_query: Query<&Display>,
+    broken_query: Query<(Entity, Option<&LayoutAnchorBroken>)>,
+    reg: Res<AnchorNameRegistry>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    mut overrides: ResMut<AnchorOverrides>,
+    mut warned: ResMut<LayoutAnchorWarnedThisFrame>,
+) {
+    // 1. Clear frame-local state. Observers do NOT contribute to
+    // `warned.set` (D11) — they only update the registry. Duplicates
+    // are re-detected from the registry below.
+    overrides.by_entity.clear();
+    warned.set.clear();
+
+    // When no primary window is present (headless tests, multi-window
+    // before the primary attaches), treat the viewport as effectively
+    // unbounded. `FitsInViewport` passes trivially (no upper bound),
+    // `AnchorVisible` reads the anchor box against (0, 0, MAX, MAX)
+    // which is always an intersection for non-degenerate boxes.
+    let viewport = primary_window
+        .single()
+        .ok()
+        .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(Vec2::splat(f32::MAX));
+
+    // 2. Build edge map. The Kahn helper does its own pre-pass for
+    // external target nodes (D10), so we don't insert plain-Node
+    // targets here.
+    let mut edges: std::collections::HashMap<Entity, Option<Entity>> =
+        std::collections::HashMap::new();
+    let mut new_warns: Vec<(Entity, AnchorErrorKind)> = Vec::new();
+
+    // Helper: target resolution honoring Display::None (D9). Returns
+    // Some(entity) only when the target is name-resolvable AND not
+    // Display::None.
+    let resolve_target = |r: &AnchorRef| -> Option<Entity> {
+        let candidate = match r {
+            AnchorRef::Entity(t) => Some(*t),
+            AnchorRef::Name(n) => reg.find_entity_by_name(n),
+        }?;
+        if let Ok(Display::None) = display_query.get(candidate) {
+            return None;
+        }
+        Some(candidate)
+    };
+
+    for (e, anchor, _) in anchored_query.iter() {
+        let target = anchor.position_anchor.as_ref().and_then(&resolve_target);
+        edges.insert(e, target);
+        if anchor.position_anchor.is_some() && target.is_none() {
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+        }
+    }
+
+    // 3. Kahn sort. The helper handles external-target pre-pass and
+    // cycle-edge dropping.
+    let entity_epochs_fn = |e: Entity| reg.entity_epoch(e);
+    let (order, dropped) = kahn_anchor_sort(&edges, &entity_epochs_fn);
+
+    // D8 — both endpoints of a dropped cycle edge get
+    // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
+    // other end of each dropped edge (read from the pre-drop edges
+    // map).
+    let mut dropped_targets: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for d in &dropped {
+        new_warns.push((*d, AnchorErrorKind::InCycle));
+        if let Some(Some(target)) = edges.get(d).copied() {
+            dropped_targets.insert(target);
+        }
+    }
+
+    // 4. DuplicateName detection (D11). Scan registry buckets;
+    // `bucket.len() > 1` means duplicate; the last entry is the
+    // late-inserter / warn target.
+    for (_name, bucket) in reg.iter_buckets() {
+        if bucket.len() > 1
+            && let Some(&(late_entity, _)) = bucket.last()
+        {
+            new_warns.push((late_entity, AnchorErrorKind::DuplicateName));
+        }
+    }
+
+    // 5. Walk topological order. Resolve position-try chain per entity.
+    let mut broken_set: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    // Cycle endpoints are broken regardless of try-chain outcome.
+    for d in &dropped {
+        broken_set.insert(*d);
+    }
+    for t in &dropped_targets {
+        broken_set.insert(*t);
+    }
+
+    for &e in &order {
+        let Some((_, anchor, _existing_broken)) = anchored_query.get(e).ok() else {
+            continue;
+        };
+        if anchor.position_anchor.as_ref().is_none() {
+            continue;
+        }
+
+        if dropped.contains(&e) {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            // `broken_set` already contains `e`.
+            continue;
+        }
+
+        let target = edges.get(&e).copied().flatten();
+        let Some(target_entity) = target else {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            broken_set.insert(e);
+            continue;
+        };
+
+        // Read anchor target's box from Taffy.
+        let Some(target_taffy) = tree.by_entity.get(&target_entity).copied() else {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            broken_set.insert(e);
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+            continue;
+        };
+        let Ok(target_layout) = tree.tree.layout(target_taffy) else {
+            overrides.by_entity.insert(e, Vec2::ZERO);
+            broken_set.insert(e);
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+            continue;
+        };
+        let anchor_pos = Vec2::new(target_layout.location.x, target_layout.location.y);
+        let anchor_size = Vec2::new(target_layout.size.width, target_layout.size.height);
+
+        // Anchored entity's own size (from Taffy).
+        let anchored_size = tree
+            .by_entity
+            .get(&e)
+            .copied()
+            .and_then(|id| tree.tree.layout(id).ok())
+            .map(|l| Vec2::new(l.size.width, l.size.height))
+            .unwrap_or(Vec2::ZERO);
+
+        // Iterate `position_try`; first passing wins.
+        let mut resolved_position: Option<Vec2> = None;
+        for try_ in &anchor.position_try {
+            let candidate = try_anchored_position(
+                anchor_pos,
+                anchor_size,
+                anchored_size,
+                &try_.inset,
+                viewport,
+            );
+            let candidate_rect = (candidate, anchored_size);
+            let anchor_rect = (anchor_pos, anchor_size);
+            if try_conditions_pass(
+                &try_.conditions,
+                candidate_rect,
+                anchor_rect,
+                viewport,
+                &tree,
+                &reg,
+                &display_query,
+            ) {
+                resolved_position = Some(candidate);
+                break;
+            }
+        }
+
+        match resolved_position {
+            Some(pos) => {
+                overrides.by_entity.insert(e, pos);
+                // `broken_set` does NOT contain `e` — idempotent
+                // remove fires below.
+            }
+            None => {
+                overrides.by_entity.insert(e, Vec2::ZERO);
+                broken_set.insert(e);
+                new_warns.push((e, AnchorErrorKind::AllFallbacksFailed));
+            }
+        }
+    }
+
+    // 6. Idempotent `LayoutAnchorBroken` marker management. Iterate
+    // over every entity that could currently have or need the marker —
+    // anchored entities (anchored_query) AND dropped_targets (which
+    // may be plain Nodes without Anchor). Use `broken_query` to read
+    // the current marker state for the non-anchored set.
+    for (e, _, existing_broken) in anchored_query.iter() {
+        let is_broken = broken_set.contains(&e);
+        if is_broken && existing_broken.is_none() {
+            commands.entity(e).insert(LayoutAnchorBroken);
+        } else if !is_broken && existing_broken.is_some() {
+            commands.entity(e).remove::<LayoutAnchorBroken>();
+        }
+    }
+    // Also handle plain-Node targets in `dropped_targets` (they may not
+    // be in anchored_query but still need the marker per D8).
+    for &t in &dropped_targets {
+        if let Ok((_, existing_broken)) = broken_query.get(t)
+            && existing_broken.is_none()
+        {
+            commands.entity(t).insert(LayoutAnchorBroken);
+        }
+    }
+    // Cleanup: remove `LayoutAnchorBroken` from entities NOT in
+    // `broken_set` but currently carrying the marker AND not in
+    // `anchored_query` (anchored case handled above). Covers the case
+    // where a previously cycle-broken plain-Node target becomes
+    // un-broken.
+    for (t, existing_broken) in broken_query.iter() {
+        if existing_broken.is_some() && !broken_set.contains(&t) && anchored_query.get(t).is_err() {
+            commands.entity(t).remove::<LayoutAnchorBroken>();
+        }
+    }
+
+    // 7. Emit warns (one per unique `(entity, kind)` per frame).
+    for (entity, kind) in new_warns {
+        if warned.set.insert((entity, kind)) {
+            match kind {
+                AnchorErrorKind::TargetMissing => {
+                    warn!(?entity, "buiy: anchor target missing or has Display::None");
+                }
+                AnchorErrorKind::AllFallbacksFailed => {
+                    warn!(?entity, "buiy: every position_try fallback failed");
+                }
+                AnchorErrorKind::InCycle => {
+                    warn!(
+                        ?entity,
+                        "buiy: anchor cycle detected; dropped this entity's outgoing edge (both cycle endpoints marked LayoutAnchorBroken)"
+                    );
+                }
+                AnchorErrorKind::DuplicateName => {
+                    warn!(
+                        ?entity,
+                        "buiy: duplicate anchor_name — late inserter wins, shadowed entries lose name lookup"
+                    );
+                }
+                AnchorErrorKind::AnchorSizeUsed => {
+                    warn!(
+                        ?entity,
+                        "buiy: anchor-size() in PositionTry::inset is deferred to v1.x; resolving to 0"
+                    );
+                }
+            }
+        }
+    }
+}
 
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
 /// removed (despawn or component-remove). `RemovedComponents<Node>`
@@ -180,17 +857,27 @@ pub(super) fn sync_styles(
                 // stable converge after at most one extra frame and
                 // then stop firing).
                 Changed<ResolvedLayout>,
-                // Phase 5 Task 9: container/CQ change set. Nested under
-                // a single inner `Or` so the outer tuple stays at 15
-                // entries (Bevy 0.18 caps `Or` tuples at 15). The
-                // semantics are identical to spelling the four entries
-                // at the top level — `Or<(A, Or<(B, C)>)>` matches
-                // exactly when `A || B || C`.
+                // Phase 5 Task 9 / Phase 6 Task 9: container/CQ + Anchor
+                // change set. Nested under a single inner `Or` so the
+                // outer tuple stays at 15 entries (Bevy 0.18 caps `Or`
+                // tuples at 15). The semantics are identical to spelling
+                // the entries at the top level — `Or<(A, Or<(B, C)>)>`
+                // matches exactly when `A || B || C`.
+                //
+                // Phase 6: `Changed<Anchor>` joins the inner Or so
+                // `sync_styles` re-translates an entity when its Anchor
+                // component is inserted/modified — the entity may need a
+                // Taffy node sync if it was just spawned, and the
+                // anchor-resolution sub-pass 6d only consults Taffy
+                // layouts for entities whose nodes are up to date.
+                // `LayoutAnchorBroken` is intentionally OMITTED: it's a
+                // devtools marker that doesn't affect Taffy translation.
                 Or<(
                     Changed<Container>,
                     Changed<ContainerQuery>,
                     Changed<ContainerQueryActive>,
                     Changed<ContainerQueryInactive>,
+                    Changed<Anchor>,
                 )>,
             )>,
         ),
@@ -472,12 +1159,21 @@ pub(super) fn write_resolved_layout(
     mut commands: Commands,
     tree: NonSend<LayoutTree>,
     existing: Query<&ResolvedLayout>,
+    overrides: Res<AnchorOverrides>,
 ) {
     let mut to_write: Vec<(Entity, ResolvedLayout)> = Vec::new();
     for (&entity, &id) in tree.by_entity.iter() {
         if let Ok(layout) = tree.tree.layout(id) {
+            // Phase 6 — anchor resolution may have written a position
+            // override for this entity. Size is always from Taffy; only
+            // position is overridden.
+            let position = overrides
+                .by_entity
+                .get(&entity)
+                .copied()
+                .unwrap_or_else(|| Vec2::new(layout.location.x, layout.location.y));
             let new = ResolvedLayout {
-                position: Vec2::new(layout.location.x, layout.location.y),
+                position,
                 size: Vec2::new(layout.size.width, layout.size.height),
             };
             let unchanged = existing
@@ -1098,4 +1794,278 @@ mod cq_tests {
         let conds = [QueryCondition::MinAspectRatio(1.0)];
         assert!(!evaluate_conditions(&conds, Vec2::new(300.0, 0.0)));
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anchor_name_registry_lookup_returns_most_recent() {
+        let mut r = AnchorNameRegistry::default();
+        let e1 = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let e2 = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        r.insert("foo".into(), e1);
+        r.insert("foo".into(), e2);
+        assert_eq!(r.find_entity_by_name("foo"), Some(e2));
+    }
+
+    #[test]
+    fn anchor_name_registry_remove_falls_back_to_prior() {
+        let mut r = AnchorNameRegistry::default();
+        let e1 = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let e2 = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        r.insert("foo".into(), e1);
+        r.insert("foo".into(), e2);
+        r.remove(e2);
+        assert_eq!(r.find_entity_by_name("foo"), Some(e1));
+    }
+
+    #[test]
+    fn anchor_name_registry_remove_unknown_is_noop() {
+        let mut r = AnchorNameRegistry::default();
+        r.remove(bevy::prelude::Entity::from_raw_u32(99).unwrap()); // does not panic
+    }
+
+    #[test]
+    fn anchor_name_registry_epoch_monotonic() {
+        let mut r = AnchorNameRegistry::default();
+        let e1 = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let e2 = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        r.insert("a".into(), e1);
+        r.insert("b".into(), e2);
+        assert!(r.entity_epoch(e2) > r.entity_epoch(e1));
+    }
+
+    #[test]
+    fn anchor_overrides_default_empty() {
+        let o = AnchorOverrides::default();
+        assert!(o.by_entity.is_empty());
+    }
+
+    #[test]
+    fn layout_anchor_warned_default_empty() {
+        let w = LayoutAnchorWarnedThisFrame::default();
+        assert!(w.set.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_orders_simple_chain() {
+        // a → b → c
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        let c = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(c));
+        edges.insert(c, None);
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        // anchor targets come BEFORE anchored entities: c, b, a
+        let ci = order.iter().position(|&e| e == c).unwrap();
+        let bi = order.iter().position(|&e| e == b).unwrap();
+        let ai = order.iter().position(|&e| e == a).unwrap();
+        assert!(ci < bi);
+        assert!(bi < ai);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_breaks_2_node_cycle_at_higher_epoch() {
+        // a → b, b → a; epoch(b) > epoch(a)
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(a));
+        let epochs = move |e: Entity| if e == b { 10 } else { 5 };
+        let (order, dropped) = kahn_anchor_sort(&edges, &epochs);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped.contains(&b)); // b's edge (b → a) was dropped
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn kahn_sort_breaks_3_node_cycle_at_highest_epoch() {
+        // a → b → c → a (cycle); epoch(c) > epoch(b) > epoch(a)
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        let c = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(c));
+        edges.insert(c, Some(a));
+        let epochs = move |e: Entity| match e {
+            x if x == c => 30,
+            x if x == b => 20,
+            _ => 10,
+        };
+        let (order, dropped) = kahn_anchor_sort(&edges, &epochs);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped.contains(&c));
+        assert_eq!(order.len(), 3);
+    }
+
+    #[test]
+    fn kahn_sort_handles_two_independent_cycles() {
+        // (a → b → a) + (c → d → c); each cycle drops its higher-epoch node
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        let c = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+        let d = bevy::prelude::Entity::from_raw_u32(4).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(a));
+        edges.insert(c, Some(d));
+        edges.insert(d, Some(c));
+        let epochs = move |e: Entity| match e {
+            x if x == b => 20,
+            x if x == d => 40,
+            _ => 10,
+        };
+        let (order, dropped) = kahn_anchor_sort(&edges, &epochs);
+        assert_eq!(dropped.len(), 2);
+        assert!(dropped.contains(&b));
+        assert!(dropped.contains(&d));
+        assert_eq!(order.len(), 4);
+    }
+
+    #[test]
+    fn kahn_sort_empty_input_is_empty_output() {
+        let edges = std::collections::HashMap::new();
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        assert!(order.is_empty());
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_only_targets_no_anchored() {
+        // a (no outgoing), b (no outgoing) — both should appear, no edges
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        edges.insert(a, None);
+        edges.insert(b, None);
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        assert_eq!(order.len(), 2);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_external_target_no_anchor_doesnt_loop() {
+        // a → b, but b is NOT in edges (it's a plain Node target).
+        // D10 pre-pass should add b as `b → None`, Kahn terminates cleanly.
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        edges.insert(a, Some(b));
+        // NOT inserting b.
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        assert_eq!(order.len(), 2);
+        let ai = order.iter().position(|&e| e == a).unwrap();
+        let bi = order.iter().position(|&e| e == b).unwrap();
+        assert!(bi < ai); // b is the target — comes first
+        assert!(dropped.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod observer_tests {
+    use super::*;
+    use crate::layout::components::Anchor;
+    use crate::layout::types::AnchorName;
+
+    fn app_with_observers() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<AnchorNameRegistry>();
+        app.init_resource::<LayoutAnchorWarnedThisFrame>();
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Insert, Anchor>,
+             q: Query<&Anchor>,
+             mut reg: ResMut<AnchorNameRegistry>| {
+                super::handle_anchor_insert(trigger.event().entity, &q, &mut reg);
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Replace, Anchor>,
+             mut reg: ResMut<AnchorNameRegistry>| {
+                reg.remove(trigger.event().entity);
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Remove, Anchor>,
+             mut reg: ResMut<AnchorNameRegistry>| {
+                reg.remove(trigger.event().entity);
+            },
+        );
+        app
+    }
+
+    #[test]
+    fn observer_insert_registers_named_anchor() {
+        let mut app = app_with_observers();
+        let e = app
+            .world_mut()
+            .spawn(Anchor {
+                anchor_name: Some(AnchorName::Named("foo".into())),
+                ..default()
+            })
+            .id();
+        // Observers fire synchronously on `spawn`, so the registry
+        // reflects the new entry immediately.
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("foo"), Some(e));
+    }
+
+    #[test]
+    fn observer_remove_cleans_registry() {
+        let mut app = app_with_observers();
+        let e = app
+            .world_mut()
+            .spawn(Anchor {
+                anchor_name: Some(AnchorName::Named("foo".into())),
+                ..default()
+            })
+            .id();
+        app.world_mut().entity_mut(e).remove::<Anchor>();
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("foo"), None);
+    }
+
+    #[test]
+    fn observer_replace_removes_then_reinserts() {
+        let mut app = app_with_observers();
+        let e = app
+            .world_mut()
+            .spawn(Anchor {
+                anchor_name: Some(AnchorName::Named("old".into())),
+                ..default()
+            })
+            .id();
+        app.world_mut().entity_mut(e).insert(Anchor {
+            anchor_name: Some(AnchorName::Named("new".into())),
+            ..default()
+        });
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("old"), None);
+        assert_eq!(reg.find_entity_by_name("new"), Some(e));
+    }
+
+    #[test]
+    fn observer_anchor_without_name_is_tracked_by_epoch_only() {
+        let mut app = app_with_observers();
+        let e = app.world_mut().spawn(Anchor::default()).id();
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        // No named entry — but the entity is in entity_epochs (for
+        // cycle-resolution lookups that don't go through `by_name`).
+        assert!(reg.entity_epoch(e) > 0);
+        // The empty-string bucket should NOT contain the entity.
+        // (regression test for the v1 plan's empty-string side-channel).
+        assert_eq!(reg.find_entity_by_name(""), None);
+    }
+
+    // DuplicateName detection moved to anchor_resolution (D11) — the
+    // observer no longer touches LayoutAnchorWarnedThisFrame. Test
+    // coverage for duplicate-name warns lives in the integration tests
+    // (tests/layout_anchor_positioning.rs).
 }

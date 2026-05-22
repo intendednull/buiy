@@ -320,3 +320,174 @@ tagged release.
 - The Task 1 `cq_unit_fallback_px` placeholder (deleted in Task 7
   when the real ancestor-driven resolver landed; transitional bridge,
   never shipped to users).
+
+### Added (Phase 6 — layout anchor positioning)
+- **CSS anchor positioning (Phase 6 of the layout migration).** Spec:
+  `docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md`
+  § 3. Plan: `docs/plans/2026-05-21-buiy-layout-anchor-positioning.md`.
+- **`Anchor` component** (decomposed-only per spec § 2.4 — NOT in the
+  `Style` Bundle, spawned alongside): `anchor_name: Option<AnchorName>`
+  declares the entity as an anchor target; `position_anchor:
+  Option<AnchorRef>` declares the entity is anchored TO another;
+  `position_try: Vec<PositionTry>` is the ordered fallback chain.
+- **`LayoutAnchorBroken` devtools marker.** Unit-struct, present iff
+  the anchor failed to resolve this frame (target missing, every
+  fallback failed, or in a cycle). Idempotent insert/remove — no
+  `Changed<LayoutAnchorBroken>` churn (preserves Phase 2 O(0)
+  steady-state invariant).
+- **Five value types** in `layout::types`: `AnchorName`
+  (`Implicit` | `Named(String)` — spec uses `SmolStr` but Phase 6
+  follows Phase 3 `String` precedent to avoid a new dep),
+  `AnchorRef` (`Entity(Entity)` | `Name(String)`), `PositionTry`
+  (`inset` + `conditions`), `TryCondition`
+  (`FitsInViewport` | `FitsInContainer(AnchorRef)` |
+  `AnchorVisible`), and `AnchorErrorKind` (5 per-frame warn-dedup
+  categories).
+- **Four `Inset` convenience constructors** mirroring the spec's
+  authoring example (§ 3.3): `Inset::above(Length)`, `below(Length)`,
+  `left_of(Length)`, `right_of(Length)`.
+- **`AnchorNameRegistry` resource** (Phase 6 introduces the first
+  `Resource` maintained by Bevy 0.18 observers, not by a regular
+  system). Storage: `HashMap<String, Vec<(Entity, u64)>>` (last-wins
+  semantics for duplicate names) + `HashMap<Entity, u64>` (per-entity
+  insertion epoch — used by the Kahn cycle-edge-drop tiebreaker) +
+  monotonic `next_epoch` counter. Public methods: `find_entity_by_name`,
+  `entity_epoch`. Crate-internal accessors: `insert`, `track_epoch`
+  (epoch-only path for unnamed anchors — no empty-string sentinel
+  bucket), `remove`, `iter_buckets` (for the in-resolver
+  `DuplicateName` scan).
+- **Three closure-based observers** registered in `LayoutPlugin::build`:
+  `On<Insert, Anchor>` (adds to registry via `handle_anchor_insert`
+  private helper), `On<Replace, Anchor>` (pre-replace cleanup),
+  `On<Remove, Anchor>` (post-remove cleanup). Closures were chosen
+  over named `fn` items because `On<'w, 't, E, B>` has two lifetime
+  parameters without defaults, and Rust's lifetime elision in named-fn
+  signatures for multi-lifetime structs is subtle.
+- **`AnchorOverrides` resource** (`pub by_entity: HashMap<Entity, Vec2>`).
+  Cleared at the top of `anchor_resolution`, populated per resolved
+  anchored entity, consulted by `write_resolved_layout` (step 7) to
+  override the position (size still always from Taffy).
+- **`LayoutAnchorWarnedThisFrame` resource** (`pub set: HashSet<(Entity,
+  AnchorErrorKind)>`) for per-frame warn dedup. Cleared at the top of
+  `anchor_resolution`; populated solely by `anchor_resolution` (not by
+  observers — observer-side warns would be silently lost on the clear).
+- **`anchor_resolution` system** attached in `BuiyLayoutStep::PostTaffyOverrides`
+  (sub-pass 6d of the 9-step pipeline). Algorithm:
+  1. Clear frame-local state.
+  2. Build the `(anchored → anchor_target)` edge map. Targets are
+     resolved by `AnchorRef::Entity(e) → e` or
+     `AnchorRef::Name(n) → registry.find_entity_by_name(n)`, with
+     `Display::None` targets treated as missing (D9: explicit
+     `Query<&Display>` lookup, because `sync_styles` does NOT remove
+     `Display::None` entities from `tree.by_entity` — it sets
+     `taffy::Display::None` and `tree.tree.layout()` returns a
+     zero-size box, not `Err`).
+  3. Hand-rolled Kahn topological sort over the edge DAG with O(V+E)
+     re-runs after each cycle-edge drop. The dropped edge belongs to
+     the cycle node with the highest insertion epoch; both endpoints
+     of the dropped edge are added to the `broken_set` (spec § 3.4
+     line 229: "Both endpoints get `LayoutAnchorBroken` markers"). The
+     Kahn helper does its own pre-pass to ensure external target
+     nodes (entities pointed at via `AnchorRef::Entity(e)` that
+     themselves have no `Anchor`) are well-defined keys in the edge
+     map, preventing an infinite drop-loop.
+  4. Detect duplicate names by scanning `reg.iter_buckets()` for
+     `bucket.len() > 1` (D11 — the late inserter is the warn target;
+     persists across frames as long as the duplicate is live).
+  5. For each anchored entity in topological order, read the target's
+     box from `tree.tree.layout()` (spec § 3.2 + architecture.md § 3.2
+     prior-art for the same reason `cq_flip_check` reads from Taffy:
+     `ResolvedLayout` is stale during sub-pass 6 because step 7 hasn't
+     written it yet). Iterate `position_try`; first try whose
+     `TryCondition`s all pass wins. Write the resolved position to
+     `AnchorOverrides.by_entity`. On no-try-passes: write `Vec2::ZERO`,
+     add to broken set, emit `AllFallbacksFailed` warn.
+  6. Idempotent `LayoutAnchorBroken` marker management — covers both
+     anchored entities AND plain-Node cycle-target entities via a
+     second `broken_query`.
+  7. Emit warns via per-(entity, kind) dedup gate.
+- **Sub-pass 6d cost contract**: `O(anchored entities × tries + V + E)`
+  per spec § 3.4 line 230. The pass does NOT trigger Taffy re-layout
+  (spec § 3.4 line 231).
+- **`anchor_resolution` takes `NonSend<LayoutTree>`** (read-only, no
+  `compute_layout` calls — Phase 5 same-frame re-layout cap of 2×
+  Taffy stays intact).
+- **`write_resolved_layout` extended** to consult `Res<AnchorOverrides>`:
+  position from override when present, else from Taffy. Size always
+  from Taffy. Existing idempotent-insert compare is unchanged.
+- **`sync_styles` `Or<>` filter widened** to include `Changed<Anchor>`
+  in the inner nested `Or` (now at 5 entries: Container,
+  ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
+  Anchor). Outer Or stays at Bevy 0.18's 15-tuple cap.
+  `LayoutAnchorBroken` is intentionally OMITTED (devtools-only marker
+  that doesn't affect Taffy translation).
+- **11 integration tests** at `crates/buiy_core/tests/layout_anchor_positioning.rs`:
+  basic anchor positioning, `AnchorOverrides`-vs-Taffy precedence,
+  `sync_styles` re-runs on `Changed<Anchor>`, two-try fallback chain
+  (first overflows viewport, second wins), 2-node cycle with
+  both-endpoints-broken assertion, duplicate-name warn persistence
+  across frames, missing target → broken + warn, broken marker clears
+  when resolution succeeds, steady-state O(0) `sync_styles` invariant,
+  observer registry cleanup on despawn, `Display::None` target →
+  broken.
+- **Pipeline-order test augmentation** at
+  `crates/buiy_core/tests/layout_pipeline_order.rs`: anchor target +
+  anchored entity pair so the 9-step chain assertion exercises the
+  PostTaffyOverrides slot end-to-end.
+
+### Changed (Phase 6)
+- `LayoutPlugin::build` gains 3 `init_resource` calls (`AnchorNameRegistry`,
+  `AnchorOverrides`, `LayoutAnchorWarnedThisFrame`), 3 `add_observer`
+  registrations (Insert/Replace/Remove of `Anchor`), 7 `register_type`
+  calls for reflection (`Anchor`, `LayoutAnchorBroken`, `AnchorName`,
+  `AnchorRef`, `PositionTry`, `TryCondition`, `AnchorErrorKind`), and 1
+  `add_systems` call attaching `anchor_resolution` to
+  `BuiyLayoutStep::PostTaffyOverrides`.
+- `buiy_core` and `buiy` facade crates re-export the 7 new public types.
+- A forward-looking comment in `mod.rs` notes that future Phase 7
+  systems attaching to `PostTaffyOverrides` (sticky 6a, table 6b,
+  multicol 6c) must add `.before(anchor_resolution)` to preserve the
+  spec's declared 6a → 6b → 6c → 6d sub-pass order.
+
+### Deferred / divergences from spec (Phase 6)
+- **`anchor-size()` in `PositionTry::inset`** — tier-C deferred to v1.x
+  per spec § 3.4 line 231. Phase 6 ships the `AnchorErrorKind::AnchorSizeUsed`
+  variant with a stub that resolves to `0.0`; a future
+  `Length::AnchorSize` extension can land without churn.
+- **`position_try_max_depth` resource cap** — README § 5 open question
+  ("if profiling surfaces deeply-nested fallback hot paths"). Phase 6
+  evaluates the full chain linearly. Tracked in
+  `docs/plans/follow-ups.md`.
+- **Cross-window anchor targets** — spec silent. Phase 6 implementation:
+  cross-window targets emit `TargetMissing` and broken (their
+  `tree.by_entity` lookup fails because they live in a different
+  `LayoutTree` root). Tracked in `docs/plans/follow-ups.md`.
+- **Anchor target IS sticky/table/multicol** (Phase 7 interaction) —
+  `anchor_resolution` reads from `tree.tree.layout()`, which is Taffy's
+  *pre-correction* position. When Phase 7 lands the 6a/6b/6c sub-passes,
+  they need either (a) `.before(anchor_resolution)` ordering so the
+  corrected ResolvedLayout is available *as a separate per-entity
+  buffer* anchor reads from, OR (b) move `anchor_resolution` to run
+  after those corrections. Tracked in `docs/plans/follow-ups.md`.
+- **Steady-state cost** — `anchor_resolution` is `O(anchored)`, not
+  `O(0)`. Spec architecture.md § 9 line 265 explicitly carves out
+  "steps 0, 6, 7 are `O(roots + anchored)`" — this is within the
+  declared cost contract. Phase 2's O(0) invariant applies to
+  `sync_styles` and the absence of `Changed<ResolvedLayout>` churn
+  from anchor pass — both preserved.
+- **Per-frame warn dedup vs per-`BuiyExit` (architecture.md § 6)** —
+  Phase 6 anchor errors use per-frame dedup (matching display-and-positioning.md
+  § 3.2 step 4 "warn fires once per (entity, frame)"); other Phase 1-5
+  warn paths (Taffy `Err`, `Length::Fr` outside grid, etc.) continue
+  to use per-session `AtomicBool` gates. Documented spec divergence;
+  a future cleanup may unify behind a single `LayoutWarnLog` resource
+  with per-kind policies.
+- **`cq_flip_rerun` filter NOT widened with `Changed<Anchor>`** — only
+  `sync_styles` was. `cq_flip_rerun` only runs when a CQ flips, and
+  `sync_styles` (step 1) already covers `Changed<Anchor>` in the same
+  frame. No correctness gap; minor latency gap in a hypothetical
+  scenario where a mid-pipeline system inserts an `Anchor` after step
+  1 but before step 5 — no such system exists today.
+
+### Removed (Phase 6)
+- (none) — Phase 6 is purely additive.

@@ -230,6 +230,54 @@ pub struct Inset {
     pub left: Sizing,
 }
 
+impl Inset {
+    /// Place the anchored entity ABOVE the anchor: anchored box's bottom
+    /// edge is `dist` above the anchor's top edge.
+    ///
+    /// Sets `bottom = Sizing::Length(dist)` and leaves the other three
+    /// sides at `Sizing::default()` (`Auto`). Spec authoring example:
+    /// docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.3.
+    pub fn above(dist: Length) -> Self {
+        Self {
+            bottom: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+
+    /// Place the anchored entity BELOW the anchor: anchored box's top
+    /// edge is `dist` below the anchor's bottom edge.
+    ///
+    /// Sets `top = Sizing::Length(dist)`.
+    pub fn below(dist: Length) -> Self {
+        Self {
+            top: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+
+    /// Place the anchored entity to the LEFT of the anchor: anchored
+    /// box's right edge is `dist` left of the anchor's left edge.
+    ///
+    /// Sets `right = Sizing::Length(dist)`.
+    pub fn left_of(dist: Length) -> Self {
+        Self {
+            right: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+
+    /// Place the anchored entity to the RIGHT of the anchor: anchored
+    /// box's left edge is `dist` right of the anchor's right edge.
+    ///
+    /// Sets `left = Sizing::Length(dist)`.
+    pub fn right_of(dist: Length) -> Self {
+        Self {
+            left: Sizing::Length(dist),
+            ..Default::default()
+        }
+    }
+}
+
 /// Per-axis overflow handling. CSS `overflow`.
 ///
 /// `Visible` (default) lets children render outside the box. `Hidden` and
@@ -727,6 +775,84 @@ impl LogicalEdges {
     }
 }
 
+/// CSS anchor name. `Implicit` means "referenced by `Entity` ID alone" —
+/// no name lookup, the anchor target is identified directly. `Named(_)`
+/// participates in the `AnchorNameRegistry` lookup.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+///
+/// Spec uses `SmolStr` for the named payload; Phase 6 follows the
+/// Phase 3 `GridAreas` precedent and uses `String` to avoid a new direct
+/// dep (`crates/buiy_core/src/layout/types.rs:394`).
+#[derive(Reflect, Clone, Debug, PartialEq, Eq, Default)]
+pub enum AnchorName {
+    #[default]
+    Implicit,
+    Named(String),
+}
+
+/// A reference to an anchor target — either a direct `Entity` handle or
+/// a name lookup against the `AnchorNameRegistry`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+#[derive(Reflect, Clone, Debug, PartialEq, Eq)]
+pub enum AnchorRef {
+    Entity(bevy::prelude::Entity),
+    Name(String),
+}
+
+/// One entry in an `Anchor.position_try` fallback chain. The first
+/// `PositionTry` whose `conditions` all evaluate true is applied.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+#[derive(Reflect, Clone, Debug, PartialEq, Default)]
+pub struct PositionTry {
+    /// The offset relative to the anchor's resolved box for this try.
+    pub inset: Inset,
+    /// All conditions must pass for this try to apply.
+    pub conditions: Vec<TryCondition>,
+}
+
+/// A condition guarding a `PositionTry`. All conditions on a try must
+/// pass simultaneously for the try to apply.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+pub enum TryCondition {
+    /// The anchored entity's would-be box does not overflow the viewport.
+    FitsInViewport,
+    /// The anchored entity's would-be box fits inside the referenced
+    /// container's resolved box. The container is identified the same
+    /// way as `Anchor.position_anchor` — by `Entity` or by registered
+    /// name.
+    FitsInContainer(AnchorRef),
+    /// The anchor's resolved box intersects the viewport.
+    AnchorVisible,
+}
+
+/// Per-frame anchor-error category for the warn-dedup `HashSet` in
+/// `LayoutAnchorWarnedThisFrame`. Spec § 3.2 step 4: "warn fires once
+/// per (entity, frame)".
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AnchorErrorKind {
+    /// The anchor target was missing, despawned, or carried `Display::None`.
+    TargetMissing,
+    /// Every `PositionTry` in the chain failed its conditions.
+    AllFallbacksFailed,
+    /// The entity was in an anchor cycle; its edge was dropped.
+    InCycle,
+    /// Two entities declared the same `anchor_name`; the later wins.
+    /// Reported on the *late* insert. Distinct from spec's "warn once
+    /// per (name, frame)" only in that the per-entity gate also avoids
+    /// repeat warns if the same entity re-inserts within the same frame.
+    DuplicateName,
+    /// `anchor-size()` used in a `PositionTry::inset` term. Tier-C
+    /// deferred to v1.x; the term resolves to zero with a warn.
+    AnchorSizeUsed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -983,5 +1109,53 @@ mod tests {
         assert_eq!(physical.bottom, Length::Px(2.0));
         assert_eq!(physical.left, Length::Px(3.0));
         assert_eq!(physical.right, Length::Px(4.0));
+    }
+
+    #[test]
+    fn anchor_name_named_round_trips() {
+        let n = AnchorName::Named("tooltip-anchor".into());
+        let copy = n.clone();
+        assert_eq!(n, copy);
+    }
+
+    #[test]
+    fn anchor_name_implicit_vs_named_are_distinct() {
+        assert_ne!(AnchorName::Implicit, AnchorName::Named("x".into()));
+    }
+
+    #[test]
+    fn anchor_ref_entity_and_name_are_distinct() {
+        let e = AnchorRef::Entity(bevy::prelude::Entity::PLACEHOLDER);
+        let n = AnchorRef::Name("x".into());
+        assert_ne!(e, n);
+    }
+
+    #[test]
+    fn position_try_default_is_empty() {
+        let p = PositionTry::default();
+        assert_eq!(p.inset, Inset::default());
+        assert!(p.conditions.is_empty());
+    }
+
+    #[test]
+    fn try_condition_fits_in_container_carries_ref() {
+        let c = TryCondition::FitsInContainer(AnchorRef::Name("parent".into()));
+        let copy = c.clone();
+        assert_eq!(c, copy);
+    }
+
+    #[test]
+    fn try_condition_variants_are_distinct() {
+        assert_ne!(TryCondition::FitsInViewport, TryCondition::AnchorVisible);
+    }
+
+    #[test]
+    fn anchor_error_kind_hashes_and_compares() {
+        use std::collections::HashSet;
+        let mut s = HashSet::new();
+        s.insert(AnchorErrorKind::TargetMissing);
+        s.insert(AnchorErrorKind::AllFallbacksFailed);
+        s.insert(AnchorErrorKind::TargetMissing);
+        assert_eq!(s.len(), 2);
     }
 }

@@ -11,21 +11,24 @@ mod tree;
 mod types;
 
 pub use components::{
-    BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive, Display,
-    FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, ScrollOffset,
-    ScrollSnapItem, WritingMode, WritingModeResolved,
+    Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
+    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, Overflow, Position,
+    Scroll, ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
-pub use systems::{LayoutTaffyComputeCount, SyncStylesIterCount};
+pub use systems::{
+    AnchorNameRegistry, AnchorOverrides, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
+    SyncStylesIterCount,
+};
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
-    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
-    Length, LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
-    QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
-    WritingModeKind,
+    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
+    ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow,
+    GridLine, Inset, JustifyContent, JustifyItems, Length, LogicalEdges, NamedArea, Orientation,
+    OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount,
+    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
+    SnapType, TextOrientation, TrackSize, TryCondition, UnicodeBidi, WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -45,6 +48,38 @@ impl Plugin for LayoutPlugin {
         app.init_resource::<systems::CqReRunRequested>();
         app.init_resource::<systems::LayoutTaffyComputeCount>();
         app.init_resource::<systems::SyncStylesIterCount>();
+
+        // Phase 6 — anchor-positioning resources. `AnchorNameRegistry`
+        // is maintained by the observers below; `AnchorOverrides` and
+        // `LayoutAnchorWarnedThisFrame` are cleared + populated by
+        // `anchor_resolution` each frame.
+        app.init_resource::<systems::AnchorNameRegistry>();
+        app.init_resource::<systems::AnchorOverrides>();
+        app.init_resource::<systems::LayoutAnchorWarnedThisFrame>();
+
+        // Phase 6 — observers register as closures per Decision D12:
+        // `On<'w, 't, E, B>` carries two lifetimes without defaults and
+        // named-fn signatures don't elide them cleanly. Closures inherit
+        // lifetimes from `add_observer`'s `IntoObserverSystem` impl.
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Insert, Anchor>,
+             q: Query<&Anchor>,
+             mut reg: ResMut<systems::AnchorNameRegistry>| {
+                systems::handle_anchor_insert(trigger.event().entity, &q, &mut reg);
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Replace, Anchor>,
+             mut reg: ResMut<systems::AnchorNameRegistry>| {
+                reg.remove(trigger.event().entity);
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Remove, Anchor>,
+             mut reg: ResMut<systems::AnchorNameRegistry>| {
+                reg.remove(trigger.event().entity);
+            },
+        );
 
         // Register decomposed components for reflection / BSN / inspectors.
         // Grouped by phase / feature area: Phase 1-2 layout primitives,
@@ -88,7 +123,15 @@ impl Plugin for LayoutPlugin {
             .register_type::<ContainerQueryInactive>()
             .register_type::<ContainerType>()
             .register_type::<Orientation>()
-            .register_type::<QueryCondition>();
+            .register_type::<QueryCondition>()
+            // Phase 6 — anchor positioning.
+            .register_type::<Anchor>()
+            .register_type::<LayoutAnchorBroken>()
+            .register_type::<AnchorName>()
+            .register_type::<AnchorRef>()
+            .register_type::<PositionTry>()
+            .register_type::<TryCondition>()
+            .register_type::<AnchorErrorKind>();
 
         pipeline::configure_pipeline(app);
 
@@ -102,6 +145,10 @@ impl Plugin for LayoutPlugin {
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
                 systems::cq_flip_check.in_set(BuiyLayoutStep::CqFlipCheck),
                 systems::cq_flip_rerun.in_set(BuiyLayoutStep::CqFlipReRun),
+                // Phase 6 — sub-pass 6d. Future phases (sticky 6a,
+                // table 6b, multicol 6c) attach with `.before(...)` to
+                // preserve the declared 6a→6b→6c→6d order.
+                systems::anchor_resolution.in_set(BuiyLayoutStep::PostTaffyOverrides),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
             ),
         );
