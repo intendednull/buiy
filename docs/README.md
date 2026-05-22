@@ -80,6 +80,7 @@ External systems we learn from. Living documents — update on revision, archive
 
 - [bevy_ui](prior-art/bevy-ui/) — official Bevy UI crate, the system Buiy is parallel to; Taffy + cosmic-text (until 0.19) + AccessKit substrate. Consult before any spec on render pipeline, component decomposition, layout integration, or BSN-friendly authoring. `[active]`
 - [bevy_picking](prior-art/bevy-picking/) — official Bevy hit-testing primitive; Buiy registers its own backend. Consult before any spec on input, pointer events, drag-and-drop, or focus/picking interaction. `[active]`
+- [bevy_flair](prior-art/bevy-flair/) — third-party CSS stylesheets on top of bevy_ui (5,885 downloads, single maintainer, bus factor 1); the only published "CSS in Bevy UI" precedent. Consult **before** drafting any future `buiy-css-stylesheet-design` sub-spec — the foundation README §5 leaves that an open question. `[active]`
 
 ### Non-Bevy Rust GUI
 
@@ -96,6 +97,10 @@ _(empty)_
 - [Taffy](prior-art/taffy/) — load-bearing Rust layout engine (Flexbox + Grid + Block + Float since 0.10); DioxusLabs-org, Nico Burns-maintained. MIT, bus-factor risk. Consult before any spec on layout primitives, sticky/anchor/container-queries (which Buiy implements ABOVE Taffy), or `Style` decomposition. `[active]`
 - [cosmic-text](prior-art/cosmic-text/) — load-bearing Rust text engine; harfrust (since 0.15.0, NOT rustybuzz) + swash + skrifa + unicode-bidi. System76-stewarded. Bevy 0.19-dev migrated to parley+swash — post-0.19 Buiy diverges from bevy_ui on text shaper. Consult before any spec on text shaping, BiDi, editing, IME, color emoji, or font fallback. `[active]`
 - [AccessKit](prior-art/accesskit/) — load-bearing cross-platform a11y bridge; Pneuma Solutions-stewarded. Windows / macOS / Linux production; Android pre-1.0; **iOS adapter shipped 2026-05-11** (Buiy spec needs update); web adapter NOT yet shipped. Buiy is the *producer*, `accesskit_consumer` is for adapter-side code. Consult before any spec on a11y tree construction, AccessKit integration, ACCNAME 1.2, focus model, or per-window adapter ownership. `[active]`
+
+### Archived
+
+- [bevy_cosmic_edit](prior-art/bevy-cosmic-edit/) — third-party Bevy plugin bridging cosmic-text into bevy_ui and 2D sprites. **Repo archived 2025-03-21**; final release 0.26.0 (2024-12-07, pinned to Bevy 0.15). Documented as a structural anti-pattern case study (bridge crate between two fast-moving Rust UI ecosystems). Validates Buiy's commitment to own its text-edit surface end-to-end. `[archived]`
 
 ## Reference designs
 

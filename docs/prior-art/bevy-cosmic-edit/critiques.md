@@ -41,7 +41,7 @@ What this meant for users:
 
 This was a known shape-of-the-problem gap: cosmic-text leaves IME to the embedder (per [`../cosmic-text/editing.md` § IME](../cosmic-text/editing.md#ime-composition-the-embedder-boundary)), and bevy_cosmic_edit could not implement preedit without either patching cosmic-text upstream (not within the maintainer's scope) or maintaining a parallel preedit overlay (which would have required substantial work in `render.rs`).
 
-This gap directly informs Buiy's IME requirement ([`text.md` § IME composition](../../specs/2026-05-07-buiy-foundation/text.md#34-typography)): preedit rendering, preedit cursor positioning, composition as undo unit, composition popup positioning. All four are **F**oundation tier.
+This gap directly informs Buiy's IME requirement ([`text.md` § IME composition](../../specs/2026-05-07-buiy-foundation/text.md#35-text-editing)): preedit rendering, preedit cursor positioning, composition as undo unit, composition popup positioning. All four are **F**oundation tier.
 
 ## BiDi caret traversal
 

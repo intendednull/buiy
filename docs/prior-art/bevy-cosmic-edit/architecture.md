@@ -106,7 +106,7 @@ IME composition was **not** handled inside the crate. bevy_cosmic_edit relied on
 
 This was a known gap (no tracking issue but discussed in informal user reports) and is the cleanest example of the bridge-layer limit: the crate could neither extend cosmic-text (upstream's `Editor` had no preedit hook — see [`cosmic-text/editing.md` § IME](../cosmic-text/editing.md#ime-composition-the-embedder-boundary)) nor maintain a parallel preedit span itself (the `CosmicEditBuffer` was the only text-bearing state). The "right" implementation requires the embedder to own a preedit overlay; bevy_cosmic_edit did not.
 
-Buiy's text.md ([§ IME composition](../../specs/2026-05-07-buiy-foundation/text.md#34-typography)) requires preedit rendering, preedit cursor positioning, composition as undo unit, and composition popup positioning — all of which were absent from bevy_cosmic_edit. See [`lessons.md`](lessons.md) "Borrow" for the partial pattern + "Avoid" for the gap.
+Buiy's text.md ([§ IME composition](../../specs/2026-05-07-buiy-foundation/text.md#35-text-editing)) requires preedit rendering, preedit cursor positioning, composition as undo unit, and composition popup positioning — all of which were absent from bevy_cosmic_edit. See [`lessons.md`](lessons.md) "Borrow" for the partial pattern + "Avoid" for the gap.
 
 ## Cursor + selection rendering
 

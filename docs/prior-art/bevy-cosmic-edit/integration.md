@@ -91,13 +91,13 @@ If a hypothetical fork updated bevy_cosmic_edit to Bevy 0.17, both crates would 
 
 Resolution would require explicit "which widget wins on focus competition" logic that neither crate ships. The cleaner answer for any new project is to pick one — and `bevy_feathers` is the one that's still maintained.
 
-See [`../bevy-feathers/README.md`](../bevy-feathers/README.md) for the active alternative.
+See [`../bevy-feathers/`](../bevy-feathers/) for the active alternative.
 
 ## Sources
 
 - `Cargo.toml` at final tag — https://github.com/Dimchikkk/bevy_cosmic_edit/blob/main/Cargo.toml
 - README compat table — https://github.com/Dimchikkk/bevy_cosmic_edit/blob/main/README.md
 - cosmic-text release timeline — [`../cosmic-text/history.md`](../cosmic-text/history.md)
-- bevy_feathers — [`../bevy-feathers/README.md`](../bevy-feathers/README.md)
+- bevy_feathers — [`../bevy-feathers/`](../bevy-feathers/)
 - bevy_text → Parley migration — https://github.com/bevyengine/bevy/issues/21765
 - Buiy parallel-stack rationale — [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md)
