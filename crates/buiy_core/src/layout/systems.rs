@@ -18,13 +18,13 @@
 use super::components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
     Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
-    Position, Scroll, WritingMode, WritingModeResolved,
+    Position, Scroll, ScrollOffset, WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, LayoutWarnOnceKey,
-    Length, QueryCondition, Sizing, TryCondition,
+    Length, PositionKind, QueryCondition, Sizing, TryCondition,
 };
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
@@ -234,6 +234,370 @@ pub(super) fn clear_post_taffy_overrides(mut overrides: ResMut<PostTaffyPosition
 #[allow(dead_code)]
 pub(super) fn clear_warned_once_on_exit(mut warned: ResMut<LayoutWarnedOnceSession>) {
     warned.set.clear();
+}
+
+// ---------------------------------------------------------------------
+// Phase 7 — sub-pass 6a: sticky positioning.
+//
+// The four helpers below (`nearest_scroll_container`, `world_position`,
+// `resolve_sticky_inset`, `compute_sticky_displacement`) plus the
+// `sticky_offset` system implement the CSS § 6.3 sticky-positioning
+// algorithm.
+//
+// Wired into `BuiyLayoutStep::PostTaffyOverrides` by Task 8; carries
+// `#[allow(dead_code)]` until then. The pure helper
+// `compute_sticky_displacement` is covered by unit tests in
+// `mod tests`; integration coverage of the full pipeline lands in
+// Task 10.
+//
+// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.3.
+
+/// Walk up `ChildOf` from `entity`, returning the first ancestor whose
+/// `Overflow.is_scroll_container()` is true. Returns `None` if no
+/// scroll-container ancestor exists.
+///
+/// Phase 7 — sub-pass 6a (`sticky_offset`) uses this to find the
+/// reference frame for sticky displacement (innermost wins, per D9).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.1.
+#[allow(dead_code)] // Wired into the pipeline in Task 8.
+fn nearest_scroll_container(
+    entity: Entity,
+    parent_chain: &Query<&ChildOf>,
+    overflow_q: &Query<&Overflow>,
+) -> Option<Entity> {
+    let mut current = entity;
+    loop {
+        // ChildOf is not a tuple struct in Bevy 0.18; use `.parent()`.
+        let parent = parent_chain.get(current).ok()?.parent();
+        if let Ok(overflow) = overflow_q.get(parent)
+            && overflow.is_scroll_container()
+        {
+            return Some(parent);
+        }
+        current = parent;
+    }
+}
+
+/// Compute `entity`'s position in `ancestor`'s content-box coordinate
+/// system by walking `ChildOf` from `entity` up to (but not including)
+/// `ancestor`, summing the Taffy `.location` of each step.
+///
+/// Uses the provided `memo` cache to avoid re-walking shared subpaths
+/// (mirrors `resolve_writing_mode`'s memoization pattern).
+///
+/// Returns `None` if (a) `entity` has no `LayoutTree` mapping, (b) the
+/// walk leaves `ancestor`'s subtree without finding `ancestor`, or
+/// (c) a `tree.tree.layout()` read fails.
+///
+/// Phase 7 — sub-pass 6a (`sticky_offset`).
+#[allow(dead_code)] // Wired into the pipeline in Task 8.
+fn world_position(
+    entity: Entity,
+    ancestor: Entity,
+    tree: &LayoutTree,
+    parent_chain: &Query<&ChildOf>,
+    memo: &mut HashMap<Entity, Vec2>,
+) -> Option<Vec2> {
+    if entity == ancestor {
+        return Some(Vec2::ZERO);
+    }
+    if let Some(cached) = memo.get(&entity) {
+        return Some(*cached);
+    }
+    // ChildOf accessor is `.parent()` in Bevy 0.18.
+    let parent = parent_chain.get(entity).ok()?.parent();
+    let parent_position = world_position(parent, ancestor, tree, parent_chain, memo)?;
+    let node_id = tree.by_entity.get(&entity)?;
+    let layout = tree.tree.layout(*node_id).ok()?;
+    let position = parent_position + Vec2::new(layout.location.x, layout.location.y);
+    memo.insert(entity, position);
+    Some(position)
+}
+
+/// Resolve a `Sizing` inset to pixels in the scroll container's
+/// reference frame, per D3 / D11.
+///
+/// Returns `Some(px)` for "this edge is sticky-active" or `None` for
+/// "this edge is not set." Inputs that are deferred (`Cq*`) or
+/// semantically invalid (`Fr` — grid-only) return `Some(0.0)` and
+/// record one `warn!` per (entity, session) via `warned`.
+///
+/// v2 — `Length` has only `Px / Percent / Fr / Cq*`. `Vh/Vw/Vmin/Vmax/
+/// Em/Rem` are not variants and never will be without a Phase 10
+/// extension; the match below is closed (no wildcard arm) so the
+/// compiler errors when Phase 10 adds new variants — forcing a
+/// deliberate decision per future variant.
+///
+/// Phase 7 — sub-pass 6a (`sticky_offset`).
+#[allow(dead_code)] // Wired into the pipeline in Task 8.
+fn resolve_sticky_inset(
+    s: &Sizing,
+    scroll_container_axis_size: f32,
+    entity: Entity,
+    warned: &mut LayoutWarnedOnceSession,
+) -> Option<f32> {
+    let length = match s {
+        Sizing::Length(l) => l,
+        // Auto, None, FitContent, MinContent, MaxContent, Stretch —
+        // edge not set. Intrinsic-size keywords are never meaningful
+        // as positional insets in any CSS.
+        Sizing::Auto
+        | Sizing::None
+        | Sizing::FitContent(_)
+        | Sizing::MinContent
+        | Sizing::MaxContent
+        | Sizing::Stretch => return None,
+    };
+    Some(match length {
+        Length::Px(p) => *p,
+        Length::Percent(p) => scroll_container_axis_size * (p / 100.0),
+        Length::Fr(_) => {
+            if warned
+                .set
+                .insert(LayoutWarnOnceKey::StickyFrUnsupported(entity))
+            {
+                warn!(
+                    "Sticky entity {:?} uses fr inset; fr is grid-only and resolves to 0.0 on sticky inset.",
+                    entity,
+                );
+            }
+            0.0
+        }
+        // All Cq* variants — full resolution is deferred to a Phase
+        // 7.x follow-up (would port Phase 6's `length_inset_to_px`,
+        // which takes an anchor-box second argument; sticky's
+        // reference frame is the sticky entity's own cq-ancestor, a
+        // different shape). v1: warn once per entity, resolve to 0.0.
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => {
+            if warned
+                .set
+                .insert(LayoutWarnOnceKey::StickyCqDeferred(entity))
+            {
+                warn!(
+                    "Sticky entity {:?} uses Cq* inset; sticky-cq resolution is deferred to a Phase 7.x follow-up. Inset resolves to 0.0.",
+                    entity,
+                );
+            }
+            0.0
+        }
+    })
+}
+
+/// Compute the per-axis sticky displacement, given the natural Taffy
+/// position and size of the sticky element, its parent, the scroll
+/// container's size, the current scroll offset, and the resolved inset
+/// values.
+///
+/// All positions are in the scroll container's content-box coordinate
+/// frame. Output is a displacement to add to the sticky element's
+/// natural-relative-to-parent position to get the final
+/// position-in-parent-frame.
+///
+/// **v1 deviation: when both `inset_top` and `inset_bottom` are set,
+/// top wins.** A future correct dual-clamp implementation will replace
+/// this if-else with an "upper-stuck vs lower-stuck, smallest
+/// perturbation from natural wins" rule (CSS spec § 6.3). Documented in
+/// CHANGELOG; the `sticky_both_top_and_bottom_active_top_wins` test
+/// pins the current behavior.
+///
+/// Pure function — no Bevy queries, no Taffy reads. Easy to unit test.
+///
+/// Phase 7 — sub-pass 6a.
+#[allow(clippy::too_many_arguments)]
+fn compute_sticky_displacement(
+    e_natural_in_s: Vec2,        // sticky element position in S's content-box frame
+    e_size: Vec2,                // sticky element size
+    parent_in_s: Vec2,           // parent position in S's content-box frame
+    parent_size: Vec2,           // parent size
+    scroll_container_size: Vec2, // S's content-box size
+    scroll_offset: Vec2,         // current ScrollOffset on S
+    inset_top: Option<f32>,
+    inset_bottom: Option<f32>,
+    inset_left: Option<f32>,
+    inset_right: Option<f32>,
+) -> Vec2 {
+    let visible_top = scroll_offset.y;
+    let visible_bottom = scroll_offset.y + scroll_container_size.y;
+    let visible_left = scroll_offset.x;
+    let visible_right = scroll_offset.x + scroll_container_size.x;
+
+    let parent_bottom = parent_in_s.y + parent_size.y;
+    let parent_right = parent_in_s.x + parent_size.x;
+
+    let desired_y = if let Some(top_px) = inset_top {
+        let threshold = visible_top + top_px;
+        e_natural_in_s
+            .y
+            .max(threshold)
+            .min(parent_bottom - e_size.y)
+            .max(parent_in_s.y)
+    } else if let Some(bottom_px) = inset_bottom {
+        let threshold = visible_bottom - bottom_px;
+        (threshold - e_size.y)
+            .min(e_natural_in_s.y)
+            .max(parent_in_s.y)
+            .min(parent_bottom - e_size.y)
+    } else {
+        e_natural_in_s.y
+    };
+    let desired_x = if let Some(left_px) = inset_left {
+        let threshold = visible_left + left_px;
+        e_natural_in_s
+            .x
+            .max(threshold)
+            .min(parent_right - e_size.x)
+            .max(parent_in_s.x)
+    } else if let Some(right_px) = inset_right {
+        let threshold = visible_right - right_px;
+        (threshold - e_size.x)
+            .min(e_natural_in_s.x)
+            .max(parent_in_s.x)
+            .min(parent_right - e_size.x)
+    } else {
+        e_natural_in_s.x
+    };
+
+    Vec2::new(desired_x - e_natural_in_s.x, desired_y - e_natural_in_s.y)
+}
+
+/// Sub-pass 6a — sticky offset.
+///
+/// For each entity with `Position::Sticky`:
+/// 1. Find nearest scroll-container ancestor via `nearest_scroll_container`.
+/// 2. If none, skip (no warn — silent no-op per D5).
+/// 3. Compute world positions in the scroll-container frame.
+/// 4. Resolve insets per `resolve_sticky_inset`.
+/// 5. Compute displacement per `compute_sticky_displacement`.
+/// 6. Write `entity_natural_relative_to_parent + displacement` to
+///    `PostTaffyPositionOverrides.by_entity`. Skip the write when the
+///    displacement is zero (avoid spurious override entries).
+///
+/// `Display::None` entities are skipped (D10). When the sticky element
+/// has no `ChildOf` (it's a layout root), we skip — Bevy's parent
+/// query will simply return `Err`.
+///
+/// Sticky behaves as `Relative` when no scroll-container ancestor is
+/// in scope (D5, silent no-op) — useful for sticky-in-static-context
+/// placeholder patterns. Percent insets resolve against the scroll
+/// container's content-box axis size (D11). `Length::Fr` and
+/// `Length::Cq*` insets warn-once-per-session and resolve to 0.0.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.3.
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // Wired into BuiyLayoutStep::PostTaffyOverrides in Task 8.
+pub(super) fn sticky_offset(
+    tree: NonSend<LayoutTree>,
+    sticky_query: Query<(Entity, &Position, &Display), With<Node>>,
+    overflow_q: Query<&Overflow>,
+    scroll_offset_q: Query<&ScrollOffset>,
+    parent_chain: Query<&ChildOf>,
+    mut overrides: ResMut<PostTaffyPositionOverrides>,
+    mut warned: ResMut<LayoutWarnedOnceSession>,
+) {
+    // Per-call memo for `world_position` — entities deeper in the
+    // sticky set share `ChildOf` chain prefixes, so memoizing avoids
+    // redundant walks.
+    let mut memo: HashMap<Entity, Vec2> = HashMap::new();
+
+    for (e, pos, display) in sticky_query.iter() {
+        // D14 — filter in Rust (no Bevy `Without<Display::None>` exists,
+        // `Or<>` slots are scarce). D10 — skip `Display::None`.
+        if !matches!(pos.kind, PositionKind::Sticky) || matches!(display, Display::None) {
+            continue;
+        }
+        // D5 — no scroll container, silent no-op.
+        let Some(scroll_container) = nearest_scroll_container(e, &parent_chain, &overflow_q) else {
+            continue;
+        };
+
+        // Read sizes / natural-position from Taffy. Each Taffy read
+        // failure is a "skip this frame" — Taffy may not have placed
+        // the entity yet (e.g. mid-spawn). No warn here — Taffy's own
+        // error log covers actual misuse.
+        let Some(e_node) = tree.by_entity.get(&e) else {
+            continue;
+        };
+        let Ok(e_layout) = tree.tree.layout(*e_node) else {
+            continue;
+        };
+        let e_size = Vec2::new(e_layout.size.width, e_layout.size.height);
+        let e_natural_rel = Vec2::new(e_layout.location.x, e_layout.location.y);
+
+        let Ok(parent_co) = parent_chain.get(e) else {
+            continue;
+        };
+        let parent = parent_co.parent();
+        let Some(parent_node) = tree.by_entity.get(&parent) else {
+            continue;
+        };
+        let Ok(parent_layout) = tree.tree.layout(*parent_node) else {
+            continue;
+        };
+        let parent_size = Vec2::new(parent_layout.size.width, parent_layout.size.height);
+
+        let Some(s_node) = tree.by_entity.get(&scroll_container) else {
+            continue;
+        };
+        let Ok(s_layout) = tree.tree.layout(*s_node) else {
+            continue;
+        };
+        let s_size = Vec2::new(s_layout.size.width, s_layout.size.height);
+
+        let Some(e_in_s) = world_position(e, scroll_container, &tree, &parent_chain, &mut memo)
+        else {
+            continue;
+        };
+        let Some(parent_in_s) =
+            world_position(parent, scroll_container, &tree, &parent_chain, &mut memo)
+        else {
+            continue;
+        };
+
+        // `ScrollOffset` is opt-in per Phase 2 — many scroll
+        // containers don't carry one. Default to zero in that case.
+        let scroll_offset = scroll_offset_q
+            .get(scroll_container)
+            .copied()
+            .unwrap_or_default();
+
+        // D3 / D11 — per-axis inset resolution. The caller passes the
+        // correct scroll-container axis size (height for top/bottom,
+        // width for left/right); `resolve_sticky_inset` does not need
+        // an axis-tag parameter.
+        let top = resolve_sticky_inset(&pos.inset.top, s_size.y, e, &mut warned);
+        let bottom = resolve_sticky_inset(&pos.inset.bottom, s_size.y, e, &mut warned);
+        let left = resolve_sticky_inset(&pos.inset.left, s_size.x, e, &mut warned);
+        let right = resolve_sticky_inset(&pos.inset.right, s_size.x, e, &mut warned);
+
+        let displacement = compute_sticky_displacement(
+            e_in_s,
+            e_size,
+            parent_in_s,
+            parent_size,
+            s_size,
+            Vec2::new(scroll_offset.x, scroll_offset.y),
+            top,
+            bottom,
+            left,
+            right,
+        );
+
+        if displacement == Vec2::ZERO {
+            // No displacement — leave the override map untouched.
+            // Avoids polluting the map with no-op entries (which
+            // `write_resolved_layout` would otherwise apply
+            // redundantly).
+            continue;
+        }
+
+        overrides.by_entity.insert(e, e_natural_rel + displacement);
+    }
 }
 
 /// Private helper invoked by the `On<Insert, Anchor>` observer closure
@@ -2067,6 +2431,185 @@ mod tests {
         let bi = order.iter().position(|&e| e == b).unwrap();
         assert!(bi < ai); // b is the target — comes first
         assert!(dropped.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 7 Task 5 — `compute_sticky_displacement` pure-helper tests.
+    //
+    // The full `sticky_offset` system is covered by integration tests
+    // in Task 10; here we exercise every branch of the per-axis sticky
+    // algorithm in isolation. Assertion values from plan v2 Task 5
+    // Step 6 (post-test-reviewer corrections).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn sticky_no_inset_no_displacement() {
+        let d = compute_sticky_displacement(
+            Vec2::new(10.0, 20.0),    // natural in S
+            Vec2::new(100.0, 50.0),   // size
+            Vec2::new(0.0, 0.0),      // parent in S
+            Vec2::new(300.0, 1000.0), // parent size
+            Vec2::new(300.0, 500.0),  // S size
+            Vec2::ZERO,               // scroll offset
+            None,
+            None,
+            None,
+            None, // no insets
+        );
+        assert_eq!(d, Vec2::ZERO);
+    }
+
+    #[test]
+    fn sticky_top_pins_when_scrolled_past() {
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 50.0), // natural at y=50
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(300.0, 500.0),
+            Vec2::new(0.0, 100.0), // scrolled down by 100
+            Some(10.0),
+            None,
+            None,
+            None, // top: 10px
+        );
+        // visible_top = 100, threshold = 110. natural_y = 50.
+        // desired_y = max(50, 110) = 110, clamped by parent_bottom - size
+        // = 1000 - 30 = 970, by parent_in_s.y = 0.
+        // displacement.y = 110 - 50 = 60.
+        assert_eq!(d, Vec2::new(0.0, 60.0));
+    }
+
+    #[test]
+    fn sticky_top_does_not_pull_up() {
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 50.0), // natural at y=50
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(300.0, 500.0),
+            Vec2::ZERO, // not scrolled
+            Some(10.0),
+            None,
+            None,
+            None,
+        );
+        // visible_top = 0, threshold = 10. natural_y = 50.
+        // desired_y = max(50, 10) = 50, clamped by parent. = 50.
+        // displacement = 50 - 50 = 0.
+        assert_eq!(d, Vec2::ZERO);
+    }
+
+    #[test]
+    fn sticky_top_clamped_by_parent_bottom() {
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 10.0),
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 50.0), // small parent — height 50
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(0.0, 100.0),
+            Some(5.0),
+            None,
+            None,
+            None,
+        );
+        // visible_top = 100, threshold = 105. natural_y = 10.
+        // desired_y = max(10, 105) = 105, clamped by parent_bottom -
+        // size = 50 - 30 = 20, by parent_in_s.y = 0 → 20.
+        // displacement = 20 - 10 = 10.
+        assert_eq!(d, Vec2::new(0.0, 10.0));
+    }
+
+    // ---- v2 — bottom-pin branch coverage (test-reviewer BLOCKER B1) ----
+
+    #[test]
+    fn sticky_bottom_pins_when_scroll_near_bottom() {
+        // visible_bottom = scroll_offset.y + S.y = 150 + 500 = 650.
+        // threshold = 650 - 10 = 640. e_h = 30.
+        // (threshold - e_h) = 610. min(610, natural=700) = 610.
+        // .max(parent_top=0) = 610. .min(parent_bottom - e_h = 970)
+        // = 610. displacement = 610 - 700 = -90.
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 700.0), // natural y=700
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),      // parent in S
+            Vec2::new(300.0, 1000.0), // parent height
+            Vec2::new(300.0, 500.0),  // S size
+            Vec2::new(0.0, 150.0),    // scroll
+            None,
+            Some(10.0),
+            None,
+            None, // bottom: 10px
+        );
+        assert_eq!(d, Vec2::new(0.0, -90.0));
+    }
+
+    #[test]
+    fn sticky_bottom_does_not_push_down_before_scroll() {
+        // visible_bottom = 0 + 500 = 500, threshold = 490,
+        // threshold - e_h = 460. min(460, natural=300) = 300.
+        // displacement = 0.
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 300.0),
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(300.0, 500.0),
+            Vec2::ZERO,
+            None,
+            Some(10.0),
+            None,
+            None,
+        );
+        assert_eq!(d, Vec2::ZERO);
+    }
+
+    #[test]
+    fn sticky_bottom_clamped_by_parent_top() {
+        // parent_in_s.y = 100, parent_height = 200. natural_y = 280,
+        // e_h = 30. visible_bottom = 0 + 100 = 100, threshold = 90,
+        // threshold - e_h = 60. .min(natural=280) = 60.
+        // .max(parent_top=100) = 100. .min(parent_bottom - e_h = 270)
+        // = 100. displacement = 100 - 280 = -180.
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 280.0),
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 100.0), // parent has nonzero top
+            Vec2::new(300.0, 200.0),
+            Vec2::new(300.0, 100.0), // tiny scroll container
+            Vec2::ZERO,
+            None,
+            Some(10.0),
+            None,
+            None,
+        );
+        assert_eq!(d, Vec2::new(0.0, -180.0));
+    }
+
+    // ---- v2 — both-top-and-bottom-active behavior (test-reviewer BLOCKER B2) ----
+
+    #[test]
+    fn sticky_both_top_and_bottom_active_top_wins() {
+        // v1 deviation: when both insets are set, top wins. This test
+        // documents the behavior — a future correct dual-clamp impl
+        // will fail this test and that's the signal to flip it.
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 50.0),
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(300.0, 500.0),
+            Vec2::new(0.0, 100.0),
+            Some(10.0),
+            Some(10.0),
+            None,
+            None, // both insets set
+        );
+        // Top-pin branch fires: visible_top=100, threshold=110,
+        // max(50, 110)=110. Clamped by parent_bottom - e_h = 970 → 110.
+        // Displacement = 60. Bottom inset is ignored.
+        assert_eq!(d, Vec2::new(0.0, 60.0));
     }
 }
 
