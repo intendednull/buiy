@@ -50,7 +50,7 @@ The Unicode bidi formatting characters fall into two groups, both handled by `un
 
 Caret motion across a BiDi boundary is the editing layer's concern, not the shaping layer's. cosmic-text's `Cursor` carries `{ line, index, affinity }` where `affinity` (Before/After) disambiguates a position at a level boundary (the "split caret" case).
 
-The `Editor` (in `src/edit/editor.rs`, Agent B's `editing.md`) implements **logical** caret movement: arrow keys move by logical position, not visual. The web platform allows either logical or visual caret behavior depending on the OS — Windows uses visual, GTK uses logical, macOS uses logical-with-special-cases. Buiy must decide its default and may need to layer visual caret movement on top, which requires walking `LayoutGlyph::level` to find the next visual neighbor.
+The `Editor`'s `Cursor` position is **logical** (byte index + affinity), but arrow-key motion (`Motion::Left/Right`) steps in **visual order** across BiDi runs. See editing.md for the canonical caret-movement semantics.
 
 See Agent B's `editing.md` for the full caret model, selection rectangles for mixed-direction lines, and the affinity semantics.
 

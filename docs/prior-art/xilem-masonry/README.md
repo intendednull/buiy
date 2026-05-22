@@ -51,7 +51,7 @@ If you're consulting this folder for a Buiy design decision:
 3. **For a11y questions:** [`accessibility.md`](accessibility.md) (cross-link to `../accesskit/lessons.md`).
 4. **For reactivity / authoring questions:** [`xilem-architecture.md`](xilem-architecture.md) then [`masonry-toolkit.md`](masonry-toolkit.md).
 5. **For history / "why this and not that":** [`history.md`](history.md) (Druid → Masonry → Xilem timeline).
-6. **For ecosystem / production status:** [`ecosystem.md` + `comparisons.md`](ecosystem-comparisons.md).
+6. **For ecosystem / production status:** [`ecosystem-comparisons.md`](ecosystem-comparisons.md).
 7. **For critiques / open problems:** [`critiques-and-open-problems.md`](critiques-and-open-problems.md).
 8. **For governance / licensing:** [`distribution-governance.md`](distribution-governance.md).
 

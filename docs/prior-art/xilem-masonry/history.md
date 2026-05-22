@@ -44,7 +44,7 @@ The paper is *conceptual*; no implementation yet. The crate `xilem` doesn't exis
 
 The final Druid release. Around this time, Raph and contributors signal the strategic shift: Druid is in maintenance mode, Xilem is the future. The Druid README is updated to say "UNMAINTAINED - The Druid project has been discontinued." Repository is not formally `archived` on GitHub, but development stops.
 
-## 2023-05-07 — Xilem 0.1.0 (first release)
+## 2024-05-07 — Xilem 0.1.0 (first release)
 
 The first Xilem crate hits crates.io. Initial implementation of the paper's ideas: view trees, diffing, Masonry-backed paint. Masonry exists at this point but is internal-shaped — version numbers are inconsistent (masonry-v0.2.0 ships alongside xilem v0.1.0, reflecting Masonry's earlier internal life as part of Druid before being lifted out).
 
@@ -97,7 +97,7 @@ The full timeline:
 - **2020 Q3** — "Towards principled reactive UI" — paper-form articulation of Druid's limitations.
 - **2022 Q2** — Xilem paper.
 - **2023 Q1** — Druid declared unmaintained.
-- **2023 Q2** — Xilem 0.1.0 ships.
+- **2024 Q2** — Xilem 0.1.0 ships.
 - **2025 Q2** — Xilem 0.3.0 (one year of catch-up work).
 - **2025 Q4** — Xilem + Masonry 0.4.0 sibling release.
 

@@ -49,6 +49,8 @@ The name `belly` is not registered to any other project on crates.io either — 
 
 The Bevy version belly is pinned to (0.13, April 2024) predates several Bevy primitives Buiy depends on: Required Components (0.15+), the decomposed `BackgroundColor` / `BorderColor` / `Outline` / `BoxShadow` components (drifted through 0.14–0.17), `bevy_input_focus` (0.16+), `bevy_a11y` post-#17644 PR #24308 changes (0.17+), `bevy_feathers` (0.18+). A migration to current Bevy would touch every belly crate.
 
+**Version-tag drift signal.** The `main` branch's `Cargo.toml` declares `version = "0.4.0"` even though the `v0.5.0` git tag was published 2024-04-20. The main-branch version was never bumped post-tagging — a small but real signal that release discipline lapsed before the project went silent. Tooling that pins to `git` rev (rather than tag) gets the pre-0.5 version string; the dependency-resolution-mismatch is invisible until a user investigates.
+
 ## License
 
 Dual MIT OR Apache-2.0. Standard for the Rust + Bevy ecosystem. License files:

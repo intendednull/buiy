@@ -1,8 +1,6 @@
----
 **Date:** 2026-05-22
 **Status:** active
 **Subject:** cosmic-text — how embedders integrate it (Iced, Bevy, COSMIC desktop, Buiy)
----
 
 # Integration
 

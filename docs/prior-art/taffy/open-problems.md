@@ -42,7 +42,7 @@ For each gap: current Taffy status, the linked issue if any, and the Buiy postur
 
 **Browser status:** Chrome 125 (2024) shipped behind a flag, on by default since 128. Safari and Firefox tracking implementations. Not yet broadly cross-browser.
 
-**Buiy posture:** Buiy commits to implementing anchor positioning as a **post-Taffy overlay pass** ([Buiy architecture.md § 3.3](../../specs/2026-05-08-buiy-layout-design/architecture.md#33-anchor-resolution)). Anchored elements lay out via Taffy first using their author-declared dimensions; a Buiy pass then walks every `Anchor` component, looks up the anchor target's `ResolvedLayout`, and overrides the anchored entity's position per the `position-try` chain. The decomposed `Anchor` component lives in [display-and-positioning.md § 3.1](../../specs/2026-05-08-buiy-layout-design/README.md). The anchor target's resolved layout is read from `tree.layout(node_id)`, not entity-side `ResolvedLayout`.
+**Buiy posture:** Buiy commits to implementing anchor positioning as a **post-Taffy overlay pass** ([Buiy architecture.md § 3.3](../../specs/2026-05-08-buiy-layout-design/architecture.md#33-anchor-resolution)). Anchored elements lay out via Taffy first using their author-declared dimensions; a Buiy pass then walks every `Anchor` component, looks up the anchor target's `ResolvedLayout`, and overrides the anchored entity's position per the `position-try` chain. The decomposed `Anchor` component lives in [display-and-positioning.md § 3.1](../../specs/2026-05-08-buiy-layout-design/display-and-positioning.md). The anchor target's resolved layout is read from `tree.layout(node_id)`, not entity-side `ResolvedLayout`.
 
 This is one of the two features Buiy explicitly layers above Taffy.
 
@@ -63,7 +63,7 @@ This is one of the two features Buiy explicitly layers above Taffy.
 3. Steps 1 and 3 re-run once.
 4. Cap at 2× Taffy compute per frame; no fixed-point iteration.
 
-The decomposed `Container` component and the rule-carrier `ContainerQuery` live in [container-queries-and-writing-modes.md](../../specs/2026-05-08-buiy-layout-design/README.md). Taffy is unaware; it sees only the resulting `taffy::Style` differences after Buiy flips markers.
+The decomposed `Container` component and the rule-carrier `ContainerQuery` live in [container-queries-and-writing-modes.md](../../specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md). Taffy is unaware; it sees only the resulting `taffy::Style` differences after Buiy flips markers.
 
 This is the second feature Buiy explicitly layers above Taffy.
 
@@ -142,7 +142,7 @@ This is the same workaround every Taffy embedder uses except Servo and Blitz. No
 
 **Why:** Scroll snap is a behavior layered on top of scrolling — given the resolved layout of snap targets, it constrains where the scroll position lands. Taffy doesn't model scrolling.
 
-**Buiy posture:** Buiy implements scroll snap above Taffy. The `Scroll` component carries `snap_type`, `snap_align`, `snap_stop`, snap padding, snap margin. The application layer reads `ResolvedLayout` for snap-target rectangles and constrains scroll position. See [overflow-and-scrolling.md](../../specs/2026-05-08-buiy-layout-design/README.md).
+**Buiy posture:** Buiy implements scroll snap above Taffy. The `Scroll` component carries `snap_type`, `snap_align`, `snap_stop`, snap padding, snap margin. The application layer reads `ResolvedLayout` for snap-target rectangles and constrains scroll position. See [overflow-and-scrolling.md](../../specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md).
 
 ## 12. `aspect-ratio`
 

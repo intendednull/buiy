@@ -65,7 +65,7 @@ Read [`lessons.md`](lessons.md) first when you're designing anything text-shaped
 
 ## Internal contradictions to fix in a polish pass
 
-- **Harfrust migration version.** [`architecture.md`](architecture.md) (§ "Brief correction up front") and [`shaping.md`](shaping.md) (§ "Substrate correction") both state the rustybuzz → harfrust migration "happened in the 0.17.x / 0.18.x line." This is **wrong**. The canonical answer, verified per the 0.15.0 release notes ("Replace rustybuzz with HarfRust") and PR #417 commit `2610c86` merged 2025-09-09, is that **the migration first shipped in 0.15.0**. This README, [`lessons.md`](lessons.md), [`glossary.md`](glossary.md), [`history.md`](history.md), [`governance.md`](governance.md), [`ecosystem.md`](ecosystem.md), and [`integration.md`](integration.md) all say 0.15.0; the two Agent A files need to be edited to match.
+Internal contradictions surfaced during research have been fixed in a polish pass on 2026-05-22. The flagged Bevy adoption version and harfrust migration version are now consistent across all files.
 
 ## Sources
 

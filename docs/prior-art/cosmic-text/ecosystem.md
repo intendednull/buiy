@@ -1,8 +1,6 @@
----
 **Date:** 2026-05-22
 **Status:** active
 **Subject:** cosmic-text — adjacent crates, downstream consumers, community surface
----
 
 # Ecosystem
 
