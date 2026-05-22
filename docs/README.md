@@ -62,7 +62,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Buiy layout grid](plans/2026-05-09-buiy-layout-grid.md) — Phase 3: `GridParams` + `GridItem`, `TrackSize` / `GridLine` / `GridAreas` value types, `Display::Grid` → Taffy, Subgrid + Masonry warn-once stubs. `[landed]`
 - [Buiy layout writing modes](plans/2026-05-10-buiy-layout-writing-modes.md) — Phase 4: `WritingMode` + `WritingModeResolved`, inheritance pass, `LogicalBoxModel` / `LogicalInset` builders, sideways-* warn-once stubs. `[landed]`
 - [Buiy layout container queries](plans/2026-05-21-buiy-layout-container-queries.md) — Phase 5: `Container` + `ContainerQuery`, `Length::Cq{w,h,i,b,min,max}`, `cq_activate` / `cq_flip_check` / `cq_flip_rerun` pipeline systems, same-frame re-layout capped at 2× Taffy. `[landed]`
-- [Buiy layout anchor positioning](plans/2026-05-21-buiy-layout-anchor-positioning.md) — Phase 6: `Anchor` component + `AnchorNameRegistry` observer-maintained resource, `anchor_resolution` sub-pass 6d, Kahn topological sort with deterministic cycle-edge dropping, per-frame warn dedup. `[active]`
+- [Buiy layout anchor positioning](plans/2026-05-21-buiy-layout-anchor-positioning.md) — Phase 6: `Anchor` component + `AnchorNameRegistry` observer-maintained resource, `anchor_resolution` sub-pass 6d, Kahn topological sort with deterministic cycle-edge dropping, per-frame warn dedup. `[landed]`
 
 ### Docs infrastructure
 

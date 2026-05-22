@@ -1,7 +1,7 @@
 # Buiy layout — Phase 6: anchor positioning
 
 **Date:** 2026-05-21
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/display-and-positioning.md`](../specs/2026-05-08-buiy-layout-design/display-and-positioning.md) § 3 (anchor positioning) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-pass 6d), § 6 (error model).
 **Supersedes:** none (graduates from "anchor positioning" sub-pass 6d stub in Phase 5 `BuiyLayoutStep::PostTaffyOverrides`).
 
