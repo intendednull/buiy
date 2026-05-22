@@ -88,7 +88,8 @@ External systems we learn from. Living documents — update on revision, archive
 
 ### Non-Bevy Rust GUI
 
-_(empty — pending Wave 3+)_
+- [Freya](prior-art/freya/) — cross-platform, native (non-web) Rust GUI library powered by **Skia** (via `freya-skia-safe`) for rendering and **Dioxus** for reactivity, with own layout engine **Torin** (NOT Taffy) and AccessKit-integrated a11y. Single maintainer (Marc Espín Sanz, Barcelona, since 2022-07-27); pre-1.0 with active rc churn (`0.4.0-rc.19` 2026-04-23; last stable `0.3.4` June 2025). MIT, 33,720 downloads, ~2.8k stars, desktop-only. Closest existing-art for "Skia + reactive Rust UI"; structurally incompatible with Buiy (wgpu, not Skia; Bevy ECS, not Dioxus). Borrowable lessons: Dioxus signals work outside Dioxus core, CSS-aligned attribute naming, the Skia primitive set as a wgpu-shader checklist. Avoid: Skia C++ dep, Dioxus coupling, own-layout-engine path, stringly-typed styling props, single-maintainer governance. Consult before any spec touching reactivity (open question § 5), render primitives, or solo-vs-team governance. `[active]`
+- *(dioxus, cosmic-text crosslink, iced, slint, egui folders exist — index entries pending)*
 
 ### Game engine UI systems
 
