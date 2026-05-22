@@ -42,8 +42,8 @@ From [`Node` docs](https://docs.rs/accesskit/latest/accesskit/struct.Node.html):
 | `aria-multiselectable` | `set_multiselectable()` | flag |
 | `aria-checked` (`true`/`false`/`mixed`) | `set_toggled(Toggled)` | `Toggled` enum: `True`, `False`, `Mixed`. |
 | `aria-pressed` (`true`/`false`/`mixed`) | `set_toggled(Toggled)` | same enum (AccessKit unifies checked/pressed). |
-| `aria-expanded` | `set_expanded()` / `set_collapsed()` | (verify exact spelling against current API). |
-| `aria-selected` | `set_selected()` | flag. |
+| `aria-expanded` | `set_expanded(Option<bool>)` | Tri-state via `Option<bool>`; `None` = not applicable. |
+| `aria-selected` | `set_selected(Option<bool>)` | Tri-state via `Option<bool>`; `None` = not applicable. |
 | `aria-orientation` (`horizontal`/`vertical`) | `set_orientation(Orientation)` | enum. |
 | `aria-haspopup` (`menu`/`listbox`/`tree`/`grid`/`dialog`) | `set_has_popup(HasPopup)` | enum. |
 | `aria-autocomplete` | `set_auto_complete(AutoComplete)` | enum. |

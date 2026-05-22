@@ -58,7 +58,7 @@ Per [`accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md
 
 ## Coordinate-space gotcha
 
-AccessKit `Node::set_bounds` takes an `accesskit::Rect` in **absolute screen coordinates** (window-relative coordinates are wrong — screen readers consume bounds via OS-level APIs that expect screen space). Embedders must translate from window-local layout coordinates to screen coordinates per push. Buiy's `BuiySet::A11yUpdate` pulls `winit::Window::inner_position()` once per frame and offsets every `Node`'s bounds; per-window adapter ownership makes that one-window-scoped, which is the simple case.
+AccessKit `Node::set_bounds` takes an `accesskit::Rect` in **window-relative logical coordinates**. The adapter (not the embedder) applies the window's screen position + DPI scale transform when publishing to the platform AT; screen readers see screen-space bounds because the adapter does the translation, not because the producer pre-translates. Embedders push window-relative coordinates directly — pre-baking screen position would invalidate the entire tree on every window move. Buiy's `BuiySet::A11yUpdate` pushes window-relative logical coords from the computed layout straight into each `Node`'s bounds, with no `inner_position()` offset pass; per-window adapter ownership makes the one-window-scoped case trivial.
 
 ## Threading
 

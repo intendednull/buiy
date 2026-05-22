@@ -14,7 +14,7 @@ The three co-founders all worked together on Qt at Trolltech in Oslo (the compan
 - **Simon Hausmann** — lead developer + maintainer of the QtQml engine at The Qt Company; one of the canonical authors of QML's reactive bindings.
 - **Aurindam Jana** — Qt engineering manager; technical and partner-relationship background. Listed as Slint co-founder per Rust Foundation member spotlight and Slint about-us.
 
-Brief correction from the seed brief: **Tobias Hunger** is a Software Engineer at Slint Software GmbH, *not* a co-founder. The brief's "Hunger + Goffart" framing was wrong; verified via the company about-us page which lists Goffart / Hausmann / Jana as Co-Founders and Hunger as Software Engineer. Hunger (GitHub @tronical) is nonetheless one of the most active contributors and was the named author of the initial AccessKit integration PR ([#2865](https://github.com/slint-ui/slint/pull/2865)).
+Brief correction from the seed brief: **Tobias Hunger** is a Software Engineer at Slint Software GmbH, *not* a co-founder. The brief's "Hunger + Goffart" framing was wrong; verified via the company about-us page which lists Goffart / Hausmann / Jana as Co-Founders and Hunger as Software Engineer. Tobias Hunger (GitHub `@hunger`) is one of the most active engineering contributors. The initial AccessKit integration PR ([#2865](https://github.com/slint-ui/slint/pull/2865)) was authored by co-founder **Simon Hausmann** (GitHub `@tronical`) with collaboration from Matt Campbell.
 
 ## Major milestones
 
@@ -27,7 +27,7 @@ Brief correction from the seed brief: **Tobias Hunger** is a Software Engineer a
 | 2022-07-06 | 0.2.5 | Initial accessibility annotations on standard widgets (pre-AccessKit). |
 | 2022-Q3–Q4 | 0.3.x | Backend split (winit / Qt); Skia renderer first appearance; Live Preview shipping. |
 | 2023-04-05 | **1.0.0** | First stable release. Three years of pre-1.0 iteration. Same-day blog post + community-wide announcement. |
-| 2023-06-15 | (between 1.0 and 1.1) | **PR [#2865](https://github.com/slint-ui/slint/pull/2865) merged**: initial AccessKit producer wiring through `accesskit_winit`. Author: Tobias Hunger (@tronical), with collaboration from Matt Campbell (Pneuma Solutions / AccessKit). Pinned `accesskit` 0.11.0. |
+| 2023-06-15 | (between 1.0 and 1.1) | **PR [#2865](https://github.com/slint-ui/slint/pull/2865) merged**: initial AccessKit producer wiring through `accesskit_winit`. Author: Simon Hausmann (@tronical), with collaboration from Matt Campbell (Pneuma Solutions / AccessKit). Pinned `accesskit` 0.11.0. |
 | 2023-06 | **1.1.0** | Added **royalty-free license** as the third triple-license option (alongside GPL-3 and commercial). Major shift in business model — desktop proprietary apps can now use Slint without buying a commercial license, under specific terms. Embedded / mobile proprietary still require commercial. |
 | 2024-03-14 | 1.5.0 | Android backend added (`backend-android-activity-05`); RGB565 framebuffer support solidified. |
 | 2024-07-18 | 1.7.0 | Winit 0.30 upgrade + **AccessKit 0.16** upgrade; multi-window support; live-preview redesign; date / time picker popups. |

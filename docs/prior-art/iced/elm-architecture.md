@@ -141,7 +141,7 @@ Buiy's ECS model sidesteps this trade-off — UI entities persist across frames;
 
 ## Implications for Buiy
 
-Iced demonstrates Elm-architecture is viable for Rust desktop GUI at production scale (COSMIC, Halloy, Icebreaker, Modrinth-launcher). But:
+Iced demonstrates Elm-architecture is viable for Rust desktop GUI at production scale (COSMIC, Halloy). But:
 
 1. **Buiy is not Elm-architecture.** Buiy is ECS-native; the `Model + Message + Update + View` pattern is *not* an organizing principle. Buiy widgets are entities; widget state lives on entities; observers replace `update`. Iced is reference for "how does a retained-mode Rust GUI feel" — not for the state-model itself.
 2. **`Task<Message>` is the cleanest async-effect type in Rust GUI.** Buiy can study it as a model for async-effect descriptors if Buiy ever ships an effect-layer above raw `AsyncComputeTaskPool`. Open question — currently not planned, but the pattern is good.

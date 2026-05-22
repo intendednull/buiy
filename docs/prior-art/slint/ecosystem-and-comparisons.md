@@ -10,7 +10,7 @@ This file combines two related lenses: who's actually shipping Slint (ecosystem)
 
 - **OTIV** — rail automation. Industrial customer named explicitly in the Rust Foundation member spotlight; Slint provides "safe, reliable, and intuitive user interfaces" for assisted / remote / autonomous rail-driving systems. Safety-critical embedded HMI use case. The single most-cited Slint production deployment.
 - **KDAB consulting clients** — KDAB (110+ employees, offices in Germany / France / UK / USA / Sweden) lists Slint as a service-partner offering. Multiple KDAB-integrated Slint deployments are referenced in KDAB and Slint marketing, generally industrial / automotive / medical without named-customer disclosure.
-- **LibrePCB 2.0** — open-source PCB design software currently migrating from Qt to Slint for its 2.0 release. Listed in the "Making Slint Desktop-Ready" blog post as a flagship migration partner driving Slint's desktop-readiness work.
+- **LibrePCB 2.0** — open-source PCB design software that completed its Qt → Slint migration in LibrePCB 2.0 (released 2025; 2.0.1 in Feb 2026). Listed in the "Making Slint Desktop-Ready" blog post as a flagship migration partner driving Slint's desktop-readiness work.
 - **Internal Slint demos**: `slint-viewer`, the Live Preview, the Online Editor, and the WASM demos themselves are all production Slint apps maintained by SixtyFPS GmbH.
 
 Industries cited (per Rust Foundation spotlight) in the commercial customer base: industrial automation, medical devices, automotive, aerospace/defense.

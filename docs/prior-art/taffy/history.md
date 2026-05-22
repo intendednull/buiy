@@ -8,7 +8,7 @@ Taffy is the third generation of a single Rust flexbox engine that has changed h
 
 ## 1. Stretch — Visly Inc., 2018–2020
 
-**Original author:** Emil Sjölander, at Visly Inc. (a now-defunct Stockholm-based design tool company; `visly.app`). The project was open-sourced 2018-12-29 with first release `stretch 0.1.0`.
+**Original author:** Emil Sjölander, at Visly Inc. (a now-defunct design tool company; `visly.app`). Founder Sjölander is Swedish; Visly Inc. itself was US-incorporated (Delaware). The project was open-sourced 2018-12-29 with first release `stretch 0.1.0`.
 
 **What it was:** "High performance & cross-platform Flexbox implementation" — Yoga rewritten in Rust. Bindings for Android, iOS, JavaScript/TypeScript, and Rust itself. Powered the Visly design app.
 

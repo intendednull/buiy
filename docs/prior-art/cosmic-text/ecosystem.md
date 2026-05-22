@@ -57,7 +57,7 @@ The downside Buiy inherits: cosmic-text has the COLRv1 gap that Parley does not 
 
 ### glyph_brush / ab_glyph (legacy)
 
-`alexheretic`'s ecosystem. `ab_glyph` for individual glyph parsing, `glyph_brush` for batched rasterization + texture-atlas management. **No shaping. No BiDi. No fallback.** Bevy used this through 0.13 and migrated away in 0.14. Still actively used by simple games that don't need complex script support. Not a serious alternative for a comprehensive UI library — the script-coverage ceiling is too low.
+`alexheretic`'s ecosystem. `ab_glyph` for individual glyph parsing, `glyph_brush` for batched rasterization + texture-atlas management. **No shaping. No BiDi. No fallback.** Bevy used this through 0.14 and migrated away in 0.15 (PR #10193 merged 2024-07-04 during the 0.14 cycle, shipped 2024-11-29). Still actively used by simple games that don't need complex script support. Not a serious alternative for a comprehensive UI library — the script-coverage ceiling is too low.
 
 ### font-kit (Servo)
 
@@ -78,7 +78,7 @@ Confirmed via crates.io reverse-dependency search and direct repo inspection:
 **Production UI toolkits using cosmic-text:**
 
 - **Iced** (`iced-rs/iced`) — since 0.10.0 (2023-07-28). Currently on cosmic-text 0.15 in Iced 0.14.0 (2025-12-07). Uses `glyphon` for wgpu-side atlas. Largest non-COSMIC consumer.
-- **Bevy** (`bevyengine/bevy`) — since 0.14 (2024-07-09). `bevy_text` crate wraps cosmic-text. Sets the precedent for Buiy's parallel approach.
+- **Bevy** (`bevyengine/bevy`) — since 0.15 (2024-11-29, PR #10193 merged 2024-07-04 during the 0.14 cycle). `bevy_text` crate wraps cosmic-text. Sets the precedent for Buiy's parallel approach.
 - **libcosmic** (`pop-os/libcosmic`) — the COSMIC desktop's iced fork. Indirect consumer via Iced.
 
 **Production apps using cosmic-text (mostly via COSMIC stack):**

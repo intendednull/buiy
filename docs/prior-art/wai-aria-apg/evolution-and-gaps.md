@@ -51,7 +51,7 @@ APG is not formally versioned the way ARIA spec is — it's a living document. M
 - Treegrid added
 - Date Picker example added (still labelled "example" not "pattern")
 
-The patterns roster at folder-write (32 patterns per <https://www.w3.org/WAI/ARIA/apg/patterns/>) is the current cut.
+The patterns roster at folder-write (30 patterns per <https://www.w3.org/WAI/ARIA/apg/patterns/>) is the current cut.
 
 ## ACCNAME version history
 

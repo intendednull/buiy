@@ -76,7 +76,7 @@ Short definitions for terms used across the Taffy prior-art folder. Each entry c
 
 - **WPT** — [Web Platform Tests](https://github.com/web-platform-tests/wpt). The W3C-hosted browser-conformance suite. Taffy imports a WPT-derived subset of layout tests as fixtures (under `test_fixtures/`); the umbrella was [#639](https://github.com/DioxusLabs/taffy/issues/639) (closed). Pass-rate not advertised. Buiy can import the same fixtures via the `scripts/import-yoga-tests` and `scripts/gentest` patterns. See [ecosystem.md § 3](ecosystem.md).
 
-- **Stretch** — The predecessor crate, by Emil Sjölander at Visly Inc. (Stockholm), first published 2018-12-29. Repo lives at [`vislyhq/stretch`](https://github.com/vislyhq/stretch); last commit 2020-05-22. Flexbox only. Bevy UI shipped on `stretch 0.3.2` from Bevy 0.5 through Bevy 0.8 carrying known bugs that couldn't be fixed without a maintained upstream. Defunct. See [history.md § 1](history.md).
+- **Stretch** — The predecessor crate, by Emil Sjölander at Visly Inc. (founder Sjölander is Swedish; Visly Inc. itself was US-incorporated), first published 2018-12-29. Repo lives at [`vislyhq/stretch`](https://github.com/vislyhq/stretch); last commit 2020-05-22. Flexbox only. Bevy UI shipped on `stretch 0.3.2` from Bevy 0.5 through Bevy 0.8 carrying known bugs that couldn't be fixed without a maintained upstream. Defunct. See [history.md § 1](history.md).
 
 - **stretch2** — Jonathan Kelley's fork of Stretch, published to crates.io 2022-03-09 to unblock the Dioxus + Bevy UI consumers. Final release `0.4.3` (2022-05-23) lists Alice Cecile as author — the maintenance bridge to Taffy. Defunct. See [history.md § 2](history.md).
 

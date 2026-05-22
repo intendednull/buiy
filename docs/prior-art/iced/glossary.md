@@ -73,6 +73,7 @@ Cross-link target for every other file in the folder. Terms are listed in rough 
 - **modrinth-app** — **NOT an Iced user.** Listed in the original brief as "modrinth's desktop launcher built on Iced"; verification confirms `modrinth/code` is built with **Tauri + Vue**. Common confusion. See [`ecosystem.md`](ecosystem.md) § "Brief corrections."
 - **Kraken** — The cryptocurrency exchange. Sponsors Iced via its Cryptowatch team (per Iced README's "Sponsors" section). Largest single financial backer since around the 0.6 era. URL: https://kraken.com.
 - **Héctor Ramón** — GitHub handle `hecrj`. Founder, lead architect, sole committer on `iced-rs/iced`. Iced is his project from 2019 onward, spun out of his earlier `coffee` game-engine experiments. GitHub Sponsors page: https://github.com/sponsors/hecrj.
+- `jackpot51` — Jeremy Soller, System76 principal engineer, cosmic-text + COSMIC desktop maintainer. Identified as a single-maintainer bus-factor parallel to Bevy's `@cart` (Carter Anderson).
 - **iced-rs** — The GitHub organization. Holds `iced`, `cryoglyph`, `awesome-iced`, `iced_aw`. URL: https://github.com/iced-rs.
 
 ## Community libraries and ecosystem

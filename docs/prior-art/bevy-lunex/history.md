@@ -110,7 +110,7 @@ One bevy_lunex minor per Bevy minor, no overlap, no LTS. See [`distribution.md`]
 
 ## Sources
 
-- bevy_lunex releases — `https://github.com/bytestring-net/bevy_lunex/releases`.
+- bevy_lunex releases — `https://github.com/bytestring-net/bevy-lunex/releases`.
 - bevy_lunex crates.io versions — `https://crates.io/crates/bevy_lunex/versions` (fetched 2026-05-22).
 - bevy_lunex commit history (`main`) — `https://github.com/bytestring-net/bevy-lunex/commits/main`.
 - Bevy Lunex book — `https://bytestring-net.github.io/bevy_lunex/`.

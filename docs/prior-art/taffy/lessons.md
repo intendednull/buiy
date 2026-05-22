@@ -18,7 +18,7 @@ These Buiy design choices are confirmed by Taffy's experience:
 
 - **`LayoutPartialTree` / `TraversePartialTree` / `CacheTree` as a clean integration boundary.** Three separable concerns: child topology, layout dispatch, caching. Each can be implemented independently. Buiy currently wraps `TaffyTree` (Phase 0); the trait path is reserved for a future bridge that drops the `Entity → TaffyNodeId` map. The trait split makes that migration possible without redesigning the algorithm. See [architecture.md § 2](architecture.md).
 
-- **Multi-algorithm support (Flexbox + Grid + Block + Float) in one engine.** Production-proven across Bevy 0.9+, Servo, Blitz, Zed, Lapce, Slint. This is the load-bearing reason Buiy picked Taffy over Yoga-via-bindings: Buiy needs Grid + Block + Float, Yoga is Flexbox-only. See [ecosystem.md § 2](ecosystem.md).
+- **Multi-algorithm support (Flexbox + Grid + Block + Float) in one engine.** Production-proven across Bevy 0.8+, Servo, Blitz, Zed, Lapce, Slint. This is the load-bearing reason Buiy picked Taffy over Yoga-via-bindings: Buiy needs Grid + Block + Float, Yoga is Flexbox-only. See [ecosystem.md § 2](ecosystem.md).
 
 - **`Style` is `!Send + !Sync` since 0.8 → Buiy stores `LayoutTree` as a `NonSendResource`.** Tagged-pointer `CompactLength` carries opaque pointers; the type cannot be `Send`. This is intentional (it's what enables `calc()`'s embedder-owned evaluator) and not changing. Layout is sequential anyway, so the restriction is free. Buiy's `LayoutTree` `NonSendResource` decision is validated. See [architecture.md § 8](architecture.md).
 

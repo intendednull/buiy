@@ -73,7 +73,7 @@ This is the standard cosmic-text embedding pattern, and it matches what Buiy com
 
 This mirrors the IME-boundary pattern recommended in [`../cosmic-text/lessons.md`](../cosmic-text/lessons.md) § Borrow #9 ("The IME boundary contract"). Buiy's text-editing-design sub-spec can study Iced's implementation directly.
 
-**Status note:** IME in Iced 0.14 is brand-new (~6 months in production at this writing). Real-world coverage of CJK / Indic IMEs is in early days — Halloy and Modrinth-launcher use it; comprehensive IME test coverage in CI is not (yet) published.
+**Status note:** IME in Iced 0.14 is brand-new (~6 months in production at this writing). Real-world coverage of CJK / Indic IMEs is in early days — Halloy uses it; comprehensive IME test coverage in CI is not (yet) published.
 
 ## BiDi support
 

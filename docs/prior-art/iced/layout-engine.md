@@ -74,7 +74,7 @@ The cost: layout cannot ask "how big would my parent want me to be if I were 200
 No published benchmarks at 1,000+ nodes from Iced upstream. Anecdotal:
 
 - COSMIC desktop apps (cosmic-files, cosmic-edit) run smoothly with hundreds of widgets per view. The architecture's `Lazy` widget memoizes subtree layout against dep hashes, so unchanged subtrees skip the layout pass entirely.
-- Halloy IRC client and Modrinth-launcher run smoothly with hundreds of message-list children rendered via `Scrollable + Column + Keyed`.
+- Halloy IRC client runs smoothly with hundreds of message-list children rendered via `Scrollable + Column + Keyed`.
 - The per-frame full-relayout cost is real — Iced does NOT cache layout across frames at the engine level. Apps that need it use `Lazy` per subtree.
 
 For Buiy's commitment to 1000+-node productivity-app fixtures ([verification.md](../../specs/2026-05-07-buiy-foundation/verification.md)), Iced's "you must memoize via `Lazy`" pattern is the load-bearing optimization. Without `Lazy`, large UIs re-layout every frame — same shape as the bevy_ui complaint about lack of layout caching ([`../bevy-ui/lessons.md`](../bevy-ui/lessons.md) § Avoid → Per-frame full layout rebuild).

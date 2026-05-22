@@ -94,7 +94,7 @@ The **design bet Buiy adopts from bevy_lunex**: parallel-stack stance, worldspac
 
 ## Sources
 
-- bevy_lunex repo — `https://github.com/bytestring-net/bevy_lunex`.
+- bevy_lunex repo — `https://github.com/bytestring-net/bevy-lunex`.
 - bevy_lunex Cargo.toml — `https://raw.githubusercontent.com/bytestring-net/bevy-lunex/main/crate/Cargo.toml`.
 - Bevy Lunex book limitations — `https://bytestring-net.github.io/bevy_lunex/`.
 - `bevy_ui` crates.io — `https://crates.io/crates/bevy_ui`.

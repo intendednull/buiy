@@ -6,7 +6,7 @@
 
 The **WAI-ARIA Authoring Practices Guide** is a W3C document maintained by the ARIA Working Group at <https://www.w3.org/WAI/ARIA/apg/>. It is **not a specification** — the normative specs are WAI-ARIA 1.2 (the role / state / property vocabulary, W3C Recommendation 6 June 2023), ACCNAME 1.2 (the accessible name and description computation, W3C Working Draft 20 May 2026), and WCAG 2.2 (the success criteria, W3C Recommendation 5 October 2023). APG is the **non-normative companion** that tells widget authors *how to combine* those primitives into the keyboard contract, ARIA emission, and name/description sourcing that screen readers and assistive technologies expect.
 
-APG enumerates **32 widget design patterns**, each pinning a keyboard contract, an ARIA role + state + property mapping, and accessible-name + description sourcing rules. The patterns are the **lookup reference** Buiy spec authors reach for whenever they author a new widget contract — because every Buiy widget MUST conform to the relevant APG pattern, and the AccessKit tree Buiy emits MUST be readable in a way that drives the AT verbalisations APG users expect.
+APG enumerates **30 widget design patterns**, each pinning a keyboard contract, an ARIA role + state + property mapping, and accessible-name + description sourcing rules. The patterns are the **lookup reference** Buiy spec authors reach for whenever they author a new widget contract — because every Buiy widget MUST conform to the relevant APG pattern, and the AccessKit tree Buiy emits MUST be readable in a way that drives the AT verbalisations APG users expect.
 
 ## Framing disclosure — this is a CONTRACT, not a lesson source
 
@@ -63,7 +63,7 @@ Cross-link prior-art:
 |---|---|---|
 | APG home | <https://www.w3.org/WAI/ARIA/apg/> | W3C |
 | APG patterns library | <https://www.w3.org/WAI/ARIA/apg/patterns/> | W3C |
-| Pattern count | **32** widget design patterns (see [`patterns-catalog.md`](patterns-catalog.md)) | APG patterns index |
+| Pattern count | **~30** widget design patterns (see [`patterns-catalog.md`](patterns-catalog.md)) | APG patterns index |
 | WAI-ARIA 1.2 spec | W3C Recommendation, **6 June 2023** | <https://www.w3.org/TR/wai-aria-1.2/> |
 | WAI-ARIA 1.3 spec | W3C Working Draft (in progress) | <https://www.w3.org/TR/wai-aria-1.3/> |
 | ACCNAME 1.2 spec | W3C Working Draft, **20 May 2026** | <https://www.w3.org/TR/accname-1.2/> |

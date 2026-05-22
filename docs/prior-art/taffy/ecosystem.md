@@ -109,7 +109,7 @@ There's no mailing list, no IRC, no Matrix. No dedicated forum.
 
 The shipping artifacts that demonstrate Taffy works at scale:
 
-- **Bevy** — every shipped Bevy app since `0.9` (Dec 2022). The ecosystem is wide but per-app UI is usually small.
+- **Bevy** — every shipped Bevy app since `0.8` (2022-07-30, [PR #4716](https://github.com/bevyengine/bevy/pull/4716)). The ecosystem is wide but per-app UI is usually small.
 - **Servo** — replaced its own layout engine with Taffy in 2024. Servo is preview-grade, not mainstream-shipped, but it's the most demanding correctness exposure.
 - **Blitz** — alpha. The Dioxus Native target. Render-Wikipedia-correctly is the stretch goal.
 - **Zed** — released editor. GPUI uses Taffy traits against its own element arena. Zed's UI layouts are simple-flexbox-heavy, not load-bearing on Grid.

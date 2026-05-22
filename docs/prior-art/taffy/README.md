@@ -18,11 +18,11 @@ Buiy treats Taffy as a load-bearing dependency. Buiy's [layout architecture](../
 - **WPT-derived test corpus.** The crate ships 1500+ generated tests plus thousands more imported from CSS WG, Chromium, Firefox, and WebKit suites. The pass-rate is not advertised numerically (see [critiques.md § 5](critiques.md)), but the coverage is meaningfully wider than Yoga.
 - **Spec-tracking discipline.** When Chromium changes layout behavior, Taffy ports the fix. The lag is months, but the treadmill is real.
 
-**Bus-factor risk.** The day-to-day maintainer is **Nico Burns** — independent, not employed by DioxusLabs, supported by sporadic personal GitHub Sponsors. He authored CSS Grid, the trait restructure, `CacheTree`, `CompactLength`, named grid lines, float, and direction. His absence would visibly stall the project. The repo is GitHub-admin-owned by DioxusLabs (VC-backed via Series A from FutureWei + Khosla Ventures), but Taffy has no separate budget line; the funding goes to Dioxus. Crate ownership is shared across three names (Burns, Alice Cecile, Jonathan Kelley), so the crate cannot be lost to account-death. The mitigating factor: Bevy + Blitz + Servo are large enough downstreams that *somebody* would fork in a crisis. Buiy's contingency: fork Taffy (it's MIT-licensed); ramp cost is months.
+**Bus-factor risk.** The day-to-day maintainer is **Nico Burns** — independent, not employed by DioxusLabs, supported by sporadic personal GitHub Sponsors. He authored CSS Grid, the trait restructure, `CacheTree`, `CompactLength`, named grid lines, float, and direction. His absence would visibly stall the project. The repo is GitHub-admin-owned by DioxusLabs (Steward DioxusLabs (YC S23 seed + Pioneer Fund + GitHub Accelerator; FutureWei is a sponsor, not equity). See `../dioxus/governance.md` for sourcing.), but Taffy has no separate budget line; the funding goes to Dioxus. Crate ownership is shared across three names (Burns, Alice Cecile, Jonathan Kelley), so the crate cannot be lost to account-death. The mitigating factor: Bevy + Blitz + Servo are large enough downstreams that *somebody* would fork in a crisis. Buiy's contingency: fork Taffy (it's MIT-licensed); ramp cost is months.
 
 **Stuck features.** Three features have been "coming" for years with no PR:
 
-- **Subgrid** ([#468](https://github.com/DioxusLabs/taffy/issues/468)) — open since **2023-04-24**. Conflicts with Taffy's strict parent-to-child traversal in `LayoutPartialTree`. Browsers shipped subgrid in 2022-2023; Taffy lags 3+ years. No design doc.
+- **Subgrid** ([#468](https://github.com/DioxusLabs/taffy/issues/468)) — open since **2023-04-24**. Conflicts with Taffy's strict parent-to-child traversal in `LayoutPartialTree`. Browsers shipped subgrid in 2019 (Firefox 71), 2022 (Safari 16), 2023 (Chrome 117); see open-problems.md for full timeline. Taffy lags 3+ years. No design doc.
 - **Masonry** ([#910](https://github.com/DioxusLabs/taffy/issues/910)) — open since **2026-01-05**. Burns himself notes it depends on subgrid landing first.
 - **Anchor positioning** ([#703](https://github.com/DioxusLabs/taffy/issues/703)) — open since **2024-08-03**. Not on the active roadmap. Anchor positioning is a cross-tree post-layout dependency, fundamentally a different primitive from Taffy's intra-formatting-context algorithms.
 
@@ -43,7 +43,7 @@ These three are why Buiy ships container queries and anchor positioning **above 
 | Total downloads | 7,250,881 (recent 90d: 2,017,439) | crates.io |
 | Crate owners | Jonathan Kelley (DioxusLabs), Alice Cecile (Bevy UI), Nico Burns (independent — day-to-day maintainer) | crates.io owners endpoint |
 | Cargo.toml typo | author listed as "Johnathan Kelley"; correct spelling is Jonathan Kelley | [`Cargo.toml`](https://github.com/DioxusLabs/taffy/blob/main/Cargo.toml) |
-| Steward | DioxusLabs (GitHub admin); Series A VC-backed from FutureWei + Khosla — funding is for Dioxus, not Taffy | dioxuslabs.com |
+| Steward | DioxusLabs (GitHub admin); DioxusLabs is YC-funded (seed); funding is for Dioxus, not Taffy | dioxuslabs.com |
 | Algorithms | Flexbox · CSS Grid · Block · Float (all default-on; each feature-gated) | [layout-algorithms.md](layout-algorithms.md) |
 | `Display` variants | `Block | Flex | Grid | None` only — no inline-*, no table*, no list-item, no contents, no flow-root, no ruby | [api.md § 5](api.md) |
 | `Position` variants | `Relative | Absolute` only — no Static, Fixed, Sticky | [api.md § 5](api.md) |
@@ -54,7 +54,7 @@ These three are why Buiy ships container queries and anchor positioning **above 
 | `CompactLength` (tagged pointer) | **0.8.0** (2025-04-01) — `Style` became `!Send + !Sync` | [architecture.md § 8](architecture.md) |
 | `CacheTree` trait split | **0.7.0** (2024-12-12) | [architecture.md § 2](architecture.md) |
 | `Style::DEFAULT` + `length()` etc. | `const`-constructible | [api.md § 6](api.md) |
-| Bevy UI adopted Taffy | Bevy **0.9** (December 2022) — *not* Bevy 0.10 | [integration.md § 2](integration.md) |
+| Bevy UI adopted Taffy | Bevy **0.8** (2022-07-30, [PR #4716](https://github.com/bevyengine/bevy/pull/4716)) | [integration.md § 2](integration.md) |
 | Top production users | Bevy (UI), Servo (layout engine), Blitz (Dioxus Native), Zed (GPUI), Lapce (Floem), Slint | [ecosystem.md § 1](ecosystem.md) |
 | Iced uses Taffy? | **No** — Taffy README claim is stale | [ecosystem.md § 1](ecosystem.md), [integration.md § 4](integration.md) |
 | WPT corpus | 1500+ generated tests + thousands imported from CSS WG / Chromium / Firefox / WebKit; pass-rate not published | [ecosystem.md § 3](ecosystem.md) |

@@ -28,7 +28,7 @@ There is **no `CODEOWNERS` file** (`/.github/CODEOWNERS` 404s). Approvals are by
 
 Indirect support paths:
 
-- **DioxusLabs is venture-backed** (Series A from FutureWei + Khosla Ventures, per `dioxuslabs.com`); Taffy benefits inasmuch as DioxusLabs cares about Blitz, which uses Taffy. But this funding is for Dioxus, not Taffy.
+- **DioxusLabs is YC S23-seed-funded** (~$500K) + Pioneer Fund + GitHub Accelerator (per Crunchbase + Tracxn + YC company page). FutureWei is listed as a sponsor, not an equity investor. Taffy itself has no separate funding line. See `../dioxus/governance.md`.
 - **Nico Burns** is independent and supports the work via consulting + sporadic GitHub Sponsorship on his personal account (`github.com/sponsors/nicoburns`). The Taffy repo does not surface this.
 - **Bevy Foundation** indirectly underwrites Alice Cecile's time; her Taffy review work is a side-quest.
 - **Servo / Igalia** — Servo has migrated to Taffy as its layout engine (via `servo-layout 0.10`). Igalia (the company underwriting Servo) has not, as of 2026-05, announced direct Taffy sponsorship, but Servo's correctness needs drive a substantial fraction of Burns's review backlog.

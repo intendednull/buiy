@@ -49,7 +49,7 @@ Slint is the closest mainstream Rust-ecosystem example of the design shape Buiy 
 | Renderers | Qt (native styling), Skia (default on Win/macOS since 1.14), FemtoVG (OpenGL ES 2.0), software (CPU; MCU-grade), FemtoVG-WGPU (since 1.12) | README + CHANGELOG |
 | Backends | winit, Qt, Android (since 1.5), iOS (since 1.10), LinuxKMS, ESP-IDF, STM32 | CHANGELOG |
 | AccessKit integration | Initial: PR [#2865](https://github.com/slint-ui/slint/pull/2865) merged 2023-06-15 with `accesskit` 0.11.0 + `accesskit_winit` 0.14.0; updated to 0.16 in 1.7 (2024-07); subsequent updates in 1.12 / 1.13; pin drift documented in issue [#8148](https://github.com/slint-ui/slint/issues/8148) | PR/issue history |
-| Production users (verified) | **OTIV** (rail automation); KDAB consulting clients; LibrePCB 2.0 (in-progress migration) | [Rust Foundation spotlight](https://rustfoundation.org/media/member-spotlight-slint/), [partners page](https://slint.dev/partners) |
+| Production users (verified) | **OTIV** (rail automation); KDAB consulting clients; LibrePCB 2.0 (Qt → Slint migration shipped; 2.0.0 in 2025, 2.0.1 in Feb 2026) | [Rust Foundation spotlight](https://rustfoundation.org/media/member-spotlight-slint/), [partners page](https://slint.dev/partners) |
 | Tooling | VSCode extension (Slint.slint marketplace), Live Preview, Figma plugin (1.10+), Slint compiler `slint-compiler`, `slint-viewer`, `slint-lsp` | [VS Code marketplace](https://marketplace.visualstudio.com/items?itemName=Slint.slint) |
 | Categories on crates.io | gui, rendering::engine, no-std | crates.io |
 

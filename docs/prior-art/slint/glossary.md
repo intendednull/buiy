@@ -50,7 +50,7 @@ System-specific vocabulary. See [`README.md`](README.md) for the corpus overview
 
 **Aurindam Jana** — Slint co-founder; ex-Qt Company. Qt engineering manager background; technical and partner-relationship work. Listed as co-founder per Rust Foundation member spotlight and Slint about-us page.
 
-**Tobias Hunger** (GitHub @tronical) — Slint software engineer, **not** a co-founder. (The original prior-art brief mis-listed Hunger as a founder; corrected per Slint's about-us page.) One of the most active contributors; named author of the initial AccessKit integration PR [#2865](https://github.com/slint-ui/slint/pull/2865) (merged 2023-06-15).
+**Tobias Hunger** (GitHub `@hunger`) — Slint software engineer, **not** a co-founder. (The original prior-art brief mis-listed Hunger as a founder; corrected per Slint's about-us page.) One of the most active contributors. (See history.md for PR #2865, which was authored by co-founder Simon Hausmann @tronical, not Hunger.)
 
 ## Licenses
 

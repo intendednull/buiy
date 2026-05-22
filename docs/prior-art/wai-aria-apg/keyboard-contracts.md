@@ -1,6 +1,6 @@
 **Date:** 2026-05-22
 **Status:** active
-**Subject:** WAI-ARIA APG — aggregated keyboard contract conventions across the 32 patterns; cross-cutting key meanings and per-widget overrides Buiy must implement
+**Subject:** WAI-ARIA APG — aggregated keyboard contract conventions across the 30 patterns; cross-cutting key meanings and per-widget overrides Buiy must implement
 
 # Keyboard contracts (cross-cutting)
 

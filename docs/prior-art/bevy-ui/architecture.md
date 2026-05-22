@@ -44,7 +44,7 @@ So as of 0.18.1 / 0.19-rc.1, the canonical decomposition is:
 - `BackgroundGradient`, `BorderGradient` — gradient variants (0.17+).
 - `UiTransform` / `UiGlobalTransform` — 2D-only transforms ([Bevy 0.17 notes](https://bevy.org/news/bevy-0-17/)), replacing 3D `Transform`/`GlobalTransform` for UI.
 
-The 0.15 split was the design that made required-components a real authoring story, but it left a hybrid: visual properties like `BackgroundColor` are decomposed, while layout properties remain bundled in `Node`. See [component-model.md](component-model.md) for the BSN implications and issue #17644's critique of the analogous `bevy_a11y` AccessNode megacomponent.
+The 0.15 split was the design that made required-components a real authoring story, but it left a hybrid: visual properties like `BackgroundColor` are decomposed, while layout properties remain bundled in `Node`. See [component-model.md](component-model.md) for the BSN implications and issue #17644's critique of the analogous `bevy_a11y` AccessibilityNode megacomponent.
 
 ## Taffy integration
 

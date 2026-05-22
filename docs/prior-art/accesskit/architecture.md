@@ -6,7 +6,7 @@
 
 AccessKit factors a UI toolkit's accessibility story into two roles around a single shared data structure (the tree):
 
-- **Producer** (sometimes "provider" or "toolkit-side") — the UI toolkit. Builds nodes, owns identities, decides what is in the tree, pushes `TreeUpdate`s. Buiy is a producer. Bevy's `bevy_a11y` is a producer. egui, Slint, Xilem, Freya, and Iced are all producers.
+- **Producer** (sometimes "provider" or "toolkit-side") — the UI toolkit. Builds nodes, owns identities, decides what is in the tree, pushes `TreeUpdate`s. Buiy is a producer. Bevy's `bevy_a11y` is a producer. egui, Slint, Xilem, and Freya are all producers; Iced is queueing integration (draft PRs only, see README.md § Adopters).
 - **Adapter** — the per-platform code that takes the tree from the producer and exposes it through the local OS accessibility API (UIA on Windows, NSAccessibility on macOS, AT-SPI on Linux, etc.). Adapters live in `accesskit_windows`, `accesskit_macos`, `accesskit_unix`, `accesskit_android`, `accesskit_ios`, with `accesskit_winit` as a multiplexing helper. `accesskit_consumer` is the internal library *adapters* use to walk/diff/cache the tree — despite the name, it sits on the adapter side of the boundary. Application code never depends on `accesskit_consumer` directly.
 
 The boundary is a data protocol (the `TreeUpdate` schema), not a Rust trait. That keeps the producer side language-agnostic: AccessKit ships C and Python bindings against the same schema, and the schema is reflectable to JSON Schema and Protocol Buffers.
@@ -80,8 +80,8 @@ Initial activation is the same path with `tree: Some(Tree { root, toolkit_name: 
 The same `Node` struct expresses the producer's intent on every platform. AccessKit's per-platform adapters translate the unified `Node` into platform-native data structures:
 
 - `Role::Button` becomes UIA `ControlType.Button`, NSAccessibility `kAXButtonRole`, AT-SPI `ROLE_PUSH_BUTTON`, Android `RoleDescription` plus an inferred control hint, iOS `UIAccessibilityTraitButton`.
-- `Node::is_focused` becomes UIA `IsKeyboardFocusable` + focus event, NSAccessibility `kAXFocusedAttribute`, AT-SPI `STATE_FOCUSED`, etc.
-- Geometry `set_bounds(Rect)` is interpreted in **absolute screen coordinates** on all platforms after the adapter applies the window's screen transform; the producer pushes window-relative coordinates and the adapter handles the placement. (See [tree-model.md § Coordinate spaces](tree-model.md).)
+- `TreeUpdate.focus: NodeId` becomes UIA `IsKeyboardFocusable` + focus event, NSAccessibility `kAXFocusedAttribute`, AT-SPI `STATE_FOCUSED`, etc.
+- Geometry `set_bounds(Rect)` takes **window-relative logical coordinates**. The adapter applies the window's screen position + DPI scale transform when publishing to the platform AT. Producers must not bake screen position into the tree at push time — that would invalidate the entire tree on every window move. (See [tree-model.md § Coordinate spaces](tree-model.md).)
 
 Because the producer-side `Node` shape is invariant, a producer that builds a correct tree gets correct AT behavior on every supported platform without per-platform conditionals in producer code. Per-platform divergences live entirely inside the adapter crates — which is what makes AccessKit useful as a "write once" target for toolkit authors.
 

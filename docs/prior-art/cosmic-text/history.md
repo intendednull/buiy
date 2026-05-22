@@ -39,7 +39,7 @@ The first `cosmic-text` commit landed in September 2022. The crate's first crate
 | 0.6 / 0.7 | mid 2023 | `Editor` introduced (the decoupling commit from `Buffer` landed 2022-10-31; first stable surface in this band). BiDi-aware cursor traversal. |
 | 0.10 | ~late 2023 | Adopted as Iced's text engine (Iced 0.10.0, 2023-07-28 — the cosmic-text version was earlier; Iced bumped to cosmic-text 0.10 in Iced 0.13.0 on 2024-09-18). |
 | 0.11 / 0.12 | early-mid 2024 | `cosmic_undo_2` integration via the `vi` feature. `ViEditor` becomes the canonical undo-stack-bearing editor. Color-emoji path stabilized via swash's CPALv0 support. |
-| 0.13 | mid 2024 | Bevy 0.14 (released 2024-07-09) ships with cosmic-text via PR #10193 (merged 2024-07-04). |
+| 0.13 | mid 2024 | Bevy 0.15 (released 2024-11-29) ships with cosmic-text via PR #10193 (merged 2024-07-04 during the 0.14 development cycle). |
 | 0.14.0 | 2025-03-31 | (Per crates.io publish date.) Stable cycle. MSRV pinned to 1.75. |
 | 0.14.2 | 2025-04-14 | MSRV 1.75 cement. |
 | 0.15.0 | 2025-10-30 | **Variable font support** lands. Pixel font flag, pixel-based scrolling for `Editor`. ASCII fast path optimization. The `rustybuzz → HarfRust` migration commit (PR #417, `2610c86`, 2025-09-09) lands in this window. |
@@ -65,7 +65,7 @@ Lateral-release notes for feature-landing-version questions:
 ## Adoption timeline (downstream)
 
 - **Iced 0.10.0** (2023-07-28) — adopts cosmic-text as the text engine. Changelog: *"Text shaping, font fallback, and `iced_wgpu` overhaul. [#1697]"*. This was the largest single non-COSMIC consumer at the time.
-- **Bevy 0.14** (2024-07-09) — PR #10193 merged 2024-07-04. Migrated from `ab_glyph` to cosmic-text. First release with system-font support. (Common mis-statement: that Bevy migrated *from* `glyph_brush`. `glyph_brush` had been a transitive dep through earlier renderer layers; the canonical migration was `ab_glyph` → cosmic-text.)
+- **Bevy 0.15** (2024-11-29) — PR #10193 merged 2024-07-04 during the 0.14 development cycle. Migrated from `ab_glyph` to cosmic-text. First release with system-font support. (Common mis-statement: that Bevy migrated *from* `glyph_brush`. `glyph_brush` had been a transitive dep through earlier renderer layers; the canonical migration was `ab_glyph` → cosmic-text.)
 - **`bevy_cosmic_edit`** (`Dimchikkk`) — community plugin layering an editing UI on top of `bevy_cosmic_edit`. Most recent compatibility is Bevy 0.15. **Archived 2025-03-21**, no longer maintained.
 - **Zed / GPUI** — appears in cosmic-text's reverse-dependency list on crates.io (gpui crate showed historical dependency). The current `zed-industries/zed` main-branch Cargo.toml shows no cosmic-text reference, suggesting Zed has either migrated away or vendored it. Status unclear from public sources.
 - **Floem** (`lapce/floem`) — does NOT use cosmic-text. Uses Parley. Sometimes mis-attributed as a cosmic-text consumer because Lapce-the-editor (which Floem-the-toolkit is part of the same org as) uses cosmic-text indirectly through glyphon.

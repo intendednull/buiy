@@ -18,7 +18,7 @@ Definitions for bevy_ui-specific identifiers, type names, and ecosystem terms us
 - **`UiMaterial`** — extension point for custom shader effects on UI nodes. Plug a custom shader into the UI pipeline for materials beyond the built-in node shader. See [`architecture.md`](architecture.md) § "Render pipeline" (#6).
 - **`Val`** — bevy_ui's length type. Variants: `Auto`, `Px(f32)`, `Percent(f32)`, `Vw(f32)`, `Vh(f32)`, `VMin(f32)`, `VMax(f32)`. The CSS `<length>` analog. Buiy's `Length` is the parallel type.
 - **`RequiredComponents`** — Bevy 0.15+ mechanism (`#[require(...)]` on a `Component` derive) that auto-inserts default-constructed companion components when the marked component is inserted. The replacement for `*Bundle` types, which were deprecated in 0.15. See [`component-model.md`](component-model.md) § "RequiredComponents: the mechanism."
-- **`AccessibilityNode`** — `bevy_a11y`'s a11y component. Wraps `accesskit::Node`. The *megacomponent* that issue #17644 flagged as BSN-incompatible (private fields, inconsistent method-style setters). PR #24308 broke it up. Still not Buiy's a11y model.
+- **`AccessibilityNode`** — `bevy_a11y`'s a11y component. Wraps `accesskit::Node`. The *megacomponent* that issue #17644 flagged as BSN-incompatible (private fields, inconsistent method-style setters). PR #24308 added an `AccessibleLabel` sibling component; the megacomponent `AccessibilityNode` itself is unchanged. Still not Buiy's a11y model.
 
 ## Layout
 

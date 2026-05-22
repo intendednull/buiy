@@ -21,7 +21,7 @@ Each of these is a hard *renderer-level* limit. Buiy's response: implement them 
 
 ## Accessibility tree completeness
 
-- **`bevy_a11y` is post-#17644 but still maturing.** PR #24308 broke up `AccessNode` into more BSN-friendly pieces, but the full decomposed-component set Buiy ships (foundation architecture.md § 2.6 — `A11yRole` / `A11yLabel` / `A11yDescription` / `A11yStates` / `A11yRelations`) is *not* what bevy_a11y exposes today. Buiy will replace, not layer.
+- **`bevy_a11y` is post-#17644 but still maturing.** PR #24308 added a single `AccessibleLabel` sibling; `AccessibilityNode` itself is unchanged, but the full decomposed-component set Buiy ships (foundation architecture.md § 2.6 — `A11yRole` / `A11yLabel` / `A11yDescription` / `A11yStates` / `A11yRelations`) is *not* what bevy_a11y exposes today. Buiy will replace, not layer.
 - **Live regions** (polite / assertive). Not built into bevy_a11y as of 0.18; Buiy provides a global announcer resource (foundation architecture.md § 2.3).
 - **ACCNAME 1.2 name computation.** Not in bevy_ui; Buiy implements it in `buiy_core` (architecture.md § 2.6).
 - **AccessKit web adapter.** Not yet shipped upstream in AccessKit (per its own roadmap), so bevy_ui (and Buiy) cannot offer first-class a11y on WASM. iOS adapter is in-progress upstream. Foundation README § 5 flags this as an open question.

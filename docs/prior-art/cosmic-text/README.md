@@ -4,7 +4,7 @@
 
 ## What it is
 
-[`cosmic-text`](https://github.com/pop-os/cosmic-text) is the pure-Rust text engine built and maintained by System76 for the COSMIC desktop and Pop!_OS. It composes a HarfBuzz-port shaper (`harfrust`), a font-format rasterizer (`swash`), Servo's UAX #9 BiDi (`unicode-bidi`), Google Fonts' `read-fonts` wrapper (`skrifa`), and `fontdb` font discovery into a single crate that does shape + layout + cursor + selection + glyph caching for multi-line, multi-script, BiDi-correct text. It is the substrate Iced has used since 0.10.0 (2023-07-28) and the substrate Bevy adopted in 0.14 (2024-07-09, PR #10193), replacing the script-coverage-capped `ab_glyph` engine.
+[`cosmic-text`](https://github.com/pop-os/cosmic-text) is the pure-Rust text engine built and maintained by System76 for the COSMIC desktop and Pop!_OS. It composes a HarfBuzz-port shaper (`harfrust`), a font-format rasterizer (`swash`), Servo's UAX #9 BiDi (`unicode-bidi`), Google Fonts' `read-fonts` wrapper (`skrifa`), and `fontdb` font discovery into a single crate that does shape + layout + cursor + selection + glyph caching for multi-line, multi-script, BiDi-correct text. It is the substrate Iced has used since 0.10.0 (2023-07-28) and the substrate Bevy adopted in 0.15 (2024-11-29, PR #10193 merged 2024-07-04 during the 0.14 cycle), replacing the script-coverage-capped `ab_glyph` engine.
 
 Buiy's foundation spec ([`text.md`](../../specs/2026-05-07-buiy-foundation/text.md)) treats cosmic-text as a **load-bearing dependency**: full BiDi, RTL, complex script shaping, IME composition, and color emoji parity with the web platform are committed to cosmic-text, with Buiy owning the glyph atlas, the IME-event-to-Action translation, the undo stack, and the render passes above it. **Buiy diverges from bevy_ui on text substrate post-0.19:** Bevy 0.19-dev (issue [#21765](https://github.com/bevyengine/bevy/issues/21765), 2025-11-06) migrated `bevy_text` from cosmic-text to **Parley + swash**; Buiy stays on cosmic-text. The bet is that cosmic-text's IME-aware editing primitives, System76 dogfooding via COSMIC, and `harfrust` shaping are the right pick for Buiy's web-parity surface — even though Parley's tighter integration with the newer Linebender stack (vello, kurbo, peniko) is a real alternative.
 
@@ -38,7 +38,7 @@ Buiy's foundation spec ([`text.md`](../../specs/2026-05-07-buiy-foundation/text.
 | Line break | `unicode-linebreak 0.1.5` (UAX #14, no dictionary) |
 | Editor decoupled from Buffer | 2022-10-31 |
 | Iced adoption | 0.10.0 (2023-07-28) |
-| Bevy adoption | 0.14 (2024-07-09, PR #10193); migrated away in 0.19-dev (issue #21765, 2025-11-06) |
+| Bevy adoption | 0.15 (2024-11-29, PR #10193 merged 2024-07-04 during the 0.14 cycle); migrated away in 0.19-dev (issue #21765, 2025-11-06) |
 | `bevy_cosmic_edit` | **archived 2025-03-21** |
 | Open issues | ~98 (May 2026) |
 

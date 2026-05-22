@@ -8,7 +8,7 @@ This file documents the ARIA-1.2 vocabulary as Buiy must emit it through AccessK
 
 ## Roles — the role taxonomy
 
-WAI-ARIA 1.2 defines a closed role taxonomy. Each role falls into one of four superclasses:
+WAI-ARIA 1.2 defines a closed role taxonomy. Each role falls into one of six categories:
 
 1. **Abstract roles** — never used directly in markup; structure only (`widget`, `composite`, `landmark`, `structure`, `window`, `range`, `select`, ...). Buiy never emits these.
 2. **Widget roles** — interactive controls. Sub-divides into:
@@ -26,7 +26,7 @@ WAI-ARIA 1.2 defines a closed role taxonomy. Each role falls into one of four su
 - ARIA `combobox` splits into AccessKit `ComboBox` (read-only popup) and `EditableComboBox` (editable text + popup) — AccessKit pre-decides what ARIA infers from `aria-expanded` + presence of `<input>`
 - ARIA `checkbox` + `aria-pressed` (toggle button) unifies into AccessKit `CheckBox` + `Toggled` enum
 - ARIA `img` and `image` are both spelled `Image` in AccessKit (single role)
-- ARIA `none` and `presentation` are both `Role::GenericContainer` or omitted via AccessKit "hidden / virtual" mechanisms
+- ARIA `none` and `presentation` are both `Role::Generic` or omitted via AccessKit "hidden / virtual" mechanisms
 - Composite roles map directly: `listbox`, `combobox`, `menu`, `menubar`, `tree`, `treegrid`, `grid`, `radiogroup`, `tablist`
 
 The role-description fallback (`Node::set_role_description("custom name")` + `Role::Generic`) is the supported escape hatch when no `Role` variant fits.

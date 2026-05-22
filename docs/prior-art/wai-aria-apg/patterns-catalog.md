@@ -1,10 +1,10 @@
 **Date:** 2026-05-22
 **Status:** active
-**Subject:** WAI-ARIA APG — full catalog of the 32 widget design patterns with keyboard contract, ARIA role + state + property emission, and accessible name/description sourcing per pattern
+**Subject:** WAI-ARIA APG — full catalog of the 30 widget design patterns with keyboard contract, ARIA role + state + property emission, and accessible name/description sourcing per pattern
 
 # APG patterns catalog
 
-This is the **lookup reference**. For every Buiy widget that maps to an APG pattern, find its row here, then cross-reference [`keyboard-contracts.md`](keyboard-contracts.md), [`roles-states-properties.md`](roles-states-properties.md), and [`name-computation.md`](name-computation.md) for cross-cutting details. The 32 patterns are enumerated as published at <https://www.w3.org/WAI/ARIA/apg/patterns/>.
+This is the **lookup reference**. For every Buiy widget that maps to an APG pattern, find its row here, then cross-reference [`keyboard-contracts.md`](keyboard-contracts.md), [`roles-states-properties.md`](roles-states-properties.md), and [`name-computation.md`](name-computation.md) for cross-cutting details. The 30 patterns are enumerated as published at <https://www.w3.org/WAI/ARIA/apg/patterns/>.
 
 The "Buiy widget" column names the Buiy widget that implements the pattern (from [`media-and-widgets.md § 3.10`](../../specs/2026-05-07-buiy-foundation/media-and-widgets.md)); the **tier** column repeats the Buiy foundation tier (F = foundation, C = core, E = extended).
 
@@ -40,8 +40,6 @@ The "Buiy widget" column names the Buiy widget that implements the pattern (from
 28. [Tree View](#28-tree-view) — C
 29. [Treegrid](#29-treegrid) — C
 30. [Window Splitter](#30-window-splitter) — C
-
-(APG also documents the **Disclosure (Modal)** pattern as a sub-variant of Dialog and **Slider Multi-Thumb** as a sibling to Slider; APG's index lists 32 rows total. Where APG bundles two rows under one heading — e.g. "Menu and Menubar", "Slider", "Slider (Multi-Thumb)" — Buiy treats them as separate widget contracts but a single pattern row in this catalog.)
 
 ## 1. Accordion (Sections with Show/Hide Functionality)
 
@@ -424,7 +422,7 @@ For each, the per-widget spec under `buiy-widget-catalog-design` is the canonica
 
 ## Sources
 
-- APG patterns library (32 patterns): <https://www.w3.org/WAI/ARIA/apg/patterns/>
+- APG patterns library (30 patterns): <https://www.w3.org/WAI/ARIA/apg/patterns/>
 - WAI-ARIA 1.2 — Roles, States, Properties: <https://www.w3.org/TR/wai-aria-1.2/>
 - WCAG 2.2 Understanding docs: <https://www.w3.org/WAI/WCAG22/Understanding/>
 - Buiy widget catalog (foundation): [`docs/specs/2026-05-07-buiy-foundation/media-and-widgets.md`](../../specs/2026-05-07-buiy-foundation/media-and-widgets.md)

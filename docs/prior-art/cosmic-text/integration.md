@@ -36,14 +36,14 @@ This last point matters: **Iced did not adopt `cosmic-text::Editor` for its text
 
 ## How Bevy UI integrates
 
-Bevy switched from `ab_glyph` (not glyph_brush as sometimes claimed; glyph_brush had been a transitive dep earlier) to cosmic-text in **PR #10193**, merged **2024-07-04**, shipped in Bevy **0.14** (July 2024). The migration introduced:
+Bevy switched from `ab_glyph` (not glyph_brush as sometimes claimed; glyph_brush had been a transitive dep earlier) to cosmic-text in **PR #10193**, merged **2024-07-04** during the 0.14 development cycle, shipped in Bevy **0.15** (2024-11-29). The migration introduced:
 
 - A required `CosmicBuffer` component holding the per-text-node `Buffer`.
 - Font sizes recalibrated by approximately 1.2× (the cosmic-text metrics interpretation differs from `ab_glyph`'s).
 - `Text2dBounds` replaced with `TextBounds` accepting `Option<f32>` (because cosmic-text's wrap width is `Option`, not `f32::INFINITY`).
 - Removal of the old `TextSettings` struct + `subpixel_alignment` feature.
 
-Bevy 0.14 also introduced system font support as the headline benefit — cosmic-text via fontdb iterates `/usr/share/fonts`, `~/Library/Fonts`, `%WINDIR%\Fonts`, etc.
+Bevy 0.15 also introduced system font support as the headline benefit — cosmic-text via fontdb iterates `/usr/share/fonts`, `~/Library/Fonts`, `%WINDIR%\Fonts`, etc.
 
 The Bevy shape:
 - A single `Res<CosmicFontSystem>` resource wraps `FontSystem` (which is non-Sync; the resource pins it to a thread).

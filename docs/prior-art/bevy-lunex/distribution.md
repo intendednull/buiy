@@ -112,4 +112,4 @@ The pattern: bursts of activity around Bevy minors, gaps of 3–5 months between
 - Issue #102 (Linux cursor) — `https://github.com/bytestring-net/bevy-lunex/issues/102`.
 - Bevypunk demo — `https://idedary.itch.io/bevypunk`.
 - Bevy Lunex book intro — `https://bytestring-net.github.io/bevy_lunex/`.
-- Release tags — `https://github.com/bytestring-net/bevy_lunex/releases`.
+- Release tags — `https://github.com/bytestring-net/bevy-lunex/releases`.

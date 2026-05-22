@@ -142,6 +142,6 @@ For Buiy: serving both 2D and 3D UI ergonomically is one of Buiy's distinguishin
 - Bevy Lunex book — `https://bytestring-net.github.io/bevy_lunex/`.
 - Interactivity chapter — `https://bytestring-net.github.io/bevy_lunex/chapters/interactivity.html`.
 - bevy_lunex Cargo.toml — `https://raw.githubusercontent.com/bytestring-net/bevy-lunex/main/crate/Cargo.toml`.
-- 0.3.0 release notes (picking backend migration) — `https://github.com/bytestring-net/bevy_lunex/releases`.
+- 0.3.0 release notes (picking backend migration) — `https://github.com/bytestring-net/bevy-lunex/releases`.
 - Bevypunk WASM caveats — `https://idedary.itch.io/bevypunk`.
 - AccessKit + Bevy integration article — `https://accesskit.dev/accesskit-integration-makes-bevy-the-first-general-purpose-game-engine-with-built-in-accessibility-support/`.

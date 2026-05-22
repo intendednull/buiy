@@ -12,7 +12,7 @@ This file walks the integration shape and the lessons it surfaces for Buiy's own
 
 | Date | Slint version | What landed |
 |---|---|---|
-| 2023-06-15 | (pre-1.1) | PR [#2865](https://github.com/slint-ui/slint/pull/2865) merged — initial AccessKit producer wiring through `accesskit_winit`. Pinned `accesskit` 0.11.0 + `accesskit_winit` 0.14.0. Author: @tronical (Tobias Hunger), with collaboration from Matt Campbell on stable `NodeId` semantics. |
+| 2023-06-15 | (pre-1.1) | PR [#2865](https://github.com/slint-ui/slint/pull/2865) merged — initial AccessKit producer wiring through `accesskit_winit`. Pinned `accesskit` 0.11.0 + `accesskit_winit` 0.14.0. Author: @tronical (Simon Hausmann, co-founder), with collaboration from Matt Campbell on stable `NodeId` semantics. |
 | 2023-Q3 | 1.1.x | Linux AccessKit startup panic fixed. |
 | 2024-05-13 | 1.6.0 | "Annotated more widgets with accessible properties and actions." |
 | 2024-07-18 | 1.7.0 | Updated to **winit 0.30 + AccessKit 0.16**. |

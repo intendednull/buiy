@@ -141,7 +141,7 @@ For a Buiy author considering bevy_lunex as a peer or inspiration in the Bevy Sc
 - bevy_lunex book (limitations, university-student disclosure) — `https://bytestring-net.github.io/bevy_lunex/`.
 - bevy_lunex book interactivity chapter — `https://bytestring-net.github.io/bevy_lunex/chapters/interactivity.html`.
 - bevy_lunex Cargo.toml (no accesskit dep) — `https://raw.githubusercontent.com/bytestring-net/bevy-lunex/main/crate/Cargo.toml`.
-- 0.3.0 release notes (rewrite, picking integration) — `https://github.com/bytestring-net/bevy_lunex/releases`.
+- 0.3.0 release notes (rewrite, picking integration) — `https://github.com/bytestring-net/bevy-lunex/releases`.
 - Open issues (DSL #10, hot reload #11, Linux cursor #102) — `https://github.com/bytestring-net/bevy-lunex/issues`.
 - Bevypunk demo limitations — `https://idedary.itch.io/bevypunk`.
 - AccessKit integration in Bevy core (the contrast point) — `https://accesskit.dev/accesskit-integration-makes-bevy-the-first-general-purpose-game-engine-with-built-in-accessibility-support/`.

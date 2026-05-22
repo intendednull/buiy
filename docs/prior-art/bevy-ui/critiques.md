@@ -49,15 +49,15 @@ The implicit critique: as of late 2023, **no Bevy UI framework had cleanly demon
 
 ## The megacomponent problem (#17644)
 
-Issue [**#17644**](https://github.com/bevyengine/bevy/issues/17644) — "Design of bevy_a11y is BSN-unfriendly." Author: **@viridia**, opened ~2026-02-02. **Closed via PR #24308.** Core argument:
+Issue [**#17644**](https://github.com/bevyengine/bevy/issues/17644) — "Design of bevy_a11y is BSN-unfriendly." Author: **@viridia**, opened ~2025-02-02. **Partially mitigated by PR #24308 (added `AccessibleLabel` sibling that mirrors into the unchanged `AccessibilityNode`); the megacomponent itself remains as of Bevy 0.19.0-rc.2.** Core argument:
 
 > "Because of this, I can well imagine wanting to merge together multiple BSN templates, each of which has opinions about various accessibility attributes."
 
-The technical specifics: `AccessNode` (Bevy's a11y component) had **private fields exposed only through method-style setters**. BSN works by *patching component property values from layered templates* (PR #20158). If properties are private, BSN can't reach them. If methods are inconsistent (some `set_x`, some `with_x`, some via builder), BSN can't introspect them either. So `bevy_a11y` was BSN-incompatible.
+The technical specifics: `AccessibilityNode` (Bevy's a11y component) had **private fields exposed only through method-style setters**. BSN works by *patching component property values from layered templates* (PR #20158). If properties are private, BSN can't reach them. If methods are inconsistent (some `set_x`, some `with_x`, some via builder), BSN can't introspect them either. So `bevy_a11y` was BSN-incompatible.
 
 **Why this generalizes** (and the lesson Buiy embeds — foundation README § 1.3, architecture.md § 2.4): any "megacomponent" with private fields blocks BSN authoring. The Buiy hard rule is that every component is small, public-fielded, observable, and decomposed by concern. Forced into the bones of every Buiy subsystem. The `bevy_a11y` mistake is the cautionary tale.
 
-This also motivates the architecture decision to **replace bevy_a11y rather than layer over it** (foundation architecture.md § 2.6) — even after the PR #24308 fix, the decomposition done by Bevy is *for bevy_ui's needs*, not for Buiy's. Buiy needs its own decomposed a11y components (`A11yRole` / `A11yLabel` / `A11yDescription` / `A11yStates` / `A11yRelations`) keyed to its own component model.
+This also motivates the architecture decision to **replace bevy_a11y rather than layer over it** (foundation architecture.md § 2.6) — even after PR #24308 added `AccessibleLabel`, the underlying `AccessibilityNode` megacomponent is unchanged; the partial decomposition that has shipped serves bevy_ui's needs, not Buiy's. Buiy needs its own decomposed a11y components (`A11yRole` / `A11yLabel` / `A11yDescription` / `A11yStates` / `A11yRelations`) keyed to its own component model.
 
 ## Third-party "why we built parallel" critiques
 
