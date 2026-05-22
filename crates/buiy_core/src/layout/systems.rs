@@ -284,7 +284,9 @@ fn nearest_scroll_container(
 /// `ancestor`, summing the Taffy `.location` of each step.
 ///
 /// Uses the provided `memo` cache to avoid re-walking shared subpaths
-/// (mirrors `resolve_writing_mode`'s memoization pattern).
+/// (mirrors `resolve_writing_mode`'s memoization pattern). Memoization
+/// key is `(entity, ancestor)` to handle multiple scroll-container
+/// frames in the same call.
 ///
 /// Returns `None` if (a) `entity` has no `LayoutTree` mapping, (b) the
 /// walk leaves `ancestor`'s subtree without finding `ancestor`, or
@@ -297,12 +299,12 @@ fn world_position(
     ancestor: Entity,
     tree: &LayoutTree,
     parent_chain: &Query<&ChildOf>,
-    memo: &mut HashMap<Entity, Vec2>,
+    memo: &mut HashMap<(Entity, Entity), Vec2>,
 ) -> Option<Vec2> {
     if entity == ancestor {
         return Some(Vec2::ZERO);
     }
-    if let Some(cached) = memo.get(&entity) {
+    if let Some(cached) = memo.get(&(entity, ancestor)) {
         return Some(*cached);
     }
     // ChildOf accessor is `.parent()` in Bevy 0.18.
@@ -311,7 +313,7 @@ fn world_position(
     let node_id = tree.by_entity.get(&entity)?;
     let layout = tree.tree.layout(*node_id).ok()?;
     let position = parent_position + Vec2::new(layout.location.x, layout.location.y);
-    memo.insert(entity, position);
+    memo.insert((entity, ancestor), position);
     Some(position)
 }
 
@@ -503,7 +505,7 @@ pub(super) fn sticky_offset(
     // Per-call memo for `world_position` — entities deeper in the
     // sticky set share `ChildOf` chain prefixes, so memoizing avoids
     // redundant walks.
-    let mut memo: HashMap<Entity, Vec2> = HashMap::new();
+    let mut memo: HashMap<(Entity, Entity), Vec2> = HashMap::new();
 
     for (e, pos, display) in sticky_query.iter() {
         // D14 — filter in Rust (no Bevy `Without<Display::None>` exists,
