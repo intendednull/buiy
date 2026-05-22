@@ -11,11 +11,13 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BoxSizing, ContainerType,
+    AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BoxSizing, BreakAfter,
+    BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnSpan, ContainerType,
     Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
-    JustifyContent, JustifyItems, OverflowMode, OverscrollBehavior, PositionKind, PositionTry,
-    QueryCondition, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing,
-    SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
+    JustifyContent, JustifyItems, Length, OverflowMode, OverscrollBehavior, PositionKind,
+    PositionTry, QueryCondition, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
+    Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
+    WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -308,6 +310,37 @@ impl WritingModeResolved {
 pub struct Container {
     pub container_type: ContainerType,
     pub container_name: Option<String>,
+}
+
+/// CSS multi-column container (tier-E).
+///
+/// **Status:** API stub. v1 ships every field for forward
+/// compatibility, but the multi-column packing algorithm is a no-op
+/// — sub-pass 6c emits one `warn!` per session on the first
+/// `MultiColumn` entity it encounters and produces single-column
+/// layout. Authors can write multi-column-aware code that compiles
+/// against v1; the algorithm lands in a v1.x point release.
+///
+/// `Eq` is intentionally NOT derived: `column_width` and `column_gap`
+/// carry `Length` values which contain `f32`, and `column_rule.color`
+/// is a `bevy::color::Color` which lacks `Eq`. `PartialEq` is
+/// sufficient for tests and authoring ergonomics.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.
+///
+/// Sub-pass: 6c (`multicol_pack`) in `BuiyLayoutStep::PostTaffyOverrides`.
+#[derive(Component, Reflect, Clone, Copy, PartialEq, Debug, Default)]
+#[reflect(Component, Default)]
+pub struct MultiColumn {
+    pub column_count: ColumnCount,
+    pub column_width: Option<Length>,
+    pub column_gap: Option<Length>,
+    pub column_rule: ColumnRule,
+    pub column_span: ColumnSpan,
+    pub column_fill: ColumnFill,
+    pub break_inside: BreakInside,
+    pub break_before: BreakBefore,
+    pub break_after: BreakAfter,
 }
 
 /// A `@container` rule pinned to a single entity. The rule activates
@@ -665,5 +698,18 @@ mod tests {
         let _m = LayoutAnchorBroken;
         // existence + Default suffice; the marker carries no data.
         let _d = LayoutAnchorBroken;
+    }
+
+    #[test]
+    fn multi_column_default_is_auto() {
+        let m = MultiColumn::default();
+        assert_eq!(m.column_count, ColumnCount::Auto);
+        assert!(m.column_width.is_none());
+        assert!(m.column_gap.is_none());
+        assert_eq!(m.column_span, ColumnSpan::None);
+        assert_eq!(m.column_fill, ColumnFill::Balance);
+        assert_eq!(m.break_inside, BreakInside::Auto);
+        assert_eq!(m.break_before, BreakBefore::Auto);
+        assert_eq!(m.break_after, BreakAfter::Auto);
     }
 }

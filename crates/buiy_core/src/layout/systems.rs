@@ -17,8 +17,8 @@
 
 use super::components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, Overflow, Position,
-    Scroll, WritingMode, WritingModeResolved,
+    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
+    Position, Scroll, WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
@@ -889,12 +889,21 @@ pub(super) fn sync_styles(
                 // layouts for entities whose nodes are up to date.
                 // `LayoutAnchorBroken` is intentionally OMITTED: it's a
                 // devtools marker that doesn't affect Taffy translation.
+                //
+                // Phase 7: `Changed<MultiColumn>` joins the inner Or per
+                // spec architecture.md § 1.2 line 42. The trigger is
+                // currently a no-op — multicol doesn't feed Taffy in v1
+                // (sub-pass 6c is a warn-once-per-session stub) — but the
+                // hook is wired now so the v1.x packing algorithm flows
+                // through `sync_styles` without a filter widening.
+                // Inner Or<> grows 5 → 6 entries (cap 15).
                 Or<(
                     Changed<Container>,
                     Changed<ContainerQuery>,
                     Changed<ContainerQueryActive>,
                     Changed<ContainerQueryInactive>,
                     Changed<Anchor>,
+                    Changed<MultiColumn>,
                 )>,
             )>,
         ),

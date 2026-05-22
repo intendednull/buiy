@@ -830,6 +830,107 @@ pub enum TryCondition {
     AnchorVisible,
 }
 
+// ============================================================
+// Phase 7 — multi-column types (flex-and-grid.md § 3)
+// ============================================================
+
+/// CSS `column-count`. Tier-E. Currently a stub field on
+/// `MultiColumn`; the algorithm warns-once and falls back to
+/// single-column layout in v1.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnCount {
+    #[default]
+    Auto,
+    Count(u32),
+}
+
+/// CSS `column-rule` shorthand (width / style / color triple).
+/// Render side honors this; layout side passes it through.
+///
+/// `Color` derives `Reflect` but not `Eq` (it contains `f32`), so this
+/// struct derives `PartialEq` only — matching the `ScrollbarColor`
+/// convention at `types.rs:326-334`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Debug, Default)]
+pub struct ColumnRule {
+    pub width: Length,
+    pub style: ColumnRuleStyle,
+    pub color: bevy::color::Color,
+}
+
+/// CSS `column-rule-style`. Subset of CSS line-style values.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnRuleStyle {
+    #[default]
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+}
+
+/// CSS `column-span`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnSpan {
+    #[default]
+    None,
+    All,
+}
+
+/// CSS `column-fill`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnFill {
+    #[default]
+    Balance,
+    Auto,
+}
+
+/// CSS `break-inside`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakInside {
+    #[default]
+    Auto,
+    Avoid,
+    AvoidColumn,
+}
+
+/// CSS `break-before`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakBefore {
+    #[default]
+    Auto,
+    Always,
+    Avoid,
+    Column,
+    AvoidColumn,
+}
+
+/// CSS `break-after`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakAfter {
+    #[default]
+    Auto,
+    Always,
+    Avoid,
+    Column,
+    AvoidColumn,
+}
+
 /// Per-frame anchor-error category for the warn-dedup `HashSet` in
 /// `LayoutAnchorWarnedThisFrame`. Spec § 3.2 step 4: "warn fires once
 /// per (entity, frame)".
