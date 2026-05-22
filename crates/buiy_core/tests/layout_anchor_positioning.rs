@@ -243,7 +243,6 @@ fn anchor_cycle_marks_both_endpoints_broken() {
                     inset: Inset::below(Length::Px(5.0)),
                     conditions: vec![],
                 }],
-                ..default()
             },
         ))
         .id();
@@ -259,7 +258,6 @@ fn anchor_cycle_marks_both_endpoints_broken() {
                     inset: Inset::below(Length::Px(5.0)),
                     conditions: vec![],
                 }],
-                ..default()
             },
         ))
         .id();
