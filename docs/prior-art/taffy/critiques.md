@@ -10,7 +10,7 @@ Honest tone. Where there's an open issue or PR documenting a complaint, this fil
 
 CSS Grid Level 2 subgrid: [issue #468](https://github.com/DioxusLabs/taffy/issues/468) opened **2023-04-24** by Nico Burns himself. Open as of 2026-05. No implementation, no experimental branch, no placeholder enum variant in `MinTrackSizingFunction` or `GridTemplateComponent`. The issue body acknowledges the design challenge: subgrid "requires access to non-direct descendants of a node," which conflicts with Taffy's strict parent-then-child traversal in `LayoutPartialTree`.
 
-Three years between issue-open and any visible implementation work is a meaningful gap. The CSS-WG concluded subgrid in 2023; browsers shipped it (Firefox 2022, Safari 2023, Chrome 2024). Taffy lags.
+Three years between issue-open and any visible implementation work is a meaningful gap. The CSS-WG concluded subgrid in 2023; browsers shipped it (Firefox 71 (2019), Safari 16 (2022), Chrome 117 (2023)). Taffy lags.
 
 CSS Grid Level 3 masonry: [issue #910](https://github.com/DioxusLabs/taffy/issues/910), opened **2026-01-05**, also by Burns. The issue body acknowledges *"It may well make sense to implement CSS Grid Level 2 (subgrid layout) first."* — i.e. masonry waits on subgrid, which waits on the recursive-traversal redesign. Reasonable engineering caution; an honest reading is "neither is shipping in 2026."
 

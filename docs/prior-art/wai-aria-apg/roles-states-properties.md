@@ -12,9 +12,9 @@ WAI-ARIA 1.2 defines a closed role taxonomy. Each role falls into one of six cat
 
 1. **Abstract roles** — never used directly in markup; structure only (`widget`, `composite`, `landmark`, `structure`, `window`, `range`, `select`, ...). Buiy never emits these.
 2. **Widget roles** — interactive controls. Sub-divides into:
-   - **Standalone** (20): `button`, `checkbox`, `gridcell`, `link`, `menuitem`, `menuitemcheckbox`, `menuitemradio`, `option`, `progressbar`, `radio`, `scrollbar`, `searchbox`, `separator` (when focusable), `slider`, `spinbutton`, `switch`, `tab`, `tabpanel`, `textbox`, `treeitem`
+   - **Standalone** (20): `button`, `checkbox`, `gridcell`, `link`, `menuitem`, `menuitemcheckbox`, `menuitemradio`, `option`, `progressbar`, `radio`, `scrollbar`, `searchbox`, `separator` (when focusable), `slider`, `spinbutton`, `switch`, `tab`, `tabpanel`, `textbox`, `tooltip`, `treeitem`
    - **Composite** (9): `combobox`, `grid`, `listbox`, `menu`, `menubar`, `radiogroup`, `tablist`, `tree`, `treegrid`
-3. **Document structure roles** (38): `article`, `blockquote`, `caption`, `cell`, `code`, `columnheader`, `definition`, `deletion`, `document`, `emphasis`, `feed`, `figure`, `generic`, `group`, `heading`, `img` / `image`, `insertion`, `list`, `listitem`, `mark`, `math`, `meter`, `none` / `presentation`, `note`, `paragraph`, `row`, `rowgroup`, `rowheader`, `separator` (non-focusable), `strong`, `subscript`, `superscript`, `suggestion`, `table`, `term`, `time`, `toolbar`, `tooltip`
+3. **Document structure roles** (38): `article`, `blockquote`, `caption`, `cell`, `code`, `columnheader`, `definition`, `deletion`, `document`, `emphasis`, `feed`, `figure`, `generic`, `group`, `heading`, `img` / `image`, `insertion`, `list`, `listitem`, `mark`, `math`, `meter`, `none` / `presentation`, `note`, `paragraph`, `row`, `rowgroup`, `rowheader`, `separator` (non-focusable), `strong`, `subscript`, `superscript`, `suggestion`, `table`, `term`, `time`, `toolbar`
 4. **Landmark roles** (8): `banner`, `complementary`, `contentinfo`, `form`, `main`, `navigation`, `region`, `search`
 5. **Live region roles** (5): `alert`, `log`, `marquee`, `status`, `timer` — plus the implicit-live `alert` and `status`
 6. **Window roles** (2): `alertdialog`, `dialog`

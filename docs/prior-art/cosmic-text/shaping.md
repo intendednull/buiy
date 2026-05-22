@@ -4,7 +4,7 @@
 
 ## Substrate correction
 
-cosmic-text 0.19.0's shaper is **harfrust 0.5.0** (verified in `Cargo.toml`). harfrust started as a fork of rustybuzz and currently aligns with HarfBuzz v13.0.0; it is maintained by the official `harfbuzz` GitHub organization, not by the rustybuzz author. The migration from rustybuzz to harfrust landed in the 0.17.x/0.18.x line — anything older in the wild still says "rustybuzz." Anywhere in this corpus or in the Buiy text spec where "rustybuzz" appears should be read as "harfrust" for 0.19+.
+cosmic-text 0.19.0's shaper is **harfrust 0.5.0** (verified in `Cargo.toml`). harfrust started as a fork of rustybuzz and currently aligns with HarfBuzz v13.0.0; it is maintained by the official `harfbuzz` GitHub organization, not by the rustybuzz author. The migration from rustybuzz to harfrust shipped in **cosmic-text 0.15.0** (PR #417, merged 2025-09-09) — anything older in the wild still says "rustybuzz." Anywhere in this corpus or in the Buiy text spec where "rustybuzz" appears should be read as "harfrust" for 0.19+.
 
 Per harfrust's own README, the implementation is "less than 25% slower than HarfBuzz on most common fonts," with two explicit gaps: **no Arabic fallback shaper**, and "experimental HarfBuzz features like most of the boring-expansion-spec are not supported yet."
 

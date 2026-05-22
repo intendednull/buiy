@@ -111,7 +111,7 @@ The gap analysis cleanly justifies Buiy's [architectural pillars 2 and 3](../../
 - **Sub-pass composition is bounded.** Sticky / table / multi-column / anchor are exactly four sub-passes (6a–6d). Container queries are one above-Taffy re-layout. Writing-modes wait on upstream. That's the entire gap-mitigation surface; it's well-scoped.
 - **Subgrid + masonry are explicit "wait on upstream" items.** Buiy reserves the API shape; the stub-and-warn convention ([flex-and-grid.md § 2.3](../../specs/2026-05-08-buiy-layout-design/flex-and-grid.md#23-subgrid), [§ 2.4](../../specs/2026-05-08-buiy-layout-design/flex-and-grid.md#24-masonry)) means a Taffy bump for those features is a "remove the warn" cutover, not a redesign.
 
-The single biggest risk is **writing-modes** — issue #752 has been open since 2023, vertical-* and sideways-* modes are tablestakes for i18n, and the Buiy-side rotation pass option ([Buiy README § 5](../../specs/2026-05-08-buiy-layout-design/README.md#5-open-questions) open question) is non-trivial. Track this issue.
+The single biggest risk is **writing-modes** — issue #752 has been open since 2024-12-04, vertical-* and sideways-* modes are tablestakes for i18n, and the Buiy-side rotation pass option ([Buiy README § 5](../../specs/2026-05-08-buiy-layout-design/README.md#5-open-questions) open question) is non-trivial. Track this issue.
 
 ## Sources
 

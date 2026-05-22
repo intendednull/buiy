@@ -10,7 +10,7 @@ This file documents the internal architecture of `cosmic-text` as of **0.19.0** 
 
 The Buiy-side verified-facts pre-amble called the substrate **rustybuzz + swash + unicode-bidi + fontdb**. Verified against `Cargo.toml` on `main` at HEAD:
 
-- The shaper is **harfrust 0.5.0**, not rustybuzz. `harfrust` is a fork of rustybuzz, maintained by the official `harfbuzz` GitHub org, that ported the font backend from `ttf-parser` to `read-fonts`. The migration happened in the 0.17.x / 0.18.x line; rustybuzz no longer appears in `Cargo.toml`.
+- The shaper is **harfrust 0.5.0**, not rustybuzz. `harfrust` is a fork of rustybuzz, maintained by the official `harfbuzz` GitHub org, that ported the font backend from `ttf-parser` to `read-fonts`. The migration shipped in **cosmic-text 0.15.0** (PR #417, merged 2025-09-09); rustybuzz no longer appears in `Cargo.toml` as of 0.15.0.
 - `swash 0.2.6` is still present but **only with `render` + `scale` features** — i.e. swash is used as the rasterizer / outline scaler, not as the shaper, font fallback engine, or font discovery layer. Color emoji rasterization (COLR/CPAL, sbix, CBDT/CBLC) lives in `swash::scale`.
 - Font data parsing now goes through **skrifa 0.40.0** (Google Fonts' `read-fonts`-based crate), which replaced what was previously routed through swash's introspection side.
 - BiDi is **unicode-bidi 0.3.18** with `hardcoded-data` (UAX #9 tables compiled in). Confirmed.
