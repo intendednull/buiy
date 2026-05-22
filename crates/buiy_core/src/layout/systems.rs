@@ -1101,7 +1101,22 @@ pub(super) fn anchor_resolution(
             new_warns.push((e, AnchorErrorKind::TargetMissing));
             continue;
         };
-        let anchor_pos = Vec2::new(target_layout.location.x, target_layout.location.y);
+        // D1 fix — closes Phase 6 follow-up "Anchor positioning —
+        // anchor target IS sticky/table/multicol." When the anchor
+        // target itself was displaced by sub-pass 6a (sticky), 6b
+        // (table), or 6c (multicol), its corrected position lives in
+        // `overrides.by_entity`. Reading from the override map first
+        // (fallback to Taffy) lets `position_try` evaluate against the
+        // *displaced* target box, which is what an author expects when
+        // they anchor a tooltip to a sticky header.
+        //
+        // Only *position* is overridden per D1; size always comes from
+        // Taffy (sub-passes 6a-6c do not modify size).
+        let anchor_pos = overrides
+            .by_entity
+            .get(&target_entity)
+            .copied()
+            .unwrap_or_else(|| Vec2::new(target_layout.location.x, target_layout.location.y));
         let anchor_size = Vec2::new(target_layout.size.width, target_layout.size.height);
 
         // Anchored entity's own size (from Taffy).
