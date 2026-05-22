@@ -79,7 +79,7 @@ Other recurring authors visible in the issue/PR tracker: `@robtfm` (Bevy contrib
 
 DioxusLabs took stewardship via the rename event on 2022-06-10 — same day as `taffy 0.1.0`. The repo has always lived at `DioxusLabs/taffy`. There is no separate steward-handover commit because the rename was the handover.
 
-The Dioxus parent org is venture-backed (Series A from FutureWei + others, per `dioxuslabs.com`); Taffy benefits indirectly via Burns + Cecile having sponsored time on it, but the project has no separate budget line. There is no `funding.json`, no GitHub Sponsors integration on the repo, no Open Collective.
+The Dioxus parent org is YC S23-seed-funded (~$500K) with additional Pioneer Fund + GitHub Accelerator support (per `../dioxus/governance.md`; FutureWei is a sponsor, not equity); Taffy benefits indirectly via Burns + Cecile having sponsored time on it, but the project has no separate budget line. There is no `funding.json`, no GitHub Sponsors integration on the repo, no Open Collective.
 
 ## 7. License decision
 
