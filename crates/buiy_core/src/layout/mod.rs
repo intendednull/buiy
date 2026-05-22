@@ -12,8 +12,8 @@ mod types;
 
 pub use components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, Overflow, Position,
-    Scroll, ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
+    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
+    Position, Scroll, ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
@@ -24,11 +24,13 @@ pub use systems::{
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
-    ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow,
-    GridLine, Inset, JustifyContent, JustifyItems, Length, LogicalEdges, NamedArea, Orientation,
-    OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount,
-    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
-    SnapType, TextOrientation, TrackSize, TryCondition, UnicodeBidi, WritingModeKind,
+    BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnRuleStyle,
+    ColumnSpan, ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas,
+    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, LogicalEdges, NamedArea,
+    Orientation, OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition,
+    RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing,
+    SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, TryCondition, UnicodeBidi,
+    WritingModeKind,
 };
 
 use bevy::prelude::*;
