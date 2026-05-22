@@ -16,13 +16,13 @@
 //! systems to them.
 
 use super::components::{
-    BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive, Display,
-    FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, WritingMode,
+    Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
+    Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll, WritingMode,
     WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
-use super::types::{AnchorErrorKind, ContainerType, GridAreas, Length, QueryCondition};
+use super::types::{AnchorErrorKind, AnchorName, ContainerType, GridAreas, Length, QueryCondition};
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -75,11 +75,25 @@ pub struct SyncStylesIterCount(pub usize);
 ///   insert. Never decrements.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
-#[derive(Resource, Default, Debug)]
+#[derive(Resource, Debug)]
 pub struct AnchorNameRegistry {
     by_name: std::collections::HashMap<String, Vec<(Entity, u64)>>,
     entity_epochs: std::collections::HashMap<Entity, u64>,
     next_epoch: u64,
+}
+
+impl Default for AnchorNameRegistry {
+    fn default() -> Self {
+        Self {
+            by_name: std::collections::HashMap::new(),
+            entity_epochs: std::collections::HashMap::new(),
+            // Start at 1 so `entity_epoch(e) > 0` is a faithful
+            // "tracked" predicate (epoch 0 is reserved for the
+            // `unwrap_or(0)` fallback in `entity_epoch` — i.e.
+            // "no entry for this entity").
+            next_epoch: 1,
+        }
+    }
 }
 
 impl AnchorNameRegistry {
@@ -167,6 +181,39 @@ pub struct AnchorOverrides {
 #[derive(Resource, Default, Debug)]
 pub struct LayoutAnchorWarnedThisFrame {
     pub set: std::collections::HashSet<(Entity, AnchorErrorKind)>,
+}
+
+/// Private helper invoked by the `On<Insert, Anchor>` observer closure
+/// registered in `LayoutPlugin::build` (D12). Adds the entity to the
+/// registry under its `anchor_name` if any; otherwise tracks just the
+/// epoch (D11/B2 — no empty-string sentinel bucket).
+///
+/// Duplicate-name detection is NOT done here; it happens in
+/// `anchor_resolution` via `reg.iter_buckets()` (D11). Observers run
+/// between frames; clearing `LayoutAnchorWarnedThisFrame` at the top
+/// of `anchor_resolution` would otherwise lose any observer-recorded
+/// warns.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+pub(super) fn handle_anchor_insert(
+    entity: Entity,
+    q: &Query<&Anchor>,
+    reg: &mut AnchorNameRegistry,
+) {
+    let Ok(anchor) = q.get(entity) else {
+        return; // entity may have been despawned mid-flush
+    };
+    match &anchor.anchor_name {
+        Some(AnchorName::Named(name)) => {
+            reg.insert(name.clone(), entity);
+        }
+        Some(AnchorName::Implicit) | None => {
+            // Track the epoch only — D11/B2 — never put unnamed
+            // anchors into `by_name` (would pollute the registry
+            // and corrupt `find_entity_by_name("")` semantics).
+            reg.track_epoch(entity);
+        }
+    }
 }
 
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
@@ -1259,4 +1306,108 @@ mod tests {
         let w = LayoutAnchorWarnedThisFrame::default();
         assert!(w.set.is_empty());
     }
+}
+
+#[cfg(test)]
+mod observer_tests {
+    use super::*;
+    use crate::components::Node;
+    use crate::layout::components::Anchor;
+    use crate::layout::types::AnchorName;
+    use bevy::prelude::*;
+
+    fn app_with_observers() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<AnchorNameRegistry>();
+        app.init_resource::<LayoutAnchorWarnedThisFrame>();
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Insert, Anchor>,
+             q: Query<&Anchor>,
+             mut reg: ResMut<AnchorNameRegistry>| {
+                super::handle_anchor_insert(trigger.event().entity, &q, &mut reg);
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Replace, Anchor>,
+             mut reg: ResMut<AnchorNameRegistry>| {
+                reg.remove(trigger.event().entity);
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Remove, Anchor>,
+             mut reg: ResMut<AnchorNameRegistry>| {
+                reg.remove(trigger.event().entity);
+            },
+        );
+        app
+    }
+
+    #[test]
+    fn observer_insert_registers_named_anchor() {
+        let mut app = app_with_observers();
+        let e = app
+            .world_mut()
+            .spawn(Anchor {
+                anchor_name: Some(AnchorName::Named("foo".into())),
+                ..default()
+            })
+            .id();
+        // Observers fire synchronously on `spawn`, so the registry
+        // reflects the new entry immediately.
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("foo"), Some(e));
+    }
+
+    #[test]
+    fn observer_remove_cleans_registry() {
+        let mut app = app_with_observers();
+        let e = app
+            .world_mut()
+            .spawn(Anchor {
+                anchor_name: Some(AnchorName::Named("foo".into())),
+                ..default()
+            })
+            .id();
+        app.world_mut().entity_mut(e).remove::<Anchor>();
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("foo"), None);
+    }
+
+    #[test]
+    fn observer_replace_removes_then_reinserts() {
+        let mut app = app_with_observers();
+        let e = app
+            .world_mut()
+            .spawn(Anchor {
+                anchor_name: Some(AnchorName::Named("old".into())),
+                ..default()
+            })
+            .id();
+        app.world_mut().entity_mut(e).insert(Anchor {
+            anchor_name: Some(AnchorName::Named("new".into())),
+            ..default()
+        });
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("old"), None);
+        assert_eq!(reg.find_entity_by_name("new"), Some(e));
+    }
+
+    #[test]
+    fn observer_anchor_without_name_is_tracked_by_epoch_only() {
+        let mut app = app_with_observers();
+        let e = app.world_mut().spawn(Anchor::default()).id();
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        // No named entry — but the entity is in entity_epochs (for
+        // cycle-resolution lookups that don't go through `by_name`).
+        assert!(reg.entity_epoch(e) > 0);
+        // The empty-string bucket should NOT contain the entity.
+        // (regression test for the v1 plan's empty-string side-channel).
+        assert_eq!(reg.find_entity_by_name(""), None);
+    }
+
+    // DuplicateName detection moved to anchor_resolution (D11) — the
+    // observer no longer touches LayoutAnchorWarnedThisFrame. Test
+    // coverage for duplicate-name warns lives in the integration tests
+    // (tests/layout_anchor_positioning.rs).
 }
