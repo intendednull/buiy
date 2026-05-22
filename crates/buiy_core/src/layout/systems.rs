@@ -217,6 +217,111 @@ pub(super) fn handle_anchor_insert(
     }
 }
 
+/// Kahn topological sort over the (anchored → anchor) DAG. Returns the
+/// resolved topological order (anchor targets first, anchored last) and
+/// the set of entities whose outgoing edge was dropped to break a cycle.
+///
+/// On cycle: identifies the remaining cycle-bound nodes (post-Kahn nodes
+/// with in_degree > 0), finds the one with the highest insertion epoch
+/// via `epochs(entity)`, drops its outgoing edge, and re-runs Kahn from
+/// scratch. Repeats until all nodes are placed.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+///
+/// `edges`: anchored entity → `Some(anchor_target)` or `None` (entity is
+/// only an anchor target, no outgoing edge). Returns: (order, dropped).
+fn kahn_anchor_sort(
+    edges: &std::collections::HashMap<Entity, Option<Entity>>,
+    epochs: &dyn Fn(Entity) -> u64,
+) -> (Vec<Entity>, std::collections::HashSet<Entity>) {
+    let mut current_edges: std::collections::HashMap<Entity, Option<Entity>> = edges.clone();
+    let mut dropped: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+
+    // D10 — pre-pass: ensure every target of a `Some(t)` edge is also a
+    // key in `current_edges` (with `None` outgoing). Without this, a
+    // target Entity that has no Anchor component (e.g. a plain Node
+    // pointed at via AnchorRef::Entity(e)) ends up with in_degree > 0
+    // but is never dequeued — Kahn flags it as a cycle node and the
+    // edge-drop is a no-op, looping forever. Pre-populating these
+    // "external target" nodes gives the algorithm a well-defined
+    // termination check.
+    let external_targets: Vec<Entity> = current_edges
+        .values()
+        .filter_map(|t| t.as_ref().copied())
+        .filter(|t| !current_edges.contains_key(t))
+        .collect();
+    for t in external_targets {
+        current_edges.insert(t, None);
+    }
+
+    loop {
+        // Build in_degree map: number of edges ending at each node.
+        let mut in_degree: std::collections::HashMap<Entity, usize> = std::collections::HashMap::new();
+        for &e in current_edges.keys() {
+            in_degree.entry(e).or_insert(0);
+        }
+        for (_, target) in &current_edges {
+            if let Some(t) = target {
+                *in_degree.entry(*t).or_insert(0) += 1;
+            }
+        }
+
+        // Queue of zero-in-degree nodes.
+        let mut queue: std::collections::VecDeque<Entity> = in_degree
+            .iter()
+            .filter(|&(_, &d)| d == 0)
+            .map(|(e, _)| *e)
+            .collect();
+
+        let mut order: Vec<Entity> = Vec::with_capacity(current_edges.len());
+        while let Some(n) = queue.pop_front() {
+            order.push(n);
+            // Decrement in_degree of the node n points at (if any).
+            if let Some(Some(target)) = current_edges.get(&n).copied() {
+                let d = in_degree.entry(target).or_insert(1);
+                *d = d.saturating_sub(1);
+                if *d == 0 {
+                    queue.push_back(target);
+                }
+            }
+        }
+
+        if order.len() == current_edges.len() {
+            // Kahn over (anchored → anchor_target) yields sources first
+            // (anchored before target). Anchor resolution requires
+            // targets first (the anchor's box must be resolved before
+            // the anchored entity reads it), so reverse the order.
+            order.reverse();
+            return (order, dropped);
+        }
+
+        // Cycle detected. Find the remaining cycle-bound nodes
+        // (in_degree > 0 at termination), pick the one with the highest
+        // epoch, drop its outgoing edge, re-run.
+        let cycle_nodes: Vec<Entity> = in_degree
+            .iter()
+            .filter(|&(_, &d)| d > 0)
+            .map(|(e, _)| *e)
+            .collect();
+
+        if cycle_nodes.is_empty() {
+            // Defensive: should not happen if order.len() != edges.len()
+            return (order, dropped);
+        }
+
+        let &drop_from = cycle_nodes
+            .iter()
+            .max_by_key(|&&e| epochs(e))
+            .expect("cycle_nodes non-empty");
+
+        // Drop the outgoing edge from this node.
+        if let Some(entry) = current_edges.get_mut(&drop_from) {
+            *entry = None;
+        }
+        dropped.insert(drop_from);
+    }
+}
+
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
 /// removed (despawn or component-remove). `RemovedComponents<Node>`
 /// ordering across a parent/child despawn pair is not guaranteed by
@@ -1306,6 +1411,124 @@ mod tests {
     fn layout_anchor_warned_default_empty() {
         let w = LayoutAnchorWarnedThisFrame::default();
         assert!(w.set.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_orders_simple_chain() {
+        // a → b → c
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        let c = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(c));
+        edges.insert(c, None);
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        // anchor targets come BEFORE anchored entities: c, b, a
+        let ci = order.iter().position(|&e| e == c).unwrap();
+        let bi = order.iter().position(|&e| e == b).unwrap();
+        let ai = order.iter().position(|&e| e == a).unwrap();
+        assert!(ci < bi);
+        assert!(bi < ai);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_breaks_2_node_cycle_at_higher_epoch() {
+        // a → b, b → a; epoch(b) > epoch(a)
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(a));
+        let epochs = move |e: Entity| if e == b { 10 } else { 5 };
+        let (order, dropped) = kahn_anchor_sort(&edges, &epochs);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped.contains(&b)); // b's edge (b → a) was dropped
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn kahn_sort_breaks_3_node_cycle_at_highest_epoch() {
+        // a → b → c → a (cycle); epoch(c) > epoch(b) > epoch(a)
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        let c = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(c));
+        edges.insert(c, Some(a));
+        let epochs = move |e: Entity| match e {
+            x if x == c => 30,
+            x if x == b => 20,
+            _ => 10,
+        };
+        let (order, dropped) = kahn_anchor_sort(&edges, &epochs);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped.contains(&c));
+        assert_eq!(order.len(), 3);
+    }
+
+    #[test]
+    fn kahn_sort_handles_two_independent_cycles() {
+        // (a → b → a) + (c → d → c); each cycle drops its higher-epoch node
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        let c = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+        let d = bevy::prelude::Entity::from_raw_u32(4).unwrap();
+        edges.insert(a, Some(b));
+        edges.insert(b, Some(a));
+        edges.insert(c, Some(d));
+        edges.insert(d, Some(c));
+        let epochs = move |e: Entity| match e {
+            x if x == b => 20,
+            x if x == d => 40,
+            _ => 10,
+        };
+        let (order, dropped) = kahn_anchor_sort(&edges, &epochs);
+        assert_eq!(dropped.len(), 2);
+        assert!(dropped.contains(&b));
+        assert!(dropped.contains(&d));
+        assert_eq!(order.len(), 4);
+    }
+
+    #[test]
+    fn kahn_sort_empty_input_is_empty_output() {
+        let edges = std::collections::HashMap::new();
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        assert!(order.is_empty());
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_only_targets_no_anchored() {
+        // a (no outgoing), b (no outgoing) — both should appear, no edges
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        edges.insert(a, None);
+        edges.insert(b, None);
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        assert_eq!(order.len(), 2);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn kahn_sort_external_target_no_anchor_doesnt_loop() {
+        // a → b, but b is NOT in edges (it's a plain Node target).
+        // D10 pre-pass should add b as `b → None`, Kahn terminates cleanly.
+        let mut edges = std::collections::HashMap::new();
+        let a = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let b = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        edges.insert(a, Some(b));
+        // NOT inserting b.
+        let (order, dropped) = kahn_anchor_sort(&edges, &|_| 0);
+        assert_eq!(order.len(), 2);
+        let ai = order.iter().position(|&e| e == a).unwrap();
+        let bi = order.iter().position(|&e| e == b).unwrap();
+        assert!(bi < ai); // b is the target — comes first
+        assert!(dropped.is_empty());
     }
 }
 
