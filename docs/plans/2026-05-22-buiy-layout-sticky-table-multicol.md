@@ -1,6 +1,7 @@
 # Buiy layout — Phase 7: sticky positioning + table stub + multicol stub
 
 **Date:** 2026-05-22
+**Revision:** v2 (post 3-agent parallel review — see "Plan v2 revisions" section below)
 **Status:** active
 **Spec:** [`specs/2026-05-08-buiy-layout-design/display-and-positioning.md`](../specs/2026-05-08-buiy-layout-design/display-and-positioning.md) § 1.2 (table layout status), § 2.3 (sticky positioning) + [`flex-and-grid.md`](../specs/2026-05-08-buiy-layout-design/flex-and-grid.md) § 3 (multi-column) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-passes 6a/6b/6c), § 6 (error model).
 **Supersedes:** none (graduates from empty sub-passes 6a/6b/6c stubs declared in Phase 1 `BuiyLayoutStep::PostTaffyOverrides` and partially populated in Phase 6 by sub-pass 6d).
@@ -14,7 +15,25 @@
 2. **Sticky-offset as a pure post-Taffy transform.** Sub-pass 6a `sticky_offset` queries entities with `Position { kind: PositionKind::Sticky, inset, .. }`; for each, walks `ChildOf` to find the nearest scroll-container ancestor (an entity whose `Overflow.is_scroll_container()` is true — same helper Phase 2 added). If no scroll container is in scope the entity behaves as `Relative` (no displacement, no warn — spec § 2.1 "falls back to parent's content box outside the sticky range" treats absence-of-context as a valid no-op). Otherwise the pass reads the sticky entity's natural box from `tree.tree.layout()` (same Taffy-direct read pattern as Phase 5 `cq_flip_check` and Phase 6 `anchor_resolution`), computes per-axis displacement by intersecting the natural box with the scroll container's visible viewport (offset by `ScrollOffset`), clamps the displacement so the box does not escape its parent's box (CSS sticky invariant), and writes the resolved position to `PostTaffyPositionOverrides`. Sticky writes do NOT invalidate Taffy (spec § 2.3) — sub-pass 6a runs after `taffy_compute` (step 3) and feeds `write_resolved_layout` (step 7) directly through the override map.
 3. **Table + multicol as warn-once-per-session no-ops.** Sub-pass 6b `table_layout` queries entities with `Display::{Table, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableCell, TableCaption, TableColumnGroup, TableColumn}` and emits one `warn!` per (entity, session) on first encounter — the fallback path (Table → Block) is already handled by `translate.rs::map_display`. Sub-pass 6c `multicol_pack` queries entities with the new `MultiColumn` component and emits one `warn!` per session (single warn, not per-entity, per spec § 3.2 "once per session"). Both passes write nothing to `PostTaffyPositionOverrides`. The dedup mechanism is a new `LayoutWarnedOnceSession` resource holding `HashSet<LayoutWarnOnceKey>` cleared only on `BuiyExit` (canonical spec § 6 pattern); the existing Phase 6 `LayoutAnchorWarnedThisFrame` per-frame resource is preserved (different scope, different consumer).
 
-**Tech Stack:** Bevy 0.18 (no new APIs vs Phase 6 — `Query<&Position>`, `Query<&Overflow>`, `Query<&ScrollOffset>`, `Query<&ChildOf>` ancestor walk, `NonSend<LayoutTree>` for `tree.tree.layout()` reads). Taffy 0.10 (read-only — no new Taffy emit path; sticky is a pure post-Taffy overlay, table maps to Block via existing `map_display`, multicol is a stub). `std::collections::{HashMap, HashSet}` (no `bevy::utils::HashMap` per Phase 6 precedent). **No new external dependency.**
+**Tech Stack:** Bevy 0.18 (no new APIs vs Phase 6 — `Query<&Position>`, `Query<&Overflow>`, `Query<&ScrollOffset>`, `Query<&ChildOf>` ancestor walk with `.parent()` accessor, `NonSend<LayoutTree>` for `tree.tree.layout()` reads). Taffy 0.10 (read-only — no new Taffy emit path; sticky is a pure post-Taffy overlay, table maps to Block via existing `map_display`, multicol is a stub). `std::collections::{HashMap, HashSet}` (no `bevy::utils::HashMap` per Phase 6 precedent). **No new external dependency.**
+
+---
+
+## Plan v2 revisions (post 3-agent parallel review)
+
+The first three reviewers (spec-coverage, feasibility, test-strategy) found a total of one spec-coverage BLOCKER, four feasibility BLOCKERs, and five test-strategy BLOCKERs. v2 addresses every BLOCKER and most CONCERNs. The key changes are:
+
+1. **D3 simplified** — `Length` lacks `Vh/Vw/Vmin/Vmax/Em/Rem` (verified by direct inspection of `crates/buiy_core/src/layout/types.rs:29-50`). Only `Px`, `Percent`, `Fr`, and `Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax` exist. `resolve_sticky_inset` simplified accordingly. `StickyEmRemDeferred` variant dropped from `LayoutWarnOnceKey`; `StickyCqDeferred` added (sticky `Cq*` inset path is the new deferral, per follow-up vs. plumbing from Phase 6 `length_inset_to_px`).
+2. **Task 5 helpers use `.parent()`** — verified `crates/buiy_core/src/layout/systems.rs:911,1120,1258` all access `ChildOf` via `.parent()`. `ChildOf::parent()` is the accessor; `ChildOf` is not a tuple struct in Bevy 0.18.
+3. **`Entity::from_raw_u32(n).unwrap()`** — verified existing test pattern at `crates/buiy_core/src/layout/systems.rs:1806-1816` and `tests/a11y_translate.rs:29-91`. Task 2 + Task 4 test snippets use this form.
+4. **`MultiColumn` always inserted via `#[derive(Bundle)]`** — verified `Style` at `crates/buiy_core/src/layout/style.rs:44` derives `Bundle`; every field is always inserted. The Phase-5 Container precedent confirms: Container is always inserted regardless of value. D8 corrected: drop the "only if non-default" claim. Task 3's `multi_column_default_not_inserted` test is INVERTED to `multi_column_always_inserted`.
+5. **`Changed<MultiColumn>` added to nested Or<> in `sync_styles`** — spec `architecture.md § 1.2 line 42` lists `Changed<MultiColumn>` as a required trigger. Inner Or<> is currently at 5 entries (verified at `systems.rs:875-881`); cap is 15; plenty of room. Added to Task 3 Step 6.
+6. **D4 step 8 formula text** — corrected to match the working code in `compute_sticky_displacement` (`.min(e_natural_in_s.y)` is the bottom-pin ceiling clamp, not `.min(e_natural_in_s.y + (parent_height - e_height))`).
+7. **mod.rs:21 `pub use`** — Task 2 explicitly names this line as a rename site.
+8. **5 new sticky unit tests** (Task 5) — bottom-pin-when-near-bottom, bottom-no-push-down-before-scroll, bottom-clamped-by-parent-top, both-top-and-bottom-active (documents "top wins" v1 deviation), clear-ordering-regression (2-frame, sticky + anchor target).
+9. **5 new sticky integration tests** (Task 10) — explicit `overrides.by_entity.is_empty()` for no-scroll-container, table-no-rewarn-on-replace, `warned_once_session_manual_clear`, multicol with 3 entities (was 2 in v1), drop em/rem test (variant no longer exists).
+10. **`Sizing::Length(Length::Cqw(_))` etc.** in `resolve_sticky_inset` either defer to a `StickyCqDeferred(Entity)` warn-once *or* port the Phase-6 `length_inset_to_px` helper. v2 chooses the **defer** path for Phase 7 — simpler, smaller scope; full Cq* sticky support tracked in `follow-ups.md` Phase 7 closeout.
+11. **Sticky-inside-sticky behavior documented as a known limitation** — `world_position` walks Taffy positions (un-displaced), so an inner sticky inside an outer sticky resolves its threshold against the outer's *natural* position. Phase 7 ships this as known behavior; tracked in `follow-ups.md` Phase 7 closeout.
 
 ---
 
@@ -83,13 +102,17 @@ No changes to: `translate.rs` (sticky maps to `taffy::Position::Relative` alread
 
 ### D3. Sticky inset semantics — `Sizing::Auto` = "edge not set"
 
-**Decision:** Treat `Sizing::Auto` (the `Inset` field default) as "this edge has no sticky inset." Only `Sizing::Length(Length::Px(_))`, `Sizing::Length(Length::Percent(_))`, viewport units `Vh/Vw/Vmin/Vmax`, and container query units `Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax` resolve to active sticky edges. `Sizing::Length(Length::Em(_) | Length::Rem(_))` resolves to `0.0` with one warn per (entity, session) `LayoutWarnOnceKey::StickyEmRemDeferred` — em/rem require font context which sticky doesn't have. `Sizing::Length(Length::Fr(_))` resolves to `0.0` with one warn per (entity, session) `LayoutWarnOnceKey::StickyFrUnsupported` — `fr` is grid-only per spec. `Sizing::None | FitContent(_) | MaxContent | MinContent | Stretch` resolve to "edge not set" (no warn — these are intrinsic-size keywords, never meaningful as positional insets in any CSS).
+**Decision:** Treat `Sizing::Auto` (the `Inset` field default) as "this edge has no sticky inset." Only `Sizing::Length(Length::Px(_))` and `Sizing::Length(Length::Percent(_))` resolve to active sticky edges in v1. `Sizing::Length(Length::Fr(_))` resolves to `0.0` with one warn per (entity, session) `LayoutWarnOnceKey::StickyFrUnsupported` — `fr` is grid-only per spec. `Sizing::Length(Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_) | Length::Cqmin(_) | Length::Cqmax(_))` resolves to `0.0` with one warn per (entity, session) `LayoutWarnOnceKey::StickyCqDeferred` — full container-units resolution requires plumbing the cq-context from Phase 6's `length_inset_to_px` (helper at `crates/buiy_core/src/layout/systems.rs::cq_compute_for_anchor` or similar; deferred to a Phase 7.x follow-up). `Sizing::None | FitContent(_) | MaxContent | MinContent | Stretch` resolve to "edge not set" (no warn — these are intrinsic-size keywords, never meaningful as positional insets in any CSS).
 
-**Why:** Matches the CSS sticky spec: a sticky element only "sticks" to edges that have a non-auto inset. The `Inset::default()` shape (all `Sizing::Auto`) corresponds to a sticky element that participates as `Relative` with no displacement — a degenerate but valid case (e.g. mid-layout debugging). Em/rem-as-zero plus warn is conservative — these *could* be supported with font context plumbing, but that crosses subsystem boundaries (font sizing lives in `buiy-text-rendering-design`) — defer to a follow-up.
+**What about `Vh/Vw/Vmin/Vmax/Em/Rem`?** They do not exist as `Length` variants in the current codebase (verified at `crates/buiy_core/src/layout/types.rs:29-50`). The doc comment on `Length` says viewport units arrive with Phase 10; em/rem are not on the spec roadmap for v1. Therefore the `resolve_sticky_inset` arm set is *closed* at Px / Percent (active) + Fr / Cq* (warn-defer-zero) + others (edge not set). No forward-compat arms for not-yet-existing variants — when Phase 10 adds `Length::Vh(_)` and friends, that phase extends this helper.
 
-**How to apply:** In `sticky_offset`, a per-edge helper `fn resolve_sticky_inset(s: &Sizing, axis_size: f32, viewport: Vec2, cq_ctx: &CqContext) -> Option<f32>` returns `Some(px)` for active edges and `None` for unset edges. The active-edge predicate is `matches!(s, Sizing::Length(Length::Px(_) | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_) | Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_) | Length::Cqmin(_) | Length::Cqmax(_)))`.
+**Why:** Matches the CSS sticky spec: a sticky element only "sticks" to edges that have a non-auto inset. The `Inset::default()` shape (all `Sizing::Auto`) corresponds to a sticky element that participates as `Relative` with no displacement — a degenerate but valid case (e.g. mid-layout debugging). Cq*-as-zero plus warn is conservative — full support requires the Phase-6 cq-context helper and a re-entrant resolution path (the sticky element itself may be CQ-styled).
+
+**How to apply:** In `sticky_offset`, a per-edge helper `fn resolve_sticky_inset(s: &Sizing, scroll_container_axis_size: f32, entity: Entity, warned: &mut LayoutWarnedOnceSession) -> Option<f32>` returns `Some(px)` for active edges and `None` for unset edges. Closed match on `Length` variants — no wildcard fallthrough so the compiler errors when Phase 10 adds new variants (forcing a deliberate decision per future variant).
 
 **Runner-up rejected:** Define a new `StickyInset { top: Option<Length>, .. }` shape. Rejected because (a) `Inset` is reused across `Position` (absolute/relative/sticky) and `Anchor.position_try` — branching the type just for sticky's "unset" notion would fragment the API surface; (b) `Sizing::Auto` already exists and already means "unset" in most CSS contexts (margin auto, width auto). Reusing it here is the cheapest fit.
+
+**Second runner-up rejected:** Plumb Phase-6 `length_inset_to_px` cq-context into sticky in Phase 7. Rejected because (a) the Phase-6 helper takes the anchor target's box as its second resolution reference; sticky has no anchor target, so the call shape differs; (b) the cq-context for sticky resolves against the *sticky entity's own* nearest CQ ancestor, not the scroll container — a re-entrant lookup that needs more design work; (c) full sticky-Cq tests need a multi-axis fixture (Cqi/Cqb resolve against writing-mode inline/block axes). Tracked in follow-ups.
 
 ### D4. Sticky algorithm — per-axis independent computation
 
@@ -108,12 +131,12 @@ No changes to: `translate.rs` (sticky maps to `taffy::Position::Relative` alread
    - Clamp by parent: `desired_y = desired_y.min(parent_top_in_S + parent_height - e_height)`.
    - Also clamp at the floor: `desired_y = desired_y.max(e_natural_y_in_S)` (don't pull the element *up* past its natural position when scrolled to top).
    - Displacement: `displacement_y = desired_y - e_natural_y_in_S`.
-8. Else if `inset.bottom` is active (mutually-exclusive precedence: when both top and bottom are active, top wins for the upper-clamp computation; bottom is then used for the lower clamp):
+8. Else if `inset.bottom` is active (mutually-exclusive precedence with top: when both are active, top wins — v1 deviation documented in CHANGELOG; bottom branch is unreachable when top is set):
    - Let `visible_bottom_in_S = scroll_offset.y + S_content_height`.
    - Let `bottom_threshold = visible_bottom_in_S - bottom_inset_px`.
-   - Let `desired_y = e_natural_y_in_S.min(bottom_threshold - e_height)`.
-   - Clamp by parent floor: `desired_y = desired_y.max(parent_top_in_S)`.
-   - Also clamp at ceiling: `desired_y = desired_y.min(e_natural_y_in_S + (parent_height - e_height))` (don't push the element *down* past parent's bottom).
+   - Let `desired_y = (bottom_threshold - e_height).min(e_natural_y_in_S)` — pin to threshold or stay at natural, whichever is *smaller* (i.e., further up the page). This implements "don't push the element down past its natural position when the bottom threshold is below natural" — the bottom-sticky mirror of the top-sticky no-pull-up guard.
+   - Clamp by parent floor: `desired_y = desired_y.max(parent_top_in_S)` — bottom-sticky element cannot go above parent top.
+   - Clamp by parent bottom: `desired_y = desired_y.min(parent_in_S.y + parent_height - e_height)` — safety guard, redundant when Taffy correctly placed `e_natural_y_in_S` at or above `parent_bottom - e_height`.
    - `displacement_y = desired_y - e_natural_y_in_S`.
 9. Final position in E's parent-relative coords: `position = e_natural_relative.x + displacement_x, e_natural_relative.y + displacement_y`. Write to `PostTaffyPositionOverrides.by_entity`.
 
@@ -144,13 +167,15 @@ X-axis mirror.
 
 **Why:** Spec § 6 defines per-session dedup as the canonical pattern. Phase 6 introduced a per-frame variant *as a divergence* (documented in Phase 6 CHANGELOG "Deferred / divergences" item). Phase 7 does not extend that divergence to new error kinds; it re-aligns with spec for all new warns. Keeping both resources side-by-side makes the divergence explicit: per-frame for anchor errors (where a user might reposition an anchor and want to know each frame the error re-fires until they fix it), per-session for tier-E stub warnings (where the warning's purpose is to inform the developer once, not log spam every frame).
 
-**How to apply:** `LayoutWarnOnceKey` lives in `types.rs` alongside `AnchorErrorKind`. Variants:
+**How to apply:** `LayoutWarnOnceKey` lives in `types.rs` alongside `AnchorErrorKind`. Variants (v2 — Em/Rem dropped, Cq added):
 - `TableUnsupported(Entity)` — one per table entity, one warn per session
 - `MulticolUnsupported` — single session-wide warn (no Entity payload — first multicol entity triggers, all subsequent are silent)
-- `StickyEmRemDeferred(Entity)` — sticky entity uses em/rem inset, deferred to v1.x
-- `StickyFrUnsupported(Entity)` — sticky entity uses fr inset (grid-only unit applied to inset)
+- `StickyFrUnsupported(Entity)` — sticky entity uses `Length::Fr` inset (grid-only unit applied to inset). One warn per (entity, session); inset resolves to 0.0.
+- `StickyCqDeferred(Entity)` — sticky entity uses a `Length::Cq*` inset (container query unit). Full cq-context resolution for sticky is deferred to a Phase 7.x follow-up; v1 resolves to 0.0. One warn per (entity, session).
 
 Variant set is closed in Phase 7. Future phases extending warn-once can add variants here.
+
+**v1 → v2 change:** v1's `StickyEmRemDeferred(Entity)` variant is dropped because `Length::Em(_)` and `Length::Rem(_)` do not exist in the codebase (verified at `crates/buiy_core/src/layout/types.rs:29-50`). If Phase 10 adds them, the variant returns then.
 
 **Runner-up rejected:** Reuse Phase 6's per-frame `LayoutAnchorWarnedThisFrame`. Rejected because (a) clearing each frame means table/multicol warns fire every frame for the lifetime of the entity — log spam; (b) the resource is anchor-specific by name (`AnchorErrorKind`); cross-using it would force renaming and re-scoping that resource just to dodge a new resource.
 
@@ -170,7 +195,9 @@ Variant set is closed in Phase 7. Future phases extending warn-once can add vari
 
 **Why:** Spec § 2.4 explicitly says "Style covers an entity's *self-styling* — properties that describe the entity's own box ... and the *container side* of layout algorithms it participates in (`FlexParams` when it's a flex container, `GridParams` when it's a grid container, `Container` when it's a query container)." Multicol is exactly this shape. Anchor is decomposed-only per § 2.4's "child side and relational properties" rationale; that does not apply to multicol.
 
-**How to apply:** `Style { multi_column: MultiColumn::default(), .. }` field. Fluent setter `pub fn multi_column(mut self, m: MultiColumn) -> Self { self.multi_column = m; self }`. Bundle expansion in `style.rs` includes `MultiColumn` whenever it differs from default. Defaults: `column_count: ColumnCount::Auto, column_width: None, column_gap: None, column_rule: ColumnRule::default(), column_span: ColumnSpan::None, column_fill: ColumnFill::Balance, break_inside: BreakInside::Auto, break_before: BreakBefore::Auto, break_after: BreakAfter::Auto`. Bundle includes the component only when `self.multi_column != MultiColumn::default()` to preserve the Phase-1 "don't pollute entities with empty components" invariant.
+**How to apply:** `Style { multi_column: MultiColumn::default(), .. }` field. Fluent setter `pub fn multi_column(mut self, m: MultiColumn) -> Self { self.multi_column = m; self }`. Defaults: `column_count: ColumnCount::Auto, column_width: None, column_gap: None, column_rule: ColumnRule::default(), column_span: ColumnSpan::None, column_fill: ColumnFill::Balance, break_inside: BreakInside::Auto, break_before: BreakBefore::Auto, break_after: BreakAfter::Auto`.
+
+**v1 → v2 correction:** Style is `#[derive(Bundle, Clone, Debug, Default)]` at `crates/buiy_core/src/layout/style.rs:44`. The derive macro inserts every field unconditionally — there is no "include only if non-default" guard available with the derived Bundle. The Phase-5 Container precedent confirms: Container is **always** inserted regardless of value. MultiColumn follows suit: every entity spawned via `Style { .. }` gets a `MultiColumn` component, even when the field is default. This is consistent with how Container/Display/Position/etc. work. The Phase-1 "don't pollute entities with empty components" invariant *applies to optional Bundle fields* (e.g. `Option<&FlexItem>` is set only when an entity needs it); it does NOT apply to required Bundle fields (Container, MultiColumn). Task 3 Step 7's `multi_column_default_not_inserted` test is therefore **inverted** to `multi_column_always_inserted` — every Style-spawned entity has the component.
 
 **Runner-up rejected:** Decomposed-only (mirror Phase 6 `Anchor`). Rejected because the spec is explicit and the precedent (Container, GridParams) is clear. Authors writing multicol layouts will write them in `Style { multi_column: .., flex_column().padding(..).multi_column(..) }` not as a separate `commands.spawn((Style::default(), MultiColumn { .. }))` pair.
 
@@ -291,6 +318,7 @@ for (e, pos, display) in query.iter() {
 - Modify: `crates/buiy_core/src/layout/systems.rs:495-510` (remove `overrides.by_entity.clear()` from `anchor_resolution`'s top)
 - Modify: `crates/buiy_core/src/layout/systems.rs:1158-1191` (update `write_resolved_layout` to read `PostTaffyPositionOverrides`)
 - Add: `crates/buiy_core/src/layout/systems.rs` (after `LayoutAnchorWarnedThisFrame`, add `clear_post_taffy_overrides` system)
+- Modify: `crates/buiy_core/src/layout/mod.rs:21` (the `pub use systems::{... AnchorOverrides ...}` re-export line — rename the identifier in that line)
 - Modify: `crates/buiy_core/src/layout/mod.rs:57` (`init_resource::<AnchorOverrides>` → `init_resource::<PostTaffyPositionOverrides>`)
 - Modify: `crates/buiy_core/src/layout/mod.rs:151` (the `anchor_resolution.in_set(...)` line will be rewired in Task 8 — leave it alone for now)
 - Tests: existing tests at `systems.rs:1841-1851` (`anchor_overrides_default_empty`) renamed to `post_taffy_position_overrides_default_empty`
@@ -312,7 +340,7 @@ for (e, pos, display) in query.iter() {
       app.add_systems(Update, clear_post_taffy_overrides);
       // Pre-seed with a fake override.
       app.world_mut().resource_mut::<PostTaffyPositionOverrides>()
-          .by_entity.insert(Entity::from_raw(42), Vec2::new(10.0, 20.0));
+          .by_entity.insert(Entity::from_raw_u32(42).unwrap(), Vec2::new(10.0, 20.0));
       app.update();
       let overrides = app.world().resource::<PostTaffyPositionOverrides>();
       assert!(overrides.by_entity.is_empty(), "clear system did not empty the map");
@@ -586,21 +614,30 @@ no-op system so the per-frame lifecycle is explicit and decoupled from sub-pass 
   };
   ```
 
-- [ ] **Step 5: Bundle expansion.** In `style.rs` find the Bundle impl. Add to the expanded set:
-  ```rust
-  if self.multi_column != MultiColumn::default() {
-      out.push(self.multi_column.into_any());  // or whatever the existing pattern is
-  }
-  ```
-  **Implementer note:** look at how `Container` is added to the Bundle (Phase 5 precedent at `style.rs:414-447`). Mirror that pattern exactly. The "include only if non-default" guard is the existing Phase-1 invariant.
+- [ ] **Step 5: Bundle expansion is automatic.** No manual code needed — `Style` is `#[derive(Bundle, ...)]` at `crates/buiy_core/src/layout/style.rs:44`, so adding `multi_column: MultiColumn` as a field is sufficient for it to be inserted on every spawn. No "only if non-default" guard exists; every Style-spawned entity receives a `MultiColumn`. This mirrors the Container precedent (every Style-spawned entity receives a `Container`). **v1 → v2 correction.** Skip this step — the field add in Step 4 is sufficient.
 
-- [ ] **Step 6: Run tests.**
+- [ ] **Step 6: Widen `sync_styles` `Or<>` filter to include `Changed<MultiColumn>`.** Per spec `architecture.md § 1.2 line 42`, `Changed<MultiColumn>` is required in the trigger set. The outer Or<> is currently at 15 entries (cap); the *inner nested Or<>* (at `systems.rs:875-881`) is at 5 entries — plenty of room.
+  Find this block in `systems.rs`:
+  ```rust
+  Or<(
+      Changed<Container>,
+      Changed<ContainerQuery>,
+      Changed<ContainerQueryActive>,
+      Changed<ContainerQueryInactive>,
+      Changed<Anchor>,
+  )>,
+  ```
+  Add `Changed<MultiColumn>` as the 6th entry. **Also import `MultiColumn` in the `use` statement at the top of `systems.rs`.** Note in a comment that the trigger is currently a no-op (multicol doesn't feed Taffy in v1) but is wired for forward-compat per spec.
+
+  Run: `cargo test -p buiy_core` — no test specifically asserts this, but the project gate (`cargo clippy --workspace --all-targets -- -D warnings`) must remain green.
+
+- [ ] **Step 7: Run tests.**
   ```bash
   cargo test -p buiy_core multi_column
   ```
-  Expected PASS.
+  Expected PASS for the type tests added in Step 1.
 
-- [ ] **Step 7: Add a Style-expansion test.** In `style.rs::mod tests`:
+- [ ] **Step 8: Add a Style-expansion test.** In `style.rs::mod tests`:
   ```rust
   #[test]
   fn multi_column_field_round_trips() {
@@ -614,30 +651,39 @@ no-op system so the per-frame lifecycle is explicit and decoupled from sub-pass 
       assert_eq!(mc.column_count, ColumnCount::Count(3));
   }
 
+  // v1 → v2: this test asserts MultiColumn is ALWAYS inserted (mirrors Container
+  // behavior). Style is #[derive(Bundle)]; every field always inserts.
   #[test]
-  fn multi_column_default_not_inserted() {
+  fn multi_column_always_inserted() {
       let mut world = World::new();
-      let s = Style::default(); // multi_column is default
+      let s = Style::default(); // multi_column is at default value
       let entity = world.spawn(s).id();
-      assert!(world.get::<MultiColumn>(entity).is_none(), "default MultiColumn polluted entity");
+      assert!(world.get::<MultiColumn>(entity).is_some(),
+          "Style is derived-Bundle: every field inserts unconditionally (matches Container)");
   }
   ```
   Run: `cargo test -p buiy_core multi_column_field`. Expected PASS.
 
-- [ ] **Step 8: Project gate.**
+- [ ] **Step 9: Project gate.**
   ```bash
   cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo doc --workspace --no-deps && xvfb-run -a cargo test --workspace
   ```
 
-- [ ] **Step 9: Commit.**
+- [ ] **Step 10: Commit.**
   ```bash
-  git add crates/buiy_core/src/layout/types.rs crates/buiy_core/src/layout/components.rs crates/buiy_core/src/layout/style.rs
-  git commit -m "feat(layout): MultiColumn component (Phase 7 tier-E API stub)
+  git add crates/buiy_core/src/layout/types.rs crates/buiy_core/src/layout/components.rs crates/buiy_core/src/layout/style.rs crates/buiy_core/src/layout/systems.rs
+  git commit -m "feat(layout): MultiColumn component + sync_styles trigger (Phase 7 tier-E API)
 
 Adds MultiColumn + supporting enums (ColumnCount, ColumnRule, ColumnRuleStyle,
 ColumnSpan, ColumnFill, BreakInside, BreakBefore, BreakAfter). Component is a
-Style field per spec § 2.4 container-side convention. Algorithm is deferred to
-v1.x; sub-pass 6c (Task 7) emits the warn-once."
+Style field per spec § 2.4 container-side convention; Style derives Bundle so the
+component is always inserted (matches Container).
+
+Also widens the sync_styles nested Or<> filter to include Changed<MultiColumn>
+per spec architecture.md § 1.2. Filter is forward-compat — multicol doesn't feed
+Taffy in v1, but the trigger will be live when the v1.x algorithm ships.
+
+Algorithm is deferred to v1.x; sub-pass 6c (Task 7) emits the warn-once."
   ```
 
 ### Task 4: `LayoutWarnedOnceSession` resource + `LayoutWarnOnceKey` type
@@ -661,7 +707,7 @@ v1.x; sub-pass 6c (Task 7) emits the warn-once."
   #[test]
   fn warned_once_session_dedup() {
       let mut r = LayoutWarnedOnceSession::default();
-      let key = LayoutWarnOnceKey::TableUnsupported(Entity::from_raw(1));
+      let key = LayoutWarnOnceKey::TableUnsupported(Entity::from_raw_u32(1).unwrap());
       let first = r.set.insert(key);
       let second = r.set.insert(key);
       assert!(first, "first insert should report true (newly added)");
@@ -697,20 +743,20 @@ v1.x; sub-pass 6c (Task 7) emits the warn-once."
       /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
       MulticolUnsupported,
 
-      /// Sticky entity uses em/rem inset. v1 resolves these to 0.0
-      /// since font context lives in a separate subsystem; warn once
-      /// per (entity, session) so authors can plumb explicit
-      /// pixel-equivalents until em/rem-on-inset lands.
-      ///
-      /// Spec: D3, this plan.
-      StickyEmRemDeferred(Entity),
-
       /// Sticky entity uses `Length::Fr` inset. `fr` is grid-only;
       /// applying it as a sticky inset is semantically invalid. Warn
       /// once per (entity, session); inset resolves to 0.0.
       ///
       /// Spec: D3, this plan.
       StickyFrUnsupported(Entity),
+
+      /// Sticky entity uses a `Length::Cq*` inset (container query
+      /// unit). Full cq-context resolution for sticky is deferred to
+      /// a Phase 7.x follow-up (port from Phase 6 `length_inset_to_px`).
+      /// v1 resolves to 0.0. One warn per (entity, session).
+      ///
+      /// Spec: D3, this plan.
+      StickyCqDeferred(Entity),
   }
   ```
 
@@ -762,8 +808,10 @@ v1.x; sub-pass 6c (Task 7) emits the warn-once."
 
 New resource holds a HashSet<LayoutWarnOnceKey> for session-scoped warn dedup,
 matching spec § 6 'cleared on BuiyExit'. Adds LayoutWarnOnceKey enum with
-variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
-(per-entity). Phase 6's per-frame LayoutAnchorWarnedThisFrame stays unchanged."
+variants for table (per-entity), multicol (session-wide), sticky Fr (per-entity),
+sticky Cq* (per-entity). Phase 6's per-frame LayoutAnchorWarnedThisFrame stays
+unchanged. Em/Rem variants not added — those Length variants do not exist in
+the codebase (verified at types.rs:29-50)."
   ```
 
 ### Task 5: `sticky_offset` system (sub-pass 6a, full implementation)
@@ -822,7 +870,8 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
   ) -> Option<Entity> {
       let mut current = entity;
       loop {
-          let parent = parent_chain.get(current).ok()?.0;
+          // v2 fix: ChildOf is not a tuple struct in Bevy 0.18; use .parent().
+          let parent = parent_chain.get(current).ok()?.parent();
           if let Ok(overflow) = overflow_q.get(parent)
               && overflow.is_scroll_container()
           {
@@ -860,7 +909,8 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
       if let Some(cached) = memo.get(&entity) {
           return Some(*cached);
       }
-      let parent = parent_chain.get(entity).ok()?.0;
+      // v2 fix: ChildOf accessor is .parent() in Bevy 0.18.
+      let parent = parent_chain.get(entity).ok()?.parent();
       let parent_position = world_position(parent, ancestor, tree, parent_chain, memo)?;
       let node_id = tree.by_entity.get(&entity)?;
       let layout = tree.tree.layout(*node_id).ok()?;
@@ -876,45 +926,32 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
   /// reference frame, per D3 / D11.
   ///
   /// Returns `Some(px)` for "this edge is sticky-active" or `None` for
-  /// "this edge is not set." Inputs that are deferred (em/rem) or
-  /// invalid (fr) return `Some(0.0)` and record a warn-once via the
+  /// "this edge is not set." Inputs that are deferred (Cq*) or
+  /// invalid (Fr) return `Some(0.0)` and record a warn-once via the
   /// caller.
+  ///
+  /// v2 — em/rem are not `Length` variants and never will be without a
+  /// Phase 10 extension; the match is closed (no wildcard arm) so the
+  /// compiler errors when Phase 10 adds new variants.
   ///
   /// Phase 7 — sub-pass 6a (`sticky_offset`).
   fn resolve_sticky_inset(
       s: &Sizing,
       scroll_container_axis_size: f32,
-      viewport: Vec2,
-      axis: StickyAxis,
       entity: Entity,
       warned: &mut LayoutWarnedOnceSession,
   ) -> Option<f32> {
       use crate::layout::types::{Length, Sizing};
       let length = match s {
           Sizing::Length(l) => l,
-          _ => return None, // Auto, None, FitContent, Stretch, etc. — edge not set
+          // Auto, None, FitContent, MinContent, MaxContent, Stretch —
+          // edge not set; intrinsic-size keywords are not meaningful as
+          // positional insets in any CSS.
+          _ => return None,
       };
       Some(match length {
           Length::Px(p) => *p,
           Length::Percent(p) => scroll_container_axis_size * (p / 100.0),
-          Length::Vw(v) => viewport.x * (v / 100.0),
-          Length::Vh(v) => viewport.y * (v / 100.0),
-          Length::Vmin(v) => viewport.x.min(viewport.y) * (v / 100.0),
-          Length::Vmax(v) => viewport.x.max(viewport.y) * (v / 100.0),
-          // ... Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax — implementer plumbs the
-          // cq context similar to anchor_resolution's
-          // `length_inset_to_px`. If too much scope, return `Some(0.0)`
-          // with a new LayoutWarnOnceKey::StickyCqDeferred(Entity)
-          // variant and track as a follow-up.
-          Length::Em(_) | Length::Rem(_) => {
-              if warned.set.insert(LayoutWarnOnceKey::StickyEmRemDeferred(entity)) {
-                  bevy::log::warn!(
-                      "Sticky entity {:?} uses em/rem inset; v1 resolves to 0.0 (font context unavailable).",
-                      entity,
-                  );
-              }
-              0.0
-          }
           Length::Fr(_) => {
               if warned.set.insert(LayoutWarnOnceKey::StickyFrUnsupported(entity)) {
                   bevy::log::warn!(
@@ -924,16 +961,25 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
               }
               0.0
           }
-          // Any other Length variant (Cqw/Cqh/...): implementer chooses
-          // — see container-units note above.
-          _ => 0.0,
+          // All Cq* variants — full resolution is deferred to a Phase
+          // 7.x follow-up (would port Phase 6 length_inset_to_px which
+          // takes an anchor-box second argument; sticky's reference
+          // frame is the sticky entity's own cq-ancestor, a different
+          // shape). v1: warn once per entity, resolve to 0.0.
+          Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_)
+          | Length::Cqb(_) | Length::Cqmin(_) | Length::Cqmax(_) => {
+              if warned.set.insert(LayoutWarnOnceKey::StickyCqDeferred(entity)) {
+                  bevy::log::warn!(
+                      "Sticky entity {:?} uses Cq* inset; sticky-cq resolution is deferred to a Phase 7.x follow-up. Inset resolves to 0.0.",
+                      entity,
+                  );
+              }
+              0.0
+          }
       })
   }
-
-  #[derive(Clone, Copy)]
-  enum StickyAxis { X, Y }
   ```
-  **Implementer note:** if the container-units resolution is straightforward (port from Phase 6's `length_inset_to_px`), do it. If it requires deeper refactor, defer with a new `LayoutWarnOnceKey::StickyCqDeferred(Entity)` variant added in Task 4 (the implementer can iterate Task 4 → Task 5 if needed).
+  **Implementer note:** the `axis: StickyAxis` parameter from v1 is dropped — sticky CSS percent semantics depend on which *axis* the inset is on, and the caller already passes the correct `scroll_container_axis_size` (height for top/bottom, width for left/right). No StickyAxis enum is needed. `viewport: Vec2` is also dropped — no viewport units exist in `Length` currently, so the function never reads it.
 
 - [ ] **Step 5: Implement `compute_sticky_displacement` (pure function).**
   ```rust
@@ -1073,6 +1119,87 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
       // displacement = 20 - 10 = 10
       assert_eq!(d, Vec2::new(0.0, 10.0));
   }
+
+  // ---- v2 — bottom-pin branch coverage (BLOCKER B1) ----
+
+  #[test]
+  fn sticky_bottom_pins_when_scroll_near_bottom() {
+      // visible_bottom = scroll_offset.y + S.y = 300 + 500 = 800.
+      // threshold = 800 - 10 = 790. natural_y = 700, e_h = 30.
+      // (threshold - e_h) = 760. min(760, 700) = 700.
+      // .max(parent_top=0) = 700. .min(parent_bottom - e_h = 970) = 700.
+      // displacement = 700 - 700 = 0 — wait, the threshold (760) is below natural (700)?
+      // Re-examining: when bottom_threshold - e_height >= natural, sticky stays at natural.
+      // Need scroll_offset such that threshold - e_h < natural. Try scroll_offset.y=150:
+      // visible_bottom = 650, threshold = 640, threshold - e_h = 610. min(610, 700) = 610.
+      // displacement = 610 - 700 = -90.
+      let d = compute_sticky_displacement(
+          Vec2::new(0.0, 700.0),    // natural y=700
+          Vec2::new(100.0, 30.0),
+          Vec2::new(0.0, 0.0),      // parent in S
+          Vec2::new(300.0, 1000.0), // parent height
+          Vec2::new(300.0, 500.0),  // S size
+          Vec2::new(0.0, 150.0),    // scroll
+          None, Some(10.0), None, None, // bottom: 10px
+      );
+      assert_eq!(d, Vec2::new(0.0, -90.0));
+  }
+
+  #[test]
+  fn sticky_bottom_does_not_push_down_before_scroll() {
+      // visible_bottom = 0 + 500 = 500, threshold = 490, threshold - e_h = 460.
+      // min(460, natural=300) = 300. displacement = 0.
+      let d = compute_sticky_displacement(
+          Vec2::new(0.0, 300.0),
+          Vec2::new(100.0, 30.0),
+          Vec2::new(0.0, 0.0),
+          Vec2::new(300.0, 1000.0),
+          Vec2::new(300.0, 500.0),
+          Vec2::ZERO,
+          None, Some(10.0), None, None,
+      );
+      assert_eq!(d, Vec2::ZERO);
+  }
+
+  #[test]
+  fn sticky_bottom_clamped_by_parent_top() {
+      // parent_in_s.y = 100, parent_height = 200. natural_y = 280, e_h = 30.
+      // visible_bottom = 0 + 100 = 100, threshold = 90, threshold - e_h = 60.
+      // .min(natural=280) = 60. .max(parent_top=100) = 100. .min(parent_bottom - e_h = 270) = 100.
+      // displacement = 100 - 280 = -180.
+      let d = compute_sticky_displacement(
+          Vec2::new(0.0, 280.0),
+          Vec2::new(100.0, 30.0),
+          Vec2::new(0.0, 100.0),    // parent has nonzero top
+          Vec2::new(300.0, 200.0),
+          Vec2::new(300.0, 100.0),  // tiny scroll container
+          Vec2::ZERO,
+          None, Some(10.0), None, None,
+      );
+      assert_eq!(d, Vec2::new(0.0, -180.0));
+  }
+
+  // ---- v2 — both-top-and-bottom-active behavior (BLOCKER B2) ----
+
+  #[test]
+  fn sticky_both_top_and_bottom_active_top_wins() {
+      // v1 deviation: when both insets are set, top wins. This test documents
+      // the behavior — a future correct dual-clamp impl will fail this test
+      // and that's the signal to flip it.
+      let d = compute_sticky_displacement(
+          Vec2::new(0.0, 50.0),
+          Vec2::new(100.0, 30.0),
+          Vec2::new(0.0, 0.0),
+          Vec2::new(300.0, 1000.0),
+          Vec2::new(300.0, 500.0),
+          Vec2::new(0.0, 100.0),
+          Some(10.0), Some(10.0), None, None, // both insets set
+      );
+      // Top-pin branch fires: visible_top=100, threshold=110, max(50, 110)=110.
+      // Clamped by parent_bottom - e_h = 970 → 110. Displacement = 60.
+      // Bottom inset is ignored.
+      assert_eq!(d, Vec2::new(0.0, 60.0));
+  }
   ```
   Run: expected PASS (logic should compile and match these assertions).
 
@@ -1097,15 +1224,9 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
       overflow_q: Query<&Overflow>,
       scroll_offset_q: Query<&ScrollOffset>,
       parent_chain: Query<&ChildOf>,
-      primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
       mut overrides: ResMut<PostTaffyPositionOverrides>,
       mut warned: ResMut<LayoutWarnedOnceSession>,
   ) {
-      let viewport = primary_window
-          .single()
-          .ok()
-          .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
-          .unwrap_or(Vec2::splat(f32::MAX));
       let mut memo: std::collections::HashMap<Entity, Vec2> = std::collections::HashMap::new();
 
       for (e, pos, display) in sticky_query.iter() {
@@ -1123,7 +1244,8 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
           let e_natural_rel = Vec2::new(e_layout.location.x, e_layout.location.y);
 
           let Ok(parent_co) = parent_chain.get(e) else { continue };
-          let parent = parent_co.0;
+          // v2 fix: ChildOf accessor is .parent() in Bevy 0.18.
+          let parent = parent_co.parent();
           let Some(parent_node) = tree.by_entity.get(&parent) else { continue };
           let Ok(parent_layout) = tree.tree.layout(*parent_node) else { continue };
           let parent_size = Vec2::new(parent_layout.size.width, parent_layout.size.height);
@@ -1139,11 +1261,11 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
 
           let scroll_offset = scroll_offset_q.get(scroll_container).copied().unwrap_or_default();
 
-          // Resolve insets.
-          let top = resolve_sticky_inset(&pos.inset.top,    s_size.y, viewport, StickyAxis::Y, e, &mut warned);
-          let bottom = resolve_sticky_inset(&pos.inset.bottom, s_size.y, viewport, StickyAxis::Y, e, &mut warned);
-          let left = resolve_sticky_inset(&pos.inset.left,   s_size.x, viewport, StickyAxis::X, e, &mut warned);
-          let right = resolve_sticky_inset(&pos.inset.right,  s_size.x, viewport, StickyAxis::X, e, &mut warned);
+          // Resolve insets. v2: signature is (sizing, scroll_container_axis_size, entity, warned).
+          let top = resolve_sticky_inset(&pos.inset.top,    s_size.y, e, &mut warned);
+          let bottom = resolve_sticky_inset(&pos.inset.bottom, s_size.y, e, &mut warned);
+          let left = resolve_sticky_inset(&pos.inset.left,   s_size.x, e, &mut warned);
+          let right = resolve_sticky_inset(&pos.inset.right,  s_size.x, e, &mut warned);
 
           let displacement = compute_sticky_displacement(
               e_in_s, e_size, parent_in_s, parent_size, s_size,
@@ -1163,7 +1285,8 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
   - The `ScrollOffset` is the Phase-2 component `crates/buiy_core/src/layout/components.rs:361-380`. Default is zero per `ScrollOffset { x: 0.0, y: 0.0 }`.
   - The `Position` component is `crates/buiy_core/src/layout/components.rs:89-110`.
   - All Bevy query types are the same shapes used in `anchor_resolution`.
-  - Add necessary imports at the top of `systems.rs`: `OverflowMode`, `ScrollOffset`, `StickyAxis` (new local enum).
+  - Add necessary imports at the top of `systems.rs`: `OverflowMode` (likely already present), `ScrollOffset`.
+  - **v2:** `StickyAxis` enum is dropped from v1 — `resolve_sticky_inset` does not need an axis parameter (the caller passes the correct `scroll_container_axis_size`). `viewport: Vec2` is dropped — no viewport-unit variants exist in `Length` currently. `primary_window` query is removed from `sticky_offset` signature.
 
 - [ ] **Step 8: Project gate + integration tests will follow in Task 10.** For now run the unit tests:
   ```bash
@@ -1179,7 +1302,7 @@ variants for table (per-entity), multicol (session-wide), sticky em/rem and fr
 Full sticky-positioning implementation:
 - nearest_scroll_container ancestor walk
 - world_position helper (per-call memoized)
-- resolve_sticky_inset (px/percent/viewport/Cq, em/rem deferred warn-once)
+- resolve_sticky_inset (px/percent active; Fr + Cq* warn-once-defer; closed match)
 - compute_sticky_displacement (pure function, per-axis algorithm per D4)
 - sticky_offset system writes to PostTaffyPositionOverrides
 
@@ -1475,23 +1598,42 @@ After this change, anchor_resolution (6d) consults the override map written by
 
 - [ ] **Step 1: Create `layout_sticky.rs` with test scaffolding.** Mirror the Phase 6 integration test shape (`tests/layout_anchor_positioning.rs`). Use `App::new()` + `BuiyCorePlugin` + spawn fixtures + `app.update()` + assertions on `ResolvedLayout`.
 
-  Tests to include (each as a separate `#[test]` function):
+  Tests to include (each as a separate `#[test]` function). v2 added tests T5-T11 to cover bottom-pin branches (test reviewer BLOCKER B1), both-active conflict (B2), clear-ordering regression (B4), explicit empty assertion (B5), and dropped the em/rem test (variant no longer exists).
+
+  **Top-pin tests (carried from v1):**
   1. `sticky_pins_to_top_during_scroll` — sticky element with `top: 0px` inside a scrolling parent; scroll the parent, assert sticky position increases by scroll amount.
   2. `sticky_does_not_pull_up_before_scroll` — sticky element starts at y=50 with `top: 0px`; no scroll; assert sticky position == natural position.
   3. `sticky_clamped_by_parent_bottom` — sticky element inside a small parent; scroll enough that the threshold would push it past the parent bottom; assert it's clamped.
-  4. `sticky_no_scroll_container_is_no_op` — sticky element with no scroll container ancestor; assert no override is written.
-  5. `sticky_percent_inset_against_scroll_container` — sticky element with `top: 10%`; scroll container is 200px tall; assert threshold is `scroll_offset.y + 20.0`.
-  6. `sticky_em_rem_inset_resolves_to_zero_with_warn` — sticky element with `top: 1em`; assert position == natural (em → 0 → no displacement); assert `LayoutWarnedOnceSession.set` contains `StickyEmRemDeferred(e)`.
-  7. `sticky_in_nested_scroll_containers_uses_innermost` (D9) — two nested scroll containers; sticky inside the inner; scroll the outer but not the inner; assert sticky position unchanged.
-  8. `sticky_display_none_is_skipped` (D10) — sticky element with `Display::None`; assert no override.
-  9. `anchor_target_is_sticky_anchored_tracks_displaced_position` (closes the follow-up) — sticky target + anchored element; scroll; assert anchored element follows the displaced target.
 
-- [ ] **Step 2: Create `layout_table_multicol_stubs.rs`.**
-  1. `table_warns_once_per_entity_per_session` — spawn two Table entities; run two frames; assert exactly two warns recorded (one per entity, each fires once).
+  **Bottom-pin tests (v2 — new per BLOCKER B1):**
+  4. `sticky_bottom_pins_when_scroll_near_bottom` — element at natural y=700, parent height 1000, scroll container height 500, scroll_offset.y=300, bottom inset 10px. visible_bottom=800, threshold=790. Assert displacement is negative (element held at bottom edge of viewport).
+  5. `sticky_bottom_does_not_push_down_before_scroll` — same setup as #4 but scroll_offset.y=0; threshold puts element above its natural position; the no-push-down clamp should fire; displacement should be zero.
+  6. `sticky_bottom_clamped_by_parent_top` — scroll near the bottom enough that the bottom threshold would push the element above `parent_in_s.y`; assert clamp holds it at parent_top.
+
+  **Both-active conflict test (v2 — new per BLOCKER B2):**
+  7. `sticky_both_top_and_bottom_inset_top_wins` — element with both `inset_top = Some(10.0)` and `inset_bottom = Some(10.0)`, scrolled to a position where bottom threshold would displace but top threshold wouldn't (or vice versa); assert top-wins behavior; comment documents the v1 deviation so future correct-dual-clamp implementation knows what to change.
+
+  **No-scroll-container test (v2 — strengthened per BLOCKER B5):**
+  8. `sticky_no_scroll_container_is_no_op` — sticky element with no scroll container ancestor; after `app.update()`, **explicitly assert `app.world().resource::<PostTaffyPositionOverrides>().by_entity.is_empty()`** (not just that ResolvedLayout.position is unchanged — that would always pass for a no-displacement case).
+
+  **Other coverage:**
+  9. `sticky_percent_inset_against_scroll_container` — sticky element with `top: 10%`; scroll container is 200px tall; assert threshold is `scroll_offset.y + 20.0`.
+  10. `sticky_cq_inset_deferred_resolves_to_zero_with_warn` (v2 — new) — sticky element with `Sizing::Length(Length::Cqw(20.0))` as top inset; assert position == natural (cq → 0 → no displacement); assert `LayoutWarnedOnceSession.set` contains `StickyCqDeferred(e)`.
+  11. `sticky_fr_inset_resolves_to_zero_with_warn` (v2 — new) — sticky element with `Sizing::Length(Length::Fr(2.0))` as top inset; assert position == natural; assert `LayoutWarnedOnceSession.set` contains `StickyFrUnsupported(e)`.
+  12. `sticky_in_nested_scroll_containers_uses_innermost` (D9) — two nested scroll containers; sticky inside the inner; scroll the outer but not the inner; assert sticky position unchanged.
+  13. `sticky_display_none_is_skipped` (D10) — sticky element with `Display::None`; assert no override.
+  14. `anchor_target_is_sticky_anchored_tracks_displaced_position` (closes the follow-up) — sticky target + anchored element; scroll; assert anchored element follows the displaced target.
+  15. `clear_ordering_regression_two_frames` (v2 — new per BLOCKER B4) — spawn a sticky entity inside a scroll container, run frame 1 with scroll_offset=100, run frame 2 with scroll_offset=200; assert the override map's entry for the sticky entity on frame 2 reflects frame 2's displacement (not frame 1's leftover). Catches a regression where `clear_post_taffy_overrides` is moved to AFTER `sticky_offset` in the chain.
+
+- [ ] **Step 2: Create `layout_table_multicol_stubs.rs`.** v2 added tests T6-T8 per CONCERNs.
+  1. `table_warns_once_per_entity_per_session` — spawn two Table entities; run three frames; assert exactly two warns recorded (one per entity, each fires once, never duplicates across frames).
   2. `table_no_warn_when_no_table_entities` — empty world (no Table); assert no warn.
-  3. `multicol_warns_once_per_session_regardless_of_entity_count` — spawn 3 MultiColumn entities; assert exactly 1 `MulticolUnsupported` warn.
+  3. `multicol_warns_once_per_session_regardless_of_entity_count` — spawn **3** MultiColumn entities (v2 — bumped from 2); assert exactly 1 `MulticolUnsupported` warn.
   4. `multicol_no_warn_when_no_multicol_entities` — empty world; no warn.
   5. `table_and_multicol_warns_are_independent` — spawn one Table + one MultiColumn; assert one `TableUnsupported(e)` + one `MulticolUnsupported`.
+  6. `table_does_not_rewarn_on_component_replace` (v2 — new per CONCERN C3) — spawn a table entity (frame 1, 1 warn); re-insert `Display::Table` on the same entity via `world.entity_mut(e).insert(Display::Table)` (frame 2); assert warn count is still 1 (entity identity unchanged).
+  7. `warned_once_session_manual_clear` (v2 — new per CONCERN C4) — pre-seed `LayoutWarnedOnceSession.set` with a `TableUnsupported` key; call `clear_warned_once_on_exit` as a direct system invocation; assert set is empty. Documents the expected `OnExit` behavior even while the `BuiyExit` wire-up is deferred.
+  8. `table_all_nine_variants_each_warn` (v2 — new edge case) — spawn one entity per `Display::Table*` variant (9 total); assert 9 distinct `TableUnsupported(Entity)` keys in the session set. Validates `is_table_display` covers all variants.
 
 - [ ] **Step 3: Run the integration suite.**
   ```bash
@@ -1504,10 +1646,12 @@ After this change, anchor_resolution (6d) consults the override map written by
   git add crates/buiy_core/tests/layout_sticky.rs crates/buiy_core/tests/layout_table_multicol_stubs.rs
   git commit -m "test(buiy_core): Phase 7 integration tests — sticky behavior + stub warns
 
-9 sticky tests covering scroll-pin, scroll-floor, parent-clamp, no-scroll-container,
-percent inset, em/rem deferred, nested-innermost, Display::None, anchor-target-is-sticky.
-5 stub-warn tests covering per-(entity,session) for table, session-wide for multicol,
-independence between them."
+15 sticky tests covering scroll-pin (top + bottom + both), no-pull-up, no-push-down,
+parent-clamp, no-scroll-container (empty assertion), percent inset, Cq deferred,
+Fr unsupported, nested-innermost, Display::None, anchor-target-is-sticky,
+clear-ordering regression. 8 stub-warn tests covering per-(entity,session) for
+table including 9-variant coverage and component-replace dedup, session-wide
+for multicol with 3 entities, independence, manual session-set clear."
   ```
 
 ### Task 11: Augment `tests/layout_pipeline_order.rs` fixture
@@ -1529,6 +1673,7 @@ independence between them."
   - Assert `LayoutWarnedOnceSession.set` contains `TableUnsupported(_)`.
   - Assert `LayoutWarnedOnceSession.set` contains `MulticolUnsupported`.
   - Assert anchor entry still works (Phase 6 invariant unchanged).
+  - **v2 — explicit intra-sub-pass ordering proof (BLOCKER B3).** Include in the fixture: a sticky entity that is also an anchor target (sticky's displaced position is what `anchor_resolution` should read). After `app.update()`, assert that the anchored entity's `ResolvedLayout.position` reflects the displaced sticky position, not the natural Taffy position. This is the only test that distinguishes "sub-passes ran in declared order" from "sub-passes ran at all" — if `anchor_resolution` ran before `sticky_offset`, the anchored entity would track the un-displaced position. Cross-references `anchor_target_is_sticky_anchored_tracks_displaced_position` in `tests/layout_sticky.rs` (Task 10) for the standalone behavior test; this fixture-level assertion exercises the same invariant in the cross-phase pipeline test so a reader knows the ordering invariant is covered without needing to find it in another file.
 
 - [ ] **Step 4: Run.**
   ```bash
@@ -1564,10 +1709,12 @@ anchor pair."
   - `table_layout` system (sub-pass 6b) — no-op stub per spec § 1.2; emits one `warn!` per (entity, session) on first encounter of any `Display::Table*` variant.
   - `multicol_pack` system (sub-pass 6c) — no-op stub per `flex-and-grid.md` § 3.2; emits one `warn!` per session on first encounter of any `MultiColumn`.
   - `MultiColumn` component + 8 supporting enums (`ColumnCount`, `ColumnRule`, `ColumnRuleStyle`, `ColumnSpan`, `ColumnFill`, `BreakInside`, `BreakBefore`, `BreakAfter`). Tier-E API surface; algorithm deferred to v1.x.
-  - `LayoutWarnedOnceSession` resource + `LayoutWarnOnceKey` enum (variants: `TableUnsupported(Entity)`, `MulticolUnsupported`, `StickyEmRemDeferred(Entity)`, `StickyFrUnsupported(Entity)`). Session-scoped warn dedup per spec § 6.
+  - `LayoutWarnedOnceSession` resource + `LayoutWarnOnceKey` enum (variants: `TableUnsupported(Entity)`, `MulticolUnsupported`, `StickyFrUnsupported(Entity)`, `StickyCqDeferred(Entity)`). Session-scoped warn dedup per spec § 6. (v1 plan's `StickyEmRemDeferred` variant dropped — `Length::Em(_)` and `Length::Rem(_)` do not exist in the codebase.)
   - `clear_post_taffy_overrides` system — dedicated per-frame clear for the shared override map. Runs first in `PostTaffyOverrides`.
-  - 14 integration tests across `tests/layout_sticky.rs` + `tests/layout_table_multicol_stubs.rs` + augmented `tests/layout_pipeline_order.rs`.
-  - `Style.multi_column` field + `Style::multi_column()` fluent setter per spec § 2.4 (container-side property convention).
+  - 23 integration tests across `tests/layout_sticky.rs` + `tests/layout_table_multicol_stubs.rs` + augmented `tests/layout_pipeline_order.rs` (v2 — expanded from v1's 14 per test-reviewer findings).
+  - 4 new sticky unit tests covering bottom-pin (3 cases) + both-active conflict (1 case) on `compute_sticky_displacement` (v2 — covers BLOCKER B1 + B2).
+  - `Style.multi_column` field + `Style::multi_column()` fluent setter per spec § 2.4 (container-side property convention). Field always inserted (Style derives Bundle).
+  - `Changed<MultiColumn>` added to `sync_styles` nested Or<> filter per spec architecture.md § 1.2 (forward-compat for v1.x multicol algorithm).
 
   ### Changed
   - Renamed `AnchorOverrides` → `PostTaffyPositionOverrides` (Phase 6 → Phase 7). Same shape (`HashMap<Entity, Vec2>`), same per-frame-cleared semantics; widened scope to "any sub-pass writes." This is a public type rename — code that referenced `AnchorOverrides` directly must update.
@@ -1578,8 +1725,11 @@ anchor pair."
   - **`Position::Fixed` — still a warn-once stub.** Phase 7's spec scope (per architecture.md § 3) is sub-passes 6a/6b/6c — Fixed is mapped to "Absolute with viewport-as-CB" which is a separate code path. Tracked in `follow-ups.md`.
   - **Multi-column algorithm — deferred to v1.x.** Per spec § 3.2 (`flex-and-grid.md`): "Multi-column is tier-E; v1 ships the API but the algorithm is a stub."
   - **Table layout algorithm — deferred to v1.x.** Per spec § 1.2: "v1 ships only the API surface and the fallback path; the full algorithm is deferred to a v1.x point release." The fallback path (Table → Block) already ships from Phase 1.
-  - **Sticky em/rem inset — deferred.** Em/rem require font-context plumbing across subsystem boundaries (font sizing in `buiy-text-rendering-design`). Phase 7 resolves to 0.0 with one warn per (entity, session).
-  - **Sticky Cq* (container query) inset — implementer's choice.** Phase 7 either plumbs the container-units resolution from Phase 6 `anchor_resolution`'s `length_inset_to_px` or defers with a new `LayoutWarnOnceKey::StickyCqDeferred(Entity)` variant. Document which path was taken in the merging commit.
+  - **Sticky `Length::Cq*` inset — deferred.** Full container-query-unit resolution for sticky requires plumbing a cq-context lookup analogous to (but distinct from) Phase 6's `length_inset_to_px` (sticky's reference frame is the sticky entity's own cq-ancestor, not the anchor target). v1 resolves to 0.0 with `LayoutWarnOnceKey::StickyCqDeferred(Entity)` warn per (entity, session). Tracked in `follow-ups.md`.
+  - **Sticky `Length::Fr` inset — invalid.** `fr` is a grid-only unit; applying it to a sticky inset is semantically wrong. v1 resolves to 0.0 with `LayoutWarnOnceKey::StickyFrUnsupported(Entity)` warn per (entity, session).
+  - **No em/rem support in sticky insets.** `Length::Em(_)` and `Length::Rem(_)` do not exist as `Length` variants in v1 (per `types.rs:29-50`). When Phase 10 (or a font-rendering phase) adds them, the sticky inset resolver gains new arms.
+  - **Both-top-and-bottom-inset sticky — "top wins".** Per D4, when both insets are set, top wins. Documented v1 deviation; CSS spec § 6.3 implies a dual-clamp ("element sticks to whichever edge the scroll position is closer to") but Phase 7's simpler "top wins" matches WebKit/Blink in the common case. Tracked in `follow-ups.md`.
+  - **Sticky inside sticky — inner uses outer's natural position.** `world_position` walks Taffy positions (un-displaced); inner sticky elements resolve their thresholds against the outer's *natural* position, not the displaced one. Rare authoring case; tracked in `follow-ups.md` for v1.x.
   - **`LayoutWarnedOnceSession` `BuiyExit` clear — wiring deferred.** The clear function exists; the wire-up to `OnExit(BuiyState::Active)` depends on the foundation lifecycle which is still draft. Tracked in `follow-ups.md`. Until wired, `App::new()` in tests starts with a clean resource (Bevy default).
 
   ### Removed
@@ -1594,9 +1744,12 @@ anchor pair."
   - **Layout — `Position::Fixed` implementation.** Sketch: change `translate.rs::map_position` to emit `taffy::Position::Absolute` for `Fixed`, override the `ContainingBlock` resolution to point at the layout root. Single `sync_styles` change + a private `is_fixed_root` flag.
   - **Layout — full table algorithm.** Sketch: replace `table_layout` stub with the algorithm described in `display-and-positioning.md § 1.2` ("Gather entities by Display::Table* family. Compute column widths via Taffy on a synthetic flex container per row group. Write corrected positions back to `PostTaffyPositionOverrides`").
   - **Layout — full multicol algorithm.** Sketch: replace `multicol_pack` stub with a packing pass that respects `column_count` / `column_width` + `break-*` properties. Write each child's `PostTaffyPositionOverrides` entry.
-  - **Layout — sticky em/rem inset.** Sketch: plumb font context from `buiy-text-rendering-design` into sticky inset resolution. Replace the warn-once with a real resolution.
-  - **Layout — sticky `Cq*` inset (if Task 5 deferred).** Plumb container-query context from Phase 6's `length_inset_to_px` helper.
-  - **Layout — `clear_warned_once_on_exit` lifecycle wire-up.** Once foundation lifecycle states are settled, wire the clear via `app.add_systems(OnExit(BuiyState::Active), ...)`.
+  - **Layout — sticky `Length::Cq*` inset resolution.** Plumb container-query context from Phase 6's `length_inset_to_px` helper. v1 ships a `StickyCqDeferred` warn-once; the follow-up wires through the actual cq-context (sticky's reference frame is the sticky entity's own nearest CQ ancestor — distinct from anchor's "anchor target box" frame). Multi-axis fixture needed (Cqi/Cqb resolve against writing-mode inline/block axes).
+  - **Layout — sticky em/rem inset support.** When `Length::Em(_)` and `Length::Rem(_)` are added to the `Length` enum (Phase 10 or font-rendering phase), extend `resolve_sticky_inset` with new arms (currently a closed match so the compiler will force the change).
+  - **Layout — sticky `Length::Vh/Vw/Vmin/Vmax` inset support.** Same as em/rem follow-up; Phase 10 viewport-units extension.
+  - **Layout — sticky both-top-and-bottom inset dual clamp.** v1 implements "top wins" per D4. The CSS spec § 6.3 implies a dual-clamp where the element sticks to whichever edge the scroll position is currently closer to. Follow-up: implement the dual-clamp (likely requires storing both upper and lower sticky thresholds and computing midpoint logic in `compute_sticky_displacement`). The v2 test `sticky_both_top_and_bottom_active_top_wins` becomes the regression test for the v1 behavior; flipping it documents the algorithm upgrade.
+  - **Layout — sticky inside sticky.** v1's `world_position` walks Taffy positions (un-displaced); inner sticky elements resolve their thresholds against the outer's *natural* position. Follow-up: consult `PostTaffyPositionOverrides` (just-written by 6a) when walking the ancestor chain, so inner sticky sees the displaced outer. Requires careful ordering (inner sticky must run after outer; topological pre-pass or two-frame eventual-consistency are both options).
+  - **Layout — `clear_warned_once_on_exit` lifecycle wire-up.** Once foundation lifecycle states are settled, wire the clear via `app.add_systems(OnExit(BuiyState::Active), ...)`. Until then, the function is exposed but never called — tests can invoke directly via `world.run_system_once(clear_warned_once_on_exit)`.
 
 - [ ] **Step 4: Open PR.**
   ```bash
@@ -1618,8 +1771,9 @@ anchor pair."
 
   - [x] Unit tests for `compute_sticky_displacement` (no-inset, top-pins-when-scrolled, no-pull-up-before-scroll, parent-clamp).
   - [x] Unit tests for `clear_post_taffy_overrides`, `nearest_scroll_container`, `world_position` memoization, `LayoutWarnedOnceSession` dedup.
-  - [x] Integration tests in `tests/layout_sticky.rs` (9 scenarios: scroll-pin, scroll-floor, parent-clamp, no-scroll-container, percent-inset, em/rem-deferred, nested-innermost, Display::None, anchor-target-is-sticky).
-  - [x] Integration tests in `tests/layout_table_multicol_stubs.rs` (5 scenarios: per-entity table dedup, no-table-no-warn, multicol session dedup, no-multicol-no-warn, independence).
+  - [x] Integration tests in `tests/layout_sticky.rs` (15 scenarios — v2 expanded from v1's 9: top-pin trio, bottom-pin trio, both-active conflict, no-scroll-container, percent-inset, Cq-deferred, Fr-unsupported, nested-innermost, Display::None, anchor-target-is-sticky, clear-ordering-regression).
+  - [x] Integration tests in `tests/layout_table_multicol_stubs.rs` (8 scenarios — v2 expanded from v1's 5: per-entity table dedup, no-table-no-warn, multicol-3-entity session dedup, no-multicol-no-warn, independence, table-no-rewarn-on-replace, manual-session-clear, all-9-table-variants).
+  - [x] Unit tests in `systems.rs::mod tests` (4 new sticky-displacement tests added in v2: bottom-pins-when-near-bottom, bottom-no-push-down, bottom-clamped-by-parent-top, both-active-top-wins).
   - [x] Pipeline-order fixture (`tests/layout_pipeline_order.rs`) extended with sticky + table + multicol entities.
   - [x] All Phase 1-6 tests still pass (Phase 6 anchor suite, container queries, writing modes, grid, scrolling, foundations).
   - [x] All 6 CI gates green (Deny, Doc, Lint, Test ubuntu/macos/windows).
@@ -1662,19 +1816,36 @@ anchor pair."
    - `architecture.md § 6` (error model) → Tasks 4 + 6 + 7.
    - Phase 6 follow-up architectural quirk → Tasks 2 + 9.
 
-2. **Placeholder scan:** No "TBD" or "implement later" terms. Two intentional implementer-choice points: (a) sticky `Cq*` inset resolution scope (Task 5 Step 4) — explicitly framed as "implementer's choice with documented escape hatch"; (b) `BuiyExit` clear wire-up (Task 4 Step 4) — explicitly framed as "check what's available, lowest-friction path." Both are bounded with concrete fallback specs.
+2. **Placeholder scan (v2):** No "TBD" or "implement later" terms. Implementer-choice points reduced to one — (a) sticky `Cq*` resolution is **decided in v2** as the deferred path with `StickyCqDeferred` warn-once; (b) `BuiyExit` clear wire-up is the remaining true implementer-choice (lifecycle states still in foundation draft).
 
-3. **Type consistency:**
+3. **Type consistency (v2):**
    - `PostTaffyPositionOverrides` referenced consistently across T2/T5/T6/T7/T8/T9/T10/T11.
-   - `LayoutWarnOnceKey` variants `TableUnsupported(Entity) / MulticolUnsupported / StickyEmRemDeferred(Entity) / StickyFrUnsupported(Entity)` consistent across T4/T5/T6/T7/T10.
+   - `LayoutWarnOnceKey` variants `TableUnsupported(Entity) / MulticolUnsupported / StickyFrUnsupported(Entity) / StickyCqDeferred(Entity)` consistent across T4/T5/T6/T7/T10 — em/rem variant dropped in v2.
    - `MultiColumn` field set in T3 matches the Default impl assertions in T3 Step 1 and the test in T10.
+   - All `ChildOf` accesses use `.parent()` (v2 fix — Bevy 0.18 accessor, not `.0`).
+   - All `Entity::from_raw` in test code use `Entity::from_raw_u32(n).unwrap()` (v2 fix — Bevy 0.18 API).
 
 4. **Decision-block coverage:** D1-D15 all referenced from at least one task; D7 explicitly flagged as deferred-wire-up.
+
+5. **v2 BLOCKER resolution:** all BLOCKERs from the 3-agent review are addressed:
+   - Spec-coverage BLOCKER 1 (`Changed<MultiColumn>` missing) → Task 3 Step 6.
+   - Feasibility BLOCKER 1 (`Length::Vh/Vw/Vmin/Vmax/Em/Rem` don't exist) → D3 rewritten + `resolve_sticky_inset` simplified.
+   - Feasibility BLOCKER 2 (`ChildOf::.0` → `.parent()`) → Task 5 helpers updated.
+   - Feasibility BLOCKER 3 (`Entity::from_raw` → `Entity::from_raw_u32(n).unwrap()`) → Task 2 + Task 4 test snippets.
+   - Feasibility BLOCKER 4 (`Style` derives Bundle, no conditional insert) → D8 corrected, Task 3 Step 5 removed, Task 3 Step 8 test inverted.
+   - Test BLOCKER B1 (bottom-pin branches untested) → 3 unit tests + 3 integration tests added.
+   - Test BLOCKER B2 (both-active untested) → unit test + integration test added.
+   - Test BLOCKER B3 (pipeline-order ordering vs execution) → Task 11 includes the sticky-anchor cross-test in the fixture.
+   - Test BLOCKER B4 (clear-ordering regression) → `clear_ordering_regression_two_frames` integration test added.
+   - Test BLOCKER B5 (no-scroll-container explicit assertion) → fixture spec strengthened.
 
 ---
 
 ## Open questions (defer to implementation, not plan revision)
 
 - **Where exactly does `Position` import live in `sticky_offset`?** Likely `crate::layout::components::{Position, PositionKind}` and `crate::layout::types::Sizing`. Implementer confirms via existing imports at top of `systems.rs`.
-- **Reflect bound on `ColumnRule.color: bevy::color::Color`?** `bevy::color::Color` derives `Reflect` since Bevy 0.13; confirm at task-time.
 - **`ScrollOffset` query missing entity → default zero?** Yes, per Phase 2 semantics: `ScrollOffset` is opt-in, absence means "not scrolled." Code path: `scroll_offset_q.get(scroll_container).copied().unwrap_or_default()`.
+
+**v2 — pre-answered open questions:**
+- **`Reflect` and `Copy` bounds on `ColumnRule.color: bevy::color::Color`?** `bevy::color::Color` derives `Reflect, Clone, Copy, PartialEq, Default` in Bevy 0.18 — verified via existing `ScrollbarColor` enum at `crates/buiy_core/src/layout/types.rs:326-334` which derives `Copy` alongside a `Color` field. `ColumnRule` can safely derive `Copy`. `Color::default()` returns `Color::WHITE`.
+- **`Or<>` 15-cap status?** Outer Or<> at `sync_styles` is at 15/15 (cap); inner nested Or<> is at 5/15 with room for `Changed<MultiColumn>` (filling to 6/15). Phase 8+ filter widening will need to either grow the nested Or<> or add a second nested layer (`Or<(A, Or<(B, Or<(C, D, E)>)>)>`).
