@@ -263,10 +263,8 @@ fn kahn_anchor_sort(
         for &e in current_edges.keys() {
             in_degree.entry(e).or_insert(0);
         }
-        for (_, target) in &current_edges {
-            if let Some(t) = target {
-                *in_degree.entry(*t).or_insert(0) += 1;
-            }
+        for t in current_edges.values().flatten() {
+            *in_degree.entry(*t).or_insert(0) += 1;
         }
 
         // Queue of zero-in-degree nodes.

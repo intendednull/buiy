@@ -123,7 +123,15 @@ impl Plugin for LayoutPlugin {
             .register_type::<ContainerQueryInactive>()
             .register_type::<ContainerType>()
             .register_type::<Orientation>()
-            .register_type::<QueryCondition>();
+            .register_type::<QueryCondition>()
+            // Phase 6 — anchor positioning.
+            .register_type::<Anchor>()
+            .register_type::<LayoutAnchorBroken>()
+            .register_type::<AnchorName>()
+            .register_type::<AnchorRef>()
+            .register_type::<PositionTry>()
+            .register_type::<TryCondition>()
+            .register_type::<AnchorErrorKind>();
 
         pipeline::configure_pipeline(app);
 
