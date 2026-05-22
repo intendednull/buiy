@@ -5,7 +5,9 @@
 use bevy::prelude::*;
 use buiy_core::components::{Node, ResolvedLayout};
 use buiy_core::layout::{
-    Anchor, AnchorName, AnchorRef, Inset, LayoutPlugin, Length, PositionTry, Style, TryCondition,
+    Anchor, AnchorErrorKind, AnchorName, AnchorNameRegistry, AnchorRef, Display, Inset,
+    LayoutAnchorBroken, LayoutAnchorWarnedThisFrame, LayoutPlugin, Length, PositionTry, Style,
+    SyncStylesIterCount, TryCondition,
 };
 
 fn app() -> App {
@@ -131,4 +133,350 @@ fn sync_styles_reruns_when_anchor_changes() {
     // Sanity: silence unused warning on count_before — it's kept to make
     // the steady→change→steady arc explicit in the test body.
     let _ = count_before;
+}
+
+// ---------------------------------------------------------------------
+// Phase 6 Task 11 — full integration coverage per spec § 4.
+// ---------------------------------------------------------------------
+
+#[test]
+fn anchor_fallback_chain_second_wins_when_first_overflows_viewport() {
+    use bevy::window::{PrimaryWindow, Window, WindowResolution};
+    let mut app = app();
+
+    // Synthesize a 200x200 PrimaryWindow so `FitsInViewport` has a
+    // meaningful upper bound. Pattern matches
+    // tests/layout_container_queries.rs:336.
+    app.world_mut().spawn((
+        Window {
+            resolution: WindowResolution::new(200, 200),
+            ..Default::default()
+        },
+        PrimaryWindow,
+    ));
+
+    // Anchor: 50x50 at default flexbox position (0, 0) inside the
+    // 200x200 root. The "above" inset would place the anchored entity
+    // at y = -20 → fails FitsInViewport. The "below" inset places it
+    // at y = 50 + 10 = 60 → passes.
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(200.0).height_px(200.0)))
+        .id();
+    let anchor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(50.0).height_px(50.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("a".into())),
+                ..default()
+            },
+        ))
+        .id();
+    app.world_mut().entity_mut(root).add_children(&[anchor]);
+
+    // Anchored: try ABOVE first (fails: y = -20 < 0), then BELOW.
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("a".into())),
+                position_try: vec![
+                    PositionTry {
+                        inset: Inset::above(Length::Px(10.0)),
+                        conditions: vec![TryCondition::FitsInViewport],
+                    },
+                    PositionTry {
+                        inset: Inset::below(Length::Px(10.0)),
+                        conditions: vec![TryCondition::FitsInViewport],
+                    },
+                ],
+                ..default()
+            },
+        ))
+        .id();
+
+    app.update();
+    app.update();
+
+    let rl = app.world().get::<ResolvedLayout>(anchored).unwrap();
+    // BELOW fallback wins: y = anchor.y + anchor.h + 10 = 0 + 50 + 10 = 60.
+    assert_eq!(rl.position.y, 60.0);
+    // Not broken — a fallback resolved successfully.
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_none());
+}
+
+#[test]
+fn anchor_cycle_marks_both_endpoints_broken() {
+    let mut app = app();
+    // a -> b (a anchors to "b"); b -> a (b anchors to "a"). b is
+    // spawned after a, so b's epoch is higher → b's outgoing edge is
+    // dropped per Kahn. Per spec § 3.4 D8, BOTH endpoints get
+    // LayoutAnchorBroken.
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(50.0).height_px(50.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("a".into())),
+                position_anchor: Some(AnchorRef::Name("b".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(5.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(50.0).height_px(50.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("b".into())),
+                position_anchor: Some(AnchorRef::Name("a".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(5.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+    app.update();
+    app.update();
+
+    // Spec § 3.4 line 229: "Both endpoints get LayoutAnchorBroken markers."
+    assert!(
+        app.world().get::<LayoutAnchorBroken>(b).is_some(),
+        "spec § 3.4: cycle source (dropped edge) must be marked"
+    );
+    assert!(
+        app.world().get::<LayoutAnchorBroken>(a).is_some(),
+        "spec § 3.4: cycle target (other endpoint of dropped edge) must be marked"
+    );
+
+    // Exactly one InCycle warn per cycle per frame.
+    let warned = app.world().resource::<LayoutAnchorWarnedThisFrame>();
+    let in_cycle_count = warned
+        .set
+        .iter()
+        .filter(|(_, k)| *k == AnchorErrorKind::InCycle)
+        .count();
+    assert_eq!(in_cycle_count, 1);
+}
+
+#[test]
+fn anchor_duplicate_name_warns_each_frame_dupe_persists() {
+    let mut app = app();
+    // First entity claims "dupe".
+    let _e1 = app
+        .world_mut()
+        .spawn(Anchor {
+            anchor_name: Some(AnchorName::Named("dupe".into())),
+            ..default()
+        })
+        .id();
+    // Second entity also claims "dupe" — e2 is the late inserter.
+    let e2 = app
+        .world_mut()
+        .spawn(Anchor {
+            anchor_name: Some(AnchorName::Named("dupe".into())),
+            ..default()
+        })
+        .id();
+    app.update();
+
+    let warned = app.world().resource::<LayoutAnchorWarnedThisFrame>();
+    assert!(warned.set.contains(&(e2, AnchorErrorKind::DuplicateName)));
+
+    // After a second update, the duplicate persists — warn should still
+    // fire (re-detected each frame from the registry, not only at
+    // observer-insert time).
+    app.update();
+    let warned = app.world().resource::<LayoutAnchorWarnedThisFrame>();
+    assert!(warned.set.contains(&(e2, AnchorErrorKind::DuplicateName)));
+}
+
+#[test]
+fn anchor_missing_target_marks_broken_and_warns_once_per_frame() {
+    let mut app = app();
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("nonexistent".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(0.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+    app.update();
+    app.update();
+
+    assert!(app.world().get::<LayoutAnchorBroken>(e).is_some());
+    let rl = app.world().get::<ResolvedLayout>(e).unwrap();
+    assert_eq!(rl.position, Vec2::ZERO);
+
+    let warned = app.world().resource::<LayoutAnchorWarnedThisFrame>();
+    assert!(warned.set.contains(&(e, AnchorErrorKind::TargetMissing)));
+}
+
+#[test]
+fn layout_anchor_broken_clears_when_resolution_succeeds() {
+    let mut app = app();
+
+    // Start with a missing target → broken.
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("late".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(0.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+    app.update();
+    app.update();
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_some());
+
+    // Now spawn the target.
+    let _target = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(50.0).height_px(50.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("late".into())),
+                ..default()
+            },
+        ))
+        .id();
+    app.update();
+    app.update();
+
+    // Broken marker should be removed (idempotent cleanup).
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_none());
+}
+
+#[test]
+fn anchor_steady_state_no_extra_sync_styles_iter() {
+    let mut app = app();
+    let _anchor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(50.0).height_px(50.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("a".into())),
+                ..default()
+            },
+        ))
+        .id();
+    let _anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("a".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(5.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+
+    // Run several frames to reach steady state.
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // Steady-state Phase 2 invariant: sync_styles iter count is 0 (no
+    // Changed<> for any tracked component on this frame). Anchor pass
+    // writes to AnchorOverrides (resource) but does NOT cascade
+    // Changed<> back into sync_styles's trigger set.
+    let count = app.world().resource::<SyncStylesIterCount>().0;
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn anchor_observer_cleans_registry_on_despawn() {
+    let mut app = app();
+    let e = app
+        .world_mut()
+        .spawn(Anchor {
+            anchor_name: Some(AnchorName::Named("ephemeral".into())),
+            ..default()
+        })
+        .id();
+
+    {
+        let reg = app.world().resource::<AnchorNameRegistry>();
+        assert_eq!(reg.find_entity_by_name("ephemeral"), Some(e));
+    }
+
+    app.world_mut().entity_mut(e).despawn();
+
+    // Despawn fires On<Remove, Anchor> which calls reg.remove(e).
+    let reg = app.world().resource::<AnchorNameRegistry>();
+    assert_eq!(reg.find_entity_by_name("ephemeral"), None);
+}
+
+#[test]
+fn anchor_target_with_display_none_is_treated_as_missing() {
+    let mut app = app();
+    let _hidden_anchor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(50.0)
+                .height_px(50.0)
+                .display(Display::None),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("hidden".into())),
+                ..default()
+            },
+        ))
+        .id();
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("hidden".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(0.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+    app.update();
+    app.update();
+
+    // Display::None target → anchored is broken (spec § 3.2 step 1,
+    // D9 explicit query in anchor_resolution).
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_some());
 }
