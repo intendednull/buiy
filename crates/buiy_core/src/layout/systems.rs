@@ -102,8 +102,8 @@ impl AnchorNameRegistry {
     /// (e.g. component replaced) — the epoch bumps so the cycle tiebreaker
     /// considers this entry the most recent.
     ///
-    /// Use [`track_epoch`] for unnamed anchors — `insert` is for the
-    /// named case only.
+    /// Use [`Self::track_epoch`] for unnamed anchors — `insert` is for
+    /// the named case only.
     pub fn insert(&mut self, name: String, entity: Entity) {
         let epoch = self.bump_epoch_for(entity);
         let bucket = self.by_name.entry(name).or_default();
@@ -174,10 +174,11 @@ pub struct AnchorOverrides {
 }
 
 /// Phase 6 — per-frame warn-dedup set. Cleared at the top of
-/// `anchor_resolution` (for the `TargetMissing`, `AllFallbacksFailed`,
-/// `InCycle`, `AnchorSizeUsed` kinds) and populated by both observer
-/// closures (for the `DuplicateName` kind) and `anchor_resolution`
-/// itself. Spec § 3.2 step 4: "warn fires once per (entity, frame)".
+/// `anchor_resolution` and populated solely by `anchor_resolution`
+/// itself (all kinds, including `DuplicateName` which is re-detected
+/// each frame by scanning `AnchorNameRegistry::iter_buckets` — see
+/// Decision D11). Observers do NOT touch this set.
+/// Spec § 3.2 step 4: "warn fires once per (entity, frame)".
 #[derive(Resource, Default, Debug)]
 pub struct LayoutAnchorWarnedThisFrame {
     pub set: std::collections::HashSet<(Entity, AnchorErrorKind)>,
