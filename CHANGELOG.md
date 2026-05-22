@@ -192,3 +192,131 @@ tagged release.
   `buiy_core::components::FlexDirection`. Their roles are taken by
   `buiy_core::layout::Style` (the hybrid builder) and
   `buiy_core::layout::FlexAxis` (the four-variant axis enum).
+
+### Added (Phase 5 — layout container queries)
+- **`Container` component** (joins `Style`'s Bundle): `container_type`
+  (`Normal` / `Size` / `InlineSize`) and `container_name: Option<String>`.
+  Descendants resolve `@container` rules and container units against
+  this entity's resolved size. `String` over `SmolStr` matches Phase 3's
+  `GridLine::Area` precedent.
+- **`ContainerQuery` component** (decomposed-only, child-side):
+  `container: Option<String>` (None = nearest queried ancestor;
+  Some(name) = nearest by name) and `conditions: Vec<QueryCondition>`
+  (AND-combined; empty list = always active).
+- **`ContainerQueryActive` / `ContainerQueryInactive`** unit-struct
+  marker components — the activation surface. `cq_activate` /
+  `cq_flip_check` toggle them; authors observe `With<...>` to apply
+  whatever behavior they want (style-bundle application is
+  consumer-responsibility per spec § 1.2).
+- **`Length::Cqw` / `Cqh` / `Cqi` / `Cqb` / `Cqmin` / `Cqmax`** container
+  units. Resolve at translate time against the nearest queried
+  ancestor's previous-frame `ResolvedLayout`. `Cqi` / `Cqb` honor the
+  entity's `WritingModeResolved` (sideways modes normalized to
+  vertical for axis selection, mirroring Phase 4 `LogicalEdges`).
+  Fallback to viewport (`bevy::window::Window.resolution`) when no
+  queried ancestor exists; one `warn!` per session.
+- **`ContainerType`, `Orientation`, `QueryCondition`** value types.
+  `Orientation::Portrait` (default) = `inline_axis <= block_axis`;
+  `Landscape` = strict greater. `QueryCondition` covers `MinWidth` /
+  `MaxWidth` / `MinHeight` / `MaxHeight` (taking `Length`),
+  `MinAspectRatio` / `MaxAspectRatio` (taking `f32`), and
+  `Orientation(Orientation)`.
+- **`BuiyLayoutStep::CqActivate`** pipeline step (was a Phase 4 stub).
+  `cq_activate` system: memoized nearest-queried-ancestor walk
+  (mirrors Phase 4 `inherit_writing_mode` at `systems.rs:308-362`),
+  reads previous-frame `ResolvedLayout`, idempotent marker insert
+  (compare-before-write preserves Phase 1's O(0) steady-state).
+- **`BuiyLayoutStep::CqFlipCheck`** pipeline step (was a Phase 4 stub).
+  `cq_flip_check` system reads **fresh `tree.layout(node_id)`** from
+  Taffy (per architecture.md § 3.2 explicit pinning — NOT the stale
+  entity-side `ResolvedLayout`). Detects activation flips against
+  this frame's just-computed sizes; sets `CqReRunRequested(true)`
+  when any rule flipped. No-ancestor case marks inactive (allows a
+  previously-active rule to flip back when its ancestor is despawned).
+- **`BuiyLayoutStep::CqFlipReRun`** pipeline step (was a Phase 4 stub).
+  `cq_flip_rerun` system (Approach B — normal Bevy system with the
+  union of `sync_styles` + `taffy_compute` params, gated on
+  `CqReRunRequested.0`) re-runs translation + Taffy compute once per
+  flip. Same-frame re-layout cap is 2× Taffy; transitive flips wait
+  for next frame. `translate_one_entity` factored out as a shared
+  `pub(super) fn` so both `sync_styles` and `cq_flip_rerun` reuse the
+  per-entity work without body duplication.
+- **`Style` fluent setters** for container declaration:
+  `.container_size()`, `.container_inline_size()`,
+  `.container_name(_)`, `.container(_)`. Field is unconditional
+  `Container` (NOT `Option<Container>`) because `Style` is
+  `#[derive(Bundle)]` and Bevy 0.18 does not impl `Bundle` for
+  `Option<T>`. Default sentinel `{ Normal, None }` is inert.
+- **`LayoutTaffyComputeCount`** resource (`pub`): per-frame counter
+  of Taffy `compute_layout` invocations. Reset at top of
+  `taffy_compute`, incremented per-root in `taffy_compute` and once
+  in `cq_flip_rerun`. Used by the same-frame re-layout cap tests.
+- **`SyncStylesIterCount`** resource (`pub`): per-frame count of
+  entities matched by `sync_styles`' Or-filter. Used by the
+  idempotent-insert invariant test.
+- **`Container` / `ContainerQuery` / `ContainerQueryActive` /
+  `ContainerQueryInactive` / `ContainerType` / `Orientation` /
+  `QueryCondition` registered for reflection** in `LayoutPlugin::build`.
+  Re-exported from `buiy_core::layout` and bubbled up to `buiy_core`
+  root, mirroring Phase 4's `WritingMode*` precedent.
+
+### Changed (Phase 5)
+- `sync_styles`'s `Or<>` trigger filter widens with `Changed<Container>`,
+  `Changed<ContainerQuery>`, `Changed<ContainerQueryActive>`,
+  `Changed<ContainerQueryInactive>`. **Bevy 0.18 caps `Or` tuples at
+  15**, so the four new entries are nested inside an inner
+  `Or<(...)>` (one outer slot, four inner). **Phase 2 invariant
+  intact:** `Changed<ScrollOffset>` / `Changed<ScrollSnapItem>`
+  remain excluded; asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
+- `sync_styles`'s filter also gains `Changed<ResolvedLayout>` (added
+  to support initial-frame container-unit cascade — without it,
+  descendants of newly-sized containers can't read the just-populated
+  `ResolvedLayout`). Idempotency preserved by making
+  `write_resolved_layout` compare-before-write (mirrors Phase 4's
+  `inherit_writing_mode` idempotent insert).
+- `taffy_compute` instrumented to bump `LayoutTaffyComputeCount`.
+- `LayoutPlugin::build` registers `CqReRunRequested`,
+  `LayoutTaffyComputeCount`, `SyncStylesIterCount` resources and
+  attaches `cq_activate` / `cq_flip_check` / `cq_flip_rerun` to their
+  respective `BuiyLayoutStep` sets.
+
+### Deferred / divergences from spec (Phase 5)
+- **`when_active` / `when_inactive: Option<Entity>` fields on
+  `ContainerQuery`** (spec § 1.2): omitted in v1. The marker
+  components are the activation surface; spec § 1.2 last paragraph
+  says style-bundle application is consumer-responsibility. There is
+  no in-tree consumer for the Entity fields in v1. Adding them later
+  is non-breaking (additive Rust schema; Bevy reflection
+  default-initializes new fields).
+- **Multi-level geometric cascade** (spec § 1.3 transitive scenarios,
+  spec § 1.5 test surface): when an ancestor's `ResolvedLayout`
+  changes and a `Cqw`-sized intermediate (not in any `Changed<>`
+  filter) sits between the ancestor and a rule-bearing descendant,
+  the intermediate is **never re-translated** and the descendant's
+  rule never re-evaluates. Direct-ancestor geometric cascade (rule
+  on a direct child of a resized container) IS handled in-frame by
+  `cq_flip_check`'s `tree.layout()` read + `cq_flip_rerun`. The
+  Task 10 test `cq_transitive_cascade_is_one_frame_stale` is a
+  **negative assertion** documenting this gap; it will be promoted
+  to a positive assertion when a future phase adds descendant
+  invalidation for ancestor-resolved-size changes. See
+  `docs/plans/follow-ups.md`.
+- **Style-bundle cascade** (spec § 1.2 `when_active`/`when_inactive`
+  Entity fields): not shipped (see above).
+- **Viewport-unit fallback as `Length::Vw/Vh` rewriting** (spec § 1.4):
+  Phase 5 reads `bevy::window::Window.resolution` inline; observable
+  behavior matches spec but the implementation path is direct-pixel
+  read, not unit-rewrite. Phase 10 (`buiy-layout-units-calc`)
+  replaces the inline read with `Length::Vw/Vh` infrastructure
+  without behavior change.
+- **Warn-once granularity** (spec § 1.4): spec asks per-entity, Phase 5
+  uses session-global `AtomicBool`. Per-entity tracking via a
+  `HashSet` resource grows unboundedly across despawns; the spec's
+  intent (avoid log flood) is better served by global once-only.
+- **Multiple ContainerQuery per entity**: v1 stores at most one (Bevy
+  `Component` single-instance). Multi-query is a follow-up.
+
+### Removed (Phase 5)
+- The Task 1 `cq_unit_fallback_px` placeholder (deleted in Task 7
+  when the real ancestor-driven resolver landed; transitional bridge,
+  never shipped to users).

@@ -13,13 +13,13 @@
 //! `Style`.
 
 use super::components::{
-    BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
+    BoxModel, Container, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
 };
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
-    FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length, LogicalEdges,
-    OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, Sizing, SnapType,
-    TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
+    FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length,
+    LogicalEdges, OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth,
+    Sizing, SnapType, TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
 };
 use bevy::ecs::bundle::Bundle;
 
@@ -51,6 +51,7 @@ pub struct Style {
     pub scroll: Scroll,
     pub grid_params: GridParams,
     pub writing_mode: WritingMode,
+    pub container: Container,
 }
 
 impl Style {
@@ -409,6 +410,40 @@ impl Style {
         self.writing_mode.unicode_bidi = u;
         self
     }
+
+    // ---- Container ----
+
+    /// Set the entity as a CSS query container (`container-type: size`).
+    /// Descendant `@container` rules and container units resolve against
+    /// this entity's resolved size. Preserves any name previously set.
+    pub fn container_size(mut self) -> Self {
+        self.container.container_type = ContainerType::Size;
+        self
+    }
+
+    /// Set the entity as a CSS *inline-size* query container
+    /// (`container-type: inline-size`). Only the inline axis is
+    /// queryable; block-axis queries against this container fall back
+    /// to viewport-block with warn-once.
+    pub fn container_inline_size(mut self) -> Self {
+        self.container.container_type = ContainerType::InlineSize;
+        self
+    }
+
+    /// Set the query container's name (CSS `container-name`). Has no
+    /// effect unless `container_size()` or `container_inline_size()`
+    /// is also called (or the entity is otherwise opted in by direct
+    /// `Container` insertion with a non-Normal type).
+    pub fn container_name(mut self, name: impl Into<String>) -> Self {
+        self.container.container_name = Some(name.into());
+        self
+    }
+
+    /// Set the full `Container` value (overwrite both type and name).
+    pub fn container(mut self, c: Container) -> Self {
+        self.container = c;
+        self
+    }
 }
 
 /// Builder for the box-model surface using logical (writing-mode-aware)
@@ -541,11 +576,13 @@ impl LogicalInset {
 mod tests {
     use super::*;
     use crate::layout::components::{
-        BoxModel, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
+        BoxModel, Container, Display, FlexParams, GridParams, Overflow, Position, Scroll,
+        WritingMode,
     };
     use crate::layout::types::{
-        AlignItems, BoxSizing, Direction, Edges, FlexAxis, FlexGap, GridAutoFlow, JustifyContent,
-        Length, OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize, WritingModeKind,
+        AlignItems, BoxSizing, ContainerType, Direction, Edges, FlexAxis, FlexGap, GridAutoFlow,
+        JustifyContent, Length, OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize,
+        WritingModeKind,
     };
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
@@ -684,6 +721,33 @@ mod tests {
         assert!(world.get::<Scroll>(entity).is_some());
         assert!(world.get::<GridParams>(entity).is_some());
         assert!(world.get::<WritingMode>(entity).is_some());
+        assert!(world.get::<Container>(entity).is_some());
+    }
+
+    #[test]
+    fn style_container_sets_type_and_name() {
+        let s = Style::default().container_size().container_name("card");
+        assert_eq!(s.container.container_type, ContainerType::Size);
+        assert_eq!(s.container.container_name.as_deref(), Some("card"));
+    }
+
+    #[test]
+    fn style_container_inline_size_no_name() {
+        let s = Style::default().container_inline_size();
+        assert_eq!(s.container.container_type, ContainerType::InlineSize);
+        assert!(s.container.container_name.is_none());
+    }
+
+    #[test]
+    fn style_default_container_is_normal_unnamed() {
+        // Inert default — every Style-spawned entity carries a
+        // Container { Normal, None }. cq_activate's ancestor walk
+        // skips Normal containers, so this has no semantic effect;
+        // it's required because #[derive(Bundle)] needs every field
+        // be a real component (Bevy 0.18: Option<T> is not Bundle).
+        let s = Style::default();
+        assert_eq!(s.container.container_type, ContainerType::Normal);
+        assert!(s.container.container_name.is_none());
     }
 
     #[test]

@@ -10,10 +10,21 @@
 
 use bevy::prelude::*;
 
-/// CSS-style length value. Phase 1 ships only `Px` and `Percent`; other
-/// variants are reserved for later phases. The variants present here cover
-/// every value the Phase 1 translation layer can emit to Taffy without
-/// further resolution.
+/// CSS-style length value.
+///
+/// Phase 1 shipped `Px`, `Percent`. Phase 3 added `Fr` (grid-only).
+/// Phase 5 adds the container-query unit family (`Cqw`/`Cqh`/`Cqi`/`Cqb`/
+/// `Cqmin`/`Cqmax`). Em / Rem / viewport / Calc resolution remains
+/// deferred to Phase 10 (`buiy-layout-units-calc`).
+///
+/// Container units resolve in `style_to_taffy` against the entity's
+/// nearest *queried* ancestor's previous-frame `ResolvedLayout` (an
+/// ancestor whose `Container.container_type != Normal`). When no
+/// queried ancestor exists, container units fall back to viewport
+/// dimensions (resolved directly from `bevy::window::Window` until
+/// Phase 10's `Length::Vw/Vh` infrastructure lands) with one `warn!`
+/// per (entity, unit) pair per session. Spec:
+/// docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.4.
 #[derive(Reflect, Clone, Copy, Debug, PartialEq)]
 pub enum Length {
     /// Absolute logical pixels.
@@ -23,6 +34,19 @@ pub enum Length {
     /// CSS `<flex>` unit — only meaningful inside `TrackSize::Length(Length::Fr(_))`.
     /// Outside grid templates, `Fr` warns once and resolves to `Auto`.
     Fr(f32),
+    /// `cqw` — percentage of nearest queried ancestor's *width*.
+    Cqw(f32),
+    /// `cqh` — percentage of nearest queried ancestor's *height*.
+    Cqh(f32),
+    /// `cqi` — percentage of nearest queried ancestor's *inline* axis
+    /// (depends on writing-mode).
+    Cqi(f32),
+    /// `cqb` — percentage of nearest queried ancestor's *block* axis.
+    Cqb(f32),
+    /// `cqmin` — percentage of `min(cqi, cqb)`.
+    Cqmin(f32),
+    /// `cqmax` — percentage of `max(cqi, cqb)`.
+    Cqmax(f32),
 }
 
 impl Length {
@@ -544,6 +568,58 @@ pub enum WritingModeKind {
     SidewaysLr,
 }
 
+/// CSS `container-type`. Determines whether an entity is a query
+/// container (i.e., whether descendant `@container` rules and container
+/// units resolve against it).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.1.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerType {
+    /// Not a query container. The default.
+    #[default]
+    Normal,
+    /// Both axes queryable; `cqw/cqh/cqi/cqb` all resolve.
+    Size,
+    /// Only inline axis queryable; `cqb` against this container falls
+    /// back to viewport-block with warn-once.
+    InlineSize,
+}
+
+/// CSS `@container (orientation: ...)` condition value.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.2.
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Orientation {
+    /// Container's inline axis is shorter than its block axis.
+    #[default]
+    Portrait,
+    /// Container's inline axis is longer than its block axis.
+    Landscape,
+}
+
+/// One `@container` condition — a single predicate on the resolved size
+/// of the query container. A `ContainerQuery` AND-combines multiple of
+/// these.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.2.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq)]
+pub enum QueryCondition {
+    /// Activates when container `width >= value`.
+    MinWidth(Length),
+    /// Activates when container `width <= value`.
+    MaxWidth(Length),
+    /// Activates when container `height >= value`.
+    MinHeight(Length),
+    /// Activates when container `height <= value`.
+    MaxHeight(Length),
+    /// Activates when container `width/height >= ratio`.
+    MinAspectRatio(f32),
+    /// Activates when container `width/height <= ratio`.
+    MaxAspectRatio(f32),
+    /// Activates when container orientation matches.
+    Orientation(Orientation),
+}
+
 /// CSS `direction`. Maps directly to `taffy::Direction`.
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -752,6 +828,31 @@ mod tests {
     }
 
     #[test]
+    fn length_container_unit_variants_distinct_and_round_trip() {
+        // Same variant + same payload compares equal (exercises the
+        // derived `PartialEq` end-to-end).
+        assert_eq!(Length::Cqw(50.0), Length::Cqw(50.0));
+        assert_eq!(Length::Cqh(25.0), Length::Cqh(25.0));
+        assert_eq!(Length::Cqi(50.0), Length::Cqi(50.0));
+        assert_eq!(Length::Cqb(25.0), Length::Cqb(25.0));
+        assert_eq!(Length::Cqmin(10.0), Length::Cqmin(10.0));
+        assert_eq!(Length::Cqmax(90.0), Length::Cqmax(90.0));
+
+        // Different variants with the same payload compare *not* equal —
+        // guards against a hand-written `PartialEq` impl that collapses
+        // all `Cq*` variants together (would silently break container-
+        // unit resolution while keeping these tests green).
+        assert_ne!(Length::Cqw(50.0), Length::Cqh(50.0));
+        assert_ne!(Length::Cqi(50.0), Length::Cqb(50.0));
+        assert_ne!(Length::Cqmin(50.0), Length::Cqmax(50.0));
+        assert_ne!(Length::Cqw(50.0), Length::Cqi(50.0));
+        assert_ne!(Length::Cqh(50.0), Length::Cqb(50.0));
+
+        // Different payload, same variant compare *not* equal.
+        assert_ne!(Length::Cqw(50.0), Length::Cqw(51.0));
+    }
+
+    #[test]
     fn track_size_default_is_auto() {
         assert_eq!(TrackSize::default(), TrackSize::Auto);
     }
@@ -794,6 +895,32 @@ mod tests {
     #[test]
     fn writing_mode_kind_default_is_horizontal_tb() {
         assert_eq!(WritingModeKind::default(), WritingModeKind::HorizontalTb);
+    }
+
+    #[test]
+    fn container_type_default_is_normal() {
+        assert_eq!(ContainerType::default(), ContainerType::Normal);
+    }
+
+    #[test]
+    fn orientation_default_is_portrait() {
+        // Width <= height -> portrait. CSS default ambiguous; we pick
+        // Portrait so the default `Orientation(Portrait)` condition is
+        // a useful sentinel.
+        assert_eq!(Orientation::default(), Orientation::Portrait);
+    }
+
+    #[test]
+    fn query_condition_variants_construct() {
+        let c1 = QueryCondition::MinWidth(Length::Px(600.0));
+        let c2 = QueryCondition::MaxAspectRatio(1.5);
+        let c3 = QueryCondition::Orientation(Orientation::Landscape);
+        // PartialEq derive covers structural equality.
+        assert_ne!(c1, c2);
+        assert_ne!(c2, c3);
+        // Copy bound — implicit copy through assignment.
+        let c4 = c1;
+        assert_eq!(c4, c1);
     }
 
     #[test]

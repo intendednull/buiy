@@ -11,11 +11,11 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, Edges, FlexAxis, FlexGap,
-    FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, OverflowMode,
-    OverscrollBehavior, PositionKind, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
-    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
-    WritingModeKind,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
+    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
+    OverflowMode, OverscrollBehavior, PositionKind, QueryCondition, ScrollBehavior, ScrollbarColor,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation,
+    TrackSize, UnicodeBidi, WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -290,6 +290,71 @@ impl WritingModeResolved {
     }
 }
 
+/// Marks an entity as a CSS container (or not). Descendants resolve
+/// `@container` rules and container units (`cqw`, `cqi`, ...) against
+/// the nearest ancestor whose `container_type` is `Size` or `InlineSize`.
+///
+/// `container_name` is an optional opaque label (CSS `container-name`).
+/// When set, descendant `ContainerQuery` rules with `container:
+/// Some(name)` match this container by name; rules with `container: None`
+/// match the nearest queried ancestor regardless of name. `String` is used
+/// for the same reason as `GridLine::Area` (Phase 3): avoids a new direct
+/// `SmolStr` dep, and container names are set at spawn time, not on a hot
+/// path.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.1.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct Container {
+    pub container_type: ContainerType,
+    pub container_name: Option<String>,
+}
+
+/// A `@container` rule pinned to a single entity. The rule activates
+/// when *all* `conditions` hold against the resolved size of the
+/// matched query container (by name, or nearest queried ancestor when
+/// `container` is `None`).
+///
+/// When the rule's activation state flips, `cq_activate` toggles
+/// `ContainerQueryActive` <-> `ContainerQueryInactive` on this same
+/// entity. Authors observe those markers and react however they want —
+/// the spec calls out (§ 1.2 last paragraph) that style-bundle
+/// application is consumer-responsibility.
+///
+/// v1 stores at most one `ContainerQuery` per entity (Bevy's
+/// `Component` is single-instance).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.2.
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
+#[reflect(Component, Default)]
+pub struct ContainerQuery {
+    /// `None` = nearest queried ancestor. `Some(name)` = nearest
+    /// ancestor with `Container { container_name: Some(name), .. }`.
+    pub container: Option<String>,
+    /// All conditions must hold for the rule to be active. Empty list
+    /// = always active (matches CSS `@container (width)` which is
+    /// always true if there's a container at all — Phase 5 simplifies
+    /// to "always active").
+    pub conditions: Vec<QueryCondition>,
+}
+
+/// Marker — set by `cq_activate` when the entity's `ContainerQuery`
+/// matched its container's resolved size on the current activation
+/// pass. Mutually exclusive with `ContainerQueryInactive`.
+///
+/// Authors observe `With<ContainerQueryActive>` to apply whatever
+/// behavior they want on activation. Spec § 1.2: style-bundle
+/// application is consumer-responsibility.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct ContainerQueryActive;
+
+/// Marker — set by `cq_activate` when the entity's `ContainerQuery`
+/// did *not* match. Mutually exclusive with `ContainerQueryActive`.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct ContainerQueryInactive;
+
 /// Runtime scroll position of a scroll container. Mutated by the
 /// scroll-input handler in `buiy-input-events-design`. Read by render
 /// (drawing) and picking (hit-testing) at consume time, and by Phase 7
@@ -488,5 +553,25 @@ mod tests {
         assert_eq!(wm.direction, Direction::Ltr);
         assert_eq!(wm.text_orientation, TextOrientation::Mixed);
         assert_eq!(wm.unicode_bidi, UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn container_default_is_normal_unnamed() {
+        let c = Container::default();
+        assert_eq!(c.container_type, ContainerType::Normal);
+        assert_eq!(c.container_name, None);
+    }
+
+    #[test]
+    fn container_query_default_is_anonymous_and_empty() {
+        let q = ContainerQuery::default();
+        assert_eq!(q.container, None);
+        assert!(q.conditions.is_empty());
+    }
+
+    #[test]
+    fn container_query_active_inactive_are_distinct_markers() {
+        let _a = ContainerQueryActive;
+        let _i = ContainerQueryInactive;
     }
 }
