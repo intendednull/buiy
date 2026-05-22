@@ -1,8 +1,6 @@
----
 **Date:** 2026-05-22
 **Status:** active
 **Subject:** cosmic-text — critiques, open issues, and structural open problems
----
 
 # Critiques and open problems
 

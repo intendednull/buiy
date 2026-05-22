@@ -45,7 +45,7 @@ The columns: **CSS feature** · **Taffy 0.10.1 status** · **Buiy mitigation** (
 
 | CSS feature | Taffy status | Buiy mitigation |
 |---|---|---|
-| `display: inline` | Not implemented. No `Display::Inline` variant. | Buiy treats text leaves as opaque measure-function leaves; no real inline-formatting context. Plan in [display-and-positioning.md] — `Display::Inline` is in Buiy's enum but currently behaves like `Block`. |
+| `display: inline` | Not implemented. No `Display::Inline` variant. | Buiy treats text leaves as opaque measure-function leaves; no real inline-formatting context. Plan in [display-and-positioning.md](../../specs/2026-05-08-buiy-layout-design/display-and-positioning.md) — `Display::Inline` is in Buiy's enum but currently behaves like `Block`. |
 | `display: inline-block` | Not implemented. | Same as above; Buiy carries the variant in its `Display` enum, behavior stub. |
 | `display: inline-flex` / `inline-grid` | Not implemented. | Variants reserved in Buiy's `Display`; falls back to block-flex / block-grid. |
 | `display: table` family | Not implemented. `item_is_table: bool` is a sizing hint only. | Buiy implements table layout as **post-Taffy sub-pass 6b** ([architecture.md § 3](../../specs/2026-05-08-buiy-layout-design/architecture.md#3-system-pipeline)). Children of `Display::Table*` are positioned by Buiy after Taffy. |

@@ -49,7 +49,7 @@ Taffy splits its size-value types by what's allowed:
 
 Different fields take different types. `padding` is `Rect<LengthPercentage>` (no `Auto`). `margin` is `Rect<LengthPercentageAuto>`. `size.width` is `Dimension`. `gap` is `Size<LengthPercentage>`.
 
-This is **CSS-correct** (CSS itself splits which values are allowed where), but it's a known ergonomics complaint. The pattern hits embedders building their own type system — you can't have one "size" type that works everywhere; you have to choose. Buiy's response is the `Val` enum on its own components ([Buiy box-model.md](../../specs/2026-05-08-buiy-layout-design/README.md)), translated to the right Taffy type per field.
+This is **CSS-correct** (CSS itself splits which values are allowed where), but it's a known ergonomics complaint. The pattern hits embedders building their own type system — you can't have one "size" type that works everywhere; you have to choose. Buiy's response is the `Val` enum on its own components ([Buiy box-model.md](../../specs/2026-05-08-buiy-layout-design/box-model.md)), translated to the right Taffy type per field.
 
 ### 3.2 Const-construction discipline (post-0.8)
 

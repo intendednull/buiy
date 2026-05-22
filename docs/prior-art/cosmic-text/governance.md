@@ -1,8 +1,6 @@
----
 **Date:** 2026-05-22
 **Status:** active
 **Subject:** cosmic-text — stewardship, funding, release cadence, contribution model
----
 
 # Governance
 

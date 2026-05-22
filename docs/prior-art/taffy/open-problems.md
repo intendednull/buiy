@@ -150,7 +150,7 @@ This is the same workaround every Taffy embedder uses except Servo and Blitz. No
 
 The `Style.aspect_ratio: Option<f32>` field exists and works for block + grid. The bug tracker has [#804](https://github.com/DioxusLabs/taffy/issues/804) "aspect_ratio is not respected in flex layouts" — open, author unknown. The brief asked for verification; the answer is: present but flaky in flexbox specifically.
 
-**Buiy posture:** Expose `aspect_ratio` on `BoxModel`. Document the flex-layout caveat in [box-model.md](../../specs/2026-05-08-buiy-layout-design/README.md). Don't work around upstream; track Taffy's fix.
+**Buiy posture:** Expose `aspect_ratio` on `BoxModel`. Document the flex-layout caveat in [box-model.md](../../specs/2026-05-08-buiy-layout-design/box-model.md). Don't work around upstream; track Taffy's fix.
 
 ## 13. `gap` for block layout
 
@@ -168,7 +168,7 @@ Taffy's `Style.gap: Size<LengthPercentage>` is read by `LayoutFlexboxContainer::
 
 The Taffy `Display` enum is exactly `Block | Flex | Grid | None` (feature-gated). No `Contents`, `FlowRoot`, `ListItem`, `Ruby`, `Table`, `TableRow`, `TableCell`, etc.
 
-**Buiy posture:** Buiy's `Display` enum carries all of them in its target shape ([display-and-positioning.md](../../specs/2026-05-08-buiy-layout-design/README.md)):
+**Buiy posture:** Buiy's `Display` enum carries all of them in its target shape ([display-and-positioning.md](../../specs/2026-05-08-buiy-layout-design/display-and-positioning.md)):
 
 - `Contents` → effectively removes the box from layout; children participate in the parent's formatting context. Implemented by Buiy as a `Display::None`-equivalent that promotes children to grandparent participation; cannot be done purely via Taffy because Taffy doesn't merge children across the boundary.
 - `FlowRoot` → block layout with no margin collapsing through parents; mapped to Taffy's `Display::Block` with a custom containment flag.

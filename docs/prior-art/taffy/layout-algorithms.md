@@ -131,7 +131,7 @@ There is one secondary signal: `Style.item_is_table: bool` (since 0.6, [PR #701]
 
 `writing-mode` (`horizontal-tb` / `vertical-rl` / `vertical-lr` / `sideways-rl` / `sideways-lr`) is **not supported**. Tracked in [issue #752](https://github.com/DioxusLabs/taffy/issues/752) (open). Taffy's geometry assumes a horizontal-tb / inline-x / block-y orientation throughout; rotating the formatting context requires more than the existing `Direction` flip.
 
-This is exactly the gap [Buiy's writing-modes spec](../../specs/2026-05-08-buiy-layout-design/README.md) calls out: Taffy supports a subset (LTR/RTL only). Buiy's design carries `WritingMode::{HorizontalTb, VerticalRl, VerticalLr, SidewaysRl, SidewaysLr}` on its component and decides whether to ship a Buiy-side rotation pass or wait on Taffy. The open question is still open.
+This is exactly the gap [Buiy's writing-modes spec](../../specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md) calls out: Taffy supports a subset (LTR/RTL only). Buiy's design carries `WritingMode::{HorizontalTb, VerticalRl, VerticalLr, SidewaysRl, SidewaysLr}` on its component and decides whether to ship a Buiy-side rotation pass or wait on Taffy. The open question is still open.
 
 ## 7. Container queries — not in Taffy
 

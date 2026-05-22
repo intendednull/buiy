@@ -1,8 +1,6 @@
----
 **Date:** 2026-05-22
 **Status:** active
 **Subject:** cosmic-text — text editing primitives (`Editor`, `Cursor`, `Selection`, `Action`)
----
 
 # Editing
 
