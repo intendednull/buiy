@@ -99,3 +99,36 @@ fn write_resolved_layout_prefers_anchor_override_over_taffy_position() {
     assert!(!overrides.by_entity.contains_key(&plain));
     assert!(!overrides.by_entity.contains_key(&anchor_e)); // anchor target, not anchored
 }
+
+#[test]
+fn sync_styles_reruns_when_anchor_changes() {
+    use buiy_core::layout::SyncStylesIterCount;
+    let mut app = app();
+
+    // Spawn one entity with default Style (no Anchor).
+    let e = app.world_mut().spawn((Node, Style::default())).id();
+    app.update();
+    let count_before = app.world().resource::<SyncStylesIterCount>().0;
+
+    // Insert Anchor — Changed<Anchor> fires.
+    app.world_mut().entity_mut(e).insert(Anchor {
+        anchor_name: Some(AnchorName::Named("x".into())),
+        ..default()
+    });
+    app.update();
+    let count_after = app.world().resource::<SyncStylesIterCount>().0;
+
+    // The entity should have been re-translated. After steady-state, the
+    // count drops back to zero. SyncStylesIterCount measures THIS frame's
+    // matched count, so count_after >= 1 immediately after the Anchor insert.
+    assert!(count_after >= 1);
+
+    // After a second update, the entity is no longer Changed; count drops.
+    app.update();
+    let count_steady = app.world().resource::<SyncStylesIterCount>().0;
+    assert_eq!(count_steady, 0);
+
+    // Sanity: silence unused warning on count_before — it's kept to make
+    // the steady→change→steady arc explicit in the test body.
+    let _ = count_before;
+}

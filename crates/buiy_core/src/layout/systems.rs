@@ -868,17 +868,27 @@ pub(super) fn sync_styles(
                 // stable converge after at most one extra frame and
                 // then stop firing).
                 Changed<ResolvedLayout>,
-                // Phase 5 Task 9: container/CQ change set. Nested under
-                // a single inner `Or` so the outer tuple stays at 15
-                // entries (Bevy 0.18 caps `Or` tuples at 15). The
-                // semantics are identical to spelling the four entries
-                // at the top level — `Or<(A, Or<(B, C)>)>` matches
-                // exactly when `A || B || C`.
+                // Phase 5 Task 9 / Phase 6 Task 9: container/CQ + Anchor
+                // change set. Nested under a single inner `Or` so the
+                // outer tuple stays at 15 entries (Bevy 0.18 caps `Or`
+                // tuples at 15). The semantics are identical to spelling
+                // the entries at the top level — `Or<(A, Or<(B, C)>)>`
+                // matches exactly when `A || B || C`.
+                //
+                // Phase 6: `Changed<Anchor>` joins the inner Or so
+                // `sync_styles` re-translates an entity when its Anchor
+                // component is inserted/modified — the entity may need a
+                // Taffy node sync if it was just spawned, and the
+                // anchor-resolution sub-pass 6d only consults Taffy
+                // layouts for entities whose nodes are up to date.
+                // `LayoutAnchorBroken` is intentionally OMITTED: it's a
+                // devtools marker that doesn't affect Taffy translation.
                 Or<(
                     Changed<Container>,
                     Changed<ContainerQuery>,
                     Changed<ContainerQueryActive>,
                     Changed<ContainerQueryInactive>,
+                    Changed<Anchor>,
                 )>,
             )>,
         ),
