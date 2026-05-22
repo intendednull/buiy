@@ -830,6 +830,107 @@ pub enum TryCondition {
     AnchorVisible,
 }
 
+// ============================================================
+// Phase 7 — multi-column types (flex-and-grid.md § 3)
+// ============================================================
+
+/// CSS `column-count`. Tier-E. Currently a stub field on
+/// `MultiColumn`; the algorithm warns-once and falls back to
+/// single-column layout in v1.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnCount {
+    #[default]
+    Auto,
+    Count(u32),
+}
+
+/// CSS `column-rule` shorthand (width / style / color triple).
+/// Render side honors this; layout side passes it through.
+///
+/// `Color` derives `Reflect` but not `Eq` (it contains `f32`), so this
+/// struct derives `PartialEq` only — matching the `ScrollbarColor`
+/// convention at `types.rs:326-334`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Debug, Default)]
+pub struct ColumnRule {
+    pub width: Length,
+    pub style: ColumnRuleStyle,
+    pub color: bevy::color::Color,
+}
+
+/// CSS `column-rule-style`. Subset of CSS line-style values.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnRuleStyle {
+    #[default]
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+}
+
+/// CSS `column-span`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnSpan {
+    #[default]
+    None,
+    All,
+}
+
+/// CSS `column-fill`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ColumnFill {
+    #[default]
+    Balance,
+    Auto,
+}
+
+/// CSS `break-inside`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakInside {
+    #[default]
+    Auto,
+    Avoid,
+    AvoidColumn,
+}
+
+/// CSS `break-before`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakBefore {
+    #[default]
+    Auto,
+    Always,
+    Avoid,
+    Column,
+    AvoidColumn,
+}
+
+/// CSS `break-after`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakAfter {
+    #[default]
+    Auto,
+    Always,
+    Avoid,
+    Column,
+    AvoidColumn,
+}
+
 /// Per-frame anchor-error category for the warn-dedup `HashSet` in
 /// `LayoutAnchorWarnedThisFrame`. Spec § 3.2 step 4: "warn fires once
 /// per (entity, frame)".
@@ -851,6 +952,53 @@ pub enum AnchorErrorKind {
     /// `anchor-size()` used in a `PositionTry::inset` term. Tier-C
     /// deferred to v1.x; the term resolves to zero with a warn.
     AnchorSizeUsed,
+}
+
+/// Phase 7 — session-scoped warn-once dedup key. Variants cover the
+/// non-anchor layout error/stub conditions introduced in Phase 7.
+///
+/// Anchor errors continue to use the per-frame
+/// `LayoutAnchorWarnedThisFrame` resource — that divergence from
+/// spec § 6 is preserved by Phase 7 (see Phase 6 CHANGELOG).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 6
+/// ("deduplicated via a `HashSet` resource cleared on `BuiyExit`")
+/// and plan decision D3 (sticky inset semantics) +
+/// D6 (per-session warn dedup) in
+/// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LayoutWarnOnceKey {
+    /// `Display::Table*` entity encountered. Sub-pass 6b emits one
+    /// warn per (entity, session) — the table algorithm is deferred
+    /// to v1.x.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+    TableUnsupported(Entity),
+
+    /// `MultiColumn` entity encountered. Sub-pass 6c emits one warn
+    /// per session (no Entity payload — first multicol entity triggers,
+    /// all subsequent are silent) — the multicol algorithm is
+    /// deferred to v1.x.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
+    MulticolUnsupported,
+
+    /// Sticky entity uses `Length::Fr` inset. `fr` is grid-only;
+    /// applying it as a sticky inset is semantically invalid. Warn
+    /// once per (entity, session); inset resolves to 0.0.
+    ///
+    /// Spec: plan decision D3 in
+    /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
+    StickyFrUnsupported(Entity),
+
+    /// Sticky entity uses a `Length::Cq*` inset (container query
+    /// unit). Full cq-context resolution for sticky is deferred to
+    /// a Phase 7.x follow-up (port from Phase 6 `length_inset_to_px`).
+    /// v1 resolves to 0.0. One warn per (entity, session).
+    ///
+    /// Spec: plan decision D3 in
+    /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
+    StickyCqDeferred(Entity),
 }
 
 #[cfg(test)]

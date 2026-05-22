@@ -1,13 +1,27 @@
 //! 9-step pipeline order asserted at the integration level.
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
+//!
+//! Phase 7 Task 11 — the fixture below also exercises the 4-sub-pass
+//! `PostTaffyOverrides` chain (6a sticky → 6b table → 6c multicol → 6d
+//! anchor) with realistic data so the order assertion doubles as a
+//! smoke-and-side-effect check: every sub-pass must produce its
+//! declared observable (override entry for sticky/anchored; warn-once
+//! set entries for table + multicol). The pivotal *ordering* proof is
+//! that the anchored entity tracks the sticky target's DISPLACED
+//! position — only possible if 6a runs before 6d (Task 9's D1 fix).
+//!
+//! Plan: docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md
+//! Task 11 (BLOCKER B3 in plan v2).
 
 use bevy::prelude::*;
 use buiy_core::{
-    CorePlugin, Node,
+    CorePlugin, Node, ResolvedLayout,
     layout::{
-        Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ContainerQuery, Inset, LayoutPlugin, Length,
-        PositionTry, QueryCondition, Sizing, Style,
+        Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ContainerQuery, Display, Inset,
+        LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Length, MultiColumn,
+        OverflowMode, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
+        QueryCondition, ScrollOffset, Sizing, Style,
     },
 };
 
@@ -110,26 +124,85 @@ fn layout_steps_are_chained_in_declared_order() {
         .id();
     app.world_mut().entity_mut(parent).add_children(&[child]);
 
-    // Phase 6 Task 10: spawn an anchor target + anchored entity so
-    // `anchor_resolution` (sub-pass 6d) has reachable work each frame.
-    // The 9-step order assertion below is unchanged — this fixture just
-    // exercises the PostTaffyOverrides slot end-to-end so the order test
-    // doubles as a smoke test that the anchor pass compiles and runs with
-    // realistic data.
-    let anchor_target = app
+    // Phase 7 Task 11: extend the fixture so each of the 4 sub-passes
+    // in `PostTaffyOverrides` has reachable work AND so the per-pass
+    // side-effects are observable from the assertions below.
+    //
+    // Structure (Option 2 from the plan — reuses the Phase 6 anchor
+    // target as the sticky entity to make the ordering invariant
+    // testable):
+    //
+    //   scroll_container  (overflow_y: scroll, ScrollOffset.y = 100)
+    //     └─ content_block          (height 1000)
+    //          ├─ spacer            (height 50, pushes sticky to y=50)
+    //          └─ sticky_target     (Position::Sticky, top inset 0,
+    //                                 Anchor name "test-anchor")
+    //   anchored                    (root) — references "test-anchor"
+    //   table_entity                (root, Display::Table)
+    //   multicol_entity             (root, MultiColumn)
+    //
+    // After update(), sub-pass 6a displaces `sticky_target` from
+    // y_in_block = 50 to y_in_block = 100 (visible_top = 100, threshold
+    // = 100, max(50, 100) = 100). Sub-pass 6d reads the *displaced*
+    // target position from PostTaffyPositionOverrides (Task 9 D1 fix)
+    // and places the anchored entity 5 px below the displaced target,
+    // not below the natural Taffy target. This is the explicit ordering
+    // proof (BLOCKER B3): a wrong ordering (6d before 6a) would yield
+    // anchored.y = natural_target_y + h + gap = 50 + 50 + 5 = 105,
+    // not displaced_target_y + h + gap = 100 + 50 + 5 = 155.
+    //
+    // The sticky_target is 50x50; the anchored entity is 30x20; the
+    // anchored entity sits at the root, so its parent-relative override
+    // is in the root frame (same as the scroll-container's parent
+    // frame in this single-child-of-root layout) — mirrors the
+    // `anchor_target_is_sticky_anchored_tracks_displaced_position` test
+    // in `tests/layout_sticky.rs`.
+    let scroll = app
         .world_mut()
         .spawn((
             Node,
-            Style::default().width_px(50.0).height_px(50.0),
+            Style::default()
+                .width_px(300.0)
+                .height_px(500.0)
+                .overflow_y(OverflowMode::Scroll),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    let content = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(1000.0)))
+        .id();
+    app.world_mut().entity_mut(scroll).add_children(&[content]);
+    let spacer = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(50.0)))
+        .id();
+    let sticky_target = app
+        .world_mut()
+        .spawn((
+            Node,
+            {
+                let mut s = Style::default().width_px(50.0).height_px(50.0);
+                s.position = Position {
+                    kind: PositionKind::Sticky,
+                    inset: Inset {
+                        top: Sizing::Length(Length::Px(0.0)),
+                        ..Default::default()
+                    },
+                };
+                s
+            },
             Anchor {
                 anchor_name: Some(AnchorName::Named("test-anchor".into())),
                 ..default()
             },
         ))
         .id();
-    let _ = anchor_target;
+    app.world_mut()
+        .entity_mut(content)
+        .add_children(&[spacer, sticky_target]);
 
-    let _anchored = app
+    let anchored = app
         .world_mut()
         .spawn((
             Node,
@@ -145,12 +218,32 @@ fn layout_steps_are_chained_in_declared_order() {
         ))
         .id();
 
+    // Sub-pass 6b — Display::Table entity (warns once per (entity,
+    // session)).
+    let table_entity = app.world_mut().spawn((Node, Display::Table)).id();
+
+    // Sub-pass 6c — MultiColumn entity (warns once per session total).
+    let _multicol_entity = app.world_mut().spawn((Node, MultiColumn::default())).id();
+
+    // Single update is sufficient: sticky_offset (6a) and
+    // anchor_resolution (6d) are chained in `PostTaffyOverrides` via
+    // `.chain()` (see layout/mod.rs ~line 180), so the anchor pass
+    // reads the displacement the sticky pass just wrote, on the same
+    // frame.
     app.update();
 
-    let observed = order.lock().unwrap().clone();
+    // Order assertion — the 9-step chain ran in declared order.
+    let observed_full = order.lock().unwrap().clone();
+    let n = observed_full.len();
+    assert_eq!(
+        n, 9,
+        "expected exactly one full pipeline cycle ({} entries); got {} entries: {:?}",
+        9, n, observed_full,
+    );
+    let observed = &observed_full[..];
     assert_eq!(
         observed,
-        vec![
+        &[
             "gc",
             "wmi",
             "sync",
@@ -161,6 +254,73 @@ fn layout_steps_are_chained_in_declared_order() {
             "post_taffy",
             "write",
         ],
-        "BuiyLayoutStep sets did not run in declared order",
+        "BuiyLayoutStep sets did not run in declared order; full trace: {:?}",
+        observed_full,
+    );
+
+    // Sub-pass 6a (sticky_offset) side-effect: the sticky_target gets
+    // an override entry whose y equals the displaced position. With
+    // ScrollOffset.y = 100, top inset = 0, natural y_in_block = 50,
+    // threshold = 100 → displaced y_in_block = 100.
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let sticky_pos = overrides
+        .by_entity
+        .get(&sticky_target)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky_target in override map after sub-pass 6a"));
+    assert_eq!(
+        sticky_pos.y, 100.0,
+        "sub-pass 6a (sticky_offset) should displace sticky_target to y=100; got {:?}",
+        sticky_pos,
+    );
+
+    // Sub-pass 6d (anchor_resolution) side-effect + the explicit
+    // ordering proof: the anchored entity tracks the DISPLACED sticky
+    // target. If 6d ran before 6a (wrong order), anchored.y would be
+    // 50 (natural target y) + 50 (target h) + 5 (gap) = 105.
+    // Correct order (6a before 6d): anchored.y = 100 (displaced
+    // target y in scroll-container frame, which equals root frame
+    // here) + 50 (target h) + 5 (gap) = 155.
+    let anchored_pos = overrides
+        .by_entity
+        .get(&anchored)
+        .copied()
+        .unwrap_or_else(|| panic!("expected anchored entity in override map after sub-pass 6d"));
+    assert_eq!(
+        anchored_pos.y, 155.0,
+        "anchored entity must track the DISPLACED sticky target — if y=105 the anchor pass \
+         read the natural target position, meaning sub-pass 6a did not run before 6d; got {:?}",
+        anchored_pos,
+    );
+
+    // ResolvedLayout reflects the override on both entities.
+    let sticky_rl = app
+        .world()
+        .get::<ResolvedLayout>(sticky_target)
+        .expect("sticky_target has ResolvedLayout");
+    assert_eq!(
+        sticky_rl.position.y, 100.0,
+        "ResolvedLayout for sticky_target reflects sub-pass 6a override",
+    );
+
+    // Sub-pass 6b (table_layout) side-effect: a TableUnsupported entry
+    // exists for the table entity.
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert!(
+        warned
+            .set
+            .contains(&LayoutWarnOnceKey::TableUnsupported(table_entity)),
+        "sub-pass 6b (table_layout) should record TableUnsupported({:?}); warn set: {:?}",
+        table_entity,
+        warned.set,
+    );
+
+    // Sub-pass 6c (multicol_pack) side-effect: the per-session
+    // MulticolUnsupported sentinel is recorded (no entity payload —
+    // first multicol entity triggers, all later are silent).
+    assert!(
+        warned.set.contains(&LayoutWarnOnceKey::MulticolUnsupported),
+        "sub-pass 6c (multicol_pack) should record MulticolUnsupported; warn set: {:?}",
+        warned.set,
     );
 }

@@ -12,23 +12,25 @@ mod types;
 
 pub use components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, Overflow, Position,
-    Scroll, ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
+    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
+    Position, Scroll, ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
-    AnchorNameRegistry, AnchorOverrides, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
-    SyncStylesIterCount,
+    AnchorNameRegistry, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
+    LayoutWarnedOnceSession, PostTaffyPositionOverrides, SyncStylesIterCount,
 };
 pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
-    ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow,
-    GridLine, Inset, JustifyContent, JustifyItems, Length, LogicalEdges, NamedArea, Orientation,
-    OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount,
-    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
-    SnapType, TextOrientation, TrackSize, TryCondition, UnicodeBidi, WritingModeKind,
+    BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnRuleStyle,
+    ColumnSpan, ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas,
+    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, LayoutWarnOnceKey, Length,
+    LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
+    PositionTry, QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
+    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
+    TryCondition, UnicodeBidi, WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -49,13 +51,23 @@ impl Plugin for LayoutPlugin {
         app.init_resource::<systems::LayoutTaffyComputeCount>();
         app.init_resource::<systems::SyncStylesIterCount>();
 
-        // Phase 6 — anchor-positioning resources. `AnchorNameRegistry`
-        // is maintained by the observers below; `AnchorOverrides` and
-        // `LayoutAnchorWarnedThisFrame` are cleared + populated by
-        // `anchor_resolution` each frame.
+        // Phase 6/7 — anchor-positioning + shared override-map resources.
+        // `AnchorNameRegistry` is maintained by the observers below;
+        // `PostTaffyPositionOverrides` is cleared by
+        // `clear_post_taffy_overrides` (Phase 7) and populated by every
+        // sub-pass of `BuiyLayoutStep::PostTaffyOverrides`;
+        // `LayoutAnchorWarnedThisFrame` is cleared + populated by
+        // `anchor_resolution` each frame (anchor-specific);
+        // `LayoutWarnedOnceSession` is the canonical per-session
+        // warn-dedup HashSet used by sticky/table/multicol sub-passes
+        // (spec § 6). It starts empty on every `App::new()`; the
+        // matching `clear_warned_once_on_exit` system is defined but
+        // not yet wired because `buiy_core` has no `BuiyState` /
+        // `BuiyExit` lifecycle states (plan D7).
         app.init_resource::<systems::AnchorNameRegistry>();
-        app.init_resource::<systems::AnchorOverrides>();
+        app.init_resource::<systems::PostTaffyPositionOverrides>();
         app.init_resource::<systems::LayoutAnchorWarnedThisFrame>();
+        app.init_resource::<systems::LayoutWarnedOnceSession>();
 
         // Phase 6 — observers register as closures per Decision D12:
         // `On<'w, 't, E, B>` carries two lifetimes without defaults and
@@ -131,7 +143,18 @@ impl Plugin for LayoutPlugin {
             .register_type::<AnchorRef>()
             .register_type::<PositionTry>()
             .register_type::<TryCondition>()
-            .register_type::<AnchorErrorKind>();
+            .register_type::<AnchorErrorKind>()
+            // Phase 7 — multi-column + warn-once key (Tasks 3, 4, 7).
+            .register_type::<MultiColumn>()
+            .register_type::<ColumnCount>()
+            .register_type::<ColumnRule>()
+            .register_type::<ColumnRuleStyle>()
+            .register_type::<ColumnSpan>()
+            .register_type::<ColumnFill>()
+            .register_type::<BreakInside>()
+            .register_type::<BreakBefore>()
+            .register_type::<BreakAfter>()
+            .register_type::<LayoutWarnOnceKey>();
 
         pipeline::configure_pipeline(app);
 
@@ -145,10 +168,24 @@ impl Plugin for LayoutPlugin {
                 systems::taffy_compute.in_set(BuiyLayoutStep::TaffyCompute),
                 systems::cq_flip_check.in_set(BuiyLayoutStep::CqFlipCheck),
                 systems::cq_flip_rerun.in_set(BuiyLayoutStep::CqFlipReRun),
-                // Phase 6 — sub-pass 6d. Future phases (sticky 6a,
-                // table 6b, multicol 6c) attach with `.before(...)` to
-                // preserve the declared 6a→6b→6c→6d order.
-                systems::anchor_resolution.in_set(BuiyLayoutStep::PostTaffyOverrides),
+                // Phase 7 — PostTaffyOverrides chain: clear → sticky 6a →
+                // table 6b → multicol 6c → anchor 6d. All four sub-passes
+                // share `PostTaffyPositionOverrides`; the clear runs first
+                // so each pass writes into an empty map (architecture.md
+                // § 3, plan Task 8 + D2). `.chain()` over the tuple gives
+                // the explicit deterministic order Phase 7's review
+                // demanded; in-set membership lets external systems
+                // hook between Taffy and write_resolved_layout without
+                // depending on individual sub-pass labels.
+                (
+                    systems::clear_post_taffy_overrides,
+                    systems::sticky_offset,
+                    systems::table_layout,
+                    systems::multicol_pack,
+                    systems::anchor_resolution,
+                )
+                    .chain()
+                    .in_set(BuiyLayoutStep::PostTaffyOverrides),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
             ),
         );

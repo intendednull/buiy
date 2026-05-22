@@ -13,7 +13,8 @@
 //! `Style`.
 
 use super::components::{
-    BoxModel, Container, Display, FlexParams, GridParams, Overflow, Position, Scroll, WritingMode,
+    BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position, Scroll,
+    WritingMode,
 };
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
@@ -52,6 +53,7 @@ pub struct Style {
     pub grid_params: GridParams,
     pub writing_mode: WritingMode,
     pub container: Container,
+    pub multi_column: MultiColumn,
 }
 
 impl Style {
@@ -444,6 +446,18 @@ impl Style {
         self.container = c;
         self
     }
+
+    // ---- MultiColumn ----
+
+    /// Set `MultiColumn` for this entity (declares it as a multi-column
+    /// container). Tier-E API surface — v1 falls back to single-column
+    /// with a warn-once-per-session.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.
+    pub fn multi_column(mut self, m: MultiColumn) -> Self {
+        self.multi_column = m;
+        self
+    }
 }
 
 /// Builder for the box-model surface using logical (writing-mode-aware)
@@ -576,13 +590,13 @@ impl LogicalInset {
 mod tests {
     use super::*;
     use crate::layout::components::{
-        BoxModel, Container, Display, FlexParams, GridParams, Overflow, Position, Scroll,
-        WritingMode,
+        BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position,
+        Scroll, WritingMode,
     };
     use crate::layout::types::{
-        AlignItems, BoxSizing, ContainerType, Direction, Edges, FlexAxis, FlexGap, GridAutoFlow,
-        JustifyContent, Length, OverflowMode, ScrollbarWidth, Sizing, SnapType, TrackSize,
-        WritingModeKind,
+        AlignItems, BoxSizing, ColumnCount, ContainerType, Direction, Edges, FlexAxis, FlexGap,
+        GridAutoFlow, JustifyContent, Length, OverflowMode, ScrollbarWidth, Sizing, SnapType,
+        TrackSize, WritingModeKind,
     };
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
@@ -722,6 +736,7 @@ mod tests {
         assert!(world.get::<GridParams>(entity).is_some());
         assert!(world.get::<WritingMode>(entity).is_some());
         assert!(world.get::<Container>(entity).is_some());
+        assert!(world.get::<MultiColumn>(entity).is_some());
     }
 
     #[test]
@@ -748,6 +763,36 @@ mod tests {
         let s = Style::default();
         assert_eq!(s.container.container_type, ContainerType::Normal);
         assert!(s.container.container_name.is_none());
+    }
+
+    #[test]
+    fn multi_column_field_round_trips() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let s = Style::default().multi_column(MultiColumn {
+            column_count: ColumnCount::Count(3),
+            ..Default::default()
+        });
+        let entity = app.world_mut().spawn(s).id();
+        let mc = app
+            .world()
+            .get::<MultiColumn>(entity)
+            .expect("MultiColumn inserted");
+        assert_eq!(mc.column_count, ColumnCount::Count(3));
+    }
+
+    // v1 → v2: this test asserts MultiColumn is ALWAYS inserted (mirrors Container
+    // behavior). Style is #[derive(Bundle)]; every field always inserts.
+    #[test]
+    fn multi_column_always_inserted() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let s = Style::default(); // multi_column is at default value
+        let entity = app.world_mut().spawn(s).id();
+        assert!(
+            app.world().get::<MultiColumn>(entity).is_some(),
+            "Style is derived-Bundle: every field inserts unconditionally (matches Container)",
+        );
     }
 
     #[test]

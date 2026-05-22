@@ -491,3 +491,115 @@ tagged release.
 
 ### Removed (Phase 6)
 - (none) — Phase 6 is purely additive.
+
+### Added (Phase 7 — layout sticky/table/multicol)
+- **Sticky positioning (sub-pass 6a, tier-F, full impl).** Spec:
+  `display-and-positioning.md § 2.3`. `sticky_offset` system walks
+  `ChildOf` for nearest scroll-container ancestor, computes per-axis
+  displacement (CSS spec § 6.3 algorithm: `max(natural, threshold)`
+  clamped by parent), writes resolved position to the shared
+  `PostTaffyPositionOverrides` resource. Pure helpers:
+  `nearest_scroll_container`, `world_position` (per-call memoized by
+  `(Entity, ancestor)` pair), `resolve_sticky_inset` (closed match on
+  `Length` variants), `compute_sticky_displacement` (pure function, per-
+  axis).
+- **Table layout (sub-pass 6b, tier-C, stub).** Spec:
+  `display-and-positioning.md § 1.2`. `table_layout` no-op stub emits one
+  warn per (entity, session) on first encounter of any `Display::Table*`
+  variant. Fallback path (Table → Block) already ships from Phase 1.
+  Algorithm deferred to v1.x.
+- **Multi-column layout (sub-pass 6c, tier-E, stub).** Spec:
+  `flex-and-grid.md § 3`. `multicol_pack` no-op stub emits one warn per
+  session on first `MultiColumn` encounter (session-wide; no per-entity
+  dedup). Algorithm deferred to v1.x.
+- **`MultiColumn` component** with 9 fields per spec § 3.1
+  (`column_count`, `column_width`, `column_gap`, `column_rule`,
+  `column_span`, `column_fill`, `break_inside`, `break_before`,
+  `break_after`). `Style.multi_column` field + `.multi_column()` fluent
+  setter per spec § 2.4 (container-side convention).
+- **8 supporting enum types:** `ColumnCount`, `ColumnRule`,
+  `ColumnRuleStyle`, `ColumnSpan`, `ColumnFill`, `BreakInside`,
+  `BreakBefore`, `BreakAfter`. All registered with reflection.
+- **`LayoutWarnedOnceSession` resource** + `LayoutWarnOnceKey` enum
+  (variants: `TableUnsupported(Entity)`, `MulticolUnsupported`,
+  `StickyFrUnsupported(Entity)`, `StickyCqDeferred(Entity)`).
+  Session-scoped warn dedup per spec § 6 ("HashSet resource cleared on
+  `BuiyExit`"). Phase 6's per-frame `LayoutAnchorWarnedThisFrame` stays
+  unchanged (different scope, different consumer).
+- **`clear_post_taffy_overrides` system** — dedicated per-frame clear
+  for the shared override map. Runs first in
+  `BuiyLayoutStep::PostTaffyOverrides` chain.
+- **31 integration tests** across `tests/layout_sticky.rs` (15),
+  `tests/layout_table_multicol_stubs.rs` (8),
+  `tests/layout_post_taffy_overrides_clear.rs` (1, from Task 2), and
+  augmented `tests/layout_pipeline_order.rs` (cross-phase ordering
+  proof). Plus 10+ unit tests in `systems.rs::mod tests`.
+- **`Changed<MultiColumn>`** added to `sync_styles`'s inner `Or<>` filter
+  per spec `architecture.md § 1.2` (forward-compat — multicol doesn't
+  feed Taffy in v1 but the trigger is wired for the v1.x algorithm).
+
+### Changed (Phase 7)
+- **Renamed `AnchorOverrides` → `PostTaffyPositionOverrides`** (Phase 6
+  → Phase 7). Same shape (`HashMap<Entity, Vec2>`), same per-frame-
+  cleared semantics; widened scope from "anchor-only writer" to "any
+  sub-pass writer." Public type rename — downstream code referencing
+  `AnchorOverrides` directly must update. Phase 6 follow-up "anchor
+  target IS sticky/table/multicol" closed: `anchor_resolution` (6d)
+  reads target position from the override map first, falls back to
+  `tree.tree.layout()` when no override exists — so anchors that target
+  sticky-displaced elements produce correct dependents (per D1 fix in
+  Task 9).
+- **`BuiyLayoutStep::PostTaffyOverrides` set** now contains 5 systems
+  chained in declared order:
+  `clear_post_taffy_overrides → sticky_offset → table_layout → multicol_pack → anchor_resolution`
+  (Phase 6 attached only `anchor_resolution`).
+
+### Deferred / divergences from spec (Phase 7)
+- **`Position::Fixed` — still a warn-once stub.** Phase 7's spec scope
+  is sub-passes 6a/6b/6c; Fixed is a separate code path (Absolute with
+  viewport-as-CB). Tracked in `docs/plans/follow-ups.md` "Layout —
+  `Position::Fixed` implementation".
+- **Multi-column algorithm — deferred to v1.x.** Per spec § 3.2
+  ("Multi-column is tier-E; v1 ships the API but the algorithm is a
+  stub"). Tracked in follow-ups.
+- **Table layout algorithm — deferred to v1.x.** Per spec § 1.2 ("v1
+  ships only the API surface and the fallback path"). The fallback path
+  (Table → Block via `translate.rs::map_display`) already ships from
+  Phase 1.
+- **Sticky `Length::Cq*` inset resolution — deferred.** Full container-
+  units resolution requires plumbing the cq-context (sticky's reference
+  frame is the sticky entity's own cq-ancestor — distinct from anchor's
+  "anchor target box" frame). v1 resolves to 0.0 with
+  `LayoutWarnOnceKey::StickyCqDeferred(Entity)` warn per (entity,
+  session). Tracked in follow-ups.
+- **Sticky `Length::Fr` inset — invalid.** `fr` is a grid-only unit;
+  applying it to a sticky inset is semantically wrong. v1 resolves to
+  0.0 with `LayoutWarnOnceKey::StickyFrUnsupported(Entity)` warn per
+  (entity, session).
+- **No em/rem/V* support in sticky insets.** `Length::Em(_)`,
+  `Length::Rem(_)`, `Length::Vh/Vw/Vmin/Vmax` do not exist as `Length`
+  variants in v1 (verified at `types.rs:29-50`). When Phase 10
+  (viewport units) or a font-rendering phase adds them, the sticky
+  inset resolver gains new arms (currently closed-match — compiler
+  forces the addition).
+- **Both-top-and-bottom-inset sticky — "top wins" (v1 deviation).** Per
+  D4. CSS spec § 6.3 implies a dual-clamp ("sticks to whichever edge
+  the scroll position is currently closer to"); Phase 7's simpler "top
+  wins" matches WebKit/Blink in the common case. Documented test
+  `sticky_both_top_and_bottom_inset_top_wins` is the regression test;
+  flipping it documents the algorithm upgrade. Tracked in follow-ups.
+- **Sticky inside sticky — inner uses outer's natural (un-displaced)
+  position.** `world_position` walks Taffy positions; an inner sticky
+  inside an outer sticky resolves its threshold against the outer's
+  *natural* position, not the displaced one. Rare authoring case.
+  Tracked in follow-ups for v1.x.
+- **`LayoutWarnedOnceSession` `BuiyExit` clear — wiring deferred.** The
+  `clear_warned_once_on_exit` function exists with
+  `#[allow(dead_code)]`; the wire-up to `OnExit(BuiyState::Active)`
+  depends on the foundation lifecycle which is still draft. Until
+  wired, `App::new()` in tests starts with a clean resource (Bevy
+  default per `init_resource`).
+
+### Removed (Phase 7)
+- (none) — Phase 7 is purely additive (plus rename `AnchorOverrides →
+  PostTaffyPositionOverrides` — see Changed).

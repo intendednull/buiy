@@ -18,15 +18,17 @@ pub use components::{Node, ResolvedLayout, Visual};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::{
     AlignContent, AlignItems, Anchor, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
-    BoxModel, BoxSizing, BuiyLayoutStep, Container, ContainerQuery, ContainerQueryActive,
-    ContainerQueryInactive, ContainerType, Direction, Display, Edges, FlexAxis, FlexGap, FlexItem,
-    FlexParams, FlexWrap, GridAreas, GridAutoFlow, GridItem, GridLine, GridParams, Inset,
-    JustifyContent, JustifyItems, LayoutAnchorBroken, LayoutPlugin, LayoutTree, Length,
-    LogicalBoxModel, LogicalEdges, LogicalInset, NamedArea, Orientation, Overflow, OverflowMode,
-    OverscrollBehavior, Position, PositionKind, PositionTry, QueryCondition, RepeatCount, Scroll,
-    ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapAlign, SnapStop, SnapType, Style, TextOrientation, TrackSize, TryCondition,
-    UnicodeBidi, WritingMode, WritingModeKind, WritingModeResolved,
+    BoxModel, BoxSizing, BreakAfter, BreakBefore, BreakInside, BuiyLayoutStep, ColumnCount,
+    ColumnFill, ColumnRule, ColumnRuleStyle, ColumnSpan, Container, ContainerQuery,
+    ContainerQueryActive, ContainerQueryInactive, ContainerType, Direction, Display, Edges,
+    FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, GridAreas, GridAutoFlow, GridItem, GridLine,
+    GridParams, Inset, JustifyContent, JustifyItems, LayoutAnchorBroken, LayoutPlugin, LayoutTree,
+    LayoutWarnOnceKey, LayoutWarnedOnceSession, Length, LogicalBoxModel, LogicalEdges,
+    LogicalInset, MultiColumn, NamedArea, Orientation, Overflow, OverflowMode, OverscrollBehavior,
+    Position, PositionKind, PositionTry, PostTaffyPositionOverrides, QueryCondition, RepeatCount,
+    Scroll, ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter,
+    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, Style, TextOrientation, TrackSize,
+    TryCondition, UnicodeBidi, WritingMode, WritingModeKind, WritingModeResolved,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 

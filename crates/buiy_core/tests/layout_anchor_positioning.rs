@@ -62,7 +62,7 @@ fn anchor_basic_positions_below_anchor() {
 
 #[test]
 fn write_resolved_layout_prefers_anchor_override_over_taffy_position() {
-    use buiy_core::layout::AnchorOverrides;
+    use buiy_core::layout::PostTaffyPositionOverrides;
     let mut app = app();
 
     // Spawn an entity with NO Anchor — just a normal layout node.
@@ -110,8 +110,8 @@ fn write_resolved_layout_prefers_anchor_override_over_taffy_position() {
     let anchored_rl = app.world().get::<ResolvedLayout>(anchored_e).unwrap();
     assert_eq!(anchored_rl.position.y, 105.0);
 
-    // Confirm via AnchorOverrides resource directly.
-    let overrides = app.world().resource::<AnchorOverrides>();
+    // Confirm via PostTaffyPositionOverrides resource directly.
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
     assert!(overrides.by_entity.contains_key(&anchored_e));
     assert!(!overrides.by_entity.contains_key(&plain));
     assert!(!overrides.by_entity.contains_key(&anchor_e)); // anchor target, not anchored
@@ -425,7 +425,7 @@ fn anchor_steady_state_no_extra_sync_styles_iter() {
 
     // Steady-state Phase 2 invariant: sync_styles iter count is 0 (no
     // Changed<> for any tracked component on this frame). Anchor pass
-    // writes to AnchorOverrides (resource) but does NOT cascade
+    // writes to PostTaffyPositionOverrides (resource) but does NOT cascade
     // Changed<> back into sync_styles's trigger set.
     let count = app.world().resource::<SyncStylesIterCount>().0;
     assert_eq!(count, 0);
