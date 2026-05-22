@@ -13,20 +13,23 @@ Reading order for newcomers:
 
 ## Document types
 
-Three document types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
+Four document types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
 
 - **Spec** (`specs/`) — *what we are building toward.* Target shape of the code: types, traits, invariants, public API. Long-lived, canonical.
 - **Plan** (`plans/`) — *how we get from current code to the target.* Migration steps, file-by-file changes, PR breakdown. Cites the spec it realizes. Goes stale once shipped.
-- **Report** (`reports/`) — *findings from a one-shot investigation.* Audits, post-mortems. Dated, immutable.
+- **Report** (`reports/`) — *findings from a one-shot investigation of our codebase.* Audits, post-mortems. Dated, immutable.
+- **Prior-art** (`prior-art/<system>/`) — *deep dive on an external system we want to learn from.* Living documents; updated as the external system evolves. One folder per system; categories live in the catalog only.
 
 ## Status tags
 
-Every entry below carries one of:
+Specs / plans / reports carry one of:
 
 - `[draft]` — being written, target not yet stable.
 - `[active]` — current target / in-flight migration.
 - `[landed]` — realized in code; canonical reference.
 - `[superseded]` — replaced; entry links to successor.
+
+Prior-art docs carry `[active]` or `[archived]`.
 
 ## Catalog
 
@@ -69,6 +72,34 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Docs organization design](specs/2026-05-07-docs-organization-design.md) — target structure of `docs/`, naming, headers, nesting. `[draft]`
 
+## Prior art
+
+External systems we learn from. Living documents — update on revision, archive when no longer worth tracking. Each system has its own subfolder under [`prior-art/`](prior-art/); categories below are organizational groupings in the index only — they do NOT exist as on-disk subfolders. Driven by the `researching-prior-art` skill (creation) and the `using-prior-art` skill (consumption).
+
+### Bevy UI ecosystem
+
+*(closest relatives — bevy_ui, bevy_feathers, bevy_ui_widgets, bevy_lunex, sickle_ui, woodpecker_ui, kayak_ui, belly, bevy_egui, bevy_flair, bevy_cosmic_edit, bevy_a11y, bevy_picking, iyes_ui_navigation, quill, polako)*
+
+_(empty)_
+
+### Non-Bevy Rust GUI
+
+*(egui, iced, slint, dioxus, leptos, gpui, freya, makepad, xilem/masonry, druid, cushy, floem, vello-gui, relm4, gtk-rs, fltk-rs, tauri)*
+
+_(empty)_
+
+### Game engine UI systems
+
+*(Unity UGUI, Unity UI Toolkit, Unreal Slate, Unreal UMG, Godot Control, NoesisGUI, RmlUi, Coherent Gameface, Scaleform, Flutter-in-Flame, Defold GUI)*
+
+_(empty)_
+
+### Substrate primitives
+
+*(load-bearing dependencies — Taffy, Yoga, Stretch, cosmic-text, Parley, AccessKit, AT-SPI / UIA / NSAccessibility, WAI-ARIA APG, CSS Houdini)*
+
+_(empty)_
+
 ## Reference designs
 
 Archived design bundles (immutable inputs to specs, not specs themselves) live in [`reference-designs/`](reference-designs/) when they exist.
@@ -85,8 +116,10 @@ Cemented in [`specs/2026-05-07-docs-organization-design.md`](specs/2026-05-07-do
 | Multi-file spec | `specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-05-07-example-design/README.md` |
 | Plan | `plans/YYYY-MM-DD-<kebab>.md` | `2026-05-07-example-plan.md` |
 | Report | `reports/YYYY-MM-DD-<kebab>.md` | `2026-05-07-example-audit.md` |
+| Prior-art | `prior-art/<system>/README.md` (no date prefix) | `prior-art/bevy-feathers/README.md` |
+| Prior-art child | `prior-art/<system>/<facet>.md` | `prior-art/bevy-feathers/architecture.md` |
 
-The date is when the doc was written, not the implementation target. The `-design.md` suffix on specs is what visually distinguishes specs from plans in `ls` output.
+The date is when the doc was written, not the implementation target. The `-design.md` suffix on specs is what visually distinguishes specs from plans in `ls` output. Prior-art uses the system name (no date prefix) because the folders are living docs — track revision via git, not filename.
 
 ### Document headers
 
@@ -97,6 +130,14 @@ Every new spec, plan, and report opens with:
 **Status:** draft | active | landed | superseded
 **Spec:** specs/...      (plans only — REQUIRED, points at the spec being realized)
 **Supersedes:** specs/... (if applicable)
+```
+
+Prior-art docs use a different header:
+
+```
+**Date:** YYYY-MM-DD       (last meaningful update — bump on revision)
+**Status:** active | archived
+**Subject:** <System name + one-line scope>
 ```
 
 ### Nested folders

@@ -23,10 +23,11 @@ Quality + longevity beat speed + convenience.
 
 ```
 docs/
-├── README.md           — Master index of specs, plans, and reports (start here)
+├── README.md           — Master index of specs, plans, reports, and prior-art (start here)
 ├── specs/              — Target state — what we are building toward (YYYY-MM-DD-<name>-design.md)
 ├── plans/              — Migration steps — how we get to the target (YYYY-MM-DD-<name>.md)
-├── reports/            — One-shot audits and investigations
+├── reports/            — One-shot audits and investigations of our code
+├── prior-art/          — Deep dives on external systems we learn from (one folder per system)
 └── reference-designs/  — Archived design bundles (immutable)
 ```
 
@@ -58,6 +59,7 @@ Other useful one-offs:
 
 ## Code Conventions
 
-- **Docs entry point:** `docs/README.md` is the master index of specs and plans, grouped by feature area. Read it before adding any new spec or plan, or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
+- **Docs entry point:** `docs/README.md` is the master index of specs, plans, reports, and prior-art folders, grouped by area. Read it before adding any new doc or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
+- **Prior-art workflow:** the `researching-prior-art` skill drives the 7-stage parallel-agent creation of a `docs/prior-art/<system>/` folder; the `using-prior-art` skill is the consumer-side flow that surfaces relevant folders during spec/plan/review work.
 
 _TODO: add language- and project-specific conventions (naming, error handling, testing, serialization, etc.) as they are established._
