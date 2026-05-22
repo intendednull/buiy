@@ -97,7 +97,7 @@ Cursor positioning during preedit: cosmic-text's `Editor::cursor()` returns the 
 
 cosmic-text owns `SwashCache`, which is a `HashMap<CacheKey, SwashImage>` keyed by glyph-id + size + font + subpixel-offset bucket. The embedder reads `SwashImage` (CPU-side pixel data) and uploads to its own GPU texture atlas.
 
-The shared-vs-per-context question: most embedders use a single process-wide atlas (Iced, Bevy 0.14+, COSMIC). Per-window or per-render-target atlases create cross-atlas glyph duplication, which wastes VRAM but eliminates contention. The Buiy spec leaves the choice to the `buiy-render-pipeline-design` sub-spec; the foundation spec only commits to "no atlas leaks" (i.e. no glyph staying resident after its text node disappears for many frames).
+The shared-vs-per-context question: most embedders use a single process-wide atlas (Iced, Bevy 0.15+, COSMIC). Per-window or per-render-target atlases create cross-atlas glyph duplication, which wastes VRAM but eliminates contention. The Buiy spec leaves the choice to the `buiy-render-pipeline-design` sub-spec; the foundation spec only commits to "no atlas leaks" (i.e. no glyph staying resident after its text node disappears for many frames).
 
 ## GPU rendering
 

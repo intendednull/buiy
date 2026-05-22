@@ -42,7 +42,7 @@ The shape cache (`shape-run-cache` feature, off by default in `default`) is opt-
 
 ### `FontSystem` lifetime ownership
 
-`FontSystem` is non-`Sync` and non-`Clone`. Every layout/shape/render call requires `&mut FontSystem`. In multi-window or worker-thread apps, this means a `Arc<Mutex<FontSystem>>` and lock contention, or pinning text work to a single thread. Bevy 0.14 wraps it in a `Res<CosmicFontSystem>` newtype that pins to a specific thread; Iced serializes through its renderer. No embedder has found a clean way to parallelize text work across cores; the `FontSystem` is a process-wide bottleneck.
+`FontSystem` is non-`Sync` and non-`Clone`. Every layout/shape/render call requires `&mut FontSystem`. In multi-window or worker-thread apps, this means a `Arc<Mutex<FontSystem>>` and lock contention, or pinning text work to a single thread. Bevy 0.15 wraps it in a `Res<CosmicFontSystem>` newtype that pins to a specific thread; Iced serializes through its renderer. No embedder has found a clean way to parallelize text work across cores; the `FontSystem` is a process-wide bottleneck.
 
 ### `Attrs` lifetimes
 

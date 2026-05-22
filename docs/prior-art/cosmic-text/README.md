@@ -49,7 +49,7 @@ Buiy's foundation spec ([`text.md`](../../specs/2026-05-07-buiy-foundation/text.
 - [`bidi.md`](bidi.md) — UAX #9 wiring via `unicode-bidi`, paragraph-level handling, base-direction selection, mirroring, isolate/override characters, BiDi-aware caret movement.
 - [`capabilities.md`](capabilities.md) — Can-do / can't-do matrix mapped to Buiy `text.md` tiers; gap analysis with `inherit` / `build above` / `fork+patch` / `out` stance per row.
 - [`editing.md`](editing.md) — `Editor` / `ViEditor` types, `Action` enum, cursor and selection model, multi-line, soft-wrap, hard-wrap, indent, undo (split via `vi` feature), IME composition boundary, find/replace, spellcheck.
-- [`integration.md`](integration.md) — Canonical embedder shape (one `FontSystem`, one `SwashCache`, per-node `Buffer`, per-edit `Editor`, embedder atlas); Iced integration; Bevy 0.14+ integration; COSMIC dogfood; Freya/Floem **not** downstream; Buiy plan; IME lifecycle.
+- [`integration.md`](integration.md) — Canonical embedder shape (one `FontSystem`, one `SwashCache`, per-node `Buffer`, per-edit `Editor`, embedder atlas); Iced integration; Bevy 0.15+ integration; COSMIC dogfood; Freya/Floem **not** downstream; Buiy plan; IME lifecycle.
 - [`history.md`](history.md) — Pre-cosmic-text Rust text landscape, COSMIC genesis, version timeline, downstream adoption.
 - [`governance.md`](governance.md) — System76 stewardship, commercial model, funding, licensing, release cadence, issue triage, contribution model.
 - [`ecosystem.md`](ecosystem.md) — Substrate (harfrust, swash, skrifa, fontdb, unicode-*); Parley contrast table; downstream apps and crates; community misattributions.
