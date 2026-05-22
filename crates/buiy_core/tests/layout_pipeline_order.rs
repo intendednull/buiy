@@ -5,7 +5,10 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin, Node,
-    layout::{BuiyLayoutStep, ContainerQuery, LayoutPlugin, Length, QueryCondition, Sizing, Style},
+    layout::{
+        Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ContainerQuery, Inset, LayoutPlugin,
+        Length, PositionTry, QueryCondition, Sizing, Style,
+    },
 };
 
 #[test]
@@ -106,6 +109,41 @@ fn layout_steps_are_chained_in_declared_order() {
         ))
         .id();
     app.world_mut().entity_mut(parent).add_children(&[child]);
+
+    // Phase 6 Task 10: spawn an anchor target + anchored entity so
+    // `anchor_resolution` (sub-pass 6d) has reachable work each frame.
+    // The 9-step order assertion below is unchanged — this fixture just
+    // exercises the PostTaffyOverrides slot end-to-end so the order test
+    // doubles as a smoke test that the anchor pass compiles and runs with
+    // realistic data.
+    let anchor_target = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(50.0).height_px(50.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("test-anchor".into())),
+                ..default()
+            },
+        ))
+        .id();
+    let _ = anchor_target;
+
+    let _anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(30.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("test-anchor".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(5.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
 
     app.update();
 
