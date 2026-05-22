@@ -23,8 +23,8 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, Length, QueryCondition,
-    Sizing, TryCondition,
+    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, Length,
+    QueryCondition, Sizing, TryCondition,
 };
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
@@ -259,7 +259,8 @@ fn kahn_anchor_sort(
 
     loop {
         // Build in_degree map: number of edges ending at each node.
-        let mut in_degree: std::collections::HashMap<Entity, usize> = std::collections::HashMap::new();
+        let mut in_degree: std::collections::HashMap<Entity, usize> =
+            std::collections::HashMap::new();
         for &e in current_edges.keys() {
             in_degree.entry(e).or_insert(0);
         }
@@ -461,10 +462,7 @@ fn try_conditions_pass(
             let (pos, size) = anchor_rect;
             // Intersection of anchor rect with viewport rect
             // (0,0,viewport.x,viewport.y).
-            pos.x + size.x > 0.0
-                && pos.y + size.y > 0.0
-                && pos.x < viewport.x
-                && pos.y < viewport.y
+            pos.x + size.x > 0.0 && pos.y + size.y > 0.0 && pos.x < viewport.x && pos.y < viewport.y
         }
     })
 }
@@ -560,8 +558,7 @@ pub(super) fn anchor_resolution(
     // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
     // other end of each dropped edge (read from the pre-drop edges
     // map).
-    let mut dropped_targets: std::collections::HashSet<Entity> =
-        std::collections::HashSet::new();
+    let mut dropped_targets: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     for d in &dropped {
         new_warns.push((*d, AnchorErrorKind::InCycle));
         if let Some(Some(target)) = edges.get(d).copied() {
@@ -704,10 +701,7 @@ pub(super) fn anchor_resolution(
     // where a previously cycle-broken plain-Node target becomes
     // un-broken.
     for (t, existing_broken) in broken_query.iter() {
-        if existing_broken.is_some()
-            && !broken_set.contains(&t)
-            && anchored_query.get(t).is_err()
-        {
+        if existing_broken.is_some() && !broken_set.contains(&t) && anchored_query.get(t).is_err() {
             commands.entity(t).remove::<LayoutAnchorBroken>();
         }
     }
@@ -717,10 +711,7 @@ pub(super) fn anchor_resolution(
         if warned.set.insert((entity, kind)) {
             match kind {
                 AnchorErrorKind::TargetMissing => {
-                    warn!(
-                        ?entity,
-                        "buiy: anchor target missing or has Display::None"
-                    );
+                    warn!(?entity, "buiy: anchor target missing or has Display::None");
                 }
                 AnchorErrorKind::AllFallbacksFailed => {
                     warn!(?entity, "buiy: every position_try fallback failed");
@@ -1982,7 +1973,6 @@ mod observer_tests {
     use super::*;
     use crate::layout::components::Anchor;
     use crate::layout::types::AnchorName;
-    use bevy::prelude::*;
 
     fn app_with_observers() -> App {
         let mut app = App::new();

@@ -649,8 +649,14 @@ mod tests {
 
     #[test]
     fn anchor_differs_when_position_try_diverges() {
-        let a = Anchor { position_try: vec![PositionTry::default()], ..default() };
-        let b = Anchor { position_try: vec![], ..default() };
+        let a = Anchor {
+            position_try: vec![PositionTry::default()],
+            ..default()
+        };
+        let b = Anchor {
+            position_try: vec![],
+            ..default()
+        };
         assert_ne!(a, b);
     }
 
