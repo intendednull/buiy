@@ -645,6 +645,29 @@ fn is_table_display(d: &Display) -> bool {
     )
 }
 
+/// Sub-pass 6c — multi-column packing stub.
+///
+/// Spec § 3.2 (`flex-and-grid.md`): "Multi-column is tier-E; v1 ships
+/// the API but the algorithm is a stub that produces single-column
+/// layout with `warn!` once per session." This sub-pass emits the
+/// single warn — no per-entity tracking.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
+#[allow(dead_code)] // Wired into BuiyLayoutStep::PostTaffyOverrides in Task 8.
+pub(super) fn multicol_pack(
+    multicol_q: Query<&MultiColumn>,
+    mut warned: ResMut<LayoutWarnedOnceSession>,
+) {
+    if multicol_q.iter().next().is_none() {
+        return; // No multicol entities; no warn.
+    }
+    if warned.set.insert(LayoutWarnOnceKey::MulticolUnsupported) {
+        bevy::log::warn!(
+            "Layout: MultiColumn detected — multi-column packing algorithm is deferred to v1.x (flex-and-grid.md § 3.2). Falling back to single-column layout. This warn fires once per session."
+        );
+    }
+}
+
 /// Private helper invoked by the `On<Insert, Anchor>` observer closure
 /// registered in `LayoutPlugin::build` (D12). Adds the entity to the
 /// registry under its `anchor_name` if any; otherwise tracks just the
@@ -2678,6 +2701,40 @@ mod tests {
                 .set
                 .iter()
                 .filter(|k| matches!(k, LayoutWarnOnceKey::TableUnsupported(_)))
+                .count(),
+            1,
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 7 Task 7 — `multicol_pack` system tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn multicol_pack_warns_once_per_session() {
+        let mut app = App::new();
+        app.init_resource::<LayoutWarnedOnceSession>();
+        app.add_systems(Update, multicol_pack);
+        let _e1 = app.world_mut().spawn((Node, MultiColumn::default())).id();
+        let _e2 = app.world_mut().spawn((Node, MultiColumn::default())).id();
+        app.update();
+        let warned = app.world().resource::<LayoutWarnedOnceSession>();
+        assert_eq!(
+            warned
+                .set
+                .iter()
+                .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolUnsupported))
+                .count(),
+            1,
+        );
+
+        app.update();
+        let warned = app.world().resource::<LayoutWarnedOnceSession>();
+        assert_eq!(
+            warned
+                .set
+                .iter()
+                .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolUnsupported))
                 .count(),
             1,
         );
