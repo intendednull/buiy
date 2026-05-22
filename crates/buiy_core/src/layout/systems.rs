@@ -22,7 +22,7 @@ use super::components::{
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
-use super::types::{ContainerType, GridAreas, Length, QueryCondition};
+use super::types::{AnchorErrorKind, ContainerType, GridAreas, Length, QueryCondition};
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -61,6 +61,113 @@ pub struct LayoutTaffyComputeCount(pub u32);
 /// `ScrollOffset` / `ScrollSnapItem`) keeps it zero.
 #[derive(Resource, Default, Debug)]
 pub struct SyncStylesIterCount(pub usize);
+
+/// Phase 6 — anchor-name lookup table maintained by observers on
+/// `On<Insert, Anchor>` / `On<Replace, Anchor>` / `On<Remove, Anchor>`.
+///
+/// Storage:
+/// - `by_name`: anchor name → ordered `Vec<(Entity, u64)>`. Last entry
+///   is the current winner (spec: "most-recently-inserted wins").
+/// - `entity_epochs`: every `Anchor`-bearing entity's monotonic insertion
+///   epoch. Used by `anchor_resolution`'s Kahn-cycle-edge-drop algorithm
+///   to identify the most-recently-inserted entity in a cycle.
+/// - `next_epoch`: monotonic counter bumped on every observer-driven
+///   insert. Never decrements.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.
+#[derive(Resource, Default, Debug)]
+pub struct AnchorNameRegistry {
+    by_name: std::collections::HashMap<String, Vec<(Entity, u64)>>,
+    entity_epochs: std::collections::HashMap<Entity, u64>,
+    next_epoch: u64,
+}
+
+impl AnchorNameRegistry {
+    /// Insert an entity under a name, bumping the epoch. If the same
+    /// `(name, entity)` pair already exists, this is a *re*-insert
+    /// (e.g. component replaced) — the epoch bumps so the cycle tiebreaker
+    /// considers this entry the most recent.
+    ///
+    /// Use [`track_epoch`] for unnamed anchors — `insert` is for the
+    /// named case only.
+    pub fn insert(&mut self, name: String, entity: Entity) {
+        let epoch = self.bump_epoch_for(entity);
+        let bucket = self.by_name.entry(name).or_default();
+        bucket.retain(|(e, _)| *e != entity);
+        bucket.push((entity, epoch));
+    }
+
+    /// Track the entity's insertion epoch without inserting into any
+    /// name bucket. Used by the `On<Insert, Anchor>` observer for
+    /// `Anchor.anchor_name == None` cases — the entity still needs an
+    /// epoch entry (for the Kahn cycle-edge-drop tiebreaker) but should
+    /// NOT pollute `by_name` with sentinel buckets.
+    pub fn track_epoch(&mut self, entity: Entity) {
+        let _ = self.bump_epoch_for(entity);
+    }
+
+    fn bump_epoch_for(&mut self, entity: Entity) -> u64 {
+        let epoch = self.next_epoch;
+        self.next_epoch += 1;
+        self.entity_epochs.insert(entity, epoch);
+        epoch
+    }
+
+    /// Remove every entry for this entity from every name bucket and
+    /// from `entity_epochs`. Called on `On<Remove, Anchor>` and
+    /// `On<Replace, Anchor>` (the replace path removes then re-inserts
+    /// using the new anchor_name).
+    pub fn remove(&mut self, entity: Entity) {
+        for bucket in self.by_name.values_mut() {
+            bucket.retain(|(e, _)| *e != entity);
+        }
+        // Drop emptied buckets to avoid unbounded growth.
+        self.by_name.retain(|_, bucket| !bucket.is_empty());
+        self.entity_epochs.remove(&entity);
+    }
+
+    /// Most-recently-inserted entity claiming this name (spec § 3.1
+    /// last-wins semantics), or `None` if no entity claims it.
+    pub fn find_entity_by_name(&self, name: &str) -> Option<Entity> {
+        self.by_name.get(name)?.last().map(|(e, _)| *e)
+    }
+
+    /// Entity's most-recent insertion epoch. Used by the Kahn
+    /// cycle-edge-drop algorithm.
+    pub fn entity_epoch(&self, entity: Entity) -> u64 {
+        self.entity_epochs.get(&entity).copied().unwrap_or(0)
+    }
+
+    /// Iterate `(name, bucket)` pairs for `DuplicateName` detection
+    /// (D11). `bucket.len() > 1` means duplicate; the last entry is
+    /// the late-inserter / warn target.
+    pub(super) fn iter_buckets(&self) -> impl Iterator<Item = (&str, &[(Entity, u64)])> {
+        self.by_name.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
+    }
+}
+
+/// Phase 6 — frame-local map of anchor-resolution position overrides.
+/// `anchor_resolution` clears this at the top of each call and populates
+/// it for every entity with `Anchor.position_anchor.is_some()`. Step 7
+/// (`write_resolved_layout`) consults the map per entity and uses the
+/// override position (with size still from `tree.tree.layout()`) when
+/// present.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2.
+#[derive(Resource, Default, Debug)]
+pub struct AnchorOverrides {
+    pub by_entity: std::collections::HashMap<Entity, Vec2>,
+}
+
+/// Phase 6 — per-frame warn-dedup set. Cleared at the top of
+/// `anchor_resolution` (for the `TargetMissing`, `AllFallbacksFailed`,
+/// `InCycle`, `AnchorSizeUsed` kinds) and populated by both observer
+/// closures (for the `DuplicateName` kind) and `anchor_resolution`
+/// itself. Spec § 3.2 step 4: "warn fires once per (entity, frame)".
+#[derive(Resource, Default, Debug)]
+pub struct LayoutAnchorWarnedThisFrame {
+    pub set: std::collections::HashSet<(Entity, AnchorErrorKind)>,
+}
 
 /// Step 0 — drop Taffy nodes for entities whose `Node` component was
 /// removed (despawn or component-remove). `RemovedComponents<Node>`
@@ -1097,5 +1204,59 @@ mod cq_tests {
         // aspect (never landscape, never satisfies MinAspectRatio>0).
         let conds = [QueryCondition::MinAspectRatio(1.0)];
         assert!(!evaluate_conditions(&conds, Vec2::new(300.0, 0.0)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anchor_name_registry_lookup_returns_most_recent() {
+        let mut r = AnchorNameRegistry::default();
+        let e1 = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let e2 = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        r.insert("foo".into(), e1);
+        r.insert("foo".into(), e2);
+        assert_eq!(r.find_entity_by_name("foo"), Some(e2));
+    }
+
+    #[test]
+    fn anchor_name_registry_remove_falls_back_to_prior() {
+        let mut r = AnchorNameRegistry::default();
+        let e1 = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let e2 = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        r.insert("foo".into(), e1);
+        r.insert("foo".into(), e2);
+        r.remove(e2);
+        assert_eq!(r.find_entity_by_name("foo"), Some(e1));
+    }
+
+    #[test]
+    fn anchor_name_registry_remove_unknown_is_noop() {
+        let mut r = AnchorNameRegistry::default();
+        r.remove(bevy::prelude::Entity::from_raw_u32(99).unwrap()); // does not panic
+    }
+
+    #[test]
+    fn anchor_name_registry_epoch_monotonic() {
+        let mut r = AnchorNameRegistry::default();
+        let e1 = bevy::prelude::Entity::from_raw_u32(1).unwrap();
+        let e2 = bevy::prelude::Entity::from_raw_u32(2).unwrap();
+        r.insert("a".into(), e1);
+        r.insert("b".into(), e2);
+        assert!(r.entity_epoch(e2) > r.entity_epoch(e1));
+    }
+
+    #[test]
+    fn anchor_overrides_default_empty() {
+        let o = AnchorOverrides::default();
+        assert!(o.by_entity.is_empty());
+    }
+
+    #[test]
+    fn layout_anchor_warned_default_empty() {
+        let w = LayoutAnchorWarnedThisFrame::default();
+        assert!(w.set.is_empty());
     }
 }
