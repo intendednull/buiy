@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-22
 **Revision:** v2 (post 3-agent parallel review — see "Plan v2 revisions" section below)
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/display-and-positioning.md`](../specs/2026-05-08-buiy-layout-design/display-and-positioning.md) § 1.2 (table layout status), § 2.3 (sticky positioning) + [`flex-and-grid.md`](../specs/2026-05-08-buiy-layout-design/flex-and-grid.md) § 3 (multi-column) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-passes 6a/6b/6c), § 6 (error model).
 **Supersedes:** none (graduates from empty sub-passes 6a/6b/6c stubs declared in Phase 1 `BuiyLayoutStep::PostTaffyOverrides` and partially populated in Phase 6 by sub-pass 6d).
 
