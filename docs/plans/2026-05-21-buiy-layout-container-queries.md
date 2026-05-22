@@ -1,7 +1,7 @@
 # Buiy layout — Phase 5: container queries
 
 **Date:** 2026-05-21
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md`](../specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md) (§ 1) and [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) (§ 3.2)
 **Supersedes:** none
 
