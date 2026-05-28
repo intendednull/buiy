@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Date:** 2026-05-08
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md`](../specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md) (with cross-references to [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md))
 
 **Goal:** Phase 2 of the layout migration — ship the overflow / scrolling component set: `Overflow` (per-axis overflow mode + scrollbar / scroll-behavior / overscroll settings), `Scroll` (snap container), `ScrollOffset` (runtime scroll position), `ScrollSnapItem` (per-snap-item child-side); wire `Overflow` and `ScrollbarWidth` into Taffy 0.10's `Style.overflow: Point<Overflow>` and `Style.scrollbar_width: f32`; widen `sync_styles`'s change-detection trigger set to include `Changed<Overflow>` / `Changed<Scroll>` while *excluding* `Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` so scroll-position mutations never invalidate Taffy.

@@ -52,7 +52,7 @@ Reading order: architecture first (it sets the invariants every other file relie
 
 Each pillar is detailed in [architecture.md](architecture.md); this section is the index.
 
-1. **Single-pipeline, fixed order.** `RemovedNodes → SyncStyles → ContainerQueryActivate → TaffyCompute → ContainerQueryFlipCheck → maybe-re-Taffy → AnchorResolution → WriteResolvedLayout`, gated behind `BuiySet::Layout`.
+1. **Single-pipeline, fixed order.** `RemovedNodesGc → WritingModeInherit → SyncStyles → CqActivate → TaffyCompute → CqFlipCheck → CqFlipReRun → PostTaffyOverrides → WriteResolvedLayout`, gated behind `BuiySet::Layout`. Step 6 `PostTaffyOverrides` chains four sub-passes in order: 6a sticky offset, 6b table layout, 6c multicol pack, 6d anchor resolution.
 2. **Hybrid component API.** Public ergonomic `Style` (struct-literal *and* fluent methods over the same builder); on insert, expands to a Bundle of decomposed components. Decomposed components are canonical for ECS storage, BSN, reflection, and serialization.
 3. **`LayoutTree` is the bridge.** A `NonSendResource` holding `TaffyTree<()>` + `HashMap<Entity, TaffyNodeId>`. Lifetime: app-long. GC: `RemovedComponents<Node>` reader.
 4. **Container queries: same-frame re-layout, capped 2×.** Activate against this frame's Taffy output; if any query flipped, run Taffy a second time. No fixed-point iteration.
@@ -81,14 +81,14 @@ This spec is a leaf — it does not spawn further sub-specs. Per-feature depth l
 
 ## 4.1 Migration
 
-This spec is target-state. The Phase 0 → target migration (15-component decomposition, hybrid `Style` builder, 8-step pipeline, anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer per-window, `LogicalBoxModel` insert-helper) lives in a series of follow-up plans, the first of which is [Phase 1 — Foundation](../../plans/2026-05-08-buiy-layout-foundation.md). The plans sequence the work into reviewable PRs; nothing in this spec depends on the plans landing.
+This spec is target-state. The Phase 0 → target migration (the decomposed-component set, hybrid `Style` builder, 8→9-step pipeline (`WritingModeInherit` is the 9th, added in Phase 4), anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer per-window, `LogicalBoxModel` insert-helper) lives in a series of follow-up plans, the first of which is [Phase 1 — Foundation](../../plans/2026-05-08-buiy-layout-foundation.md). The plans sequence the work into reviewable PRs; nothing in this spec depends on the plans landing.
 
 ## 5. Open questions
 
 - **Crate placement.** Whether layout lives in `buiy_core` (Phase 0 location) long-term, or splits into `buiy_layout` per [foundation README § 5 — crate-split refinement](../2026-05-07-buiy-foundation/README.md#5-open-questions). Resolution waits on the foundation open question; this spec assumes either.
 - **Anchor positioning fallback-chain depth cap.** v1 supports any chain length (resolved per [display-and-positioning.md § 3.1](display-and-positioning.md#31-anchor-component)). Open: whether to cap depth via a `position_try_max_depth` resource if profiling surfaces deeply-nested fallback hot paths.
 - **Container query unit semantics in nested containers.** `cqi` / `cqb` resolve against the nearest *queried* ancestor, but the interaction with `container-type: inline-size` vs `size` is subtle when nested. v1 implements the common case (single query container per axis); complex nesting is deferred to a follow-up. [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details.
-- **Subgrid availability.** Tracks Taffy upstream — Buiy ships subgrid when Taffy ships it. v1 surface includes the API stubs but the implementation returns `Display::Grid` semantics until upstream lands.
+- **Subgrid availability.** Tracks Taffy upstream — Buiy ships subgrid when Taffy ships it. Subgrid is a per-track-size value, not a whole-display mode: `TrackSize::Subgrid` is a reserved variant that warns once and degrades to `TrackSize::Auto` (Taffy 0.10 has no subgrid support). The variant is kept in the API surface so authoring code stays forward-compatible until upstream lands.
 - **Masonry availability.** Tracks Taffy and CSS-WG. Currently flux. v1 marks it tier-E and does not ship.
 - **Stacking-context performance.** The set of triggers is large (positioned + non-`auto` z-index, opacity < 1, transform, filter, will-change, isolation, mix-blend-mode). Whether to detect lazily (during paint) or eagerly (during layout) is open. [stacking-and-top-layer.md](stacking-and-top-layer.md) discusses.
 - **`writing-mode: sideways-*` Taffy support.** Taffy 0.10 has logical properties but doesn't fully model sideways modes. Whether to ship a Buiy-side rotation pass or wait on Taffy is open. [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details.

@@ -31,7 +31,7 @@ Each laid-out entity has four nested boxes: **content**, **padding**, **border**
 ## 2. `BoxModel`
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct BoxModel {
     pub width:    Sizing,
@@ -45,26 +45,23 @@ pub struct BoxModel {
     pub border:   Edges,
     pub box_sizing: BoxSizing,
     pub aspect_ratio: Option<AspectRatio>,
-    pub gap: Option<Length>,            // shorthand; flex/grid override
-    pub row_gap: Option<Length>,
-    pub column_gap: Option<Length>,
 }
 ```
 
-Defaults:
+Flex/grid gap is carried by `FlexParams.gap` / `GridParams.gap` (the `FlexGap` type — see [flex-and-grid.md](flex-and-grid.md)), not by `BoxModel`. A block-layout `gap` shorthand on `BoxModel` is deferred to a follow-up phase that wires block-axis gap to Taffy.
+
+Defaults (derived `Default`):
 
 - `width` / `height` = `Sizing::Auto`
-- `min_*` = `Sizing::Length(Length::Px(0.0))`
-- `max_*` = `Sizing::None`
+- `min_*` / `max_*` = `Sizing::Auto` — `Sizing`'s derived default. This is more CSS-faithful than `Px(0)` / `None`: CSS's initial value for `min-width` / `min-height` is `auto`, resolved contextually (Taffy applies the automatic minimum-size rule).
 - `padding` / `margin` / `border` = `Edges::ZERO`
 - `box_sizing` = `BoxSizing::ContentBox` (CSS default)
 - `aspect_ratio` = `None`
-- `gap` / `row_gap` / `column_gap` = `None`
 
 ### 2.1 `Edges` — physical-or-logical edge values
 
 ```rust
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct Edges {
     pub top: Length,
     pub right: Length,
@@ -81,12 +78,11 @@ impl Edges {
     };
     pub fn all(v: f32) -> Self;
     pub fn axis(x: f32, y: f32) -> Self;
-    pub fn logical(start: f32, end: f32, block_start: f32, block_end: f32) -> LogicalEdges;
     // ... etc
 }
 ```
 
-For logical-property authoring, use `LogicalEdges` (see [§ 4](#4-logical-properties)). Translation to physical edges happens during `style_to_taffy` based on the entity's effective writing-mode + direction.
+For logical-property authoring, use the separate `LogicalEdges` type (see [§ 4](#4-logical-properties)) — it carries the four logical edges and translates to physical `Edges` via `to_edges(mode, direction)` at construct time.
 
 ### 2.2 `BoxSizing`
 
@@ -97,20 +93,19 @@ pub enum BoxSizing {
 }
 ```
 
-Most app UIs prefer `BorderBox`. Buiy's default theme sets `BorderBox` globally via a `BuiyDefaults` plugin override (analogous to `* { box-sizing: border-box }`). The component default stays `ContentBox` to match CSS.
+Most app UIs prefer `BorderBox`. There is no global override (no `* { box-sizing: border-box }` analogue): the component default stays `ContentBox` to match CSS, and authors opt into `BorderBox` per entity.
 
 ### 2.3 `AspectRatio`
 
 ```rust
 pub struct AspectRatio {
     pub ratio: f32,             // width / height; 16/9 = 1.777..
-    pub auto:  bool,            // true = auto; intrinsic dimensions take precedence
 }
 ```
 
-`AspectRatio { ratio: 16.0/9.0, auto: false }` matches CSS `aspect-ratio: 16/9`. `auto: true` matches CSS `aspect-ratio: auto`.
+`BoxModel.aspect_ratio = Some(AspectRatio { ratio: 16.0/9.0 })` matches CSS `aspect-ratio: 16/9`. CSS `aspect-ratio: auto` (intrinsic dimensions take precedence) is represented by *not setting* the ratio — `BoxModel.aspect_ratio == None`, the field being `Option<AspectRatio>`.
 
-Replaced elements (image, video, canvas — see foundation 3.1) feed their intrinsic ratio through this component automatically. Authors override by setting `auto: false`.
+Replaced elements (image, video, canvas — see foundation 3.1) feed their intrinsic ratio through this component automatically. Authors override by setting `aspect_ratio` to an explicit `Some(_)`.
 
 ## 3. `Sizing` — the size value type
 
@@ -158,36 +153,45 @@ Every physical-axis property has a logical-axis sibling:
 
 ### 4.1 API shape
 
-`BoxModel` stores **physical** values (`width`, `height`, `padding.top`, etc.) — the canonical form Taffy consumes. Authors who want logical authoring use a `LogicalBoxModel` *insert helper*:
+`BoxModel` stores **physical** values (`width`, `height`, `padding.top`, etc.) — the canonical form Taffy consumes. Authors who want logical authoring use the `LogicalBoxModel` *builder* — a plain struct (not a `Component`) whose `to_box_model(&WritingMode)` they call explicitly to produce a `BoxModel`:
 
 ```rust
-LogicalBoxModel {
-    inline_size: Sizing::Length(Length::Rem(20.0)),
+let bm = LogicalBoxModel {
+    inline_size: Sizing::Length(Length::Px(320.0)),
     block_size:  Sizing::Auto,
     padding: LogicalEdges {
-        block_start:  Length::Rem(1.0),
-        block_end:    Length::Rem(1.0),
-        inline_start: Length::Rem(1.5),
-        inline_end:   Length::Rem(1.5),
+        block_start:  Length::Px(16.0),
+        block_end:    Length::Px(16.0),
+        inline_start: Length::Px(24.0),
+        inline_end:   Length::Px(24.0),
     },
     .. default()
 }
+.to_box_model(&writing_mode);
 ```
 
-On insert, `LogicalBoxModel` resolves against the entity's effective `WritingMode` + `direction` and writes a `BoxModel` with the corresponding physical fields. The `LogicalBoxModel` component is *not* stored — it's an insert-time transform. (The same pattern applies to `Position` insets — see [display-and-positioning.md](display-and-positioning.md).)
+`to_box_model` resolves against the passed `WritingMode` (its `mode` + `direction`): vertical modes swap inline ↔ block onto width ↔ height, and physical edges follow the `LogicalEdges` 6-row table. The author then passes the returned `BoxModel` into `Style`. `LogicalBoxModel` is never inserted as a component and there is no on-insert auto-resolution — translation happens at construct time, on the author's side. (The same builder pattern applies to `Position` insets via `LogicalInset` — see [display-and-positioning.md](display-and-positioning.md).)
 
-This keeps Taffy talking only physical values while letting authors think in logical ones. Reflection / BSN / inspectors see `BoxModel`; the logical helper is a Rust ergonomic.
+This keeps Taffy talking only physical values while letting authors think in logical ones. Reflection / BSN / inspectors see `BoxModel`; the logical builder is a Rust ergonomic.
 
 ### 4.2 Why not store logical?
 
-Storing logical and translating per-frame would require knowing the writing-mode at every read. A theme switch that flips writing-mode would invalidate every cached translation. Storing physical means a writing-mode switch invalidates only entities whose `LogicalBoxModel` was the source — which `Style`'s `Bundle` insertion already tracks via `Changed<WritingMode>` propagating to a re-translation pass. Cost is paid on the boundary, not on every read.
+Storing logical and translating per-frame would require knowing the writing-mode at every read. A theme switch that flips writing-mode would invalidate every cached translation. Storing physical means the writing-mode is consulted exactly once, when the author calls `to_box_model`; a later writing-mode change requires re-running the builder, but there is no per-frame re-translation pass and no `Changed<WritingMode>` tracking. Cost is paid on the boundary, not on every read.
 
 ## 5. Units
 
+The variants and constructors marked **Phase 10** below are *target state* — they are not yet shipped. The current `Length` (Phases 1/3/5) ships only `Px`, `Percent`, `Fr`, and the container-query family (`Cqw`/`Cqh`/`Cqi`/`Cqb`/`Cqmin`/`Cqmax`), with `px()` / `percent()` constructors. Font-relative, viewport, and `Calc` variants land in Phase 10 (`buiy-layout-units-calc`).
+
 ```rust
 pub enum Length {
+    // --- shipped ---
     Px(f32),
     Percent(f32),               // relative to containing block
+    Fr(f32),                    // grid fractional unit (only valid in GridParams)
+    Cqw(f32), Cqh(f32),         // container-query units
+    Cqi(f32), Cqb(f32),
+    Cqmin(f32), Cqmax(f32),
+    // --- Phase 10 (buiy-layout-units-calc), not yet shipped ---
     Em(f32),                    // relative to current font-size
     Rem(f32),                   // relative to root font-size
     Vw(f32), Vh(f32),           // viewport units
@@ -195,10 +199,6 @@ pub enum Length {
     Svw(f32), Svh(f32),         // small viewport (mobile UA bars retracted)
     Lvw(f32), Lvh(f32),         // large viewport (mobile UA bars expanded)
     Dvw(f32), Dvh(f32),         // dynamic viewport (live)
-    Cqw(f32), Cqh(f32),         // container-query units
-    Cqi(f32), Cqb(f32),
-    Cqmin(f32), Cqmax(f32),
-    Fr(f32),                    // grid fractional unit (only valid in GridParams)
     Calc(Box<CalcExpr>),        // calc()/min()/max()/clamp() tree
 }
 
@@ -206,6 +206,7 @@ impl Length {
     pub const ZERO: Self = Self::Px(0.0);
     pub fn px(v: f32) -> Self;
     pub fn percent(v: f32) -> Self;
+    // --- Phase 10 (buiy-layout-units-calc), not yet shipped ---
     pub fn rem(v: f32) -> Self;
     pub fn calc(expr: CalcExpr) -> Self;
     // ... etc
@@ -214,19 +215,20 @@ impl Length {
 
 ### 5.1 Resolution
 
-Each unit resolves at one of three points:
+Each unit resolves at one of four points:
 
 1. **`Px`** — already absolute; no resolution.
-2. **`Percent` / `Em` / `Rem` / viewport / container** — resolved by `style_to_taffy` against:
-   - `Percent`: containing block dimension (axis-dependent).
+2. **`Em` / `Rem` / viewport / container** — resolved by `style_to_taffy` against:
    - `Em`: current font-size (resolved via `buiy-text-rendering-design`'s font cascade; falls back to `16px` until text-rendering integrates).
    - `Rem`: root font-size resource (`RootFontSize`, default `16px`).
    - Viewport: `bevy::window::Window` size.
-   - Container: nearest queried ancestor (see [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md)).
-3. **`Fr`** — passed through to Taffy untouched; only Taffy's grid algorithm resolves it.
+   - Container (`Cq*`): nearest queried ancestor (see [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md)).
+3. **`Percent` / `Fr`** — passed through to Taffy as a percent / fractional dimension; `style_to_taffy` does *not* pre-resolve them. `Percent` resolves against the containing block (axis-dependent) inside Taffy; `Fr` is resolved only by Taffy's grid algorithm.
 4. **`Calc`** — recursively resolves operands, then evaluates the expression (`+ - * /`, `min()`, `max()`, `clamp()`). Resolution happens *before* Taffy sees the value.
 
 ### 5.2 `Calc`
+
+**Phase 10 (`buiy-layout-units-calc`) target state — not implemented.** `CalcExpr`, the `Length::Calc` variant, and the `Length::calc` constructor ship together in Phase 10; nothing in this section exists in the current code.
 
 ```rust
 pub enum CalcExpr {
@@ -254,8 +256,8 @@ This is documented behavior, not a bug. The lag is one frame and matches contain
 ## 6. Test surface
 
 - **`BoxSizing::ContentBox` vs `BorderBox`** — fixture asserting `width: 100px, padding: 10px` produces 100px content box (`ContentBox`) vs 80px content box (`BorderBox`).
-- **Aspect ratio** — fixture with `width: auto, height: 100px, aspect_ratio: 16/9` produces `width: 177.7..px`.
-- **Intrinsic sizing fall-through** — until text-rendering integrates, `MinContent` produces `Auto` semantics; this is asserted so the cutover is visible.
-- **Logical → physical translation** — fixture inserts `LogicalBoxModel` with `inline_size: 100px` under `WritingMode::VerticalRl`; assert resulting `BoxModel.height == 100px`.
-- **Unit resolution** — `100%` of a 800px container resolves to `800px`; `2rem` resolves to `2 × root_font_size`; `Cqw(50)` resolves to half the queried container's inline axis.
-- **`Calc` evaluation** — `min(100%, 800px)` of a 600px container = 600px; of a 1000px container = 800px.
+- **Aspect ratio** (target test, not yet present) — fixture with `width: auto, height: 100px, aspect_ratio: 16/9` produces `width: 177.7..px`. The `aspect_ratio → taffy` wiring exists (`translate.rs` populates `s.aspect_ratio`) but is not asserted by a box-model fixture; `layout_box_sizing.rs` covers only the `ContentBox`/`BorderBox` cases.
+- **Intrinsic sizing fall-through** (target test, not yet present) — until text-rendering integrates, `MinContent` produces `Auto` semantics; a test should assert this so the cutover is visible. The behavior exists (`translate.rs`'s `sizing_to_dim` maps `MinContent` / `MaxContent` / `FitContent` to Taffy `auto`) but no test currently asserts it.
+- **Logical → physical translation** — a test constructs `LogicalBoxModel` with `inline_size: 100px` and calls `to_box_model(&wm)` for a `VerticalRl` writing mode; assert the resulting `BoxModel.height == 100px` (`LogicalBoxModel` is a builder, not a `Component` — see [§ 4.1](#41-api-shape)).
+- **Unit resolution** — percentage resolution against the containing block is exercised in `layout_container_queries.rs` (`Cqw(50)` of an 800px container resolves to `400px`); the exact `100%` → `800px` box-model fixture is not present. (`2rem` resolving to `2 × root_font_size` is a **Phase 10** target test, not yet present.) `Cqw(50)` resolution lives under container-queries, not a box-model fixture — see [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md).
+- **`Calc` evaluation** (**Phase 10** target test, not yet present) — `min(100%, 800px)` of a 600px container = 600px; of a 1000px container = 800px.

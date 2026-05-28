@@ -10,34 +10,37 @@ Tier-F. Full CSS Flexbox via Taffy. Buiy delegates the algorithm; the Buiy contr
 
 ### 1.1 `FlexParams` (on the flex container)
 
+`FlexParams` is the only `Component` here; the inner enums and `FlexGap` are
+plain value types and carry no `#[reflect(Component, Default)]` attribute.
+
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct FlexParams {
     pub direction: FlexAxis,             // Row | Column | RowReverse | ColumnReverse
     pub wrap: FlexWrap,                  // NoWrap | Wrap | WrapReverse
     pub justify_content: JustifyContent, // FlexStart | FlexEnd | Center | SpaceBetween | SpaceAround | SpaceEvenly
-    pub align_items: AlignItems,         // FlexStart | FlexEnd | Center | Baseline | Stretch
-    pub align_content: AlignContent,     // FlexStart | FlexEnd | Center | SpaceBetween | SpaceAround | SpaceEvenly | Stretch
+    pub align_items: AlignItems,         // Stretch | FlexStart | FlexEnd | Center | Baseline
+    pub align_content: AlignContent,     // Stretch | FlexStart | FlexEnd | Center | SpaceBetween | SpaceAround | SpaceEvenly
     pub gap: FlexGap,                    // { row, column }
 }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlexAxis { #[default] Row, Column, RowReverse, ColumnReverse }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlexWrap { #[default] NoWrap, Wrap, WrapReverse }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JustifyContent { #[default] FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlignItems { #[default] Stretch, FlexStart, FlexEnd, Center, Baseline }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlignContent { #[default] Stretch, FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct FlexGap { pub row: Length, pub column: Length }
 ```
 
@@ -48,8 +51,8 @@ pub struct FlexGap { pub row: Length, pub column: Length }
 ### 1.2 `FlexItem` (on flex children)
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
-#[reflect(Component, Default)]
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
 pub struct FlexItem {
     pub grow: f32,                      // CSS flex-grow
     pub shrink: f32,                    // CSS flex-shrink (default 1.0)
@@ -59,6 +62,10 @@ pub struct FlexItem {
 }
 ```
 
+`Default` is a hand-written `impl` rather than `#[derive(Default)]` — `flex-shrink`
+defaults to `1.0` (not the field's natural `0.0`), matching the CSS initial value. For
+the same reason `#[reflect(Component)]` carries no `Default` (no `#[reflect(Default)]`).
+
 ### 1.3 Builder ergonomics
 
 ```rust
@@ -66,7 +73,7 @@ Style::default()
     .flex_row()                          // sets Display + FlexAxis::Row
     .justify_content(JustifyContent::SpaceBetween)
     .align_items(AlignItems::Center)
-    .gap(Length::Rem(1.0))
+    .gap_px(16.0)
 ```
 
 Setting `.flex_row()` after `.flex_column()` overwrites the axis. The builder's fluent methods are commutative *only* within the same domain — the last call within a domain wins. Cross-domain order is irrelevant.
@@ -78,7 +85,7 @@ Tier-F. Full CSS Grid via Taffy.
 ### 2.1 `GridParams` (on the grid container)
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct GridParams {
     pub template_columns: Vec<TrackSize>,
@@ -96,7 +103,7 @@ pub struct GridParams {
 
 pub enum TrackSize {
     Length(Length),                            // px, %, fr, etc.
-    MinMax(Box<TrackSize>, Box<TrackSize>),    // CSS minmax()
+    MinMax(Vec<TrackSize>),                    // CSS minmax(); expected len() == 2 ([min, max])
     Repeat(RepeatCount, Vec<TrackSize>),       // CSS repeat()
     Auto, MinContent, MaxContent, FitContent(Length),
 }
@@ -104,16 +111,18 @@ pub enum TrackSize {
 pub enum RepeatCount {
     AutoFill,
     AutoFit,
-    Count(u32),
+    Count(u16),
 }
 ```
 
-`Length::Fr(f32)` is only meaningful inside `TrackSize::Length(Length::Fr(_))`; using `Fr` outside grid is a `warn!` and falls back to `Auto`.
+`MinMax` stores its two arguments as a `Vec<TrackSize>` (expected `len() == 2`, `[min, max]`) rather than the more natural `(Box<TrackSize>, Box<TrackSize>)` because `bevy_reflect` 0.18 has no `Reflect` impl for `Box<T>`. Translation validates the arity and emits a warn-once, falling back to `Auto`, if it isn't exactly 2. `RepeatCount::Count` is `u16` to match Taffy 0.10's `RepetitionCount::Count(u16)` directly (65 535 repetitions is well above any realistic UI grid).
+
+`Length::Fr(f32)` is only meaningful inside `TrackSize::Length(Length::Fr(_))`; using `Fr` outside grid warns once and falls back to `Auto` (or `0`px where the Taffy target type has no `Auto` variant — gap/padding/border, which translate through `length_to_lp`).
 
 ### 2.2 `GridItem` (on grid children)
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct GridItem {
     pub column: GridLine,                       // GridLine::span(2) | GridLine::start_end(1, 4) | GridLine::area("header") | GridLine::Auto
@@ -124,22 +133,24 @@ pub struct GridItem {
 
 pub enum GridLine {
     Auto,
-    Start(i32),                                 // 1-indexed; negative counts from end
-    Span(u32),
-    StartEnd(i32, i32),
-    Area(SmolStr),                              // resolved against parent's GridParams.template_areas
+    Start(i16),                                 // 1-indexed; negative counts from end
+    Span(u16),
+    StartEnd(i16, i16),
+    Area(String),                               // resolved against parent's GridParams.template_areas
 }
 ```
 
+`Start` / `Span` / `StartEnd` use `i16` / `u16` to match Taffy 0.10's `GridLine` / `Span` underlying types directly. `Area` uses `String` rather than `SmolStr` to avoid a new direct dependency — area names are set once per spawn and never touched on a hot path.
+
 ### 2.3 Subgrid
 
-CSS `subgrid` value on `template-columns` / `template-rows`. Tracks Taffy upstream — Buiy ships subgrid when Taffy ships it. The API stub:
+CSS `subgrid` value on `template-columns` / `template-rows`. Tracks Taffy upstream — Buiy ships full subgrid behavior when Taffy ships it. The API variant:
 
 ```rust
-TrackSize::Subgrid       // future variant
+TrackSize::Subgrid
 ```
 
-is reserved. Until Taffy lands subgrid, `TrackSize::Subgrid` falls back to the parent's grid template by inheritance and emits a `warn!` once per session naming the limitation. (Plans coordinate the cutover.)
+ships today as a present stub. Taffy 0.10 has no subgrid support, so until it lands, `TrackSize::Subgrid` falls back to Taffy `Auto` (`track_to_*` in `translate.rs`) and emits a `warn!` once per session naming the limitation (`warn_once_subgrid`). The fallback is plain `Auto`, *not* inheritance of the parent's grid template — that richer behavior arrives with the Taffy cutover. (Plans coordinate the cutover.)
 
 ### 2.4 Masonry
 
@@ -152,7 +163,7 @@ Tier-E. CSS Multi-column Layout Module Level 1. Not in Taffy; Buiy-owned.
 ### 3.1 `MultiColumn` component
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Clone, Copy, PartialEq, Debug, Default)]
 #[reflect(Component, Default)]
 pub struct MultiColumn {
     pub column_count: ColumnCount,              // Auto | Count(u32)
@@ -167,14 +178,20 @@ pub struct MultiColumn {
 }
 ```
 
+`Eq` is intentionally *not* derived: `column_width` / `column_gap` carry `Length` (`f32`)
+and `column_rule.color` is a `bevy::color::Color`, neither of which is `Eq`. `PartialEq`
+is sufficient for tests and authoring ergonomics.
+
 ### 3.2 Algorithm
 
-A multi-column container's layout is computed in two stages:
+A multi-column container's layout will be computed in two stages (target algorithm — the shipped v1 is a stub, see below):
 
 1. **Determine column count** — from explicit `column_count`, or computed from `column_width` + container width + `column_gap`.
-2. **Lay out children into columns** — Buiy walks children and packs them into columns, respecting `break-*` properties. This runs as sub-pass 6c of the post-Taffy-overrides phase ([architecture.md § 3](architecture.md#3-system-pipeline)), after table layout (6b) and before anchor resolution (6d). Children's `ResolvedLayout.position` is overwritten.
+2. **Lay out children into columns** — Buiy will walk children and pack them into columns, respecting `break-*` properties, overwriting children's `ResolvedLayout.position`. This will run as sub-pass 6c of the post-Taffy-overrides phase ([architecture.md § 3](architecture.md#3-system-pipeline)), after table layout (6b) and before anchor resolution (6d).
 
-Multi-column is tier-E; v1 ships the API but the algorithm is a stub that produces single-column layout with `warn!` once per session. Prioritization waits on user demand.
+Multi-column is tier-E; v1 ships the API but the algorithm is a stub. The shipped sub-pass 6c (`multicol_pack` in `systems.rs`) is a no-op for layout: it does not determine column count or pack children — `ResolvedLayout.position` is left as Taffy produced it (single-column). It only emits the deferral `warn!`. Prioritization of the real algorithm waits on user demand.
+
+The deferral warn is deduplicated session-wide via `LayoutWarnOnceKey::MulticolUnsupported` in the `LayoutWarnedOnceSession` resource. That key carries **no `Entity` payload**, so the warn fires exactly once per session *in total* across all `MultiColumn` entities — the first multicol entity encountered triggers it; every subsequent one is silent. This contrasts with the table stub, whose `LayoutWarnOnceKey::TableUnsupported(Entity)` dedups per `(entity, session)` and so warns once for each distinct table entity.
 
 ## 4. Mixing display types
 
@@ -188,6 +205,6 @@ Multi-column is tier-E; v1 ships the API but the algorithm is a stub that produc
 - **Grid template** — `1fr 2fr 1fr` columns in a 400px row produce 100/200/100.
 - **Grid named areas** — fixture with `template_areas` and child `GridItem.column = Area("header")`; assert correct cell.
 - **Grid `repeat(auto-fill, ...)`** — fixture with `auto-fill` columns sized 100px in a 350px container; assert 3 columns + 50px slack.
-- **Subgrid stub warns** — until Taffy lands subgrid, `TrackSize::Subgrid` produces inherited template + one `warn!`.
-- **Multi-column stub warns** — `MultiColumn::column_count = Count(3)` produces single-column layout + one `warn!` (reverts once the algorithm ships).
+- **Subgrid stub warns** — until Taffy lands subgrid, `TrackSize::Subgrid` falls back to Taffy `Auto` + one `warn!`.
+- **Multi-column stub warns** — multiple `MultiColumn` entities (e.g. three, one with `column_count = Count(3)`) produce single-column layout + exactly one session-wide `warn!` total, regardless of entity count (reverts once the algorithm ships).
 - **Mixed flex-in-grid** — fixture nests a `Display::Flex(Row)` inside a `Display::Grid` cell; assert flex children are laid out within the cell's resolved box.

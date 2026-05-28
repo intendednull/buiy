@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Date:** 2026-05-08
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/`](../specs/2026-05-08-buiy-layout-design/README.md)
 
 **Goal:** Phase 0 → target migration phase 1: replace the mega-`Style` with a hybrid `Style` *builder* over decomposed components, install the 8-step pipeline skeleton, and keep every Phase 0 layout test green plus `hello_button` running.

@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Date:** 2026-05-09
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/flex-and-grid.md`](../specs/2026-05-08-buiy-layout-design/flex-and-grid.md) § 2 (with cross-references to [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md))
 
 **Goal:** Phase 3 of the layout migration — ship CSS Grid: a `GridParams` container component (template + auto + flow + alignment + gap), a `GridItem` per-child component (column/row placement, justify/align self), and the supporting value types `TrackSize`, `RepeatCount`, `GridLine`, `GridAreas`, `GridAutoFlow`, `JustifyItems`, plus `Length::Fr`. Wire `Display::Grid` / `Display::InlineGrid` to `taffy::Display::Grid` (Phase 1 routes both to Block) and translate the grid surface through to Taffy 0.10's grid fields. Widen `sync_styles`'s trigger filter to include `Changed<GridParams>` and `Changed<GridItem>`. Subgrid (CSS-WG ships when Taffy ships) and Masonry (CSS-WG flux) ship as **reserved variants** that warn once and degrade to a sensible fallback.

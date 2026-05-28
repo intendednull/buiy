@@ -17,16 +17,23 @@ pub struct Stacking {
     pub top_layer: TopLayer,
 }
 
+#[derive(Reflect, Clone, Copy, Default)]
 pub enum ZIndex {
+    #[default]
     Auto,                // CSS `z-index: auto` — does not form a stacking context
-    Layer(i32),          // explicit; forms a stacking context iff `Position::Kind != Static` (CSS rule)
+    Layer(i32),          // explicit; forms a stacking context iff `Position.kind != PositionKind::Static` (CSS rule)
 }
 
+#[derive(Reflect, Clone, Copy, Default)]
 pub enum Isolation {
-    Auto, Isolate,       // `Isolate` forces a stacking context
+    #[default]
+    Auto,
+    Isolate,             // `Isolate` forces a stacking context
 }
 
+#[derive(Reflect, Clone, Copy, Default)]
 pub enum TopLayer {
+    #[default]
     None,
     Modal,               // <dialog open> equivalent — escapes containing-block stacking
     Popover,             // popover-attribute equivalent — same escape
@@ -39,18 +46,18 @@ pub enum TopLayer {
 
 An entity forms a *stacking context* — a sub-tree painted as one unit, ordered against siblings by `z_index` — when **any** of:
 
-1. `Position::Kind != Static` AND `Stacking::z_index = Layer(_)`. (CSS quirk: positioned-with-explicit-z-index forms a stacking context; `z_index` on a `Static` entity does *not*.)
+1. `Position.kind != PositionKind::Static` AND `Stacking::z_index = Layer(_)`. (CSS quirk: positioned-with-explicit-z-index forms a stacking context; `z_index` on a `PositionKind::Static` entity does *not*.)
 2. `Stacking::isolation = Isolate`.
 3. `Transform` is non-identity. (Detailed in [transforms-and-containment.md § 3](transforms-and-containment.md#3-stacking-context-formation).)
 4. `Containment::contain` includes `Paint` or `Strict`. (Detailed in [transforms-and-containment.md § 5](transforms-and-containment.md#5-containment).)
-5. Render-side properties form one too: `opacity < 1.0`, `filter != none`, `mix_blend_mode != normal`, `will_change` mentions an SC-forming property. These live on render-side components but are *checked* during this spec's stacking-context detection so layout can hand a correct list to render.
+5. Render-side properties form one too: `opacity < 1.0`, `filter != none`, `mix_blend_mode != normal`, `will_change` mentions an SC-forming property (will-change portion: tier-E, deferred — see [transforms-and-containment.md § 5.3](transforms-and-containment.md#53-will-change)). These live on render-side components but are *checked* during this spec's stacking-context detection so layout can hand a correct list to render.
 6. The root entity always forms one.
 
 The rule set is deliberately union — any single trigger is sufficient. The CSS spec is the source of truth; the foundation visuals.md § 3.2 enumeration anchors the trigger list.
 
 ### 2.1 `StackingContext` private component
 
-A private `StackingContext { painters_z: Vec<Entity>, .. }` component is synced by the layout-pipeline's `WriteResolvedLayout` step (or a sub-pass thereof) onto every entity that forms a stacking context. The component is private (not author-set) but reflectable so devtools can inspect it.
+A private `StackingContext { painters_z: Vec<Entity>, .. }` component is synced by a new step-6 `BuiyLayoutStep::PostTaffyOverrides` sub-pass — **sub-pass 6f**, chained after the shipped sticky (6a) / table (6b) / multicol (6c) / anchor (6d) sub-passes and after the Phase 8 transform-composition sub-pass (6e) — onto every entity that forms a stacking context. It must run after 6e: stacking-context detection needs the composed transform to detect transform-triggered stacking contexts (§2 trigger 3). Placing it in `PostTaffyOverrides` rather than the single-system `WriteResolvedLayout` write-back keeps it alongside the other post-Taffy override sub-passes. The component is private (not author-set) but reflectable so devtools can inspect it.
 
 `StackingContext.painters_z` is the *paint order* of every descendant within this context, sorted by:
 
@@ -64,7 +71,7 @@ This list is what render walks at paint time. Resolving paint order at layout ti
 
 ### 2.2 Performance
 
-Stacking-context detection runs as a sub-pass of step 7 (`WriteResolvedLayout`). Cost: `O(entities)`. Most entities don't form a stacking context, so the inner sort is `O(stacking-context count × children-per-context log)` in practice.
+Stacking-context detection runs as a step-6 (`PostTaffyOverrides`) sub-pass (6f, after the 6e transform-composition sub-pass). Cost: `O(entities)`. Most entities don't form a stacking context, so the inner sort is `O(stacking-context count × children-per-context log)` in practice.
 
 The detect-eagerly-vs-lazily question ([README § 5](README.md#5-open-questions)) is open: lazy detection during paint would amortize, but break the rule of "render reads finished data."
 
@@ -83,7 +90,9 @@ The top layer is a parallel render layer that escapes all containing-block stack
 ### 4.1 `TopLayer` activation
 
 ```rust
+#[derive(Reflect, Clone, Copy, Default)]
 pub enum TopLayer {
+    #[default]
     None,        // default — entity participates in normal stacking
     Modal,       // <dialog open>
     Popover,     // popover-attribute
@@ -92,7 +101,7 @@ pub enum TopLayer {
 }
 ```
 
-Setting `TopLayer != None` *removes* the entity from its parent's stacking context for paint purposes. Layout still treats it normally — its containing block, size, and position resolve as if it were in-flow. (Authoring guidance: top-layer elements are typically `Position::Fixed` or use anchor positioning to attach to a trigger.)
+Setting `TopLayer != None` *removes* the entity from its parent's stacking context for paint purposes. Layout still treats it normally — its containing block, size, and position resolve as if it were in-flow. (Authoring guidance: top-layer elements are typically `PositionKind::Fixed` or use anchor positioning to attach to a trigger.)
 
 ### 4.2 Top-layer ordering
 
@@ -107,7 +116,7 @@ Within each tier, order is by *activation order* — the entity activated most r
 
 ### 4.3 Escape from clip
 
-Top-layer entities are not clipped by ancestor `Overflow::Hidden` / `Overflow::Clip`. Their effective clip rect is the window viewport (or per-window viewport in multi-window setups; see `buiy-window-and-surface-design`).
+Top-layer entities are not clipped by an ancestor whose `Overflow.x` / `Overflow.y` is set to `OverflowMode::Hidden` or `OverflowMode::Clip`. Their effective clip rect is the window viewport (or per-window viewport in multi-window setups; see `buiy-window-and-surface-design`).
 
 ### 4.4 Per-window scope
 
@@ -120,7 +129,11 @@ Each window has its own top layer. A modal in window A doesn't paint over window
 commands.spawn((
     Style::default()
         .position(PositionKind::Fixed)
-        .inset(Inset { top: Length::px(50.0), right: Length::px(50.0), .. default() })
+        .inset(Inset {
+            top: Sizing::Length(Length::px(50.0)),
+            right: Sizing::Length(Length::px(50.0)),
+            ..default()
+        })
         .top_layer(TopLayer::Modal),
     /* dialog contents */,
 ));
@@ -142,9 +155,9 @@ The contract: render reads, layout writes. Render does *not* compute stacking co
 ## 6. Test surface
 
 - **`z_index` ordering** — fixture with three positioned siblings, z-index `[2, -1, 0]`; assert `painters_z` orders them `[-1, 0, 2]`.
-- **`Position::Static` ignores `z_index`** — fixture with a static element + z-index 5; assert it paints in document order, not lifted.
+- **`PositionKind::Static` ignores `z_index`** — fixture with a static element + z-index 5; assert it paints in document order, not lifted.
 - **Isolation forms stacking context** — fixture with `Isolation::Isolate`; assert a `StackingContext` component appears.
-- **Top-layer escapes parent overflow** — fixture parent `Overflow::Hidden`, child `TopLayer::Modal` with `Position::Fixed` extending past the parent; assert the modal's `StackingContext` membership is the window root, not the parent.
+- **Top-layer escapes parent overflow** — fixture parent with `Overflow { x: OverflowMode::Hidden, y: OverflowMode::Hidden }`, child `TopLayer::Modal` with `PositionKind::Fixed` extending past the parent; assert the modal's `StackingContext` membership is the window root, not the parent.
 - **Top-layer activation order** — open three popovers in sequence; assert the activation deque has them in order; assert the most-recent paints last (on top).
 - **Mixed top-layer tiers** — Modal + Tooltip simultaneously open; assert paint order is Tooltip below Modal regardless of activation order.
 - **Per-window top layer** — multi-window fixture; modal in window A doesn't appear in window B's `painters_z`.

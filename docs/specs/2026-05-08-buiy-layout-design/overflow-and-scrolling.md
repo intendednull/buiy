@@ -7,14 +7,14 @@ How an entity handles content that exceeds its box, and how scrolling — includ
 ## 1. `Overflow`
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct Overflow {
     pub x: OverflowMode,
     pub y: OverflowMode,
     pub scrollbar_gutter:  ScrollbarGutter,
     pub scrollbar_width:   ScrollbarWidth,
-    pub scrollbar_color:   Option<ScrollbarColor>,
+    pub scrollbar_color:   ScrollbarColor,
     pub scroll_behavior:   ScrollBehavior,
     pub overscroll_x:      OverscrollBehavior,
     pub overscroll_y:      OverscrollBehavior,
@@ -39,7 +39,7 @@ pub enum ScrollbarWidth {
 }
 ```
 
-Logical aliases — `overflow-block` and `overflow-inline` — translate to `x` / `y` based on the entity's `WritingModeResolved` ([container-queries-and-writing-modes.md § 2.3](container-queries-and-writing-modes.md#23-logical--physical-translation)).
+**Planned (not yet shipped).** Logical aliases — `overflow-block` and `overflow-inline` — that translate to `x` / `y` based on the entity's `WritingModeResolved` ([container-queries-and-writing-modes.md § 2.3](container-queries-and-writing-modes.md#23-logical--physical-translation)) are future work; `map_overflow_mode` does no axis swap today. v1 ships only the physical `x` / `y` fields.
 
 ### 1.1 Mapping to Taffy
 
@@ -59,14 +59,14 @@ An entity is a *scroll container* if either axis's `OverflowMode` is `Scroll` or
 
 - A scroll viewport (the visible portion of children).
 - A scroll position (`ScrollOffset` component, runtime state — see [§ 2](#2-scroll-state)).
-- A `ContainingBlock` for descendants with `Position::Sticky`.
+- A containing block (the sticky-positioning reference frame) for descendants with `Position::Sticky`, resolved at runtime.
 
 `Hidden` / `Clip` clip but do not scroll.
 
 ## 2. Scroll state
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct ScrollOffset {
     pub x: f32,
@@ -104,7 +104,7 @@ Per-axis. Lives on `Overflow.overscroll_x` / `overscroll_y` (see § 1 struct def
 Tier-C. CSS Scroll Snap Module Level 1.
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct Scroll {
     pub snap_type:   SnapType,
@@ -119,7 +119,7 @@ pub enum SnapType {
     BothMandatory, BothProximity,
 }
 
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct ScrollSnapItem {
     pub align: SnapAlign,
@@ -150,9 +150,9 @@ Render-side concern; layout stores the value. `buiy-render-pipeline-design` cons
 - **`OverflowMode::Visible` doesn't clip** — fixture parent 100×100 with a 200×100 child; assert child's `ResolvedLayout` extends beyond parent.
 - **`OverflowMode::Hidden` clips** — same fixture with `Overflow::hidden()`; child's `ResolvedLayout` unchanged but render-side clip rect = parent box. (Render concern; this spec verifies that `Overflow` is correctly stored.)
 - **Scroll container detection** — fixture with `OverflowMode::Auto` on x-axis only; assert entity is treated as scroll container in containing-block resolution for sticky descendants.
-- **`ScrollbarGutter::Stable` reserves space** — fixture with `Stable` gutter on a non-scrolling container; assert content box is inset by scrollbar width regardless.
+- **Deferred / not yet shipped: `ScrollbarGutter::Stable` reserves space** — fixture with `Stable` gutter on a non-scrolling container; assert content box is inset by scrollbar width regardless. (`Stable` does not yet reserve space — see `components.rs` / `types.rs`.)
 - **Scroll offset doesn't invalidate layout** — fixture with content; modify `ScrollOffset`; assert `ResolvedLayout` is byte-equal across frames.
-- **`overflow-block` / `overflow-inline` translate** — under `WritingMode::VerticalRl`, `overflow-block: hidden` translates to `x: Hidden` (block axis = x in vertical-rl).
+- **Deferred / not yet shipped: `overflow-block` / `overflow-inline` translate** — under `WritingMode::VerticalRl`, `overflow-block: hidden` translates to `x: Hidden` (block axis = x in vertical-rl). (The logical aliases are unbuilt — see § 1.)
 
 ## 6. Open: virtual scrolling
 

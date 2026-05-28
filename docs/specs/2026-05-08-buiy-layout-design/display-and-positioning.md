@@ -7,8 +7,10 @@ How an entity participates in layout (`Display`), how its box is placed relative
 ## 1. `Display`
 
 ```rust
-#[derive(Component, Reflect, Clone, PartialEq, Default)]
-#[reflect(Component, Default)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)] // NOTE: no `Default` in the reflect attr, unlike `Position`/`PositionKind`.
+                      // Follow-up: decide whether `Display` should expose `Default` through
+                      // reflection for parity; if yes, add it in code, otherwise this is the spec.
 pub enum Display {
     #[default]
     Block,
@@ -19,7 +21,7 @@ pub enum Display {
     Grid,
     InlineGrid,
     FlowRoot,                           // CSS `display: flow-root`; establishes BFC
-    Contents,                           // children promoted to grandparent (tier-E)
+    Contents,                           // children promoted to grandparent (tier-E, not yet shipped)
     Table,
     TableRowGroup,
     TableHeaderGroup,
@@ -49,8 +51,8 @@ impl Display {
 | `Inline`, `InlineBlock` | `Block` (Taffy 0.10 doesn't model inline-flow; Buiy text shaper handles inline-level participation) |
 | `Flex(_)`, `InlineFlex(_)` | `Flex` (Buiy passes the axis through `FlexParams.direction`) |
 | `Grid`, `InlineGrid` | `Grid` |
-| `FlowRoot` | `Block` with internal containment marker (Taffy doesn't have a distinct flow-root) |
-| `Contents` | Skipped during tree build; children re-parented to grandparent |
+| `FlowRoot` | `Block` (Taffy doesn't have a distinct flow-root; v1 maps it to plain `Block` with no BFC / containment marker — deferred) |
+| `Contents` | `Block` (v1 fallback; re-parenting children to the grandparent is **deferred — tier-E, not yet shipped**, like `ListItem`/`Ruby`) |
 | `Table*` | `Block` (Taffy lacks table layout; Buiy emits a Buiy-side table pass — see [§ 1.2](#12-table-layout-status)) |
 | `ListItem` | `Block` with `::marker` pseudo-element handling (deferred to v1.x) |
 | `Ruby` | `Block` (deferred — tracks Taffy + i18n) |
@@ -78,19 +80,21 @@ Tier per [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md
 
 ### 1.4 `Contents`
 
-`Display::Contents` is tier-E. Children are *re-parented to the grandparent* during step 1's tree build — the entity itself is not added to Taffy. Useful for wrapper components that shouldn't form their own box. Caveat: `Contents` and absolute-positioned children interact — the absolute-positioned child uses the grandparent as containing block. Spec asserts this in tests.
+`Display::Contents` is tier-E and its re-parenting behavior is **deferred — not yet shipped** (like `ListItem`/`Ruby`). In v1, `map_display` ([translate.rs](../../../crates/buiy_core/src/layout/translate.rs)) maps `Contents` → `taffy::Display::Block`, so the entity stays in the Taffy tree and forms its own box. The target behavior described below applies once re-parenting lands:
+
+When shipped, children are *re-parented to the grandparent* during step 1's tree build — the entity itself is not added to Taffy. Useful for wrapper components that shouldn't form their own box. Caveat: `Contents` and absolute-positioned children interact — the absolute-positioned child uses the grandparent as containing block. Spec asserts this in tests.
 
 ## 2. `Position`
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct Position {
     pub kind: PositionKind,
     pub inset: Inset,
 }
 
-#[derive(Reflect, Clone, Copy, Default, PartialEq)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositionKind {
     #[default]
     Static,
@@ -100,7 +104,7 @@ pub enum PositionKind {
     Sticky,
 }
 
-#[derive(Reflect, Clone, Copy, Default)]
+#[derive(Reflect, Default, Clone, Copy, Debug, PartialEq)]
 pub struct Inset {
     pub top:    Sizing,
     pub right:  Sizing,
@@ -116,24 +120,28 @@ For logical authoring, a `LogicalInset` insert helper (analogous to [box-model.m
 | `PositionKind` | Containing block |
 |---|---|
 | `Static`, `Relative` | Parent's content box |
-| `Absolute` | Nearest ancestor with `PositionKind != Static`, OR the layout viewport if none |
-| `Fixed` | The layout viewport (the root entity's containing block) |
+| `Absolute` | Taffy's nearest positioned ancestor (see note), OR the layout viewport if none |
+| `Fixed` | Falls back to `Absolute` semantics in v1 (see note below) |
 | `Sticky` | Nearest scroll container; falls back to parent's content box outside the sticky range |
 
-The "nearest ancestor with `PositionKind != Static`" lookup runs in `SyncStyles` (system pipeline step 1) and is cached on a `ContainingBlock` component (private — synced, not author-set).
+> **Note — "positioned ancestor" at the Taffy layer.** Don't read the `Absolute` row as "nearest Buiy non-`Static` ancestor." `map_position_kind` ([translate.rs](../../../crates/buiy_core/src/layout/translate.rs)) emits Buiy `Static` (and `Sticky`) as `taffy::Position::Relative` (see [§ 2.2](#22-mapping-to-taffy)), and in Taffy a `Relative` box *is* a positioned containing block. So at the Taffy layer **every** ancestor box — including Buiy-`Static` ones — is a positioned containing block, and Taffy resolves an `Absolute` child against its immediate parent's content box in practice. This is the shipped behavior; true CSS "nearest non-static ancestor" semantics are the known gap noted below.
 
-`Display::Contents` is transparent to containing-block resolution — descend through it.
+Buiy does **not** resolve containing blocks itself: `Absolute` entities stay children of their real parent in the Taffy tree, and Taffy's native absolute-positioning algorithm walks up to the nearest positioned ancestor on its own. `sync_styles` (system pipeline step 1) performs no containing-block lookup, and there is no `ContainingBlock` component — `map_position_kind` ([translate.rs](../../../crates/buiy_core/src/layout/translate.rs)) simply maps `PositionKind` onto `taffy::Position` and the real parent edge carries the relationship.
+
+`Display::Contents` is transparent to containing-block resolution — descend through it (Taffy never sees the re-parented wrapper, so its native lookup also skips it).
+
+> **Known gap — true CSS containing-block semantics.** Taffy-native positioning covers the common `Static`/`Relative`/`Absolute` cases, but does not model the full CSS containing-block rules. In particular, a transformed element must become the containing block for `Position::Fixed` descendants. That semantic (and `Fixed`-against-viewport in general) is deferred to **Phase 8** alongside transforms + top-layer; until then `Fixed` falls back to `Absolute`.
 
 ### 2.2 Mapping to Taffy
 
-Taffy 0.10 supports `position: absolute` (and `relative` via offsets); `fixed` is modeled as `absolute` with the layout viewport as containing block; `sticky` is a Buiy post-Taffy pass.
+Taffy 0.10 supports `position: absolute` (resolving against the nearest positioned ancestor) and `relative` via offsets; `sticky` is a Buiy post-Taffy pass. `fixed` has no distinct Taffy modeling and falls back to `absolute` in v1.
 
 | `PositionKind` | Taffy emission |
 |---|---|
 | `Static` | `taffy::Position::Relative` with zero offsets (Taffy's "in-flow"). |
 | `Relative` | `taffy::Position::Relative` with `inset` as offset. |
-| `Absolute` | `taffy::Position::Absolute` with `inset`; child of `ContainingBlock`. |
-| `Fixed` | `taffy::Position::Absolute` with `inset`; child of layout root. |
+| `Absolute` | `taffy::Position::Absolute` with `inset`; resolved by Taffy against the real parent / nearest positioned ancestor. |
+| `Fixed` | `taffy::Position::Absolute` (v1 fallback; Phase 8 adds viewport / transformed-ancestor containing block). |
 | `Sticky` | `taffy::Position::Relative`; sticky offsets applied in sub-pass 6a ([architecture.md § 3](architecture.md#3-system-pipeline)). |
 
 ### 2.3 Sticky positioning
@@ -149,7 +157,7 @@ Tier-C. Buiy-owned, post-Taffy. CSS Anchor Positioning Module Level 1.
 ### 3.1 `Anchor` component
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct Anchor {
     pub anchor_name: Option<AnchorName>,        // declares this entity AS an anchor
@@ -157,39 +165,51 @@ pub struct Anchor {
     pub position_try: Vec<PositionTry>,         // ordered fallback chain
 }
 
-#[derive(Reflect, Clone)]
+#[derive(Reflect, Clone, Debug, PartialEq, Default)]
 pub struct PositionTry {
     pub inset: Inset,                           // anchored offset relative to the anchor's box
     pub conditions: Vec<TryCondition>,          // when this fallback is "valid"
 }
 
-#[derive(Reflect, Clone)]
+#[derive(Reflect, Clone, Debug, PartialEq)]
 pub enum TryCondition {
     FitsInViewport,                             // anchored box must not overflow the viewport
     FitsInContainer(AnchorRef),                 // anchored box must fit inside <ref>'s box
     AnchorVisible,                              // anchor's resolved rect intersects viewport
 }
 
-#[derive(Reflect, Clone)]
+// `Named`/`Name` use `String` (not `SmolStr`): Phase 6 follows the Phase 3
+// `GridAreas` precedent and avoids a new direct dep (see the String-choice
+// note on `GridLine`/`AnchorName` in types.rs, ~types.rs:787-789).
+#[derive(Reflect, Clone, Debug, PartialEq, Eq, Default)]
 pub enum AnchorName {
+    #[default]
     Implicit,                                   // referenced by Entity ID alone
-    Named(SmolStr),                             // CSS-style name lookup (registered in AnchorNameRegistry)
+    Named(String),                              // CSS-style name lookup (registered in AnchorNameRegistry)
 }
 
-#[derive(Reflect, Clone)]
+#[derive(Reflect, Clone, Debug, PartialEq, Eq)]
 pub enum AnchorRef {
     Entity(Entity),
-    Name(SmolStr),
+    Name(String),
 }
 
-/// Resource: maps `AnchorName::Named` strings to the entity that declared
+/// Resource: maps `AnchorName::Named` strings to the entities that declared
 /// that name. Maintained by an observer on `Anchor` insert/remove —
 /// authors do not write to it directly. Multiple entities declaring the
-/// same name produce a `warn!` once per (name, frame); the most-recently-
-/// inserted entity wins (registry stores `Vec<Entity>`, last wins).
-#[derive(Resource, Default)]
+/// same name produce a `warn!` once per (late-inserter entity, frame)
+/// (keyed `(Entity, AnchorErrorKind)`); the most-recently-inserted entity
+/// wins (each bucket stores `(Entity, epoch)` pairs, last wins).
+///
+/// `Default` is hand-written (NOT derived) to seed `next_epoch = 1`, so
+/// `entity_epoch(e) > 0` is a faithful "tracked" predicate (epoch 0 is the
+/// `unwrap_or(0)` "no entry" fallback). The `(Entity, epoch)` pairs and
+/// `entity_epochs` feed the Kahn cycle-edge-drop tiebreaker (§ 3.4).
+#[derive(Resource, Debug)]
 pub struct AnchorNameRegistry {
-    by_name: HashMap<SmolStr, Vec<Entity>>,
+    by_name: HashMap<String, Vec<(Entity, u64)>>,
+    entity_epochs: HashMap<Entity, u64>,
+    next_epoch: u64,
 }
 ```
 
@@ -197,7 +217,7 @@ pub struct AnchorNameRegistry {
 
 Sub-pass 6d of the pipeline ([architecture.md § 3](architecture.md#3-system-pipeline)) walks every entity with `Anchor.position_anchor.is_some()`:
 
-1. **Resolve anchor target.** Look up the anchor's `Entity` — either directly (`AnchorRef::Entity`) or via `AnchorNameRegistry` (`AnchorRef::Name`); read its `ResolvedLayout`. If the target is missing, despawned, or carries `Display::None`, the lookup fails and falls through to step 4 below. The "stale `ResolvedLayout` from before `Display::None` flipped" case is treated as missing — `Display::None` clears the entity's stored `ResolvedLayout` in step 7.
+1. **Resolve anchor target.** Look up the anchor's `Entity` — either directly (`AnchorRef::Entity`) or via `AnchorNameRegistry` (`AnchorRef::Name`); read its `ResolvedLayout`. If the target is missing, despawned, or carries `Display::None`, the lookup fails and falls through to step 4 below. The `Display::None`-as-missing rule is a **live query check** (Decision D9), not a stored-state mechanism: `resolve_target` reads the target's `Display` from a `display_query` each frame and returns `None` when it is `Display::None`; `try_conditions_pass` applies the same check to `FitsInContainer` containers. `write_resolved_layout` (step 7) does **not** clear `ResolvedLayout` for `Display::None` entities — the stale-position concern is moot because the live `Display` lookup short-circuits before the stored layout is ever consulted.
 2. **Try fallbacks in order.** For each `PositionTry` in `position_try`, compute the anchored entity's would-be box (using `inset` relative to the anchor) and evaluate every condition. The first try whose conditions all pass wins.
 3. **Apply.** Override `ResolvedLayout.position` with the chosen try's resolved coordinates.
 4. **Fallback failure.** If every try fails (or the anchor target was missing), position defaults to `(0, 0)` and the entity gets a `LayoutAnchorBroken` marker for devtools. A `warn!` fires once per (entity, frame).
@@ -228,7 +248,7 @@ commands.spawn((
 - An anchor target must resolve before its dependent. Sub-pass 6d builds a Kahn topological sort over the (anchored → anchor) DAG: `O(V + E)` where V = anchored entities, E = anchor edges (= V, since each anchored entity has exactly one anchor target).
 - **Cycle handling.** Edges that would close a cycle are dropped — the dropped edge is `(child anchored, anchor)` for the *most-recently-inserted* anchored entity in the cycle (tracked by the `AnchorNameRegistry` insertion epoch and an analogous epoch on `AnchorRef::Entity`). Both endpoints get `LayoutAnchorBroken` markers; one `warn!` fires per cycle per frame naming the dropped edge. Result: every cycle resolves deterministically; tests can assert exact membership.
 - Cost: `O(anchored entities × tries + V + E)`. Usually small — most anchored elements have 1-3 fallbacks.
-- Anchor resolution does **not** trigger Taffy re-layout. The anchor's *size* is fixed by the time anchor resolution runs; only its position changes. (Anchor *size* affecting layout — `anchor-size()` in CSS — is a tier-C feature deferred to v1.x; see open questions in [README § 5](README.md#5-open-questions). Author code that uses `anchor-size()` in a `PositionTry::inset` before v1.x ships compiles fine but the size term resolves to zero with one `warn!` per (entity, frame).)
+- Anchor resolution does **not** trigger Taffy re-layout. The anchor's *size* is fixed by the time anchor resolution runs; only its position changes. (Anchor *size* affecting layout — `anchor-size()` in CSS — is a tier-C feature **fully deferred to v1.x with no API surface in v1**: there is no `Length`/`Sizing`/`Inset` variant that can express `anchor-size()`, so authors cannot exercise it. The `AnchorErrorKind::AnchorSizeUsed` warn arm exists ([systems.rs](../../../crates/buiy_core/src/layout/systems.rs)) but is currently **unreachable** — nothing pushes that kind into the warn set, because no inset term can request an anchor size. When the API lands in v1.x, the warn arm will fire once per (entity, frame) and the size term resolves to zero. See open questions in [README § 5](README.md#5-open-questions).)
 
 ### 3.5 Open question: `position-try` chain depth
 

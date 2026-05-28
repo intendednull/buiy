@@ -46,8 +46,11 @@ pub struct BoxModel {
     pub aspect_ratio: Option<AspectRatio>,
 }
 
-/// `display` value. Phase 1 implements `Block` and `Flex(FlexAxis)`; other
-/// variants are reserved and translate to `Block` (Taffy default).
+/// `display` value. `Block` and `Flex(FlexAxis)` translate directly;
+/// `Grid` / `InlineGrid` translate to `taffy::Display::Grid` (Phase 3;
+/// Taffy 0.10 has no inline-grid variant). `Table*` variants are flagged
+/// by the `table_layout` sub-pass 6b `warn!` and fall back to `Block`.
+/// Remaining variants are reserved and translate to `Block` (Taffy default).
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
@@ -88,8 +91,11 @@ impl Display {
 }
 
 /// `position` + `inset`. Phase 1 implements `Static`, `Relative`,
-/// `Absolute`. `Fixed` and `Sticky` ship as variants but currently
-/// translate to `Absolute` / `Relative`; Phases 7/8 wire the real semantics.
+/// `Absolute`. `Sticky` is fully implemented (Phase 7) as a post-Taffy
+/// overlay — sub-pass 6a (`sticky_offset`) computes the sticky
+/// displacement against the nearest scroll container's reference frame.
+/// `Fixed` still ships as a variant that translates to `Absolute`;
+/// Phase 8 wires its real (viewport / transformed-ancestor) semantics.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.
 #[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
@@ -395,9 +401,10 @@ pub struct ContainerQueryInactive;
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/overflow-and-scrolling.md § 2.
 ///
 /// **Mutating `ScrollOffset` must NOT invalidate `ResolvedLayout`.** The
-/// invariant is enforced by excluding `Changed<ScrollOffset>` from
-/// `sync_styles`'s trigger filter (see `systems.rs` line ~80) and
-/// asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
+/// invariant is enforced by excluding `Changed<ScrollOffset>` from the
+/// `sync_styles` trigger filter (see the `Or<(Changed<...>)>` change
+/// filter on `sync_styles` in `systems.rs`) and asserted by
+/// `tests/layout_scroll_offset_no_invalidate.rs`.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct ScrollOffset {

@@ -11,11 +11,11 @@ Tier-C. CSS Containment Module Level 3. Buiy-owned implementation; Taffy doesn't
 ### 1.1 `Container` component
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq, Eq)]
 #[reflect(Component, Default)]
 pub struct Container {
     pub container_type: ContainerType,
-    pub container_name: Option<SmolStr>,
+    pub container_name: Option<String>,
 }
 
 pub enum ContainerType {
@@ -30,13 +30,11 @@ An entity with `Container { container_type: ContainerType::InlineSize, .. }` bec
 ### 1.2 `ContainerQuery` — the rule
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
 #[reflect(Component, Default)]
 pub struct ContainerQuery {
-    pub container: Option<SmolStr>,             // None = nearest queried ancestor; Some = named lookup
+    pub container: Option<String>,              // None = nearest queried ancestor; Some = named lookup
     pub conditions: Vec<QueryCondition>,        // ALL must hold for activation
-    pub when_active:   Option<Entity>,          // Entity holding the "active" component bundle to apply
-    pub when_inactive: Option<Entity>,          // Entity holding the "inactive" component bundle to apply
 }
 
 pub enum QueryCondition {
@@ -50,7 +48,7 @@ pub enum QueryCondition {
 }
 ```
 
-The query is *applied* by toggling marker components on the queried entity (one of `ContainerQueryActive(rule_id)` or `ContainerQueryInactive(rule_id)`). Style-bundle application is the consumer's responsibility — typically a separate observer / system reads the marker and (un)inserts a corresponding component bundle.
+The query is *applied* by toggling zero-field marker components on the queried entity (one of `ContainerQueryActive` or `ContainerQueryInactive`). There is at most one `ContainerQuery` per entity (Bevy `Component` is single-instance), so the markers carry no rule id. Style-bundle application is the consumer's responsibility — typically a separate observer / system reads the marker and (un)inserts a corresponding component bundle.
 
 This decoupling is intentional: the spec doesn't bake any one component-application strategy into the query system. Themes, BSN authors, and ad-hoc systems all consume the marker the same way.
 
@@ -60,17 +58,19 @@ The activation algorithm runs in two pipeline steps ([architecture.md § 3](arch
 
 **Step 2 — `CqActivate`** (before Taffy compute):
 
-1. For each `ContainerQuery` rule, find its target query container (by name or nearest-ancestor-with-`Container::Size`).
+1. For each `ContainerQuery` rule, find its target query container (by name or nearest ancestor whose `container_type` is `Size` or `InlineSize`).
 2. Read the container's `ResolvedLayout` from the *previous frame*.
 3. Evaluate every `QueryCondition` against that prior size.
 4. Toggle the rule's `ContainerQueryActive` / `ContainerQueryInactive` markers if the activation flipped.
 
 **Step 4 — `CqFlipCheck`** (after Taffy compute):
 
-5. Re-evaluate every rule against the *current frame's* fresh `ResolvedLayout`.
+5. Re-evaluate every rule against this frame's fresh Taffy output, read directly from `tree.layout(node_id)` — NOT the entity-side `ResolvedLayout`, which step 7 has not written yet and still holds the previous frame's value.
 6. If any rule's activation differs from what step 2 computed, toggle the markers and signal "re-layout needed."
 
-If step 4 signals re-layout, steps 1 (`SyncStyles`) and 3 (`TaffyCompute`) re-run **once**. Step 4 does not re-run; transitive flips wait until next frame.
+**Step 5 — `CqFlipReRun`:**
+
+7. If step 4 signaled re-layout, a dedicated step-5 system (`cq_flip_rerun`) re-runs the *inner work* of `SyncStyles` + `TaffyCompute` **once**, gated on `CqReRunRequested`. This is a single system holding the union of those two steps' params — not a literal re-invocation of steps 1 and 3 in place. Step 4 does not re-run; transitive flips wait until next frame.
 
 This is the same-frame re-layout strategy ([README § 2 pillar 4](README.md#2-architectural-pillars-one-line-summaries)). Cost ceiling: 2× Taffy on activation-flip frames, 1× otherwise.
 
@@ -87,7 +87,7 @@ This is the same-frame re-layout strategy ([README § 2 pillar 4](README.md#2-ar
 | `Cqmin(p)` | `p%` of `min(cqi, cqb)` |
 | `Cqmax(p)` | `p%` of `max(cqi, cqb)` |
 
-If no queried ancestor exists, container units fall back to viewport units (`cqw → vw`, `cqh → vh`) with a `warn!` once per session per entity.
+If no queried ancestor exists, container units fall back to viewport units (`cqw → vw`, `cqh → vh`) with a `warn!` once per session (a single global `AtomicBool` gate, not per entity).
 
 `cqi` / `cqb` against a container with `ContainerType::InlineSize` resolve only on the inline axis; querying the block axis falls back to the same warn-and-degrade path. (See [README § 5 — open questions](README.md#5-open-questions) for nested-container subtleties.)
 
@@ -97,7 +97,7 @@ If no queried ancestor exists, container units fall back to viewport units (`cqw
 - **Same-frame re-layout cap** — fixture where activating a rule flips the rule's container's size enough to *de*activate it; assert exactly 2× Taffy passes and the result is the second pass's output (not oscillation).
 - **Transitive cascade is one-frame stale** — fixture A→B→C where activation of A's rule changes B's size (which would flip B's rule); assert frame N applies A's activation, frame N+1 applies B's.
 - **Container-unit resolution** — fixture with a 800px-wide container and a child `width: Cqw(50)`; assert child width = 400px.
-- **Fallback to viewport units** — fixture with no queried ancestor; child `width: Cqw(50)` resolves to `Vw(50)` with one `warn!`.
+- **Fallback to viewport units** — fixture with no queried ancestor; child `width: Cqw(50)` resolves against the viewport (window) width — e.g. 50% of a 1000px window = 500px — with one `warn!`.
 
 ## 2. Writing modes
 
@@ -106,7 +106,7 @@ Tier-F (direction) / tier-C (writing-mode + sideways).
 ### 2.1 `WritingMode` component
 
 ```rust
-#[derive(Component, Reflect, Clone, Default)]
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 #[reflect(Component, Default)]
 pub struct WritingMode {
     pub mode: WritingModeKind,
@@ -132,16 +132,16 @@ pub enum UnicodeBidi { Normal, Embed, Isolate, BidiOverride, IsolateOverride, Pl
 
 ### 2.2 Inheritance
 
-`WritingMode` *inherits down the entity hierarchy*. The effective writing-mode for an entity is its own `WritingMode` if set, else the nearest ancestor's. A `WritingModeResolved` private component is synced by an inheritance pass that runs *before* step 1 ([architecture.md § 1.2](architecture.md#change-detection-trigger-set)) so step 1's logical→physical translation is `O(1)` per entity.
+`WritingMode` *inherits down the entity hierarchy*. The effective writing-mode for an entity is its own `WritingMode` if set, else the nearest ancestor's. A `WritingModeResolved` private component is synced by an inheritance pass that runs *before* step 1 ([architecture.md § 1.2](architecture.md#change-detection-trigger-set)) so step 1's `direction`-wiring and container-unit (`Cq*`) axis resolution are `O(1)` per entity. (Step 1 does *not* perform logical→physical edge translation — that happens at author-construct time in the `Logical*` builders; see § 2.4.) `WritingModeResolved` carries the same derives as `WritingMode` (`#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]`).
 
 Changing `WritingMode` on a parent invalidates `WritingModeResolved` on every descendant via Bevy change detection. The walking is `O(subtree size)`; mass theme switches are absorbed because writing-mode changes are rare relative to other layout mutations.
 
 ### 2.3 Logical → physical translation
 
-The bridge between logical and physical edges/axes happens during step 1. Specifically:
+The bridge between logical and physical edges/axes happens at *author-construct time* in the `Logical*` builders, **not** during step 1 (consistent with § 2.4). Specifically:
 
-1. Physical `BoxModel` and `Position::Inset` are passed to Taffy unchanged.
-2. Logical insert helpers (`LogicalBoxModel`, `LogicalInset` — see [box-model.md § 4.1](box-model.md#41-api-shape)) translate at insert time into physical fields, using the entity's `WritingModeResolved`.
+1. Physical `BoxModel` and `Position::Inset` are passed to Taffy unchanged. Step 1 (`style_to_taffy`) only forwards the already-physical fields to Taffy and wires `WritingModeResolved.direction` → `taffy::Style.direction`; it performs no logical→physical edge translation.
+2. The logical builders (`LogicalInset::to_inset` — `style.rs:538`; `LogicalEdges::to_edges` — `types.rs:733`; `LogicalBoxModel::to_box_model` — `style.rs:487`; see [box-model.md § 4.1](box-model.md#41-api-shape)) translate at author-construct time into physical fields, using the author-supplied `WritingMode` value.
 
 Mapping:
 
@@ -158,9 +158,9 @@ Mapping:
 
 ### 2.4 Taffy integration
 
-Taffy 0.10 has logical-property awareness on its `Style` (e.g. `inset.start` / `inset.end`); we route logical insets through it directly when the writing-mode is one of `horizontal-tb` / `vertical-rl` / `vertical-lr`. For `sideways-*` we pass the corresponding non-sideways mode and rely on glyph rotation downstream.
+Taffy 0.10 has *no* writing-mode awareness at the layout-engine level — it deals exclusively in physical `inset` / `padding` / `margin` rects. Buiy therefore does **not** route logical properties through Taffy. Instead, logical → physical translation happens at author-construct time: `LogicalInset::to_inset` (`style.rs`) and `LogicalEdges::to_edges` (`types.rs`) apply the 6-row mode/direction mapping (§ 2.3) and produce a physical `Inset` / `Edges`, which step 1 feeds to Taffy via the physical `inset_to_lpa` / `edges_to_*` helpers (`translate.rs`). For `sideways-*` the builders normalize to the corresponding non-sideways vertical mode and rely on glyph rotation downstream.
 
-Taffy doesn't natively know about `direction: rtl` for *inline-flow* purposes (text directionality lives in the shaper). For block-level mirroring (e.g. flex `flex-start` becoming the right edge under RTL), Taffy honors the `rtl` flag when set.
+The *only* writing-mode field wired into `taffy::Style` is `direction`: `WritingModeResolved.direction` (`Ltr` / `Rtl`) maps to `taffy::Style.direction`. Taffy honors that flag for block-level mirroring (e.g. flex `flex-start` becoming the right edge under RTL). Inline-flow text directionality is not Taffy's concern — it lives in the shaper.
 
 ### 2.5 Open question
 

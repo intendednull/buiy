@@ -23,7 +23,7 @@ use bevy::prelude::*;
 /// queried ancestor exists, container units fall back to viewport
 /// dimensions (resolved directly from `bevy::window::Window` until
 /// Phase 10's `Length::Vw/Vh` infrastructure lands) with one `warn!`
-/// per (entity, unit) pair per session. Spec:
+/// per session (a single global `AtomicBool` gate). Spec:
 /// docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.4.
 #[derive(Reflect, Clone, Copy, Debug, PartialEq)]
 pub enum Length {
@@ -32,7 +32,9 @@ pub enum Length {
     /// Percentage of the containing block dimension on the relevant axis.
     Percent(f32),
     /// CSS `<flex>` unit — only meaningful inside `TrackSize::Length(Length::Fr(_))`.
-    /// Outside grid templates, `Fr` warns once and resolves to `Auto`.
+    /// Outside grid templates, `Fr` warns once and resolves to `Auto` (or `0`px
+    /// where the Taffy target type has no `Auto` variant — gap/padding/border,
+    /// which translate through `length_to_lp`).
     Fr(f32),
     /// `cqw` — percentage of nearest queried ancestor's *width*.
     Cqw(f32),
@@ -208,9 +210,12 @@ pub struct FlexGap {
     pub column: Length,
 }
 
-/// Position kind. Phase 1 implements `Static`, `Relative`, `Absolute`;
-/// `Fixed` and `Sticky` ship as variants but emit a one-shot `warn!` and
-/// translate to `Absolute` / `Relative` respectively until Phases 7/8 land.
+/// Position kind. `Static`, `Relative`, and `Absolute` pass through to
+/// Taffy directly. `Sticky` is fully implemented via sub-pass 6a
+/// (`sticky_offset`, Phase 7) as a post-Taffy override; for the Taffy
+/// pass itself it maps to `Relative`. `Fixed` remains a fall-back-to-
+/// `Absolute` stub pending Phase 8 (top-layer / fixed-as-viewport). No
+/// `warn!` is emitted for either translation.
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositionKind {
     #[default]

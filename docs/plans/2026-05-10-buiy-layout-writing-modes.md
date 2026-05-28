@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Date:** 2026-05-10
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md`](../specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md) § 2 + cross-references to [`box-model.md`](../specs/2026-05-08-buiy-layout-design/box-model.md) § 4 (logical edges) and [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) §§ 1.2, 3.
 
 **Goal:** Phase 4 of the layout migration — ship the writing-mode subsystem: a `WritingMode` author-set component (mode + direction + text-orientation + unicode-bidi), a `WritingModeResolved` private cache populated by a new pre-`SyncStyles` inheritance pass, and the `LogicalBoxModel` / `LogicalInset` ergonomic builder helpers that translate logical edges to physical at construct time. Wire `Direction::Rtl` to `taffy::Style.direction` so flex children mirror under RTL, and route `WritingModeKind::Sideways{Rl,Lr}` through a warn-once gate that falls back to the corresponding non-sideways vertical mode (the glyph-rotation pass is `buiy-text-rendering-design`'s concern, not layout). Widen `sync_styles`'s trigger filter to include `Changed<WritingMode>` and `Changed<WritingModeResolved>`.
