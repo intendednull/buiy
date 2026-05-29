@@ -17,8 +17,11 @@ export const meta = {
 //   args.gateCmd : override the gate shell command (e.g. drop `xvfb-run -a`
 //                  on hosts without xvfb — this host runs tests headless via
 //                  MinimalPlugins, per CLAUDE.md "drop the xvfb-run prefix")
+//   args.worktree: absolute path to the git worktree to operate in (default =
+//                  the legacy layout-finish path). Every cargo/git/edit command
+//                  runs against this directory.
 // ---------------------------------------------------------------------------
-const WT = '/mnt/storage/projects/buiy/.claude/worktrees/layout-finish'
+const WT = (args && args.worktree) || '/mnt/storage/projects/buiy/.claude/worktrees/layout-finish'
 const PLAN = (args && args.plan) || `${WT}/docs/plans/2026-05-28-buiy-layout-transforms-containment.md`
 const TASKS = (args && args.tasks) || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 const RUN_GATE = !!(args && args.gate)
