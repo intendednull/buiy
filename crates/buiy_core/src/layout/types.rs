@@ -1002,13 +1002,30 @@ pub enum LayoutWarnOnceKey {
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
     TableSubfeatureUnsupported(Entity),
 
-    /// `MultiColumn` entity encountered. Sub-pass 6c emits one warn
-    /// per session (no Entity payload — first multicol entity triggers,
-    /// all subsequent are silent) — the multicol algorithm is
-    /// deferred to v1.x.
+    /// **Retired in Phase 13** — the blanket "multicol unsupported" warn
+    /// from the Phase-7 stub. Sub-pass 6c now packs children into
+    /// columns; the residual fragmentation gap is reported by
+    /// `MulticolFragmentationDeferred`. Kept as a variant for
+    /// `Reflect`/serialization stability; no code emits it. (Same
+    /// retire pattern as `TableUnsupported`.)
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
     MulticolUnsupported,
+
+    /// Sub-pass 6c packs `MultiColumn` children into columns as whole
+    /// boxes (no content fragmentation — a box is never split across a
+    /// column boundary). When a child taller than the resolved column
+    /// block-size is encountered under `column_fill: Balance` (balanced
+    /// fill needs divisible content), the layout falls back to greedy
+    /// whole-child packing and this warns once per session. True
+    /// fragmentation is tier-E, deferred to v1.x (plan D2/D5).
+    ///
+    /// No `Entity` payload: the limitation is a global capability gap,
+    /// not a per-entity error (session-wide, like the retired
+    /// `MulticolUnsupported`).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
+    MulticolFragmentationDeferred,
 
     /// Sticky entity uses `Length::Fr` inset. `fr` is grid-only;
     /// applying it as a sticky inset is semantically invalid. Warn
@@ -1261,6 +1278,13 @@ mod tests {
         let mut set = std::collections::HashSet::new();
         assert!(set.insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer));
         assert!(!set.insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer));
+    }
+
+    #[test]
+    fn multicol_fragmentation_warn_key_is_hashable() {
+        let mut set = std::collections::HashSet::new();
+        assert!(set.insert(LayoutWarnOnceKey::MulticolFragmentationDeferred));
+        assert!(!set.insert(LayoutWarnOnceKey::MulticolFragmentationDeferred));
     }
 
     #[test]
