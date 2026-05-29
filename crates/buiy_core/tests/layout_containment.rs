@@ -142,52 +142,63 @@ fn will_change_does_not_warn() {
 }
 
 #[test]
-fn content_visibility_deferred_warns_once_per_entity_across_three() {
-    use buiy_core::layout::ContentVisibility;
+fn content_visibility_auto_off_screen_without_hint_warns_once() {
+    // Phase 11 D6: the `ContentVisibilityDeferred` warn-once key is repurposed.
+    // It now fires exactly once per entity for the one residual degenerate
+    // case — a `content-visibility: auto` entity that is off-screen but carries
+    // NO `contain-intrinsic-size` hint, so the requested off-screen layout skip
+    // cannot run (D2) and the subtree lays out anyway.
+    use bevy::window::{PrimaryWindow, Window, WindowResolution};
+    use buiy_core::layout::{ContentVisibility, Inset, Length, PositionKind, Sizing};
     let mut app = app();
-    let mk = |app: &mut App| {
-        app.world_mut()
-            .spawn((
-                Node,
-                Style::default().containment(Containment {
+    app.world_mut().spawn((
+        Window {
+            resolution: WindowResolution::new(800, 600),
+            ..Default::default()
+        },
+        PrimaryWindow,
+    ));
+    // Auto + off-screen + NO contain-intrinsic-size hint → D6 diagnostic.
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(10.0)
+                .height_px(10.0)
+                .position(PositionKind::Absolute)
+                .inset(Inset {
+                    left: Sizing::Length(Length::px(5000.0)),
+                    ..Default::default()
+                })
+                .containment(Containment {
                     content_visibility: ContentVisibility::Auto,
                     ..Default::default()
                 }),
-            ))
-            .id()
-    };
-    let a = mk(&mut app);
-    let b = mk(&mut app);
-    let c = mk(&mut app);
-    app.update();
-    // run a second frame — dedup must hold (no panic / re-warn observable
-    // via the set, which persists per session).
-    app.update();
-
+        ))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(e)
+        .id();
+    app.update(); // establishes off-screen geometry
+    app.update(); // frame 2 sees last-frame off-screen → D6 warn
     let warned = app.world().resource::<LayoutWarnedOnceSession>();
     assert!(
         warned
             .set
-            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(a))
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e)),
+        "off-screen auto without contain-intrinsic-size warns (D6 repurposed)"
     );
-    assert!(
-        warned
-            .set
-            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(b))
-    );
-    assert!(
-        warned
-            .set
-            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(c))
-    );
-    // Exactly three content-vis keys (one per entity), no duplicates.
-    let count = warned
+    // dedup: a third frame does not add a duplicate.
+    app.update();
+    let count = app
+        .world()
+        .resource::<LayoutWarnedOnceSession>()
         .set
         .iter()
         .filter(|k| matches!(k, LayoutWarnOnceKey::ContentVisibilityDeferred(_)))
         .count();
-    assert_eq!(
-        count, 3,
-        "one warn-once key per entity, deduped across frames"
-    );
+    assert_eq!(count, 1, "one D6 warn per entity, deduped across frames");
 }
