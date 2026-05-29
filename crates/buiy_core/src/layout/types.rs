@@ -1051,9 +1051,14 @@ pub enum LayoutWarnOnceKey {
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.1.
     SizeContainmentZeroed(Entity),
 
-    /// `Containment.content_visibility != Visible`. Phase 8 stores the
-    /// value but does NOT enforce `Auto` (off-screen skip) or `Hidden`
-    /// (Display::None-for-descendants) — both deferred. One warn per
+    /// Phase 11 enforces `content-visibility`: `Hidden` prunes the
+    /// entity's descendants from the Taffy tree (no warn), and `Auto`
+    /// skips the off-screen subtree when a `contain-intrinsic-size` hint
+    /// is present. This variant now fires ONLY for the residual
+    /// degenerate case: an `Auto` entity that is off-screen but has **no**
+    /// usable `contain-intrinsic-size` hint, so the requested off-screen
+    /// skip cannot run and the subtree is laid out anyway. The fix is to
+    /// set `contain-intrinsic-size` (plan D2/D6). One warn per
     /// (entity, session).
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.2.
@@ -1172,8 +1177,10 @@ bitflags::bitflags! {
 // in bevy_reflect 0.18).
 impl_reflect_opaque!((in crate::layout::types) ContainFlags(Default, PartialEq));
 
-/// CSS `content-visibility`. Phase 8 stores the value; `Auto` /
-/// `Hidden` enforcement is deferred (warn-once
+/// CSS `content-visibility`. Phase 11 enforces the off-screen layout
+/// skip: `Hidden` prunes descendants unconditionally, and `Auto` skips
+/// the off-screen subtree when a `contain-intrinsic-size` hint is
+/// present (off-screen `Auto` without a hint warns once via
 /// `LayoutWarnOnceKey::ContentVisibilityDeferred`).
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5, § 5.2.
@@ -1182,9 +1189,11 @@ pub enum ContentVisibility {
     /// Always rendered (CSS initial value).
     #[default]
     Visible,
-    /// Skip rendering off-screen content (deferred in Phase 8).
+    /// Skip laying out the subtree while off-screen (enforced in Phase 11
+    /// when a `contain-intrinsic-size` hint is present — D2).
     Auto,
-    /// Skip rendering content like `display: none` for descendants (deferred).
+    /// Detach descendants from layout like `display: none` for the subtree
+    /// (the entity's own box still lays out — enforced in Phase 11, D7).
     Hidden,
 }
 
