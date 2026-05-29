@@ -17,13 +17,23 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout, ResolvedTransform,
+    components::StackingContext,
     layout::{
         Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ContainerQuery, Display, Inset,
         LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Length, MultiColumn,
         OverflowMode, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
-        QueryCondition, ScrollOffset, Sizing, Style, TransformMatrix, UiTransform,
+        QueryCondition, ScrollOffset, Sizing, Stacking, Style, TransformMatrix, UiTransform,
+        ZIndex,
     },
 };
+
+fn stacking_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+    app
+}
 
 #[test]
 fn layout_steps_are_chained_in_declared_order() {
@@ -369,5 +379,59 @@ fn identity_transform_gets_no_resolved_transform() {
     assert!(
         app.world().get::<ResolvedTransform>(e).is_none(),
         "identity transform must not produce a ResolvedTransform (spec § 7)"
+    );
+}
+
+#[test]
+fn stacking_context_runs_and_marks_positioned_z_index() {
+    let mut app = stacking_app();
+    // A root with one positioned + z-index child. The T10 `.stacking()`
+    // setter has not landed yet, so spawn `Stacking` directly as a
+    // component; position is set via the existing `Style::position`
+    // builder (`Position` is already a `Style` bundle field).
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().position(PositionKind::Relative),
+            Stacking {
+                z_index: ZIndex::Layer(1),
+                ..Default::default()
+            },
+        ))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    // Root always forms a context; the child forms one (positioned+z).
+    assert!(
+        app.world().get::<StackingContext>(root).is_some(),
+        "root forms a context"
+    );
+    assert!(
+        app.world().get::<StackingContext>(child).is_some(),
+        "positioned+z child forms a context"
+    );
+    // The root's painters_z contains the child (it is a descendant painter).
+    let root_sc = app.world().get::<StackingContext>(root).unwrap();
+    assert!(root_sc.painters_z.contains(&child));
+}
+
+#[test]
+fn plain_child_gets_no_stacking_context() {
+    let mut app = stacking_app();
+    let child = app.world_mut().spawn((Node, Style::default())).id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_none(),
+        "a plain in-flow child forms no context"
     );
 }

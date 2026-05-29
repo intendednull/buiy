@@ -13,7 +13,7 @@ mod types;
 pub use components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
     Containment, Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken,
-    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, ScrollSnapItem,
+    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, ScrollSnapItem, Stacking,
     Translate, UiTransform, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
@@ -28,11 +28,12 @@ pub use types::{
     BackfaceVisibility, BoxSizing, BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill,
     ColumnRule, ColumnRuleStyle, ColumnSpan, ContainFlags, ContainerType, ContentVisibility,
     Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
-    JustifyContent, JustifyItems, LayoutWarnOnceKey, Length, LogicalEdges, NamedArea, Orientation,
-    OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount,
-    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
-    SnapType, TextOrientation, TrackSize, TransformMatrix, TransformOrigin, TransformStyle,
-    TryCondition, UnicodeBidi, WillChange, WillChangeProperty, WritingModeKind,
+    Isolation, JustifyContent, JustifyItems, LayoutWarnOnceKey, Length, LogicalEdges, NamedArea,
+    Orientation, OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition,
+    RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing,
+    SnapAlign, SnapStop, SnapType, TextOrientation, TopLayer, TrackSize, TransformMatrix,
+    TransformOrigin, TransformStyle, TryCondition, UnicodeBidi, WillChange, WillChangeProperty,
+    WritingModeKind, ZIndex,
 };
 
 use bevy::prelude::*;
@@ -70,6 +71,10 @@ impl Plugin for LayoutPlugin {
         app.init_resource::<systems::PostTaffyPositionOverrides>();
         app.init_resource::<systems::LayoutAnchorWarnedThisFrame>();
         app.init_resource::<systems::LayoutWarnedOnceSession>();
+
+        // Phase 9 — single global top-layer activation order (D2/D3),
+        // maintained by sub-pass 6f (`stacking_context`).
+        app.init_resource::<systems::TopLayerActivation>();
 
         // Phase 6 — observers register as closures per Decision D12:
         // `On<'w, 't, E, B>` carries two lifetimes without defaults and
@@ -200,8 +205,12 @@ impl Plugin for LayoutPlugin {
                 // (spec § 1.1) — it composes the matrix and writes the
                 // private ResolvedTransform render handoff; it does NOT
                 // write PostTaffyPositionOverrides (a transform does not
-                // move the layout box, spec § 1.2). Phase 9 will append
-                // stacking 6f after 6e (it reads the composed matrix).
+                // move the layout box, spec § 1.2). Phase 9 appends
+                // stacking 6f after 6e — it reads the composed matrix
+                // (`Has<ResolvedTransform>` = trigger 3) and writes the
+                // private StackingContext render handoff; like 6e it does
+                // NOT write PostTaffyPositionOverrides (stacking does not
+                // move the layout box, spec § 2).
                 (
                     systems::clear_post_taffy_overrides,
                     systems::sticky_offset,
@@ -209,6 +218,7 @@ impl Plugin for LayoutPlugin {
                     systems::multicol_pack,
                     systems::anchor_resolution,
                     systems::transform_composition,
+                    systems::stacking_context, // 6f — reads ResolvedTransform (6e)
                 )
                     .chain()
                     .in_set(BuiyLayoutStep::PostTaffyOverrides),

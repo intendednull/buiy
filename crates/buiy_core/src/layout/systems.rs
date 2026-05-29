@@ -190,13 +190,13 @@ pub struct PostTaffyPositionOverrides {
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 4.2.
 ///
-/// Carries `#[allow(dead_code)]` because the `init_resource` wiring and
-/// the `stacking_context` sub-pass (6f) that maintains this deque land
-/// in Task 8; until then the resource is defined but not yet driven.
-/// Mirrors the deferred-but-defined `clear_warned_once_on_exit` pattern.
-#[allow(dead_code)]
+/// The membership rebuild (D3) lands in Task 9; Task 8 wires the
+/// `init_resource` + the `stacking_context` system that owns it but does
+/// not yet read `order` (hence the field-level `dead_code` allow, removed
+/// in Task 9 when the rebuild reads + writes the deque).
 #[derive(Resource, Default, Debug)]
 pub struct TopLayerActivation {
+    #[allow(dead_code)]
     pub order: std::collections::VecDeque<Entity>,
 }
 
@@ -2428,11 +2428,7 @@ pub(super) fn compose_transform(
 /// former are deferred — their components don't exist yet (spec § 7);
 /// add an `|| render_side_former` clause here when they land.
 ///
-/// Carries `#[allow(dead_code)]` because the `stacking_context` sub-pass
-/// (6f) that calls this predicate lands in Task 8; until then it is
-/// defined + unit-tested but not yet driven from a system (mirrors the
-/// deferred-but-defined `TopLayerActivation` pattern above).
-#[allow(dead_code)]
+/// Driven by the `stacking_context` sub-pass (6f).
 pub(super) fn forms_stacking_context(
     stacking: Option<&Stacking>,
     position_kind: PositionKind,
@@ -2484,11 +2480,7 @@ pub(super) fn forms_stacking_context(
 /// entity is IGNORED (CSS quirk, spec § 3): a static element stays in
 /// tier 1 regardless of its `z_index`.
 ///
-/// Carries `#[allow(dead_code)]` because the `stacking_context` sub-pass
-/// (6f) that calls this classifier lands in Task 8; until then it is
-/// defined + unit-tested but not yet driven from a system (mirrors
-/// `forms_stacking_context` above).
-#[allow(dead_code)]
+/// Driven by the `stacking_context` sub-pass (6f).
 pub(super) fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind) -> (u8, i32) {
     let positioned = !matches!(position_kind, PositionKind::Static);
     let z = match stacking.map(|s| s.z_index) {
@@ -2555,6 +2547,136 @@ pub(super) fn transform_composition(
         // Idempotent insert (mirror write_resolved_layout's gate).
         if existing.map(|rt| rt.matrix) != Some(m) {
             commands.entity(e).insert(ResolvedTransform { matrix: m });
+        }
+    }
+}
+
+/// Sub-pass 6f — stacking-context detection + paint-order resolution.
+/// Runs after `transform_composition` (6e) so it can read the composed
+/// `ResolvedTransform` (trigger 3). Writes the private `StackingContext`
+/// render handoff; writes NOTHING to `PostTaffyPositionOverrides`
+/// (stacking does not move the layout box). Spec § 2 / § 2.1 / § 4.
+///
+/// Top-layer escape + activation tracking land in Task 9; the seams are
+/// marked below.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stacking_context(
+    mut commands: Commands,
+    tree: NonSend<LayoutTree>,
+    nodes: Query<(Entity, Option<&ChildOf>), With<Node>>,
+    children_q: Query<&Children>,
+    stacking_q: Query<&Stacking>,
+    position_q: Query<&Position>,
+    transformed: Query<(), With<crate::components::ResolvedTransform>>,
+    containment_q: Query<&Containment>,
+    display_q: Query<&Display>,
+    existing_sc: Query<Option<&crate::components::StackingContext>>,
+    have_sc: Query<Entity, With<crate::components::StackingContext>>,
+    mut activation: ResMut<TopLayerActivation>,
+    mut warned: ResMut<LayoutWarnedOnceSession>,
+) {
+    use crate::components::StackingContext;
+
+    // --- closures reading the per-entity queries ---
+    let display_none = |e: Entity| matches!(display_q.get(e), Ok(Display::None));
+    let pos_kind = |e: Entity| {
+        position_q
+            .get(e)
+            .map(|p| p.kind)
+            .unwrap_or(PositionKind::Static)
+    };
+    let is_root = |parent: Option<&ChildOf>| {
+        parent
+            .map(|p| !tree.by_entity.contains_key(&p.parent()))
+            .unwrap_or(true)
+    };
+    let forms = |e: Entity, root: bool| {
+        forms_stacking_context(
+            stacking_q.get(e).ok(),
+            pos_kind(e),
+            transformed.get(e).is_ok(),
+            containment_q.get(e).ok(),
+            root,
+        )
+    };
+
+    // --- 1. top-layer activation rebuild (D3) — implemented in T9 ---
+    // (T9 inserts the membership rebuild + fullscreen warn here, then
+    // the escape logic below in step 4.)
+    let _ = (&mut activation, &mut warned); // silence unused until T9
+
+    // --- 2. find the root + classify which entities form contexts ---
+    // (Single global tree → expect exactly one root in the MinimalPlugins
+    // harness; multiple roots are each their own context.)
+    let mut forming: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    let mut roots: Vec<Entity> = Vec::new();
+    for (e, parent) in nodes.iter() {
+        if display_none(e) {
+            continue;
+        }
+        let root = is_root(parent);
+        if root {
+            roots.push(e);
+        }
+        if forms(e, root) {
+            forming.insert(e);
+        }
+    }
+    let _ = &roots; // root-relative top-layer attach lands in T9
+
+    // --- 3. build each forming context's painters_z ---
+    // For an SC root R: walk R's subtree in document order; collect every
+    // descendant that belongs to R's context. A child C of the current
+    // node belongs to R's context UNLESS C itself forms a context — in
+    // which case C is an atomic entry (added) but we do NOT descend into
+    // C (it owns its own painters_z). Non-forming children are added and
+    // descended through. Skip Display::None and (in T9) top-layer entities.
+    let painters_of = |sc_root: Entity| -> Vec<Entity> {
+        let mut painters: Vec<Entity> = Vec::new();
+        let mut stack: Vec<Entity> = Vec::new();
+        if let Ok(kids) = children_q.get(sc_root) {
+            // push in reverse so we pop in document order
+            stack.extend(kids.iter().rev());
+        }
+        while let Some(node) = stack.pop() {
+            if display_none(node) {
+                continue;
+            }
+            // (T9: `if top_layer_of(node) != TopLayer::None { continue }`)
+            painters.push(node);
+            if !forming.contains(&node)
+                && let Ok(kids) = children_q.get(node)
+            {
+                stack.extend(kids.iter().rev());
+            }
+        }
+        // Stable sort by paint tier; the Vec is already in document order,
+        // so equal-tier entries keep document order (spec § 2.1).
+        painters.sort_by_key(|&e| paint_key(stacking_q.get(e).ok(), pos_kind(e)));
+        painters
+    };
+
+    // --- 4. write StackingContext on forming entities; remove stale ---
+    for &e in &forming {
+        let new = StackingContext {
+            painters_z: painters_of(e),
+        };
+        // Idempotent insert (mirror transform_composition's gate): only
+        // write when the value differs from the existing one.
+        let differs = existing_sc
+            .get(e)
+            .ok()
+            .flatten()
+            .map(|sc| sc.painters_z != new.painters_z)
+            .unwrap_or(true);
+        if differs {
+            commands.entity(e).insert(new);
+        }
+    }
+    // Remove StackingContext from entities that no longer form one.
+    for e in have_sc.iter() {
+        if !forming.contains(&e) || display_none(e) {
+            commands.entity(e).remove::<StackingContext>();
         }
     }
 }
