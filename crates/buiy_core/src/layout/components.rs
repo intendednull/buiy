@@ -91,12 +91,15 @@ impl Display {
     }
 }
 
-/// `position` + `inset`. Phase 1 implements `Static`, `Relative`,
-/// `Absolute`. `Sticky` is fully implemented (Phase 7) as a post-Taffy
-/// overlay — sub-pass 6a (`sticky_offset`) computes the sticky
-/// displacement against the nearest scroll container's reference frame.
-/// `Fixed` still ships as a variant that translates to `Absolute`;
-/// Phase 8 wires its real (viewport / transformed-ancestor) semantics.
+/// `position` + `inset`. `Static`, `Relative`, `Absolute`, and `Fixed`
+/// are fully implemented; `Sticky` is a post-Taffy overlay (sub-pass 6a,
+/// `sticky_offset`). `Absolute` resolves against its nearest positioned
+/// ancestor; `Fixed` resolves against the layout root (its Taffy node is
+/// re-parented onto the root in `sync_children_for_entity` so Taffy's
+/// native absolute algorithm uses the root's content box — spec § 2.1).
+/// The remaining known gap is the transformed-ancestor-as-containing-block
+/// case for `Fixed` descendants (spec § 2.1 "Known gap"), which is not yet
+/// modeled.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.
 #[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]

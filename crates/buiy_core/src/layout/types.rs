@@ -212,11 +212,14 @@ pub struct FlexGap {
 }
 
 /// Position kind. `Static`, `Relative`, and `Absolute` pass through to
-/// Taffy directly. `Sticky` is fully implemented via sub-pass 6a
-/// (`sticky_offset`, Phase 7) as a post-Taffy override; for the Taffy
-/// pass itself it maps to `Relative`. `Fixed` remains a fall-back-to-
-/// `Absolute` stub pending Phase 8 (top-layer / fixed-as-viewport). No
-/// `warn!` is emitted for either translation.
+/// Taffy directly (`Static`/`Relative` → `taffy::Position::Relative`,
+/// `Absolute` → `taffy::Position::Absolute` resolved against the nearest
+/// positioned ancestor). `Fixed` also emits `taffy::Position::Absolute`
+/// but its node is re-parented onto the layout root in the children-sync
+/// pass, so it resolves against the root content box (spec § 2.1 Fixed
+/// row). `Sticky` maps to `Relative` for the Taffy pass and gets its
+/// displacement from sub-pass 6a (`sticky_offset`). No `warn!` is emitted
+/// for any translation.
 #[derive(Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositionKind {
     #[default]
@@ -1240,6 +1243,15 @@ mod tests {
         let mut set = std::collections::HashSet::new();
         assert!(set.insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer));
         assert!(!set.insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer));
+    }
+
+    #[test]
+    fn position_kind_fixed_variant_is_distinct() {
+        // Doc-refresh guard: Fixed is a real, distinct variant (not aliased
+        // to Absolute) — the doc now claims Fixed has root-containing-block
+        // semantics distinct from Absolute.
+        assert_ne!(PositionKind::Fixed, PositionKind::Absolute);
+        assert_eq!(PositionKind::Fixed, PositionKind::Fixed);
     }
 
     #[test]
