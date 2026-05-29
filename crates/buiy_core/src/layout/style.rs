@@ -14,15 +14,16 @@
 
 use super::components::{
     BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position, Scroll,
-    WritingMode,
+    UiTransform, WritingMode,
 };
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
     FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length,
     LogicalEdges, OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapType, TextOrientation, TrackSize, UnicodeBidi, WritingModeKind,
+    Sizing, SnapType, TextOrientation, TrackSize, TransformMatrix, UnicodeBidi, WritingModeKind,
 };
 use bevy::ecs::bundle::Bundle;
+use bevy::math::Quat;
 
 /// Hybrid builder over an entity's self-styling layout components.
 ///
@@ -54,6 +55,7 @@ pub struct Style {
     pub writing_mode: WritingMode,
     pub container: Container,
     pub multi_column: MultiColumn,
+    pub ui_transform: UiTransform,
 }
 
 impl Style {
@@ -458,6 +460,42 @@ impl Style {
         self.multi_column = m;
         self
     }
+
+    // ---- UiTransform ----
+    //
+    // The `Translate` / `Rotate` / `Scale` longhands are **decomposed-only**
+    // — they are NOT `Style` fields. Spawn them alongside `Style`
+    // (`commands.spawn((Style::default(), Translate(..)))`), mirroring the
+    // `FlexItem` / `Anchor` decomposed-only convention (D4). There are no
+    // setters for the longhands.
+
+    /// Set the full `UiTransform` for this entity (self-styling visual
+    /// transform). Does not affect layout flow (spec § 1.2).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
+    pub fn ui_transform(mut self, t: UiTransform) -> Self {
+        self.ui_transform = t;
+        self
+    }
+
+    /// Ergonomic setter — 2D translate in logical pixels (z = 0).
+    pub fn translate_px(mut self, x: f32, y: f32) -> Self {
+        self.ui_transform.matrix =
+            TransformMatrix::Translate(Length::px(x), Length::px(y), Length::ZERO);
+        self
+    }
+
+    /// Ergonomic setter — rotate about the z axis (radians).
+    pub fn rotate_z(mut self, radians: f32) -> Self {
+        self.ui_transform.matrix = TransformMatrix::Rotate(Quat::from_rotation_z(radians));
+        self
+    }
+
+    /// Ergonomic setter — uniform 2D scale (z = 1).
+    pub fn scale(mut self, factor: f32) -> Self {
+        self.ui_transform.matrix = TransformMatrix::Scale(factor, factor, 1.0);
+        self
+    }
 }
 
 /// Builder for the box-model surface using logical (writing-mode-aware)
@@ -591,14 +629,15 @@ mod tests {
     use super::*;
     use crate::layout::components::{
         BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position,
-        Scroll, WritingMode,
+        Scroll, UiTransform, WritingMode,
     };
     use crate::layout::types::{
         AlignItems, BoxSizing, ColumnCount, ContainerType, Direction, Edges, FlexAxis, FlexGap,
         GridAutoFlow, JustifyContent, Length, OverflowMode, ScrollbarWidth, Sizing, SnapType,
-        TrackSize, WritingModeKind,
+        TrackSize, TransformMatrix, WritingModeKind,
     };
     use bevy::app::App;
+    use bevy::ecs::world::World;
     use bevy::prelude::MinimalPlugins;
 
     fn spawn_and_extract(
@@ -901,5 +940,38 @@ mod tests {
             .copied()
             .expect("WritingMode inserted");
         assert_eq!(wm.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn style_default_spawns_ui_transform() {
+        let mut world = World::new();
+        let e = world.spawn(Style::default()).id();
+        assert!(
+            world.get::<UiTransform>(e).is_some(),
+            "Style derives Bundle; ui_transform inserts unconditionally (matches Container)"
+        );
+        assert_eq!(
+            world.get::<UiTransform>(e).unwrap().matrix,
+            TransformMatrix::None
+        );
+    }
+
+    #[test]
+    fn style_translate_px_setter_round_trips() {
+        let s = Style::default().translate_px(10.0, 20.0);
+        assert_eq!(
+            s.ui_transform.matrix,
+            TransformMatrix::Translate(Length::px(10.0), Length::px(20.0), Length::ZERO)
+        );
+    }
+
+    #[test]
+    fn style_non_identity_ui_transform_field_inserts() {
+        let mut world = World::new();
+        let e = world
+            .spawn(Style::default().rotate_z(std::f32::consts::FRAC_PI_4))
+            .id();
+        let ui = world.get::<UiTransform>(e).expect("ui_transform inserted");
+        assert!(matches!(ui.matrix, TransformMatrix::Rotate(_)));
     }
 }

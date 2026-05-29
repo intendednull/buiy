@@ -336,11 +336,10 @@ fn transform_composition_runs_and_writes_resolved_transform() {
         .world_mut()
         .spawn((
             Node,
-            Style::default(),
-            UiTransform {
+            Style::default().ui_transform(UiTransform {
                 matrix: TransformMatrix::Translate(Length::px(10.0), Length::px(0.0), Length::ZERO),
                 ..Default::default()
-            },
+            }),
         ))
         .id();
 
@@ -362,7 +361,7 @@ fn identity_transform_gets_no_resolved_transform() {
 
     let e = app
         .world_mut()
-        .spawn((Node, Style::default(), UiTransform::default()))
+        .spawn((Node, Style::default().ui_transform(UiTransform::default())))
         .id();
 
     app.update();
