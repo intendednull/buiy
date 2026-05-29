@@ -682,3 +682,92 @@ tagged release.
   `O(UiTransform-bearing entities)`; identity transforms insert nothing.
   SIZE-containment substitution is `O(1)` per contained entity inside the
   existing `sync_styles` pass.
+
+### Added (Phase 9 — layout stacking + top layer)
+- **Stacking + top layer (Phase 9 of the layout migration).** Spec:
+  `docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md`.
+  Plan: `docs/plans/2026-05-29-buiy-layout-stacking-top-layer.md`.
+- `Stacking` component (self-styling, joins `Style`'s Bundle): `z_index`,
+  `isolation`, `top_layer`. Default `Auto`/`Auto`/`None` is inert (forms no
+  stacking context). Consumed by sub-pass 6f; does NOT affect Taffy layout
+  (paint-order only). Spec § 1.
+- `ZIndex` (`Auto` default / `Layer(i32)`), `Isolation` (`Auto` default /
+  `Isolate`), `TopLayer` (`None` default / `Modal` / `Popover` / `Tooltip` /
+  `Fullscreen`) value types. Spec § 1.
+- `StackingContext { painters_z: Vec<Entity> }` — private render handoff
+  (`buiy_core::components`, next to `ResolvedTransform`), written only by
+  sub-pass 6f on each entity that forms a stacking context (removed when it
+  stops forming one). `painters_z` is the spec § 2.1 five-tier paint order
+  (negative z-index, in-flow non-positioned, auto-positioned, positive
+  z-index; floats always empty in Buiy) with document-order tie-break via a
+  stable sort. Not author-set, but reflectable for devtools. Spec § 2.1, § 5.
+- `TopLayerActivation { order: VecDeque<Entity> }` resource — single global
+  top-layer activation order (most-recently-activated at the back). Spec § 4.2.
+- `stacking_context` system — `PostTaffyOverrides` sub-pass **6f**, runs
+  after `transform_composition` (6e) so it reads the composed
+  `ResolvedTransform` (trigger 3). Detects SC-forming entities via the spec
+  § 2 trigger union (1 positioned + explicit `z_index`, 2 `Isolation::Isolate`,
+  3 non-identity transform, 4 `Containment.contain ⊇ PAINT/STRICT`, 6 root),
+  builds each context's `painters_z` paint order via a document-order tree
+  walk treating nested contexts as atomic entries, and writes the private
+  `StackingContext` handoff. Writes NOTHING to `PostTaffyPositionOverrides`
+  (stacking does not move the layout box). Idempotent insert (compare before
+  write); removes stale `StackingContext` when an entity stops forming one.
+  Spec § 2, § 2.1.
+- **Top-layer escape.** `TopLayer != None` entities are removed from their
+  parent stacking context and attached to the **root** context's `painters_z`
+  (membership = root, not parent — the spec § 6 escape test), ordered by tier
+  (Fullscreen < Tooltip < Popover < Modal) then activation order.
+  `TopLayerActivation` is rebuilt each frame inside 6f from the current set of
+  top-layer entities (drop deactivated/despawned, append newly-present in tree
+  order). The clip-rect override (§ 4.3) is a render concern; Phase 9 records
+  membership-at-root only. Spec § 4.1, § 4.2, § 4.3.
+- `forms_stacking_context` + `paint_key` pure helpers (unit-tested in
+  isolation): the SC-formation predicate and the `(tier, z)` paint-order sort
+  key (static `z_index` ignored per the CSS quirk; positioned explicit `z >= 0`
+  paints above auto-positioned). Spec § 2, § 2.1, § 3.
+- `LayoutWarnOnceKey::MultipleFullscreenTopLayer` — session-wide warn-once
+  when more than one `TopLayer::Fullscreen` is active simultaneously (CSS
+  allows one; extras fall back to normal stacking). Spec § 4.2.
+- `Style` fluent setters: `.stacking()`, `.z_index()`, `.isolation()`,
+  `.top_layer()`. Spec § 1, § 4.5.
+- Integration tests `tests/layout_stacking.rs` (z-index ordering, static-z
+  ignored, isolation context, top-layer modal escape, activation order,
+  mixed-tier ordering) + pipeline-order assertions that 6f runs after 6e.
+- `Stacking` / `ZIndex` / `Isolation` / `TopLayer` / `StackingContext`
+  registered for reflection in `LayoutPlugin`; re-exported from `buiy_core`
+  and the `buiy` facade. `TopLayerActivation` re-exported from
+  `buiy_core::layout`.
+
+### Changed (Phase 9)
+- **`BuiyLayoutStep::PostTaffyOverrides` chain now has seven elements:**
+  `clear → sticky 6a → table 6b → multicol 6c → anchor 6d → transform 6e →
+  stacking 6f` (Phase 8 attached six).
+
+### Deferred / divergences from spec (Phase 9)
+- **Render-side SC formers (`opacity` / `filter` / `mix_blend_mode`) —
+  deferred (D1).** Spec § 2 trigger 5's render-side stacking-context formers
+  live on components that do not exist in `buiy_core` yet (render-pipeline
+  spec unbuilt); 6f cannot read properties with no component. The
+  `forms_stacking_context` predicate is written so adding them later is a
+  localized `|| render_side_former` clause. Spec § 2 trigger 5, § 7.
+- **`will-change` SC former — deferred.** `WillChange` is Phase-8 tier-E,
+  stored-only; 6f does not treat an SC-forming `will-change` value as a
+  trigger. Coordinates with the existing Phase-8 "will-change layer promotion
+  + SC trigger" follow-up. Spec § 2 trigger 5, § 7.
+- **Per-window top layer — deferred (D2, deliberate divergence from spec
+  § 4.4).** `buiy_core` has a single global `LayoutTree` and reads the primary
+  window only — there is no per-window layout segregation — so Phase 9 ships
+  **one** global top layer + one global `TopLayerActivation`. Per-window scope
+  is gated on `buiy-window-and-surface-design` (unbuilt), mirroring the Phase-6
+  cross-window-anchor deferral. Spec § 4.4, § 7.
+- **Top-layer clip-rect (§ 4.3) — render concern (D8).** Phase 9 records the
+  escaped entity's membership at the root context (the testable
+  depth-ordering fact); the actual viewport clip-rect override is applied by
+  render reading `painters_z` + `Overflow`.
+
+### Performance contract (Phase 9)
+- `stacking_context` (6f) is a single O(entities) pass over the `Node`
+  hierarchy per frame; `TopLayerActivation` maintenance is O(top-layer count).
+  Idempotent `StackingContext` inserts (compare before write) avoid
+  `Changed<StackingContext>` churn.

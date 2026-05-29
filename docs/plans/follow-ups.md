@@ -389,20 +389,92 @@ honors perspective / backface / `transform-style`.
 
 **Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
 
-## Layout — Phase 9 stacking sub-pass 6f reads `ResolvedTransform`
+## Layout — Phase 9 stacking sub-pass 6f reads `ResolvedTransform` — LANDED
 
 **Originated:** Phase 8 (D1 — stacking deferred to Phase 9).
 
-**Symptom:** A non-identity transform forms a stacking context (spec § 3),
-a `ContainFlags::PAINT` and certain `will-change` values likewise, but
-Phase 8 ships no stacking-context detection.
-
-**Implementation sketch:** Phase 9 sub-pass 6f runs after 6e and reads the
-composed matrix `ResolvedTransform` produced; it implements the spec § 3
-/ § 6 SC trigger list, z-index sort, isolation, and top-layer escape.
+**Status:** **Landed** in Phase 9
+(`docs/plans/2026-05-29-buiy-layout-stacking-top-layer.md`). Sub-pass 6f
+(`stacking_context`) now runs after `transform_composition` (6e) and reads
+the composed `ResolvedTransform` (trigger 3). It implements the spec § 2 SC
+trigger union (positioned + z-index, isolation, transform, paint/strict
+containment, root), the § 2.1 five-tier z-index paint-order sort, and the
+§ 4 top-layer escape. The render-side trigger-5 formers and the will-change
+SC trigger remain deferred (separate follow-ups below).
 
 **Spec touchpoint:** `transforms-and-containment.md § 3`, § 6;
 `stacking-and-top-layer.md`.
+
+## Layout — Phase 9 render-side stacking-context formers (`opacity` / `filter` / `mix_blend_mode`)
+
+**Originated:** Phase 9 (D1 — trigger-5 formers deferred).
+
+**Symptom:** CSS spec § 2 trigger 5 (a non-default `opacity`, `filter`, or
+`mix-blend-mode` forms a stacking context) is not detected by sub-pass 6f.
+Authors who set these properties get no `StackingContext` unless another
+trigger (positioned + z-index, isolation, transform, paint/strict containment,
+root) also fires.
+
+**Cause:** the `opacity` / `filter` / `mix_blend_mode` properties live on
+render-side components that do not exist in `buiy_core` yet (the
+render-pipeline spec is unbuilt). 6f cannot read a property that has no
+component.
+
+**Implementation sketch:** when the render-side components carrying these
+properties land, extend `forms_stacking_context` with an additional
+`|| render_side_former` clause (the predicate signature takes only the inputs
+available today; adding one is a localized change). Add the corresponding
+unit tests next to the existing trigger tests.
+
+**Spec touchpoint:** `stacking-and-top-layer.md § 2` trigger 5, § 7.
+
+## Layout — Phase 9 `will-change` stacking-context former
+
+**Originated:** Phase 9 (D1) — coordinates with the Phase-8 "will-change
+layer promotion + SC trigger" follow-up (above).
+
+**Symptom:** a `WillChange` value naming an SC-forming property (e.g.
+`WillChangeProperty::Transform`, `Opacity`) should form a stacking context,
+but sub-pass 6f does not treat `will-change` as a trigger. `WillChange` is
+Phase-8 tier-E, stored-only with no behavior.
+
+**Cause:** Phase 8 stores `WillChange` on `Containment` but ships no behavior
+(D7); Phase 9 deliberately did not wire it as an SC trigger to keep the
+deferral consistent. The two concerns (render layer promotion + SC trigger)
+are the same underlying feature and should land together.
+
+**Implementation sketch:** when honoring `WillChange`, extend
+`forms_stacking_context` to return `true` when the `Containment.will_change`
+list names an SC-forming property, in the same change that adds the render
+layer-promotion hint. Cross-links the existing Phase-8 "will-change layer
+promotion + SC trigger" follow-up.
+
+**Spec touchpoint:** `transforms-and-containment.md § 5.3`;
+`stacking-and-top-layer.md § 2` trigger 5, § 7.
+
+## Layout — Phase 9 per-window top layer
+
+**Originated:** Phase 9 (D2 — deliberate divergence from spec § 4.4 at the
+implementation-scope level).
+
+**Symptom:** Phase 9 ships a **single** global top layer + one global
+`TopLayerActivation`. Spec § 4.4 wants a per-window top layer; top-layer
+entities in distinct windows would currently share one activation order and
+all escape to the same single root context.
+
+**Cause:** `buiy_core` has one global `NonSend<LayoutTree>` and reads the
+primary window only (`taffy_compute` uses `windows.iter().next()`); there is
+no per-window layout segregation anywhere. A per-window top layer would
+require per-window `LayoutTree`s (or window-tagged entries) plus a router that
+knows which window root an escaped entity attaches to.
+
+**Implementation sketch:** depends on `buiy-window-and-surface-design`
+(currently incomplete), mirroring the Phase-6 "cross-window anchor targets"
+follow-up. Once per-window layout exists, key `TopLayerActivation` by window
+(or hold one per window) and attach escaped top-layer entities to their own
+window's root context instead of `roots.first()`.
+
+**Spec touchpoint:** `stacking-and-top-layer.md § 4.4`, § 7.
 
 ## Layout — non-px translate units in `compose_transform`
 
