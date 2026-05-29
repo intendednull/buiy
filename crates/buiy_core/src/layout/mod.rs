@@ -26,12 +26,13 @@ pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
     BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnRuleStyle,
-    ColumnSpan, ContainFlags, ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap,
-    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, LayoutWarnOnceKey,
-    Length, LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
-    PositionTry, QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
-    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
-    TransformMatrix, TryCondition, UnicodeBidi, WritingModeKind,
+    ColumnSpan, ContainFlags, ContainerType, ContentVisibility, Direction, Edges, FlexAxis,
+    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
+    LayoutWarnOnceKey, Length, LogicalEdges, NamedArea, Orientation, OverflowMode,
+    OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount, ScrollBehavior,
+    ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
+    TextOrientation, TrackSize, TransformMatrix, TryCondition, UnicodeBidi, WillChange,
+    WillChangeProperty, WritingModeKind,
 };
 
 use bevy::prelude::*;

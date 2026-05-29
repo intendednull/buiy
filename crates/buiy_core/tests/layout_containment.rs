@@ -5,7 +5,9 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout,
-    layout::{ContainFlags, LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Style},
+    layout::{
+        ContainFlags, Containment, LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Style,
+    },
 };
 
 fn app() -> App {
@@ -36,5 +38,82 @@ fn size_containment_zeroes_auto_width_and_warns() {
             .set
             .contains(&LayoutWarnOnceKey::SizeContainmentZeroed(e)),
         "size-containment-zeroed warn recorded"
+    );
+}
+
+#[test]
+fn content_visibility_auto_warns_once() {
+    use buiy_core::layout::ContentVisibility;
+    let mut app = app();
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().containment(Containment {
+                content_visibility: ContentVisibility::Auto,
+                ..Default::default()
+            }),
+        ))
+        .id();
+    app.update();
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert!(
+        warned
+            .set
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e))
+    );
+}
+
+#[test]
+fn content_visibility_hidden_also_warns() {
+    use buiy_core::layout::ContentVisibility;
+    let mut app = app();
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().containment(Containment {
+                content_visibility: ContentVisibility::Hidden,
+                ..Default::default()
+            }),
+        ))
+        .id();
+    app.update();
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert!(
+        warned
+            .set
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e))
+    );
+}
+
+#[test]
+fn will_change_does_not_warn() {
+    use buiy_core::layout::{WillChange, WillChangeProperty};
+    let mut app = app();
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().containment(Containment {
+                will_change: WillChange::Properties(vec![WillChangeProperty::Transform]),
+                ..Default::default()
+            }),
+        ))
+        .id();
+    app.update();
+    // will-change is a valid stored hint — no warn-once key for it.
+    // (Negative assertion: no ContentVisibilityDeferred / SizeContainmentZeroed
+    // fires because content_visibility = Visible and size is not contained.)
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert!(
+        !warned
+            .set
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e))
+    );
+    assert!(
+        !warned
+            .set
+            .contains(&LayoutWarnOnceKey::SizeContainmentZeroed(e))
     );
 }

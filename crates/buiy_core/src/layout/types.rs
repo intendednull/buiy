@@ -1012,6 +1012,14 @@ pub enum LayoutWarnOnceKey {
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.1.
     SizeContainmentZeroed(Entity),
+
+    /// `Containment.content_visibility != Visible`. Phase 8 stores the
+    /// value but does NOT enforce `Auto` (off-screen skip) or `Hidden`
+    /// (Display::None-for-descendants) — both deferred. One warn per
+    /// (entity, session).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.2.
+    ContentVisibilityDeferred(Entity),
 }
 
 // ============================================================

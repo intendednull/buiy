@@ -24,9 +24,9 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, ContainFlags, ContainerType, GridAreas, Inset,
-    LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing, TransformMatrix, TryCondition,
-    WritingModeKind,
+    AnchorErrorKind, AnchorName, AnchorRef, ContainFlags, ContainerType, ContentVisibility,
+    GridAreas, Inset, LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing,
+    TransformMatrix, TryCondition, WritingModeKind,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -1492,6 +1492,22 @@ pub(super) fn sync_styles(
                 "Entity {:?} has size containment (contain: size/inline-size) with an \
                  auto size on a contained axis; treating the auto size as 0px (spec § 5.1). \
                  Declare an explicit width/height.",
+                entity,
+            );
+        }
+
+        // content-visibility != Visible is recognized but deferred in Phase 8
+        // (Auto needs last-frame ResolvedLayout + viewport + contain-intrinsic-size;
+        // Hidden needs a tree-skip path). Store the value; warn once per entity.
+        if !matches!(containment.content_visibility, ContentVisibility::Visible)
+            && warned
+                .set
+                .insert(LayoutWarnOnceKey::ContentVisibilityDeferred(entity))
+        {
+            bevy::log::warn!(
+                "Entity {:?} sets content-visibility != visible; Phase 8 stores the value \
+                 but does not yet skip off-screen layout/paint (deferred). The value is \
+                 recognized and will be honored in a follow-up.",
                 entity,
             );
         }
