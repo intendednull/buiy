@@ -771,6 +771,90 @@ pub(super) fn resolve_column_widths(rows: &[Vec<f32>]) -> Vec<f32> {
     widths
 }
 
+/// One table row: its entity and the cell entities it owns, in
+/// `Children` document order (column index = position in this vec).
+///
+/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
+/// the consuming `table_layout` rewrite lands in a later task (plan T4).
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(super) struct TableRowModel {
+    pub entity: Entity,
+    pub cells: Vec<Entity>,
+}
+
+/// One row-group (explicit `table-row-group`/`header`/`footer`, or the
+/// implicit group around bare rows — plan D6): its entity and rows in
+/// document order.
+///
+/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
+/// the consuming `table_layout` rewrite lands in a later task (plan T4).
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(super) struct TableRowGroupModel {
+    pub entity: Entity,
+    pub rows: Vec<TableRowModel>,
+}
+
+/// A table's structural spine gathered from the `Children` hierarchy,
+/// in document order (plan D5). Caption / column(-group) parts are not
+/// stored here — they are deferred-with-warn (plan D4).
+///
+/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
+/// the consuming `table_layout` rewrite lands in a later task (plan T4).
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub(super) struct TableModel {
+    pub groups: Vec<TableRowGroupModel>,
+}
+
+/// Assign each cell / row / row-group a position **relative to the
+/// table origin** (spec § 1.2 step 3). Cells sit at the cumulative
+/// column-x / cumulative-row-y grid; a row and its group sit at the
+/// row's y (a group at its first row's y); groups stack in document
+/// order (plan D5). `row_heights` is indexed by the flat row index
+/// across all groups (group order, then row order). Returns offsets
+/// keyed by entity; the caller adds the table's own Taffy origin.
+///
+/// Pure. Unit-tested in `mod tests`.
+///
+/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
+/// the consuming `table_layout` rewrite lands in a later task (plan T4).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+#[allow(dead_code)]
+pub(super) fn place_table_cells(
+    model: &TableModel,
+    col_widths: &[f32],
+    row_heights: &[f32],
+) -> std::collections::HashMap<Entity, Vec2> {
+    // Cumulative column x-offsets: col_x[c] = sum of widths before c.
+    let mut col_x: Vec<f32> = Vec::with_capacity(col_widths.len());
+    let mut acc = 0.0;
+    for &w in col_widths {
+        col_x.push(acc);
+        acc += w;
+    }
+
+    let mut placed: std::collections::HashMap<Entity, Vec2> = std::collections::HashMap::new();
+    let mut y = 0.0f32;
+    let mut row_index = 0usize;
+    for group in &model.groups {
+        let group_y = y;
+        placed.insert(group.entity, Vec2::new(0.0, group_y));
+        for row in &group.rows {
+            placed.insert(row.entity, Vec2::new(0.0, y));
+            for (ci, &cell) in row.cells.iter().enumerate() {
+                let x = col_x.get(ci).copied().unwrap_or(0.0);
+                placed.insert(cell, Vec2::new(x, y));
+            }
+            y += row_heights.get(row_index).copied().unwrap_or(0.0);
+            row_index += 1;
+        }
+    }
+    placed
+}
+
 /// Sub-pass 6b — table layout stub.
 ///
 /// Spec § 1.2: "v1 ships only the API surface and the fallback path;
@@ -3347,6 +3431,103 @@ mod tests {
         assert!(resolve_column_widths(&[]).is_empty());
         // A table with rows but no cells → zero columns.
         assert!(resolve_column_widths(&[vec![], vec![]]).is_empty());
+    }
+
+    // Build entities with stable ids for assertions.
+    fn ent(n: u32) -> Entity {
+        Entity::from_raw_u32(n).unwrap()
+    }
+
+    #[test]
+    fn place_single_row_two_cells_in_column_grid() {
+        // Two columns 40/60; one group with one row (height 20) holding
+        // two cells. Cell 0 at x=0, cell 1 at x=40; both at y=0.
+        let model = TableModel {
+            groups: vec![TableRowGroupModel {
+                entity: ent(1),
+                rows: vec![TableRowModel {
+                    entity: ent(2),
+                    cells: vec![ent(3), ent(4)],
+                }],
+            }],
+        };
+        let placed = place_table_cells(&model, &[40.0, 60.0], &[20.0]);
+        assert_eq!(placed[&ent(3)], bevy::math::Vec2::new(0.0, 0.0));
+        assert_eq!(placed[&ent(4)], bevy::math::Vec2::new(40.0, 0.0));
+        // Row + group sit at the table origin.
+        assert_eq!(placed[&ent(2)], bevy::math::Vec2::new(0.0, 0.0));
+        assert_eq!(placed[&ent(1)], bevy::math::Vec2::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn place_two_rows_stack_vertically_by_row_height() {
+        // Row 0 height 20, row 1 height 30. Row 1 starts at y=20.
+        let model = TableModel {
+            groups: vec![TableRowGroupModel {
+                entity: ent(1),
+                rows: vec![
+                    TableRowModel {
+                        entity: ent(2),
+                        cells: vec![ent(3)],
+                    },
+                    TableRowModel {
+                        entity: ent(4),
+                        cells: vec![ent(5)],
+                    },
+                ],
+            }],
+        };
+        let placed = place_table_cells(&model, &[40.0], &[20.0, 30.0]);
+        assert_eq!(placed[&ent(3)], bevy::math::Vec2::new(0.0, 0.0));
+        assert_eq!(placed[&ent(2)], bevy::math::Vec2::new(0.0, 0.0));
+        assert_eq!(
+            placed[&ent(5)],
+            bevy::math::Vec2::new(0.0, 20.0),
+            "row 1 cell below row 0"
+        );
+        assert_eq!(
+            placed[&ent(4)],
+            bevy::math::Vec2::new(0.0, 20.0),
+            "row 1 at y=20"
+        );
+    }
+
+    #[test]
+    fn place_two_groups_stack_in_document_order() {
+        // Group A (1 row, height 20) then group B (1 row, height 30).
+        // Group B's row starts at y=20 (D5 — document-order stacking).
+        let model = TableModel {
+            groups: vec![
+                TableRowGroupModel {
+                    entity: ent(1),
+                    rows: vec![TableRowModel {
+                        entity: ent(2),
+                        cells: vec![ent(3)],
+                    }],
+                },
+                TableRowGroupModel {
+                    entity: ent(4),
+                    rows: vec![TableRowModel {
+                        entity: ent(5),
+                        cells: vec![ent(6)],
+                    }],
+                },
+            ],
+        };
+        let placed = place_table_cells(&model, &[40.0], &[20.0, 30.0]);
+        assert_eq!(
+            placed[&ent(1)],
+            bevy::math::Vec2::new(0.0, 0.0),
+            "group A at top"
+        );
+        assert_eq!(placed[&ent(3)], bevy::math::Vec2::new(0.0, 0.0));
+        assert_eq!(
+            placed[&ent(4)],
+            bevy::math::Vec2::new(0.0, 20.0),
+            "group B below A"
+        );
+        assert_eq!(placed[&ent(5)], bevy::math::Vec2::new(0.0, 20.0));
+        assert_eq!(placed[&ent(6)], bevy::math::Vec2::new(0.0, 20.0));
     }
 
     fn stk(z: ZIndex, iso: Isolation) -> Stacking {
