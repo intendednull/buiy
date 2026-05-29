@@ -14,11 +14,11 @@ use super::types::{
     AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BackfaceVisibility, BoxSizing,
     BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnSpan,
     ContainFlags, ContainerType, ContentVisibility, Direction, Edges, FlexAxis, FlexGap, FlexWrap,
-    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
-    OverscrollBehavior, PositionKind, PositionTry, QueryCondition, ScrollBehavior, ScrollbarColor,
-    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation,
-    TrackSize, TransformMatrix, TransformOrigin, TransformStyle, UnicodeBidi, WillChange,
-    WritingModeKind,
+    GridAreas, GridAutoFlow, GridLine, Inset, Isolation, JustifyContent, JustifyItems, Length,
+    OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition, ScrollBehavior,
+    ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
+    TextOrientation, TopLayer, TrackSize, TransformMatrix, TransformOrigin, TransformStyle,
+    UnicodeBidi, WillChange, WritingModeKind, ZIndex,
 };
 use bevy::prelude::*;
 
@@ -416,6 +416,22 @@ pub struct Containment {
     pub will_change: WillChange,
 }
 
+/// Depth-ordering for an entity's box: its `z-index`, `isolation`, and
+/// top-layer participation. Self-styling (a `Style` field). Consumed by
+/// sub-pass 6f `stacking_context`, which decides whether the entity
+/// forms a stacking context and computes the global paint order into the
+/// private `StackingContext` render handoff. Does NOT affect Taffy
+/// layout — stacking is a paint-order concern only (spec § 2).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 1.
+#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct Stacking {
+    pub z_index: ZIndex,
+    pub isolation: Isolation,
+    pub top_layer: TopLayer,
+}
+
 /// A `@container` rule pinned to a single entity. The rule activates
 /// when *all* `conditions` hold against the resolved size of the
 /// matched query container (by name, or nearest queried ancestor when
@@ -811,6 +827,14 @@ mod tests {
         assert_eq!(c.contain, ContainFlags::empty());
         assert_eq!(c.content_visibility, ContentVisibility::Visible);
         assert_eq!(c.will_change, WillChange::Auto);
+    }
+
+    #[test]
+    fn stacking_default_is_auto_auto_none() {
+        let s = Stacking::default();
+        assert_eq!(s.z_index, ZIndex::Auto);
+        assert_eq!(s.isolation, Isolation::Auto);
+        assert_eq!(s.top_layer, TopLayer::None);
     }
 
     #[test]
