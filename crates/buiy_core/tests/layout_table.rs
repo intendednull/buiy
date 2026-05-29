@@ -228,3 +228,155 @@ fn rows_stack_by_their_own_height() {
         "row 1 below row 0 (25px tall)"
     );
 }
+
+#[test]
+fn explicit_row_groups_stack_in_document_order() {
+    // Table > [HeaderGroup > Row > Cell(h=20)], [RowGroup > Row > Cell(h=30)].
+    // Header group's row at y=0; body group's row at y=20 (D5 — source order,
+    // no header-floats-to-top reorder).
+    let mut app = app();
+    let hc = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(40.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let hrow = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(hc)
+        .id();
+    let header = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableHeaderGroup)))
+        .add_child(hrow)
+        .id();
+
+    let bc = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(40.0)
+                .height_px(30.0),
+        ))
+        .id();
+    let brow = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(bc)
+        .id();
+    let body = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRowGroup)))
+        .add_child(brow)
+        .id();
+
+    let _table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_children(&[header, body])
+        .id();
+
+    app.update();
+
+    assert_eq!(pos(&app, hc).y, 0.0, "header group row at top");
+    assert!(
+        (pos(&app, bc).y - 20.0).abs() < 0.5,
+        "body group row below header (20px)"
+    );
+    // Group entities sit at their first row's y.
+    assert_eq!(pos(&app, header).y, 0.0);
+    assert!((pos(&app, body).y - 20.0).abs() < 0.5);
+}
+
+#[test]
+fn cell_columns_align_across_groups() {
+    // Two groups, each one row of two cells. Column 0 = max widths across
+    // BOTH groups' rows; column 1 aligns across groups.
+    let mut app = app();
+    // group A row: 30 / 50
+    let a0 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let a1 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(50.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let arow = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_children(&[a0, a1])
+        .id();
+    let ga = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRowGroup)))
+        .add_child(arow)
+        .id();
+    // group B row: 60 / 20  → column 0 = max(30,60) = 60
+    let b0 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(60.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let b1 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(20.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let brow = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_children(&[b0, b1])
+        .id();
+    let gb = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRowGroup)))
+        .add_child(brow)
+        .id();
+
+    let _table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_children(&[ga, gb])
+        .id();
+
+    app.update();
+
+    assert!(
+        (pos(&app, a1).x - 60.0).abs() < 0.5,
+        "group A col 1 at x=60 (widest col 0 across groups)"
+    );
+    assert!(
+        (pos(&app, b1).x - 60.0).abs() < 0.5,
+        "group B col 1 also at x=60"
+    );
+}
