@@ -217,6 +217,11 @@ impl Style {
         self
     }
 
+    pub fn fixed(mut self) -> Self {
+        self.position.kind = PositionKind::Fixed;
+        self
+    }
+
     pub fn inset(mut self, i: Inset) -> Self {
         self.position.inset = i;
         self
@@ -1052,5 +1057,11 @@ mod tests {
     fn style_stacking_default_is_identity() {
         let s = Style::default();
         assert_eq!(s.stacking, Stacking::default());
+    }
+
+    #[test]
+    fn style_fixed_setter_sets_position_kind() {
+        let s = Style::default().fixed();
+        assert_eq!(s.position.kind, PositionKind::Fixed);
     }
 }
