@@ -178,6 +178,28 @@ pub struct PostTaffyPositionOverrides {
     pub by_entity: std::collections::HashMap<Entity, Vec2>,
 }
 
+/// Activation order for the single global top layer (spec § 4.2). A
+/// `VecDeque` where the most-recently-activated top-layer entity is at
+/// the back (paints last / on top within its tier). Maintained by
+/// sub-pass 6f via a per-frame current-membership rebuild (D3): entries
+/// no longer top-layer (deactivated or despawned) are dropped, newly
+/// top-layer entities are appended in tree order.
+///
+/// Single global (not per-window): `buiy_core` has no per-window layout
+/// yet (D2). Per-window top layers are a follow-up.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 4.2.
+///
+/// Carries `#[allow(dead_code)]` because the `init_resource` wiring and
+/// the `stacking_context` sub-pass (6f) that maintains this deque land
+/// in Task 8; until then the resource is defined but not yet driven.
+/// Mirrors the deferred-but-defined `clear_warned_once_on_exit` pattern.
+#[allow(dead_code)]
+#[derive(Resource, Default, Debug)]
+pub struct TopLayerActivation {
+    pub order: std::collections::VecDeque<Entity>,
+}
+
 /// Phase 6 — per-frame warn-dedup set. Cleared at the top of
 /// `anchor_resolution` and populated solely by `anchor_resolution`
 /// itself (all kinds, including `DuplicateName` which is re-detected
@@ -2491,6 +2513,11 @@ mod cq_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn top_layer_activation_default_is_empty() {
+        assert!(TopLayerActivation::default().order.is_empty());
+    }
 
     #[test]
     fn compose_identity_is_identity() {

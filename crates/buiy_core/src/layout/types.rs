@@ -1020,6 +1020,11 @@ pub enum LayoutWarnOnceKey {
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.2.
     ContentVisibilityDeferred(Entity),
+
+    /// More than one `TopLayer::Fullscreen` entity is active simultaneously;
+    /// CSS allows one — extras fall back to normal stacking (spec § 4.2).
+    /// Session-wide (no `Entity`): the condition is a property of the set.
+    MultipleFullscreenTopLayer,
 }
 
 // ============================================================
@@ -1228,6 +1233,13 @@ mod tests {
         assert_eq!(Length::px(10.0), Length::Px(10.0));
         assert_eq!(Length::percent(50.0), Length::Percent(50.0));
         assert_eq!(Length::ZERO, Length::Px(0.0));
+    }
+
+    #[test]
+    fn multiple_fullscreen_warn_key_is_hashable() {
+        let mut set = std::collections::HashSet::new();
+        assert!(set.insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer));
+        assert!(!set.insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer));
     }
 
     #[test]
