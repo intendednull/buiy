@@ -9,6 +9,7 @@
 //! sizing keywords resolve to `Auto` until text rendering integrates.
 
 use bevy::prelude::*;
+use bevy::reflect::impl_reflect_opaque;
 
 /// CSS-style length value.
 ///
@@ -1076,6 +1077,89 @@ pub enum BackfaceVisibility {
     Hidden,
 }
 
+// ============================================================
+// Phase 8 — containment value types (transforms-and-containment.md § 5)
+// ============================================================
+
+bitflags::bitflags! {
+    /// CSS `contain` flags. `CONTENT` and `STRICT` are unions of the
+    /// primitive bits (not standalone bits), so `.contains(PAINT)` is
+    /// true for a `CONTENT`- or `STRICT`-contained entity.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.
+    #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+    pub struct ContainFlags: u8 {
+        /// Isolate internal layout from the rest of the tree.
+        const LAYOUT      = 1 << 0;
+        /// Confine painting to the entity's box.
+        const PAINT       = 1 << 1;
+        /// The entity's size must be explicit (auto → 0 with a warn).
+        const SIZE        = 1 << 2;
+        /// Counters / quotes do not escape the subtree.
+        const STYLE       = 1 << 3;
+        /// Inline-axis variant of `SIZE`.
+        const INLINE_SIZE = 1 << 4;
+        /// `contain: content` — union of `LAYOUT | PAINT | STYLE`.
+        const CONTENT = Self::LAYOUT.bits() | Self::PAINT.bits() | Self::STYLE.bits();
+        /// `contain: strict` — union of `LAYOUT | PAINT | SIZE | STYLE`.
+        const STRICT  = Self::LAYOUT.bits()
+            | Self::PAINT.bits()
+            | Self::SIZE.bits()
+            | Self::STYLE.bits();
+    }
+}
+
+// `bitflags!` doesn't compose with `#[derive(Reflect)]` — register the
+// opaque type manually (`impl_reflect_value!` → `impl_reflect_opaque!`
+// in bevy_reflect 0.18).
+impl_reflect_opaque!((in crate::layout::types) ContainFlags(Default, PartialEq));
+
+/// CSS `content-visibility`. Phase 8 stores the value; `Auto` /
+/// `Hidden` enforcement is deferred (warn-once
+/// `LayoutWarnOnceKey::ContentVisibilityDeferred`).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5, § 5.2.
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum ContentVisibility {
+    /// Always rendered (CSS initial value).
+    #[default]
+    Visible,
+    /// Skip rendering off-screen content (deferred in Phase 8).
+    Auto,
+    /// Skip rendering content like `display: none` for descendants (deferred).
+    Hidden,
+}
+
+/// CSS `will-change`. Tier-E forward-compat hint; Phase 8 stores only
+/// (no layer promotion, no SC trigger — those are render / Phase 9).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.3.
+#[derive(Reflect, Clone, Default, PartialEq, Debug)]
+pub enum WillChange {
+    /// No hint (CSS initial value).
+    #[default]
+    Auto,
+    /// Author hints these properties will change.
+    Properties(Vec<WillChangeProperty>),
+}
+
+/// Properties an author hints will change (`will-change: <prop>`).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.3.
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WillChangeProperty {
+    /// `transform`.
+    Transform,
+    /// `opacity`.
+    Opacity,
+    /// `filter`.
+    Filter,
+    /// `z-index`.
+    ZIndex,
+    /// `scroll-position`.
+    ScrollPosition,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1104,6 +1188,33 @@ mod tests {
     fn transform_style_and_backface_defaults() {
         assert_eq!(TransformStyle::default(), TransformStyle::Flat);
         assert_eq!(BackfaceVisibility::default(), BackfaceVisibility::Visible);
+    }
+
+    #[test]
+    fn contain_content_includes_paint_layout_style() {
+        assert!(ContainFlags::CONTENT.contains(ContainFlags::PAINT));
+        assert!(ContainFlags::CONTENT.contains(ContainFlags::LAYOUT));
+        assert!(ContainFlags::CONTENT.contains(ContainFlags::STYLE));
+        assert!(!ContainFlags::CONTENT.contains(ContainFlags::SIZE));
+    }
+
+    #[test]
+    fn contain_strict_includes_size() {
+        assert!(ContainFlags::STRICT.contains(ContainFlags::SIZE));
+        assert!(ContainFlags::STRICT.contains(ContainFlags::PAINT));
+        assert!(ContainFlags::STRICT.contains(ContainFlags::LAYOUT));
+        assert!(ContainFlags::STRICT.contains(ContainFlags::STYLE));
+    }
+
+    #[test]
+    fn contain_flags_default_is_empty() {
+        assert_eq!(ContainFlags::default(), ContainFlags::empty());
+    }
+
+    #[test]
+    fn content_visibility_and_will_change_defaults() {
+        assert_eq!(ContentVisibility::default(), ContentVisibility::Visible);
+        assert_eq!(WillChange::default(), WillChange::Auto);
     }
 
     #[test]

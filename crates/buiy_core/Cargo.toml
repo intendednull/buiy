@@ -11,3 +11,4 @@ tracing.workspace = true
 bytemuck.workspace = true
 accesskit.workspace = true
 accesskit_winit.workspace = true
+bitflags = "2.11.1"
