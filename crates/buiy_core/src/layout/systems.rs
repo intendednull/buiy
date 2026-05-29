@@ -30,7 +30,7 @@ use super::types::{
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
 
 /// Resource — set by `cq_flip_check` (step 4) when one or more
@@ -1543,10 +1543,14 @@ pub(super) fn sync_styles(
         );
     }
 
-    // Sync child relationships for each Buiy entity.
-    for (entity, .., children, _parent) in nodes.iter() {
-        sync_children_for_entity(entity, children, tree);
-    }
+    // Sync child relationships for each Buiy entity (Fixed children are
+    // excluded from their in-flow parent's Taffy list — spec § 2.1, D4).
+    // `item.4` is the `&Position` slot of `NodeQueryItem`.
+    let rows: Vec<(Entity, bool, Option<&Children>)> = nodes
+        .iter()
+        .map(|item| (item.0, is_fixed_root(item.4), item.12))
+        .collect();
+    sync_children_pass(&rows, tree);
 }
 
 /// Per-entity tuple emitted by `sync_styles`'s (and `cq_flip_rerun`'s)
@@ -1655,18 +1659,53 @@ pub(super) fn translate_one_entity(
 /// else keeps its in-flow Taffy parent. `Absolute` does NOT re-parent —
 /// it resolves against its nearest positioned ancestor (= its real
 /// Taffy parent), which is the only behavioral difference from `Fixed`.
-// Wired into `sync_children_for_entity` / `sync_styles` in Phase 10 T3/T4;
-// `allow(dead_code)` keeps the gate green until that caller lands.
-#[allow(dead_code)]
 pub(super) fn is_fixed_root(position: &Position) -> bool {
     matches!(position.kind, PositionKind::Fixed)
+}
+
+/// The whole second pass: build the set of entities that re-parent to the
+/// layout root (`Position::Fixed` — spec § 2.1, D3) once, then call
+/// `sync_children_for_entity` for every entity so each parent's Taffy
+/// child list excludes its `Fixed` children (D1/D4). The root-attach of
+/// the excluded `Fixed` nodes lands in Phase 10 T4 inside this same pass,
+/// so both callers (`sync_styles`, `cq_flip_rerun`) stay in lock-step.
+///
+/// Takes a `(entity, is_fixed, children)` row per entity (collected by the
+/// caller from its `NodeQueryItem` query) rather than the `Query` itself:
+/// `Query<D, F>` is invariant over `D`, so the two callers' distinct
+/// `Changed<...>` filters cannot share one generic signature. Collecting
+/// the rows up front is the single point that cannot drift (D4).
+fn sync_children_pass(rows: &[(Entity, bool, Option<&Children>)], tree: &mut LayoutTree) {
+    // Entities whose box re-parents to the layout root in the Taffy tree
+    // (Position::Fixed — spec § 2.1). Built once; consumed by the
+    // children-sync pass to exclude Fixed from their in-flow parent's
+    // child list (and, in T4, attach them to the root's child list).
+    let fixed_set: HashSet<Entity> = rows
+        .iter()
+        .filter(|(_, is_fixed, _)| *is_fixed)
+        .map(|(entity, _, _)| *entity)
+        .collect();
+
+    for &(entity, _, children) in rows {
+        sync_children_for_entity(entity, children, &fixed_set, tree);
+    }
 }
 
 /// Per-entity child-sync — second-pass companion to
 /// `translate_one_entity`. Taffy's `set_children` requires all child
 /// nodes to exist first, so this must run after every entity has been
 /// translated. Factored out so `cq_flip_rerun` can re-use it.
-fn sync_children_for_entity(entity: Entity, children: Option<&Children>, tree: &mut LayoutTree) {
+///
+/// `fixed_set` carries the entities that re-parent to the layout root
+/// (`Position::Fixed` — spec § 2.1, D4): they are excluded from their
+/// in-flow parent's Taffy child list here, and attached to the root's
+/// list in `sync_children_pass` (Phase 10 T4).
+fn sync_children_for_entity(
+    entity: Entity,
+    children: Option<&Children>,
+    fixed_set: &HashSet<Entity>,
+    tree: &mut LayoutTree,
+) {
     let parent_id = match tree.by_entity.get(&entity).copied() {
         Some(id) => id,
         None => return,
@@ -1674,6 +1713,10 @@ fn sync_children_for_entity(entity: Entity, children: Option<&Children>, tree: &
     let child_ids: Vec<TaffyNodeId> = children
         .into_iter()
         .flatten()
+        // Fixed children re-parent to the layout root (spec § 2.1) —
+        // exclude them from their in-flow parent's Taffy child list.
+        // The root-attach happens in `sync_children_pass` (T4).
+        .filter(|c| !fixed_set.contains(c))
         .filter_map(|c| tree.by_entity.get(c).copied())
         .collect();
     if let Err(err) = tree.tree.set_children(parent_id, &child_ids) {
@@ -2314,9 +2357,11 @@ pub(super) fn cq_flip_rerun(
             tree,
         );
     }
-    for (entity, .., children, _parent) in nodes.iter() {
-        sync_children_for_entity(entity, children, tree);
-    }
+    let rows: Vec<(Entity, bool, Option<&Children>)> = nodes
+        .iter()
+        .map(|item| (item.0, is_fixed_root(item.4), item.12))
+        .collect();
+    sync_children_pass(&rows, tree);
 
     // Re-invoke Taffy compute. Same code shape as `taffy_compute`,
     // but WITHOUT the `compute_count.0 = 0` frame-reset (that lives
@@ -3027,6 +3072,57 @@ mod tests {
             };
             assert!(!is_fixed_root(&p), "{k:?} must not re-parent to root");
         }
+    }
+
+    // The exclusion path is the load-bearing T3 behavior: a `Fixed` child
+    // must be dropped from its in-flow parent's Taffy child list (it is
+    // re-parented onto the root in T4). This drives `sync_children_for_entity`
+    // directly with a populated `fixed_set` and a real `LayoutTree`, then
+    // inspects the resulting Taffy topology — so removing the
+    // `.filter(|c| !fixed_set.contains(c))` line makes it FAIL (true RED).
+    #[test]
+    fn sync_children_excludes_fixed_from_parent_taffy_children() {
+        // Real Bevy hierarchy so we get a genuine `Children` component.
+        let mut world = World::new();
+        let in_flow = world.spawn_empty().id();
+        let fixed = world.spawn_empty().id();
+        let parent = world.spawn_empty().add_children(&[in_flow, fixed]).id();
+
+        // Real LayoutTree with a Taffy leaf node per entity.
+        let mut tree = LayoutTree::default();
+        let parent_id = tree.tree.new_leaf(taffy::Style::default()).unwrap();
+        let in_flow_id = tree.tree.new_leaf(taffy::Style::default()).unwrap();
+        let fixed_id = tree.tree.new_leaf(taffy::Style::default()).unwrap();
+        tree.by_entity.insert(parent, parent_id);
+        tree.by_entity.insert(in_flow, in_flow_id);
+        tree.by_entity.insert(fixed, fixed_id);
+
+        let fixed_set: HashSet<Entity> = [fixed].into_iter().collect();
+
+        let children = world.get::<Children>(parent).unwrap();
+        assert_eq!(
+            children.iter().collect::<Vec<_>>(),
+            vec![in_flow, fixed],
+            "precondition: parent has both children in the Bevy hierarchy",
+        );
+
+        sync_children_for_entity(parent, Some(children), &fixed_set, &mut tree);
+
+        let taffy_children = tree.tree.children(parent_id).unwrap();
+        assert!(
+            taffy_children.contains(&in_flow_id),
+            "in-flow sibling stays in the parent's Taffy child list",
+        );
+        assert!(
+            !taffy_children.contains(&fixed_id),
+            "Fixed child is excluded from the parent's Taffy child list \
+             (it re-parents to the root in T4)",
+        );
+        assert_eq!(
+            taffy_children.len(),
+            1,
+            "only the in-flow sibling remains; the Fixed child is gone",
+        );
     }
 
     #[test]
