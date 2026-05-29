@@ -1175,6 +1175,50 @@ pub enum WillChangeProperty {
     ScrollPosition,
 }
 
+// ============================================================
+// Phase 9 — stacking value types (stacking-and-top-layer.md § 1)
+// ============================================================
+
+/// CSS `z-index`. `Auto` (default) does NOT form a stacking context on
+/// its own and orders by document order; `Layer(i32)` orders siblings
+/// within a context (0 default for explicit, negative behind, positive
+/// in front) AND forms a stacking context iff the entity is positioned
+/// (`Position.kind != Static`) — see `forms_stacking_context`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 1, § 3.
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum ZIndex {
+    #[default]
+    Auto,
+    Layer(i32),
+}
+
+/// CSS `isolation`. `Isolate` forces a stacking context regardless of
+/// position or z-index.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 1, § 2.
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Isolation {
+    #[default]
+    Auto,
+    Isolate,
+}
+
+/// Top-layer participation. `None` (default) = normal stacking; the
+/// non-`None` variants escape the parent stacking context and paint in
+/// the global top layer, ordered Fullscreen < Tooltip < Popover < Modal.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 1, § 4.
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum TopLayer {
+    #[default]
+    None,
+    Modal,
+    Popover,
+    Tooltip,
+    Fullscreen,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1525,5 +1569,20 @@ mod tests {
         s.insert(AnchorErrorKind::AllFallbacksFailed);
         s.insert(AnchorErrorKind::TargetMissing);
         assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn z_index_default_is_auto() {
+        assert_eq!(ZIndex::default(), ZIndex::Auto);
+    }
+
+    #[test]
+    fn isolation_default_is_auto() {
+        assert_eq!(Isolation::default(), Isolation::Auto);
+    }
+
+    #[test]
+    fn top_layer_default_is_none() {
+        assert_eq!(TopLayer::default(), TopLayer::None);
     }
 }
