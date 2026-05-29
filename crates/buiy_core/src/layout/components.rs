@@ -11,13 +11,13 @@
 //! respective phase plans (see foundation plan §"Phasing strategy").
 
 use super::types::{
-    AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BoxSizing, BreakAfter,
-    BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnSpan, ContainerType,
-    Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
-    JustifyContent, JustifyItems, Length, OverflowMode, OverscrollBehavior, PositionKind,
-    PositionTry, QueryCondition, ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize, UnicodeBidi,
-    WritingModeKind,
+    AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BackfaceVisibility, BoxSizing,
+    BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnSpan,
+    ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow,
+    GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode, OverscrollBehavior,
+    PositionKind, PositionTry, QueryCondition, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
+    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
+    TransformMatrix, TransformOrigin, TransformStyle, UnicodeBidi, WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -346,6 +346,25 @@ pub struct MultiColumn {
     pub break_inside: BreakInside,
     pub break_before: BreakBefore,
     pub break_after: BreakAfter,
+}
+
+/// Visual transform for an entity's box. Named `UiTransform` (not
+/// `Transform`) to avoid colliding with the glob-imported
+/// `bevy::prelude::Transform`. Does NOT affect Taffy layout (spec
+/// § 1.2) — a transformed element occupies its un-transformed box and
+/// siblings ignore the transform. Composed (with the `Translate` /
+/// `Rotate` / `Scale` longhands) by sub-pass 6e `transform_composition`
+/// into the private `ResolvedTransform` render handoff.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
+#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct UiTransform {
+    pub matrix: TransformMatrix,
+    pub origin: TransformOrigin,
+    pub style: TransformStyle,
+    pub perspective: Option<Length>,
+    pub backface_visibility: BackfaceVisibility,
 }
 
 /// A `@container` rule pinned to a single entity. The rule activates
@@ -704,6 +723,16 @@ mod tests {
         let _m = LayoutAnchorBroken;
         // existence + Default suffice; the marker carries no data.
         let _d = LayoutAnchorBroken;
+    }
+
+    #[test]
+    fn ui_transform_default_is_identity() {
+        let t = UiTransform::default();
+        assert_eq!(t.matrix, TransformMatrix::None);
+        assert_eq!(t.origin, TransformOrigin::default());
+        assert_eq!(t.style, TransformStyle::Flat);
+        assert!(t.perspective.is_none());
+        assert_eq!(t.backface_visibility, BackfaceVisibility::Visible);
     }
 
     #[test]
