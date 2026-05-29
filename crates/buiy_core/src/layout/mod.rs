@@ -24,15 +24,15 @@ pub use systems::{
 };
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
-    BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnRuleStyle,
-    ColumnSpan, ContainFlags, ContainerType, ContentVisibility, Direction, Edges, FlexAxis,
-    FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems,
-    LayoutWarnOnceKey, Length, LogicalEdges, NamedArea, Orientation, OverflowMode,
-    OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount, ScrollBehavior,
-    ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType,
-    TextOrientation, TrackSize, TransformMatrix, TryCondition, UnicodeBidi, WillChange,
-    WillChangeProperty, WritingModeKind,
+    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
+    BackfaceVisibility, BoxSizing, BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill,
+    ColumnRule, ColumnRuleStyle, ColumnSpan, ContainFlags, ContainerType, ContentVisibility,
+    Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
+    JustifyContent, JustifyItems, LayoutWarnOnceKey, Length, LogicalEdges, NamedArea, Orientation,
+    OverflowMode, OverscrollBehavior, PositionKind, PositionTry, QueryCondition, RepeatCount,
+    ScrollBehavior, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop,
+    SnapType, TextOrientation, TrackSize, TransformMatrix, TransformOrigin, TransformStyle,
+    TryCondition, UnicodeBidi, WillChange, WillChangeProperty, WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -156,7 +156,22 @@ impl Plugin for LayoutPlugin {
             .register_type::<BreakInside>()
             .register_type::<BreakBefore>()
             .register_type::<BreakAfter>()
-            .register_type::<LayoutWarnOnceKey>();
+            .register_type::<LayoutWarnOnceKey>()
+            // Phase 8 — transforms + containment.
+            .register_type::<UiTransform>()
+            .register_type::<Translate>()
+            .register_type::<Rotate>()
+            .register_type::<Scale>()
+            .register_type::<TransformMatrix>()
+            .register_type::<TransformOrigin>()
+            .register_type::<TransformStyle>()
+            .register_type::<BackfaceVisibility>()
+            .register_type::<crate::components::ResolvedTransform>()
+            .register_type::<Containment>()
+            .register_type::<ContainFlags>()
+            .register_type::<ContentVisibility>()
+            .register_type::<WillChange>()
+            .register_type::<WillChangeProperty>();
 
         pipeline::configure_pipeline(app);
 
