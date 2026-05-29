@@ -243,6 +243,7 @@ impl Plugin for LayoutPlugin {
                     .in_set(BuiyLayoutStep::PostTaffyOverrides),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
                 systems::cq_descendant_invalidate.in_set(BuiyLayoutStep::CqDescendantInvalidate),
+                systems::cq_descendant_rerun.in_set(BuiyLayoutStep::CqDescendantReRun),
             ),
         );
     }

@@ -432,6 +432,57 @@ fn cq_descendant_invalidate_runs_after_write_resolved_layout() {
 }
 
 #[test]
+fn cq_descendant_rerun_runs_after_invalidate() {
+    // Step 9 (CqDescendantReRun) must be ordered AFTER step 8
+    // (CqDescendantInvalidate) so it can drain the dirty set the
+    // invalidation pass populated (Phase 14, D6). Same tracker-system
+    // ordering mechanism as the other pipeline-order tests in this file.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+
+    let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+
+    fn make_tracker(
+        order: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        label: &'static str,
+    ) -> impl Fn() + Send + Sync + 'static {
+        move || {
+            order.lock().unwrap().push(label);
+        }
+    }
+
+    let o = order.clone();
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "cq_descendant_invalidate")
+            .in_set(BuiyLayoutStep::CqDescendantInvalidate),
+    );
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "cq_descendant_rerun").in_set(BuiyLayoutStep::CqDescendantReRun),
+    );
+
+    app.update();
+
+    let observed = order.lock().unwrap().clone();
+    let invalidate_idx = observed
+        .iter()
+        .position(|&l| l == "cq_descendant_invalidate")
+        .expect("cq_descendant_invalidate step ran");
+    let rerun_idx = observed
+        .iter()
+        .position(|&l| l == "cq_descendant_rerun")
+        .expect("cq_descendant_rerun step ran");
+    assert!(
+        rerun_idx > invalidate_idx,
+        "CqDescendantReRun (step 9) must run after CqDescendantInvalidate (step 8); \
+         observed order: {observed:?}",
+    );
+}
+
+#[test]
 fn transform_composition_runs_and_writes_resolved_transform() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

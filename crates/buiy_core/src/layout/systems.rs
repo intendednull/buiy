@@ -2709,6 +2709,27 @@ pub(super) fn cq_descendant_invalidate(
     rerun.0 = !dirty.0.is_empty();
 }
 
+/// Step 9 (`BuiyLayoutStep::CqDescendantReRun`) — when
+/// `cq_descendant_invalidate` (step 8) marked descendants dirty, re-run the
+/// inner work of `sync_styles` + `taffy_compute` for exactly that dirty set,
+/// re-write their `ResolvedLayout`, and re-evaluate container queries so a
+/// rule-bearing descendant flips its marker the SAME frame (D4/D5). Capped
+/// at one re-run per frame: deeper cascade levels settle on subsequent
+/// frames (spec § 1.3 / § 1.5). Mirrors `cq_flip_rerun` (step 5).
+///
+/// Body is gated on `CqDescendantReRunRequested.0`; the flag is cleared at
+/// the top so the system is a no-op on non-cascade frames.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3, § 1.5.
+pub(super) fn cq_descendant_rerun(mut rerun: ResMut<CqDescendantReRunRequested>) {
+    if !rerun.0 {
+        return;
+    }
+    rerun.0 = false;
+    // T5: re-translate the dirty set; T6: recompute Taffy + re-write
+    // ResolvedLayout; T7: re-evaluate container queries.
+}
+
 /// Pre-step-1 — populate `WritingModeResolved` for every `Node` entity
 /// from the nearest ancestor with `WritingMode`, falling back to default
 /// when no ancestor sets it.

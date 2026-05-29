@@ -2,7 +2,7 @@
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 //!
-//! Nine ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the original
+//! Eleven ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the original
 //! eight; Phase 4 inserts `WritingModeInherit` between `RemovedNodesGc`
 //! and `SyncStyles` so step 1 sees the effective inherited writing-mode
 //! for every entity. Steps 2 (`CqActivate`), 4 (`CqFlipCheck`), 5
@@ -45,6 +45,12 @@ pub enum BuiyLayoutStep {
     /// mark the descendants of every query container whose `ResolvedLayout`
     /// changed this frame as dirty. **Phase 14.**
     CqDescendantInvalidate,
+    /// Step 9 — conditional same-frame re-run of the inner work of
+    /// `sync_styles` + `taffy_compute` (+ `ResolvedLayout` re-write + CQ
+    /// re-evaluation) for the entities `cq_descendant_invalidate` marked
+    /// dirty. Gated on `CqDescendantReRunRequested`; capped at one re-run
+    /// per frame (D4). **Phase 14.**
+    CqDescendantReRun,
 }
 
 /// Configure the 9-step chain inside `BuiySet::Layout`.
@@ -62,6 +68,7 @@ pub fn configure_pipeline(app: &mut App) {
             BuiyLayoutStep::PostTaffyOverrides,
             BuiyLayoutStep::WriteResolvedLayout,
             BuiyLayoutStep::CqDescendantInvalidate,
+            BuiyLayoutStep::CqDescendantReRun,
         )
             .chain()
             .in_set(crate::BuiySet::Layout),
