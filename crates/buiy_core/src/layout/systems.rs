@@ -1728,6 +1728,38 @@ pub(super) fn content_visibility_skip(
     }
 }
 
+/// The viewport rectangle for the content-visibility off-screen test,
+/// expanded outward by `margin` on every side (the hysteresis dead-band,
+/// D3). Origin is the layout root's top-left `(0, 0)`; `viewport_size`
+/// is the primary window size (or `Vec2::ZERO` when window-less).
+// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
+// gate green until that caller lands.
+#[allow(dead_code)]
+pub(super) fn viewport_rect(viewport_size: Vec2, margin: f32) -> Rect {
+    Rect {
+        min: Vec2::new(-margin, -margin),
+        max: viewport_size + Vec2::splat(margin),
+    }
+}
+
+/// Whether an entity is "off-screen" for `content-visibility: auto`
+/// (spec § 5.2, D3): its *last-frame* `ResolvedLayout` border box does
+/// NOT intersect the hysteresis-expanded viewport. An entity with no
+/// resolved layout yet (first frame) is treated as on-screen — we have
+/// no geometry to skip against.
+// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
+// gate green until that caller lands.
+#[allow(dead_code)]
+pub(super) fn is_off_screen(resolved: Option<&ResolvedLayout>, expanded_viewport: Rect) -> bool {
+    let Some(rl) = resolved else {
+        return false;
+    };
+    let box_rect = Rect::from_corners(rl.position, rl.position + rl.size);
+    // Off-screen iff the boxes do not overlap. `Rect::intersect` returns
+    // an empty rect (zero positive area) when there is no overlap.
+    expanded_viewport.intersect(box_rect).is_empty()
+}
+
 /// The whole second pass: build the set of entities that re-parent to the
 /// layout root (`Position::Fixed` — spec § 2.1, D3) once, then call
 /// `sync_children_for_entity` for every entity so each parent's Taffy
@@ -3851,6 +3883,59 @@ mod tests {
                     height: Some(40.0)
                 }
             }
+        );
+    }
+
+    // --- viewport_rect + is_off_screen (Phase 11, spec § 5.2, D3) ---
+
+    #[test]
+    fn viewport_rect_expands_by_margin() {
+        let r = viewport_rect(Vec2::new(800.0, 600.0), 200.0);
+        assert_eq!(r.min, Vec2::new(-200.0, -200.0));
+        assert_eq!(r.max, Vec2::new(1000.0, 800.0));
+    }
+
+    #[test]
+    fn on_screen_box_is_not_off_screen() {
+        let vp = viewport_rect(Vec2::new(800.0, 600.0), 200.0);
+        let rl = ResolvedLayout {
+            position: Vec2::new(100.0, 100.0),
+            size: Vec2::new(50.0, 50.0),
+        };
+        assert!(!is_off_screen(Some(&rl), vp));
+    }
+
+    #[test]
+    fn box_beyond_expanded_viewport_is_off_screen() {
+        let vp = viewport_rect(Vec2::new(800.0, 600.0), 200.0);
+        // x starts at 1100 > max.x (1000) → fully outside the expanded rect.
+        let rl = ResolvedLayout {
+            position: Vec2::new(1100.0, 100.0),
+            size: Vec2::new(50.0, 50.0),
+        };
+        assert!(is_off_screen(Some(&rl), vp));
+    }
+
+    #[test]
+    fn box_within_margin_is_still_on_screen_hysteresis() {
+        let vp = viewport_rect(Vec2::new(800.0, 600.0), 200.0);
+        // x = 900: past the 800 viewport edge but inside the +200 margin → on-screen.
+        let rl = ResolvedLayout {
+            position: Vec2::new(900.0, 100.0),
+            size: Vec2::new(50.0, 50.0),
+        };
+        assert!(
+            !is_off_screen(Some(&rl), vp),
+            "within the hysteresis margin counts as on-screen"
+        );
+    }
+
+    #[test]
+    fn no_last_frame_layout_is_on_screen() {
+        let vp = viewport_rect(Vec2::new(800.0, 600.0), 200.0);
+        assert!(
+            !is_off_screen(None, vp),
+            "never skip without last-frame geometry (D3)"
         );
     }
 }
