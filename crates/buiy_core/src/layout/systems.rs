@@ -18,15 +18,15 @@
 use super::components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
     Containment, Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken,
-    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, Translate, UiTransform,
-    WritingMode, WritingModeResolved,
+    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, Stacking, Translate,
+    UiTransform, WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, ContainFlags, ContainerType, ContentVisibility,
-    GridAreas, Inset, LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing,
-    TransformMatrix, TryCondition, WritingModeKind,
+    GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing,
+    TransformMatrix, TryCondition, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -2420,6 +2420,54 @@ pub(super) fn compose_transform(
     t_mat * r_mat * s_mat * m_transform
 }
 
+/// The spec § 2 union of stacking-context-formation triggers that are
+/// implementable in `buiy_core` today (D1): (1) positioned + explicit
+/// `z_index`, (2) `Isolation::Isolate`, (3) non-identity transform,
+/// (4) `Containment.contain ⊇ PAINT/STRICT`, (6) root. Trigger (5)'s
+/// render-side formers (opacity/filter/blend) and the will-change SC
+/// former are deferred — their components don't exist yet (spec § 7);
+/// add an `|| render_side_former` clause here when they land.
+///
+/// Carries `#[allow(dead_code)]` because the `stacking_context` sub-pass
+/// (6f) that calls this predicate lands in Task 8; until then it is
+/// defined + unit-tested but not yet driven from a system (mirrors the
+/// deferred-but-defined `TopLayerActivation` pattern above).
+#[allow(dead_code)]
+pub(super) fn forms_stacking_context(
+    stacking: Option<&Stacking>,
+    position_kind: PositionKind,
+    has_transform: bool,
+    containment: Option<&Containment>,
+    is_root: bool,
+) -> bool {
+    // Trigger 6 — root.
+    if is_root {
+        return true;
+    }
+    // Trigger 3 — non-identity transform (ResolvedTransform present).
+    if has_transform {
+        return true;
+    }
+    if let Some(s) = stacking {
+        // Trigger 2 — isolation.
+        if matches!(s.isolation, Isolation::Isolate) {
+            return true;
+        }
+        // Trigger 1 — positioned (non-static) with an explicit z-index.
+        if !matches!(position_kind, PositionKind::Static) && matches!(s.z_index, ZIndex::Layer(_)) {
+            return true;
+        }
+    }
+    // Trigger 4 — paint / strict containment.
+    if let Some(c) = containment
+        && c.contain
+            .intersects(ContainFlags::PAINT | ContainFlags::STRICT)
+    {
+        return true;
+    }
+    false
+}
+
 /// Phase 8 — sub-pass 6e of `BuiyLayoutStep::PostTaffyOverrides`.
 /// Composes each entity's `UiTransform` + optional `Translate` /
 /// `Rotate` / `Scale` longhands into the private `ResolvedTransform`
@@ -2513,6 +2561,128 @@ mod cq_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::components::{Containment, Stacking};
+    use crate::layout::types::{ContainFlags, Isolation, PositionKind, TopLayer, ZIndex};
+
+    fn stk(z: ZIndex, iso: Isolation) -> Stacking {
+        Stacking {
+            z_index: z,
+            isolation: iso,
+            top_layer: TopLayer::None,
+        }
+    }
+
+    #[test]
+    fn positioned_with_explicit_z_forms_context() {
+        let s = stk(ZIndex::Layer(0), Isolation::Auto);
+        assert!(forms_stacking_context(
+            Some(&s),
+            PositionKind::Relative,
+            false,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn static_with_explicit_z_does_not_form_context() {
+        // CSS quirk: z-index on a static element does NOT form a context.
+        let s = stk(ZIndex::Layer(5), Isolation::Auto);
+        assert!(!forms_stacking_context(
+            Some(&s),
+            PositionKind::Static,
+            false,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn positioned_with_auto_z_does_not_form_context() {
+        let s = stk(ZIndex::Auto, Isolation::Auto);
+        assert!(!forms_stacking_context(
+            Some(&s),
+            PositionKind::Absolute,
+            false,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn isolate_forms_context_regardless_of_position() {
+        let s = stk(ZIndex::Auto, Isolation::Isolate);
+        assert!(forms_stacking_context(
+            Some(&s),
+            PositionKind::Static,
+            false,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn non_identity_transform_forms_context() {
+        assert!(forms_stacking_context(
+            None,
+            PositionKind::Static,
+            true,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn paint_containment_forms_context() {
+        let c = Containment {
+            contain: ContainFlags::PAINT,
+            ..Default::default()
+        };
+        assert!(forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            Some(&c),
+            false
+        ));
+    }
+
+    #[test]
+    fn strict_containment_forms_context() {
+        let c = Containment {
+            contain: ContainFlags::STRICT,
+            ..Default::default()
+        };
+        assert!(forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            Some(&c),
+            false
+        ));
+    }
+
+    #[test]
+    fn root_always_forms_context() {
+        assert!(forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            None,
+            true
+        ));
+    }
+
+    #[test]
+    fn plain_in_flow_element_does_not_form_context() {
+        assert!(!forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            None,
+            false
+        ));
+    }
 
     #[test]
     fn top_layer_activation_default_is_empty() {
