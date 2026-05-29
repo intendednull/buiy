@@ -41,6 +41,10 @@ pub enum BuiyLayoutStep {
     PostTaffyOverrides,
     /// Step 7 — push positions+sizes to Bevy components.
     WriteResolvedLayout,
+    /// Step 8 — multi-level container-query geometric-cascade invalidation:
+    /// mark the descendants of every query container whose `ResolvedLayout`
+    /// changed this frame as dirty. **Phase 14.**
+    CqDescendantInvalidate,
 }
 
 /// Configure the 9-step chain inside `BuiySet::Layout`.
@@ -57,6 +61,7 @@ pub fn configure_pipeline(app: &mut App) {
             BuiyLayoutStep::CqFlipReRun,
             BuiyLayoutStep::PostTaffyOverrides,
             BuiyLayoutStep::WriteResolvedLayout,
+            BuiyLayoutStep::CqDescendantInvalidate,
         )
             .chain()
             .in_set(crate::BuiySet::Layout),

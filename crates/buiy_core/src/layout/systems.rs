@@ -58,10 +58,6 @@ pub struct CqReRunRequested(pub bool);
 /// changes" option (b). Empty in steady state.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3, § 1.5.
-// `init_resource` construction lands in T3 (`mod.rs`); until then this
-// resource is defined-but-never-constructed, so the dead-code lint is
-// suppressed for this interim commit.
-#[allow(dead_code)]
 #[derive(Resource, Default, Debug)]
 pub struct ContainerSizeDirty(pub std::collections::HashSet<Entity>);
 
@@ -72,10 +68,6 @@ pub struct ContainerSizeDirty(pub std::collections::HashSet<Entity>);
 /// deeper cascade levels settle on subsequent frames.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3.
-// `init_resource` construction lands in T4 (`mod.rs`); until then this
-// resource is defined-but-never-constructed, so the dead-code lint is
-// suppressed for this interim commit.
-#[allow(dead_code)]
 #[derive(Resource, Default, Debug)]
 pub struct CqDescendantReRunRequested(pub bool);
 
@@ -2677,6 +2669,46 @@ pub(super) fn write_resolved_layout(
     }
 }
 
+/// Step 8 (`BuiyLayoutStep::CqDescendantInvalidate`) — seed the
+/// multi-level container-query geometric cascade. Runs AFTER
+/// `write_resolved_layout` (step 7) so it can read `Changed<ResolvedLayout>`
+/// on query containers (the entities that actually changed). For every
+/// query container (`Container { container_type != Normal }`) whose
+/// `ResolvedLayout` changed this frame, walk its descendants and mark them
+/// dirty in `ContainerSizeDirty`; if any were marked, set
+/// `CqDescendantReRunRequested(true)` so step 9 re-translates them this
+/// frame. Bevy ships no "ancestor changed" filter, so the cascade is found
+/// by reading the changed container and walking DOWN (D2/D3).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3, § 1.5.
+#[allow(clippy::type_complexity)]
+pub(super) fn cq_descendant_invalidate(
+    changed_containers: Query<(Entity, &Container), (With<Node>, Changed<ResolvedLayout>)>,
+    children_q: Query<&Children>,
+    mut dirty: ResMut<ContainerSizeDirty>,
+    mut rerun: ResMut<CqDescendantReRunRequested>,
+) {
+    // Fresh set each frame — never accumulate (D4).
+    dirty.0.clear();
+
+    // Seeds = query containers (Size / InlineSize) whose ResolvedLayout
+    // changed this frame. Plain boxes and Normal containers are skipped:
+    // descendants only resolve Cq* against a query container (D3).
+    let seeds: Vec<Entity> = changed_containers
+        .iter()
+        .filter(|(_, c)| c.container_type != ContainerType::Normal)
+        .map(|(e, _)| e)
+        .collect();
+
+    if seeds.is_empty() {
+        rerun.0 = false;
+        return;
+    }
+
+    dirty.0 = collect_dirty_descendants(&seeds, &children_q);
+    rerun.0 = !dirty.0.is_empty();
+}
+
 /// Pre-step-1 — populate `WritingModeResolved` for every `Node` entity
 /// from the nearest ancestor with `WritingMode`, falling back to default
 /// when no ancestor sets it.
@@ -2918,9 +2950,6 @@ fn nearest_container_with_size(
 /// nested inside another changed container) cost each entity once (D2/D4).
 /// No cycle guard is needed — Bevy's `Children`/`ChildOf` hierarchy is a
 /// forest by construction.
-// Production caller (`cq_descendant_invalidate`, step 8) lands in Phase 14
-// Task 3; until then this helper is exercised only by its unit tests.
-#[allow(dead_code)]
 pub(super) fn collect_dirty_descendants(
     seeds: &[Entity],
     children_q: &Query<&Children>,

@@ -380,6 +380,58 @@ fn layout_steps_are_chained_in_declared_order() {
 }
 
 #[test]
+fn cq_descendant_invalidate_runs_after_write_resolved_layout() {
+    // Step 8 (CqDescendantInvalidate) must be ordered AFTER step 7
+    // (WriteResolvedLayout) so it can read Changed<ResolvedLayout> on
+    // containers (Phase 14, D6). The pipeline-order tests in this file
+    // assert ordering by attaching tracker systems to the relevant sets
+    // and observing their run order; we mirror that mechanism here.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+
+    let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+
+    fn make_tracker(
+        order: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        label: &'static str,
+    ) -> impl Fn() + Send + Sync + 'static {
+        move || {
+            order.lock().unwrap().push(label);
+        }
+    }
+
+    let o = order.clone();
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "write").in_set(BuiyLayoutStep::WriteResolvedLayout),
+    );
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "cq_descendant_invalidate")
+            .in_set(BuiyLayoutStep::CqDescendantInvalidate),
+    );
+
+    app.update();
+
+    let observed = order.lock().unwrap().clone();
+    let write_idx = observed
+        .iter()
+        .position(|&l| l == "write")
+        .expect("write step ran");
+    let invalidate_idx = observed
+        .iter()
+        .position(|&l| l == "cq_descendant_invalidate")
+        .expect("cq_descendant_invalidate step ran");
+    assert!(
+        invalidate_idx > write_idx,
+        "CqDescendantInvalidate (step 8) must run after WriteResolvedLayout (step 7); \
+         observed order: {observed:?}",
+    );
+}
+
+#[test]
 fn transform_composition_runs_and_writes_resolved_transform() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

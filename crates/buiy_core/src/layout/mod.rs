@@ -81,6 +81,14 @@ impl Plugin for LayoutPlugin {
         // in T9; referenced here via `systems::`.)
         app.init_resource::<systems::ContentVisibilityMargin>();
 
+        // Phase 14 — multi-level descendant invalidation: the dirty set
+        // (cleared + populated by step 8) and the same-frame re-run flag
+        // (written by step 8, consumed by step 9). Both crate-internal
+        // (not re-exported). `cq_descendant_invalidate` (step 8) writes
+        // the flag, so both resources are initialized here.
+        app.init_resource::<systems::ContainerSizeDirty>();
+        app.init_resource::<systems::CqDescendantReRunRequested>();
+
         // Phase 6 — observers register as closures per Decision D12:
         // `On<'w, 't, E, B>` carries two lifetimes without defaults and
         // named-fn signatures don't elide them cleanly. Closures inherit
@@ -234,6 +242,7 @@ impl Plugin for LayoutPlugin {
                     .chain()
                     .in_set(BuiyLayoutStep::PostTaffyOverrides),
                 systems::write_resolved_layout.in_set(BuiyLayoutStep::WriteResolvedLayout),
+                systems::cq_descendant_invalidate.in_set(BuiyLayoutStep::CqDescendantInvalidate),
             ),
         );
     }
