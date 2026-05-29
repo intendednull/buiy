@@ -42,30 +42,51 @@ fn size_containment_zeroes_auto_width_and_warns() {
 }
 
 #[test]
-fn content_visibility_auto_warns_once() {
+fn content_visibility_auto_on_screen_does_not_warn() {
+    // Phase 11 D6: the blanket "content-visibility != visible is deferred"
+    // warn is gone. An on-screen `auto` entity lays out normally and never
+    // warns. (The repurposed `ContentVisibilityDeferred` warn now fires only
+    // for off-screen `auto` without a `contain-intrinsic-size` hint — exercised
+    // in tests/layout_content_visibility.rs.)
+    use bevy::window::{PrimaryWindow, Window, WindowResolution};
     use buiy_core::layout::ContentVisibility;
     let mut app = app();
+    app.world_mut().spawn((
+        Window {
+            resolution: WindowResolution::new(800, 600),
+            ..Default::default()
+        },
+        PrimaryWindow,
+    ));
+    // Sized + at the origin → squarely inside the (expanded) viewport.
     let e = app
         .world_mut()
         .spawn((
             Node,
-            Style::default().containment(Containment {
-                content_visibility: ContentVisibility::Auto,
-                ..Default::default()
-            }),
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .containment(Containment {
+                    content_visibility: ContentVisibility::Auto,
+                    ..Default::default()
+                }),
         ))
         .id();
     app.update();
+    app.update();
     let warned = app.world().resource::<LayoutWarnedOnceSession>();
     assert!(
-        warned
+        !warned
             .set
-            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e))
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e)),
+        "on-screen content-visibility:auto lays out normally and does not warn"
     );
 }
 
 #[test]
-fn content_visibility_hidden_also_warns() {
+fn content_visibility_hidden_does_not_warn() {
+    // Phase 11 D6/D7: `hidden` is fully implemented (descendants detached) and
+    // never warns.
     use buiy_core::layout::ContentVisibility;
     let mut app = app();
     let e = app
@@ -79,11 +100,13 @@ fn content_visibility_hidden_also_warns() {
         ))
         .id();
     app.update();
+    app.update();
     let warned = app.world().resource::<LayoutWarnedOnceSession>();
     assert!(
-        warned
+        !warned
             .set
-            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e))
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(e)),
+        "content-visibility:hidden is fully implemented and does not warn"
     );
 }
 

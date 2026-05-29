@@ -76,6 +76,11 @@ impl Plugin for LayoutPlugin {
         // maintained by sub-pass 6f (`stacking_context`).
         app.init_resource::<systems::TopLayerActivation>();
 
+        // Phase 11 — content-visibility: auto off-screen hysteresis margin
+        // (spec § 5.2, D3). Default 200px. (The `pub use` re-export lands
+        // in T9; referenced here via `systems::`.)
+        app.init_resource::<systems::ContentVisibilityMargin>();
+
         // Phase 6 — observers register as closures per Decision D12:
         // `On<'w, 't, E, B>` carries two lifetimes without defaults and
         // named-fn signatures don't elide them cleanly. Closures inherit

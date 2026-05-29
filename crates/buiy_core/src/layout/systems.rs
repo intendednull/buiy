@@ -178,6 +178,23 @@ pub struct PostTaffyPositionOverrides {
     pub by_entity: std::collections::HashMap<Entity, Vec2>,
 }
 
+/// Hysteresis margin (logical px) for the `content-visibility: auto`
+/// off-screen test (spec § 5.2, D3). The viewport is expanded by this
+/// margin on every side; an entity is "off-screen" only once its
+/// last-frame box is fully outside the expanded rect, and snaps back
+/// as soon as it re-enters — so an entity oscillating by less than
+/// this margin around the edge does not thrash skip-state. Also serves
+/// as the pre-roll distance (slightly-off-screen content is kept laid
+/// out). Default 200px.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct ContentVisibilityMargin(pub f32);
+
+impl Default for ContentVisibilityMargin {
+    fn default() -> Self {
+        ContentVisibilityMargin(200.0)
+    }
+}
+
 /// Activation order for the single global top layer (spec § 4.2). A
 /// `VecDeque` where the most-recently-activated top-layer entity is at
 /// the back (paints last / on top within its tier). Maintained by
@@ -1428,6 +1445,17 @@ pub(super) fn sync_styles(
     // the whole tree (mirroring `stacking_context`'s unfiltered full-tree
     // query) so every parent's child list is rebuilt from current Fixed-status.
     fixed_sync_nodes: Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
+    // content-visibility skip (spec § 5.2). Read-only side queries (conflict-free,
+    // like `parent_grid_lookup`): the skip needs *every* entity's `Containment`,
+    // last-frame `ResolvedLayout`, and optional `ContainIntrinsicSize`, not just
+    // the `Changed`-filtered `nodes` set — an off-screen entity whose only change
+    // is its ancestor's resize (so it is absent from `nodes`) must still be
+    // classified, or its descendants would be silently re-attached every
+    // steady-state frame (the skip would only hold on `Changed` frames).
+    containment_lookup: Query<(Entity, &Containment), With<Node>>,
+    resolved_lookup: Query<&ResolvedLayout>,
+    intrinsic_lookup: Query<&ContainIntrinsicSize>,
+    content_vis_margin: Res<ContentVisibilityMargin>,
     mut iter_count: ResMut<SyncStylesIterCount>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
@@ -1489,6 +1517,64 @@ pub(super) fn sync_styles(
         .map(|w| bevy::math::Vec2::new(w.resolution.width(), w.resolution.height()))
         .unwrap_or(bevy::math::Vec2::ZERO);
 
+    // content-visibility skip sets (spec § 5.2). `skip_children` holds entities
+    // whose Taffy child list is emptied this frame (Auto-sentinel or Hidden —
+    // D4); `sentinel_size` holds the per-entity contain-intrinsic-size override
+    // for the Auto-sentinel case (D2), threaded into `style_to_taffy`.
+    //
+    // Classified over the FULL (UNfiltered) tree via the read-only side
+    // queries, NOT the `Changed`-filtered `nodes` loop below: the children
+    // -detach pass (`sync_children_pass`) iterates the unfiltered tree, so the
+    // skip set must hold for ALL content-visibility entities every frame. If
+    // this were computed inside the `Changed` loop, an off-screen `Auto` (or
+    // any `Hidden`) entity that reaches steady-state and drops out of the
+    // `Changed` set would lose its `skip_children` membership, and
+    // `sync_children_for_entity` would silently re-attach its descendants every
+    // steady-state frame — defeating the skip (spec § 5.2 "the big perf win").
+    let expanded_viewport = viewport_rect(viewport_size, content_vis_margin.0);
+    let mut skip_children: HashSet<Entity> = HashSet::new();
+    let mut sentinel_size: HashMap<Entity, bevy::math::Vec2> = HashMap::new();
+    for (entity, containment) in containment_lookup.iter() {
+        // content-visibility skip (spec § 5.2). Off-screen uses last-frame
+        // ResolvedLayout vs the hysteresis-expanded viewport (D3); Auto needs
+        // both off-screen AND a contain-intrinsic-size hint (D2).
+        let off_screen = is_off_screen(resolved_lookup.get(entity).ok(), expanded_viewport);
+        let skip =
+            content_visibility_skip(containment, intrinsic_lookup.get(entity).ok(), off_screen);
+        match skip {
+            SkipKind::None => {
+                // D6: the residual diagnostic — Auto + off-screen but no usable
+                // intrinsic-size hint, so the requested skip cannot run.
+                if matches!(containment.content_visibility, ContentVisibility::Auto)
+                    && off_screen
+                    && warned
+                        .set
+                        .insert(LayoutWarnOnceKey::ContentVisibilityDeferred(entity))
+                {
+                    bevy::log::warn!(
+                        "Entity {:?} has content-visibility: auto and is off-screen, but no \
+                         contain-intrinsic-size hint — the off-screen layout skip is disabled \
+                         for it (spec § 5.2). Set contain-intrinsic-size to enable the skip.",
+                        entity,
+                    );
+                }
+            }
+            SkipKind::AutoSentinel { intrinsic } => {
+                skip_children.insert(entity);
+                sentinel_size.insert(
+                    entity,
+                    bevy::math::Vec2::new(
+                        intrinsic.width.unwrap_or(0.0),
+                        intrinsic.height.unwrap_or(0.0),
+                    ),
+                );
+            }
+            SkipKind::HiddenPrune => {
+                skip_children.insert(entity);
+            }
+        }
+    }
+
     // Ensure every Buiy entity has a Taffy node + current style. Insert
     // happens for entities new this frame (Changed<T> triggers on insert);
     // existing entities run set_style only when something in the trigger
@@ -1526,28 +1612,17 @@ pub(super) fn sync_styles(
             );
         }
 
-        // content-visibility != Visible is recognized but deferred in Phase 8
-        // (Auto needs last-frame ResolvedLayout + viewport + contain-intrinsic-size;
-        // Hidden needs a tree-skip path). Store the value; warn once per entity.
-        if !matches!(containment.content_visibility, ContentVisibility::Visible)
-            && warned
-                .set
-                .insert(LayoutWarnOnceKey::ContentVisibilityDeferred(entity))
-        {
-            bevy::log::warn!(
-                "Entity {:?} sets content-visibility != visible; Phase 8 stores the value \
-                 but does not yet skip off-screen layout/paint (deferred). The value is \
-                 recognized and will be honored in a follow-up.",
-                entity,
-            );
-        }
-
+        // content-visibility sentinel (spec § 5.2): the per-entity
+        // `AutoSentinel` size hint, classified in the full-tree pre-pass above.
+        // Threaded into this entity's `StyleView` so Taffy reserves the
+        // placeholder box without measuring the (detached) descendants.
         translate_one_entity(
             item,
             &parent_areas_for,
             &container_index,
             &cq_parent_chain,
             viewport_size,
+            sentinel_size.get(&entity).copied(),
             tree,
         );
     }
@@ -1566,7 +1641,7 @@ pub(super) fn sync_styles(
             (entity, is_fixed_root(position), children, parent)
         })
         .collect();
-    sync_children_pass(&rows, tree);
+    sync_children_pass(&rows, &skip_children, tree);
 }
 
 /// Per-entity tuple emitted by `sync_styles`'s (and `cq_flip_rerun`'s)
@@ -1611,6 +1686,7 @@ pub(super) fn translate_one_entity(
     container_index: &HashMap<Entity, ContainerSnapshot>,
     cq_parent_chain: &Query<&ChildOf>,
     viewport_size: bevy::math::Vec2,
+    content_visibility_intrinsic: Option<bevy::math::Vec2>,
     tree: &mut LayoutTree,
 ) {
     let (
@@ -1646,9 +1722,11 @@ pub(super) fn translate_one_entity(
         writing_mode_resolved,
         nearest_container,
         viewport_size,
-        // Populated by sync_styles in T5 from content_visibility_skip's
-        // AutoSentinel result; defaults to None here.
-        content_visibility_intrinsic: None,
+        // content-visibility: auto off-screen sentinel (spec § 5.2): when
+        // `Some`, `style_to_taffy` overrides the entity's resolved size with
+        // this contain-intrinsic-size hint. Set by the caller from
+        // `content_visibility_skip`'s `AutoSentinel` result; `None` otherwise.
+        content_visibility_intrinsic,
     };
     let taffy_style = style_to_taffy(view);
     match tree.by_entity.get(&entity).copied() {
@@ -1685,9 +1763,6 @@ pub(super) fn is_fixed_root(position: &Position) -> bool {
 /// How step 1 should treat an entity's subtree for `content-visibility`
 /// (spec § 5.2). Pure classification produced by
 /// [`content_visibility_skip`].
-// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
-// gate green until that caller lands.
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum SkipKind {
     /// No skip — lay the entity and its descendants out normally.
@@ -1713,9 +1788,6 @@ pub(super) enum SkipKind {
 ///
 /// `off_screen` is computed by the caller from last-frame `ResolvedLayout`
 /// vs the hysteresis-expanded viewport ([`is_off_screen`], D3).
-// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
-// gate green until that caller lands.
-#[allow(dead_code)]
 pub(super) fn content_visibility_skip(
     containment: &Containment,
     intrinsic: Option<&ContainIntrinsicSize>,
@@ -1735,9 +1807,6 @@ pub(super) fn content_visibility_skip(
 /// expanded outward by `margin` on every side (the hysteresis dead-band,
 /// D3). Origin is the layout root's top-left `(0, 0)`; `viewport_size`
 /// is the primary window size (or `Vec2::ZERO` when window-less).
-// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
-// gate green until that caller lands.
-#[allow(dead_code)]
 pub(super) fn viewport_rect(viewport_size: Vec2, margin: f32) -> Rect {
     Rect {
         min: Vec2::new(-margin, -margin),
@@ -1750,9 +1819,6 @@ pub(super) fn viewport_rect(viewport_size: Vec2, margin: f32) -> Rect {
 /// NOT intersect the hysteresis-expanded viewport. An entity with no
 /// resolved layout yet (first frame) is treated as on-screen — we have
 /// no geometry to skip against.
-// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
-// gate green until that caller lands.
-#[allow(dead_code)]
 pub(super) fn is_off_screen(resolved: Option<&ResolvedLayout>, expanded_viewport: Rect) -> bool {
     let Some(rl) = resolved else {
         return false;
@@ -1778,6 +1844,7 @@ pub(super) fn is_off_screen(resolved: Option<&ResolvedLayout>, expanded_viewport
 /// the rows up front is the single point that cannot drift (D4).
 fn sync_children_pass(
     rows: &[(Entity, bool, Option<&Children>, Option<&ChildOf>)],
+    skip_children: &HashSet<Entity>,
     tree: &mut LayoutTree,
 ) {
     // Entities whose box re-parents to the layout root in the Taffy tree
@@ -1791,7 +1858,7 @@ fn sync_children_pass(
         .collect();
 
     for &(entity, _, children, _) in rows {
-        sync_children_for_entity(entity, children, &fixed_set, tree);
+        sync_children_for_entity(entity, children, &fixed_set, skip_children, tree);
     }
 
     attach_fixed_to_root(rows, &fixed_set, tree);
@@ -1866,25 +1933,40 @@ fn attach_fixed_to_root(
 /// (`Position::Fixed` — spec § 2.1, D4): they are excluded from their
 /// in-flow parent's Taffy child list here, and attached to the root's
 /// list in `sync_children_pass` (Phase 10 T4).
+///
+/// `skip_children` carries the entities whose own child list is emptied
+/// this frame (`content-visibility: auto` off-screen sentinel or
+/// `content-visibility: hidden` — spec § 5.2, D4): Taffy never lays the
+/// detached descendants out. Their nodes stay in `LayoutTree` for a cheap
+/// re-attach on snap-back (a future `set_children` once the entity leaves
+/// the skip set — no `new_leaf` churn).
 fn sync_children_for_entity(
     entity: Entity,
     children: Option<&Children>,
     fixed_set: &HashSet<Entity>,
+    skip_children: &HashSet<Entity>,
     tree: &mut LayoutTree,
 ) {
     let parent_id = match tree.by_entity.get(&entity).copied() {
         Some(id) => id,
         None => return,
     };
-    let child_ids: Vec<TaffyNodeId> = children
-        .into_iter()
-        .flatten()
-        // Fixed children re-parent to the layout root (spec § 2.1) —
-        // exclude them from their in-flow parent's Taffy child list.
-        // The root-attach happens in `sync_children_pass` (T4).
-        .filter(|c| !fixed_set.contains(c))
-        .filter_map(|c| tree.by_entity.get(c).copied())
-        .collect();
+    let child_ids: Vec<TaffyNodeId> = if skip_children.contains(&entity) {
+        // content-visibility skip (D4): detach descendants — Taffy never
+        // lays the subtree out. Descendant nodes stay in LayoutTree for a
+        // cheap re-attach on snap-back.
+        Vec::new()
+    } else {
+        children
+            .into_iter()
+            .flatten()
+            // Fixed children re-parent to the layout root (spec § 2.1) —
+            // exclude them from their in-flow parent's Taffy child list.
+            // The root-attach happens in `sync_children_pass` (T4).
+            .filter(|c| !fixed_set.contains(c))
+            .filter_map(|c| tree.by_entity.get(c).copied())
+            .collect()
+    };
     if let Err(err) = tree.tree.set_children(parent_id, &child_ids) {
         warn!(?entity, ?err, "buiy: layout set_children failed");
     }
@@ -2524,6 +2606,9 @@ pub(super) fn cq_flip_rerun(
             &container_index,
             &cq_parent_chain,
             viewport_size,
+            // T6 supplies the real content-visibility sentinel/skip set here
+            // (D8); until then the re-run passes no sentinel.
+            None,
             tree,
         );
     }
@@ -2537,7 +2622,9 @@ pub(super) fn cq_flip_rerun(
             (entity, is_fixed_root(position), children, parent)
         })
         .collect();
-    sync_children_pass(&rows, tree);
+    // T6: real content-visibility skip set (D8). Empty here so the workspace
+    // compiles; T6 computes the identical skip set this re-run must honor.
+    sync_children_pass(&rows, &HashSet::new(), tree);
 
     // Re-invoke Taffy compute. Same code shape as `taffy_compute`,
     // but WITHOUT the `compute_count.0 = 0` frame-reset (that lives
@@ -3282,7 +3369,14 @@ mod tests {
             "precondition: parent has both children in the Bevy hierarchy",
         );
 
-        sync_children_for_entity(parent, Some(children), &fixed_set, &mut tree);
+        let skip_children: HashSet<Entity> = HashSet::new();
+        sync_children_for_entity(
+            parent,
+            Some(children),
+            &fixed_set,
+            &skip_children,
+            &mut tree,
+        );
 
         let taffy_children = tree.tree.children(parent_id).unwrap();
         assert!(
