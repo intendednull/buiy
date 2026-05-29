@@ -7,8 +7,8 @@ use bevy::window::{PrimaryWindow, Window, WindowResolution};
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout,
     layout::{
-        BoxModel, ContainIntrinsicSize, ContainerQuery, Containment, ContentVisibility, Inset,
-        LayoutPlugin, LayoutTree, Length, PositionKind, QueryCondition, Sizing, Style,
+        BoxModel, ContainerQuery, Containment, ContentVisibility, Inset, LayoutPlugin, LayoutTree,
+        Length, PositionKind, QueryCondition, Sizing, Style,
     },
 };
 
@@ -112,8 +112,6 @@ fn auto_off_screen_with_hint_applies_sentinel_and_detaches() {
         .id();
     // Auto entity positioned far off-screen (x = 5000, well past 800 + margin),
     // absolutely positioned so its ResolvedLayout.position reflects the inset.
-    // `ContainIntrinsicSize` is inserted directly (the `.contain_intrinsic_size`
-    // setter lands in T8); the off-screen skip reads it via `Option<&...>`.
     let auto = app
         .world_mut()
         .spawn((
@@ -128,11 +126,8 @@ fn auto_off_screen_with_hint_applies_sentinel_and_detaches() {
                 .containment(Containment {
                     content_visibility: ContentVisibility::Auto,
                     ..Default::default()
-                }),
-            ContainIntrinsicSize {
-                width: Some(120.0),
-                height: Some(40.0),
-            },
+                })
+                .contain_intrinsic_size(Some(120.0), Some(40.0)),
         ))
         .add_child(child)
         .id();
@@ -200,11 +195,8 @@ fn skip_holds_at_steady_state() {
                 .containment(Containment {
                     content_visibility: ContentVisibility::Auto,
                     ..Default::default()
-                }),
-            ContainIntrinsicSize {
-                width: Some(120.0),
-                height: Some(40.0),
-            },
+                })
+                .contain_intrinsic_size(Some(120.0), Some(40.0)),
         ))
         .add_child(auto_child)
         .id();
@@ -300,11 +292,8 @@ fn skip_survives_container_query_flip_frame() {
                 .containment(Containment {
                     content_visibility: ContentVisibility::Auto,
                     ..Default::default()
-                }),
-            ContainIntrinsicSize {
-                width: Some(120.0),
-                height: Some(40.0),
-            },
+                })
+                .contain_intrinsic_size(Some(120.0), Some(40.0)),
         ))
         .add_child(child)
         .id();

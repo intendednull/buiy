@@ -13,8 +13,8 @@
 //! `Style`.
 
 use super::components::{
-    BoxModel, Container, Containment, Display, FlexParams, GridParams, MultiColumn, Overflow,
-    Position, Scroll, Stacking, UiTransform, WritingMode,
+    BoxModel, ContainIntrinsicSize, Container, Containment, Display, FlexParams, GridParams,
+    MultiColumn, Overflow, Position, Scroll, Stacking, UiTransform, WritingMode,
 };
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainFlags, ContainerType, Direction,
@@ -59,6 +59,7 @@ pub struct Style {
     pub ui_transform: UiTransform,
     pub containment: Containment,
     pub stacking: Stacking,
+    pub contain_intrinsic_size: ContainIntrinsicSize,
 }
 
 impl Style {
@@ -521,6 +522,16 @@ impl Style {
         self
     }
 
+    /// Set `contain-intrinsic-size` (spec § 5.2) — the placeholder size
+    /// (logical px, per axis; `None` = no hint) used when a
+    /// `content-visibility: auto` subtree is skipped off-screen. Without
+    /// it, the off-screen Taffy skip is disabled (the engine would have to
+    /// lay the subtree out to learn its size).
+    pub fn contain_intrinsic_size(mut self, width: Option<f32>, height: Option<f32>) -> Self {
+        self.contain_intrinsic_size = ContainIntrinsicSize { width, height };
+        self
+    }
+
     // ---- Stacking ----
 
     /// Set the full `Stacking` (z-index, isolation, top-layer) at once.
@@ -682,8 +693,8 @@ impl LogicalInset {
 mod tests {
     use super::*;
     use crate::layout::components::{
-        BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position,
-        Scroll, Stacking, UiTransform, WritingMode,
+        BoxModel, ContainIntrinsicSize, Container, Display, FlexParams, GridParams, MultiColumn,
+        Overflow, Position, Scroll, Stacking, UiTransform, WritingMode,
     };
     use crate::layout::types::{
         AlignItems, BoxSizing, ColumnCount, ContainerType, Direction, Edges, FlexAxis, FlexGap,
@@ -856,6 +867,26 @@ mod tests {
         let s = Style::default();
         assert_eq!(s.container.container_type, ContainerType::Normal);
         assert!(s.container.container_name.is_none());
+    }
+
+    #[test]
+    fn style_contain_intrinsic_size_setter() {
+        let s = Style::default().contain_intrinsic_size(Some(120.0), Some(40.0));
+        assert_eq!(s.contain_intrinsic_size.width, Some(120.0));
+        assert_eq!(s.contain_intrinsic_size.height, Some(40.0));
+    }
+
+    #[test]
+    fn style_contain_intrinsic_size_default_is_none() {
+        let s = Style::default();
+        assert_eq!(s.contain_intrinsic_size, ContainIntrinsicSize::default());
+    }
+
+    #[test]
+    fn style_contain_intrinsic_size_single_axis() {
+        let s = Style::default().contain_intrinsic_size(Some(80.0), None);
+        assert_eq!(s.contain_intrinsic_size.width, Some(80.0));
+        assert_eq!(s.contain_intrinsic_size.height, None);
     }
 
     #[test]
