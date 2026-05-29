@@ -311,3 +311,108 @@ Until then, the function is exposed but never called — tests can invoke
 directly via `world.run_system_once(clear_warned_once_on_exit)`.
 
 **Spec touchpoint:** `architecture.md § 6`.
+
+## Layout / render — Bevy `Transform` ownership bridge (`GlobalTransform` write)
+
+**Originated:** Phase 8 (D2 — deliberate divergence from spec § 2
+approach (a) at the implementation-timing level).
+
+**Symptom:** Phase 8 produces the `ResolvedTransform { matrix: Mat4 }`
+artifact via sub-pass 6e but does NOT write Bevy `Transform` /
+`GlobalTransform`. Render reads `ResolvedLayout` directly and `buiy_core`
+has no `TransformPlugin` wiring (the layout harness uses `MinimalPlugins`),
+so a `Transform` write today would be dead code that nothing consumes.
+
+**Implementation sketch:** implement spec § 2 approach (a) —
+`write_resolved_layout` (or a dedicated render-prep system) composes
+`ResolvedLayout.position` + `ResolvedTransform.matrix` into the entity's
+Bevy `Transform`, so `TransformSystems::Propagate` owns `GlobalTransform`.
+Requires pulling `TransformPlugin` into the relevant app + render reading
+`GlobalTransform` instead of (or alongside) `ResolvedLayout`.
+
+**Spec touchpoint:** `transforms-and-containment.md § 2`.
+
+## Layout — `content-visibility: auto` off-screen skip
+
+**Originated:** Phase 8 (D6 — stored, not enforced).
+
+**Symptom:** `ContentVisibility::Auto` is stored on `Containment` and
+warns once via `LayoutWarnOnceKey::ContentVisibilityDeferred(Entity)`, but
+no off-screen layout/paint skip is performed.
+
+**Implementation sketch:** implement the spec § 5.2 step-1 skip — check
+`ContentVisibility::Auto` + off-screen (last-frame `ResolvedLayout` vs
+viewport) + a `contain-intrinsic-size` hint; feed Taffy a sentinel size
+and no-op the descendants' style sync; snap back on-screen. Needs a
+`contain-intrinsic-size` component.
+
+**Spec touchpoint:** `transforms-and-containment.md § 5.2`.
+
+## Layout — `content-visibility: hidden` descendant skip
+
+**Originated:** Phase 8 (D6 — stored, not enforced).
+
+**Symptom:** `ContentVisibility::Hidden` is stored + warns
+(`ContentVisibilityDeferred`), but descendants are still laid out.
+
+**Implementation sketch:** equivalent to `Display::None` for descendants
+(tree-prune in `sync_styles`); snap back on toggle.
+
+**Spec touchpoint:** `transforms-and-containment.md § 5.2`.
+
+## Layout / render — `will-change` layer promotion + SC trigger
+
+**Originated:** Phase 8 (D7 — tier-E, stored-only).
+
+**Symptom:** `WillChange` is stored on `Containment` but no layer
+promotion or stacking-context trigger behavior is produced.
+
+**Implementation sketch:** honor `WillChange::Properties` as a render
+layer-promotion hint and a stacking-context trigger when the list mentions
+an SC-forming property (`WillChangeProperty::Transform` etc.) — coordinates
+with Phase 9 stacking.
+
+**Spec touchpoint:** `transforms-and-containment.md § 5.3`.
+
+## Render — `UiTransform` paint + `Containment` PAINT clip rect + perspective / backface
+
+**Originated:** Phase 8 (spec § 4 — render-side concerns stored only).
+
+**Symptom:** `perspective`, `TransformStyle::Preserve3d`, and
+`BackfaceVisibility::Hidden` are stored on `UiTransform` and the
+`LAYOUT` / `PAINT` / `STYLE` contain flags are stored on `Containment`,
+but render does not yet consume them.
+
+**Implementation sketch:** render consumes `ResolvedTransform` + the
+containment flags — applies the composed matrix, the PAINT clip rect, and
+honors perspective / backface / `transform-style`.
+
+**Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
+
+## Layout — Phase 9 stacking sub-pass 6f reads `ResolvedTransform`
+
+**Originated:** Phase 8 (D1 — stacking deferred to Phase 9).
+
+**Symptom:** A non-identity transform forms a stacking context (spec § 3),
+a `ContainFlags::PAINT` and certain `will-change` values likewise, but
+Phase 8 ships no stacking-context detection.
+
+**Implementation sketch:** Phase 9 sub-pass 6f runs after 6e and reads the
+composed matrix `ResolvedTransform` produced; it implements the spec § 3
+/ § 6 SC trigger list, z-index sort, isolation, and top-layer escape.
+
+**Spec touchpoint:** `transforms-and-containment.md § 3`, § 6;
+`stacking-and-top-layer.md`.
+
+## Layout — non-px translate units in `compose_transform`
+
+**Originated:** Phase 8 (CHANGELOG deferral note).
+
+**Symptom:** `compose_transform` resolves only `Length::Px` for translate;
+percent / `Cq*` translate contributes `0.0`.
+
+**Implementation sketch:** resolve percent / `Cq*` translate against the
+entity's own resolved box (currently `0.0`); coordinate with the animation
+phase.
+
+**Spec touchpoint:** `transforms-and-containment.md § 1`, § 1.1.

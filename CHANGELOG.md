@@ -603,3 +603,82 @@ tagged release.
 ### Removed (Phase 7)
 - (none) — Phase 7 is purely additive (plus rename `AnchorOverrides →
   PostTaffyPositionOverrides` — see Changed).
+
+### Added (Phase 8 — layout transforms + containment)
+- `UiTransform` component (self-styling visual transform; named
+  `UiTransform` to avoid the glob-imported `bevy::prelude::Transform`
+  collision) + value types `TransformMatrix` (None default),
+  `TransformOrigin` (50%/50%/0 default), `TransformStyle` (Flat),
+  `BackfaceVisibility` (Visible). Spec § 1.
+- `Translate` / `Rotate` / `Scale` decomposed-only longhand components
+  (`Scale::default()` is `(1,1,1)` per CSS). Spec § 1.1.
+- `compose_transform(ui, t, r, s) -> Mat4` — pure helper implementing
+  `M = T·R·S·M_transform` (None=IDENTITY, Translate/Rotate/Scale/Skew/Matrix
+  direct, Compose=fold product A·B·…). Spec § 1.
+- `transform_composition` system — `PostTaffyOverrides` sub-pass **6e**,
+  runs after `anchor_resolution` (6d). Writes the composed matrix to
+  `ResolvedTransform`; writes nothing to `PostTaffyPositionOverrides` (a
+  transform does not move the layout box). Identity → no `ResolvedTransform`
+  (+removes stale); skips `Display::None`. Spec § 1.1, § 7.
+- `ResolvedTransform { matrix: Mat4 }` — private render handoff for
+  transforms, mirroring `ResolvedLayout`. Spec § 1.
+- `Style.ui_transform` field + `.ui_transform()` / `.translate_px()` /
+  `.rotate_z()` / `.scale()` fluent setters.
+- `Containment` component (`contain: ContainFlags`,
+  `content_visibility: ContentVisibility`, `will_change: WillChange`) +
+  value types `ContainFlags` bitflags (CONTENT/STRICT are bit-unions;
+  `impl_reflect_opaque!`), `ContentVisibility` (Visible default),
+  `WillChange` (Auto default), `WillChangeProperty`. Spec § 5.
+- `Style.containment` field + `.containment()` / `.contain()` setters.
+- SIZE / INLINE_SIZE containment enforcement: under `contain: size` /
+  `inline-size`, an auto width/height on a contained axis is treated as
+  `0px` with a warn-once `LayoutWarnOnceKey::SizeContainmentZeroed(Entity)`.
+  Spec § 5.1.
+- `LayoutWarnOnceKey::SizeContainmentZeroed(Entity)` +
+  `ContentVisibilityDeferred(Entity)` variants.
+- Integration tests `tests/layout_transforms.rs` +
+  `tests/layout_containment.rs`; pipeline-order test extended to assert
+  6e runs.
+
+### Changed (Phase 8)
+- **`BuiyLayoutStep::PostTaffyOverrides` chain now has six elements:**
+  `clear → sticky 6a → table 6b → multicol 6c → anchor 6d → transform 6e`
+  (Phase 7 attached five).
+
+### Deferred / divergences from spec (Phase 8)
+- **Bevy `Transform`/`GlobalTransform` write — deferred (deliberate
+  divergence from spec § 2 approach (a) at the implementation-timing
+  level).** Phase 8 produces the spec's `ResolvedTransform` artifact but
+  does NOT write Bevy `Transform`: render reads `ResolvedLayout` directly
+  and `buiy_core` has no `TransformPlugin` wiring (the harness uses
+  `MinimalPlugins`), so a `Transform` write would be dead code. The
+  Bevy-`Transform` ownership bridge (spec approach (a)) is a
+  render-pipeline / 3D-anchored-UI follow-up. Tracked in
+  `docs/plans/follow-ups.md`.
+- **`content-visibility` `Auto` + `Hidden` — stored, not enforced.**
+  `Auto` needs last-frame `ResolvedLayout` + viewport +
+  `contain-intrinsic-size`; `Hidden` needs a tree-skip path. Both
+  deferred; value is stored and `content_visibility != Visible` warns once
+  (`ContentVisibilityDeferred`). Spec § 5.2. Tracked in follow-ups.
+- **`will-change` — stored-only (tier-E).** No layer promotion, no SC
+  trigger in Phase 8 (SC triggers are Phase 9). Valid stored hint; no
+  warn. Spec § 5.3. Tracked in follow-ups.
+- **`LAYOUT` / `PAINT` / `STYLE` contain flags — stored, no Phase 8
+  layout effect** beyond what Taffy already does (spec § 5.1:
+  "render-side primarily; layout records").
+- **Non-px translate units in transforms** — `compose_transform` resolves
+  only `Length::Px` for translate; percent/cq translate (resolved against
+  the entity's own box) contributes `0.0` and is deferred to the
+  render/animation phase.
+- **Stacking-context formation / top-layer — Phase 9 (sub-pass 6f reads
+  `ResolvedTransform`).** A non-identity transform forms a stacking
+  context (spec § 3), but detection is Phase 9. Not in Phase 8.
+
+### Removed (Phase 8)
+- (none) — Phase 8 is purely additive.
+
+### Performance contract (Phase 8)
+- Steady-state O(0) preserved: `transform_composition` is
+  `O(UiTransform-bearing entities)`; identity transforms insert nothing.
+  SIZE-containment substitution is `O(1)` per contained entity inside the
+  existing `sync_styles` pass.
