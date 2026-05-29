@@ -24,10 +24,10 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, BreakAfter, BreakBefore, ColumnCount, ContainFlags,
-    ContainerType, ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length,
-    PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition, WritingModeKind,
-    ZIndex,
+    AnchorErrorKind, AnchorName, AnchorRef, BreakAfter, BreakBefore, ColumnCount, ColumnFill,
+    ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey,
+    Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition,
+    WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -1169,6 +1169,7 @@ pub(super) fn multicol_pack(
     display_q: Query<&Display>,
     position_q: Query<&Position>,
     mut overrides: ResMut<PostTaffyPositionOverrides>,
+    mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
     for (container, mc) in multicol_q.iter() {
         // Every `Style`-spawned Node carries a `MultiColumn` component
@@ -1234,6 +1235,26 @@ pub(super) fn multicol_pack(
             .column_width
             .map(|_| multicol_length_px(mc.column_width, 0.0));
         let (count, col_width) = resolve_column_count(mc.column_count, width, gap, content_width);
+
+        // Residual: balanced fill cannot be honored without splitting an
+        // oversized child across columns (true fragmentation — tier-E,
+        // deferred, plan D2/D5). Detect a child taller than a column's
+        // block-size under `column_fill: Balance` and warn once per
+        // session; the layout still greedy-packs whole children.
+        let col_block_size = content_height;
+        if matches!(mc.column_fill, ColumnFill::Balance)
+            && packed_input.iter().any(|c| c.height > col_block_size)
+            && warned
+                .set
+                .insert(LayoutWarnOnceKey::MulticolFragmentationDeferred)
+        {
+            bevy::log::warn!(
+                "Layout: a multi-column child is taller than its column and \
+                 `column-fill: balance` needs content fragmentation, which is \
+                 deferred to v1.x (flex-and-grid.md § 3.2). Falling back to \
+                 greedy whole-child packing. This warn fires once per session.",
+            );
+        }
 
         let packed = pack_columns(&packed_input, count, col_width, gap, content_height);
         for p in packed {

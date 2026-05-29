@@ -128,3 +128,67 @@ fn no_multicol_writes_no_overrides() {
         "non-multicol child untouched"
     );
 }
+
+use buiy_core::layout::{ColumnFill, LayoutWarnOnceKey, LayoutWarnedOnceSession};
+
+#[test]
+fn balanced_fill_with_oversized_child_warns_once() {
+    // column_fill: Balance + a child taller than the resolved column
+    // block-size → fragmentation would be needed; v1 greedy-packs and
+    // warns once per session (plan D5).
+    let mut app = app();
+    let mc = MultiColumn {
+        column_count: ColumnCount::Count(2),
+        column_fill: ColumnFill::Balance,
+        ..Default::default()
+    };
+    // Container content-box 200x100; one 100x250 child (250 > 100).
+    let (_container, _kids) = multicol_container(&mut app, 200.0, 100.0, mc, &[(100.0, 250.0)]);
+    app.update();
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert_eq!(
+        warned
+            .set
+            .iter()
+            .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolFragmentationDeferred))
+            .count(),
+        1,
+        "oversized child under Balance warns once",
+    );
+
+    // A second frame does not re-warn (session-wide dedup).
+    app.update();
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert_eq!(
+        warned
+            .set
+            .iter()
+            .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolFragmentationDeferred))
+            .count(),
+        1,
+    );
+}
+
+#[test]
+fn auto_fill_oversized_child_does_not_warn() {
+    // column_fill: Auto does not promise balancing → no fragmentation
+    // warn even for an oversized child.
+    let mut app = app();
+    let mc = MultiColumn {
+        column_count: ColumnCount::Count(2),
+        column_fill: ColumnFill::Auto,
+        ..Default::default()
+    };
+    let (_container, _kids) = multicol_container(&mut app, 200.0, 100.0, mc, &[(100.0, 250.0)]);
+    app.update();
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert_eq!(
+        warned
+            .set
+            .iter()
+            .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolFragmentationDeferred))
+            .count(),
+        0,
+        "Auto fill does not warn",
+    );
+}
