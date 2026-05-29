@@ -1,7 +1,7 @@
 # Buiy layout — Phase 9: stacking + top layer
 
 **Date:** 2026-05-29
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md`](../specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md) § 1 (`Stacking` + `ZIndex`/`Isolation`/`TopLayer`), § 2 (stacking-context formation + `StackingContext.painters_z`), § 3 (`z_index`), § 4 (top layer + `TopLayerActivation`), § 6 (test surface), § 7 (v1 implementation status) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-pass 6f), § 6 (error model); reads the Phase-8 [`transforms-and-containment.md`](../specs/2026-05-08-buiy-layout-design/transforms-and-containment.md) § 3 `ResolvedTransform` artifact.
 **Supersedes:** none (graduates the unbuilt `stacking-and-top-layer` spec child; sub-pass 6f extends the Phase-8 `PostTaffyOverrides` chain — `clear → sticky 6a → table 6b → multicol 6c → anchor 6d → transform 6e` — by appending `stacking_context` 6f after `transform_composition`).
 
