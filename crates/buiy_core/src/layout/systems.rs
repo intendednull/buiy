@@ -2906,6 +2906,39 @@ fn nearest_container_with_size(
     }
 }
 
+/// Flatten the descendant subtrees of `seeds` into a deduplicated set,
+/// EXCLUDING the seeds themselves. Phase 14 step 8 (`cq_descendant_invalidate`)
+/// calls this with the query containers whose `ResolvedLayout` changed this
+/// frame; the returned set is every entity that may resolve a `Length::Cq*`
+/// unit (or a `ContainerQuery`) against one of those containers and must be
+/// re-translated this frame (D2).
+///
+/// Iterative breadth-first walk over `Children`. O(total subtree size); a
+/// `HashSet` membership guard makes overlapping seed subtrees (a container
+/// nested inside another changed container) cost each entity once (D2/D4).
+/// No cycle guard is needed — Bevy's `Children`/`ChildOf` hierarchy is a
+/// forest by construction.
+// Production caller (`cq_descendant_invalidate`, step 8) lands in Phase 14
+// Task 3; until then this helper is exercised only by its unit tests.
+#[allow(dead_code)]
+pub(super) fn collect_dirty_descendants(
+    seeds: &[Entity],
+    children_q: &Query<&Children>,
+) -> std::collections::HashSet<Entity> {
+    let mut dirty: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    let mut stack: Vec<Entity> = seeds.to_vec();
+    while let Some(entity) = stack.pop() {
+        if let Ok(children) = children_q.get(entity) {
+            for child in children.iter() {
+                if dirty.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+    dirty
+}
+
 /// Walk up `ChildOf` from `entity`, returning the first ancestor that
 /// is a query container (`Container::container_type != Normal`) and,
 /// if `name` is `Some(n)`, has matching `container_name`. Memoized.
@@ -3763,6 +3796,63 @@ mod tests {
     #[test]
     fn cq_descendant_rerun_requested_default_is_false() {
         assert!(!CqDescendantReRunRequested::default().0);
+    }
+
+    #[test]
+    fn collect_dirty_descendants_flattens_subtree() {
+        use bevy::prelude::*;
+        let mut world = World::new();
+        // a -> b -> c, plus a sibling leaf d under a.
+        let c = world.spawn(Node).id();
+        let d = world.spawn(Node).id();
+        let b = world.spawn(Node).add_children(&[c]).id();
+        let a = world.spawn(Node).add_children(&[b, d]).id();
+        let mut q = world.query::<&Children>();
+        let children_q = q.query(&world);
+        let dirty = collect_dirty_descendants(&[a], &children_q);
+        // a's descendants: b, c, d (a itself excluded).
+        assert!(dirty.contains(&b));
+        assert!(dirty.contains(&c));
+        assert!(dirty.contains(&d));
+        assert!(
+            !dirty.contains(&a),
+            "the seed container itself is not dirty"
+        );
+        assert_eq!(dirty.len(), 3);
+    }
+
+    #[test]
+    fn collect_dirty_descendants_empty_for_leaf_seed() {
+        use bevy::prelude::*;
+        let mut world = World::new();
+        let leaf = world.spawn(Node).id();
+        let mut q = world.query::<&Children>();
+        let children_q = q.query(&world);
+        let dirty = collect_dirty_descendants(&[leaf], &children_q);
+        assert!(
+            dirty.is_empty(),
+            "a seed with no children produces no dirty descendants"
+        );
+    }
+
+    #[test]
+    fn collect_dirty_descendants_dedups_overlapping_subtrees() {
+        use bevy::prelude::*;
+        let mut world = World::new();
+        // a -> b -> c ; seed both a and b. c must appear once.
+        let c = world.spawn(Node).id();
+        let b = world.spawn(Node).add_children(&[c]).id();
+        let a = world.spawn(Node).add_children(&[b]).id();
+        let mut q = world.query::<&Children>();
+        let children_q = q.query(&world);
+        let dirty = collect_dirty_descendants(&[a, b], &children_q);
+        assert!(dirty.contains(&b));
+        assert!(dirty.contains(&c));
+        assert_eq!(
+            dirty.len(),
+            2,
+            "c is reached from both a and b but appears once"
+        );
     }
 
     #[test]
