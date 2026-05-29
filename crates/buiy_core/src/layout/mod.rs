@@ -19,8 +19,9 @@ pub use components::{
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
-    AnchorNameRegistry, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
-    LayoutWarnedOnceSession, PostTaffyPositionOverrides, SyncStylesIterCount, TopLayerActivation,
+    AnchorNameRegistry, ContentVisibilityMargin, LayoutAnchorWarnedThisFrame,
+    LayoutTaffyComputeCount, LayoutWarnedOnceSession, PostTaffyPositionOverrides,
+    SyncStylesIterCount, TopLayerActivation,
 };
 pub use tree::LayoutTree;
 pub use types::{
@@ -195,7 +196,9 @@ impl Plugin for LayoutPlugin {
             .register_type::<ZIndex>()
             .register_type::<Isolation>()
             .register_type::<TopLayer>()
-            .register_type::<crate::components::StackingContext>();
+            .register_type::<crate::components::StackingContext>()
+            // Phase 11 — content-visibility enforcement.
+            .register_type::<ContainIntrinsicSize>();
 
         pipeline::configure_pipeline(app);
 

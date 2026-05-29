@@ -364,3 +364,16 @@ fn skip_survives_container_query_flip_frame() {
         "detached child stays detached across the CQ flip re-run"
     );
 }
+
+#[test]
+fn phase11_types_are_registered() {
+    let mut app = app();
+    app.update();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    assert!(
+        registry
+            .get_with_type_path("buiy_core::layout::components::ContainIntrinsicSize")
+            .is_some(),
+        "ContainIntrinsicSize not registered"
+    );
+}
