@@ -192,3 +192,171 @@ fn auto_fill_oversized_child_does_not_warn() {
         "Auto fill does not warn",
     );
 }
+
+use buiy_core::layout::{BreakBefore, Display, Length, PositionKind};
+
+#[test]
+fn column_width_derives_count_with_gap() {
+    // column_width 90px, gap 20px, container content width 340.
+    // width_derived = floor((340+20)/(90+20)) = floor(360/110) = 3 cols;
+    // used width = (340 - 2*20)/3 = 100. Four 100x40 children, col block
+    // 100 → col0 [c0@0,c1@40], col1 [c2@0,c3@40], col2 [].
+    // col x: col0=0, col1=100+20=120.
+    let mut app = app();
+    let mc = MultiColumn {
+        column_width: Some(Length::Px(90.0)),
+        column_gap: Some(Length::Px(20.0)),
+        ..Default::default()
+    };
+    let (_c, kids) = multicol_container(
+        &mut app,
+        340.0,
+        100.0,
+        mc,
+        &[(100.0, 40.0), (100.0, 40.0), (100.0, 40.0), (100.0, 40.0)],
+    );
+    app.update();
+    let o = app.world().resource::<PostTaffyPositionOverrides>();
+    assert_eq!(
+        o.by_entity.get(&kids[0]).copied(),
+        Some(Vec2::new(0.0, 0.0))
+    );
+    assert_eq!(
+        o.by_entity.get(&kids[1]).copied(),
+        Some(Vec2::new(0.0, 40.0))
+    );
+    // col1 x = used_width(100) + gap(20) = 120.
+    assert_eq!(
+        o.by_entity.get(&kids[2]).copied(),
+        Some(Vec2::new(120.0, 0.0))
+    );
+    assert_eq!(
+        o.by_entity.get(&kids[3]).copied(),
+        Some(Vec2::new(120.0, 40.0))
+    );
+}
+
+#[test]
+fn container_level_break_before_forces_one_child_per_column() {
+    // break_before: Column on the container applies to every child
+    // uniformly (v1 container-level model). First child no-op; each
+    // subsequent child starts a new column → one child per column until
+    // the last column saturates. 3 cols, 3 children → c0 col0, c1 col1,
+    // c2 col2.
+    let mut app = app();
+    let mc = MultiColumn {
+        column_count: ColumnCount::Count(3),
+        break_before: BreakBefore::Column,
+        ..Default::default()
+    };
+    let (_c, kids) = multicol_container(
+        &mut app,
+        300.0,
+        500.0,
+        mc,
+        &[(100.0, 10.0), (100.0, 10.0), (100.0, 10.0)],
+    );
+    app.update();
+    let o = app.world().resource::<PostTaffyPositionOverrides>();
+    // used width = 300/3 = 100, gap 0 → col x = 0,100,200.
+    assert_eq!(
+        o.by_entity.get(&kids[0]).copied(),
+        Some(Vec2::new(0.0, 0.0))
+    );
+    assert_eq!(
+        o.by_entity.get(&kids[1]).copied(),
+        Some(Vec2::new(100.0, 0.0))
+    );
+    assert_eq!(
+        o.by_entity.get(&kids[2]).copied(),
+        Some(Vec2::new(200.0, 0.0))
+    );
+}
+
+#[test]
+fn absolute_child_is_excluded_from_columns() {
+    // An absolutely-positioned child escapes the column flow (plan D6):
+    // it gets no override. The in-flow child is packed normally.
+    let mut app = app();
+    let mc = MultiColumn {
+        column_count: ColumnCount::Count(2),
+        ..Default::default()
+    };
+    let container = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(200.0)
+                .height_px(100.0)
+                .multi_column(mc),
+        ))
+        .id();
+    let abs = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(50.0)
+                .height_px(20.0)
+                .position(PositionKind::Absolute),
+        ))
+        .id();
+    let flow = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(100.0).height_px(40.0)))
+        .id();
+    app.world_mut()
+        .entity_mut(container)
+        .add_children(&[abs, flow]);
+    app.update();
+    let o = app.world().resource::<PostTaffyPositionOverrides>();
+    assert!(
+        !o.by_entity.contains_key(&abs),
+        "absolute child escapes columns"
+    );
+    assert_eq!(
+        o.by_entity.get(&flow).copied(),
+        Some(Vec2::new(0.0, 0.0)),
+        "in-flow child packed"
+    );
+}
+
+#[test]
+fn display_none_child_is_skipped() {
+    // A Display::None child is skipped; the following in-flow child takes
+    // the first slot (no phantom gap from the hidden box).
+    let mut app = app();
+    let mc = MultiColumn {
+        column_count: ColumnCount::Count(1),
+        ..Default::default()
+    };
+    let container = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(200.0)
+                .height_px(500.0)
+                .multi_column(mc),
+        ))
+        .id();
+    let hidden = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::None)))
+        .id();
+    let visible = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(100.0).height_px(40.0)))
+        .id();
+    app.world_mut()
+        .entity_mut(container)
+        .add_children(&[hidden, visible]);
+    app.update();
+    let o = app.world().resource::<PostTaffyPositionOverrides>();
+    assert!(!o.by_entity.contains_key(&hidden));
+    assert_eq!(
+        o.by_entity.get(&visible).copied(),
+        Some(Vec2::new(0.0, 0.0))
+    );
+}
