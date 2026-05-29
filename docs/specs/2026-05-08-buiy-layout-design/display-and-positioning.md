@@ -60,17 +60,24 @@ impl Display {
 
 ### 1.2 Table layout status
 
-Taffy 0.10 doesn't ship table layout. **v1 ships only the API surface and the fallback path; the full algorithm is deferred to a v1.x point release.** The deferred algorithm is described here so the API stays stable across the cutover; the fallback path is what actually runs in v1.
+Taffy 0.10 doesn't ship table layout, so Buiy implements it as a Buiy-side post-Taffy pass. **Implemented (Phase 12).** Sub-pass 6b (`table_layout` in `systems.rs`, [architecture.md § 3](architecture.md#3-system-pipeline)) is a real position-only overlay, structurally mirroring the sticky (6a) and multicol (6c) sub-passes: `map_display` still maps `Display::Table*` → `taffy::Display::Block` (Buiy never asks Taffy to do table layout), so Taffy lays every table-family entity out as a block box first, then 6b reads each cell's Taffy-computed size, lays the cells into a column grid, stacks rows and row-groups vertically, and writes corrected **positions** into the shared `PostTaffyPositionOverrides` map that `write_resolved_layout` (step 7) consumes. Sizes are never touched — they stay from Taffy's block layout.
 
-When the algorithm lands, sub-pass 6b ([architecture.md § 3](architecture.md#3-system-pipeline)) will:
+The algorithm runs as three pure, unit-tested helpers plus a thin ECS system:
 
-1. Gather entities by `Display::Table*` family.
-2. Compute column widths via Taffy on a synthetic flex container per row group.
-3. Write corrected positions back to `ResolvedLayout`.
+1. **Gather** entities by `Display::Table*` family — walk the `Children` hierarchy into a `TableModel` (row-groups → rows → cells, document order). Bare `TableRow` children of the table form a single implicit anonymous row-group (CSS table fixup).
+2. **Compute column widths** via Taffy on a throwaway synthetic flex container per table (one flex-row per table-row, fixed-width leaves per cell); column `c`'s width is the widest cell in that column.
+3. **Place** every cell / row / row-group into the column grid (cumulative column-x, cumulative-row-y), add the table's Taffy origin, and write the corrected positions back to `PostTaffyPositionOverrides`.
 
-**Fallback behavior in v1** (the path actually shipping): `Display::Table*` translates to `Display::Block` for Taffy purposes; sub-pass 6b is a no-op. A `warn!` fires once per (entity, session) the first time each `Display::Table*` value is encountered, naming the entity. Authors who need correct table layout in v1 should use `Display::Grid` with row/column templates instead.
+Tier per [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout): tier-C. The Phase-7 stub's blanket `LayoutWarnOnceKey::TableUnsupported` warn is **retired** — kept as a `Reflect`-stable variant that no code emits (the same retire pattern as `MulticolUnsupported`), since the algorithm now ships and a blanket "unsupported" warn would be wrong for the common, fully-supported case.
 
-Tier per [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout): tier-C (the algorithm). The v1 fallback path covers the API stability commitment; the algorithm itself is tracked as a v1.x deliverable in the migration plan.
+**Still deferred (tier-C corners).** The structural spine — `Display::Table` / `TableRowGroup` / `TableHeaderGroup` / `TableFooterGroup` / `TableRow` / `TableCell` — is laid out. These sub-features are genuinely *not* yet shipped:
+
+- **`colspan` / `rowspan`** — no API surface exists (no Buiy component carries a span count), so spanning cannot be expressed. A *ragged* table (rows of differing cell counts — the shape an author builds to fake a span) is laid out positionally (column index = cell index) and reported once per (table entity, session) via `LayoutWarnOnceKey::TableSpanUnsupported(Entity)`.
+- **`Display::TableCaption` / `TableColumn` / `TableColumnGroup`** — classified by the family classifier but produce **no geometry** in v1; each warns once per (entity, session) via `LayoutWarnOnceKey::TableSubfeatureUnsupported(Entity)` and is left at its Taffy-block position. Caption placement (which grows the table box) and `<col>`/`<colgroup>` column-sizing are tier-C corners.
+- **Header / footer reorder** — row-groups stack in `Children` document order; a `TableHeaderGroup` declared after a `TableRowGroup` is laid out below it (no float-to-top / float-to-bottom reorder).
+- **Per-cell stretch-to-column-width, `border-collapse`, table border-spacing** — out of v1 scope (6b corrects positions only; size stays from Taffy).
+
+These are tracked in [`plans/follow-ups.md`](../../plans/follow-ups.md).
 
 ### 1.3 `Display::None` vs `Visibility::Hidden`
 

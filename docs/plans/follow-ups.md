@@ -202,18 +202,26 @@ remain deferred (single global root; gated on `buiy-window-and-surface-design`).
 **Spec touchpoint:** `display-and-positioning.md § 2.1` (Fixed row + Known gap),
 `§ 2.2` (Taffy mapping for Fixed).
 
-## Layout — full table layout algorithm
+## Layout — full table layout algorithm — LANDED
 
 **Originated:** Phase 7 (Task 6 stub).
 
-**Symptom:** Entities with `Display::Table*` warn-once and fall back to
-`Display::Block` semantics. No row/column geometry.
-
-**Implementation sketch:** replace `table_layout` stub with the algorithm
-described in `display-and-positioning.md § 1.2` ("Gather entities by
-`Display::Table*` family. Compute column widths via Taffy on a synthetic
-flex container per row group. Write corrected positions back to
-`PostTaffyPositionOverrides`").
+**Status:** **Landed** in Phase 12
+(`docs/plans/2026-05-29-buiy-layout-table-layout.md`). The `table_layout` stub
+(sub-pass 6b) is replaced with the real CSS table algorithm: gather
+`Display::Table*` entities by family into a `TableModel`, resolve per-column
+widths via a throwaway synthetic Taffy flex tree per table (`resolve_column_widths`),
+place every cell / row / row-group into the column grid in document order
+(`place_table_cells`), and write container-origin-relative corrected positions
+straight into `PostTaffyPositionOverrides` (sizes stay from Taffy — position-only
+overlay, like sticky 6a). Bare rows form an implicit anonymous row-group (CSS
+fixup). The blanket `TableUnsupported` warn is retired (kept `Reflect`-stable
+like `MulticolUnsupported`). Still deferred (tier-C corners): `colspan`/`rowspan`
+(no API surface — ragged rows laid out positionally + `TableSpanUnsupported(Entity)`
+warn), `Display::TableCaption`/`TableColumn`/`TableColumnGroup` geometry
+(classified but no placement + `TableSubfeatureUnsupported(Entity)` warn),
+header/footer float reorder (document-order stacking only), and per-cell
+stretch-to-column-width / `border-collapse` / border-spacing.
 
 **Spec touchpoint:** `display-and-positioning.md § 1.2`.
 

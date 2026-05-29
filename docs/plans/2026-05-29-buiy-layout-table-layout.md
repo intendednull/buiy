@@ -12,7 +12,7 @@
 **Tech Stack:** Bevy 0.18 (`bevy::prelude::{Children, ChildOf, Node, Query, NonSend, ResMut, With}`, `bevy::ecs::entity::Entity`, `bevy::math::Vec2`). `taffy::{TaffyTree, Style, Size, AvailableSpace, Dimension, FlexDirection, Display as TaffyDisplay}` for the synthetic per-table tree (already a workspace dep — `crates/buiy_core/src/layout/tree.rs:12`). `std::collections::HashMap` (no `bevy::utils::*`, per Phase 6/7/8/9 precedent). No new external dependency.
 
 **Date:** 2026-05-29
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/display-and-positioning.md`](../specs/2026-05-08-buiy-layout-design/display-and-positioning.md) § 1.2 (table layout algorithm + the v1 fallback it supersedes) + § 1 (`Display::Table*` family) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-pass 6b in the `PostTaffyOverrides` chain), § 6 (warn-once error model); reads the Phase-7 `PostTaffyPositionOverrides` plumbing ([`systems.rs:176-179`](../../crates/buiy_core/src/layout/systems.rs)).
 
 ---

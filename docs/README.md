@@ -71,6 +71,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Buiy layout stacking + top layer](plans/2026-05-29-buiy-layout-stacking-top-layer.md) — Phase 9: `Stacking` (`ZIndex`/`Isolation`/`TopLayer`), `stacking_context` sub-pass 6f detecting stacking contexts (positioned+z-index, isolation, transform, paint/strict containment, root) and writing the private `StackingContext.painters_z` paint-order handoff, CSS `z_index` ordering, single global top layer + `TopLayerActivation`. Render-side triggers / will-change SC / per-window deferred (§ 7). `[landed]`
 - [Buiy layout Position::Fixed](plans/2026-05-29-buiy-layout-position-fixed.md) — Phase 10: `Fixed` resolves against the layout root by re-parenting its Taffy node onto the root in the children-sync pass, `is_fixed_root` predicate, `.fixed()` setter; transformed-ancestor containing block still deferred. `[landed]`
 - [Buiy layout multi-column layout](plans/2026-05-29-buiy-layout-multicol-layout.md) — Phase 13: real `multicol_pack` sub-pass 6c — CSS used-value column-count resolver + greedy whole-child packer honoring forced `break-*`; true fragmentation still deferred (tier-E). `[landed]`
+- [Buiy layout table layout](plans/2026-05-29-buiy-layout-table-layout.md) — Phase 12: real `table_layout` sub-pass 6b — synthetic-flex column-width resolution + document-order row/row-group grid placement; `colspan`/`rowspan`, caption, `<col>`/`<colgroup>` still deferred (tier-C). `[landed]`
 
 ### Docs infrastructure
 
