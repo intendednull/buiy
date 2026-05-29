@@ -193,31 +193,31 @@ fn cq_non_flip_frame_runs_taffy_exactly_once() {
 /// changes the container's size, which then flips a descendant's rule.
 /// Phase 5 explicitly does NOT ship the `when_active`/`when_inactive`
 /// style-bundle application path that would cause such a cascade
-/// (decision documented in the plan's CHANGELOG block). The geometric
-/// equivalent — an ancestor's direct resize flowing through a
-/// `Cqw`-sized intermediate to a grandchild — also stays stale in
-/// Phase 5 because the intermediate is never re-translated when only
-/// the ancestor's `ResolvedLayout` changes (the per-entity changed-set
-/// filter on `sync_styles` doesn't include "ancestor's ResolvedLayout
-/// changed").
+/// (decision documented in the plan's CHANGELOG block).
 ///
-/// This test ASSERTS that documented lag: after A is widened, C's
-/// activation does NOT propagate within the frames Phase 5 owns. A
-/// future phase (when style-bundle application + descendant
-/// invalidation land) is expected to promote this assertion's polarity
-/// from "stays stale" to "catches up within frame N+1".
+/// Phase-14 regression: the multi-level container-query geometric cascade
+/// now catches up IN-FRAME. When query container `A` resizes, the
+/// `Cqw`-sized intermediate `B` is re-translated by the step-9 descendant
+/// re-run (seeded by step 8's `ContainerSizeDirty`), so `B`'s width
+/// re-resolves against the new `A` size and `C`'s `ContainerQuery`
+/// re-evaluates — all within the same frame.
+///
+/// This is the polarity flip of the former
+/// `cq_transitive_cascade_is_one_frame_stale` negative assertion (Phase 5
+/// documented the gap; Phase 14 closes it — see
+/// docs/plans/follow-ups.md "Descendant invalidation on
+/// ancestor-resolved-size changes").
 ///
 /// Scenario:
-/// - A: outer container, width 700, container_size.
-/// - B: child of A; width = `Cqw(80)` of A; container_size; no rule on B.
+/// - A: outer container, width 700 → 1000, container_size.
+/// - B: child of A; width = `Cqw(80)` of A; container_size; no rule.
 /// - C: child of B; `ContainerQuery MinWidth(700)`.
 ///
-/// Steady-state: A=700, B=`Cqw(80)` of A = 560, C inactive (560 < 700).
-/// After widening A to 1000, C stays inactive because B's translated
-/// width is not re-evaluated against the new A snapshot (the geometric
-/// cascade is not currently propagated to B).
+/// Steady-state: A=700, B=560 (Cqw(80) of 700), C inactive (560 < 700).
+/// After widening A to 1000: B=800 (Cqw(80) of 1000) same frame, C ACTIVE
+/// same frame (800 ≥ 700).
 #[test]
-fn cq_transitive_cascade_is_one_frame_stale() {
+fn cq_transitive_cascade_catches_up_in_frame() {
     let mut app = app();
     let a = app
         .world_mut()
@@ -237,7 +237,6 @@ fn cq_transitive_cascade_is_one_frame_stale() {
                 .width(Sizing::Length(Length::Cqw(80.0)))
                 .height_px(400.0)
                 .container_size(),
-            // No rule on B itself — B is the container for C.
         ))
         .id();
     let c = app
@@ -254,8 +253,6 @@ fn cq_transitive_cascade_is_one_frame_stale() {
     app.world_mut().entity_mut(a).add_children(&[b]);
     app.world_mut().entity_mut(b).add_children(&[c]);
 
-    // Settle frames: frame 1 populates ResolvedLayout; frame 2 lets the
-    // cq systems see the previous-frame snapshot and mark C inactive.
     app.update();
     app.update();
     let b_settled = app.world().get::<ResolvedLayout>(b).map(|l| l.size.x);
@@ -269,10 +266,8 @@ fn cq_transitive_cascade_is_one_frame_stale() {
         "C should be inactive at steady-state (B=560 < 700)"
     );
 
-    // Widen A. The geometric cascade lag means C stays inactive on this
-    // frame and the next — B's Cqw is not re-evaluated because B itself
-    // is not in any `Changed<>` filter on sync_styles when only A's
-    // ResolvedLayout changed.
+    // Widen A. Phase 14: the descendant re-run re-resolves B's Cqw and
+    // re-evaluates C's rule THIS frame.
     app.world_mut().entity_mut(a).insert(
         Style::default()
             .width_px(1000.0)
@@ -280,36 +275,215 @@ fn cq_transitive_cascade_is_one_frame_stale() {
             .container_size(),
     );
     app.update();
-    let a_after = app.world().get::<ResolvedLayout>(a).map(|l| l.size.x);
-    let b_after = app.world().get::<ResolvedLayout>(b).map(|l| l.size.x);
     assert_eq!(
-        a_after,
+        app.world().get::<ResolvedLayout>(a).map(|l| l.size.x),
         Some(1000.0),
-        "A's new resolved width should equal the styled width"
+        "A's new resolved width equals the styled width"
     );
     assert_eq!(
-        b_after,
-        Some(560.0),
-        "B should still report its pre-resize width (geometric cascade lag)"
+        app.world().get::<ResolvedLayout>(b).map(|l| l.size.x),
+        Some(800.0),
+        "B re-resolves to Cqw(80) of A(1000) = 800 in the same frame (geometric cascade caught up)"
     );
     assert!(
-        app.world().get::<ContainerQueryInactive>(c).is_some(),
-        "C should still be inactive immediately after A's resize \
-         (geometric cascade lag — B's Cqw was not re-evaluated)"
+        app.world().get::<ContainerQueryActive>(c).is_some(),
+        "C activates in the same frame A resized (B=800 >= 700)"
+    );
+    assert!(
+        app.world().get::<ContainerQueryInactive>(c).is_none(),
+        "the inactive marker is removed on activation"
+    );
+}
+
+/// Phase-14 (T5): the `Cqw`-sized intermediate `B` re-resolves its width
+/// in the SAME frame its query-container ancestor `A` resizes. Asserts the
+/// geometric half of the cascade in isolation (the rule flip is covered by
+/// `cq_descendant_c_activates_in_frame_after_a_resize`).
+#[test]
+fn cq_intermediate_b_reresolves_cqw_in_frame() {
+    let mut app = app();
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(700.0)
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width(Sizing::Length(Length::Cqw(80.0)))
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let c = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            ContainerQuery {
+                container: None,
+                conditions: vec![QueryCondition::MinWidth(Length::Px(700.0))],
+            },
+        ))
+        .id();
+    app.world_mut().entity_mut(a).add_children(&[b]);
+    app.world_mut().entity_mut(b).add_children(&[c]);
+
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world().get::<ResolvedLayout>(b).map(|l| l.size.x),
+        Some(560.0),
+        "B settles to Cqw(80) of A(700) = 560"
     );
 
-    // One more frame: the lag persists in Phase 5 — there is no system
-    // that fires `Changed<>` on B in response to A's `ResolvedLayout`
-    // change, so B is never re-translated and the cascade never
-    // propagates within Phase 5's scope. (A future phase adding
-    // descendant invalidation will flip this assertion's polarity.)
+    // Widen A to 1000. Cqw(80) of 1000 = 800. With the Phase-14 descendant
+    // re-run, B re-resolves THIS frame.
+    app.world_mut().entity_mut(a).insert(
+        Style::default()
+            .width_px(1000.0)
+            .height_px(400.0)
+            .container_size(),
+    );
     app.update();
+    assert_eq!(
+        app.world().get::<ResolvedLayout>(b).map(|l| l.size.x),
+        Some(800.0),
+        "B re-resolves Cqw(80) of A(1000) = 800 in the SAME frame A resized"
+    );
+    let _ = c;
+}
+
+/// Phase-14 (T6): the descendant re-run caps Taffy compute at 2× per frame
+/// (step 3 + step 9 re-run) on a cascade frame, and returns to 1× on
+/// steady-state / post-cascade frames — the spec § 1.3 cost ceiling.
+#[test]
+fn cq_descendant_rerun_caps_at_2x_taffy() {
+    let mut app = app();
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(700.0)
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width(Sizing::Length(Length::Cqw(80.0)))
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    app.world_mut().entity_mut(a).add_children(&[b]);
+
+    app.update();
+    app.update();
+    // Steady state: one Taffy compute, no descendant re-run.
+    assert_eq!(
+        app.world().resource::<LayoutTaffyComputeCount>().0,
+        1,
+        "steady-state frame runs Taffy once"
+    );
+
+    // Resize A → B is dirtied → descendant re-run fires → 2 Taffy computes.
+    app.world_mut().entity_mut(a).insert(
+        Style::default()
+            .width_px(1000.0)
+            .height_px(400.0)
+            .container_size(),
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<LayoutTaffyComputeCount>().0,
+        2,
+        "cascade frame caps at 2x Taffy (step 3 + step 9 re-run)"
+    );
+
+    // Next steady frame settles back to one compute (cascade did not recur).
+    app.update();
+    assert_eq!(
+        app.world().resource::<LayoutTaffyComputeCount>().0,
+        1,
+        "post-cascade frame returns to one Taffy compute"
+    );
+}
+
+/// Phase-14 (T7): the rule-bearing grandchild `C` flips to `Active` in the
+/// SAME frame its grand-ancestor `A` resizes, because the descendant re-run
+/// re-evaluates container queries against the freshly recomputed sizes (D5).
+#[test]
+fn cq_descendant_c_activates_in_frame_after_a_resize() {
+    let mut app = app();
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(700.0)
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width(Sizing::Length(Length::Cqw(80.0)))
+                .height_px(400.0)
+                .container_size(),
+        ))
+        .id();
+    let c = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            ContainerQuery {
+                container: None,
+                conditions: vec![QueryCondition::MinWidth(Length::Px(700.0))],
+            },
+        ))
+        .id();
+    app.world_mut().entity_mut(a).add_children(&[b]);
+    app.world_mut().entity_mut(b).add_children(&[c]);
+
+    app.update();
+    app.update();
+    // Steady state: B = Cqw(80) of 700 = 560 < 700 → C inactive.
     assert!(
         app.world().get::<ContainerQueryInactive>(c).is_some(),
-        "C should still be inactive — Phase 5 does not propagate the \
-         geometric cascade through Cqw-sized intermediates. This \
-         matches the documented divergence; a future phase promotes \
-         this assertion to ContainerQueryActive."
+        "C inactive at steady-state (B=560 < 700)"
+    );
+
+    // Resize A → B re-resolves to 800 ≥ 700 → C activates THIS frame.
+    app.world_mut().entity_mut(a).insert(
+        Style::default()
+            .width_px(1000.0)
+            .height_px(400.0)
+            .container_size(),
+    );
+    app.update();
+    assert!(
+        app.world().get::<ContainerQueryActive>(c).is_some(),
+        "C activates in the SAME frame A resized (B re-resolved to 800 >= 700)"
+    );
+    assert!(
+        app.world().get::<ContainerQueryInactive>(c).is_none(),
+        "the inactive marker is removed on activation"
     );
 }
 

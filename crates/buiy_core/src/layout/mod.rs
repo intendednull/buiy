@@ -89,6 +89,10 @@ impl Plugin for LayoutPlugin {
         // the flag, so both resources are initialized here.
         app.init_resource::<systems::ContainerSizeDirty>();
         app.init_resource::<systems::CqDescendantReRunRequested>();
+        // Per-frame "an activation flip already spent the single re-layout"
+        // signal: set by `cq_flip_rerun` (step 5), read by
+        // `cq_descendant_invalidate` (step 8) to honor the D4 2×-Taffy ceiling.
+        app.init_resource::<systems::CqFlipReRanThisFrame>();
 
         // Phase 6 — observers register as closures per Decision D12:
         // `On<'w, 't, E, B>` carries two lifetimes without defaults and

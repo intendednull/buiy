@@ -71,6 +71,28 @@ pub struct ContainerSizeDirty(pub std::collections::HashSet<Entity>);
 #[derive(Resource, Default, Debug)]
 pub struct CqDescendantReRunRequested(pub bool);
 
+/// Per-frame signal that the step-5 activation-flip re-run (`cq_flip_rerun`)
+/// actually re-ran Taffy this frame. Set `true` at the top of
+/// `cq_flip_rerun`'s body (after it observes `CqReRunRequested`), set
+/// `false` when `cq_flip_rerun` is a no-op; read by step 8
+/// (`cq_descendant_invalidate`) to enforce the D4 "one re-run per frame"
+/// cost ceiling.
+///
+/// **Why the descendant pass defers on a flip frame (D4):** an
+/// activation-flip frame already spent its single re-layout in
+/// `cq_flip_rerun` (the spec § 1.3 "2× Taffy on activation-flip frames"
+/// ceiling). Seeding a *second* re-run from step 8 the same frame would
+/// push Taffy to 3×, breaking that ceiling. The spec § 1.5 transitive
+/// cascade is explicitly multi-frame ("frame N applies A's activation,
+/// frame N+1 applies B's"), so on a flip frame the geometric cascade is
+/// deferred: step 8 skips seeding, and the next frame's `Changed`
+/// cascade (the flip re-run's recompute surfaces the new size via step 7)
+/// re-seeds it. The realistic Phase-14 case (a query container resizing
+/// with no rule on itself) never sets `CqReRunRequested`, so this guard
+/// never suppresses the same-frame settle that the phase delivers.
+#[derive(Resource, Default, Debug)]
+pub struct CqFlipReRanThisFrame(pub bool);
+
 /// Resource — per-frame counter of how many times Taffy's
 /// `compute_layout` was invoked. Reset to zero at the start of each
 /// `taffy_compute` invocation (i.e. once per frame), then bumped
@@ -2684,11 +2706,27 @@ pub(super) fn write_resolved_layout(
 pub(super) fn cq_descendant_invalidate(
     changed_containers: Query<(Entity, &Container), (With<Node>, Changed<ResolvedLayout>)>,
     children_q: Query<&Children>,
+    flip_reran: Res<CqFlipReRanThisFrame>,
     mut dirty: ResMut<ContainerSizeDirty>,
     mut rerun: ResMut<CqDescendantReRunRequested>,
 ) {
     // Fresh set each frame — never accumulate (D4).
     dirty.0.clear();
+
+    // D4 cost-ceiling guard: this frame's single re-layout was already spent
+    // by `cq_flip_rerun` (an activation-flip frame). Seeding a second re-run
+    // now would push Taffy to 3× this frame, breaking the spec § 1.3 "2×
+    // Taffy on activation-flip frames" ceiling. Defer the geometric cascade:
+    // the next frame's `Changed<ResolvedLayout>` (the flip re-run's recompute
+    // surfaced the new size via step 7) re-seeds it (spec § 1.5's
+    // explicitly multi-frame transitive-cascade contract). The realistic
+    // Phase-14 case — a query container resizing with no rule on itself —
+    // never triggers `cq_flip_rerun`, so this guard does not suppress the
+    // same-frame settle the phase delivers.
+    if flip_reran.0 {
+        rerun.0 = false;
+        return;
+    }
 
     // Seeds = query containers (Size / InlineSize) whose ResolvedLayout
     // changed this frame. Plain boxes and Normal containers are skipped:
@@ -2720,13 +2758,206 @@ pub(super) fn cq_descendant_invalidate(
 /// the top so the system is a no-op on non-cascade frames.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3, § 1.5.
-pub(super) fn cq_descendant_rerun(mut rerun: ResMut<CqDescendantReRunRequested>) {
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(super) fn cq_descendant_rerun(
+    mut rerun: ResMut<CqDescendantReRunRequested>,
+    dirty: Res<ContainerSizeDirty>,
+    mut commands: Commands,
+    existing: Query<&ResolvedLayout>,
+    overrides: Res<PostTaffyPositionOverrides>,
+    mut compute_count: ResMut<LayoutTaffyComputeCount>,
+    mut tree: NonSendMut<LayoutTree>,
+    nodes: Query<NodeQueryItem<'_>, With<Node>>,
+    parent_grid_lookup: Query<&GridParams>,
+    container_snapshot_source: Query<(Entity, &Container, &ResolvedLayout)>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    cq_parent_chain: Query<&ChildOf>,
+    roots: Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
+    windows: Query<&bevy::window::Window>,
+    rules: Query<
+        (
+            Entity,
+            &ContainerQuery,
+            Option<&ContainerQueryActive>,
+            Option<&ContainerQueryInactive>,
+        ),
+        With<Node>,
+    >,
+    containers: Query<(&Container, &ResolvedLayout)>,
+) {
     if !rerun.0 {
         return;
     }
     rerun.0 = false;
-    // T5: re-translate the dirty set; T6: recompute Taffy + re-write
-    // ResolvedLayout; T7: re-evaluate container queries.
+
+    let tree = &mut *tree;
+
+    // Snapshots rebuilt from the just-written ResolvedLayout (step 7),
+    // exactly as cq_flip_rerun rebuilds them — the dirty descendants resolve
+    // Cq* against the NEW ancestor size now present in container_index.
+    let parent_areas_for: HashMap<Entity, GridAreas> = nodes
+        .iter()
+        .filter_map(|(entity, .., parent)| {
+            let p = parent?;
+            let grid = parent_grid_lookup.get(p.parent()).ok()?;
+            grid.template_areas.clone().map(|a| (entity, a))
+        })
+        .collect();
+
+    let container_index: HashMap<Entity, ContainerSnapshot> = container_snapshot_source
+        .iter()
+        .filter_map(|(entity, container, layout)| {
+            if container.container_type == ContainerType::Normal {
+                None
+            } else {
+                Some((
+                    entity,
+                    ContainerSnapshot {
+                        container_type: container.container_type,
+                        size: layout.size,
+                    },
+                ))
+            }
+        })
+        .collect();
+
+    let viewport_size = primary_window
+        .single()
+        .ok()
+        .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(Vec2::ZERO);
+
+    // Re-translate ONLY the dirty descendants (D4). Iterate the full node
+    // set but act only on dirty members — keeps the borrow simple and the
+    // work bounded by the dirty set.
+    for item in nodes.iter() {
+        let entity = item.0;
+        if !dirty.0.contains(&entity) {
+            continue;
+        }
+        translate_one_entity(
+            item,
+            &parent_areas_for,
+            &container_index,
+            &cq_parent_chain,
+            viewport_size,
+            None,
+            tree,
+        );
+    }
+
+    // Children-sync over the FULL tree (`roots`): a dirty descendant that
+    // re-translated may need its parent's Taffy child list rebuilt. Mirrors
+    // cq_flip_rerun's full-tree children-sync.
+    let rows: Vec<(Entity, bool, Option<&Children>, Option<&ChildOf>)> = roots
+        .iter()
+        .map(|(entity, children, parent, position)| {
+            (entity, is_fixed_root(position), children, parent)
+        })
+        .collect();
+    sync_children_pass(&rows, &HashSet::new(), tree);
+
+    // Re-invoke Taffy compute per root (same shape as cq_flip_rerun;
+    // NO compute_count reset — that lives only in taffy_compute, so a
+    // cascade frame ends with count incremented, observable for the 2x cap).
+    let window_size = windows
+        .iter()
+        .next()
+        .map(|w| Vec2::new(w.width(), w.height()))
+        .unwrap_or(Vec2::new(800.0, 600.0));
+    for (entity, _children, parent, _position) in roots.iter() {
+        let is_root = parent
+            .map(|p| !tree.by_entity.contains_key(&p.parent()))
+            .unwrap_or(true);
+        if !is_root {
+            continue;
+        }
+        if let Some(id) = tree.by_entity.get(&entity).copied() {
+            match tree.tree.compute_layout(
+                id,
+                Size {
+                    width: AvailableSpace::Definite(window_size.x),
+                    height: AvailableSpace::Definite(window_size.y),
+                },
+            ) {
+                Ok(_) => compute_count.0 += 1,
+                Err(err) => {
+                    warn!(
+                        ?entity,
+                        ?err,
+                        "buiy: layout compute_layout (descendant re-run) failed"
+                    )
+                }
+            }
+        }
+    }
+
+    // Re-write ResolvedLayout for the dirty set from the recomputed Taffy
+    // tree (mirror write_resolved_layout, scoped to dirty).
+    for &entity in dirty.0.iter() {
+        let Some(&id) = tree.by_entity.get(&entity) else {
+            continue;
+        };
+        let Ok(layout) = tree.tree.layout(id) else {
+            continue;
+        };
+        let position = overrides
+            .by_entity
+            .get(&entity)
+            .copied()
+            .unwrap_or_else(|| Vec2::new(layout.location.x, layout.location.y));
+        let new = ResolvedLayout {
+            position,
+            size: Vec2::new(layout.size.width, layout.size.height),
+        };
+        let unchanged = existing
+            .get(entity)
+            .map(|cur| cur.position == new.position && cur.size == new.size)
+            .unwrap_or(false);
+        if !unchanged {
+            commands.entity(entity).insert(new);
+        }
+    }
+
+    // Re-evaluate container queries against the just-recomputed sizes so a
+    // rule-bearing descendant flips its marker THIS frame (D5). Same toggle
+    // logic as cq_activate, reading sizes from the Taffy tree directly
+    // (current this frame) — NOT the not-yet-applied Commands insert above,
+    // matching cq_flip_check's explicit source pinning (architecture.md § 3.2).
+    let mut memo: HashMap<Entity, Option<Entity>> = HashMap::new();
+    for (entity, rule, was_active, was_inactive) in rules.iter() {
+        let container_entity = resolve_nearest_container(
+            entity,
+            &rule.container,
+            &mut memo,
+            &containers,
+            &cq_parent_chain,
+        );
+        let active = match container_entity {
+            Some(cont) => match tree.by_entity.get(&cont) {
+                Some(&node_id) => match tree.tree.layout(node_id) {
+                    Ok(layout) => evaluate_conditions(
+                        &rule.conditions,
+                        Vec2::new(layout.size.width, layout.size.height),
+                    ),
+                    Err(_) => false,
+                },
+                None => false,
+            },
+            None => false,
+        };
+        if active && was_active.is_none() {
+            commands
+                .entity(entity)
+                .insert(ContainerQueryActive)
+                .remove::<ContainerQueryInactive>();
+        } else if !active && was_inactive.is_none() {
+            commands
+                .entity(entity)
+                .insert(ContainerQueryInactive)
+                .remove::<ContainerQueryActive>();
+        }
+    }
 }
 
 /// Pre-step-1 — populate `WritingModeResolved` for every `Node` entity
@@ -3190,6 +3421,7 @@ pub(super) fn cq_flip_check(
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn cq_flip_rerun(
     mut rerun: ResMut<CqReRunRequested>,
+    mut flip_reran: ResMut<CqFlipReRanThisFrame>,
     mut compute_count: ResMut<LayoutTaffyComputeCount>,
     mut tree: NonSendMut<LayoutTree>,
     nodes: Query<
@@ -3247,9 +3479,15 @@ pub(super) fn cq_flip_rerun(
     content_vis_margin: Res<ContentVisibilityMargin>,
 ) {
     if !rerun.0 {
+        // No activation flip this frame — the descendant pass (step 8) is
+        // free to spend the single re-layout (D4).
+        flip_reran.0 = false;
         return;
     }
     rerun.0 = false;
+    // Record that this frame's single re-layout was spent here, so step 8
+    // defers the geometric descendant cascade to the next frame (D4).
+    flip_reran.0 = true;
 
     let tree = &mut *tree;
 
