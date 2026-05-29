@@ -977,12 +977,30 @@ pub enum AnchorErrorKind {
 /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
 #[derive(Reflect, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum LayoutWarnOnceKey {
-    /// `Display::Table*` entity encountered. Sub-pass 6b emits one
-    /// warn per (entity, session) — the table algorithm is deferred
-    /// to v1.x.
+    /// **Retired in Phase 12** — the blanket "tables are unsupported" warn
+    /// from the Phase-7 stub. Sub-pass 6b now lays tables out; per-feature
+    /// deferrals use `TableSpanUnsupported` / `TableSubfeatureUnsupported`.
+    /// Kept as a variant for `Reflect`/serialization stability; no code
+    /// emits it.
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
     TableUnsupported(Entity),
+
+    /// A table has rows of differing cell counts (a ragged table). v1 has
+    /// no `colspan`/`rowspan` API, so spanning cannot be expressed; ragged
+    /// rows are laid out positionally (column index = cell index) and this
+    /// warns once per (table entity, session) (plan D8).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+    TableSpanUnsupported(Entity),
+
+    /// A `Display::TableCaption` / `TableColumn` / `TableColumnGroup`
+    /// entity was encountered. These table sub-features are deferred to
+    /// v1.x; the entity is left at its Taffy-block position and not placed
+    /// in the table grid. Warns once per (entity, session) (plan D4).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+    TableSubfeatureUnsupported(Entity),
 
     /// `MultiColumn` entity encountered. Sub-pass 6c emits one warn
     /// per session (no Entity payload — first multicol entity triggers,

@@ -921,7 +921,6 @@ pub(super) fn table_layout(
     mut overrides: ResMut<PostTaffyPositionOverrides>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
-    let _ = &mut warned; // per-feature warns land in T7.
     for (table, display) in table_q.iter() {
         if table_part(display) != Some(TablePart::Table) {
             continue;
@@ -936,7 +935,19 @@ pub(super) fn table_layout(
         };
         let table_origin = Vec2::new(table_layout.location.x, table_layout.location.y);
 
-        let (model, _deferred) = gather_table(table, &children_q, &display_q);
+        let (model, deferred) = gather_table(table, &children_q, &display_q);
+        for d in deferred {
+            if warned
+                .set
+                .insert(LayoutWarnOnceKey::TableSubfeatureUnsupported(d))
+            {
+                bevy::log::warn!(
+                    "Layout: table sub-feature on entity {:?} (caption / column / column-group) \
+                     is deferred to v1.x (spec § 1.2); it is left at its block position.",
+                    d,
+                );
+            }
+        }
         if model.groups.is_empty() {
             continue;
         }
@@ -964,35 +975,32 @@ pub(super) fn table_layout(
             }
         }
 
+        // Ragged rows (differing cell counts) imply spanning, which has no
+        // v1 API — lay out positionally + warn once per table (plan D8).
+        let ragged = rows_widths
+            .iter()
+            .map(|r| r.len())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            > 1;
+        if ragged
+            && warned
+                .set
+                .insert(LayoutWarnOnceKey::TableSpanUnsupported(table))
+        {
+            bevy::log::warn!(
+                "Layout: table {:?} has rows of differing cell counts; colspan/rowspan \
+                 is unsupported in v1 (spec § 1.2) — cells are placed positionally.",
+                table,
+            );
+        }
+
         let col_widths = resolve_column_widths(&rows_widths);
         let placed = place_table_cells(&model, &col_widths, &row_heights);
         for (entity, offset) in placed {
             overrides.by_entity.insert(entity, table_origin + offset);
         }
     }
-}
-
-/// Predicate matching every `Display::Table*` variant.
-///
-/// Carries `#[allow(dead_code)]` because its sole caller — the old
-/// `table_layout` warn-once stub — is replaced by the real 6b
-/// algorithm in this task (plan T4). The helper is kept until the
-/// per-feature warn pass (plan T7) decides its fate; until then it is
-/// unreferenced, mirroring the staged-helper precedent above.
-#[allow(dead_code)]
-fn is_table_display(d: &Display) -> bool {
-    matches!(
-        d,
-        Display::Table
-            | Display::TableRowGroup
-            | Display::TableHeaderGroup
-            | Display::TableFooterGroup
-            | Display::TableRow
-            | Display::TableCell
-            | Display::TableCaption
-            | Display::TableColumnGroup
-            | Display::TableColumn
-    )
 }
 
 /// Sub-pass 6c — multi-column packing stub.

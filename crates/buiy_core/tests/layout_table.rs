@@ -6,7 +6,7 @@
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
 
 use bevy::prelude::*;
-use buiy_core::layout::{Display, LayoutPlugin, Style};
+use buiy_core::layout::{Display, LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Style};
 use buiy_core::{Node, ResolvedLayout};
 
 fn app() -> App {
@@ -378,5 +378,174 @@ fn cell_columns_align_across_groups() {
     assert!(
         (pos(&app, b1).x - 60.0).abs() < 0.5,
         "group B col 1 also at x=60"
+    );
+}
+
+fn count_warns(app: &App, mut pred: impl FnMut(&LayoutWarnOnceKey) -> bool) -> usize {
+    app.world()
+        .resource::<LayoutWarnedOnceSession>()
+        .set
+        .iter()
+        .filter(|k| pred(k))
+        .count()
+}
+
+#[test]
+fn caption_warns_once_and_is_not_placed() {
+    // A caption child is classified but deferred (D4): one warn, no
+    // override (its position stays Taffy-block).
+    let mut app = app();
+    let cap = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCaption)
+                .width_px(40.0)
+                .height_px(10.0),
+        ))
+        .id();
+    let cell = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(40.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let row = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(cell)
+        .id();
+    let _table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_children(&[cap, row])
+        .id();
+
+    app.update();
+    app.update(); // second frame must NOT add another warn
+
+    assert_eq!(
+        count_warns(&app, |k| matches!(
+            k,
+            LayoutWarnOnceKey::TableSubfeatureUnsupported(e) if *e == cap
+        )),
+        1,
+        "caption warns exactly once per (entity, session)",
+    );
+}
+
+#[test]
+fn ragged_rows_warn_span_unsupported_once_per_table() {
+    // Row 0 has 2 cells, row 1 has 1 → ragged (span-faking). One
+    // TableSpanUnsupported warn for the table entity.
+    let mut app = app();
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let c = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let row0 = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_children(&[a, b])
+        .id();
+    let row1 = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(c)
+        .id();
+    let table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_children(&[row0, row1])
+        .id();
+
+    app.update();
+    app.update();
+
+    assert_eq!(
+        count_warns(&app, |k| matches!(
+            k,
+            LayoutWarnOnceKey::TableSpanUnsupported(e) if *e == table
+        )),
+        1,
+        "ragged table warns once per (table, session)",
+    );
+}
+
+#[test]
+fn well_formed_table_emits_no_warns() {
+    let mut app = app();
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let row = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_children(&[a, b])
+        .id();
+    let _table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_child(row)
+        .id();
+
+    app.update();
+
+    assert_eq!(
+        count_warns(&app, |k| matches!(
+            k,
+            LayoutWarnOnceKey::TableSpanUnsupported(_)
+                | LayoutWarnOnceKey::TableSubfeatureUnsupported(_)
+        )),
+        0,
+        "a uniform, caption-free table produces no deferral warns",
     );
 }
