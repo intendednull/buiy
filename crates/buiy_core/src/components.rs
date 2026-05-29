@@ -60,6 +60,28 @@ impl Default for ResolvedTransform {
     }
 }
 
+/// Private render handoff for stacking: the paint order of every
+/// descendant within this entity's stacking context, written by
+/// sub-pass 6f (`stacking_context`) on each entity that forms a
+/// stacking context (and removed when it stops forming one). Mirrors
+/// how `ResolvedTransform` is the render handoff for the composed
+/// matrix. Not author-set, but reflectable so devtools can inspect it.
+///
+/// `painters_z` is sorted per spec § 2.1: negative-`z_index` first,
+/// then in-flow non-positioned (document order), then floats (always
+/// empty in Buiy), then in-flow positioned with `z_index: Auto`
+/// (document order), then positive `z_index`. Nested stacking contexts
+/// appear as a single entry sorted by their own `z_index`. Top-layer
+/// entities (spec § 4) are excluded from their parent context and
+/// appended to the root context.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 2.1, § 5.
+#[derive(Component, Reflect, Clone, Default, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct StackingContext {
+    pub painters_z: Vec<Entity>,
+}
+
 /// Visual surface: theme-token references and corner radius for the
 /// Phase 0/1 render pipeline. Optional — entities without `Visual` are
 /// skipped by the render extract.
@@ -91,5 +113,10 @@ mod tests {
     #[test]
     fn resolved_transform_default_is_identity() {
         assert_eq!(ResolvedTransform::default().matrix, Mat4::IDENTITY);
+    }
+
+    #[test]
+    fn stacking_context_default_is_empty() {
+        assert!(StackingContext::default().painters_z.is_empty());
     }
 }
