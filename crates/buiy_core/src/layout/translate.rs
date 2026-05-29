@@ -501,9 +501,13 @@ fn map_box_sizing(b: BoxSizing) -> taffy::BoxSizing {
 
 fn map_position_kind(k: PositionKind) -> taffy::Position {
     use PositionKind::*;
-    // Phase 1: Static / Relative / Absolute pass through; Fixed translates
-    // to Absolute and Sticky translates to Relative. Phase 7 (sticky) and
-    // Phase 8 (top-layer / fixed-as-viewport) wire the real semantics.
+    // Static / Relative / Sticky map to Taffy Relative (Sticky offsets
+    // are applied in sub-pass 6a). Absolute and Fixed both emit
+    // taffy::Position::Absolute (spec § 2.2). The Absolute-vs-Fixed
+    // difference is the *containing block*, which is the Taffy parent
+    // edge, not the emitted Position: `sync_children_for_entity`
+    // re-parents Fixed nodes onto the layout root so Taffy resolves
+    // them against the root's content box (spec § 2.1 Fixed row).
     match k {
         Static | Relative | Sticky => taffy::Position::Relative,
         Absolute | Fixed => taffy::Position::Absolute,
@@ -1158,6 +1162,47 @@ mod tests {
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(10.0));
         assert_eq!(taffy.inset.left, taffy::LengthPercentageAuto::length(20.0));
+    }
+
+    #[test]
+    fn translate_position_fixed_emits_absolute_with_inset() {
+        // Fixed resolves against the layout root (spec § 2.1); at the Taffy
+        // emission layer it is Absolute (spec § 2.2). The root containing
+        // block is achieved by re-parenting in sync_children (not here).
+        let display = Display::default();
+        let bm = BoxModel::default();
+        let position = Position {
+            kind: PositionKind::Fixed,
+            inset: crate::layout::types::Inset {
+                top: Sizing::Length(Length::Px(5.0)),
+                left: Sizing::Length(Length::Px(7.0)),
+                ..Default::default()
+            },
+        };
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            containment: &Containment::default(),
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
+        });
+        assert_eq!(taffy.position, taffy::Position::Absolute);
+        assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(5.0));
+        assert_eq!(taffy.inset.left, taffy::LengthPercentageAuto::length(7.0));
     }
 
     #[test]
