@@ -45,6 +45,40 @@ use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
 #[derive(Resource, Default, Debug)]
 pub struct CqReRunRequested(pub bool);
 
+/// Dirty set for the multi-level container-query geometric cascade
+/// (Phase 14). Populated by step 8 (`cq_descendant_invalidate`) with the
+/// descendants of every query container whose `ResolvedLayout` changed
+/// this frame; drained by step 9 (`cq_descendant_rerun`), which
+/// re-translates exactly these entities so their `Length::Cq*` re-resolves
+/// against the new ancestor size in the same frame. Cleared at the top of
+/// step 8 each frame, so it never accumulates across frames (D1/D4).
+///
+/// Private cross-pass hand-off (a resource, not an author-set component):
+/// follow-ups.md "Descendant invalidation on ancestor-resolved-size
+/// changes" option (b). Empty in steady state.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3, § 1.5.
+// `init_resource` construction lands in T3 (`mod.rs`); until then this
+// resource is defined-but-never-constructed, so the dead-code lint is
+// suppressed for this interim commit.
+#[allow(dead_code)]
+#[derive(Resource, Default, Debug)]
+pub struct ContainerSizeDirty(pub std::collections::HashSet<Entity>);
+
+/// Re-run request flag for the Phase-14 descendant invalidation, mirroring
+/// `CqReRunRequested` (Phase 5 step 5). Set `true` by step 8 when
+/// `ContainerSizeDirty` is non-empty; observed + cleared at the top of
+/// step 9 (`cq_descendant_rerun`). Capped at one re-run per frame (D4):
+/// deeper cascade levels settle on subsequent frames.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3.
+// `init_resource` construction lands in T4 (`mod.rs`); until then this
+// resource is defined-but-never-constructed, so the dead-code lint is
+// suppressed for this interim commit.
+#[allow(dead_code)]
+#[derive(Resource, Default, Debug)]
+pub struct CqDescendantReRunRequested(pub bool);
+
 /// Resource — per-frame counter of how many times Taffy's
 /// `compute_layout` was invoked. Reset to zero at the start of each
 /// `taffy_compute` invocation (i.e. once per frame), then bumped
@@ -3720,6 +3754,16 @@ mod tests {
     use crate::layout::types::{ContainFlags, Isolation, PositionKind, TopLayer, ZIndex};
 
     use crate::layout::components::Display;
+
+    #[test]
+    fn container_size_dirty_default_is_empty() {
+        assert!(ContainerSizeDirty::default().0.is_empty());
+    }
+
+    #[test]
+    fn cq_descendant_rerun_requested_default_is_false() {
+        assert!(!CqDescendantReRunRequested::default().0);
+    }
 
     #[test]
     fn table_part_classifies_every_family_member() {
