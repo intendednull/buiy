@@ -12,7 +12,7 @@
 **Tech Stack:** Bevy 0.18 (`bevy::prelude::{Children, ChildOf, Node, Query, Commands, Res, ResMut, NonSend, NonSendMut, With, Changed, Or, Entity}`, `bevy::math::Vec2`). `std::collections::{HashSet, HashMap}` (no `bevy::utils::*`, per Phase 6/7/8/9 precedent). No new external dependency. Reuses the Phase-5 `translate_one_entity` per-entity translation helper, the `ContainerSnapshot` index, and the `cq_activate` / `cq_flip_check` systems.
 
 **Date:** 2026-05-29
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md`](../specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md) § 1.3 (same-frame re-layout / `CqFlipReRun` analogue), § 1.5 (the `A`→`B`→`C` transitive-cascade test surface) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (system pipeline). Chartered by [`plans/follow-ups.md`](follow-ups.md) "Descendant invalidation on ancestor-resolved-size changes".
 
 ---

@@ -9,11 +9,30 @@ and a sketch of the implementation direction. When a follow-up gets
 chartered into its own phase or plan, move the entry to that plan and link
 back here.
 
-## Descendant invalidation on ancestor-resolved-size changes
+## Descendant invalidation on ancestor-resolved-size changes — LANDED
 
 **Originated:** Phase 5 (container queries), Task 10 implementer finding +
 reviewer mandate. Plan `docs/plans/2026-05-21-buiy-layout-container-queries.md`
 v3 revision documents the gap.
+
+**Status:** **Landed** in Phase 14
+(`docs/plans/2026-05-29-buiy-layout-descendant-invalidation.md`). The multi-level
+geometric cascade is closed by two new pipeline steps after `write_resolved_layout`
+(step 7): step 8 `cq_descendant_invalidate` reads `Changed<ResolvedLayout>` on query
+containers (`Container { container_type != Normal }`), walks each changed container's
+`Children` subtree, and collects the descendants into a private
+`ContainerSizeDirty(HashSet<Entity>)` resource (sketch option **(b)** — the dirty-set
+resource, not the `sync_styles`-filter marker of option (a)); step 9
+`cq_descendant_rerun` (analogous to `cq_flip_rerun`) drains that set, re-translates
+exactly those descendants so their `Length::Cq*` re-resolves against the new ancestor
+size, recomputes Taffy, re-writes `ResolvedLayout`, and re-evaluates container queries
+inline — so a `Cqw`-sized intermediate `B` and a rule-bearing descendant `C` both
+catch up the **same frame** `A` resizes. Capped at one re-run per frame (the
+`CqDescendantReRunRequested` flag is cleared at the top, mirroring `cq_flip_rerun`'s
+`CqReRunRequested` discipline), so the 2×-Taffy ceiling holds and a deeper
+`A`→`B`→`C`→`D` chain settles one further level per frame. The negative regression
+test `cq_transitive_cascade_is_one_frame_stale` was flipped to the positive
+`cq_transitive_cascade_catches_up_in_frame`.
 
 **Symptom:** when an ancestor `A`'s `ResolvedLayout` changes (e.g., a
 parent container is resized) and a `Cqw`-sized intermediate `B` sits

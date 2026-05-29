@@ -70,9 +70,16 @@ The activation algorithm runs in two pipeline steps ([architecture.md § 3](arch
 
 **Step 5 — `CqFlipReRun`:**
 
-7. If step 4 signaled re-layout, a dedicated step-5 system (`cq_flip_rerun`) re-runs the *inner work* of `SyncStyles` + `TaffyCompute` **once**, gated on `CqReRunRequested`. This is a single system holding the union of those two steps' params — not a literal re-invocation of steps 1 and 3 in place. Step 4 does not re-run; transitive flips wait until next frame.
+7. If step 4 signaled re-layout, a dedicated step-5 system (`cq_flip_rerun`) re-runs the *inner work* of `SyncStyles` + `TaffyCompute` **once**, gated on `CqReRunRequested`. This is a single system holding the union of those two steps' params — not a literal re-invocation of steps 1 and 3 in place. Step 4 does not re-run.
 
 This is the same-frame re-layout strategy ([README § 2 pillar 4](README.md#2-architectural-pillars-one-line-summaries)). Cost ceiling: 2× Taffy on activation-flip frames, 1× otherwise.
+
+**Step 8 — `CqDescendantInvalidate`** (after `WriteResolvedLayout`, step 7) and **Step 9 — `CqDescendantReRun`** extend the same-frame settle to the *multi-level geometric* cascade. When a query container `A`'s `ResolvedLayout` changes, a `Cqw`-sized intermediate `B` between `A` and a rule-bearing descendant `C` has no `Changed<*>` bit of its own, so steps 1–5 alone never re-translate `B` and `C`'s rule never re-evaluates. Phase 14 closes this:
+
+8. `cq_descendant_invalidate` (step 8) reads `Changed<ResolvedLayout>` on query containers (`Container { container_type != Normal }`), walks each changed container's `Children` subtree, and collects the descendants into a private `ContainerSizeDirty(HashSet<Entity>)` resource — setting `CqDescendantReRunRequested(true)` when non-empty. (Bevy ships no "ancestor's `T` changed" filter, so the cascade is found by reading the container that *did* change and walking **down**.)
+9. `cq_descendant_rerun` (step 9, gated on `CqDescendantReRunRequested`, analogous to `cq_flip_rerun`) drains the dirty set: it re-translates exactly those descendants so their `Length::Cq*` re-resolves against `A`'s new size, recomputes Taffy, re-writes `ResolvedLayout`, and re-evaluates every `ContainerQuery` inline (reusing the same `resolve_nearest_container` / `evaluate_conditions` pieces `cq_activate` uses) — so `B` re-resolves and `C` flips its `ContainerQueryActive` / `ContainerQueryInactive` marker the **same frame** `A` resizes.
+
+The descendant re-run is likewise capped at **one re-run per frame** (`CqDescendantReRunRequested` is cleared at the top), preserving the 2×-Taffy ceiling. A deeper `A`→`B`→`C`→`D` chain therefore settles one further level per frame: the *direct* intermediate is same-frame; levels beyond it remain eventually-consistent over subsequent frames (next frame's step 8 sees the now-changed `ResolvedLayout` of the next level and seeds it). Per-fixpoint looping within one frame is intentionally **not** done — bounded per-frame re-layout is the loop-breaker.
 
 ### 1.4 Container units
 
@@ -95,7 +102,7 @@ If no queried ancestor exists, container units fall back to viewport units (`cqw
 
 - **Activation flip** — fixture with one `@container (min-width: 600px)` rule; resize container from 500 → 700 in two frames; assert this frame's `ResolvedLayout` reflects the activated rule.
 - **Same-frame re-layout cap** — fixture where activating a rule flips the rule's container's size enough to *de*activate it; assert exactly 2× Taffy passes and the result is the second pass's output (not oscillation).
-- **Transitive cascade is one-frame stale** — fixture A→B→C where activation of A's rule changes B's size (which would flip B's rule); assert frame N applies A's activation, frame N+1 applies B's.
+- **Transitive cascade catches up in-frame (direct intermediate)** — fixture A→B→C where A is a query container, B is `Cqw`-sized off A, and C bears a `ContainerQuery` against B: widening A makes B re-resolve its `Cqw` *and* C flip its marker in the **same frame** A resizes, via the step-8/step-9 descendant re-run (Phase 14). The regression test `cq_transitive_cascade_is_one_frame_stale` was flipped to the positive `cq_transitive_cascade_catches_up_in_frame`. Still bounded to one level per frame: in a deeper A→B→C→D chain, the level *beyond* the direct intermediate settles on the following frame (next-frame step 8 seeds it) — the eventual-consistency contract holds past the first hop.
 - **Container-unit resolution** — fixture with a 800px-wide container and a child `width: Cqw(50)`; assert child width = 400px.
 - **Fallback to viewport units** — fixture with no queried ancestor; child `width: Cqw(50)` resolves against the viewport (window) width — e.g. 50% of a 1000px window = 500px — with one `warn!`.
 
