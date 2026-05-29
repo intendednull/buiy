@@ -176,7 +176,13 @@ impl Plugin for LayoutPlugin {
             .register_type::<ContainFlags>()
             .register_type::<ContentVisibility>()
             .register_type::<WillChange>()
-            .register_type::<WillChangeProperty>();
+            .register_type::<WillChangeProperty>()
+            // Phase 9 — stacking + top layer.
+            .register_type::<Stacking>()
+            .register_type::<ZIndex>()
+            .register_type::<Isolation>()
+            .register_type::<TopLayer>()
+            .register_type::<crate::components::StackingContext>();
 
         pipeline::configure_pipeline(app);
 

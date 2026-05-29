@@ -435,3 +435,22 @@ fn plain_child_gets_no_stacking_context() {
         "a plain in-flow child forms no context"
     );
 }
+
+#[test]
+fn phase9_types_are_registered() {
+    let mut app = stacking_app();
+    app.update();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    for name in [
+        "buiy_core::layout::types::ZIndex",
+        "buiy_core::layout::types::Isolation",
+        "buiy_core::layout::types::TopLayer",
+        "buiy_core::layout::components::Stacking",
+        "buiy_core::components::StackingContext",
+    ] {
+        assert!(
+            registry.get_with_type_path(name).is_some(),
+            "type not registered: {name}",
+        );
+    }
+}

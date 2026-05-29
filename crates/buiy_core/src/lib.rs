@@ -14,7 +14,7 @@ pub mod render;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
-pub use components::{Node, ResolvedLayout, ResolvedTransform, Visual};
+pub use components::{Node, ResolvedLayout, ResolvedTransform, StackingContext, Visual};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::{
     AlignContent, AlignItems, Anchor, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
