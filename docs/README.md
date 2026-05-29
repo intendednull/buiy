@@ -64,6 +64,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Buiy layout container queries](plans/2026-05-21-buiy-layout-container-queries.md) — Phase 5: `Container` + `ContainerQuery`, `Length::Cq{w,h,i,b,min,max}`, `cq_activate` / `cq_flip_check` / `cq_flip_rerun` pipeline systems, same-frame re-layout capped at 2× Taffy. `[landed]`
 - [Buiy layout anchor positioning](plans/2026-05-21-buiy-layout-anchor-positioning.md) — Phase 6: `Anchor` component + `AnchorNameRegistry` observer-maintained resource, `anchor_resolution` sub-pass 6d, Kahn topological sort with deterministic cycle-edge dropping, per-frame warn dedup. `[landed]`
 - [Buiy layout sticky/table/multicol](plans/2026-05-22-buiy-layout-sticky-table-multicol.md) — Phase 7: `sticky_offset` full impl (sub-pass 6a), `table_layout` and `multicol_pack` warn-once stubs (sub-passes 6b/6c), `MultiColumn` component, refactor of `AnchorOverrides` → `PostTaffyPositionOverrides` shared across all four sub-passes. `[landed]`
+- [Buiy layout transforms + containment](plans/2026-05-28-buiy-layout-transforms-containment.md) — Phase 8: `UiTransform` + `Translate`/`Rotate`/`Scale` longhands + `compose_transform` (M = T·R·S·M_transform), `transform_composition` sub-pass 6e writing the private `ResolvedTransform` render handoff, `Containment` (contain flags / content-visibility / will-change) with SIZE-containment zeroing. Stacking/top-layer deferred to Phase 9 (6f reads the matrix). `[active]`
 
 ### Docs infrastructure
 
