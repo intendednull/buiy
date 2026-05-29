@@ -1006,6 +1006,76 @@ pub enum LayoutWarnOnceKey {
     StickyCqDeferred(Entity),
 }
 
+// ============================================================
+// Phase 8 — transform value types (transforms-and-containment.md § 1)
+// ============================================================
+
+/// The transform matrix variant for `UiTransform`. `None` is identity.
+/// `Compose([A, B, …])` is the matrix product `A · B · …` (outermost
+/// first); the rightmost/innermost entry transforms a child point
+/// first. See [`UiTransform`] composition convention.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
+#[derive(Reflect, Clone, Default, PartialEq, Debug)]
+pub enum TransformMatrix {
+    /// Identity transform.
+    #[default]
+    None,
+    /// 3D translate.
+    Translate(Length, Length, Length),
+    /// Arbitrary 3D rotation.
+    Rotate(Quat),
+    /// Per-axis scale.
+    Scale(f32, f32, f32),
+    /// Skew along x, y in radians.
+    Skew(f32, f32),
+    /// Explicit 4×4 matrix.
+    Matrix(Mat4),
+    /// Matrix product `A · B · …` (outermost first).
+    Compose(Vec<TransformMatrix>),
+}
+
+/// CSS `transform-origin`. Default is `50% 50% 0` (hand-written —
+/// `#[derive(Default)]` would give all-zero `Length`s, which is wrong).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
+#[derive(Reflect, Clone, Copy, PartialEq, Debug)]
+pub struct TransformOrigin {
+    pub x: Length,
+    pub y: Length,
+    pub z: Length,
+}
+
+impl Default for TransformOrigin {
+    fn default() -> Self {
+        Self {
+            x: Length::Percent(50.0),
+            y: Length::Percent(50.0),
+            z: Length::ZERO,
+        }
+    }
+}
+
+/// CSS `transform-style`. Render-side concern; layout stores.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 4.
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum TransformStyle {
+    #[default]
+    Flat,
+    Preserve3d,
+}
+
+/// CSS `backface-visibility`. Render-side concern; layout stores.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 4.
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum BackfaceVisibility {
+    #[default]
+    Visible,
+    Hidden,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1015,6 +1085,25 @@ mod tests {
         assert_eq!(Length::px(10.0), Length::Px(10.0));
         assert_eq!(Length::percent(50.0), Length::Percent(50.0));
         assert_eq!(Length::ZERO, Length::Px(0.0));
+    }
+
+    #[test]
+    fn transform_matrix_default_is_none() {
+        assert_eq!(TransformMatrix::default(), TransformMatrix::None);
+    }
+
+    #[test]
+    fn transform_origin_default_is_50_50_0() {
+        let o = TransformOrigin::default();
+        assert_eq!(o.x, Length::Percent(50.0));
+        assert_eq!(o.y, Length::Percent(50.0));
+        assert_eq!(o.z, Length::ZERO);
+    }
+
+    #[test]
+    fn transform_style_and_backface_defaults() {
+        assert_eq!(TransformStyle::default(), TransformStyle::Flat);
+        assert_eq!(BackfaceVisibility::default(), BackfaceVisibility::Visible);
     }
 
     #[test]
