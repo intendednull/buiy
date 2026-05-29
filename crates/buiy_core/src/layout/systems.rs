@@ -2468,6 +2468,50 @@ pub(super) fn forms_stacking_context(
     false
 }
 
+/// The spec § 2.1 paint tiers, as the primary sort rank. Document order
+/// (the `Children`-iteration order of the input `Vec`) breaks ties
+/// within a tier via a STABLE sort.
+///
+/// Returns `(tier, z)`:
+/// - tier 0, z = the negative z   → negative `z_index` (positioned), lowest first
+/// - tier 1, z = 0                → in-flow non-positioned (document order)
+/// - tier 2, z = 0                → in-flow positioned, `z_index: Auto` (document order)
+/// - tier 3, z = the positive z   → positive `z_index` (positioned), lowest first
+///
+/// (Floats — spec tier between non-positioned and auto-positioned — are
+/// always empty in Buiy, so they are omitted; the four live tiers keep
+/// the spec's relative order.) `z_index` on a `PositionKind::Static`
+/// entity is IGNORED (CSS quirk, spec § 3): a static element stays in
+/// tier 1 regardless of its `z_index`.
+///
+/// Carries `#[allow(dead_code)]` because the `stacking_context` sub-pass
+/// (6f) that calls this classifier lands in Task 8; until then it is
+/// defined + unit-tested but not yet driven from a system (mirrors
+/// `forms_stacking_context` above).
+#[allow(dead_code)]
+pub(super) fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind) -> (u8, i32) {
+    let positioned = !matches!(position_kind, PositionKind::Static);
+    let z = match stacking.map(|s| s.z_index) {
+        Some(ZIndex::Layer(n)) if positioned => Some(n),
+        _ => None, // Auto, or static (z ignored)
+    };
+    match z {
+        Some(n) if n < 0 => (0, n),
+        None if !positioned => (1, 0),
+        None => (2, 0), // positioned + auto z
+        Some(n) /* n >= 0 */ => {
+            if n == 0 {
+                // Positioned with explicit z-index 0 sits with the
+                // positive tier per CSS (0 is "explicit", paints above
+                // auto-positioned). Spec § 3: "0 is default for explicit".
+                (3, 0)
+            } else {
+                (3, n)
+            }
+        }
+    }
+}
+
 /// Phase 8 — sub-pass 6e of `BuiyLayoutStep::PostTaffyOverrides`.
 /// Composes each entity's `UiTransform` + optional `Translate` /
 /// `Rotate` / `Scale` longhands into the private `ResolvedTransform`
@@ -2687,6 +2731,45 @@ mod tests {
     #[test]
     fn top_layer_activation_default_is_empty() {
         assert!(TopLayerActivation::default().order.is_empty());
+    }
+
+    #[test]
+    fn paint_key_negative_z_sorts_first() {
+        // Negative z-index → tier 0; in-flow non-positioned → tier 1;
+        // auto-positioned → tier 3; positive z → tier 4.
+        let neg = stk(ZIndex::Layer(-1), Isolation::Auto);
+        let pos = stk(ZIndex::Layer(2), Isolation::Auto);
+        let auto = stk(ZIndex::Auto, Isolation::Auto);
+        // positioned entities
+        let kn = paint_key(Some(&neg), PositionKind::Relative);
+        let kp = paint_key(Some(&pos), PositionKind::Relative);
+        let ka = paint_key(Some(&auto), PositionKind::Relative);
+        let kf = paint_key(None, PositionKind::Static); // in-flow non-positioned
+        assert!(kn < kf, "negative z paints behind in-flow");
+        assert!(kf < ka, "in-flow paints behind auto-positioned");
+        assert!(ka < kp, "auto-positioned paints behind positive z");
+    }
+
+    #[test]
+    fn paint_key_orders_positive_z_ascending() {
+        let z1 = stk(ZIndex::Layer(1), Isolation::Auto);
+        let z2 = stk(ZIndex::Layer(2), Isolation::Auto);
+        assert!(
+            paint_key(Some(&z1), PositionKind::Relative)
+                < paint_key(Some(&z2), PositionKind::Relative)
+        );
+    }
+
+    #[test]
+    fn paint_key_static_z_index_is_ignored() {
+        // z-index on a static element does not lift it out of in-flow tier.
+        let z5 = stk(ZIndex::Layer(5), Isolation::Auto);
+        let kf = paint_key(None, PositionKind::Static);
+        assert_eq!(
+            paint_key(Some(&z5), PositionKind::Static).0,
+            kf.0,
+            "static z-index stays in the in-flow tier"
+        );
     }
 
     #[test]
