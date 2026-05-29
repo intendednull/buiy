@@ -683,6 +683,94 @@ pub(super) fn table_part(display: &Display) -> Option<TablePart> {
     }
 }
 
+/// Resolve per-column widths for a table from each row's cell widths,
+/// via a throwaway synthetic Taffy flex tree (spec § 1.2 step 2). The
+/// synthetic tree has one flex-row container per table-row, each
+/// holding one fixed-width leaf per cell, all rows under a synthetic
+/// flex-column root; one `compute_layout` resolves the cells, and
+/// column `c`'s width is the max resolved width of cell `c` across
+/// rows. Column count = the widest row's cell count; rows shorter than
+/// that contribute nothing to the trailing columns (ragged-row case,
+/// plan D8). The synthetic `TaffyTree` is local and dropped on return
+/// — the shared `LayoutTree` is never touched.
+///
+/// Pure (no Bevy queries / no shared state). Unit-tested in `mod tests`.
+///
+/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
+/// the consuming `table_layout` rewrite lands in a later task (plan T4).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
+#[allow(dead_code)]
+pub(super) fn resolve_column_widths(rows: &[Vec<f32>]) -> Vec<f32> {
+    let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    if col_count == 0 {
+        return Vec::new();
+    }
+
+    let mut tree: taffy::TaffyTree<()> = taffy::TaffyTree::new();
+    let mut row_nodes: Vec<taffy::NodeId> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut cell_nodes: Vec<taffy::NodeId> = Vec::with_capacity(row.len());
+        for &w in row {
+            // Fixed-size leaf: the cell's Taffy-block-computed width.
+            let leaf = tree
+                .new_leaf(taffy::Style {
+                    size: taffy::Size {
+                        width: taffy::Dimension::length(w),
+                        height: taffy::Dimension::length(0.0),
+                    },
+                    flex_grow: 0.0,
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .expect("synthetic table column leaf");
+            cell_nodes.push(leaf);
+        }
+        let row_node = tree
+            .new_with_children(
+                taffy::Style {
+                    display: taffy::Display::Flex,
+                    flex_direction: taffy::FlexDirection::Row,
+                    ..Default::default()
+                },
+                &cell_nodes,
+            )
+            .expect("synthetic table row");
+        row_nodes.push(row_node);
+    }
+    let root = tree
+        .new_with_children(
+            taffy::Style {
+                display: taffy::Display::Flex,
+                flex_direction: taffy::FlexDirection::Column,
+                ..Default::default()
+            },
+            &row_nodes,
+        )
+        .expect("synthetic table root");
+    // MaxContent so each column sizes to its widest cell, no shrink.
+    tree.compute_layout(
+        root,
+        taffy::Size {
+            width: taffy::AvailableSpace::MaxContent,
+            height: taffy::AvailableSpace::MaxContent,
+        },
+    )
+    .expect("synthetic table layout");
+
+    let mut widths = vec![0.0f32; col_count];
+    for (ri, &row_node) in row_nodes.iter().enumerate() {
+        for (ci, width) in widths.iter_mut().enumerate().take(rows[ri].len()) {
+            if let Ok(child) = tree.child_at_index(row_node, ci)
+                && let Ok(layout) = tree.layout(child)
+            {
+                *width = width.max(layout.size.width);
+            }
+        }
+    }
+    widths
+}
+
 /// Sub-pass 6b — table layout stub.
 ///
 /// Spec § 1.2: "v1 ships only the API surface and the fallback path;
@@ -3222,6 +3310,43 @@ mod tests {
             table_part(&Display::Flex(crate::layout::types::FlexAxis::Row)),
             None
         );
+    }
+
+    #[test]
+    fn resolve_column_widths_single_row_passes_cell_widths_through() {
+        // One row, three cells 30/50/20 → columns resolve to 30/50/20.
+        let cols = resolve_column_widths(&[vec![30.0, 50.0, 20.0]]);
+        assert_eq!(cols.len(), 3);
+        assert!((cols[0] - 30.0).abs() < 0.5);
+        assert!((cols[1] - 50.0).abs() < 0.5);
+        assert!((cols[2] - 20.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn resolve_column_widths_takes_per_column_max_across_rows() {
+        // Row A: 30/50  Row B: 40/20 → columns = max(30,40)=40, max(50,20)=50.
+        let cols = resolve_column_widths(&[vec![30.0, 50.0], vec![40.0, 20.0]]);
+        assert_eq!(cols.len(), 2);
+        assert!((cols[0] - 40.0).abs() < 0.5, "col0 = max(30,40) = 40");
+        assert!((cols[1] - 50.0).abs() < 0.5, "col1 = max(50,20) = 50");
+    }
+
+    #[test]
+    fn resolve_column_widths_ragged_rows_use_max_row_length() {
+        // Row A has 3 cells, Row B has 1 → 3 columns; the missing cells
+        // contribute 0 width (D8 ragged-row handling).
+        let cols = resolve_column_widths(&[vec![10.0, 20.0, 30.0], vec![15.0]]);
+        assert_eq!(cols.len(), 3, "column count = widest row");
+        assert!((cols[0] - 15.0).abs() < 0.5, "col0 = max(10,15) = 15");
+        assert!((cols[1] - 20.0).abs() < 0.5);
+        assert!((cols[2] - 30.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn resolve_column_widths_empty_table_is_empty() {
+        assert!(resolve_column_widths(&[]).is_empty());
+        // A table with rows but no cells → zero columns.
+        assert!(resolve_column_widths(&[vec![], vec![]]).is_empty());
     }
 
     fn stk(z: ZIndex, iso: Isolation) -> Stacking {
