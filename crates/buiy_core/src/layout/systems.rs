@@ -636,6 +636,53 @@ pub(super) fn sticky_offset(
     }
 }
 
+/// The role an entity plays in a CSS table, derived from its
+/// `Display` (spec § 1, display-and-positioning.md). The four
+/// structural roles (`Table` / `RowGroup` / `Row` / `Cell`) are laid
+/// out by sub-pass 6b; `Caption` / `Column` / `ColumnGroup` are
+/// classified but deferred-with-warn in v1 (plan D4).
+///
+/// Carries `#[allow(dead_code)]` because the `table_layout` system
+/// that consumes this classifier is rewritten to use it in a later
+/// task (plan T4); until then the helper is exercised only by its
+/// unit tests. Mirrors the staged `clear_warned_once_on_exit`
+/// precedent above.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum TablePart {
+    Table,
+    /// `table-row-group` / `table-header-group` / `table-footer-group`
+    /// — all three collapse to `RowGroup`; header/footer reorder is a
+    /// v1.x follow-up (D5).
+    RowGroup,
+    Row,
+    Cell,
+    Caption,
+    Column,
+    ColumnGroup,
+}
+
+/// Classify a `Display` into its `TablePart` role, or `None` if the
+/// entity is not a table-family member.
+///
+/// Carries `#[allow(dead_code)]` for the same reason as `TablePart`:
+/// the consuming system rewrite lands in a later task (plan T4).
+#[allow(dead_code)]
+pub(super) fn table_part(display: &Display) -> Option<TablePart> {
+    match display {
+        Display::Table => Some(TablePart::Table),
+        Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup => {
+            Some(TablePart::RowGroup)
+        }
+        Display::TableRow => Some(TablePart::Row),
+        Display::TableCell => Some(TablePart::Cell),
+        Display::TableCaption => Some(TablePart::Caption),
+        Display::TableColumn => Some(TablePart::Column),
+        Display::TableColumnGroup => Some(TablePart::ColumnGroup),
+        _ => None,
+    }
+}
+
 /// Sub-pass 6b — table layout stub.
 ///
 /// Spec § 1.2: "v1 ships only the API surface and the fallback path;
@@ -3139,6 +3186,43 @@ mod tests {
     use super::*;
     use crate::layout::components::{Containment, Position, Stacking};
     use crate::layout::types::{ContainFlags, Isolation, PositionKind, TopLayer, ZIndex};
+
+    use crate::layout::components::Display;
+
+    #[test]
+    fn table_part_classifies_every_family_member() {
+        assert_eq!(table_part(&Display::Table), Some(TablePart::Table));
+        assert_eq!(
+            table_part(&Display::TableRowGroup),
+            Some(TablePart::RowGroup)
+        );
+        assert_eq!(
+            table_part(&Display::TableHeaderGroup),
+            Some(TablePart::RowGroup)
+        );
+        assert_eq!(
+            table_part(&Display::TableFooterGroup),
+            Some(TablePart::RowGroup)
+        );
+        assert_eq!(table_part(&Display::TableRow), Some(TablePart::Row));
+        assert_eq!(table_part(&Display::TableCell), Some(TablePart::Cell));
+        assert_eq!(table_part(&Display::TableCaption), Some(TablePart::Caption));
+        assert_eq!(table_part(&Display::TableColumn), Some(TablePart::Column));
+        assert_eq!(
+            table_part(&Display::TableColumnGroup),
+            Some(TablePart::ColumnGroup)
+        );
+    }
+
+    #[test]
+    fn table_part_is_none_for_non_table_display() {
+        assert_eq!(table_part(&Display::Block), None);
+        assert_eq!(table_part(&Display::None), None);
+        assert_eq!(
+            table_part(&Display::Flex(crate::layout::types::FlexAxis::Row)),
+            None
+        );
+    }
 
     fn stk(z: ZIndex, iso: Isolation) -> Stacking {
         Stacking {
