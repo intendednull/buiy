@@ -1,0 +1,86 @@
+**Date:** 2026-05-22
+**Status:** archived
+**Subject:** sickle_ui — Validates / Avoid / Borrow decisions for Buiy
+
+# Lessons for Buiy
+
+This is the consult-this-when-designing file. The other files in this corpus are evidence; this file is the synthesis. Three sections — **Validates** (Buiy choices that sickle's experience confirms, often by negative example), **Avoid** (specific pitfalls + Buiy's mitigation), **Borrow** (concrete primitives worth adapting).
+
+## Top of file: one framing
+
+sickle_ui is the most thoroughly executed example of "third-party Bevy widget library that extends bevy_ui and ships in 75 days" in the ecosystem. It made its design choices competently within that frame, then died because the frame itself (extends-bevy_ui + solo-maintainer + free-time-bandwidth + Bevy-version-coupled) is structurally precarious. Most lessons below are not about sickle's mistakes per se — they are about *the failure modes the frame produces*. Buiy's foundation is largely a deliberate response to those failure modes.
+
+The **single most important sickle data point** is also the simplest: the maintainer wrote `"sickle_ui has been made obsolete by changes introduced in Bevy 0.15.0 and will not be publicly maintained."` That sentence, dated to Bevy 0.15 (released 2024-11-26, ~54 days after sickle 0.4.0), is the single best evidence that Buiy's "tracks latest Bevy stable" + "parallel-to-bevy_ui" policy combination is the right structural bet. The alternative is what happened to sickle.
+
+## Validates
+
+These Buiy design choices are confirmed by sickle's experience:
+
+- **Parallel-stack rationale (foundation README § 1.4).** sickle's pinning to Bevy 0.14 and the maintainer's stated reason for declaring obsolescence (Bevy 0.15's `RequiredComponents` PR #14791 invalidated the spawn-bundle pattern) demonstrate that any widget library tightly coupled to `bevy_ui`'s component model is on a treadmill where one minor's migration cost can exceed maintenance bandwidth. Buiy owns its own component model in `buiy_core`; `bevy_ui` component-model churn does not break Buiy's vocabulary.
+- **Tracks latest Bevy stable as a hard policy (foundation README § 1.5).** sickle is the canonical example of what happens when a library *doesn't* track: it ships once, falls behind one minor, gets declared obsolete. Buiy commits to migrating with each Bevy minor; sickle's death is the cost of not doing so.
+- **AccessKit-first / WCAG 2.2 AA floor (foundation README goal 2).** sickle ships zero a11y. No `AccessibilityNode`, no role mapping, no APG keyboard contracts. The absence is presented in the surviving-fork README as a feature gap, not a defining limitation — that framing is exactly what Buiy rejects. Treating a11y as foundation (not polish) is validated by sickle treating it as out-of-scope and producing a library that fails the productivity-app user base.
+- **Headless-behavior / styled-presentation split (foundation architecture.md § 2.3).** sickle conflated them into one library; `bevy_ui_widgets` + `bevy_feathers` later split them. The split is the structurally correct architecture; sickle is the negative example. Buiy's `buiy_widgets` (headless markers + events + APG keyboard contracts) vs `buiy_widgets_theme_*` (styled presentation) mirrors the split intentionally.
+- **Components-first / BSN-friendly authoring (foundation goal 3).** sickle's extension-trait DSL is the cleanest negative example of authoring-via-method-dispatch. BSN-as-data-format cannot statically reach trait-dispatched method calls; the entire `Ui<Widget>Ext::widget(args, closure)` family is BSN-hostile. Buiy commits to widgets-as-components from day 1 — `Button`, `Slider`, `Checkbox` are components, not method names.
+- **No mega-components, no private setters (foundation goal 3).** sickle's `DynamicStyle` is a single component carrying a `Vec<DynamicStyleAttribute>` constructed via builder methods — exactly the megacomponent shape Buiy's foundation rules out. Buiy's analog (when one is needed) decomposes into `BuiyStyleAttribute` entries with explicit per-attribute components, observable on insertion, public-fielded.
+- **Verifiable APG keyboard contracts (foundation media-and-widgets.md § 3.10).** sickle ships zero APG keyboard contracts. Every interactive widget would be an APG-keyboard test fixture in Buiy; sickle's absence is the precedent for treating them as optional, and Buiy declines that precedent.
+- **Single focus tree with `:focus-visible`, traps, restoration (foundation architecture.md § 2.3).** sickle has no focus model beyond `FluxInteraction::PointerEnter`. The absence is the canonical evidence for "focus is too important to leave to the widget library to invent." Buiy owns a single focus tree as a foundation primitive.
+- **Theme-as-asset, hot-reloadable (foundation architecture.md § 2.5).** sickle's `PseudoTheme::deferred(|s, t| { ... })` carries Rust closures inside the theme definition. Hot-reloading the closures is impossible; theme changes require recompiling the app. Buiy's theme-as-asset commitment (declarative + hot-reloadable) is partly a response to this kind of closure-carrying design.
+- **Verification pipeline as a CI gate (foundation verification.md).** sickle has no automated tests for visual regression, AccessKit tree shape, APG keyboard behavior, or theme variant output. Quality claims (the "Material Design 3 inspired theming") are unverifiable from outside the library. Buiy's verification pipeline (visual snapshot tests, AccessKit tree snapshot tests, APG keyboard fixture tests, theme variant tests) substitutes machine-testable claims for community-anecdote claims.
+
+## Avoid
+
+Pitfalls drawn from sickle's experience, with Buiy's mitigation.
+
+| Pitfall | Source | Buiy mitigation |
+|---|---|---|
+| **Extension-trait DSL for widget vocabulary** — `ui.button(...)`, `ui.column(|c| { ... })`, etc., dispatched through `Ui*Ext` traits. BSN-as-data-format cannot reach them; the prelude balloons to 200+ traits; IDE autocomplete becomes noise. | [`api.md` § "BSN-compat assessment"](api.md); [`critiques.md` § 3, § 4](critiques.md). | Components-first. Every Buiy widget is a component (`Button`, `Slider`, `Checkbox`, ...). Spawning is via BSN or `commands.spawn(Button::default())`, not via trait methods. Helper functions exist as sugar over component insertion, not as the primary surface. Foundation [architecture.md § 2.4](../../specs/2026-05-07-buiy-foundation/architecture.md). |
+| **Closure-carrying theme definitions** — `PseudoTheme::deferred(\|s, t\| { ... })` puts Rust closures inside theme construction. Themes cannot be hot-reloaded, cannot live in assets, cannot be authored by non-Rust contributors. | [`architecture.md` § "Theme<C>"](architecture.md); [`api.md` § "Theming"](api.md). | Theme-as-asset. Buiy themes are declarative files (BSN-style or analogous), hot-reloadable, asset-pipeline-managed. The closure escape hatch exists only for the small number of cases where dynamic computation is genuinely needed (e.g. a token value derived from screen DPI). Foundation [architecture.md § 2.5](../../specs/2026-05-07-buiy-foundation/architecture.md). |
+| **Solo maintainer with no funding model + no community contribution surface** — UmbraLuminosa shipped sickle alone, disabled GitHub Issues, never published a Discord channel, never produced a contributor guide. When the maintainer chose not to migrate to Bevy 0.15, no community could pick up the work. | [`distribution.md` § "Governance"](distribution.md). | Buiy's governance commitment in CLAUDE.md + foundation README is to maintain enough public documentation (specs, plans, reports, prior-art, contributor docs) that any contributor can pick up work without needing the original author's tribal knowledge. Issues stay open. Process discipline is the moat against bus-factor problems, not headcount. |
+| **No AccessKit integration / no APG keyboard contracts on any widget.** | [`widgets.md`](widgets.md); [`critiques.md` § 5, § 6](critiques.md). | A11y is foundation, not polish. Every Buiy widget ships with decomposed `A11yRole`, `A11yLabel`, `A11yStates`, `A11yRelations` components; every interactive widget has an APG keyboard contract verified by a CI fixture. Foundation goal 2; [architecture.md § 2.6](../../specs/2026-05-07-buiy-foundation/architecture.md); [accessibility.md](../../specs/2026-05-07-buiy-foundation/accessibility.md). |
+| **Tight coupling to bevy_ui's renderer and component model** — every sickle widget is a bevy_ui Node, every visual property is a bevy_ui component. The library inherits every bevy_ui renderer cap (non-rect clipping, no backdrop-filter, no mix-blend-mode, no true top layer) and every bevy_ui component-model migration becomes a sickle migration. | [`architecture.md`](architecture.md); [`critiques.md` § 2, § 8](critiques.md). | Parallel stack. Buiy owns its render pipeline + component model + layout integration. bevy_ui evolution does not propagate into Buiy as forced migrations. Foundation [README § 1.4](../../specs/2026-05-07-buiy-foundation/README.md); [architecture.md § 2.3](../../specs/2026-05-07-buiy-foundation/architecture.md). |
+| **Megacomponent style attributes** — `DynamicStyle` is one component carrying a `Vec<DynamicStyleAttribute>` constructed via builder methods. BSN cannot patch into it; multiple layered BSN templates cannot combine their style opinions without rewriting the whole vector. | [`architecture.md` § "DynamicStyle"](architecture.md); [`../bevy-ui/lessons.md` § Avoid "Megacomponents"](../bevy-ui/lessons.md). | Decompose. When Buiy needs state-on-style equivalent, the per-attribute carriers are separate components (`BuiyHoverBackground(Color)`, `BuiyFocusOutline(...)`) rather than a single style-vector. The engine system resolves them; the storage is decomposed. |
+| **No verification (no visual regression, no AccessKit snapshot, no keyboard contract tests)** — sickle's quality claims rest on README prose and the simple_editor example. | [`critiques.md` § 9](critiques.md). | Verification pipeline gates every machine-testable claim. Foundation [verification.md](../../specs/2026-05-07-buiy-foundation/verification.md). |
+| **Deleting the upstream repository.** sickle's `UmbraLuminosa/sickle_ui` returns 404. Future archeologists cannot find git history, can't read past issues, can't audit the maintenance trajectory. The crates.io page links to a dead URL. | [`history.md` § "The repository removal"](history.md); [`distribution.md` § "Distribution channels"](distribution.md). | Buiy commits to preserving the public archive. If the project becomes inactive, the repository stays public with an in-tree `Status: archived` note. The corpus inside `docs/prior-art/` follows the same discipline. |
+| **Conflating headless behavior with styled presentation in one library.** sickle ships both as the same widgets; later ecosystems (`bevy_ui_widgets` + `bevy_feathers`) split them; the split is the structurally correct shape. | [`ecosystem.md` § "vs bevy_feathers"](ecosystem.md); [`architecture.md`](architecture.md). | Buiy ships `buiy_widgets` (headless markers + events + APG keyboard contracts, theme-agnostic) and `buiy_widgets_theme_default` (or similar — styled presentation as a separate concern). Third parties can ship their own styled layers on `buiy_widgets`. |
+| **200+ extension traits in the prelude.** Discoverability collapses; IDE autocomplete becomes noise; the API surface is effectively un-searchable. | [`api.md` § "The extension-trait dispatch pattern"](api.md); [`critiques.md` § 4](critiques.md). | Component-first authoring with small, semantically grouped helpers. The prelude exposes named types, not method-dispatch traits. |
+
+## Borrow
+
+Concrete primitives worth studying and adapting.
+
+1. **`FluxInteraction` state machine — `None / PointerEnter / PointerLeave / Pressed / Released / PressCanceled / Disabled`.** A meaningful refinement of `bevy_ui::Interaction`'s three states. The `PointerEnter` / `PointerLeave` split (separating them from `None` and `Pressed`) gives state-on-style engines a clean place to attach hover-enter vs hover-leave animations. `PressCanceled` (releasing outside the node) lets buttons cancel cleanly without firing activation. Buiy's input-events sub-spec (foundation [interaction.md](../../specs/2026-05-07-buiy-foundation/interaction.md)) should adopt this shape, ideally as decomposed components rather than one enum.
+
+2. **`FluxInteractionStopwatch` — time-in-current-state per entity.** Cleanly drives animated state transitions (e.g. "fade background over 200ms after entering Pressed"). The pattern of "every interaction-state component carries a stopwatch resource" is a clean Bevy-idiomatic shape; Buiy's animation sub-spec should study it.
+
+3. **`UiContext::get(name) -> Entity` — named sub-entity lookup.** Lets a composite widget (slider with bar+handle+label, button with content+icon, dropdown with header+panel+items) expose its internal entities by string. Themes target sub-entities via name lookup. This is the cleanest expression of "the widget owns its internal structure, but the theme system needs to reach into it" in any Bevy widget library. Buiy's widget catalog should formalize the same pattern.
+
+4. **Four-tier widget extension ladder — structural / functional / themed / contextually-themed.** Each tier opts in to more theming machinery; widgets can stay at tier 1 (just a styled `Node`) without paying the cost of tier 4 (full `UiContext` named slots). Buiy's widget-catalog sub-spec should adopt this staged opt-in for custom-widget authors building on Buiy.
+
+5. **The `Theme<C>` typing — per-component-type themes.** Themes are keyed on the widget component type. The `ComponentThemePlugin::<C>` plugin registers a theme for type `C`; the engine matches on `C` at runtime. This is the cleanest type-safe answer to "how do we associate a theme with a widget kind" in Rust. The downside (no theme inheritance / cascading) is acceptable for the foundational level; for cascade we layer a separate spec on top. Buiy's theme system should at minimum study this typing.
+
+6. **The `sickle_ui_scaffold` / `sickle_ui` crate split — substrate vs catalog.** The decision to publish theming + builder + style-engine as a separate crate, with the widget catalog as the consumer, is the right shape for an ecosystem where third parties want to build additional widgets. The pattern survived the project — `bevy_cobweb_ui` salvaged the scaffold layer as `cob_sickle_ui_scaffold`. Buiy's `buiy_widgets_core` + `buiy_widgets` analog should mirror the split.
+
+7. **The `StyleCommands` derive macro pattern.** sickle uses `#[derive(StyleCommands)]` on enum definitions to generate the ~150 `Set<Property>Ext` style-setter traits. The macro-from-data approach scales the surface without hand-writing each trait. If Buiy ever needs an analogous pattern (e.g. generating a per-CSS-property animation setter), the macro shape is borrowable. Caveat: the *output* (extension traits) is what Buiy avoids; the *technique* (data-driven macro expansion) is what's worth borrowing.
+
+## How to use this file
+
+When designing a Buiy feature:
+
+1. **Find the row in `Avoid`** that names a pitfall close to your design. Read the linked file for the original incident.
+2. **Find the entry in `Borrow`** that names a primitive close to what you're designing. Read the linked file to understand sickle's shape, then adapt for Buiy's component model (decomposed, public-fielded, observable, BSN-friendly, reflection-registered).
+3. **Promote any decision into a Buiy spec** under `docs/specs/` — this file captures lessons, not Buiy's own commitments.
+
+## Sources
+
+- All sibling files in this corpus: [`architecture.md`](architecture.md), [`widgets.md`](widgets.md), [`api.md`](api.md), [`integration.md`](integration.md), [`history.md`](history.md), [`distribution.md`](distribution.md), [`ecosystem.md`](ecosystem.md), [`critiques.md`](critiques.md), [`glossary.md`](glossary.md).
+- Surviving fork (obsolescence notice) — https://github.com/UkoeHB/sickle_ui
+- Bevy 0.15 RequiredComponents PR — https://github.com/bevyengine/bevy/pull/14791
+- BSN PR — https://github.com/bevyengine/bevy/pull/20158
+- WAI-ARIA APG (the keyboard contracts) — https://www.w3.org/WAI/ARIA/apg/
+- Buiy foundation README — [`../../specs/2026-05-07-buiy-foundation/README.md`](../../specs/2026-05-07-buiy-foundation/README.md)
+- Buiy foundation architecture — [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md)
+- Buiy foundation interaction — [`../../specs/2026-05-07-buiy-foundation/interaction.md`](../../specs/2026-05-07-buiy-foundation/interaction.md)
+- Buiy foundation accessibility — [`../../specs/2026-05-07-buiy-foundation/accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md)
+- Buiy foundation verification — [`../../specs/2026-05-07-buiy-foundation/verification.md`](../../specs/2026-05-07-buiy-foundation/verification.md)
+- bevy_ui lessons (companion corpus) — [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md)
+- bevy_feathers architecture (the official successor) — [`../bevy-feathers/architecture.md`](../bevy-feathers/architecture.md)

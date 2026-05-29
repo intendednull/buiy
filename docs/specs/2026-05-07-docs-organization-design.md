@@ -16,7 +16,7 @@ under `docs/plans/`, per the spec/plan distinction defined below.
 
 ## Document types
 
-Three document types, each with a single job. The split is the spine of the
+Four document types, each with a single job. The split is the spine of the
 whole structure — if a doc does not fit one of these, the type list is wrong,
 not the doc.
 
@@ -43,8 +43,30 @@ in the spec.
 
 ### Report — findings from a one-shot investigation
 
-Lives in `docs/reports/`. Audits, post-mortems, performance investigations.
-Dated, immutable, does not define future direction.
+Lives in `docs/reports/`. Audits, post-mortems, performance investigations
+of *our* codebase. Dated, immutable, does not define future direction.
+
+### Prior-art — deep dive on an external system
+
+Lives in `docs/prior-art/<system>/`. Captures an external project (competitor,
+integration target, load-bearing dependency, design-space neighbor) as
+durable reference material — so future spec authors consult the folder
+instead of redoing the research. Each system gets its own subfolder; categories
+(Bevy UI ecosystem, Rust GUI, game-engine UI, substrate) live as section
+headers in the catalog only, not as on-disk subfolders.
+
+Driven by two skills:
+
+- `researching-prior-art` — the producer-side flow that creates a folder via
+  a 7-stage workflow (landscape scan, structured overview, deep-dive
+  fan-out, review, polish, second review, framing disclosure).
+- `using-prior-art` — the consumer-side flow: surface relevant folders when
+  brainstorming a spec, extend with online research, flag worth-promoting
+  findings back to the corpus.
+
+Prior-art docs are NOT specs. Do not encode Buiy design decisions in a
+prior-art doc; capture lessons in the folder's `lessons.md` (validates / avoid
+/ borrow) and promote real decisions into a spec.
 
 ### Implications of the split
 
@@ -53,6 +75,9 @@ Dated, immutable, does not define future direction.
 - A plan without a spec is suspicious — flag it during review.
 - When the target evolves, the spec is updated and a new plan is written;
   old plans are not rewritten retroactively.
+- A prior-art folder is a launchpad for specs, not a substitute. A spec that
+  consults prior art cites the folder + section, names the runner-up
+  paradigm if a choice was made, and flags remaining gaps.
 
 ## Top-level layout
 
@@ -61,7 +86,8 @@ docs/
 ├── README.md            master index — entry point for agents and humans
 ├── specs/               target state — what we are building toward
 ├── plans/               migration steps — how we get there
-├── reports/             one-shot audits and investigations
+├── reports/             one-shot audits and investigations of our code
+├── prior-art/           deep dives on external systems we learn from
 └── reference-designs/   archived Claude Design bundles (immutable)
 ```
 
@@ -76,11 +102,15 @@ docs/
 | Multi-file spec | `docs/specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-04-19-ui-design/README.md` |
 | Plan | `docs/plans/YYYY-MM-DD-<kebab>.md` (no `-design`) | `2026-04-21-e2e-test-architecture.md` |
 | Report | `docs/reports/YYYY-MM-DD-<kebab>.md` | `2026-04-13-test-audit.md` |
+| Prior-art | `docs/prior-art/<system>/README.md` (no date prefix) | `docs/prior-art/bevy-feathers/README.md` |
+| Prior-art child | `docs/prior-art/<system>/<facet>.md` | `docs/prior-art/bevy-feathers/architecture.md` |
 
 The date is **when the doc was written**, not the implementation target.
 
 The `-design.md` suffix on specs is what visually distinguishes a spec from a
-plan in `ls` output. Plans omit it.
+plan in `ls` output. Plans omit it. Prior-art uses the system name (lowercase,
+kebab-case) with no date prefix — folders are living docs and revision
+history lives in git, not in filenames.
 
 ## Document headers
 
@@ -94,12 +124,25 @@ predating this convention are not retrofitted (see *Non-goals*).
 **Supersedes:** docs/specs/... (if applicable)
 ```
 
-Status semantics:
+Status semantics for specs/plans/reports:
 
 - `draft` — being written, target not yet stable
 - `active` — current target / in-flight migration
 - `landed` — realized in code; canonical reference
 - `superseded` — replaced; header links to successor
+
+Prior-art docs use a different header:
+
+```
+**Date:** YYYY-MM-DD       (last meaningful update — bump on revision)
+**Status:** active | archived
+**Subject:** <System name + one-line scope>
+```
+
+Prior-art `active` = the system is still relevant to our framing. `archived`
+= we've concluded the system isn't worth tracking further; the folder is
+kept for historical context and the catalog entry moves under an
+`### Archived` sub-section of `## Prior art`.
 
 ## Nested folder convention
 
