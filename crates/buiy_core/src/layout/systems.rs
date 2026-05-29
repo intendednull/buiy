@@ -24,9 +24,9 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, ContainFlags, ContainerType, ContentVisibility,
-    GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing,
-    TopLayer, TransformMatrix, TryCondition, WritingModeKind, ZIndex,
+    AnchorErrorKind, AnchorName, AnchorRef, ColumnCount, ContainFlags, ContainerType,
+    ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length, PositionKind,
+    QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -754,6 +754,65 @@ pub(super) fn resolve_column_widths(rows: &[Vec<f32>]) -> Vec<f32> {
         }
     }
     widths
+}
+
+/// Resolve the CSS Multicol L1 § 7.3 *used* `(column_count, column_width)`
+/// pair from the declared `column-count` / `column-width` / `column-gap`
+/// and the container's available (content-box inline) width.
+///
+/// Four cases (plan D3):
+/// - **neither** (`Auto` + `None`): 1 column, used width = `available_width`.
+/// - **count only**: used count = `max(1, n)`; used width =
+///   `(available - (count-1)*gap) / count`.
+/// - **width only**: used count =
+///   `max(1, floor((available + gap) / (width + gap)))`; used width =
+///   `(available - (count-1)*gap) / count` (columns expand to fill).
+/// - **both**: `column-count` is a *maximum* — used count =
+///   `max(1, min(n, width_derived_count))`; used width as above.
+///
+/// Pure (no Bevy queries / no Taffy reads). Unit-tested in `mod tests`.
+///
+/// Carries `#[allow(dead_code)]` because the rewritten `multicol_pack`
+/// system consumes it in a later Phase-13 task (T6); committing the pure
+/// helper first follows the `resolve_column_widths` precedent.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
+#[allow(dead_code)]
+pub(super) fn resolve_column_count(
+    column_count: ColumnCount,
+    column_width: Option<f32>,
+    gap: f32,
+    available_width: f32,
+) -> (usize, f32) {
+    let avail = available_width.max(0.0);
+    let gap = gap.max(0.0);
+
+    // Count derivable from a usable (> 0) width: how many `width + gap`
+    // slabs fit, with one fewer gap than columns (the `+ gap` numerator
+    // term cancels the trailing gap). 0 → fall through to clamp.
+    let width_derived = |w: f32| -> usize {
+        if w <= 0.0 {
+            return 0;
+        }
+        (((avail + gap) / (w + gap)).floor() as i64).max(0) as usize
+    };
+
+    let count = match (column_count, column_width) {
+        (ColumnCount::Auto, None) => 1,
+        (ColumnCount::Count(n), None) => (n as usize).max(1),
+        (ColumnCount::Auto, Some(w)) => width_derived(w).max(1),
+        (ColumnCount::Count(n), Some(w)) => {
+            // column-count is a maximum; clamp the width-derived count.
+            (n as usize).min(width_derived(w).max(1)).max(1)
+        }
+    };
+
+    let used_width = if count <= 1 {
+        avail
+    } else {
+        ((avail - (count as f32 - 1.0) * gap) / count as f32).max(0.0)
+    };
+    (count, used_width)
 }
 
 /// One table row: its entity and the cell entities it owns, in
@@ -4656,5 +4715,69 @@ mod observer_tests {
         // percent / cq column metrics are a v1 non-goal (D8) — fall back.
         assert_eq!(multicol_length_px(Some(Length::Percent(50.0)), 0.0), 0.0);
         assert_eq!(multicol_length_px(Some(Length::Cqw(10.0)), 7.0), 7.0);
+    }
+
+    #[test]
+    fn resolve_column_count_neither_is_single_column() {
+        // No count, no width → 1 column spanning the box.
+        let (n, w) = resolve_column_count(ColumnCount::Auto, None, 0.0, 400.0);
+        assert_eq!(n, 1);
+        assert_eq!(w, 400.0);
+    }
+
+    #[test]
+    fn resolve_column_count_count_only_divides_with_gaps() {
+        // count = 3, gap = 20, width 440 → 3 cols, (440 - 2*20)/3 = 133.33.
+        let (n, w) = resolve_column_count(ColumnCount::Count(3), None, 20.0, 440.0);
+        assert_eq!(n, 3);
+        assert!((w - 400.0 / 3.0).abs() < 1e-3, "used width = {w}");
+    }
+
+    #[test]
+    fn resolve_column_count_count_zero_clamps_to_one() {
+        let (n, _w) = resolve_column_count(ColumnCount::Count(0), None, 0.0, 400.0);
+        assert_eq!(n, 1, "count 0 clamps to 1 column");
+    }
+
+    #[test]
+    fn resolve_column_count_width_only_floors_then_fills() {
+        // width 100, gap 0, available 350 → floor((350+0)/(100+0)) = 3 cols;
+        // used width = (350 - 0)/3 = 116.67 (columns expand to fill).
+        let (n, w) = resolve_column_count(ColumnCount::Auto, Some(100.0), 0.0, 350.0);
+        assert_eq!(n, 3);
+        assert!((w - 350.0 / 3.0).abs() < 1e-3, "used width = {w}");
+    }
+
+    #[test]
+    fn resolve_column_count_width_only_with_gap() {
+        // width 100, gap 25, available 350 → floor((350+25)/(100+25)) =
+        // floor(375/125) = 3 cols; used width = (350 - 2*25)/3 = 100.
+        let (n, w) = resolve_column_count(ColumnCount::Auto, Some(100.0), 25.0, 350.0);
+        assert_eq!(n, 3);
+        assert!((w - 100.0).abs() < 1e-3, "used width = {w}");
+    }
+
+    #[test]
+    fn resolve_column_count_both_count_is_max() {
+        // count = 2 (a maximum), width 100, gap 0, available 350.
+        // width-derived = floor(350/100) = 3, capped at count 2 → 2 cols.
+        let (n, _w) = resolve_column_count(ColumnCount::Count(2), Some(100.0), 0.0, 350.0);
+        assert_eq!(n, 2, "column-count caps the width-derived count");
+    }
+
+    #[test]
+    fn resolve_column_count_both_width_wins_when_smaller() {
+        // count = 5, width 100, gap 0, available 350 →
+        // width-derived = 3, min(5, 3) = 3 cols.
+        let (n, _w) = resolve_column_count(ColumnCount::Count(5), Some(100.0), 0.0, 350.0);
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn resolve_column_count_width_wider_than_box_is_one_column() {
+        // width 500 > available 400 → floor((400+0)/(500+0)) = 0 → clamp 1.
+        let (n, w) = resolve_column_count(ColumnCount::Auto, Some(500.0), 0.0, 400.0);
+        assert_eq!(n, 1);
+        assert!((w - 400.0).abs() < 1e-3);
     }
 }
