@@ -7,8 +7,8 @@ use bevy::window::{PrimaryWindow, Window, WindowResolution};
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout,
     layout::{
-        BoxModel, ContainerQuery, Containment, ContentVisibility, Inset, LayoutPlugin, LayoutTree,
-        Length, PositionKind, QueryCondition, Sizing, Style,
+        BoxModel, ContainerQuery, Containment, ContentVisibility, ContentVisibilityMargin, Inset,
+        LayoutPlugin, LayoutTree, Length, Position, PositionKind, QueryCondition, Sizing, Style,
     },
 };
 
@@ -375,5 +375,201 @@ fn phase11_types_are_registered() {
             .get_with_type_path("buiy_core::layout::components::ContainIntrinsicSize")
             .is_some(),
         "ContainIntrinsicSize not registered"
+    );
+}
+
+/// spec § 5.2: a `content-visibility: auto` subtree "snaps back to full
+/// layout when on-screen." We drive the entity off-screen (skipped:
+/// sentinel size + detached child), then move it on-screen and assert the
+/// skip releases — the child re-attaches to the Taffy tree and is laid out
+/// at its real size again.
+#[test]
+fn auto_snaps_back_on_screen() {
+    let mut app = app();
+    with_window(&mut app, 800, 600);
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(50.0).height_px(50.0)))
+        .id();
+    let auto = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Absolute)
+                .inset(Inset {
+                    left: Sizing::Length(Length::px(5000.0)),
+                    ..Default::default()
+                })
+                .containment(Containment {
+                    content_visibility: ContentVisibility::Auto,
+                    ..Default::default()
+                })
+                .contain_intrinsic_size(Some(120.0), Some(40.0)),
+        ))
+        .add_child(child)
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(auto)
+        .id();
+    app.update();
+    app.update();
+    // Skipped (sentinel) + detached while off-screen.
+    assert_eq!(
+        app.world().get::<ResolvedLayout>(auto).unwrap().size,
+        Vec2::new(120.0, 40.0),
+        "off-screen auto uses the sentinel size"
+    );
+    assert_eq!(
+        taffy_child_count(&app, auto),
+        0,
+        "off-screen auto's descendant is detached"
+    );
+
+    // Move it on-screen.
+    {
+        let mut e = app.world_mut().entity_mut(auto);
+        let mut pos = e.get_mut::<Position>().unwrap();
+        pos.inset.left = Sizing::Length(Length::px(10.0));
+    }
+    app.update();
+    app.update();
+
+    // Snapped back: the child is re-attached and laid out again at 50x50.
+    assert_eq!(
+        taffy_child_count(&app, auto),
+        1,
+        "descendant re-attaches to the Taffy tree on snap-back"
+    );
+    let cr = app
+        .world()
+        .get::<ResolvedLayout>(child)
+        .expect("child re-laid-out");
+    assert_eq!(
+        cr.size,
+        Vec2::new(50.0, 50.0),
+        "descendant snaps back to its real size on-screen"
+    );
+}
+
+/// spec § 7: "content-visibility: auto skips off-screen — off-screen child
+/// has `ContentVisibility::Auto`; assert child is not in step 1's
+/// translation set when off-screen." We assert the observable consequence:
+/// an off-screen auto node's descendants are detached from the Taffy tree
+/// (not laid out) while an identical on-screen sibling's descendants are
+/// laid out normally.
+#[test]
+fn auto_skips_off_screen_spec_section_7() {
+    let mut app = app();
+    with_window(&mut app, 800, 600);
+
+    let mk_auto = |app: &mut App, left: f32| -> (Entity, Entity) {
+        let grandchild = app
+            .world_mut()
+            .spawn((Node, Style::default().width_px(30.0).height_px(30.0)))
+            .id();
+        let auto = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .position(PositionKind::Absolute)
+                    .inset(Inset {
+                        left: Sizing::Length(Length::px(left)),
+                        ..Default::default()
+                    })
+                    .containment(Containment {
+                        content_visibility: ContentVisibility::Auto,
+                        ..Default::default()
+                    })
+                    .contain_intrinsic_size(Some(60.0), Some(60.0)),
+            ))
+            .add_child(grandchild)
+            .id();
+        (auto, grandchild)
+    };
+    let (off_auto, _off_gc) = mk_auto(&mut app, 5000.0); // off-screen
+    let (on_auto, on_gc) = mk_auto(&mut app, 10.0); // on-screen
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[off_auto, on_auto])
+        .id();
+    app.update();
+    app.update();
+
+    // Off-screen: sentinel size + detached grandchild.
+    assert_eq!(
+        app.world().get::<ResolvedLayout>(off_auto).unwrap().size,
+        Vec2::new(60.0, 60.0),
+        "off-screen auto uses the sentinel"
+    );
+    assert_eq!(
+        taffy_child_count(&app, off_auto),
+        0,
+        "off-screen auto's descendant is detached from the Taffy tree"
+    );
+    // On-screen: descendant attached + laid out at its real size.
+    assert_eq!(
+        taffy_child_count(&app, on_auto),
+        1,
+        "on-screen auto keeps its descendant attached"
+    );
+    assert_eq!(
+        app.world().get::<ResolvedLayout>(on_gc).unwrap().size,
+        Vec2::new(30.0, 30.0),
+        "on-screen auto lays out its descendant"
+    );
+}
+
+/// D3: the `ContentVisibilityMargin` resource controls the hysteresis
+/// dead-band. With the margin shrunk to 0, an entity just past the
+/// viewport edge counts as off-screen and skips.
+#[test]
+fn margin_resource_controls_hysteresis_band() {
+    let mut app = app();
+    with_window(&mut app, 800, 600);
+    // Shrink the margin to 0 so an entity just past the viewport edge skips.
+    app.insert_resource(ContentVisibilityMargin(0.0));
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(20.0).height_px(20.0)))
+        .id();
+    let auto = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Absolute)
+                .inset(Inset {
+                    left: Sizing::Length(Length::px(900.0)), // past 800, margin 0 → off-screen
+                    ..Default::default()
+                })
+                .containment(Containment {
+                    content_visibility: ContentVisibility::Auto,
+                    ..Default::default()
+                })
+                .contain_intrinsic_size(Some(50.0), Some(50.0)),
+        ))
+        .add_child(child)
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(auto)
+        .id();
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world().get::<ResolvedLayout>(auto).unwrap().size,
+        Vec2::new(50.0, 50.0),
+        "with margin 0, an entity past the viewport edge skips"
+    );
+    assert_eq!(
+        taffy_child_count(&app, auto),
+        0,
+        "with margin 0, the off-screen entity's descendant is detached"
     );
 }
