@@ -16,10 +16,10 @@
 //! systems to them.
 
 use super::components::{
-    Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Containment, Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken,
-    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, Stacking, Translate,
-    UiTransform, WritingMode, WritingModeResolved,
+    Anchor, BoxModel, ContainIntrinsicSize, Container, ContainerQuery, ContainerQueryActive,
+    ContainerQueryInactive, Containment, Display, FlexItem, FlexParams, GridItem, GridParams,
+    LayoutAnchorBroken, MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset,
+    Stacking, Translate, UiTransform, WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
@@ -1677,6 +1677,55 @@ pub(super) fn translate_one_entity(
 /// Taffy parent), which is the only behavioral difference from `Fixed`.
 pub(super) fn is_fixed_root(position: &Position) -> bool {
     matches!(position.kind, PositionKind::Fixed)
+}
+
+/// How step 1 should treat an entity's subtree for `content-visibility`
+/// (spec § 5.2). Pure classification produced by
+/// [`content_visibility_skip`].
+// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
+// gate green until that caller lands.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum SkipKind {
+    /// No skip — lay the entity and its descendants out normally.
+    None,
+    /// `content-visibility: auto`, off-screen, with a `contain-intrinsic-size`
+    /// hint (D2): give the entity the intrinsic-size as its Taffy size and
+    /// detach its descendants from the Taffy tree.
+    AutoSentinel { intrinsic: ContainIntrinsicSize },
+    /// `content-visibility: hidden` (D7): detach the entity's descendants
+    /// from the Taffy tree (the entity itself still lays out).
+    HiddenPrune,
+}
+
+/// Classify an entity's `content-visibility` skip for step 1 (spec § 5.2).
+///
+/// - `Visible` → never skip.
+/// - `Hidden` → always `HiddenPrune` (descendants detached; entity box
+///   still resolves — D7).
+/// - `Auto` → `AutoSentinel` only when BOTH off-screen AND a
+///   `ContainIntrinsicSize` with at least one axis hint is present (D2);
+///   otherwise `None` (lay out normally — the off-screen *paint* skip is
+///   a render concern Phase 11 does not own).
+///
+/// `off_screen` is computed by the caller from last-frame `ResolvedLayout`
+/// vs the hysteresis-expanded viewport ([`is_off_screen`], D3).
+// Wired into `sync_styles` in Phase 11 T5; `allow(dead_code)` keeps the
+// gate green until that caller lands.
+#[allow(dead_code)]
+pub(super) fn content_visibility_skip(
+    containment: &Containment,
+    intrinsic: Option<&ContainIntrinsicSize>,
+    off_screen: bool,
+) -> SkipKind {
+    match containment.content_visibility {
+        ContentVisibility::Visible => SkipKind::None,
+        ContentVisibility::Hidden => SkipKind::HiddenPrune,
+        ContentVisibility::Auto => match intrinsic {
+            Some(h) if off_screen && h.has_hint() => SkipKind::AutoSentinel { intrinsic: *h },
+            _ => SkipKind::None,
+        },
+    }
 }
 
 /// The whole second pass: build the set of entities that re-parent to the
@@ -3718,6 +3767,90 @@ mod tests {
                 .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolUnsupported))
                 .count(),
             1,
+        );
+    }
+
+    // --- content_visibility_skip (Phase 11, spec § 5.2, D2/D7) ---
+
+    fn cvis(cv: ContentVisibility) -> Containment {
+        Containment {
+            content_visibility: cv,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn skip_none_when_visible() {
+        let c = cvis(ContentVisibility::Visible);
+        // off-screen + hint present, but Visible never skips.
+        let hint = ContainIntrinsicSize {
+            width: Some(100.0),
+            height: Some(50.0),
+        };
+        assert_eq!(
+            content_visibility_skip(&c, Some(&hint), /*off_screen=*/ true),
+            SkipKind::None
+        );
+    }
+
+    #[test]
+    fn skip_hidden_always_prunes() {
+        let c = cvis(ContentVisibility::Hidden);
+        // Hidden prunes descendants regardless of geometry / hint.
+        assert_eq!(
+            content_visibility_skip(&c, None, /*off_screen=*/ false),
+            SkipKind::HiddenPrune
+        );
+        assert_eq!(
+            content_visibility_skip(&c, None, /*off_screen=*/ true),
+            SkipKind::HiddenPrune
+        );
+    }
+
+    #[test]
+    fn skip_auto_on_screen_is_none() {
+        let c = cvis(ContentVisibility::Auto);
+        let hint = ContainIntrinsicSize {
+            width: Some(100.0),
+            height: Some(50.0),
+        };
+        assert_eq!(
+            content_visibility_skip(&c, Some(&hint), /*off_screen=*/ false),
+            SkipKind::None
+        );
+    }
+
+    #[test]
+    fn skip_auto_off_screen_without_hint_is_none() {
+        // D2: Auto + off-screen but NO intrinsic-size hint → lay out normally.
+        let c = cvis(ContentVisibility::Auto);
+        assert_eq!(
+            content_visibility_skip(&c, None, /*off_screen=*/ true),
+            SkipKind::None
+        );
+        // a present-but-empty hint (both None) also does not qualify.
+        let empty = ContainIntrinsicSize::default();
+        assert_eq!(
+            content_visibility_skip(&c, Some(&empty), /*off_screen=*/ true),
+            SkipKind::None
+        );
+    }
+
+    #[test]
+    fn skip_auto_off_screen_with_hint_is_sentinel() {
+        let c = cvis(ContentVisibility::Auto);
+        let hint = ContainIntrinsicSize {
+            width: Some(120.0),
+            height: Some(40.0),
+        };
+        assert_eq!(
+            content_visibility_skip(&c, Some(&hint), /*off_screen=*/ true),
+            SkipKind::AutoSentinel {
+                intrinsic: ContainIntrinsicSize {
+                    width: Some(120.0),
+                    height: Some(40.0)
+                }
+            }
         );
     }
 }
