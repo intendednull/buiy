@@ -5,7 +5,8 @@
 use bevy::prelude::*;
 use buiy_core::components::StackingContext;
 use buiy_core::layout::{
-    Isolation, LayoutPlugin, PositionKind, Style, TopLayer, TopLayerActivation, ZIndex,
+    ContainFlags, Isolation, LayoutPlugin, PositionKind, Style, TopLayer, TopLayerActivation,
+    ZIndex,
 };
 use buiy_core::{CorePlugin, Node};
 
@@ -24,9 +25,13 @@ fn top_layer_modal_escapes_to_root() {
         .world_mut()
         .spawn((Node, Style::default().top_layer(TopLayer::Modal)))
         .id();
+    // The parent forms its OWN stacking context (isolate) so the
+    // "modal absent from parent" assertion below actually executes — with a
+    // plain `Style::default()` parent (no SC) the branch was vacuous. This
+    // is the spec § 6 escape: the modal escapes a real ancestor context.
     let parent = app
         .world_mut()
-        .spawn((Node, Style::default()))
+        .spawn((Node, Style::default().isolation(Isolation::Isolate)))
         .add_child(modal)
         .id();
     let root = app
@@ -41,11 +46,82 @@ fn top_layer_modal_escapes_to_root() {
         root_sc.painters_z.contains(&modal),
         "modal escapes to root context"
     );
-    // It must not also appear in any non-root context that forms one.
-    if let Some(parent_sc) = app.world().get::<StackingContext>(parent) {
+    // The parent DOES form a context (isolate); the modal must not appear in
+    // it — it escaped. This assertion now genuinely runs.
+    let parent_sc = app
+        .world()
+        .get::<StackingContext>(parent)
+        .expect("parent forms a stacking context via Isolation::Isolate");
+    assert!(
+        !parent_sc.painters_z.contains(&modal),
+        "modal must not be counted in its parent's context (it escaped)"
+    );
+}
+
+#[test]
+fn transform_forms_stacking_context_end_to_end() {
+    // Trigger 3 via the REAL 6e→6f handoff: a non-identity transform makes
+    // `transform_composition` (6e) write `ResolvedTransform`, which 6f reads
+    // (`transformed.get(e).is_ok()`) to form a stacking context. Exercises
+    // the cross-system wiring, not a literal `has_transform: true`.
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().translate_px(10.0, 0.0)))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_some(),
+        "non-identity transform forms a stacking context (trigger 3, via 6e ResolvedTransform)"
+    );
+    let root_sc = app.world().get::<StackingContext>(root).unwrap();
+    assert!(
+        root_sc.painters_z.contains(&child),
+        "transformed child is an atomic painter in the root context"
+    );
+}
+
+#[test]
+fn paint_containment_forms_stacking_context_end_to_end() {
+    // Trigger 4 via the real `containment_q.get(e)` path in 6f.
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().contain(ContainFlags::PAINT)))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_some(),
+        "PAINT containment forms a stacking context (trigger 4)"
+    );
+}
+
+#[test]
+fn parentless_top_layer_does_not_self_reference() {
+    // Regression (review finding B1): a top-layer entity that is itself a
+    // root has no parent context to escape from, so it must NOT be appended
+    // to its own `painters_z` — a self-edge would make a paint-order walk
+    // recurse infinitely.
+    let mut app = app();
+    let modal = app
+        .world_mut()
+        .spawn((Node, Style::default().top_layer(TopLayer::Modal)))
+        .id();
+    app.update();
+    if let Some(sc) = app.world().get::<StackingContext>(modal) {
         assert!(
-            !parent_sc.painters_z.contains(&modal),
-            "modal must not be counted in its parent's context"
+            !sc.painters_z.contains(&modal),
+            "a parentless top-layer root must not list itself in painters_z"
         );
     }
 }

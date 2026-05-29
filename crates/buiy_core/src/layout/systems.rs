@@ -190,13 +190,12 @@ pub struct PostTaffyPositionOverrides {
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 4.2.
 ///
-/// The membership rebuild (D3) lands in Task 9; Task 8 wires the
-/// `init_resource` + the `stacking_context` system that owns it but does
-/// not yet read `order` (hence the field-level `dead_code` allow, removed
-/// in Task 9 when the rebuild reads + writes the deque).
+/// The membership rebuild (D3) is owned by `stacking_context` (6f): it
+/// drops entries that are no longer top-layer (deactivated / despawned)
+/// and appends newly-activated entities at the back, so the deque stays in
+/// activation order with the most-recently-activated entity last.
 #[derive(Resource, Default, Debug)]
 pub struct TopLayerActivation {
-    #[allow(dead_code)]
     pub order: std::collections::VecDeque<Entity>,
 }
 
@@ -2557,13 +2556,15 @@ pub(super) fn transform_composition(
 /// render handoff; writes NOTHING to `PostTaffyPositionOverrides`
 /// (stacking does not move the layout box). Spec § 2 / § 2.1 / § 4.
 ///
-/// Top-layer escape + activation tracking land in Task 9; the seams are
-/// marked below.
+/// Top-layer entities escape their parent stacking context and attach to
+/// their root-ancestor context (the window proxy); the global activation
+/// order is tracked in `TopLayerActivation` (spec § 4).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stacking_context(
     mut commands: Commands,
     tree: NonSend<LayoutTree>,
     nodes: Query<(Entity, Option<&ChildOf>), With<Node>>,
+    parent_chain: Query<&ChildOf>,
     children_q: Query<&Children>,
     stacking_q: Query<&Stacking>,
     position_q: Query<&Position>,
@@ -2641,7 +2642,7 @@ pub(super) fn stacking_context(
             .insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer)
     {
         bevy::log::warn!(
-            "Layout: {fullscreen_count} entities request TopLayer::Fullscreen; CSS allows one — extras fall back to normal stacking (spec § 4.2)."
+            "Layout: {fullscreen_count} entities request TopLayer::Fullscreen; CSS designates a single fullscreen element. Buiy v1 keeps them all in the top layer ordered by activation — single-winner enforcement (extras falling back to normal stacking) is a follow-up (spec § 4.2)."
         );
     }
 
@@ -2649,16 +2650,11 @@ pub(super) fn stacking_context(
     // (Single global tree → expect exactly one root in the MinimalPlugins
     // harness; multiple roots are each their own context.)
     let mut forming: std::collections::HashSet<Entity> = std::collections::HashSet::new();
-    let mut roots: Vec<Entity> = Vec::new();
     for (e, parent) in nodes.iter() {
         if display_none(e) {
             continue;
         }
-        let root = is_root(parent);
-        if root {
-            roots.push(e);
-        }
-        if forms(e, root) {
+        if forms(e, is_root(parent)) {
             forming.insert(e);
         }
     }
@@ -2695,15 +2691,24 @@ pub(super) fn stacking_context(
         }
         // Stable sort by paint tier; the Vec is already in document order,
         // so equal-tier entries keep document order (spec § 2.1).
-        painters.sort_by_key(|&e| paint_key(stacking_q.get(e).ok(), pos_kind(e)));
+        painters.sort_by_cached_key(|&e| paint_key(stacking_q.get(e).ok(), pos_kind(e)));
         painters
     };
 
     // --- 4. compute the escaped top-layer paint order (spec § 4.2) ---
-    // Top-layer entities are attached to the root context, ordered by
-    // tier (Fullscreen bottom < Tooltip < Popover < Modal top) then, within
-    // a tier, activation order. The deque is already in activation order, so
-    // a STABLE sort by tier preserves activation order inside each tier.
+    // Top-layer entities escape their parent and attach to their
+    // root-ancestor context, ordered by tier (Fullscreen bottom < Tooltip <
+    // Popover < Modal top) then, within a tier, activation order. The deque
+    // is already in activation order, so a STABLE sort by tier preserves
+    // activation order inside each tier.
+    //
+    // Attaching to the entity's own root ancestor (rather than a single
+    // global `roots.first()`) keeps one global top layer when there is a
+    // single root (D2) while staying correct + deterministic if multiple
+    // root trees exist; true per-window scoping is the deferred follow-up.
+    // An entity that is itself a root does NOT escape (it has no parent
+    // context to escape from) — it forms its own root context, so it is
+    // excluded here to avoid a self-reference in its own `painters_z`.
     fn tier_rank(t: TopLayer) -> u8 {
         match t {
             TopLayer::Fullscreen => 0,
@@ -2713,17 +2718,36 @@ pub(super) fn stacking_context(
             TopLayer::None => u8::MAX,
         }
     }
+    let root_ancestor = |start: Entity| -> Entity {
+        let mut cur = start;
+        while let Ok(parent) = parent_chain.get(cur) {
+            let p = parent.parent();
+            if tree.by_entity.contains_key(&p) {
+                cur = p;
+            } else {
+                break; // parent is not a Buiy node → `cur` is the root
+            }
+        }
+        cur
+    };
     let mut top_sorted: Vec<Entity> = activation.order.iter().copied().collect();
-    top_sorted.sort_by_key(|&e| tier_rank(top_layer_of(e)));
-    let root = roots.first().copied();
+    top_sorted.sort_by_cached_key(|&e| tier_rank(top_layer_of(e)));
+    let mut escaped_by_root: std::collections::HashMap<Entity, Vec<Entity>> =
+        std::collections::HashMap::new();
+    for &e in &top_sorted {
+        let r = root_ancestor(e);
+        if r != e {
+            escaped_by_root.entry(r).or_default().push(e);
+        }
+    }
 
     // --- 5. write StackingContext on forming entities; remove stale ---
     for &e in &forming {
         let mut painters_z = painters_of(e);
-        // The single global top layer attaches to the root context (D2/D8):
-        // its members paint after all in-flow root painters.
-        if Some(e) == root {
-            painters_z.extend(top_sorted.iter().copied());
+        // Escaped top-layer members of this root context paint after all
+        // in-flow painters (spec § 4.1 / D8).
+        if let Some(escaped) = escaped_by_root.get(&e) {
+            painters_z.extend(escaped.iter().copied());
         }
         let new = StackingContext { painters_z };
         // Idempotent insert (mirror transform_composition's gate): only
