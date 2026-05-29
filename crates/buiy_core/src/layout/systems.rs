@@ -24,9 +24,10 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, ColumnCount, ContainFlags, ContainerType,
-    ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length, PositionKind,
-    QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition, WritingModeKind, ZIndex,
+    AnchorErrorKind, AnchorName, AnchorRef, BreakAfter, BreakBefore, ColumnCount, ContainFlags,
+    ContainerType, ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length,
+    PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition, WritingModeKind,
+    ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -772,12 +773,7 @@ pub(super) fn resolve_column_widths(rows: &[Vec<f32>]) -> Vec<f32> {
 ///
 /// Pure (no Bevy queries / no Taffy reads). Unit-tested in `mod tests`.
 ///
-/// Carries `#[allow(dead_code)]` because the rewritten `multicol_pack`
-/// system consumes it in a later Phase-13 task (T6); committing the pure
-/// helper first follows the `resolve_column_widths` precedent.
-///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
-#[allow(dead_code)]
 pub(super) fn resolve_column_count(
     column_count: ColumnCount,
     column_width: Option<f32>,
@@ -821,13 +817,7 @@ pub(super) fn resolve_column_count(
 /// after it (derived from `break-before` / `break-after`). Width is not
 /// stored — every column is the resolved `column_width`; the packer
 /// places children at the column-x, it does not resize them (plan D1).
-///
-/// Carries `#[allow(dead_code)]` because `pack_columns` (and through it
-/// the rewritten `multicol_pack` system) consumes it in a later Phase-13
-/// task (T5); committing the pure helper first follows the
-/// `resolve_column_count` precedent.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub(super) struct MulticolChild {
     pub entity: Entity,
     pub height: f32,
@@ -838,11 +828,7 @@ pub(super) struct MulticolChild {
 /// A packed child: its entity and its offset relative to the multicol
 /// container's content-box origin (plan D7 — written straight into the
 /// override map, no container-origin add).
-///
-/// Carries `#[allow(dead_code)]` because it is only produced/consumed by
-/// `pack_columns` until the `multicol_pack` rewrite (T5) reads it.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub(super) struct PackedChild {
     pub entity: Entity,
     pub offset: Vec2,
@@ -864,12 +850,7 @@ pub(super) struct PackedChild {
 ///
 /// Pure (no Bevy queries / no Taffy reads). Unit-tested in `mod tests`.
 ///
-/// Carries `#[allow(dead_code)]` because the rewritten `multicol_pack`
-/// system consumes it in a later Phase-13 task (T5); committing the pure
-/// helper first follows the `resolve_column_count` precedent.
-///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
-#[allow(dead_code)]
 pub(super) fn pack_columns(
     children: &[MulticolChild],
     count: usize,
@@ -1158,25 +1139,106 @@ pub(super) fn table_layout(
     }
 }
 
-/// Sub-pass 6c — multi-column packing stub.
+/// Sub-pass 6c — multi-column packing (spec § 3.2). For each
+/// `MultiColumn` container: resolve the used column count + width from
+/// the container's Taffy content box (step 1), pack its in-flow
+/// children into columns as whole boxes top-to-bottom (step 2,
+/// respecting forced `break-before`/`after`), and write each child's
+/// corrected container-content-relative position into
+/// `PostTaffyPositionOverrides` (plan D7). Sizes are never touched —
+/// they stay from Taffy's block layout (plan D1), matching 6a/6b.
 ///
-/// Spec § 3.2 (`flex-and-grid.md`): "Multi-column is tier-E; v1 ships
-/// the API but the algorithm is a stub that produces single-column
-/// layout with `warn!` once per session." This sub-pass emits the
-/// single warn — no per-entity tracking.
+/// Out-of-flow children (`Position::Absolute`/`Fixed`) and
+/// `Display::None` children are excluded (plan D6). True content
+/// fragmentation is deferred (plan D2); the residual warn lands in a
+/// later task.
+///
+/// `break-before`/`break-after`/`break-inside` are container-level
+/// fields on `MultiColumn` in the v1 API (the spec § 3.1 models them on
+/// the multicol box), so a forced break applies *uniformly* to every
+/// child — this is the literal reading of "respect break-* properties"
+/// given the shipped component shape. Per-child breaks (each child
+/// carrying its own `break-*`) require a per-child component that does
+/// not exist yet and are a documented follow-up.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
 pub(super) fn multicol_pack(
-    multicol_q: Query<&MultiColumn>,
-    mut warned: ResMut<LayoutWarnedOnceSession>,
+    tree: NonSend<LayoutTree>,
+    multicol_q: Query<(Entity, &MultiColumn), With<Node>>,
+    children_q: Query<&Children>,
+    display_q: Query<&Display>,
+    position_q: Query<&Position>,
+    mut overrides: ResMut<PostTaffyPositionOverrides>,
 ) {
-    if multicol_q.iter().next().is_none() {
-        return; // No multicol entities; no warn.
-    }
-    if warned.set.insert(LayoutWarnOnceKey::MulticolUnsupported) {
-        bevy::log::warn!(
-            "Layout: MultiColumn detected — multi-column packing algorithm is deferred to v1.x (flex-and-grid.md § 3.2). Falling back to single-column layout. This warn fires once per session."
-        );
+    for (container, mc) in multicol_q.iter() {
+        // Every `Style`-spawned Node carries a `MultiColumn` component
+        // (it is a non-optional bundle field), so the query matches plain
+        // block containers too. A container is only a *multi-column* box
+        // when `column-count` or `column-width` is explicitly set; the
+        // inert default (`Auto` + `None`) is the CSS "neither" case, which
+        // resolves to a single column identical to normal block flow.
+        // Skip it so we never overwrite a plain block child's natural
+        // position (plan D3 "neither" / D6).
+        if matches!(mc.column_count, ColumnCount::Auto) && mc.column_width.is_none() {
+            continue;
+        }
+
+        // The container's Taffy box (content width drives column count).
+        let Some(container_node) = tree.by_entity.get(&container) else {
+            continue;
+        };
+        let Ok(container_layout) = tree.tree.layout(*container_node) else {
+            continue;
+        };
+        let content_width = container_layout.size.width;
+        let content_height = container_layout.size.height;
+
+        // Gather in-flow children in document order (plan D6).
+        let Ok(kids) = children_q.get(container) else {
+            continue;
+        };
+        let mut packed_input: Vec<MulticolChild> = Vec::new();
+        for child in kids.iter() {
+            // Skip Display::None.
+            if matches!(display_q.get(child), Ok(Display::None)) {
+                continue;
+            }
+            // Skip out-of-flow (absolute / fixed escape the columns).
+            if let Ok(pos) = position_q.get(child)
+                && matches!(pos.kind, PositionKind::Absolute | PositionKind::Fixed)
+            {
+                continue;
+            }
+            // Child block-size from Taffy; skip if not yet placed.
+            let Some(child_node) = tree.by_entity.get(&child) else {
+                continue;
+            };
+            let Ok(child_layout) = tree.tree.layout(*child_node) else {
+                continue;
+            };
+            let bf = matches!(mc.break_before, BreakBefore::Column | BreakBefore::Always);
+            let af = matches!(mc.break_after, BreakAfter::Column | BreakAfter::Always);
+            packed_input.push(MulticolChild {
+                entity: child,
+                height: child_layout.size.height,
+                force_break_before: bf,
+                force_break_after: af,
+            });
+        }
+        if packed_input.is_empty() {
+            continue;
+        }
+
+        let gap = multicol_length_px(mc.column_gap, 0.0);
+        let width = mc
+            .column_width
+            .map(|_| multicol_length_px(mc.column_width, 0.0));
+        let (count, col_width) = resolve_column_count(mc.column_count, width, gap, content_width);
+
+        let packed = pack_columns(&packed_input, count, col_width, gap, content_height);
+        for p in packed {
+            overrides.by_entity.insert(p.entity, p.offset);
+        }
     }
 }
 
@@ -3194,13 +3256,7 @@ fn length_px(l: &Length) -> f32 {
 /// when `Some`, and a non-`Px` width resolving to its fallback (0.0)
 /// makes `resolve_column_count` treat it as "no usable width".
 ///
-/// Carries `#[allow(dead_code)]` because the rewritten `multicol_pack`
-/// system consumes it in a later Phase-13 task (T6); committing the pure
-/// helper first follows the `table_part` / `resolve_column_widths`
-/// precedent.
-///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
-#[allow(dead_code)]
 pub(super) fn multicol_length_px(l: Option<Length>, fallback: f32) -> f32 {
     match l {
         Some(Length::Px(v)) => v,
@@ -4523,39 +4579,10 @@ mod tests {
     // `App` in a unit test does not provide.
     // -----------------------------------------------------------------
 
-    // -----------------------------------------------------------------
-    // Phase 7 Task 7 — `multicol_pack` system tests.
-    // -----------------------------------------------------------------
-
-    #[test]
-    fn multicol_pack_warns_once_per_session() {
-        let mut app = App::new();
-        app.init_resource::<LayoutWarnedOnceSession>();
-        app.add_systems(Update, multicol_pack);
-        let _e1 = app.world_mut().spawn((Node, MultiColumn::default())).id();
-        let _e2 = app.world_mut().spawn((Node, MultiColumn::default())).id();
-        app.update();
-        let warned = app.world().resource::<LayoutWarnedOnceSession>();
-        assert_eq!(
-            warned
-                .set
-                .iter()
-                .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolUnsupported))
-                .count(),
-            1,
-        );
-
-        app.update();
-        let warned = app.world().resource::<LayoutWarnedOnceSession>();
-        assert_eq!(
-            warned
-                .set
-                .iter()
-                .filter(|k| matches!(k, LayoutWarnOnceKey::MulticolUnsupported))
-                .count(),
-            1,
-        );
-    }
+    // Phase 13 — the Phase-7 `multicol_pack_warns_once_per_session` stub
+    // test was removed: 6c now packs columns (no blanket warn). Packing +
+    // the residual fragmentation warn are covered by
+    // `tests/layout_multicol.rs`.
 
     // --- content_visibility_skip (Phase 11, spec § 5.2, D2/D7) ---
 

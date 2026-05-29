@@ -6,8 +6,9 @@
 //! `PostTaffyOverrides` chain (6a sticky → 6b table → 6c multicol → 6d
 //! anchor) with realistic data so the order assertion doubles as a
 //! smoke-and-side-effect check: every sub-pass must produce its
-//! declared observable (override entry for sticky/anchored; warn-once
-//! set entries for table + multicol). The pivotal *ordering* proof is
+//! declared observable (override entries for sticky/anchored, the table
+//! cell, and the multicol child — the Phase-12 table + Phase-13 multicol
+//! algorithms now write real position overrides). The pivotal *ordering* proof is
 //! that the anchored entity tracks the sticky target's DISPLACED
 //! position — only possible if 6a runs before 6d (Task 9's D1 fix).
 //!
@@ -19,11 +20,10 @@ use buiy_core::{
     CorePlugin, Node, ResolvedLayout, ResolvedTransform,
     components::StackingContext,
     layout::{
-        Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ContainerQuery, Display, Inset,
-        LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Length, MultiColumn,
-        OverflowMode, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
-        QueryCondition, ScrollOffset, Sizing, Stacking, Style, TransformMatrix, UiTransform,
-        ZIndex,
+        Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ColumnCount, ContainerQuery, Display, Inset,
+        LayoutPlugin, Length, MultiColumn, OverflowMode, Position, PositionKind, PositionTry,
+        PostTaffyPositionOverrides, QueryCondition, ScrollOffset, Sizing, Stacking, Style,
+        TransformMatrix, UiTransform, ZIndex,
     },
 };
 
@@ -254,8 +254,27 @@ fn layout_steps_are_chained_in_declared_order() {
         .add_child(table_row)
         .id();
 
-    // Sub-pass 6c — MultiColumn entity (warns once per session total).
-    let _multicol_entity = app.world_mut().spawn((Node, MultiColumn::default())).id();
+    // Sub-pass 6c — a real multi-column container (column-count set, so
+    // it is not the inert default) with one in-flow child. The packing
+    // pass writes a corrected position override for the child.
+    let multicol_child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(40.0).height_px(20.0)))
+        .id();
+    let _multicol_entity = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(80.0)
+                .height_px(40.0)
+                .multi_column(MultiColumn {
+                    column_count: ColumnCount::Count(2),
+                    ..Default::default()
+                }),
+        ))
+        .add_child(multicol_child)
+        .id();
 
     // Single update is sufficient: sticky_offset (6a) and
     // anchor_resolution (6d) are chained in `PostTaffyOverrides` via
@@ -347,14 +366,16 @@ fn layout_steps_are_chained_in_declared_order() {
         table_overrides.by_entity.keys().collect::<Vec<_>>(),
     );
 
-    // Sub-pass 6c (multicol_pack) side-effect: the per-session
-    // MulticolUnsupported sentinel is recorded (no entity payload —
-    // first multicol entity triggers, all later are silent).
-    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    // Sub-pass 6c (multicol_pack) side-effect: the real packing pass
+    // (Phase 13) writes a corrected container-relative position override
+    // for the in-flow multicol child (the Phase-7 stub's blanket
+    // MulticolUnsupported warn was retired).
+    let multicol_overrides = app.world().resource::<PostTaffyPositionOverrides>();
     assert!(
-        warned.set.contains(&LayoutWarnOnceKey::MulticolUnsupported),
-        "sub-pass 6c (multicol_pack) should record MulticolUnsupported; warn set: {:?}",
-        warned.set,
+        multicol_overrides.by_entity.contains_key(&multicol_child),
+        "sub-pass 6c (multicol_pack) should write a position override for the multicol child; \
+         override keys: {:?}",
+        multicol_overrides.by_entity.keys().collect::<Vec<_>>(),
     );
 }
 

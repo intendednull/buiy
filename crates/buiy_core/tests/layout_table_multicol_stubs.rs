@@ -1,103 +1,25 @@
 //! Phase 7 Task 10 Step 2: integration coverage for the
-//! `multicol_pack` (sub-pass 6c) stub-warn pass.
+//! `PostTaffyOverrides` stub-warn passes.
 //!
-//! `multicol_pack` warns once per session total — the first
-//! `MultiColumn` entity triggers, all subsequent are silent.
-//!
-//! The table (sub-pass 6b) stub-warn tests that once lived here are
-//! superseded by the real table layout algorithm (Phase 12); their
-//! behavioral coverage now lives in `tests/layout_table.rs`.
+//! Both the table (sub-pass 6b, Phase 12) and multi-column (sub-pass 6c,
+//! Phase 13) stub-warn tests that once lived here are superseded by the
+//! real algorithms; their behavioral coverage now lives in
+//! `tests/layout_table.rs` and `tests/layout_multicol.rs` respectively.
+//! The retired `MulticolUnsupported` / `TableUnsupported` keys are kept
+//! `Reflect`-stable (no code emits them) and only the
+//! `clear_warned_once_on_exit` smoke below still references them as a
+//! seed value.
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
 //! Plan: docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md Task 10 Step 2.
 
 use bevy::prelude::*;
-use buiy_core::layout::{
-    Display, LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, MultiColumn,
-};
-use buiy_core::{ColumnCount, Node};
+use buiy_core::layout::{LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession};
 
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins).add_plugins(LayoutPlugin);
     app
-}
-
-/// Helper: count entries in `LayoutWarnedOnceSession.set` matching a
-/// predicate. The set stores opaque `LayoutWarnOnceKey` enum values,
-/// so a closure predicate is the simplest way to count one variant
-/// without writing one-off match arms inline at each call site.
-fn count_warns(app: &App, mut pred: impl FnMut(&LayoutWarnOnceKey) -> bool) -> usize {
-    app.world()
-        .resource::<LayoutWarnedOnceSession>()
-        .set
-        .iter()
-        .filter(|k| pred(k))
-        .count()
-}
-
-// =====================================================================
-// multicol_pack (sub-pass 6c)
-// =====================================================================
-
-#[test]
-fn multicol_warns_once_per_session_regardless_of_entity_count() {
-    let mut app = app();
-    // 3 MultiColumn entities — bumped from v1's 2 per v2 plan, to
-    // demonstrate the session-wide (not per-entity) dedup more
-    // clearly.
-    let _e1 = app.world_mut().spawn((Node, MultiColumn::default())).id();
-    let _e2 = app
-        .world_mut()
-        .spawn((
-            Node,
-            MultiColumn {
-                column_count: ColumnCount::Count(2),
-                ..Default::default()
-            },
-        ))
-        .id();
-    let _e3 = app
-        .world_mut()
-        .spawn((
-            Node,
-            MultiColumn {
-                column_count: ColumnCount::Count(3),
-                ..Default::default()
-            },
-        ))
-        .id();
-
-    app.update();
-    app.update();
-
-    assert_eq!(
-        count_warns(&app, |k| matches!(
-            k,
-            LayoutWarnOnceKey::MulticolUnsupported
-        )),
-        1,
-        "MulticolUnsupported is session-wide: one warn covers all 3 entities",
-    );
-}
-
-#[test]
-fn multicol_no_warn_when_no_multicol_entities() {
-    let mut app = app();
-    // Spawn a plain entity (no MultiColumn) to ensure the system
-    // runs but finds nothing.
-    let _e = app.world_mut().spawn((Node, Display::Block)).id();
-
-    app.update();
-
-    assert_eq!(
-        count_warns(&app, |k| matches!(
-            k,
-            LayoutWarnOnceKey::MulticolUnsupported
-        )),
-        0,
-        "no MultiColumn entities should produce no MulticolUnsupported warns",
-    );
 }
 
 // =====================================================================
