@@ -12,7 +12,7 @@
 **Tech Stack:** Bevy 0.18 (`bevy::prelude::{Children, ChildOf, Node, Query, With}`, `bevy::ecs::entity::Entity`). Taffy 0.10 (`set_children`, native `Position::Absolute` resolution). `std::collections::HashMap` (the existing `LayoutTree::by_entity`). No new external dependency, no new component, no new resource.
 
 **Date:** 2026-05-29
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/display-and-positioning.md`](../specs/2026-05-08-buiy-layout-design/display-and-positioning.md) § 2.1 (containing-block resolution — `Fixed` row), § 2.2 (Taffy mapping — `Fixed` row), § 2 (`Position`/`PositionKind`) + chartered by [`plans/follow-ups.md`](follow-ups.md) "## Layout — `Position::Fixed` implementation".
 
 ---

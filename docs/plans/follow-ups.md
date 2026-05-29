@@ -182,22 +182,25 @@ when Phase 7 extends the sub-pass set.
 `apply_anchor_broken_markers`, `emit_anchor_warns`. No behavior change;
 makes future extension cleaner.
 
-## Layout — `Position::Fixed` implementation
+## Layout — `Position::Fixed` implementation — LANDED
 
 **Originated:** Phase 7 (D13 — explicit deferral).
 
-**Symptom:** `PositionKind::Fixed` still emits a Phase-1 warn-once;
-`translate.rs::map_position` does not yet emit `taffy::Position::Absolute`
-for Fixed.
+**Status:** **Landed** in Phase 10
+(`docs/plans/2026-05-29-buiy-layout-position-fixed.md`). `PositionKind::Fixed`
+now resolves against the **layout root**: its Taffy node is re-parented onto the
+root's child list in `sync_children_for_entity` (excluded from its in-flow
+parent's list, appended to the root's), so Taffy's native absolute algorithm
+resolves it — including percentage insets — against the root's content box. A
+pure `is_fixed_root(&Position)` predicate (not a stored flag) decides
+re-parenting; `map_position_kind` already emitted `taffy::Position::Absolute`
+for `Fixed`, so no emission change was needed and there was no warn-once to
+remove. A `.fixed()` convenience setter was added to `Style`. Transformed-
+ancestor-as-containing-block and per-window / multi-root `Fixed` targeting
+remain deferred (single global root; gated on `buiy-window-and-surface-design`).
 
-**Implementation sketch:** change `translate.rs::map_position` to emit
-`taffy::Position::Absolute` for `Fixed`; override the `ContainingBlock`
-resolution to point at the layout root regardless of nearest-positioned-
-ancestor. Single `sync_styles` change + a private `is_fixed_root` flag on
-the entity's translation state.
-
-**Spec touchpoint:** `display-and-positioning.md § 2.2` (Position type,
-Taffy mapping for Fixed).
+**Spec touchpoint:** `display-and-positioning.md § 2.1` (Fixed row + Known gap),
+`§ 2.2` (Taffy mapping for Fixed).
 
 ## Layout — full table layout algorithm
 

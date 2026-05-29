@@ -121,7 +121,7 @@ For logical authoring, a `LogicalInset` insert helper (analogous to [box-model.m
 |---|---|
 | `Static`, `Relative` | Parent's content box |
 | `Absolute` | Taffy's nearest positioned ancestor (see note), OR the layout viewport if none |
-| `Fixed` | Falls back to `Absolute` semantics in v1 (see note below) |
+| `Fixed` | The **layout root** (Phase 10 — implemented; see § 2.2 + Known gap below). |
 | `Sticky` | Nearest scroll container; falls back to parent's content box outside the sticky range |
 
 > **Note — "positioned ancestor" at the Taffy layer.** Don't read the `Absolute` row as "nearest Buiy non-`Static` ancestor." `map_position_kind` ([translate.rs](../../../crates/buiy_core/src/layout/translate.rs)) emits Buiy `Static` (and `Sticky`) as `taffy::Position::Relative` (see [§ 2.2](#22-mapping-to-taffy)), and in Taffy a `Relative` box *is* a positioned containing block. So at the Taffy layer **every** ancestor box — including Buiy-`Static` ones — is a positioned containing block, and Taffy resolves an `Absolute` child against its immediate parent's content box in practice. This is the shipped behavior; true CSS "nearest non-static ancestor" semantics are the known gap noted below.
@@ -130,18 +130,20 @@ Buiy does **not** resolve containing blocks itself: `Absolute` entities stay chi
 
 `Display::Contents` is transparent to containing-block resolution — descend through it (Taffy never sees the re-parented wrapper, so its native lookup also skips it).
 
-> **Known gap — true CSS containing-block semantics.** Taffy-native positioning covers the common `Static`/`Relative`/`Absolute` cases, but does not model the full CSS containing-block rules. In particular, a transformed element must become the containing block for `Position::Fixed` descendants. That semantic (and `Fixed`-against-viewport in general) is deferred to **Phase 8** alongside transforms + top-layer; until then `Fixed` falls back to `Absolute`.
+> **Shipped — `Fixed` resolves against the layout root.** Phase 10 implements `Position::Fixed`: a `Fixed` entity's Taffy node is re-parented onto the layout root's child list in `sync_children_for_entity` ([systems.rs](../../../crates/buiy_core/src/layout/systems.rs)), so Taffy's native absolute algorithm resolves it (including percentage insets) against the root's content box rather than its nearest positioned ancestor. This is the sole behavioral difference from `Absolute`. The entity remains a Bevy child of its real parent, so writing-mode inheritance, the changed-set filter, and the `ResolvedLayout` write are unchanged.
+>
+> **Still deferred.** Taffy-native positioning does not model the *full* CSS containing-block rules: a transformed element must become the containing block for `Position::Fixed` descendants. That transformed-ancestor case is **not yet implemented** — `Fixed` always resolves against the layout root regardless of an intervening transformed ancestor. Per-window / multi-root `Fixed` targeting is likewise gated on `buiy-window-and-surface-design` (single global root in v1; the first root in `Node`-query order wins).
 
 ### 2.2 Mapping to Taffy
 
-Taffy 0.10 supports `position: absolute` (resolving against the nearest positioned ancestor) and `relative` via offsets; `sticky` is a Buiy post-Taffy pass. `fixed` has no distinct Taffy modeling and falls back to `absolute` in v1.
+Taffy 0.10 supports `position: absolute` (resolving against the nearest positioned ancestor) and `relative` via offsets; `sticky` is a Buiy post-Taffy pass. `fixed` has no distinct Taffy modeling, so it emits `taffy::Position::Absolute` like `Absolute`; the difference is the *containing block*, which Buiy effects by re-parenting the `Fixed` node onto the layout root in the children-sync pass (so the emitted `Position` is identical but the Taffy parent edge — and therefore the resolution box — is the root). Implemented in Phase 10.
 
 | `PositionKind` | Taffy emission |
 |---|---|
 | `Static` | `taffy::Position::Relative` with zero offsets (Taffy's "in-flow"). |
 | `Relative` | `taffy::Position::Relative` with `inset` as offset. |
 | `Absolute` | `taffy::Position::Absolute` with `inset`; resolved by Taffy against the real parent / nearest positioned ancestor. |
-| `Fixed` | `taffy::Position::Absolute` (v1 fallback; Phase 8 adds viewport / transformed-ancestor containing block). |
+| `Fixed` | `taffy::Position::Absolute`; resolved against the **layout root** because the node is re-parented onto the root's child list in `sync_children_for_entity` (Phase 10). Transformed-ancestor-as-containing-block still deferred (see Known gap, § 2.1). |
 | `Sticky` | `taffy::Position::Relative`; sticky offsets applied in sub-pass 6a ([architecture.md § 3](architecture.md#3-system-pipeline)). |
 
 ### 2.3 Sticky positioning
