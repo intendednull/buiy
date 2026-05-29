@@ -11,10 +11,10 @@ mod tree;
 mod types;
 
 pub use components::{
-    Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Containment, Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken,
-    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, ScrollSnapItem, Stacking,
-    Translate, UiTransform, WritingMode, WritingModeResolved,
+    Anchor, BoxModel, ContainIntrinsicSize, Container, ContainerQuery, ContainerQueryActive,
+    ContainerQueryInactive, Containment, Display, FlexItem, FlexParams, GridItem, GridParams,
+    LayoutAnchorBroken, MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset,
+    ScrollSnapItem, Stacking, Translate, UiTransform, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};

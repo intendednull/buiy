@@ -419,6 +419,32 @@ pub struct Containment {
     pub will_change: WillChange,
 }
 
+/// CSS `contain-intrinsic-size` — an author-supplied placeholder size
+/// (logical px, per axis) used when the entity's descendants are
+/// skipped under `ContentVisibility::Auto` (off-screen). `None` on an
+/// axis = no hint for that axis. Optional and usually absent — only
+/// `content-visibility: auto` authors who want the off-screen Taffy
+/// skip need it (spec § 5.2: without it the engine must lay the
+/// subtree out to learn its size, defeating the skip).
+///
+/// Self-styling (a `Style` field, default both-`None`). Read by step 1
+/// (`sync_styles`) when classifying the content-visibility skip.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.2.
+#[derive(Component, Reflect, Clone, Copy, Default, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct ContainIntrinsicSize {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+}
+
+impl ContainIntrinsicSize {
+    /// True if at least one axis carries a hint.
+    pub fn has_hint(&self) -> bool {
+        self.width.is_some() || self.height.is_some()
+    }
+}
+
 /// Depth-ordering for an entity's box: its `z-index`, `isolation`, and
 /// top-layer participation. Self-styling (a `Style` field). Consumed by
 /// sub-pass 6f `stacking_context`, which decides whether the entity
@@ -851,5 +877,31 @@ mod tests {
         assert_eq!(m.break_inside, BreakInside::Auto);
         assert_eq!(m.break_before, BreakBefore::Auto);
         assert_eq!(m.break_after, BreakAfter::Auto);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_default_is_none_none() {
+        let c = ContainIntrinsicSize::default();
+        assert_eq!(c.width, None);
+        assert_eq!(c.height, None);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_has_hint_reports_axes() {
+        assert!(!ContainIntrinsicSize::default().has_hint());
+        assert!(
+            ContainIntrinsicSize {
+                width: Some(100.0),
+                height: None
+            }
+            .has_hint()
+        );
+        assert!(
+            ContainIntrinsicSize {
+                width: None,
+                height: Some(50.0)
+            }
+            .has_hint()
+        );
     }
 }
