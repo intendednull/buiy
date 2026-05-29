@@ -1,7 +1,7 @@
 # Buiy layout — Phase 8: transforms + containment
 
 **Date:** 2026-05-28
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/transforms-and-containment.md`](../specs/2026-05-08-buiy-layout-design/transforms-and-containment.md) § 1 (`UiTransform` + `TransformMatrix`/`TransformOrigin`/`TransformStyle`/`BackfaceVisibility`), § 1.1 (`Translate`/`Rotate`/`Scale` longhands + composition order), § 5 (`Containment` + `ContainFlags`/`ContentVisibility`/`WillChange`/`WillChangeProperty`) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-pass 6e), § 6 (error model).
 **Supersedes:** none (graduates the unbuilt `transforms-and-containment` spec children; sub-pass 6e extends the Phase-7 `PostTaffyOverrides` chain — `clear → sticky 6a → table 6b → multicol 6c → anchor 6d` — by appending `transform_composition` 6e after `anchor_resolution`).
 
