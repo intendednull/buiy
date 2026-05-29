@@ -13,14 +13,19 @@ export const meta = {
 // Parameters (via the Workflow `args` input)
 //   args.plan  : absolute path to the plan .md (default = Phase 8 plan)
 //   args.tasks : array of task numbers to run, in order (default = T1..T14)
-//   args.gate  : if true, run the full CLAUDE.md project gate after the last task
+//   args.gate    : if true, run the full CLAUDE.md project gate after the last task
+//   args.gateCmd : override the gate shell command (e.g. drop `xvfb-run -a`
+//                  on hosts without xvfb — this host runs tests headless via
+//                  MinimalPlugins, per CLAUDE.md "drop the xvfb-run prefix")
 // ---------------------------------------------------------------------------
 const WT = '/mnt/storage/projects/buiy/.claude/worktrees/layout-finish'
 const PLAN = (args && args.plan) || `${WT}/docs/plans/2026-05-28-buiy-layout-transforms-containment.md`
 const TASKS = (args && args.tasks) || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 const RUN_GATE = !!(args && args.gate)
 
-const GATE = `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && xvfb-run -a cargo test --workspace`
+const GATE =
+  (args && args.gateCmd) ||
+  `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && xvfb-run -a cargo test --workspace`
 
 const IMPL_SCHEMA = {
   type: 'object',

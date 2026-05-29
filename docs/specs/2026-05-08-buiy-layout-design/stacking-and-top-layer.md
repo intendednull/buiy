@@ -160,4 +160,39 @@ The contract: render reads, layout writes. Render does *not* compute stacking co
 - **Top-layer escapes parent overflow** — fixture parent with `Overflow { x: OverflowMode::Hidden, y: OverflowMode::Hidden }`, child `TopLayer::Modal` with `PositionKind::Fixed` extending past the parent; assert the modal's `StackingContext` membership is the window root, not the parent.
 - **Top-layer activation order** — open three popovers in sequence; assert the activation deque has them in order; assert the most-recent paints last (on top).
 - **Mixed top-layer tiers** — Modal + Tooltip simultaneously open; assert paint order is Tooltip below Modal regardless of activation order.
-- **Per-window top layer** — multi-window fixture; modal in window A doesn't appear in window B's `painters_z`.
+- **Per-window top layer** — multi-window fixture; modal in window A doesn't appear in window B's `painters_z`. *(Deferred — see § 7; `buiy_core` has no per-window layout yet.)*
+
+## 7. v1 implementation status (Phase 9 scope)
+
+This section records the seam between the canonical target above and what the
+v1 phase (Phase 9, sub-pass 6f) actually realizes. The target is unchanged;
+the deferrals are forced by features that do not yet exist in `buiy_core`, and
+each is tracked in [`../../plans/follow-ups.md`](../../plans/follow-ups.md).
+
+**Realized in Phase 9 (sub-pass 6f):**
+
+- Stacking-context formation triggers **1** (positioned + explicit `z_index`),
+  **2** (`Isolation::Isolate`), **3** (non-identity transform — read from the
+  Phase-8 `ResolvedTransform`), **4** (`Containment.contain` ⊇ `PAINT` / `STRICT`),
+  and **6** (root).
+- `StackingContext.painters_z` paint-order sort (§ 2.1, all five tiers; floats
+  always empty).
+- `z_index` sibling ordering within a context (§ 3).
+- Top-layer escape from parent stacking + from ancestor `Overflow` clip (§ 4.1,
+  § 4.3), tier ordering (§ 4.2), and `TopLayerActivation` activation-order
+  tracking — all within a **single global top layer**.
+
+**Deferred (target stands; not in Phase 9):**
+
+- **Trigger 5 — render-side SC formers** (`opacity < 1`, `filter`,
+  `mix_blend_mode`). These live on render-side components that do not exist in
+  `buiy_core` yet; 6f cannot check what is not present. When the render
+  components land, 6f's trigger predicate extends to read them.
+- **Trigger 5 — `will-change` SC former.** `WillChange` is stored by Phase 8
+  (tier-E, no behavior); its SC-forming behavior is deferred with the rest of
+  `will-change` layer promotion.
+- **§ 4.4 per-window scope.** `buiy_core` has a single global `LayoutTree` and
+  uses the primary window only (no per-window layout segregation). Phase 9
+  ships one global top layer; per-window top layers depend on
+  `buiy-window-and-surface-design`. The per-window test in § 6 is deferred with
+  it.
