@@ -117,3 +117,54 @@ fn will_change_does_not_warn() {
             .contains(&LayoutWarnOnceKey::SizeContainmentZeroed(e))
     );
 }
+
+#[test]
+fn content_visibility_deferred_warns_once_per_entity_across_three() {
+    use buiy_core::layout::ContentVisibility;
+    let mut app = app();
+    let mk = |app: &mut App| {
+        app.world_mut()
+            .spawn((
+                Node,
+                Style::default().containment(Containment {
+                    content_visibility: ContentVisibility::Auto,
+                    ..Default::default()
+                }),
+            ))
+            .id()
+    };
+    let a = mk(&mut app);
+    let b = mk(&mut app);
+    let c = mk(&mut app);
+    app.update();
+    // run a second frame — dedup must hold (no panic / re-warn observable
+    // via the set, which persists per session).
+    app.update();
+
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    assert!(
+        warned
+            .set
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(a))
+    );
+    assert!(
+        warned
+            .set
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(b))
+    );
+    assert!(
+        warned
+            .set
+            .contains(&LayoutWarnOnceKey::ContentVisibilityDeferred(c))
+    );
+    // Exactly three content-vis keys (one per entity), no duplicates.
+    let count = warned
+        .set
+        .iter()
+        .filter(|k| matches!(k, LayoutWarnOnceKey::ContentVisibilityDeferred(_)))
+        .count();
+    assert_eq!(
+        count, 3,
+        "one warn-once key per entity, deduped across frames"
+    );
+}
