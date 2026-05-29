@@ -149,6 +149,8 @@ fn layout_steps_are_chained_in_declared_order() {
     //                                 Anchor name "test-anchor")
     //   anchored                    (root) — references "test-anchor"
     //   table_entity                (root, Display::Table)
+    //     └─ table_row              (Display::TableRow)
+    //          └─ table_cell        (Display::TableCell, 40x20)
     //   multicol_entity             (root, MultiColumn)
     //
     // After update(), sub-pass 6a displaces `sticky_target` from
@@ -228,9 +230,29 @@ fn layout_steps_are_chained_in_declared_order() {
         ))
         .id();
 
-    // Sub-pass 6b — Display::Table entity (warns once per (entity,
-    // session)).
-    let table_entity = app.world_mut().spawn((Node, Display::Table)).id();
+    // Sub-pass 6b — a minimal table (Table > Row > Cell). The real 6b
+    // algorithm places the cell into a column grid and writes a
+    // corrected position to PostTaffyPositionOverrides (Phase 12).
+    let table_cell = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(40.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let table_row = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(table_cell)
+        .id();
+    let _table_entity = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_child(table_row)
+        .id();
 
     // Sub-pass 6c — MultiColumn entity (warns once per session total).
     let _multicol_entity = app.world_mut().spawn((Node, MultiColumn::default())).id();
@@ -313,21 +335,22 @@ fn layout_steps_are_chained_in_declared_order() {
         "ResolvedLayout for sticky_target reflects sub-pass 6a override",
     );
 
-    // Sub-pass 6b (table_layout) side-effect: a TableUnsupported entry
-    // exists for the table entity.
-    let warned = app.world().resource::<LayoutWarnedOnceSession>();
+    // Sub-pass 6b (table_layout) side-effect: the real algorithm
+    // writes a corrected position for the table cell into
+    // PostTaffyPositionOverrides (Phase 12 — placing it into the
+    // column grid).
+    let table_overrides = app.world().resource::<PostTaffyPositionOverrides>();
     assert!(
-        warned
-            .set
-            .contains(&LayoutWarnOnceKey::TableUnsupported(table_entity)),
-        "sub-pass 6b (table_layout) should record TableUnsupported({:?}); warn set: {:?}",
-        table_entity,
-        warned.set,
+        table_overrides.by_entity.contains_key(&table_cell),
+        "sub-pass 6b (table_layout) should write a position override for the table cell; \
+         override keys: {:?}",
+        table_overrides.by_entity.keys().collect::<Vec<_>>(),
     );
 
     // Sub-pass 6c (multicol_pack) side-effect: the per-session
     // MulticolUnsupported sentinel is recorded (no entity payload —
     // first multicol entity triggers, all later are silent).
+    let warned = app.world().resource::<LayoutWarnedOnceSession>();
     assert!(
         warned.set.contains(&LayoutWarnOnceKey::MulticolUnsupported),
         "sub-pass 6c (multicol_pack) should record MulticolUnsupported; warn set: {:?}",

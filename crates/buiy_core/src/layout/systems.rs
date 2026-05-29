@@ -641,13 +641,6 @@ pub(super) fn sticky_offset(
 /// structural roles (`Table` / `RowGroup` / `Row` / `Cell`) are laid
 /// out by sub-pass 6b; `Caption` / `Column` / `ColumnGroup` are
 /// classified but deferred-with-warn in v1 (plan D4).
-///
-/// Carries `#[allow(dead_code)]` because the `table_layout` system
-/// that consumes this classifier is rewritten to use it in a later
-/// task (plan T4); until then the helper is exercised only by its
-/// unit tests. Mirrors the staged `clear_warned_once_on_exit`
-/// precedent above.
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum TablePart {
     Table,
@@ -664,10 +657,6 @@ pub(super) enum TablePart {
 
 /// Classify a `Display` into its `TablePart` role, or `None` if the
 /// entity is not a table-family member.
-///
-/// Carries `#[allow(dead_code)]` for the same reason as `TablePart`:
-/// the consuming system rewrite lands in a later task (plan T4).
-#[allow(dead_code)]
 pub(super) fn table_part(display: &Display) -> Option<TablePart> {
     match display {
         Display::Table => Some(TablePart::Table),
@@ -696,11 +685,7 @@ pub(super) fn table_part(display: &Display) -> Option<TablePart> {
 ///
 /// Pure (no Bevy queries / no shared state). Unit-tested in `mod tests`.
 ///
-/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
-/// the consuming `table_layout` rewrite lands in a later task (plan T4).
-///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
-#[allow(dead_code)]
 pub(super) fn resolve_column_widths(rows: &[Vec<f32>]) -> Vec<f32> {
     let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     if col_count == 0 {
@@ -773,10 +758,6 @@ pub(super) fn resolve_column_widths(rows: &[Vec<f32>]) -> Vec<f32> {
 
 /// One table row: its entity and the cell entities it owns, in
 /// `Children` document order (column index = position in this vec).
-///
-/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
-/// the consuming `table_layout` rewrite lands in a later task (plan T4).
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(super) struct TableRowModel {
     pub entity: Entity,
@@ -786,10 +767,6 @@ pub(super) struct TableRowModel {
 /// One row-group (explicit `table-row-group`/`header`/`footer`, or the
 /// implicit group around bare rows — plan D6): its entity and rows in
 /// document order.
-///
-/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
-/// the consuming `table_layout` rewrite lands in a later task (plan T4).
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(super) struct TableRowGroupModel {
     pub entity: Entity,
@@ -799,10 +776,6 @@ pub(super) struct TableRowGroupModel {
 /// A table's structural spine gathered from the `Children` hierarchy,
 /// in document order (plan D5). Caption / column(-group) parts are not
 /// stored here — they are deferred-with-warn (plan D4).
-///
-/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
-/// the consuming `table_layout` rewrite lands in a later task (plan T4).
-#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(super) struct TableModel {
     pub groups: Vec<TableRowGroupModel>,
@@ -818,11 +791,7 @@ pub(super) struct TableModel {
 ///
 /// Pure. Unit-tested in `mod tests`.
 ///
-/// Carries `#[allow(dead_code)]` for the same reason as `table_part`:
-/// the consuming `table_layout` rewrite lands in a later task (plan T4).
-///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
-#[allow(dead_code)]
 pub(super) fn place_table_cells(
     model: &TableModel,
     col_widths: &[f32],
@@ -855,33 +824,162 @@ pub(super) fn place_table_cells(
     placed
 }
 
-/// Sub-pass 6b — table layout stub.
+/// Walk a table entity's `Children` hierarchy into a `TableModel`
+/// (spec § 1.2 step 1). Explicit row-groups contribute their own
+/// rows; bare `TableRow` children of the table form a single implicit
+/// anonymous row-group in document order (plan D6). Caption / column
+/// parts are skipped here (deferred-with-warn, plan D4). Returns the
+/// model plus the deferred-part entities for the caller's warn pass.
 ///
-/// Spec § 1.2: "v1 ships only the API surface and the fallback path;
-/// the full algorithm is deferred to a v1.x point release." The
-/// fallback path (Table → Block) is handled by `translate.rs`. This
-/// sub-pass exists solely to emit a `warn!` once per (entity,
-/// session) the first time each `Display::Table*` value is
-/// encountered.
+/// `children_q` is the `Query<&Children>`; `display_q` reads each
+/// child's `Display`.
+///
+/// Carries `#[allow(dead_code)]` on the deferred-part vec only via the
+/// caller; the warn pass that consumes it lands in a later task (plan
+/// T7). The model half is consumed by `table_layout` immediately.
+fn gather_table(
+    table: Entity,
+    children_q: &Query<&Children>,
+    display_q: &Query<&Display>,
+) -> (TableModel, Vec<Entity>) {
+    let mut model = TableModel::default();
+    let mut deferred: Vec<Entity> = Vec::new();
+    // The implicit group accumulates bare rows; flushed when a real
+    // group is seen or at the end, preserving document order.
+    let mut implicit = TableRowGroupModel {
+        entity: table, // implicit group is the table box itself
+        rows: Vec::new(),
+    };
+
+    let gather_row = |row: Entity| -> TableRowModel {
+        let mut cells: Vec<Entity> = Vec::new();
+        if let Ok(row_kids) = children_q.get(row) {
+            for cell in row_kids.iter() {
+                if matches!(display_q.get(cell), Ok(d) if table_part(d) == Some(TablePart::Cell)) {
+                    cells.push(cell);
+                }
+            }
+        }
+        TableRowModel { entity: row, cells }
+    };
+
+    let Ok(table_kids) = children_q.get(table) else {
+        return (model, deferred);
+    };
+    for child in table_kids.iter() {
+        match display_q.get(child).ok().and_then(table_part) {
+            Some(TablePart::Row) => implicit.rows.push(gather_row(child)),
+            Some(TablePart::RowGroup) => {
+                let mut group = TableRowGroupModel {
+                    entity: child,
+                    rows: Vec::new(),
+                };
+                if let Ok(group_kids) = children_q.get(child) {
+                    for gk in group_kids.iter() {
+                        if matches!(display_q.get(gk), Ok(d) if table_part(d) == Some(TablePart::Row))
+                        {
+                            group.rows.push(gather_row(gk));
+                        }
+                    }
+                }
+                model.groups.push(group);
+            }
+            Some(TablePart::Caption | TablePart::Column | TablePart::ColumnGroup) => {
+                deferred.push(child);
+            }
+            _ => {}
+        }
+    }
+    if !implicit.rows.is_empty() {
+        // Bare rows precede explicit groups in document order only if
+        // they appeared first; for v1 the common case is *either* bare
+        // rows *or* explicit groups, so prepend the implicit group.
+        model.groups.insert(0, implicit);
+    }
+    (model, deferred)
+}
+
+/// Sub-pass 6b — table layout (spec § 1.2). For each `Display::Table`
+/// entity: gather its row-group / row / cell spine (step 1), resolve
+/// per-column widths via a synthetic Taffy flex tree (step 2), place
+/// every cell / row / row-group into the column grid relative to the
+/// table origin, and write the corrected absolute positions into
+/// `PostTaffyPositionOverrides` (step 3). Sizes are never touched —
+/// they stay from Taffy's block layout (plan D1), matching how 6a
+/// (sticky) corrects position only.
+///
+/// Caption / column(-group) parts and ragged (span-faking) rows warn
+/// once per (entity, session) (plan D4 / D8); the warns land in a
+/// later task.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
 pub(super) fn table_layout(
+    tree: NonSend<LayoutTree>,
     table_q: Query<(Entity, &Display), With<Node>>,
+    children_q: Query<&Children>,
+    display_q: Query<&Display>,
+    mut overrides: ResMut<PostTaffyPositionOverrides>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
-    for (e, d) in table_q.iter() {
-        if !is_table_display(d) {
+    let _ = &mut warned; // per-feature warns land in T7.
+    for (table, display) in table_q.iter() {
+        if table_part(display) != Some(TablePart::Table) {
             continue;
         }
-        if warned.set.insert(LayoutWarnOnceKey::TableUnsupported(e)) {
-            bevy::log::warn!(
-                "Layout: Display::Table* on entity {:?} — table layout algorithm is deferred to v1.x (spec § 1.2). Falling back to Display::Block. Use Display::Grid for v1 table-like layouts.",
-                e,
-            );
+        // The table's own natural position (Taffy-block). Skip if Taffy
+        // hasn't placed it yet (mirrors sticky_offset's continue-on-miss).
+        let Some(table_node) = tree.by_entity.get(&table) else {
+            continue;
+        };
+        let Ok(table_layout) = tree.tree.layout(*table_node) else {
+            continue;
+        };
+        let table_origin = Vec2::new(table_layout.location.x, table_layout.location.y);
+
+        let (model, _deferred) = gather_table(table, &children_q, &display_q);
+        if model.groups.is_empty() {
+            continue;
+        }
+
+        // Per-row cell widths (from Taffy) + per-row heights (max cell
+        // height in the row). Flat across groups, matching place order.
+        let mut rows_widths: Vec<Vec<f32>> = Vec::new();
+        let mut row_heights: Vec<f32> = Vec::new();
+        for group in &model.groups {
+            for row in &group.rows {
+                let mut widths: Vec<f32> = Vec::with_capacity(row.cells.len());
+                let mut max_h = 0.0f32;
+                for &cell in &row.cells {
+                    let (w, h) = tree
+                        .by_entity
+                        .get(&cell)
+                        .and_then(|n| tree.tree.layout(*n).ok())
+                        .map(|l| (l.size.width, l.size.height))
+                        .unwrap_or((0.0, 0.0));
+                    widths.push(w);
+                    max_h = max_h.max(h);
+                }
+                rows_widths.push(widths);
+                row_heights.push(max_h);
+            }
+        }
+
+        let col_widths = resolve_column_widths(&rows_widths);
+        let placed = place_table_cells(&model, &col_widths, &row_heights);
+        for (entity, offset) in placed {
+            overrides.by_entity.insert(entity, table_origin + offset);
         }
     }
 }
 
+/// Predicate matching every `Display::Table*` variant.
+///
+/// Carries `#[allow(dead_code)]` because its sole caller — the old
+/// `table_layout` warn-once stub — is replaced by the real 6b
+/// algorithm in this task (plan T4). The helper is kept until the
+/// per-feature warn pass (plan T7) decides its fate; until then it is
+/// unreferenced, mirroring the staged-helper precedent above.
+#[allow(dead_code)]
 fn is_table_display(d: &Display) -> bool {
     matches!(
         d,
@@ -4230,30 +4328,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 7 Task 6 — `table_layout` system tests.
+    // Phase 12 — `table_layout` (sub-pass 6b) is now the real algorithm
+    // (gather → resolve columns → place cells → write overrides). Its
+    // behavior is covered by the integration suite `tests/layout_table.rs`
+    // and the pure-helper unit tests above (`table_part`,
+    // `resolve_column_widths`, `place_table_cells`). The Phase-7
+    // stub-warn unit test was removed when the stub was superseded —
+    // `table_layout` now requires `NonSend<LayoutTree>`, which a bare
+    // `App` in a unit test does not provide.
     // -----------------------------------------------------------------
-
-    #[test]
-    fn table_layout_warns_once_per_entity() {
-        let mut app = App::new();
-        app.init_resource::<LayoutWarnedOnceSession>();
-        app.add_systems(Update, table_layout);
-        let e = app.world_mut().spawn((Node, Display::Table)).id();
-        app.update();
-        let warned = app.world().resource::<LayoutWarnedOnceSession>();
-        assert!(warned.set.contains(&LayoutWarnOnceKey::TableUnsupported(e)));
-
-        app.update();
-        let warned = app.world().resource::<LayoutWarnedOnceSession>();
-        assert_eq!(
-            warned
-                .set
-                .iter()
-                .filter(|k| matches!(k, LayoutWarnOnceKey::TableUnsupported(_)))
-                .count(),
-            1,
-        );
-    }
 
     // -----------------------------------------------------------------
     // Phase 7 Task 7 — `multicol_pack` system tests.
