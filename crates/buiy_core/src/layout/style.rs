@@ -14,14 +14,14 @@
 
 use super::components::{
     BoxModel, Container, Containment, Display, FlexParams, GridParams, MultiColumn, Overflow,
-    Position, Scroll, UiTransform, WritingMode,
+    Position, Scroll, Stacking, UiTransform, WritingMode,
 };
 use super::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, ContainFlags, ContainerType, Direction,
-    Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent,
+    Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, Isolation, JustifyContent,
     JustifyItems, Length, LogicalEdges, OverflowMode, PositionKind, ScrollBehavior,
-    ScrollbarGutter, ScrollbarWidth, Sizing, SnapType, TextOrientation, TrackSize, TransformMatrix,
-    UnicodeBidi, WritingModeKind,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapType, TextOrientation, TopLayer, TrackSize,
+    TransformMatrix, UnicodeBidi, WritingModeKind, ZIndex,
 };
 use bevy::ecs::bundle::Bundle;
 use bevy::math::Quat;
@@ -58,6 +58,7 @@ pub struct Style {
     pub multi_column: MultiColumn,
     pub ui_transform: UiTransform,
     pub containment: Containment,
+    pub stacking: Stacking,
 }
 
 impl Style {
@@ -514,6 +515,36 @@ impl Style {
         self.containment.contain = flags;
         self
     }
+
+    // ---- Stacking ----
+
+    /// Set the full `Stacking` (z-index, isolation, top-layer) at once.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 1.
+    pub fn stacking(mut self, s: Stacking) -> Self {
+        self.stacking = s;
+        self
+    }
+
+    /// Set `z-index` (spec § 3). `ZIndex::Layer(n)` on a positioned entity
+    /// forms a stacking context and orders siblings.
+    pub fn z_index(mut self, z: ZIndex) -> Self {
+        self.stacking.z_index = z;
+        self
+    }
+
+    /// Set `isolation` (spec § 2). `Isolation::Isolate` forces a context.
+    pub fn isolation(mut self, iso: Isolation) -> Self {
+        self.stacking.isolation = iso;
+        self
+    }
+
+    /// Set top-layer participation (spec § 4). Non-`None` escapes the
+    /// parent stacking context into the global top layer.
+    pub fn top_layer(mut self, t: TopLayer) -> Self {
+        self.stacking.top_layer = t;
+        self
+    }
 }
 
 /// Builder for the box-model surface using logical (writing-mode-aware)
@@ -647,12 +678,12 @@ mod tests {
     use super::*;
     use crate::layout::components::{
         BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position,
-        Scroll, UiTransform, WritingMode,
+        Scroll, Stacking, UiTransform, WritingMode,
     };
     use crate::layout::types::{
         AlignItems, BoxSizing, ColumnCount, ContainerType, Direction, Edges, FlexAxis, FlexGap,
-        GridAutoFlow, JustifyContent, Length, OverflowMode, ScrollbarWidth, Sizing, SnapType,
-        TrackSize, TransformMatrix, WritingModeKind,
+        GridAutoFlow, Isolation, JustifyContent, Length, OverflowMode, ScrollbarWidth, Sizing,
+        SnapType, TopLayer, TrackSize, TransformMatrix, WritingModeKind, ZIndex,
     };
     use bevy::app::App;
     use bevy::ecs::world::World;
@@ -1004,5 +1035,22 @@ mod tests {
     fn style_contain_setter_round_trips() {
         let s = Style::default().contain(ContainFlags::SIZE);
         assert_eq!(s.containment.contain, ContainFlags::SIZE);
+    }
+
+    #[test]
+    fn style_stacking_setters() {
+        let s = Style::default()
+            .z_index(ZIndex::Layer(3))
+            .isolation(Isolation::Isolate)
+            .top_layer(TopLayer::Modal);
+        assert_eq!(s.stacking.z_index, ZIndex::Layer(3));
+        assert_eq!(s.stacking.isolation, Isolation::Isolate);
+        assert_eq!(s.stacking.top_layer, TopLayer::Modal);
+    }
+
+    #[test]
+    fn style_stacking_default_is_identity() {
+        let s = Style::default();
+        assert_eq!(s.stacking, Stacking::default());
     }
 }

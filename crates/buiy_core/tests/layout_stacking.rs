@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 use buiy_core::components::StackingContext;
-use buiy_core::layout::{LayoutPlugin, Stacking, Style, TopLayer, TopLayerActivation};
+use buiy_core::layout::{LayoutPlugin, Style, TopLayer, TopLayerActivation};
 use buiy_core::{CorePlugin, Node};
 
 fn app() -> App {
@@ -20,14 +20,7 @@ fn top_layer_modal_escapes_to_root() {
     let mut app = app();
     let modal = app
         .world_mut()
-        .spawn((
-            Node,
-            Style::default(),
-            Stacking {
-                top_layer: TopLayer::Modal,
-                ..Default::default()
-            },
-        ))
+        .spawn((Node, Style::default().top_layer(TopLayer::Modal)))
         .id();
     let parent = app
         .world_mut()
@@ -60,25 +53,11 @@ fn top_layer_activation_tracks_open_order() {
     let mut app = app();
     let a = app
         .world_mut()
-        .spawn((
-            Node,
-            Style::default(),
-            Stacking {
-                top_layer: TopLayer::Popover,
-                ..Default::default()
-            },
-        ))
+        .spawn((Node, Style::default().top_layer(TopLayer::Popover)))
         .id();
     let b = app
         .world_mut()
-        .spawn((
-            Node,
-            Style::default(),
-            Stacking {
-                top_layer: TopLayer::Popover,
-                ..Default::default()
-            },
-        ))
+        .spawn((Node, Style::default().top_layer(TopLayer::Popover)))
         .id();
     let _root = app
         .world_mut()

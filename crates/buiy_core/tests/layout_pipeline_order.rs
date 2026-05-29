@@ -385,19 +385,19 @@ fn identity_transform_gets_no_resolved_transform() {
 #[test]
 fn stacking_context_runs_and_marks_positioned_z_index() {
     let mut app = stacking_app();
-    // A root with one positioned + z-index child. The T10 `.stacking()`
-    // setter has not landed yet, so spawn `Stacking` directly as a
-    // component; position is set via the existing `Style::position`
-    // builder (`Position` is already a `Style` bundle field).
+    // A root with one positioned + z-index child. `Stacking` is a `Style`
+    // bundle field (T10), so set it via the `.stacking()` setter; position
+    // is set via the existing `Style::position` builder.
     let child = app
         .world_mut()
         .spawn((
             Node,
-            Style::default().position(PositionKind::Relative),
-            Stacking {
-                z_index: ZIndex::Layer(1),
-                ..Default::default()
-            },
+            Style::default()
+                .position(PositionKind::Relative)
+                .stacking(Stacking {
+                    z_index: ZIndex::Layer(1),
+                    ..Default::default()
+                }),
         ))
         .id();
     let root = app
