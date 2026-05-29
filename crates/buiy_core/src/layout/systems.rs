@@ -815,6 +815,102 @@ pub(super) fn resolve_column_count(
     (count, used_width)
 }
 
+/// One in-flow multi-column child as seen by the packer: its entity,
+/// its Taffy-computed block-size (height in horizontal writing mode),
+/// and whether a forced column break is requested immediately before /
+/// after it (derived from `break-before` / `break-after`). Width is not
+/// stored — every column is the resolved `column_width`; the packer
+/// places children at the column-x, it does not resize them (plan D1).
+///
+/// Carries `#[allow(dead_code)]` because `pack_columns` (and through it
+/// the rewritten `multicol_pack` system) consumes it in a later Phase-13
+/// task (T5); committing the pure helper first follows the
+/// `resolve_column_count` precedent.
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub(super) struct MulticolChild {
+    pub entity: Entity,
+    pub height: f32,
+    pub force_break_before: bool,
+    pub force_break_after: bool,
+}
+
+/// A packed child: its entity and its offset relative to the multicol
+/// container's content-box origin (plan D7 — written straight into the
+/// override map, no container-origin add).
+///
+/// Carries `#[allow(dead_code)]` because it is only produced/consumed by
+/// `pack_columns` until the `multicol_pack` rewrite (T5) reads it.
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub(super) struct PackedChild {
+    pub entity: Entity,
+    pub offset: Vec2,
+}
+
+/// Distribute `children` (document order) into `count` equal-width
+/// columns via greedy whole-child packing (plan D2): fill a column
+/// top-to-bottom until the next child would exceed `col_block_size`,
+/// then move to the next column. A child is never split. Forced column
+/// breaks (`force_break_before` / `force_break_after`, plan D4) start a
+/// new column at the child boundary; a break before the first child of
+/// column 0 is a no-op (no empty leading column). More than `count`
+/// columns is never produced — the column index saturates at
+/// `count - 1` so an overlong content stream stacks into the final
+/// column (whole-child packing, no overflow column).
+///
+/// Column `c`'s x-offset is `c * (col_width + gap)`. A child's y is the
+/// running cumulative height within its column.
+///
+/// Pure (no Bevy queries / no Taffy reads). Unit-tested in `mod tests`.
+///
+/// Carries `#[allow(dead_code)]` because the rewritten `multicol_pack`
+/// system consumes it in a later Phase-13 task (T5); committing the pure
+/// helper first follows the `resolve_column_count` precedent.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.2.
+#[allow(dead_code)]
+pub(super) fn pack_columns(
+    children: &[MulticolChild],
+    count: usize,
+    col_width: f32,
+    gap: f32,
+    col_block_size: f32,
+) -> Vec<PackedChild> {
+    let count = count.max(1);
+    let last_col = count - 1;
+    let mut out: Vec<PackedChild> = Vec::with_capacity(children.len());
+    let mut col = 0usize;
+    let mut y = 0.0f32;
+
+    for (i, child) in children.iter().enumerate() {
+        let is_first_in_layout = i == 0;
+        // A forced break-before, or an overflow of the current column,
+        // advances to the next column — but never before placing the
+        // very first child (no empty leading column).
+        let force_break = child.force_break_before && !is_first_in_layout;
+        let overflow = y > 0.0 && (y + child.height) > col_block_size;
+        if (force_break || overflow) && col < last_col {
+            col += 1;
+            y = 0.0;
+        }
+
+        let x = col as f32 * (col_width + gap);
+        out.push(PackedChild {
+            entity: child.entity,
+            offset: Vec2::new(x, y),
+        });
+        y += child.height;
+
+        // A forced break-after moves the *next* child to a new column.
+        if child.force_break_after && col < last_col {
+            col += 1;
+            y = 0.0;
+        }
+    }
+    out
+}
+
 /// One table row: its entity and the cell entities it owns, in
 /// `Children` document order (column index = position in this vec).
 #[derive(Clone, Debug)]
@@ -4779,5 +4875,111 @@ mod observer_tests {
         let (n, w) = resolve_column_count(ColumnCount::Auto, Some(500.0), 0.0, 400.0);
         assert_eq!(n, 1);
         assert!((w - 400.0).abs() < 1e-3);
+    }
+
+    // Build a MulticolChild test fixture (entity, height, no forced breaks).
+    fn mc_child(world: &mut World, height: f32) -> MulticolChild {
+        let e = world.spawn_empty().id();
+        MulticolChild {
+            entity: e,
+            height,
+            force_break_before: false,
+            force_break_after: false,
+        }
+    }
+
+    #[test]
+    fn pack_columns_fills_columns_top_to_bottom() {
+        // 2 columns, width 100, gap 20, col block-size 100.
+        // children heights [40, 40, 40]: col0 gets [40,40] (y 0,40),
+        // col1 gets [40] (y 0). col x: col0 = 0, col1 = 120.
+        let mut world = World::new();
+        let a = mc_child(&mut world, 40.0);
+        let b = mc_child(&mut world, 40.0);
+        let c = mc_child(&mut world, 40.0);
+        let (ea, eb, ec) = (a.entity, b.entity, c.entity);
+        let packed = pack_columns(&[a, b, c], 2, 100.0, 20.0, 100.0);
+        let pos = |e: Entity| packed.iter().find(|p| p.entity == e).unwrap().offset;
+        assert_eq!(pos(ea), Vec2::new(0.0, 0.0));
+        assert_eq!(pos(eb), Vec2::new(0.0, 40.0));
+        assert_eq!(pos(ec), Vec2::new(120.0, 0.0));
+    }
+
+    #[test]
+    fn pack_columns_overflow_starts_next_column() {
+        // col block-size 50; heights [40, 40] → b doesn't fit after a
+        // (40+40 > 50) → b starts col1.
+        let mut world = World::new();
+        let a = mc_child(&mut world, 40.0);
+        let b = mc_child(&mut world, 40.0);
+        let (ea, eb) = (a.entity, b.entity);
+        let packed = pack_columns(&[a, b], 2, 100.0, 0.0, 50.0);
+        let pos = |e: Entity| packed.iter().find(|p| p.entity == e).unwrap().offset;
+        assert_eq!(pos(ea), Vec2::new(0.0, 0.0));
+        assert_eq!(pos(eb), Vec2::new(100.0, 0.0), "overflow pushes b to col1");
+    }
+
+    #[test]
+    fn pack_columns_force_break_before_starts_new_column() {
+        // both fit in col0 by size, but b has force_break_before → col1.
+        let mut world = World::new();
+        let a = mc_child(&mut world, 10.0);
+        let mut b = mc_child(&mut world, 10.0);
+        b.force_break_before = true;
+        let (ea, eb) = (a.entity, b.entity);
+        let packed = pack_columns(&[a, b], 2, 100.0, 0.0, 500.0);
+        let pos = |e: Entity| packed.iter().find(|p| p.entity == e).unwrap().offset;
+        assert_eq!(pos(ea), Vec2::new(0.0, 0.0));
+        assert_eq!(
+            pos(eb),
+            Vec2::new(100.0, 0.0),
+            "force-break-before starts col1"
+        );
+    }
+
+    #[test]
+    fn pack_columns_force_break_after_pushes_next_child() {
+        // a has force_break_after → b starts col1 even though it would fit.
+        let mut world = World::new();
+        let mut a = mc_child(&mut world, 10.0);
+        a.force_break_after = true;
+        let b = mc_child(&mut world, 10.0);
+        let (ea, eb) = (a.entity, b.entity);
+        let packed = pack_columns(&[a, b], 2, 100.0, 0.0, 500.0);
+        let pos = |e: Entity| packed.iter().find(|p| p.entity == e).unwrap().offset;
+        assert_eq!(pos(ea), Vec2::new(0.0, 0.0));
+        assert_eq!(
+            pos(eb),
+            Vec2::new(100.0, 0.0),
+            "force-break-after pushes b to col1"
+        );
+    }
+
+    #[test]
+    fn pack_columns_break_at_column_zero_is_no_op() {
+        // force_break_before on the very first child must not create an empty
+        // column 0 — it stays in col0.
+        let mut world = World::new();
+        let mut a = mc_child(&mut world, 10.0);
+        a.force_break_before = true;
+        let _ea = a.entity;
+        let packed = pack_columns(&[a], 1, 100.0, 0.0, 500.0);
+        assert_eq!(
+            packed[0].offset,
+            Vec2::new(0.0, 0.0),
+            "break on first child is a no-op"
+        );
+    }
+
+    #[test]
+    fn pack_columns_single_column_stacks_all() {
+        let mut world = World::new();
+        let a = mc_child(&mut world, 30.0);
+        let b = mc_child(&mut world, 30.0);
+        let (ea, eb) = (a.entity, b.entity);
+        let packed = pack_columns(&[a, b], 1, 400.0, 0.0, 1000.0);
+        let pos = |e: Entity| packed.iter().find(|p| p.entity == e).unwrap().offset;
+        assert_eq!(pos(ea), Vec2::new(0.0, 0.0));
+        assert_eq!(pos(eb), Vec2::new(0.0, 30.0));
     }
 }
