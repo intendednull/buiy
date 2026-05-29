@@ -217,16 +217,24 @@ flex container per row group. Write corrected positions back to
 
 **Spec touchpoint:** `display-and-positioning.md § 1.2`.
 
-## Layout — full multi-column layout algorithm
+## Layout — full multi-column layout algorithm — LANDED
 
 **Originated:** Phase 7 (Task 7 stub).
 
-**Symptom:** Entities with `MultiColumn` warn-once-per-session and fall
-back to single-column layout.
-
-**Implementation sketch:** replace `multicol_pack` stub with a packing
-pass that respects `column_count` / `column_width` + `break-*`
-properties. Write each child's `PostTaffyPositionOverrides` entry.
+**Status:** **Landed** in Phase 13
+(`docs/plans/2026-05-29-buiy-layout-multicol-layout.md`). The `multicol_pack`
+stub (sub-pass 6c) is replaced with a real packing pass: a pure CSS Multicol L1
+§ 7.3 used-value `resolve_column_count` resolver (count-only / width-only / both
+/ neither, with `column-count` treated as a maximum), a pure greedy whole-child
+`pack_columns` packer that fills columns top-to-bottom and honors forced
+`break-before` / `break-after` (`Column` / `Always`) at the child boundary, and
+container-content-relative offsets written straight into
+`PostTaffyPositionOverrides`. The blanket `MulticolUnsupported` warn is retired
+(kept `Reflect`-stable like `TableUnsupported`). True content fragmentation
+(splitting one box across a column boundary) and break-*avoidance* remain
+deferred (tier-E) behind a session-wide `MulticolFragmentationDeferred`
+warn-once; `column_width` / `column_gap` resolve `Px` only (percent / cq column
+metrics deferred).
 
 **Spec touchpoint:** `flex-and-grid.md § 3` (multi-column).
 

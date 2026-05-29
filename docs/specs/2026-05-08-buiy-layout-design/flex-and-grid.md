@@ -184,14 +184,20 @@ is sufficient for tests and authoring ergonomics.
 
 ### 3.2 Algorithm
 
-A multi-column container's layout will be computed in two stages (target algorithm — the shipped v1 is a stub, see below):
+A multi-column container's layout is computed in two stages:
 
 1. **Determine column count** — from explicit `column_count`, or computed from `column_width` + container width + `column_gap`.
-2. **Lay out children into columns** — Buiy will walk children and pack them into columns, respecting `break-*` properties, overwriting children's `ResolvedLayout.position`. This will run as sub-pass 6c of the post-Taffy-overrides phase ([architecture.md § 3](architecture.md#3-system-pipeline)), after table layout (6b) and before anchor resolution (6d).
+2. **Lay out children into columns** — Buiy walks children and packs them into columns, respecting `break-*` properties, overwriting children's `ResolvedLayout.position`. This runs as sub-pass 6c of the post-Taffy-overrides phase ([architecture.md § 3](architecture.md#3-system-pipeline)), after table layout (6b) and before anchor resolution (6d).
 
-Multi-column is tier-E; v1 ships the API but the algorithm is a stub. The shipped sub-pass 6c (`multicol_pack` in `systems.rs`) is a no-op for layout: it does not determine column count or pack children — `ResolvedLayout.position` is left as Taffy produced it (single-column). It only emits the deferral `warn!`. Prioritization of the real algorithm waits on user demand.
+**Implemented (Phase 13).** Sub-pass 6c (`multicol_pack` in `systems.rs`) is a real position-only overlay, structurally mirroring the table sub-pass (6b): Taffy lays the container + children out in block flow first, then 6c reads the container's Taffy content box + each child's Taffy size, resolves the used column count, packs the in-flow children into columns, and writes corrected **parent-relative** child positions into the shared `PostTaffyPositionOverrides` map. Sizes are never touched — only positions.
 
-The deferral warn is deduplicated session-wide via `LayoutWarnOnceKey::MulticolUnsupported` in the `LayoutWarnedOnceSession` resource. That key carries **no `Entity` payload**, so the warn fires exactly once per session *in total* across all `MultiColumn` entities — the first multicol entity encountered triggers it; every subsequent one is silent. This contrasts with the table stub, whose `LayoutWarnOnceKey::TableUnsupported(Entity)` dedups per `(entity, session)` and so warns once for each distinct table entity.
+- **Column-count resolution** is the pure `resolve_column_count` helper implementing the CSS Multicol L1 § 7.3 used-value algorithm (count-only / width-only / both / neither). When both `column_count` and `column_width` are set, `column-count` is treated as a *maximum*; columns expand to fill the content box.
+- **Packing** is the pure `pack_columns` greedy whole-child packer: children flow into columns in document order, top-to-bottom, until the next child would exceed the column block-size, then start the next column. Forced breaks (`break-before` / `break-after` = `Column` / `Always`) start a new column at the child boundary. In-flow children are the container's direct `Children` minus `Display::None` (no box) and `Position::Absolute` / `Fixed` (out of flow — they keep their Taffy position).
+- `column_width` / `column_gap` resolve `Px` only in v1 (percent / cq column metrics deferred); the gap fallback for CSS `normal` is `0.0` (pre-font-metrics).
+
+**Still deferred (tier-E).** True content *fragmentation* — splitting a single child's box across a column boundary — is not implemented: Buiy produces one rect per entity, so a child taller than its column is placed whole and overflows. Break-*avoidance* (`break-inside: avoid`, `break-before/after: avoid`) is likewise a best-effort no-op (whole-child packing trivially satisfies `break-inside: avoid`; avoidance breaks that need backtracking/balancing are not honored). Both gaps are reported by a session-wide `LayoutWarnOnceKey::MulticolFragmentationDeferred` warn-once, which fires when a child whose block-size exceeds the resolved column block-size is encountered under `column_fill: Balance` (balanced fill assumes divisible content). That key carries **no `Entity` payload**, so it fires exactly once per session *in total*.
+
+The Phase-7 stub's blanket `LayoutWarnOnceKey::MulticolUnsupported` warn is **retired** — it is kept as a `Reflect`-stable variant that no code emits (the same retire pattern as `TableUnsupported`), since the packing algorithm now ships and the blanket "unsupported" warn would be wrong for the common, fully-supported case.
 
 ## 4. Mixing display types
 
@@ -206,5 +212,5 @@ The deferral warn is deduplicated session-wide via `LayoutWarnOnceKey::MulticolU
 - **Grid named areas** — fixture with `template_areas` and child `GridItem.column = Area("header")`; assert correct cell.
 - **Grid `repeat(auto-fill, ...)`** — fixture with `auto-fill` columns sized 100px in a 350px container; assert 3 columns + 50px slack.
 - **Subgrid stub warns** — until Taffy lands subgrid, `TrackSize::Subgrid` falls back to Taffy `Auto` + one `warn!`.
-- **Multi-column stub warns** — multiple `MultiColumn` entities (e.g. three, one with `column_count = Count(3)`) produce single-column layout + exactly one session-wide `warn!` total, regardless of entity count (reverts once the algorithm ships).
+- **Multi-column packing** (Phase 13) — a `column_count = Count(2)` container with three fixed-size children packs them greedily into two columns (col 0 fills top-to-bottom, overflow spills to col 1); `resolve_column_count` unit-tests the four CSS used-value cases; `pack_columns` unit-tests greedy fill + forced `break-before` / `break-after` starting a new column; a child taller than the column under `column_fill: Balance` produces whole-child overflow + exactly one session-wide `MulticolFragmentationDeferred` `warn!` (the residual fragmentation gap).
 - **Mixed flex-in-grid** — fixture nests a `Display::Flex(Row)` inside a `Display::Grid` cell; assert flex children are laid out within the cell's resolved box.

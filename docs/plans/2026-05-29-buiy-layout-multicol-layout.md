@@ -12,7 +12,7 @@
 **Tech Stack:** Bevy 0.18 (`bevy::prelude::{Children, ChildOf, Node, Query, NonSend, ResMut, With, Vec2}`, `bevy::ecs::entity::Entity`). `std::collections::HashMap` (no `bevy::utils::*`, per Phase 6/7/8 precedent). Taffy 0.10 read-only via the shared `NonSend<LayoutTree>` (`tree.tree.layout(node)` → `taffy::Layout { location, size }`); **no synthetic Taffy tree** (unlike 6b — column packing is pure arithmetic over already-resolved child sizes). No new external dependency.
 
 **Date:** 2026-05-29
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/flex-and-grid.md`](../specs/2026-05-08-buiy-layout-design/flex-and-grid.md) § 3 (multi-column) — § 3.1 (`MultiColumn` component + value types, already shipped Phase 7), § 3.2 (the two-stage algorithm: 1 determine column count, 2 lay out children into columns), § 5 ("Multi-column stub warns" test bullet — this phase **graduates** that bullet from stub to real packing). Reads [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (sub-pass 6c in the `PostTaffyOverrides` chain), § 6 (warn-once dedup model). Prior-art: [`prior-art/blink/layout.md`](../prior-art/blink/layout.md) § 3–§ 5 (fragmentation = multi-fragment output tree, the deliberately-deferred tier-E piece), [`prior-art/servo-stylo/layout.md`](../prior-art/servo-stylo/layout.md), [`prior-art/taffy/architecture.md`](../prior-art/taffy/architecture.md) (Taffy has no fragmentation / inline formatting context, so multicol is an above-Taffy pass).
 
 ---
