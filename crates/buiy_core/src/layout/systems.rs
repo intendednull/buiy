@@ -996,9 +996,9 @@ pub(super) fn place_table_cells(
 /// `children_q` is the `Query<&Children>`; `display_q` reads each
 /// child's `Display`.
 ///
-/// Carries `#[allow(dead_code)]` on the deferred-part vec only via the
-/// caller; the warn pass that consumes it lands in a later task (plan
-/// T7). The model half is consumed by `table_layout` immediately.
+/// The deferred-part vec is consumed by `table_layout`, which warns
+/// `TableSubfeatureUnsupported` once per (entity, session) for each
+/// (plan D4); the model half is laid out into the column grid.
 fn gather_table(
     table: Entity,
     children_q: &Query<&Children>,
@@ -1071,8 +1071,7 @@ fn gather_table(
 /// (sticky) corrects position only.
 ///
 /// Caption / column(-group) parts and ragged (span-faking) rows warn
-/// once per (entity, session) (plan D4 / D8); the warns land in a
-/// later task.
+/// once per (entity, session) (plan D4 / D8).
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.2.
 pub(super) fn table_layout(
