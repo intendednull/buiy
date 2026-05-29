@@ -1649,6 +1649,19 @@ pub(super) fn translate_one_entity(
     }
 }
 
+/// Whether this entity's box re-parents to the layout root in the Taffy
+/// tree so its containing block is the root (spec § 2.1 `Fixed` row).
+/// Pure function of `Position.kind` (D3): `Fixed` re-parents, everything
+/// else keeps its in-flow Taffy parent. `Absolute` does NOT re-parent —
+/// it resolves against its nearest positioned ancestor (= its real
+/// Taffy parent), which is the only behavioral difference from `Fixed`.
+// Wired into `sync_children_for_entity` / `sync_styles` in Phase 10 T3/T4;
+// `allow(dead_code)` keeps the gate green until that caller lands.
+#[allow(dead_code)]
+pub(super) fn is_fixed_root(position: &Position) -> bool {
+    matches!(position.kind, PositionKind::Fixed)
+}
+
 /// Per-entity child-sync — second-pass companion to
 /// `translate_one_entity`. Taffy's `set_children` requires all child
 /// nodes to exist first, so this must run after every entity has been
@@ -2816,7 +2829,7 @@ mod cq_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::components::{Containment, Stacking};
+    use crate::layout::components::{Containment, Position, Stacking};
     use crate::layout::types::{ContainFlags, Isolation, PositionKind, TopLayer, ZIndex};
 
     fn stk(z: ZIndex, iso: Isolation) -> Stacking {
@@ -2981,6 +2994,39 @@ mod tests {
             kf.0,
             "static z-index stays in the in-flow tier"
         );
+    }
+
+    #[test]
+    fn is_fixed_root_true_for_fixed() {
+        let p = Position {
+            kind: PositionKind::Fixed,
+            ..Default::default()
+        };
+        assert!(is_fixed_root(&p));
+    }
+
+    #[test]
+    fn is_fixed_root_false_for_absolute() {
+        let p = Position {
+            kind: PositionKind::Absolute,
+            ..Default::default()
+        };
+        assert!(!is_fixed_root(&p));
+    }
+
+    #[test]
+    fn is_fixed_root_false_for_static_relative_sticky() {
+        for k in [
+            PositionKind::Static,
+            PositionKind::Relative,
+            PositionKind::Sticky,
+        ] {
+            let p = Position {
+                kind: k,
+                ..Default::default()
+            };
+            assert!(!is_fixed_root(&p), "{k:?} must not re-parent to root");
+        }
     }
 
     #[test]
