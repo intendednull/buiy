@@ -72,6 +72,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Buiy layout Position::Fixed](plans/2026-05-29-buiy-layout-position-fixed.md) — Phase 10: `Fixed` resolves against the layout root by re-parenting its Taffy node onto the root in the children-sync pass, `is_fixed_root` predicate, `.fixed()` setter; transformed-ancestor containing block still deferred. `[landed]`
 - [Buiy layout multi-column layout](plans/2026-05-29-buiy-layout-multicol-layout.md) — Phase 13: real `multicol_pack` sub-pass 6c — CSS used-value column-count resolver + greedy whole-child packer honoring forced `break-*`; true fragmentation still deferred (tier-E). `[landed]`
 - [Buiy layout table layout](plans/2026-05-29-buiy-layout-table-layout.md) — Phase 12: real `table_layout` sub-pass 6b — synthetic-flex column-width resolution + document-order row/row-group grid placement; `colspan`/`rowspan`, caption, `<col>`/`<colgroup>` still deferred (tier-C). `[landed]`
+- [Buiy layout content-visibility](plans/2026-05-29-buiy-layout-content-visibility.md) — Phase 11: real `content-visibility: auto` off-screen skip (last-frame `ResolvedLayout` vs margin-expanded viewport + `ContainIntrinsicSize` sentinel size, descendants detached, stateless hysteresis) and `content-visibility: hidden` descendant prune, both in step-1 `sync_styles` + mirrored in `cq_flip_rerun`; blanket deferred-warn retired (repurposed to the Auto-without-hint residual). Auto paint-only skip + `contain-intrinsic-size: auto` remembered-size still deferred. `[landed]`
 
 ### Docs infrastructure
 

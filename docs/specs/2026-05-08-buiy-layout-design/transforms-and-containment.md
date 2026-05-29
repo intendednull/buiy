@@ -208,17 +208,23 @@ pub enum WillChange {
 
 Containment is a *performance opt-in*. An entity with `Containment::contain = ContainFlags::CONTENT` lets the engine skip recomputing its descendants when properties outside the container change. Buiy honors this for change-detection scope: a Bevy `Changed<X>` query on an entity inside a `CONTENT`-contained subtree doesn't invalidate the container's siblings.
 
-### 5.2 `content-visibility: auto`
+### 5.2 `content-visibility: auto` / `hidden`
 
-The big perf win. A `ContentVisibility::Auto` entity:
+The big perf win. **Shipped in `Phase 11`** ([`plans/2026-05-29-buiy-layout-content-visibility.md`](../../plans/2026-05-29-buiy-layout-content-visibility.md)). A `ContentVisibility::Auto` entity:
 
-- Skips paint when the entity is fully outside the viewport.
-- *Skips Taffy compute* on its descendants when both off-screen AND its `contain-intrinsic-size` (an opt-in size hint) is set. Without `contain-intrinsic-size`, the engine has to lay out to determine size — defeats the purpose.
-- Snaps back to full layout + paint when the entity comes on-screen.
+- *Skips Taffy compute* on its descendants when both off-screen AND its `contain-intrinsic-size` (an opt-in size hint, the `ContainIntrinsicSize` component) is set. Without `contain-intrinsic-size`, the engine would have to lay out to determine size — defeats the purpose — so without the hint the entity lays out normally (the layout skip does not run; it warns once instead, see below).
+- Snaps back to full layout when the entity comes on-screen.
 
-The skip is implemented as: during step 1, check if the entity is `ContentVisibility::Auto` and currently off-screen (using last frame's `ResolvedLayout`); if so, mark the subtree for skip — Taffy receives a sentinel size and the descendants' style sync is no-op.
+The skip runs during step 1 (`sync_styles`): a pure `content_visibility_skip(...)` helper classifies each entity from its `Containment.content_visibility`, its optional `ContainIntrinsicSize`, and an off-screen test. "Off-screen" is the entity's **last-frame** `ResolvedLayout` border box failing to intersect the primary-window viewport expanded outward by a `ContentVisibilityMargin` (default 200 logical px) on all sides — a single symmetric expanded rect, so the margin doubles as a stateless hysteresis dead-band that prevents per-frame skip-state thrash at the edge. Reading only last-frame geometry keeps the "layout writes, render reads" no-re-entrancy contract (same bounded feedback edge as `Length::Cq*`). An entity with no last-frame `ResolvedLayout` (first frame) is treated as on-screen.
 
-`ContentVisibility::Hidden` is harsher — equivalent to `Display::None` for descendants, doesn't snap back unless toggled.
+When the Auto skip fires, the entity's own Taffy node receives the `ContainIntrinsicSize` hint as a sentinel size (per-axis, unset axis → `0`), and its descendants are detached from the Taffy child list (their nodes are kept alive in the `LayoutTree`, so snap-back is a cheap `set_children` re-attach rather than a subtree rebuild). The skip is computed identically in `sync_styles` and `cq_flip_rerun`, so a container-query flip frame does not transiently re-lay-out the skipped subtree.
+
+`ContentVisibility::Hidden` is harsher — its descendants are skipped exactly like `Display::None`, geometry-independent (no off-screen test, no hint needed), and it doesn't snap back unless toggled. Per CSS, only the *descendants* are skipped: the Hidden entity itself still lays out and resolves its own box.
+
+**Still deferred (render-side / v1 limitation):**
+
+- **Auto's off-screen *paint* skip.** Phase 11 owns layout, not paint. An off-screen Auto entity *without* a `contain-intrinsic-size` hint lays out normally; suppressing its paint while off-screen is a render-pipeline concern (see [§ 8](#8-coordination)) and is not yet wired. When the Auto layout skip cannot run because the hint is missing, the engine warns once per entity (`LayoutWarnOnceKey::ContentVisibilityDeferred`, repurposed from the old blanket deferral warn) to surface the actionable fix ("ship `contain-intrinsic-size` first").
+- **`contain-intrinsic-size: auto` (remembered size).** The browser behavior where a once-laid-out skipped subtree caches its measured size as the placeholder is deferred; v1 gates the skip on an *explicit* `ContainIntrinsicSize` hint only.
 
 ### 5.3 `will-change`
 

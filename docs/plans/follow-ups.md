@@ -351,31 +351,48 @@ Requires pulling `TransformPlugin` into the relevant app + render reading
 
 **Spec touchpoint:** `transforms-and-containment.md § 2`.
 
-## Layout — `content-visibility: auto` off-screen skip
+## Layout — `content-visibility: auto` off-screen skip — LANDED
 
 **Originated:** Phase 8 (D6 — stored, not enforced).
 
-**Symptom:** `ContentVisibility::Auto` is stored on `Containment` and
-warns once via `LayoutWarnOnceKey::ContentVisibilityDeferred(Entity)`, but
-no off-screen layout/paint skip is performed.
-
-**Implementation sketch:** implement the spec § 5.2 step-1 skip — check
-`ContentVisibility::Auto` + off-screen (last-frame `ResolvedLayout` vs
-viewport) + a `contain-intrinsic-size` hint; feed Taffy a sentinel size
-and no-op the descendants' style sync; snap back on-screen. Needs a
-`contain-intrinsic-size` component.
+**Status:** **Landed** in Phase 11
+(`docs/plans/2026-05-29-buiy-layout-content-visibility.md`). The spec § 5.2
+step-1 skip is now real: `sync_styles` classifies every entity via a pure
+`content_visibility_skip(...)` helper, and a `ContentVisibility::Auto` entity
+that is off-screen **and** carries a `ContainIntrinsicSize` hint gets the Taffy
+skip — its own Taffy size is overridden with the intrinsic-size sentinel
+(`StyleView.content_visibility_intrinsic`) and its descendants are detached from
+the Taffy child list (reusing the children-sync exclusion-set mechanism;
+descendant nodes are kept alive for a cheap `set_children` snap-back). Off-screen
+is computed from the *last-frame* `ResolvedLayout` border box vs the primary-window
+viewport expanded by a `ContentVisibilityMargin` (default 200px) — a single
+symmetric expanded rect, so the margin doubles as a stateless hysteresis dead-band
+that stops edge thrash. The blanket "content-visibility deferred" warn is gone; the
+`ContentVisibilityDeferred(Entity)` warn-once is repurposed to fire only for the
+residual degenerate case (Auto + off-screen + **no** intrinsic-size hint, where the
+requested skip cannot run). The skip is mirrored identically in `cq_flip_rerun` so a
+container-query flip frame does not transiently re-lay-out the skipped subtree (D8).
+Auto's off-screen *paint* skip without a hint remains a render concern Phase 11 does
+not own, and the Blink `contain-intrinsic-size: auto` "remembered size" auto-sizing
+of the placeholder remains deferred (v1 gates the skip on an explicit hint).
 
 **Spec touchpoint:** `transforms-and-containment.md § 5.2`.
 
-## Layout — `content-visibility: hidden` descendant skip
+## Layout — `content-visibility: hidden` descendant skip — LANDED
 
 **Originated:** Phase 8 (D6 — stored, not enforced).
 
-**Symptom:** `ContentVisibility::Hidden` is stored + warns
-(`ContentVisibilityDeferred`), but descendants are still laid out.
-
-**Implementation sketch:** equivalent to `Display::None` for descendants
-(tree-prune in `sync_styles`); snap back on toggle.
+**Status:** **Landed** in Phase 11
+(`docs/plans/2026-05-29-buiy-layout-content-visibility.md`). A
+`ContentVisibility::Hidden` entity now prunes its descendants from the Taffy tree
+(`content_visibility_skip` → `HiddenPrune`, added to the same per-frame
+`skip_children` set as the Auto sentinel), so Taffy never lays the subtree out —
+geometry-independent (no off-screen check, no intrinsic-size hint needed). Per spec
+§ 5 / § 5.2 and CSS, only the *descendants* are skipped: the Hidden entity itself
+still lays out and resolves its own box (it is not `Display::None` on self, D7).
+Snap-back on toggle is a cheap `set_children` re-attach since the descendant Taffy
+nodes are kept alive. Hidden never warns (fully implemented). Mirrored in
+`cq_flip_rerun` (D8).
 
 **Spec touchpoint:** `transforms-and-containment.md § 5.2`.
 

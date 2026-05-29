@@ -9,7 +9,7 @@
 **Tech Stack:** Bevy 0.18 (`bevy::prelude::{Component, Reflect, Query, Entity, Children, ChildOf, With, Changed, Or}`, `bevy::math::{Vec2, Rect}`). `std::collections::HashSet` (no `bevy::utils::*`, per Phase 6/7/8/9 precedent). Taffy 0.10 via the existing `LayoutTree` (`set_children` / `set_style`). No new external dependency. Reads the primary window for the viewport (same read `sync_styles` already does for `viewport_size`).
 
 **Date:** 2026-05-29
-**Status:** active
+**Status:** landed
 **Spec:** [`specs/2026-05-08-buiy-layout-design/transforms-and-containment.md`](../specs/2026-05-08-buiy-layout-design/transforms-and-containment.md) § 5.2 (`content-visibility: auto` / `hidden`), § 5 (`Containment` / `ContentVisibility`), § 7 (test surface) + [`architecture.md`](../specs/2026-05-08-buiy-layout-design/architecture.md) § 3 (step 1 `sync_styles`), § 6 (error model). Chartered by [`follow-ups.md`](follow-ups.md) "Layout — `content-visibility: auto` off-screen skip" + "Layout — `content-visibility: hidden` descendant skip" (both Phase-8 D6 deferrals).
 
 ---
