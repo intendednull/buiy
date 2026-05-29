@@ -7,8 +7,8 @@ use bevy::window::{PrimaryWindow, Window, WindowResolution};
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout,
     layout::{
-        ContainIntrinsicSize, Containment, ContentVisibility, Inset, LayoutPlugin, LayoutTree,
-        Length, PositionKind, Sizing, Style,
+        BoxModel, ContainIntrinsicSize, ContainerQuery, Containment, ContentVisibility, Inset,
+        LayoutPlugin, LayoutTree, Length, PositionKind, QueryCondition, Sizing, Style,
     },
 };
 
@@ -260,5 +260,118 @@ fn skip_holds_at_steady_state() {
         ar.size,
         Vec2::new(120.0, 40.0),
         "off-screen auto keeps its contain-intrinsic-size at steady state"
+    );
+}
+
+/// D8: the same-frame container-query re-run (`cq_flip_rerun`) must
+/// reproduce the content-visibility skip — sentinel size + descendant
+/// detach — or a CQ flip frame would re-lay-out a skipped subtree and undo
+/// the skip.
+///
+/// The fixture nests an off-screen `content-visibility: auto` node with a
+/// hint + a sized child alongside a sibling that owns a `ContainerQuery`. We
+/// first run several frames so the auto node reaches a steady, skipped state
+/// (off-screen last-frame geometry + sentinel size, descendants detached).
+/// THEN we flip the query condition so `cq_flip_check` signals a flip and
+/// `cq_flip_rerun` runs on a frame where the skip is already active. If the
+/// re-run did not honor the skip set (T5's placeholder empty set), it would
+/// re-attach the auto node's child during that re-run; the assertions below
+/// catch that.
+#[test]
+fn skip_survives_container_query_flip_frame() {
+    let mut app = app();
+    with_window(&mut app, 800, 600);
+
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(50.0).height_px(50.0)))
+        .id();
+    let auto = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Absolute)
+                .inset(Inset {
+                    left: Sizing::Length(Length::px(5000.0)),
+                    top: Sizing::Length(Length::px(0.0)),
+                    ..Default::default()
+                })
+                .containment(Containment {
+                    content_visibility: ContentVisibility::Auto,
+                    ..Default::default()
+                }),
+            ContainIntrinsicSize {
+                width: Some(120.0),
+                height: Some(40.0),
+            },
+        ))
+        .add_child(child)
+        .id();
+
+    // A query container whose condition we flip later to force `cq_flip_rerun`
+    // on a frame where the auto node is already in its skipped steady state.
+    let queried = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().height_px(100.0).container_size(),
+            ContainerQuery {
+                container: None,
+                conditions: vec![QueryCondition::MinWidth(Length::px(300.0))],
+            },
+        ))
+        .id();
+    // The query resolves to its nearest ancestor container — `root`. Its width
+    // gates the rule: 400 >= 300 = active. We later shrink it below 300 so the
+    // rule deactivates. Because the size change resolves THIS frame in Taffy
+    // while `cq_activate` (step 1.5) reads last-frame `ResolvedLayout`, the two
+    // disagree → `cq_flip_check` signals a same-frame `cq_flip_rerun` (D8).
+    let root = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(600.0)
+                .container_size(),
+        ))
+        .add_children(&[auto, queried])
+        .id();
+
+    // Reach steady state: the auto node is off-screen + skipped, the query is
+    // active (400 >= 300), and no flip is pending.
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(
+        taffy_child_count(&app, auto),
+        0,
+        "auto node is skipped at steady state before the flip"
+    );
+
+    // Shrink the container below the query threshold. The new size resolves in
+    // this frame's Taffy compute, but `cq_activate` already evaluated against
+    // the stale (400) last-frame size — so `cq_flip_check` detects a same-frame
+    // flip and triggers `cq_flip_rerun` while the auto node's skip is active.
+    app.world_mut()
+        .get_mut::<BoxModel>(root)
+        .expect("root box model present")
+        .width = Sizing::Length(Length::px(200.0));
+    app.update();
+
+    let ar = app
+        .world()
+        .get::<ResolvedLayout>(auto)
+        .expect("auto resolves");
+    assert_eq!(
+        ar.size,
+        Vec2::new(120.0, 40.0),
+        "sentinel survives the CQ flip frame"
+    );
+    assert_eq!(
+        taffy_child_count(&app, auto),
+        0,
+        "detached child stays detached across the CQ flip re-run"
     );
 }

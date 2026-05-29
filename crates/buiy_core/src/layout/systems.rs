@@ -3234,6 +3234,17 @@ pub(super) fn cq_flip_rerun(
     // per-root Taffy `compute_layout` loop below.
     roots: Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
     windows: Query<&bevy::window::Window>,
+    // content-visibility skip inputs (spec § 5.2, D8) — read-only and disjoint
+    // from the mutable `tree`/`rerun`/`compute_count`, mirroring `sync_styles`'s
+    // side queries. `containment_lookup` is the FULL (unfiltered) classification
+    // source (the children-detach pass iterates every parent, not just the
+    // `Changed`-filtered `nodes`); `resolved_lookup`/`intrinsic_lookup` feed the
+    // off-screen test + the per-axis hint. No `warned` resource here — the D6
+    // diagnostic already fired in `sync_styles` this frame (do NOT re-warn).
+    containment_lookup: Query<(Entity, &Containment), With<Node>>,
+    resolved_lookup: Query<&ResolvedLayout>,
+    intrinsic_lookup: Query<&ContainIntrinsicSize>,
+    content_vis_margin: Res<ContentVisibilityMargin>,
 ) {
     if !rerun.0 {
         return;
@@ -3278,16 +3289,44 @@ pub(super) fn cq_flip_rerun(
         .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
         .unwrap_or(Vec2::ZERO);
 
+    // content-visibility skip sets (spec § 5.2, D8) — reproduced IDENTICALLY to
+    // `sync_styles`. Classified over the FULL tree (`containment_lookup`), not
+    // the `Changed`-filtered `nodes`: the children-detach pass below iterates
+    // every parent, so a skipped entity that is no longer in the re-run's
+    // changed set must still be detached, or this flip frame would re-attach its
+    // descendants and undo the skip (the exact thrash D8 guards against).
+    let expanded_viewport = viewport_rect(viewport_size, content_vis_margin.0);
+    let mut skip_children: HashSet<Entity> = HashSet::new();
+    let mut sentinel_size: HashMap<Entity, bevy::math::Vec2> = HashMap::new();
+    for (entity, containment) in containment_lookup.iter() {
+        let off_screen = is_off_screen(resolved_lookup.get(entity).ok(), expanded_viewport);
+        match content_visibility_skip(containment, intrinsic_lookup.get(entity).ok(), off_screen) {
+            SkipKind::None => {}
+            SkipKind::AutoSentinel { intrinsic } => {
+                skip_children.insert(entity);
+                sentinel_size.insert(
+                    entity,
+                    bevy::math::Vec2::new(
+                        intrinsic.width.unwrap_or(0.0),
+                        intrinsic.height.unwrap_or(0.0),
+                    ),
+                );
+            }
+            SkipKind::HiddenPrune => {
+                skip_children.insert(entity);
+            }
+        }
+    }
+
     for item in nodes.iter() {
+        let entity = item.0;
         translate_one_entity(
             item,
             &parent_areas_for,
             &container_index,
             &cq_parent_chain,
             viewport_size,
-            // T6 supplies the real content-visibility sentinel/skip set here
-            // (D8); until then the re-run passes no sentinel.
-            None,
+            sentinel_size.get(&entity).copied(),
             tree,
         );
     }
@@ -3301,9 +3340,9 @@ pub(super) fn cq_flip_rerun(
             (entity, is_fixed_root(position), children, parent)
         })
         .collect();
-    // T6: real content-visibility skip set (D8). Empty here so the workspace
-    // compiles; T6 computes the identical skip set this re-run must honor.
-    sync_children_pass(&rows, &HashSet::new(), tree);
+    // Honor the content-visibility skip set (D8): the same entities
+    // `sync_styles` detached this frame stay detached across the flip re-run.
+    sync_children_pass(&rows, &skip_children, tree);
 
     // Re-invoke Taffy compute. Same code shape as `taffy_compute`,
     // but WITHOUT the `compute_count.0 = 0` frame-reset (that lives
