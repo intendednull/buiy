@@ -13,7 +13,8 @@ mod types;
 pub use components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
     Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
-    Position, Scroll, ScrollOffset, ScrollSnapItem, WritingMode, WritingModeResolved,
+    Position, Rotate, Scale, Scroll, ScrollOffset, ScrollSnapItem, Translate, UiTransform,
+    WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
@@ -30,7 +31,7 @@ pub use types::{
     LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
     PositionTry, QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
     ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
-    TryCondition, UnicodeBidi, WritingModeKind,
+    TransformMatrix, TryCondition, UnicodeBidi, WritingModeKind,
 };
 
 use bevy::prelude::*;
@@ -169,20 +170,29 @@ impl Plugin for LayoutPlugin {
                 systems::cq_flip_check.in_set(BuiyLayoutStep::CqFlipCheck),
                 systems::cq_flip_rerun.in_set(BuiyLayoutStep::CqFlipReRun),
                 // Phase 7 — PostTaffyOverrides chain: clear → sticky 6a →
-                // table 6b → multicol 6c → anchor 6d. All four sub-passes
-                // share `PostTaffyPositionOverrides`; the clear runs first
-                // so each pass writes into an empty map (architecture.md
-                // § 3, plan Task 8 + D2). `.chain()` over the tuple gives
-                // the explicit deterministic order Phase 7's review
-                // demanded; in-set membership lets external systems
-                // hook between Taffy and write_resolved_layout without
-                // depending on individual sub-pass labels.
+                // table 6b → multicol 6c → anchor 6d. The first four
+                // effect sub-passes share `PostTaffyPositionOverrides`;
+                // the clear runs first so each pass writes into an empty
+                // map (architecture.md § 3, plan Task 8 + D2). `.chain()`
+                // over the tuple gives the explicit deterministic order
+                // Phase 7's review demanded; in-set membership lets
+                // external systems hook between Taffy and
+                // write_resolved_layout without depending on individual
+                // sub-pass labels.
+                //
+                // Phase 8 appends transform_composition 6e AFTER anchor
+                // (spec § 1.1) — it composes the matrix and writes the
+                // private ResolvedTransform render handoff; it does NOT
+                // write PostTaffyPositionOverrides (a transform does not
+                // move the layout box, spec § 1.2). Phase 9 will append
+                // stacking 6f after 6e (it reads the composed matrix).
                 (
                     systems::clear_post_taffy_overrides,
                     systems::sticky_offset,
                     systems::table_layout,
                     systems::multicol_pack,
                     systems::anchor_resolution,
+                    systems::transform_composition,
                 )
                     .chain()
                     .in_set(BuiyLayoutStep::PostTaffyOverrides),

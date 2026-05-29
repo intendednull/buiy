@@ -27,7 +27,7 @@ use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, LayoutWarnOnceKey,
     Length, PositionKind, QueryCondition, Sizing, TransformMatrix, TryCondition,
 };
-use crate::components::{Node, ResolvedLayout};
+use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
@@ -2272,10 +2272,6 @@ pub(super) fn cq_flip_rerun(
 /// magnitude via `Length::Px` only; other variants contribute 0.0.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
-// Production caller is `compose_transform`, whose sole consumer — the
-// `transform_composition` sub-pass 6e system — lands in the next task;
-// the helper is exercised by `mod tests` in the meantime.
-#[allow(dead_code)]
 fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
     match m {
         TransformMatrix::None => Mat4::IDENTITY,
@@ -2302,8 +2298,6 @@ fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
 /// meaningful at compose time in Phase 8; other units (percent /
 /// cq) resolve against the entity's own box and are deferred to the
 /// render/animation phase — they contribute 0.0 here.
-// See `transform_matrix_to_mat4` — production caller arrives with 6e (next task).
-#[allow(dead_code)]
 fn length_px(l: &Length) -> f32 {
     match l {
         Length::Px(p) => *p,
@@ -2321,9 +2315,6 @@ fn length_px(l: &Length) -> f32 {
 /// Pure function — no Bevy queries, no Taffy reads. Easy to unit test.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 1.1.
-// Sole production consumer is the `transform_composition` sub-pass 6e
-// system, wired in the next task; covered by `mod tests` until then.
-#[allow(dead_code)]
 pub(super) fn compose_transform(
     ui: &UiTransform,
     t: Option<&Translate>,
@@ -2346,6 +2337,53 @@ pub(super) fn compose_transform(
     };
     let m_transform = transform_matrix_to_mat4(&ui.matrix);
     t_mat * r_mat * s_mat * m_transform
+}
+
+/// Phase 8 — sub-pass 6e of `BuiyLayoutStep::PostTaffyOverrides`.
+/// Composes each entity's `UiTransform` + optional `Translate` /
+/// `Rotate` / `Scale` longhands into the private `ResolvedTransform`
+/// render handoff per spec § 1 (`M = T·R·S·M_transform`).
+///
+/// Runs AFTER `anchor_resolution` (6d). Unlike 6a–6d, writes NOTHING
+/// to `PostTaffyPositionOverrides` — a transform does not move the
+/// layout box (spec § 1.2). For identity transforms it inserts no
+/// `ResolvedTransform` and removes a stale one (spec § 7). Skips
+/// `Display::None` entities.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.1.
+#[allow(clippy::type_complexity)]
+pub(super) fn transform_composition(
+    mut commands: Commands,
+    query: Query<
+        (
+            Entity,
+            &UiTransform,
+            Option<&Translate>,
+            Option<&Rotate>,
+            Option<&Scale>,
+            &Display,
+            Option<&ResolvedTransform>,
+        ),
+        With<Node>,
+    >,
+) {
+    for (e, ui, t, r, s, display, existing) in query.iter() {
+        if matches!(display, Display::None) {
+            continue;
+        }
+        let m = compose_transform(ui, t, r, s);
+        if m == Mat4::IDENTITY {
+            // Identity → no ResolvedTransform; remove a stale one.
+            if existing.is_some() {
+                commands.entity(e).remove::<ResolvedTransform>();
+            }
+            continue;
+        }
+        // Idempotent insert (mirror write_resolved_layout's gate).
+        if existing.map(|rt| rt.matrix) != Some(m) {
+            commands.entity(e).insert(ResolvedTransform { matrix: m });
+        }
+    }
 }
 
 #[cfg(test)]

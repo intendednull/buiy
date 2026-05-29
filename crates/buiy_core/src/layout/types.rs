@@ -1013,7 +1013,7 @@ pub enum LayoutWarnOnceKey {
 /// The transform matrix variant for `UiTransform`. `None` is identity.
 /// `Compose([A, B, …])` is the matrix product `A · B · …` (outermost
 /// first); the rightmost/innermost entry transforms a child point
-/// first. See [`UiTransform`] composition convention.
+/// first. See [`crate::layout::UiTransform`] composition convention.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
 #[derive(Reflect, Clone, Default, PartialEq, Debug)]

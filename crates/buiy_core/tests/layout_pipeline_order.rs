@@ -16,12 +16,12 @@
 
 use bevy::prelude::*;
 use buiy_core::{
-    CorePlugin, Node, ResolvedLayout,
+    CorePlugin, Node, ResolvedLayout, ResolvedTransform,
     layout::{
         Anchor, AnchorName, AnchorRef, BuiyLayoutStep, ContainerQuery, Display, Inset,
         LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession, Length, MultiColumn,
         OverflowMode, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
-        QueryCondition, ScrollOffset, Sizing, Style,
+        QueryCondition, ScrollOffset, Sizing, Style, TransformMatrix, UiTransform,
     },
 };
 
@@ -322,5 +322,53 @@ fn layout_steps_are_chained_in_declared_order() {
         warned.set.contains(&LayoutWarnOnceKey::MulticolUnsupported),
         "sub-pass 6c (multicol_pack) should record MulticolUnsupported; warn set: {:?}",
         warned.set,
+    );
+}
+
+#[test]
+fn transform_composition_runs_and_writes_resolved_transform() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            UiTransform {
+                matrix: TransformMatrix::Translate(Length::px(10.0), Length::px(0.0), Length::ZERO),
+                ..Default::default()
+            },
+        ))
+        .id();
+
+    app.update();
+
+    let rt = app
+        .world()
+        .get::<ResolvedTransform>(e)
+        .expect("6e should write ResolvedTransform for a non-identity UiTransform");
+    assert_eq!(rt.matrix, Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)));
+}
+
+#[test]
+fn identity_transform_gets_no_resolved_transform() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+
+    let e = app
+        .world_mut()
+        .spawn((Node, Style::default(), UiTransform::default()))
+        .id();
+
+    app.update();
+
+    assert!(
+        app.world().get::<ResolvedTransform>(e).is_none(),
+        "identity transform must not produce a ResolvedTransform (spec § 7)"
     );
 }
