@@ -4,7 +4,9 @@
 
 use bevy::prelude::*;
 use buiy_core::components::StackingContext;
-use buiy_core::layout::{LayoutPlugin, Style, TopLayer, TopLayerActivation};
+use buiy_core::layout::{
+    Isolation, LayoutPlugin, PositionKind, Style, TopLayer, TopLayerActivation, ZIndex,
+};
 use buiy_core::{CorePlugin, Node};
 
 fn app() -> App {
@@ -71,5 +73,136 @@ fn top_layer_activation_tracks_open_order() {
         order,
         vec![a, b],
         "activation order follows tree/open order; most recent last"
+    );
+}
+
+#[test]
+fn z_index_ordering_neg_zero_pos() {
+    // spec § 6: three positioned siblings z=[2,-1,0] → painters_z [-1,0,2].
+    let mut app = app();
+    let z2 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Relative)
+                .z_index(ZIndex::Layer(2)),
+        ))
+        .id();
+    let zneg = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Relative)
+                .z_index(ZIndex::Layer(-1)),
+        ))
+        .id();
+    let z0 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Relative)
+                .z_index(ZIndex::Layer(0)),
+        ))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[z2, zneg, z0])
+        .id();
+    app.update();
+    let sc = app.world().get::<StackingContext>(root).unwrap();
+    // The three positioned children are themselves SC roots (positioned+z),
+    // so they appear as atomic entries in root.painters_z, ordered by z.
+    let order: Vec<Entity> = sc
+        .painters_z
+        .iter()
+        .copied()
+        .filter(|e| [z2, zneg, z0].contains(e))
+        .collect();
+    assert_eq!(
+        order,
+        vec![zneg, z0, z2],
+        "painters ordered by z-index [-1,0,2]"
+    );
+}
+
+#[test]
+fn static_z_index_paints_in_document_order() {
+    // spec § 6: static element + z-index 5 paints in document order, not lifted.
+    let mut app = app();
+    let a = app.world_mut().spawn((Node, Style::default())).id(); // first, static
+    let b = app
+        .world_mut()
+        .spawn((Node, Style::default().z_index(ZIndex::Layer(5))))
+        .id(); // static z=5
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[a, b])
+        .id();
+    app.update();
+    let sc = app.world().get::<StackingContext>(root).unwrap();
+    let order: Vec<Entity> = sc
+        .painters_z
+        .iter()
+        .copied()
+        .filter(|e| [a, b].contains(e))
+        .collect();
+    assert_eq!(
+        order,
+        vec![a, b],
+        "static z-index ignored; document order preserved"
+    );
+    assert!(
+        app.world().get::<StackingContext>(b).is_none(),
+        "static+z forms no context"
+    );
+}
+
+#[test]
+fn isolation_forms_stacking_context() {
+    // spec § 6: Isolation::Isolate → a StackingContext appears.
+    let mut app = app();
+    let iso = app
+        .world_mut()
+        .spawn((Node, Style::default().isolation(Isolation::Isolate)))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(iso)
+        .id();
+    app.update();
+    assert!(app.world().get::<StackingContext>(iso).is_some());
+}
+
+#[test]
+fn mixed_top_layer_tiers_order_tooltip_below_modal() {
+    // spec § 6: Modal + Tooltip open → Tooltip below Modal regardless of activation order.
+    let mut app = app();
+    // activate modal first, tooltip second — tier must still win.
+    let modal = app
+        .world_mut()
+        .spawn((Node, Style::default().top_layer(TopLayer::Modal)))
+        .id();
+    let tooltip = app
+        .world_mut()
+        .spawn((Node, Style::default().top_layer(TopLayer::Tooltip)))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[modal, tooltip])
+        .id();
+    app.update();
+    let sc = app.world().get::<StackingContext>(root).unwrap();
+    let mi = sc.painters_z.iter().position(|e| *e == modal).unwrap();
+    let ti = sc.painters_z.iter().position(|e| *e == tooltip).unwrap();
+    assert!(
+        ti < mi,
+        "tooltip paints below modal (earlier in painters_z) regardless of activation"
     );
 }
