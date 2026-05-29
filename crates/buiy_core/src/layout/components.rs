@@ -367,6 +367,37 @@ pub struct UiTransform {
     pub backface_visibility: BackfaceVisibility,
 }
 
+/// CSS `translate` longhand. **Decomposed-only** — spawn alongside
+/// `Style` (not a `Style` field), composed with `UiTransform.matrix`
+/// by sub-pass 6e per `M = T·R·S·M_transform`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.1.
+#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct Translate(pub Length, pub Length, pub Length);
+
+/// CSS `rotate` longhand. **Decomposed-only.** Default is the identity
+/// quaternion.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.1.
+#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct Rotate(pub Quat);
+
+/// CSS `scale` longhand. **Decomposed-only.** CSS default scale is
+/// identity `(1, 1, 1)`, not derived zeros — hand-written `Default`.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.1.
+#[derive(Component, Reflect, Clone, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct Scale(pub f32, pub f32, pub f32);
+
+impl Default for Scale {
+    fn default() -> Self {
+        Scale(1.0, 1.0, 1.0)
+    }
+}
+
 /// A `@container` rule pinned to a single entity. The rule activates
 /// when *all* `conditions` hold against the resolved size of the
 /// matched query container (by name, or nearest queried ancestor when
@@ -733,6 +764,27 @@ mod tests {
         assert_eq!(t.style, TransformStyle::Flat);
         assert!(t.perspective.is_none());
         assert_eq!(t.backface_visibility, BackfaceVisibility::Visible);
+    }
+
+    #[test]
+    fn translate_default_is_zero() {
+        let t = Translate::default();
+        assert_eq!(t.0, Length::ZERO);
+        assert_eq!(t.1, Length::ZERO);
+        assert_eq!(t.2, Length::ZERO);
+    }
+
+    #[test]
+    fn rotate_default_is_identity_quat() {
+        assert_eq!(Rotate::default().0, Quat::IDENTITY);
+    }
+
+    #[test]
+    fn scale_default_is_one_one_one() {
+        let s = Scale::default();
+        assert_eq!(s.0, 1.0);
+        assert_eq!(s.1, 1.0);
+        assert_eq!(s.2, 1.0);
     }
 
     #[test]
