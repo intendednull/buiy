@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use bevy::prelude::warn;
 
 use super::components::{
-    BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
-    WritingModeResolved,
+    BoxModel, Containment, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position,
+    Scroll, WritingModeResolved,
 };
 use super::types::{
-    AlignContent, AlignItems, BoxSizing, Direction, Edges, FlexAxis, FlexWrap, GridAreas,
-    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
+    AlignContent, AlignItems, BoxSizing, ContainFlags, Direction, Edges, FlexAxis, FlexWrap,
+    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
     PositionKind, RepeatCount, ScrollbarWidth, Sizing, TrackSize, WritingModeKind,
 };
 // Bring helper free functions and grid-specific types from `taffy::prelude`
@@ -174,6 +174,26 @@ fn normalize_cq_sizing(s: Sizing, view: &StyleView<'_>) -> Sizing {
     }
 }
 
+/// Under SIZE / INLINE_SIZE containment, `Sizing::Auto` on a contained
+/// axis is treated as `0px` (spec § 5.1). Pure — the warn-once side
+/// effect lives in `sync_styles` (which holds the warn resource);
+/// this just performs the deterministic substitution from the flags.
+fn apply_size_containment(sizing: Sizing, contained_axis: bool) -> Sizing {
+    if contained_axis && matches!(sizing, Sizing::Auto) {
+        Sizing::Length(Length::px(0.0))
+    } else {
+        sizing
+    }
+}
+
+/// Whether the resolved writing mode lays out inline = horizontal (width).
+/// `HorizontalTb` is horizontal; vertical + sideways modes are not.
+/// Mirrors the mode→axis decision in `resolve_cq_unit_px` (sideways modes
+/// normalize to their vertical equivalents, so they too are non-horizontal).
+fn writing_mode_is_horizontal(wmr: &WritingModeResolved) -> bool {
+    matches!(wmr.mode, WritingModeKind::HorizontalTb)
+}
+
 /// Pre-normalize every `Length` in an `Edges` quartet.
 fn normalize_cq_edges(e: Edges, view: &StyleView<'_>) -> Edges {
     Edges {
@@ -217,6 +237,10 @@ fn normalize_cq_track(t: &TrackSize, view: &StyleView<'_>) -> TrackSize {
 pub struct StyleView<'a> {
     pub display: &'a Display,
     pub box_model: &'a BoxModel,
+    /// Containment opt-in. Phase 8 reads only `contain` to apply the
+    /// SIZE / INLINE_SIZE auto-size zeroing (spec § 5.1); the warn-once
+    /// side effect lives in `sync_styles`.
+    pub containment: &'a Containment,
     pub position: &'a Position,
     pub flex_params: &'a FlexParams,
     pub flex_item: Option<&'a FlexItem>,
@@ -260,13 +284,33 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
     // then see only Px / Percent / Fr — Cq* arms in those helpers are a
     // defensive fallback that never fires when this normalization is in
     // place. Spec: container-queries-and-writing-modes.md § 1.4.
+    // SIZE / INLINE_SIZE containment: an `Auto` size on a contained axis
+    // is treated as `0px` (spec § 5.1). `SIZE` contains both axes;
+    // `INLINE_SIZE` contains only the inline axis — inline = width under
+    // horizontal writing modes, height under vertical/sideways modes
+    // (D5 mapping). The warn-once side effect lives in `sync_styles`;
+    // this substitution is pure and deterministic from the flags.
+    let contain = view.containment.contain;
+    let size_all = contain.contains(ContainFlags::SIZE);
+    let inline_is_horizontal = writing_mode_is_horizontal(view.writing_mode_resolved);
+    let contain_width =
+        size_all || (contain.contains(ContainFlags::INLINE_SIZE) && inline_is_horizontal);
+    let contain_height =
+        size_all || (contain.contains(ContainFlags::INLINE_SIZE) && !inline_is_horizontal);
+
     let mut s = taffy::Style {
         display: map_display(view.display),
         box_sizing: map_box_sizing(view.box_model.box_sizing),
         position: map_position_kind(view.position.kind),
         size: taffy::Size {
-            width: sizing_to_dim(normalize_cq_sizing(view.box_model.width, &view)),
-            height: sizing_to_dim(normalize_cq_sizing(view.box_model.height, &view)),
+            width: sizing_to_dim(normalize_cq_sizing(
+                apply_size_containment(view.box_model.width, contain_width),
+                &view,
+            )),
+            height: sizing_to_dim(normalize_cq_sizing(
+                apply_size_containment(view.box_model.height, contain_height),
+                &view,
+            )),
         },
         min_size: taffy::Size {
             width: sizing_to_dim(normalize_cq_sizing(view.box_model.min_width, &view)),
@@ -985,8 +1029,8 @@ fn warn_once_sideways_layout_fallback() {
 mod tests {
     use super::*;
     use crate::layout::components::{
-        BoxModel, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow, Position, Scroll,
-        WritingModeResolved,
+        BoxModel, Containment, Display, FlexItem, FlexParams, GridItem, GridParams, Overflow,
+        Position, Scroll, WritingModeResolved,
     };
     use crate::layout::types::{
         AlignItems, BoxSizing, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridLine,
@@ -1008,6 +1052,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: item,
@@ -1055,6 +1100,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1096,6 +1142,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1133,6 +1180,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: Some(&item),
@@ -1204,6 +1252,7 @@ mod tests {
             let taffy = style_to_taffy(StyleView {
                 display: &display,
                 box_model: &bm,
+                containment: &Containment::default(),
                 position: &position,
                 flex_params: &flex,
                 flex_item: None,
@@ -1248,6 +1297,7 @@ mod tests {
             let taffy = style_to_taffy(StyleView {
                 display: &display,
                 box_model: &bm,
+                containment: &Containment::default(),
                 position: &position,
                 flex_params: &flex,
                 flex_item: None,
@@ -1286,6 +1336,7 @@ mod tests {
             let taffy = style_to_taffy(StyleView {
                 display: &display,
                 box_model: &bm,
+                containment: &Containment::default(),
                 position: &position,
                 flex_params: &flex,
                 flex_item: None,
@@ -1321,6 +1372,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1359,6 +1411,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1396,6 +1449,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1447,6 +1501,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1488,6 +1543,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,
@@ -1516,6 +1572,7 @@ mod tests {
         let taffy = style_to_taffy(StyleView {
             display: &display,
             box_model: &bm,
+            containment: &Containment::default(),
             position: &position,
             flex_params: &flex,
             flex_item: None,

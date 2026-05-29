@@ -1005,6 +1005,13 @@ pub enum LayoutWarnOnceKey {
     /// Spec: plan decision D3 in
     /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
     StickyCqDeferred(Entity),
+
+    /// `Containment.contain` includes `SIZE` / `INLINE_SIZE` and the
+    /// corresponding axis sizing is `Sizing::Auto`. Per spec § 5.1 the
+    /// auto size is treated as `0px`. One warn per (entity, session).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.1.
+    SizeContainmentZeroed(Entity),
 }
 
 // ============================================================

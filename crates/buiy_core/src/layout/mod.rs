@@ -12,9 +12,9 @@ mod types;
 
 pub use components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
-    Position, Rotate, Scale, Scroll, ScrollOffset, ScrollSnapItem, Translate, UiTransform,
-    WritingMode, WritingModeResolved,
+    Containment, Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken,
+    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, ScrollSnapItem,
+    Translate, UiTransform, WritingMode, WritingModeResolved,
 };
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
@@ -26,9 +26,9 @@ pub use tree::LayoutTree;
 pub use types::{
     AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, BoxSizing,
     BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnRuleStyle,
-    ColumnSpan, ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas,
-    GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, LayoutWarnOnceKey, Length,
-    LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
+    ColumnSpan, ContainFlags, ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap,
+    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, LayoutWarnOnceKey,
+    Length, LogicalEdges, NamedArea, Orientation, OverflowMode, OverscrollBehavior, PositionKind,
     PositionTry, QueryCondition, RepeatCount, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
     ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
     TransformMatrix, TryCondition, UnicodeBidi, WritingModeKind,

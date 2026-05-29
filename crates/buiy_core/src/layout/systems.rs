@@ -17,15 +17,16 @@
 
 use super::components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
-    Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
-    Position, Rotate, Scale, Scroll, ScrollOffset, Translate, UiTransform, WritingMode,
-    WritingModeResolved,
+    Containment, Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken,
+    MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset, Translate, UiTransform,
+    WritingMode, WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, LayoutWarnOnceKey,
-    Length, PositionKind, QueryCondition, Sizing, TransformMatrix, TryCondition,
+    AnchorErrorKind, AnchorName, AnchorRef, ContainFlags, ContainerType, GridAreas, Inset,
+    LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing, TransformMatrix, TryCondition,
+    WritingModeKind,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -1299,7 +1300,7 @@ pub(super) fn gc_removed_nodes(
 /// every scroll-input frame) and `ScrollSnapItem` is consumed by the
 /// snap-point math in `buiy-input-events-design`, not by layout. Their
 /// exclusion is asserted by `tests/layout_scroll_offset_no_invalidate.rs`.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn sync_styles(
     mut tree: NonSendMut<LayoutTree>,
     nodes: Query<
@@ -1307,6 +1308,7 @@ pub(super) fn sync_styles(
             Entity,
             &Display,
             &BoxModel,
+            &Containment,
             &Position,
             &FlexParams,
             Option<&FlexItem>,
@@ -1383,6 +1385,11 @@ pub(super) fn sync_styles(
                     Changed<ContainerQueryInactive>,
                     Changed<Anchor>,
                     Changed<MultiColumn>,
+                    // Phase 8: re-translate when `Containment` changes so
+                    // the SIZE / INLINE_SIZE auto-size zeroing (spec § 5.1)
+                    // flows through `style_to_taffy`. Inner Or<> grows
+                    // 6 → 7 entries (cap 15).
+                    Changed<Containment>,
                 )>,
             )>,
         ),
@@ -1392,6 +1399,7 @@ pub(super) fn sync_styles(
     primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     cq_parent_chain: Query<&ChildOf>,
     mut iter_count: ResMut<SyncStylesIterCount>,
+    mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
     let tree = &mut *tree;
 
@@ -1411,7 +1419,7 @@ pub(super) fn sync_styles(
     // (filtered) query under Bevy 0.18.
     let parent_areas_for: HashMap<Entity, GridAreas> = nodes
         .iter()
-        .filter_map(|(entity, _, _, _, _, _, _, _, _, _, _, _, parent)| {
+        .filter_map(|(entity, .., parent)| {
             let p = parent?;
             let grid = parent_grid_lookup.get(p.parent()).ok()?;
             grid.template_areas.clone().map(|a| (entity, a))
@@ -1456,6 +1464,38 @@ pub(super) fn sync_styles(
     // existing entities run set_style only when something in the trigger
     // set actually changed — see foundation/architecture.md § 1.2.
     for item in nodes.iter() {
+        // SIZE / INLINE_SIZE containment with an auto size on a contained
+        // axis → treated as 0px (spec § 5.1). Warn once per (entity,
+        // session). The substitution itself happens in `style_to_taffy`
+        // (pure); this is just the log. Lives in `sync_styles` (which
+        // holds the warn resource), not `translate_one_entity` (shared
+        // with `cq_flip_rerun`, which has no warn resource).
+        let (entity, _, box_model, containment, .., writing_mode_resolved, _, _) = item;
+        let contain = containment.contain;
+        let size_all = contain.contains(ContainFlags::SIZE);
+        // Inline = width under horizontal modes, height under vertical /
+        // sideways modes (D5 mapping; sideways normalize to vertical).
+        let inline_is_horizontal =
+            matches!(writing_mode_resolved.mode, WritingModeKind::HorizontalTb);
+        let zeroed_width = (size_all
+            || (contain.contains(ContainFlags::INLINE_SIZE) && inline_is_horizontal))
+            && matches!(box_model.width, Sizing::Auto);
+        let zeroed_height = (size_all
+            || (contain.contains(ContainFlags::INLINE_SIZE) && !inline_is_horizontal))
+            && matches!(box_model.height, Sizing::Auto);
+        if (zeroed_width || zeroed_height)
+            && warned
+                .set
+                .insert(LayoutWarnOnceKey::SizeContainmentZeroed(entity))
+        {
+            bevy::log::warn!(
+                "Entity {:?} has size containment (contain: size/inline-size) with an \
+                 auto size on a contained axis; treating the auto size as 0px (spec § 5.1). \
+                 Declare an explicit width/height.",
+                entity,
+            );
+        }
+
         translate_one_entity(
             item,
             &parent_areas_for,
@@ -1480,6 +1520,7 @@ type NodeQueryItem<'w> = (
     Entity,
     &'w Display,
     &'w BoxModel,
+    &'w Containment,
     &'w Position,
     &'w FlexParams,
     Option<&'w FlexItem>,
@@ -1519,6 +1560,7 @@ pub(super) fn translate_one_entity(
         entity,
         display,
         bm,
+        containment,
         position,
         flex,
         flex_item,
@@ -1535,6 +1577,7 @@ pub(super) fn translate_one_entity(
     let view = StyleView {
         display,
         box_model: bm,
+        containment,
         position,
         flex_params: flex,
         flex_item,
