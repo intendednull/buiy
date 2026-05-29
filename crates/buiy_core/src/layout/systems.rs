@@ -1646,6 +1646,9 @@ pub(super) fn translate_one_entity(
         writing_mode_resolved,
         nearest_container,
         viewport_size,
+        // Populated by sync_styles in T5 from content_visibility_skip's
+        // AutoSentinel result; defaults to None here.
+        content_visibility_intrinsic: None,
     };
     let taffy_style = style_to_taffy(view);
     match tree.by_entity.get(&entity).copied() {

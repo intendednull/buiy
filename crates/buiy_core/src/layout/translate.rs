@@ -275,6 +275,14 @@ pub struct StyleView<'a> {
     /// inline; Phase 10's `Length::Vw/Vh` infrastructure will
     /// replace the inline read.
     pub(super) viewport_size: bevy::math::Vec2,
+    /// `content-visibility: auto` off-screen sentinel size (logical px),
+    /// or `None` when the entity is not skipping. When `Some`, the
+    /// entity's resolved Taffy `size` is replaced by this `contain-intrinsic-size`
+    /// hint and its descendants are detached from the Taffy tree by the
+    /// caller (`sync_styles`), so Taffy never lays the subtree out.
+    /// Set by `sync_styles` (step 1) from `content_visibility_skip`'s
+    /// `AutoSentinel` result. Spec § 5.2.
+    pub(super) content_visibility_intrinsic: Option<bevy::math::Vec2>,
 }
 
 pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
@@ -471,6 +479,17 @@ pub fn style_to_taffy(view: StyleView<'_>) -> taffy::Style {
         && let Some(a) = item.align_self
     {
         s.align_self = Some(map_align_items_as_self(a));
+    }
+
+    // content-visibility: auto off-screen sentinel (spec § 5.2): replace
+    // the resolved size with the contain-intrinsic-size hint so Taffy
+    // reserves the placeholder box without measuring the (detached)
+    // descendants.
+    if let Some(intrinsic) = view.content_visibility_intrinsic {
+        s.size = taffy::Size {
+            width: taffy::Dimension::length(intrinsic.x),
+            height: taffy::Dimension::length(intrinsic.y),
+        };
     }
 
     s
@@ -1068,6 +1087,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         // Default Display::Block + ContentBox + everything Auto produces taffy default Display::Block.
         assert_eq!(taffy.display, taffy::Display::Block);
@@ -1116,6 +1136,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert_eq!(taffy.display, taffy::Display::Flex);
         assert_eq!(taffy.flex_direction, taffy::FlexDirection::Row);
@@ -1158,6 +1179,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(10.0));
@@ -1199,6 +1221,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert_eq!(taffy.position, taffy::Position::Absolute);
         assert_eq!(taffy.inset.top, taffy::LengthPercentageAuto::length(5.0));
@@ -1237,6 +1260,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert_eq!(taffy.flex_grow, 2.0);
         assert_eq!(taffy.flex_shrink, 0.5);
@@ -1309,6 +1333,7 @@ mod tests {
                 writing_mode_resolved: &writing_mode_resolved,
                 nearest_container: None,
                 viewport_size: bevy::math::Vec2::ZERO,
+                content_visibility_intrinsic: None,
             });
             assert_eq!(
                 taffy.overflow.x, x_expected,
@@ -1354,6 +1379,7 @@ mod tests {
                 writing_mode_resolved: &writing_mode_resolved,
                 nearest_container: None,
                 viewport_size: bevy::math::Vec2::ZERO,
+                content_visibility_intrinsic: None,
             });
             assert_eq!(taffy.scrollbar_width, expected, "{input:?}");
         }
@@ -1393,6 +1419,7 @@ mod tests {
                 writing_mode_resolved: &writing_mode_resolved,
                 nearest_container: None,
                 viewport_size: bevy::math::Vec2::ZERO,
+                content_visibility_intrinsic: None,
             });
             assert_eq!(taffy.display, taffy::Display::Grid, "{display:?}");
         }
@@ -1429,6 +1456,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert_eq!(taffy.grid_template_columns.len(), 2);
         assert!(matches!(
@@ -1468,6 +1496,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert_eq!(taffy.grid_template_columns.len(), 1);
         assert!(matches!(
@@ -1506,6 +1535,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         // Line(1) and Line(4) — the values are GridPlacement variants.
         // Pin the discriminants by construction.
@@ -1558,6 +1588,7 @@ mod tests {
             writing_mode_resolved: &writing_mode_resolved,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         // Column resolves to Line(1)..Line(3) (1-indexed, end is exclusive
         // in CSS spec terms — column_start 0 → Line(1), column_end 2 →
@@ -1600,6 +1631,7 @@ mod tests {
             writing_mode_resolved: &wmr,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert!(matches!(taffy.direction, taffy::Direction::Rtl));
     }
@@ -1629,7 +1661,48 @@ mod tests {
             writing_mode_resolved: &wmr,
             nearest_container: None,
             viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
         });
         assert!(matches!(taffy.direction, taffy::Direction::Ltr));
+    }
+
+    #[test]
+    fn content_visibility_intrinsic_overrides_size() {
+        // Build a default-ish StyleView with an auto size, then assert the
+        // intrinsic override replaces the Taffy size with the sentinel.
+        let display = Display::Block;
+        let box_model = BoxModel {
+            width: Sizing::Auto,
+            height: Sizing::Auto,
+            ..Default::default()
+        };
+        let containment = Containment::default();
+        let position = Position::default();
+        let flex_params = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
+
+        let view = StyleView {
+            display: &display,
+            box_model: &box_model,
+            containment: &containment,
+            position: &position,
+            flex_params: &flex_params,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: Some(bevy::math::Vec2::new(120.0, 40.0)),
+        };
+        let s = style_to_taffy(view);
+        assert_eq!(s.size.width, taffy::Dimension::length(120.0));
+        assert_eq!(s.size.height, taffy::Dimension::length(40.0));
     }
 }
