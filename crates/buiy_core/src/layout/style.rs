@@ -13,14 +13,15 @@
 //! `Style`.
 
 use super::components::{
-    BoxModel, Container, Display, FlexParams, GridParams, MultiColumn, Overflow, Position, Scroll,
-    UiTransform, WritingMode,
+    BoxModel, Container, Containment, Display, FlexParams, GridParams, MultiColumn, Overflow,
+    Position, Scroll, UiTransform, WritingMode,
 };
 use super::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainerType, Direction, Edges, FlexAxis,
-    FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent, JustifyItems, Length,
-    LogicalEdges, OverflowMode, PositionKind, ScrollBehavior, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapType, TextOrientation, TrackSize, TransformMatrix, UnicodeBidi, WritingModeKind,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, ContainFlags, ContainerType, Direction,
+    Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, JustifyContent,
+    JustifyItems, Length, LogicalEdges, OverflowMode, PositionKind, ScrollBehavior,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapType, TextOrientation, TrackSize, TransformMatrix,
+    UnicodeBidi, WritingModeKind,
 };
 use bevy::ecs::bundle::Bundle;
 use bevy::math::Quat;
@@ -56,6 +57,7 @@ pub struct Style {
     pub container: Container,
     pub multi_column: MultiColumn,
     pub ui_transform: UiTransform,
+    pub containment: Containment,
 }
 
 impl Style {
@@ -494,6 +496,22 @@ impl Style {
     /// Ergonomic setter — uniform 2D scale (z = 1).
     pub fn scale(mut self, factor: f32) -> Self {
         self.ui_transform.matrix = TransformMatrix::Scale(factor, factor, 1.0);
+        self
+    }
+
+    // ---- Containment ----
+
+    /// Set the full `Containment` for this entity.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.
+    pub fn containment(mut self, c: Containment) -> Self {
+        self.containment = c;
+        self
+    }
+
+    /// Set just the `contain` flags (e.g. `ContainFlags::SIZE`).
+    pub fn contain(mut self, flags: ContainFlags) -> Self {
+        self.containment.contain = flags;
         self
     }
 }
@@ -973,5 +991,18 @@ mod tests {
             .id();
         let ui = world.get::<UiTransform>(e).expect("ui_transform inserted");
         assert!(matches!(ui.matrix, TransformMatrix::Rotate(_)));
+    }
+
+    #[test]
+    fn style_default_spawns_containment() {
+        let mut world = World::new();
+        let e = world.spawn(Style::default()).id();
+        assert!(world.get::<Containment>(e).is_some());
+    }
+
+    #[test]
+    fn style_contain_setter_round_trips() {
+        let s = Style::default().contain(ContainFlags::SIZE);
+        assert_eq!(s.containment.contain, ContainFlags::SIZE);
     }
 }

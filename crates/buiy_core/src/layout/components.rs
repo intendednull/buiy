@@ -13,11 +13,12 @@
 use super::types::{
     AlignContent, AlignItems, AnchorName, AnchorRef, AspectRatio, BackfaceVisibility, BoxSizing,
     BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill, ColumnRule, ColumnSpan,
-    ContainerType, Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow,
-    GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode, OverscrollBehavior,
-    PositionKind, PositionTry, QueryCondition, ScrollBehavior, ScrollbarColor, ScrollbarGutter,
-    ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation, TrackSize,
-    TransformMatrix, TransformOrigin, TransformStyle, UnicodeBidi, WritingModeKind,
+    ContainFlags, ContainerType, ContentVisibility, Direction, Edges, FlexAxis, FlexGap, FlexWrap,
+    GridAreas, GridAutoFlow, GridLine, Inset, JustifyContent, JustifyItems, Length, OverflowMode,
+    OverscrollBehavior, PositionKind, PositionTry, QueryCondition, ScrollBehavior, ScrollbarColor,
+    ScrollbarGutter, ScrollbarWidth, Sizing, SnapAlign, SnapStop, SnapType, TextOrientation,
+    TrackSize, TransformMatrix, TransformOrigin, TransformStyle, UnicodeBidi, WillChange,
+    WritingModeKind,
 };
 use bevy::prelude::*;
 
@@ -396,6 +397,23 @@ impl Default for Scale {
     fn default() -> Self {
         Scale(1.0, 1.0, 1.0)
     }
+}
+
+/// CSS containment — a performance opt-in describing how this
+/// entity's subtree is isolated from the rest of the layout/paint
+/// tree. Self-styling (`Style` field). Phase 8 implements only
+/// SIZE / INLINE_SIZE containment (auto width/height → 0 with a
+/// warn-once); LAYOUT/PAINT/STYLE flags are stored for render/future;
+/// `content_visibility != Visible` is stored + deferred (warn-once);
+/// `will_change` is stored-only (tier-E).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 5.
+#[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct Containment {
+    pub contain: ContainFlags,
+    pub content_visibility: ContentVisibility,
+    pub will_change: WillChange,
 }
 
 /// A `@container` rule pinned to a single entity. The rule activates
@@ -785,6 +803,14 @@ mod tests {
         assert_eq!(s.0, 1.0);
         assert_eq!(s.1, 1.0);
         assert_eq!(s.2, 1.0);
+    }
+
+    #[test]
+    fn containment_default_is_empty_visible_auto() {
+        let c = Containment::default();
+        assert_eq!(c.contain, ContainFlags::empty());
+        assert_eq!(c.content_visibility, ContentVisibility::Visible);
+        assert_eq!(c.will_change, WillChange::Auto);
     }
 
     #[test]
