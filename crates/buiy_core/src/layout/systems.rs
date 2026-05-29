@@ -3031,6 +3031,28 @@ fn length_px(l: &Length) -> f32 {
     }
 }
 
+/// Resolve a `MultiColumn` length metric (`column_width` / `column_gap`)
+/// to px for the v1 packer. Only `Length::Px` is meaningful in v1
+/// (percent / cq column metrics are a non-goal — plan D8); any other
+/// variant, or `None`, yields `fallback`. The gap's fallback is `0.0`
+/// (CSS `normal` maps to 0 pre-font-metrics); a width is only resolved
+/// when `Some`, and a non-`Px` width resolving to its fallback (0.0)
+/// makes `resolve_column_count` treat it as "no usable width".
+///
+/// Carries `#[allow(dead_code)]` because the rewritten `multicol_pack`
+/// system consumes it in a later Phase-13 task (T6); committing the pure
+/// helper first follows the `table_part` / `resolve_column_widths`
+/// precedent.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 3.1.
+#[allow(dead_code)]
+pub(super) fn multicol_length_px(l: Option<Length>, fallback: f32) -> f32 {
+    match l {
+        Some(Length::Px(v)) => v,
+        _ => fallback,
+    }
+}
+
 /// Compose the final transform matrix per spec § 1:
 /// `M = T_translate · R_rotate · S_scale · M_transform`.
 /// The longhand `Translate`/`Rotate`/`Scale` (absent → identity
@@ -4618,4 +4640,21 @@ mod observer_tests {
     // observer no longer touches LayoutAnchorWarnedThisFrame. Test
     // coverage for duplicate-name warns lives in the integration tests
     // (tests/layout_anchor_positioning.rs).
+
+    #[test]
+    fn multicol_length_px_px_passes_through() {
+        assert_eq!(multicol_length_px(Some(Length::Px(120.0)), 0.0), 120.0);
+    }
+
+    #[test]
+    fn multicol_length_px_none_uses_fallback() {
+        assert_eq!(multicol_length_px(None, 16.0), 16.0);
+    }
+
+    #[test]
+    fn multicol_length_px_non_px_uses_fallback() {
+        // percent / cq column metrics are a v1 non-goal (D8) — fall back.
+        assert_eq!(multicol_length_px(Some(Length::Percent(50.0)), 0.0), 0.0);
+        assert_eq!(multicol_length_px(Some(Length::Cqw(10.0)), 7.0), 7.0);
+    }
 }
