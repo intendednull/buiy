@@ -20,7 +20,7 @@ pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
     AnchorNameRegistry, LayoutAnchorWarnedThisFrame, LayoutTaffyComputeCount,
-    LayoutWarnedOnceSession, PostTaffyPositionOverrides, SyncStylesIterCount,
+    LayoutWarnedOnceSession, PostTaffyPositionOverrides, SyncStylesIterCount, TopLayerActivation,
 };
 pub use tree::LayoutTree;
 pub use types::{

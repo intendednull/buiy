@@ -26,7 +26,7 @@ use super::tree::LayoutTree;
 use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, ContainFlags, ContainerType, ContentVisibility,
     GridAreas, Inset, Isolation, LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing,
-    TransformMatrix, TryCondition, WritingModeKind, ZIndex,
+    TopLayer, TransformMatrix, TryCondition, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use bevy::prelude::*;
@@ -2585,6 +2585,12 @@ pub(super) fn stacking_context(
             .map(|p| p.kind)
             .unwrap_or(PositionKind::Static)
     };
+    let top_layer_of = |e: Entity| {
+        stacking_q
+            .get(e)
+            .map(|s| s.top_layer)
+            .unwrap_or(TopLayer::None)
+    };
     let is_root = |parent: Option<&ChildOf>| {
         parent
             .map(|p| !tree.by_entity.contains_key(&p.parent()))
@@ -2600,10 +2606,44 @@ pub(super) fn stacking_context(
         )
     };
 
-    // --- 1. top-layer activation rebuild (D3) — implemented in T9 ---
-    // (T9 inserts the membership rebuild + fullscreen warn here, then
-    // the escape logic below in step 4.)
-    let _ = (&mut activation, &mut warned); // silence unused until T9
+    // --- 1. top-layer activation rebuild (D3) ---
+    // Single global top layer (D2). Recompute the current top-layer
+    // membership from the live `Stacking.top_layer` values; drop deque
+    // entries that are no longer top-layer (deactivated / despawned),
+    // keeping the existing activation order, then append newly-present
+    // entities in tree-iteration order (most-recent at the back).
+    let mut fullscreen_count = 0usize;
+    let mut current_top: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for (e, _) in nodes.iter() {
+        if display_none(e) {
+            continue;
+        }
+        match top_layer_of(e) {
+            TopLayer::None => {}
+            TopLayer::Fullscreen => {
+                fullscreen_count += 1;
+                current_top.insert(e);
+            }
+            _ => {
+                current_top.insert(e);
+            }
+        }
+    }
+    activation.order.retain(|e| current_top.contains(e));
+    for (e, _) in nodes.iter() {
+        if current_top.contains(&e) && !activation.order.contains(&e) {
+            activation.order.push_back(e);
+        }
+    }
+    if fullscreen_count > 1
+        && warned
+            .set
+            .insert(LayoutWarnOnceKey::MultipleFullscreenTopLayer)
+    {
+        bevy::log::warn!(
+            "Layout: {fullscreen_count} entities request TopLayer::Fullscreen; CSS allows one — extras fall back to normal stacking (spec § 4.2)."
+        );
+    }
 
     // --- 2. find the root + classify which entities form contexts ---
     // (Single global tree → expect exactly one root in the MinimalPlugins
@@ -2622,7 +2662,6 @@ pub(super) fn stacking_context(
             forming.insert(e);
         }
     }
-    let _ = &roots; // root-relative top-layer attach lands in T9
 
     // --- 3. build each forming context's painters_z ---
     // For an SC root R: walk R's subtree in document order; collect every
@@ -2642,7 +2681,11 @@ pub(super) fn stacking_context(
             if display_none(node) {
                 continue;
             }
-            // (T9: `if top_layer_of(node) != TopLayer::None { continue }`)
+            // Top-layer entities escape their parent context — they are
+            // attached to the root context in step 5 (spec § 4.1).
+            if top_layer_of(node) != TopLayer::None {
+                continue;
+            }
             painters.push(node);
             if !forming.contains(&node)
                 && let Ok(kids) = children_q.get(node)
@@ -2656,11 +2699,33 @@ pub(super) fn stacking_context(
         painters
     };
 
-    // --- 4. write StackingContext on forming entities; remove stale ---
+    // --- 4. compute the escaped top-layer paint order (spec § 4.2) ---
+    // Top-layer entities are attached to the root context, ordered by
+    // tier (Fullscreen bottom < Tooltip < Popover < Modal top) then, within
+    // a tier, activation order. The deque is already in activation order, so
+    // a STABLE sort by tier preserves activation order inside each tier.
+    fn tier_rank(t: TopLayer) -> u8 {
+        match t {
+            TopLayer::Fullscreen => 0,
+            TopLayer::Tooltip => 1,
+            TopLayer::Popover => 2,
+            TopLayer::Modal => 3,
+            TopLayer::None => u8::MAX,
+        }
+    }
+    let mut top_sorted: Vec<Entity> = activation.order.iter().copied().collect();
+    top_sorted.sort_by_key(|&e| tier_rank(top_layer_of(e)));
+    let root = roots.first().copied();
+
+    // --- 5. write StackingContext on forming entities; remove stale ---
     for &e in &forming {
-        let new = StackingContext {
-            painters_z: painters_of(e),
-        };
+        let mut painters_z = painters_of(e);
+        // The single global top layer attaches to the root context (D2/D8):
+        // its members paint after all in-flow root painters.
+        if Some(e) == root {
+            painters_z.extend(top_sorted.iter().copied());
+        }
+        let new = StackingContext { painters_z };
         // Idempotent insert (mirror transform_composition's gate): only
         // write when the value differs from the existing one.
         let differs = existing_sc
