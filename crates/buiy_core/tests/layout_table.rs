@@ -103,3 +103,128 @@ fn cell_size_comes_from_taffy_not_overridden() {
     assert!((rl.size.x - 40.0).abs() < 0.5, "cell width from Taffy");
     assert!((rl.size.y - 25.0).abs() < 0.5, "cell height from Taffy");
 }
+
+#[test]
+fn columns_size_to_widest_cell_across_rows() {
+    // Row 0: cells 30 / 50.  Row 1: cells 70 / 20.
+    // Column 0 = max(30,70) = 70; column 1 starts at x=70 for BOTH rows.
+    let mut app = app();
+    let r0c0 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(30.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let r0c1 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(50.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let r1c0 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(70.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let r1c1 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(20.0)
+                .height_px(20.0),
+        ))
+        .id();
+    let row0 = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_children(&[r0c0, r0c1])
+        .id();
+    let row1 = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_children(&[r1c0, r1c1])
+        .id();
+    let _table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_children(&[row0, row1])
+        .id();
+
+    app.update();
+
+    // Column 1 starts after the widest column-0 cell (70px) in BOTH rows.
+    assert!(
+        (pos(&app, r0c1).x - 70.0).abs() < 0.5,
+        "row 0 col 1 at x=70 (widest col 0)"
+    );
+    assert!(
+        (pos(&app, r1c1).x - 70.0).abs() < 0.5,
+        "row 1 col 1 also at x=70"
+    );
+    assert_eq!(pos(&app, r0c0).x, 0.0);
+    assert_eq!(pos(&app, r1c0).x, 0.0);
+}
+
+#[test]
+fn rows_stack_by_their_own_height() {
+    // Row 0 cell height 25; row 1 cell height 40. Row 1 starts at y=25.
+    let mut app = app();
+    let r0 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(40.0)
+                .height_px(25.0),
+        ))
+        .id();
+    let r1 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .display(Display::TableCell)
+                .width_px(40.0)
+                .height_px(40.0),
+        ))
+        .id();
+    let row0 = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(r0)
+        .id();
+    let row1 = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::TableRow)))
+        .add_child(r1)
+        .id();
+    let _table = app
+        .world_mut()
+        .spawn((Node, Style::default().display(Display::Table)))
+        .add_children(&[row0, row1])
+        .id();
+
+    app.update();
+
+    assert_eq!(pos(&app, r0).y, 0.0, "row 0 at top");
+    assert!(
+        (pos(&app, r1).y - 25.0).abs() < 0.5,
+        "row 1 below row 0 (25px tall)"
+    );
+}
