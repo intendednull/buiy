@@ -28,6 +28,38 @@ pub struct ResolvedLayout {
     pub size: Vec2,
 }
 
+/// Resolved composed transform, written by sub-pass 6e
+/// (`transform_composition`) when an entity has a non-identity
+/// `UiTransform` / `Translate` / `Rotate` / `Scale`. The render
+/// handoff for transforms — mirrors how `ResolvedLayout` is the
+/// render handoff for position+size. Absent on entities with an
+/// identity transform (sub-pass 6e inserts it only when non-identity
+/// and removes a stale one otherwise — spec § 7).
+///
+/// **Not** written into a Bevy `Transform`/`GlobalTransform` in
+/// Phase 8 (deliberate divergence from spec § 2 approach (a): render
+/// reads `ResolvedLayout` directly and `buiy_core` has no
+/// `TransformPlugin` wiring — the Bevy-`Transform` ownership bridge
+/// is a render-pipeline follow-up). Stored as `Mat4` (3D-ready,
+/// represents perspective + arbitrary 4×4).
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 1.1, § 2.
+#[derive(Component, Reflect, Clone, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct ResolvedTransform {
+    /// The composed transform matrix `M = T·R·S·M_transform`. A child
+    /// point `p` is transformed as `M · p`.
+    pub matrix: Mat4,
+}
+
+impl Default for ResolvedTransform {
+    fn default() -> Self {
+        Self {
+            matrix: Mat4::IDENTITY,
+        }
+    }
+}
+
 /// Visual surface: theme-token references and corner radius for the
 /// Phase 0/1 render pipeline. Optional — entities without `Visual` are
 /// skipped by the render extract.
@@ -50,4 +82,14 @@ pub struct Visual {
     pub foreground_token: String,
     /// Uniform corner radius in logical pixels.
     pub border_radius: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolved_transform_default_is_identity() {
+        assert_eq!(ResolvedTransform::default().matrix, Mat4::IDENTITY);
+    }
 }

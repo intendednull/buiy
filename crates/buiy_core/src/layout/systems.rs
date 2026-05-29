@@ -18,13 +18,14 @@
 use super::components::{
     Anchor, BoxModel, Container, ContainerQuery, ContainerQueryActive, ContainerQueryInactive,
     Display, FlexItem, FlexParams, GridItem, GridParams, LayoutAnchorBroken, MultiColumn, Overflow,
-    Position, Scroll, ScrollOffset, WritingMode, WritingModeResolved,
+    Position, Rotate, Scale, Scroll, ScrollOffset, Translate, UiTransform, WritingMode,
+    WritingModeResolved,
 };
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, ContainerType, GridAreas, Inset, LayoutWarnOnceKey,
-    Length, PositionKind, QueryCondition, Sizing, TryCondition,
+    Length, PositionKind, QueryCondition, Sizing, TransformMatrix, TryCondition,
 };
 use crate::components::{Node, ResolvedLayout};
 use bevy::prelude::*;
@@ -2259,6 +2260,94 @@ pub(super) fn cq_flip_rerun(
     }
 }
 
+/// Convert a `TransformMatrix` to a `Mat4`. `None` → identity.
+/// `Translate`/`Rotate`/`Scale`/`Skew`/`Matrix` map directly;
+/// `Compose([A, B, …])` folds to the matrix product `A · B · …`
+/// (outermost first; rightmost transforms a child point first).
+///
+/// `Length`s in `Translate` resolve as px today (percent/cq transform
+/// translates resolve against the entity's own box — deferred to the
+/// render/animation phase; px is the only meaningful unit at compose
+/// time for Phase 8). Non-px `Length` variants resolve to their px
+/// magnitude via `Length::Px` only; other variants contribute 0.0.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
+// Production caller is `compose_transform`, whose sole consumer — the
+// `transform_composition` sub-pass 6e system — lands in the next task;
+// the helper is exercised by `mod tests` in the meantime.
+#[allow(dead_code)]
+fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
+    match m {
+        TransformMatrix::None => Mat4::IDENTITY,
+        TransformMatrix::Translate(x, y, z) => {
+            Mat4::from_translation(Vec3::new(length_px(x), length_px(y), length_px(z)))
+        }
+        TransformMatrix::Rotate(q) => Mat4::from_quat(*q),
+        TransformMatrix::Scale(x, y, z) => Mat4::from_scale(Vec3::new(*x, *y, *z)),
+        TransformMatrix::Skew(ax, ay) => {
+            // 2D skew: shear matrix with tan(angle) off-diagonals.
+            let mut mat = Mat4::IDENTITY;
+            mat.y_axis.x = ax.tan();
+            mat.x_axis.y = ay.tan();
+            mat
+        }
+        TransformMatrix::Matrix(mat) => *mat,
+        TransformMatrix::Compose(list) => list.iter().fold(Mat4::IDENTITY, |acc, item| {
+            acc * transform_matrix_to_mat4(item)
+        }),
+    }
+}
+
+/// Resolve a `Length` to px for transform translation. Only `Px` is
+/// meaningful at compose time in Phase 8; other units (percent /
+/// cq) resolve against the entity's own box and are deferred to the
+/// render/animation phase — they contribute 0.0 here.
+// See `transform_matrix_to_mat4` — production caller arrives with 6e (next task).
+#[allow(dead_code)]
+fn length_px(l: &Length) -> f32 {
+    match l {
+        Length::Px(p) => *p,
+        _ => 0.0,
+    }
+}
+
+/// Compose the final transform matrix per spec § 1:
+/// `M = T_translate · R_rotate · S_scale · M_transform`.
+/// The longhand `Translate`/`Rotate`/`Scale` (absent → identity
+/// contribution) are the outer factors; `UiTransform.matrix` is the
+/// innermost. A child point `p` is transformed as `M · p`, so it
+/// feels the rightmost (innermost) factor first.
+///
+/// Pure function — no Bevy queries, no Taffy reads. Easy to unit test.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 1.1.
+// Sole production consumer is the `transform_composition` sub-pass 6e
+// system, wired in the next task; covered by `mod tests` until then.
+#[allow(dead_code)]
+pub(super) fn compose_transform(
+    ui: &UiTransform,
+    t: Option<&Translate>,
+    r: Option<&Rotate>,
+    s: Option<&Scale>,
+) -> Mat4 {
+    let t_mat = match t {
+        Some(Translate(x, y, z)) => {
+            Mat4::from_translation(Vec3::new(length_px(x), length_px(y), length_px(z)))
+        }
+        None => Mat4::IDENTITY,
+    };
+    let r_mat = match r {
+        Some(Rotate(q)) => Mat4::from_quat(*q),
+        None => Mat4::IDENTITY,
+    };
+    let s_mat = match s {
+        Some(Scale(x, y, z)) => Mat4::from_scale(Vec3::new(*x, *y, *z)),
+        None => Mat4::IDENTITY,
+    };
+    let m_transform = transform_matrix_to_mat4(&ui.matrix);
+    t_mat * r_mat * s_mat * m_transform
+}
+
 #[cfg(test)]
 mod cq_tests {
     use super::*;
@@ -2305,6 +2394,68 @@ mod cq_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_identity_is_identity() {
+        let ui = UiTransform::default();
+        let m = compose_transform(&ui, None, None, None);
+        assert_eq!(m, Mat4::IDENTITY);
+    }
+
+    #[test]
+    fn compose_matrix_translate_only() {
+        let ui = UiTransform {
+            matrix: TransformMatrix::Translate(Length::px(10.0), Length::px(20.0), Length::ZERO),
+            ..Default::default()
+        };
+        let m = compose_transform(&ui, None, None, None);
+        assert_eq!(m, Mat4::from_translation(Vec3::new(10.0, 20.0, 0.0)));
+    }
+
+    #[test]
+    fn compose_matrix_scale_only() {
+        let ui = UiTransform {
+            matrix: TransformMatrix::Scale(2.0, 3.0, 1.0),
+            ..Default::default()
+        };
+        let m = compose_transform(&ui, None, None, None);
+        assert_eq!(m, Mat4::from_scale(Vec3::new(2.0, 3.0, 1.0)));
+    }
+
+    #[test]
+    fn compose_longhands_with_matrix_order() {
+        // Longhand translate (10,0,0), longhand scale (2,2,1), matrix Rotate(z 90°).
+        // M = T_translate · R_rotate · S_scale · M_transform
+        //   = T(10) · R_longhand_identity? — NOTE: Rotate longhand absent, so R = IDENTITY.
+        // With t = Translate(10,0,0), r = None, s = Scale(2,2,1), matrix = Rotate(z, FRAC_PI_2):
+        //   M = T(10,0,0) · IDENTITY · S(2,2,1) · Rz(90°)
+        let ui = UiTransform {
+            matrix: TransformMatrix::Rotate(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+            ..Default::default()
+        };
+        let t = Translate(Length::px(10.0), Length::ZERO, Length::ZERO);
+        let s = Scale(2.0, 2.0, 1.0);
+        let m = compose_transform(&ui, Some(&t), None, Some(&s));
+        let expected = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))
+            * Mat4::from_scale(Vec3::new(2.0, 2.0, 1.0))
+            * Mat4::from_quat(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+        assert_eq!(m, expected);
+    }
+
+    #[test]
+    fn compose_matrix_compose_product_order() {
+        // Compose([A, B]) = A · B (A outermost, B transforms a child point first).
+        let a = TransformMatrix::Translate(Length::px(5.0), Length::ZERO, Length::ZERO);
+        let b = TransformMatrix::Scale(2.0, 1.0, 1.0);
+        let ui = UiTransform {
+            matrix: TransformMatrix::Compose(vec![a, b]),
+            ..Default::default()
+        };
+        let m = compose_transform(&ui, None, None, None);
+        let expected = Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0))
+            * Mat4::from_scale(Vec3::new(2.0, 1.0, 1.0));
+        assert_eq!(m, expected);
+    }
 
     #[test]
     fn anchor_name_registry_lookup_returns_most_recent() {
