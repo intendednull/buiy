@@ -105,38 +105,28 @@ fn clip_contribution(
     let border = box_model.map(|b| &b.border).unwrap_or(&zero);
     let padding = own.inset_border(border);
 
-    // Per-axis overflow: a `Visible` axis leaves that axis unbounded
-    // (±infinity); only a clipping axis (Hidden/Clip/Scroll/Auto) binds.
+    // Per-axis overflow: start fully unbounded, then bind only the clipping
+    // axes (Hidden/Clip/Scroll/Auto) to the padding box; a `Visible` axis
+    // stays at ±infinity.
     let (ox, oy) = overflow
         .map(|o| (o.x, o.y))
         .unwrap_or((OverflowMode::Visible, OverflowMode::Visible));
     let x_clips = !matches!(ox, OverflowMode::Visible);
     let y_clips = !matches!(oy, OverflowMode::Visible);
-    let overflow_bound = (x_clips || y_clips).then_some(Aabb {
-        min: Vec2::new(
-            if x_clips {
-                padding.min.x
-            } else {
-                f32::NEG_INFINITY
-            },
-            if y_clips {
-                padding.min.y
-            } else {
-                f32::NEG_INFINITY
-            },
-        ),
-        max: Vec2::new(
-            if x_clips {
-                padding.max.x
-            } else {
-                f32::INFINITY
-            },
-            if y_clips {
-                padding.max.y
-            } else {
-                f32::INFINITY
-            },
-        ),
+    let overflow_bound = (x_clips || y_clips).then(|| {
+        let mut b = Aabb {
+            min: Vec2::splat(f32::NEG_INFINITY),
+            max: Vec2::splat(f32::INFINITY),
+        };
+        if x_clips {
+            b.min.x = padding.min.x;
+            b.max.x = padding.max.x;
+        }
+        if y_clips {
+            b.min.y = padding.min.y;
+            b.max.y = padding.max.y;
+        }
+        b
     });
 
     // `contain: paint` clips to the BORDER box (own box, no inset).
@@ -144,17 +134,23 @@ fn clip_contribution(
         .filter(|c| c.contain.contains(ContainFlags::PAINT))
         .map(|_| own);
 
-    match (overflow_bound, paint_bound) {
+    intersect_opt(overflow_bound, paint_bound)
+}
+
+/// Intersect two optional clip boxes: both present → their intersection; one
+/// present → that one; neither → `None`.
+fn intersect_opt(a: Option<Aabb>, b: Option<Aabb>) -> Option<Aabb> {
+    match (a, b) {
         (Some(a), Some(b)) => Some(a.intersect(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
+        (a, b) => a.or(b),
     }
 }
 
-/// Per-node layout/clip inputs read by the walk.
+/// Per-node layout/clip inputs read by the walk. `ResolvedLayout` is optional
+/// so the walk can still read `Display` / `ContentVisibility` (to prune + clear
+/// stale clips) on a node that lacks a resolved box this frame.
 type ClipNodeData<'w> = (
-    &'w ResolvedLayout,
+    Option<&'w ResolvedLayout>,
     Option<&'w BoxModel>,
     Option<&'w Overflow>,
     Option<&'w Containment>,
@@ -176,7 +172,7 @@ pub fn write_clip_rects(
     node_marker: Query<(), With<Node>>,
     children: Query<&Children>,
     // SPEC § A.4: ScrollOffset is intentionally NOT a clip input.
-    nodes: Query<ClipNodeData>,
+    nodes: Query<ClipNodeData, With<Node>>,
     existing: Query<(Option<&ClipRect>, Option<&AncestorClip>)>,
 ) {
     // A clip root is a Node with no `ChildOf`, OR whose `ChildOf` parent is
@@ -201,36 +197,64 @@ fn walk(
     ancestor: Option<Aabb>,
     commands: &mut Commands,
     children: &Query<&Children>,
-    nodes: &Query<ClipNodeData>,
+    nodes: &Query<ClipNodeData, With<Node>>,
     existing: &Query<(Option<&ClipRect>, Option<&AncestorClip>)>,
 ) {
+    // A non-Node entity in the Children tree is not a Buiy node — skip it and
+    // its subtree (clip applies to the Buiy node tree).
     let Ok((rl, box_model, overflow, containment, display)) = nodes.get(entity) else {
         return;
     };
-    // Prune Display::None / ContentVisibility::Hidden subtrees (spec § A.3).
-    if matches!(display, Some(Display::None)) {
-        return;
-    }
-    if containment.is_some_and(|c| c.content_visibility == ContentVisibility::Hidden) {
+
+    // Prune Display::None / ContentVisibility::Hidden subtrees (spec § A.3): a
+    // pruned node paints nothing, so it AND its descendants must drop any clip
+    // a prior frame wrote, and compute no new clip below.
+    if matches!(display, Some(Display::None))
+        || containment.is_some_and(|c| c.content_visibility == ContentVisibility::Hidden)
+    {
+        clear_subtree(entity, commands, children, existing);
         return;
     }
 
-    let own = Aabb::from_box(rl.position, rl.size);
-    let clip: Option<Aabb> = ancestor.map(|a| a.intersect(own));
-    reconcile(entity, clip, ancestor, commands, existing);
-
-    // The clip box THIS node imposes on its descendants, folded into the
-    // running ancestor AABB.
-    let own_contribution = clip_contribution(own, box_model, overflow, containment);
-    let child_ancestor = match (ancestor, own_contribution) {
-        (Some(a), Some(c)) => Some(a.intersect(c)),
-        (None, Some(c)) => Some(c),
-        (some, None) => some,
+    // Without a resolved box this node cannot be clipped; clear its own stale
+    // clip but keep walking descendants with the unchanged ancestor clip.
+    let child_ancestor = match rl {
+        Some(rl) => {
+            let own = Aabb::from_box(rl.position, rl.size);
+            let clip = ancestor.map(|a| a.intersect(own));
+            reconcile(entity, clip, ancestor, commands, existing);
+            // The clip box THIS node imposes on its descendants, folded into
+            // the running ancestor AABB.
+            let contribution = clip_contribution(own, box_model, overflow, containment);
+            intersect_opt(ancestor, contribution)
+        }
+        None => {
+            reconcile(entity, None, None, commands, existing);
+            ancestor
+        }
     };
 
     if let Ok(kids) = children.get(entity) {
         for child in kids.iter() {
             walk(child, child_ancestor, commands, children, nodes, existing);
+        }
+    }
+}
+
+/// Remove any stale [`ClipRect`] / [`AncestorClip`] on `entity` and its whole
+/// subtree — a pruned (`Display::None` / `ContentVisibility::Hidden`) node
+/// paints nothing, so it and its descendants must drop the clips a prior frame
+/// wrote (and compute no new clip).
+fn clear_subtree(
+    entity: Entity,
+    commands: &mut Commands,
+    children: &Query<&Children>,
+    existing: &Query<(Option<&ClipRect>, Option<&AncestorClip>)>,
+) {
+    reconcile(entity, None, None, commands, existing);
+    if let Ok(kids) = children.get(entity) {
+        for child in kids.iter() {
+            clear_subtree(child, commands, children, existing);
         }
     }
 }

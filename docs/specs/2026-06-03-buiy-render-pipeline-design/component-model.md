@@ -17,10 +17,11 @@ and [effect-compositor.md](effect-compositor.md).
 The **author-set** components follow the foundation's decomposed-component
 convention (foundation goal §1.3): each is a small public-fielded `Component`
 deriving `Reflect + Default + Clone + Component`, registered in the render
-plugin's `build` so reflection / BSN / inspectors find them. The two **computed**
-components are deliberate exceptions — `ClipRect` (§ 9) and `EffectGroup` (§ 10)
-are render-prep-written, never authored or serialized, so they carry leaner
-derives (no `Reflect` / `Default`) per their owning specs. They are the
+plugin's `build` so reflection / BSN / inspectors find them. The three
+**computed** components are deliberate exceptions — `ClipRect` (§ 9),
+`AncestorClip` (§ 9), and `EffectGroup` (§ 10) are render-prep-written, never
+authored or serialized, so they carry leaner derives (no `Reflect` / `Default`)
+per their owning specs. They are the
 render-side analogue of the layout decomposed components in
 [`layout/components.rs`](../../../crates/buiy_core/src/layout/components.rs) and
 mirror the layout-spec authoring model
@@ -558,7 +559,7 @@ underlying components** (`Opacity` / `Filter` / `MixBlendMode` / `BackdropFilter
 and the layout-owned `Stacking.isolation` bit, spelled `Isolation::Isolate`).
 Its detection rule — the canonical effect-group-former predicate owned by
 [effect-compositor.md § 1](effect-compositor.md#1-the-identity-effect-group-set--effect-forming-stacking-context-set)
-— is the union of the SC-trigger set **plus** `BackdropFilter` (which forms a
+— is the union of the *effect-forming* SC triggers **plus** `BackdropFilter` (which forms a
 compositing boundary without forming a stacking context). Render target allocation/pooling,
 the v1 set (group `opacity` + `isolation` only), and the reserved filter/blend
 seams are owned by [effect-compositor.md](effect-compositor.md), which uses this
@@ -720,7 +721,7 @@ Every **author-set** component above is registered in the render plugin's
 `build` via `app.register_type::<T>()` so reflection, BSN, and inspectors resolve
 them — the same contract the layout plugin honors for its decomposed components
 ([layout/architecture.md § 2.1](../2026-05-08-buiy-layout-design/architecture.md#21-decomposed-components--canonical-storage)).
-The two computed components (`ClipRect`, `EffectGroup`) are not author-set or
+The three computed components (`ClipRect`, `AncestorClip`, `EffectGroup`) are not author-set or
 serialized and so are not `register_type`'d; they exist only as render-prep
 outputs. The layout-written `OffscreenAuto` marker (§ 12.2) is likewise **not**
 registered by this spec's render plugin — it is layout-owned (README § 3.1), so
@@ -744,7 +745,7 @@ How these claims are proven (gate IDs from
 
 - **Reflection/registration** — a headless test asserts every author-set render
   component `register_type`s (no GPU needed), mirroring the layout plugin's
-  registration test (the computed `ClipRect` / `EffectGroup` are exempt — they
+  registration test (the computed `ClipRect` / `AncestorClip` / `EffectGroup` are exempt — they
   are not reflected). Defaults match CSS initial values (`Opacity(1.0)`,
   `Background::default()` transparent, `Border::default()` square + no stroke,
   empty `BoxShadow`, `MixBlendMode::Normal`).
