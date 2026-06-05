@@ -3,7 +3,7 @@
 //! still yields the magenta sentinel. Pure resolution; no RenderApp.
 
 use bevy::prelude::*;
-use buiy_core::render::color::ColorToken;
+use buiy_core::render::color::{ColorToken, SystemColorKeyword};
 use buiy_core::render::resolve_token;
 use buiy_core::theme::Theme;
 use std::borrow::Cow;
@@ -38,4 +38,17 @@ fn transparent_token_resolves_to_none() {
     let (color, missed) = resolve_token(&ColorToken::Transparent, &theme);
     assert_eq!(color, Color::NONE);
     assert!(!missed);
+}
+
+#[test]
+fn system_color_resolves_to_sentinel_until_forced_colors_map_lands() {
+    // v1 deferral: the system-color map is owned by buiy-theme-tokens-design,
+    // so every SystemColor token misses → magenta sentinel + warn. This pins
+    // the deferred miss-path so the R11 rewrite (route present entries through
+    // the map) has a regression guard.
+    let theme = Theme::default();
+    let (color, missed) =
+        resolve_token(&ColorToken::SystemColor(SystemColorKeyword::Canvas), &theme);
+    assert_eq!(color, Color::srgb(1.0, 0.0, 1.0));
+    assert!(missed);
 }

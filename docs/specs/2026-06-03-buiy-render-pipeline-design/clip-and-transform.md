@@ -663,7 +663,7 @@ This is the contract the bridge fixes once, for the whole render pipeline:
 | **View uniform (GPU)** | The y-down → Bevy's y-up screen convention flip is folded into the **view-projection uniform** for Buiy's render node, so every primitive inherits it once. Logical-px → physical-px scaling (the window `scale_factor`) is folded into the same uniform. |
 
 **`scale_factor` lives in two places, by design (reconciles
-[effect-compositor.md § 2.1](effect-compositor.md) / R9).** `GlobalTransform`,
+[effect-compositor.md § 2.1](effect-compositor.md)).** `GlobalTransform`,
 `ClipRect`, and the bridge all stay in **logical px** — `scale_factor` is *not*
 baked into them. Instead the window `scale_factor` is:
 

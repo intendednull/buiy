@@ -498,8 +498,8 @@ angle surface is **C**).
 
 ## 9. `ClipRect` — F (computed, not authored)
 
-`ClipRect` is the **only** render component on this list that is *not*
-author-set. Its type definition (fields + the accumulation algorithm) is owned
+`ClipRect` is one of the **three computed** render components that are *not*
+author-set (alongside `AncestorClip` § 9 and `EffectGroup` § 10); what distinguishes it is that it is read by **both** render and picking. Its type definition (fields + the accumulation algorithm) is owned
 by [clip-and-transform.md § A.2](clip-and-transform.md#a2-the-cliprect-output-shape)
 — it is `ClipRect { min: Vec2, max: Vec2 }` (logical px, the accumulated clip
 AABB),
