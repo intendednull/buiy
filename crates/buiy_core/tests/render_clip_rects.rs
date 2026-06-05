@@ -9,8 +9,8 @@
 use bevy::prelude::*;
 use buiy_core::render::components::AncestorClip;
 use buiy_core::{
-    ClipRect, ContainFlags, Containment, ContentVisibility, CorePlugin, Node, OverflowMode,
-    ResolvedLayout, ScrollOffset,
+    ClipRect, ContainFlags, Containment, ContentVisibility, CorePlugin, Display, Node,
+    OverflowMode, ResolvedLayout, ScrollOffset,
     layout::{LayoutPlugin, Style},
     render::BuiyRenderPlugin,
 };
@@ -427,7 +427,23 @@ fn node_parented_under_non_node_is_a_clip_root() {
 
 #[test]
 fn steady_state_frame_does_not_rewrite_clip_rect() {
+    // A re-insert is detected by a `Changed<ClipRect>` system run inside the
+    // schedule (a query created *after* the updates cannot tell a gated insert
+    // from a re-insert-every-frame impl). With the change-gate, frame 2 must
+    // see no `ClipRect` change; without it this test fails (re-insert marks
+    // the component Changed every frame).
+    #[derive(Resource, Default)]
+    struct SawClipChange(bool);
+    fn detect(q: Query<(), Changed<ClipRect>>, mut saw: ResMut<SawClipChange>) {
+        if !q.is_empty() {
+            saw.0 = true;
+        }
+    }
+
     let mut app = app();
+    app.init_resource::<SawClipChange>();
+    app.add_systems(Update, detect.after(buiy_core::render::write_clip_rects));
+
     let parent = app
         .world_mut()
         .spawn((
@@ -444,13 +460,72 @@ fn steady_state_frame_does_not_rewrite_clip_rect() {
         .id();
     app.world_mut().entity_mut(parent).add_child(child);
 
+    app.update(); // frame 1: ClipRect inserted; `detect` sees the change.
+    assert!(
+        app.world().get::<ClipRect>(child).is_some(),
+        "frame 1 wrote the clip"
+    );
+    app.world_mut().resource_mut::<SawClipChange>().0 = false;
+    app.update(); // frame 2: steady — `detect` must NOT see a change.
+    assert!(
+        !app.world().resource::<SawClipChange>().0,
+        "steady-state frame must not re-insert ClipRect (change-gate)"
+    );
+}
+
+#[test]
+fn pruned_node_drops_its_stale_clip() {
+    let mut app = app();
+    let parent = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .overflow(OverflowMode::Hidden, OverflowMode::Hidden),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(40.0).height_px(40.0)))
+        .id();
+    let grandchild = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(20.0).height_px(20.0)))
+        .id();
+    app.world_mut().entity_mut(parent).add_child(child);
+    app.world_mut().entity_mut(child).add_child(grandchild);
+
     app.update();
+    assert!(
+        app.world().get::<ClipRect>(child).is_some(),
+        "child clipped on frame 1"
+    );
+    assert!(
+        app.world().get::<ClipRect>(grandchild).is_some(),
+        "grandchild clipped on frame 1"
+    );
+
+    // Flip the child to Display::None — it AND its grandchild must drop their
+    // stale clips (the prune path clears the whole subtree, spec § A.3).
+    app.world_mut().entity_mut(child).insert(Display::None);
     app.update();
 
-    let mut q = app.world_mut().query::<Ref<ClipRect>>();
-    let r = q.get(app.world(), child).expect("child has ClipRect");
     assert!(
-        !r.is_changed(),
-        "steady-state frame must not re-insert ClipRect (change-gate)"
+        app.world().get::<ClipRect>(child).is_none(),
+        "pruned child drops ClipRect"
+    );
+    assert!(
+        app.world().get::<AncestorClip>(child).is_none(),
+        "pruned child drops AncestorClip"
+    );
+    assert!(
+        app.world().get::<ClipRect>(grandchild).is_none(),
+        "descendant of pruned drops ClipRect"
+    );
+    assert!(
+        app.world().get::<AncestorClip>(grandchild).is_none(),
+        "descendant of pruned drops AncestorClip"
     );
 }
