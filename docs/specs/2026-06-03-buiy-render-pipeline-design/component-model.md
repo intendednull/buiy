@@ -14,11 +14,14 @@ fills and glyph alpha lives in
 these components is [paint-order-and-top-layer.md](paint-order-and-top-layer.md)
 and [effect-compositor.md](effect-compositor.md).
 
-These components follow the foundation's decomposed-component convention
-(foundation goal §1.3): each is a small public-fielded `Component` deriving
-`Reflect + Default + Clone + Component`, registered in the render plugin's
-`build` so reflection / BSN / inspectors find them. They are the render-side
-analogue of the layout decomposed components in
+The **author-set** components follow the foundation's decomposed-component
+convention (foundation goal §1.3): each is a small public-fielded `Component`
+deriving `Reflect + Default + Clone + Component`, registered in the render
+plugin's `build` so reflection / BSN / inspectors find them. The two **computed**
+components are deliberate exceptions — `ClipRect` (§ 9) and `EffectGroup` (§ 10)
+are render-prep-written, never authored or serialized, so they carry leaner
+derives (no `Reflect` / `Default`) per their owning specs. They are the
+render-side analogue of the layout decomposed components in
 [`layout/components.rs`](../../../crates/buiy_core/src/layout/components.rs) and
 mirror the layout-spec authoring model
 ([layout/architecture.md § 2.1](../2026-05-08-buiy-layout-design/architecture.md#21-decomposed-components--canonical-storage)).
@@ -49,7 +52,13 @@ and it exists for the same three reasons:
   on `Changed<Background>`, `Changed<Border>`, etc. (pillar 3). Keeping one
   property family per component makes the change signal precise — mutating a
   background does not re-extract a border. This is the "damage tracking for
-  free" the architecture relies on.
+  free" the architecture relies on. The same gate must also cover the
+  **paint-skip** signals: the extract Or-set includes `Changed<CssVisibility>`
+  (§ 12.1), `Changed<OffscreenAuto>` (§ 12.2), and `Changed<Containment>`
+  (`content_visibility` toggle) — all three flip whether a subtree paints at all
+  (`visibility: hidden`, off-screen-`Auto` add/remove, `content-visibility`
+  change), so without them in the trigger set a paint-skip flip would never
+  re-extract and paint would go stale (architecture.md § 3.1).
 
 Components are inserted independently. An entity can carry `Background` without
 `Border`; `Outline` without `Opacity`. A missing component means "render the
@@ -65,20 +74,25 @@ Where a field carries a `bevy::color::Color` (which contains `f32` and so is
 
 Render components store **color tokens**, not resolved `Color`s, wherever a
 value is themeable — exactly as `Visual.background_token` did. A `ColorToken` is
-a typed reference into `Res<Theme>` (a token name plus the `currentColor` /
-`transparent` / forced-colors system-keyword cases); its resolution against the
-active theme, the linear-light pipeline, and the forced-colors contract are
-owned by [color-and-forced-colors.md](color-and-forced-colors.md). This file
-treats `ColorToken` as an opaque value type and only states *which fields hold
-one*.
+a typed reference into `Res<Theme>` with four variants — `Transparent`,
+`Token(name)`, `CurrentColor`, and the forced-colors `SystemColor(keyword)`
+(see [color-and-forced-colors.md § 2.0](color-and-forced-colors.md#20-the-colortoken-type)
+for the variant set); the **enum and its
+variants are defined and owned** by
+[color-and-forced-colors.md § 2](color-and-forced-colors.md#2-theme-token-resolution-at-extract-time),
+which also owns each variant's resolution against the active theme, the
+linear-light pipeline, and the forced-colors contract. This file treats
+`ColorToken` as an opaque value type and only states *which fields hold one*.
 
 ```rust
 /// A themeable color reference. Resolved against `Res<Theme>` at extract
-/// time by the color pass; see color-and-forced-colors.md. Carries the
-/// `currentColor` / `transparent` / system-color-keyword cases so a render
-/// component never stores a pre-resolved `Color` for a themeable slot.
+/// time by the color pass; see color-and-forced-colors.md § 2.0 for the
+/// variant set. Carries all four variants — `Transparent`, `Token(name)`,
+/// `CurrentColor`, and the forced-colors `SystemColor(keyword)` — so a
+/// render component never stores a pre-resolved `Color` for a themeable
+/// slot.
 #[derive(Reflect, Clone, Default, PartialEq, Debug)]
-pub enum ColorToken { /* defined in color-and-forced-colors.md */ }
+pub enum ColorToken { /* variants defined in color-and-forced-colors.md § 2 */ }
 ```
 
 Non-themeable literal colors (rare; e.g. a debug overlay) may store a raw
@@ -86,14 +100,12 @@ Non-themeable literal colors (rare; e.g. a debug overlay) may store a raw
 
 ## 3. `Background` — F
 
-Replaces `Visual.background_token`. v1 ships a single solid color token; the
-layered / gradient surface (foundation §3.3 *Backgrounds*, all **C**) is
-reserved as fields that default to "absent" so the v1 → C migration adds
-behavior without changing the component's identity.
+Replaces `Visual.background_token`. v1 ships a **single solid color token** and
+nothing else — the v1 struct is `Background { color: ColorToken }`.
 
 ```rust
-/// Solid background fill (v1) with reserved layered/gradient fields (C).
-/// Replaces `Visual.background_token`. Absent component == transparent.
+/// Solid background fill (v1). Replaces `Visual.background_token`.
+/// Absent component == transparent.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 3.
 #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
@@ -102,22 +114,27 @@ pub struct Background {
     /// F: solid fill. `ColorToken::default()` (transparent) == no fill,
     /// matching `Visual.background_token == ""`.
     pub color: ColorToken,
-
-    /// C (reserved): ordered background layers (gradients, images,
-    /// multiple stacked fills) painted over `color`, bottom-to-top.
-    /// Empty in v1; `BackgroundLayer` is a reserved type the gradient /
-    /// image fast-follow defines. Gradient stops sample the atlas
-    /// (atlas-and-text-seam.md).
-    pub layers: Vec<BackgroundLayer>,
 }
 ```
+
+The layered / gradient surface (foundation §3.3 *Backgrounds*, all **C**) is
+**reserved in prose, not as a v1 field**: a future `layers: Vec<BackgroundLayer>`
+will carry ordered background layers (gradients, images, multiple stacked fills)
+painted over `color`, bottom-to-top, with gradient stops sampling the atlas
+([atlas-and-text-seam.md](atlas-and-text-seam.md)). That `layers` field and the
+`BackgroundLayer` type both land **with the gradient / image fast-follow** — the
+v1 struct intentionally does **not** name an undefined `BackgroundLayer` type.
+Adding the field later is a purely additive C-tier change that does not alter the
+component's identity or the v1 → C migration of the solid `color` it already
+ships.
 
 `color` resolving to transparent makes the entity background-free without
 removing the component — the render extract skips emitting a quad primitive for
 a transparent fill, preserving `Visual`'s "empty string → skip the fill"
-behavior. The painted shape is the **border box** from `ResolvedLayout`, inset
-to the padding/border edges per `Border` (the `background-clip` C-tier knob that
-chooses which box to fill lives in the reserved `layers` work).
+behavior. The v1 painted shape is just the **border box** from `ResolvedLayout`
+(the `background-clip` box-selection knob that chooses which box to fill — padding
+box, content box — is the deferred **C-tier** clause and lands with the reserved
+`layers` work).
 
 ## 4. `Border` — F
 
@@ -181,6 +198,14 @@ pub struct Radius {
 arrive with Phase 10). Percentage radii resolve against the border box per CSS;
 the resolution timing matches the unit-resolution contract in
 [box-model.md § 5.1](../2026-05-08-buiy-layout-design/box-model.md#51-resolution).
+A paint radius accepts only the resolvable subset (`Px` / `Percent` /
+container-query `Cq*`, all of which resolve to px); the grid-only `Fr` variant is
+**not applicable** to a corner radius and is **warned-and-resolved to `0`px**,
+mirroring how layout warns-once-and-falls-back when `Fr` appears outside a grid
+track ([`layout/types.rs`](../../../crates/buiy_core/src/layout/types.rs)
+`Length::Fr`). The same warn-and-resolve rule applies to every paint `Length`
+field in this file (`Border.radius`, `BoxShadow` terms, `Outline.width` /
+`Outline.offset`).
 
 The radius is read by **both** render (to round the fill + border) and the clip
 pass — a rounded border box clips its rounded-rect descendants. That coupling is
@@ -229,13 +254,21 @@ parameter on the shadow primitive — no off-screen pass and no atlas entry is
 needed for rectangular/rounded-rect shadows (the common case); arbitrary
 `clip-path` shadow shapes are C-tier and defer with `clip-path`.
 
+The `BoxShadow` list-index order (which shadow within *this* element's list
+paints over which — index 0 frontmost) and the shadow-under-quad paint order
+(every outset shadow paints behind this element's own background/border quad,
+every inset shadow above its fill) are **orthogonal**: list index orders the
+shadows *among themselves*, while the under-/over-quad rule fixes where the whole
+shadow group sits relative to the element's box. Neither order changes the
+other.
+
 ## 6. `Opacity` — F (and an `EffectGroup` former)
 
 ```rust
 /// Group opacity in `[0.0, 1.0]`. `1.0` (default) is a no-op. A value
 /// `< 1.0` forms an `EffectGroup` (off-screen composite boundary) AND is
-/// a stacking-context trigger that layout sub-pass 6f reads back
-/// (pillar 6). Absent == opaque.
+/// a stacking-context trigger that layout sub-pass 6f *will* read back
+/// once the trigger-5 clause lands (pillar 6). Absent == opaque.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 6.
 #[derive(Component, Reflect, Clone, Copy, PartialEq, Debug)]
@@ -247,6 +280,14 @@ impl Default for Opacity {
 }
 ```
 
+`Opacity` carries a **manual `Default`** (initial `1.0`), not the derived one: a
+derived `Default` on a tuple struct over `f32` would give `Opacity(0.0)` — fully
+transparent — which is the wrong CSS initial value. The `#[reflect(Default)]`
+attribute binds this manual impl, so reflection / BSN / inspectors construct
+`Opacity(1.0)` too. This is a deliberate divergence from the derive-`Default`
+convention every other author-set component in this file follows, justified by the
+CSS initial value `opacity: 1`.
+
 `Opacity` is the one v1 effect that is *both* fully shipped paint **and** a
 compositing boundary. When `0.0 ≤ value < 1.0` the entity is a
 **group-opacity** case: its whole subtree is composited to an off-screen target
@@ -255,20 +296,23 @@ double-blend (the correctness point the user insisted on — pillar 6, runner-up
 "forward-pass approximation" was rejected). Forming the boundary is the job of
 [effect-compositor.md](effect-compositor.md); this component is the trigger.
 
-`Opacity < 1` participates in stacking-context formation. Because layout sub-pass
-6f (`stacking_context`) is the SC former and lives across the layout↔render
-boundary, the trigger components it reads must be visible to layout — the
-crate-placement constraint in
+`Opacity < 1` *will* participate in stacking-context formation once layout
+sub-pass 6f gains its trigger-5 clause. Today `forms_stacking_context`
+([`layout/systems.rs`](../../../crates/buiy_core/src/layout/systems.rs)) takes no
+`Opacity` parameter — the render-side trigger components do not yet exist for it
+to read. Because 6f (`stacking_context`) is the SC former and lives across the
+layout↔render boundary, the trigger components it *will* read must be visible to
+layout — the crate-placement constraint in
 [README § 3.2](README.md#32-render-owned-this-spec-introduces) and pinned by
-[architecture.md](architecture.md). `Opacity` is in the SC-trigger union
+[architecture.md](architecture.md). `Opacity` is in the future SC-trigger union
 alongside `Filter` / `MixBlendMode` (below) and the layout-owned `Stacking`
 (`isolation`) and `UiTransform`.
 
 > **Distinct from `visibility` and `Display::None`.** `opacity: 0` still
 > participates in layout, paint traversal, and hit-testing (it forms an
 > invisible-but-present group); `Display::None` (layout-owned) skips everything;
-> `visibility: hidden` (foundation §3.3, **F**, render-owned, not yet a
-> component here — see [§ 11 open](#11-reserved-vs-deferred-and-open-items))
+> `visibility: hidden` (foundation §3.3, **F**, render-owned, the `CssVisibility`
+> component defined in [§ 12.1](#121-cssvisibility--f-render-owned))
 > paints nothing but keeps layout + a11y. They are three different mechanisms.
 
 ## 7. `Outline` — F
@@ -298,16 +342,24 @@ faithful CSS semantics:
    purely render-side.
 2. **It is not clipped by the element's own clip.** A focus ring on a
    `overflow: hidden` element must remain visible. The render pass paints
-   `Outline` using the entity's *ancestor* `ClipRect` (the clip it inherits),
-   **not** the entity's own `ClipRect` — the one place a render component
-   deliberately reads a different clip than the box it decorates. This rule is
-   stated here and enforced by the clip pass
-   ([clip-and-transform.md](clip-and-transform.md)); the
-   gate-#10 hit-target / gate-#2 visual-regression fixtures assert a focus ring
-   survives an `overflow: hidden` ancestor.
+   `Outline` using the entity's companion **`AncestorClip`** (the intersection of
+   its *ancestor* clip boxes only, without the own-box intersection step), **not**
+   the entity's own `ClipRect` (which is already intersected with the element's
+   border box and would crop the ring back to the box). `AncestorClip` is emitted
+   alongside `ClipRect` by `WriteClipRects` and is **owned and defined** by
+   [clip-and-transform.md § A.2](clip-and-transform.md#a2-the-cliprect-output-shape);
+   this is the one place a render component deliberately reads a different clip
+   than the box it decorates. The rule is stated here and enforced by the clip
+   pass; the gate-#10 hit-target / gate-#2 visual-regression fixtures assert a
+   focus ring survives an `overflow: hidden` ancestor.
 
 The outline shape is the border box expanded by `width + offset`, rounded by
 `Border.radius` grown by the same amount (CSS-faithful outline corner rounding).
+
+`Outline.width` and `Outline.offset` are paint `Length`s and follow the same
+applicable-subset rule as `Border.radius` (§ 4): only the resolvable variants
+(`Px` / `Percent` / `Cq*`) apply; the grid-only `Fr` variant is
+warned-and-resolved to `0`px, mirroring layout's `Length::Fr` fallback.
 
 ## 8. The reserved effect components — C (ship now, shaders deferred)
 
@@ -325,20 +377,27 @@ are deferred. But their **components ship in v1**, for one decisive reason:
 > no layout edit). Deferring the components would force layout to re-open 6f
 > later, exactly the relitigation the immutable-output contract forbids.
 
-So these three ship as registered, reflectable, public-fielded components that
-participate in **two** v1 behaviors — SC-trigger union (read by layout 6f) and
-`EffectGroup` formation (read by the compositor to allocate an off-screen
-target, [effect-compositor.md](effect-compositor.md)) — and contribute **no**
-pixels until their shader lands. An entity carrying `Filter([Blur(4px)])` in v1
-forms a stacking context and an effect group; the group composites with an
-identity pass (the reserved seam) and the blur is a no-op until the filter
-shader ships. The deferral is a missing shader, never a missing trigger.
+So these three ship as registered, reflectable, public-fielded components.
+`Filter` and `MixBlendMode` are slated for **two** behaviors — `EffectGroup`
+formation (active in v1) and the SC-trigger union (which layout 6f *will* read
+once its trigger-5 clause lands). `BackdropFilter` participates in **only**
+`EffectGroup` formation: it is the "EffectGroup-but-not-SC" case (it forms a
+compositing boundary without forming a stacking context, so layout 6f does
+**not** read it). `EffectGroup` formation is read by the compositor to allocate
+an off-screen target ([effect-compositor.md](effect-compositor.md)). All three contribute **no**
+pixels until their shader lands. An entity carrying `Filter([Blur(4px)])` forms
+an effect group in v1 and *will* form a stacking context once layout 6f gains
+its trigger-5 clause (today `forms_stacking_context` takes no `Filter`
+parameter); the group composites with an identity pass (the reserved seam) and
+the blur is a no-op until the filter shader ships. The deferral is a missing
+shader, never a missing trigger.
 
 ```rust
-/// C (reserved). Filter function list. SC-trigger + EffectGroup former in
-/// v1; the filter shaders (blur/brightness/.../drop-shadow) are deferred
-/// (foundation §3.3). A non-empty list forms a stacking context (read by
-/// layout 6f) and an `EffectGroup`. Empty / absent == no filter.
+/// C (reserved). Filter function list. `EffectGroup` former in v1 and a
+/// future SC-trigger (layout 6f will read it once its trigger-5 clause
+/// lands); the filter shaders (blur/brightness/.../drop-shadow) are
+/// deferred (foundation §3.3). A non-empty list forms an `EffectGroup`.
+/// Empty / absent == no filter.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
 #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
@@ -347,10 +406,11 @@ pub struct Filter(pub Vec<FilterFn>);
 
 /// C (reserved). Backdrop filter list — samples what is BEHIND the
 /// element. Component + the off-screen boundary ship v1; the
-/// backdrop-sampling shader is deferred (foundation §3.3 "Backdrop
-/// sampling for `backdrop-filter`"). Forms an `EffectGroup` (the
-/// compositor must hold a backdrop copy) but is NOT a stacking-context
-/// trigger on its own in CSS — see note below.
+/// backdrop-sampling shader is deferred (§ 6). Forms an `EffectGroup` (the
+/// compositor must hold a backdrop copy). Buiy treats `backdrop-filter`
+/// as an effect-group former ONLY; CSS additionally makes it form a
+/// stacking context, which Buiy does not rely on because `EffectGroup`
+/// membership is derived render-side — see note below.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
 #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
@@ -358,9 +418,9 @@ pub struct Filter(pub Vec<FilterFn>);
 pub struct BackdropFilter(pub Vec<FilterFn>);
 
 /// C (reserved). Blend mode against the backdrop. Any value other than
-/// `Normal` forms a stacking context (read by layout 6f) and an
-/// `EffectGroup`; the blend shader is deferred (foundation §3.3).
-/// `Normal` (default) is a no-op.
+/// `Normal` forms an `EffectGroup` in v1 and is a future SC-trigger
+/// (layout 6f will read it once its trigger-5 clause lands); the blend
+/// shader is deferred (foundation §3.3). `Normal` (default) is a no-op.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
 #[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Debug)]
@@ -388,105 +448,121 @@ pub enum FilterFn {
 }
 ```
 
-**`MixBlendMode` is a stacking-context trigger; `BackdropFilter` is not** — this
-matches CSS (a non-`Normal` blend mode and a non-empty `filter` form stacking
-contexts; `backdrop-filter` forms an `EffectGroup`/containing block but the
-trigger-5 union layout 6f reads is the SC-forming set: `opacity < 1`, non-empty
-`filter`, non-`Normal` `mix-blend-mode`, `isolation: isolate`). The exact
-trigger predicate is owned by layout's
+**`MixBlendMode` will be a stacking-context trigger; `BackdropFilter` will not**
+— a non-`Normal` blend mode and a non-empty `filter` form stacking contexts,
+matching CSS. `BackdropFilter` is the deliberate divergence: Buiy treats
+`backdrop-filter` as an effect-group former ONLY; CSS additionally makes it form
+a stacking context, which Buiy does not rely on because `EffectGroup` membership
+is derived render-side. So the trigger-5 union layout 6f *will* read is the
+SC-forming set — `Opacity < 1`, non-empty `Filter`, non-`Normal` `MixBlendMode`,
+`Stacking.isolation == Isolation::Isolate` — and `BackdropFilter` is excluded
+from it. The canonical effect-group-former predicate (the superset that *does*
+include `BackdropFilter`) is owned by
+[effect-compositor.md § 1](effect-compositor.md#1-the-identity-effect-group-set--effect-forming-stacking-context-set); the exact
+SC-trigger predicate is owned by layout's
 [stacking-and-top-layer.md](../2026-05-08-buiy-layout-design/stacking-and-top-layer.md)
 `forms_stacking_context`; this file fixes *which render components feed it*.
-`will-change` of an SC-forming property is the fifth wedge (README § 4 item 3,
+`will-change` of an SC-forming property is the fifth SC wedge (README § 4 item 3,
 the `WillChange` hint already in
-[`layout/types.rs`](../../../crates/buiy_core/src/layout/types.rs)); a render-side
-`WillChange` layer-promotion hint and layout's reading of the
-SC-forming-property clause land as the one paired change README § 4 item 3
-describes.
+[`layout/types.rs`](../../../crates/buiy_core/src/layout/types.rs)). It is on a
+**different timeline** from the three C-tier trigger-5 components above and must
+not be conflated with them: the `will-change` SC-former is **tier-E / deferred**
+per the layout spec — named-only, not shipped in v1 — whereas `Filter` /
+`MixBlendMode` / `BackdropFilter` are the **near-term C-tier** trigger-5 components
+that ship their component model in v1 (the `opacity` / `filter` /
+`mix-blend-mode` clause). A render-side `WillChange` layer-promotion hint is
+correspondingly **reserved/open**, not a contract component listed today (see the
+reserved row in [README § 3.2](README.md#32-render-owned-this-spec-introduces));
+whether it is a new render component or a read of the existing layout type, and
+layout's reading of the SC-forming-property clause, land as the one paired change
+README § 4 item 3 describes — strictly after the C-tier trigger-5 components.
 
-`Angle` (for `HueRotate`) is a reserved angle type (foundation §3.3 *Units*:
-angles are **C**); it is named here and defined by the units fast-follow, not
-this file.
+`Angle` (for `HueRotate`) is a **v1 unit prerequisite defined here** as a minimal
+stub so `FilterFn::HueRotate(Angle)` compiles against v1:
+
+```rust
+/// Angle in radians. Minimal v1 stub so `FilterFn::HueRotate(Angle)` compiles.
+/// The full CSS angle unit family (deg/grad/turn parsing, the rest of foundation
+/// §3.3 *Units* angle surface, which is **C**) lands with the units fast-follow,
+/// which is expected to absorb or re-home this type; v1 carries only the radian
+/// scalar `HueRotate` needs.
+#[derive(Reflect, Clone, Copy, PartialEq, Debug)]
+pub struct Angle(pub f32); // radians
+```
+
+This is a v1 unit prerequisite, not a deferred fast-follow type — the stub must
+exist now because `FilterFn` is a shipped (registered, reflectable) v1 enum even
+though `HueRotate`'s evaluation is deferred (foundation §3.3 *Units*: the broader
+angle surface is **C**).
 
 ## 9. `ClipRect` — F (computed, not authored)
 
 `ClipRect` is the **only** render component on this list that is *not*
-author-set. It is written by the `WriteClipRects` render-prep pass (pillar 4)
-from layout-owned inputs (`Overflow`, `ScrollOffset`, `Containment` PAINT,
-`Border.radius`, the box) and read by **both** render (to clip primitives) and
-picking (so a hit-test cannot fall outside the visible region — the
-ordering/clip identity README § 1 guards). Because it is computed by a pass that
-reads only layout output, it stays testable under the layout-snapshot gate (#5)
-without a GPU.
+author-set. Its type definition (fields + the accumulation algorithm) is owned
+by [clip-and-transform.md § A.2](clip-and-transform.md#a2-the-cliprect-output-shape)
+— it is `ClipRect { min: Vec2, max: Vec2 }` (logical px, the accumulated clip
+AABB),
+written by the `WriteClipRects` render-prep pass (pillar 4) and read by **both**
+render (to clip primitives) and picking. This file does **not** redefine it.
+
+Absent-semantics: "Absent ClipRect ⇔ no ancestor clips this entity ⇒ render
+applies no scissor."
+
+The reserved rounded-corner clip is carried by a **separate** sibling component
+`ClipRadius` (C-tier, reserved, not built v1) — the rounded-rect / `clip-path`
+cases live there, not as a `shape` field on `ClipRect`. Both components, and the
+geometry algorithm, are owned by
+[clip-and-transform.md](clip-and-transform.md).
+
+## 10. `EffectGroup` — F (compositing-boundary, carries the reason)
 
 ```rust
-/// Per-entity computed clip region. Written by `WriteClipRects`
-/// (render-prep), read by render and picking. NOT author-set. Absent ==
-/// unclipped (inherits the ancestor clip only).
-///
-/// The stored rect is the intersection of this entity's own clip box
-/// (overflow/containment-paint, offset by scroll) with every ancestor
-/// clip — so a single component read gives the final scissor region. The
-/// rounded-corner and non-rectangular (`clip-path`, C) cases live in the
-/// `shape` field; the geometry algorithm is in clip-and-transform.md.
-///
-/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 9.
-#[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
-#[reflect(Component, Default)]
-pub struct ClipRect {
-    /// Axis-aligned clip rectangle (logical px, window-relative — same
-    /// frame as `ResolvedLayout.position`), already intersected with all
-    /// ancestor clips.
-    pub rect: Rect, // bevy::math::Rect
-    /// F: rounded-rect corners (from the clipping ancestor's
-    /// `Border.radius`). C (reserved): arbitrary `clip-path` shapes.
-    pub shape: ClipShape,
+/// Which effect(s) caused this entity to form an off-screen compositing
+/// boundary. The compositor reads `reason` to choose the composite op
+/// without re-querying the five effect components.
+bitflags::bitflags! {
+    /// One entity can carry several reasons at once (opacity<1 AND isolate).
+    pub struct EffectReason: u8 {
+        const OPACITY         = 1;  // v1: carried
+        const ISOLATION       = 2;  // v1: carried
+        const FILTER          = 4;  // reserved: marks the group, no shader in v1
+        const BACKDROP_FILTER = 8;  // reserved: marks the group, needs backdrop sample (§ 6)
+        const MIX_BLEND       = 16; // reserved: marks the group, no shader in v1
+    }
 }
 
-/// F = `RoundedRect`; the non-rectangular cases are reserved for the
-/// C-tier `clip-path` work.
-#[derive(Reflect, Default, Clone, PartialEq, Debug)]
-pub enum ClipShape {
-    #[default]
-    Rect,
-    RoundedRect(Corners),
-    // C (reserved): Path / Circle / Ellipse / Polygon (clip-path).
-}
-```
-
-The **fields here are deliberately the storage shape only** — how `rect` is
-computed (ancestor intersection, the `Changed<ScrollOffset>` fast recompute, the
-PAINT-containment boundary, the transformed-clip interaction) is owned by
-[clip-and-transform.md](clip-and-transform.md). This file fixes the component's
-name, ownership (render-prep writes, render + picking read), and that a single
-read yields the final region.
-
-## 10. `EffectGroup` — F (compositing-boundary marker)
-
-```rust
-/// Marker: this entity establishes an off-screen compositing boundary.
-/// Written by the render-prep pass that detects an effect-group former
-/// (`Opacity < 1`, `isolation: isolate`, non-empty `Filter`, non-`Normal`
-/// `MixBlendMode`, non-empty `BackdropFilter`), removed when none holds.
-/// Read by the compositor to allocate / pool a render target per group.
-/// NOT author-set. Absent == this entity paints into its parent's target.
+/// This entity establishes an off-screen compositing boundary. Written by
+/// the render-prep pass that detects an effect-group former — the canonical
+/// predicate is owned by effect-compositor.md § 1 (`Opacity < 1`,
+/// `Stacking.isolation == Isolation::Isolate`, non-empty `Filter`,
+/// non-`Normal` `MixBlendMode`, non-empty `BackdropFilter`), removed when
+/// none holds. Read by the
+/// compositor to allocate / pool a render target per group. NOT author-set.
+/// Absence of the component == no group (this entity paints into its
+/// parent's target).
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 10.
-#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Debug)]
-#[reflect(Component, Default)]
-pub struct EffectGroup;
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EffectGroup {
+    /// The OR of every reason that formed this group. NO `Default`:
+    /// an `EffectGroup` only exists when at least one reason holds.
+    pub reason: EffectReason,
+}
 ```
 
-`EffectGroup` is a pure marker — it carries no data because the *which-effect*
-information already lives on the typed effect components (`Opacity` / `Filter` /
-`MixBlendMode` / `BackdropFilter`) and the *isolation* bit on the layout-owned
-`Stacking`. The marker exists so the compositor can query `With<EffectGroup>`
-without re-deriving the former predicate every frame, and so its presence is a
-single change-detection signal for "this subtree needs an off-screen target."
-Its detection rule is the union of the SC-trigger set **plus** `BackdropFilter`
-(which forms a compositing boundary without forming a stacking context). Render
-target allocation/pooling, the v1 set (group `opacity` + `isolation` only), and
-the reserved filter/blend seams are owned by
-[effect-compositor.md](effect-compositor.md).
+`EffectGroup` **carries data** — `reason` records *which* of the formers (one or
+more, OR-ed) caused the boundary. The compositor reads `reason` to pick the
+composite op (alpha-blend for `OPACITY`, plain copy for `ISOLATION`, the
+filter/backdrop/blend seams for the others) **without re-querying the five
+underlying components** (`Opacity` / `Filter` / `MixBlendMode` / `BackdropFilter`
+and the layout-owned `Stacking.isolation` bit, spelled `Isolation::Isolate`).
+Its detection rule — the canonical effect-group-former predicate owned by
+[effect-compositor.md § 1](effect-compositor.md#1-the-identity-effect-group-set--effect-forming-stacking-context-set)
+— is the union of the SC-trigger set **plus** `BackdropFilter` (which forms a
+compositing boundary without forming a stacking context). Render target allocation/pooling,
+the v1 set (group `opacity` + `isolation` only), and the reserved filter/blend
+seams are owned by [effect-compositor.md](effect-compositor.md), which uses this
+exact struct.
 
 > The effect-group former set is a **superset** of the SC-trigger set
 > (`BackdropFilter` is in one but not the other). The two predicates are kept
@@ -519,37 +595,140 @@ re-homed as above. The Phase-0 closeout note in `Visual`'s own doc-comment
 already names `Background` / `Border` as the successors, so this is the
 fulfilment of a commitment the code already records, not a new decision.
 
-## 12. Reserved vs. deferred, and open items
+That same doc-comment
+([`components.rs`](../../../crates/buiy_core/src/components.rs)) also names a
+third successor, **`Stroke`** — which this spec deliberately does **not** mint as
+a separate component. The Phase-0 `Stroke` placeholder is **subsumed by `Border`
+(§ 4)**: per-side line style is `BorderSide.style` folded into `Border`, not a
+standalone stroke type. So when `Visual` is deleted, its doc-comment's `Stroke`
+clause resolves to "the `style` longhand on `Border`," and the spec does not
+silently contradict the code comment — the placeholder is fulfilled, not
+dropped.
 
-- **`visibility: visible | hidden | collapse`** (foundation §3.3, **F**) has no
-  component on README § 3.2's list. It is render-owned (it paints nothing but
-  keeps layout + a11y, unlike `Display::None`). Whether it becomes its own
-  `Visibility` component or a field — and how `collapse` interacts with table
-  layout — is **open**; see [README § 5](README.md#5-open-questions). It is
-  flagged here so it is not silently dropped; it does not block the trigger-5
-  follow-up and can land with the paint-order child.
+## 12. Defined-here F-tier rows, reserved items, and open items
+
+`CssVisibility` is the one README § 3.2 **render-owned** F-tier row this file
+defines concretely (rather than leaving it dangling as "reserved"). The
+`OffscreenAuto` marker defined alongside it in § 12.2 is **not** a § 3.2
+render-owned component — it is a [README § 3.1](README.md#31-layout-owned-render-reads-already-exist)
+**layout-written, render-read** marker; this file pins its shape because render
+extract consumes it, but layout owns and writes it.
+
+### 12.1 `CssVisibility` — F (render-owned)
+
+```rust
+/// CSS `visibility`. `Hidden` skips paint for this entity's subtree but keeps
+/// its layout box and a11y presence (unlike `Display::None`). `Collapse` is a
+/// deferred marker (table-row / flex-item collapse) — named only in v1.
+///
+/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 12.1.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Default)]
+#[reflect(Component, Default)]
+pub enum CssVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    Collapse,
+}
+```
+
+This component is named `CssVisibility`, **not** `Visibility`, and deliberately
+does **not** reuse `bevy::prelude::Visibility`. Bevy already ships a
+`Visibility { Inherited, Hidden, Visible }` enum (bevy_camera `visibility/mod.rs`,
+re-exported in `bevy::prelude`) with different variants and its own visibility
+systems; a render-owned CSS-visibility enum named `Visibility` would collide with
+it on import and inherit Bevy's inherit/cull semantics rather than CSS's. This is
+the same name-collision rationale that keeps the layout transform bridge writing
+Bevy's `Transform` rather than minting a Buiy `Transform`
+([clip-and-transform.md § B.1](clip-and-transform.md#b1-the-ownership-problem-pillar-5)) —
+where a Bevy type with established semantics owns the name, Buiy renames its
+property carrier to avoid the collision.
+
+`CssVisibility` is render-owned and F-tier (foundation §3.3 *visibility* is **F**).
+**v1 ships the `Hidden` paint-skip:** the subtree is not painted but keeps its
+layout box (the box still occupies space and still contributes to layout — the
+distinction from `Display::None`, which skips everything). Per CSS
+`visibility: hidden`, the subtree is *also* not hit-tested; that picking
+interaction is **owned by [`buiy-input-events-design`](../2026-05-07-buiy-foundation/README.md)**,
+not committed here. The paint-skip rule itself is stated in
+[paint-order-and-top-layer.md § 5](paint-order-and-top-layer.md#5-skip-rules).
+
+`Collapse` (table-row / flex-item collapse) is a **deferred marker** — the enum
+variant exists so authors can write `visibility`-aware code that compiles against
+v1, but its collapse-the-box behavior (how a collapsed row removes its track,
+how a collapsed flex item is treated) is **named-only in v1** and lands with the
+table / flex-collapse fast-follow.
+
+### 12.2 `OffscreenAuto` — F (layout-written marker)
+
+```rust
+/// Zero-field marker placed by LAYOUT on entities whose
+/// `Containment.content_visibility == Auto` subtree is currently off-screen
+/// (the `is_off_screen` test against the `ContentVisibilityMargin`-expanded
+/// viewport). Render's extract skips paint for an `OffscreenAuto` subtree
+/// exactly as it skips a `Containment.content_visibility == Hidden` subtree.
+/// (`ContentVisibility` is the enum *type* of that field —
+/// `Visible`/`Auto`/`Hidden`; the field carrier is `Containment`.)
+/// Layout-written, render-read. NOT registered by this spec's render plugin:
+/// it is layout-owned (README § 3.1), so layout's plugin owns whether and how
+/// it is reflected/registered (matching the § 13 "layout-written markers are
+/// not reflected here" convention) — render only reads it.
+///
+/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 12.2.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct OffscreenAuto;
+```
+
+`OffscreenAuto` is the carrier for the render half of layout's Phase 11 (the
+off-screen `content-visibility: auto` *paint* skip — see
+[paint-order-and-top-layer.md § 5.3](paint-order-and-top-layer.md#53-contentvisibilityauto-off-screen--skip-paint-render-owned-half)).
+Render reuses layout's already-computed off-screen determination rather than
+recomputing visibility, keeping render a thin consumer (README § 2 pillar 1).
+
+> **This marker does not exist in layout today (grep-confirmed).** Layout's
+> off-screen test runs inline in `sync_styles`
+> ([`layout/systems.rs`](../../../crates/buiy_core/src/layout/systems.rs)) and
+> persists nothing render can read. Emitting `OffscreenAuto` from that pass is the
+> **layout-side deliverable** of the render half of Phase 11 — a **tracked
+> cross-spec dependency** (README § 5), not code this spec can assume present.
+> [paint-order-and-top-layer.md § 5.3](paint-order-and-top-layer.md#53-contentvisibilityauto-off-screen--skip-paint-render-owned-half)
+> references the marker by name; this section defines its shape.
+
+### 12.3 Reserved / open
+
 - **`WillChange` (render-side promotion hint).** The render half of README § 4
   item 3 is a `WillChange`-driven layer-promotion hint that pairs with layout 6f
-  reading the SC-forming-property clause. The *layout* `WillChange` type already
-  exists in
+  reading the SC-forming-property clause. It is on the **tier-E / deferred**
+  timeline (the `will-change` SC-former; see [§ 8](#8-the-reserved-effect-components--c-ship-now-shaders-deferred)),
+  **distinct from** the near-term C-tier trigger-5 components — do not conflate
+  the two. It is carried as a **reserved/open** row in
+  [README § 3.2](README.md#32-render-owned-this-spec-introduces), not a contract
+  component listed today. The *layout* `WillChange` type already exists in
   [`layout/types.rs`](../../../crates/buiy_core/src/layout/types.rs); whether the
   render promotion hint is a new component or a read of the existing one is a
   one-change-both-sides decision tracked in README § 4, not resolved here.
-- **`Angle`, `BackgroundLayer`, `currentColor` resolution** are named-but-not-
-  owned here: `Angle` and the gradient `BackgroundLayer` type belong to the
-  units and gradient fast-follows; `ColorToken` (incl. `currentColor` /
-  forced-colors) is owned by
-  [color-and-forced-colors.md](color-and-forced-colors.md).
+- **`BackgroundLayer`, `currentColor` resolution** are named-but-not-owned
+  here: the gradient `BackgroundLayer` type lands with the gradient / image
+  fast-follow (§ 3); `ColorToken` (incl. `currentColor` / forced-colors) is owned
+  by [color-and-forced-colors.md](color-and-forced-colors.md). (`Angle`, by
+  contrast, **is** defined here as a v1 unit prerequisite — see [§ 8](#8-the-reserved-effect-components--c-ship-now-shaders-deferred) —
+  because the shipped `FilterFn` enum needs it to compile.)
 
 ## 13. Registration and crate placement
 
-Every component above is registered in the render plugin's `build` via
-`app.register_type::<T>()` so reflection, BSN, and inspectors resolve them —
-the same contract the layout plugin honors for its decomposed components
+Every **author-set** component above is registered in the render plugin's
+`build` via `app.register_type::<T>()` so reflection, BSN, and inspectors resolve
+them — the same contract the layout plugin honors for its decomposed components
 ([layout/architecture.md § 2.1](../2026-05-08-buiy-layout-design/architecture.md#21-decomposed-components--canonical-storage)).
+The two computed components (`ClipRect`, `EffectGroup`) are not author-set or
+serialized and so are not `register_type`'d; they exist only as render-prep
+outputs. The layout-written `OffscreenAuto` marker (§ 12.2) is likewise **not**
+registered by this spec's render plugin — it is layout-owned (README § 3.1), so
+layout's plugin owns its registration; render only reads it.
 
-The SC-trigger components (`Opacity`, `Filter`, `BackdropFilter`,
-`MixBlendMode`) carry the **crate-placement constraint** from
+The three SC-trigger components (`Opacity`, `Filter`, `MixBlendMode`) — plus
+`BackdropFilter`, which is **not** read by layout 6f but shares the crate home
+for `EffectGroup` reasons — carry the **crate-placement constraint** from
 [README § 3.2](README.md#32-render-owned-this-spec-introduces): they must live
 where both layout sub-pass 6f and render can read them, and the dependency edge
 points layout → these components → render (never inverted). If the workspace
@@ -563,19 +742,22 @@ this file only restates the invariant that constrains it.
 How these claims are proven (gate IDs from
 [verification.md](verification.md)):
 
-- **Reflection/registration** — a headless test asserts every render component
-  `register_type`s (no GPU needed), mirroring the layout plugin's
-  registration test. Defaults match CSS initial values (`Opacity(1.0)`,
+- **Reflection/registration** — a headless test asserts every author-set render
+  component `register_type`s (no GPU needed), mirroring the layout plugin's
+  registration test (the computed `ClipRect` / `EffectGroup` are exempt — they
+  are not reflected). Defaults match CSS initial values (`Opacity(1.0)`,
   `Background::default()` transparent, `Border::default()` square + no stroke,
   empty `BoxShadow`, `MixBlendMode::Normal`).
 - **`Visual` migration** — a test (or the absence of `Visual` from the type
   registry once migration lands) pins that `Background.color` reproduces
   `Visual.background_token` and `Border.radius` reproduces `border_radius` on a
   fixture; gate #2 (visual-regression golden image) catches any pixel drift.
-- **SC-trigger participation** — a headless layout-side test asserts an entity
-  with `Opacity(0.5)` / non-empty `Filter` / non-`Normal` `MixBlendMode` forms a
-  stacking context via 6f's `forms_stacking_context`, proving the reserved
-  components unblock the follow-up *before* any shader exists.
+- **SC-trigger participation** — once layout 6f gains its trigger-5 clause, a
+  headless layout-side test asserts an entity with `Opacity(0.5)` / non-empty
+  `Filter` / non-`Normal` `MixBlendMode` forms a stacking context via 6f's
+  `forms_stacking_context`, proving the reserved components unblock the follow-up
+  *before* any shader exists. (Today `forms_stacking_context` takes no such
+  parameter; the components ship first so the clause can be added in one change.)
 - **`ClipRect` geometry** — proven under the layout-snapshot gate (#5), since the
   clip pass reads only layout output (the assertion lives in
   [clip-and-transform.md](clip-and-transform.md)).

@@ -79,7 +79,7 @@ Each subsystem below graduates to its own design spec at `docs/specs/YYYY-MM-DD-
 
 | Sub-spec | Scope |
 |---|---|
-| `buiy-render-pipeline-design` | Render passes, top-layer compositing, clipping, filters, blend modes, atlasing, color management, render-graph node ordering. |
+| [`buiy-render-pipeline-design`](../2026-06-03-buiy-render-pipeline-design/README.md) | Render passes, top-layer compositing, clipping, filters, blend modes, atlasing, color management, render-graph node ordering. *(drafted — `[draft]`)* |
 | `buiy-layout-design` | Taffy integration, anchor positioning, container queries, writing-mode integration. |
 | `buiy-text-rendering-design` | cosmic-text integration, atlas management, font registration, fallback. |
 | `buiy-text-editing-design` | IME composition, BiDi caret, undo/redo, multi-line, rich-text edit surface. |

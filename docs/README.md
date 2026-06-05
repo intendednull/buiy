@@ -57,6 +57,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 **Specs**
 
 - [Buiy layout design](specs/2026-05-08-buiy-layout-design/README.md) — Taffy bridge, hybrid `Style` builder + decomposed components, anchor positioning, container queries, writing modes, stacking + top layer, transforms + containment (multi-file). `[active]`
+- [Buiy render-pipeline design](specs/2026-06-03-buiy-render-pipeline-design/README.md) — Bevy render-graph integration, render-side component model, clipping, top-layer compositing, effect compositor, atlasing, forced-colors; consumes layout's immutable paint inputs (multi-file). `[draft]`
 
 **Plans**
 

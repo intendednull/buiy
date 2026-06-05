@@ -81,14 +81,36 @@ every PR with no adapter.
   [`render/pipeline.rs`](../../../crates/buiy_core/src/render/pipeline.rs); the
   test asserts the resource, the e2e harness (layer 4) asserts the *compiled*
   pipeline by actually drawing.
-- **Graph node + edges exist per window.** The `BuiyRenderLabel` node is present
-  in the `Core2d` sub-graph and is ordered after `Node2d::EndMainPass`
-  (`render_smoke::render_graph_node_inserted_after_main_2d_pass`). As the spec
-  grows the node into the per-window `BuiyRenderLabel` node group of
-  [pillar 2 / architecture.md](architecture.md), this test extends to assert the
+- **Graph node + edges exist per window.** *Separate PRESENT from TARGET here.*
+  **Present (Phase 0):** `render_smoke::render_graph_node_inserted_after_main_2d_pass`
+  asserts **only that the `BuiyRenderLabel` node is present** in the `Core2d`
+  sub-graph (`sub.get_node_state(BuiyRenderLabel).is_ok()`); the wiring it stands
+  over today is the single edge
+  `add_render_graph_edge(Core2d, Node2d::EndMainPass, BuiyRenderLabel)` in
+  [`render/node.rs`](../../../crates/buiy_core/src/render/node.rs) — an
+  `EndMainPass → BuiyRenderLabel` after-anchor, with **no** `Tonemapping` edge and
+  **no** `StartMainPassPostProcessing` anchor. This is a Phase-0 seed, not
+  target-state proof.
+  **Target:** the edges of [architecture.md § 1.3](architecture.md) —
+  the after-anchor `StartMainPassPostProcessing → BuiyRenderLabel` and the
+  load-bearing `BuiyRenderLabel → Tonemapping` — are what this test must be
+  **extended to assert** (the present test does not yet check either edge; it must
+  grow from node-presence to edge-chain assertions). As the spec further grows the
+  node into the per-window `BuiyRenderLabel` node group of
+  [pillar 2 / architecture.md](architecture.md), the same test extends to assert the
   group's internal node→node edges and the top-layer composite node's placement
   after the typed-primitive batched node — still purely a graph-shape assertion,
-  still device-free where the graph can be built without one.
+  but **not** device-free: **registering the render-graph node and its edges
+  requires the `RenderApp`, and the `RenderApp` is only created when
+  `RenderPlugin::build` succeeds in acquiring a wgpu adapter.** So the
+  node/edge-registration assertions are part of the GPU e2e path (they carry the
+  `#[ignore]` adapter caveat and run on the e2e runner / `--ignored`), not the
+  every-PR headless path. The headless path covers the component model + `ClipRect`
+  geometry + instance/coordinate math + the **main-world** system
+  schedule-membership/ordering (the `WriteClipRects` / `WriteEffectGroups`
+  render-prep passes are main-world systems, so their schedule placement is
+  inspectable with no `RenderApp`) — never the graph wiring, which has no
+  `RenderApp` to register into without a device.
 
 > Registration tests that need `RenderPlugin` (pipeline resource, graph node)
 > carry the `#[ignore]` adapter caveat and run on the e2e runner; tests that
@@ -113,10 +135,18 @@ and the one this spec grows the most as the component model lands.
   (`render_instance::instance_data_layout_matches_pipeline_descriptor`,
   pinning stride = 36 today). A drift between the Rust struct and the WGSL
   vertex layout is a silent corruption the compiler cannot catch; this test is
-  the guard. As [component-model.md](component-model.md) adds `Background` /
-  `Border` / `BoxShadow` packing, **each new instance/uniform struct gets its own
-  stride-vs-descriptor assertion** — the rule is "no `#[repr(C)]` GPU struct
-  without a matching layout test."
+  the guard. **PRESENT vs TARGET:** the `array_stride = 36` literal and the
+  `to_instance_*` packing assertions are **Phase-0 BASELINE** tests pinning the
+  *current* per-vertex-instance layout; the pillar-3 hybrid handoff
+  ([architecture.md](architecture.md)) **REPLACES** that per-instance vertex
+  layout with persistent storage buffers + a view uniform, so these specific
+  stride/packing assertions are migrated, not target-state proof. What carries to
+  the target is the **rule**, not the number: as [component-model.md](component-model.md)
+  adds `Background` / `Border` / `BoxShadow` packing, **each new instance/uniform
+  struct gets its own stride-vs-descriptor assertion** against its own layout —
+  the invariant is "no `#[repr(C)]` GPU struct without a matching layout test,"
+  and *that* is the target-state proof, with the literal `36` retired when the
+  hybrid handoff lands.
 - **sRGB → linear conversion.** `to_instance` converts the authored sRGB color
   to `LinearRgba` so the linear-light pipeline (pillar referenced in
   [color-and-forced-colors.md](color-and-forced-colors.md)) blends correctly and
@@ -126,10 +156,14 @@ and the one this spec grows the most as the component model lands.
   y-flip carried in `rect_size`, the `2.0 / min(window)` radius scale) is locked
   by `to_instance_centers_origin_at_window_center`,
   `to_instance_offsets_position_to_clip`, and `to_instance_radius_uses_min_window_dim`.
-  When pillar 3's hybrid handoff moves this conversion into a **view uniform**,
-  the same assertions move to a CPU port of the uniform math — the property
-  "a px rect lands at the right clip coordinates" is layer-2 testable whether the
-  arithmetic lives on CPU or in a view-uniform-fed vertex stage.
+  **PRESENT vs TARGET:** these three `to_instance_*` assertions are **Phase-0
+  BASELINE** — they pin the *current* CPU-side per-instance conversion that the
+  hybrid handoff **REPLACES**. When pillar 3's hybrid handoff moves this conversion
+  into a **view uniform**, the assertions are migrated to a CPU port of the uniform
+  math, and *that* port is the target-state proof. The durable property —
+  "a px rect lands at the right clip coordinates" — is layer-2 testable whether the
+  arithmetic lives on the (Phase-0) CPU `to_instance` path or the (target)
+  view-uniform-fed vertex stage; only the seed assertions are retired.
 - **SDF semantics via a CPU port.** The fragment SDF is mirrored 1:1 in Rust
   (`sdf_rounded_rect` / `shader_half_size` in `render_instance.rs`) and walked at
   known sample points, proving "inside the box is filled, outside is empty"
@@ -198,24 +232,30 @@ realizes it, and the pillar claim it discharges.
 |---|---|---|---|
 | **#2 Visual regression** | 4 (device) | Rendered output matches golden per widget × state × theme × viewport. The *only* gate that proves pixels. | Pillars 2, 3, 6 end-to-end; [effect-compositor.md](effect-compositor.md), [color-and-forced-colors.md](color-and-forced-colors.md) |
 | **#5 Layout snapshots** | 3 (headless) | `ClipRect` resolved geometry (the box, ancestor intersection, scroll-translated viewport). | Pillar 4; [clip-and-transform.md](clip-and-transform.md) |
-| **#10 Hit-target ≥24×24** | 3 (headless) | Every interactive widget's picking hit-rect is ≥24×24 at every fixture viewport. Geometric check on resolved geometry — the *same* geometry render paints, because paint order = hit-test order reversed (pillar 1). | Pillar 1 (ordering identity); [paint-order-and-top-layer.md](paint-order-and-top-layer.md) |
-| **#11 Forced-colors** | 3 + 4 | (a) token-flow analysis: no widget paints a color outside the system-color token set under `forced-colors: active` (headless, on the resolved `Background`/`Border`/`Outline` tokens); (b) golden visual diff under forced-colors (device). | [color-and-forced-colors.md](color-and-forced-colors.md) |
-| **#14 Perf regression** | 4 (device) | Render time per fixture vs main-branch baseline on the fixed runner (±10% default slack). **Mechanism committed here; per-fixture numbers owned by `buiy-verification-design`.** | Pillar 3 (the hybrid handoff exists to keep this gate satisfiable); README § 5 #4 |
+| **#10 Hit-target ≥24×24** | 3 (headless) | A **layout/picking-time** geometric gate, not render-owned: every interactive widget's picking hit-rect is ≥24×24 at every fixture viewport. Render aligns to it for free — it shares one `ClipRect` and paint order = hit-test order reversed (pillar 1) — so the geometry the gate checks is the geometry render paints. | Pillar 1 (ordering identity); [paint-order-and-top-layer.md](paint-order-and-top-layer.md) |
+| **#11 Forced-colors** | 3 + 4 | (a) token-flow analysis: no widget paints a color outside the system-color token set under `forced-colors: active` (headless, on the resolved `Background`/`Border`/`Outline` tokens); (b) golden visual diff under forced-colors (device) — **blocked on `buiy-theme-tokens-design` delivering the forced-colors system-color map (or a minimal v1 stub map): the goldens cannot be captured until the resolved palette exists, so #11(b) is a tracked-dependency gate, not silently un-runnable at v1.** | [color-and-forced-colors.md](color-and-forced-colors.md) |
+| **#14 Perf regression** | 4 (device) | The **combined** layout + render + a11y per-frame time per fixture vs main-branch baseline on the fixed runner — the ±10% default slack and the per-fixture budget belong to the *whole* gate, not to render alone. This spec owns and keeps-satisfiable only the **render-time component** of that measure; it is not a render-only gate. **Mechanism committed here; per-fixture numbers owned by `buiy-verification-design`.** | Pillar 3 (the hybrid handoff exists to keep render's component of this gate satisfiable); README § 5 #4 |
 | **#15 Memory leak** | 4 (device) | RSS slope < 1 MB/min after warmup and atlas-entry count returns within ε of baseline after a ~10-min scripted fixture. **Mechanism committed; numbers owned by `buiy-verification-design`.** | [atlas-and-text-seam.md](atlas-and-text-seam.md), [effect-compositor.md](effect-compositor.md) (RT pooling) |
 | **#1 Unit tests** | 1, 2 | The smoke/registration and CPU-math layers above run as ordinary `cargo test`. | Pillars 2, 3, 4 (registration + packing) |
 
 Two clarifications the table compresses:
 
-- **#10 binds render to picking without a second geometry source.** Pillar 1
-  fixes hit-test order = paint order reversed and `ClipRect` is read by *both*
-  render and picking ([README § 3.2](README.md#32-render-owned-this-spec-introduces)).
-  So gate #10's hit-rect check operates on exactly the geometry render paints;
-  the two cannot diverge because there is one `ClipRect`, not two.
+- **#10 is a layout/picking-time gate render aligns to, not a render-owned
+  gate.** It checks resolved hit-rect geometry at picking time; render does not
+  own it and does not get a separate measurement. Render aligns to it for free
+  because pillar 1 fixes hit-test order = paint order reversed and the single
+  `ClipRect` is read by *both* render and picking
+  ([README § 3.2](README.md#32-render-owned-this-spec-introduces)). So gate #10's
+  hit-rect check operates on exactly the geometry render paints; the two cannot
+  diverge because there is one `ClipRect`, not two.
 - **#14 / #15 are mechanism-only here.** This spec defines atlas
   eviction/warmup ([atlas-and-text-seam.md](atlas-and-text-seam.md)), effect-RT
   pooling ([effect-compositor.md](effect-compositor.md)), and the persistent-buffer
   handoff (pillar 3) **so that the gates are satisfiable** — i.e. so there is a
-  steady state to regress against. The pass/fail thresholds are
+  steady state to regress against. Note also that #14 is the *combined*
+  layout + render + a11y per-frame measure: its ±10% slack and per-fixture budget
+  belong to the whole gate, and this spec owns only render's *component* of it,
+  never a render-only gate. The pass/fail thresholds are
   [README § 5](README.md#5-open-questions) open question #4, owned by
   `buiy-verification-design`. Do not encode threshold numbers in this spec.
 
@@ -294,7 +334,7 @@ blanket re-accept; the curation step is what keeps the golden trustworthy.
 Gate #2, like all applicable gates, runs **per-window** where multi-window
 fixtures exist (foundation § Multi-window verification): top-layer compositing
 and node-group ownership are per-window by construction
-([README § 2 pillar 4](README.md#2-architectural-pillars-one-line-summaries)),
+([README goal #4](README.md#1-goals-and-non-goals) / [pillar 2](README.md#2-architectural-pillars-one-line-summaries) / [architecture.md § 4](architecture.md#4-per-window-node-group-ownership-cross-cutting-318-f-tier)),
 so multi-window goldens verify each window's stack independently. The v1
 single-global-`TopLayerActivation` simplification ([README § 5](README.md#5-open-questions)
 open question #1) bounds what these fixtures can assert about per-window
@@ -309,8 +349,8 @@ pillar, the gate/layer that proves it cannot have silently broken.
 
 | Pillar | Claim | Proven by |
 |---|---|---|
-| 1 — immutable consumer | paint order = hit-test order reversed; geometry never recomputed | Gate #10 (one `ClipRect`, one order, shared by render + picking); layer-1 graph-shape test that render reads `painters_z` forward |
-| 2 — typed-primitive node + top-layer pass | node group + composite pass registered in `Core2d` after `EndMainPass` | Layer 1 (graph node + edges); gate #2 (the pass actually composites) |
+| 1 — immutable consumer | paint order = hit-test order reversed; geometry never recomputed | Gate #10 — a layout/picking-time geometric gate render aligns to (one `ClipRect`, one order, shared by render + picking), not render-owned; plus the layer-1 graph-shape test that render reads `painters_z` forward |
+| 2 — typed-primitive node + top-layer pass | node group + composite pass registered in `Core2d` after `StartMainPassPostProcessing`, with the load-bearing `BuiyRenderLabel → Tonemapping` edge | Layer 1 (graph node + edges); gate #2 (the pass actually composites) |
 | 3 — hybrid handoff | persistent buffers + view uniform pack correctly; no per-frame realloc waste | Layer 2 (stride-vs-descriptor + view-uniform math); gate #14 (the handoff keeps render time in budget) |
 | 4 — `ClipRect` in render-prep | clip computed from layout output, testable as resolved values | Gate #5 (layout snapshots over `ClipRect`); layer 1 (the pass is scheduled in render-prep) |
 | 5 — layout owns transform tree | render reads `GlobalTransform`; no re-implemented propagation | Bevy's own `TransformSystems::Propagate` tests + a Buiy bridge test that `ResolvedLayout` + `ResolvedTransform` compose into the expected `Transform` (layer 2); gate #2 confirms the painted result |
@@ -324,6 +364,16 @@ subtly wrong over overlapping children*
 Gate #2 must therefore include a fixture with overlapping children under a group
 `Opacity < 1` and an `isolation` boundary — that golden is the standing proof the
 correct off-screen-composite path stayed correct.
+
+A wording precision on this row's "isolation": **isolation is the layout-owned
+`Stacking.isolation` FIELD, not a render SC-trigger component.** The render-owned
+SC-trigger component count is **THREE** — `Opacity` / `Filter` / `MixBlendMode`
+([effect-compositor.md § 1](effect-compositor.md), [component-model.md](component-model.md));
+isolation rides the layout `Stacking` bundle's `isolation` field, and the
+compositor reads that field (it does not introduce a fourth render-side trigger
+component). The pillar-6 golden still exercises the isolation boundary, but the
+boundary is materialized from layout's `Stacking.isolation`, not from a render
+component this spec defines.
 
 ---
 

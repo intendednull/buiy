@@ -15,11 +15,13 @@ This file owns:
   intersection algorithm, the `ClipRect` output shape, and the proof that the
   `Changed<ScrollOffset>` recompute does **not** re-run layout.
 - **(B)** the `Transform` / `GlobalTransform` bridge — how `ResolvedLayout` +
-  `ResolvedTransform` fold into one Bevy `Transform`, why
-  `TransformSystems::Propagate` (not Buiy) owns `GlobalTransform`, the
-  logical-pixel / y-down coordinate contract, and the consumption of the
-  Phase-8 stored-but-unconsumed `perspective` / `transform-style` /
-  `backface-visibility` data.
+  `ResolvedTransform` fold into one Bevy `Transform`, why **Bevy's** propagation
+  systems (`mark_dirty_trees` / `propagate_parent_transforms` /
+  `sync_simple_transforms`), not Buiy, own `GlobalTransform`, **how Buiy
+  schedules those three in `Update`** so `GlobalTransform` is final before
+  picking + extract (§ B.2.1), the logical-pixel / y-down coordinate contract,
+  and the consumption of the Phase-8 stored-but-unconsumed `perspective` /
+  `transform-style` / `backface-visibility` data.
 
 The component names used here are fixed by [README § 3](README.md#3-the-component-contract);
 this file elaborates the two it introduces (`ClipRect`) and the bridge logic,
@@ -53,20 +55,58 @@ row). It is not a render-graph node — it is a normal ECS system in the main
 
 ### A.2 The `ClipRect` output shape
 
+`ClipRect` is **owned and defined here** — this is its single canonical
+definition across the render-pipeline spec; every other file references this
+section rather than redefining the type.
+
 ```rust
 /// Per-entity computed clip, written by `write_clip_rects` (render-prep)
 /// and read by render extract + picking. Render reads it; render never
-/// re-derives it. Absent on entities that are not clipped by any
-/// ancestor (the unbounded case) — an absent `ClipRect` means "no clip".
+/// re-derives it. The accumulated clip AABB, in logical px.
 ///
 /// Geometry is in the same logical-pixel, y-down, window-relative space
 /// as `ResolvedLayout.position` (see § B.4), so render extract can
 /// intersect it against an instance's box without a coordinate change.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A.
-#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
-#[reflect(Component)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct ClipRect {
+    /// Top-left corner, logical px, window-relative (y-down).
+    pub min: Vec2,
+    /// Bottom-right corner, logical px, window-relative (y-down).
+    pub max: Vec2,
+}
+// NO `Default`: an absent `ClipRect` is meaningful (it means "no clip"),
+// so the type is never default-constructed into a zero rect.
+```
+
+**Absent-semantics (canonical, quoted identically in component-model.md § 9):**
+"Absent ClipRect ⇔ no ancestor clips this entity ⇒ render applies no scissor."
+
+Alongside `ClipRect`, `write_clip_rects` emits a companion **`AncestorClip`**
+— the canonical owner of which is **this section** — for every entity that
+paints an [`Outline`](component-model.md) (emitting it always is permissible if
+that is simpler to implement; the cost is one extra component on Outline-bearing
+entities only):
+
+```rust
+/// Per-entity *ancestor-only* clip, written by `write_clip_rects`
+/// (render-prep). This is the intersection of the entity's **ancestor**
+/// clip boxes ONLY — the own-box step (§ A.3 rule 1) is NOT applied — so
+/// it bounds geometry an entity paints *outside* its own border box.
+///
+/// `Outline` reads this (not the self-intersected `ClipRect`), so an
+/// outline drawn outside the border box is clipped only by ancestors,
+/// never by the entity's own box (which would erase it). component-model.md
+/// § 7 (Outline) consumes this; § A.2 here is its canonical definition.
+///
+/// Geometry is in the same logical-pixel, y-down, window-relative space as
+/// `ClipRect` (§ B.4). Absent `AncestorClip` ⇔ no ancestor clips this
+/// entity ⇒ the outline is unclipped.
+///
+/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A.2.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct AncestorClip {
     /// Top-left corner, logical px, window-relative (y-down).
     pub min: Vec2,
     /// Bottom-right corner, logical px, window-relative (y-down).
@@ -74,19 +114,30 @@ pub struct ClipRect {
 }
 ```
 
+`ClipRect` (= ancestor clips **intersected with** the own box) and
+`AncestorClip` (= the intersection of ancestor clip boxes **only**, without the
+own-box step) differ exactly by rule 1 of the § A.3 walk: `AncestorClip` is the
+running ancestor intersection *before* the own-box intersection, `ClipRect` is
+that same value *after* it. The pass already computes both as a byproduct of
+the single top-down fold, so `AncestorClip` adds no extra walk.
+
 The rect is an axis-aligned bounding box (AABB) in logical pixels. v1 stores a
 **rectangular** clip only — non-rectangular clips (`border-radius` rounding of
 the clip edge, `clip-path`) are deferred:
 
-- **Rounded-rect clip** (the `Border.radius` of a clipping ancestor) is the
-  first C-tier extension. `ClipRect` reserves the seam by carrying only the
-  AABB now; the rounded variant adds a sibling `ClipRadius` component (per-corner
-  elliptical radii, mirroring [`Border`](component-model.md)) that render's SDF
-  quad shader already understands. Marked open where the AABB is insufficient;
-  see [README § 5](README.md#5-open-questions) is **not** the owner — this is a
-  render-side C-tier fast-follow tracked in [verification.md](verification.md)'s
-  gate map, not a cross-spec open question.
-- **`clip-path`** (arbitrary path clip) is E-tier, named only, no component.
+- **Rounded-rect clip** (the `Border.radius` of a clipping ancestor) is
+  deferred to a **separate sibling component `ClipRadius`** — a C-tier,
+  reserved carrier that is **not built in v1**. `ClipRect` carries only the
+  AABB; `ClipRadius` (per-corner elliptical radii, mirroring
+  [`Border`](component-model.md)) is the reserved rounded-clip carrier that
+  render's SDF quad shader already understands. This is a render-side C-tier
+  fast-follow tracked in [verification.md](verification.md)'s gate map, not a
+  cross-spec open question.
+- **`clip-path`** (arbitrary path clip) is **C-tier** (matching
+  [foundation/visuals.md](../2026-05-07-buiy-foundation/visuals.md#33-visual-styling-and-rendering)),
+  a **reserved seam** carried by the **path primitive** (architecture § 1.4
+  already tiers it C). Named only in v1, no component built — it is a reserved
+  C-tier seam, not an E-tier deviation.
 
 A degenerate clip — `min.x >= max.x` or `min.y >= max.y` — is the empty rect;
 render skips painting the entity entirely (it is fully clipped away). This is
@@ -104,15 +155,21 @@ entity `E` it computes the **intersection** of:
 2. For each ancestor `A` walked via `ChildOf` from `E` to the layout root, in
    order:
    - if `A.Overflow` clips on an axis (`Hidden` / `Clip` / `Scroll` / `Auto` —
-     i.e. *not* `Visible`), intersect with `A`'s **content box** on that axis
-     (the border box inset by border + padding — the same content rect Taffy
-     resolved; `ResolvedLayout` reports the border box, so the pass insets it
-     using `A`'s `BoxModel` border + padding edges);
+     i.e. *not* `Visible`), intersect with `A`'s **padding box** on that axis
+     (the border box inset by **border only** — *not* padding; scrollable /
+     overflowing content shows *under* the padding, so the clip edge is the
+     inner border edge, not the content edge). `ResolvedLayout` reports the
+     border box, so the pass insets it using `A`'s `BoxModel` **border** edges
+     only. `Overflow` is **per-axis** (`{ x, y }`): a `Visible` axis contributes
+     **no** clip even when the other axis clips — only the clipping axis is
+     intersected, so a node with `overflow-x: hidden; overflow-y: visible`
+     constrains `x` and leaves `y` unbounded;
    - if `A` is a **scroll container** (`A.Overflow.is_scroll_container()`),
-     the viewport is `A`'s content box, and the *child-facing* clip is that
-     content box — `ScrollOffset` does **not** move the clip box itself (the
-     visible window is fixed in `A`'s frame); it moves the *content* (see § A.4
-     for where the offset is applied);
+     the viewport is `A`'s **padding box** (same border-only inset — content
+     scrolls under the padding), and the *child-facing* clip is that padding
+     box — `ScrollOffset` does **not** move the clip box itself (the visible
+     window is fixed in `A`'s frame); it moves the *content* (see § A.4 for
+     where the offset is applied);
    - if `A.Containment.contain` includes `ContainFlags::PAINT`, intersect with
      `A`'s border box (paint containment clips descendants to the box —
      [transforms-and-containment.md § 5.1](../2026-05-08-buiy-layout-design/transforms-and-containment.md#51-effect-of-contain)).
@@ -126,6 +183,9 @@ scroll container nor paint-contained), so an entity with no clipping ancestor
 emits **no `ClipRect`** (cheaper than writing a window-sized sentinel and lets
 render branch on `Option<&ClipRect>`).
 
+The signature below is **illustrative** (it sketches the inputs and the
+write path; the real system also carries the change-gating resource of § A.4):
+
 ```rust
 /// Render-prep — computes per-entity `ClipRect` by intersecting the
 /// entity box with every ancestor clip / scroll-viewport / PAINT
@@ -137,20 +197,85 @@ render branch on `Option<&ClipRect>`).
 fn write_clip_rects(
     mut commands: Commands,
     roots: Query<Entity, (With<Node>, Without<ChildOf>)>,
-    nodes: Query<(&ResolvedLayout, &BoxModel, &Overflow, Option<&Containment>, Option<&ScrollOffset>)>,
+    // No `ScrollOffset` here: the clip *box* is offset-independent (§ A.4) —
+    // scroll moves content via the bridge (§ B.3), never the clip box — so
+    // this fold reads only the box-geometry inputs.
+    //
+    // Every per-node component except `ResolvedLayout` is `Option<&T>`,
+    // because `Node` carries no `#[require]` for `BoxModel` / `Overflow` /
+    // `Containment` (they are inserted only via the `Style` bundle, never
+    // guaranteed on a bare `Node`). A non-`Option` `&BoxModel` / `&Overflow`
+    // query would silently *drop* bare Nodes from the walk — those entities
+    // would never receive a `ClipRect`. The fold therefore reads each via
+    // `Option` and applies the absent-default below.
+    nodes: Query<(
+        &ResolvedLayout,
+        Option<&BoxModel>,
+        Option<&Overflow>,
+        Option<&Containment>,
+        // Pruning inputs (§ A.3): the same skip predicates paint-order § 5
+        // owns. `Display::None` and `ContentVisibility::Hidden` subtrees are
+        // not descended into. `Containment.content_visibility` lives on the
+        // `Containment` above; `Display` is read here. Both are `Option` for
+        // the same bare-`Node` reason — absent `Display` ⇒ not `None`.
+        Option<&Display>,
+    )>,
     children: Query<&Children>,
-    existing: Query<&ClipRect>,
-) { /* top-down ancestor-clip fold; see § A.3 */ }
+    // `existing`: the entity's previously-written `ClipRect` (if any). The
+    // fold is change-gated against it — see the body below — so a frame that
+    // recomputes the same rect issues no `Commands` op.
+    existing: Query<Option<&ClipRect>>,
+) {
+    // Top-down from each root: push the running clip down through `Children`,
+    // intersecting each ancestor's clip box (§ A.3). At each entity:
+    //
+    //   let computed: Option<ClipRect> = /* running intersection, None if
+    //                                       no ancestor clips this entity */;
+    //   match (computed, existing.get(e).ok().flatten()) {
+    //       (Some(c), prev) if prev != Some(&c) => { commands.entity(e).insert(c); }
+    //       (None,    Some(_))                  => { commands.entity(e).remove::<ClipRect>(); }
+    //       _ => { /* unchanged — no write */ }
+    //   }
+    //
+    // The `insert` / `remove` is what actually writes the output; the
+    // change-gate against `existing` keeps a steady-state frame at zero
+    // structural ops.
+}
 ```
 
 The system is written **top-down from each root** (push the running clip down
-through `Children`) rather than bottom-up per entity, so each ancestor box is
-computed once and the running intersection is `O(depth)` amortized to `O(1)`
-per entity — the same top-down shape `inherit_writing_mode`
+through `Children`) rather than bottom-up per entity — it needs the running
+ancestor context anyway — so each ancestor box is computed once and the running
+intersection is `O(depth)` amortized to `O(1)` per entity — the same top-down
+shape `inherit_writing_mode`
 ([layout systems.rs](../../../crates/buiy_core/src/layout/systems.rs)) uses.
-`Display::None` and `ContentVisibility::Hidden` subtrees are pruned from the
-walk (their descendants are not painted, so they get no `ClipRect`); this
-mirrors the skip rules detailed in [paint-order-and-top-layer.md](paint-order-and-top-layer.md).
+
+**Per-node data is read with absent-defaults, never as a flat non-`Option`
+query.** A bare `Node` is not guaranteed to carry `BoxModel` / `Overflow` /
+`Containment` (they arrive only via the `Style` bundle), so the walk fetches
+each via `Option<&T>` (the query above) and applies a default that makes a
+missing component a *no-op* for that node's clip contribution:
+
+- **no `BoxModel`** ⇒ no border inset (the border-only inset of § A.3 rule 2
+  uses a zero border edge, so the clip box is the bare border box);
+- **no `Overflow`** ⇒ `Overflow::Visible` ⇒ the node contributes **no** clip
+  (it is treated as non-clipping on both axes);
+- **no `Containment`** ⇒ no `PAINT` clip (the node imposes no paint-containment
+  box).
+
+A non-`Option` `(&ResolvedLayout, &BoxModel, &Overflow)` query would instead
+silently drop every bare `Node` from the walk and emit no `ClipRect` for it —
+the same bare-`Node` reasoning architecture § 1.2 applies to the render
+extract's `Option<&ClipRect>`.
+
+**Pruning has real inputs.** The top-down walk does **not** seed `Display::None`
+or `ContentVisibility::Hidden` subtrees: it applies the *same* skip predicates
+[paint-order-and-top-layer.md § 5](paint-order-and-top-layer.md) owns — reading
+the `Display` enum and `Containment.content_visibility` at each node and not
+descending into a pruned subtree (a pruned entity's descendants are never
+painted, so they need no `ClipRect`). Because the predicates are shared with
+paint-order, a pruned-here / painted-there divergence is impossible by
+construction.
 
 ### A.4 `ScrollOffset` moves content, not the clip — and never re-runs layout
 
@@ -167,8 +292,8 @@ Layout enforces this by *excluding* `Changed<ScrollOffset>` from the
 byte-stable across scroll-only frames.
 
 The render side honors the same split. A scroll container's clip box is its
-**viewport** (content box) and is independent of `ScrollOffset` — scrolling
-does not move the visible window. What scroll moves is the **content
+**viewport** (padding box, § A.3) and is independent of `ScrollOffset` —
+scrolling does not move the visible window. What scroll moves is the **content
 translation** applied to the scrolled descendants. That translation is folded
 into the transform bridge (§ B.3), **not** into `ClipRect`: render draws each
 descendant at `GlobalTransform`-derived position shifted by the accumulated
@@ -201,9 +326,13 @@ Because of this split, `WriteClipRects` has two cost regimes:
 > (§ B.2, so `Transform` is composed) but **before** `BuiySet::Picking` and
 > before the render world's `ExtractSchedule`. Picking reads `ClipRect` to
 > reject pointer hits outside the clip; render extract reads it to scissor.
-> [architecture.md](architecture.md) pins the render-prep stage's exact set
-> ordering inside `BuiySet::Render`'s preamble; this file requires only the
-> ordering relation `Layout → bridge → WriteClipRects → Picking → Extract`.
+> Render-prep is scheduled `.after(BuiySet::Animate).before(BuiySet::Picking)`
+> — it runs **between** `Animate` and `Picking`, **not** inside
+> `BuiySet::Render`'s preamble (`BuiySet::Render` is the last set, after
+> `Picking`, so render-prep cannot live there). [architecture.md](architecture.md)
+> pins the render-prep stage's exact set ordering (matching architecture § 5.2);
+> this file requires only the ordering relation
+> `Layout → bridge → WriteClipRects → Picking → Extract`.
 
 ### A.5 Verification (clip)
 
@@ -233,9 +362,10 @@ Because of this split, `WriteClipRects` has two cost regimes:
 Bevy already owns a `bevy::prelude::Transform` and `GlobalTransform`.
 `TransformPlugin` registers a `TransformSystems::Propagate` set that recomposes
 `GlobalTransform` from `Transform` on every frame a `Transform` changed —
-`*global_transform = GlobalTransform::from(*transform)` at both the root path
-and the child-propagation path
-([`bevy_transform-0.18.1/src/systems.rs:201` / `:376`](../2026-05-08-buiy-layout-design/transforms-and-containment.md#2-mapping-to-bevy-transform)).
+`*global_transform = GlobalTransform::from(*transform)` in both
+`sync_simple_transforms` (the root / parentless path) and
+`propagate_parent_transforms` (the child-propagation path)
+([`bevy_transform-0.18.1/src/systems.rs`](../2026-05-08-buiy-layout-design/transforms-and-containment.md#2-mapping-to-bevy-transform)).
 Writing `GlobalTransform` directly would be clobbered by that propagation.
 
 So Buiy lives **inside** Bevy's ownership model (the recommended "approach (a)"
@@ -259,41 +389,68 @@ write.
 ### B.2 The composition: `ResolvedLayout` + `ResolvedTransform` → one `Transform`
 
 A single render-prep system, `write_buiy_transform`, folds the two layout
-outputs into the entity's Bevy `Transform`:
+outputs **and the accumulated ancestor scroll** into the entity's Bevy
+`Transform`. It is the **only writer** of `Transform.translation` for a
+laid-out entity (architecture § 5.2): there is no second per-entity writer and
+no scroll-specific writer that could race it — "which write wins" is moot
+because there is exactly one write per entity per frame.
+
+Because each entity's translation depends on the *accumulated* `ScrollOffset`
+of its scroll-container **ancestors** (§ B.3), the system is a **top-down
+accumulation walk** (`Children`), not a flat per-entity query: it carries the
+running ancestor scroll sum down the tree and composes it into each node's
+base, exactly mirroring the `write_clip_rects` top-down shape (§ A.3):
 
 ```rust
-/// Render-prep — folds layout's `ResolvedLayout.position` and the
-/// optional composed `ResolvedTransform.matrix` into the entity's Bevy
-/// `Transform`. Bevy's `TransformSystems::Propagate` then owns the
-/// resulting `GlobalTransform`. Buiy owns the `Transform` of every
-/// entity it lays out.
+/// Render-prep — folds layout's `ResolvedLayout.position`, the accumulated
+/// ancestor scroll, and the optional composed `ResolvedTransform.matrix`
+/// into the entity's Bevy `Transform`. The SOLE writer of a laid-out
+/// entity's `Transform`. Buiy's own `Update`-scheduled propagation chain
+/// (§ B.2.1) then owns the resulting `GlobalTransform`.
 ///
-/// Runs after `BuiySet::Layout` (so both inputs are final) and before
-/// `TransformSystems::Propagate` (PostUpdate). Render reads the
-/// propagated `GlobalTransform`, never `ResolvedLayout`/`ResolvedTransform`.
+/// Runs in `Update`, after `BuiySet::Layout` (so both inputs are final)
+/// and before the propagation chain + `BuiySet::Picking` (§ B.2.1).
+/// Render reads the propagated `GlobalTransform`, never
+/// `ResolvedLayout`/`ResolvedTransform`.
 ///
-/// Spec: clip-and-transform.md § B.2.
+/// Top-down walk: per entity, compose
+///   `base = position - accumulated_ancestor_scroll`
+/// (lifted to a translation `Mat4`), then `base * ResolvedTransform.matrix`,
+/// into ONE `Transform`. The walk re-runs a subtree (the `ScrollDirty`
+/// top-down set, § B.3) iff its `ResolvedLayout` OR `ResolvedTransform`
+/// changed OR any ancestor scroll-container's `ScrollOffset` changed.
+///
+/// Spec: clip-and-transform.md § B.2 / § B.3.
 fn write_buiy_transform(
-    mut q: Query<
-        (&ResolvedLayout, Option<&ResolvedTransform>, &mut Transform),
-        Or<(Changed<ResolvedLayout>, Changed<ResolvedTransform>)>,
-    >,
+    roots: Query<Entity, (With<Node>, Without<ChildOf>)>,
+    layout: Query<(&ResolvedLayout, Option<&ResolvedTransform>, Option<&ScrollOffset>)>,
+    children: Query<&Children>,
+    mut transforms: Query<&mut Transform>,
+    // `ScrollDirty` (§ B.3): the top-down set seeded by `Changed<ScrollOffset>`
+    // (a scroll container re-translates its whole subtree) unioned with the
+    // entities whose `ResolvedLayout`/`ResolvedTransform` changed. The walk
+    // only descends into seeded subtrees; a steady-state frame visits none.
+    dirty: Res<ScrollDirty>,
 ) {
-    for (layout, xform, mut transform) in &mut q {
-        // Position: layout's window-relative top-left, lifted into
-        // Bevy's translation. The y-down → y-up flip lives in the view
-        // uniform (§ B.4), NOT here — the bridge stays in logical-px,
-        // y-down space so picking and ClipRect share one coordinate frame.
-        let base = Mat4::from_translation(layout.position.extend(0.0));
-        let composed = match xform {
-            // 6e writes `ResolvedTransform` only when non-identity, and
-            // removes a stale one otherwise (layout components.rs), so the
-            // `None` arm is the identity fast path.
-            Some(rt) => base * rt.matrix,
-            None => base,
-        };
-        *transform = Transform::from_matrix(composed);
-    }
+    // Top-down from each seeded root, carrying the running ancestor scroll
+    // sum `acc: Vec2` (starts at zero). At each entity `e`:
+    //
+    //   let base = Mat4::from_translation((layout.position - acc).extend(0.0));
+    //   let composed = match resolved_transform {
+    //       // 6e writes `ResolvedTransform` only when non-identity, and
+    //       // removes a stale one otherwise (layout components.rs), so the
+    //       // `None` arm is the identity fast path.
+    //       Some(rt) => base * rt.matrix,
+    //       None     => base,
+    //   };
+    //   *transforms.get_mut(e)? = Transform::from_matrix(composed);
+    //   // Push down: a scroll-container child sees its parent's `acc` plus
+    //   // this node's own `ScrollOffset` (if it is a scroll container).
+    //   let child_acc = acc + this_node_scroll_offset;
+    //
+    // The y-down → y-up flip lives in the view uniform (§ B.4), NOT here —
+    // the bridge stays in logical-px, y-down space so picking and `ClipRect`
+    // share one coordinate frame.
 }
 ```
 
@@ -303,9 +460,12 @@ Key points:
   when the composed transform is non-identity and removes a stale one otherwise
   ([components.rs `ResolvedTransform`](../../../crates/buiy_core/src/components.rs)).
   The `None` arm is the steady-state fast path (most entities have identity
-  transforms), and the `Or<(Changed<ResolvedLayout>, Changed<ResolvedTransform>)>`
-  filter keeps the system `O(0)` on frames where nothing moved — matching the
-  layout pipeline's steady-state contract.
+  transforms). The walk keeps the system `O(0)` on frames where nothing moved by
+  descending only into the `ScrollDirty` set (§ B.3) — seeded by
+  `Changed<ResolvedLayout>`, `Changed<ResolvedTransform>`, **and**
+  `Changed<ScrollOffset>` on a scroll-container ancestor — which is empty on a
+  steady-state frame, matching the layout pipeline's steady-state contract. This
+  is one re-run trigger feeding one writer, not two competing filters.
 - **The transform origin** (`UiTransform.origin`, default `50% 50% 0`) is
   *already baked into* `ResolvedTransform.matrix` by sub-pass 6e (it composes
   `M = T·R·S·M_transform` around the resolved origin), so the bridge does a
@@ -317,26 +477,161 @@ Key points:
   resulting `Transform` for every laid-out entity, so author/gameplay
   transforms do not race the UI layout for the same component
   ([transforms-and-containment.md § 2](../2026-05-08-buiy-layout-design/transforms-and-containment.md#2-mapping-to-bevy-transform)).
+- **The bridge carries the *affine* part only — true perspective cannot
+  survive it.** Bevy's `Transform` is affine (TRS) and `GlobalTransform` wraps
+  an `Affine3A`; `Transform::from_matrix`
+  ([`bevy_transform-0.18.1` `components/transform.rs`](../2026-05-08-buiy-layout-design/transforms-and-containment.md#2-mapping-to-bevy-transform))
+  calls `Mat4::to_scale_rotation_translation()`, which **decomposes** the `Mat4`
+  to TRS and **drops any projective (non-`(0,0,0,1)`) row**. So even though `ResolvedTransform.matrix` is a full `Mat4`, only its
+  affine part survives the `from_matrix` bridge — a true perspective term placed
+  in that row would be silently lost. v1 ships only the **`Flat` fast path**
+  (no perspective in the bridge); perspective (`Preserve3d`, C-tier deferred,
+  § B.5) rides a **separate render-side channel** applied at the view / primitive
+  stage, *not* through `Transform`/`GlobalTransform`.
+
+### B.2.1 Scheduling the propagation (mechanism owned here)
+
+Bevy's `TransformPlugin` schedules propagation in **`PostUpdate`**. Buiy cannot
+wait until `PostUpdate`: picking (`BuiySet::Picking`) and the render world's
+`ExtractSchedule` both read `GlobalTransform` and both run *within / right after*
+`Update`. So Buiy schedules the **three real public propagation systems**
+
+```rust
+bevy_transform::systems::{ mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms }
+```
+
+itself, in **`Update`**, **chained in that exact order**, **after**
+`write_buiy_transform` and **before** `BuiySet::Picking`:
+
+```rust
+app.add_systems(
+    Update,
+    (
+        write_buiy_transform,
+        // Bevy's own propagation systems, chained in dependency order:
+        mark_dirty_trees,            // marks subtrees whose Transform changed
+        propagate_parent_transforms, // recomposes GlobalTransform down the tree
+        sync_simple_transforms,      // root + parentless fast path
+    )
+        .chain()
+        .before(BuiySet::Picking),
+);
+```
+
+This guarantees `GlobalTransform` is **final** before picking and before
+`ExtractSchedule` read it — the ordering constraint
+[architecture.md § 5.3](architecture.md) restates (it owns only the ordering;
+the *mechanism* — these three systems, this chain — lives here).
+
+**Accepted re-propagation cost, and the engine-global heuristic it perturbs
+(corrects the "PostUpdate re-run is bounded by changed-entity count,
+idempotent" claim).** Change ticks clear **once per `World::update`** (at frame
+end), **not** between schedules. So if the app *also* runs Bevy's default
+`PostUpdate` `TransformSystems::Propagate` (e.g. a 3D scene that keeps the
+stock `TransformPlugin` schedule), every Buiy subtree Buiy touched this frame
+still has its `TransformTreeChanged` flagged `Changed` when `PostUpdate` runs,
+so those subtrees **re-propagate a second time** in `PostUpdate`. That second
+pass is **not** free. Two facts pin the bound exactly:
+
+- **Buiy's subtrees re-propagate in `PostUpdate` either way — but for two
+  different source reasons depending on the `enabled` flag.**
+  `propagate_parent_transforms`'s early-exit is
+  `if static_optimizations.enabled && !transform_tree.is_changed()`
+  (`bevy_transform::systems::propagate_parent_transforms`,
+  [`bevy_transform-0.18.1/src/systems.rs`](../2026-05-08-buiy-layout-design/transforms-and-containment.md#2-mapping-to-bevy-transform)).
+  The early-exit short-circuits on **either** conjunct, giving two paths:
+  - **`enabled == true`** (≤30% of all transforms moved this frame): the
+    `TransformTreeChanged` marks that Buiy's `Update` `mark_dirty_trees` set on
+    every subtree Buiy moved **survive** the unclearable tick into `PostUpdate`
+    (change ticks clear only at frame end, below), so `!is_changed()` is `false`
+    for those subtrees and the early-exit **cannot** fire — the `PostUpdate`
+    re-walk of Buiy's touched subtrees is forced by the surviving marks. The flag
+    still skips Buiy's *untouched* static subtrees and the rest of the world.
+  - **`enabled == false`** (>30% of all transforms moved): Buiy's `Update`
+    `mark_dirty_trees` set **no** marks at all — it does
+    `if !static_optimizations.enabled { return; }`
+    (`bevy_transform-0.18.1/src/systems.rs`, in `mark_dirty_trees`) **before** the
+    `set_changed()` loop, so the >30%-moving frame leaves `TransformTreeChanged`
+    untouched. But `propagate_parent_transforms` re-propagates **every** root
+    anyway, because its early-exit's first conjunct (`enabled`) is `false`, so the
+    whole `enabled && !is_changed()` short-circuits to `false` for every subtree —
+    Buiy's included. Either path re-propagates Buiy's subtrees in `PostUpdate`;
+    the surviving-marks path (`enabled == true`) and the disabled-early-exit path
+    (`enabled == false`) are two different source reasons for the same outcome,
+    not the single "marks survive regardless of `enabled`" mechanism.
+- **The flag is the global `StaticTransformOptimizations` resource**
+  (`bevy_transform::systems::StaticTransformOptimizations`,
+  [`bevy_transform-0.18.1/src/systems.rs`](../2026-05-08-buiy-layout-design/transforms-and-containment.md#2-mapping-to-bevy-transform)),
+  whose `enabled` field `mark_dirty_trees` **recomputes every call** from the
+  **whole-world** moving-entity ratio (`changed_transforms.count() /
+  transforms.count()`, default threshold **0.30**).
+
+Two consequences follow, both world-global rather than Buiy-scoped:
+
+1. **A co-existing dynamic 3D scene can disable the optimization globally.** If
+   more than 30% of *all* transformed entities in the world moved this frame,
+   `mark_dirty_trees` sets `enabled = false`, switching off the
+   `enabled && !is_changed()` early-exit's first conjunct for **every** subtree.
+   On that frame Buiy's `Update` `mark_dirty_trees` sets no marks (the
+   `enabled == false` path above), so the `PostUpdate` re-walk is driven purely by
+   the disabled early-exit and covers Buiy's *static* (untouched) subtrees too —
+   the extra `Update`/`PostUpdate` propagation degrades to **O(Buiy-tree size)**
+   rather than O(changed Buiy subtrees). When `enabled == true` (the common UI
+   case) only Buiy's mark-bearing touched subtrees re-walk (previous bullet,
+   first path).
+2. **Buiy's extra `mark_dirty_trees` perturbs the shared heuristic.** Because
+   `mark_dirty_trees` takes `ResMut<StaticTransformOptimizations>` and runs a
+   whole-world `count()` over every `TransformTreeChanged`, Buiy running it an
+   **extra** time in `Update` both **mutates this engine-global resource** (the
+   `enabled` flag the app's own `PostUpdate` pass then reads) and **adds a
+   whole-world `count()` pass** unrelated to Buiy's tree size. The two
+   `StaticTransformOptimizations` writers (Buiy's `Update` `mark_dirty_trees`
+   and the app's `PostUpdate` one) are ordered **only** by the fact that `Update`
+   precedes `PostUpdate` — there is no explicit set ordering between them, since
+   Buiy's `Update` propagation copies are a **distinct schedule**, **not**
+   members of `TransformSystems::Propagate` (that set lives in `PostUpdate`).
+
+**Escape hatch (adopt only if measured).** If this becomes a measured
+**gate #14** problem (the per-frame budget), the fix is a **Buiy-scoped
+propagation** — a private propagation chain over only Buiy's subtree that does
+**not** touch the shared `StaticTransformOptimizations` resource (no `ResMut`,
+no whole-world `count()`) — adopted at the cost of re-implementing Bevy's
+change-gating locally. We do **not** take it pre-emptively: a **UI-only** app
+that does **not** add propagation to `PostUpdate` (no `TransformPlugin`
+`PostUpdate` schedule) pays the propagation exactly **once** (the `Update` run
+only) and never co-exists with a >30%-moving dynamic scene, so for that app the
+double-pass and the shared-resource perturbation simply do not arise.
 
 ### B.3 Scroll content translation rides the bridge
 
-The content translation from accumulated ancestor `ScrollOffset` (§ A.4) is
-applied here, not in `ClipRect`. The bridge's `base` translation for a
-scrolled descendant subtracts each scroll-container ancestor's `ScrollOffset`
-(content scrolls up as the offset grows). Because `ScrollOffset` is layout
-output that does *not* invalidate `ResolvedLayout`, the bridge's
-change-detection filter gains `Changed<ScrollOffset>` on scroll-container
-*descendants* — but the recompute is a pure translation update, never a
-re-layout. This is the single place a scroll-only frame does measurable work,
-and it is bounded by the count of scrolled descendants, not the tree size.
+Scroll is **not** a second transform writer — it is folded into the *same*
+top-down `write_buiy_transform` walk (§ B.2), applied here rather than in
+`ClipRect`. The walk's `base` for a scrolled descendant is
+`position - accumulated_ancestor_scroll`: it subtracts each scroll-container
+ancestor's `ScrollOffset` accumulated down the tree (content scrolls up as the
+offset grows). Because `ScrollOffset` is layout output that does *not*
+invalidate `ResolvedLayout`, a scroll-only frame re-runs only the
+translation-composition walk, never a re-layout. This is the single place a
+scroll-only frame does measurable work, and it is bounded by the count of
+scrolled descendants, not the tree size.
+
+The re-run trigger is the **`ScrollDirty` top-down set** (the one trigger
+feeding the one writer, § B.2): an ancestor scroll-container whose
+`ScrollOffset` changed seeds its whole subtree into the set, just as a node
+whose `ResolvedLayout`/`ResolvedTransform` changed seeds itself. There is no
+separate scroll filter and no flat `Or<…>` query — the union lives in
+`ScrollDirty`, and the walk composes base − scroll × matrix once per seeded
+entity.
 
 > The exact mechanism for "an ancestor's `ScrollOffset` changed, re-translate
 > my descendants" is the same multi-level-descendant problem layout solved in
 > Phase 14 with a dirty-set resource (`ContainerSizeDirty`) — the bridge
 > reuses that pattern with a `ScrollDirty(HashSet<Entity>)` render-prep
-> resource seeded by `Changed<ScrollOffset>` and drained top-down. This keeps
-> the bridge a thin consumer and is the render-prep analogue of the layout
-> cascade, not a new invalidation philosophy.
+> resource seeded by `Changed<ScrollOffset>` (plus the
+> `Changed<ResolvedLayout>` / `Changed<ResolvedTransform>` seeds, § B.2) and
+> drained top-down. This keeps the bridge a thin consumer and is the
+> render-prep analogue of the layout cascade, not a new invalidation
+> philosophy.
 
 ### B.4 The coordinate contract (pinned)
 
@@ -347,6 +642,22 @@ This is the contract the bridge fixes once, for the whole render pipeline:
 | **Buiy logical-pixel** | `ResolvedLayout.position` is the **top-left** corner, **window-relative**, **y-down** (y grows downward, the CSS/screen convention), in logical (DPI-independent) pixels. `ClipRect` shares this exactly. |
 | **Bevy `Transform` translation** | The bridge lifts the logical-px top-left straight into `Transform.translation` (`z = 0`), **keeping y-down** at the ECS level. No flip happens in the bridge. |
 | **View uniform (GPU)** | The y-down → Bevy's y-up screen convention flip is folded into the **view-projection uniform** for Buiy's render node, so every primitive inherits it once. Logical-px → physical-px scaling (the window `scale_factor`) is folded into the same uniform. |
+
+**`scale_factor` lives in two places, by design (reconciles
+[effect-compositor.md § 2.1](effect-compositor.md) / R9).** `GlobalTransform`,
+`ClipRect`, and the bridge all stay in **logical px** — `scale_factor` is *not*
+baked into them. Instead the window `scale_factor` is:
+
+1. folded into the **GPU view-projection uniform** (above), so every primitive
+   renders at physical-pixel resolution; **and**
+2. read **explicitly CPU-side** (from the extracted view / window) by the
+   [effect compositor](effect-compositor.md), which multiplies the
+   logical-px painted bounds by `scale_factor` to size its off-screen
+   `TextureDescriptor` in physical pixels.
+
+These are the *same* scalar applied at two layers; because `GlobalTransform`
+stays logical-px (this section), the compositor must re-apply `scale_factor`
+CPU-side rather than reading it back out of the transform.
 
 The decisive move: **the Phase-0 per-instance y-flip migrates into the view
 uniform.** Phase 0 (and the temporary `Visual` extract) flipped y per instance
@@ -378,11 +689,18 @@ follow-up's transform half (the PAINT-clip half is § A.3):
 - **`perspective: Option<Length>`** — the 3D viewing distance for `Preserve3d`
   children. Resolved to logical px and folded into the **perspective matrix
   factor** of the *parent's* contribution to a child's composed transform.
-  Because `ResolvedTransform.matrix` is already a full `Mat4` (Phase 8 chose
-  `Mat4`, not `Affine2`, expressly to carry perspective —
-  [components.rs](../../../crates/buiy_core/src/components.rs)), the perspective
-  term composes into the matrix and flows through the bridge unchanged; render
-  reads the perspective-bearing `GlobalTransform`. No new component.
+  `ResolvedTransform.matrix` is a full `Mat4` (Phase 8 chose `Mat4`, not
+  `Affine2` —[components.rs](../../../crates/buiy_core/src/components.rs)), so it
+  *can hold* a projective perspective row. **But Bevy's transform is affine and
+  cannot transport that row** (§ B.2): `Transform::from_matrix` decomposes to TRS
+  and `GlobalTransform` wraps `Affine3A`, so the projective term is dropped at the
+  bridge. The perspective therefore does **not** flow through
+  `Transform`/`GlobalTransform`; it is a **render-side channel** applied at the
+  view/primitive stage (the same place the view uniform lives, § B.4), reading
+  the parent's resolved `perspective` directly. v1 ships only the `Flat` fast path
+  (no perspective in the bridge); the perspective channel is the C-tier
+  `Preserve3d` extension. No new *layout* component (the data is already on
+  `UiTransform`).
 - **`transform-style: Flat | Preserve3d`** — selects whether a subtree
   composes in 3D (`Preserve3d`: children's matrices multiply in 3D before
   projection) or is **flattened** to a 2D layer at this boundary (`Flat`, the
@@ -419,29 +737,42 @@ follow-up's transform half (the PAINT-clip half is § A.3):
 
 - **Bridge composition** — a fixture with a Bevy-parented Buiy subtree, a child
   carrying a non-identity `UiTransform`; assert the child's `Transform` equals
-  `from_translation(ResolvedLayout.position) * ResolvedTransform.matrix`, and
-  (after a manual `TransformSystems::Propagate` run) its `GlobalTransform`
-  equals the parent-composed product. Headless, no GPU.
-- **Identity fast path** — an entity with identity transform has **no**
-  `ResolvedTransform` and its `Transform.translation` equals the resolved
-  position with `z = 0`; the `Or<Changed<…>>` filter does no work on a
-  steady-state frame (assert via a per-frame iter-count probe analogous to
-  `SyncStylesIterCount`).
+  `from_translation(ResolvedLayout.position) * ResolvedTransform.matrix`, and —
+  after running propagation — its `GlobalTransform` equals the parent-composed
+  product. **The test must add `TransformPlugin`** (or chain the three
+  `bevy_transform::systems::{ mark_dirty_trees, propagate_parent_transforms,
+  sync_simple_transforms }` directly, the same chain § B.2.1 schedules) before
+  reading `GlobalTransform`: the `buiy_core` harness runs `MinimalPlugins`,
+  which does **not** include `TransformPlugin`, so a bare "manual
+  `TransformSystems::Propagate` run" is ambiguous — that set is empty unless
+  some plugin populated it. Headless, no GPU.
+- **Identity fast path** — an entity with identity transform and no scrolled
+  ancestor has **no** `ResolvedTransform` and its `Transform.translation` equals
+  the resolved position with `z = 0`; the walk visits **no** entities on a
+  steady-state frame (the `ScrollDirty` set is empty, § B.3), asserted via a
+  per-frame visited-count probe analogous to `SyncStylesIterCount`.
 - **Coordinate contract** — a golden-image fixture (gate #2) renders a box at a
   known logical-px top-left and asserts the pixel lands y-down-correct, proving
   the y-flip is in the view uniform exactly once (a double-flip or missing flip
   is a visible regression).
 - **Perspective / backface** — a fixture with a `Preserve3d` parent + rotated
-  child asserts the perspective term survives into `GlobalTransform`; a
-  `backface-visibility: hidden` entity rotated 180° about y is culled by render
-  (gate #2 golden shows it absent).
+  child asserts the **affine** part of the composed transform survives into
+  `GlobalTransform`, and asserts the **projective perspective row does NOT**
+  (it is dropped by `Transform::from_matrix`'s TRS decomposition, § B.2 / G5) —
+  perspective is verified instead on the render-side channel, not on
+  `GlobalTransform`. A `backface-visibility: hidden` entity rotated 180° about y
+  is culled by render (gate #2 golden shows it absent). v1 exercises only the
+  `Flat` fast path; the perspective-channel assertion is a C-tier follow-up.
 
 ---
 
 ## Cross-file dependencies
 
 - **[architecture.md](architecture.md)** owns the render-prep stage's exact
-  system-set ordering inside `BuiySet::Render` and the **view-uniform**
+  system-set ordering — render-prep is scheduled
+  `.after(BuiySet::Animate).before(BuiySet::Picking)` (between `Animate` and
+  `Picking`, **not** inside `BuiySet::Render`, which is the last set after
+  `Picking`; matching architecture § 5.2) — and the **view-uniform**
   (y-flip + logical→physical scale + projection) this file relies on (§ B.4).
   This file requires only `Layout → write_buiy_transform → write_clip_rects →
   Picking → Extract` and that the view uniform carries the y-flip.
@@ -460,9 +791,10 @@ follow-up's transform half (the PAINT-clip half is § A.3):
 
 ## Open items
 
-- **Rounded-rect / `clip-path` clipping** (§ A.2) is a render-side C/E-tier
-  fast-follow, tracked in [verification.md](verification.md)'s gate map — not a
-  README § 5 open question. Flagged here so the AABB-only `ClipRect` is not
-  mistaken for the final clip shape.
+- **Rounded-rect / `clip-path` clipping** (§ A.2) is a render-side **C-tier**
+  reserved seam (rounded-rect via the `ClipRadius` carrier, `clip-path` via the
+  path primitive), tracked in [verification.md](verification.md)'s gate map —
+  not a README § 5 open question. Flagged here so the AABB-only `ClipRect` is
+  not mistaken for the final clip shape.
 - **`Preserve3d` cross-sibling 3D compositing** (§ B.5) is C-tier; v1 ships the
   `Flat` fast path and the reserved compositor seam.
