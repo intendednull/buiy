@@ -90,7 +90,7 @@ Render resolves color tokens to concrete `Color` values **during the extract pha
 // Target: Background/Border/Outline/BoxShadow carry tokens; extract resolves
 // each against Res<Theme> to a packed linear instance. Phase 0's single
 // Visual.background_token generalizes to this set (component-model.md).
-fn extract_buiy_paint(
+fn extract_buiy_nodes(
     mut commands: Commands,
     paints: Extract<Query<(&Background, &ResolvedLayout, &GlobalTransform, &ClipRect /* … */), With<Node>>>,
     theme: Extract<Res<Theme>>,

@@ -107,12 +107,15 @@ fn clip_contribution(
 
     // Per-axis overflow: start fully unbounded, then bind only the clipping
     // axes (Hidden/Clip/Scroll/Auto) to the padding box; a `Visible` axis
-    // stays at ±infinity.
+    // stays at ±infinity. Exception: a scroll container clips BOTH axes — CSS
+    // computes a `Visible` axis to `auto` when its sibling axis scrolls, so
+    // `overflow-x: scroll; overflow-y: visible` still has a 2D viewport.
     let (ox, oy) = overflow
         .map(|o| (o.x, o.y))
         .unwrap_or((OverflowMode::Visible, OverflowMode::Visible));
-    let x_clips = !matches!(ox, OverflowMode::Visible);
-    let y_clips = !matches!(oy, OverflowMode::Visible);
+    let scroll_container = overflow.is_some_and(|o| o.is_scroll_container());
+    let x_clips = scroll_container || !matches!(ox, OverflowMode::Visible);
+    let y_clips = scroll_container || !matches!(oy, OverflowMode::Visible);
     let overflow_bound = (x_clips || y_clips).then(|| {
         let mut b = Aabb {
             min: Vec2::splat(f32::NEG_INFINITY),
@@ -287,11 +290,11 @@ fn reconcile_one<C: Component + PartialEq>(
         Some(n) if prev != Some(&n) => {
             commands.entity(entity).insert(n);
         }
-        Some(_) => {}
         None if prev.is_some() => {
             commands.entity(entity).remove::<C>();
         }
-        None => {}
+        // unchanged (Some == prev) or absent-and-was-absent: no structural op.
+        _ => {}
     }
 }
 
