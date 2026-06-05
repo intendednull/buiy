@@ -14,12 +14,14 @@ use crate::{
 use bevy::prelude::*;
 use bevy::render::{Extract, ExtractSchedule, RenderApp};
 
+pub mod clip;
 pub mod color;
 pub mod components;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
 
+pub use clip::write_clip_rects;
 pub use color::{ColorToken, SystemColorKeyword};
 pub use components::{
     AncestorClip, Angle, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius,
@@ -84,6 +86,16 @@ pub struct BuiyRenderPlugin;
 
 impl Plugin for BuiyRenderPlugin {
     fn build(&self, app: &mut App) {
+        // Main-world render-prep: clip computation runs between Animate and
+        // Picking (architecture.md § 5.2) so picking + extract see settled
+        // ClipRects. Runs on CI/headless — no RenderApp required.
+        app.add_systems(
+            Update,
+            clip::write_clip_rects
+                .after(crate::BuiySet::Animate)
+                .before(crate::BuiySet::Picking),
+        );
+
         // Register author-set render components (reflection / BSN / inspectors)
         // in the MAIN world, before the RenderApp branch, so registration
         // happens even on headless hosts with no RenderApp (component-model.md
