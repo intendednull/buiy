@@ -19,7 +19,7 @@ convention (foundation goal §1.3): each is a small public-fielded `Component`
 deriving `Reflect + Default + Clone + Component`, registered in the render
 plugin's `build` so reflection / BSN / inspectors find them. The three
 **computed** components are deliberate exceptions — `ClipRect` (§ 9),
-`AncestorClip` (§ 9), and `EffectGroup` (§ 10) are render-prep-written, never
+`AncestorClip` (clip-and-transform.md § A.2), and `EffectGroup` (§ 10) are render-prep-written, never
 authored or serialized, so they carry leaner derives (no `Reflect` / `Default`)
 per their owning specs. They are the
 render-side analogue of the layout decomposed components in
@@ -407,7 +407,7 @@ pub struct Filter(pub Vec<FilterFn>);
 
 /// C (reserved). Backdrop filter list — samples what is BEHIND the
 /// element. Component + the off-screen boundary ship v1; the
-/// backdrop-sampling shader is deferred (§ 6). Forms an `EffectGroup` (the
+/// backdrop-sampling shader is deferred ([effect-compositor.md § 6](effect-compositor.md)). Forms an `EffectGroup` (the
 /// compositor must hold a backdrop copy). Buiy treats `backdrop-filter`
 /// as an effect-group former ONLY; CSS additionally makes it form a
 /// stacking context, which Buiy does not rely on because `EffectGroup`
@@ -499,7 +499,7 @@ angle surface is **C**).
 ## 9. `ClipRect` — F (computed, not authored)
 
 `ClipRect` is one of the **three computed** render components that are *not*
-author-set (alongside `AncestorClip` § 9 and `EffectGroup` § 10); what distinguishes it is that it is read by **both** render and picking. Its type definition (fields + the accumulation algorithm) is owned
+author-set (alongside `AncestorClip` (clip-and-transform.md § A.2) and `EffectGroup` § 10); what distinguishes it is that it is read by **both** render and picking. Its type definition (fields + the accumulation algorithm) is owned
 by [clip-and-transform.md § A.2](clip-and-transform.md#a2-the-cliprect-output-shape)
 — it is `ClipRect { min: Vec2, max: Vec2 }` (logical px, the accumulated clip
 AABB),
@@ -527,7 +527,7 @@ bitflags::bitflags! {
         const OPACITY         = 1;  // v1: carried
         const ISOLATION       = 2;  // v1: carried
         const FILTER          = 4;  // reserved: marks the group, no shader in v1
-        const BACKDROP_FILTER = 8;  // reserved: marks the group, needs backdrop sample (§ 6)
+        const BACKDROP_FILTER = 8;  // reserved: marks the group, needs backdrop sample ([effect-compositor.md § 6](effect-compositor.md))
         const MIX_BLEND       = 16; // reserved: marks the group, no shader in v1
     }
 }

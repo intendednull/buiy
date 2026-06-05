@@ -210,3 +210,16 @@ fn extract_buiy_draws(
     // reallocating the inner Vec each frame. See `buiy-render-pipeline-design`.
     commands.insert_resource(draws);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniform_radius_reads_top_left_circular_px() {
+        // The Phase-0 radius migration: `Border.radius` (`Corners`) → the
+        // legacy single-`f32` quad radius via the top-left corner's x, px-only.
+        assert_eq!(uniform_radius_px(&Corners::all(Radius::circular(6.0))), 6.0);
+        assert_eq!(uniform_radius_px(&Corners::ZERO), 0.0);
+    }
+}

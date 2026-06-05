@@ -203,6 +203,44 @@ fn per_axis_overflow_leaves_visible_axis_unbounded() {
 }
 
 #[test]
+fn scroll_container_clips_both_axes_even_with_visible_sibling() {
+    let mut app = app();
+    // overflow-x: scroll, overflow-y: visible — the node is still a scroll
+    // container (either-axis rule), so CSS computes the visible axis to `auto`:
+    // the child-facing clip is the full 2D padding-box viewport, NOT unbounded
+    // on y. Distinguishes a scroll container from a plain per-axis clipper.
+    let sc = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .overflow(OverflowMode::Scroll, OverflowMode::Visible),
+            ScrollOffset::default(),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(300.0)))
+        .id();
+    app.world_mut().entity_mut(sc).add_child(child);
+    app.update();
+
+    let anc = *app.world().get::<AncestorClip>(child).expect("clipped");
+    assert_eq!(
+        anc.max,
+        Vec2::new(100.0, 100.0),
+        "both axes clipped to the scroll viewport"
+    );
+    assert_ne!(
+        anc.max.y,
+        f32::INFINITY,
+        "y is NOT unbounded despite overflow-y:visible (scroll container → auto)"
+    );
+}
+
+#[test]
 fn clip_rect_is_ancestor_clip_intersected_with_own_box() {
     let mut app = app();
     let parent = app

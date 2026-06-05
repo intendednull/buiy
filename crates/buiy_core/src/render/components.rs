@@ -60,6 +60,12 @@ pub struct Radius {
 }
 
 impl Radius {
+    /// A square corner (both radii zero) — the canonical "no rounding" value.
+    pub const ZERO: Self = Self {
+        x: Length::ZERO,
+        y: Length::ZERO,
+    };
+
     /// A circular (`x == y`) radius of `px` logical pixels.
     pub const fn circular(px: f32) -> Self {
         Self {
@@ -82,24 +88,7 @@ pub struct Corners {
 
 impl Corners {
     /// All corners square (the default — matches `Visual.border_radius == 0`).
-    pub const ZERO: Self = Self {
-        top_left: Radius {
-            x: Length::ZERO,
-            y: Length::ZERO,
-        },
-        top_right: Radius {
-            x: Length::ZERO,
-            y: Length::ZERO,
-        },
-        bottom_right: Radius {
-            x: Length::ZERO,
-            y: Length::ZERO,
-        },
-        bottom_left: Radius {
-            x: Length::ZERO,
-            y: Length::ZERO,
-        },
-    };
+    pub const ZERO: Self = Self::all(Radius::ZERO);
 
     /// A uniform radius on all four corners.
     pub const fn all(r: Radius) -> Self {
