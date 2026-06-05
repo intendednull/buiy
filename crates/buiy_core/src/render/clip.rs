@@ -48,20 +48,42 @@ impl Aabb {
     fn inset_border(self, border: &Edges) -> Aabb {
         Aabb {
             min: Vec2::new(
-                self.min.x + px_edge(border.left),
-                self.min.y + px_edge(border.top),
+                self.min.x + px_or_zero(border.left),
+                self.min.y + px_or_zero(border.top),
             ),
             max: Vec2::new(
-                self.max.x - px_edge(border.right),
-                self.max.y - px_edge(border.bottom),
+                self.max.x - px_or_zero(border.right),
+                self.max.y - px_or_zero(border.bottom),
             ),
         }
     }
 }
 
-/// Resolve a border-edge `Length` to px. Layout emits only `Length::Px`
-/// borders into Taffy; any other unit means "no border inset here".
-fn px_edge(len: Length) -> f32 {
+impl From<Aabb> for ClipRect {
+    fn from(a: Aabb) -> Self {
+        Self {
+            min: a.min,
+            max: a.max,
+        }
+    }
+}
+
+impl From<Aabb> for AncestorClip {
+    fn from(a: Aabb) -> Self {
+        Self {
+            min: a.min,
+            max: a.max,
+        }
+    }
+}
+
+/// Resolve a `Length` to px, px-only: `Length::Px(v) => v`, every other unit
+/// (Percent, Cq*, Fr) => 0.0. The render-internal "no inset / no radius for an
+/// unsupported unit" rule shared by the clip border inset and the Phase-0
+/// radius read (mod.rs). Deliberately px-only — NOT a public `Length` method,
+/// since the px-vs-Percent distinction is render-specific (layout's
+/// `length_to_px` resolves Percent and is a different contract).
+pub(crate) fn px_or_zero(len: Length) -> f32 {
     match len {
         Length::Px(v) => v,
         _ => 0.0,
@@ -149,14 +171,26 @@ type ClipNodeData<'w> = (
 /// (architecture.md § 5.2), so picking + extract see settled clips.
 pub fn write_clip_rects(
     mut commands: Commands,
-    roots: Query<Entity, (With<Node>, Without<ChildOf>)>,
+    all_nodes: Query<Entity, With<Node>>,
+    child_of: Query<&ChildOf>,
+    node_marker: Query<(), With<Node>>,
     children: Query<&Children>,
     // SPEC § A.4: ScrollOffset is intentionally NOT a clip input.
     nodes: Query<ClipNodeData>,
     existing: Query<(Option<&ClipRect>, Option<&AncestorClip>)>,
 ) {
-    for root in roots.iter() {
-        walk(root, None, &mut commands, &children, &nodes, &existing);
+    // A clip root is a Node with no `ChildOf`, OR whose `ChildOf` parent is
+    // not a Node — the same two-disjunct root definition layout uses (spec
+    // § A.3). Seeding only detached Nodes would silently drop the clip walk
+    // for a Buiy subtree parented under a non-Node Bevy entity.
+    for entity in all_nodes.iter() {
+        let is_root = match child_of.get(entity) {
+            Ok(parent) => node_marker.get(parent.parent()).is_err(),
+            Err(_) => true,
+        };
+        if is_root {
+            walk(entity, None, &mut commands, &children, &nodes, &existing);
+        }
     }
 }
 
@@ -212,37 +246,28 @@ fn reconcile(
     existing: &Query<(Option<&ClipRect>, Option<&AncestorClip>)>,
 ) {
     let (prev_clip, prev_anc) = existing.get(entity).unwrap_or((None, None));
+    reconcile_one(commands, entity, clip.map(ClipRect::from), prev_clip);
+    reconcile_one(commands, entity, ancestor.map(AncestorClip::from), prev_anc);
+}
 
-    match (clip, prev_clip) {
-        (Some(a), prev) => {
-            let next = ClipRect {
-                min: a.min,
-                max: a.max,
-            };
-            if prev != Some(&next) {
-                commands.entity(entity).insert(next);
-            }
+/// Insert `next` only when it differs from `prev`; remove the component when
+/// `next` is absent but a stale one exists. The change-gate that makes a
+/// steady-state frame issue zero structural ops (spec § A.3).
+fn reconcile_one<C: Component + PartialEq>(
+    commands: &mut Commands,
+    entity: Entity,
+    next: Option<C>,
+    prev: Option<&C>,
+) {
+    match next {
+        Some(n) if prev != Some(&n) => {
+            commands.entity(entity).insert(n);
         }
-        (None, Some(_)) => {
-            commands.entity(entity).remove::<ClipRect>();
+        Some(_) => {}
+        None if prev.is_some() => {
+            commands.entity(entity).remove::<C>();
         }
-        (None, None) => {}
-    }
-
-    match (ancestor, prev_anc) {
-        (Some(a), prev) => {
-            let next = AncestorClip {
-                min: a.min,
-                max: a.max,
-            };
-            if prev != Some(&next) {
-                commands.entity(entity).insert(next);
-            }
-        }
-        (None, Some(_)) => {
-            commands.entity(entity).remove::<AncestorClip>();
-        }
-        (None, None) => {}
+        None => {}
     }
 }
 
@@ -284,8 +309,8 @@ mod tests {
     }
 
     #[test]
-    fn px_edge_resolves_px_only() {
-        assert_eq!(px_edge(Length::Px(7.0)), 7.0);
-        assert_eq!(px_edge(Length::Percent(50.0)), 0.0);
+    fn px_or_zero_resolves_px_only() {
+        assert_eq!(px_or_zero(Length::Px(7.0)), 7.0);
+        assert_eq!(px_or_zero(Length::Percent(50.0)), 0.0);
     }
 }

@@ -7,7 +7,6 @@
 //! architecture.md § 2.3.
 
 use crate::{
-    Length,
     components::{Node, ResolvedLayout},
     theme::Theme,
 };
@@ -151,34 +150,29 @@ const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
 /// color-and-forced-colors.md; here they route through `Theme::color` of the
 /// fallback token and sentinel-on-miss).
 pub fn resolve_token(token: &ColorToken, theme: &Theme) -> (Color, bool) {
-    match token {
-        ColorToken::Transparent => (Color::NONE, false),
-        ColorToken::Token(name) => match theme.color(name) {
-            Some(c) => (c, false),
-            None => (MISSING_TOKEN_FALLBACK, true),
-        },
-        // v1 fallback: currentColor → theme default foreground token
-        // (color-and-forced-colors.md § 2.0); a miss is sentinel + warn.
-        ColorToken::CurrentColor => match theme.color("color.text.primary") {
-            Some(c) => (c, false),
-            None => (MISSING_TOKEN_FALLBACK, true),
-        },
-        // v1 fallback: system-color keywords resolve via the active theme's
-        // system-color map (owned by buiy-theme-tokens-design); until that
-        // map lands a lookup misses → sentinel + warn.
-        ColorToken::SystemColor(_) => (MISSING_TOKEN_FALLBACK, true),
+    // Each named token maps to the theme key to look up; the lookup-or-sentinel
+    // step is shared. `currentColor`'s v1 fallback is the theme default
+    // foreground token (color-and-forced-colors.md § 2.0); `SystemColor`'s
+    // map is owned by buiy-theme-tokens-design and misses (sentinel) until it
+    // lands.
+    let name = match token {
+        ColorToken::Transparent => return (Color::NONE, false),
+        ColorToken::SystemColor(_) => return (MISSING_TOKEN_FALLBACK, true),
+        ColorToken::Token(name) => name.as_ref(),
+        ColorToken::CurrentColor => "color.text.primary",
+    };
+    match theme.color(name) {
+        Some(c) => (c, false),
+        None => (MISSING_TOKEN_FALLBACK, true),
     }
 }
 
 /// Phase-0 parity helper: the uniform corner radius in logical px, read from
-/// the top-left corner's x radius. Only `Length::Px` resolves here; other
+/// the top-left corner's x radius. Px-only via [`clip::px_or_zero`]; other
 /// units resolve to `0` for now (paint-`Length` resolution is a later-phase
 /// concern). A `Border`-less entity is square (radius 0).
 fn uniform_radius_px(corners: &Corners) -> f32 {
-    match corners.top_left.x {
-        Length::Px(v) => v,
-        _ => 0.0,
-    }
+    clip::px_or_zero(corners.top_left.x)
 }
 
 #[allow(clippy::type_complexity)]
