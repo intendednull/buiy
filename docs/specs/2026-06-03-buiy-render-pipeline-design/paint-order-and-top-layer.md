@@ -8,7 +8,8 @@ Its scope is purely the *consumer side*: how the typed-primitive batched node an
 the top-layer composite pass ([architecture.md](architecture.md)) walk
 `StackingContext.painters_z`, how the paint walk and the hit-test walk are pinned
 to be exact inverses, how top-layer members escape to the root composite pass, the
-`::backdrop` model, and the `Display::None` / `ContentVisibility` skip rules.
+`::backdrop` model, and the `Display::None` / `Containment.content_visibility` /
+`CssVisibility` skip rules.
 
 Render contributes **nothing** to stacking. Every fact below — membership, paint
 order, tiebreak, top-layer tier ordering — is decided in layout sub-pass 6f
@@ -152,9 +153,15 @@ in `painters_of`) and re-attaches them to their **root-ancestor** context's
 already at the tail of the root context's list and composites them there — it does
 not hunt the tree for top-layer members.
 
-### 3.1 The four-tier ordering, read from `TopLayerActivation`
+### 3.1 The four-tier ordering, materialized into the `painters_z` tail
 
-Within the top layer, order is the **four-tier model**:
+Render's **only** ordering input is the `painters_z` tail. `TopLayerActivation` is
+**layout's** input to sub-pass 6f, *not* render's — render never reads it. 6f consumes
+the activation stack and emits the resulting tier order *into* the root context's
+`painters_z` tail, which is the single ordered structure render walks.
+
+Within the top layer, order is the **four non-None tiers** (`None` is not a tier —
+it means the entity is not in the top layer at all):
 
 ```text
 Fullscreen  <  Tooltip  <  Popover  <  Modal        (tier, bottom → top)
@@ -162,9 +169,11 @@ Fullscreen  <  Tooltip  <  Popover  <  Modal        (tier, bottom → top)
 ```
 
 Sub-pass 6f produces this order: it stable-sorts the `TopLayerActivation.order`
-`VecDeque` (already in activation order, oldest → newest) by `tier_rank`
-(`Fullscreen = 0 … Modal = 3`), so the tier is the primary key and activation
-recency is the within-tier tiebreak. The `VecDeque` is the LIFO activation stack
+`VecDeque` (already in activation order, oldest → newest) by `tier_rank`, so the
+tier is the primary key and activation recency is the within-tier tiebreak. The
+concrete rank values are owned by layout's `tier_rank`
+(`crates/buiy_core/src/layout/systems.rs`); render consumes the resulting order
+without depending on the numbering. The `VecDeque` is the LIFO activation stack
 ([blink/stacking-and-paint.md § 4](../../prior-art/blink/stacking-and-paint.md))
 maintained whenever `top_layer` flips `None → non-None`. Render reads the resulting
 tail-of-`painters_z` order verbatim.
@@ -218,14 +227,19 @@ too ([blink/stacking-and-paint.md § 4](../../prior-art/blink/stacking-and-paint
 Two models are on the table; this spec **proposes** the first and marks the choice
 open against README § 5 #3.
 
-- **(proposed) Render-synthesized backdrop.** Render owns a backdrop slot per
-  top-layer entry, sorted **immediately below its owner** in the top-layer paint
-  order — an internal sort key of `owner_index − ε` within the escaped top-layer
-  slice of the root `painters_z`. This is not a new ordering concept: the
+- **(proposed) Render-synthesized backdrop.** Render synthesizes the backdrop
+  *primitive* per top-layer entry, but it would own **no ordering input** for it: the
+  backdrop's slot — **immediately below its owner** in the top-layer paint order — would be
+  materialized **layout-side into `painters_z`** as the synthesized `owner_index − ε`
+  position, so render never carries a second sort key that could reintroduce the
+  pillar-1 layer-tree drift. The `owner_index − ε` materialization is **part of this
+  proposed (not-yet-committed) model**, not settled v1: it would be a **layout (sub-pass
+  6f) deliverable *if* this model is accepted**, and nothing emits it today. This is
+  not a new ordering concept, though: the
   `TopLayerActivation` `VecDeque` is *already* the LIFO order a backdrop nests into,
-  so a backdrop is "owner's index − ε," not a second list
-  ([blink/stacking-and-paint.md § 4](../../prior-art/blink/stacking-and-paint.md)).
-  It composites with the owner as a unit, so a stack of modal+popover dims correctly
+  so 6f *would* materialize the backdrop as "owner's index − ε" in the `painters_z` tail, not
+  a second list ([blink/stacking-and-paint.md § 4](../../prior-art/blink/stacking-and-paint.md)).
+  It would composite with the owner as a unit, so a stack of modal+popover dims correctly
   in LIFO order with no app involvement, and the backdrop never appears as a sibling
   in normal stacking. It would carry no entity in the layout tree (it is a render
   artifact), so it does not perturb document order or the AccessKit tree (§ 3.2).
@@ -241,10 +255,21 @@ beneath the owner) without an app-tree entity, but the choice is **confirmed aga
 and the scrim-vs-synthesized boundary interact with that spec. Until then this is
 **OPEN (README § 5 #3)** and no `::backdrop` primitive is committed in v1.
 
+**v1 behavior during the open period: no dimming backdrop ships.** Until the model
+above cements, v1 paints top-layer members with **no synthesized dimming box** beneath
+them — a modal opened over a popover does not dim the popover. The four-tier ordering
+(§ 3.1) and the clip/a11y escape (§ 3.2) ship; only the `::backdrop` dimming primitive
+is withheld. Consequently the modal-over-popover golden (§ 6) asserts **tier ORDER
+only** (Fullscreen < Tooltip < Popover < Modal, plus within-tier recency), **not
+backdrop nesting** — there is no backdrop to nest in v1. This keeps the open `::backdrop`
+decision from leaking an uncommitted primitive into the shipped golden.
+
 ## 5. Skip rules
 
-The forward walk skips three categories of subtree entirely. The skip predicates are
-layout-owned; render reads their result and emits nothing.
+The forward walk skips four categories. The first three skip a subtree *entirely*
+(no box, no descendants) and their predicates are layout-owned; render reads their
+result and emits nothing. The fourth — `CssVisibility::Hidden` — skips the subtree's
+*paint* while **keeping its layout box**, and is render-owned.
 
 ### 5.1 `Display::None` — skipped entirely
 
@@ -254,9 +279,9 @@ no `ResolvedLayout`, and is excluded from every `painters_z` (sub-pass 6f's
 render — no paint, no clip, no stacking participation. There is no render-side
 `Display::None` check to write; the absence from `painters_z` *is* the skip.
 
-### 5.2 `ContentVisibility::Hidden` — subtree skipped
+### 5.2 `Containment.content_visibility == Hidden` — subtree skipped
 
-A `ContentVisibility::Hidden` entity prunes its **descendants** from layout entirely
+A `Containment.content_visibility == Hidden` entity prunes its **descendants** from layout entirely
 (`content_visibility_skip(...) → SkipKind::HiddenPrune`, `crates/buiy_core/src/layout/systems.rs`):
 Taffy never lays the subtree out, so the descendants have no geometry and appear in
 no `painters_z`. Per CSS the Hidden entity *itself* still lays out and resolves its
@@ -265,9 +290,9 @@ paints the Hidden entity's own box (background/border/etc.) but its subtree is
 absent. This is a layout-side prune (paint + clip + stacking traversal all skipped
 for the descendants because they were never laid out); render inherits it for free.
 
-### 5.3 `ContentVisibility::Auto` off-screen — skip paint (render-owned half)
+### 5.3 `Containment.content_visibility == Auto` off-screen — skip paint (render-owned half)
 
-`ContentVisibility::Auto` is the one skip with a **render-owned half**, completing
+`Containment.content_visibility == Auto` is the one skip with a **render-owned half**, completing
 layout's Phase 11. Layout owns the *layout* half: an `Auto` entity that is off-screen
 **and** carries a `ContainIntrinsicSize` hint gets the Taffy size-sentinel and its
 descendants detached (`SkipKind::AutoSentinel`,
@@ -276,23 +301,64 @@ off-screen `Auto` entity is explicitly **a render concern Phase 11 does not own*
 (follow-ups.md verbatim: "Auto's off-screen *paint* skip … remains a render concern
 Phase 11 does not own").
 
-This spec owns it: **render skips painting an off-screen `ContentVisibility::Auto`
+This spec owns it: **render skips painting an off-screen `Containment.content_visibility == Auto`
 subtree.** Render reuses layout's already-computed off-screen determination rather
 than recomputing visibility — the same hysteresis-expanded-viewport test
 (`is_off_screen` against the `ContentVisibilityMargin`-expanded rect, default 200px,
-`crates/buiy_core/src/layout/systems.rs`). The natural carrier is a layout-written
-marker on off-screen `Auto` entities (set by the same 6-side pass that already does
-the off-screen test), which the render extract reads to drop the subtree's
-primitives — keeping render a thin consumer (README § 2 pillar 1) rather than a
-second visibility engine. The exact marker name is a [component-model.md](component-model.md)
-concern; this file fixes the behavior (off-screen `Auto` → no paint) and the source
-of truth (layout's off-screen test, not a render recompute).
+`crates/buiy_core/src/layout/systems.rs`). The carrier is **`OffscreenAuto`** (F-tier),
+a layout-written, render-read marker component placed on each off-screen `Auto`
+entity by the same off-screen test layout already runs inline in `sync_styles`
+(`is_off_screen`, `crates/buiy_core/src/layout/systems.rs`; component-model § 12.2).
+That inline test persists nothing render can read today — emitting
+`OffscreenAuto` from it is the layout-side deliverable this rule depends on. Render
+extract reads `OffscreenAuto` to drop the subtree's primitives, keeping render a thin
+consumer (README § 2 pillar 1) rather than a second visibility engine. The component
+is catalogued in [component-model.md § 12](component-model.md) and
+[README § 3.1](README.md); this file fixes the behavior (off-screen `Auto` → no
+paint) and the source of truth (layout's off-screen test, surfaced as `OffscreenAuto`,
+not a render recompute).
+
+The layout off-screen test (and therefore the future `OffscreenAuto` emission) is
+**primary-window-only today**: layout builds the comparison viewport from
+`Query<&Window, With<PrimaryWindow>>` (`crates/buiy_core/src/layout/systems.rs`), so a
+second window's viewport never enters the off-screen determination. This is a tracked
+per-window-layout dependency, mirroring the global-`TopLayerActivation` primary-window
+read (§ 3.1, the D2 flag): both are seams that per-window layout/window routing
+(`buiy-window-and-surface-design`) slots into, not final decisions.
 
 The asymmetry is deliberate and matches CSS: `Auto` *off-screen without an intrinsic
 hint* is the residual case where layout cannot skip the layout work (no placeholder
 size), but render can and should still skip the paint — which is why the paint skip
 is render-owned and geometry-light, gated only on the off-screen flag, not on the
 hint.
+
+### 5.4 `CssVisibility::Hidden` — skip paint, keep the box
+
+Unlike the three layout-owned skips above, `CssVisibility` is **render-owned** (F-tier,
+catalogued in [component-model.md § 12](component-model.md)): an
+`enum CssVisibility { Visible, Hidden, Collapse }` whose `Hidden` variant means *paint
+nothing for this entity and its subtree, but keep the layout box*. (The render-owned
+CSS-visibility enum is deliberately **not** named `Visibility`: `bevy::prelude::Visibility`
+exists with different variants/semantics and its own visibility systems — reusing the
+name would collide, so the CSS property gets its own `CssVisibility` type, mirroring
+the `Transform`-reuse name-collision rationale in [component-model.md § 12](component-model.md).)
+This is CSS `visibility: hidden`: the subtree still occupies space (its `ResolvedLayout`
+box is unchanged and its descendants stay in `painters_z`), but render emits no primitives
+for it. So a `CssVisibility::Hidden` subtree differs from `Display::None` (which has no
+box at all) and from `Containment.content_visibility == Hidden` (which has the parent box
+but prunes descendants from *layout*): here the geometry is fully laid out and present in
+`painters_z`, and the skip is purely a paint suppression.
+
+Render's extract drops the `CssVisibility::Hidden` entity *and its descendants* from
+primitive emission — the same subtree-scoped paint skip as the `OffscreenAuto` case
+(§ 5.3), just keyed on `CssVisibility::Hidden` instead of the off-screen marker. Because
+the box is retained, the hit-test interaction is **not** decided here: per CSS,
+`visibility: hidden` also removes the subtree from hit-testing, but that picking skip
+is owned by [`buiy-input-events-design`](../2026-05-07-buiy-foundation/README.md)
+alongside the `pointer-events` mapping (§ 2.1), not by this paint rule. The `Collapse`
+variant (table-row / flex-item collapse) is a **deferred marker** — named in the
+component model but not painted-differently in v1; v1 ships only the `Hidden`
+paint-skip.
 
 ## 6. Verification
 
@@ -310,17 +376,18 @@ proven where they are cheapest:
   emits no interleaving with parent painters between the nested entry and its
   completion.
 - **Top-layer compositing (gate #2 visual-regression + gate #10 hit-target).** A
-  modal-over-popover golden image proves the four-tier order and backdrop nesting on
-  the canonical CI GPU; the hit-target gate proves the modal (and its backdrop)
-  intercept input first (§ 2, § 3).
+  modal-over-popover golden image proves the four-tier **order only** (tier ranking +
+  within-tier recency, § 3.1) on the canonical CI GPU — **not** backdrop nesting, since
+  v1 ships no dimming `::backdrop` (§ 4, OPEN); the hit-target gate proves the modal
+  intercepts input first (§ 2, § 3).
 - **Clip escape vs. a11y retention (headless).** A top-layer member under an
   `Overflow::Hidden` ancestor asserts (a) its `ClipRect` is the viewport, not the
   ancestor box ([clip-and-transform.md](clip-and-transform.md), gate #5
   layout-snapshot), and (b) it remains its `ChildOf` parent's child in the AccessKit
   tree (§ 3.2).
-- **Skip rules (headless).** `Display::None` / `ContentVisibility::Hidden` subtrees
-  emit no primitives (their absence from `painters_z` is asserted layout-side; the
-  render half asserts no extract output); an off-screen `ContentVisibility::Auto`
+- **Skip rules (headless).** `Display::None` / `Containment.content_visibility == Hidden`
+  subtrees emit no primitives (their absence from `painters_z` is asserted layout-side; the
+  render half asserts no extract output); an off-screen `Containment.content_visibility == Auto`
   subtree emits no paint while its on-screen sibling does (§ 5.3).
 
 ---

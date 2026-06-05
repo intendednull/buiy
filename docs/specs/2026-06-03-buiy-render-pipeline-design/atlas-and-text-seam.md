@@ -36,8 +36,8 @@ owns the glyphs**, so the atlas is not designed twice:
 | The glyph-alpha primitive *shape* (instance layout, shader contract, the alpha-as-color trick) | **this spec** |
 | Icon/sprite primitive shape | **this spec** |
 | Gradient + generated-mask atlas *entries* and their primitive shapes | **this spec** (component model + reserved entry kind; C-tier — see § 6) |
-| Glyph **shaping** (cosmic-text `Buffer`, `harfrust` driving), line layout, font **fallback**, **BiDi** | `buiy-text-rendering-design` |
-| Producing glyph **coverage bitmaps** (`swash` rasterization) and **inserting** them into this atlas | `buiy-text-rendering-design` |
+| Glyph **shaping** (cosmic-text `Buffer`), line layout, font **fallback**, **BiDi** | `buiy-text-rendering-design` |
+| Producing glyph **coverage bitmaps** (rasterization) and **inserting** them into this atlas | `buiy-text-rendering-design` |
 | **Emitting** glyph-alpha primitives (one per visible glyph, with the atlas key + tint) | `buiy-text-rendering-design` |
 
 Read the boundary as: **text rendering produces coverage and primitives; this
@@ -67,9 +67,29 @@ group serves a frame's worth of glyphs, icons, gradients, and masks — the
 GPUI/WebRender "share atlas binds across all instances" batching win
 ([prior-art/gpui/gpu-rendering.md § "Batching and draw call count"](../../prior-art/gpui/gpu-rendering.md)).
 
+> **Atlas mutation is single-threaded by design.** Because there is exactly one
+> `BuiyAtlas`, every insert/evict goes through a single `ResMut<BuiyAtlas>`, so
+> atlas mutation serializes across all windows and all primitive producers. This
+> is **deliberate**, not an oversight: glyph/icon coverage is *window-independent*
+> (a glyph's R8 bitmap is the same whichever window paints it), so a shared atlas
+> is the correct sharing boundary — splitting it per-window would re-rasterize and
+> re-store the same coverage N times. It is a distinct seam from the **per-window
+> isolation** of the instance buffers and effect-group targets
+> ([architecture.md](architecture.md), [effect-compositor.md § 2.2](effect-compositor.md)),
+> which *are* partitioned because their contents are view-specific. The
+> serialization is a **performance**, not a correctness, coupling: entries are
+> content-addressed (§ 3), so a producer that loses the race for a given frame's
+> mutation simply re-inserts on the next miss — no entry is ever wrong, only
+> occasionally re-blitted. The accepted cost is that heavy concurrent insertion
+> (e.g. many windows warming cold glyphs at once) and eviction contend on the one
+> `ResMut`.
+
 ```rust
-/// Render-world resource. One per `RenderApp`; lives in `BuiyRenderLabel`'s crate
-/// (the same crate home pinned for the effect components — see architecture.md § crate placement).
+/// Render-world resource. One per `RenderApp`; lives in `buiy_core` for v1,
+/// the same crate home as the pure-render component group
+/// (Background/Border/…/EffectGroup) — it "may move into `buiy_render` cleanly"
+/// because, unlike the SC-trigger group that layout's 6f reads, the atlas is
+/// never read by layout (see architecture.md § crate placement).
 #[derive(Resource)]
 pub struct BuiyAtlas {
     /// One backing texture per `AtlasFormat`. Glyph/mask coverage is R8;
@@ -113,14 +133,27 @@ pub struct AtlasEntry {
 SCOPE asks for ("shelf/guillotine or similar") is *already decided for us*: Bevy
 0.18.1's `DynamicTextureAtlasBuilder` (`bevy_image/src/dynamic_texture_atlas_builder.rs`)
 is built on `guillotiere::AtlasAllocator`, a guillotine allocator with shelf-like
-coalescing, and crucially it exposes `allocate(size) -> Option<Allocation>` (with
-an `AllocId`) **and** `deallocate(AllocId)` — the deallocate path is what makes
-LRU eviction (§ 2.4) buildable rather than clear-the-world. Buiy uses
-`guillotiere` directly (it is already in the dependency tree via Bevy) and reuses
-`DynamicTextureAtlasBuilder::add_texture` semantics for the place-and-blit step:
-that function takes a source `&Image` and an `&mut Image` atlas page, writes the
-coverage in, and returns a `usize` index into a `TextureAtlasLayout.textures:
-Vec<URect>`. Buiy wraps this so the returned rect becomes an `AtlasEntry`.
+coalescing. Buiy drives the **raw `guillotiere::AtlasAllocator` directly** because
+that is the type that exposes the
+allocate/deallocate pair eviction needs: `allocate(Size) -> Option<Allocation>`,
+where `Allocation { id: AllocId, rectangle: Rectangle }`, **and**
+`deallocate(AllocId)`. Owning the `AllocId` ourselves (stored in `AtlasPage.live`,
+§ 2.1) is what makes LRU eviction (§ 2.4) buildable rather than clear-the-world.
+`DynamicTextureAtlasBuilder::add_texture` is reused **only conceptually**, for the
+place-and-blit step: it takes a source `&Image` and an `&mut Image` atlas page,
+writes the coverage in, and returns a `usize` index into a
+`TextureAtlasLayout.textures: Vec<URect>` — it does **not** surface the `AllocId`
+(it allocates internally and discards the `Allocation`), so Buiy does not call it
+for the residency path. Buiy keeps the `guillotiere` `Allocation` from its own
+`allocate` call and turns the returned rect into an `AtlasEntry`, performing the
+pixel blit itself with `add_texture`-equivalent logic.
+
+> **`guillotiere` must be a direct, version-pinned dependency.** `guillotiere` is
+> only a *transitive* dependency of `bevy_image` (its `Cargo.toml` pins
+> `guillotiere = "0.6.0"`) and is **not re-exported** (no `pub use guillotiere`).
+> Buiy therefore declares `guillotiere` directly in its own `Cargo.toml`, pinned
+> to the same version `bevy_image` resolves, so a `bevy_image` patch bump cannot
+> silently drop the crate out from under the atlas allocator.
 
 > **Runner-up rejected:** a bespoke shelf-packer tuned for monospaced glyph rows.
 > Rejected — `guillotiere` already handles the mixed glyph/icon/gradient size
@@ -135,6 +168,16 @@ glyph and mask coverage is **single-channel** (`AtlasFormat::CoverageR8`,
 color** (`AtlasFormat::ColorRgba8`, `TextureFormat::Rgba8UnormSrgb`). They never
 share a page — a `guillotiere` page is one format.
 
+This reconciles with the linear-light pillar: **both paths arrive linear at the
+shader.** The `CoverageR8` page stores no color at all — it modulates the
+per-instance *linear* tint (§ 4.1's alpha-as-color), so coverage never carries an
+encoding. The `ColorRgba8` page is `Rgba8UnormSrgb`, so the GPU's sRGB→linear
+*sample decode* converts each fetched icon/gradient texel to linear before the
+shader sees it. The `_Srgb` page is therefore the **deliberate, isolated
+exception**: color-icon source art is authored and stored sRGB-encoded (the only
+place sRGB bytes live in the pipeline), and the hardware decode is exactly what
+lets it join the otherwise all-linear shading without a manual conversion.
+
 Each page's CPU `Image` is created with `RenderAssetUsages::MAIN_WORLD |
 RenderAssetUsages::RENDER_WORLD` (the `add_texture` blit path asserts
 `MAIN_WORLD`), and its `GpuImage` is the texture the batched node binds. A page
@@ -144,7 +187,8 @@ that gained entries this frame re-uploads; an unchanged page does not (the same
 
 Default page size is 1024×1024; a new page is appended when the current page's
 allocator returns `None` and eviction (§ 2.4) cannot free enough contiguous
-space. Page count is the lever gate #15 watches.
+space. Page count is the lever gate #15 watches, and it is capped by
+`config.page_budget` (§ 2.4).
 
 ### 2.3 Warmup
 
@@ -194,11 +238,44 @@ why eviction can be aggressive without a stale-paint bug (the failure mode
 [README § 2 pillar 3](README.md#2-architectural-pillars-one-line-summaries) calls
 out for retained scenes). **F**
 
-> **Open — concrete budget numbers.** `config.page_budget`,
+> **Two pools, not one shared eviction model.** The atlas and the effect-group
+> render-target pool ([effect-compositor.md § 2.2](effect-compositor.md)) are
+> **distinct mechanisms**, each tuned for its allocation shape — do not read them
+> as one policy. The atlas evicts via `guillotiere::AtlasAllocator` sub-rect
+> `deallocate(AllocId)` under a **tunable-grace LRU** (`config.eviction_grace`
+> frames, content-addressed re-insert on miss), because glyph/icon cells are many
+> small sub-allocations packed into a shared page. The render-target pool evicts
+> via Bevy's `TextureCache` `frames_since_last_use < 3` retain, because targets are
+> whole descriptor-keyed textures recycled across groups. They satisfy the **same
+> gate-#15 clause** (entries return within ε of baseline after idle) but do **not**
+> share an eviction model, a grace window, or an allocator.
+>
+> **Consequence for the gate-#15 fixture's idle-settle window.** Because the two
+> pools have **independent settle times**, the fixture's idle-settle window (how
+> long it waits idle before asserting "returned within ε of baseline") must exceed
+> `max(config.eviction_grace, RT-pool 3 frames)` — i.e. the longer of the atlas's
+> tunable LRU grace and the render-target pool's `frames_since_last_use < 3`
+> retain. Settling for only one pool's window leaves the other pool's entries
+> still resident and fails the gate spuriously. The fixture accounts for **both**
+> settle times.
+
+> **`config.page_budget` — unit pinned, tuned number deferred.** `page_budget` is
+> a **maximum page count** (a count of 1024×1024 pages, the § 2.2 default page
+> size), not a byte figure: pages are uniform-sized, so a page count *is* the
+> memory cap, and counting pages is the lever gate #15 already watches (§ 2.2).
+> **v1 default: `page_budget = 8`** (eight 1024×1024 pages — ≈ 8 MiB at `CoverageR8`,
+> ≈ 32 MiB at `ColorRgba8`, summed across formats). When an allocation would push a
+> format's page set past the budget, eviction (§ 2.4 step 2) runs first; only if the
+> LRU queue is exhausted and the entry still does not fit does a page append exceed
+> the budget — i.e. the budget bounds steady state, never correctness. This pins the
+> *unit and the v1 default* exactly as § 2.2 pins the page-size and § 2.4 pins the
+> eviction rule; only the **tuned** value is deferred.
+>
+> **Open — tuned budget numbers.** The tuned `config.page_budget`,
 > `config.eviction_grace`, and the per-fixture "ε of baseline" tolerance are
 > calibration owned by `buiy-verification-design` ([README § 5 open #4](README.md#5-open-questions)).
-> This file commits the *eviction mechanism* so gate #15 is **satisfiable**; the
-> numbers tune over time on the fixed runner.
+> This file commits the *eviction mechanism* and the budget's unit + v1 default so
+> gate #15 is **satisfiable**; the numbers tune over time on the fixed runner.
 
 ### 2.5 Pooling
 
@@ -248,7 +325,7 @@ pub struct AtlasBitmap { pub size: UVec2, pub format: AtlasFormat, pub data: Vec
 
 The `coverage` argument is a **closure** so that on the common path (glyph
 already resident) the producer never rasterizes — the text spec passes a closure
-that runs `swash` only on a miss. This keeps the expensive rasterization on the
+that rasterizes only on a miss. This keeps the expensive rasterization on the
 *text* side of the seam (where the font machinery lives) while the *residency
 decision* stays on the atlas side (where the allocator and LRU live). Neither
 side reaches across.
@@ -304,8 +381,8 @@ stamp uses it (a generated mask, § 6). Text is its first and primary producer.
 
 ### 4.2 Icon / sprite primitive
 
-For full-color content — themed raster icons, color emoji glyph bitmaps that
-`swash` produces as `Rgba8` (COLRv0/CBDT, per
+For full-color content — themed raster icons, color emoji glyph bitmaps the
+text spec produces as `Rgba8` (COLRv0/CBDT, per
 [prior-art/cosmic-text/README.md](../../prior-art/cosmic-text/README.md) key
 facts) — there is **no recolor trick**: the atlas stores the color, the
 primitive samples it straight. This mirrors GPUI's `PolychromeSprite`
@@ -327,7 +404,7 @@ pub struct IconInstance {
 A color-emoji glyph is therefore an `IconInstance` keyed into a `ColorRgba8`
 page, while a monochrome glyph is a `GlyphAlphaInstance` keyed into a
 `CoverageR8` page. The text spec decides which kind a given shaped glyph is (it
-knows whether `swash` returned coverage or color); this spec provides both
+knows whether its rasterizer returned coverage or color); this spec provides both
 primitive shapes and both page formats so the decision has a home on either
 side. **F**
 
@@ -349,7 +426,7 @@ End-to-end, for one frame of text, with the boundary marked:
    positions, font ids, subpixel buckets. (Shaping, fallback, BiDi — entirely
    the text spec's, [text.md § 3.4](../2026-05-07-buiy-foundation/text.md#34-typography).)
 2. **[text spec]** For each glyph, build `AtlasKey` and call
-   `atlas.get_or_insert(key, format, || swash_rasterize(...))`. On a miss the
+   `atlas.get_or_insert(key, format, || rasterize(...))`. On a miss the
    closure rasterizes; on a hit nothing rasterizes. **[this spec]** allocates,
    evicts LRU if needed, blits, returns the `AtlasEntry`.
 3. **[text spec]** Emit one `GlyphAlphaInstance` (or `IconInstance` for color
