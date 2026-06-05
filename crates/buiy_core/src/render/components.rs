@@ -311,18 +311,6 @@ pub struct ClipRect {
     pub max: Vec2,
 }
 
-impl ClipRect {
-    /// AABB intersection of two clip rects (component-wise max of mins,
-    /// min of maxes). Used by the accumulation pass to fold an ancestor
-    /// clip into this entity's box.
-    pub fn intersect(&self, other: &ClipRect) -> ClipRect {
-        ClipRect {
-            min: self.min.max(other.min),
-            max: self.max.min(other.max),
-        }
-    }
-}
-
 /// Companion clip AABB holding the intersection of **ancestor** clip boxes
 /// only (without the own-box step). Read by render for `Outline` painting
 /// so a focus ring is cropped by ancestor clips but not by the element's
@@ -542,35 +530,6 @@ mod tests {
     #[test]
     fn offscreen_auto_is_zero_field_marker() {
         let _m = OffscreenAuto;
-    }
-
-    #[test]
-    fn clip_rect_intersect_is_aabb_overlap() {
-        let a = ClipRect {
-            min: Vec2::new(0.0, 0.0),
-            max: Vec2::new(100.0, 100.0),
-        };
-        let b = ClipRect {
-            min: Vec2::new(50.0, 25.0),
-            max: Vec2::new(150.0, 75.0),
-        };
-        let c = a.intersect(&b);
-        assert_eq!(c.min, Vec2::new(50.0, 25.0));
-        assert_eq!(c.max, Vec2::new(100.0, 75.0));
-    }
-
-    #[test]
-    fn clip_rect_intersect_is_commutative_on_overlap() {
-        let a = ClipRect {
-            min: Vec2::new(10.0, 10.0),
-            max: Vec2::new(40.0, 40.0),
-        };
-        let b = ClipRect {
-            min: Vec2::new(20.0, 0.0),
-            max: Vec2::new(60.0, 30.0),
-        };
-        assert_eq!(a.intersect(&b).min, b.intersect(&a).min);
-        assert_eq!(a.intersect(&b).max, b.intersect(&a).max);
     }
 
     #[test]

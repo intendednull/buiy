@@ -3,7 +3,7 @@
 **Parent:** [README.md](README.md)
 
 This file defines every render-owned component on the layout↔render boundary —
-the typed surface that replaces the temporary `Visual` and the seam the layout
+the typed surface that replaced the temporary `Visual` and the seam the layout
 subsystem reaches back across for stacking-context trigger 5. The names and
 ownership are fixed by [README § 3.2](README.md#32-render-owned-this-spec-introduces);
 this file elaborates each component's fields, tier, and the reasoning that
@@ -574,10 +574,11 @@ exact struct.
 
 ## 11. The `Visual` migration
 
-`Visual`
-([`crates/buiy_core/src/components.rs`](../../../crates/buiy_core/src/components.rs))
-is the Phase-0 temporary carrier — `background_token`, `foreground_token`,
-`border_radius`. It is fully replaced:
+`Visual` was the Phase-0 temporary carrier — `background_token`,
+`foreground_token`, `border_radius`. It has been **deleted** from
+[`crates/buiy_core/src/components.rs`](../../../crates/buiy_core/src/components.rs)
+and fully replaced by the render-side components in
+[`crates/buiy_core/src/render/components.rs`](../../../crates/buiy_core/src/render/components.rs):
 
 | `Visual` field | Target home | Notes |
 |---|---|---|
@@ -585,25 +586,24 @@ is the Phase-0 temporary carrier — `background_token`, `foreground_token`,
 | `border_radius: f32` | `Border.radius: Corners` | Uniform `f32` → `Corners::all(Radius::circular(px))`. |
 | `foreground_token: String` | **moves to `buiy-text-rendering-design`** | Reserved/unused in Phase 1 render; it is a *text* color, so it belongs to the text spec, not here. |
 
-Once `Background` + `Border` ship and the text spec owns the foreground token,
-`Visual` is deleted from
-[`components.rs`](../../../crates/buiy_core/src/components.rs) and its
-render-extract usage retargets to the new components. **The migration mechanics
-(when `Visual` is removed, how the Phase-0 extract retargets) are a plan
+`Background` + `Border` shipped, the text spec owns the foreground token, and
+`Visual` was deleted from
+[`components.rs`](../../../crates/buiy_core/src/components.rs); its
+render-extract usage retargeted to the new components. **The migration mechanics
+(when `Visual` was removed, how the Phase-0 extract retargeted) were a plan
 concern** — this spec defines only the target: `Visual` gone, its three concerns
-re-homed as above. The Phase-0 closeout note in `Visual`'s own doc-comment
-already names `Background` / `Border` as the successors, so this is the
-fulfilment of a commitment the code already records, not a new decision.
+re-homed as above. This section remains as a historical migration record; the
+landed successors live in
+[`render/components.rs`](../../../crates/buiy_core/src/render/components.rs).
 
-That same doc-comment
-([`components.rs`](../../../crates/buiy_core/src/components.rs)) also names a
-third successor, **`Stroke`** — which this spec deliberately does **not** mint as
-a separate component. The Phase-0 `Stroke` placeholder is **subsumed by `Border`
-(§ 4)**: per-side line style is `BorderSide.style` folded into `Border`, not a
-standalone stroke type. So when `Visual` is deleted, its doc-comment's `Stroke`
-clause resolves to "the `style` longhand on `Border`," and the spec does not
-silently contradict the code comment — the placeholder is fulfilled, not
-dropped.
+The Phase-0 `Visual` design had also contemplated a third successor,
+**`Stroke`** — which this spec deliberately did **not** mint as a separate
+component. That `Stroke` placeholder is **subsumed by `Border` (§ 4)**: per-side
+line style is `BorderSide.style` folded into `Border`, not a standalone stroke
+type. So the `Stroke` concern resolved to "the `style` longhand on `Border`" in
+the landed
+[`render/components.rs`](../../../crates/buiy_core/src/render/components.rs) — the
+placeholder was fulfilled, not dropped.
 
 ## 12. Defined-here F-tier rows, reserved items, and open items
 

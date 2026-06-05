@@ -365,10 +365,12 @@ fn scroll_only_frame_does_not_relayout() {
     let rl_after = app.world().get::<ResolvedLayout>(child).unwrap().position;
     let size_after = app.world().get::<ResolvedLayout>(child).unwrap().size;
 
-    // The decisive proof for R2: scroll moves content, not geometry — the
-    // child's resolved layout is byte-stable across the scroll frame. (That a
-    // scroll frame runs zero Taffy compute is a layout-internal invariant
-    // proven by tests/layout_scroll_offset_no_invalidate.rs.)
+    // The decisive proof for R2: scroll moves content, not geometry. The
+    // child's resolved layout is byte-stable AND — stronger than value
+    // equality — its change tick did not advance, so layout did not even
+    // rewrite ResolvedLayout (a relayout recomputing the same value would
+    // fail this). (The sync_styles-trigger proof of "scroll never re-runs
+    // Taffy" is owned by tests/layout_scroll_offset_no_invalidate.rs.)
     assert_eq!(
         rl_before, rl_after,
         "ResolvedLayout.position stable across scroll"
@@ -376,6 +378,50 @@ fn scroll_only_frame_does_not_relayout() {
     assert_eq!(
         size_before, size_after,
         "ResolvedLayout.size stable across scroll"
+    );
+    let mut q = app.world_mut().query::<Ref<ResolvedLayout>>();
+    let r = q.get(app.world(), child).expect("child has ResolvedLayout");
+    assert!(
+        !r.is_changed(),
+        "scroll-only frame must not rewrite ResolvedLayout (no relayout)"
+    );
+}
+
+#[test]
+fn node_parented_under_non_node_is_a_clip_root() {
+    let mut app = app();
+    // A plain (non-Node) Bevy entity as parent — a supported topology that
+    // layout treats as a clip root. The clip walk must reach this subtree via
+    // the two-disjunct root (no ChildOf OR parent-not-a-Node), not only via
+    // detached Nodes.
+    let non_node = app.world_mut().spawn(()).id();
+    let clipper = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .overflow(OverflowMode::Hidden, OverflowMode::Hidden),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(300.0)))
+        .id();
+    app.world_mut().entity_mut(non_node).add_child(clipper);
+    app.world_mut().entity_mut(clipper).add_child(child);
+    app.update();
+
+    let clip = app.world().get::<ClipRect>(child);
+    assert!(
+        clip.is_some(),
+        "a Node rooted under a non-Node parent must still be clip-walked"
+    );
+    assert_eq!(
+        clip.unwrap().max,
+        Vec2::new(100.0, 100.0),
+        "child clamped to the clipper viewport"
     );
 }
 

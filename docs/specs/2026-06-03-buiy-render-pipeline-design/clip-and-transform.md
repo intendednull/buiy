@@ -196,7 +196,16 @@ write path; the real system also carries the change-gating resource of § A.4):
 /// Spec: clip-and-transform.md § A.3.
 fn write_clip_rects(
     mut commands: Commands,
-    roots: Query<Entity, (With<Node>, Without<ChildOf>)>,
+    // A clip root is a `Node` with no `ChildOf`, OR whose `ChildOf` parent is
+    // not a `Node` — the same two-disjunct root predicate § A.3 defines (and
+    // layout uses). Seeding `Without<ChildOf>` alone would silently drop the
+    // walk for a Buiy subtree parented under a non-`Node` Bevy entity, so the
+    // sketch iterates *all* Nodes and tests both disjuncts (see the body): for
+    // each `entity`, it is a root when it has no `ChildOf`, or
+    // `node_marker.get(parent.parent()).is_err()`.
+    all_nodes: Query<Entity, With<Node>>,
+    child_of: Query<&ChildOf>,
+    node_marker: Query<(), With<Node>>,
     // No `ScrollOffset` here: the clip *box* is offset-independent (§ A.4) —
     // scroll moves content via the bridge (§ B.3), never the clip box — so
     // this fold reads only the box-geometry inputs.
@@ -226,6 +235,16 @@ fn write_clip_rects(
     // recomputes the same rect issues no `Commands` op.
     existing: Query<Option<&ClipRect>>,
 ) {
+    // Select roots by the § A.3 two-disjunct predicate, then walk each:
+    //
+    //   for entity in all_nodes.iter() {
+    //       let is_root = match child_of.get(entity) {
+    //           Ok(parent) => node_marker.get(parent.parent()).is_err(),
+    //           Err(_)     => true, // no `ChildOf` ⇒ root
+    //       };
+    //       if is_root { /* walk this subtree top-down */ }
+    //   }
+    //
     // Top-down from each root: push the running clip down through `Children`,
     // intersecting each ancestor's clip box (§ A.3). At each entity:
     //
@@ -758,7 +777,7 @@ follow-up's transform half (the PAINT-clip half is § A.3):
 - **Perspective / backface** — a fixture with a `Preserve3d` parent + rotated
   child asserts the **affine** part of the composed transform survives into
   `GlobalTransform`, and asserts the **projective perspective row does NOT**
-  (it is dropped by `Transform::from_matrix`'s TRS decomposition, § B.2 / G5) —
+  (it is dropped by `Transform::from_matrix`'s TRS decomposition, § B.2) —
   perspective is verified instead on the render-side channel, not on
   `GlobalTransform`. A `backface-visibility: hidden` entity rotated 180° about y
   is culled by render (gate #2 golden shows it absent). v1 exercises only the
