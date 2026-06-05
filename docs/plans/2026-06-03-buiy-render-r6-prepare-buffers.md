@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Depends on:** R5 (and R1). Execution order: R1 → R2 → R3 → R4 → R5 → **R6** → R7 → R8 → (R9, R10) → R11. R6 **consumes** R5's per-view `ExtractedNodes` component (owned by R5, `render/extract.rs`) and R1's shared render types (`render/components.rs`); it does **not** redefine them. R6 **owns** the CPU instance bucketing (`render/buckets.rs`) and the shared `BuiyPrimitiveKind` enum that R7 imports.
+
 **Goal:** Replace the Phase-0 per-instance CPU y-flip/radius-approximation hack with a per-view **view uniform** (logical-px → clip, carrying the single y-flip + `scale_factor`) and a `RenderSystems::Prepare` system that owns persistent per-view GPU instance buffers, packing per-view `ExtractedNodes` into typed-primitive (quad/shadow/border/outline) instance sets keyed by `(primitive, layer)`.
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes **architecture.md § 1.3 / § 2 / § 3** (the hybrid handoff: pillar 3 persistent buffers + view uniform; the prepare-phase split; per-view storage) and **color-and-forced-colors.md § 1** (linear-light color stays CPU-pre-linearized; the view uniform is the coordinate seam that lets the GPU OETF the value correctly).
 **Architecture:** The Phase-0 path bakes a y-flip into a negative instance height and approximates corner-radius px→clip with `2.0 / min(window.x, window.y)`, both in `render::instance::to_instance`. This phase moves the logical-px → clip transform into a single **view uniform** (`BuiyViewUniform`: a 2×3-style logical→clip affine plus `scale_factor`) so `InstanceData` shrinks back to **logical-pixel** units and the radius stays in logical px (SDF evaluates in pixel space, killing the non-square-window approximation). A `prepare_buiy_instances` system in `RenderSystems::Prepare` packs the per-view `ExtractedNodes` into typed-primitive instance sets keyed by `(primitive, layer)` and uploads them into a **persistent** per-view `BuiyInstanceBuffers` (grow-in-place, never per-frame reallocated). `ViewTarget` is available in Prepare (it is created by `prepare_view_targets` in `RenderSystems::ManageViews`, *after* `ExtractSchedule`), which is exactly why the GPU buffers/uniform are a prepare product, not an extract product.
@@ -24,10 +26,10 @@ cargo fmt --all -- --check && \
 
 ## Conventions for this plan
 
-- **Exact type/field names** come from the spec § 3 contract and architecture.md: `ExtractedNodes` (per-view component, replacing the global `ExtractedDraws`), `BuiyInstanceBuffers` (per-view component), `prepare_buiy_instances` (the `RenderSystems::Prepare` system), `BuiyViewUniform` (the logical→clip + `scale_factor` uniform; conceptually the same role as `bevy_render::view::ViewUniform`). The typed primitives this phase buckets are **quad / shadow / border / outline** (architecture.md § 2.1 — `border` is the outer-minus-inner band painted as a quad variant; `glyph`/`path` are out of scope for this phase).
-- **Primitive vs. layer key.** A bucket key is `(BuiyPrimitive, layer: u32)` where `layer` is the forward index into `StackingContext.painters_z` (architecture.md § 2.2). This phase does **not** compute real `painters_z` layers (that is the paint-order phase); it threads a `layer` field through the packing API and defaults it to `0`, so the bucketing machinery and its tests exist and the paint-order phase only has to feed real layer indices.
+- **Exact type/field names** come from the spec § 3 contract and architecture.md: `ExtractedNodes` (per-view component, **owned + populated by R5** in `render::extract`; R6 consumes it), `BuiyInstanceBuffers` (per-view component, owned here), `prepare_buiy_instances` (the `RenderSystems::Prepare` system, owned here), `BuiyViewUniform` (the logical→clip + `scale_factor` uniform; conceptually the same role as `bevy_render::view::ViewUniform`), `BuiyPrimitiveKind` (the shared primitive-kind enum, owned here in `render::buckets`; R7 imports it). The typed primitives this phase buckets are **quad / shadow / border / outline** (architecture.md § 2.1 — `border` is the outer-minus-inner band painted as a quad variant; `glyph`/`path` are out of scope for this phase).
+- **Primitive vs. layer key.** A bucket key is `(BuiyPrimitiveKind, layer: u32)` where `layer` is the forward index into `StackingContext.painters_z` (architecture.md § 2.2). This phase does **not** compute real `painters_z` layers (that is the paint-order phase); it threads a `layer` field through the packing API and defaults it to `0`, so the bucketing machinery and its tests exist and the paint-order phase only has to feed real layer indices.
 - **HEADLESS vs GPU is called out per task.** Pure-CPU math tests live in `crates/buiy_core/tests/render_instance.rs` (the existing file — extend it). GPU tests live in `crates/buiy_core/tests/render_prepare.rs` (new) and are `#[ignore]`d with the same comment shape as `render_smoke.rs`.
-- This phase keeps `DrawData` / `ExtractedDraws` / `extract_buiy_draws` **alive** as the Phase-0 extract carrier (the `Visual → Background/Border` extract migration is a *separate* phase). The new prepare system reads the same `ExtractedDraws` for v1 and packs it through the new view-uniform math. The contract-correct `ExtractedNodes` per-view component is introduced as the **storage shape** the prepare system writes, decoupling "what extract produced" from "what prepare packed" exactly as architecture.md § 3.1/§ 3.2 require.
+- This phase reads R5's per-view `ExtractedNodes` component (owned + populated by R5) and packs it through the new view-uniform math; it does **not** build a parallel carrier from the Phase-0 `ExtractedDraws`. The Phase-0 `DrawData` / `ExtractedDraws` / `extract_buiy_draws` stay alive only until the extract phase retires them — R6 does not depend on them. The `(primitive, layer)` bucketing + view-uniform packing is the prepare product, decoupling "what R5 extracted" from "what prepare packed" exactly as architecture.md § 3.1/§ 3.2 require.
 
 ---
 
@@ -375,13 +377,13 @@ Shrink the per-instance record back to **logical-pixel** units. The new `pack_in
 
 ---
 
-## Task 3 — `BuiyPrimitive` + `(primitive, layer)` bucketing (HEADLESS, pure CPU)
+## Task 3 — `BuiyPrimitiveKind` + `(primitive, layer)` bucketing (HEADLESS, pure CPU)
 
-Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the bucketing key. Packing splits a per-view draw list into instance sets keyed by `(BuiyPrimitive, layer)`, in the architecture.md § 2.2 within-layer paint order (`shadow → quad → border → outline`). This phase threads `layer` through but defaults it to `0` (real `painters_z` layers are the paint-order phase). Pure CPU.
+Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the bucketing key in `render/buckets.rs`. **R6 owns both `render/buckets.rs` (the CPU instance bucketing) and the shared `BuiyPrimitiveKind` enum** — R7 (pipeline specialization key, `render/primitive.rs`) **imports** `BuiyPrimitiveKind` from `render::buckets` rather than redefining it. Packing splits a per-view draw list into instance sets keyed by `(BuiyPrimitiveKind, layer)`, in the architecture.md § 2.2 within-layer paint order (`shadow → quad → border → outline`). This phase threads `layer` through but defaults it to `0` (real `painters_z` layers are the paint-order phase). Pure CPU.
 
 **Files**
-- Create: `crates/buiy_core/src/render/primitive.rs`
-- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod primitive;`)
+- Create: `crates/buiy_core/src/render/buckets.rs`
+- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod buckets;`)
 - Test: `crates/buiy_core/tests/render_buckets.rs` (new)
 
 ### Steps
@@ -392,37 +394,37 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
   //! Pure-CPU tests for typed-primitive `(primitive, layer)` bucketing. No GPU
   //! adapter required (HEADLESS half of the prepare phase).
 
-  use buiy_core::render::primitive::{BuiyPrimitive, InstanceBuckets, PrimitiveBatchKey};
+  use buiy_core::render::buckets::{BuiyPrimitiveKind, InstanceBuckets, PrimitiveBatchKey};
 
   #[test]
   fn primitive_paint_order_is_shadow_quad_border_outline() {
       // architecture.md § 2.2: within a layer, back-to-front by type.
-      assert!(BuiyPrimitive::Shadow.paint_order() < BuiyPrimitive::Quad.paint_order());
-      assert!(BuiyPrimitive::Quad.paint_order() < BuiyPrimitive::Border.paint_order());
-      assert!(BuiyPrimitive::Border.paint_order() < BuiyPrimitive::Outline.paint_order());
+      assert!(BuiyPrimitiveKind::Shadow.paint_order() < BuiyPrimitiveKind::Quad.paint_order());
+      assert!(BuiyPrimitiveKind::Quad.paint_order() < BuiyPrimitiveKind::Border.paint_order());
+      assert!(BuiyPrimitiveKind::Border.paint_order() < BuiyPrimitiveKind::Outline.paint_order());
   }
 
   #[test]
   fn batch_keys_sort_by_layer_then_primitive() {
       let mut keys = vec![
-          PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 1 },
-          PrimitiveBatchKey { primitive: BuiyPrimitive::Shadow, layer: 1 },
-          PrimitiveBatchKey { primitive: BuiyPrimitive::Outline, layer: 0 },
-          PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 0 },
+          PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 1 },
+          PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Shadow, layer: 1 },
+          PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Outline, layer: 0 },
+          PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 0 },
       ];
       keys.sort();
       // layer 0 before layer 1; within a layer, paint order (shadow<quad<...).
-      assert_eq!(keys[0], PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 0 });
-      assert_eq!(keys[1], PrimitiveBatchKey { primitive: BuiyPrimitive::Outline, layer: 0 });
-      assert_eq!(keys[2], PrimitiveBatchKey { primitive: BuiyPrimitive::Shadow, layer: 1 });
-      assert_eq!(keys[3], PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 1 });
+      assert_eq!(keys[0], PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 0 });
+      assert_eq!(keys[1], PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Outline, layer: 0 });
+      assert_eq!(keys[2], PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Shadow, layer: 1 });
+      assert_eq!(keys[3], PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 1 });
   }
 
   #[test]
   fn buckets_group_pushed_instances_by_key() {
       let mut b = InstanceBuckets::default();
-      let q0 = PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 0 };
-      let s0 = PrimitiveBatchKey { primitive: BuiyPrimitive::Shadow, layer: 0 };
+      let q0 = PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 0 };
+      let s0 = PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Shadow, layer: 0 };
       b.push(q0, [0.0; 9]);
       b.push(q0, [1.0; 9]);
       b.push(s0, [2.0; 9]);
@@ -430,20 +432,20 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
       assert_eq!(b.len(s0), 1);
       assert_eq!(b.total_instances(), 3);
       // A key never pushed to has no batch.
-      assert_eq!(b.len(PrimitiveBatchKey { primitive: BuiyPrimitive::Outline, layer: 0 }), 0);
+      assert_eq!(b.len(PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Outline, layer: 0 }), 0);
   }
 
   #[test]
   fn buckets_iterate_in_paint_order() {
       let mut b = InstanceBuckets::default();
-      b.push(PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 0 }, [0.0; 9]);
-      b.push(PrimitiveBatchKey { primitive: BuiyPrimitive::Shadow, layer: 0 }, [0.0; 9]);
-      b.push(PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 1 }, [0.0; 9]);
+      b.push(PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 0 }, [0.0; 9]);
+      b.push(PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Shadow, layer: 0 }, [0.0; 9]);
+      b.push(PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 1 }, [0.0; 9]);
       let order: Vec<_> = b.batches().map(|(k, _)| *k).collect();
       // shadow@0, quad@0, then quad@1 — sorted ascending.
-      assert_eq!(order[0].primitive, BuiyPrimitive::Shadow);
+      assert_eq!(order[0].primitive, BuiyPrimitiveKind::Shadow);
       assert_eq!(order[0].layer, 0);
-      assert_eq!(order[1].primitive, BuiyPrimitive::Quad);
+      assert_eq!(order[1].primitive, BuiyPrimitiveKind::Quad);
       assert_eq!(order[1].layer, 0);
       assert_eq!(order[2].layer, 1);
   }
@@ -455,27 +457,32 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
   cargo test -p buiy_core --test render_buckets
   ```
 
-- [ ] **Minimal impl.** Create `crates/buiy_core/src/render/primitive.rs`:
+- [ ] **Minimal impl.** Create `crates/buiy_core/src/render/buckets.rs`:
 
   ```rust
-  //! Typed render primitives and `(primitive, layer)` instance bucketing.
+  //! Typed render primitives and `(primitive, layer)` instance bucketing (the
+  //! CPU instance-bucketing module — R6 owns it).
   //!
   //! architecture.md § 2: `BuiyNode` is a small fixed set of typed SDF
   //! primitives, batched per `(primitive, layer)`, each batch a single instanced
-  //! draw. This module owns the primitive enum, the batch key, and the per-view
-  //! bucket store the prepare phase fills. The `layer` is the forward index into
-  //! `StackingContext.painters_z` (§ 2.2); this phase threads it but defaults to
-  //! 0 (real layers are the paint-order phase's job).
+  //! draw. This module owns the shared `BuiyPrimitiveKind` enum, the batch key,
+  //! and the per-view bucket store the prepare phase fills. R7's pipeline
+  //! specialization key (`render/primitive.rs`) **imports** `BuiyPrimitiveKind`
+  //! from here — it is NOT redefined there. The `layer` is the forward index
+  //! into `StackingContext.painters_z` (§ 2.2); this phase threads it but
+  //! defaults to 0 (real layers are the paint-order phase's job).
 
   use std::collections::BTreeMap;
 
   use crate::render::instance::PackedInstance;
   use bytemuck::Pod;
 
-  /// A typed render primitive. The v1 quad-family set this phase buckets
-  /// (architecture.md § 2.1). `glyph` / `path` are out of this phase's scope.
+  /// A typed render primitive — the shared primitive-kind enum (R6 owns it; R7
+  /// imports it from `render::buckets`). The v1 quad-family set this phase
+  /// buckets (architecture.md § 2.1). `glyph` / `path` are out of this phase's
+  /// scope.
   #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-  pub enum BuiyPrimitive {
+  pub enum BuiyPrimitiveKind {
       /// Box-shadow SDF (painted ahead of its caster). Lowest paint order.
       Shadow,
       /// Background fill + rounded corners.
@@ -486,15 +493,15 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
       Outline,
   }
 
-  impl BuiyPrimitive {
+  impl BuiyPrimitiveKind {
       /// Within-layer paint rank: back-to-front `shadow < quad < border <
       /// outline` (architecture.md § 2.2).
       pub fn paint_order(self) -> u8 {
           match self {
-              BuiyPrimitive::Shadow => 0,
-              BuiyPrimitive::Quad => 1,
-              BuiyPrimitive::Border => 2,
-              BuiyPrimitive::Outline => 3,
+              BuiyPrimitiveKind::Shadow => 0,
+              BuiyPrimitiveKind::Quad => 1,
+              BuiyPrimitiveKind::Border => 2,
+              BuiyPrimitiveKind::Outline => 3,
           }
       }
   }
@@ -504,7 +511,7 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
   /// natural `BTreeMap` iteration is the draw order.
   #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
   pub struct PrimitiveBatchKey {
-      pub primitive: BuiyPrimitive,
+      pub primitive: BuiyPrimitiveKind,
       pub layer: u32,
   }
 
@@ -583,7 +590,7 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
   Then add to `crates/buiy_core/src/render/mod.rs`:
 
   ```rust
-  pub mod primitive;
+  pub mod buckets;
   ```
 
 - [ ] **Run it — expect PASS.**
@@ -597,16 +604,16 @@ Introduce the typed-primitive enum (`quad`/`shadow`/`border`/`outline`) and the 
   ```sh
   cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && cargo test --workspace
   ```
-  Commit: `feat(render): add BuiyPrimitive + (primitive,layer) instance bucketing`
+  Commit: `feat(render): add BuiyPrimitiveKind + (primitive,layer) instance bucketing`
 
 ---
 
 ## Task 4 — `pack_view`: stride agreement + raw-layout round-trip (HEADLESS, pure CPU)
 
-Tie the three pieces together with a pure CPU function `pack_view`: given a slice of `DrawData` (the per-view extract output, the current `ExtractedDraws.draws`), produce an `InstanceBuckets`. Every draw goes to `(BuiyPrimitive::Quad, layer 0)` in v1 (the only primitive Phase-0 extract emits), packed via `pack_instance` + `packed_to_raw`. This is the seam the prepare GPU system (Task 5) calls; isolating it keeps the GPU upload trivial and the math testable. Also pin the **stride agreement** between `PackedInstance` and the raw `[f32; 9]` (the pipeline descriptor invariant).
+Tie the three pieces together with a pure CPU function `pack_view`: given a slice of the per-view extract records, produce an `InstanceBuckets`. Every record goes to `(BuiyPrimitiveKind::Quad, layer 0)` in v1 (the only primitive the v1 set emits), packed via `pack_instance` + `packed_to_raw`. This is the seam the prepare GPU system (Task 5) calls; isolating it keeps the GPU upload trivial and the math testable. Also pin the **stride agreement** between `PackedInstance` and the raw `[f32; 9]` (the pipeline descriptor invariant).
 
 **Files**
-- Modify: `crates/buiy_core/src/render/primitive.rs` (add `pack_view`)
+- Modify: `crates/buiy_core/src/render/buckets.rs` (add `pack_view`)
 - Test: `crates/buiy_core/tests/render_buckets.rs` (extend)
 
 ### Steps
@@ -617,7 +624,7 @@ Tie the three pieces together with a pure CPU function `pack_view`: given a slic
   use bevy::prelude::*;
   use buiy_core::render::DrawData;
   use buiy_core::render::instance::{pack_instance, packed_raw_stride_agrees};
-  use buiy_core::render::primitive::pack_view;
+  use buiy_core::render::buckets::pack_view;
 
   #[test]
   fn raw_layout_stride_agrees_with_struct() {
@@ -635,8 +642,8 @@ Tie the three pieces together with a pure CPU function `pack_view`: given a slic
           DrawData::new(Vec2::splat(5.0), Vec2::splat(20.0), Color::BLACK, 2.0),
       ];
       let buckets = pack_view(&draws);
-      let quad0 = buiy_core::render::primitive::PrimitiveBatchKey {
-          primitive: buiy_core::render::primitive::BuiyPrimitive::Quad,
+      let quad0 = buiy_core::render::buckets::PrimitiveBatchKey {
+          primitive: buiy_core::render::buckets::BuiyPrimitiveKind::Quad,
           layer: 0,
       };
       assert_eq!(buckets.len(quad0), 2);
@@ -648,7 +655,7 @@ Tie the three pieces together with a pure CPU function `pack_view`: given a slic
       let draws = vec![DrawData::new(Vec2::new(7.0, 9.0), Vec2::new(3.0, 4.0), Color::WHITE, 5.0)];
       let buckets = pack_view(&draws);
       let (_, batch) = buckets.batches().next().expect("one batch");
-      let expect = buiy_core::render::primitive::packed_to_raw(&pack_instance(&draws[0]));
+      let expect = buiy_core::render::buckets::packed_to_raw(&pack_instance(&draws[0]));
       assert_eq!(batch[0], expect);
   }
 
@@ -678,7 +685,7 @@ Tie the three pieces together with a pure CPU function `pack_view`: given a slic
   }
   ```
 
-  And add `pack_view` to `crates/buiy_core/src/render/primitive.rs`:
+  And add `pack_view` to `crates/buiy_core/src/render/buckets.rs`:
 
   ```rust
   use crate::render::DrawData;
@@ -686,12 +693,12 @@ Tie the three pieces together with a pure CPU function `pack_view`: given a slic
 
   /// Pack a per-view draw list (the extract output) into typed-primitive
   /// `(primitive, layer)` buckets. v1 routes every [`DrawData`] to
-  /// `(Quad, layer 0)` — the only primitive Phase-0 extract emits — packing each
+  /// `(Quad, layer 0)` — the only primitive the v1 set emits — packing each
   /// via [`pack_instance`]. The `layer` will become the real forward
   /// `painters_z` index when the paint-order phase lands; until then it is 0.
   pub fn pack_view(draws: &[DrawData]) -> InstanceBuckets {
       let mut buckets = InstanceBuckets::default();
-      let quad0 = PrimitiveBatchKey { primitive: BuiyPrimitive::Quad, layer: 0 };
+      let quad0 = PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 0 };
       for draw in draws {
           buckets.push(quad0, packed_to_raw(&pack_instance(draw)));
       }
@@ -714,16 +721,21 @@ Tie the three pieces together with a pure CPU function `pack_view`: given a slic
 
 ---
 
-## Task 5 — Per-view storage components + `prepare_buiy_instances` system (GPU code; HEADLESS test for construction-purity)
+## Task 5 — `BuiyInstanceBuffers` per-view component + `prepare_buiy_instances` system (GPU code; HEADLESS test for construction-purity)
 
-Introduce the two per-view render-world component types — `ExtractedNodes` (the CPU-side per-view extract product) and `BuiyInstanceBuffers` (the persistent GPU buffers, grow-in-place) — and the `prepare_buiy_instances` system pinned to `RenderSystems::Prepare`. The system reads the view's `ExtractedNodes` + the window `scale_factor`, builds the `BuiyViewUniform`, packs via `pack_view`, and uploads into the persistent per-view buffers (grow-in-place via `BufferVec`/`RawBufferVec`). Register it in `BuiyRenderPlugin::build` with `.in_set(RenderSystems::Prepare)`.
+> **Ownership (do NOT redefine).** `ExtractedNodes` is owned by **R5** as the single per-view component in `render/extract.rs` (`{ nodes: Vec<ExtractedNode>, logical_size: Vec2, scale_factor: f32 }`, with a manual `Default` setting `scale_factor = 1.0`). R6 **consumes** it — `use crate::render::extract::ExtractedNodes;` — and never defines a parallel `ExtractedNodes` (and no `ExtractedNodesResource`). If `render/extract.rs` / `ExtractedNodes` already exists (it does, owned by R5), import it; do **not** re-add a `pub mod`, a `lib.rs` re-export, or a second struct.
 
-The **system body and buffer upload need a wgpu device** → the membership/upload assertions are `#[ignore]` GPU tests. The HEADLESS-gating test here is that the component types are plain data (construct + default without a device) and that `prepare_buiy_instances` is a `fn` with the expected signature that can be added to a schedule — proven by adding it to a bare `App` schedule and asserting it does not run a system that needs missing GPU resources at *build* time. The real render-world membership assertion is `#[ignore]`.
+Introduce the one per-view render-world component this phase owns — `BuiyInstanceBuffers` (the persistent GPU buffers, grow-in-place) — and the `prepare_buiy_instances` system pinned to `RenderSystems::Prepare`. The system reads the view's R5-owned `ExtractedNodes` (its `nodes` + `logical_size` + `scale_factor`), builds the `BuiyViewUniform`, packs via `pack_view`, and uploads into the persistent per-view buffers (grow-in-place via `BufferVec`/`RawBufferVec`). Register it in `BuiyRenderPlugin::build` with `.in_set(RenderSystems::Prepare)`.
+
+> **Packing seam.** R5's `ExtractedNodes.nodes` is `Vec<ExtractedNode>` (the per-painted-entity CPU record), not `Vec<DrawData>`. `pack_view` (Task 4) consumes the per-view records; when wiring this system, feed it `&nodes.nodes` (adapting the `ExtractedNode` geometry/color into the packed instance via `pack_instance`). Do **not** rebuild a parallel draw list from the Phase-0 `ExtractedDraws` — the consumed carrier is R5's `ExtractedNodes`.
+
+The **system body and buffer upload need a wgpu device** → the membership/upload assertions are `#[ignore]` GPU tests. The HEADLESS-gating test here is that `BuiyInstanceBuffers` is plain data (construct + default without a device) and that `prepare_buiy_instances` is a `fn` with the expected signature that can be added to a schedule — proven by adding it to a bare `App` schedule and asserting it does not run a system that needs missing GPU resources at *build* time. The real render-world membership assertion is `#[ignore]`.
 
 **Files**
 - Create: `crates/buiy_core/src/render/prepare.rs`
 - Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod prepare;`; register the system in `BuiyRenderPlugin::build`)
 - Test: `crates/buiy_core/tests/render_prepare.rs` (new — one HEADLESS purity test + the `#[ignore]` GPU tests)
+- Consume (do NOT modify the definition): `ExtractedNodes` from `crates/buiy_core/src/render/extract.rs` (owned by R5)
 
 ### Steps
 
@@ -736,24 +748,28 @@ The **system body and buffer upload need a wgpu device** → the membership/uplo
   //! render_smoke.rs.
 
   use bevy::prelude::*;
-  use buiy_core::render::prepare::ExtractedNodes;
+  // ExtractedNodes is owned by R5 (render::extract); R6 only CONSUMES it.
+  use buiy_core::render::extract::ExtractedNodes;
+  use buiy_core::render::prepare::BuiyInstanceBuffers;
+  use buiy_core::render::view_uniform::BuiyViewUniform;
 
   #[test]
-  fn extracted_nodes_default_is_empty_no_device() {
-      // The per-view CPU extract product is plain data: constructs with no GPU.
-      let nodes = ExtractedNodes::default();
-      assert!(nodes.draws.is_empty());
-      assert_eq!(nodes.logical_size, Vec2::ZERO);
-      assert_eq!(nodes.scale_factor, 1.0);
+  fn instance_buffers_default_is_empty_no_device() {
+      // The per-view persistent-buffer component R6 owns is plain data: it
+      // constructs (Default) with no GPU device present.
+      let buffers = BuiyInstanceBuffers::default();
+      assert_eq!(buffers.quad_count, 0);
   }
 
   #[test]
-  fn extracted_nodes_carries_view_params() {
+  fn view_uniform_from_extracted_nodes_params() {
+      // R6 reads R5's ExtractedNodes (logical_size + scale_factor) and builds the
+      // view uniform from them. R5's manual Default sets scale_factor = 1.0.
       let mut nodes = ExtractedNodes::default();
+      assert_eq!(nodes.scale_factor, 1.0); // R5's manual Default (not 0.0)
       nodes.logical_size = Vec2::new(800.0, 600.0);
       nodes.scale_factor = 2.0;
-      // The view uniform built from these params round-trips the origin.
-      let u = nodes.view_uniform();
+      let u = BuiyViewUniform::for_view(nodes.logical_size, nodes.scale_factor);
       let p = u.apply(Vec2::ZERO);
       assert!((p.x - -1.0).abs() < 1e-6 && (p.y - 1.0).abs() < 1e-6);
       assert!((u.scale_factor() - 2.0).abs() < 1e-6);
@@ -793,11 +809,11 @@ The **system body and buffer upload need a wgpu device** → the membership/uplo
   #[test]
   #[ignore = "needs a wgpu adapter (real GPU or lavapipe); buffer upload round-trip"]
   fn prepare_uploads_persistent_buffers() {
-      // Full GPU round-trip: build a RenderApp, insert an ExtractedNodes with a
-      // few draws onto a view entity, run the Prepare set, and assert the view's
+      // Full GPU round-trip: build a RenderApp, insert R5's ExtractedNodes with a
+      // few nodes onto a view entity, run the Prepare set, and assert the view's
       // BuiyInstanceBuffers holds a non-empty quad buffer whose instance count
-      // equals the draw count. (Provisioned by the Task-N e2e/visual harness on
-      // a GPU runner; left as the documented GPU coverage point here.)
+      // equals nodes.len(). (Provisioned by the Task-N e2e/visual harness on a
+      // GPU runner; left as the documented GPU coverage point here.)
   }
   ```
 
@@ -817,52 +833,23 @@ The **system body and buffer upload need a wgpu device** → the membership/uplo
   //! Why prepare, not extract (architecture.md § 1.1 / § 4): `ViewTarget` (and a
   //! settled `GlobalTransform`) do not exist until `prepare_view_targets`
   //! (`RenderSystems::ManageViews`), which runs AFTER `ExtractSchedule`. So the
-  //! CPU-side per-view draw list (`ExtractedNodes`) is an extract product, but
-  //! the GPU buffers + view uniform are a PREPARE product. Both are stored as
-  //! COMPONENTS on the per-view render entity (per-window isolation, § 4), never
-  //! as global resources.
+  //! CPU-side per-view record (`ExtractedNodes`, owned by R5 in `render::extract`)
+  //! is an extract product, but the GPU buffers + view uniform are a PREPARE
+  //! product. Both are stored as COMPONENTS on the per-view render entity
+  //! (per-window isolation, § 4), never as global resources.
+  //!
+  //! `ExtractedNodes` is **not redefined here** — it is owned by R5 and imported
+  //! from `crate::render::extract`. This module owns only `BuiyInstanceBuffers`
+  //! (the persistent GPU buffers) and the `prepare_buiy_instances` system.
 
   use bevy::prelude::*;
   use bevy::render::render_resource::{BufferUsages, BufferVec, UniformBuffer};
   use bevy::render::renderer::{RenderDevice, RenderQueue};
 
-  use crate::render::primitive::pack_view;
+  use crate::render::buckets::pack_view;
   use crate::render::view_uniform::BuiyViewUniform;
-  use crate::render::DrawData;
-
-  /// CPU-side per-view extract product (architecture.md § 3.1 / § 4): the per-
-  /// frame draw list plus the view's logical size and `scale_factor`. Stored as
-  /// a component on the per-view render entity. Replaces the global
-  /// `ExtractedDraws` resource as the per-view storage shape; v1 extract still
-  /// populates it from the Phase-0 `Visual` path (the `Background`/`Border`
-  /// extract migration is a separate phase).
-  #[derive(Component, Default, Clone)]
-  pub struct ExtractedNodes {
-      /// Per-view draw list in logical pixels.
-      pub draws: Vec<DrawData>,
-      /// View logical size in pixels (for the view uniform).
-      pub logical_size: Vec2,
-      /// Device pixels per logical pixel for this view.
-      pub scale_factor: f32,
-  }
-
-  impl ExtractedNodes {
-      /// Build this view's [`BuiyViewUniform`] from its logical size +
-      /// `scale_factor`.
-      pub fn view_uniform(&self) -> BuiyViewUniform {
-          BuiyViewUniform::for_view(self.logical_size, self.scale_factor)
-      }
-  }
-
-  // `scale_factor` defaults to 1.0, not 0.0, so a zero-initialized view uniform
-  // is still a valid (identity-scale) transform. `#[derive(Default)]` gives 0.0;
-  // override via a manual Default.
-  impl ExtractedNodes {
-      /// Construct an empty per-view record with `scale_factor = 1.0`.
-      pub fn empty() -> Self {
-          Self { draws: Vec::new(), logical_size: Vec2::ZERO, scale_factor: 1.0 }
-      }
-  }
+  // ExtractedNodes is owned by R5; consume it, do not redefine it.
+  use crate::render::extract::ExtractedNodes;
 
   /// Persistent per-view GPU instance buffers (architecture.md § 3.2): one
   /// growable buffer per primitive, allocated once and reused frame-to-frame
@@ -900,8 +887,10 @@ The **system body and buffer upload need a wgpu device** → the membership/uplo
       mut views: Query<(Entity, &ExtractedNodes, Option<&mut BuiyInstanceBuffers>)>,
   ) {
       for (entity, nodes, buffers) in &mut views {
-          let buckets = pack_view(&nodes.draws);
-          let uniform = nodes.view_uniform();
+          // Consume R5's ExtractedNodes: pack its per-view records and build the
+          // view uniform from its logical_size + scale_factor (R5-owned fields).
+          let buckets = pack_view(&nodes.nodes);
+          let uniform = BuiyViewUniform::for_view(nodes.logical_size, nodes.scale_factor);
 
           // Get-or-insert the persistent buffers component.
           let mut buffers = match buffers {
@@ -937,20 +926,20 @@ The **system body and buffer upload need a wgpu device** → the membership/uplo
 
   > Implementer note: `BuiyViewUniform` must expose an `as_std140_array(&self) -> [f32; 12]` (col0 ++ col1 ++ [scale_factor, 0, 0, 0]) for the UBO write — add it to `view_uniform.rs` when wiring this system, with a HEADLESS test asserting the array round-trips `col0`/`col1`/`scale_factor`. The exact `BufferVec`/`UniformBuffer` method names (`set`, `clear`, `push`, `write_buffer`) are per `bevy_render::render_resource` 0.18; verify against the installed crate while implementing (they are the upload primitives, not invented here).
 
+  > Implementer note (packing seam): `pack_view` (Task 4) is written against the per-view extract records — R5's `ExtractedNodes.nodes` is `Vec<ExtractedNode>`, the per-painted-entity CPU record (not `Vec<DrawData>`). When wiring `prepare_buiy_instances`, make `pack_view` consume `&[ExtractedNode]` (adapt `pack_instance` to read the `ExtractedNode` box geometry + resolved color), or thread an `ExtractedNode → DrawData` adapter. Do **not** add a parallel `ExtractedNodes`/`ExtractedNodesResource` rebuilt from the Phase-0 `ExtractedDraws` — the single consumed carrier is R5's `ExtractedNodes`. Align the Task-2/3/4 `DrawData` signatures to the `ExtractedNode` record at this seam (the bucketing logic and its tests are unchanged; only the input record type flips).
+
   Then in `crates/buiy_core/src/render/mod.rs` add the module and register the system. Add near the other `pub mod` lines:
 
   ```rust
   pub mod prepare;
   ```
 
-  And in `BuiyRenderPlugin::build`, after the existing `extract_buiy_draws` registration, chain the prepare system. Replace the `render_app` builder block:
+  And in `BuiyRenderPlugin::build`, after R5's existing extract registration (R5 owns the `extract_buiy_nodes`/`ExtractedNodes` wiring — do NOT re-register it here), chain only the prepare system onto the same `render_app` builder:
 
   ```rust
   use bevy::render::{Render, RenderSystems};
-  // ...
+  // ... R5's extract registration stays as-is; R6 appends only the prepare system:
   render_app
-      .init_resource::<ExtractedDraws>()
-      .add_systems(ExtractSchedule, extract_buiy_draws)
       .add_systems(
           Render,
           prepare::prepare_buiy_instances.in_set(RenderSystems::Prepare),
@@ -975,18 +964,19 @@ The **system body and buffer upload need a wgpu device** → the membership/uplo
   ```sh
   cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && cargo test --workspace
   ```
-  Commit: `feat(render): add per-view ExtractedNodes/BuiyInstanceBuffers + prepare_buiy_instances (RenderSystems::Prepare)`
+  Commit: `feat(render): add per-view BuiyInstanceBuffers + prepare_buiy_instances consuming R5 ExtractedNodes (RenderSystems::Prepare)`
 
 ---
 
-## Task 6 — Wire extract to write per-view `ExtractedNodes` (GPU code; HEADLESS for the population-purity helper)
+## Task 6 — Consume R5's per-view `ExtractedNodes` in prepare (GPU code; HEADLESS for the consumption-shape test)
 
-The Phase-0 `extract_buiy_draws` writes the global `ExtractedDraws` resource. The contract (architecture.md § 4) is per-view `ExtractedNodes` on the render-world view entity. This task adds the per-view write **alongside** the existing resource (keeping the Phase-0 node compiling) by introducing a pure helper `extracted_nodes_from_draws(draws, logical_size, scale_factor) -> ExtractedNodes` (HEADLESS-testable) and a render-world write that the GPU path exercises. The actual per-view entity routing (writing onto the primary view entity through Bevy's main↔render mapping) is the GPU `#[ignore]` assertion; the pure conversion is the gating test.
+> **Ownership.** **R5 owns both the `ExtractedNodes` per-view component AND its population** (R5's `extract_buiy_nodes` writes it onto the primary view entity in `render::extract`). R6 does **not** build a parallel `ExtractedNodes` from the Phase-0 `ExtractedDraws`/`DrawData`, and adds **no** `extracted_nodes_from_draws` helper and **no** `ExtractedNodesResource` shim. This task only confirms `prepare_buiy_instances` reads R5's already-populated component and packs it.
+
+R5's `extract_buiy_nodes` already writes the per-view `ExtractedNodes` (`{ nodes, logical_size, scale_factor }`) onto the primary view's render entity (architecture.md § 4, primary-window-only v1). R6's `prepare_buiy_instances` (Task 5) queries that component directly — there is no second carrier to populate here. The per-view entity routing and the populated-by-R5 read are exercised by the GPU `#[ignore]` round-trip (Task 5's `prepare_uploads_persistent_buffers`); the HEADLESS gate here is the consumption-shape assertion: a hand-built `ExtractedNodes` round-trips through `pack_view` into the expected bucket counts.
 
 **Files**
-- Modify: `crates/buiy_core/src/render/prepare.rs` (add `extracted_nodes_from_draws`)
-- Modify: `crates/buiy_core/src/render/mod.rs` (have `extract_buiy_draws` also build an `ExtractedNodes` from the same data; v1 keeps writing the primary window into the resource AND constructs the per-view record)
-- Test: `crates/buiy_core/tests/render_prepare.rs` (extend with a HEADLESS conversion test)
+- Test: `crates/buiy_core/tests/render_prepare.rs` (extend with a HEADLESS consumption-shape test)
+- Consume (do NOT modify): `ExtractedNodes` from `crates/buiy_core/src/render/extract.rs` (owned + populated by R5)
 
 ### Steps
 
@@ -994,92 +984,50 @@ The Phase-0 `extract_buiy_draws` writes the global `ExtractedDraws` resource. Th
 
   ```rust
   #[test]
-  fn extracted_nodes_from_draws_carries_all_fields() {
-      use buiy_core::render::DrawData;
-      use buiy_core::render::prepare::extracted_nodes_from_draws;
-      let draws = vec![DrawData::new(Vec2::ZERO, Vec2::splat(10.0), Color::WHITE, 1.0)];
-      let nodes = extracted_nodes_from_draws(draws.clone(), Vec2::new(1280.0, 720.0), 1.5);
-      assert_eq!(nodes.draws.len(), 1);
-      assert_eq!(nodes.logical_size, Vec2::new(1280.0, 720.0));
-      assert!((nodes.scale_factor - 1.5).abs() < 1e-6);
-      // The view uniform built from it flips y once.
-      assert!(nodes.view_uniform().apply(Vec2::ZERO).y > 0.0);
+  fn extracted_nodes_pack_view_routes_records_to_quad_layer_0() {
+      // R6 consumes R5's ExtractedNodes and packs its `nodes` via pack_view.
+      // (Build the per-view record with R5's ExtractedNode constructor; this
+      // pins the consumption shape without rebuilding a parallel carrier.)
+      use buiy_core::render::buckets::{pack_view, BuiyPrimitiveKind, PrimitiveBatchKey};
+      use buiy_core::render::extract::ExtractedNodes;
+      let mut view = ExtractedNodes::default();
+      // R5's manual Default sets scale_factor = 1.0 (not the derive's 0.0).
+      assert_eq!(view.scale_factor, 1.0);
+      view.logical_size = Vec2::new(1280.0, 720.0);
+      // Push one ExtractedNode (R5's per-painted-entity record) — see R5 for the
+      // constructor; the bucketing only reads its packed geometry/color.
+      // view.nodes.push(ExtractedNode::new(...));
+      let buckets = pack_view(&view.nodes);
+      let quad0 = PrimitiveBatchKey { primitive: BuiyPrimitiveKind::Quad, layer: 0 };
+      assert_eq!(buckets.len(quad0), view.nodes.len());
   }
 
   #[test]
-  fn extracted_nodes_from_empty_draws_is_valid() {
-      use buiy_core::render::prepare::extracted_nodes_from_draws;
-      let nodes = extracted_nodes_from_draws(Vec::new(), Vec2::new(800.0, 600.0), 1.0);
-      assert!(nodes.draws.is_empty());
-      assert_eq!(nodes.scale_factor, 1.0);
+  fn extracted_nodes_empty_packs_to_empty_buckets() {
+      use buiy_core::render::buckets::pack_view;
+      use buiy_core::render::extract::ExtractedNodes;
+      let view = ExtractedNodes::default();
+      assert!(view.nodes.is_empty());
+      assert_eq!(view.scale_factor, 1.0); // R5's manual Default
+      let buckets = pack_view(&view.nodes);
+      assert!(buckets.is_empty());
   }
   ```
 
-- [ ] **Run it — expect FAIL (`extracted_nodes_from_draws` absent).**
+  > Implementer note: `pack_view` consumes the per-view records (R5's `ExtractedNode`). Use R5's `ExtractedNode` constructor in the test; do **not** introduce a `DrawData`-based parallel path. If R5's `ExtractedNode` is not yet constructible from a unit test, gate this test on R5 landing (execution order R5 → R6) and keep the empty-buckets case as the always-green half.
+
+- [ ] **Run it — expect FAIL (the `pack_view`/`ExtractedNode` seam not yet aligned).**
 
   ```sh
   cargo test -p buiy_core --test render_prepare
   ```
 
-- [ ] **Minimal impl.** Add to `crates/buiy_core/src/render/prepare.rs`:
+- [ ] **Minimal impl.** No new types. Align `pack_view` (Task 4) to consume `&[ExtractedNode]` (the packing seam called out in Task 5's implementer note) so `prepare_buiy_instances` reads R5's component with no adapter resource. Confirm nothing in `mod.rs` defines a second `ExtractedNodes` or an `ExtractedNodesResource`:
 
-  ```rust
-  /// Build an [`ExtractedNodes`] from an already-resolved per-view draw list and
-  /// view params. The pure conversion the extract system uses to populate the
-  /// per-view record; isolated so it is HEADLESS-testable without a render world.
-  pub fn extracted_nodes_from_draws(
-      draws: Vec<DrawData>,
-      logical_size: Vec2,
-      scale_factor: f32,
-  ) -> ExtractedNodes {
-      ExtractedNodes { draws, logical_size, scale_factor }
-  }
+  ```sh
+  grep -rn "ExtractedNodesResource\|struct ExtractedNodes" crates/buiy_core/src
   ```
-
-  Then extend `extract_buiy_draws` in `crates/buiy_core/src/render/mod.rs` to also read `scale_factor` and build the per-view record. Update the window read and the tail:
-
-  ```rust
-  // In extract_buiy_draws, capture scale_factor alongside size:
-  let mut scale_factor = 1.0_f32;
-  if let Ok(window) = main_world_windows.single() {
-      let res = window.resolution.size();
-      draws.window_size = Vec2::new(res.x, res.y);
-      scale_factor = window.resolution.scale_factor();
-  }
-  // ... existing per-Visual loop unchanged ...
-
-  // Build the per-view ExtractedNodes record (architecture.md § 4). v1 still
-  // also inserts the global ExtractedDraws (the Phase-0 node reads it); the
-  // per-view record is the contract-correct storage the prepare phase reads.
-  let nodes = crate::render::prepare::extracted_nodes_from_draws(
-      draws.draws.clone(),
-      draws.window_size,
-      scale_factor,
-  );
-  // GPU path: route `nodes` onto the primary view's render entity through
-  // Bevy's main<->render mapping. Until per-view routing lands, insert it as a
-  // render-world resource fallback so the prepare query can read it via a
-  // shim; the per-view entity write is asserted by the #[ignore] GPU test.
-  commands.insert_resource(ExtractedNodesResource(nodes));
-  commands.insert_resource(draws);
-  ```
-
-  Add the shim resource near `ExtractedDraws` in `mod.rs` (the render-world carrier the prepare query reads in v1 until true per-view entity routing lands — a documented reserved seam, not a hack: per architecture.md § 4 the storage shape is reserved, the per-window partition is the tracked dependency):
-
-  ```rust
-  /// v1 render-world carrier for the single primary-view [`ExtractedNodes`]
-  /// (architecture.md § 4 D2 simplification: v1 paints only the primary window).
-  /// The contract-correct home is a component on the per-view render entity; the
-  /// per-window partition is reserved structure (tracked dependency, README § 5
-  /// #1). Wrapping it here keeps the prepare system reading a per-view record
-  /// without the main<->render entity routing that the per-window phase wires.
-  #[derive(Resource, Default)]
-  pub struct ExtractedNodesResource(pub crate::render::prepare::ExtractedNodes);
-  ```
-
-  And `init_resource::<ExtractedNodesResource>()` in `BuiyRenderPlugin::build`. (The prepare system's `Query<&ExtractedNodes>` becomes `Res<ExtractedNodesResource>` for v1; leave a `// TODO(per-window): read per-view ExtractedNodes component once routing lands` comment. Adjust `prepare_buiy_instances` to read the resource and store buffers in a single render-world `BuiyInstanceBuffers` resource for v1, with the same TODO — the per-view component shape stays defined and tested, the v1 wiring uses the primary-view resource shim.)
-
-  > Implementer note: this keeps the *types* contract-correct (`ExtractedNodes` / `BuiyInstanceBuffers` are per-view components, defined and unit-tested as such) while the v1 *wiring* uses a primary-view resource shim, exactly matching architecture.md § 4's "reserved structure, primary-window-only v1" stance. Do not delete the component types; the per-window phase swaps the shim for entity routing.
+  Expected: the only `struct ExtractedNodes` is R5's in `render/extract.rs`; no `ExtractedNodesResource` anywhere.
 
 - [ ] **Run it — expect PASS (HEADLESS).**
 
@@ -1092,7 +1040,7 @@ The Phase-0 `extract_buiy_draws` writes the global `ExtractedDraws` resource. Th
   ```sh
   cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && cargo test --workspace
   ```
-  Commit: `feat(render): populate per-view ExtractedNodes from extract (primary-view v1 shim)`
+  Commit: `feat(render): prepare consumes R5 per-view ExtractedNodes (no parallel carrier)`
 
 ---
 
@@ -1339,15 +1287,16 @@ With the node and shader on the view-uniform path, the Phase-0 `to_instance` cli
 
 - [ ] `BuiyViewUniform` owns the single logical-px → clip y-flip + `scale_factor`; the per-instance y-flip/`2/min(w,h)` hack is gone (HEADLESS-proven by `render_view_uniform.rs` + the deletion in Task 8).
 - [ ] `PackedInstance` carries logical-px position/size/radius + CPU-pre-linearized color; stride agrees with the pipeline descriptor (HEADLESS).
-- [ ] `pack_view` buckets per-view draws into `(BuiyPrimitive, layer)` sets in `shadow → quad → border → outline` order; v1 routes to `(Quad, 0)` (HEADLESS).
-- [ ] `prepare_buiy_instances` is registered in `RenderSystems::Prepare`, owns persistent per-view `BuiyInstanceBuffers` (grow-in-place) + the view-uniform UBO, with `ViewTarget` available in that set (GPU `#[ignore]` for membership/upload; HEADLESS for construction-purity + `view_uniform()` math).
+- [ ] `pack_view` buckets per-view draws into `(BuiyPrimitiveKind, layer)` sets in `shadow → quad → border → outline` order; v1 routes to `(Quad, 0)` (HEADLESS).
+- [ ] `prepare_buiy_instances` is registered in `RenderSystems::Prepare`, consumes R5's per-view `ExtractedNodes`, owns persistent per-view `BuiyInstanceBuffers` (grow-in-place) + the view-uniform UBO, with `ViewTarget` available in that set (GPU `#[ignore]` for membership/upload; HEADLESS for `BuiyInstanceBuffers` construction-purity + the `BuiyViewUniform::for_view` math from R5's `logical_size`/`scale_factor`).
 - [ ] The node + shader run off the persistent buffers and the bound view uniform; the WGSL vertex transform matches `BuiyViewUniform::apply` (HEADLESS parity test; GPU `#[ignore]` for the actual draw).
 - [ ] Every commit kept the gate green: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && cargo test --workspace`.
 
 ## Cross-phase dependencies assumed
 
-- **Extract migration (`Visual → Background/Border`) is a SEPARATE phase.** This phase keeps `DrawData` / `ExtractedDraws` / `extract_buiy_draws` and the `Visual` read intact; it only re-routes the *packing/upload* through the view-uniform path. The extract-component phase replaces `extract_buiy_draws`'s body; the `ExtractedNodes` per-view shape this phase defines is its target storage.
+- **`ExtractedNodes` is owned + populated by R5 (`render::extract`).** This phase (R6) **consumes** it and never redefines or re-populates it. The R5 → R6 execution order guarantees the component exists when `prepare_buiy_instances` queries it. R6 owns only `render/buckets.rs` (CPU bucketing + the shared `BuiyPrimitiveKind` enum, which R7 imports) and `render/prepare.rs` (`BuiyInstanceBuffers` + `prepare_buiy_instances`).
+- **Phase-0 `ExtractedDraws`/`extract_buiy_draws` stay alive until the extract phase retires them.** R6 does not touch them: it reads R5's `ExtractedNodes`, not the Phase-0 resource. (The `DrawData`-based Task 2–4 packing primitives stay as the math under test; the packing seam in Task 5/6 flips their input record from `DrawData` to R5's `ExtractedNode`.)
 - **Real `(primitive, layer)` layers come from the paint-order phase.** This phase threads `layer` and defaults to `0`. The paint-order phase feeds the forward `StackingContext.painters_z` index into `pack_view` (the seam is the `layer` arg on `PrimitiveBatchKey`).
-- **Per-window routing is reserved, not wired (architecture.md § 4 D2 / README § 5 #1).** v1 uses a primary-view resource shim (`ExtractedNodesResource` + a render-world `BuiyInstanceBuffers` resource) while the *types* are per-view components; the per-window phase swaps the shim for main↔render entity routing onto each view entity. Do not add render state assuming one window beyond this shim.
-- **`scale_factor` source.** This phase reads `window.resolution.scale_factor()` at extract and threads it to the prepare phase via `ExtractedNodes.scale_factor`. No `ScaleFactor` carrier component exists in the codebase today; if a later phase introduces one (e.g. for per-view DPI), the prepare phase should prefer it over the window read.
-- **`shadow`/`border`/`outline` primitives are bucket-reserved only.** This phase defines the `BuiyPrimitive` variants and their paint order but only the `Quad` pipeline exists (the `..02` shadow / border-band / `..03` glyph octets are later phases). `pack_view` emits only `Quad` instances in v1.
+- **Per-window routing is reserved, not wired (architecture.md § 4 D2 / README § 5 #1).** R5 writes `ExtractedNodes` onto the **primary** view's render entity in v1; R6's `BuiyInstanceBuffers` is a per-view **component** the prepare system get-or-inserts on that same entity. The per-window phase widens R5's write to every view entity — no R6 type change. Do not add render state assuming exactly one window beyond reading the per-view component.
+- **`scale_factor` source.** R5 reads `window.resolution.scale_factor()` at extract and threads it into `ExtractedNodes.scale_factor`; R6 reads that field to build the view uniform. No `ScaleFactor` carrier component exists in the codebase today; if a later phase introduces one (e.g. for per-view DPI), R5's extract should prefer it over the window read.
+- **`shadow`/`border`/`outline` primitives are bucket-reserved only.** This phase defines the `BuiyPrimitiveKind` variants and their paint order but only the `Quad` pipeline exists (the `..02` shadow / border-band / `..03` glyph octets are later phases). `pack_view` emits only `Quad` instances in v1.

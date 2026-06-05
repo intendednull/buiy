@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Depends on:** R1 (`render/components.rs` + `render/color.rs` and every shared render type — `Background`, `Border`, `ResolvedTransform` consumers, `ColorToken`). **Execution order:** R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11. R3 imports `Background`/`Border`/`ColorToken` and `resolve_token` from R1's `render::components` / `render::color` / `render::mod`; it MUST NOT define or re-export any of them. R3 introduces NO new `BuiySet` variant (spec [architecture.md § 5.1/§ 5.2](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md) forbids a new top-level render set); `write_buiy_transform` + the three `bevy_transform` propagation systems are pinned directly `.after(BuiySet::Animate).before(BuiySet::Picking)` inside the existing chain.
+
 **Goal:** Fold `ResolvedLayout.position` − accumulated ancestor `ScrollOffset`, composed with `ResolvedTransform.matrix`, into a single Bevy `Transform` via one top-down render-prep writer (`write_buiy_transform`), then schedule Bevy's three propagation systems in `Update` so `GlobalTransform` is final before picking and extract.
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [clip-and-transform.md § B](../specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md) (the bridge, the propagation scheduling, the coordinate contract, perspective/backface consumption), README pillar 5, and unblocks follow-up "`Transform`/`GlobalTransform` bridge".
 **Architecture:** A new render-prep system `write_buiy_transform` is the *single* authority over each laid-out entity's `Transform.translation`. It is a top-down `Children` walk that carries the running ancestor-scroll sum, composes `base = position − acc` lifted to a translation `Mat4`, then `base * ResolvedTransform.matrix`, and writes one `Transform` per entity (seeded by a `ScrollDirty` resource unioning `Changed<ResolvedLayout>`, `Changed<ResolvedTransform>`, and `Changed<ScrollOffset>`-on-a-scroll-ancestor). Bevy's `mark_dirty_trees → propagate_parent_transforms → sync_simple_transforms` are then chained in `Update` after the writer and before `BuiySet::Picking`. The y-down→y-up flip and logical→physical scale stay out of the bridge (they live in the GPU view uniform); the whole bridge stays in logical-px, y-down, window-relative space. `Preserve3d`/perspective is affine-incompatible and C-tier deferred (noted, not built); `backface_visibility` is consumed only as a per-primitive render flag (render reads `UiTransform` directly — no new component).
@@ -22,80 +24,6 @@
 - **Crate placement.** The bridge is render-prep but reads only layout output + writes a Bevy `Transform`. Per the spec it is a *main-world* system. Put the system and its `ScrollDirty` resource in a **new module** `crates/buiy_core/src/render/bridge.rs` (a sibling of the existing `render/node.rs` etc.), re-exported from `render/mod.rs`. The scheduling (adding the systems to `Update`) goes in `CorePlugin` (`crates/buiy_core/src/lib.rs`) because the bridge runs in the main world `Update` schedule alongside `BuiySet`, **not** in the `RenderApp` branch of `BuiyRenderPlugin` (that branch early-returns headless, which would make the bridge dead on CI — wrong).
 - **Coordinate contract (pinned, do not flip).** `Transform.translation = (position.x − acc.x, position.y − acc.y, 0.0)` in logical px, y-down. No y-flip, no scale. Asserted by tests.
 - **Type/name fidelity.** Use exactly: `write_buiy_transform`, `ScrollDirty`, `ResolvedLayout`, `ResolvedTransform`, `ScrollOffset`, `UiTransform`, `BackfaceVisibility`, `Overflow::is_scroll_container`, `bevy_transform::systems::{mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms}`, `BuiySet::Animate`, `BuiySet::Picking`.
-
----
-
-## Task 0 — Add a `BuiySet::RenderPrep` system set between `Animate` and `Picking`
-
-**Why first:** the spec pins the bridge + propagation `.after(BuiySet::Animate).before(BuiySet::Picking)`. `BuiySet` today has no render-prep slot; the bridge and the three propagation systems need a stable home that ordering tests can assert. We add one new internal set variant `RenderPrep` to `BuiySet` (the spec § 5.1 says "adds no new *top-level* variant" for the render *graph*; this is a fine-grained ordering anchor inside the existing chain — name it `RenderPrep` and chain it Animate → RenderPrep → Picking). This keeps the bridge's home explicit and test-pinnable.
-
-**Files**
-- Modify: `crates/buiy_core/src/lib.rs` (add `RenderPrep` to `BuiySet`, chain it)
-- Modify: `crates/buiy/src/lib.rs` (no change needed unless re-export breaks — verify only)
-- Test: `crates/buiy_core/tests/system_set_order.rs` (extend)
-
-Steps:
-
-- [ ] **Write the failing test.** Append to `crates/buiy_core/tests/system_set_order.rs`:
-  ```rust
-  #[test]
-  fn render_prep_runs_between_animate_and_picking() {
-      // The render-prep stage (write_buiy_transform + the three propagation
-      // systems) is pinned `.after(BuiySet::Animate).before(BuiySet::Picking)`
-      // per clip-and-transform.md § B.2.1 / architecture.md § 5.2.
-      let idx = set_indices(&[BuiySet::Animate, BuiySet::RenderPrep, BuiySet::Picking]);
-      assert!(idx[0] < idx[1], "Animate must precede RenderPrep");
-      assert!(idx[1] < idx[2], "RenderPrep must precede Picking");
-  }
-  ```
-- [ ] **Run it — expect FAIL (does not compile):**
-  ```sh
-  cargo test -p buiy_core --test system_set_order render_prep_runs_between_animate_and_picking
-  ```
-  Expected: compile error `no variant named RenderPrep found for enum BuiySet`.
-- [ ] **Minimal impl.** In `crates/buiy_core/src/lib.rs`, add the variant and chain it. Edit the enum:
-  ```rust
-  /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
-  /// → RenderPrep → Picking → A11yUpdate → Render.
-  #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
-  pub enum BuiySet {
-      Layout,
-      Style,
-      Input,
-      Animate,
-      /// Render-prep stage (clip-and-transform.md § B.2.1): the `Transform`
-      /// compose bridge + Bevy's propagation chain run here so
-      /// `GlobalTransform` is final before `Picking` and `ExtractSchedule`.
-      RenderPrep,
-      Picking,
-      A11yUpdate,
-      Render,
-  }
-  ```
-  And in `CorePlugin::build`'s `configure_sets`, insert `BuiySet::RenderPrep` between `Animate` and `Picking`:
-  ```rust
-              .configure_sets(
-                  Update,
-                  (
-                      BuiySet::Layout,
-                      BuiySet::Style,
-                      BuiySet::Input,
-                      BuiySet::Animate,
-                      BuiySet::RenderPrep,
-                      BuiySet::Picking,
-                      BuiySet::A11yUpdate,
-                      BuiySet::Render,
-                  )
-                      .chain(),
-              );
-  ```
-- [ ] **Run pass:**
-  ```sh
-  cargo test -p buiy_core --test system_set_order
-  ```
-  Both `buiy_sets_run_in_documented_order` and the new test pass.
-- [ ] **Run the full gate.** Fix the doc comment on `BuiySet` to list all 8 variants so `RUSTDOCFLAGS="-D warnings"` stays clean.
-- [ ] **Commit:** `feat(core): add BuiySet::RenderPrep between Animate and Picking`
 
 ---
 
@@ -230,13 +158,15 @@ Steps:
   ```sh
   cargo test -p buiy_core --test render_transform_bridge
   ```
-  Note: `seed_scroll_dirty` is not yet scheduled, so `ScrollDirty` will not be initialized as a resource unless we add it. **This test will still fail** with "Resource ScrollDirty does not exist" — that is expected; wire the resource + system in Task 3 (scheduling). To keep this task's gate green, also do the scheduling-resource init here: in `CorePlugin::build` add `app.init_resource::<crate::render::bridge::ScrollDirty>();` and schedule `seed_scroll_dirty.in_set(BuiySet::RenderPrep)`. (Full chain wiring is Task 3; this minimal wiring makes `ScrollDirty` exist + steady-state-empty.)
+  Note: `seed_scroll_dirty` is not yet scheduled, so `ScrollDirty` will not be initialized as a resource unless we add it. **This test will still fail** with "Resource ScrollDirty does not exist" — that is expected; wire the resource + system in Task 3 (scheduling). To keep this task's gate green, also do the scheduling-resource init here: in `CorePlugin::build` add `app.init_resource::<crate::render::bridge::ScrollDirty>();` and schedule `seed_scroll_dirty` directly `.after(BuiySet::Animate).before(BuiySet::Picking)` (R3 adds **no** new `BuiySet` variant — the bridge slots into the existing chain per spec architecture.md § 5.2). (Full chain wiring is Task 3; this minimal wiring makes `ScrollDirty` exist + steady-state-empty.)
   Concretely add to `CorePlugin::build`, after `configure_sets`:
   ```rust
           app.init_resource::<crate::render::bridge::ScrollDirty>();
           app.add_systems(
               Update,
-              crate::render::bridge::seed_scroll_dirty.in_set(BuiySet::RenderPrep),
+              crate::render::bridge::seed_scroll_dirty
+                  .after(BuiySet::Animate)
+                  .before(BuiySet::Picking),
           );
   ```
   Re-run — passes (`ScrollDirty` empty on frame 2).
@@ -407,7 +337,7 @@ Steps:
       }
   }
   ```
-  Schedule it in `CorePlugin::build` chained **after** `seed_scroll_dirty`, in `RenderPrep` (replace the single-system add from Task 1):
+  Schedule it in `CorePlugin::build` chained **after** `seed_scroll_dirty`, directly `.after(BuiySet::Animate).before(BuiySet::Picking)` (replace the single-system add from Task 1):
   ```rust
           app.add_systems(
               Update,
@@ -416,7 +346,8 @@ Steps:
                   crate::render::bridge::write_buiy_transform,
               )
                   .chain()
-                  .in_set(BuiySet::RenderPrep),
+                  .after(BuiySet::Animate)
+                  .before(BuiySet::Picking),
           );
   ```
 - [ ] **Run pass:** `cargo test -p buiy_core --test render_transform_bridge`. All four tests pass.

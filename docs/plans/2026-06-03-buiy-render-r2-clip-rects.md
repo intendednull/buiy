@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Depends on:** R1 (component model — owns `render/components.rs`, the sole home of `ClipRect` / `AncestorClip`). Execution order: R1 → **R2** → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11.
+
 **Goal:** Add the `write_clip_rects` render-prep pass that walks the `Children` tree top-down and writes a per-entity `ClipRect` (own box ∩ ancestor clips) plus an ancestor-only `AncestorClip`, scheduled between `BuiySet::Animate` and `BuiySet::Picking`, with a scroll-only recompute that never re-runs layout.
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [clip-and-transform.md](../specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md) § A (the `WriteClipRects` pass, `ClipRect`, `AncestorClip`).
-**Architecture:** `ClipRect` / `AncestorClip` are render-owned `Component`s (no `Default`, `Copy + PartialEq`, in `crates/buiy_core/src/components.rs`). A single render-prep ECS system `write_clip_rects` runs in `Update`, `.after(BuiySet::Animate).before(BuiySet::Picking)`, doing a top-down `Children` walk: it intersects each entity's own border box with each ancestor's clip box (overflow-clip padding box per-axis, scroll-container viewport padding box, nearest `contain: paint` border box), pruning `Display::None` / `ContentVisibility::Hidden` subtrees. `ClipRect` is the ancestor intersection ∩ own box; `AncestorClip` is the ancestor intersection alone (for `Outline`). Absent component ⇔ no ancestor clips. The walk is change-gated against the entity's previously-written `ClipRect` so a steady-state frame issues zero structural ops; `ScrollOffset` is **not** a clip-box input (scroll moves content, not the clip), so a scroll-only frame neither changes a clip box nor touches `ResolvedLayout`.
+**Architecture:** `ClipRect` / `AncestorClip` are render-owned computed `Component`s **defined by R1** in `crates/buiy_core/src/render/components.rs` — lean plain structs `{ pub min: Vec2, pub max: Vec2 }`, no `Reflect`, NOT `register_type`'d (spec clip-and-transform.md § A.2 + component-model.md § 13). They have no `Default` (an absent `ClipRect`/`AncestorClip` means "no clip"). **R2 does NOT define, re-export, or register these types — it imports them from `crate::render::components` and contributes only `write_clip_rects` plus the field *population* (the computed clip values).** A single render-prep ECS system `write_clip_rects` runs in `Update`, `.after(BuiySet::Animate).before(BuiySet::Picking)`, doing a top-down `Children` walk: it intersects each entity's own border box with each ancestor's clip box (overflow-clip padding box per-axis, scroll-container viewport padding box, nearest `contain: paint` border box), pruning `Display::None` / `ContentVisibility::Hidden` subtrees. `ClipRect` is the ancestor intersection ∩ own box; `AncestorClip` is the ancestor intersection alone (for `Outline`). Absent component ⇔ no ancestor clips. The walk is change-gated against the entity's previously-written `ClipRect` so a steady-state frame issues zero structural ops; `ScrollOffset` is **not** a clip-box input (scroll moves content, not the clip), so a scroll-only frame neither changes a clip box nor touches `ResolvedLayout`.
 **Tier/Test reality:** HEADLESS. `write_clip_rects` is a plain `Update` ECS system — every gating test runs on this host / CI via `App::new() + MinimalPlugins + CorePlugin + LayoutPlugin` with **no** wgpu adapter and **no** xvfb. There is no GPU-`#[ignore]` test in this phase; the GATE below must stay green for every commit.
 
 THE GATE (run before every commit; must be green — this host + CI have NO xvfb and NO wgpu adapter):
@@ -24,7 +26,7 @@ Repo worktree root: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipelin
 
 - All paths are absolute from the worktree root above.
 - Each task is RED → GREEN → COMMIT. Write the failing test first, run it, see it fail for the stated reason, then write the minimal impl, run it green, run THE GATE, commit.
-- Components live in `crates/buiy_core/src/components.rs` (crate root — the same file that already homes `ResolvedLayout` / `ResolvedTransform` / `StackingContext`; spec README § 3 owner-is-subsystem note confirms render-owned paint components may co-home here pre-crate-split).
+- `ClipRect` / `AncestorClip` are **defined by R1** in `crates/buiy_core/src/render/components.rs` (the render-component home R1 creates) and are re-exported from `crate::render::components` / the crate root by R1. R2 imports them — it does NOT add a definition, a `pub mod`, a `pub use`, or a `register_type` for them.
 - The pass + its public system fn live in a new module `crates/buiy_core/src/render/clip.rs`, re-exported from `crates/buiy_core/src/render/mod.rs`.
 - Integration tests live in `crates/buiy_core/tests/render_clip_rects.rs` and mirror the layout snapshot idiom in `tests/layout_containment.rs` / `tests/layout_scroll_offset_no_invalidate.rs`: build `App::new()`, add `MinimalPlugins`, `CorePlugin`, `LayoutPlugin`, the `BuiyRenderPlugin` (its `build` is a clean no-op without a RenderApp — see `tests/render_smoke.rs`), `app.update()`, then read components off entities.
 - `BuiyRenderPlugin` (in `render/mod.rs`) is where the **main-world** schedule wiring for `write_clip_rects` is added — its current `build` early-returns when there is no RenderApp, so a new **main-world** `add_systems(Update, …)` must be added *before* that early-return (Task 6 handles this precisely).
@@ -33,158 +35,43 @@ Repo worktree root: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipelin
 
 ---
 
-## Task 1 — `ClipRect` component (no `Default`, `Copy + PartialEq`)
+## Prerequisite (R1) — `ClipRect` / `AncestorClip` already exist; do NOT redefine them
 
-**Files**
-- Modify: `crates/buiy_core/src/components.rs`
-- Modify: `crates/buiy_core/src/lib.rs` (re-export)
-- Test: `crates/buiy_core/src/components.rs` (unit test in the existing `mod tests`)
-
-This is the canonical definition of `ClipRect` (spec § A.2). It deliberately has **no** `Default` (an absent `ClipRect` means "no clip"). HEADLESS.
-
-- [ ] RED — add a unit test to the `#[cfg(test)] mod tests` block at the bottom of `crates/buiy_core/src/components.rs`:
+`ClipRect` and `AncestorClip` are **created and owned by R1** in
+`crates/buiy_core/src/render/components.rs`. Per the canonical-ownership
+sheet they are lean computed structs, distinct types:
 
 ```rust
-    #[test]
-    fn clip_rect_is_copy_and_eq() {
-        let a = ClipRect {
-            min: Vec2::new(1.0, 2.0),
-            max: Vec2::new(3.0, 4.0),
-        };
-        let b = a; // Copy
-        assert_eq!(a, b); // PartialEq
-        assert_ne!(
-            a,
-            ClipRect {
-                min: Vec2::ZERO,
-                max: Vec2::splat(1.0)
-            }
-        );
-    }
+// Defined by R1 in render/components.rs — DO NOT re-add here.
+pub struct ClipRect { pub min: Vec2, pub max: Vec2 }
+pub struct AncestorClip { pub min: Vec2, pub max: Vec2 }
 ```
 
-- [ ] Run RED — `cargo test -p buiy_core --lib clip_rect_is_copy_and_eq` → expect FAIL: `cannot find struct ClipRect in this scope`.
+They derive `Clone, Copy, Debug, PartialEq` and have **no `Default`** (an
+absent component means "no clip"). They are **not** `Reflect`, **not**
+`register_type`'d, and **not** re-exported via a new `pub use` in this
+phase — R1 does all of that. The registry test in R1 asserts these types
+are ABSENT from the type registry; that is correct and intentional.
 
-- [ ] GREEN — add the component to `crates/buiy_core/src/components.rs` (after `StackingContext`, before `Visual`):
+**R2's job for these types is import + population only.** Everywhere this
+plan uses `ClipRect` / `AncestorClip`, import them with:
 
 ```rust
-/// Per-entity computed clip, written by `write_clip_rects` (render-prep,
-/// `crate::render::clip`) and read by render extract + picking. Render
-/// reads it; render never re-derives it. The accumulated clip AABB, in
-/// logical px, in the same y-down window-relative space as
-/// `ResolvedLayout.position`.
-///
-/// **No `Default`:** an absent `ClipRect` is meaningful — it means "no
-/// ancestor clips this entity ⇒ render applies no scissor" — so the type
-/// is never default-constructed into a zero rect.
-///
-/// A degenerate clip (`min.x >= max.x` or `min.y >= max.y`) is the empty
-/// rect: render skips painting the entity entirely (it is fully clipped
-/// away).
-///
-/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A.
-#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
-#[reflect(Component)]
-pub struct ClipRect {
-    /// Top-left corner, logical px, window-relative (y-down).
-    pub min: Vec2,
-    /// Bottom-right corner, logical px, window-relative (y-down).
-    pub max: Vec2,
-}
+use crate::render::components::{AncestorClip, ClipRect};
 ```
 
-- [ ] Re-export from `crates/buiy_core/src/lib.rs`: change the `pub use components::{…}` line to include `ClipRect`:
+(in integration tests: `use buiy_core::{AncestorClip, ClipRect, …};` —
+R1's crate-root re-export). If R1 has not landed when you start, **do
+not** create these types as a workaround; R1 is a hard precondition
+(execution order R1 → R2). Confirm `crate::render::components::ClipRect`
+resolves before writing any task below.
 
-```rust
-pub use components::{ClipRect, Node, ResolvedLayout, ResolvedTransform, StackingContext, Visual};
-```
-
-- [ ] Register the type in `CorePlugin::build` in `crates/buiy_core/src/lib.rs` (so `#[reflect(Component)]` is sound and matches the project convention). Add `.register_type::<ClipRect>()` to the `app.register_type::<Node>()…` chain, e.g. right after `.register_type::<Visual>()`:
-
-```rust
-        app.register_type::<Node>()
-            .register_type::<ResolvedLayout>()
-            .register_type::<Visual>()
-            .register_type::<ClipRect>()
-            .configure_sets(
-```
-
-- [ ] Run GREEN — `cargo test -p buiy_core --lib clip_rect_is_copy_and_eq` → expect PASS.
-- [ ] Run THE GATE → green.
-- [ ] Commit: `feat(render): add ClipRect component (no Default, render-prep clip output)`
+There is no separate "define the component" task in R2 — the first
+behavioral task is the `clip.rs` geometry skeleton below.
 
 ---
 
-## Task 2 — `AncestorClip` component (ancestor-only clip for `Outline`)
-
-**Files**
-- Modify: `crates/buiy_core/src/components.rs`
-- Modify: `crates/buiy_core/src/lib.rs` (re-export + register)
-- Test: `crates/buiy_core/src/components.rs` (unit test)
-
-Canonical definition (spec § A.2). Same shape as `ClipRect`, distinct type — it holds the ancestor intersection **without** the own-box step. HEADLESS.
-
-- [ ] RED — add to `mod tests` in `crates/buiy_core/src/components.rs`:
-
-```rust
-    #[test]
-    fn ancestor_clip_is_distinct_copy_eq_type() {
-        let a = AncestorClip {
-            min: Vec2::ZERO,
-            max: Vec2::splat(10.0),
-        };
-        let b = a;
-        assert_eq!(a, b);
-        // Distinct type from ClipRect (this line only compiles if both exist).
-        let _c = ClipRect { min: a.min, max: a.max };
-    }
-```
-
-- [ ] Run RED — `cargo test -p buiy_core --lib ancestor_clip_is_distinct_copy_eq_type` → expect FAIL: `cannot find struct AncestorClip`.
-
-- [ ] GREEN — add the component to `crates/buiy_core/src/components.rs` (immediately after `ClipRect`):
-
-```rust
-/// Per-entity *ancestor-only* clip, written by `write_clip_rects`
-/// (render-prep). The intersection of the entity's **ancestor** clip
-/// boxes ONLY — the own-box step is NOT applied — so it bounds geometry
-/// an entity paints *outside* its own border box.
-///
-/// `Outline` reads this (not the self-intersected `ClipRect`), so an
-/// outline drawn outside the border box is clipped only by ancestors,
-/// never by the entity's own box (which would erase it).
-///
-/// Same logical-px, y-down, window-relative space as `ClipRect`. Absent
-/// `AncestorClip` ⇔ no ancestor clips this entity ⇒ the outline is
-/// unclipped.
-///
-/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A.2.
-#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
-#[reflect(Component)]
-pub struct AncestorClip {
-    /// Top-left corner, logical px, window-relative (y-down).
-    pub min: Vec2,
-    /// Bottom-right corner, logical px, window-relative (y-down).
-    pub max: Vec2,
-}
-```
-
-- [ ] Re-export + register in `crates/buiy_core/src/lib.rs`:
-
-```rust
-pub use components::{
-    AncestorClip, ClipRect, Node, ResolvedLayout, ResolvedTransform, StackingContext, Visual,
-};
-```
-and add `.register_type::<AncestorClip>()` after `.register_type::<ClipRect>()`.
-
-- [ ] Run GREEN — `cargo test -p buiy_core --lib ancestor_clip_is_distinct_copy_eq_type` → expect PASS.
-- [ ] Run THE GATE → green.
-- [ ] Commit: `feat(render): add AncestorClip component (ancestor-only clip for Outline)`
-
----
-
-## Task 3 — Clip geometry helpers (`clip.rs` module skeleton)
+## Task 1 — Clip geometry helpers (`clip.rs` module skeleton)
 
 **Files**
 - Create: `crates/buiy_core/src/render/clip.rs`
@@ -316,7 +203,7 @@ fn px_edge(len: Length) -> f32 {
 
 ---
 
-## Task 4 — `write_clip_rects`: own-box-only `ClipRect` for a single unclipped node emits nothing
+## Task 2 — `write_clip_rects`: own-box-only `ClipRect` for a single unclipped node emits nothing
 
 **Files**
 - Modify: `crates/buiy_core/src/render/clip.rs` (add the system)
@@ -379,7 +266,9 @@ fn unclipped_node_emits_no_clip_rect() {
 In `clip.rs`, add the public system (remove the Task-3 `#[allow(dead_code)]` now that the helpers are used):
 
 ```rust
-use crate::components::{AncestorClip, ClipRect, Node, ResolvedLayout};
+use crate::components::{Node, ResolvedLayout};
+// ClipRect / AncestorClip are owned by R1 — import, never redefine.
+use crate::render::components::{AncestorClip, ClipRect};
 use crate::layout::{
     BoxModel, ContainFlags, Containment, ContentVisibility, Display, Edges, Overflow, OverflowMode,
 };
@@ -535,7 +424,7 @@ Also re-export the system from `mod.rs`: `pub use clip::write_clip_rects;` (plac
 
 ---
 
-## Task 5 — Single `overflow: hidden` ancestor clips its child to the padding box
+## Task 3 — Single `overflow: hidden` ancestor clips its child to the padding box
 
 **Files**
 - Modify: `crates/buiy_core/src/render/clip.rs` (ancestor contribution: overflow clip)

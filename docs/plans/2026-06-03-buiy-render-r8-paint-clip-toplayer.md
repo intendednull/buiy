@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `BuiyNode` consume `StackingContext.painters_z` forward for paint, scissor each entity by its per-entity `ClipRect` (absent ⇒ full view), pin hit-test order as the exact reverse of paint order, and composite top-layer entries (already at the tail of the root `painters_z`) at the root in layout-decided tier order with no render-side re-sort.
+**Depends on:** R5 (`render/extract.rs` — owns `ExtractedNode` / `ExtractedNodes`, the per-view CPU instance set this phase extends with the paint-order walk + `clip` / `is_top_layer` fields) and R6 (the view-uniform `BuiyNode::run` rework + persistent prepare-phase buffers — where this phase's per-entity scissor + top-layer composite land). Execution order is **R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11**; R8 rebases onto the R5 + R6 target state and must land after both.
+
+**Goal:** Make the view-uniform `BuiyNode::run` (R6) consume `StackingContext.painters_z` forward for paint, scissor each entity by its per-entity `ClipRect` (absent ⇒ full view), pin hit-test order as the exact reverse of paint order, and composite top-layer entries (already at the tail of the root `painters_z`) at the root in layout-decided tier order with no render-side re-sort.
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [paint-order-and-top-layer.md](../specs/2026-06-03-buiy-render-pipeline-design/paint-order-and-top-layer.md) (all of §1–§6) and [clip-and-transform.md § A](../specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md#a-the-writecliprects-render-prep-pass) (ClipRect **consumption** only — the `WriteClipRects` producer is a sibling phase).
-**Architecture:** Render is a thin read-only consumer (README pillar 1). Layout's sub-pass 6f already wrote the immutable `StackingContext.painters_z` with top-layer members escaped to the root context's tail in tier order; this phase walks that order verbatim (no sort, no tree walk), reads each entity's `ClipRect` to derive a window-relative scissor rect, suppresses paint for `CssVisibility::Hidden` / `OffscreenAuto` subtrees, paints `Outline` against `AncestorClip` (not the own-box `ClipRect`), and composites the top-layer tail at the root with the window viewport as clip. The forward paint order and its exact reverse (hit-test order) are factored into pure functions so the §2 ordering identity is provable without a GPU.
+**Architecture:** Render is a thin read-only consumer (README pillar 1). Layout's sub-pass 6f already wrote the immutable `StackingContext.painters_z` with top-layer members escaped to the root context's tail in tier order; this phase walks that order verbatim (no sort, no tree walk), reads each entity's `ClipRect` to derive a window-relative scissor rect, suppresses paint for `CssVisibility::Hidden` / `OffscreenAuto` subtrees, paints `Outline` against `AncestorClip` (not the own-box `ClipRect`), and composites the top-layer tail at the root with the window viewport as clip. The paint-order walk and the per-entity `clip` / `is_top_layer` carriers attach to **R5's `ExtractedNode`** (the per-view CPU instance record), not the retired Phase-0 `DrawData`; the actual scissored draw + top-layer composite happen in **R6's view-uniform `BuiyNode::run`**, not the Phase-0 node. The forward paint order and its exact reverse (hit-test order) are factored into pure functions so the §2 ordering identity is provable without a GPU.
 **Tier/Test reality:** Mixed. The order-walk math, scissor-rect derivation, skip-rule consumption, and the paint/hit-test ordering identity are **HEADLESS** (pure fns + `App::new()+MinimalPlugins+CorePlugin+LayoutPlugin` integration, no wgpu adapter). The actual scissored draw and the top-layer ordering golden are **GPU** (real code, but `#[ignore]`-gated exactly like `render_smoke.rs` — CI has no wgpu adapter).
 
 ---
@@ -13,10 +15,10 @@
 
 Read these before starting (absolute paths):
 
-- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/mod.rs` — the Phase-0 extract (`extract_buiy_draws`) that today reads `(Visual, ResolvedLayout)` **unordered** and pushes `DrawData`. This phase replaces the unordered iteration with a `painters_z` walk.
-- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/node.rs` — `BuiyNode::run` (the GPU draw). This phase adds the per-entity scissor.
-- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/instance.rs` — `to_instance` (logical-px → clip-space). Reused as-is.
-- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/components.rs` — `StackingContext { painters_z: Vec<Entity> }`, `ResolvedLayout { position, size }`, `Visual`.
+- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/extract.rs` — **R5's** `extract_buiy_nodes`, the per-view `ExtractedNode` / `ExtractedNodes` carrier that walks `painters_z`. This phase extends `ExtractedNode` with the `clip` / `is_top_layer` fields and the paint-order walk; it does **not** touch the retired Phase-0 `extract_buiy_draws` / `DrawData` (R6 deletes those).
+- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/node.rs` — **R6's** view-uniform `BuiyNode::run` (the GPU draw, rebuilt onto `ExtractedNodes` + the persistent prepare-phase buffers). This phase adds the per-entity scissor + the top-layer-at-root composite here.
+- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/components.rs` — **R1's** sole home of the shared author-set + computed render components, including `ClipRect` / `AncestorClip` (`{ pub min: Vec2, pub max: Vec2 }`). This phase **imports** them; it never defines them.
+- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/components.rs` — `StackingContext { painters_z: Vec<Entity> }`, `ResolvedLayout { position, size }`.
 - `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/layout/components.rs` — `Stacking { z_index, isolation, top_layer }`.
 - `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/layout/types.rs` — `enum TopLayer { None, Modal, Popover, Tooltip, Fullscreen }`.
 - `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/tests/layout_stacking.rs` — the **idiom** for driving the real layout plugin so a genuine `StackingContext.painters_z` exists to assert against.
@@ -24,19 +26,20 @@ Read these before starting (absolute paths):
 
 ### Cross-phase dependencies (READ THIS — types this phase consumes but does NOT own)
 
-This phase is the **consumer** of components owned by sibling render-pipeline phases. At plan-authoring time these do **not** exist in the tree (grep-confirmed: no `ClipRect`, `AncestorClip`, `CssVisibility`, `OffscreenAuto`, `Outline` anywhere under `crates/`). The dependency direction is fixed by the spec:
+This phase is the **consumer** of components owned by **R1** (`render/components.rs` — the sole creator/definer of every shared render type) and the per-view carrier owned by **R5** (`render/extract.rs`). R8 lands after R1, R5, and R6, so by the time this phase runs every type below already exists in the tree — **R8 imports them, it never defines them**. The dependency direction is fixed by the spec:
 
-| Type | Canonical owner (sibling phase) | What this phase does with it |
-|---|---|---|
-| `ClipRect { min: Vec2, max: Vec2 }` | clip-and-transform.md § A.2 / component-model.md § 12 | **reads** (`Option<&ClipRect>`) → scissor rect; absent ⇒ no scissor |
-| `AncestorClip { min: Vec2, max: Vec2 }` | clip-and-transform.md § A.2 | **reads** for `Outline` clip (not own-box) |
-| `CssVisibility { Visible, Hidden, Collapse }` | component-model.md § 12 | **reads** `Hidden` → subtree paint-skip |
-| `OffscreenAuto` (marker) | component-model.md § 12.2 (layout-emitted) | **reads** → off-screen `content-visibility:auto` subtree paint-skip |
-| `Outline` | component-model.md § 7 | **reads** → outline primitive (clipped by `AncestorClip`) |
+| Type | Canonical owner | Where R8 imports it from | What this phase does with it |
+|---|---|---|---|
+| `ClipRect { pub min: Vec2, pub max: Vec2 }` | R1 (plain computed struct, no Reflect, not registered — clip-and-transform.md § A.2) | `crate::render::components` | **reads** (`Option<&ClipRect>`) → scissor rect; absent ⇒ no scissor |
+| `AncestorClip { pub min: Vec2, pub max: Vec2 }` | R1 (plain computed struct, no Reflect, not registered — clip-and-transform.md § A.2) | `crate::render::components` | **reads** for `Outline` clip (not own-box) |
+| `CssVisibility { Visible, Hidden, Collapse }` | R1 (author-set component — component-model.md § 12) | `crate::render::components` | **reads** `Hidden` → subtree paint-skip |
+| `OffscreenAuto` (marker) | R1 (layout-emitted marker — component-model.md § 12.2) | `crate::render::components` | **reads** → off-screen `content-visibility:auto` subtree paint-skip |
+| `Outline` | R1 (author-set component — component-model.md § 7) | `crate::render::components` | **reads** → outline primitive (clipped by `AncestorClip`) |
+| `ExtractedNode` / `ExtractedNodes` | R5 (per-view CPU instance set — architecture.md § 3.1) | `crate::render::extract` | **extends** `ExtractedNode` with `clip` / `is_top_layer`; the walk emits into `ExtractedNodes` |
 
-**How this plan stays buildable + gating without those phases landing first:** Task 1 defines the **minimal `ClipRect` and `AncestorClip` shapes** (the canonical definitions per clip-and-transform.md § A.2 — render does not invent them, it transcribes the spec's struct) in `render/clip.rs`, **only if a grep shows no `ClipRect` already exists in the crate** (a `// MOVED:` comment makes the hand-off explicit so the sibling phase deletes this copy and re-exports its own). `CssVisibility` / `OffscreenAuto` / `Outline` are consumed via **`Option<&T>` queries guarded behind their existence**; where a type is not yet in the tree, the task that needs it defines the **minimal render-read shape** in `render/skip.rs` / `render/clip.rs` with the same `// MOVED:` hand-off marker. Every such definition is `#[derive(Component, ...)]` matching the spec field-for-field, so when the owning phase lands, the consumer code is unchanged and the duplicate definition is deleted in favor of a re-export. **If, when you reach a task, the owning phase has already landed its type, skip the local definition and import the real one** — the test assertions are identical either way.
+**Guarded-import rule (no duplicate definitions).** Every shared type R8 touches is owned by R1 (or, for the per-view carrier, R5). When a task below reaches a type, **assume it already exists** (it does — R1/R5 landed first) and `use crate::render::components::{ClipRect, AncestorClip, CssVisibility, OffscreenAuto, Outline};` / `use crate::render::extract::{ExtractedNode, ExtractedNodes};`. **Do NOT define, re-export, register_type, or `pub mod` any of them.** No `render/clip.rs` / `render/skip.rs` definition of `ClipRect` / `AncestorClip` / `CssVisibility` / `OffscreenAuto` — those are R1's. The pure helpers this phase adds (`scissor_rect`, `flatten_paint_order`, `clip_for_primitive`, the skip predicate, the top-layer partition) live in render modules but operate over the **imported** types.
 
-This is the single assumed cross-phase dependency set. It is recorded in the final structured output.
+This cross-phase dependency set is recorded in the final structured output.
 
 ### THE GATE (every commit must keep this green — no xvfb, no wgpu adapter on this host or CI)
 
@@ -51,54 +54,31 @@ Run it before every commit. GPU tests are `#[ignore]`d so `cargo test --workspac
 
 ---
 
-## Task 1 — `ClipRect` / `AncestorClip` consumption shapes + the pure scissor-rect derivation (HEADLESS)
+## Task 1 — Import `ClipRect` / `AncestorClip` (R1) + the pure scissor-rect derivation (HEADLESS)
 
-Adds the per-entity clip rect type render reads, and the **pure function** that turns a `ClipRect` (logical-px, y-down, window-relative) into a wgpu scissor rect `(x, y, w, h)` in **physical** pixels, clamped to the view. This is the device-free half of "apply per-entity ClipRect as a scissor rect" — no GPU needed to prove the geometry.
+Adds the **pure function** that turns a `ClipRect` (logical-px, y-down, window-relative) into a wgpu scissor rect `(x, y, w, h)` in **physical** pixels, clamped to the view. This is the device-free half of "apply per-entity ClipRect as a scissor rect" — no GPU needed to prove the geometry. `ClipRect` / `AncestorClip` are **imported from R1's `render::components`** (the sole owner of every shared render type); this task does NOT define them.
 
 **Files**
-- Create: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/clip.rs`
+- Create: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/clip.rs` (the `scissor_rect` helper only — NO type definitions)
 - Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/mod.rs` (add `pub mod clip;`)
 - Test: inline `#[cfg(test)] mod tests` in `clip.rs`
 
 Steps:
 
-- [ ] **Pre-check (cross-phase):** run `rg -n "struct ClipRect" crates/` from the worktree root. If it already exists (sibling phase landed), import it instead of defining it and **skip the struct definition below** (keep only `scissor_rect` + tests, importing `ClipRect` from its real home).
+- [ ] **Guarded import (cross-phase):** `ClipRect` and `AncestorClip` already exist — they are owned by **R1** in `render/components.rs` (plain computed structs `{ pub min: Vec2, pub max: Vec2 }`, no `Reflect`, not registered, per clip-and-transform.md § A.2 + component-model.md § 13). Import them with `use crate::render::components::{ClipRect, AncestorClip};`. Do **NOT** define them here, do **NOT** add a `// MOVED:` shape, do **NOT** re-export or `register_type` them. R8 lands after R1, so a `rg -n "struct ClipRect" crates/` confirms the type is already present; if it is somehow absent, STOP — R1 has not landed and the execution order (R1 → … → R8) was violated.
 - [ ] Write the failing test first. Create `crates/buiy_core/src/render/clip.rs` with ONLY this content (the impl is stubbed to force a fail):
 
 ```rust
 //! Render-side **consumption** of the per-entity clip rect (clip-and-transform.md § A).
-//! Render reads `ClipRect`; it never re-derives it (the `WriteClipRects`
-//! render-prep pass is the producer, owned by the clip-and-transform phase).
+//! Render reads `ClipRect` (owned by R1, `render::components`); it never
+//! re-derives it (the `WriteClipRects` render-prep pass is the producer, owned
+//! by R2). This module holds only the pure scissor-rect derivation.
 //!
 //! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A.2,
 //!       docs/specs/2026-06-03-buiy-render-pipeline-design/paint-order-and-top-layer.md § 3.2.
 
+use crate::render::components::{AncestorClip, ClipRect};
 use bevy::prelude::*;
-
-// MOVED: canonical owner is clip-and-transform.md § A.2 (`WriteClipRects` pass).
-// Defined here as the render-read shape until that sibling phase lands its
-// producer; when it does, delete this and re-export the owner's `ClipRect`.
-/// Per-entity computed clip AABB, logical px, y-down, window-relative.
-/// Absent `ClipRect` ⇔ no ancestor clips this entity ⇒ render applies no scissor.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct ClipRect {
-    /// Top-left corner, logical px, window-relative (y-down).
-    pub min: Vec2,
-    /// Bottom-right corner, logical px, window-relative (y-down).
-    pub max: Vec2,
-}
-
-// MOVED: canonical owner is clip-and-transform.md § A.2. Ancestor-only clip
-// (no own-box step) — `Outline` reads this so a focus ring outside the border
-// box is clipped by ancestors but not erased by the entity's own box.
-/// Per-entity ancestor-only clip AABB, logical px, y-down, window-relative.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct AncestorClip {
-    /// Top-left corner, logical px, window-relative (y-down).
-    pub min: Vec2,
-    /// Bottom-right corner, logical px, window-relative (y-down).
-    pub max: Vec2,
-}
 
 /// A wgpu scissor rect in **physical** pixels: `(x, y, width, height)`.
 /// `None` ⇒ the clip is degenerate (empty) ⇒ render must skip the entity.
@@ -579,7 +559,7 @@ Render's forward walk drops `CssVisibility::Hidden` and `OffscreenAuto` entities
 
 Steps:
 
-- [ ] **Pre-check (cross-phase):** `rg -n "enum CssVisibility|struct OffscreenAuto" crates/`. If `CssVisibility` / `OffscreenAuto` already exist (component-model phase landed), import them and skip the local definitions below.
+- [ ] **Guarded import (cross-phase):** `CssVisibility` (`{ Visible, Hidden, Collapse }`) and `OffscreenAuto` (marker) already exist — they are author-set / layout-emitted components owned by **R1** in `render/components.rs` (component-model.md § 12 / § 12.2). Import them with `use crate::render::components::{CssVisibility, OffscreenAuto};`. Do **NOT** define them here, do **NOT** add a `// MOVED:` shape, do **NOT** re-export or `register_type` them. R8 lands after R1; if `rg -n "enum CssVisibility|struct OffscreenAuto" crates/` finds nothing, STOP — the execution order was violated.
 - [ ] Write the failing test first. Create `crates/buiy_core/src/render/skip.rs`:
 
 ```rust
@@ -588,31 +568,12 @@ Steps:
 //! paint) and `OffscreenAuto` (off-screen `content-visibility:auto`) entities
 //! AND their descendants. `Display::None` / `content-visibility:hidden` are
 //! layout-owned — those subtrees are absent from `painters_z`, so render needs
-//! no clause for them.
+//! no clause for them. `CssVisibility` / `OffscreenAuto` are owned by R1
+//! (`render::components`); this module holds only the pure skip predicate.
 //!
 //! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/paint-order-and-top-layer.md § 5.
 
-use bevy::prelude::*;
-
-// MOVED: canonical owner is component-model.md § 12. Defined here as the
-// render-read shape until that phase lands; delete + re-export when it does.
-/// CSS `visibility`. `Hidden` paints nothing for the entity + subtree but
-/// keeps the layout box. `Collapse` is a deferred marker (v1 paints it as
-/// `Visible`). Deliberately NOT `bevy::prelude::Visibility` (name collision).
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum CssVisibility {
-    #[default]
-    Visible,
-    Hidden,
-    Collapse,
-}
-
-// MOVED: canonical owner is component-model.md § 12.2 (layout-emitted).
-/// Marker: this entity's `content-visibility: auto` subtree is currently
-/// off-screen (layout's hysteresis-expanded viewport test). Render skips
-/// painting it + its descendants (§ 5.3).
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct OffscreenAuto;
+use crate::render::components::CssVisibility;
 
 /// True iff this entity (and therefore its subtree) must be skipped for paint:
 /// `CssVisibility::Hidden` (§ 5.4) or `OffscreenAuto` present (§ 5.3).

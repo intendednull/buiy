@@ -10,6 +10,8 @@
 
 **Tier/Test reality:** MIXED. HEADLESS (every-PR `cargo test`, no wgpu adapter): the `ColorToken` resolver + missing-token sentinel, the contrast helper, the forced-colors `Theme`-swap system (`App::new()` + `MinimalPlugins`), the `Theme::is_changed()` re-resolve, and both gate-#11 static analyzers. GPU (`#[ignore]`, no wgpu adapter on CI/this host): the gate-#2 / gate-#11(b) goldens — code + harness scaffold land here, captured only on the canonical CI GPU runner.
 
+**Depends on:** R1. Execution order across the render-pipeline plans: R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11. This is the **last** plan in the order. R1 is the sole creator of `crates/buiy_core/src/render/color.rs` and the sole definer of `ColorToken` + `SystemColorKeyword` (color-and-forced-colors.md § 2.0). This plan **extends** `color.rs` with resolution + forced-colors logic; it does **not** redefine those types and does **not** re-export them from `lib.rs`.
+
 ---
 
 ## The gate (every commit must keep this green)
@@ -53,7 +55,7 @@ Any test that needs a wgpu adapter (RenderApp construction, pipeline compilation
 
 | Task | Create | Modify | Test |
 |---|---|---|---|
-| 1 | `crates/buiy_core/src/render/color.rs` | `render/mod.rs` (`pub mod color;`), `lib.rs` (re-export), `crates/buiy/src/lib.rs` (re-export) | `crates/buiy_core/tests/render_color_token.rs` |
+| 1 | — | — (verify only; `render/color.rs` + `ColorToken`/`SystemColorKeyword` already exist, owned by R1) | `crates/buiy_core/tests/render_color_token.rs` |
 | 2 | — | `render/color.rs` (resolver + sentinel) | `crates/buiy_core/tests/render_color_token.rs` |
 | 3 | — | `theme.rs` (`SystemColorKeyword`, `forced_colors_theme()`, register) | `crates/buiy_core/tests/theme_forced_colors.rs` |
 | 4 | `crates/buiy_core/src/render/forced_colors.rs` | `render/mod.rs`, `render/color.rs` (system-color resolution), `lib.rs` | `crates/buiy_core/tests/render_forced_colors_swap.rs` |
@@ -66,19 +68,22 @@ Any test that needs a wgpu adapter (RenderApp construction, pipeline compilation
 
 ---
 
-## Task 1 — `ColorToken` + `SystemColorKeyword` types
+## Task 1 — verify the `ColorToken` + `SystemColorKeyword` types (owned by R1)
 
 **Files**
-- **Create:** `crates/buiy_core/src/render/color.rs`
-- **Modify:** `crates/buiy_core/src/render/mod.rs` (add `pub mod color;`), `crates/buiy_core/src/lib.rs` (re-export `ColorToken`, `SystemColorKeyword`), `crates/buiy/src/lib.rs` (re-export)
+- **Create:** — (nothing; `render/color.rs` already exists, owned by R1)
+- **Modify:** — (do **not** add `pub mod color;`, do **not** re-export from `lib.rs` or `crates/buiy/src/lib.rs` — R1 already did all of this)
 - **Test:** `crates/buiy_core/tests/render_color_token.rs`
 
-Defines the typed CSS `<color>` reference set from [color-and-forced-colors.md § 2.0](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md). HEADLESS — pure type + `Default`.
+> **Guarded import — do not redefine.** `crates/buiy_core/src/render/color.rs` and the `ColorToken` + `SystemColorKeyword` enums it holds are **created and owned by R1** ([color-and-forced-colors.md § 2.0](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md) is the canonical owner; R1 lands the enum, this plan extends the file with resolution + forced-colors logic). This task no longer *creates* the types — it **verifies their shape** with the test below and confirms the variant/keyword set this plan's resolver depends on. If R1's `color.rs` is missing or the variant set differs from what this test asserts, stop and reconcile with R1 before continuing; never re-`pub mod color;`, never re-add the `lib.rs` re-export, never redefine the enums.
 
-- [ ] **Write the failing test.** Create `crates/buiy_core/tests/render_color_token.rs`:
+Verifies the typed CSS `<color>` reference set from [color-and-forced-colors.md § 2.0](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md) is present (defined by R1). HEADLESS — pure type + `Default`.
+
+- [ ] **Write the verification test** (asserts R1's already-landed shape; it passes against R1's `color.rs`, it does not gate a new definition here). Create `crates/buiy_core/tests/render_color_token.rs`:
 
 ```rust
 //! `ColorToken` typed-variant + default tests. Pure-CPU, no GPU adapter.
+//! Verifies the R1-owned shape this plan's resolver (Task 2) extends.
 //! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md § 2.0.
 
 use buiy_core::render::color::{ColorToken, SystemColorKeyword};
@@ -110,125 +115,25 @@ fn system_color_keyword_set_has_all_sixteen() {
 }
 ```
 
-- [ ] **Run it — expect FAIL (does not compile, `color` module absent):**
+- [ ] **Run it — expect PASS** (R1 already landed `render/color.rs` + both enums, so the test compiles and passes):
   `cargo test -p buiy_core --test render_color_token`
-- [ ] **Minimal impl.** Create `crates/buiy_core/src/render/color.rs`:
+
+  If it FAILS to compile (`color` module / `ColorToken` / `SystemColorKeyword` absent), R1 has not landed yet — **stop and resolve the R1 dependency**; do **not** define the types here. The R1-owned shape this plan's resolver depends on is, for reference (do **not** copy it into a new file):
 
 ```rust
-//! Render-side color tokens and their resolution against `Res<Theme>`.
-//!
-//! A `ColorToken` is the typed CSS `<color>` reference set Buiy needs on the
-//! paint boundary; it is resolved to one `bevy_color::Color` at extract time
-//! (§ 2.1). Color is a leaf-value lookup — no tree traversal — so resolving it
-//! in extract does not violate pillar 1 (thin render consumer).
-//!
-//! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md.
-
-use bevy::prelude::*;
-use std::borrow::Cow;
-
-/// The 16 CSS system-color keywords (foundation-F, visuals.md § 3.3). Under
-/// forced-colors this is the *only* set that resolves (§ 3.1).
-#[derive(Reflect, Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum SystemColorKeyword {
-    Canvas,
-    CanvasText,
-    LinkText,
-    ButtonText,
-    ButtonBorder,
-    GrayText,
-    Highlight,
-    HighlightText,
-    Field,
-    FieldText,
-    Mark,
-    MarkText,
-    SelectedItem,
-    SelectedItemText,
-    AccentColor,
-    AccentColorText,
-}
-
-impl SystemColorKeyword {
-    /// The theme-map key for this keyword (e.g. `Canvas` → `"Canvas"`). The
-    /// forced-colors theme's `colors` map is keyed on exactly these strings
-    /// (§ 3.1); a normal theme need not carry them.
-    pub fn token(self) -> &'static str {
-        use SystemColorKeyword::*;
-        match self {
-            Canvas => "Canvas",
-            CanvasText => "CanvasText",
-            LinkText => "LinkText",
-            ButtonText => "ButtonText",
-            ButtonBorder => "ButtonBorder",
-            GrayText => "GrayText",
-            Highlight => "Highlight",
-            HighlightText => "HighlightText",
-            Field => "Field",
-            FieldText => "FieldText",
-            Mark => "Mark",
-            MarkText => "MarkText",
-            SelectedItem => "SelectedItem",
-            SelectedItemText => "SelectedItemText",
-            AccentColor => "AccentColor",
-            AccentColorText => "AccentColorText",
-        }
-    }
-
-    /// The 16-keyword set, in declaration order. Used by the forced-colors
-    /// stub theme builder (theme.rs) and the gate-#11 analyzer.
-    pub const ALL: [SystemColorKeyword; 16] = {
-        use SystemColorKeyword::*;
-        [
-            Canvas, CanvasText, LinkText, ButtonText, ButtonBorder, GrayText, Highlight,
-            HighlightText, Field, FieldText, Mark, MarkText, SelectedItem, SelectedItemText,
-            AccentColor, AccentColorText,
-        ]
-    };
-}
-
-/// A themeable color reference, resolved against `Res<Theme>` at extract time
-/// (§ 2.1). Default is `Transparent`, matching the empty-token "no fill" case
-/// and the CSS-initial semantics (component-model.md § 2/§ 3).
-#[derive(Reflect, Clone, Default, PartialEq, Debug)]
-pub enum ColorToken {
-    /// CSS `transparent` (and the empty-token "skip the fill" case). The
-    /// default; resolves to `Color::NONE` (alpha 0). Extract skips emitting a
-    /// quad for a transparent fill.
-    #[default]
-    Transparent,
-    /// A named theme token, e.g. `Token("surface")`. Resolves via
-    /// `Theme::color(name)`; a miss is the magenta sentinel + `warn!` (§ 2.2).
-    Token(Cow<'static, str>),
-    /// CSS `currentColor`. v1 FALLBACK (§ 2.0): resolves to the theme default
-    /// foreground token (`CanvasText` under forced-colors, else
-    /// `color.text.primary`) until `buiy-text-rendering-design` exposes the
-    /// inherited-text-color carrier — a TRACKED cross-spec dependency.
-    CurrentColor,
-    /// A CSS system-color keyword. Resolves against the active theme's
-    /// system-color map; under forced-colors this is the only set that
-    /// resolves (§ 3.1).
-    SystemColor(SystemColorKeyword),
-}
+// OWNED BY R1 — crates/buiy_core/src/render/color.rs (reference only, do not redefine).
+// SystemColorKeyword: the 16 CSS system-color keywords, with a `token(self) ->
+//   &'static str` method (e.g. Canvas → "Canvas") and a `const ALL: [_; 16]`
+//   declaration-order set (used by Task 3's stub theme and Task 7's analyzer).
+// ColorToken: { #[default] Transparent, Token(Cow<'static, str>), CurrentColor,
+//   SystemColor(SystemColorKeyword) }, deriving Reflect + Clone + Default +
+//   PartialEq + Debug. Default == Transparent (CSS-initial "no fill").
 ```
 
-Append to `crates/buiy_core/src/render/mod.rs` module list (after `pub mod node;`):
+This plan **extends** that file (Tasks 2, 6 append `resolve_token` / `MISSING_TOKEN_FALLBACK` / `contrast_ratio`); it never re-declares the enums, never re-adds `pub mod color;` to `render/mod.rs`, and never re-adds the `lib.rs` / `crates/buiy/src/lib.rs` re-exports — R1 owns all of that.
 
-```rust
-pub mod color;
-```
-
-Add to `crates/buiy_core/src/lib.rs` re-exports (a new line near the other `pub use`):
-
-```rust
-pub use render::color::{ColorToken, SystemColorKeyword};
-```
-
-Add the same re-export to `crates/buiy/src/lib.rs` inside the `pub use buiy_core::{ … render::color::{ColorToken, SystemColorKeyword}, … }` group (place it alongside the existing `theme::{…}` line as `render::color::{ColorToken, SystemColorKeyword},`).
-
-- [ ] **Run it — expect PASS:** `cargo test -p buiy_core --test render_color_token`
 - [ ] **Run the full gate** (see top). Resolve every warning.
-- [ ] **Commit:** `feat(render): add ColorToken + SystemColorKeyword typed color references`
+- [ ] **No commit for this task** — it is verification-only (no source change). Proceed to Task 2.
 
 ---
 
