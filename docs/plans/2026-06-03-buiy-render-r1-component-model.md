@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Depends on:** nothing. **Execution order:** R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11. R1 is the FIRST phase and the **sole creator** of `crates/buiy_core/src/render/components.rs` and `crates/buiy_core/src/render/color.rs`, and the **sole definer** of every shared render type: `Background`, `Border` (+ `BorderSide`, `Radius`, `Corners`, `LineStyle`), `BoxShadow` (+ `Shadow`), `Opacity` (manual `Default 1.0`), `Outline`, `CssVisibility`, `OffscreenAuto`, `ClipRect`, `AncestorClip`, `EffectGroup` (+ `EffectReason`), `Filter` (+ full 10-variant `FilterFn`), `MixBlendMode`, `BackdropFilter`, `Angle`, `ClipRadius`, and `ColorToken` (+ `SystemColorKeyword`, in `render/color.rs`). Every later phase imports these from `render::components` / `render::color` and MUST NOT redefine them, re-`pub mod`, or re-`register_type` them.
+
 **Goal:** Replace the temporary `Visual` carrier with the render-side component model from the render-pipeline spec (`Background`/`Border`/`BoxShadow`/`Opacity`/`Outline`/`CssVisibility`/`EffectGroup`/`ClipRect`/the reserved effect components), register the author-set ones, and migrate the Phase-0 render extract + button + example onto `Background`/`Border` with zero pixel-behavior change.
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [component-model.md](../specs/2026-06-03-buiy-render-pipeline-design/component-model.md) (all sections) and [color-and-forced-colors.md § 2.0](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md#20-the-colortoken-type) (`ColorToken`).
-**Architecture:** A new `crate::render::components` module holds every render-owned component as a small public-fielded decomposed component (foundation §1.3 convention), each deriving `Reflect + Default + Clone + Component` with the two computed exceptions (`ClipRect`, `EffectGroup`) carrying leaner derives. Author-set types are `register_type`'d in `BuiyRenderPlugin::build` **before** the RenderApp branch (so registration runs in the main world and is headless-testable). The extract path resolves a `ColorToken` against `Res<Theme>` exactly as Phase-0 resolved a `background_token` string, so the rounded-rect drawing behaviour and `render_smoke`/`render_instance` stay green.
+**Architecture:** A new `crate::render::components` module holds every render-owned component as a small public-fielded decomposed component (foundation §1.3 convention), each deriving `Reflect + Default + Clone + Component` with the computed exceptions (`ClipRect`, `AncestorClip`, `EffectGroup`) carrying leaner derives. `ColorToken` + `SystemColorKeyword` live in a sibling new module `crate::render::color` (spec color-and-forced-colors.md § 2.0 names color.rs as the canonical owner); `render/components.rs` imports `ColorToken` from `render::color`. Author-set types are `register_type`'d in `BuiyRenderPlugin::build` **before** the RenderApp branch (so registration runs in the main world and is headless-testable). The extract path resolves a `ColorToken` against `Res<Theme>` exactly as Phase-0 resolved a `background_token` string, so the rounded-rect drawing behaviour and `render_smoke`/`render_instance` stay green.
 **Tier/Test reality:** HEADLESS (unit/integration on CI). Every gating test in this plan runs under `App::new()` + `MinimalPlugins` (+ `CorePlugin`/`BuiyRenderPlugin` where a type registry is needed) with **no** wgpu adapter — the component model, `Default`/field math, `ColorToken` resolution, and `register_type` coverage need no GPU. The two pre-existing GPU tests in `render_smoke.rs` stay `#[ignore]`d (no wgpu adapter on CI/this host); this plan adds **no** new `#[ignore]` tests because nothing here constructs a RenderApp or compiles a pipeline.
 
 THE GATE — every commit must keep this green (this host + CI have NO xvfb and NO wgpu adapter):
@@ -35,36 +37,33 @@ Naming is **fixed by the spec**; do not invent names that contradict it. The exa
 
 ## Module layout decision (read once)
 
-All new component types go into a single new file `crates/buiy_core/src/render/components.rs`, declared `pub mod components;` in `render/mod.rs`. Rationale: the spec calls them "render-owned"; co-locating them under `render/` mirrors how layout types sit under `layout/`. Re-export the author-set public types from the crate root (`lib.rs`) and from `render/mod.rs` so `buiy::*` users and the migrated `button.rs`/`hello_button` reach them. `Visual` is deleted from `components.rs` and dropped from every re-export in the final migration task.
+All new component types go into a single new file `crates/buiy_core/src/render/components.rs`, declared `pub mod components;` in `render/mod.rs`. `ColorToken` + `SystemColorKeyword` live in a **sibling** new file `crates/buiy_core/src/render/color.rs`, declared `pub mod color;` in `render/mod.rs`; `render/components.rs` does `use crate::render::color::ColorToken;`. Rationale: the spec calls the components "render-owned"; co-locating them under `render/` mirrors how layout types sit under `layout/`, and color-and-forced-colors.md § 2.0 names `render/color.rs` as the canonical owner of `ColorToken` so the R11 forced-colors phase can EXTEND that same file with resolution logic (it must not redefine the enum). Re-export the author-set public types from the crate root (`lib.rs`) and from `render/mod.rs` so `buiy::*` users and the migrated `button.rs`/`hello_button` reach them; `ColorToken` re-exports from `render::color`. `Visual` is deleted from the crate-root `components.rs` and dropped from every re-export in the final migration task.
 
-`SystemColorKeyword` and `Angle` are **v1 unit prerequisites defined here** (the spec assigns ownership of `SystemColorKeyword`'s *resolution* to color-and-forced-colors.md and `buiy-theme-tokens-design`, but the *enum* must exist for `ColorToken::SystemColor(_)` to compile, exactly like `Angle` for `FilterFn::HueRotate`). Define them with the 16-keyword / radian-scalar shapes the spec names; do not implement resolution here.
+`SystemColorKeyword` (in `render/color.rs`) and `Angle` (in `render/components.rs`) are **v1 unit prerequisites defined here** (the spec assigns ownership of `SystemColorKeyword`'s *resolution* to color-and-forced-colors.md and `buiy-theme-tokens-design`, but the *enum* must exist for `ColorToken::SystemColor(_)` to compile, exactly like `Angle` for `FilterFn::HueRotate`). Define them with the 16-keyword / radian-scalar shapes the spec names; do not implement resolution here.
 
 ---
 
-## Task 1 — `ColorToken` + `SystemColorKeyword`
+## Task 1 — `ColorToken` + `SystemColorKeyword` (new `render/color.rs`)
 
-The themeable color reference every paint field holds. Default is `Transparent` (CSS-initial "no fill", matching `Visual.background_token == ""`).
+The themeable color reference every paint field holds. Default is `Transparent` (CSS-initial "no fill", matching `Visual.background_token == ""`). These two types live in their own new module `render/color.rs` — color-and-forced-colors.md § 2.0 names `render/color.rs` as the canonical owner so the R11 forced-colors phase can EXTEND this file with resolution logic. `render/components.rs` (created in Task 2 alongside `Background`) imports `ColorToken` from `render::color`.
 
 **Files**
-- Create: `crates/buiy_core/src/render/components.rs`
-- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod components;`)
+- Create: `crates/buiy_core/src/render/color.rs`
+- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod color;`)
 
 Steps:
 
-- [ ] Add `pub mod components;` to `crates/buiy_core/src/render/mod.rs` (next to the existing `pub mod instance;` etc.).
-- [ ] Write the failing test first. Create `crates/buiy_core/src/render/components.rs` with only the test module and a stub so the crate compiles to a failing assertion:
+- [ ] Add `pub mod color;` to `crates/buiy_core/src/render/mod.rs` (next to the existing `pub mod instance;` etc.). (`pub mod components;` is added in Task 2.)
+- [ ] Write the failing test first. Create `crates/buiy_core/src/render/color.rs` with only the test module and a stub so the crate compiles to a failing assertion:
 
 ```rust
-//! Render-owned components (the layout↔render paint boundary).
+//! The `ColorToken` themeable color reference (the layout↔render paint
+//! boundary's color seam) + the CSS `SystemColorKeyword` set. Canonical
+//! owner per color-and-forced-colors.md § 2.0; the R11 forced-colors phase
+//! EXTENDS this file with resolution logic (it must not redefine these
+//! enums). `render/components.rs` imports `ColorToken` from here.
 //!
-//! Replaces the temporary `crate::components::Visual`. Each author-set
-//! component is a small public-fielded decomposed component deriving
-//! `Reflect + Default + Clone + Component`; the two computed components
-//! (`ClipRect`, `EffectGroup`) carry leaner derives (no `Reflect`/`Default`)
-//! because they are render-prep outputs, never authored or serialized.
-//!
-//! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md
-//! and color-and-forced-colors.md § 2.0 (`ColorToken`).
+//! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md § 2.0.
 
 use bevy::prelude::*;
 use std::borrow::Cow;
@@ -142,22 +141,43 @@ mod tests {
 }
 ```
 
-- [ ] Run it and watch it FAIL to compile/build first if the module wiring is wrong, then pass. Command: `cargo test -p buiy_core --lib render::components` — expect the three `tests` to PASS once the file above compiles (this task's code *is* the implementation; the test is co-written, which is acceptable for pure type-shape tasks — the RED here is "module does not compile / not declared" before you add the `pub mod` line). If you want a strict RED first, add the `pub mod components;` line and the test module *before* the type definitions; `cargo test -p buiy_core --lib render::components` then fails with "cannot find type `ColorToken`".
+- [ ] Run it and watch it FAIL to compile/build first if the module wiring is wrong, then pass. Command: `cargo test -p buiy_core --lib render::color` — expect the three `tests` to PASS once the file above compiles (this task's code *is* the implementation; the test is co-written, which is acceptable for pure type-shape tasks — the RED here is "module does not compile / not declared" before you add the `pub mod` line). If you want a strict RED first, add the `pub mod color;` line and the test module *before* the type definitions; `cargo test -p buiy_core --lib render::color` then fails with "cannot find type `ColorToken`".
 - [ ] Run the full gate. Expect PASS.
-- [ ] Commit: `feat(render): add ColorToken + SystemColorKeyword (R1 component model)`.
+- [ ] Commit: `feat(render): add ColorToken + SystemColorKeyword in render/color.rs (R1 component model)`.
 
 ---
 
-## Task 2 — `Background`
+## Task 2 — `Background` (create `render/components.rs`)
 
-Solid color token (v1). Replaces `Visual.background_token`. Absent component == transparent.
+Solid color token (v1). Replaces `Visual.background_token`. Absent component == transparent. This task creates `render/components.rs` (the home of every render component except `ColorToken`/`SystemColorKeyword`, which live in `render/color.rs` from Task 1) and wires its module header, importing `ColorToken` from `render::color`.
 
 **Files**
-- Modify: `crates/buiy_core/src/render/components.rs`
+- Create: `crates/buiy_core/src/render/components.rs`
+- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod components;`)
 
 Steps:
 
-- [ ] Add the failing test to the `tests` module:
+- [ ] Add `pub mod components;` to `crates/buiy_core/src/render/mod.rs` (next to the `pub mod color;` from Task 1).
+- [ ] Create `crates/buiy_core/src/render/components.rs` with this header (it imports `ColorToken` from `render::color`; do NOT redefine `ColorToken`/`SystemColorKeyword` here):
+
+```rust
+//! Render-owned components (the layout↔render paint boundary).
+//!
+//! Replaces the temporary `crate::components::Visual`. Each author-set
+//! component is a small public-fielded decomposed component deriving
+//! `Reflect + Default + Clone + Component`; the computed components
+//! (`ClipRect`, `AncestorClip`, `EffectGroup`) carry leaner derives (no
+//! `Reflect`/`Default`) because they are render-prep outputs, never authored
+//! or serialized. `ColorToken`/`SystemColorKeyword` live in the sibling
+//! `render/color.rs` (color-and-forced-colors.md § 2.0 owns them).
+//!
+//! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md.
+
+use bevy::prelude::*;
+use crate::render::color::ColorToken;
+```
+
+- [ ] Add the failing test to the (new) `tests` module:
 
 ```rust
     #[test]
@@ -762,9 +782,9 @@ Steps:
     }
 
     #[test]
-    fn ancestor_clip_wraps_a_cliprect() {
-        let ac = AncestorClip(ClipRect { min: Vec2::ZERO, max: Vec2::splat(10.0) });
-        assert_eq!(ac.0.max, Vec2::splat(10.0));
+    fn ancestor_clip_holds_min_max() {
+        let ac = AncestorClip { min: Vec2::ZERO, max: Vec2::splat(10.0) };
+        assert_eq!(ac.max, Vec2::splat(10.0));
     }
 ```
 
@@ -801,11 +821,16 @@ impl ClipRect {
 /// Companion clip AABB holding the intersection of **ancestor** clip boxes
 /// only (without the own-box step). Read by render for `Outline` painting
 /// so a focus ring is cropped by ancestor clips but not by the element's
-/// own clip. Written by `WriteClipRects` (a later phase). NOT author-set.
+/// own clip. Written by `WriteClipRects` (a later phase). A plain `min`/`max`
+/// struct (a DISTINCT type from `ClipRect`, NOT a newtype wrapper) per spec
+/// clip-and-transform.md § A.2 + component-model.md § 13. NOT author-set.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 7 / § 9.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct AncestorClip(pub ClipRect);
+pub struct AncestorClip {
+    pub min: Vec2,
+    pub max: Vec2,
+}
 
 /// C (reserved). Rounded-clip corners — the sibling carrier for
 /// rounded-corner clipping, not built in v1. The rounded-rect / `clip-path`
@@ -1227,6 +1252,7 @@ Replace the button's `Visual { background_token, foreground_token, border_radius
 - Modify: `crates/buiy_widgets/src/button.rs`
 - Modify: `examples/hello_button/src/main.rs` (only if it constructs `Visual` directly — it does not; it uses `Button::new`, so likely no change beyond a compile check)
 - Modify: `crates/buiy_core/src/components.rs` (delete `Visual` + its test references)
+- Modify: `crates/buiy_core/tests/components.rs` (delete the `Visual`-registered assertion + rename the test — see step below; verified: line 24 asserts `registry.get::<Visual>().is_some()` and line 6 names the test `..._and_visual_...`, both go red the moment `Visual` is deleted)
 - Modify: `crates/buiy_core/src/lib.rs` (drop `Visual` from `pub use components::{...}` and from `register_type::<Visual>()`)
 - Modify: `crates/buiy/src/lib.rs` (drop `Visual` from the re-export)
 

@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the Phase-0 single hard-format rounded-rect pipeline with a set of typed-primitive `SpecializedRenderPipeline`s (quad / box-shadow / border / outline) keyed on the target `ColorTargetState` format (view format + `Rgba16Float` group targets), each backed by its own WGSL SDF shader under the stable `0xB01A_01XX` render-asset UUID octets.
+**Depends on:** R6 (`render/buckets.rs` — owns the shared `BuiyPrimitiveKind { Quad, Shadow, Border, Outline }` enum and CPU instance bucketing; R7 **imports** that enum, it does not redefine it). Execution order: R1 → R2 → R3 → R4 → R5 → R6 → **R7** → R8 → (R9, R10) → R11. R7 must land after R6 so `BuiyPrimitiveKind` exists to import.
+
+**Goal:** Replace the Phase-0 single hard-format rounded-rect pipeline with a set of typed-primitive `SpecializedRenderPipeline`s (quad / box-shadow / outline) keyed on the target `ColorTargetState` format (view format + `Rgba16Float` group targets), each backed by its own WGSL SDF shader under the stable `0xB01A_01XX` render-asset UUID octets. **Border is folded into the `quad` SDF pipeline** ([architecture.md § 1.4 / § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set): "`quad` … border = outer-minus-inner SDF band") — it is **not** a separate shader or octet; `BuiyPrimitiveKind::Border` is a CPU-bucketing distinction (owned by R6) that maps to the **quad** pipeline+shader, exactly as `Outline` does.
 
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [architecture.md](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md) § 1.4 (typed-primitive pipelines, `SpecializedRenderPipeline` per format, the normative octet table) + § 2.1/§ 2.2 (the primitive set, batching), and [color-and-forced-colors.md](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md) § 1 (linear-light render, one pipeline per target format, the blend-space seam).
 
-**Architecture:** A wgpu `RenderPipeline`'s fragment `ColorTargetState.format` is fixed at creation, so a single pipeline cannot target both the view's `Rgba8UnormSrgb` attachment and the `Rgba16Float` effect-group targets. Each typed primitive therefore becomes a `SpecializedRenderPipeline` keyed on the target format; `Buiy` builds each primitive for both formats. The specialization key is a tiny pure value (`BuiyPrimitiveKey`) so the "distinct key ⇒ distinct `CachedRenderPipelineId` per format" mapping logic and the descriptor construction are unit-testable with no wgpu adapter; the WGSL is validated by parsing with `naga` (no GPU). Actual pipeline compilation and draw stay GPU-only and ride the `#[ignore]` e2e path. This phase keeps the Phase-0 rounded-rect visual behavior intact — it becomes the `quad` primitive — and adds shadow/border/outline shaders + descriptors without yet wiring the new component model (that is a sibling phase; this phase wires the *pipelines* and proves the *specialization key* logic).
+**Architecture:** A wgpu `RenderPipeline`'s fragment `ColorTargetState.format` is fixed at creation, so a single pipeline cannot target both the view's `Rgba8UnormSrgb` attachment and the `Rgba16Float` effect-group targets. Each typed primitive therefore becomes a `SpecializedRenderPipeline` keyed on the target format; `Buiy` builds each primitive for both formats. The specialization key is a tiny pure value (`BuiyPrimitiveKey`) whose `kind` field is the shared `BuiyPrimitiveKind` enum **owned by R6 (`render/buckets.rs`)** — R7 imports it, never redefines it. The "distinct key ⇒ distinct `CachedRenderPipelineId` per format" mapping logic and the descriptor construction are unit-testable with no wgpu adapter; the WGSL is validated by parsing with `naga` (no GPU). Actual pipeline compilation and draw stay GPU-only and ride the `#[ignore]` e2e path. This phase keeps the Phase-0 rounded-rect visual behavior intact — it becomes the `quad` primitive — and adds the shadow shader + outline/border key variants (both share the quad shader) without yet wiring the new component model (that is a sibling phase; this phase wires the *pipelines* and proves the *specialization key* logic). **Border is folded into the quad SDF** (outer-minus-inner band, [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)) — no separate border shader, no new octet.
 
 **Tier/Test reality:** GPU (code + `#[ignore]` e2e — no wgpu adapter on CI / this host). The **gating** (always-green) tests are device-free: the specialization-key pure logic, the descriptor-construction pure logic (format/blend/UUID assertions over the returned `RenderPipelineDescriptor`), the per-format-distinct-id mapping over a stub cache, and `naga` WGSL parse/entry-point checks. The **`#[ignore]`** tests (need a wgpu adapter) are: `SpecializedRenderPipelines::specialize` producing real `CachedRenderPipelineId`s through a live `PipelineCache`, pipeline-queued/compiled assertions, and any draw. Mark them `#[ignore]` with the same wording `render_smoke.rs` already uses.
 
@@ -28,8 +30,8 @@ cargo fmt --all -- --check && \
 ## Conventions this plan assumes (read once)
 
 - **Worktree root:** `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline`. All paths below are relative to it unless absolute.
-- **UUID octets are normative** ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)). Reserved range `0xB01A_0100_..` through `0xB01A_01FF_..`. Assignments this phase realizes (do **not** renumber): `..01` quad/rounded-rect (exists), `..02` shadow, `..04` border (border is a `quad`-family SDF in the spec primitive table but gets its own pipeline+shader here — it is **not** octet `..03` glyph-alpha, which the atlas phase owns, nor `..05` composite). Outline reuses the **quad** pipeline+shader (`..01`) per [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set) ("`Outline` … is the existing quad pipeline with the clip rect suppressed"), so outline adds **no new shader UUID** — it is a key variant, not a new primitive shader.
-- **Border octet.** The spec's normative table reserves `..01`/`..02`/`..03`(glyph)/`..04`(path)/`..05`(composite). Border is **not** separately octetted in that table because the spec folds the border band into the `quad` SDF (`border = outer-minus-inner SDF band`, [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)). This phase ships border as a **distinct pipeline+shader for the stroked per-side / elliptical-radius case**, and reserves it the next free F-tier octet **after** the spec's enumerated set without colliding: it uses `..06` and documents the addition in the `pipeline.rs` octet comment block (the spec says "Each octet is documented in the `pipeline.rs` comment block as the shader lands" and "plans realize but do not renumber" the *enumerated* ones — `..06` is a new addition this plan introduces inside the reserved `0xB01A_01..` range, not a renumber of an enumerated octet). If a reviewer prefers folding border into the quad shader instead, that is a design change to raise before Task 6, not a silent deviation.
+- **UUID octets are normative** ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)). Reserved range `0xB01A_0100_..` through `0xB01A_01FF_..`. Assignments this phase realizes (do **not** renumber): `..01` quad/rounded-rect (exists), `..02` shadow. `..03` glyph-alpha (atlas phase), `..04` path (C-tier reserved), and `..05` composite (effect-compositor phase) are **not** built here. This phase adds **no new octet**: border folds into `..01` (next bullet), outline reuses `..01`.
+- **Border folds into the quad SDF — no separate shader, no new octet.** The spec's normative primitive table ([architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)) defines `quad` as "Background fill + border band + rounded corners" with "border = outer-minus-inner SDF band" — i.e. the border band is part of the **quad** primitive, not a separate one. R7 follows the spec: `BuiyPrimitiveKind::Border` (the CPU-bucketing variant owned by R6/`buckets.rs`) maps to the **quad** pipeline+shader (`..01`), exactly as `Outline` does. There is **no** `border.wgsl`, **no** `BORDER_SHADER_UUID`, and **no** `..06` octet. (An earlier draft of this plan shipped a distinct `..06` border shader; that was a deviation from the spec's folded-band model and is removed per the plan-reconciliation review. If a reviewer ever wants a standalone stroked-border pipeline for the elliptical per-corner case, that is a *spec amendment* to raise against architecture.md § 2.1 first, not a silent plan deviation.) Outline likewise reuses the **quad** pipeline+shader (`..01`) per § 2.1 ("`Outline` … is the existing quad pipeline with the clip rect suppressed"), so it too adds **no new shader UUID** — it is a key variant, not a new primitive shader.
 - **Format key.** The two target formats are `TextureFormat::Rgba8UnormSrgb` (the `Camera2d` default view, via `ViewTarget::main_texture_format()` — owned by [architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)) and `TextureFormat::Rgba16Float` (effect-group targets). The view format on an opt-in HDR view is also `Rgba16Float`; the key is the **format**, so HDR-view and group-target variants coincide and dedupe through the same `SpecializedRenderPipelines` cache — that dedup is an explicit gating-test assertion (Task 3).
 - **Blend space.** All pipelines keep `BlendState::ALPHA_BLENDING` (the Phase-0 setting). The encoded-vs-linear blend-space seam ([color-and-forced-colors.md § 1.1](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md#11-the-invariant)) is a consequence of the target *format*, not a per-pipeline blend change, so no pipeline sets a different `BlendState`.
 - **No component-model wiring here.** `Background`/`Border`/`BoxShadow`/`Outline` *components* and the extract rewrite are sibling phases. This phase touches only `crates/buiy_core/src/render/{pipeline,shader.wgsl}` and adds `shaders/` WGSL + a `primitive` module; the Phase-0 `node.rs` keeps drawing the quad via the existing path (Task 8 only swaps the quad pipeline-id source so the node still compiles and the existing GPU smoke test still asserts a registered quad pipeline).
@@ -94,13 +96,15 @@ Steps:
 
 ---
 
-## Task 1 — `BuiyPrimitiveKind` enum + `BuiyPrimitiveKey` specialization key (pure types)
+## Task 1 — `BuiyPrimitiveKey` specialization key (pure type; imports `BuiyPrimitiveKind` from R6)
 
-**Why:** The specialization key is the single device-free fulcrum of this phase: `(primitive, target_format)` → one pipeline variant. Define it as a tiny `Clone + Hash + PartialEq + Eq` value (the bound `SpecializedRenderPipeline::Key` requires) and prove its construction/equality before any descriptor or shader work. No GPU.
+**Why:** The specialization key is the single device-free fulcrum of this phase: `(primitive, target_format)` → one pipeline variant. Define `BuiyPrimitiveKey` as a tiny `Clone + Hash + PartialEq + Eq` value (the bound `SpecializedRenderPipeline::Key` requires) and prove its construction/equality before any descriptor or shader work. No GPU.
+
+**Ownership guard — do NOT redefine `BuiyPrimitiveKind`.** The shared `BuiyPrimitiveKind { Quad, Shadow, Border, Outline }` enum is **owned by R6** (`crates/buiy_core/src/render/buckets.rs`, the CPU instance-bucketing module). It already exists by the time R7 runs (execution order R6 → R7). R7 **imports** it (`use crate::render::buckets::BuiyPrimitiveKind;`) and does **not** redefine it, does **not** re-export it, does **not** add a parallel copy in `primitive.rs`. `primitive.rs` owns only `BuiyPrimitiveKey`.
 
 **Files**
-- Create: `crates/buiy_core/src/render/primitive.rs`
-- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod primitive;`)
+- Create: `crates/buiy_core/src/render/primitive.rs` (defines `BuiyPrimitiveKey` **only**; imports `BuiyPrimitiveKind` from `crate::render::buckets`)
+- Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod primitive;` — `pub mod buckets;` is already added by R6, do **not** re-add it)
 - Test: `crates/buiy_core/tests/render_primitive_key.rs`
 
 Steps:
@@ -112,7 +116,10 @@ Steps:
   //! `SpecializedRenderPipeline` variant selection (architecture.md § 1.4).
 
   use bevy::render::render_resource::TextureFormat;
-  use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitiveKind};
+  // `BuiyPrimitiveKind` is owned by R6 (render::buckets); `BuiyPrimitiveKey`
+  // is owned here (render::primitive). Import each from its real owner.
+  use buiy_core::render::buckets::BuiyPrimitiveKind;
+  use buiy_core::render::primitive::BuiyPrimitiveKey;
 
   #[test]
   fn kind_variants_are_distinct() {
@@ -173,35 +180,26 @@ Steps:
   ```sh
   cargo test -p buiy_core --test render_primitive_key
   ```
-- [ ] Minimal impl. Create `crates/buiy_core/src/render/primitive.rs`:
+- [ ] **Guard:** confirm `BuiyPrimitiveKind` already exists in `crates/buiy_core/src/render/buckets.rs` (it does — owned by R6). Do **not** redefine it. If it is somehow missing, R6 has not landed; stop and resolve the ordering, do not re-create the enum here.
+- [ ] Minimal impl. Create `crates/buiy_core/src/render/primitive.rs` — it defines `BuiyPrimitiveKey` only and **imports** `BuiyPrimitiveKind` from R6's `buckets` module:
   ```rust
   //! Typed-primitive pipeline specialization: the device-free key that selects
   //! one `SpecializedRenderPipeline` variant per `(primitive, target format)`.
   //!
   //! A wgpu `RenderPipeline`'s fragment `ColorTargetState.format` is fixed at
-  //! creation, so each typed primitive (quad / shadow / border / outline) is a
-  //! `SpecializedRenderPipeline` keyed on the target format; Buiy builds each
-  //! for both the view format (`Rgba8UnormSrgb` by default) and the
-  //! `Rgba16Float` effect-group target format. See
+  //! creation, so each typed primitive (quad / shadow / outline; border folds
+  //! into quad) is a `SpecializedRenderPipeline` keyed on the target format;
+  //! Buiy builds each for both the view format (`Rgba8UnormSrgb` by default)
+  //! and the `Rgba16Float` effect-group target format. See
   //! `docs/specs/2026-06-03-buiy-render-pipeline-design/architecture.md` § 1.4.
+  //!
+  //! `BuiyPrimitiveKind` is **owned by `crate::render::buckets`** (R6); this
+  //! module imports it and adds only the `(kind, format)` specialization key.
 
   use bevy::render::render_resource::TextureFormat;
 
-  /// The fixed set of typed SDF primitives Buiy paints
-  /// (architecture.md § 2.1). `Outline` reuses the quad shader/pipeline family
-  /// with the element's own clip suppressed; it is a distinct *key* variant so
-  /// the compositor can address it, not a separate shader.
-  #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-  pub enum BuiyPrimitiveKind {
-      /// Background fill + rounded corners (the Phase-0 rounded-rect).
-      Quad,
-      /// `BoxShadow` entries — Gaussian-blurred rounded-rect SDF.
-      Shadow,
-      /// Per-side stroked band with elliptical per-corner radius.
-      Border,
-      /// Focus indicator — quad-family SDF painted outside the border box.
-      Outline,
-  }
+  // Owned by R6 (render::buckets) — imported, not redefined.
+  use crate::render::buckets::BuiyPrimitiveKind;
 
   /// One `SpecializedRenderPipeline` variant: a primitive built for a specific
   /// target color-attachment format. `Key` for the typed-primitive
@@ -215,7 +213,8 @@ Steps:
       pub format: TextureFormat,
   }
   ```
-- [ ] Add `pub mod primitive;` to `crates/buiy_core/src/render/mod.rs` (alongside the existing `pub mod instance; pub mod node; pub mod pipeline;`).
+  > If `BuiyPrimitiveKey` re-exporting `BuiyPrimitiveKind` is convenient for downstream imports, add `pub use crate::render::buckets::BuiyPrimitiveKind;` here — but the **definition** stays in `buckets.rs`. Prefer importing from `buckets` at each use site to keep ownership unambiguous.
+- [ ] Add `pub mod primitive;` to `crates/buiy_core/src/render/mod.rs`. Do **not** add `pub mod buckets;` — R6 already added it. (`pub mod instance; pub mod node; pub mod pipeline;` are the Phase-0 modules already present.)
 - [ ] Run — expect **PASS** (all three tests green).
 - [ ] Run the full gate. Commit.
   - Commit: `feat(render): add typed-primitive specialization key`
@@ -243,7 +242,8 @@ Steps:
   use bevy::render::render_resource::{
       BlendState, SpecializedRenderPipeline, TextureFormat,
   };
-  use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitiveKind, BuiyPrimitives};
+  use buiy_core::render::buckets::BuiyPrimitiveKind;
+  use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
 
   fn descriptor_for(kind: BuiyPrimitiveKind, format: TextureFormat) {
       // exercised via the asserts in each test; helper kept for readability

@@ -2,26 +2,31 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the `WriteEffectGroups` render-prep pass that derives the `EffectGroup { reason: EffectReason }` marker on every entity that forms an off-screen compositing boundary, and removes it when none of the five formers hold.
-**Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [effect-compositor.md § 1](../specs/2026-06-03-buiy-render-pipeline-design/effect-compositor.md) (the canonical former predicate + who writes `EffectGroup`) and [component-model.md § 10](../specs/2026-06-03-buiy-render-pipeline-design/component-model.md) (the `EffectGroup` / `EffectReason` struct).
-**Architecture:** `WriteEffectGroups` is a main-world render-prep system. It reads the five effect inputs (`Opacity`, `Stacking.isolation`, `Filter`, `MixBlendMode`, `BackdropFilter`), OR-s their reason bits, and inserts/removes a derived `EffectGroup` carrying that `EffectReason` flag set. It is scheduled alongside `WriteClipRects` in the render-prep window — `.after(BuiySet::Animate).before(BuiySet::Picking)` — so picking and the render extract see a current marker. This phase writes **only** the marker; per-group target sizing/allocation is a render-world Prepare pass owned by later phases (R6/R9).
+**Depends on:** R1 (sole creator of `render/components.rs` + `render/color.rs` and sole definer of `Opacity`/`Filter`/`FilterFn`/`MixBlendMode`/`BackdropFilter`/`EffectGroup`/`EffectReason`). Execution order: R1 → R2 → R3 → **R4** → R5 → R6 → R7 → R8 → (R9, R10) → R11.
+
+**Goal:** Implement the `WriteEffectGroups` render-prep pass that derives the `EffectGroup { reason: EffectReason }` marker on every entity that forms an off-screen compositing boundary, and removes it when none of the five formers hold. The marker type and the five effect-input components are **owned by R1** (`render/components.rs`); this phase imports them and contributes only the predicate + system.
+**Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [effect-compositor.md § 1](../specs/2026-06-03-buiy-render-pipeline-design/effect-compositor.md) (the canonical former predicate + who writes `EffectGroup`) and [component-model.md § 10](../specs/2026-06-03-buiy-render-pipeline-design/component-model.md) (the `EffectGroup` / `EffectReason` struct, defined by R1).
+**Architecture:** `WriteEffectGroups` is a main-world render-prep system. It reads the five effect inputs (`Opacity`, `Stacking.isolation`, `Filter`, `MixBlendMode`, `BackdropFilter` — all owned by R1's `render/components.rs`), OR-s their reason bits, and inserts/removes a derived `EffectGroup` carrying that `EffectReason` flag set. It is scheduled alongside `WriteClipRects` in the render-prep window — `.after(BuiySet::Animate).before(BuiySet::Picking)` — so picking and the render extract see a current marker. This phase writes **only** the marker; per-group target sizing/allocation is a render-world Prepare pass owned by later phases (R6/R9).
 **Tier/Test reality:** HEADLESS (unit/integration on CI). Every test in this plan runs under `App::new()` + `MinimalPlugins` with no wgpu adapter and no `RenderApp`. `WriteEffectGroups` touches only main-world ECS components and CPU predicate math — there is **nothing GPU here**, so there are **no `#[ignore]` GPU tests** in this phase.
 
 ---
 
 ## Cross-phase dependency (read before starting)
 
-The five effect-input components and the `EffectGroup` / `EffectReason` output types are, per the spec, owned by the **render component-model phase** ([component-model.md §§ 6, 8, 10](../specs/2026-06-03-buiy-render-pipeline-design/component-model.md)). At the time this plan was authored **none of them exist in the codebase** (grep-confirmed: no `Opacity`, `Filter`, `MixBlendMode`, `BackdropFilter`, `EffectGroup`, or `EffectReason` anywhere). This plan is therefore written to be **self-contained**: Task 1 creates the four effect-input components, and Task 2 creates the `EffectReason` / `EffectGroup` output types, in a new `crates/buiy_core/src/render/effect.rs` module.
+The five effect-input components and the `EffectGroup` / `EffectReason` output types are, per the spec, owned by the **render component-model phase R1** ([component-model.md §§ 6, 8, 10](../specs/2026-06-03-buiy-render-pipeline-design/component-model.md)), which lands `crates/buiy_core/src/render/components.rs` as their **sole home**. R1 runs before R4 (execution order R1 → R2 → R3 → R4), so by the time you execute this plan they already exist:
 
-**If the component-model phase has already landed these types when you execute this plan**, do NOT duplicate them: skip Tasks 1–2's *type creation* (keep their tests as regression coverage, re-pointing imports at the existing definitions), and start the real work at Task 3. Verify with:
+- `Opacity` (manual `Default` 1.0), `Filter` (+ the **full 10-variant** `FilterFn`), `MixBlendMode`, `BackdropFilter` — the four render-owned effect inputs (`Stacking.isolation` is the fifth, already in `layout::components`).
+- `EffectGroup { reason: EffectReason }` (no `Reflect`, no `Default`) + the `EffectReason` bitflags — the predicate output.
+
+**Do NOT redefine, re-export, register, or `pub mod` any of these.** Import them from `crate::render::components` (or the `buiy_core` crate-root re-exports R1 already adds). This phase contributes **only** `effect_reason_for` + `write_effect_groups` in a new `crates/buiy_core/src/render/effect.rs` module. Verify the owners exist before starting:
 
 ```sh
-grep -rn "struct Opacity\|enum MixBlendMode\|struct EffectGroup\|struct EffectReason\|EffectReason:" crates/buiy_core/src/
+grep -rn "struct Opacity\|enum MixBlendMode\|struct EffectGroup\|struct EffectReason\|EffectReason:\|enum FilterFn" crates/buiy_core/src/render/components.rs
 ```
 
-If that prints definitions, the types exist — adapt imports and proceed from Task 3. If it prints nothing, build them here as written. Either way the `WriteEffectGroups` system (Tasks 3–8) is this phase's deliverable and is identical.
+That MUST print the definitions (R1 landed them). If it prints nothing, R1 has not landed — stop and land R1 first; do not build these types here.
 
-The spec uses `Length` (for `Filter`/`BackdropFilter`'s `FilterFn::Blur` and the radius/shadow fields) and `Angle` (for `FilterFn::HueRotate`). `Length` already exists in `crate::layout::types`. To keep this phase scoped to *effect-group formation* and not the full `FilterFn` surface, Tasks 1's `Filter` / `BackdropFilter` carry `Vec<FilterFn>` with a **minimal** `FilterFn` enum sufficient for the predicate (a non-empty list is all the former needs). The full `FilterFn` variant set + `Angle` stub are component-model's concern; if component-model lands first it supplies the richer enum and you import it instead.
+`Length` (for `FilterFn::Blur`) and `Angle` (for `FilterFn::HueRotate`) are already provided: `Length` in `crate::layout::types`, `Angle` in R1's `render/components.rs`. R1's `FilterFn` is the **full 10-variant** CSS surface — the predicate only needs "non-empty list", so it reads that richer enum transparently (any variant counts as a former). There is no minimal `FilterFn` stub in this phase.
 
 ---
 
@@ -42,76 +47,45 @@ The spec uses `Length` (for `Filter`/`BackdropFilter`'s `FilterFn::Blur` and the
 
 ---
 
-## Task 1 — The four effect-input components (`Opacity`, `Filter`, `MixBlendMode`, `BackdropFilter`)
+## Task 1 — Create `render/effect.rs` (system module only; import all types from R1)
 
-These are the predicate inputs `WriteEffectGroups` reads. `Stacking.isolation` (the fifth input) already exists in `layout::components` and needs nothing here.
+This phase owns **no** types. The five effect-input components (`Opacity`, `Filter` + the full 10-variant `FilterFn`, `MixBlendMode`, `BackdropFilter`) and the predicate output (`EffectGroup` / `EffectReason`) are **already defined by R1 in `crate::render::components`** (R1 runs first — verified by the grep in the Cross-phase section). Create `render/effect.rs` as a thin module holding only `effect_reason_for` (Task 2) and `write_effect_groups` (Tasks 3–7); this task just stands the module up with its imports.
+
+**Guarded-import rule:** `render/components.rs` and all of the above types already exist (owned by R1). Do **NOT** redefine them, do **NOT** add `pub mod components;`, do **NOT** re-export them from `lib.rs`, do **NOT** `register_type` them. Import them from `crate::render::components`.
 
 **Files**
-- Create: `crates/buiy_core/src/render/effect.rs`
+- Create: `crates/buiy_core/src/render/effect.rs` (module header + imports only)
 - Modify: `crates/buiy_core/src/render/mod.rs` (add `pub mod effect;`)
-- Modify: `crates/buiy_core/src/lib.rs` (re-export the new public types)
-- Test: `crates/buiy_core/src/render/effect.rs` (inline `#[cfg(test)] mod tests`)
 
 ### Steps
 
-- [ ] **Write the failing test.** Create `crates/buiy_core/src/render/effect.rs` with only the test module first so it fails to compile (RED = the types don't exist yet):
+- [ ] **Create the module** `crates/buiy_core/src/render/effect.rs` with the header doc-comment and the R1-type imports — no type definitions:
 
   ```rust
-  //! Render-owned effect components and the derived `EffectGroup` marker.
+  //! The `WriteEffectGroups` render-prep pass: derive the `EffectGroup`
+  //! marker from the five effect formers.
   //!
-  //! The four effect-input components here (`Opacity`, `Filter`,
-  //! `MixBlendMode`, `BackdropFilter`) plus the layout-owned
-  //! `Stacking.isolation` field are the inputs to the canonical
-  //! effect-group-former predicate; `EffectGroup` / `EffectReason` (§ 2 of
-  //! this module) are its output. Predicate + ownership:
+  //! The effect-input components (`Opacity`, `Filter`/`FilterFn`,
+  //! `MixBlendMode`, `BackdropFilter`) and the predicate output
+  //! (`EffectGroup` / `EffectReason`) are owned by R1's
+  //! `crate::render::components` — this module defines **no** types, only the
+  //! predicate (`effect_reason_for`) and the system (`write_effect_groups`).
+  //! The layout-owned `Stacking.isolation` field is the fifth input.
+  //!
+  //! Predicate + ownership:
   //! docs/specs/2026-06-03-buiy-render-pipeline-design/effect-compositor.md § 1.
-  //! Struct shapes: component-model.md §§ 6, 8, 10.
+  //! Struct shapes (owned by R1): component-model.md §§ 6, 8, 10.
 
   use bevy::prelude::*;
 
-  #[cfg(test)]
-  mod tests {
-      use super::*;
-      use crate::layout::Length;
-
-      #[test]
-      fn opacity_default_is_one() {
-          // CSS initial value `opacity: 1` — NOT the derived `Opacity(0.0)`.
-          assert_eq!(Opacity::default().0, 1.0);
-      }
-
-      #[test]
-      fn filter_default_is_empty() {
-          assert!(Filter::default().0.is_empty());
-      }
-
-      #[test]
-      fn backdrop_filter_default_is_empty() {
-          assert!(BackdropFilter::default().0.is_empty());
-      }
-
-      #[test]
-      fn mix_blend_mode_default_is_normal() {
-          assert_eq!(MixBlendMode::default(), MixBlendMode::Normal);
-      }
-
-      #[test]
-      fn filter_carries_a_function_list() {
-          let f = Filter(vec![FilterFn::Blur(Length::px(4.0))]);
-          assert_eq!(f.0.len(), 1);
-      }
-  }
+  // All effect types are owned by R1 (render/components.rs) — imported, never
+  // redefined here.
+  use crate::render::components::{
+      BackdropFilter, EffectGroup, EffectReason, Filter, MixBlendMode, Opacity,
+  };
   ```
 
-- [ ] **Run it — expect FAIL (does not compile):**
-
-  ```sh
-  cargo test -p buiy_core --lib render::effect 2>&1 | tail -20
-  ```
-
-  Expected: compile errors `cannot find type/struct ` for `Opacity`, `Filter`, `BackdropFilter`, `MixBlendMode`, `FilterFn` — confirms RED. (Also add `pub mod effect;` to `render/mod.rs` now so the module is reachable, see next step; without it the test isn't even discovered.)
-
-- [ ] **Minimal impl.** In `render/mod.rs` add `pub mod effect;` directly under the existing `pub mod node;` line group:
+- [ ] **Wire the module.** In `render/mod.rs` add `pub mod effect;` directly under the existing `pub mod node;` line group:
 
   ```rust
   pub mod effect;
@@ -120,103 +94,15 @@ These are the predicate inputs `WriteEffectGroups` reads. `Stacking.isolation` (
   pub mod pipeline;
   ```
 
-  Then prepend the component definitions **above** the test module in `effect.rs`:
+  Do NOT re-export the imported types from `lib.rs` — R1 already does (re-exporting here would be a duplicate `pub use`).
 
-  ```rust
-  use crate::layout::Length;
-
-  /// Group opacity in `[0.0, 1.0]`. `1.0` (default, CSS initial) is a no-op;
-  /// a value `< 1.0` forms an `EffectGroup` (`EffectReason::OPACITY`).
-  /// Absent component == opaque.
-  ///
-  /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 6.
-  #[derive(Component, Reflect, Clone, Copy, PartialEq, Debug)]
-  #[reflect(Component, Default)]
-  pub struct Opacity(pub f32);
-
-  impl Default for Opacity {
-      // Manual: a derived `Default` on a tuple `f32` gives `Opacity(0.0)`
-      // (fully transparent), the wrong CSS initial value.
-      fn default() -> Self {
-          Opacity(1.0)
-      }
-  }
-
-  /// Reserved filter-function value (minimal, predicate-sufficient subset).
-  /// A non-empty `Filter`/`BackdropFilter` list is all the effect-group
-  /// former needs; the full CSS `FilterFn` surface + `Angle` stub are
-  /// component-model.md § 8's concern and land with the filter shader.
-  ///
-  /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
-  #[derive(Reflect, Clone, PartialEq, Debug)]
-  pub enum FilterFn {
-      /// CSS `blur(<length>)`.
-      Blur(Length),
-  }
-
-  /// C (reserved). Filter function list. Non-empty == forms an
-  /// `EffectGroup` (`EffectReason::FILTER`) in v1; the filter shaders are
-  /// deferred. Empty / absent == no filter.
-  ///
-  /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
-  #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
-  #[reflect(Component, Default)]
-  pub struct Filter(pub Vec<FilterFn>);
-
-  /// C (reserved). Backdrop filter list — samples what is BEHIND the
-  /// element. Non-empty == forms an `EffectGroup`
-  /// (`EffectReason::BACKDROP_FILTER`) in v1; the backdrop-sampling shader
-  /// is deferred. Buiy treats `backdrop-filter` as an effect-group former
-  /// ONLY (it forms NO stacking context). Empty / absent == none.
-  ///
-  /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
-  #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
-  #[reflect(Component, Default)]
-  pub struct BackdropFilter(pub Vec<FilterFn>);
-
-  /// C (reserved). Blend mode against the backdrop. Any value other than
-  /// `Normal` forms an `EffectGroup` (`EffectReason::MIX_BLEND`) in v1; the
-  /// blend shader is deferred. `Normal` (default) is a no-op.
-  ///
-  /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
-  #[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Debug)]
-  #[reflect(Component, Default)]
-  pub enum MixBlendMode {
-      #[default]
-      Normal,
-      Multiply,
-      Screen,
-      Overlay,
-      Darken,
-      Lighten,
-      ColorDodge,
-      ColorBurn,
-      HardLight,
-      SoftLight,
-      Difference,
-      Exclusion,
-      Hue,
-      Saturation,
-      Color,
-      Luminosity,
-  }
-  ```
-
-  Re-export them from `crates/buiy_core/src/lib.rs`. Add a new `pub use` for the render effect types near the existing `pub use components::{...}` block:
-
-  ```rust
-  pub use render::effect::{BackdropFilter, Filter, FilterFn, MixBlendMode, Opacity};
-  ```
-
-  (Confirm `Length` is reachable as `crate::layout::Length` — it is re-exported there. If clippy flags an unused import in the test, gate it under `#[cfg(test)]` usage only.)
-
-- [ ] **Run it — expect PASS:**
+- [ ] **Run it — expect PASS (compiles clean, no tests yet):**
 
   ```sh
-  cargo test -p buiy_core --lib render::effect
+  cargo test -p buiy_core --lib render::effect 2>&1 | tail -20
   ```
 
-  Expected: 5 passing tests.
+  Expected: the module compiles; the imports resolve against R1's `render::components`. If any import is "unresolved", R1's component-model has not landed — stop and land R1 first (per the Cross-phase grep). If clippy flags an unused import at this stage, it will be consumed by Task 2's predicate; you may land Tasks 1+2 in one commit to avoid a transient unused-import warning, or `#[allow(unused_imports)]` only on this intermediate commit.
 
 - [ ] **Full gate, then commit.**
 
@@ -228,135 +114,29 @@ These are the predicate inputs `WriteEffectGroups` reads. `Stacking.isolation` (
   ```
 
   ```sh
-  git add -A && git commit -m "feat(render): add effect-input components (Opacity/Filter/MixBlendMode/BackdropFilter)"
+  git add -A && git commit -m "feat(render): stand up render/effect.rs (imports R1 effect types)"
   ```
 
 ---
 
-## Task 2 — The `EffectReason` bitflags + `EffectGroup` marker
+## Task 2 — The former predicate as a pure function
 
-The output of the predicate. `EffectGroup` is **computed/derived** (never author-set, not serialized), so per [component-model.md § 10](../specs/2026-06-03-buiy-render-pipeline-design/component-model.md) it carries leaner derives — **no** `Reflect`, **no** `Default` (absence of the component == no group).
-
-**Files**
-- Modify: `crates/buiy_core/src/render/effect.rs`
-- Modify: `crates/buiy_core/src/lib.rs` (re-export `EffectGroup`, `EffectReason`)
-- Test: `crates/buiy_core/src/render/effect.rs` (extend the inline `tests` module)
-
-### Steps
-
-- [ ] **Write the failing test.** Add to the `tests` module in `effect.rs`:
-
-  ```rust
-  #[test]
-  fn effect_reason_bits_are_disjoint_powers_of_two() {
-      assert_eq!(EffectReason::OPACITY.bits(), 1);
-      assert_eq!(EffectReason::ISOLATION.bits(), 2);
-      assert_eq!(EffectReason::FILTER.bits(), 4);
-      assert_eq!(EffectReason::BACKDROP_FILTER.bits(), 8);
-      assert_eq!(EffectReason::MIX_BLEND.bits(), 16);
-  }
-
-  #[test]
-  fn effect_reason_ors_multiple_reasons() {
-      let r = EffectReason::OPACITY | EffectReason::ISOLATION;
-      assert!(r.contains(EffectReason::OPACITY));
-      assert!(r.contains(EffectReason::ISOLATION));
-      assert!(!r.contains(EffectReason::FILTER));
-  }
-
-  #[test]
-  fn effect_group_carries_its_reason() {
-      let g = EffectGroup {
-          reason: EffectReason::OPACITY,
-      };
-      assert_eq!(g.reason, EffectReason::OPACITY);
-  }
-  ```
-
-- [ ] **Run it — expect FAIL (does not compile):**
-
-  ```sh
-  cargo test -p buiy_core --lib render::effect 2>&1 | tail -20
-  ```
-
-  Expected: `cannot find type EffectReason` / `EffectGroup`. RED confirmed.
-
-- [ ] **Minimal impl.** Add to `effect.rs` (above the test module). The crate already depends on `bitflags = "2.11.1"` (see `Cargo.toml`); mirror the `ContainFlags` idiom in `layout/types.rs`:
-
-  ```rust
-  bitflags::bitflags! {
-      /// Which effect(s) made an entity an `EffectGroup`. One entity can
-      /// carry several at once (`OPACITY | ISOLATION`). The compositor reads
-      /// this to choose the composite op without re-querying the five
-      /// underlying components.
-      ///
-      /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 10.
-      #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-      pub struct EffectReason: u8 {
-          const OPACITY         = 1;  // v1: carried
-          const ISOLATION       = 2;  // v1: carried
-          const FILTER          = 4;  // reserved: marks the group, no shader in v1
-          const BACKDROP_FILTER = 8;  // reserved: marks the group, needs backdrop sample
-          const MIX_BLEND       = 16; // reserved: marks the group, no shader in v1
-      }
-  }
-
-  /// Render-owned, render-prep-DERIVED: this entity's subtree composites to
-  /// its own off-screen target before its effect applies. Written by
-  /// `WriteEffectGroups` (this module); NEVER author-set. NO `Reflect` /
-  /// `Default` — absence of the component == no group.
-  ///
-  /// The canonical former predicate (any of: `Opacity < 1`,
-  /// `Stacking.isolation == Isolation::Isolate`, non-empty `Filter`,
-  /// non-`Normal` `MixBlendMode`, non-empty `BackdropFilter`) is owned by
-  /// effect-compositor.md § 1.
-  ///
-  /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 10.
-  #[derive(Component, Clone, Copy, Debug)]
-  pub struct EffectGroup {
-      /// The OR of every reason that formed this group.
-      pub reason: EffectReason,
-  }
-  ```
-
-  Re-export from `lib.rs`, extending the Task 1 line:
-
-  ```rust
-  pub use render::effect::{
-      BackdropFilter, EffectGroup, EffectReason, Filter, FilterFn, MixBlendMode, Opacity,
-  };
-  ```
-
-- [ ] **Run it — expect PASS:**
-
-  ```sh
-  cargo test -p buiy_core --lib render::effect
-  ```
-
-  Expected: 8 passing tests in this module.
-
-- [ ] **Full gate, then commit.**
-
-  ```sh
-  git add -A && git commit -m "feat(render): add EffectReason bitflags + derived EffectGroup marker"
-  ```
-
----
-
-## Task 3 — The former predicate as a pure function
-
-Before wiring a system, isolate the decision into a pure, unit-testable function that maps the five inputs to an `Option<EffectReason>`. Pure CPU math, trivially headless. This is the single source of the predicate the system applies.
+Isolate the decision into a pure, unit-testable function that maps the five inputs to an `Option<EffectReason>`. Pure CPU math, trivially headless. This is the single source of the predicate the system applies. All types are imported from R1's `render::components`.
 
 **Files**
 - Modify: `crates/buiy_core/src/render/effect.rs`
-- Test: `crates/buiy_core/src/render/effect.rs` (extend inline `tests`)
+- Test: `crates/buiy_core/src/render/effect.rs` (inline `#[cfg(test)] mod tests`)
 
 ### Steps
 
-- [ ] **Write the failing test.** Add to the `tests` module:
+- [ ] **Write the failing test.** Add the inline `tests` module to `effect.rs`. All types are imported from R1 (`super::*` re-exports the module's `use crate::render::components::{...}`, plus `Isolation`/`Length`/`FilterFn` pulled in explicitly):
 
   ```rust
-  use crate::layout::Isolation;
+  #[cfg(test)]
+  mod tests {
+      use super::*;
+      use crate::layout::{Isolation, Length};
+      use crate::render::components::FilterFn;
 
   // A small constructor matching the system's read-shape: the four
   // render-owned inputs plus the one layout-owned `Isolation` field.
@@ -456,6 +236,7 @@ Before wiring a system, isolate the decision into a pure, unit-testable function
           reason_of(Some(0.1), Isolation::Isolate, 1, MixBlendMode::Screen, 1),
           Some(EffectReason::all())
       );
+  }
   }
   ```
 
