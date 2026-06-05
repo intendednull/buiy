@@ -7,7 +7,7 @@ use bevy::prelude::*;
 pub use buiy_core::{
     BuiySet, CorePlugin,
     a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin},
-    components::{Node, ResolvedLayout, ResolvedTransform, StackingContext, Visual},
+    components::{Node, ResolvedLayout, ResolvedTransform, StackingContext},
     focus::{FocusVisible, Focusable, FocusedEntity},
     layout::{
         AlignContent, AlignItems, Anchor, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
@@ -27,6 +27,8 @@ pub use buiy_core::{
         WritingMode, WritingModeKind, WritingModeResolved, ZIndex,
     },
     picking::{BuiyPickingBackendPlugin, Hovered},
+    render::color::ColorToken,
+    render::components::{Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius},
     theme::{Theme, UserPreferences, default_light_theme},
 };
 pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};

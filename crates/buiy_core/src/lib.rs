@@ -14,7 +14,7 @@ pub mod render;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
-pub use components::{Node, ResolvedLayout, ResolvedTransform, StackingContext, Visual};
+pub use components::{Node, ResolvedLayout, ResolvedTransform, StackingContext};
 pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
 pub use layout::{
     AlignContent, AlignItems, Anchor, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
@@ -33,6 +33,12 @@ pub use layout::{
     WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
+pub use render::color::{ColorToken, SystemColorKeyword};
+pub use render::components::{
+    BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius, ClipRect, Corners,
+    CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle, MixBlendMode, Opacity,
+    Outline, Radius, Shadow,
+};
 
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
 /// → Picking → A11yUpdate → Render.
@@ -56,7 +62,6 @@ impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<Node>()
             .register_type::<ResolvedLayout>()
-            .register_type::<Visual>()
             .configure_sets(
                 Update,
                 (

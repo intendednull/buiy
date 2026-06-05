@@ -7,15 +7,25 @@
 //! architecture.md § 2.3.
 
 use crate::{
-    components::{Node, ResolvedLayout, Visual},
+    Length,
+    components::{Node, ResolvedLayout},
     theme::Theme,
 };
 use bevy::prelude::*;
 use bevy::render::{Extract, ExtractSchedule, RenderApp};
 
+pub mod color;
+pub mod components;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
+
+pub use color::{ColorToken, SystemColorKeyword};
+pub use components::{
+    AncestorClip, Angle, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius,
+    ClipRect, Corners, CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle,
+    MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow,
+};
 
 /// What the render world needs from the main world per frame: a list of
 /// (rect, color, radius) tuples in window-local logical pixels, plus the
@@ -74,6 +84,31 @@ pub struct BuiyRenderPlugin;
 
 impl Plugin for BuiyRenderPlugin {
     fn build(&self, app: &mut App) {
+        // Register author-set render components (reflection / BSN / inspectors)
+        // in the MAIN world, before the RenderApp branch, so registration
+        // happens even on headless hosts with no RenderApp (component-model.md
+        // § 13). The computed ClipRect/AncestorClip/EffectGroup and the
+        // layout-owned OffscreenAuto are deliberately NOT registered here.
+        app.register_type::<components::Background>()
+            .register_type::<components::Border>()
+            .register_type::<components::BorderSide>()
+            .register_type::<components::Corners>()
+            .register_type::<components::Radius>()
+            .register_type::<components::LineStyle>()
+            .register_type::<components::BoxShadow>()
+            .register_type::<components::Shadow>()
+            .register_type::<components::Opacity>()
+            .register_type::<components::Outline>()
+            .register_type::<components::Filter>()
+            .register_type::<components::BackdropFilter>()
+            .register_type::<components::MixBlendMode>()
+            .register_type::<components::FilterFn>()
+            .register_type::<components::Angle>()
+            .register_type::<components::CssVisibility>()
+            .register_type::<components::ClipRadius>()
+            .register_type::<color::ColorToken>()
+            .register_type::<color::SystemColorKeyword>();
+
         // ExtractedDraws is render-world only — the main world does not read it.
         // Initialization lives below inside the RenderApp branch.
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -95,9 +130,49 @@ impl Plugin for BuiyRenderPlugin {
 /// `error!` once tokens are typed.
 const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
 
+/// Resolve a [`ColorToken`] against the active theme. Returns the resolved
+/// `Color` and whether a named token *missed* (so the caller can emit one
+/// `warn!`). Mirrors the Phase-0 `Visual.background_token` resolution:
+/// `Transparent` → `Color::NONE`; `Token(name)` → `Theme::color(name)` or
+/// the magenta sentinel on miss; `CurrentColor` / `SystemColor(_)` use the
+/// v1 fallback (theme default foreground / system-color map — owned by
+/// color-and-forced-colors.md; here they route through `Theme::color` of the
+/// fallback token and sentinel-on-miss).
+pub fn resolve_token(token: &ColorToken, theme: &Theme) -> (Color, bool) {
+    match token {
+        ColorToken::Transparent => (Color::NONE, false),
+        ColorToken::Token(name) => match theme.color(name) {
+            Some(c) => (c, false),
+            None => (MISSING_TOKEN_FALLBACK, true),
+        },
+        // v1 fallback: currentColor → theme default foreground token
+        // (color-and-forced-colors.md § 2.0); a miss is sentinel + warn.
+        ColorToken::CurrentColor => match theme.color("color.text.primary") {
+            Some(c) => (c, false),
+            None => (MISSING_TOKEN_FALLBACK, true),
+        },
+        // v1 fallback: system-color keywords resolve via the active theme's
+        // system-color map (owned by buiy-theme-tokens-design); until that
+        // map lands a lookup misses → sentinel + warn.
+        ColorToken::SystemColor(_) => (MISSING_TOKEN_FALLBACK, true),
+    }
+}
+
+/// Phase-0 parity helper: the uniform corner radius in logical px, read from
+/// the top-left corner's x radius. Only `Length::Px` resolves here; other
+/// units resolve to `0` for now (paint-`Length` resolution is a later-phase
+/// concern). A `Border`-less entity is square (radius 0).
+fn uniform_radius_px(corners: &Corners) -> f32 {
+    match corners.top_left.x {
+        Length::Px(v) => v,
+        _ => 0.0,
+    }
+}
+
+#[allow(clippy::type_complexity)]
 fn extract_buiy_draws(
     mut commands: Commands,
-    main_world_q: Extract<Query<(&Visual, &ResolvedLayout), With<Node>>>,
+    main_world_q: Extract<Query<(&Background, Option<&Border>, &ResolvedLayout), With<Node>>>,
     main_world_theme: Extract<Res<Theme>>,
     main_world_windows: Extract<Query<&Window, With<bevy::window::PrimaryWindow>>>,
 ) {
@@ -106,23 +181,24 @@ fn extract_buiy_draws(
         let res = window.resolution.size();
         draws.window_size = Vec2::new(res.x, res.y);
     }
-    for (visual, layout) in main_world_q.iter() {
-        let color = match main_world_theme.color(&visual.background_token) {
-            Some(c) => c,
-            None => {
-                tracing::warn!(
-                    token = %visual.background_token,
-                    "missing theme color token; falling back to magenta sentinel"
-                );
-                MISSING_TOKEN_FALLBACK
-            }
-        };
-        draws.draws.push(DrawData {
-            position: layout.position,
-            size: layout.size,
-            color,
-            radius: visual.border_radius,
-        });
+    for (background, border, layout) in main_world_q.iter() {
+        let (color, missed) = resolve_token(&background.color, &main_world_theme);
+        if missed {
+            tracing::warn!(
+                token = ?background.color,
+                "missing theme color token; falling back to magenta sentinel"
+            );
+        }
+        // Phase-0 parity: skip emitting a quad for a transparent fill
+        // (`Background` absent OR `ColorToken::Transparent`), matching the
+        // old empty-string skip.
+        if color == Color::NONE {
+            continue;
+        }
+        let radius = border.map(|b| uniform_radius_px(&b.radius)).unwrap_or(0.0);
+        draws
+            .draws
+            .push(DrawData::new(layout.position, layout.size, color, radius));
     }
     // TODO(v0.x): reuse ExtractedDraws via ResMut + clear/extend instead of
     // reallocating the inner Vec each frame. See `buiy-render-pipeline-design`.
