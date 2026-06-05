@@ -10,11 +10,14 @@
 use bevy::prelude::*;
 use buiy_core::{
     a11y::{A11yLabel, A11yRole},
-    components::{Node, Visual},
+    components::Node,
     focus::Focusable,
     layout::Style,
     picking::Hovered,
+    render::color::ColorToken,
+    render::components::{Background, Border, Corners, Radius},
 };
+use std::borrow::Cow;
 
 #[derive(Component, Reflect, Default, Clone, Debug)]
 #[reflect(Component)]
@@ -41,10 +44,12 @@ impl Button {
                 .width_px(120.0)
                 .height_px(32.0)
                 .padding(8.0),
-            Visual {
-                background_token: "color.surface.secondary".into(),
-                foreground_token: "color.text.primary".into(),
-                border_radius: 6.0, // matches "radius.md"
+            Background {
+                color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+            },
+            Border {
+                radius: Corners::all(Radius::circular(6.0)), // matches "radius.md"
+                ..Default::default()
             },
             Focusable::default(),
             A11yRole::Button,

@@ -3,7 +3,7 @@ use buiy_core::{CorePlugin, components::*, layout::Style};
 
 #[test]
 #[allow(clippy::default_constructed_unit_structs)]
-fn node_resolved_layout_and_visual_are_registered_and_default_constructible() {
+fn node_and_resolved_layout_are_registered_and_default_constructible() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(CorePlugin);
@@ -20,11 +20,6 @@ fn node_resolved_layout_and_visual_are_registered_and_default_constructible() {
             .is_some(),
         "ResolvedLayout not registered"
     );
-    assert!(
-        registry.get(std::any::TypeId::of::<Visual>()).is_some(),
-        "Visual not registered"
-    );
-
     drop(registry);
     let world = app.world_mut();
     let entity = world.spawn((Node::default(), Style::default())).id();
