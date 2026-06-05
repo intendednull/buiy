@@ -388,7 +388,11 @@ proven where they are cheapest:
 - **Skip rules (headless).** `Display::None` / `Containment.content_visibility == Hidden`
   subtrees emit no primitives (their absence from `painters_z` is asserted layout-side; the
   render half asserts no extract output); an off-screen `Containment.content_visibility == Auto`
-  subtree emits no paint while its on-screen sibling does (§ 5.3).
+  subtree emits no paint while its on-screen sibling does (§ 5.3); and a
+  `CssVisibility::Hidden` subtree emits no primitives **while retaining its layout box
+  and `painters_z` membership** (§ 5.4) — the render-owned paint skip, sharing the
+  `OffscreenAuto` subtree-scoped mechanism (§ 5.3) and distinguished from `Display::None`
+  by the kept box.
 
 ---
 

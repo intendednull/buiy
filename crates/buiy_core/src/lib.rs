@@ -35,10 +35,12 @@ pub use layout::{
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 pub use render::color::{ColorToken, SystemColorKeyword};
 pub use render::components::{
-    BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius, ClipRect, Corners,
-    CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle, MixBlendMode, Opacity,
-    Outline, Radius, Shadow,
+    AncestorClip, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius, ClipRect,
+    Corners, CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle, MixBlendMode,
+    Opacity, Outline, Radius, Shadow,
 };
+// `OffscreenAuto` is intentionally NOT root-exported: it is a layout-written
+// marker (layout owns its registration), reachable via `render::components`.
 
 /// Top-level system sets for Buiy. Order: Layout → Style → Input → Animate
 /// → Picking → A11yUpdate → Render.
