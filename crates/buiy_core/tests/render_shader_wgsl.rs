@@ -1,0 +1,38 @@
+//! Headless WGSL validation of Buiy's render shaders. Parses each shader
+//! source with `naga` (no wgpu adapter needed) and asserts the expected
+//! entry points exist. This is the device-free half of pipeline coverage;
+//! actual GPU compilation rides the `#[ignore]` e2e path (render_smoke.rs).
+
+/// Parse WGSL source with naga; panics with the naga diagnostic on error.
+fn parse_wgsl(label: &str, src: &str) -> naga::Module {
+    naga::front::wgsl::parse_str(src)
+        .unwrap_or_else(|e| panic!("{label}: WGSL parse failed: {e:?}"))
+}
+
+/// True iff the module declares an entry point with this name.
+fn has_entry_point(module: &naga::Module, name: &str) -> bool {
+    module.entry_points.iter().any(|ep| ep.name == name)
+}
+
+const QUAD_WGSL: &str = include_str!("../src/render/shader.wgsl");
+const SHADOW_WGSL: &str = include_str!("../src/render/shadow.wgsl");
+
+#[test]
+fn quad_shader_parses_and_has_entry_points() {
+    let m = parse_wgsl("quad", QUAD_WGSL);
+    assert!(has_entry_point(&m, "vertex"), "quad shader has `vertex`");
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "quad shader has `fragment`"
+    );
+}
+
+#[test]
+fn shadow_shader_parses_and_has_entry_points() {
+    let m = parse_wgsl("shadow", SHADOW_WGSL);
+    assert!(has_entry_point(&m, "vertex"), "shadow shader has `vertex`");
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "shadow shader has `fragment`"
+    );
+}

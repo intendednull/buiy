@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Depends on:** R6 (`render/buckets.rs` — owns the shared `BuiyPrimitiveKind { Quad, Shadow, Border, Outline }` enum and CPU instance bucketing; R7 **imports** that enum, it does not redefine it). Execution order: R1 → R2 → R3 → R4 → R5 → R6 → **R7** → R8 → (R9, R10) → R11. R7 must land after R6 so `BuiyPrimitiveKind` exists to import.
+**Depends on:** R6 (`render/buckets.rs` — owns the shared `BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }` enum and CPU instance bucketing; R7 **imports** that enum, it does not redefine it). Execution order: R1 → R2 → R3 → R4 → R5 → R6 → **R7** → R8 → (R9, R10) → R11. R7 must land after R6 so `BuiyPrimitiveKind` exists to import.
 
-**Goal:** Replace the Phase-0 single hard-format rounded-rect pipeline with a set of typed-primitive `SpecializedRenderPipeline`s (quad / box-shadow / outline) keyed on the target `ColorTargetState` format (view format + `Rgba16Float` group targets), each backed by its own WGSL SDF shader under the stable `0xB01A_01XX` render-asset UUID octets. **Border is folded into the `quad` SDF pipeline** ([architecture.md § 1.4 / § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set): "`quad` … border = outer-minus-inner SDF band") — it is **not** a separate shader or octet; `BuiyPrimitiveKind::Border` is a CPU-bucketing distinction (owned by R6) that maps to the **quad** pipeline+shader, exactly as `Outline` does.
+**Goal:** Replace the Phase-0 single hard-format rounded-rect pipeline with a set of typed-primitive `SpecializedRenderPipeline`s (quad / box-shadow) keyed on the target `ColorTargetState` format (view format + `Rgba16Float` group targets), each backed by its own WGSL SDF shader under the stable `0xB01A_01XX` render-asset UUID octets. **Border is folded into the `quad` SDF pipeline** ([architecture.md § 1.4 / § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set): "`quad` … border = outer-minus-inner SDF band") — it is **not** a separate shader, octet, or `BuiyPrimitiveKind` variant; the border band is part of the **quad** primitive. The landed R6 enum is `BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }`; this phase builds the two F-tier pipelines whose shaders it ships — `Quad` (octet `..01`) and `Shadow` (octet `..02`). `Glyph` and `Path` are bucket-reserved by R6 but their shaders are sibling-phase work, not built here.
 
 **Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md) — realizes [architecture.md](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md) § 1.4 (typed-primitive pipelines, `SpecializedRenderPipeline` per format, the normative octet table) + § 2.1/§ 2.2 (the primitive set, batching), and [color-and-forced-colors.md](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md) § 1 (linear-light render, one pipeline per target format, the blend-space seam).
 
-**Architecture:** A wgpu `RenderPipeline`'s fragment `ColorTargetState.format` is fixed at creation, so a single pipeline cannot target both the view's `Rgba8UnormSrgb` attachment and the `Rgba16Float` effect-group targets. Each typed primitive therefore becomes a `SpecializedRenderPipeline` keyed on the target format; `Buiy` builds each primitive for both formats. The specialization key is a tiny pure value (`BuiyPrimitiveKey`) whose `kind` field is the shared `BuiyPrimitiveKind` enum **owned by R6 (`render/buckets.rs`)** — R7 imports it, never redefines it. The "distinct key ⇒ distinct `CachedRenderPipelineId` per format" mapping logic and the descriptor construction are unit-testable with no wgpu adapter; the WGSL is validated by parsing with `naga` (no GPU). Actual pipeline compilation and draw stay GPU-only and ride the `#[ignore]` e2e path. This phase keeps the Phase-0 rounded-rect visual behavior intact — it becomes the `quad` primitive — and adds the shadow shader + outline/border key variants (both share the quad shader) without yet wiring the new component model (that is a sibling phase; this phase wires the *pipelines* and proves the *specialization key* logic). **Border is folded into the quad SDF** (outer-minus-inner band, [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)) — no separate border shader, no new octet.
+**Architecture:** A wgpu `RenderPipeline`'s fragment `ColorTargetState.format` is fixed at creation, so a single pipeline cannot target both the view's `Rgba8UnormSrgb` attachment and the `Rgba16Float` effect-group targets. Each typed primitive therefore becomes a `SpecializedRenderPipeline` keyed on the target format; `Buiy` builds each primitive for both formats. The specialization key is a tiny pure value (`BuiyPrimitiveKey`) whose `kind` field is the shared `BuiyPrimitiveKind` enum **owned by R6 (`render/buckets.rs`)** — R7 imports it, never redefines it. The "distinct key ⇒ distinct `CachedRenderPipelineId` per format" mapping logic and the descriptor construction are unit-testable with no wgpu adapter; the WGSL is validated by parsing with `naga` (no GPU). Actual pipeline compilation and draw stay GPU-only and ride the `#[ignore]` e2e path. This phase keeps the Phase-0 rounded-rect visual behavior intact — it becomes the `quad` primitive — and adds the shadow shader without yet wiring the new component model (that is a sibling phase; this phase wires the *pipelines* and proves the *specialization key* logic). **Border is folded into the quad SDF** (outer-minus-inner band, [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)) — no separate border shader, no new octet, no `Border` key kind. Outline (focus indicator) is likewise the quad pipeline with the clip rect suppressed, not a distinct kind in the landed R6 enum.
 
 **Tier/Test reality:** GPU (code + `#[ignore]` e2e — no wgpu adapter on CI / this host). The **gating** (always-green) tests are device-free: the specialization-key pure logic, the descriptor-construction pure logic (format/blend/UUID assertions over the returned `RenderPipelineDescriptor`), the per-format-distinct-id mapping over a stub cache, and `naga` WGSL parse/entry-point checks. The **`#[ignore]`** tests (need a wgpu adapter) are: `SpecializedRenderPipelines::specialize` producing real `CachedRenderPipelineId`s through a live `PipelineCache`, pipeline-queued/compiled assertions, and any draw. Mark them `#[ignore]` with the same wording `render_smoke.rs` already uses.
 
@@ -30,8 +30,8 @@ cargo fmt --all -- --check && \
 ## Conventions this plan assumes (read once)
 
 - **Worktree root:** `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline`. All paths below are relative to it unless absolute.
-- **UUID octets are normative** ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)). Reserved range `0xB01A_0100_..` through `0xB01A_01FF_..`. Assignments this phase realizes (do **not** renumber): `..01` quad/rounded-rect (exists), `..02` shadow. `..03` glyph-alpha (atlas phase), `..04` path (C-tier reserved), and `..05` composite (effect-compositor phase) are **not** built here. This phase adds **no new octet**: border folds into `..01` (next bullet), outline reuses `..01`.
-- **Border folds into the quad SDF — no separate shader, no new octet.** The spec's normative primitive table ([architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)) defines `quad` as "Background fill + border band + rounded corners" with "border = outer-minus-inner SDF band" — i.e. the border band is part of the **quad** primitive, not a separate one. R7 follows the spec: `BuiyPrimitiveKind::Border` (the CPU-bucketing variant owned by R6/`buckets.rs`) maps to the **quad** pipeline+shader (`..01`), exactly as `Outline` does. There is **no** `border.wgsl`, **no** `BORDER_SHADER_UUID`, and **no** `..06` octet. (An earlier draft of this plan shipped a distinct `..06` border shader; that was a deviation from the spec's folded-band model and is removed per the plan-reconciliation review. If a reviewer ever wants a standalone stroked-border pipeline for the elliptical per-corner case, that is a *spec amendment* to raise against architecture.md § 2.1 first, not a silent plan deviation.) Outline likewise reuses the **quad** pipeline+shader (`..01`) per § 2.1 ("`Outline` … is the existing quad pipeline with the clip rect suppressed"), so it too adds **no new shader UUID** — it is a key variant, not a new primitive shader.
+- **UUID octets are normative** ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)). Reserved range `0xB01A_0100_..` through `0xB01A_01FF_..`. Assignments this phase realizes (do **not** renumber): `..01` quad/rounded-rect (exists), `..02` shadow. `..03` glyph-alpha (atlas phase), `..04` path (C-tier reserved), and `..05` composite (effect-compositor phase) are **not** built here. This phase adds **no new octet**: border folds into `..01` (next bullet).
+- **Border folds into the quad SDF — no separate shader, no new octet, no key kind.** The spec's normative primitive table ([architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)) defines `quad` as "Background fill + border band + rounded corners" with "border = outer-minus-inner SDF band" — i.e. the border band is part of the **quad** primitive, not a separate one. The landed R6 enum (`crates/buiy_core/src/render/buckets.rs`) is `BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }` — there is **no** `Border` variant and **no** `Outline` variant; the buckets.rs doc comment is explicit that border folds into `Quad` and `Outline` is a `Quad` variant (the quad pipeline with the clip rect suppressed). R7 follows that: the border band is painted by the **quad** pipeline+shader (`..01`); the focus outline is the **quad** pipeline with clip suppressed. There is **no** `border.wgsl`, **no** `BORDER_SHADER_UUID`, and **no** `..06` octet. (An earlier draft of this plan shipped a distinct `..06` border shader *and* `Border`/`Outline` key kinds; both were deviations from the spec's folded-band model and the landed R6 enum, and are removed per the plan-reconciliation review. If a reviewer ever wants a standalone stroked-border pipeline for the elliptical per-corner case, that is a *spec amendment* to raise against architecture.md § 2.1 and a new `BuiyPrimitiveKind` variant in R6 first, not a silent plan deviation.)
 - **Format key.** The two target formats are `TextureFormat::Rgba8UnormSrgb` (the `Camera2d` default view, via `ViewTarget::main_texture_format()` — owned by [architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)) and `TextureFormat::Rgba16Float` (effect-group targets). The view format on an opt-in HDR view is also `Rgba16Float`; the key is the **format**, so HDR-view and group-target variants coincide and dedupe through the same `SpecializedRenderPipelines` cache — that dedup is an explicit gating-test assertion (Task 3).
 - **Blend space.** All pipelines keep `BlendState::ALPHA_BLENDING` (the Phase-0 setting). The encoded-vs-linear blend-space seam ([color-and-forced-colors.md § 1.1](../specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md#11-the-invariant)) is a consequence of the target *format*, not a per-pipeline blend change, so no pipeline sets a different `BlendState`.
 - **No component-model wiring here.** `Background`/`Border`/`BoxShadow`/`Outline` *components* and the extract rewrite are sibling phases. This phase touches only `crates/buiy_core/src/render/{pipeline,shader.wgsl}` and adds `shaders/` WGSL + a `primitive` module; the Phase-0 `node.rs` keeps drawing the quad via the existing path (Task 8 only swaps the quad pipeline-id source so the node still compiles and the existing GPU smoke test still asserts a registered quad pipeline).
@@ -100,7 +100,7 @@ Steps:
 
 **Why:** The specialization key is the single device-free fulcrum of this phase: `(primitive, target_format)` → one pipeline variant. Define `BuiyPrimitiveKey` as a tiny `Clone + Hash + PartialEq + Eq` value (the bound `SpecializedRenderPipeline::Key` requires) and prove its construction/equality before any descriptor or shader work. No GPU.
 
-**Ownership guard — do NOT redefine `BuiyPrimitiveKind`.** The shared `BuiyPrimitiveKind { Quad, Shadow, Border, Outline }` enum is **owned by R6** (`crates/buiy_core/src/render/buckets.rs`, the CPU instance-bucketing module). It already exists by the time R7 runs (execution order R6 → R7). R7 **imports** it (`use crate::render::buckets::BuiyPrimitiveKind;`) and does **not** redefine it, does **not** re-export it, does **not** add a parallel copy in `primitive.rs`. `primitive.rs` owns only `BuiyPrimitiveKey`.
+**Ownership guard — do NOT redefine `BuiyPrimitiveKind`.** The shared `BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }` enum is **owned by R6** (`crates/buiy_core/src/render/buckets.rs`, the CPU instance-bucketing module). It already exists by the time R7 runs (execution order R6 → R7), and it has exactly those four variants — there is **no** `Border` or `Outline` variant (border folds into `Quad`; outline is a clip-suppressed `Quad`). R7 **imports** it (`use crate::render::buckets::BuiyPrimitiveKind;`) and does **not** redefine it, does **not** re-export it, does **not** add a parallel copy in `primitive.rs`, and does **not** add new variants to it. `primitive.rs` owns only `BuiyPrimitiveKey`.
 
 **Files**
 - Create: `crates/buiy_core/src/render/primitive.rs` (defines `BuiyPrimitiveKey` **only**; imports `BuiyPrimitiveKind` from `crate::render::buckets`)
@@ -124,7 +124,10 @@ Steps:
   #[test]
   fn kind_variants_are_distinct() {
       use BuiyPrimitiveKind::*;
-      let all = [Quad, Shadow, Border, Outline];
+      // The landed R6 enum (render::buckets) — Shadow/Quad/Glyph/Path. Border
+      // folds into Quad and Outline is a clip-suppressed Quad, so neither is a
+      // variant here. This phase ships the Quad and Shadow pipelines.
+      let all = [Shadow, Quad, Glyph, Path];
       for (i, a) in all.iter().enumerate() {
           for (j, b) in all.iter().enumerate() {
               assert_eq!(i == j, a == b, "{a:?} vs {b:?} distinctness");
@@ -319,9 +322,7 @@ Steps:
       VertexFormat, VertexState, VertexStepMode,
   };
 
-  use crate::render::pipeline::{
-      border_shader_handle, shader_handle, shadow_shader_handle,
-  };
+  use crate::render::pipeline::{shader_handle, shadow_shader_handle};
 
   /// The typed-primitive `SpecializedRenderPipeline`. One specializer builds
   /// every `(kind, format)` variant; `SpecializedRenderPipelines<BuiyPrimitives>`
@@ -379,12 +380,16 @@ Steps:
           ]
       }
 
-      /// The shader handle for a primitive kind. Outline reuses the quad shader.
+      /// The shader handle for a primitive kind. Border folds into the quad
+      /// SDF and outline is a clip-suppressed quad, so both paint through the
+      /// quad shader — neither is a distinct `BuiyPrimitiveKind` variant.
+      /// `Glyph` / `Path` shaders are sibling-phase work (octets `..03` /
+      /// `..04`), not built here; this phase ships only `Quad` and `Shadow`.
       fn shader_for(kind: BuiyPrimitiveKind) -> bevy::asset::Handle<bevy::shader::Shader> {
           match kind {
-              BuiyPrimitiveKind::Quad | BuiyPrimitiveKind::Outline => shader_handle(),
+              BuiyPrimitiveKind::Quad => shader_handle(),
               BuiyPrimitiveKind::Shadow => shadow_shader_handle(),
-              BuiyPrimitiveKind::Border => border_shader_handle(),
+              BuiyPrimitiveKind::Glyph | BuiyPrimitiveKind::Path => shader_handle(),
           }
       }
   }
@@ -430,23 +435,17 @@ Steps:
       }
   }
   ```
-  > `shadow_shader_handle` / `border_shader_handle` are introduced in Tasks 4 and 6. To keep this task compiling and green on its own, add **temporary** stubs to `pipeline.rs` now that return the quad `shader_handle()` value behind their own (not-yet-registered) UUIDs — Task 4/6 replace the stub bodies with real WGSL registration. Concretely, in `pipeline.rs` add:
+  > `shadow_shader_handle` is introduced in Task 4. To keep this task compiling and green on its own, add a **temporary** stub to `pipeline.rs` now that returns a weak handle behind its (not-yet-registered) UUID — Task 4 replaces the stub by registering the real WGSL under the same UUID. Concretely, in `pipeline.rs` add:
   ```rust
   /// Stable UUID for the box-shadow SDF shader (octet `..02`).
   const SHADOW_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0102_0000_0000_0000_0000_0000_0002u128);
-  /// Stable UUID for the per-side/elliptical-radius border SDF shader (octet `..06`).
-  const BORDER_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0106_0000_0000_0000_0000_0000_0006u128);
 
   /// Weak handle to the box-shadow WGSL shader.
   pub fn shadow_shader_handle() -> Handle<Shader> {
       Handle::Uuid(SHADOW_SHADER_UUID, PhantomData)
   }
-  /// Weak handle to the border WGSL shader.
-  pub fn border_shader_handle() -> Handle<Shader> {
-      Handle::Uuid(BORDER_SHADER_UUID, PhantomData)
-  }
   ```
-  (The handles are valid weak handles even before the WGSL is inserted — `specialize` only references them; nothing loads them in a headless test.)
+  (The handle is a valid weak handle even before the WGSL is inserted — `specialize` only references it; nothing loads it in a headless test.)
 - [ ] Run — expect **PASS** (all three descriptor tests green).
 - [ ] Run the full gate. Commit.
   - Commit: `feat(render): SpecializedRenderPipeline for typed primitives (quad descriptor)`
@@ -475,7 +474,8 @@ Steps:
   use std::collections::HashMap;
 
   use bevy::render::render_resource::TextureFormat;
-  use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitiveKind};
+  use buiy_core::render::buckets::BuiyPrimitiveKind;
+  use buiy_core::render::primitive::BuiyPrimitiveKey;
 
   /// Mirror of `SpecializedRenderPipelines::specialize`'s allocation: each new
   /// key gets the next id; a repeated key returns its existing id.
@@ -505,7 +505,10 @@ Steps:
       let mut ids = StubPipelineIds::default();
       let formats = [TextureFormat::Rgba8UnormSrgb, TextureFormat::Rgba16Float];
       let mut seen = Vec::new();
-      for kind in [Quad, Shadow, Border, Outline] {
+      // The landed R6 enum's four kinds; the key is `(kind, format)` so each
+      // (kind, format) pair is a distinct variant regardless of which kinds'
+      // shaders this phase ships.
+      for kind in [Shadow, Quad, Glyph, Path] {
           for format in formats {
               seen.push(ids.id_for(key(kind, format)));
           }
@@ -661,19 +664,20 @@ Steps:
 
 ## Task 5 — Border SDF: pure-CPU port test of the per-side / elliptical-radius band
 
-**Why:** The border primitive is an outer-minus-inner SDF band; its correctness (a fragment inside the band vs. inside the content hole vs. outside the outer edge) is pure SDF math, portable to CPU exactly like `render_instance.rs` ports `sdf_rounded_rect`. Prove the band math **device-free** before writing the WGSL, so the shader (Task 6) has a reference oracle. This is the same idiom `render_instance.rs::shader_sdf_inside_is_filled_outside_is_empty` already establishes.
+**Why:** The border band is part of the **quad** primitive (folded into the `..01` quad SDF — [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set), "border = outer-minus-inner SDF band"), not a separate shader. Its correctness (a fragment inside the band vs. inside the content hole vs. outside the outer edge) is pure SDF math, portable to CPU exactly like `render_instance.rs` ports `sdf_rounded_rect`. Lock the band math **device-free** here as the reference oracle the quad SDF's band must match when the component-model phase grows the instance record and extends `shader.wgsl`'s fragment with per-side widths. This is the same idiom `render_instance.rs::shader_sdf_inside_is_filled_outside_is_empty` already establishes.
 
 **Files**
 - Test: `crates/buiy_core/tests/render_border_sdf.rs`
 
 Steps:
 
-- [ ] Write the failing test. Create `crates/buiy_core/tests/render_border_sdf.rs` — it defines the CPU port and asserts the three band regions. The test compiles and runs with no production code (the port lives in the test, like `render_instance.rs`), so it is **green on creation if the math is right** — the value is locking the reference math the WGSL must match:
+- [ ] Write the failing test. Create `crates/buiy_core/tests/render_border_sdf.rs` — it defines the CPU port and asserts the three band regions. The test compiles and runs with no production code (the port lives in the test, like `render_instance.rs`), so it is **green on creation if the math is right** — the value is locking the reference math the quad SDF's band must match:
   ```rust
-  //! Pure-CPU reference for the border band SDF. Mirrors the GPU border
-  //! fragment 1:1 (only abs/length/min/max). No wgpu adapter — this is the
-  //! oracle the WGSL (shadow.wgsl sibling, border.wgsl) is validated against.
-  //! Same idiom as render_instance.rs's sdf port.
+  //! Pure-CPU reference for the border band SDF that folds into the quad
+  //! primitive (architecture.md § 2.1). Mirrors the GPU band fragment 1:1
+  //! (only abs/length/min/max). No wgpu adapter — this is the oracle the quad
+  //! shader's outer-minus-inner band is validated against when the component
+  //! phase grows it. Same idiom as render_instance.rs's sdf port.
 
   use bevy::math::Vec2;
 
@@ -754,125 +758,17 @@ Steps:
 
 ---
 
-## Task 6 — Border SDF shader (`..06`) + WGSL parse test
+## Task 6 — (removed) Border folds into the quad SDF — no separate shader, no `..06` octet
 
-**Why:** Ship the border WGSL whose fragment matches the Task-5 oracle (outer-minus-inner band), under the new `..06` octet inside the reserved `0xB01A_01..` range. Per-side widths and elliptical per-corner radius are carried via the instance record (the component-model phase maps `Border` longhands into it); this phase ships the shader + pipeline and validates it headlessly.
+**Removed per the plan-reconciliation review.** An earlier draft shipped a standalone `border.wgsl` under a new `..06` octet plus a `BORDER_SHADER_UUID` and a `BuiyPrimitiveKind::Border` key kind. That contradicted (a) the spec's **normative** octet table ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)), which enumerates only `..01..05` and states "this is the only place the octets are enumerated; plans realize but do not renumber them" — there is no `..06`; (b) the spec's folded-band primitive model ([architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)): the border band is part of the **quad** primitive ("border = outer-minus-inner SDF band"), not a separate one; and (c) the landed R6 enum `BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }`, which has no `Border` variant.
 
-**Files**
-- Create: `crates/buiy_core/src/render/border.wgsl`
-- Modify: `crates/buiy_core/src/render/pipeline.rs` (register border WGSL under `BORDER_SHADER_UUID`; document `..06` in the octet comment block)
-- Test: `crates/buiy_core/tests/render_shader_wgsl.rs` (extend)
-
-Steps:
-
-- [ ] Write the failing test — add to `crates/buiy_core/tests/render_shader_wgsl.rs`:
-  ```rust
-  const BORDER_WGSL: &str = include_str!("../src/render/border.wgsl");
-
-  #[test]
-  fn border_shader_parses_and_has_entry_points() {
-      let m = parse_wgsl("border", BORDER_WGSL);
-      assert!(has_entry_point(&m, "vertex"), "border shader has `vertex`");
-      assert!(has_entry_point(&m, "fragment"), "border shader has `fragment`");
-  }
-  ```
-- [ ] Run — expect **FAIL** (`border.wgsl` missing):
-  ```sh
-  cargo test -p buiy_core --test render_shader_wgsl
-  ```
-- [ ] Minimal impl — create `crates/buiy_core/src/render/border.wgsl`. The fragment computes outer and inner rounded-rect SDFs and emits coverage only in the band (`inside outer && outside inner`), matching the Task-5 oracle. The instance `radius` field is the outer corner radius; the inner radius is derived from it minus the band width (the v1 instance record reuses the 36-byte stride, so per-side width is a later instance-layout growth owned by the component-model phase — this shader takes a uniform width via a packed channel of `color.a`'s sibling; for headless validity the shader just needs to *parse* and expose both entry points, with the band logic present):
-  ```wgsl
-  // Buiy border shader (octet ..06). Outer-minus-inner rounded-rect SDF band.
-  // Matches the CPU oracle in tests/render_border_sdf.rs. Inputs reuse the
-  // quad instance layout (stride 36); `radius` is the outer corner radius and
-  // the band width is carried in the unused high bits of the instance record
-  // by the component-model phase. v1 ships a uniform-width band.
-
-  struct Vertex {
-      @location(0) position: vec2<f32>,
-      @location(1) uv: vec2<f32>,
-  };
-
-  struct Instance {
-      @location(2) rect_pos: vec2<f32>,
-      @location(3) rect_size: vec2<f32>,
-      @location(4) color: vec4<f32>,
-      @location(5) radius: f32,
-  };
-
-  struct VertexOut {
-      @builtin(position) clip_position: vec4<f32>,
-      @location(0) local_uv: vec2<f32>,
-      @location(1) half_size: vec2<f32>,
-      @location(2) color: vec4<f32>,
-      @location(3) radius: f32,
-  };
-
-  @vertex
-  fn vertex(v: Vertex, i: Instance) -> VertexOut {
-      var out: VertexOut;
-      let world = i.rect_pos + v.uv * i.rect_size;
-      out.clip_position = vec4<f32>(world, 0.0, 1.0);
-      out.local_uv = v.uv * 2.0 - 1.0;
-      out.half_size = abs(i.rect_size) * 0.5;
-      out.color = i.color;
-      out.radius = i.radius;
-      return out;
-  }
-
-  fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
-      let q = abs(p) - half_size + vec2<f32>(r, r);
-      return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
-  }
-
-  @fragment
-  fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
-      let p = in.local_uv * in.half_size;
-      // Uniform 1px-min band placeholder width = 10% of the shorter half-extent
-      // (v1; per-side width arrives via the instance record in the component
-      // phase). Outer SDF / inner SDF give the band.
-      let width = max(1.0, min(in.half_size.x, in.half_size.y) * 0.1);
-      let inner_half = in.half_size - vec2<f32>(width, width);
-      let inner_r = max(in.radius - width, 0.0);
-      let d_outer = sdf_rounded_rect(p, in.half_size, in.radius);
-      let d_inner = sdf_rounded_rect(p, inner_half, inner_r);
-      let aa = fwidth(d_outer);
-      let cov_outer = 1.0 - smoothstep(-aa, aa, d_outer);
-      let cov_inner = 1.0 - smoothstep(-aa, aa, d_inner);
-      let band = max(cov_outer - cov_inner, 0.0);
-      return vec4<f32>(in.color.rgb, in.color.a * band);
-  }
-  ```
-- [ ] Register the WGSL in `pipeline.rs::register` (mirror the shadow insert block):
-  ```rust
-  {
-      let mut shaders = world.resource_mut::<Assets<Shader>>();
-      let _prev = shaders.insert(
-          border_shader_handle().id(),
-          Shader::from_wgsl(include_str!("border.wgsl"), "buiy/render/border.wgsl"),
-      );
-  }
-  ```
-- [ ] Update the octet comment block at the top of `pipeline.rs` (the `SHADER_UUID` doc comment) to enumerate the new assignments, so the documentation stays the source of truth:
-  ```
-  /// Octet assignments (reserved range 0xB01A_0100_.. through 0xB01A_01FF_..):
-  ///   ..01 rounded-rect quad (this asset)         F
-  ///   ..02 box-shadow Gaussian SDF                 F   (shadow.wgsl)
-  ///   ..04 path-SDF                                C   (reserved, not built here)
-  ///   ..05 top-layer / effect composite           F   (reserved, sibling phase)
-  ///   ..06 per-side / elliptical-radius border SDF F   (border.wgsl, this plan)
-  /// Outline reuses ..01 (the quad shader with the element's own clip
-  /// suppressed — architecture.md § 2.1), so it adds no new octet.
-  ```
-- [ ] Run — expect **PASS** (`border_shader_parses_and_has_entry_points ... ok`).
-- [ ] Run the full gate. Commit.
-  - Commit: `feat(render): per-side/elliptical border SDF shader (octet ..06)`
+There is **no** `border.wgsl`, **no** `BORDER_SHADER_UUID`, and **no** `..06` octet in this plan. The border band is the **quad** pipeline+shader's (`..01`) responsibility; the outer-minus-inner band math is locked by the Task-5 CPU oracle and is realized in the quad SDF when the component-model phase grows the instance record with per-side widths and the border color channel (that phase owns extending `shader.wgsl`'s fragment with the band — it is out of scope here, where the quad shader keeps the Phase-0 fill behavior). If a reviewer ever wants a standalone stroked-border pipeline for the elliptical per-corner case, that is a spec amendment to raise against architecture.md § 2.1 plus a new R6 `BuiyPrimitiveKind` variant, not a silent plan deviation.
 
 ---
 
-## Task 7 — Outline is a quad-shader key variant: assert it shares the quad shader (pure, no GPU)
+## Task 7 — Quad and Shadow have distinct shaders; the quad shader carries fill + border + outline (pure, no GPU)
 
-**Why:** Per [architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set), `Outline` reuses the quad pipeline+shader with the element's own clip suppressed — it must **not** introduce a new shader UUID. Lock that with a device-free test over `specialize`: the `Outline` and `Quad` descriptors reference the **same** shader handle, differing only in their label (and, later, clip handling). This catches a regression where someone gives outline its own shader.
+**Why:** This phase ships two F-tier pipelines — `Quad` (octet `..01`) and `Shadow` (octet `..02`) — and they must reference **distinct** shader handles. The other two roles the spec calls out — the **border band** and the focus **outline** — are not separate kinds in the landed R6 enum (`BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }`): border folds into the quad SDF and outline is the quad pipeline with the clip rect suppressed ([architecture.md § 2.1](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#21-the-primitive-set)). So the device-free contract to lock is: `Quad` and `Shadow` resolve to **different** shaders, and there is no third "border" or "outline" shader UUID. This catches a regression where someone re-introduces a standalone border/outline shader.
 
 **Files**
 - Test: `crates/buiy_core/tests/render_primitive_descriptor.rs` (extend)
@@ -882,30 +778,7 @@ Steps:
 - [ ] Write the failing test — add to `crates/buiy_core/tests/render_primitive_descriptor.rs`:
   ```rust
   #[test]
-  fn outline_reuses_the_quad_shader_handle() {
-      let specializer = BuiyPrimitives::default();
-      let quad = specializer.specialize(BuiyPrimitiveKey {
-          kind: BuiyPrimitiveKind::Quad,
-          format: TextureFormat::Rgba8UnormSrgb,
-      });
-      let outline = specializer.specialize(BuiyPrimitiveKey {
-          kind: BuiyPrimitiveKind::Outline,
-          format: TextureFormat::Rgba8UnormSrgb,
-      });
-      // Same shader asset (Outline = quad with clip suppressed; no new UUID).
-      assert_eq!(
-          quad.vertex.shader, outline.vertex.shader,
-          "outline must reuse the quad vertex shader (architecture.md § 2.1)"
-      );
-      assert_eq!(
-          quad.fragment.as_ref().unwrap().shader,
-          outline.fragment.as_ref().unwrap().shader,
-          "outline must reuse the quad fragment shader"
-      );
-  }
-
-  #[test]
-  fn shadow_and_border_use_their_own_shaders() {
+  fn quad_and_shadow_use_distinct_shaders() {
       let s = BuiyPrimitives::default();
       let quad = s.specialize(BuiyPrimitiveKey {
           kind: BuiyPrimitiveKind::Quad,
@@ -915,21 +788,26 @@ Steps:
           kind: BuiyPrimitiveKind::Shadow,
           format: TextureFormat::Rgba8UnormSrgb,
       });
-      let border = s.specialize(BuiyPrimitiveKey {
-          kind: BuiyPrimitiveKind::Border,
-          format: TextureFormat::Rgba8UnormSrgb,
-      });
-      assert_ne!(quad.fragment.as_ref().unwrap().shader, shadow.fragment.as_ref().unwrap().shader);
-      assert_ne!(quad.fragment.as_ref().unwrap().shader, border.fragment.as_ref().unwrap().shader);
-      assert_ne!(shadow.fragment.as_ref().unwrap().shader, border.fragment.as_ref().unwrap().shader);
+      // The two F-tier pipelines this phase ships reference different shaders;
+      // border (folded into quad) and outline (clip-suppressed quad) add no
+      // third shader UUID — they are not BuiyPrimitiveKind variants.
+      assert_ne!(
+          quad.vertex.shader, shadow.vertex.shader,
+          "quad and shadow must use distinct vertex shaders"
+      );
+      assert_ne!(
+          quad.fragment.as_ref().unwrap().shader,
+          shadow.fragment.as_ref().unwrap().shader,
+          "quad and shadow must use distinct fragment shaders (..01 vs ..02)"
+      );
   }
   ```
-- [ ] Run — expect **PASS** (the Task-2 `shader_for` already maps `Outline | Quad` to `shader_handle()`, and shadow/border to their own handles). If `outline_reuses_the_quad_shader_handle` **fails**, the bug is in `BuiyPrimitives::shader_for` — fix it there:
+- [ ] Run — expect **PASS** (the Task-2 `shader_for` maps `Quad` to `shader_handle()` (`..01`) and `Shadow` to `shadow_shader_handle()` (`..02`), which are distinct UUIDs). If it **fails**, the bug is in `BuiyPrimitives::shader_for` — fix it there:
   ```sh
   cargo test -p buiy_core --test render_primitive_descriptor
   ```
 - [ ] Run the full gate. Commit.
-  - Commit: `test(render): pin outline-reuses-quad-shader and distinct primitive shaders`
+  - Commit: `test(render): pin quad/shadow distinct-shader contract`
 
 ---
 
@@ -980,7 +858,8 @@ Steps:
   Expected: existing tests run, the three GPU ones (including the new one) report as `ignored`.
 - [ ] Minimal impl — in `pipeline.rs::register`, replace the inline `RenderPipelineDescriptor { … }` literal with a `specialize` call keyed on the view's default format. Because `register` runs at plugin-finish (no `ViewTarget` yet), key the **main-pass** variant off the **`TextureFormat::Rgba8UnormSrgb` literal** — this is exactly what `ViewTarget::main_texture_format()` returns for the default `Camera2d` view ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders)) and what the Phase-0 descriptor already hard-coded, so using the literal here avoids importing the `BevyDefault` trait (its `bevy_default()` returns `Rgba8UnormSrgb`, but the trait is not re-exported through `bevy::render` and would add an import for no behavior difference):
   ```rust
-  use crate::render::primitive::{BuiyPrimitiveKey, BuiyPrimitiveKind, BuiyPrimitives};
+  use crate::render::buckets::BuiyPrimitiveKind;
+  use crate::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
   use bevy::render::render_resource::SpecializedRenderPipeline;
 
   // … inside register, after shaders are inserted and pipeline_cache is held:
@@ -1022,7 +901,8 @@ Steps:
       RenderApp,
       render_resource::{PipelineCache, SpecializedRenderPipelines, TextureFormat},
   };
-  use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitiveKind, BuiyPrimitives};
+  use buiy_core::render::buckets::BuiyPrimitiveKind;
+  use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
 
   #[test]
   #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
@@ -1094,7 +974,7 @@ Steps:
 
 - [ ] Read `docs/README.md` and find the render-pipeline plans grouping (or the plans table). Add a row/link:
   ```
-  - [2026-06-03-buiy-render-r7-pipelines-shaders](plans/2026-06-03-buiy-render-r7-pipelines-shaders.md) — typed-primitive SpecializedRenderPipelines (quad/shadow/border/outline) + SDF WGSL under the 0xB01A_01XX octets. [landed]
+  - [2026-06-03-buiy-render-r7-pipelines-shaders](plans/2026-06-03-buiy-render-r7-pipelines-shaders.md) — typed-primitive SpecializedRenderPipelines (quad `..01` + shadow `..02`; border folds into the quad SDF, outline is the clip-suppressed quad) + SDF WGSL under the 0xB01A_01XX octets. [landed]
   ```
   Follow the exact formatting of the surrounding entries (match the `organizing-buiy-docs` conventions — bullet style, date-prefix, trailing status marker).
 - [ ] If `docs/README.md` has no plans grouping yet, add a minimal "Render pipeline — plans" subsection under the render-pipeline area, mirroring how layout plans are grouped.
@@ -1114,4 +994,4 @@ Steps:
 
 ---
 
-*Plan authored 2026-06-03 against the render-pipeline design spec. Headless gate is the four-command block at the top; GPU assertions are `#[ignore]`d with the `render_smoke.rs` wording. Octet `..06` (border) is the one octet this plan adds inside the reserved `0xB01A_01..` range beyond the spec's enumerated set — documented in `pipeline.rs`, raised here for reviewer awareness.*
+*Plan authored 2026-06-03 against the render-pipeline design spec; reconciled to the landed R6 enum (`BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }`) and the spec's folded-band model per the plan-reconciliation review. Headless gate is the four-command block at the top; GPU assertions are `#[ignore]`d with the `render_smoke.rs` wording. This plan adds **no** octet beyond the spec's normative enumeration ([architecture.md § 1.4](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md#14-pipelines-pipelinecache--stable-uuid-shaders), `..01..05`): it ships the `..01` quad and `..02` shadow shaders; the border band folds into `..01` and the focus outline is the clip-suppressed quad pipeline.*
