@@ -10,10 +10,11 @@ use bevy::asset::uuid::Uuid;
 use bevy::mesh::VertexBufferLayout;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    BlendState, Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
-    ColorTargetState, ColorWrites, FragmentState, FrontFace, MultisampleState, PipelineCache,
-    PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipelineDescriptor, TextureFormat,
-    VertexAttribute, VertexFormat, VertexState, VertexStepMode,
+    BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendState, Buffer,
+    BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites,
+    FragmentState, FrontFace, MultisampleState, PipelineCache, PolygonMode, PrimitiveState,
+    PrimitiveTopology, RenderPipelineDescriptor, ShaderStages, TextureFormat, VertexAttribute,
+    VertexFormat, VertexState, VertexStepMode, binding_types::uniform_buffer,
 };
 use bevy::render::renderer::RenderDevice;
 use bevy::shader::Shader;
@@ -22,9 +23,11 @@ use bevy::shader::Shader;
 ///
 /// **Buiy render-asset UUID convention.** All render-asset UUIDs in `buiy_core`
 /// use the prefix `0xB01A_01XX_..` ("BUIY 01") with the trailing octet
-/// distinguishing the asset (01 = rounded-rect shader). When future tasks add
-/// shader / atlas / pipeline assets, increment the trailing octet and document
-/// in this comment block. Reserved range: `0xB01A_0100_0000_0000_0000_0000_0000_0001`
+/// distinguishing the asset (01 = rounded-rect shader; the view-uniform bind
+/// group at `@group(0) @binding(0)` is now part of this rounded-rect pipeline,
+/// not a separate asset). When future tasks add shader / atlas / pipeline
+/// assets, increment the trailing octet and document in this comment block.
+/// Reserved range: `0xB01A_0100_0000_0000_0000_0000_0000_0001`
 /// through `0xB01A_01FF_..._FFFF`.
 const SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0100_0000_0000_0000_0000_0000_0001u128);
 
@@ -41,6 +44,11 @@ pub struct BuiyPipeline {
     /// scope: vertex emission order matches the `cull_mode: None` setting in
     /// the descriptor; v0.x tightens to back-face culling.
     pub vertex_buffer: Buffer,
+    /// Bind-group layout for the per-view view uniform (`@group(0) @binding(0)`,
+    /// `var<uniform> view: BuiyView`, vertex stage). The node builds the bind
+    /// group from this layout against `BuiyInstanceBuffers::view_uniform` each
+    /// frame; the layout itself is created once here.
+    pub view_layout: BindGroupLayout,
 }
 
 pub(crate) fn register(render_app: &mut SubApp) {
@@ -58,12 +66,36 @@ pub(crate) fn register(render_app: &mut SubApp) {
         );
     }
 
+    // Bind-group layout for the per-view view uniform: one `var<uniform>` at
+    // `@group(0) @binding(0)`, visible to the vertex stage (the logical->clip
+    // transform happens in `vertex`). `[Vec4; 3]` is the `BuiyViewUniform`
+    // std140 payload the prepare phase uploads (`as_std140_array`, regrouped into
+    // the three `vec4` columns of the WGSL `BuiyView`); its min binding size is
+    // 48 B, matching the WGSL struct. A bare `[f32; 12]` is NOT a valid uniform
+    // payload (4-byte scalar-array stride violates std140's 16-byte rule), so the
+    // carrier and this layout both use `[Vec4; 3]`.
+    //
+    // The SAME entries feed two consumers: the pipeline descriptor (a
+    // `BindGroupLayoutDescriptor` the cache materializes + dedups) and the
+    // concrete `BindGroupLayout` stored on `BuiyPipeline` for the node to build
+    // the per-frame bind group. Both are byte-identical entries, so the bind
+    // group is layout-compatible with the pipeline. Built from the render
+    // device, a separate immutable borrow from the `PipelineCache` below — both
+    // coexist.
+    let view_layout_entries =
+        BindGroupLayoutEntries::single(ShaderStages::VERTEX, uniform_buffer::<[Vec4; 3]>(false));
+    let view_layout = world
+        .resource::<RenderDevice>()
+        .create_bind_group_layout("buiy_view_uniform_layout", &view_layout_entries);
+    let view_layout_descriptor =
+        BindGroupLayoutDescriptor::new("buiy_view_uniform_layout", &view_layout_entries);
+
     // Build pipeline descriptor and queue it.
     let pipeline_cache = world.resource::<PipelineCache>();
 
     let descriptor = RenderPipelineDescriptor {
         label: Some("buiy_rounded_rect_pipeline".into()),
-        layout: vec![],
+        layout: vec![view_layout_descriptor],
         push_constant_ranges: vec![],
         vertex: VertexState {
             shader: shader_handle(),
@@ -178,5 +210,9 @@ pub(crate) fn register(render_app: &mut SubApp) {
     });
 
     let id = pipeline_cache.queue_render_pipeline(descriptor);
-    world.insert_resource(BuiyPipeline { id, vertex_buffer });
+    world.insert_resource(BuiyPipeline {
+        id,
+        vertex_buffer,
+        view_layout,
+    });
 }

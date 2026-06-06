@@ -11,9 +11,10 @@ use crate::{
     theme::Theme,
 };
 use bevy::prelude::*;
-use bevy::render::{Extract, ExtractSchedule, RenderApp};
+use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
 
 pub mod bridge;
+pub mod buckets;
 pub mod clip;
 pub mod color;
 pub mod components;
@@ -22,6 +23,8 @@ pub mod extract;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
+pub mod prepare;
+pub mod view_uniform;
 
 pub use bridge::ScrollDirty;
 pub use clip::write_clip_rects;
@@ -46,10 +49,10 @@ pub use components::{
 pub struct ExtractedDraws {
     pub draws: Vec<DrawData>,
     /// Logical-pixel size of the primary window this frame. Populated by the
-    /// extract system. Render-graph nodes use this to convert
-    /// `DrawData` (px) → `InstanceData` (clip) per the Phase 0 closeout
-    /// design. Zero on frames where no window exists; the render node
-    /// must skip drawing in that case.
+    /// extract system. The live render path no longer reads it (the view
+    /// uniform owns the logical → clip transform); it stays only for the
+    /// Phase-0 `ExtractedDraws` carrier until the extract phase retires it.
+    /// Zero on frames where no window exists.
     pub window_size: Vec2,
 }
 
@@ -148,8 +151,15 @@ impl Plugin for BuiyRenderPlugin {
             // node/instance rework) when node.rs reads the per-view
             // ExtractedNodes instead.
             .add_systems(ExtractSchedule, extract_buiy_draws)
-            // The per-view extract rework (this phase). architecture § 1.2/§ 3/§ 4.
-            .add_systems(ExtractSchedule, extract::extract_buiy_nodes);
+            // The per-view extract rework (R5). architecture § 1.2/§ 3/§ 4.
+            .add_systems(ExtractSchedule, extract::extract_buiy_nodes)
+            // The prepare phase (R6): per-view persistent buffers + view
+            // uniform, packed from R5's ExtractedNodes. ViewTarget exists in
+            // RenderSystems::Prepare (architecture § 4), unlike in extract.
+            .add_systems(
+                Render,
+                prepare::prepare_buiy_instances.in_set(RenderSystems::Prepare),
+            );
         // Phase 0: render-graph node + pipeline initialization.
         // The actual pipeline + node wiring lives in pipeline.rs and node.rs.
         node::register(render_app);
