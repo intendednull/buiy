@@ -32,9 +32,9 @@ pub use layout::{
     NamedArea, Orientation, Overflow, OverflowMode, OverscrollBehavior, Position, PositionKind,
     PositionTry, PostTaffyPositionOverrides, QueryCondition, RepeatCount, Rotate, Scale, Scroll,
     ScrollBehavior, ScrollOffset, ScrollSnapItem, ScrollbarColor, ScrollbarGutter, ScrollbarWidth,
-    Sizing, SnapAlign, SnapStop, SnapType, Style, TextOrientation, TrackSize, TransformMatrix,
-    TransformOrigin, TransformStyle, Translate, TryCondition, UiTransform, UnicodeBidi, WillChange,
-    WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
+    Sizing, SnapAlign, SnapStop, SnapType, Stacking, Style, TextOrientation, TrackSize,
+    TransformMatrix, TransformOrigin, TransformStyle, Translate, TryCondition, UiTransform,
+    UnicodeBidi, WillChange, WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
 };
 pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 pub use render::color::{ColorToken, SystemColorKeyword};
