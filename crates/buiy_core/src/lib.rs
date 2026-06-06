@@ -4,6 +4,10 @@
 //! sub-plugin order and SystemSet definitions.
 
 use bevy::prelude::*;
+use bevy::transform::systems::{
+    StaticTransformOptimizations, mark_dirty_trees, propagate_parent_transforms,
+    sync_simple_transforms,
+};
 
 pub mod a11y;
 pub mod components;
@@ -77,5 +81,38 @@ impl Plugin for CorePlugin {
                 )
                     .chain(),
             );
+
+        app.init_resource::<crate::render::bridge::ScrollDirty>();
+        // `mark_dirty_trees` / `propagate_parent_transforms` take
+        // `Res<StaticTransformOptimizations>`, a resource `TransformPlugin`
+        // normally inserts. The bridge schedules those two systems in `Update`
+        // independently of `TransformPlugin`, so `CorePlugin` must supply the
+        // resource or the standalone `Update` copies panic on missing-resource
+        // param validation. `init_resource` is idempotent: when
+        // `TransformPlugin` is also present (the harness, `BuiyPlugin`,
+        // `DefaultPlugins`) the single shared resource is reused.
+        app.init_resource::<StaticTransformOptimizations>();
+        app.add_systems(
+            Update,
+            (
+                crate::render::bridge::seed_scroll_dirty,
+                crate::render::bridge::write_buiy_transform,
+                // Bevy's three public propagation systems, chained in
+                // dependency order (clip-and-transform.md § B.2.1). A DISTINCT
+                // Update instance — NOT PostUpdate's TransformSystems::Propagate
+                // set — so GlobalTransform is final before Picking + extract.
+                // These run even without TransformPlugin (CorePlugin supplies
+                // their StaticTransformOptimizations resource above; they are
+                // otherwise inert until an entity carries a Transform, which the
+                // bridge inserts). With TransformPlugin also present, its
+                // PostUpdate chain re-propagates — an accepted cost (§ B.2.1).
+                mark_dirty_trees,
+                propagate_parent_transforms,
+                sync_simple_transforms,
+            )
+                .chain()
+                .after(BuiySet::Animate)
+                .before(BuiySet::Picking),
+        );
     }
 }

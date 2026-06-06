@@ -441,14 +441,25 @@ base, exactly mirroring the `write_clip_rects` top-down shape (§ A.3):
 ///
 /// Spec: clip-and-transform.md § B.2 / § B.3.
 fn write_buiy_transform(
-    roots: Query<Entity, (With<Node>, Without<ChildOf>)>,
+    // Roots are selected by the § A.3 two-disjunct predicate (a Node is a
+    // root iff it has no `ChildOf` OR its `ChildOf` parent is not a Node),
+    // identical to `write_clip_rects` — `Without<ChildOf>` alone would
+    // silently drop the walk for a Buiy subtree parented under a non-Node
+    // Bevy entity, leaving it with no `Transform`.
+    all_nodes: Query<Entity, With<Node>>,
+    child_of: Query<&ChildOf>,
+    node_marker: Query<(), With<Node>>,
     layout: Query<(&ResolvedLayout, Option<&ResolvedTransform>, Option<&ScrollOffset>)>,
     children: Query<&Children>,
     mut transforms: Query<&mut Transform>,
     // `ScrollDirty` (§ B.3): the top-down set seeded by `Changed<ScrollOffset>`
     // (a scroll container re-translates its whole subtree) unioned with the
-    // entities whose `ResolvedLayout`/`ResolvedTransform` changed. The walk
-    // only descends into seeded subtrees; a steady-state frame visits none.
+    // entities whose `ResolvedLayout`/`ResolvedTransform` changed, plus the
+    // entities whose `ResolvedTransform` was *removed* this frame (6e drops it
+    // on a return to identity — a removal does not match `Changed`, so the
+    // seed reads `RemovedComponents<ResolvedTransform>` to recompose the node
+    // back to its position-only translation). The walk only descends into
+    // seeded subtrees; a steady-state frame visits none.
     dirty: Res<ScrollDirty>,
 ) {
     // Top-down from each seeded root, carrying the running ancestor scroll

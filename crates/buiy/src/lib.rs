@@ -64,6 +64,23 @@ pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};
 /// 0.18 panics when a `Res<T>` system param is missing, so the plugin
 /// must be present.
 ///
+/// `BuiyPlugin` does **not** itself require `bevy::transform::TransformPlugin`
+/// for the bridge to produce a correct `GlobalTransform` (clip-and-transform.md
+/// § B): `CorePlugin` schedules `write_buiy_transform` plus a distinct `Update`
+/// copy of Bevy's `mark_dirty_trees → propagate_parent_transforms →
+/// sync_simple_transforms`, and seeds their `StaticTransformOptimizations`
+/// resource itself, so `GlobalTransform` is already final before
+/// `BuiySet::Picking` and extract with no `TransformPlugin` present (§ B.2.1's
+/// escape hatch — a UI-only app pays propagation exactly once, in `Update`).
+///
+/// Add `TransformPlugin` when you want Bevy's *canonical* late propagation pass:
+/// `TransformPlugin` re-runs the same chain in `PostUpdate` (and `PostStartup`),
+/// reconciling any `Transform` an app system mutates *after* the `Update` window
+/// has closed — without it, such a late mutation is not reflected in
+/// `GlobalTransform` until the next frame's `Update` chain. `DefaultPlugins`
+/// includes `TransformPlugin`; on `MinimalPlugins` add it explicitly if your app
+/// edits `Transform` outside the bridge's `Update` window.
+///
 /// `BuiyPlugin` also composes `bevy::picking::PickingPlugin` (the core
 /// bevy_picking infrastructure), so you do not need to add it separately.
 /// If you are using `DefaultPlugins`, bevy_picking is not included by

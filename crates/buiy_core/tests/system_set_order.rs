@@ -93,3 +93,20 @@ fn layout_runs_before_animate() {
     let idx = set_indices(&[BuiySet::Layout, BuiySet::Animate]);
     assert!(idx[0] < idx[1], "Layout must run before Animate: {idx:?}");
 }
+
+// NOTE: the plan's belt-and-suspenders name-probe (locating
+// `write_buiy_transform` / `mark_dirty_trees` / `propagate_parent_transforms`
+// / `sync_simple_transforms` by name in the Update toposort) is intentionally
+// NOT implemented here. In this build configuration `System::name()` returns
+// the placeholder `<Enable the debug feature to see the name>` (Bevy strips
+// system names without the `debug` feature), and the `dependency()` DAG's
+// toposort holds only set + sync-point nodes — the real user systems do not
+// resolve through `graph.systems`. The plan (clip-and-transform R3 plan,
+// Task 3 Note) anticipates this: "If `graph.systems` is not directly
+// iterable… drop the toposort-name probe. The behavior test (`GlobalTransform`
+// final after `Update`) is the load-bearing gate." That gate lives in
+// `tests/render_transform_bridge.rs`
+// (`global_transform_is_final_after_update_no_postupdate_needed` +
+// `nested_transforms_compose_through_global_transform`), and the
+// chain's `.before(BuiySet::Picking)` ordering is pinned by the set-order
+// tests above.
