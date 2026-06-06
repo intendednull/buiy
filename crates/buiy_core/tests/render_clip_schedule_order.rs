@@ -40,11 +40,12 @@ use buiy_core::{BuiySet, CorePlugin, layout::LayoutPlugin, render::BuiyRenderPlu
 /// writer leaving the `.after(Animate).before(Picking)` window (N → N−1) fails
 /// the assertion. Authored in-window systems: the R3 bridge chain
 /// (`seed_scroll_dirty`, `write_buiy_transform`, `mark_dirty_trees`,
-/// `propagate_parent_transforms`, `sync_simple_transforms`) plus
-/// `write_clip_rects`; the remainder are auto-inserted `ApplyDeferred`
+/// `propagate_parent_transforms`, `sync_simple_transforms`), `write_clip_rects`,
+/// and `write_effect_groups` (R4, effect-compositor.md § 1.1 — runs alongside
+/// `WriteClipRects`); the remainder are auto-inserted `ApplyDeferred`
 /// boundaries. If you intentionally add or remove a render-prep writer in this
 /// window, update this constant in the same change.
-const EXPECTED_NODES_IN_WINDOW: usize = 6;
+const EXPECTED_NODES_IN_WINDOW: usize = 7;
 
 /// Number of `Update` nodes that have BOTH an incoming dependency edge from
 /// `BuiySet::Animate` and an outgoing one to `BuiySet::Picking` — i.e. systems
@@ -90,11 +91,12 @@ fn write_clip_rects_is_scheduled_after_animate_and_before_picking() {
         systems_after_animate_before_picking(),
         EXPECTED_NODES_IN_WINDOW,
         "exactly {EXPECTED_NODES_IN_WINDOW} render-prep nodes must sit \
-         .after(BuiySet::Animate).before(BuiySet::Picking) (write_clip_rects, the \
-         R3 transform bridge chain, and their ApplyDeferred sync points). A LOWER \
-         count means a writer left the window — e.g. write_clip_rects moved into \
-         BuiySet::Render or lost its .before(Picking) edge — which would feed \
-         picking/extract a stale or absent ClipRect. A HIGHER count means a new \
-         in-window writer was added; if intentional, bump EXPECTED_NODES_IN_WINDOW.",
+         .after(BuiySet::Animate).before(BuiySet::Picking) (write_clip_rects, \
+         write_effect_groups, the R3 transform bridge chain, and their \
+         ApplyDeferred sync points). A LOWER count means a writer left the window \
+         — e.g. write_clip_rects moved into BuiySet::Render or lost its \
+         .before(Picking) edge — which would feed picking/extract a stale or \
+         absent ClipRect. A HIGHER count means a new in-window writer was added; \
+         if intentional, bump EXPECTED_NODES_IN_WINDOW.",
     );
 }

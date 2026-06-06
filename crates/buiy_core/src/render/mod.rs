@@ -17,6 +17,7 @@ pub mod bridge;
 pub mod clip;
 pub mod color;
 pub mod components;
+pub mod effect;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
@@ -93,6 +94,18 @@ impl Plugin for BuiyRenderPlugin {
         app.add_systems(
             Update,
             clip::write_clip_rects
+                .after(crate::BuiySet::Animate)
+                .before(crate::BuiySet::Picking),
+        );
+
+        // Render-prep (main world): derive the EffectGroup marker alongside
+        // WriteClipRects, in the .after(Animate).before(Picking) window
+        // (effect-compositor.md § 1.1). Main-world ECS work, not a RenderApp
+        // system, so it is registered before the RenderApp branch — it lands
+        // even on headless hosts with no RenderApp.
+        app.add_systems(
+            Update,
+            effect::write_effect_groups
                 .after(crate::BuiySet::Animate)
                 .before(crate::BuiySet::Picking),
         );
