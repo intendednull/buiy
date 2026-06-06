@@ -18,6 +18,7 @@ pub mod clip;
 pub mod color;
 pub mod components;
 pub mod effect;
+pub mod extract;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
@@ -142,7 +143,13 @@ impl Plugin for BuiyRenderPlugin {
         };
         render_app
             .init_resource::<ExtractedDraws>()
-            .add_systems(ExtractSchedule, extract_buiy_draws);
+            .init_resource::<extract::ExtractedNodesView>()
+            // Phase-0 draw path (feeds node.rs today); retired by R6/R8 (the
+            // node/instance rework) when node.rs reads the per-view
+            // ExtractedNodes instead.
+            .add_systems(ExtractSchedule, extract_buiy_draws)
+            // The per-view extract rework (this phase). architecture § 1.2/§ 3/§ 4.
+            .add_systems(ExtractSchedule, extract::extract_buiy_nodes);
         // Phase 0: render-graph node + pipeline initialization.
         // The actual pipeline + node wiring lives in pipeline.rs and node.rs.
         node::register(render_app);
@@ -154,7 +161,7 @@ impl Plugin for BuiyRenderPlugin {
 /// glance in screenshots). The accompanying `warn!` surfaces the typo'd token
 /// name in dev. Phase 0 has a small, known token set; v0.x can promote to an
 /// `error!` once tokens are typed.
-const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
+pub(crate) const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
 
 /// Resolve a [`ColorToken`] against the active theme. Returns the resolved
 /// `Color` and whether a named token *missed* (so the caller can emit one

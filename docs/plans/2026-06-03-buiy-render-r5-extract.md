@@ -71,16 +71,16 @@ The Phase-0 `extract_buiy_draws` + `ExtractedDraws` + `DrawData` + `instance::to
 
 ### Steps
 
-- [ ] Confirm the R1 types exist (they do — R1 is a prerequisite). If any grep below is empty, R1 has not landed and this phase is blocked — stop and surface it rather than re-creating the type:
+- [x] Confirm the R1 types exist (they do — R1 is a prerequisite). If any grep below is empty, R1 has not landed and this phase is blocked — stop and surface it rather than re-creating the type:
 
 ```sh
 grep -rn "pub enum ColorToken" crates/buiy_core/src/render/color.rs
 grep -rn "pub struct Background\|pub enum CssVisibility\|pub struct OffscreenAuto" crates/buiy_core/src/render/components.rs
 ```
 
-- [ ] Confirm `lib.rs` already re-exports `ColorToken` (from `render::color`, added by R1). Do NOT add a second re-export here.
-- [ ] No code/test is written in this task — `extract.rs` (Tasks 2–6) imports `ColorToken` from `crate::render::color` and `Background` / `CssVisibility` / `OffscreenAuto` from `crate::render::components`. The R1 inline tests already cover these types' `Default`/variant behavior; this phase does not re-test R1's surface.
-- [ ] No commit for this task (verification only); fold it into Task 2's first commit if any tracking change is needed.
+- [x] Confirm `lib.rs` already re-exports `ColorToken` (from `render::color`, added by R1). Do NOT add a second re-export here.
+- [x] No code/test is written in this task — `extract.rs` (Tasks 2–6) imports `ColorToken` from `crate::render::color` and `Background` / `CssVisibility` / `OffscreenAuto` from `crate::render::components`. The R1 inline tests already cover these types' `Default`/variant behavior; this phase does not re-test R1's surface.
+- [x] No commit for this task (verification only); fold it into Task 2's first commit if any tracking change is needed.
 
 ---
 
@@ -95,7 +95,7 @@ grep -rn "pub struct Background\|pub enum CssVisibility\|pub struct OffscreenAut
 
 ### Steps
 
-- [ ] Create `crates/buiy_core/src/render/extract.rs` with just the module doc + `use`s so the test target resolves the path, then write the failing test file `crates/buiy_core/tests/render_extract.rs`:
+- [x] Create `crates/buiy_core/src/render/extract.rs` with just the module doc + `use`s so the test target resolves the path, then write the failing test file `crates/buiy_core/tests/render_extract.rs`:
 
 ```rust
 //! Headless unit tests for the per-view extract mapping. Pure-CPU: no wgpu
@@ -133,13 +133,13 @@ fn missing_token_resolves_to_magenta_sentinel() {
 }
 ```
 
-- [ ] Run — expect FAIL (does not compile: `resolve_color_token` unresolved):
+- [x] Run — expect FAIL (does not compile: `resolve_color_token` unresolved):
 
 ```sh
 cargo test -p buiy_core --test render_extract 2>&1 | tail -20
 ```
 
-- [ ] Minimal impl. Write `crates/buiy_core/src/render/extract.rs`:
+- [x] Minimal impl. Write `crates/buiy_core/src/render/extract.rs`:
 
 ```rust
 //! The per-view extract mapping, factored into pure functions so the
@@ -177,15 +177,15 @@ pub fn resolve_color_token(token: &ColorToken, theme: &Theme) -> Color {
 }
 ```
 
-- [ ] Add `pub mod extract;` to `crates/buiy_core/src/render/mod.rs`. Confirm `MISSING_TOKEN_FALLBACK` is reachable: it is currently a private `const` in `mod.rs`. Change its declaration from `const MISSING_TOKEN_FALLBACK` to `pub(crate) const MISSING_TOKEN_FALLBACK` so `extract.rs` can use it (do NOT make it `pub`).
-- [ ] Run — expect PASS:
+- [x] Add `pub mod extract;` to `crates/buiy_core/src/render/mod.rs`. Confirm `MISSING_TOKEN_FALLBACK` is reachable: it is currently a private `const` in `mod.rs`. Change its declaration from `const MISSING_TOKEN_FALLBACK` to `pub(crate) const MISSING_TOKEN_FALLBACK` so `extract.rs` can use it (do NOT make it `pub`).
+- [x] Run — expect PASS:
 
 ```sh
 cargo test -p buiy_core --test render_extract 2>&1 | tail -20
 ```
 
-- [ ] Run the full gate. Resolve every warning.
-- [ ] Commit: `feat(render): resolve_color_token pure fn with transparent + sentinel rules`
+- [x] Run the full gate. Resolve every warning.
+- [x] Commit: `feat(render): resolve_color_token pure fn with transparent + sentinel rules`
 
 ---
 
@@ -199,7 +199,7 @@ cargo test -p buiy_core --test render_extract 2>&1 | tail -20
 
 ### Steps
 
-- [ ] Add failing tests to `crates/buiy_core/tests/render_extract.rs`:
+- [x] Add failing tests to `crates/buiy_core/tests/render_extract.rs`:
 
 ```rust
 use buiy_core::render::components::{CssVisibility, OffscreenAuto};
@@ -255,13 +255,13 @@ fn css_hidden_takes_precedence_over_offscreen() {
 }
 ```
 
-- [ ] Run — expect FAIL (does not compile: `SkipReason`, `node_skip_reason` unresolved):
+- [x] Run — expect FAIL (does not compile: `SkipReason`, `node_skip_reason` unresolved):
 
 ```sh
 cargo test -p buiy_core --test render_extract 2>&1 | tail -20
 ```
 
-- [ ] Minimal impl. Append to `crates/buiy_core/src/render/extract.rs`:
+- [x] Minimal impl. Append to `crates/buiy_core/src/render/extract.rs`:
 
 ```rust
 use crate::render::components::CssVisibility;
@@ -301,9 +301,9 @@ pub fn node_skip_reason(
 }
 ```
 
-- [ ] Run — expect PASS.
-- [ ] Run the full gate. Resolve every warning.
-- [ ] Commit: `feat(render): node_skip_reason predicate (CssHidden + OffscreenAuto; content-visibility:hidden paints own box)`
+- [x] Run — expect PASS.
+- [x] Run the full gate. Resolve every warning.
+- [x] Commit: `feat(render): node_skip_reason predicate (CssHidden + OffscreenAuto; content-visibility:hidden paints own box)`
 
 ---
 
@@ -317,7 +317,7 @@ pub fn node_skip_reason(
 
 ### Steps
 
-- [ ] Add failing tests:
+- [x] Add failing tests:
 
 ```rust
 use bevy::prelude::*;
@@ -376,8 +376,8 @@ fn extracted_node_position_follows_global_transform() {
 }
 ```
 
-- [ ] Run — expect FAIL (unresolved `ExtractedNode` / `extracted_node_for`).
-- [ ] Minimal impl. Append to `crates/buiy_core/src/render/extract.rs`:
+- [x] Run — expect FAIL (unresolved `ExtractedNode` / `extracted_node_for`).
+- [x] Minimal impl. Append to `crates/buiy_core/src/render/extract.rs`:
 
 ```rust
 use crate::components::ResolvedLayout;
@@ -428,9 +428,9 @@ pub fn extracted_node_for(
 }
 ```
 
-- [ ] Run — expect PASS.
-- [ ] Run the full gate. Resolve every warning.
-- [ ] Commit: `feat(render): ExtractedNode record + extracted_node_for builder`
+- [x] Run — expect PASS.
+- [x] Run the full gate. Resolve every warning.
+- [x] Commit: `feat(render): ExtractedNode record + extracted_node_for builder`
 
 ---
 
@@ -446,7 +446,7 @@ pub fn extracted_node_for(
 
 ### Steps
 
-- [ ] Add failing tests (paint-order identity + skip-drops-from-output, the two headless properties paint-order § 6 names):
+- [x] Add failing tests (paint-order identity + skip-drops-from-output, the two headless properties paint-order § 6 names):
 
 ```rust
 use buiy_core::render::extract::{ExtractedNodes, assemble_in_paint_order};
@@ -526,8 +526,8 @@ fn hit_test_order_is_paint_order_reversed() {
 }
 ```
 
-- [ ] Run — expect FAIL (unresolved `ExtractedNodes`, `assemble_in_paint_order`).
-- [ ] Minimal impl. Append to `crates/buiy_core/src/render/extract.rs`:
+- [x] Run — expect FAIL (unresolved `ExtractedNodes`, `assemble_in_paint_order`).
+- [x] Minimal impl. Append to `crates/buiy_core/src/render/extract.rs`:
 
 ```rust
 /// Per-view CPU instance set — the `Changed`-gated per-frame product of
@@ -587,9 +587,9 @@ pub fn assemble_in_paint_order(
 }
 ```
 
-- [ ] Run — expect PASS.
-- [ ] Run the full gate. Resolve every warning.
-- [ ] Commit: `feat(render): ExtractedNodes per-view component + painters_z-ordered assembly`
+- [x] Run — expect PASS.
+- [x] Run the full gate. Resolve every warning.
+- [x] Commit: `feat(render): ExtractedNodes per-view component + painters_z-ordered assembly`
 
 ---
 
@@ -603,7 +603,7 @@ pub fn assemble_in_paint_order(
 
 ### Steps
 
-- [ ] Implement the system. Append to `crates/buiy_core/src/render/extract.rs`. This is the architecture § 1.2 fan, written against the v1 subset this phase ships (Background + the skip inputs + the layout handoffs); reserved effect components (`BoxShadow`/`Opacity`/`Outline`/`EffectGroup`/`ClipRect`/`Filter`/…) are added to the fan as their tier lands — the `// FAN: add … here` comment marks the seam:
+- [x] Implement the system. Append to `crates/buiy_core/src/render/extract.rs`. This is the architecture § 1.2 fan, written against the v1 subset this phase ships (Background + the skip inputs + the layout handoffs); reserved effect components (`BoxShadow`/`Opacity`/`Outline`/`EffectGroup`/`ClipRect`/`Filter`/…) are added to the fan as their tier lands — the `// FAN: add … here` comment marks the seam:
 
 ```rust
 use crate::components::StackingContext;
@@ -724,14 +724,14 @@ pub struct ExtractedNodesView(pub ExtractedNodes);
 
 > **Note on `by_entity.get(&e).copied()`:** the `Changed`-gated fan only yields *changed* entities, so an unchanged painter is absent from `by_entity` and would be dropped from this frame's set. That is the R6/R8 partial-re-extract concern (architecture § 3.1: "an unchanged entity contributes its *cached* instance record"). v1 of THIS phase intentionally rebuilds only the changed set into the carrier; the cache-merge across frames is R6/R8. The pure assembler (Task 5) is already correct for the full-set case the cache will feed it. The `// R6/R8: merge cached records for unchanged painters here` comment marks the seam at the `assemble_in_paint_order` call.
 
-- [ ] Confirm it compiles as a library (no GPU needed to *compile* the system; only to *run* it in a `RenderApp`):
+- [x] Confirm it compiles as a library (no GPU needed to *compile* the system; only to *run* it in a `RenderApp`):
 
 ```sh
 cargo build -p buiy_core 2>&1 | tail -20
 ```
 
-- [ ] Run the full gate. Resolve every warning. (Clippy will see the system; the `#[allow(clippy::type_complexity)]` keeps the fan tuple acceptable — mirror the layout systems' convention if clippy complains about anything else.)
-- [ ] Commit: `feat(render): extract_buiy_nodes system wiring (per-view, Changed-gated, primary view)`
+- [x] Run the full gate. Resolve every warning. (Clippy will see the system; the `#[allow(clippy::type_complexity)]` keeps the fan tuple acceptable — mirror the layout systems' convention if clippy complains about anything else.)
+- [x] Commit: `feat(render): extract_buiy_nodes system wiring (per-view, Changed-gated, primary view)`
 
 ---
 
@@ -745,7 +745,7 @@ cargo build -p buiy_core 2>&1 | tail -20
 
 ### Steps
 
-- [ ] Add a failing headless test to `crates/buiy_core/tests/render_smoke.rs` asserting the plugin still loads without a `RenderApp` and that `extract.rs` / its types are reachable. (Reflection registration of `Background`/`CssVisibility` is R1's responsibility and is tested in R1 — do NOT re-assert it here.) Append:
+- [x] Add a failing headless test to `crates/buiy_core/tests/render_smoke.rs` asserting the plugin still loads without a `RenderApp` and that `extract.rs` / its types are reachable. (Reflection registration of `Background`/`CssVisibility` is R1's responsibility and is tested in R1 — do NOT re-assert it here.) Append:
 
 ```rust
 #[test]
@@ -761,13 +761,13 @@ fn buiy_render_plugin_loads_headless_with_extract_module() {
 }
 ```
 
-- [ ] Run — expect PASS once `pub mod extract;` exists (or FAIL to compile if the module path is not yet public):
+- [x] Run — expect PASS once `pub mod extract;` exists (or FAIL to compile if the module path is not yet public):
 
 ```sh
 cargo test -p buiy_core --test render_smoke buiy_render_plugin_loads_headless_with_extract_module 2>&1 | tail -20
 ```
 
-- [ ] Minimal impl in `crates/buiy_core/src/render/mod.rs`:
+- [x] Minimal impl in `crates/buiy_core/src/render/mod.rs`:
   1. Add `pub mod extract;` near the other `pub mod` lines (if not already added in Task 2). Do NOT add `pub mod components;` / `pub mod color;` — those modules are owned and declared by R1.
   2. Do NOT add any `app.register_type::<components::…>()` chain — R1 already registers the author-set render components. (If a `cargo test` shows a missing registration, that is an R1 gap to fix in R1, not a re-registration here.)
   3. Inside the `RenderApp` branch, register the new extract system alongside the existing one (dual-registration; see the task preamble). Change:
@@ -793,14 +793,14 @@ render_app
 
   4. Keep the path-qualified `extract::extract_buiy_nodes` to avoid an unused-import lint. Confirm the `extract` module is `pub mod`.
 
-- [ ] Run — expect PASS:
+- [x] Run — expect PASS:
 
 ```sh
 cargo test -p buiy_core --test render_smoke 2>&1 | tail -20
 ```
 
-- [ ] Run the full gate. Resolve every warning.
-- [ ] Commit: `feat(render): register extract_buiy_nodes in ExtractSchedule (alongside Phase-0 draw)`
+- [x] Run the full gate. Resolve every warning.
+- [x] Commit: `feat(render): register extract_buiy_nodes in ExtractSchedule (alongside Phase-0 draw)`
 
 ---
 
@@ -813,7 +813,7 @@ cargo test -p buiy_core --test render_smoke 2>&1 | tail -20
 
 ### Steps
 
-- [ ] Add the GPU-`#[ignore]` test to `crates/buiy_core/tests/render_smoke.rs`, mirroring the existing `#[ignore]` idiom verbatim:
+- [x] Add the GPU-`#[ignore]` test to `crates/buiy_core/tests/render_smoke.rs`, mirroring the existing `#[ignore]` idiom verbatim:
 
 ```rust
 // Same RenderApp/wgpu-adapter caveat as `pipeline_registers_in_render_app`:
@@ -850,20 +850,20 @@ fn extract_buiy_nodes_registered_in_extract_schedule() {
 }
 ```
 
-- [ ] Confirm the ignored test compiles and is skipped by default:
+- [x] Confirm the ignored test compiles and is skipped by default:
 
 ```sh
 cargo test -p buiy_core --test render_smoke 2>&1 | tail -20   # the new test shows as `ignored`
 ```
 
-- [ ] (Optional, only if a lavapipe adapter is available locally — NOT on CI) run the ignored test:
+- [x] (Optional, only if a lavapipe adapter is available locally — NOT on CI) run the ignored test:
 
 ```sh
 cargo test -p buiy_core --test render_smoke -- --ignored 2>&1 | tail -20
 ```
 
-- [ ] Run the full gate (the ignored test must still *compile* clean). Resolve every warning.
-- [ ] Commit: `test(render): GPU-ignored smoke for extract_buiy_nodes RenderApp membership`
+- [x] Run the full gate (the ignored test must still *compile* clean). Resolve every warning.
+- [x] Commit: `test(render): GPU-ignored smoke for extract_buiy_nodes RenderApp membership`
 
 ---
 
@@ -877,9 +877,9 @@ cargo test -p buiy_core --test render_smoke -- --ignored 2>&1 | tail -20
 
 ### Steps
 
-- [ ] In `docs/README.md`, find the render-pipeline plans grouping (or add one under the render area) and add a row pointing to this plan with status `landed (extract rework; node-side read pending R6/R8)`. Mirror the existing row formatting in that file — read the surrounding rows first, do not invent a new table shape.
-- [ ] Confirm no other spec child contradicts "extract_buiy_nodes shipped": the architecture § 1.2 text already describes it as the target; no edit needed there (it is target-state prose). Leave a one-line note in this plan's header if any drift is found.
-- [ ] Run the full gate one final time (docs changes do not affect it, but run it to be certain nothing regressed):
+- [x] In `docs/README.md`, find the render-pipeline plans grouping (or add one under the render area) and add a row pointing to this plan with status `landed (extract rework; node-side read pending R6/R8)`. Mirror the existing row formatting in that file — read the surrounding rows first, do not invent a new table shape.
+- [x] Confirm no other spec child contradicts "extract_buiy_nodes shipped": the architecture § 1.2 text already describes it as the target; no edit needed there (it is target-state prose). Leave a one-line note in this plan's header if any drift is found.
+- [x] Run the full gate one final time (docs changes do not affect it, but run it to be certain nothing regressed):
 
 ```sh
 cargo fmt --all -- --check && \
@@ -888,7 +888,7 @@ cargo fmt --all -- --check && \
   cargo test --workspace
 ```
 
-- [ ] Commit: `docs(render): mark per-view extract rework landed in catalog`
+- [x] Commit: `docs(render): mark per-view extract rework landed in catalog`
 
 ---
 

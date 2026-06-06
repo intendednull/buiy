@@ -459,6 +459,30 @@ honors perspective / backface / `transform-style`.
 
 **Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
 
+## Render — subtree visibility suppression (`CssVisibility::Hidden` / `OffscreenAuto` descendants)
+
+**Originated:** R5 (per-view extract) — `node_skip_reason` is a per-entity leaf
+predicate; the spec requires a subtree-scoped paint skip.
+
+**Symptom:** `extract_buiy_nodes` drops the entity that carries
+`CssVisibility::Hidden` (or `OffscreenAuto`) but not its descendants, which stay in
+`painters_z` with valid `ResolvedLayout`. Buiy has no visibility cascade, so a
+`Visible`/default child of a `Hidden` parent would still paint — a divergence from
+paint-order-and-top-layer.md § 5.4 / § 5.3. Latent today: no v1 code sets
+`CssVisibility::Hidden` on a non-leaf entity and layout does not yet emit
+`OffscreenAuto`.
+
+**Implementation sketch:** a render-prep `Children`-walk visibility-propagation pass
+(same shape as `write_clip_rects` / `write_buiy_transform`, in the
+`.after(Animate).before(Picking)` window) that writes a computed paint-skip marker
+across each hidden/offscreen subtree; extract reads the computed marker per entity.
+Recommended over a cache-coordinated drop in R6/R8's assembler. Land alongside or just
+before R6/R8 (the first phase whose output paints the full set). v1 semantics: blanket
+subtree drop (no `visibility:visible` override until a visibility cascade exists).
+
+**Spec touchpoint:** `paint-order-and-top-layer.md § 5.3 / § 5.4`; design fork in
+`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-subtree-visibility-suppression-design.md`.
+
 ## Layout — Phase 9 stacking sub-pass 6f reads `ResolvedTransform` — LANDED
 
 **Originated:** Phase 8 (D1 — stacking deferred to Phase 9).

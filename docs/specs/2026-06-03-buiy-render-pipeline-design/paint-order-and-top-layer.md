@@ -351,7 +351,25 @@ but prunes descendants from *layout*): here the geometry is fully laid out and p
 
 Render's extract drops the `CssVisibility::Hidden` entity *and its descendants* from
 primitive emission — the same subtree-scoped paint skip as the `OffscreenAuto` case
-(§ 5.3), just keyed on `CssVisibility::Hidden` instead of the off-screen marker. Because
+(§ 5.3), just keyed on `CssVisibility::Hidden` instead of the off-screen marker.
+
+> **v1 implementation status (R5).** R5's `extract_buiy_nodes` implements the
+> per-entity **leaf** skip only: `node_skip_reason` drops the entity that carries
+> `CssVisibility::Hidden` (or `OffscreenAuto`), but does **not** yet drop its
+> descendants — Buiy has no visibility cascade, so a `Visible`/default child of a
+> `Hidden` parent stays in `painters_z` and would still paint. The subtree-scoped
+> suppression this section mandates is a tracked follow-up
+> ([follow-ups.md](../../plans/follow-ups.md) → "Render — subtree visibility
+> suppression"; design fork in
+> [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md)).
+> Deferred deliberately: R5 emits only the `Changed`-gated set and leaves full-set
+> assembly + the persistent unchanged-painter cache to R6/R8, and a cache-coherent
+> descendant drop must coordinate with that cache (or land as a separate render-prep
+> visibility-propagation pass). The leaf skip is sufficient today because no v1 code
+> sets `CssVisibility::Hidden` on a non-leaf entity and layout does not yet emit
+> `OffscreenAuto`.
+
+Because
 the box is retained, the hit-test interaction is **not** decided here: per CSS,
 `visibility: hidden` also removes the subtree from hit-testing, but that picking skip
 is owned by [`buiy-input-events-design`](../2026-05-07-buiy-foundation/README.md)
