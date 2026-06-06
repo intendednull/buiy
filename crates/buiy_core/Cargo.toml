@@ -12,3 +12,6 @@ bytemuck.workspace = true
 accesskit.workspace = true
 accesskit_winit.workspace = true
 bitflags = "2.11.1"
+
+[dev-dependencies]
+naga = "27"

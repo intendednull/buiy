@@ -182,6 +182,32 @@ fn extract_buiy_nodes_registered_in_extract_schedule() {
     );
 }
 
+// Same RenderApp/wgpu-adapter caveat as the other render_smoke tests:
+// RenderPlugin::build does block_on(initialize_renderer(...)) which expect()s
+// a wgpu adapter. After Task 8 the quad pipeline is built through
+// BuiyPrimitives::specialize; this asserts the BuiyPipeline resource (and its
+// valid quad CachedRenderPipelineId) still registers via that path.
+//
+// Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
+fn quad_pipeline_registers_via_specializer() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::render::RenderPlugin::default());
+    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+
+    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
+    let pipeline = render_app
+        .world()
+        .get_resource::<buiy_core::render::pipeline::BuiyPipeline>()
+        .expect("BuiyPipeline registered via specializer path");
+    // The id is a valid handle into the cache (compilation is async; we only
+    // assert the resource + id exist, not that the pipeline finished).
+    let _ = pipeline.id;
+}
+
 // Same wgpu-adapter caveat as the other render_smoke #[ignore] tests. Asserts
 // the ported node draws the persistent buffers without panicking and the
 // view-uniform bind group is wired. Run locally with `-- --ignored`.
