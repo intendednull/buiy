@@ -8,7 +8,14 @@
 //! `ScrollOffset` — the clip box is scroll-offset-independent (scroll moves
 //! content via the transform bridge, not the clip box).
 //!
-//! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A.
+//! This module also holds the render-side **consumption** of that clip:
+//! [`scissor_rect`] turns a computed [`ClipRect`] into a physical-pixel wgpu
+//! scissor rect. Render reads `ClipRect`; it never re-derives it (this pass is
+//! the sole producer).
+//!
+//! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § A
+//!       (§ A.2 the producer + the scissor-rect derivation),
+//!       docs/specs/2026-06-03-buiy-render-pipeline-design/paint-order-and-top-layer.md § 3.2.
 
 use crate::components::{Node, ResolvedLayout};
 use crate::layout::{
@@ -87,6 +94,59 @@ pub(crate) fn px_or_zero(len: Length) -> f32 {
     match len {
         Length::Px(v) => v,
         _ => 0.0,
+    }
+}
+
+/// A wgpu scissor rect in **physical** pixels: `(x, y, width, height)`.
+/// `None` ⇒ the clip is degenerate (empty) ⇒ render must skip the entity.
+pub type ScissorRect = Option<(u32, u32, u32, u32)>;
+
+/// Derive a physical-pixel wgpu scissor rect from a logical-px [`ClipRect`].
+///
+/// `scale_factor` converts logical → physical px (the same scalar the view
+/// uniform folds in, clip-and-transform.md § B.4). The result is clamped to
+/// `[0, view_physical]` on both axes. A degenerate clip (`min.x >= max.x` or
+/// `min.y >= max.y`, clip-and-transform.md § A.2) returns `None` — the entity
+/// is fully clipped away. The clip is already y-down window-relative, the same
+/// space wgpu's scissor expects, so NO y-flip happens here.
+pub fn scissor_rect(clip: &ClipRect, scale_factor: f32, view_physical: UVec2) -> ScissorRect {
+    if clip.min.x >= clip.max.x || clip.min.y >= clip.max.y {
+        return None;
+    }
+    let min = (clip.min * scale_factor).max(Vec2::ZERO);
+    let max = (clip.max * scale_factor)
+        .min(Vec2::new(view_physical.x as f32, view_physical.y as f32))
+        .max(Vec2::ZERO);
+    if min.x >= max.x || min.y >= max.y {
+        return None; // clamped away entirely (off-screen)
+    }
+    Some((
+        min.x as u32,
+        min.y as u32,
+        (max.x - min.x) as u32,
+        (max.y - min.y) as u32,
+    ))
+}
+
+/// Which clip a primitive scissors against. A fill / background / border uses
+/// the entity's own-box-intersected [`ClipRect`]. An `Outline` (painted outside
+/// the border box) uses [`AncestorClip`] — the ancestor intersection WITHOUT the
+/// own-box step — so a focus ring outside the box is cropped by ancestors but
+/// not erased by the entity's own box (clip-and-transform.md § A.2; § 3.2).
+///
+/// Returns the AABB to scissor against, or `None` ⇒ no scissor (unclipped).
+pub fn clip_for_primitive(
+    is_outline: bool,
+    own_clip: Option<&ClipRect>,
+    ancestor_clip: Option<&AncestorClip>,
+) -> Option<ClipRect> {
+    if is_outline {
+        ancestor_clip.map(|a| ClipRect {
+            min: a.min,
+            max: a.max,
+        })
+    } else {
+        own_clip.copied()
     }
 }
 
@@ -339,5 +399,103 @@ mod tests {
     fn px_or_zero_resolves_px_only() {
         assert_eq!(px_or_zero(Length::Px(7.0)), 7.0);
         assert_eq!(px_or_zero(Length::Percent(50.0)), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod scissor_tests {
+    use super::*;
+
+    #[test]
+    fn full_box_maps_to_full_physical_rect() {
+        let clip = ClipRect {
+            min: Vec2::ZERO,
+            max: Vec2::new(800.0, 600.0),
+        };
+        let s = scissor_rect(&clip, 1.0, UVec2::new(800, 600));
+        assert_eq!(s, Some((0, 0, 800, 600)));
+    }
+
+    #[test]
+    fn scale_factor_scales_to_physical_px() {
+        let clip = ClipRect {
+            min: Vec2::new(10.0, 20.0),
+            max: Vec2::new(110.0, 220.0),
+        };
+        let s = scissor_rect(&clip, 2.0, UVec2::new(1600, 1200));
+        // (10,20)..(110,220) logical → (20,40) origin, 200x400 physical.
+        assert_eq!(s, Some((20, 40, 200, 400)));
+    }
+
+    #[test]
+    fn clip_is_clamped_to_view() {
+        // A clip wider than the view clamps to the view bounds (no overflow).
+        let clip = ClipRect {
+            min: Vec2::new(-50.0, -50.0),
+            max: Vec2::new(2000.0, 2000.0),
+        };
+        let s = scissor_rect(&clip, 1.0, UVec2::new(800, 600));
+        assert_eq!(s, Some((0, 0, 800, 600)));
+    }
+
+    #[test]
+    fn degenerate_clip_returns_none() {
+        // min.x >= max.x ⇒ empty rect ⇒ skip (clip-and-transform.md § A.2).
+        let clip = ClipRect {
+            min: Vec2::new(100.0, 0.0),
+            max: Vec2::new(100.0, 50.0),
+        };
+        assert_eq!(scissor_rect(&clip, 1.0, UVec2::new(800, 600)), None);
+        let clip2 = ClipRect {
+            min: Vec2::new(0.0, 80.0),
+            max: Vec2::new(50.0, 40.0),
+        };
+        assert_eq!(scissor_rect(&clip2, 1.0, UVec2::new(800, 600)), None);
+    }
+}
+
+#[cfg(test)]
+mod outline_clip_tests {
+    use super::*;
+
+    #[test]
+    fn fill_uses_own_clip() {
+        let own = ClipRect {
+            min: Vec2::ZERO,
+            max: Vec2::splat(50.0),
+        };
+        let anc = AncestorClip {
+            min: Vec2::ZERO,
+            max: Vec2::splat(200.0),
+        };
+        assert_eq!(clip_for_primitive(false, Some(&own), Some(&anc)), Some(own));
+    }
+
+    #[test]
+    fn outline_uses_ancestor_clip_not_own() {
+        let own = ClipRect {
+            min: Vec2::ZERO,
+            max: Vec2::splat(50.0),
+        };
+        let anc = AncestorClip {
+            min: Vec2::ZERO,
+            max: Vec2::splat(200.0),
+        };
+        // Outline must NOT be clipped to the 50x50 own box — it uses the 200x200
+        // ancestor clip, so the ring outside the border box survives.
+        let got = clip_for_primitive(true, Some(&own), Some(&anc));
+        assert_eq!(
+            got,
+            Some(ClipRect {
+                min: anc.min,
+                max: anc.max
+            })
+        );
+    }
+
+    #[test]
+    fn absent_clips_are_unclipped() {
+        assert_eq!(clip_for_primitive(false, None, None), None);
+        assert_eq!(clip_for_primitive(true, None, None), None);
     }
 }
