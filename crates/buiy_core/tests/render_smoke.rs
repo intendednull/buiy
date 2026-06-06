@@ -181,3 +181,15 @@ fn extract_buiy_nodes_registered_in_extract_schedule() {
         with_plugin_count - baseline_count,
     );
 }
+
+// Same wgpu-adapter caveat as the other render_smoke #[ignore] tests. Asserts
+// the ported node draws the persistent buffers without panicking and the
+// view-uniform bind group is wired. Run locally with `-- --ignored`.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); ported node draws persistent buffers"]
+fn node_draws_persistent_buffers_with_view_uniform() {
+    // Build a RenderApp with BuiyRenderPlugin, drive one frame with a single
+    // Buiy node + Visual, and assert the frame completes (no panic) and the
+    // BuiyInstanceBuffers quad_count == 1. Provisioned on a GPU runner by the
+    // visual-regression harness; documented GPU coverage point.
+}

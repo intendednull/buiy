@@ -1,62 +1,76 @@
-//! Per-instance data layout for the rounded-rect pipeline. The struct stride
-//! must equal the per-instance `array_stride` declared in
-//! `pipeline.rs::register` (currently 36). Phase 0 closeout converts logical
-//! pixels → clip-space units on the CPU here, per the path (a) decision in
-//! `shader.wgsl`'s former TODO comment.
+//! Per-instance data layout for the rounded-rect pipeline (the view-uniform
+//! path). The struct stride must equal the per-instance `array_stride` declared
+//! in `pipeline.rs::register` (36 B). Records stay in LOGICAL-pixel units: the
+//! per-view [`BuiyViewUniform`] does the logical → clip transform in the vertex
+//! stage, so the Phase-0 per-instance y-flip / `2/min(w,h)` radius hack is
+//! retired (`buiy-render-pipeline-design`, architecture.md § 3).
 //!
-//! v0.x will replace this with a view uniform (`buiy-render-pipeline-design`),
-//! at which point the conversion moves to the vertex stage and `InstanceData`
-//! shrinks back to logical-pixel units.
+//! [`BuiyViewUniform`]: crate::render::view_uniform::BuiyViewUniform
 
 use crate::render::DrawData;
+use crate::render::extract::ExtractedNode;
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 
-/// Stride must match `pipeline.rs::register` instance-buffer layout (36 B).
-pub const INSTANCE_STRIDE_BYTES: usize = 36;
+/// Stride of the logical-pixel [`PackedInstance`] in bytes. Must match the
+/// per-instance `array_stride` declared in `pipeline.rs::register` (36 B). The
+/// values are LOGICAL pixels — the GPU view uniform
+/// ([`crate::render::view_uniform::BuiyViewUniform`]) applies the logical->clip
+/// transform in the vertex stage.
+pub const PACKED_INSTANCE_STRIDE_BYTES: usize = 36;
 
-/// One instance record. Fields match `Instance` in `shader.wgsl` 1:1.
+/// One instance record in LOGICAL-pixel units (the view-uniform handoff). There
+/// is no per-instance y-flip and no `2/min(w,h)` radius approximation:
+/// position/size/radius are forwarded raw and the GPU view uniform does the
+/// clip transform. Color is CPU-pre-linearized (color-and-forced-colors.md
+/// § 1.1).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct InstanceData {
-    /// Top-left in clip space (-1..+1, y up).
+pub struct PackedInstance {
+    /// Top-left in logical pixels (window-relative, y-down).
     pub rect_pos: [f32; 2],
-    /// Width / height in clip space; height is negative because UI-space y is
-    /// down-positive but clip-space y is up-positive (single y-flip lives in
-    /// the size, not the position, so the shader's `rect_pos + uv * rect_size`
-    /// remains correct top-down).
+    /// Width / height in logical pixels (height is POSITIVE — the y-flip lives
+    /// in the view uniform now, not in a negative height).
     pub rect_size: [f32; 2],
-    /// Linear RGBA. Pipeline target is `Rgba8UnormSrgb`, so the GPU re-encodes
-    /// to sRGB on write.
+    /// Linear RGBA, pre-linearized on the CPU.
     pub color: [f32; 4],
-    /// Corner radius in clip-space units. Phase 0 closeout uses
-    /// `2.0 / min(window.x, window.y)` as the px→clip conversion to keep
-    /// corners visually round on non-square windows; v0.x view uniform
-    /// removes the approximation.
+    /// Corner radius in LOGICAL pixels (no clip-space approximation).
     pub radius: f32,
 }
 
-/// Convert one [`DrawData`] (logical-pixel UI space) into an [`InstanceData`]
-/// (clip space) for the given window size in logical pixels.
-pub fn to_instance(draw: &DrawData, window_size: Vec2) -> InstanceData {
-    let inv_w = 2.0 / window_size.x;
-    let inv_h = 2.0 / window_size.y;
-    let inv_min = 2.0 / window_size.x.min(window_size.y);
-
-    let rect_pos = [
-        draw.position.x * inv_w - 1.0,
-        // y-flip: UI top (px=0) → clip top (+1).
-        1.0 - draw.position.y * inv_h,
-    ];
-    let rect_size = [draw.size.x * inv_w, -draw.size.y * inv_h];
-
+/// Pack one [`DrawData`] into a logical-pixel [`PackedInstance`]. The clip
+/// transform is deferred to the GPU view uniform; only the sRGB->linear color
+/// conversion happens here.
+pub fn pack_instance(draw: &DrawData) -> PackedInstance {
     let lin = LinearRgba::from(draw.color);
-    let color = [lin.red, lin.green, lin.blue, lin.alpha];
-
-    InstanceData {
-        rect_pos,
-        rect_size,
-        color,
-        radius: draw.radius * inv_min,
+    PackedInstance {
+        rect_pos: [draw.position.x, draw.position.y],
+        rect_size: [draw.size.x, draw.size.y],
+        color: [lin.red, lin.green, lin.blue, lin.alpha],
+        radius: draw.radius,
     }
+}
+
+/// Pack one R5 [`ExtractedNode`] (the per-painted-entity CPU record) into a
+/// logical-pixel [`PackedInstance`] — the prepare seam R6 packs through with no
+/// `DrawData` adapter. `ExtractedNode` carries the solid-fill quad inputs
+/// (position / size / color); per-node corner radius is not yet on the extract
+/// record, so v1 packs square quads (radius `0`). Color is CPU-pre-linearized
+/// exactly as in [`pack_instance`] (color-and-forced-colors.md § 1.1).
+pub fn pack_extracted(node: &ExtractedNode) -> PackedInstance {
+    let lin = LinearRgba::from(node.color);
+    PackedInstance {
+        rect_pos: [node.position.x, node.position.y],
+        rect_size: [node.size.x, node.size.y],
+        color: [lin.red, lin.green, lin.blue, lin.alpha],
+        radius: 0.0,
+    }
+}
+
+/// `true` iff the raw `[f32; 9]` bucket layout is byte-equal to
+/// [`PackedInstance`]'s stride (the pipeline-descriptor invariant). Pins the
+/// agreement the instanced draw relies on.
+pub fn packed_raw_stride_agrees() -> bool {
+    std::mem::size_of::<PackedInstance>() == std::mem::size_of::<[f32; 9]>()
+        && PACKED_INSTANCE_STRIDE_BYTES == std::mem::size_of::<[f32; 9]>()
 }
