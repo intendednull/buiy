@@ -175,6 +175,35 @@ fn uniform_radius_px(corners: &Corners) -> f32 {
     clip::px_or_zero(corners.top_left.x)
 }
 
+/// Build the [`DrawData`] for one node, or `None` when the resolved fill is
+/// transparent (`Background` set to `ColorToken::Transparent`, or a token that
+/// resolves to `Color::NONE`) — Phase-0 parity with the old empty-string skip.
+/// Emits a `warn!` for each node whose named token misses (no per-session
+/// dedup yet — fires every extract; the sentinel magenta is still drawn).
+///
+/// Pure (no ECS params) so the transparent-skip and the `Border.radius`
+/// (`Corners`) → quad-`radius` migration are unit-testable without a RenderApp
+/// / wgpu adapter — the [`extract_buiy_draws`] system that wraps it needs one.
+fn draw_for_node(
+    background: &Background,
+    border: Option<&Border>,
+    layout: &ResolvedLayout,
+    theme: &Theme,
+) -> Option<DrawData> {
+    let (color, missed) = resolve_token(&background.color, theme);
+    if missed {
+        tracing::warn!(
+            token = ?background.color,
+            "missing theme color token; falling back to magenta sentinel"
+        );
+    }
+    if color == Color::NONE {
+        return None;
+    }
+    let radius = border.map(|b| uniform_radius_px(&b.radius)).unwrap_or(0.0);
+    Some(DrawData::new(layout.position, layout.size, color, radius))
+}
+
 #[allow(clippy::type_complexity)]
 fn extract_buiy_draws(
     mut commands: Commands,
@@ -188,23 +217,9 @@ fn extract_buiy_draws(
         draws.window_size = Vec2::new(res.x, res.y);
     }
     for (background, border, layout) in main_world_q.iter() {
-        let (color, missed) = resolve_token(&background.color, &main_world_theme);
-        if missed {
-            tracing::warn!(
-                token = ?background.color,
-                "missing theme color token; falling back to magenta sentinel"
-            );
+        if let Some(draw) = draw_for_node(background, border, layout, &main_world_theme) {
+            draws.draws.push(draw);
         }
-        // Phase-0 parity: skip emitting a quad for a transparent fill
-        // (`Background` absent OR `ColorToken::Transparent`), matching the
-        // old empty-string skip.
-        if color == Color::NONE {
-            continue;
-        }
-        let radius = border.map(|b| uniform_radius_px(&b.radius)).unwrap_or(0.0);
-        draws
-            .draws
-            .push(DrawData::new(layout.position, layout.size, color, radius));
     }
     // TODO(v0.x): reuse ExtractedDraws via ResMut + clear/extend instead of
     // reallocating the inner Vec each frame. See `buiy-render-pipeline-design`.
@@ -214,6 +229,20 @@ fn extract_buiy_draws(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
+
+    fn theme_with(token: &str, color: Color) -> Theme {
+        let mut t = Theme::default();
+        t.colors.insert(token.to_string(), color);
+        t
+    }
+
+    fn layout(pos: Vec2, size: Vec2) -> ResolvedLayout {
+        ResolvedLayout {
+            position: pos,
+            size,
+        }
+    }
 
     #[test]
     fn uniform_radius_reads_top_left_circular_px() {
@@ -221,5 +250,61 @@ mod tests {
         // legacy single-`f32` quad radius via the top-left corner's x, px-only.
         assert_eq!(uniform_radius_px(&Corners::all(Radius::circular(6.0))), 6.0);
         assert_eq!(uniform_radius_px(&Corners::ZERO), 0.0);
+        // Reads the top-left corner specifically, not any other corner: a
+        // non-uniform `Corners` resolves to its top-left x, not top-right.
+        assert_eq!(
+            uniform_radius_px(&Corners {
+                top_left: Radius::circular(4.0),
+                top_right: Radius::circular(8.0),
+                ..Corners::ZERO
+            }),
+            4.0
+        );
+    }
+
+    #[test]
+    fn transparent_background_emits_no_draw() {
+        // `ColorToken::Transparent` → `Color::NONE` → skipped (no quad), the
+        // Phase-0 empty-string parity. Theme is irrelevant on this path.
+        let bg = Background {
+            color: ColorToken::Transparent,
+        };
+        let l = layout(Vec2::ZERO, Vec2::splat(10.0));
+        assert!(draw_for_node(&bg, None, &l, &Theme::default()).is_none());
+    }
+
+    #[test]
+    fn tokened_background_with_border_carries_color_size_and_migrated_radius() {
+        // The load-bearing extract path: resolve the token, propagate
+        // position/size from `ResolvedLayout`, and migrate `Border.radius`
+        // (`Corners`) → the single quad `radius` via the top-left x.
+        let theme = theme_with("color.surface.secondary", Color::srgb(0.2, 0.3, 0.4));
+        let bg = Background {
+            color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        };
+        let border = Border {
+            radius: Corners::all(Radius::circular(6.0)),
+            ..Default::default()
+        };
+        let l = layout(Vec2::new(10.0, 20.0), Vec2::new(30.0, 40.0));
+
+        let draw = draw_for_node(&bg, Some(&border), &l, &theme).expect("opaque fill draws");
+        assert_eq!(draw.color, Color::srgb(0.2, 0.3, 0.4));
+        assert_eq!(draw.position, Vec2::new(10.0, 20.0));
+        assert_eq!(draw.size, Vec2::new(30.0, 40.0));
+        assert_eq!(draw.radius, 6.0);
+    }
+
+    #[test]
+    fn missing_token_draws_magenta_sentinel_and_borderless_is_square() {
+        // A miss still emits a quad (magenta sentinel, visible in screenshots),
+        // and a `Border`-less node is square (radius 0).
+        let bg = Background {
+            color: ColorToken::Token(Cow::Borrowed("nope.not.here")),
+        };
+        let l = layout(Vec2::ZERO, Vec2::splat(10.0));
+        let draw = draw_for_node(&bg, None, &l, &Theme::default()).expect("sentinel still draws");
+        assert_eq!(draw.color, Color::srgb(1.0, 0.0, 1.0));
+        assert_eq!(draw.radius, 0.0);
     }
 }
