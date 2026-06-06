@@ -1,5 +1,21 @@
 # Paint-order walk + clip scissor + top-layer composite Implementation Plan
 
+> **STATUS (2026-06-06): partially landed + partially superseded.** Executed
+> against the landed R5/R6 state, several tasks turned out to be already shipped by
+> R5: the forward `painters_z` walk (Task 2 `flatten_paint_order`) duplicates R5's
+> live `assemble_context_tree`, the skip predicate (Task 6 `skips_paint`) duplicates
+> R5's `node_skip_reason`, and the Task 7 "rewire `extract_buiy_draws`" targets a
+> path R5/R6 already retired (`extract_buiy_nodes` is the live extract). Those
+> duplicate drafts were dropped. **Landed:** the genuinely-new pure consumer helpers
+> `scissor_rect` + `clip_for_primitive` (`render/clip.rs`), `partition_top_layer`
+> (`render/top_layer.rs`), and the `render_paint_order` integration test (reuses R5's
+> walk). **Deferred (Task 8):** the GPU consumer — per-entity scissored draw +
+> top-layer composite in `BuiyNode::run` — blocked on the node-draw-model design
+> decision (per-entity clip + composite passes on R6's single-buffer draw), shared
+> with R9. See
+> [2026-06-06-render-node-draw-model-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md)
+> and the follow-ups.md entry. Tasks below are the original plan, kept for context.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Depends on:** R5 (`render/extract.rs` — owns `ExtractedNode` / `ExtractedNodes`, the per-view CPU instance set this phase extends with the paint-order walk + `clip` / `is_top_layer` fields) and R6 (the view-uniform `BuiyNode::run` rework + persistent prepare-phase buffers — where this phase's per-entity scissor + top-layer composite land). Execution order is **R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11**; R8 rebases onto the R5 + R6 target state and must land after both.
@@ -15,7 +31,7 @@
 
 Read these before starting (absolute paths):
 
-- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/extract.rs` — **R5's** `extract_buiy_nodes`, the per-view `ExtractedNode` / `ExtractedNodes` carrier that walks `painters_z`. This phase extends `ExtractedNode` with the `clip` / `is_top_layer` fields and the paint-order walk; it does **not** touch the retired Phase-0 `extract_buiy_draws` / `DrawData` (R6 deletes those).
+- `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/extract.rs` — **R5's** `extract_buiy_nodes`, the per-view `ExtractedNode` / `ExtractedNodes` carrier that walks `painters_z` (it already calls `assemble_context_tree` for the atomic nested-SC descent). This phase extends `ExtractedNode` with the `clip` / `is_top_layer` fields and populates them in `extracted_node_for` / `extract_buiy_nodes`; it does **not** touch the Phase-0 `extract_buiy_draws` / `DrawData`. Those are still present in `render/mod.rs` (labeled "retired by R6/R8") but are **dead** — the live node reads `ExtractedNodes` via `prepare_buiy_instances` (`render/prepare.rs`) → `BuiyInstanceBuffers`, never `DrawData`. R8 must NOT revive the `DrawData` path; leave it untouched (a later cleanup removes it).
 - `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/node.rs` — **R6's** view-uniform `BuiyNode::run` (the GPU draw, rebuilt onto `ExtractedNodes` + the persistent prepare-phase buffers). This phase adds the per-entity scissor + the top-layer-at-root composite here.
 - `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/components.rs` — **R1's** sole home of the shared author-set + computed render components, including `ClipRect` / `AncestorClip` (`{ pub min: Vec2, pub max: Vec2 }`). This phase **imports** them; it never defines them.
 - `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/components.rs` — `StackingContext { painters_z: Vec<Entity> }`, `ResolvedLayout { position, size }`.
@@ -622,185 +638,127 @@ mod tests {
 
 ---
 
-## Task 7 — Rewire `extract_buiy_draws` to walk `painters_z` in order + carry clip + apply skips (HEADLESS schedule, GPU draw deferred)
+## Task 7 — Carry `clip` + `is_top_layer` on `ExtractedNode`; populate them in the landed `extract_buiy_nodes` walk (HEADLESS)
 
-Replace the Phase-0 **unordered** `(Visual, ResolvedLayout)` iteration with the ordered consumption: extract from the root `StackingContext.painters_z` using the Task-2 flatten walk, attach each draw's `Option<ClipRect>` and a `top_layer` flag, and drop entities the Task-6 predicate skips (with subtree pruning). `DrawData` grows a `clip: Option<ClipRect>` field and an `is_top_layer: bool`. This system runs in `ExtractSchedule` (render world), so its **construction is headless** but it only does real work with extracted components — the per-frame schedule-membership is the headless gate; the actual pixels are Task 8 (GPU).
+> **RE-PLANNED against the landed R5/R6 architecture.** The original Task 7 grew the Phase-0 `DrawData` and rewrote `extract_buiy_draws`. That path is **dead**: the live render reads R5's per-view `ExtractedNodes` (`render/extract.rs`) via R6's `prepare_buiy_instances` → `BuiyInstanceBuffers` (`render/prepare.rs`) → `BuiyNode::run`. `DrawData` / `extract_buiy_draws` / `ExtractedDraws` still exist in `render/mod.rs` (labeled "retired by R6/R8") but nothing reads them, so wiring clip/top-layer into them would attach scissor logic to a path the node never paints from. Architecture.md § 3.1 is explicit: "The per-view `ExtractedNodes` component (**replacing** the global `ExtractedDraws` resource)". So this task extends `ExtractedNode`, not `DrawData`, and edits the **already-landed** `extract_buiy_nodes` (which already does the atomic `painters_z` walk via `assemble_context_tree` and already applies the `node_skip_reason` skips), not the Phase-0 `extract_buiy_draws`. **Do NOT touch `DrawData` / `extract_buiy_draws`** — a later cleanup deletes the dead path; reviving it here is out of scope and wrong.
+
+Extend the per-entity CPU record `ExtractedNode` (`render/extract.rs`) with `clip: Option<ClipRect>` and `is_top_layer: bool`, and populate them in `extracted_node_for` (the pure record builder) and `extract_buiy_nodes` (the system that already walks `painters_z`). The walk, the atomic nested-SC descent (`assemble_context_tree`), and the `CssVisibility::Hidden` / `OffscreenAuto` skips already landed in R5 — this task only adds the two carriers, populated from the extract fan (`Option<&ClipRect>`, `Option<&Stacking>`). The `painters_z` order and skips are NOT re-implemented here.
 
 **Files**
-- Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/mod.rs` (extend `DrawData`, rewrite `extract_buiy_draws`)
-- Test: inline `#[cfg(test)] mod tests` in `mod.rs` (pure: a free helper `build_draws` that does the walk given closures — testable with no render world)
+- Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/extract.rs` (extend `ExtractedNode`; extend `extracted_node_for`; add `Option<&ClipRect>` + `Option<&Stacking>` to the `extract_buiy_nodes` query fan + its `Changed<…>` Or-set; populate the two fields)
+- Test: inline `#[cfg(test)] mod tests` in `extract.rs` (pure: `extracted_node_for` carries the clip + top-layer flag; the ordering/skip behavior is already covered by R5's `assemble_*` tests, do NOT duplicate it)
 
 Steps:
 
-- [ ] **Refactor for testability first.** The current `extract_buiy_draws` does the work inline inside an `Extract<Query>` system, which is not headless-testable (needs the render world). Extract the **pure core** into a free function `build_draws` that takes the root `painters_z`, plus closures `resolved_of`, `visual_color_of`, `clip_of`, `top_layer_of`, `skips_of`, `painters_of`, and returns `Vec<DrawData>` in paint order. The `Extract` system becomes a thin adapter that builds those closures from queries and calls `build_draws`. This makes the order/skip/clip consumption provable headless.
-- [ ] Write the failing test first — add to a new `#[cfg(test)] mod extract_tests` in `mod.rs`:
+- [ ] **Guarded import (cross-phase).** `ClipRect` is R1's (`crate::render::components`), already imported by `clip.rs`; `Stacking` / `TopLayer` are layout's (`crate::layout`). Import what `extract.rs` is missing (`use crate::render::components::ClipRect;`, `use crate::layout::{Stacking, TopLayer};` — `Stacking` may already be imported for the `Changed<Stacking>` trigger). Define **nothing** new.
+- [ ] Extend `ExtractedNode` (currently `{ entity, position, size, color }`) with two fields:
 
 ```rust
-#[cfg(test)]
-mod extract_tests {
-    use super::*;
-    use crate::render::clip::ClipRect;
-    use crate::layout::TopLayer;
-    use bevy::prelude::*;
-
-    fn e(i: u32) -> Entity {
-        Entity::from_raw_u32(i).unwrap()
-    }
-
-    #[test]
-    fn build_draws_emits_in_painters_z_order_and_skips_hidden() {
-        let root = e(0);
-        let (a, hidden, c) = (e(1), e(2), e(3));
-        let order = vec![a, hidden, c];
-        let resolved_of = |q: Entity| Some((Vec2::splat(q.index() as f32 * 10.0), Vec2::splat(10.0)));
-        let color_of = |_q: Entity| Color::WHITE;
-        let radius_of = |_q: Entity| 0.0;
-        let clip_of = |q: Entity| {
-            if q == c { Some(ClipRect { min: Vec2::ZERO, max: Vec2::splat(100.0) }) } else { None }
-        };
-        let top_layer_of = |_q: Entity| TopLayer::None;
-        let skips_of = |q: Entity| q == hidden; // CssVisibility::Hidden on `hidden`
-        let painters_of = |_q: Entity| None;
-
-        let draws = build_draws(
-            root, &order, &resolved_of, &color_of, &radius_of, &clip_of, &top_layer_of, &skips_of, &painters_of,
-        );
-
-        // `hidden` is dropped; order is [a, c] (painters_z order minus skip).
-        assert_eq!(draws.len(), 2);
-        assert_eq!(draws[0].position, Vec2::new(10.0, 10.0)); // a
-        assert_eq!(draws[1].position, Vec2::new(30.0, 30.0)); // c
-        // c carries its clip; a does not.
-        assert!(draws[0].clip.is_none());
-        assert_eq!(draws[1].clip, Some(ClipRect { min: Vec2::ZERO, max: Vec2::splat(100.0) }));
-    }
-
-    #[test]
-    fn build_draws_marks_top_layer_entries() {
-        let root = e(0);
-        let (inflow, modal) = (e(1), e(2));
-        let order = vec![inflow, modal];
-        let resolved_of = |_q: Entity| Some((Vec2::ZERO, Vec2::splat(10.0)));
-        let color_of = |_q: Entity| Color::WHITE;
-        let radius_of = |_q: Entity| 0.0;
-        let clip_of = |_q: Entity| None;
-        let top_layer_of = |q: Entity| if q == modal { TopLayer::Modal } else { TopLayer::None };
-        let skips_of = |_q: Entity| false;
-        let painters_of = |_q: Entity| None;
-
-        let draws = build_draws(
-            root, &order, &resolved_of, &color_of, &radius_of, &clip_of, &top_layer_of, &skips_of, &painters_of,
-        );
-        assert!(!draws[0].is_top_layer);
-        assert!(draws[1].is_top_layer, "modal draw flagged top-layer for the root composite");
-    }
-}
-```
-
-- [ ] Extend `DrawData` with the two new fields (keep `#[non_exhaustive]`; the `new` constructor keeps the Phase-0 signature and defaults the new fields, so `render_instance.rs` keeps compiling). Add the fields:
-
-```rust
-    /// The entity's computed clip; `None` ⇒ no scissor (full view). Read by
-    /// `BuiyNode::run` to set the per-draw scissor rect (clip-and-transform.md § A).
-    pub clip: Option<crate::render::clip::ClipRect>,
-    /// True iff this draw is a top-layer member (already at the root
-    /// `painters_z` tail). The node composites these at the root after the
-    /// in-flow layers (paint-order-and-top-layer.md § 3).
+    /// The entity's computed clip rect (R2's `WriteClipRects` output), in
+    /// logical px. `None` ⇒ no ancestor clips this node ⇒ no scissor (full
+    /// view). Read by `BuiyNode::run` (Task 8) to set the per-batch scissor.
+    pub clip: Option<ClipRect>,
+    /// True iff this node is a top-layer member (already at the tail of the
+    /// root context's `painters_z`, appended by layout sub-pass 6f in tier
+    /// order). The node composites these at the root AFTER the in-flow layers,
+    /// scissored to the full viewport — never re-sorting (paint-order § 3).
     pub is_top_layer: bool,
 ```
 
-- [ ] Add the pure `build_draws` free function (signature matches the test). It uses `paint_order::flatten_paint_order` for ordering and prunes skipped subtrees (a skipped entry's descendants are not emitted — implement by checking `skips_of` per emitted entity and, when skipping, **not descending** into its nested `painters_of`). Minimal real impl:
+  `ExtractedNode` derives `Clone, Copy, Debug, PartialEq`; `ClipRect` is `Copy + PartialEq`, so the derives still hold. Every constructor of `ExtractedNode` (only `extracted_node_for`) must set the new fields — there is no `Default`/`..` spread, so the compiler enforces completeness.
+- [ ] Write the failing test first — add to `extract.rs`'s `#[cfg(test)] mod tests` (the pure record builder carries the new fields):
 
 ```rust
-/// Pure core of `extract_buiy_draws`: walk the root `painters_z` forward
-/// (atomic nested-SC descent), drop skipped subtrees, and emit one `DrawData`
-/// per painted entity in paint order with its clip + top-layer flag.
-///
-/// Render NEVER re-sorts (paint-order-and-top-layer.md § 1.2): the order is
-/// `flatten_paint_order`'s verbatim read of layout's list.
-#[allow(clippy::too_many_arguments)]
-pub fn build_draws<'a, R, C, Ra, Cl, Tl, Sk, Po>(
-    root: Entity,
-    root_painters: &'a [Entity],
-    resolved_of: &R,
-    color_of: &C,
-    radius_of: &Ra,
-    clip_of: &Cl,
-    top_layer_of: &Tl,
-    skips_of: &Sk,
-    painters_of: &Po,
-) -> Vec<DrawData>
-where
-    R: Fn(Entity) -> Option<(Vec2, Vec2)>,
-    C: Fn(Entity) -> Color,
-    Ra: Fn(Entity) -> f32,
-    Cl: Fn(Entity) -> Option<crate::render::clip::ClipRect>,
-    Tl: Fn(Entity) -> crate::layout::TopLayer,
-    Sk: Fn(Entity) -> bool,
-    Po: Fn(Entity) -> Option<&'a [Entity]>,
-{
-    let _ = root;
-    let mut out = Vec::new();
-    fn walk<'a, R, C, Ra, Cl, Tl, Sk, Po>(
-        painters: &'a [Entity],
-        resolved_of: &R, color_of: &C, radius_of: &Ra, clip_of: &Cl,
-        top_layer_of: &Tl, skips_of: &Sk, painters_of: &Po, out: &mut Vec<DrawData>,
-    )
-    where
-        R: Fn(Entity) -> Option<(Vec2, Vec2)>, C: Fn(Entity) -> Color, Ra: Fn(Entity) -> f32,
-        Cl: Fn(Entity) -> Option<crate::render::clip::ClipRect>, Tl: Fn(Entity) -> crate::layout::TopLayer,
-        Sk: Fn(Entity) -> bool, Po: Fn(Entity) -> Option<&'a [Entity]>,
-    {
-        for &p in painters {
-            if skips_of(p) {
-                continue; // skip the entity AND its subtree — do not descend.
-            }
-            if let Some((position, size)) = resolved_of(p) {
-                let mut d = DrawData::new(position, size, color_of(p), radius_of(p));
-                d.clip = clip_of(p);
-                d.is_top_layer = top_layer_of(p) != crate::layout::TopLayer::None;
-                out.push(d);
-            }
-            if let Some(nested) = painters_of(p) {
-                walk(nested, resolved_of, color_of, radius_of, clip_of, top_layer_of, skips_of, painters_of, out);
-            }
-        }
+    #[test]
+    fn extracted_node_carries_clip_and_top_layer_flag() {
+        let theme = Theme::default();
+        let gt = GlobalTransform::from_translation(Vec3::new(5.0, 6.0, 0.0));
+        let layout = ResolvedLayout { position: Vec2::ZERO, size: Vec2::splat(10.0) };
+        let clip = ClipRect { min: Vec2::ZERO, max: Vec2::splat(100.0) };
+        let e = Entity::from_raw_u32(1).unwrap();
+
+        // Clipped, top-layer (Modal).
+        let node = extracted_node_for(e, &gt, &layout, None, Some(&clip), TopLayer::Modal, &theme);
+        assert_eq!(node.clip, Some(clip));
+        assert!(node.is_top_layer);
+
+        // Unclipped, in-flow.
+        let node2 = extracted_node_for(e, &gt, &layout, None, None, TopLayer::None, &theme);
+        assert_eq!(node2.clip, None);
+        assert!(!node2.is_top_layer);
     }
-    walk(root_painters, resolved_of, color_of, radius_of, clip_of, top_layer_of, skips_of, painters_of, &mut out);
-    out
-}
 ```
 
-- [ ] Rewrite `extract_buiy_draws` as the thin adapter: query the root entity(ies) carrying `StackingContext` (the root context — an entity `With<StackingContext>, Without<ChildOf>` or the layout-root definition), build the closures from `Extract<Query<(&Visual, &ResolvedLayout, Option<&ClipRect>, Option<&Stacking>, Option<&CssVisibility>, Option<&OffscreenAuto>)>>` plus a `Query<&StackingContext>` for `painters_of`, and call `build_draws`. Keep the existing theme-color resolution + window-size population. **Where `ClipRect` / `CssVisibility` / `OffscreenAuto` are not yet in the tree (cross-phase), use the Task-1/Task-6 local shapes via `crate::render::clip::ClipRect` etc.** The adapter does real work only at runtime with a render world; its correctness is proven by `build_draws` headless tests + Task 8 GPU.
-- [ ] Run + FAIL first (before adding `build_draws`): `cargo test -p buiy_core --lib render::extract_tests` → compile error (no `build_draws`). Add the field + fn, re-run → PASS.
-- [ ] Confirm `render_instance.rs` still compiles (the `DrawData::new` signature is unchanged; new fields default). Run `cargo test -p buiy_core --test render_instance` → PASS.
-- [ ] Run the full GATE. Commit: `feat(render): extract walks painters_z in order, carrying clip + top-layer flag, pruning skips`.
+- [ ] Make it pass — extend `extracted_node_for`'s signature with `clip: Option<&ClipRect>` and `top_layer: TopLayer`, and set the fields (`clip: clip.copied()`, `is_top_layer: top_layer != TopLayer::None`). Run `cargo test -p buiy_core --lib render::extract::tests::extracted_node_carries` → PASS.
+- [ ] Thread the inputs through the **landed** `extract_buiy_nodes` system (do NOT add a new walk):
+  - Add `Option<&ClipRect>` and `Option<&Stacking>` to the query tuple's author/handoff fan (architecture § 1.2 lists both as `Option<&_>`); `Stacking` carries `top_layer` (a bare `Node` lacks it ⇒ `TopLayer::None`).
+  - Add `Changed<ClipRect>` to the `Or<(…)>` trigger set in lockstep (architecture § 3.1 lists it; `Changed<Stacking>` is already present).
+  - In the per-entity loop, pass `clip` and `stacking.map(|s| s.top_layer).unwrap_or(TopLayer::None)` into `extracted_node_for` when building each `by_entity` record.
+- [ ] Confirm `pack_extracted` (`render/instance.rs`) and `pack_view` (`render/buckets.rs`) still compile unchanged — they read only `position`/`size`/`color` off `ExtractedNode`, so the two new fields are inert until Task 8 consumes them. `prepare_buiy_instances` is untouched this task. Run `cargo test -p buiy_core --test render_instance` (if present) and `--lib render::buckets render::instance` → PASS.
+- [ ] Run the full GATE. Commit: `feat(render): ExtractedNode carries clip + top-layer flag, populated in the painters_z walk`.
 
 ---
 
-## Task 8 — `BuiyNode::run`: per-entity scissor + top-layer-at-root composite (GPU, #[ignore] e2e)
+## Task 8 — Per-batch scissor side-table + top-layer tail batch → `BuiyNode::run` set_scissor + top-layer-last (HEADLESS prepare seam + GPU #[ignore] e2e)
 
-Wire the consumption into the actual draw: in `BuiyNode::run`, walk the extracted draws (already in paint order from Task 7), set `pass.set_scissor_rect(...)` per draw from its `Option<ClipRect>` (absent ⇒ reset to full view; degenerate ⇒ skip the draw), and paint the top-layer-flagged draws **last** at the root with the **window viewport** as scissor (top-layer escapes ancestor clip — §3.2). Because this needs a real render pass / wgpu adapter, the end-to-end assertion is `#[ignore]`-gated exactly like `render_smoke.rs`; the device-free assertions already shipped in Tasks 1–7.
+> **RE-PLANNED against the landed R6 prepare/node architecture.** The original Task 8 said to "walk the extracted draws" and "partition the extracted draws into in-flow vs `is_top_layer`" inside `BuiyNode::run`. That does not exist in the landed code: `prepare_buiy_instances` (`render/prepare.rs`) packs `ExtractedNodes` into a **flat `[f32; 9]` blob** (`BuiyInstanceBuffers.quad`) via `pack_view`/`packed_to_raw` (`render/buckets.rs`), and `BuiyNode::run` (`render/node.rs`) issues exactly **one** `pass.draw(0..4, 0..quad_count)`. The `[f32; 9]` instance (pos2+size2+color4+radius1, `PACKED_INSTANCE_STRIDE_BYTES = 36`) has **no slot** for a clip rect or a top-layer flag, and the node has no per-draw loop to set a scissor in. So the clip/top-layer carriers added to `ExtractedNode` in Task 7 must be threaded through the **bucket/prepare layer as side-data**, NOT into the instance blob, and `BuiyNode::run` must grow a per-batch draw loop. This is the architecture-§2.2 shape ("one instanced draw per `(primitive, layer)` batch") that R6 deferred to "layer 0 only" — R8 turns the deferred per-batch loop on.
+
+Thread per-entity clip + top-layer from `ExtractedNode` into `InstanceBuckets` as a **per-batch scissor side-table** plus a **top-layer tail batch**, extend `BuiyInstanceBuffers` to carry the side-table, and rewrite `BuiyNode::run` to iterate batches: `set_scissor_rect` per batch, draw the slice, then draw the top-layer tail last scissored to the full viewport. The device-free half (bucketing by `(scissor, is_top_layer)`, the flat-buffer offset/len side-table, the top-layer-last order) is **HEADLESS** and unit-tested; the actual GPU pass is `#[ignore]`-gated like `render_smoke.rs`.
 
 **Files**
-- Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/node.rs`
-- Test: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/tests/render_smoke.rs` (add `#[ignore]` GPU cases)
+- Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/buckets.rs` (`pack_view` reads `ExtractedNode.clip` / `.is_top_layer`; emit a per-batch scissor + an `is_top_layer` flag on the batch key, so the natural `BTreeMap` order is in-flow batches then the top-layer tail)
+- Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/prepare.rs` (`pack_extracted_nodes` returns the flat blob **plus** a `Vec<BatchDraw>` side-table of `{ offset, len, scissor: Option<ClipRect>, is_top_layer }`; `BuiyInstanceBuffers` carries that `Vec<BatchDraw>` alongside `quad`/`quad_count`)
+- Modify: `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/src/render/node.rs` (replace the single `pass.draw(0..4, 0..quad_count)` with the per-batch `set_scissor_rect` + draw loop, top-layer tail scissored to the full viewport)
+- Test: inline `#[cfg(test)] mod tests` in `buckets.rs` + `prepare.rs` (HEADLESS: side-table offsets/lens, scissor per batch, top-layer batches sort last) and `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline/crates/buiy_core/tests/render_smoke.rs` (`#[ignore]` GPU wiring smoke)
 
 Steps:
 
-- [ ] Write the failing GPU test first (mirrors the `#[ignore]` idiom already in `render_smoke.rs`). Append:
+- [ ] **Bucket key carries scissor + top-layer (HEADLESS, the real R8 work).** `PrimitiveBatchKey` (`buckets.rs`) is currently `{ primitive, layer }`. A scissor rect cannot be a `BTreeMap` key directly (`ClipRect` is `f32`-based, no `Ord`), so do **not** key on the rect. Instead: in `pack_view`, group nodes into batches by **consecutive runs of equal `(scissor, is_top_layer)`** along the already-paint-ordered `nodes` slice (the order is `painters_z`; never re-sort — pillar 1), and record each run as a `BatchDraw { offset, len, scissor: Option<ClipRect>, is_top_layer }` against the flat instance vec. Top-layer nodes are already at the `painters_z` tail (layout 6f), so the `is_top_layer` runs naturally fall last — assert this rather than re-sorting. Keep transparent-skip (`color == Color::NONE`) exactly as `pack_view` does today.
+- [ ] Write the failing test first (HEADLESS) in `buckets.rs` / a new `pack` helper test:
 
 ```rust
-// GPU e2e: per-entity scissor + top-layer composite. Needs a wgpu adapter
+    #[test]
+    fn pack_view_emits_per_clip_batches_then_top_layer_tail() {
+        use crate::render::components::ClipRect;
+        let clip = ClipRect { min: Vec2::ZERO, max: Vec2::splat(50.0) };
+        // paint order: [inflow-unclipped, inflow-clipped, top-layer-clipped].
+        let nodes = vec![
+            node(Vec2::ZERO, Color::WHITE, None, false),
+            node(Vec2::splat(10.0), Color::WHITE, Some(clip), false),
+            node(Vec2::splat(20.0), Color::WHITE, Some(clip), true),
+        ];
+        let (instances, batches) = pack_view_batched(&nodes);
+        assert_eq!(instances.len(), 3);
+        // three runs: unclipped in-flow, clipped in-flow, clipped top-layer.
+        assert_eq!(batches.len(), 3);
+        assert_eq!((batches[0].scissor, batches[0].is_top_layer), (None, false));
+        assert_eq!((batches[1].scissor, batches[1].is_top_layer), (Some(clip), false));
+        // top-layer batch is LAST (it was at the painters_z tail; not re-sorted).
+        assert!(batches[2].is_top_layer);
+        // offsets/lens partition the flat instance vec contiguously.
+        assert_eq!(batches[0].offset, 0);
+        assert_eq!(batches.iter().map(|b| b.len).sum::<usize>(), instances.len());
+    }
+```
+
+  (`node(..)` / `pack_view_batched(..)` are the test fixture + the batched packer this task introduces; `pack_view`'s current single-batch behavior is replaced by it. Keep the existing `pack_view` tests passing or migrate them.)
+- [ ] Make it pass — implement `pack_view_batched` (run-length over `(scissor, is_top_layer)`) returning `(Vec<[f32;9]>, Vec<BatchDraw>)`; have `prepare::pack_extracted_nodes` return the `Vec<BatchDraw>` alongside the flat blob and the uniform; store it on `BuiyInstanceBuffers`. Run `cargo test -p buiy_core --lib render::buckets render::prepare` → PASS.
+- [ ] **`BuiyNode::run` per-batch loop (GPU behavior).** Replace the single `pass.draw(0..4, 0..buffers.quad_count)` with: for each `BatchDraw` in `buffers.batches` in order — compute the scissor (`b.is_top_layer` ⇒ full viewport, escaping ancestor clip per §3.2; else `b.scissor.map(|c| scissor_rect(&c, scale_factor, view_physical))`); on a degenerate `None`-from-`scissor_rect` (clip `min>=max`), **skip the batch**; on absent clip, `set_scissor_rect` to the full view; then `pass.draw(0..4, b.offset as u32 .. (b.offset + b.len) as u32)`. The top-layer batches already sit last in `buffers.batches`, so iterating in order paints them after in-flow (architecture § 2.3: one ordered composite pass) — **no render-side re-sort**. Obtain `scale_factor` + physical view size from the view (`ExtractedNodes.scale_factor` × `logical_size`, carried through prepare, or the `ViewTarget`'s physical size). Keep the existing early-returns (no buffers / `quad_count == 0` / no view binding).
+- [ ] Add a code comment at the top-layer batches: `// v1 ::backdrop = OPEN (paint-order § 4): no dimming backdrop. Top-layer batches already sit last in painters_z (layout 6f); we draw them in order, scissored to the full viewport — never re-sorted (§3.1).`
+- [ ] Write the GPU `#[ignore]` wiring smoke test (mirrors the `#[ignore]` idiom already in `render_smoke.rs`). Append:
+
+```rust
+// GPU e2e: per-batch scissor + top-layer-last composite. Needs a wgpu adapter
 // (real GPU or lavapipe); CI has none, so #[ignore] exactly like the other
 // render-graph tests. The device-free consumption logic (paint order, scissor
-// derivation, top-layer partition, skip rules) is proven headless in the
-// `render::{clip,paint_order,top_layer,skip}` unit tests + `render_paint_order`.
+// derivation, per-batch side-table, top-layer-last) is proven headless in the
+// `render::{clip,paint_order,top_layer,skip,buckets,prepare}` unit tests +
+// `render_paint_order`.
 //
 // Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by the e2e golden harness"]
-fn buiy_node_scissors_per_entity_and_composites_top_layer() {
+fn buiy_node_scissors_per_batch_and_composites_top_layer() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
@@ -821,13 +779,9 @@ fn buiy_node_scissors_per_entity_and_composites_top_layer() {
 }
 ```
 
-- [ ] Run + confirm it is collected and **ignored** (no adapter): `cargo test -p buiy_core --test render_smoke` → shows `ignored`. The GATE stays green.
-- [ ] Implement the `BuiyNode::run` changes. Two real behaviors:
-  - **Per-draw scissor.** After building the instance buffer, instead of one `pass.draw(0..4, 0..n)`, iterate draws: for each draw compute `scissor_rect(&clip, scale_factor, view_physical)` (from `render::clip`); `None` (absent clip) ⇒ `pass.set_scissor_rect(0, 0, view_w, view_h)` (full view); `Some((x,y,w,h))` ⇒ `pass.set_scissor_rect(x,y,w,h)`; a degenerate clip (the `scissor_rect` returned `None` because `min>=max`, distinct from absent) ⇒ **skip that draw's instance**. Then issue the instanced draw for that one instance (or batch consecutive same-scissor draws — batching is a perf detail, correctness first). Obtain `scale_factor` + physical view size from the `ViewTarget` / extracted view (the `window_size` is logical; multiply, or read the view's physical size). Keep the existing early-returns (empty draws / zero window).
-  - **Top-layer last at root.** Partition the extracted draws into in-flow vs `is_top_layer` (stable, preserving order — they are already tail-ordered). Draw in-flow first, then top-layer draws, **each top-layer draw scissored to the full window viewport** (ignore its `clip` — §3.2 clip escape). This is the "single ordered top-layer composite pass" (architecture § 2.3): for v1 it is a draw-order relocation, **no `::backdrop` dimming box** (§4 OPEN — paint top-layer over in-flow with no synthesized scrim).
-- [ ] Add a code comment at the top-layer block: `// v1 ::backdrop = OPEN (paint-order § 4): no dimming backdrop. Top-layer paints over in-flow in layout's tier order; the golden asserts tier ORDER only.`
-- [ ] Run + FAIL→handle: the new test stays `ignored` (green on CI). Locally on a GPU box, `cargo test -p buiy_core --test render_smoke -- --ignored` should pass once wired; if you cannot run on a GPU box, the headless tests + a careful read are the verification (note this in the commit body honestly — do NOT claim the GPU path passed if you did not run it).
-- [ ] Run the full GATE (headless) → green. Commit: `feat(render): BuiyNode applies per-entity scissor + composites top-layer at root (GPU #[ignore])`.
+- [ ] Run + confirm the GPU test is collected and **ignored** (no adapter): `cargo test -p buiy_core --test render_smoke` → shows `ignored`. The GATE stays green.
+- [ ] Run + FAIL→handle: the GPU test stays `ignored` (green on CI). Locally on a GPU box, `cargo test -p buiy_core --test render_smoke -- --ignored` should pass once wired; if you cannot run on a GPU box, the headless `buckets`/`prepare` side-table tests + a careful read are the verification (note this in the commit body honestly — do NOT claim the GPU path passed if you did not run it).
+- [ ] Run the full GATE (headless) → green. Commit: `feat(render): per-batch scissor side-table + top-layer-last in BuiyNode::run (GPU #[ignore])`.
 
 ---
 
@@ -922,7 +876,7 @@ Steps:
 ## Done criteria
 
 - [ ] `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && cargo test --workspace` is green.
-- [ ] HEADLESS-gating tests (run on CI, no adapter): `render::clip` (scissor-rect derivation + outline-clip selector), `render::paint_order` (forward walk + atomicity + reverse identity), `render::top_layer` (tail partition, no re-sort), `render::skip` (paint-skip predicate), `render::extract_tests` (`build_draws` order + clip + top-layer flag + skip pruning), and integration `tests/render_paint_order.rs` (real 6f tail tier order + modal-first-hit).
-- [ ] GPU `#[ignore]` tests (real code, no CI adapter): `tests/render_smoke.rs::buiy_node_scissors_per_entity_and_composites_top_layer` — the actual scissored draw + top-layer-at-root composite; the tier-order golden lives in the gate-#2 visual-regression harness, which this phase feeds but does not own.
+- [ ] HEADLESS-gating tests (run on CI, no adapter): `render::clip` (scissor-rect derivation + outline-clip selector), `render::paint_order` (forward walk + atomicity + reverse identity), `render::top_layer` (tail partition, no re-sort), `render::skip` (paint-skip predicate), `render::extract` (`extracted_node_for` carries clip + top-layer flag; the ordering/skip walk is already covered by R5's `assemble_*` tests), `render::buckets` / `render::prepare` (per-batch scissor side-table + top-layer tail sorts last, flat-blob offsets/lens), and integration `tests/render_paint_order.rs` (real 6f tail tier order + modal-first-hit).
+- [ ] GPU `#[ignore]` tests (real code, no CI adapter): `tests/render_smoke.rs::buiy_node_scissors_per_batch_and_composites_top_layer` — the actual per-batch scissored draw + top-layer-last composite; the tier-order golden lives in the gate-#2 visual-regression harness, which this phase feeds but does not own.
 - [ ] v1 `::backdrop` = no dimming backdrop (§4 OPEN); the top-layer composite paints over in-flow in layout's tier order, and the modal-over-popover golden asserts **tier ORDER only**.
 - [ ] No render-side re-sort anywhere: paint order, hit-test order, and the top-layer tail are all verbatim reads of layout's `painters_z` (the §1.2 / §3.1 hard constraint), enforced by the `render_does_not_reorder_*` tests.

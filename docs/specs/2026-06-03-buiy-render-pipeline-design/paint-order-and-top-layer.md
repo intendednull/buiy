@@ -389,10 +389,18 @@ proven where they are cheapest:
   helper yields the exact reverse — pinning the § 2 identity without a GPU. The
   ordering identity is a pure-data property, so it does not need the golden-image
   harness.
+  **Landed (headless):** R5's `render::extract` (`assemble_in_paint_order` forward walk;
+  the reverse identity is pinned by `hit_test_order_is_paint_order_reversed` in
+  `crates/buiy_core/tests/render_extract.rs`) and integration
+  `crates/buiy_core/tests/render_paint_order.rs` (real 6f `painters_z`, modal is the
+  first hit-test candidate over a popover).
 - **Nested-context atomicity (headless).** A fixture with a nested SC inside a
   parent asserts the render walk descends the nested `painters_z` as a unit and
   emits no interleaving with parent painters between the nested entry and its
   completion.
+  **Landed (headless):** the nested-SC atomic descent is covered by R5's
+  `assemble_context_tree` and the `render::extract` assemble tests in
+  `crates/buiy_core/tests/render_extract.rs`.
 - **Top-layer compositing (gate #2 visual-regression + gate #10 hit-target).** A
   modal-over-popover golden image proves the four-tier **order only** (tier ranking +
   within-tier recency, § 3.1) on the canonical CI GPU — **not** backdrop nesting, since
@@ -411,6 +419,11 @@ proven where they are cheapest:
   and `painters_z` membership** (§ 5.4) — the render-owned paint skip, sharing the
   `OffscreenAuto` subtree-scoped mechanism (§ 5.3) and distinguished from `Display::None`
   by the kept box.
+  **Landed (headless):** the per-entity leaf skip is R5's `node_skip_reason`
+  (`render::extract` — `CssVisibility::Hidden` and `OffscreenAuto` skip, `Visible`/`Collapse`
+  paint in v1), exercised by the skip tests in `crates/buiy_core/tests/render_extract.rs`.
+  The clip-side consumption is `render::clip` (`scissor_rect` derivation + `clip_for_primitive`
+  selector — `Outline` against `AncestorClip`, fills against own `ClipRect`).
 
 ---
 

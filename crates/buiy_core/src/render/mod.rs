@@ -25,6 +25,7 @@ pub mod node;
 pub mod pipeline;
 pub mod prepare;
 pub mod primitive;
+pub mod top_layer;
 pub mod view_uniform;
 
 pub use bridge::ScrollDirty;

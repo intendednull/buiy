@@ -27,6 +27,7 @@ This is a multi-file spec. The catalog is split across the children below; the p
 - [color-and-forced-colors.md](color-and-forced-colors.md) — linear-light render, sRGB output pre-tonemapping, theme-token resolution against `Res<Theme>`, the forced-colors contract (gate #11), and the boundary against deferred C-tier color management.
 - [verification.md](verification.md) — how render correctness is proven: the headless-no-GPU constraint, the gate mapping (#2 visual-regression, #5 layout-snapshot for `ClipRect`, #10 hit-target, #11 forced-colors, #14 render-time, #15 atlas/RSS), and the e2e golden-image harness.
 - [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md) — open design fork (deferred to R6/R8): how render performs the subtree-scoped paint skip for `CssVisibility::Hidden` / `OffscreenAuto` (render-prep propagation pass vs cache-coordinated drop). R5 ships the per-entity leaf skip only.
+- [2026-06-06-render-node-draw-model-design.md](2026-06-06-render-node-draw-model-design.md) — open design decision (blocks R8 Task 8 + R9): how `BuiyNode::run` does per-entity clip + the top-layer / effect-group composite passes on R6's single persistent-buffer draw (fragment-discard clip vs hardware-scissor batches vs a hybrid multi-pass node). Recommends the hybrid.
 
 Reading order: architecture first (it sets the integration seams and the handoff every other file relies on), then component-model, then any topic in any order.
 

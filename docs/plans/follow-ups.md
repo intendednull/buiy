@@ -459,6 +459,29 @@ honors perspective / backface / `transform-style`.
 
 **Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
 
+## Render — node-draw model: per-entity clip + composite passes (R8 Task 8 / R9 blocker)
+
+**Originated:** R8 (paint/clip/toplayer). R8 landed the pure consumer helpers
+(`scissor_rect`, `clip_for_primitive`, `partition_top_layer`) but **not** the GPU
+consumer (per-entity scissored draw + top-layer composite in `BuiyNode::run`).
+
+**Symptom:** R6's `BuiyNode::run` is a single `draw(0..4, 0..quad_count)` against one
+persistent buffer; it cannot express per-entity rectangular clip, the top-layer
+composite pass, or (R9) effect-group off-screen targets — all while preserving
+`painters_z` paint order. R8's plan assumed a "scissor side-table" but did not
+reconcile it with the single-buffer draw, so Task 8 stopped.
+
+**Implementation sketch:** decide the node-draw model (recommended **hybrid**:
+per-instance fragment-discard clip via `clip_for_primitive` threaded into
+`PackedInstance` + the reserved multi-pass node — normal pass → top-layer composite
+pass driven by `partition_top_layer` → R9 effect-group passes). Changes R6's
+instance layout (+ WGSL) and the node pass structure, so it needs ratifying before
+R8 Task 8 / R9 implement against it.
+
+**Spec touchpoint:** design note
+`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md`;
+`architecture.md § 2`, `paint-order-and-top-layer.md § 3/§ 4`, `effect-compositor.md`.
+
 ## Render — subtree visibility suppression (`CssVisibility::Hidden` / `OffscreenAuto` descendants)
 
 **Originated:** R5 (per-view extract) — `node_skip_reason` is a per-entity leaf
