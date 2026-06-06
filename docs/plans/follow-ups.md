@@ -350,25 +350,40 @@ directly via `world.run_system_once(clear_warned_once_on_exit)`.
 
 **Spec touchpoint:** `architecture.md § 6`.
 
-## Layout / render — Bevy `Transform` ownership bridge (`GlobalTransform` write)
+## Layout / render — Bevy `Transform` ownership bridge (`GlobalTransform` write) — LANDED
 
 **Originated:** Phase 8 (D2 — deliberate divergence from spec § 2
 approach (a) at the implementation-timing level).
 
-**Symptom:** Phase 8 produces the `ResolvedTransform { matrix: Mat4 }`
-artifact via sub-pass 6e but does NOT write Bevy `Transform` /
-`GlobalTransform`. Render reads `ResolvedLayout` directly and `buiy_core`
-has no `TransformPlugin` wiring (the layout harness uses `MinimalPlugins`),
-so a `Transform` write today would be dead code that nothing consumes.
+**Status:** **Landed** in render-pipeline Phase R3
+(`docs/plans/2026-06-03-buiy-render-r3-transform-bridge.md`). The new
+render-prep module `crates/buiy_core/src/render/bridge.rs` adds
+`write_buiy_transform` — the SOLE writer of each laid-out entity's Bevy
+`Transform`. It is a top-down `Children` walk seeded by a `ScrollDirty`
+resource (the union of `Changed<ResolvedLayout>`,
+`Changed<ResolvedTransform>`, and `Changed<ScrollOffset>` on a
+scroll-container) that, per entity, composes
+`base = from_translation(ResolvedLayout.position − accumulated_ancestor_scroll)`
+then `base * ResolvedTransform.matrix` into one `Transform` (change-gated;
+inserting it pulls in the `GlobalTransform` + `TransformTreeChanged`
+companions). `CorePlugin` then chains a DISTINCT `Update` copy of Bevy's
+`mark_dirty_trees → propagate_parent_transforms → sync_simple_transforms`
+after the writer and `.before(BuiySet::Picking)`, so `GlobalTransform` is
+final before picking + extract (no new `BuiySet` variant — the bridge slots
+into the existing chain). `extract_buiy_draws` now reads
+`GlobalTransform.translation()` for position (pillar 5), keeping
+`ResolvedLayout` only for size. The bridge stays in logical-px, y-down,
+window-relative space — the y-flip + logical→physical scale live in the GPU
+view uniform, never the bridge (§ B.4). Perspective / `transform-style:
+Preserve3d` stays C-tier deferred (`Transform::from_matrix` decomposes to
+TRS and drops the projective row — pinned by a CPU test); `backface_visibility`
+is consumed only as a per-primitive render flag read off `UiTransform` (no
+new component). Apps must supply `TransformPlugin` (`DefaultPlugins` does;
+`MinimalPlugins` needs it added) for the canonical `PostUpdate` pass +
+reflection registration.
 
-**Implementation sketch:** implement spec § 2 approach (a) —
-`write_resolved_layout` (or a dedicated render-prep system) composes
-`ResolvedLayout.position` + `ResolvedTransform.matrix` into the entity's
-Bevy `Transform`, so `TransformSystems::Propagate` owns `GlobalTransform`.
-Requires pulling `TransformPlugin` into the relevant app + render reading
-`GlobalTransform` instead of (or alongside) `ResolvedLayout`.
-
-**Spec touchpoint:** `transforms-and-containment.md § 2`.
+**Spec touchpoint:** `transforms-and-containment.md § 2`;
+`docs/specs/2026-06-03-buiy-render-pipeline-design/clip-and-transform.md § B`.
 
 ## Layout — `content-visibility: auto` off-screen skip — LANDED
 
