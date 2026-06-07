@@ -36,3 +36,45 @@ fn shadow_shader_parses_and_has_entry_points() {
         "shadow shader has `fragment`"
     );
 }
+
+#[test]
+fn quad_shader_with_clip_parses() {
+    // The R8b clip AABB rides the instance at `@location(6)`/`(7)` and the
+    // fragment discards outside `[clip_min, clip_max]`. naga rejects a malformed
+    // attribute index, type, or discard expression, so a clean parse + present
+    // entry points proves the clip additions are well-formed WGSL.
+    let m = parse_wgsl("quad", QUAD_WGSL);
+    assert!(has_entry_point(&m, "vertex"), "quad shader has `vertex`");
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "quad shader has `fragment`"
+    );
+    assert!(
+        QUAD_WGSL.contains("clip_min") && QUAD_WGSL.contains("clip_max"),
+        "quad shader declares the clip AABB inputs"
+    );
+    assert!(
+        QUAD_WGSL.contains("@location(6)") && QUAD_WGSL.contains("@location(7)"),
+        "quad clip inputs bound at @location(6)/(7) (matches the vertex layout)"
+    );
+}
+
+#[test]
+fn shadow_shader_with_clip_parses() {
+    // Same clip AABB as the quad shader, with the shadow's `@location(5)` being
+    // `blur` (not `radius`); the clip fields still append at `@location(6)`/`(7)`.
+    let m = parse_wgsl("shadow", SHADOW_WGSL);
+    assert!(has_entry_point(&m, "vertex"), "shadow shader has `vertex`");
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "shadow shader has `fragment`"
+    );
+    assert!(
+        SHADOW_WGSL.contains("clip_min") && SHADOW_WGSL.contains("clip_max"),
+        "shadow shader declares the clip AABB inputs"
+    );
+    assert!(
+        SHADOW_WGSL.contains("@location(6)") && SHADOW_WGSL.contains("@location(7)"),
+        "shadow clip inputs bound at @location(6)/(7) (matches the vertex layout)"
+    );
+}

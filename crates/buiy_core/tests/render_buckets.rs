@@ -74,9 +74,9 @@ fn buckets_group_pushed_instances_by_key() {
         primitive: BuiyPrimitiveKind::Shadow,
         layer: 0,
     };
-    b.push(q0, [0.0; 9]);
-    b.push(q0, [1.0; 9]);
-    b.push(s0, [2.0; 9]);
+    b.push(q0, [0.0; 13]);
+    b.push(q0, [1.0; 13]);
+    b.push(s0, [2.0; 13]);
     assert_eq!(b.len(q0), 2);
     assert_eq!(b.len(s0), 1);
     assert_eq!(b.total_instances(), 3);
@@ -98,21 +98,21 @@ fn buckets_iterate_in_paint_order() {
             primitive: BuiyPrimitiveKind::Quad,
             layer: 0,
         },
-        [0.0; 9],
+        [0.0; 13],
     );
     b.push(
         PrimitiveBatchKey {
             primitive: BuiyPrimitiveKind::Shadow,
             layer: 0,
         },
-        [0.0; 9],
+        [0.0; 13],
     );
     b.push(
         PrimitiveBatchKey {
             primitive: BuiyPrimitiveKind::Quad,
             layer: 1,
         },
-        [0.0; 9],
+        [0.0; 13],
     );
     let order: Vec<_> = b.batches().map(|(k, _)| *k).collect();
     // shadow@0, quad@0, then quad@1 — sorted ascending.
@@ -137,16 +137,17 @@ fn node(entity: u32, position: Vec2, size: Vec2, color: Color) -> ExtractedNode 
         position,
         size,
         color,
+        clip: None,
     }
 }
 
 #[test]
 fn raw_layout_stride_agrees_with_struct() {
-    // The [f32;9] the bucket holds must be byte-identical in size to the
-    // PackedInstance struct the pipeline descriptor declares (36 B). If this
+    // The [f32;13] the bucket holds must be byte-identical in size to the
+    // PackedInstance struct the pipeline descriptor declares (52 B). If this
     // ever drifts, the instanced draw reads garbage.
     assert!(packed_raw_stride_agrees());
-    assert_eq!(std::mem::size_of::<[f32; 9]>(), 36);
+    assert_eq!(std::mem::size_of::<[f32; 13]>(), 52);
 }
 
 #[test]

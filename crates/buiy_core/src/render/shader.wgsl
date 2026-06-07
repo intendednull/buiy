@@ -22,6 +22,8 @@ struct Instance {
     @location(3) rect_size: vec2<f32>,  // logical px, POSITIVE height
     @location(4) color: vec4<f32>,
     @location(5) radius: f32,            // logical px
+    @location(6) clip_min: vec2<f32>,   // logical px, clip AABB min (-inf = none)
+    @location(7) clip_max: vec2<f32>,   // logical px, clip AABB max (+inf = none)
 };
 
 struct VertexOut {
@@ -30,6 +32,9 @@ struct VertexOut {
     @location(1) half_size: vec2<f32>,  // logical px
     @location(2) color: vec4<f32>,
     @location(3) radius: f32,            // logical px
+    @location(4) rect_center: vec2<f32>, // logical px, window-relative
+    @location(5) clip_min: vec2<f32>,   // logical px (clip AABB, ClipRect space)
+    @location(6) clip_max: vec2<f32>,   // logical px (clip AABB, ClipRect space)
 };
 
 fn logical_to_clip(p: vec2<f32>) -> vec2<f32> {
@@ -45,6 +50,9 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
     out.half_size = i.rect_size * 0.5;             // positive — no abs needed
     out.color = i.color;
     out.radius = i.radius;
+    out.rect_center = i.rect_pos + out.half_size;  // logical px, window-relative
+    out.clip_min = i.clip_min;
+    out.clip_max = i.clip_max;
     return out;
 }
 
@@ -56,6 +64,13 @@ fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
+    // Per-primitive clip AABB (R8b): discard fragments outside [clip_min,
+    // clip_max] in logical-px window space — the same space as ClipRect. The
+    // full-view sentinel (±inf) makes this never fire (unclipped / top-layer).
+    let frag_pos = in.rect_center + in.local_uv * in.half_size;
+    if any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
     // SDF in logical px; AA from fwidth in logical px (the view uniform keeps
     // logical px well-scaled, so fwidth is meaningful without scale_factor).
     let d = sdf_rounded_rect(in.local_uv * in.half_size, in.half_size, in.radius);

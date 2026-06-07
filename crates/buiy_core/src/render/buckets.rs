@@ -83,13 +83,13 @@ impl Ord for PrimitiveBatchKey {
 /// [`PackedInstance`].
 #[derive(Default)]
 pub struct InstanceBuckets {
-    batches: BTreeMap<PrimitiveBatchKey, Vec<[f32; 9]>>,
+    batches: BTreeMap<PrimitiveBatchKey, Vec<[f32; 13]>>,
 }
 
 impl InstanceBuckets {
-    /// Push one packed instance (as raw `[f32; 9]` = pos2+size2+color4+radius1)
-    /// into its batch.
-    pub fn push(&mut self, key: PrimitiveBatchKey, instance: [f32; 9]) {
+    /// Push one packed instance (as raw `[f32; 13]` =
+    /// pos2+size2+color4+radius1+clip_min2+clip_max2) into its batch.
+    pub fn push(&mut self, key: PrimitiveBatchKey, instance: [f32; 13]) {
         self.batches.entry(key).or_default().push(instance);
     }
 
@@ -109,15 +109,15 @@ impl InstanceBuckets {
     }
 
     /// Iterate batches in draw order (`(layer, primitive paint order)`).
-    pub fn batches(&self) -> impl Iterator<Item = (&PrimitiveBatchKey, &Vec<[f32; 9]>)> {
+    pub fn batches(&self) -> impl Iterator<Item = (&PrimitiveBatchKey, &Vec<[f32; 13]>)> {
         self.batches.iter()
     }
 }
 
-/// Flatten a [`PackedInstance`] into the raw `[f32; 9]` the bucket store holds.
+/// Flatten a [`PackedInstance`] into the raw `[f32; 13]` the bucket store holds.
 /// Keeps the bucket store decoupled from the concrete instance struct while
 /// the stride is asserted equal in tests.
-pub fn packed_to_raw(p: &PackedInstance) -> [f32; 9] {
+pub fn packed_to_raw(p: &PackedInstance) -> [f32; 13] {
     [
         p.rect_pos[0],
         p.rect_pos[1],
@@ -128,6 +128,10 @@ pub fn packed_to_raw(p: &PackedInstance) -> [f32; 9] {
         p.color[2],
         p.color[3],
         p.radius,
+        p.clip_min[0],
+        p.clip_min[1],
+        p.clip_max[0],
+        p.clip_max[1],
     ]
 }
 

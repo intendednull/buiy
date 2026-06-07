@@ -11,6 +11,10 @@
 //!
 //! `BuiyPrimitiveKind` is **owned by `crate::render::buckets`** (R6); this
 //! module imports it and adds only the `(kind, format)` specialization key.
+//!
+//! The per-instance vertex layout carries the R8b clip AABB
+//! (`clip_min`/`clip_max`) at `@location(6)`/`(7)`, lifting the instance stride
+//! to 52 B; the quad-family shaders discard fragments outside it.
 
 use bevy::mesh::VertexBufferLayout;
 use bevy::render::render_resource::{
@@ -47,7 +51,12 @@ pub struct BuiyPrimitives;
 
 impl BuiyPrimitives {
     /// The two interleaved vertex-buffer layouts shared by every quad-family
-    /// primitive (static unit quad, stride 16; per-instance record, stride 36).
+    /// primitive (static unit quad, stride 16; per-instance record, stride 52).
+    /// The instance record carries the per-primitive clip AABB at
+    /// `@location(6)`/`(7)` (R8b); its `array_stride` tracks
+    /// [`PACKED_INSTANCE_STRIDE_BYTES`] (52 B).
+    ///
+    /// [`PACKED_INSTANCE_STRIDE_BYTES`]: crate::render::instance::PACKED_INSTANCE_STRIDE_BYTES
     fn quad_family_vertex_buffers() -> Vec<VertexBufferLayout> {
         vec![
             VertexBufferLayout {
@@ -67,7 +76,7 @@ impl BuiyPrimitives {
                 ],
             },
             VertexBufferLayout {
-                array_stride: 36,
+                array_stride: 52,
                 step_mode: VertexStepMode::Instance,
                 attributes: vec![
                     VertexAttribute {
@@ -89,6 +98,19 @@ impl BuiyPrimitives {
                         format: VertexFormat::Float32,
                         offset: 32,
                         shader_location: 5,
+                    },
+                    // R8b clip AABB: `clip_min` @ 36, `clip_max` @ 44 — appended
+                    // after `radius`/`blur` (@ 32); see `PackedInstance` and both
+                    // quad-family shaders' `Instance.clip_min`/`clip_max`.
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 36,
+                        shader_location: 6,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 44,
+                        shader_location: 7,
                     },
                 ],
             },

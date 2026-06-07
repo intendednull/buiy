@@ -42,13 +42,13 @@ use crate::render::view_uniform::BuiyViewUniform;
 /// carriers to components together when the view-entity routing lands.
 ///
 /// The quad instance store is a [`RawBufferVec`] (not a `BufferVec`): the
-/// instance record is a raw `[f32; 9]` POD vertex blob (the pipeline-descriptor
+/// instance record is a raw `[f32; 13]` POD vertex blob (the pipeline-descriptor
 /// layout), which is `NoUninit` but **not** a `ShaderType`, so it rides the
 /// raw, CPU-readable vertex path rather than the std140/encase `BufferVec` path.
 #[derive(Resource)]
 pub struct BuiyInstanceBuffers {
     /// Quad-family instances (the v1 primitive set). Grows in place.
-    pub quad: RawBufferVec<[f32; 9]>,
+    pub quad: RawBufferVec<[f32; 13]>,
     /// The per-view logical->clip + scale_factor uniform (`col0 ++ col1 ++
     /// [scale_factor, 0, 0, 0]`, [`BuiyViewUniform::as_std140_array`]).
     ///
@@ -85,9 +85,9 @@ impl Default for BuiyInstanceBuffers {
 /// R5's `ExtractedNodes.nodes` is fed to [`pack_view`] directly — no `DrawData`
 /// adapter — so the prepare phase consumes R5's component with no parallel
 /// carrier (the packing seam after Task 6's flip).
-pub fn pack_extracted_nodes(nodes: &ExtractedNodes) -> (Vec<[f32; 9]>, [f32; 12]) {
+pub fn pack_extracted_nodes(nodes: &ExtractedNodes) -> (Vec<[f32; 13]>, [f32; 12]) {
     let buckets = pack_view(&nodes.nodes);
-    let instances: Vec<[f32; 9]> = buckets
+    let instances: Vec<[f32; 13]> = buckets
         .batches()
         .flat_map(|(_key, batch)| batch.iter().copied())
         .collect();

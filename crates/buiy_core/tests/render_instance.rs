@@ -40,13 +40,14 @@ use buiy_core::render::instance::{PACKED_INSTANCE_STRIDE_BYTES, PackedInstance, 
 
 #[test]
 fn packed_instance_stride_matches_logical_pipeline_descriptor() {
-    // pos(2*4) + size(2*4) + color(4*4) + radius(1*4) = 36, same field set as
-    // the Phase-0 InstanceData but the values are LOGICAL px, not clip.
+    // pos(2*4) + size(2*4) + color(4*4) + radius(1*4) + clip_min(2*4) +
+    // clip_max(2*4) = 52, in LOGICAL px (not clip). The clip AABB rides every
+    // instance (R8b fragment discard); the const must equal the struct stride.
     assert_eq!(
         std::mem::size_of::<PackedInstance>(),
         PACKED_INSTANCE_STRIDE_BYTES
     );
-    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 36);
+    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 52);
 }
 
 #[test]
@@ -81,6 +82,64 @@ fn pack_instance_pre_linearizes_color_on_cpu() {
     assert!((p.color[1] - lin.green).abs() < 1e-5);
     assert!((p.color[2] - lin.blue).abs() < 1e-5);
     assert!((p.color[3] - lin.alpha).abs() < 1e-5);
+}
+
+// ----- R8b: per-instance clip AABB (stride 36 -> 52) -----
+// The clip AABB rides every instance (one draw, order-safe). `None` packs to the
+// full-view sentinel (±INFINITY) so the fragment discard never fires.
+use buiy_core::render::components::ClipRect;
+use buiy_core::render::extract::ExtractedNode;
+use buiy_core::render::instance::pack_extracted;
+
+fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
+    ExtractedNode {
+        entity: Entity::from_raw_u32(1).unwrap(),
+        position: Vec2::new(10.0, 20.0),
+        size: Vec2::new(30.0, 40.0),
+        color: Color::WHITE,
+        clip,
+    }
+}
+
+#[test]
+fn packed_instance_stride_is_52() {
+    // R8b: pos(2)+size(2)+color(4)+radius(1)+clip_min(2)+clip_max(2) = 13 f32 = 52 B.
+    // The struct stride, the const, and the raw [f32;13] must all agree (52 B);
+    // any drift makes the instanced draw read garbage.
+    assert_eq!(std::mem::size_of::<PackedInstance>(), 52);
+    assert_eq!(
+        std::mem::size_of::<PackedInstance>(),
+        std::mem::size_of::<[f32; 13]>()
+    );
+    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 52);
+}
+
+#[test]
+fn pack_extracted_sets_clip_min_max_from_node_clip() {
+    // A node carrying a finite ClipRect packs that box verbatim into
+    // clip_min/clip_max (the same logical-px space as ClipRect.min/.max).
+    let clip = ClipRect {
+        min: Vec2::new(5.0, 6.0),
+        max: Vec2::new(105.0, 206.0),
+    };
+    let p = pack_extracted(&node_with_clip(Some(clip)));
+    assert_eq!(p.clip_min, [5.0, 6.0]);
+    assert_eq!(p.clip_max, [105.0, 206.0]);
+}
+
+#[test]
+fn pack_extracted_uses_full_view_sentinel_when_clip_absent() {
+    // clip == None packs to clip_min = [-INF; 2], clip_max = [+INF; 2] — for any
+    // finite frag_pos the discard never fires, so the node paints unclipped.
+    let p = pack_extracted(&node_with_clip(None));
+    assert_eq!(p.clip_min, [f32::NEG_INFINITY, f32::NEG_INFINITY]);
+    assert_eq!(p.clip_max, [f32::INFINITY, f32::INFINITY]);
+}
+
+#[test]
+fn packed_raw_stride_agrees_with_thirteen_floats() {
+    // The raw bucket layout is [f32;13] and byte-equal to PackedInstance's stride.
+    assert!(buiy_core::render::instance::packed_raw_stride_agrees());
 }
 
 #[test]

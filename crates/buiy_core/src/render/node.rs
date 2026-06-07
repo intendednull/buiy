@@ -91,6 +91,28 @@ impl ViewNode for BuiyNode {
         pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, instance_buffer.slice(..));
         pass.draw(0..4, 0..buffers.quad_count);
+
+        // v1 top-layer composite: ONE draw suffices, no second pass.
+        //
+        // Top-layer members are NOT a separate render pass in v1. Layout
+        // sub-pass 6f already places them at the TAIL of the root `painters_z`
+        // (paint-order-and-top-layer.md § 6f), so they extract last → pack last
+        // → draw last in this single instanced `draw` — painting over all
+        // in-flow content for free. Their `ExtractedNode.clip` is forced to
+        // `None` (§ 3.2), packed to the `[±INFINITY]` full-view sentinel, so the
+        // fragment-discard clip never fires and they paint unclipped over the
+        // whole view. `painters_z` order is preserved VERBATIM here — render
+        // never groups or re-sorts (pillar 1) — so a second pass is unnecessary.
+        //
+        // R9 RESERVED — per-`EffectGroup` intermediate passes go here. When an
+        // effect group (opacity/blur/blend-isolation, component-model.md § 13)
+        // or a top-layer subtree that must escape the sentinel clip needs its
+        // own offscreen target, this is where the multi-pass composite lands:
+        // render each group to an intermediate texture, then composite the
+        // results in paint order after this base draw. `partition_top_layer`
+        // (render/top_layer.rs) is the landed helper that splits the in-flow and
+        // top-layer instance ranges for that explicit separate pass. v1 has no
+        // such active second pass — the single draw above is the whole node.
         Ok(())
     }
 }
