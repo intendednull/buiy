@@ -18,6 +18,7 @@ pub mod buckets;
 pub mod clip;
 pub mod color;
 pub mod components;
+pub mod compositor;
 pub mod effect;
 pub mod extract;
 pub mod instance;
@@ -166,6 +167,11 @@ impl Plugin for BuiyRenderPlugin {
         // The actual pipeline + node wiring lives in pipeline.rs and node.rs.
         node::register(render_app);
         pipeline::register(render_app);
+        // Compositor resources/pipelines (effect-compositor.md § 3): adds NO
+        // render-graph node — the BuiyRenderLabel group + edges are owned by
+        // node::register / architecture § 1.3; the composite passes run inside
+        // BuiyNode::run. No-op until prepare_effect_groups lands (Task 9).
+        compositor::register(render_app);
     }
 }
 
