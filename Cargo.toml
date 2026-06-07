@@ -53,3 +53,8 @@ tracing = "0.1"
 bytemuck = { version = "1", features = ["derive"] }
 accesskit = "0.21"
 accesskit_winit = "0.29"
+# guillotiere is only a *transitive* dep of bevy_image (not re-exported);
+# pin it directly to the version bevy_image 0.18.1 resolves so a bevy patch
+# bump cannot drop the atlas allocator. Spec atlas-and-text-seam.md § 2.1.
+guillotiere = "=0.6.2"
+smallvec = "1"
