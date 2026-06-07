@@ -459,6 +459,35 @@ honors perspective / backface / `transform-style`.
 
 **Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
 
+## Render — effect-compositor GPU orchestration (R9 prepare body + composite draws)
+
+**Originated:** R9 (effect compositor). R9 landed the full compositor MATH as
+headless-tested pure fns (`painted_bounds`, `bucket_extent`, `post_order_indices`,
+`plan_allocation`/`rt_pool_budget` degradation, `group_target_descriptor`,
+`composite_src_over`) + the structural seams (`compositor::register`,
+`PreparedEffectGroups` per-view component, the `BuiyNode::run` step-1/step-2
+composite loops) — but `prepare_effect_groups` has an EMPTY body and the node
+composite loops are inert (`prepared.groups` always empty in v1).
+
+**Symptom:** the working compositor needs an extract→prepare data flow that does
+not exist: R5's `extract_buiy_nodes` emits a FLAT node list with no effect-group
+membership/tree/bounds carried to the render world, so `prepare_effect_groups`
+has nothing to read. The GPU body (acquire pooled `Rgba16Float` TextureCache
+targets, rasterize each group subtree, composite bottom-up) also needs a wgpu
+adapter to write+verify, which this host/CI lack.
+
+**Implementation sketch:** (1) extend extract to carry per-view effect-group
+structure (which extracted nodes belong to which `EffectGroup`, the group tree,
+and per-group instance ranges) into the render world; (2) fill
+`prepare_effect_groups`: compose `painted_bounds → bucket_extent →
+group_target_descriptor`, `post_order_indices`, `plan_allocation`, acquire pooled
+targets, write `PreparedEffectGroups`; (3) wire the `BuiyNode::run` step-1/step-2
+loops to rasterize + composite, and make the flat draw EXCLUDE group-member
+instance ranges (TODO already in `node.rs` — else double-paint). GPU `#[ignore]`
+goldens (group-opacity correctness, RSS return-to-baseline) run under an adapter.
+
+**Spec touchpoint:** `effect-compositor.md § 1.1 / § 2 / § 3`; architecture.md § 1.4 / § 4.
+
 ## Render — node-draw model: per-entity clip + composite passes (R8 Task 8 / R9 blocker)
 
 **Originated:** R8 (paint/clip/toplayer). R8 landed the pure consumer helpers
