@@ -2,22 +2,21 @@
 //! adapter, no RenderApp. Mirrors tests/render_instance.rs conventions.
 
 use bevy::prelude::*;
-use buiy_core::render::color::ColorToken;
-use buiy_core::render::extract::resolve_color_token;
-use buiy_core::theme::{Theme, default_light_theme};
+use buiy_core::render::color::{ColorToken, SystemColorKeyword, resolve_token};
+use buiy_core::theme::{Theme, default_light_theme, forced_colors_theme};
 use std::borrow::Cow;
 
 #[test]
 fn transparent_token_resolves_to_none() {
     let theme = Theme::default();
-    let c = resolve_color_token(&ColorToken::Transparent, &theme);
+    let c = resolve_token(&ColorToken::Transparent, &theme);
     assert_eq!(c, Color::NONE);
 }
 
 #[test]
 fn known_token_resolves_to_theme_color() {
     let theme = default_light_theme();
-    let c = resolve_color_token(
+    let c = resolve_token(
         &ColorToken::Token(Cow::Borrowed("color.surface.primary")),
         &theme,
     );
@@ -27,12 +26,49 @@ fn known_token_resolves_to_theme_color() {
 #[test]
 fn missing_token_resolves_to_magenta_sentinel() {
     let theme = default_light_theme();
-    let c = resolve_color_token(
+    let c = resolve_token(
         &ColorToken::Token(Cow::Borrowed("nope.not.a.token")),
         &theme,
     );
     // Same sentinel render/mod.rs uses for a missing token.
     assert_eq!(c, Color::srgb(1.0, 0.0, 1.0));
+}
+
+#[test]
+fn system_color_resolves_through_forced_theme_on_the_r5_path() {
+    // The R5 extract path (`extracted_node_for` → `color::resolve_token`) must
+    // resolve `SystemColor(kw)` against the active theme's system-color map, not
+    // hardcode the sentinel. Under the forced-colors stub theme, `Canvas` is a
+    // real high-contrast color — NOT the magenta sentinel (the divergence the
+    // old `extract::resolve_color_token` introduced). color-and-forced-colors.md
+    // § 3.1.
+    let theme = forced_colors_theme();
+    let bg = Background {
+        color: ColorToken::SystemColor(SystemColorKeyword::Canvas),
+    };
+    let layout = ResolvedLayout {
+        position: Vec2::ZERO,
+        size: Vec2::splat(10.0),
+    };
+    let gt = GlobalTransform::IDENTITY;
+    let node = extracted_node_for(
+        Entity::from_raw_u32(42).unwrap(),
+        &gt,
+        &layout,
+        Some(&bg),
+        None,
+        &theme,
+    );
+    assert_ne!(
+        node.color,
+        Color::srgb(1.0, 0.0, 1.0),
+        "SystemColor(Canvas) must resolve through the forced theme, not the sentinel"
+    );
+    assert_eq!(
+        node.color,
+        theme.color("Canvas").unwrap(),
+        "the R5 path must resolve to the forced theme's Canvas color"
+    );
 }
 
 use buiy_core::render::components::CssVisibility;

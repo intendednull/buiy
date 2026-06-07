@@ -107,9 +107,22 @@ fn system_color_keyword_set_has_all_sixteen() {
     // The foundation-F 16-keyword CSS system-color set (visuals.md § 3.3).
     use SystemColorKeyword::*;
     let all = [
-        Canvas, CanvasText, LinkText, ButtonText, ButtonBorder, GrayText, Highlight,
-        HighlightText, Field, FieldText, Mark, MarkText, SelectedItem, SelectedItemText,
-        AccentColor, AccentColorText,
+        Canvas,
+        CanvasText,
+        LinkText,
+        ButtonText,
+        ButtonBorder,
+        GrayText,
+        Highlight,
+        HighlightText,
+        Field,
+        FieldText,
+        Mark,
+        MarkText,
+        SelectedItem,
+        SelectedItemText,
+        AccentColor,
+        AccentColorText,
     ];
     assert_eq!(all.len(), 16);
 }

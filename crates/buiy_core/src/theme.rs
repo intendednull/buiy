@@ -88,6 +88,47 @@ pub fn default_light_theme() -> Theme {
     t
 }
 
+/// v1 **stub** forced-colors (high-contrast) theme. Its `colors` map holds
+/// exactly the 16 CSS system-color keys so every forced-colors paint token
+/// resolves (color-and-forced-colors.md § 3.1 — the hard v1 prerequisite).
+///
+/// Values are placeholders modeled on a Windows-High-Contrast black palette;
+/// the *authoritative* system-color values are owned by
+/// `buiy-theme-tokens-design`. This stub exists only so the forced-colors path
+/// resolves to real colors (not magenta) and the gate-#11 analyzer is
+/// meaningful. The keys, not the values, are the contract.
+pub fn forced_colors_theme() -> Theme {
+    use crate::render::color::SystemColorKeyword::*;
+    let mut t = Theme::default();
+    let black = Color::srgb(0.0, 0.0, 0.0);
+    let white = Color::WHITE;
+    let yellow = Color::srgb(1.0, 1.0, 0.0);
+    let cyan = Color::srgb(0.0, 1.0, 1.0);
+    let gray = Color::srgb(0.5, 0.5, 0.5);
+    let pairs = [
+        (Canvas, black),
+        (CanvasText, white),
+        (LinkText, cyan),
+        (ButtonText, white),
+        (ButtonBorder, white),
+        (GrayText, gray),
+        (Highlight, yellow),
+        (HighlightText, black),
+        (Field, black),
+        (FieldText, white),
+        (Mark, yellow),
+        (MarkText, black),
+        (SelectedItem, yellow),
+        (SelectedItemText, black),
+        (AccentColor, cyan),
+        (AccentColorText, black),
+    ];
+    for (kw, color) in pairs {
+        t.colors.insert(kw.token().to_string(), color);
+    }
+    t
+}
+
 pub struct ThemePlugin;
 
 impl Plugin for ThemePlugin {

@@ -459,6 +459,26 @@ honors perspective / backface / `transform-style`.
 
 **Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
 
+## Render — R11 forced-colors cross-phase seams (CatalogPaint + BoxShadow draw-skip)
+
+**Originated:** R11 (color / forced-colors / verify). R11's gate-#11 analyzers run
+over a `CatalogPaint` descriptor seam, and the forced-colors `BoxShadow` draw-skip
+has no live producer yet.
+
+**Symptom / what's deferred:**
+1. `forced_colors_analyzer::{analyze_forced_colors, analyze_shadow_only}` analyze
+   `CatalogPaint` descriptors that tests construct by hand — there is no live
+   widget-catalog source. When the `Background`/`Border`/`Outline`/`BoxShadow`
+   component-model phase lands real painted components, the analyzer seam must be
+   re-pointed at them (the gate then runs over the actual catalog, not fixtures).
+2. color-and-forced-colors.md § 3.3: in forced-colors mode, extract must read
+   `UserPreferences.forced_colors` and SKIP the `BoxShadow` batch (shadows are
+   decorative, suppressed under forced colors). `extract_buiy_nodes` has no such
+   branch — it lands when `BoxShadow` gets a real extract/draw path (the BoxShadow
+   primitive pipeline is itself a later-tier seam, R7 bucket-reserved only).
+
+**Spec touchpoint:** `color-and-forced-colors.md § 3.3`; the gate-#11 section.
+
 ## Render — effect-compositor GPU orchestration (R9 prepare body + composite draws)
 
 **Originated:** R9 (effect compositor). R9 landed the full compositor MATH as

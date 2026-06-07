@@ -3,6 +3,7 @@
 //! per `buiy-theme-tokens-design`.
 
 use bevy::prelude::Color;
+use buiy_core::render::color::contrast_ratio;
 use buiy_core::theme::Theme;
 
 pub const WCAG_AA_NORMAL: f64 = 4.5;
@@ -32,22 +33,14 @@ pub struct ContrastViolation {
 
 /// WCAG 2.1 §1.4.3 contrast ratio: `(L_lighter + 0.05) / (L_darker + 0.05)`.
 /// Returns a value in [1, 21]; identical colors yield 1.0, black-on-white yields 21.0.
+///
+/// Thin f64 wrapper over the single WCAG source of truth,
+/// [`buiy_core::render::color::contrast_ratio`] (computed in f32). Keeping the
+/// math in one place means this gate (#9) and the render-side focus-ring /
+/// token-pair checks can never drift. The argument order is `(fg, bg)` here for
+/// linter ergonomics; the underlying ratio is symmetric.
 pub fn wcag2_ratio(fg: Color, bg: Color) -> f64 {
-    let l1 = relative_luminance(fg);
-    let l2 = relative_luminance(bg);
-    let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
-    (lighter + 0.05) / (darker + 0.05)
-}
-
-/// Relative luminance per WCAG 2.1 (Rec.709 weights on linear-light channels).
-/// Bevy's `Color::to_linear()` performs the sRGB→linear gamma transform; this
-/// fn must NOT re-apply it. See WCAG 2.1 §1.4.3 "relative luminance" definition.
-fn relative_luminance(c: Color) -> f64 {
-    let lin = c.to_linear();
-    let lin_r = lin.red as f64;
-    let lin_g = lin.green as f64;
-    let lin_b = lin.blue as f64;
-    0.2126 * lin_r + 0.7152 * lin_g + 0.0722 * lin_b
+    contrast_ratio(fg, bg) as f64
 }
 
 pub fn contrast_violations(

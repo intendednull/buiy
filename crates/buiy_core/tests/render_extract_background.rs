@@ -3,8 +3,7 @@
 //! still yields the magenta sentinel. Pure resolution; no RenderApp.
 
 use bevy::prelude::*;
-use buiy_core::render::color::{ColorToken, SystemColorKeyword};
-use buiy_core::render::resolve_token;
+use buiy_core::render::color::{ColorToken, SystemColorKeyword, resolve_token};
 use buiy_core::theme::Theme;
 use std::borrow::Cow;
 
@@ -18,37 +17,32 @@ fn theme_with(token: &str, color: Color) -> Theme {
 fn token_resolves_to_theme_color() {
     let theme = theme_with("color.surface.secondary", Color::srgb(0.2, 0.3, 0.4));
     let tok = ColorToken::Token(Cow::Borrowed("color.surface.secondary"));
-    let (color, missed) = resolve_token(&tok, &theme);
-    assert_eq!(color, Color::srgb(0.2, 0.3, 0.4));
-    assert!(!missed);
+    assert_eq!(resolve_token(&tok, &theme), Color::srgb(0.2, 0.3, 0.4));
 }
 
 #[test]
 fn missing_token_falls_back_to_magenta_sentinel() {
     let theme = Theme::default();
     let tok = ColorToken::Token(Cow::Borrowed("nope.not.here"));
-    let (color, missed) = resolve_token(&tok, &theme);
-    assert_eq!(color, Color::srgb(1.0, 0.0, 1.0));
-    assert!(missed);
+    assert_eq!(resolve_token(&tok, &theme), Color::srgb(1.0, 0.0, 1.0));
 }
 
 #[test]
 fn transparent_token_resolves_to_none() {
     let theme = Theme::default();
-    let (color, missed) = resolve_token(&ColorToken::Transparent, &theme);
-    assert_eq!(color, Color::NONE);
-    assert!(!missed);
+    assert_eq!(resolve_token(&ColorToken::Transparent, &theme), Color::NONE);
 }
 
 #[test]
-fn system_color_resolves_to_sentinel_until_forced_colors_map_lands() {
-    // v1 deferral: the system-color map is owned by buiy-theme-tokens-design,
-    // so every SystemColor token misses → magenta sentinel + warn. This pins
-    // the deferred miss-path so the R11 rewrite (route present entries through
-    // the map) has a regression guard.
+fn system_color_misses_to_sentinel_when_theme_lacks_the_key() {
+    // The canonical resolver routes `SystemColor(kw)` through the theme's
+    // system-color map (`resolve_named(kw.token(), …)`). With a bare `Theme`
+    // (no system-color keys) the lookup misses → magenta sentinel + warn. The
+    // forced-colors stub theme (Task 3) is what supplies those keys; this pins
+    // the miss-path for a theme that lacks them.
     let theme = Theme::default();
-    let (color, missed) =
-        resolve_token(&ColorToken::SystemColor(SystemColorKeyword::Canvas), &theme);
-    assert_eq!(color, Color::srgb(1.0, 0.0, 1.0));
-    assert!(missed);
+    assert_eq!(
+        resolve_token(&ColorToken::SystemColor(SystemColorKeyword::Canvas), &theme),
+        Color::srgb(1.0, 0.0, 1.0)
+    );
 }
