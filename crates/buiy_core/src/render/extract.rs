@@ -1,52 +1,15 @@
 //! The per-view extract mapping, factored into pure functions so the
-//! device-independent half (color-token resolution, skip predicates,
-//! `painters_z` ordering, per-entity record build) is unit-testable on CI
-//! runners with no wgpu adapter. The `extract_buiy_nodes` system (Task 6) is a
-//! thin wrapper that calls these.
+//! device-independent half (skip predicates, `painters_z` ordering, per-entity
+//! record build) is unit-testable on CI runners with no wgpu adapter. Color
+//! resolution is delegated to the single canonical resolver
+//! [`color::resolve_token`](crate::render::color::resolve_token) — this module
+//! holds no second token→`Color` mapping. The `extract_buiy_nodes` system
+//! (Task 6) is a thin wrapper that calls these.
 //!
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
-use crate::render::MISSING_TOKEN_FALLBACK;
-use crate::render::color::ColorToken;
 use crate::theme::Theme;
 use bevy::prelude::*;
-
-/// Resolve a [`ColorToken`] to a concrete `Color` against `Res<Theme>`
-/// (color-and-forced-colors.md § 2.1). `Transparent` resolves to `Color::NONE`;
-/// `Token(name)` resolves via `Theme::color(name)`, falling back to the magenta
-/// sentinel with a `warn!` on a miss (§ 2.2) — a missing token is an author bug
-/// that must be loud, never silently transparent.
-///
-/// `CurrentColor` uses the v1 fallback foreground token (`color.text.primary`,
-/// § 2.0) and `SystemColor(_)` resolves to the sentinel until its theme
-/// system-color map lands (owned by `buiy-theme-tokens-design`); both mirror
-/// the established [`resolve_token`](crate::render::resolve_token).
-pub fn resolve_color_token(token: &ColorToken, theme: &Theme) -> Color {
-    // The named token to look up; `Transparent` short-circuits, `SystemColor`
-    // misses (its map is a later phase). `CurrentColor`'s v1 fallback is the
-    // theme default foreground token (color-and-forced-colors.md § 2.0).
-    let name = match token {
-        ColorToken::Transparent => return Color::NONE,
-        ColorToken::SystemColor(_) => return missing_token_sentinel(token),
-        ColorToken::Token(name) => name.as_ref(),
-        ColorToken::CurrentColor => "color.text.primary",
-    };
-    match theme.color(name) {
-        Some(c) => c,
-        None => missing_token_sentinel(token),
-    }
-}
-
-/// Emit the missing-token `warn!` and return the magenta sentinel. A missing
-/// token is an author bug that must be loud, never silently transparent
-/// (color-and-forced-colors.md § 2.2).
-fn missing_token_sentinel(token: &ColorToken) -> Color {
-    tracing::warn!(
-        ?token,
-        "missing theme color token; falling back to magenta sentinel"
-    );
-    MISSING_TOKEN_FALLBACK
-}
 
 use crate::render::components::CssVisibility;
 
@@ -128,7 +91,7 @@ pub fn extracted_node_for(
 ) -> ExtractedNode {
     let translation = global_transform.translation();
     let color = match background {
-        Some(bg) => resolve_color_token(&bg.color, theme),
+        Some(bg) => crate::render::color::resolve_token(&bg.color, theme),
         None => Color::NONE,
     };
     ExtractedNode {

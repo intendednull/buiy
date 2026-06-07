@@ -22,6 +22,9 @@ pub mod components;
 pub mod compositor;
 pub mod effect;
 pub mod extract;
+pub mod forced_colors;
+pub mod forced_colors_analyzer;
+pub mod golden;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
@@ -96,6 +99,17 @@ pub struct BuiyRenderPlugin;
 
 impl Plugin for BuiyRenderPlugin {
     fn build(&self, app: &mut App) {
+        // Main-world forced-colors selection runs in BuiySet::Style, before the
+        // BuiySet::Render extract reads Theme (color-and-forced-colors.md § 3.1).
+        // Registered unconditionally — it has no RenderApp dependency, so it
+        // must land before the RenderApp guard's early `return` below.
+        app.init_resource::<crate::render::forced_colors::PrePreferenceTheme>()
+            .add_systems(
+                Update,
+                crate::render::forced_colors::apply_forced_colors_theme
+                    .in_set(crate::BuiySet::Style),
+            );
+
         // Main-world render-prep: clip computation runs between Animate and
         // Picking (architecture.md § 5.2) so picking + extract see settled
         // ClipRects. Runs on CI/headless — no RenderApp required.
@@ -181,38 +195,6 @@ impl Plugin for BuiyRenderPlugin {
     }
 }
 
-/// Sentinel color for missing theme tokens (magenta = "missing", visible at a
-/// glance in screenshots). The accompanying `warn!` surfaces the typo'd token
-/// name in dev. Phase 0 has a small, known token set; v0.x can promote to an
-/// `error!` once tokens are typed.
-pub(crate) const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
-
-/// Resolve a [`ColorToken`] against the active theme. Returns the resolved
-/// `Color` and whether a named token *missed* (so the caller can emit one
-/// `warn!`). Mirrors the Phase-0 `Visual.background_token` resolution:
-/// `Transparent` → `Color::NONE`; `Token(name)` → `Theme::color(name)` or
-/// the magenta sentinel on miss; `CurrentColor` / `SystemColor(_)` use the
-/// v1 fallback (theme default foreground / system-color map — owned by
-/// color-and-forced-colors.md; here they route through `Theme::color` of the
-/// fallback token and sentinel-on-miss).
-pub fn resolve_token(token: &ColorToken, theme: &Theme) -> (Color, bool) {
-    // Each named token maps to the theme key to look up; the lookup-or-sentinel
-    // step is shared. `currentColor`'s v1 fallback is the theme default
-    // foreground token (color-and-forced-colors.md § 2.0); `SystemColor`'s
-    // map is owned by buiy-theme-tokens-design and misses (sentinel) until it
-    // lands.
-    let name = match token {
-        ColorToken::Transparent => return (Color::NONE, false),
-        ColorToken::SystemColor(_) => return (MISSING_TOKEN_FALLBACK, true),
-        ColorToken::Token(name) => name.as_ref(),
-        ColorToken::CurrentColor => "color.text.primary",
-    };
-    match theme.color(name) {
-        Some(c) => (c, false),
-        None => (MISSING_TOKEN_FALLBACK, true),
-    }
-}
-
 /// Phase-0 parity helper: the uniform corner radius in logical px, read from
 /// the top-left corner's x radius. Px-only via [`clip::px_or_zero`]; other
 /// units resolve to `0` for now (paint-`Length` resolution is a later-phase
@@ -244,13 +226,10 @@ fn draw_for_node(
     layout: &ResolvedLayout,
     theme: &Theme,
 ) -> Option<DrawData> {
-    let (color, missed) = resolve_token(&background.color, theme);
-    if missed {
-        tracing::warn!(
-            token = ?background.color,
-            "missing theme color token; falling back to magenta sentinel"
-        );
-    }
+    // The canonical §2.1 resolver (color::resolve_token) is the single owner of
+    // token→Color mapping and of the missing-token `warn!` (via resolve_named),
+    // so this path neither re-derives the miss nor re-emits the warn.
+    let color = color::resolve_token(&background.color, theme);
     if color == Color::NONE {
         return None;
     }
@@ -283,6 +262,15 @@ fn draw_for_node(
 /// lands. Perspective / `Preserve3d` is the third § B.5 point: affine-
 /// incompatible and C-tier deferred — pinned by the bridge's
 /// `from_matrix`-drops-the-projective-row test, not here.
+///
+/// Token resolution re-reads `Res<Theme>` live every frame, so a theme swap
+/// (light↔dark or the forced-colors variant) re-resolves all token-bearing
+/// paint with no cached, theme-stamped buffer (color-and-forced-colors.md
+/// § 2.3). The component-model phase replaces `Visual.background_token` with
+/// `ColorToken`-bearing `Background`/`Border`/`Outline`/`BoxShadow`, resolved
+/// via [`crate::render::color::resolve_token`]; the `theme.is_changed()` global
+/// re-resolve signal then bypasses the per-entity `Changed<T>` short-circuit
+/// on a theme-only switch.
 #[allow(clippy::type_complexity)]
 fn extract_buiy_draws(
     mut commands: Commands,

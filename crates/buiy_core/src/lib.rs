@@ -43,6 +43,11 @@ pub use render::components::{
     Corners, CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle, MixBlendMode,
     Opacity, Outline, Radius, Shadow,
 };
+pub use render::forced_colors::{PrePreferenceTheme, apply_forced_colors_theme};
+pub use render::forced_colors_analyzer::{
+    CatalogPaint, ForcedColorsViolation, analyze_forced_colors, analyze_shadow_only,
+};
+pub use render::golden::{GoldenConfig, perceptual_diff};
 // `OffscreenAuto` is intentionally NOT root-exported: it is a layout-written
 // marker (layout owns its registration), reachable via `render::components`.
 
