@@ -1,8 +1,9 @@
 # Render node-draw model — per-entity clip + composite passes (design)
 
-**Status:** OPEN design decision. Blocks R8 Task 8 (per-entity scissored draw +
-top-layer composite) and R9 (effect-group compositor). Surfaced 2026-06-06 when
-R8's plan could not express the consumer draw coherently on R6's draw model.
+**Status:** DECIDED 2026-06-07 — **Option C (hybrid)**. Per-instance fragment-discard
+clip + the reserved multi-pass node (top-layer composite, then R9 effect-group
+passes). R8 Task 8 + R9 implement against it. Surfaced 2026-06-06 when R8's plan
+could not express the consumer draw coherently on R6's single-buffer draw model.
 **Owners:** render-pipeline.
 **Related:** [architecture.md § 1.3 / § 2](architecture.md) (pillar 2: typed-primitive batched node + one top-layer composite pass), [clip-and-transform.md § A](clip-and-transform.md) (`ClipRect`/`AncestorClip` consumption), [paint-order-and-top-layer.md § 3 / § 4](paint-order-and-top-layer.md) (top-layer composite), [effect-compositor.md](effect-compositor.md) (R9), R6 (`render/prepare.rs`, `render/node.rs`), R8 (`scissor_rect`, `clip_for_primitive`, `partition_top_layer`).
 
@@ -73,6 +74,8 @@ multi-pass node structure architecture § 2 already commits to. Concretely:
    driven by `partition_top_layer`.
 2. R9: add per-`EffectGroup` intermediate targets + a composite step in the same node.
 
-This is a design **recommendation**, not yet ratified — it changes the instance
-layout (R6's `PackedInstance` + the WGSL) and the node pass structure, which is why
-it is written down for a decision before implementing R8 Task 8 / R9.
+**Ratified 2026-06-07.** R8b ([2026-06-07-buiy-render-r8b-node-draw.md](../../plans/2026-06-07-buiy-render-r8b-node-draw.md))
+implements this: the clip AABB is threaded `ExtractedNode` → `PackedInstance`
+(stride 36 → 52) → the quad/shadow WGSL fragment discard, and the top-layer/effect
+multi-pass extension point is reserved in `BuiyNode::run`. R9 adds the effect-group
+passes against the same reserved structure.

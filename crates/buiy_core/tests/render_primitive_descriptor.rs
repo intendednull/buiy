@@ -10,7 +10,9 @@
 // `tests/components.rs` for `Node::default()`.
 #![allow(clippy::default_constructed_unit_structs)]
 
-use bevy::render::render_resource::{BlendState, SpecializedRenderPipeline, TextureFormat};
+use bevy::render::render_resource::{
+    BlendState, SpecializedRenderPipeline, TextureFormat, VertexFormat,
+};
 use buiy_core::render::buckets::BuiyPrimitiveKind;
 use buiy_core::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
 
@@ -62,8 +64,9 @@ fn quad_descriptor_keeps_alpha_blending_and_entry_points() {
 
 #[test]
 fn quad_descriptor_has_two_vertex_buffers_with_phase0_strides() {
-    // Static unit-quad VBO (stride 16) + per-instance buffer (stride 36),
-    // matching the Phase-0 pipeline layout the quad primitive preserves.
+    // Static unit-quad VBO (stride 16) + per-instance buffer (stride 52 after
+    // R8b appends the clip AABB at @location(6)/(7)); the unit-quad VBO is
+    // untouched.
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
@@ -71,7 +74,55 @@ fn quad_descriptor_has_two_vertex_buffers_with_phase0_strides() {
     let buffers = &d.vertex.buffers;
     assert_eq!(buffers.len(), 2, "vertex + instance buffer layouts");
     assert_eq!(buffers[0].array_stride, 16);
-    assert_eq!(buffers[1].array_stride, 36);
+    assert_eq!(buffers[1].array_stride, 52);
+}
+
+#[test]
+fn instance_buffer_stride_is_52_with_clip_fields() {
+    // The per-instance record grew from 36 B (R7) to 52 B (R8b) when the clip
+    // AABB (`clip_min`/`clip_max`, two Float32x2) was appended; the vertex
+    // layout's `array_stride` must track `PackedInstance`'s 52-byte stride or
+    // wgpu mis-strides the instance buffer.
+    let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+    });
+    assert_eq!(d.vertex.buffers[1].array_stride, 52);
+}
+
+#[test]
+fn instance_has_clip_min_at_location_6_offset_36() {
+    // `clip_min` is the first appended clip field: Float32x2 at byte offset 36
+    // (immediately after `radius`/`blur` @ 32) bound to `@location(6)` — the
+    // WGSL `Instance.clip_min`.
+    let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+    });
+    let attrs = &d.vertex.buffers[1].attributes;
+    let clip_min = attrs
+        .iter()
+        .find(|a| a.shader_location == 6)
+        .expect("instance layout has @location(6) clip_min");
+    assert_eq!(clip_min.format, VertexFormat::Float32x2);
+    assert_eq!(clip_min.offset, 36);
+}
+
+#[test]
+fn instance_has_clip_max_at_location_7_offset_44() {
+    // `clip_max` follows `clip_min`: Float32x2 at byte offset 44 bound to
+    // `@location(7)` — the WGSL `Instance.clip_max`.
+    let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+    });
+    let attrs = &d.vertex.buffers[1].attributes;
+    let clip_max = attrs
+        .iter()
+        .find(|a| a.shader_location == 7)
+        .expect("instance layout has @location(7) clip_max");
+    assert_eq!(clip_max.format, VertexFormat::Float32x2);
+    assert_eq!(clip_max.offset, 44);
 }
 
 #[test]

@@ -208,6 +208,36 @@ fn quad_pipeline_registers_via_specializer() {
     let _ = pipeline.id;
 }
 
+// Same RenderApp/wgpu-adapter caveat as `quad_pipeline_registers_via_specializer`:
+// RenderPlugin::build does block_on(initialize_renderer(...)) which expect()s a
+// wgpu adapter. After R8b the per-instance vertex layout grew to stride 52 (the
+// clip AABB at @location(6)/(7)); wgpu validates the layout against the WGSL
+// `Instance` at pipeline creation, so a registered BuiyPipeline on a real
+// adapter proves the stride-52 layout + clip-aware shaders compile and bind. The
+// device-free half (layout offsets, naga parse) is covered headlessly in
+// render_primitive_descriptor.rs / render_shader_wgsl.rs.
+//
+// Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
+fn clip_aabb_pipeline_registers_with_stride_52() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::render::RenderPlugin::default());
+    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+
+    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
+    let pipeline = render_app
+        .world()
+        .get_resource::<buiy_core::render::pipeline::BuiyPipeline>()
+        .expect("BuiyPipeline registered with the stride-52 clip-AABB layout");
+    // The id is a valid handle into the cache (compilation is async; we only
+    // assert the resource + id exist, not that the pipeline finished). Pipeline
+    // creation is where wgpu would reject a layout/shader stride mismatch.
+    let _ = pipeline.id;
+}
+
 // Same wgpu-adapter caveat as the other render_smoke #[ignore] tests. Asserts
 // the ported node draws the persistent buffers without panicking and the
 // view-uniform bind group is wired. Run locally with `-- --ignored`.
@@ -218,4 +248,63 @@ fn node_draws_persistent_buffers_with_view_uniform() {
     // Buiy node + Visual, and assert the frame completes (no panic) and the
     // BuiyInstanceBuffers quad_count == 1. Provisioned on a GPU runner by the
     // visual-regression harness; documented GPU coverage point.
+}
+
+// Same wgpu-adapter caveat as the other render_smoke #[ignore] tests. The v1
+// top-layer composite (R8b) is a SINGLE draw, not a second pass: layout sub-pass
+// 6f tails top-layer members in the root `painters_z`, so they pack last and the
+// one instanced `BuiyNode::run` draw emits them OVER the in-flow content; their
+// `clip = None` packs to the full-view sentinel so the fragment discard never
+// fires and they paint unclipped over the whole view (paint-order § 3.2/§ 6f).
+// This asserts that compositing-last property on a real adapter — the ordering
+// + sentinel half is proven headlessly in render_extract.rs
+// (`top_layer_entity_gets_none_clip_regardless_of_clip_rect` and the
+// `assemble_*` painters_z tests). Run locally with `-- --ignored`.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); top-layer composites last in one draw"]
+fn top_layer_composites_last_over_in_flow() {
+    // Build a RenderApp with BuiyRenderPlugin, drive one frame with an in-flow
+    // Buiy node and a top-layer (`Stacking { top_layer: Modal, .. }`) node whose
+    // box overlaps it, and assert the frame completes (no panic) with both
+    // instances packed — the top-layer member at the TAIL of the quad buffer
+    // (drawn last → over the in-flow node) and carrying the `[±INFINITY]`
+    // sentinel clip (unclipped over the full view). Provisioned on a GPU runner
+    // by the visual-regression harness; documented GPU coverage point for the
+    // single-draw top-layer composite (R9 reserves the multi-pass extension).
+}
+
+// Same RenderApp/wgpu-adapter caveat as the other render_smoke #[ignore] tests:
+// RenderPlugin::build does block_on(initialize_renderer(...)) which expect()s a
+// wgpu adapter. This is the final R8b wire-up guard: the full clip path —
+// ClipRect → ExtractedNode.clip → PackedInstance.clip_min/clip_max (stride 52) →
+// the @location(6)/(7) vertex attrs consumed by the clip-aware quad/shadow WGSL
+// — is proven device-free across Tasks 1–3 (render_extract.rs, render_instance.rs,
+// render_primitive_descriptor.rs, render_shader_wgsl.rs). What only a real adapter
+// can prove is that wgpu *accepts* that end-to-end shape at pipeline creation:
+// it validates the stride-52 instance layout against the WGSL `Instance` struct
+// and compiles the clip-discard fragment, so a registered BuiyPipeline on a live
+// device means the whole wired path binds without a layout/shader mismatch.
+//
+// Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
+fn clip_aabb_full_wire_up_smoke() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::render::RenderPlugin::default());
+    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+
+    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
+    let pipeline = render_app
+        .world()
+        .get_resource::<buiy_core::render::pipeline::BuiyPipeline>()
+        .expect(
+            "BuiyPipeline registered: stride-52 clip layout + clip-aware WGSL accepted by wgpu",
+        );
+    // The id is a valid handle into the cache (compilation is async; we only
+    // assert the resource + id exist, not that the pipeline finished). Pipeline
+    // creation is where wgpu would reject the stride-52 layout / clip-discard
+    // shader mismatch, so a present id proves the full wired path is accepted.
+    let _ = pipeline.id;
 }

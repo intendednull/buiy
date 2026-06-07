@@ -47,12 +47,14 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 position: Vec2::new(10.0, 20.0),
                 size: Vec2::new(100.0, 50.0),
                 color: Color::srgb(1.0, 0.0, 0.0),
+                clip: None,
             },
             ExtractedNode {
                 entity: Entity::from_raw_u32(2).unwrap(),
                 position: Vec2::new(30.0, 40.0),
                 size: Vec2::new(60.0, 70.0),
                 color: Color::srgb(0.0, 1.0, 0.0),
+                clip: None,
             },
         ],
     };
@@ -95,6 +97,7 @@ fn extracted_nodes_pack_view_routes_records_to_quad_layer_0() {
         position: Vec2::new(10.0, 20.0),
         size: Vec2::new(100.0, 50.0),
         color: Color::srgb(1.0, 0.0, 0.0),
+        clip: None,
     });
     let buckets = pack_view(&view.nodes);
     let quad0 = PrimitiveBatchKey {

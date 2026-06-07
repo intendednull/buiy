@@ -88,8 +88,9 @@ fn css_hidden_takes_precedence_over_offscreen() {
 }
 
 use buiy_core::components::ResolvedLayout;
-use buiy_core::render::components::Background;
-use buiy_core::render::extract::extracted_node_for;
+use buiy_core::layout::{Stacking, TopLayer};
+use buiy_core::render::components::{AncestorClip, Background, ClipRect};
+use buiy_core::render::extract::{effective_clip, extracted_node_for};
 
 #[test]
 fn extracted_node_carries_box_and_resolved_color() {
@@ -104,7 +105,7 @@ fn extracted_node_carries_box_and_resolved_color() {
     };
     let entity = Entity::from_raw_u32(7).unwrap();
 
-    let node = extracted_node_for(entity, &gt, &layout, Some(&bg), &theme);
+    let node = extracted_node_for(entity, &gt, &layout, Some(&bg), None, &theme);
 
     assert_eq!(node.entity, entity);
     assert_eq!(node.size, Vec2::new(100.0, 40.0));
@@ -121,8 +122,134 @@ fn absent_background_is_transparent() {
         size: Vec2::splat(8.0),
     };
     let gt = GlobalTransform::IDENTITY;
-    let node = extracted_node_for(Entity::from_raw_u32(1).unwrap(), &gt, &layout, None, &theme);
+    let node = extracted_node_for(
+        Entity::from_raw_u32(1).unwrap(),
+        &gt,
+        &layout,
+        None,
+        None,
+        &theme,
+    );
     assert_eq!(node.color, Color::NONE);
+}
+
+#[test]
+fn extracted_node_for_carries_clip_when_provided() {
+    // The per-primitive clip AABB is threaded through extract: a `Some(clip)`
+    // is carried verbatim onto the record; `None` (no clip / top-layer
+    // sentinel) stays `None`. This is the CPU half of the fragment-discard
+    // clip — render packs `None` to the full-view sentinel (R8b § 3.2).
+    let theme = Theme::default();
+    let layout = ResolvedLayout {
+        position: Vec2::new(10.0, 20.0),
+        size: Vec2::new(100.0, 40.0),
+    };
+    let gt = GlobalTransform::IDENTITY;
+    let entity = Entity::from_raw_u32(9).unwrap();
+    let clip = ClipRect {
+        min: Vec2::new(10.0, 20.0),
+        max: Vec2::new(60.0, 50.0),
+    };
+
+    let clipped = extracted_node_for(entity, &gt, &layout, None, Some(&clip), &theme);
+    assert_eq!(clipped.clip, Some(clip), "Some(clip) is carried verbatim");
+
+    let unclipped = extracted_node_for(entity, &gt, &layout, None, None, &theme);
+    assert_eq!(unclipped.clip, None, "absent clip stays None (sentinel)");
+}
+
+#[test]
+fn assemble_preserves_clip_per_entity() {
+    // Each painter's record keeps the clip the build closure stamped on it; the
+    // forward walk never mixes one entity's clip into another's.
+    let order = vec![e(1), e(2), e(3)];
+    let clip2 = ClipRect {
+        min: Vec2::ZERO,
+        max: Vec2::splat(50.0),
+    };
+    let nodes = assemble_in_paint_order(&order, |x| {
+        Some(ExtractedNode {
+            entity: x,
+            position: Vec2::ZERO,
+            size: Vec2::ONE,
+            color: Color::WHITE,
+            // Only entity 2 carries a clip; the others stay unclipped.
+            clip: (x == e(2)).then_some(clip2),
+        })
+    });
+    let clips: Vec<Option<ClipRect>> = nodes.nodes.iter().map(|n| n.clip).collect();
+    assert_eq!(clips, vec![None, Some(clip2), None]);
+}
+
+// These guard the production `effective_clip` (the per-entity decision
+// `extract_buiy_nodes` runs before `extracted_node_for`): a top-layer member is
+// forced to the `None` full-view sentinel, an in-flow member takes
+// `clip_for_primitive`. Each assertion exercises the real branch and the spec
+// property each half implements.
+#[test]
+fn top_layer_entity_gets_none_clip_regardless_of_clip_rect() {
+    // paint-order-and-top-layer.md § 3.2: a top-layer member escapes every
+    // ancestor clip and paints over the full view, so it ALWAYS resolves to the
+    // `None` sentinel — even when a `ClipRect`/`AncestorClip` is present on the
+    // entity (a stale clip from before it was promoted, say). Any non-`None`
+    // `TopLayer` variant triggers the escape.
+    let clip = ClipRect {
+        min: Vec2::new(10.0, 20.0),
+        max: Vec2::new(60.0, 50.0),
+    };
+    let anc = AncestorClip {
+        min: Vec2::ZERO,
+        max: Vec2::splat(200.0),
+    };
+    for variant in [
+        TopLayer::Modal,
+        TopLayer::Popover,
+        TopLayer::Tooltip,
+        TopLayer::Fullscreen,
+    ] {
+        let stacking = Stacking {
+            top_layer: variant,
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_clip(Some(&stacking), Some(&clip), Some(&anc)),
+            None,
+            "{variant:?} top-layer member must get the full-view sentinel"
+        );
+    }
+}
+
+#[test]
+fn in_flow_clipped_entity_gets_clip_from_clip_for_primitive() {
+    // An in-flow member (no `Stacking`, or `TopLayer::None`) takes the fill clip
+    // straight from `clip_for_primitive(false, …)`: its own-box `ClipRect` when
+    // present, `None` when nothing clips it. The branch never substitutes the
+    // sentinel for an in-flow node.
+    let clip = ClipRect {
+        min: Vec2::new(10.0, 20.0),
+        max: Vec2::new(60.0, 50.0),
+    };
+    let anc = AncestorClip {
+        min: Vec2::ZERO,
+        max: Vec2::splat(200.0),
+    };
+
+    // No Stacking at all → in-flow → own-box clip carried verbatim.
+    assert_eq!(
+        effective_clip(None, Some(&clip), Some(&anc)),
+        Some(clip),
+        "in-flow fill clips to its own box (clip_for_primitive(false, …))"
+    );
+    // `TopLayer::None` is in-flow too → same own-box clip.
+    let in_flow = Stacking::default();
+    assert_eq!(
+        effective_clip(Some(&in_flow), Some(&clip), Some(&anc)),
+        Some(clip),
+        "TopLayer::None is in-flow, not a top-layer escape"
+    );
+    // No clip inputs → unclipped (`None`), NOT promoted to the sentinel by the
+    // top-layer branch — `clip_for_primitive` itself returns `None`.
+    assert_eq!(effective_clip(None, None, None), None);
 }
 
 #[test]
@@ -137,7 +264,14 @@ fn extracted_node_position_follows_global_transform() {
         size: Vec2::splat(50.0),
     };
     let gt = GlobalTransform::from_translation(Vec3::new(200.0, 300.0, 0.0));
-    let node = extracted_node_for(Entity::from_raw_u32(2).unwrap(), &gt, &layout, None, &theme);
+    let node = extracted_node_for(
+        Entity::from_raw_u32(2).unwrap(),
+        &gt,
+        &layout,
+        None,
+        None,
+        &theme,
+    );
     assert_eq!(node.position, Vec2::new(200.0, 300.0));
 }
 
@@ -170,6 +304,7 @@ fn assemble_emits_in_painters_z_order() {
             position: Vec2::ZERO,
             size: Vec2::ONE,
             color: Color::WHITE,
+            clip: None,
         })
     });
     let got: Vec<Entity> = nodes.nodes.iter().map(|n| n.entity).collect();
@@ -195,6 +330,7 @@ fn assemble_drops_skipped_entities() {
                 position: Vec2::ZERO,
                 size: Vec2::ONE,
                 color: Color::WHITE,
+                clip: None,
             })
         }
     });
@@ -228,6 +364,7 @@ fn hit_test_order_is_paint_order_reversed() {
             position: Vec2::ZERO,
             size: Vec2::ONE,
             color: Color::WHITE,
+            clip: None,
         })
     });
     // Paint order is painters_z forward.
@@ -280,6 +417,7 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
                 position: Vec2::ZERO,
                 size: Vec2::ONE,
                 color: Color::WHITE,
+                clip: None,
             })
         },
         &mut out,
@@ -314,6 +452,7 @@ fn tree_assembly_skips_dropped_entities_across_the_boundary() {
                     position: Vec2::ZERO,
                     size: Vec2::ONE,
                     color: Color::WHITE,
+                    clip: None,
                 })
             }
         },

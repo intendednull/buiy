@@ -85,7 +85,7 @@ pub fn node_skip_reason(
 }
 
 use crate::components::{Node, ResolvedLayout};
-use crate::render::components::{Background, OffscreenAuto};
+use crate::render::components::{AncestorClip, Background, ClipRect, OffscreenAuto};
 
 /// One painted entity's CPU record — the per-frame instance the per-view
 /// `ExtractedNodes` (Task 5) holds, keyed by `Entity` so a partial re-extract
@@ -104,18 +104,26 @@ pub struct ExtractedNode {
     /// Resolved background fill (already theme-resolved; `Color::NONE` ==
     /// transparent, extract emits no quad for it downstream).
     pub color: Color,
+    /// The per-primitive clip AABB (own border box ∩ ancestor clips, from
+    /// `clip_for_primitive`). `None` == the full-view sentinel: no ancestor
+    /// clips this entity, OR it is a top-layer member (always `None`, per
+    /// paint-order-and-top-layer.md § 3.2). Downstream (`pack_extracted`)
+    /// packs `None` to `[±INFINITY]` so the fragment discard never fires.
+    pub clip: Option<ClipRect>,
 }
 
 /// Build one [`ExtractedNode`] from the layout box + composed transform + the
-/// (optional) background token. Pure: no GPU, no ECS access beyond the
-/// borrowed components. `position` is the `GlobalTransform` translation; `size`
-/// is `ResolvedLayout.size`; `color` resolves the `Background` token (absent
-/// background == transparent).
+/// (optional) background token + the (optional) per-primitive clip AABB. Pure:
+/// no GPU, no ECS access beyond the borrowed components. `position` is the
+/// `GlobalTransform` translation; `size` is `ResolvedLayout.size`; `color`
+/// resolves the `Background` token (absent background == transparent); `clip`
+/// is carried verbatim (`None` == full-view sentinel, see [`ExtractedNode::clip`]).
 pub fn extracted_node_for(
     entity: Entity,
     global_transform: &GlobalTransform,
     layout: &ResolvedLayout,
     background: Option<&Background>,
+    clip: Option<&ClipRect>,
     theme: &Theme,
 ) -> ExtractedNode {
     let translation = global_transform.translation();
@@ -128,6 +136,7 @@ pub fn extracted_node_for(
         position: translation.truncate(),
         size: layout.size,
         color,
+        clip: clip.copied(),
     }
 }
 
@@ -236,9 +245,34 @@ pub fn assemble_context_tree<'a>(
 }
 
 use crate::components::StackingContext;
-use crate::layout::Stacking;
+use crate::layout::{Stacking, TopLayer};
+use crate::render::clip::clip_for_primitive;
 use bevy::render::Extract;
 use bevy::window::PrimaryWindow;
+
+/// Resolve one entity's per-primitive clip AABB from its stacking + clip inputs
+/// (the decision `extract_buiy_nodes` runs before [`extracted_node_for`]). Pure:
+/// `Option<&Stacking>`/`Option<&ClipRect>`/`Option<&AncestorClip>` →
+/// `Option<ClipRect>`, no ECS access. A top-layer member (any non-`None`
+/// [`TopLayer`]) escapes every ancestor clip and paints over the full view
+/// (paint-order-and-top-layer.md § 3.2), so it ALWAYS resolves to the `None`
+/// full-view sentinel — even with a (stale) `ClipRect`/`AncestorClip` present.
+/// An in-flow member takes its fill clip straight from
+/// `clip_for_primitive(false, …)` (own-box ∩ ancestor clips; the
+/// `Outline`/`is_outline = true` path is a later tier), which is `None` when
+/// nothing clips it.
+pub fn effective_clip(
+    stacking: Option<&Stacking>,
+    clip_rect: Option<&ClipRect>,
+    ancestor_clip: Option<&AncestorClip>,
+) -> Option<ClipRect> {
+    let is_top_layer = stacking.is_some_and(|s| s.top_layer != TopLayer::None);
+    if is_top_layer {
+        None
+    } else {
+        clip_for_primitive(false, clip_rect, ancestor_clip)
+    }
+}
 
 /// Per-frame, `Changed`-gated extract (architecture.md § 1.2/§ 3/§ 4). Reads
 /// the main world's layout + render-owned components through `Extract`, walks
@@ -267,9 +301,16 @@ pub fn extract_buiy_nodes(
                 Option<&Background>,
                 Option<&CssVisibility>,
                 Option<&OffscreenAuto>,
+                // Clip inputs (R8b): the computed per-entity clip AABB + its
+                // ancestor-only companion (consumed by `clip_for_primitive`),
+                // and `Stacking` so a top-layer member is forced to the
+                // full-view sentinel (`clip = None`, paint-order § 3.2).
+                Option<&ClipRect>,
+                Option<&AncestorClip>,
+                Option<&Stacking>,
                 // FAN: add Option<&BoxShadow>/&Outline/&Opacity/&EffectGroup/
-                // &ClipRect/&Border and the reserved effect components here as
-                // their tier lands (architecture § 1.2 illustrative subset).
+                // &Border and the reserved effect components here as their tier
+                // lands (architecture § 1.2 illustrative subset).
                 // NOTE: Containment is NOT in the fan — content-visibility:hidden
                 // paints the entity's own box and prunes descendants layout-side
                 // (paint-order § 5.2), so it is not a render skip input.
@@ -284,6 +325,8 @@ pub fn extract_buiy_nodes(
                     Changed<OffscreenAuto>,
                     Changed<StackingContext>,
                     Changed<Stacking>,
+                    Changed<ClipRect>,
+                    Changed<AncestorClip>,
                     // FAN: extend the Or-set in lockstep with the query tuple
                     // (architecture § 3.1 trigger union).
                 )>,
@@ -324,12 +367,21 @@ pub fn extract_buiy_nodes(
     // `std::collections::HashMap` matches the convention in layout/systems.rs.
     let mut by_entity: std::collections::HashMap<Entity, ExtractedNode> =
         std::collections::HashMap::new();
-    for (entity, gt, layout, bg, css_vis, offscreen) in nodes.iter() {
+    for (entity, gt, layout, bg, css_vis, offscreen, clip_rect, ancestor_clip, stacking) in
+        nodes.iter()
+    {
         let skip = node_skip_reason(css_vis, offscreen.is_some());
         if skip.is_some() {
             continue;
         }
-        by_entity.insert(entity, extracted_node_for(entity, gt, layout, bg, theme));
+        // A top-layer member escapes every ancestor clip and paints over the
+        // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
+        // clips to its own box ∩ ancestor clips. See [`effective_clip`].
+        let clip = effective_clip(stacking, clip_rect, ancestor_clip);
+        by_entity.insert(
+            entity,
+            extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme),
+        );
     }
 
     // Index every forming context by its root entity, then drive the recursive
