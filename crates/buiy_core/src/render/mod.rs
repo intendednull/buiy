@@ -13,6 +13,7 @@ use crate::{
 use bevy::prelude::*;
 use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
 
+pub mod atlas;
 pub mod bridge;
 pub mod buckets;
 pub mod clip;
@@ -167,6 +168,11 @@ impl Plugin for BuiyRenderPlugin {
         // The actual pipeline + node wiring lives in pipeline.rs and node.rs.
         node::register(render_app);
         pipeline::register(render_app);
+        // Shared texture atlas (atlas-and-text-seam.md § 2): the render-world
+        // BuiyAtlas + AtlasWarmupQueue resources plus the pre-paint
+        // `warmup_atlas` drain in ExtractSchedule. Coverage/image primitives
+        // (glyph/icon/gradient/mask) sample this one warehouse.
+        atlas::register(render_app);
         // Compositor resources/pipelines (effect-compositor.md § 3): adds NO
         // render-graph node — the BuiyRenderLabel group + edges are owned by
         // node::register / architecture § 1.3; the composite passes run inside
