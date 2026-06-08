@@ -17,6 +17,10 @@ fn core2d_node_count(with_buiy: bool) -> usize {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::render::RenderPlugin::default());
+    // `CorePipelinePlugin` → `TonemappingPlugin::build` reads `Assets<Image>`,
+    // whose owner is `ImagePlugin` (not `AssetPlugin`). Without it, build panics
+    // with "Requested resource … does not exist" from tonemapping/mod.rs.
+    app.add_plugins(bevy::image::ImagePlugin::default());
     app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
     if with_buiy {
         app.add_plugins(buiy_core::render::BuiyRenderPlugin);
@@ -58,6 +62,8 @@ fn compositor_register_adds_no_extra_graph_node() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::render::RenderPlugin::default());
+    // See `core2d_node_count`: `CorePipelinePlugin` needs `Assets<Image>` (ImagePlugin).
+    app.add_plugins(bevy::image::ImagePlugin::default());
     app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
     app.add_plugins(buiy_core::render::BuiyRenderPlugin);
     let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
@@ -73,41 +79,72 @@ fn compositor_register_adds_no_extra_graph_node() {
     );
 }
 
+// Number of systems `BuiyRenderPlugin` adds to the `Render` schedule:
+// `prepare_buiy_instances` (render/mod.rs) and `prepare_effect_groups`
+// (render/compositor.rs `register`), both `.in_set(RenderSystems::Prepare)` and
+// both queued in `build`. Mirrors `BUIY_RENDER_SYSTEM_COUNT` in
+// tests/render_prepare.rs; bump in lockstep whenever the plugin's
+// `add_systems(Render, …)` registrations change.
+const BUIY_RENDER_SYSTEM_COUNT: usize = 2;
+
+// Count the systems in a RenderApp's `Render` schedule graph. `graph().systems`
+// is populated at `add_systems` time (in `build`), so this is pure introspection
+// — no executor init, no `finish()`, no extra device work. Identical helper to
+// `render_schedule_system_count` in tests/render_prepare.rs.
+fn render_schedule_system_count(app: &App) -> usize {
+    use bevy::render::{Render, RenderApp};
+    app.get_sub_app(RenderApp)
+        .expect("RenderApp")
+        .world()
+        .resource::<bevy::ecs::schedule::Schedules>()
+        .get(Render)
+        .expect("Render schedule present in the RenderApp")
+        .graph()
+        .systems
+        .len()
+}
+
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by e2e harness"]
 fn prepare_effect_groups_runs_in_prepare_set() {
-    use bevy::render::{Render, RenderApp, RenderSystems};
+    use bevy::render::RenderSystems;
+
+    // Membership is asserted by a baseline system-count delta rather than by
+    // system *name*: without `bevy_utils/debug` (this workspace does not enable
+    // it) `System::name()` resolves to the placeholder "<Enable the debug feature
+    // to see the name>", so a `name().contains("prepare_effect_groups")` match
+    // can NEVER fire here — the prior name-based body was structurally broken on
+    // a non-debug build. Same proven idiom as
+    // `prepare_system_is_in_render_prepare_set` in tests/render_prepare.rs:
+    // count the Render-schedule systems WITHOUT the plugin, then WITH it, and
+    // assert the delta is exactly the Buiy render-system count. Deleting the
+    // `compositor::register` → `add_systems(Render, prepare_effect_groups…)` line
+    // drops the delta below `BUIY_RENDER_SYSTEM_COUNT` and fails here. Only
+    // *building* the RenderApp needs the wgpu adapter; walking the schedule does
+    // not. `CorePipelinePlugin` is intentionally NOT added (it is irrelevant to
+    // this membership assertion and pulls in the tonemapping `Assets<Image>`
+    // dependency).
+    let mut baseline = App::new();
+    baseline.add_plugins(MinimalPlugins);
+    baseline.add_plugins(bevy::asset::AssetPlugin::default());
+    baseline.add_plugins(bevy::render::RenderPlugin::default());
+    let baseline_count = render_schedule_system_count(&baseline);
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::render::RenderPlugin::default());
-    app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
     app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+    let with_plugin_count = render_schedule_system_count(&app);
 
-    let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
-    // Assert the Render schedule actually contains `prepare_effect_groups`.
-    // Bevy exposes schedule membership via the Schedules resource; we iterate
-    // the Render schedule graph and match the system by name — mirroring the
-    // sibling `prepare_system_is_in_render_prepare_set` in tests/render_prepare.rs.
-    // This FAILS (under a debug build) if `register` stops adding the system,
-    // which is the contract this test guards.
-    let schedules = render_app
-        .world()
-        .resource::<bevy::ecs::schedule::Schedules>();
-    let render = schedules.get(Render).expect("Render schedule present");
-    // `System::name()` derefs to `str`; without `bevy_utils/debug` it is a
-    // placeholder (same caveat render_smoke.rs / render_prepare.rs document), so
-    // this name match only fires on a debug-feature build — acceptable here
-    // because this is the #[ignore] GPU path, run locally on a debug-capable host.
-    let found = render
-        .graph()
-        .systems
-        .iter()
-        .any(|(_, system, _)| system.name().contains("prepare_effect_groups"));
-    assert!(
-        found,
-        "prepare_effect_groups registered in the Render schedule"
+    assert_eq!(
+        with_plugin_count - baseline_count,
+        BUIY_RENDER_SYSTEM_COUNT,
+        "BuiyRenderPlugin must register {BUIY_RENDER_SYSTEM_COUNT} systems in the \
+         Render schedule (prepare_buiy_instances + prepare_effect_groups); got a \
+         delta of {} — a missing add_systems(Render, prepare_effect_groups…) in \
+         render/compositor.rs `register`",
+        with_plugin_count - baseline_count,
     );
     // The set-membership (RenderSystems::Prepare) is pinned by register() and
     // the compositor schedule-order test; this test pins presence in the render world.
@@ -128,6 +165,8 @@ fn buiy_node_runs_with_prepared_effect_groups_query() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::render::RenderPlugin::default());
+    // See `core2d_node_count`: `CorePipelinePlugin` needs `Assets<Image>` (ImagePlugin).
+    app.add_plugins(bevy::image::ImagePlugin::default());
     app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
     app.add_plugins(buiy_core::render::BuiyRenderPlugin);
 

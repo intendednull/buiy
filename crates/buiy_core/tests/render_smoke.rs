@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use buiy_core::{CorePlugin, render::BuiyRenderPlugin};
 
+mod support;
+
 #[test]
 fn render_plugin_loads_without_panic() {
     let mut app = App::new();
@@ -46,12 +48,15 @@ fn buiy_render_plugin_loads_headless_without_render_app() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
 fn pipeline_registers_in_render_app() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    // RenderPlugin requires AssetPlugin (Shader is an Asset).
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+    // `BuiyPipeline` is registered in `BuiyRenderPlugin::finish` (not `build`):
+    // it needs the `RenderDevice`/`PipelineCache` that `RenderPlugin::finish`
+    // materializes via the async renderer init, so `finish()` MUST run first.
+    // `finish()` also runs `ImagePlugin::finish` (which indexes the added
+    // `ImagePlugin`) and `RenderPlugin`'s fallback-image init, so the *complete*
+    // `gpu_test_app` plugin set is required — a bare minimal set panics in
+    // `ImagePlugin::finish`. No frame is driven; this only inspects the resource.
+    let mut app = support::gpu_test_app();
+    app.finish();
 
     let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
     let pipeline = render_app
@@ -75,6 +80,11 @@ fn render_graph_node_inserted_after_main_2d_pass() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::render::RenderPlugin::default());
+    // `CorePipelinePlugin` pulls in `TonemappingPlugin::build`, which reads
+    // `Assets<Image>` to register its LUT images; that asset is owned by
+    // `ImagePlugin`, so it must be added (before `CorePipelinePlugin`) or the
+    // tonemapping build panics with "Requested resource … does not exist".
+    app.add_plugins(bevy::image::ImagePlugin::default());
     app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
     app.add_plugins(buiy_core::render::BuiyRenderPlugin);
 
@@ -94,10 +104,12 @@ fn render_graph_node_inserted_after_main_2d_pass() {
 }
 
 // Number of systems `BuiyRenderPlugin` adds to `ExtractSchedule`: the Phase-0
-// `extract_buiy_draws` and the per-view `extract_buiy_nodes` (render/mod.rs).
-// This is the delta the membership test below asserts; bump it in lockstep
-// whenever the plugin's `ExtractSchedule` registrations change.
-const BUIY_EXTRACT_SYSTEM_COUNT: usize = 2;
+// `extract_buiy_draws`, the per-view `extract_buiy_nodes` (render/mod.rs), and
+// the R10 `warmup_atlas` drain (atlas/mod.rs, wired via `atlas::register` in the
+// plugin's RenderApp branch). This is the delta the membership test below
+// asserts; bump it in lockstep whenever the plugin's `ExtractSchedule`
+// registrations change.
+const BUIY_EXTRACT_SYSTEM_COUNT: usize = 3;
 
 // Count the systems in a RenderApp's `ExtractSchedule`. Reads the schedule
 // graph directly (`graph().systems`), which is populated immediately at
@@ -176,8 +188,9 @@ fn extract_buiy_nodes_registered_in_extract_schedule() {
         with_plugin_count - baseline_count,
         BUIY_EXTRACT_SYSTEM_COUNT,
         "BuiyRenderPlugin must register {BUIY_EXTRACT_SYSTEM_COUNT} systems in \
-         ExtractSchedule (extract_buiy_draws + extract_buiy_nodes); got a delta \
-         of {} — a missing add_systems(ExtractSchedule, …) in render/mod.rs",
+         ExtractSchedule (extract_buiy_draws + extract_buiy_nodes + warmup_atlas); \
+         got a delta of {} — a missing add_systems(ExtractSchedule, …) in \
+         render/mod.rs or atlas/mod.rs",
         with_plugin_count - baseline_count,
     );
 }
@@ -192,11 +205,10 @@ fn extract_buiy_nodes_registered_in_extract_schedule() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
 fn quad_pipeline_registers_via_specializer() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+    // `BuiyPipeline` is registered in `BuiyRenderPlugin::finish` and `finish()`
+    // needs the full plugin set — see `pipeline_registers_in_render_app`.
+    let mut app = support::gpu_test_app();
+    app.finish();
 
     let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
     let pipeline = render_app
@@ -221,11 +233,10 @@ fn quad_pipeline_registers_via_specializer() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
 fn clip_aabb_pipeline_registers_with_stride_52() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+    // `BuiyPipeline` is registered in `BuiyRenderPlugin::finish` and `finish()`
+    // needs the full plugin set — see `pipeline_registers_in_render_app`.
+    let mut app = support::gpu_test_app();
+    app.finish();
 
     let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
     let pipeline = render_app
@@ -289,11 +300,10 @@ fn top_layer_composites_last_over_in_flow() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
 fn clip_aabb_full_wire_up_smoke() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+    // `BuiyPipeline` is registered in `BuiyRenderPlugin::finish` and `finish()`
+    // needs the full plugin set — see `pipeline_registers_in_render_app`.
+    let mut app = support::gpu_test_app();
+    app.finish();
 
     let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
     let pipeline = render_app

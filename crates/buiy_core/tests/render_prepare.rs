@@ -143,36 +143,70 @@ fn view_uniform_carrier_is_a_valid_std140_uniform() {
 // ----- GPU (#[ignore]) — needs a wgpu adapter -----
 // Run locally with: `cargo test -p buiy_core --test render_prepare -- --ignored`.
 
+// Number of systems `BuiyRenderPlugin` adds to the `Render` schedule:
+// `prepare_buiy_instances` (render/mod.rs) and `prepare_effect_groups`
+// (render/compositor.rs `register`), both `.in_set(RenderSystems::Prepare)` and
+// both queued in `build`. Bump this in lockstep whenever the plugin's
+// `add_systems(Render, …)` registrations change.
+const BUIY_RENDER_SYSTEM_COUNT: usize = 2;
+
+// Count the systems in a RenderApp's `Render` schedule. Reads the schedule graph
+// directly (`graph().systems`), which is populated at `add_systems` time — no
+// executor initialization (hence no schedule run, hence no extra device work) is
+// required, so this is a pure introspection of which systems were registered.
+fn render_schedule_system_count(app: &bevy::app::App) -> usize {
+    use bevy::render::{Render, RenderApp};
+    let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+    render_app
+        .world()
+        .resource::<bevy::ecs::schedule::Schedules>()
+        .get(Render)
+        .expect("Render schedule present in the RenderApp")
+        .graph()
+        .systems
+        .len()
+}
+
+// Membership is asserted by a baseline delta rather than by system *name*, the
+// same idiom as `extract_buiy_nodes_registered_in_extract_schedule` in
+// render_smoke.rs: `System::name()` resolves to a placeholder ("<Enable the
+// debug feature …>") unless `bevy_utils/debug` is enabled, which this workspace
+// does not enable, so a `name().contains("prepare_buiy_instances")` match never
+// fires. Instead we count the `Render`-schedule systems in a RenderApp built
+// WITHOUT `BuiyRenderPlugin` and assert that adding the plugin grows the schedule
+// by exactly the Buiy render-system count. Deleting the
+// `add_systems(Render, prepare_buiy_instances…)` line in render/mod.rs (the
+// regression this test name promises to catch) drops the delta below
+// `BUIY_RENDER_SYSTEM_COUNT` and fails the assertion. Only *building* the
+// RenderApp needs the wgpu adapter; walking the schedule graph does not.
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); prepare-system render-world membership"]
 fn prepare_system_is_in_render_prepare_set() {
-    use bevy::render::{Render, RenderApp, RenderSystems};
+    use bevy::render::RenderSystems;
+
+    // Baseline: RenderApp with Bevy's own render systems but none of ours.
+    let mut baseline = App::new();
+    baseline.add_plugins(MinimalPlugins);
+    baseline.add_plugins(bevy::asset::AssetPlugin::default());
+    baseline.add_plugins(bevy::render::RenderPlugin::default());
+    let baseline_count = render_schedule_system_count(&baseline);
+
+    // With BuiyRenderPlugin added, the Render schedule must gain exactly the Buiy
+    // prepare systems (incl. prepare_buiy_instances).
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::render::RenderPlugin::default());
     app.add_plugins(buiy_core::render::BuiyRenderPlugin);
 
-    let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
-    // Assert the Render schedule contains our prepare system. Bevy exposes
-    // schedule membership via the Schedules resource; we check the system is
-    // present in the Render schedule graph.
-    let schedules = render_app
-        .world()
-        .resource::<bevy::ecs::schedule::Schedules>();
-    let render = schedules.get(Render).expect("Render schedule present");
-    // `System::name()` derefs to `str`; without `bevy_utils/debug` it is a
-    // placeholder (same caveat render_smoke.rs documents), so this name match
-    // only fires on a debug-feature build — acceptable here because this is the
-    // #[ignore] GPU path, run locally on a machine that can build with debug.
-    let found = render
-        .graph()
-        .systems
-        .iter()
-        .any(|(_, system, _)| system.name().contains("prepare_buiy_instances"));
-    assert!(
-        found,
-        "prepare_buiy_instances registered in the Render schedule"
+    let with_plugin_count = render_schedule_system_count(&app);
+    assert_eq!(
+        with_plugin_count - baseline_count,
+        BUIY_RENDER_SYSTEM_COUNT,
+        "BuiyRenderPlugin must register {BUIY_RENDER_SYSTEM_COUNT} systems in the \
+         Render schedule (prepare_buiy_instances + prepare_effect_groups); got a \
+         delta of {} — a missing add_systems(Render, …) in render/mod.rs",
+        with_plugin_count - baseline_count,
     );
     // The set-membership (RenderSystems::Prepare) is asserted by the ordering
     // test below; this test pins presence in the render world.
