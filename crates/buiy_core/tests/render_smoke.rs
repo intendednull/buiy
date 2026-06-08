@@ -262,19 +262,23 @@ fn node_draws_persistent_buffers_with_view_uniform() {
     use buiy_core::render::prepare::BuiyInstanceBuffers;
     use std::borrow::Cow;
 
-    let mut app = support::gpu_test_app_with_layout();
-    // A 2D camera so a render view exists and the Core2d graph runs BuiyNode::run
-    // (the node is a ViewNode — it executes once per view).
-    app.world_mut().spawn(Camera2d);
+    // `gpu_render_app` adds `CorePipelinePlugin` so a live `Core2d` graph exists
+    // for `BuiyRenderPlugin` to wire `BuiyNode` into — without it the node is
+    // never added to a graph and never executes. A capture camera targeting an
+    // offscreen image gives the node a real `ViewTarget` to paint into.
+    const W: u32 = 32;
+    const H: u32 = 32;
+    let mut app = support::gpu_render_app(W, H);
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
     app.world_mut().spawn((
         Node,
+        // 40×40 opaque white over the 32×32 view → the readback is fully covered.
         Style::default().width_px(40.0).height_px(40.0),
         Background {
             color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
         },
     ));
-    // The frame completing without panic proves BuiyNode::run built the view bind
-    // group and issued its draw against the persistent buffer on a live adapter.
     support::finish_and_run(&mut app, 3);
 
     let buffers = support::render_world_resource::<BuiyInstanceBuffers>(&app)
@@ -286,6 +290,15 @@ fn node_draws_persistent_buffers_with_view_uniform() {
     assert!(
         buffers.view_uniform.binding().is_some(),
         "the view-uniform UBO was uploaded (the @group(0) bind the node builds)"
+    );
+    // And the node actually PAINTED: read the offscreen target back and assert it
+    // is not uniformly the clear color — proof BuiyNode::run executed its draw in
+    // the live graph (the buffer-only asserts above can't see a never-run node).
+    let pixels = support::readback_rgba(&mut app, target);
+    let clear = [0u8, 0, 0, 255];
+    assert!(
+        pixels.chunks_exact(4).any(|px| px != clear),
+        "BuiyNode::run painted non-clear pixels into the offscreen view"
     );
 }
 
