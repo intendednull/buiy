@@ -175,15 +175,32 @@ Update `CLAUDE.md` Build & Test and the campaign memory.
     into the assembled set. Stored-PNG `--accept` golden machinery (image dep,
     `tests/goldens/`, budget) deferred to verification-design — the inline pixel
     assertion proves the shared capture infra. (gate-#2)
-  - [ ] 4. Atlas upload + sampling: `warmed_glyph_uploads_and_samples_with_tint`,
-    `retint_same_glyph_leaves_atlas_byte_identical`, `warmup_makes_first_frame_match_golden`,
-    `gate15_atlas_entries_return_to_baseline_after_idle`.
-  - [ ] 5. Effect-compositor GPU orchestration (extract→prepare effect-group dataflow +
-    off-screen RT composite): `group_opacity_overlap_is_single_layer_at_half`,
-    `rt_pool_returns_to_baseline_after_idle`.
-  - [ ] Two non-test deferrals: subtree-visibility suppression pass (independent,
-    can land now); R11 §3.3 BoxShadow forced-colors draw-skip (blocked on the
-    nonexistent BoxShadow pipeline — stays deferred, can't verify yet).
+  - [x] **4. Atlas coverage-glyph GPU pipeline** (commit `824d91e`). The whole GPU
+    half of the atlas: `coverage.wgsl` + `atlas/gpu.rs` (dirty-page `write_texture`
+    upload + `@group(1)` bind group in prepare), page `Vec<u8>`+blit, the Glyph
+    specialization + glyph instance buffer + node draw branch. Byte-firewalled
+    (68 B `GlyphAlphaInstance`, compile-time asserts). Fresh-reviewed: fixed a
+    "premultiplied"→"straight-alpha" doc mislabel. 4 tests green (coverage×tint,
+    retint byte-identity, warmup, gate-#15). Design note
+    `2026-06-08-render-atlas-glyph-gpu-design.md`.
+  - [x] **5. Effect-compositor GPU orchestration** (this commit). extract carries
+    effect-group membership (`EffectGroupExtract` + `group: Option<usize>`, derived
+    from the `EffectGroup` marker + `ChildOf` subtree — NOT the SC tree, see the
+    fork-5 deviation), `pack_view_partitioned` splits the buffer into contiguous
+    per-group ranges, `prepare_effect_groups` acquires pooled `Rgba16Float` targets
+    and attaches `PreparedEffectGroups` + `PreparedEffectTargets` to the view entity,
+    `composite.{rs,wgsl}` + the node two-pass (group passes → composite into
+    parent/window at opacity, flat draw excludes group ranges). 2 tests green
+    (overlap composites once at 0.5; RT pool returns to baseline). The agent
+    found+fixed a flat-draw double-paint bug; a fresh review added a contiguity guard
+    (the invariant is blocked on the opacity SC trigger — follow-ups.md) + a
+    glyph-bypass TODO. Design note `2026-06-08-render-effect-compositor-gpu-design.md`.
+  - [ ] **Deferred (tracked in follow-ups.md):** subtree-visibility suppression pass
+    (independent CPU render-prep, latent — no v1 producer); the opacity
+    stacking-context trigger (makes the compositor's contiguity invariant hold by
+    construction; cross-layer seam); glyphs-in-effect-groups (text-seam follow-up);
+    R11 §3.3 BoxShadow forced-colors draw-skip (blocked on the nonexistent BoxShadow
+    pipeline).
 - [x] **Phase 5 — GPU gate lane.** Documented in `CLAUDE.md` § Build & Test: the
   `cargo test -p buiy_core -j 2 -- --ignored --test-threads=1` lane (needs a real
   adapter; Vulkan render-to-texture needs no display), additive to the headless

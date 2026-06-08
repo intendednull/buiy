@@ -98,6 +98,7 @@ fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
         size: Vec2::new(30.0, 40.0),
         color: Color::WHITE,
         clip,
+        group: None,
     }
 }
 

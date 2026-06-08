@@ -115,6 +115,7 @@ fn modal_is_first_hit_candidate_over_popover() {
                 size: Vec2::ONE,
                 color: Color::WHITE,
                 clip: None,
+                group: None,
             })
         },
         &mut assembled,

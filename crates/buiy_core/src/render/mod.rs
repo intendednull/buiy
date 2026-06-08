@@ -19,6 +19,7 @@ pub mod buckets;
 pub mod clip;
 pub mod color;
 pub mod components;
+pub mod composite;
 pub mod compositor;
 pub mod effect;
 pub mod extract;
@@ -193,6 +194,16 @@ impl Plugin for BuiyRenderPlugin {
                 "coverage.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
+            // The effect-group composite shader (octet ..05). Loaded into the
+            // MAIN world like the quad/shadow/coverage shaders; the composite
+            // pipeline (composite.rs::specialize) resolves this handle through the
+            // PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                composite::composite_shader_handle(),
+                "composite.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
         }
 
         // ExtractedDraws is render-world only — the main world does not read it.
@@ -203,6 +214,12 @@ impl Plugin for BuiyRenderPlugin {
         render_app
             .init_resource::<ExtractedDraws>()
             .init_resource::<extract::ExtractedNodesView>()
+            // The per-view effect-group carrier `prepare_effect_groups` reads as a
+            // non-Option `Res`. `extract_buiy_nodes` overwrites it every frame
+            // (both paths), but init it here for the same reason as
+            // `ExtractedNodesView`: the resource must exist before the first
+            // Prepare even if extract were ever skipped/reordered.
+            .init_resource::<extract::ExtractedEffectGroups>()
             // The persistent per-frame instance buffers (R6). Device-free to
             // construct (`RawBufferVec`/`UniformBuffer` allocate their GPU buffers
             // lazily on first `write_buffer`), so it is initialized here in `build`
@@ -263,6 +280,10 @@ impl Plugin for BuiyRenderPlugin {
         // `finish` (not `build`) because `AtlasGpu::from_world` needs the
         // `RenderDevice` that `RenderPlugin::finish` materializes.
         atlas::register_gpu(render_app);
+        // The device-owning composite half (`CompositePipeline`: bind-group
+        // layouts, sampler, unit-quad VBO). `finish` for the same reason — its
+        // `FromWorld` needs the `RenderDevice`.
+        composite::register_gpu(render_app);
     }
 }
 
