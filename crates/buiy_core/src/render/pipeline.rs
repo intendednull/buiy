@@ -11,7 +11,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BindGroupLayoutEntry,
     Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, PipelineCache,
-    ShaderStages, SpecializedRenderPipeline, TextureFormat, binding_types::uniform_buffer,
+    SamplerBindingType, ShaderStages, SpecializedRenderPipeline, TextureFormat, TextureSampleType,
+    binding_types::{sampler, texture_2d, uniform_buffer},
 };
 use bevy::render::renderer::RenderDevice;
 use bevy::shader::Shader;
@@ -47,6 +48,18 @@ pub fn shadow_shader_handle() -> Handle<Shader> {
     Handle::Uuid(SHADOW_SHADER_UUID, PhantomData)
 }
 
+/// Stable UUID for the coverage-glyph (alpha-as-color) shader (octet `..03`).
+const COVERAGE_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0103_0000_0000_0000_0000_0000_0003u128);
+
+/// Weak handle to the coverage-glyph WGSL shader (octet `..03`).
+///
+/// Backed by `coverage.wgsl` (the alpha-as-color glyph primitive,
+/// atlas-and-text-seam.md § 4.1), loaded under `COVERAGE_SHADER_UUID` into the
+/// MAIN world by `BuiyRenderPlugin::build` (`load_internal_asset!`).
+pub fn coverage_shader_handle() -> Handle<Shader> {
+    Handle::Uuid(COVERAGE_SHADER_UUID, PhantomData)
+}
+
 /// The bind-group-layout entries for the per-view view uniform: one
 /// `var<uniform>` at `@group(0) @binding(0)`, visible to the vertex stage (the
 /// logical->clip transform happens in `vertex`). `[Vec4; 3]` is the
@@ -70,9 +83,51 @@ pub(crate) fn view_uniform_layout_descriptor() -> BindGroupLayoutDescriptor {
     BindGroupLayoutDescriptor::new("buiy_view_uniform_layout", &view_uniform_layout_entries())
 }
 
+/// The bind-group-layout entries for the atlas `@group(1)`: a fragment-stage
+/// `texture_2d<f32>` (binding 0) + a filtering `sampler` (binding 1). This is
+/// **additive** — only the atlas-sampling pipelines (coverage glyph) declare it;
+/// the non-sampling quad/shadow pipelines keep their single-group `@group(0)`
+/// layout byte-identical (GPU-verify design fork #2). The coverage page is
+/// `R8Unorm` (a filterable float-sampled format), so `TextureSampleType::Float
+/// { filterable: true }` + `SamplerBindingType::Filtering` match the WGSL
+/// `texture_2d<f32>` + `sampler`.
+fn atlas_layout_entries() -> BindGroupLayoutEntries<2> {
+    BindGroupLayoutEntries::sequential(
+        ShaderStages::FRAGMENT,
+        (
+            texture_2d(TextureSampleType::Float { filterable: true }),
+            sampler(SamplerBindingType::Filtering),
+        ),
+    )
+}
+
+/// The pipeline-layout descriptor for the atlas `@group(1)`. Shared by the
+/// coverage pipeline's `specialize` (so the descriptor declares the group the
+/// shader binds) and the concrete [`build_atlas_layout`] the bind group is built
+/// against — one source of truth, so the bind group is layout-compatible.
+pub(crate) fn atlas_layout_descriptor() -> BindGroupLayoutDescriptor {
+    BindGroupLayoutDescriptor::new("buiy_atlas_layout", &atlas_layout_entries())
+}
+
+/// Build the concrete `@group(1)` atlas bind-group layout from the device. The
+/// atlas prepare system (`atlas::gpu::prepare_atlas_textures`) builds the
+/// coverage bind group against the copy stored on [`BuiyPipeline::atlas_layout`];
+/// this is the constructor for it. Same entries as `atlas_layout_descriptor`
+/// (the crate-private descriptor the coverage pipeline declares), so the bind
+/// group is layout-compatible with the pipeline.
+pub fn build_atlas_layout(device: &RenderDevice) -> BindGroupLayout {
+    device.create_bind_group_layout("buiy_atlas_layout", &atlas_layout_entries())
+}
+
 #[derive(Resource)]
 pub struct BuiyPipeline {
     pub id: CachedRenderPipelineId,
+    /// Cached pipeline id for the coverage-glyph (alpha-as-color) primitive,
+    /// keyed to the view format (`Rgba8UnormSrgb`). The glyph node looks this up
+    /// to set the coverage pipeline before its glyph draw. Specialized through
+    /// the same `BuiyPrimitives` specializer as `id` (the `Glyph` kind), so it
+    /// reuses `coverage.wgsl` + the `@group(0)`/`@group(1)` layout.
+    pub glyph_id: CachedRenderPipelineId,
     /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
     /// at pipeline registration and reused every frame. Phase 0 closeout
     /// scope: vertex emission order matches the `cull_mode: None` setting in
@@ -83,6 +138,12 @@ pub struct BuiyPipeline {
     /// group from this layout against `BuiyInstanceBuffers::view_uniform` each
     /// frame; the layout itself is created once here.
     pub view_layout: BindGroupLayout,
+    /// Bind-group layout for the atlas `@group(1)` (`texture_2d<f32>` + a
+    /// `sampler`, fragment stage). The atlas prepare system builds the coverage
+    /// bind group against this; created once here from the SAME entries the
+    /// coverage pipeline descriptor declares, so the bind group is
+    /// layout-compatible. Additive — quad/shadow never bind it (design fork #2).
+    pub atlas_layout: BindGroupLayout,
 }
 
 pub(crate) fn register(render_app: &mut SubApp) {
@@ -109,6 +170,12 @@ pub(crate) fn register(render_app: &mut SubApp) {
         .resource::<RenderDevice>()
         .create_bind_group_layout("buiy_view_uniform_layout", &view_uniform_layout_entries());
 
+    // The concrete atlas `@group(1)` layout, from the same entries the coverage
+    // pipeline descriptor declares (one source of truth — see
+    // `atlas_layout_descriptor`). The atlas prepare system builds its coverage
+    // bind group against this copy.
+    let atlas_layout = build_atlas_layout(world.resource::<RenderDevice>());
+
     // Build pipeline descriptor and queue it.
     let pipeline_cache = world.resource::<PipelineCache>();
 
@@ -125,6 +192,15 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // sibling phase.
     let descriptor = BuiyPrimitives.specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+    });
+
+    // The coverage-glyph pipeline, same view format. Built through the SAME
+    // specializer so the glyph vertex layout + `@group(0)`/`@group(1)` cannot
+    // drift from the descriptor. Queued alongside the quad pipeline; the glyph
+    // node binds `glyph_id` + the atlas `@group(1)` for its glyph draw.
+    let glyph_descriptor = BuiyPrimitives.specialize(BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Glyph,
         format: TextureFormat::Rgba8UnormSrgb,
     });
 
@@ -167,9 +243,12 @@ pub(crate) fn register(render_app: &mut SubApp) {
     });
 
     let id = pipeline_cache.queue_render_pipeline(descriptor);
+    let glyph_id = pipeline_cache.queue_render_pipeline(glyph_descriptor);
     world.insert_resource(BuiyPipeline {
         id,
+        glyph_id,
         vertex_buffer,
         view_layout,
+        atlas_layout,
     });
 }

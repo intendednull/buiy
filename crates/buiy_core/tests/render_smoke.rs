@@ -104,12 +104,13 @@ fn render_graph_node_inserted_after_main_2d_pass() {
 }
 
 // Number of systems `BuiyRenderPlugin` adds to `ExtractSchedule`: the Phase-0
-// `extract_buiy_draws`, the per-view `extract_buiy_nodes` (render/mod.rs), and
-// the R10 `warmup_atlas` drain (atlas/mod.rs, wired via `atlas::register` in the
-// plugin's RenderApp branch). This is the delta the membership test below
-// asserts; bump it in lockstep whenever the plugin's `ExtractSchedule`
-// registrations change.
-const BUIY_EXTRACT_SYSTEM_COUNT: usize = 3;
+// `extract_buiy_draws`, the per-view `extract_buiy_nodes` (render/mod.rs), the
+// R10 `warmup_atlas` drain, and the atlas `maintain_atlas` per-frame maintenance
+// (both atlas/mod.rs, wired via `atlas::register` in the plugin's RenderApp
+// branch as a `(warmup_atlas, maintain_atlas).chain()`). This is the delta the
+// membership test below asserts; bump it in lockstep whenever the plugin's
+// `ExtractSchedule` registrations change.
+const BUIY_EXTRACT_SYSTEM_COUNT: usize = 4;
 
 // Count the systems in a RenderApp's `ExtractSchedule`. Reads the schedule
 // graph directly (`graph().systems`), which is populated immediately at

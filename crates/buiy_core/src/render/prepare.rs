@@ -28,9 +28,25 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{BufferUsages, RawBufferVec, UniformBuffer};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 
+use crate::render::atlas::GlyphAlphaInstance;
 use crate::render::buckets::pack_view;
 use crate::render::extract::{ExtractedNodes, ExtractedNodesView};
 use crate::render::view_uniform::BuiyViewUniform;
+
+/// Render-world list of glyph-alpha instances to draw this frame, in paint
+/// order. The text seam (`buiy-text-rendering-design`, unbuilt) is the in-app
+/// producer — it shapes glyphs, inserts coverage into the atlas, and pushes one
+/// [`GlyphAlphaInstance`] per visible glyph here. Until then this resource is
+/// empty in production and the glyph draw is a no-op; the GPU tests play the
+/// producer and fill it directly (the test-as-producer pattern `atlas_alloc.rs`
+/// already uses for `AtlasBitmap`). [`prepare_buiy_instances`] packs it into
+/// [`BuiyInstanceBuffers::glyph`].
+#[derive(Resource, Default)]
+pub struct ExtractedGlyphs {
+    /// One instance per visible glyph, in paint order (the node draws them in
+    /// this order, after the quad draw — shadow < quad < glyph < path).
+    pub glyphs: Vec<GlyphAlphaInstance>,
+}
 
 /// Persistent per-view GPU instance buffers (architecture.md § 3.2): one
 /// growable buffer per primitive, allocated once and reused frame-to-frame
@@ -49,6 +65,13 @@ use crate::render::view_uniform::BuiyViewUniform;
 pub struct BuiyInstanceBuffers {
     /// Quad-family instances (the v1 primitive set). Grows in place.
     pub quad: RawBufferVec<[f32; 13]>,
+    /// Coverage-glyph instances (the alpha-as-color primitive,
+    /// atlas-and-text-seam.md § 4.1). A `RawBufferVec<GlyphAlphaInstance>` for
+    /// the same reason as `quad`: `GlyphAlphaInstance` is a raw `#[repr(C)]`
+    /// vertex POD (the Glyph pipeline-descriptor layout), `NoUninit` but not a
+    /// `ShaderType`, so it rides the raw, CPU-readable vertex path. Grows in
+    /// place; the node draws it after the quad draw (paint order glyph > quad).
+    pub glyph: RawBufferVec<GlyphAlphaInstance>,
     /// The per-view logical->clip + scale_factor uniform (`col0 ++ col1 ++
     /// [scale_factor, 0, 0, 0]`, [`BuiyViewUniform::as_std140_array`]).
     ///
@@ -62,16 +85,20 @@ pub struct BuiyInstanceBuffers {
     /// The flat `[f32; 12]` from [`BuiyViewUniform::as_std140_array`] is regrouped
     /// into the three columns at the `set(...)` boundary in `prepare_buiy_instances`.
     pub view_uniform: UniformBuffer<[Vec4; 3]>,
-    /// Instance count written this frame (the instanced draw range).
+    /// Quad instance count written this frame (the instanced draw range).
     pub quad_count: u32,
+    /// Glyph instance count written this frame (the glyph instanced draw range).
+    pub glyph_count: u32,
 }
 
 impl Default for BuiyInstanceBuffers {
     fn default() -> Self {
         Self {
             quad: RawBufferVec::new(BufferUsages::VERTEX),
+            glyph: RawBufferVec::new(BufferUsages::VERTEX),
             view_uniform: UniformBuffer::default(),
             quad_count: 0,
+            glyph_count: 0,
         }
     }
 }
@@ -107,6 +134,7 @@ pub fn prepare_buiy_instances(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     nodes: Res<ExtractedNodesView>,
+    glyphs: Res<ExtractedGlyphs>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
 ) {
     // Damage gate (architecture.md § 3.1): extract overwrites `ExtractedNodesView`
@@ -117,31 +145,47 @@ pub fn prepare_buiy_instances(
     // and re-draws it as-is — and skip the GPU re-upload (the gate-#14 budget the
     // spec protects). `BuiyInstanceBuffers` is `init_resource`'d in the plugin
     // build, so it always exists here (no one-frame warmup).
-    if !nodes.is_changed() {
-        return;
+    //
+    // The quad and glyph buffers are gated INDEPENDENTLY: a frame that re-tints a
+    // glyph (gate #2 test) changes only `ExtractedGlyphs`, so the quad buffer is
+    // retained and only the glyph buffer re-uploads — and vice versa.
+    if nodes.is_changed() {
+        // Consume R5's ExtractedNodes: pack its per-view records into the flat
+        // quad blob and build the view uniform (logical_size + scale_factor are
+        // R5's). The view uniform rides the quad gate because R5's
+        // `ExtractedNodes` carries the logical_size/scale_factor it is built from.
+        let (instances, uniform) = pack_extracted_nodes(&nodes.0);
+
+        // Repack the quad buffer in place: clear + extend (the Vec backing
+        // grows; the GPU buffer grows only on capacity overflow).
+        buffers.quad.clear();
+        for inst in &instances {
+            buffers.quad.push(*inst);
+        }
+        buffers.quad_count = instances.len() as u32;
+        buffers.quad.write_buffer(&render_device, &render_queue);
+
+        // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
+        // Regroup the flat 12 floats into the three `vec4` columns the WGSL
+        // `BuiyView` reads; `[Vec4; 3]` is a valid std140 payload (16-byte
+        // stride), unlike the bare `[f32; 12]` which would panic encase's
+        // compat assert.
+        buffers.view_uniform.set(as_view_columns(uniform));
+        buffers
+            .view_uniform
+            .write_buffer(&render_device, &render_queue);
     }
 
-    // Consume R5's ExtractedNodes: pack its per-view records into the flat quad
-    // blob and build the view uniform (logical_size + scale_factor are R5's).
-    let (instances, uniform) = pack_extracted_nodes(&nodes.0);
-
-    // Repack the quad buffer in place: clear + extend (the Vec backing
-    // grows; the GPU buffer grows only on capacity overflow).
-    buffers.quad.clear();
-    for inst in &instances {
-        buffers.quad.push(*inst);
+    // Glyph buffer (the coverage-glyph primitive). Gated on its own change
+    // signal so a re-tint-only frame re-uploads glyphs without touching quads.
+    if glyphs.is_changed() {
+        buffers.glyph.clear();
+        for inst in &glyphs.glyphs {
+            buffers.glyph.push(*inst);
+        }
+        buffers.glyph_count = glyphs.glyphs.len() as u32;
+        buffers.glyph.write_buffer(&render_device, &render_queue);
     }
-    buffers.quad_count = instances.len() as u32;
-    buffers.quad.write_buffer(&render_device, &render_queue);
-
-    // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
-    // Regroup the flat 12 floats into the three `vec4` columns the WGSL
-    // `BuiyView` reads; `[Vec4; 3]` is a valid std140 payload (16-byte stride),
-    // unlike the bare `[f32; 12]` which would panic encase's compat assert.
-    buffers.view_uniform.set(as_view_columns(uniform));
-    buffers
-        .view_uniform
-        .write_buffer(&render_device, &render_queue);
 }
 
 /// Regroup the flat std140 view-uniform array ([`BuiyViewUniform::as_std140_array`])

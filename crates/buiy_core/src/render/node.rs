@@ -32,7 +32,8 @@ use bevy::render::{
 };
 
 use super::{
-    compositor::PreparedEffectGroups, pipeline::BuiyPipeline, prepare::BuiyInstanceBuffers,
+    atlas::AtlasGpu, compositor::PreparedEffectGroups, pipeline::BuiyPipeline,
+    prepare::BuiyInstanceBuffers,
 };
 
 #[derive(Default)]
@@ -67,13 +68,14 @@ impl ViewNode for BuiyNode {
             return Ok(());
         };
         // Nothing to draw this frame (empty extract, or buffers not yet
-        // uploaded — `buffer()` is `None` until the first `write_buffer`).
-        if buffers.quad_count == 0 {
+        // uploaded). Glyphs draw even with zero quads (a pure-text frame), so the
+        // skip checks BOTH counts.
+        if buffers.quad_count == 0 && buffers.glyph_count == 0 {
             return Ok(());
         }
-        let (Some(instance_buffer), Some(view_binding)) =
-            (buffers.quad.buffer(), buffers.view_uniform.binding())
-        else {
+        // The view uniform is required for any draw (both pipelines bind it at
+        // `@group(0)`); it is `None` until the first `write_buffer`.
+        let Some(view_binding) = buffers.view_uniform.binding() else {
             return Ok(());
         };
 
@@ -130,20 +132,54 @@ impl ViewNode for BuiyNode {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_render_pipeline(pipeline);
+        // The view uniform `@group(0)` is shared by both the quad and glyph
+        // pipelines, so it is bound once for the whole pass.
         pass.set_bind_group(0, &view_bind_group, &[]);
         pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
-        pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        // v1: draws the whole instance buffer (no effect groups are live).
-        // TODO(R9 prepare-body wiring): once `prepare_effect_groups` populates
-        // `prepared.groups`, this flat draw MUST exclude the instance ranges that
-        // belong to effect-group subtrees — those are rasterized into their own
-        // off-screen targets in step 1 above and composited back in step 2 below.
-        // Drawing them here too would double-paint them (once flat, once
-        // composited). The exclusion mechanism depends on how the prepare body
-        // partitions the instance buffer into per-group ranges (effect-compositor
-        // § 3); it is a no-op while `prepared.groups` is empty.
-        pass.draw(0..4, 0..buffers.quad_count);
+
+        // --- Quad draw (paint order: quad after shadow, before glyph) --------
+        // `buffer()` is `None` until the first `write_buffer`; a zero-count or
+        // not-yet-uploaded quad buffer simply skips the quad draw (glyphs may
+        // still draw below).
+        if buffers.quad_count > 0
+            && let Some(instance_buffer) = buffers.quad.buffer()
+        {
+            pass.set_render_pipeline(pipeline);
+            pass.set_vertex_buffer(1, instance_buffer.slice(..));
+            // v1: draws the whole instance buffer (no effect groups are live).
+            // TODO(R9 prepare-body wiring): once `prepare_effect_groups`
+            // populates `prepared.groups`, this flat draw MUST exclude the
+            // instance ranges that belong to effect-group subtrees — those are
+            // rasterized into their own off-screen targets in step 1 above and
+            // composited back in step 2 below. Drawing them here too would
+            // double-paint them (once flat, once composited). The exclusion
+            // mechanism depends on how the prepare body partitions the instance
+            // buffer into per-group ranges (effect-compositor § 3); it is a no-op
+            // while `prepared.groups` is empty.
+            pass.draw(0..4, 0..buffers.quad_count);
+        }
+
+        // --- Glyph draw (paint order: glyph after quad) ----------------------
+        // The coverage-glyph (alpha-as-color) primitive, drawn AFTER the quad so
+        // text paints over fills (shadow < quad < glyph < path). Requires: the
+        // glyph pipeline compiled, the atlas `@group(1)` bind group built by
+        // `prepare_atlas_textures` (a coverage page exists), and a non-empty
+        // uploaded glyph buffer. Any missing piece skips the glyph draw without
+        // disturbing the quad draw above (e.g. before the pipeline async-compiles
+        // or before the first glyph warms an atlas page).
+        if buffers.glyph_count > 0
+            && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(buiy_pipeline.glyph_id)
+            && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
+            && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
+            && let Some(glyph_buffer) = buffers.glyph.buffer()
+        {
+            pass.set_render_pipeline(glyph_pipeline);
+            // `@group(0)` (view) is already bound for the pass; add the atlas
+            // `@group(1)` (texture + sampler) the coverage shader samples.
+            pass.set_bind_group(1, atlas_bind_group, &[]);
+            pass.set_vertex_buffer(1, glyph_buffer.slice(..));
+            pass.draw(0..4, 0..buffers.glyph_count);
+        }
 
         // Effect-group composite — step 2: composite each group target into its
         // parent target, bottom-up (effect-compositor.md § 3 step 2). In the

@@ -69,7 +69,7 @@ use buiy_core::render::atlas::AtlasPage;
 
 #[test]
 fn page_allocates_a_rect_of_requested_size() {
-    let mut page = AtlasPage::new(1024);
+    let mut page = AtlasPage::new(1024, AtlasFormat::CoverageR8);
     let r: URect = page
         .try_alloc(URect::new(0, 0, 16, 32).size())
         .expect("fits");
@@ -80,7 +80,7 @@ fn page_allocates_a_rect_of_requested_size() {
 
 #[test]
 fn page_alloc_returns_none_when_request_exceeds_page() {
-    let mut page = AtlasPage::new(64);
+    let mut page = AtlasPage::new(64, AtlasFormat::CoverageR8);
     assert!(
         page.try_alloc(bevy::math::UVec2::new(128, 128)).is_none(),
         "a request larger than the page cannot fit"
@@ -90,7 +90,7 @@ fn page_alloc_returns_none_when_request_exceeds_page() {
 #[test]
 fn page_deallocate_frees_space_for_reuse() {
     // Fill the page with one big alloc, free it, re-alloc the same size.
-    let mut page = AtlasPage::new(64);
+    let mut page = AtlasPage::new(64, AtlasFormat::CoverageR8);
     let id = page
         .alloc_id(bevy::math::UVec2::new(64, 64))
         .expect("first fits");
@@ -107,7 +107,7 @@ fn page_deallocate_frees_space_for_reuse() {
 
 #[test]
 fn page_is_empty_reports_residency() {
-    let mut page = AtlasPage::new(64);
+    let mut page = AtlasPage::new(64, AtlasFormat::CoverageR8);
     assert!(page.is_empty());
     let id = page.alloc_id(bevy::math::UVec2::new(8, 8)).unwrap();
     assert!(!page.is_empty());
