@@ -125,9 +125,35 @@ Update `CLAUDE.md` Build & Test and the campaign memory.
 ## Status
 
 - [x] Finding confirmed; campaign chartered (user-approved "Full GPU campaign").
-- [x] BUG #1 + #2 fixed + verified (uncommitted).
-- [ ] Phase 1 — canonical harness (in progress).
-- [ ] Phase 2 — fix + run 42.
-- [ ] Phase 3 — real GPU bugs.
-- [ ] Phase 4 — deferred orchestration.
+- [x] BUG #1 + #2 fixed + verified. Committed `f79635b`.
+- [x] **Phase 1 — canonical harness.** `tests/support/mod.rs::gpu_test_app` + the
+  keystone smoke `tests/render_gpu_harness.rs`. The "Message not initialized"
+  panic was a pure Bevy-stack gap (not a Buiy bug); fixed by adding the correct
+  owning plugins (WindowPlugin, CameraPlugin, ThemePlugin) + `init_asset::<Mesh>()`.
+  Committed `f79635b`.
+- [x] **Phase 2 — triage + fix the suite.** The "42" was inflated by doc-comment
+  mentions; **22 real ignored tests**. Result: **0 real bugs** — 11 broken
+  harnesses fixed (missing `finish()`/`ImagePlugin`, dead `System::name()`
+  membership idiom → count-delta, stale `BUIY_EXTRACT_SYSTEM_COUNT` 2→3), 1
+  pass-already, 10 empty stubs deferred to Phase 4. GPU lane 25 pass / 0 fail;
+  headless gate 656 pass / 0 fail / 26 ignored. Committed `f21bb6d`.
+- [x] **Phase 3 — real GPU bugs: NONE.** Triage found zero. The only real
+  production bugs were #1 + #2 (Phase 1). The production GPU path (pipeline
+  registration, graph topology, extract/prepare wiring, specialization cache,
+  atlas resources) is correct. Phase 3 closes empty.
+- [ ] **Phase 4 — deferred orchestration** (the 10 empty stubs = the 4
+  follow-ups.md render deferrals). Build order by dependency:
+  1. Buffer-upload round-trip (prepare → `BuiyInstanceBuffers` for a real node):
+     `prepare_uploads_persistent_buffers`, `node_draws_persistent_buffers_with_view_uniform`.
+  2. Golden capture/readback harness (render-to-texture + readback + `perceptual_diff`)
+     — the infra ALL pixel-asserting stubs reuse: `overlapping_semitransparent_fills_match_golden`.
+  3. Node actually paints + top-layer composite order: `top_layer_composites_last_over_in_flow`.
+  4. Atlas upload + sampling: `warmed_glyph_uploads_and_samples_with_tint`,
+     `retint_same_glyph_leaves_atlas_byte_identical`, `warmup_makes_first_frame_match_golden`,
+     `gate15_atlas_entries_return_to_baseline_after_idle`.
+  5. Effect-compositor GPU orchestration (extract→prepare effect-group dataflow +
+     off-screen RT composite): `group_opacity_overlap_is_single_layer_at_half`,
+     `rt_pool_returns_to_baseline_after_idle`.
+  Also the two non-test deferrals: subtree-visibility suppression pass; R11 §3.3
+  BoxShadow forced-colors draw-skip. Each lands with its now-real GPU `#[ignore]` test.
 - [ ] Phase 5 — GPU gate lane.
