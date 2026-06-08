@@ -247,7 +247,10 @@ pub fn effective_clip(
 ///
 /// Extraction is one-directional and read-only (pillar 1): it never mutates the
 /// main world, never re-sorts `painters_z`, never re-derives stacking/geometry.
-#[allow(clippy::type_complexity)]
+// A Bevy extract system reads many independently-tracked inputs (the paint-input
+// fan, the damage probe, the despawn stream, the context tree, the theme, the
+// window set); splitting them into a bundle param would obscure, not clarify.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_nodes(
     mut commands: Commands,
     // The author-set + handoff fan: Option<&T> for every independently-inserted
@@ -255,6 +258,13 @@ pub fn extract_buiy_nodes(
     // Node missing that component). Required terms: &ResolvedLayout (a
     // Display::None entity has no ResolvedLayout and is dropped here) and
     // &GlobalTransform (pillar 5).
+    // The FULL node set, UN-gated: when the damage gate below decides this frame
+    // is dirty, the whole set is re-extracted so a single changed entity does not
+    // drop its unchanged siblings (the changed-only replace was the R5 bug —
+    // 2026-06-07-render-extract-retain-damage-design.md). The `Changed`-gating is
+    // a *whether-to-rebuild* probe (`changed`/`removed`/`theme` below), not a
+    // *what-to-include* filter — building the full set is CPU-cheap; the GPU
+    // re-upload is what the gate protects (architecture.md § 3.1).
     nodes: Extract<
         Query<
             (
@@ -278,6 +288,17 @@ pub fn extract_buiy_nodes(
                 // paints the entity's own box and prunes descendants layout-side
                 // (paint-order § 5.2), so it is not a render skip input.
             ),
+            With<Node>,
+        >,
+    >,
+    // Damage probe: did any paint input change this frame? Entity-only, gated by
+    // the architecture.md § 3.1 trigger union. Non-empty ⇒ a paint value or
+    // paint-skip flipped (a `Display::None` transition lands here too, via the
+    // zero-size `Changed<ResolvedLayout>` re-write — layout never *removes*
+    // `ResolvedLayout`).
+    changed: Extract<
+        Query<
+            Entity,
             (
                 With<Node>,
                 Or<(
@@ -290,12 +311,16 @@ pub fn extract_buiy_nodes(
                     Changed<Stacking>,
                     Changed<ClipRect>,
                     Changed<AncestorClip>,
-                    // FAN: extend the Or-set in lockstep with the query tuple
+                    // FAN: extend the Or-set in lockstep with the `nodes` tuple
                     // (architecture § 3.1 trigger union).
                 )>,
             ),
         >,
     >,
+    // Entity despawn — the one damage source the `Changed` probe cannot see (a
+    // despawn drops every component, emitting no `Changed`). A `Display::None`
+    // hide is NOT here (it keeps `ResolvedLayout`); it rides `changed` above.
+    mut removed: Extract<RemovedComponents<ResolvedLayout>>,
     // EVERY forming entity's StackingContext, keyed by its entity. The root
     // context(s) are the ones not listed as a painter in any other context's
     // painters_z; nested-context roots appear as a single atomic entry in their
@@ -315,10 +340,29 @@ pub fn extract_buiy_nodes(
     // never early-returns), so a vanished window clears to empty. Returning here
     // would instead leave the prior frame's nodes resident once the carrier is
     // `init_resource`'d (Task 7), and render would keep painting stale nodes.
+    // Drain the despawn stream FIRST, before any early-return, so the
+    // `RemovedComponents` cursor advances every frame and events never accumulate
+    // (incl. the vanished-window path below). A despawn drops `ResolvedLayout` —
+    // the one damage source the `Changed` probe cannot see.
+    let despawned = removed.read().count() > 0;
+
     let Ok(_primary_window) = primary.single() else {
         commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
         return;
     };
+
+    // Damage gate (architecture.md § 3.1 / 2026-06-07-render-extract-retain-damage
+    // -design.md). Rebuild only when something this view paints actually changed:
+    // a `Changed` paint input (incl. a paint-skip flip), an entity despawn, or a
+    // theme/forced-colors swap (a global token re-resolve that bypasses per-entity
+    // change detection — color-and-forced-colors.md § 3). On a steady-state frame,
+    // return WITHOUT touching the resource — the prior `ExtractedNodesView` stays
+    // resident and `is_changed()` is false in prepare, which retains the persistent
+    // buffers (the node re-binds + re-draws them). This is the O(0) steady-state
+    // the spec's gate-#14 budget requires.
+    if changed.is_empty() && !despawned && !theme.is_changed() {
+        return;
+    }
 
     // Build a per-entity index so the painters_z walk can look each painter up.
     // (A HashMap keyed by Entity; the partial-re-extract cache keyed by Entity

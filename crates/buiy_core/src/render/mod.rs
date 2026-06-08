@@ -193,6 +193,14 @@ impl Plugin for BuiyRenderPlugin {
         render_app
             .init_resource::<ExtractedDraws>()
             .init_resource::<extract::ExtractedNodesView>()
+            // The persistent per-frame instance buffers (R6). Device-free to
+            // construct (`RawBufferVec`/`UniformBuffer` allocate their GPU buffers
+            // lazily on first `write_buffer`), so it is initialized here in `build`
+            // rather than lazily in `prepare`. Initializing it up front lets
+            // `prepare_buiy_instances` skip its re-upload on an unchanged frame and
+            // RETAIN the prior buffer (architecture.md § 3.1 damage retention),
+            // instead of the old one-frame warmup that returned without uploading.
+            .init_resource::<prepare::BuiyInstanceBuffers>()
             // Phase-0 draw path (feeds node.rs today); retired by R6/R8 (the
             // node/instance rework) when node.rs reads the per-view
             // ExtractedNodes instead.

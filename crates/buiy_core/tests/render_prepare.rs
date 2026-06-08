@@ -9,6 +9,8 @@ use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_core::render::prepare::{BuiyInstanceBuffers, pack_extracted_nodes};
 use buiy_core::render::view_uniform::BuiyViewUniform;
 
+mod support;
+
 #[test]
 fn instance_buffers_default_is_empty_no_device() {
     // The per-view persistent-buffer component R6 owns is plain data: it
@@ -216,9 +218,240 @@ fn prepare_system_is_in_render_prepare_set() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); buffer upload round-trip"]
 fn prepare_uploads_persistent_buffers() {
-    // Full GPU round-trip: build a RenderApp, insert R5's ExtractedNodes with a
-    // few nodes onto a view entity, run the Prepare set, and assert the view's
-    // BuiyInstanceBuffers holds a non-empty quad buffer whose instance count
-    // equals nodes.len(). (Provisioned by the Task-N e2e/visual harness on a
-    // GPU runner; left as the documented GPU coverage point here.)
+    use buiy_core::Node;
+    use buiy_core::layout::Style;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use std::borrow::Cow;
+
+    // The real spine round-trip on a live adapter: spawn one opaque painted node,
+    // drive the full layout → stacking → transform-bridge → extract → prepare
+    // path, and read the uploaded persistent buffer back from the render world.
+    // `color.surface.primary` resolves to WHITE in the default light theme; a
+    // transparent/None fill would be skipped by `pack_view` and pack zero quads.
+    let mut app = support::gpu_test_app_with_layout();
+    app.world_mut().spawn((
+        Node,
+        Style::default().width_px(50.0).height_px(50.0),
+        Background {
+            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        },
+    ));
+
+    // Drive several frames. The persistent buffer must hold the opaque node's
+    // instance on a steady-state frame, not only the frame the node mutated:
+    // extract retains the prior set on no-change frames and prepare retains the
+    // uploaded buffer (architecture.md § 3.1 — "the persistent buffers from the
+    // prior frame are re-bound and re-drawn").
+    support::finish_and_run(&mut app, 3);
+
+    let buffers = support::render_world_resource::<BuiyInstanceBuffers>(&app)
+        .expect("BuiyInstanceBuffers present in the render world after prepare");
+    assert_eq!(
+        buffers.quad_count, 1,
+        "one opaque node packs exactly one quad instance and survives steady-state \
+         frames (the no-op regression this guards is quad_count == 0)"
+    );
+    assert!(
+        buffers.quad.buffer().is_some(),
+        "the quad VBO was uploaded via write_buffer"
+    );
+}
+
+// ----- Damage-retention regressions (2026-06-07-render-extract-retain-damage-design.md) -----
+// These pin each branch of the extract damage gate + prepare's retain. They are
+// the GPU coverage for the R5 changed-only-replace bug (a static UI extracted once
+// then vanished); the bug fails them with quad_count flickering to 0.
+
+/// One opaque static node must keep `quad_count == 1` on EVERY steady-state frame,
+/// not just the frame it spawned: extract retains the prior set on no-change frames
+/// and prepare skips the re-upload (architecture.md § 3.1), so the persistent buffer
+/// is never cleared. The pre-fix bug flickered to 0 from frame 1.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); damage-retention regression"]
+fn static_node_survives_steady_state_frames() {
+    use buiy_core::Node;
+    use buiy_core::layout::Style;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use std::borrow::Cow;
+
+    let mut app = support::gpu_test_app_with_layout();
+    app.world_mut().spawn((
+        Node,
+        Style::default().width_px(30.0).height_px(30.0),
+        Background {
+            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        },
+    ));
+    app.finish();
+    app.cleanup();
+    for frame in 0..5 {
+        app.update();
+        let qc = support::render_world_resource::<BuiyInstanceBuffers>(&app)
+            .map(|b| b.quad_count)
+            .unwrap_or(0);
+        assert_eq!(
+            qc, 1,
+            "the static node must remain packed on frame {frame} (no flicker to 0)"
+        );
+    }
+}
+
+/// When ONE of several nodes changes, the FULL set is re-extracted — an unchanged
+/// sibling must not be dropped. This is the core R5 bug: the changed-only replace
+/// emitted just the mutated node, dropping the others. The fix re-extracts the
+/// whole set on any change (the un-gated `nodes` query).
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); damage-retention regression"]
+fn one_node_change_keeps_unchanged_siblings() {
+    use buiy_core::Node;
+    use buiy_core::layout::Style;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use std::borrow::Cow;
+
+    let opaque = |t: &'static str| Background {
+        color: ColorToken::Token(Cow::Borrowed(t)),
+    };
+    let mut app = support::gpu_test_app_with_layout();
+    let a = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            opaque("color.surface.primary"),
+        ))
+        .id();
+    for _ in 0..2 {
+        app.world_mut().spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            opaque("color.surface.primary"),
+        ));
+    }
+    support::finish_and_run(&mut app, 2);
+    assert_eq!(
+        support::render_world_resource::<BuiyInstanceBuffers>(&app)
+            .map(|b| b.quad_count)
+            .unwrap_or(0),
+        3,
+        "all three nodes pack before the mutation"
+    );
+
+    // Touch ONE node's Background (→ Changed<Background> → full re-extract).
+    app.world_mut()
+        .get_mut::<Background>(a)
+        .expect("node a has Background")
+        .set_changed();
+    app.update();
+    app.update();
+    assert_eq!(
+        support::render_world_resource::<BuiyInstanceBuffers>(&app)
+            .map(|b| b.quad_count)
+            .unwrap_or(0),
+        3,
+        "mutating one node must NOT drop its two unchanged siblings (the R5 bug)"
+    );
+}
+
+/// Despawning the painted node must drop it from the buffer — the despawn damage
+/// path (`RemovedComponents<ResolvedLayout>`), the one signal the `Changed` probe
+/// cannot see.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); damage-retention regression"]
+fn despawn_drops_the_instance() {
+    use buiy_core::Node;
+    use buiy_core::layout::Style;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use std::borrow::Cow;
+
+    let mut app = support::gpu_test_app_with_layout();
+    let node = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(25.0).height_px(25.0),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+            },
+        ))
+        .id();
+    support::finish_and_run(&mut app, 2);
+    assert_eq!(
+        support::render_world_resource::<BuiyInstanceBuffers>(&app)
+            .map(|b| b.quad_count)
+            .unwrap_or(0),
+        1,
+        "the node packs before despawn"
+    );
+
+    app.world_mut().despawn(node);
+    app.update();
+    app.update();
+    assert_eq!(
+        support::render_world_resource::<BuiyInstanceBuffers>(&app)
+            .map(|b| b.quad_count)
+            .unwrap_or(99),
+        0,
+        "despawn must re-extract (RemovedComponents) and clear the buffer"
+    );
+}
+
+/// A theme swap re-resolves every token-bearing fill globally and must bypass the
+/// per-entity `Changed` gate (color-and-forced-colors.md § 3): the extracted color
+/// must update even though no paint component on the node changed. Without
+/// `theme.is_changed()` in the damage gate the new retain would leave stale colors.
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); damage-retention regression"]
+fn theme_swap_reresolves_extracted_color() {
+    use bevy::prelude::Color;
+    use buiy_core::Node;
+    use buiy_core::layout::Style;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use buiy_core::render::extract::ExtractedNodesView;
+    use buiy_core::theme::Theme;
+    use std::borrow::Cow;
+
+    let mut app = support::gpu_test_app_with_layout();
+    app.world_mut().spawn((
+        Node,
+        Style::default().width_px(20.0).height_px(20.0),
+        Background {
+            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        },
+    ));
+    support::finish_and_run(&mut app, 2);
+    let color_before = support::render_world_resource::<ExtractedNodesView>(&app)
+        .and_then(|v| {
+            v.0.nodes
+                .iter()
+                .find(|n| n.color != Color::NONE)
+                .map(|n| n.color)
+        })
+        .expect("an opaque node was extracted");
+
+    // Re-point the token to a new color in the live theme (a theme swap edge).
+    app.world_mut()
+        .resource_mut::<Theme>()
+        .colors
+        .insert("color.surface.primary".into(), Color::srgb(0.1, 0.2, 0.3));
+    app.update();
+    app.update();
+    let color_after = support::render_world_resource::<ExtractedNodesView>(&app)
+        .and_then(|v| {
+            v.0.nodes
+                .iter()
+                .find(|n| n.color != Color::NONE)
+                .map(|n| n.color)
+        })
+        .expect("the node is still extracted after the theme swap");
+
+    assert_ne!(
+        color_before, color_after,
+        "a theme swap must re-resolve the token (theme.is_changed() bypasses the \
+         per-entity Changed gate)"
+    );
 }

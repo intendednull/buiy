@@ -104,27 +104,26 @@ pub fn pack_extracted_nodes(nodes: &ExtractedNodes) -> (Vec<[f32; 13]>, [f32; 12
 /// maintains `BuiyInstanceBuffers` as the matching resource shim (see module
 /// docs); R6/R8 flips both to per-view-entity components together.
 pub fn prepare_buiy_instances(
-    mut commands: Commands,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     nodes: Res<ExtractedNodesView>,
-    buffers: Option<ResMut<BuiyInstanceBuffers>>,
+    mut buffers: ResMut<BuiyInstanceBuffers>,
 ) {
+    // Damage gate (architecture.md § 3.1): extract overwrites `ExtractedNodesView`
+    // ONLY on a frame where a paint input actually changed (a despawn, a theme
+    // swap, or a `Changed` paint component); on a steady-state frame it leaves the
+    // resource resident, so `is_changed()` is the exact per-frame damage signal.
+    // When nothing changed, RETAIN the persistent buffer — `BuiyNode::run` re-binds
+    // and re-draws it as-is — and skip the GPU re-upload (the gate-#14 budget the
+    // spec protects). `BuiyInstanceBuffers` is `init_resource`'d in the plugin
+    // build, so it always exists here (no one-frame warmup).
+    if !nodes.is_changed() {
+        return;
+    }
+
     // Consume R5's ExtractedNodes: pack its per-view records into the flat quad
     // blob and build the view uniform (logical_size + scale_factor are R5's).
     let (instances, uniform) = pack_extracted_nodes(&nodes.0);
-
-    // Get-or-insert the persistent buffers resource shim.
-    let mut buffers = match buffers {
-        Some(b) => b,
-        None => {
-            commands.init_resource::<BuiyInstanceBuffers>();
-            // Skip this frame's upload; next frame the resource exists.
-            // (Acceptable one-frame warmup; documented, not a hack —
-            // grow-in-place buffers are created lazily on first sight.)
-            return;
-        }
-    };
 
     // Repack the quad buffer in place: clear + extend (the Vec backing
     // grows; the GPU buffer grows only on capacity overflow).
