@@ -28,9 +28,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{BufferUsages, RawBufferVec, UniformBuffer};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 
+use std::ops::Range;
+
 use crate::render::atlas::GlyphAlphaInstance;
-use crate::render::buckets::pack_view;
-use crate::render::extract::{ExtractedNodes, ExtractedNodesView};
+use crate::render::buckets::{pack_view, pack_view_partitioned};
+use crate::render::extract::{ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView};
 use crate::render::view_uniform::BuiyViewUniform;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
@@ -89,6 +91,18 @@ pub struct BuiyInstanceBuffers {
     pub quad_count: u32,
     /// Glyph instance count written this frame (the glyph instanced draw range).
     pub glyph_count: u32,
+    /// Per-effect-group contiguous quad-instance ranges (`group_ranges[g]` =
+    /// group `g`'s members), recomputed each quad-buffer upload from
+    /// `ExtractedNode.group` (effect-compositor.md § 1.1 / decided fork 3). The
+    /// node draws each range into its off-screen target in step 1 — NOT in the
+    /// flat window draw. Empty (and so a no-op partition) when no group is live.
+    pub group_ranges: Vec<Range<u32>>,
+    /// The complement of `group_ranges`: maximal runs of non-group quad
+    /// instances. The flat window draw covers exactly these so a group member is
+    /// never painted twice (once flat, once composited — the double-paint TODO).
+    /// When no group is live this is the single full `0..quad_count` range, so
+    /// the flat path is byte-for-byte the pre-compositor draw.
+    pub flat_ranges: Vec<Range<u32>>,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -99,6 +113,8 @@ impl Default for BuiyInstanceBuffers {
             view_uniform: UniformBuffer::default(),
             quad_count: 0,
             glyph_count: 0,
+            group_ranges: Vec::new(),
+            flat_ranges: Vec::new(),
         }
     }
 }
@@ -134,6 +150,7 @@ pub fn prepare_buiy_instances(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     nodes: Res<ExtractedNodesView>,
+    groups: Res<ExtractedEffectGroups>,
     glyphs: Res<ExtractedGlyphs>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
 ) {
@@ -149,21 +166,32 @@ pub fn prepare_buiy_instances(
     // The quad and glyph buffers are gated INDEPENDENTLY: a frame that re-tints a
     // glyph (gate #2 test) changes only `ExtractedGlyphs`, so the quad buffer is
     // retained and only the glyph buffer re-uploads — and vice versa.
-    if nodes.is_changed() {
+    if nodes.is_changed() || groups.is_changed() {
         // Consume R5's ExtractedNodes: pack its per-view records into the flat
-        // quad blob and build the view uniform (logical_size + scale_factor are
-        // R5's). The view uniform rides the quad gate because R5's
-        // `ExtractedNodes` carries the logical_size/scale_factor it is built from.
-        let (instances, uniform) = pack_extracted_nodes(&nodes.0);
+        // quad blob, the per-group instance-range partition, and build the view
+        // uniform (logical_size + scale_factor are R5's). The view uniform rides
+        // the quad gate because R5's `ExtractedNodes` carries the logical_size/
+        // scale_factor it is built from. The partition keys off `ExtractedNode.group`
+        // (effect-compositor.md § 1.1): each group's contiguous range renders into
+        // its own off-screen target (the node's step 1), the flat ranges into the
+        // window — so a group member is never double-painted.
+        let partition = pack_view_partitioned(&nodes.0.nodes, groups.0.len());
+        let uniform =
+            BuiyViewUniform::for_view(nodes.0.logical_size, nodes.0.scale_factor).as_std140_array();
 
         // Repack the quad buffer in place: clear + extend (the Vec backing
         // grows; the GPU buffer grows only on capacity overflow).
         buffers.quad.clear();
-        for inst in &instances {
+        for inst in &partition.instances {
             buffers.quad.push(*inst);
         }
-        buffers.quad_count = instances.len() as u32;
+        buffers.quad_count = partition.instances.len() as u32;
         buffers.quad.write_buffer(&render_device, &render_queue);
+        // When NO group is live, the whole buffer is the flat draw — `pack_view_
+        // partitioned` returns it as the single non-group run, so the node's flat
+        // path stays byte-for-byte the pre-compositor draw.
+        buffers.group_ranges = partition.group_ranges;
+        buffers.flat_ranges = partition.flat_ranges;
 
         // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
         // Regroup the flat 12 floats into the three `vec4` columns the WGSL

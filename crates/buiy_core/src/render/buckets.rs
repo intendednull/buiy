@@ -171,3 +171,99 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
     }
     buckets
 }
+
+/// The instance-range partition of a packed view (effect-compositor.md § 1.1 /
+/// decided fork 3): the flat quad blob plus, per effect group, the contiguous
+/// `[start, end)` instance range its members occupy, and the complement
+/// (non-group) ranges the flat window draw covers. Drawn off `ExtractedNode.group`:
+/// the packer skips transparent nodes (no instance), so the indices here are
+/// INSTANCE indices, not node indices — the only correct partition key for the
+/// draw. `group_ranges[g]` is the instance range for group index `g`; a group
+/// with no opaque members is `start == end` (empty, never drawn). `flat_ranges`
+/// is every maximal run of consecutive non-group instances.
+///
+/// Contiguity holds by construction: extract emits a group's subtree as a
+/// contiguous paint-order run (it descends a node's children before its
+/// siblings), so a group's instances form one run. The packer preserves node
+/// order within the single `(Quad, 0)` batch, so the instance run stays
+/// contiguous. A degenerate interleaving (a group's run split by a non-member)
+/// would surface as a non-`start..end`-contiguous range and is asserted against
+/// in the bucket tests.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PackedPartition {
+    /// The full flat quad blob (every instance, in paint order) — identical to
+    /// `pack_view`'s single `(Quad, 0)` batch flattened.
+    pub instances: Vec<[f32; 13]>,
+    /// `group_ranges[g]` = the `[start, end)` instance range of group `g`'s
+    /// members (empty range if the group has no opaque member).
+    pub group_ranges: Vec<std::ops::Range<u32>>,
+    /// Maximal runs of consecutive NON-group instances — the flat window draw.
+    pub flat_ranges: Vec<std::ops::Range<u32>>,
+}
+
+/// Pack a view's nodes into the flat quad blob AND its per-group instance-range
+/// partition ([`PackedPartition`]). `group_count` is the length of the per-view
+/// effect-group list (so a group with zero opaque members still gets an empty
+/// range slot at its index). The flat draw uses `flat_ranges`; each group pass
+/// uses `group_ranges[g]`. See [`PackedPartition`] for the contiguity contract.
+pub fn pack_view_partitioned(nodes: &[ExtractedNode], group_count: usize) -> PackedPartition {
+    let mut instances: Vec<[f32; 13]> = Vec::with_capacity(nodes.len());
+    let mut group_ranges: Vec<std::ops::Range<u32>> = vec![0..0; group_count];
+    let mut flat_ranges: Vec<std::ops::Range<u32>> = Vec::new();
+    // Tracks the group of the previous instance to coalesce contiguous runs.
+    let mut run_group: Option<Option<usize>> = None;
+    for node in nodes {
+        if node.color == Color::NONE {
+            continue;
+        }
+        let idx = instances.len() as u32;
+        instances.push(packed_to_raw(&pack_extracted(node)));
+        let g = node.group.filter(|&g| g < group_count);
+        // Extend or start the group/flat run this instance belongs to.
+        match g {
+            Some(gi) => {
+                let r = &mut group_ranges[gi];
+                if r.start == r.end {
+                    *r = idx..idx + 1; // first member of this group
+                } else {
+                    // CONTIGUITY INVARIANT (the off-screen composite's load-bearing
+                    // assumption): a group's members must be a contiguous run in
+                    // paint order, so the group draws as ONE [start,end) slice into
+                    // its target and the flat draw is the exact complement. This
+                    // holds when the group is ATOMIC — CSS guarantees it because an
+                    // `opacity < 1` element forms a stacking context, so nothing
+                    // non-descendant can paint between its descendants. Buiy's layout
+                    // does NOT yet form that SC (the deferred Phase-9 opacity/filter/
+                    // blend SC trigger — follow-ups.md), so a group member carrying
+                    // its OWN z-index SC at a different paint tier than a non-member
+                    // sibling could interleave, breaking contiguity. A single-range
+                    // partition cannot express that (supporting it would bake in
+                    // NON-atomic semantics, which is wrong); the real fix is the
+                    // layout SC trigger. Catch the violation loudly rather than
+                    // silently double-painting the spanned non-member.
+                    debug_assert_eq!(
+                        r.end, idx,
+                        "effect group {gi} is non-contiguous in paint order (gap \
+                         before instance {idx}): a group member's z-index stacking \
+                         context interleaved a non-member. Blocked on the layout \
+                         opacity stacking-context trigger (follow-ups.md)."
+                    );
+                    r.end = idx + 1; // contiguous extension
+                }
+            }
+            None => {
+                if run_group == Some(None) {
+                    flat_ranges.last_mut().expect("open flat run").end = idx + 1;
+                } else {
+                    flat_ranges.push(idx..idx + 1);
+                }
+            }
+        }
+        run_group = Some(g);
+    }
+    PackedPartition {
+        instances,
+        group_ranges,
+        flat_ranges,
+    }
+}

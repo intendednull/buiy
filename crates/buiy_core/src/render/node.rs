@@ -26,13 +26,20 @@ use bevy::render::{
     render_graph::{
         NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
     },
-    render_resource::{BindGroupEntries, PipelineCache, RenderPassDescriptor},
+    render_resource::{
+        BindGroupEntries, BufferInitDescriptor, BufferUsages, LoadOp, Operations, PipelineCache,
+        RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
+    },
     renderer::RenderContext,
+    texture::CachedTexture,
     view::ViewTarget,
 };
 
 use super::{
-    atlas::AtlasGpu, compositor::PreparedEffectGroups, pipeline::BuiyPipeline,
+    atlas::AtlasGpu,
+    composite::CompositePipeline,
+    compositor::{PreparedEffectGroups, PreparedEffectTargets},
+    pipeline::BuiyPipeline,
     prepare::BuiyInstanceBuffers,
 };
 
@@ -45,13 +52,17 @@ impl ViewNode for BuiyNode {
     // component, or one with an empty `groups` vec) runs the existing flat pass
     // byte-for-byte unchanged. The prepare pass attaches it on views that have
     // live `EffectGroup`s (architecture § 4 / effect-compositor.md § 1.1).
-    type ViewQuery = (&'static ViewTarget, Option<&'static PreparedEffectGroups>);
+    type ViewQuery = (
+        &'static ViewTarget,
+        Option<&'static PreparedEffectGroups>,
+        Option<&'static PreparedEffectTargets>,
+    );
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (view_target, prepared): QueryItem<'w, '_, Self::ViewQuery>,
+        (view_target, prepared, prepared_targets): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
@@ -79,40 +90,127 @@ impl ViewNode for BuiyNode {
             return Ok(());
         };
 
-        // Effect-group composite — step 1: group-subtree passes, innermost-first
-        // (effect-compositor.md § 3 step 1). When the prepared per-view store
-        // (§ 1.1) carries live groups, EACH group's subtree rasterizes into its
-        // own off-screen `Rgba16Float` target BEFORE the in-flow window draw
-        // below, in the precomputed post-order (children before parents, so an
-        // ancestor samples a child's *composited* result, not its raw subtree).
-        //
-        // Target RESIDENCY (§ 3): every group target is acquired up-front and
-        // held for the whole run — a child target filled here is sampled by its
-        // parent at composite (step 2 / the tail below), so it must NOT be
-        // recycled mid-run. The `CachedTexture`s ride the prepared per-view
-        // store: `TextureCache::get` needs `&mut TextureCache`, which a render
-        // node cannot obtain from `&World`, so acquisition lives in the prepare
-        // pass (`prepare_effect_groups`, `RenderSystems::Prepare`) exactly as
-        // Bevy's own `prepare_core_2d_depth_textures` does — the spec permits
-        // "in the prepare pass OR at the very start of `run`" (§ 3), and the
-        // prepare side is the only one with the mutable cache handle.
-        //
-        // The per-group typed-primitive draw consumes the group's `painters_z`
-        // instance range and a `Rgba16Float`-targeted pipeline specialization
-        // (effect-compositor.md § 2.2 / architecture § 1.4) — neither lands in
-        // this phase: `PreparedEffectGroup` carries `bounds`/`extent`/`opacity`/
-        // `reason`/`parent`/`index`, and the prepare body that fills the store +
-        // the per-format composite pipeline are the deferred upstream seams
-        // (Task 9 body / architecture § 1.4). So `prepared.groups` is empty in
-        // v1 and this loop is inert; it is the structural seam the draws slot
-        // into, mirroring `prepare_effect_groups`'s documented skeleton body.
-        if let Some(prepared) = prepared {
+        // Effect-group composite — step 1: each group's DIRECT members rasterize
+        // into the group's own off-screen `Rgba16Float` target (effect-compositor.md
+        // § 3 step 1). A nested group's members tag the nested group, so a parent's
+        // target receives only its OWN direct members here; the nested child's
+        // composited result is blended in at step 2 (post-order, below). Target
+        // RESIDENCY (§ 3): the `CachedTexture`s were acquired up-front in
+        // `prepare_effect_groups` (the only side with `&mut TextureCache`) and held
+        // on `PreparedEffectTargets`, so no child target is recycled before its
+        // parent samples it. Both carriers ride the SAME view entity (decided fork
+        // 2), so this fires iff prepare attached live groups — never a false-green.
+        if let (Some(prepared), Some(targets)) = (prepared, prepared_targets)
+            && let Some(quad_id) = prepared.quad_pipeline
+            && let Some(group_pipeline) = pipeline_cache.get_render_pipeline(quad_id)
+            && let Some(quad_buffer) = buffers.quad.buffer()
+        {
             for group in &prepared.groups {
-                // clear `targets[group.index]` transparent, then run the
-                // typed-primitive pass over `group`'s `painters_z` slice into it
-                // (effect-compositor.md § 3 step 1). Nested groups appear as a
-                // single composited sample — handled by their earlier iteration.
-                let _ = group;
+                let Some(target) = targets.targets.get(group.index).and_then(|t| t.as_ref()) else {
+                    continue; // degraded group (no target) — drawn flat instead.
+                };
+                let placement = &targets.placements[group.index];
+                let range = placement.instance_range.clone();
+                if range.start == range.end {
+                    continue; // no opaque member instances.
+                }
+                // Per-group view uniform: logical px → THIS target's bucketed
+                // texel grid, anchored at the painted-bounds min (prepare built
+                // the columns). A transient UBO + bind group, valid for this pass.
+                let group_view_buf =
+                    render_context
+                        .render_device()
+                        .create_buffer_with_data(&BufferInitDescriptor {
+                            label: Some("buiy_group_view_uniform"),
+                            contents: bytemuck::cast_slice(&placement.target_view_columns),
+                            usage: BufferUsages::UNIFORM,
+                        });
+                let group_view_bg = render_context.render_device().create_bind_group(
+                    "buiy_group_view_bind_group",
+                    &buiy_pipeline.view_layout,
+                    &BindGroupEntries::single(group_view_buf.as_entire_binding()),
+                );
+                let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                    label: Some("buiy_effect_group_pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &target.default_view,
+                        // R8b clip + per-target index need bevy 0.18's
+                        // `depth_slice`/`resolve_target` defaulted.
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            // Clear transparent so an `opacity < 1` group's
+                            // empty texels contribute nothing at composite.
+                            load: LoadOp::Clear(LinearRgba::NONE.into()),
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_render_pipeline(group_pipeline);
+                pass.set_bind_group(0, &group_view_bg, &[]);
+                pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, quad_buffer.slice(..));
+                pass.draw(0..4, range);
+            }
+        }
+
+        // Effect-group composite — step 2a (NESTED groups, before the window
+        // pass): composite each non-root group's target into its PARENT group's
+        // target, in post-order (children before parents, so a parent's target
+        // holds every nested child's composited result before it composites into
+        // the window in step 2b). Root groups (`parent == None`) composite into
+        // the window inside the `buiy_pass` below. A separate pass per nested
+        // composite because each targets a different attachment (the parent's
+        // `Rgba16Float` target). The single-group test has no nested groups, so
+        // this loop is a no-op there; it is the seam nesting slots into.
+        if let (Some(prepared), Some(targets)) = (prepared, prepared_targets) {
+            let composite = world.resource::<CompositePipeline>();
+            for &gi in &prepared.composite_order {
+                let group = &prepared.groups[gi];
+                let Some(parent_idx) = group.parent else {
+                    continue; // root group → composited into the window below.
+                };
+                let (Some(src), Some(parent_tex)) = (
+                    targets.targets.get(gi).and_then(|t| t.as_ref()),
+                    targets.targets.get(parent_idx).and_then(|t| t.as_ref()),
+                ) else {
+                    continue; // a degraded group on either end: skip (no target).
+                };
+                let placement = &targets.placements[gi];
+                let Some(comp_id) = placement.composite_pipeline else {
+                    continue;
+                };
+                let Some(comp_pipeline) = pipeline_cache.get_render_pipeline(comp_id) else {
+                    continue;
+                };
+                // Build the composite bind groups BEFORE the pass (they need the
+                // device, which the open pass borrows); then composite into the
+                // PARENT group's target (LoadOp::Load preserves its step-1 content).
+                let (uniform_bg, source_bg) =
+                    composite_bindings(render_context, composite, src, placement);
+                let mut cpass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                    label: Some("buiy_effect_composite_nested_pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &parent_tex.default_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                cpass.set_render_pipeline(comp_pipeline);
+                cpass.set_bind_group(0, &uniform_bg, &[]);
+                cpass.set_bind_group(1, &source_bg, &[]);
+                cpass.set_vertex_buffer(0, composite.vertex_buffer.slice(..));
+                cpass.draw(0..4, 0..1);
             }
         }
 
@@ -146,17 +244,20 @@ impl ViewNode for BuiyNode {
         {
             pass.set_render_pipeline(pipeline);
             pass.set_vertex_buffer(1, instance_buffer.slice(..));
-            // v1: draws the whole instance buffer (no effect groups are live).
-            // TODO(R9 prepare-body wiring): once `prepare_effect_groups`
-            // populates `prepared.groups`, this flat draw MUST exclude the
-            // instance ranges that belong to effect-group subtrees — those are
-            // rasterized into their own off-screen targets in step 1 above and
-            // composited back in step 2 below. Drawing them here too would
-            // double-paint them (once flat, once composited). The exclusion
-            // mechanism depends on how the prepare body partitions the instance
-            // buffer into per-group ranges (effect-compositor § 3); it is a no-op
-            // while `prepared.groups` is empty.
-            pass.draw(0..4, 0..buffers.quad_count);
+            // Effect-group double-paint exclusion (effect-compositor § 3 / decided
+            // fork 3): draw ONLY the non-group instance ranges. A group member is
+            // rasterized into its own off-screen target (step 1 above) and
+            // composited back into the window (step 2 below), so drawing it flat
+            // here too would double-paint it (over-bright overlap). `flat_ranges`
+            // is the complement of `group_ranges`: when NO group is live it is the
+            // single full `0..quad_count` run (so the flat path is byte-for-byte the
+            // pre-compositor draw); when EVERY instance is a group member it is
+            // empty, and the flat draw is correctly a no-op (the composite paints
+            // the content). It is never wrong to iterate it — an empty `flat_ranges`
+            // means "nothing to draw flat", NOT "draw everything".
+            for r in &buffers.flat_ranges {
+                pass.draw(0..4, r.clone());
+            }
         }
 
         // --- Glyph draw (paint order: glyph after quad) ----------------------
@@ -167,6 +268,16 @@ impl ViewNode for BuiyNode {
         // uploaded glyph buffer. Any missing piece skips the glyph draw without
         // disturbing the quad draw above (e.g. before the pipeline async-compiles
         // or before the first glyph warms an atlas page).
+        //
+        // TODO(text-seam): glyphs draw into the FLAT window pass with NO group
+        // mechanism. Correct only while the text seam is unconnected
+        // (`glyph_count == 0` in v1). When text lands, a glyph inside an
+        // `EffectGroup` subtree would render at full opacity straight to the
+        // window — bypassing the group's off-screen target + the opacity composite
+        // (text in an `Opacity(0.5)` card would not dim). The glyph buffer must
+        // then be partitioned (flat/group ranges, like the quad path) and the
+        // step-1 group pass must draw glyph instances into the group target via a
+        // `Glyph@Rgba16Float` specialization.
         if buffers.glyph_count > 0
             && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(buiy_pipeline.glyph_id)
             && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
@@ -181,35 +292,57 @@ impl ViewNode for BuiyNode {
             pass.draw(0..4, 0..buffers.glyph_count);
         }
 
-        // Effect-group composite — step 2: composite each group target into its
-        // parent target, bottom-up (effect-compositor.md § 3 step 2). In the
-        // same precomputed post-order, each filled group target draws as one
-        // textured quad into its PARENT target — the enclosing group's target
-        // for a nested group (`group.parent == Some(i)`), or the window
-        // `ViewTarget::main_texture_view()` for a root group (`group.parent ==
-        // None`), which is why this composite-into-window runs AFTER the in-flow
-        // flat draw above (the root group paints over the in-flow content). The
-        // composite applies `EffectReason`: v1 multiplies the sampled alpha by
-        // the prepared `group.opacity` and blends `SrcOver` in LINEAR space (the
-        // group target is pinned `Rgba16Float`, § 2.2) — the `composite_src_over`
-        // arithmetic run on the GPU, so overlapping children inside an
-        // `opacity < 1` group composite once as a unit and do not double-darken
-        // (the correct semantics, § 4 / § 5.1; the rejected per-child
-        // approximation is only the under-budget degradation fallback, § 2.3).
-        // `ISOLATION` alone changes nothing about this composite math (§ 4) — its
-        // effect is structural, scoping descendants' blending within the target.
-        //
-        // Inert in v1 for the same reason as step 1: `prepared.groups` is empty
-        // until the prepare body + composite pipeline land (Task 9 / architecture
-        // § 1.4). The targets stay resident through here; `update_texture_cache_system`
-        // (render `Cleanup`, under `DefaultPlugins`) un-`taken`s them next frame
-        // (§ 2.2). Buiy adds NO copy of that system.
-        if let Some(prepared) = prepared {
-            for group in &prepared.groups {
-                // composite `targets[group.index]` into its parent target
-                // (`group.parent` → enclosing group, or the window ViewTarget at
-                // the root), applying `group.opacity` × `SrcOver` (§ 3 step 2).
-                let _ = group;
+        // End the flat window pass before the root-group composites: a composite
+        // is a SEPARATE pass into the same window attachment (LoadOp::Load), so it
+        // must not overlap the borrow of `pass`.
+        drop(pass);
+
+        // Effect-group composite — step 2b (ROOT groups → window): composite each
+        // root group's target into the window, in post-order, AFTER the flat draw
+        // (the group paints over the in-flow content). The composite samples the
+        // group target (`Rgba16Float`, straight-alpha linear) and blends SrcOver
+        // with `sampled.a * opacity` in the WINDOW's space (the `Rgba8UnormSrgb`
+        // attachment re-encodes linear→sRGB8 on write) — the GPU form of
+        // `composite_src_over` (compositor.rs). A nested child's result is already
+        // in the parent target (step 2a), so overlapping children inside an
+        // `opacity < 1` group composite ONCE as a unit and do not double-darken
+        // (the correct semantics, § 4). The targets stay resident through here;
+        // `update_texture_cache_system` (render `Cleanup`) un-`taken`s them next
+        // frame (§ 2.2).
+        if let (Some(prepared), Some(targets)) = (prepared, prepared_targets) {
+            let composite = world.resource::<CompositePipeline>();
+            for &gi in &prepared.composite_order {
+                let group = &prepared.groups[gi];
+                if group.parent.is_some() {
+                    continue; // nested → composited into its parent (step 2a).
+                }
+                let Some(src) = targets.targets.get(gi).and_then(|t| t.as_ref()) else {
+                    continue; // degraded root group (no target).
+                };
+                let placement = &targets.placements[gi];
+                let Some(comp_id) = placement.composite_pipeline else {
+                    continue;
+                };
+                let Some(comp_pipeline) = pipeline_cache.get_render_pipeline(comp_id) else {
+                    continue;
+                };
+                // Bind groups before the pass (device borrow); then composite into
+                // the window attachment (LoadOp::Load preserves the flat draw).
+                let (uniform_bg, source_bg) =
+                    composite_bindings(render_context, composite, src, placement);
+                let attachment = view_target.get_color_attachment();
+                let mut cpass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                    label: Some("buiy_effect_composite_window_pass"),
+                    color_attachments: &[Some(attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                cpass.set_render_pipeline(comp_pipeline);
+                cpass.set_bind_group(0, &uniform_bg, &[]);
+                cpass.set_bind_group(1, &source_bg, &[]);
+                cpass.set_vertex_buffer(0, composite.vertex_buffer.slice(..));
+                cpass.draw(0..4, 0..1);
             }
         }
 
@@ -234,6 +367,56 @@ impl ViewNode for BuiyNode {
         // explicit separate pass.
         Ok(())
     }
+}
+
+/// Build the composite pass's two bind groups (effect-compositor.md § 3 step 2)
+/// for one group: `@group(0)` the `Composite` uniform (parent transform + the
+/// quad's logical bounds + uv_max + opacity) and `@group(1)` the source target
+/// texture + the composite sampler. Created BEFORE the render pass begins (the
+/// open pass borrows the device); the transient uniform buffer's bytes are owned
+/// by the returned `BindGroup`, so it may drop immediately.
+fn composite_bindings(
+    render_context: &mut RenderContext,
+    composite: &CompositePipeline,
+    src: &CachedTexture,
+    placement: &super::compositor::GroupPlacement,
+) -> (
+    bevy::render::render_resource::BindGroup,
+    bevy::render::render_resource::BindGroup,
+) {
+    // The WGSL `Composite` uniform = col0, col1, bounds(min.xy,max.zw),
+    // [uv_max.x, uv_max.y, opacity, 0]. 4 × vec4 = 64 B (byte-identical to the
+    // `composite.wgsl` struct).
+    let b = placement.composite_bounds;
+    let uniform: [Vec4; 4] = [
+        placement.composite_view_columns[0],
+        placement.composite_view_columns[1],
+        Vec4::new(b.min.x, b.min.y, b.max.x, b.max.y),
+        Vec4::new(
+            placement.uv_max.x,
+            placement.uv_max.y,
+            placement.opacity,
+            0.0,
+        ),
+    ];
+    let buf = render_context
+        .render_device()
+        .create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("buiy_composite_uniform"),
+            contents: bytemuck::cast_slice(&uniform),
+            usage: BufferUsages::UNIFORM,
+        });
+    let uniform_bg = render_context.render_device().create_bind_group(
+        "buiy_composite_uniform_bind_group",
+        &composite.uniform_layout,
+        &BindGroupEntries::single(buf.as_entire_binding()),
+    );
+    let source_bg = render_context.render_device().create_bind_group(
+        "buiy_composite_source_bind_group",
+        &composite.source_layout,
+        &BindGroupEntries::sequential((&src.default_view, &composite.sampler)),
+    );
+    (uniform_bg, source_bg)
 }
 
 /// Stable [`RenderLabel`] for the Buiy node inside the [`Core2d`] sub-graph.

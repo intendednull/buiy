@@ -3,6 +3,8 @@
 //! exactly like tests/render_smoke.rs. Run locally with:
 //!   cargo test -p buiy_core --test render_compositor_gpu -- --ignored
 
+mod support;
+
 use bevy::prelude::*;
 
 /// Count the nodes in the Core2d sub-graph of a freshly-built app, optionally
@@ -180,45 +182,253 @@ fn buiy_node_runs_with_prepared_effect_groups_query() {
 }
 
 #[test]
-#[ignore = "gate #2 golden; needs a wgpu adapter + golden harness (verification.md § 2.4)"]
-// Placeholder body: the pixel-readback assertion lands with the device-backed
-// golden harness; until then the `assert!(true, ..)` marker documents the
-// fixture contract (clippy would otherwise reject a constant assertion).
-#[allow(clippy::assertions_on_constants)]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); run with --ignored"]
 fn group_opacity_overlap_is_single_layer_at_half() {
-    // Fixture: two overlapping opaque red children inside an Opacity(0.5)
-    // group. The overlap region must read as 50% red over the backdrop —
-    // the off-screen pass result — NOT a doubled (per-child-approx) composite
-    // (effect-compositor.md § 4 / § 5.1). This is the regression guard that
-    // the correct off-screen pass shipped, not the rejected approximation.
-    //
-    // The pixel readback rides the e2e golden harness (verification.md § 2.4).
-    // Assembled here as the canonical fixture so the harness can target it.
-    assert!(
-        true,
-        "fixture builder lands with the gate-#2 golden harness"
-    );
+    // The pillar-6 regression (effect-compositor.md § 4 / § 5.1): TWO overlapping
+    // OPAQUE-red children inside an `Opacity(0.5)` parent. The children are
+    // composed ONCE in the group's off-screen `Rgba16Float` target (opaque red,
+    // alpha 1 everywhere they paint), then that target composites at 0.5 over the
+    // backdrop. So the OVERLAP pixel == a non-overlap pixel == 50% red over black
+    // — NOT the `0.5*0.5` doubled darkening the rejected per-child approximation
+    // would produce. This is the proof the off-screen pass shipped.
+    use buiy_core::Node;
+    use buiy_core::layout::{Inset, Length, Sizing, Style};
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::{Background, Opacity};
+    use buiy_core::render::compositor::composite_src_over;
+    use std::borrow::Cow;
+
+    const W: u32 = 64;
+    const H: u32 = 64;
+
+    let red = Color::srgb(0.9, 0.05, 0.05); // an OPAQUE red (alpha 1)
+
+    let mut app = support::gpu_render_app(W, H);
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme.colors.insert("test.red".into(), red);
+    }
+
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+
+    // Two absolutely-positioned 32x32 opaque-red children that OVERLAP, both
+    // children of one `Opacity(0.5)` parent (so they share its group). The parent
+    // is backgroundless (no quad of its own — only the children fill the target).
+    // A: x∈[8,40), y∈[8,40).  B: x∈[20,52), y∈[20,52).
+    // Overlap: x∈[20,40), y∈[20,40); sampled deep-interior at (30,30).
+    // A-only (non-overlap red): (12,12).
+    let child = |left: f32, top: f32| {
+        (
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(top)),
+                    left: Sizing::Length(Length::px(left)),
+                    ..default()
+                })
+                .width_px(32.0)
+                .height_px(32.0),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed("test.red")),
+            },
+        )
+    };
+    let a = app.world_mut().spawn(child(8.0, 8.0)).id();
+    let b = app.world_mut().spawn(child(20.0, 20.0)).id();
+    // The Opacity(0.5) parent — an EffectGroup former (write_effect_groups marks
+    // it). Absolutely positioned so it forms a clean subtree under the root.
+    let parent = app
+        .world_mut()
+        .spawn((Node, Style::default().absolute(), Opacity(0.5)))
+        .id();
+    app.world_mut().entity_mut(parent).add_children(&[a, b]);
+    // A root holds the parent (single StackingContext forms at the root).
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[parent]);
+
+    // Drive frames: finish + layout→extract→prepare upload + the graph paint
+    // settle; `readback_rgba` polls further (the pipeline async-compiles).
+    support::finish_and_run(&mut app, 4);
+
+    let pixels = support::readback_rgba(&mut app, target);
+    assert_eq!(pixels.len(), (W * H * 4) as usize);
+    let px = |x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * W + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+
+    // Expectation via the CPU port: an opaque-red group sample at 0.5 over the
+    // opaque-black clear, then encode linear→sRGB8 (what the Rgba8UnormSrgb target
+    // stores). The group sample is the FULLY-COMPOSED red (alpha 1), so the same
+    // value lands on overlap AND non-overlap pixels.
+    let red_lin = LinearRgba::from(red);
+    let black_lin = LinearRgba::new(0.0, 0.0, 0.0, 1.0);
+    let expected_lin = composite_src_over(red_lin, black_lin, 0.5);
+    let expected_srgb = Srgba::from(expected_lin);
+    let expected = [
+        (expected_srgb.red * 255.0).round() as u8,
+        (expected_srgb.green * 255.0).round() as u8,
+        (expected_srgb.blue * 255.0).round() as u8,
+        255u8,
+    ];
+
+    let clear = px(1, 1);
+    let a_only = px(12, 12);
+    let overlap = px(30, 30);
+    println!("clear   (1,1)   = {clear:?}");
+    println!("A-only  (12,12) = {a_only:?}  (expected {expected:?})");
+    println!("overlap (30,30) = {overlap:?}  (expected {expected:?})");
+
+    assert_eq!(clear, [0, 0, 0, 255], "untouched corner reads the clear");
+
+    const TOL: i32 = 4;
+    // (1) The overlap is 50%-red-over-black — NOT doubled. A per-child-approx
+    // double composite would darken the red channel further (≈0.25 linear red
+    // instead of 0.5), reading visibly lower than `expected` here.
+    for ch in 0..3 {
+        let got = overlap[ch] as i32;
+        let want = expected[ch] as i32;
+        assert!(
+            (got - want).abs() <= TOL,
+            "overlap channel {ch}: got {got}, expected {want} (±{TOL}); the group \
+             must composite ONCE at 0.5, not double-darken the overlap. full \
+             overlap={overlap:?} expected={expected:?}"
+        );
+    }
+    // (2) A non-overlap red pixel equals the SAME 0.5 red — proves the overlap is
+    // not darker than a single layer (no double-darken).
+    for ch in 0..3 {
+        assert!(
+            (a_only[ch] as i32 - overlap[ch] as i32).abs() <= TOL,
+            "non-overlap red ({a_only:?}) must equal the overlap ({overlap:?}) — \
+             both are the group composited once at 0.5"
+        );
+    }
 }
 
 #[test]
-#[ignore = "gate #15 RSS/leak; needs a wgpu adapter + leak harness (verification.md / README § 5 #4)"]
-// Placeholder body: the RSS-slope + RT-bucket-count assertion lands with the
-// device-backed leak harness; until then the `assert!(true, ..)` marker
-// documents the fixture contract (clippy would otherwise reject a constant
-// assertion).
-#[allow(clippy::assertions_on_constants)]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); run with --ignored"]
 fn rt_pool_returns_to_baseline_after_idle() {
-    // Fixture: spawn N opacity groups, animate opacity 1.0->0.5->1.0 to churn
-    // EffectGroup membership, then idle. After > max(atlas eviction_grace,
-    // RT-pool 3 frames) (effect-compositor.md § 2.2), the TextureCache entry
-    // count for the "buiy_effect_group_target" descriptor family must return
-    // within ε of the steady-state working set, and RSS slope < 1 MB/min.
-    //
-    // Return-to-baseline is guaranteed by construction: sizing is
-    // painted-bounds (not viewport), reuse is descriptor-keyed, and Bevy's
-    // update_texture_cache_system drops targets unused for 3 frames (§ 2.3).
-    // Buiy adds NO bespoke eviction. The slope/ε numbers are owned by
-    // buiy-verification-design (README § 5 #4); this fixture is the mechanism
-    // proof the numbers calibrate against.
-    assert!(true, "leak fixture builder lands with the gate-#15 harness");
+    // The RT-pool leak mechanism (effect-compositor.md § 2.3): churn `EffectGroup`
+    // membership across frames (transient `buiy_effect_group_target` targets), then
+    // idle past the 3-frame `TextureCache` reclaim. The compositor's working set
+    // (the targets it holds for live groups) returns to the idle baseline (zero)
+    // because sizing is painted-bounds + descriptor-keyed reuse + Buiy adds NO
+    // bespoke eviction — Bevy's `update_texture_cache_system` un-`taken`s and drops
+    // targets unused for 3 frames. Observed via `RtPoolStats`, the render-world
+    // stat `prepare_effect_groups` records each frame (the `TextureCache`'s own
+    // per-descriptor buckets are private).
+    use bevy::render::RenderApp;
+    use buiy_core::Node;
+    use buiy_core::layout::{Inset, Length, Sizing, Style};
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::{Background, Opacity};
+    use buiy_core::render::compositor::RtPoolStats;
+    use std::borrow::Cow;
+
+    const W: u32 = 128;
+    const H: u32 = 128;
+
+    let stats = |app: &App| -> RtPoolStats {
+        *app.get_sub_app(RenderApp)
+            .expect("RenderApp")
+            .world()
+            .resource::<RtPoolStats>()
+    };
+
+    let mut app = support::gpu_render_app(W, H);
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme
+            .colors
+            .insert("test.red".into(), Color::srgb(0.9, 0.05, 0.05));
+    }
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target);
+
+    // A spawner for one opacity group (a fill child under an Opacity(0.5) parent).
+    let spawn_group = |app: &mut App, left: f32, top: f32| -> Entity {
+        let fill = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .absolute()
+                    .inset(Inset {
+                        top: Sizing::Length(Length::px(top)),
+                        left: Sizing::Length(Length::px(left)),
+                        ..default()
+                    })
+                    .width_px(24.0)
+                    .height_px(24.0),
+                Background {
+                    color: ColorToken::Token(Cow::Borrowed("test.red")),
+                },
+            ))
+            .id();
+        let parent = app
+            .world_mut()
+            .spawn((Node, Style::default().absolute(), Opacity(0.5)))
+            .id();
+        app.world_mut().entity_mut(parent).add_children(&[fill]);
+        app.world_mut()
+            .spawn((Node, Style::default()))
+            .add_children(&[parent]);
+        parent
+    };
+
+    support::finish_and_run(&mut app, 3);
+
+    // Idle baseline: no groups live → zero targets.
+    let baseline = stats(&app);
+    println!("baseline (no groups): {baseline:?}");
+    assert_eq!(
+        baseline.live_targets, 0,
+        "no EffectGroup live → no off-screen targets"
+    );
+
+    // Churn: open three opacity groups across frames (transient targets), then
+    // close them all. Each open spawns a new group; group membership flips frame
+    // to frame, exercising acquire + descriptor-keyed reuse.
+    let mut open: Vec<Entity> = Vec::new();
+    for i in 0..3 {
+        open.push(spawn_group(&mut app, 8.0 + i as f32 * 30.0, 8.0));
+        app.update();
+    }
+    let peak = stats(&app);
+    println!("peak (3 groups live): {peak:?}");
+    assert!(
+        peak.live_targets >= 1,
+        "churn made the compositor hold live targets (got {})",
+        peak.live_targets
+    );
+
+    // Close every group: despawn the parents (drops EffectGroup membership). The
+    // children go with them (despawn_recursive via the hierarchy).
+    for e in open {
+        app.world_mut().entity_mut(e).despawn();
+    }
+
+    // Idle past the 3-frame TextureCache reclaim window (a few extra frames let
+    // the despawn extract + the reclaim settle).
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let after_idle = stats(&app);
+    println!("after idle (groups closed): {after_idle:?}");
+    // The working set returns to the idle baseline — no leaked targets.
+    assert_eq!(
+        after_idle.live_targets, baseline.live_targets,
+        "live target count returns to baseline after idle (got {}, baseline {})",
+        after_idle.live_targets, baseline.live_targets
+    );
+    assert_eq!(
+        after_idle.distinct_buckets, baseline.distinct_buckets,
+        "distinct target buckets return to baseline after idle (got {}, baseline {})",
+        after_idle.distinct_buckets, baseline.distinct_buckets
+    );
 }

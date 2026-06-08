@@ -48,7 +48,46 @@ pub fn node_skip_reason(
 }
 
 use crate::components::{Node, ResolvedLayout};
-use crate::render::components::{AncestorClip, Background, ClipRect, OffscreenAuto};
+use crate::render::components::{
+    AncestorClip, Background, ClipRect, EffectGroup, EffectReason, OffscreenAuto, Opacity,
+};
+
+/// One extracted effect group's CPU record (effect-compositor.md § 1.1). Emitted
+/// alongside the flat node list by [`extract_buiy_nodes`]; the prepare pass turns
+/// it into a `PreparedEffectGroup` (painted-bounds → bucket_extent → target). The
+/// index of a record in the per-view `Vec<EffectGroupExtract>` is the value a
+/// node's [`ExtractedNode::group`] holds.
+///
+/// `bounds` are logical-px, already folded through `GlobalTransform` by the
+/// caller (the union of the group entity's own box and every descendant box the
+/// group encloses — the v1 painted-bounds input; ink-expansion terms are an
+/// upstream tier, not added here). `parent` is the index of the nearest
+/// ENCLOSING group, or `None` for a root group (composites into the window).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectGroupExtract {
+    /// The main-world group entity (the `EffectGroup` former).
+    pub entity: Entity,
+    /// Index of the enclosing group's record, or `None` if this group is not
+    /// nested inside another effect group (composites into the window target).
+    pub parent: Option<usize>,
+    /// Group opacity in `[0,1]` (the `Opacity` value; `1.0` if the group formed
+    /// for a non-opacity reason only). Applied once at the parent composite.
+    pub opacity: f32,
+    /// The OR of every reason that formed this group (from the `EffectGroup`
+    /// marker). Drives the `plan_allocation` degradation ranking.
+    pub reason: EffectReason,
+    /// Logical-px painted bounds: the union of the group entity's own box and
+    /// every box it transitively encloses, folded through `GlobalTransform`.
+    pub bounds: Rect,
+}
+
+/// Per-view list of extracted effect groups (effect-compositor.md § 1.1),
+/// carried as a render-world resource shim alongside [`ExtractedNodesView`]
+/// (the v1 carrier shape — the per-view-component flip is the shared view-routing
+/// follow-up). `prepare_effect_groups` reads this to size + acquire targets. The
+/// vec index is the value `ExtractedNode::group` references.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct ExtractedEffectGroups(pub Vec<EffectGroupExtract>);
 
 /// One painted entity's CPU record — the per-frame instance the per-view
 /// `ExtractedNodes` (Task 5) holds, keyed by `Entity` so a partial re-extract
@@ -73,6 +112,15 @@ pub struct ExtractedNode {
     /// paint-order-and-top-layer.md § 3.2). Downstream (`pack_extracted`)
     /// packs `None` to `[±INFINITY]` so the fragment discard never fires.
     pub clip: Option<ClipRect>,
+    /// The enclosing effect group's index into the per-view
+    /// [`EffectGroupExtract`] list (effect-compositor.md § 1.1), or `None` for
+    /// an in-flow / top-layer node that no `EffectGroup` ancestor encloses. The
+    /// index is the NEAREST `EffectGroup` ancestor: a node nested two groups
+    /// deep tags the inner group, and that group's record carries its own
+    /// `parent` link up the chain. `pack_view` partitions the flat instance blob
+    /// into contiguous per-group ranges off this tag (off-screen targets), so a
+    /// group member is drawn once into its target, never flat.
+    pub group: Option<usize>,
 }
 
 /// Build one [`ExtractedNode`] from the layout box + composed transform + the
@@ -81,6 +129,10 @@ pub struct ExtractedNode {
 /// `GlobalTransform` translation; `size` is `ResolvedLayout.size`; `color`
 /// resolves the `Background` token (absent background == transparent); `clip`
 /// is carried verbatim (`None` == full-view sentinel, see [`ExtractedNode::clip`]).
+/// The effect-group tag starts `None`; `extract_buiy_nodes` overwrites it from
+/// the per-entity nearest-`EffectGroup`-ancestor map after this builds the record
+/// (the group membership needs the main-world `ChildOf` chain, not just the
+/// borrowed paint inputs).
 pub fn extracted_node_for(
     entity: Entity,
     global_transform: &GlobalTransform,
@@ -100,6 +152,7 @@ pub fn extracted_node_for(
         size: layout.size,
         color,
         clip: clip.copied(),
+        group: None,
     }
 }
 
@@ -281,16 +334,25 @@ pub fn extract_buiy_nodes(
                 Option<&ClipRect>,
                 Option<&AncestorClip>,
                 Option<&Stacking>,
-                // FAN: add Option<&BoxShadow>/&Outline/&Opacity/&EffectGroup/
-                // &Border and the reserved effect components here as their tier
-                // lands (architecture § 1.2 illustrative subset).
+                // Effect-compositor fan (effect-compositor.md § 1.1): the
+                // `EffectGroup` marker (which entities form an off-screen group +
+                // their `reason`) and `Opacity` (the alpha applied at composite).
+                // FAN: add Option<&BoxShadow>/&Outline/&Border and the reserved
+                // effect components here as their tier lands (architecture § 1.2
+                // illustrative subset).
                 // NOTE: Containment is NOT in the fan — content-visibility:hidden
                 // paints the entity's own box and prunes descendants layout-side
                 // (paint-order § 5.2), so it is not a render skip input.
+                Option<&EffectGroup>,
+                Option<&Opacity>,
             ),
             With<Node>,
         >,
     >,
+    // The parent link, used to resolve each painted node's nearest `EffectGroup`
+    // ancestor (the off-screen group it belongs to). Read over ALL `Node`s so the
+    // walk can climb through non-group ancestors to the enclosing group.
+    child_of: Extract<Query<&bevy::prelude::ChildOf, With<Node>>>,
     // Damage probe: did any paint input change this frame? Entity-only, gated by
     // the architecture.md § 3.1 trigger union. Non-empty ⇒ a paint value or
     // paint-skip flipped (a `Display::None` transition lands here too, via the
@@ -311,6 +373,12 @@ pub fn extract_buiy_nodes(
                     Changed<Stacking>,
                     Changed<ClipRect>,
                     Changed<AncestorClip>,
+                    // Effect-compositor damage (effect-compositor.md § 1.1): a
+                    // group forming/dropping (`EffectGroup`) or an opacity change
+                    // re-extracts so group membership + the composite alpha never
+                    // go stale. Kept in lockstep with the `nodes` fan above.
+                    Changed<EffectGroup>,
+                    Changed<Opacity>,
                     // FAN: extend the Or-set in lockstep with the `nodes` tuple
                     // (architecture § 3.1 trigger union).
                 )>,
@@ -357,6 +425,7 @@ pub fn extract_buiy_nodes(
 
     let Ok(primary_window) = primary.single() else {
         commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
+        commands.insert_resource(ExtractedEffectGroups::default());
         return;
     };
 
@@ -383,12 +452,36 @@ pub fn extract_buiy_nodes(
     // `std::collections::HashMap` matches the convention in layout/systems.rs.
     let mut by_entity: std::collections::HashMap<Entity, ExtractedNode> =
         std::collections::HashMap::new();
-    for (entity, gt, layout, bg, css_vis, offscreen, clip_rect, ancestor_clip, stacking) in
-        nodes.iter()
+    // Effect-group formers seen this frame, keyed by entity → (reason, opacity).
+    // The painted-bounds union + parent links are derived below from the
+    // `ChildOf` chain; the per-entity `EffectReason`/`Opacity` are captured here
+    // while the fan is borrowed (effect-compositor.md § 1.1).
+    let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32)> =
+        std::collections::HashMap::new();
+    for (
+        entity,
+        gt,
+        layout,
+        bg,
+        css_vis,
+        offscreen,
+        clip_rect,
+        ancestor_clip,
+        stacking,
+        effect_group,
+        opacity,
+    ) in nodes.iter()
     {
         let skip = node_skip_reason(css_vis, offscreen.is_some());
         if skip.is_some() {
             continue;
+        }
+        if let Some(eg) = effect_group {
+            // `Opacity` default is 1.0 (no-op); only an opacity-formed group
+            // carries a `< 1` value, but capture it unconditionally so a group
+            // that ALSO has opacity composites at the right alpha.
+            let a = opacity.map(|o| o.0).unwrap_or(1.0);
+            group_formers.insert(entity, (eg.reason, a));
         }
         // A top-layer member escapes every ancestor clip and paints over the
         // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
@@ -399,6 +492,63 @@ pub fn extract_buiy_nodes(
             extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme),
         );
     }
+
+    // Resolve each painted node's NEAREST `EffectGroup` ancestor (the group it
+    // belongs to). An effect group does not necessarily form a stacking context
+    // (opacity is a deferred SC trigger — layout/systems.rs `forms_stacking_context`),
+    // so membership is the `ChildOf` subtree of a former, NOT an SC boundary. The
+    // nearest-former climb (a node is its OWN group if it is a former) is the v1
+    // nesting source (effect-compositor.md § 1.1, decided fork 5).
+    let nearest_group_entity = |start: Entity| -> Option<Entity> {
+        let mut cur = start;
+        loop {
+            if group_formers.contains_key(&cur) {
+                return Some(cur);
+            }
+            match child_of.get(cur) {
+                Ok(parent) => cur = parent.parent(),
+                Err(_) => return None,
+            }
+        }
+    };
+
+    // Assign each former a stable index, then compute its parent link (the
+    // nearest enclosing former of its OWN parent) and seed its painted bounds.
+    let mut group_entities: Vec<Entity> = group_formers.keys().copied().collect();
+    group_entities.sort_unstable(); // deterministic indices
+    let group_index: std::collections::HashMap<Entity, usize> = group_entities
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| (e, i))
+        .collect();
+    let mut groups: Vec<EffectGroupExtract> = group_entities
+        .iter()
+        .map(|&e| {
+            let (reason, opacity) = group_formers[&e];
+            // The enclosing group is the nearest former STRICTLY above `e`.
+            let parent = child_of
+                .get(e)
+                .ok()
+                .and_then(|p| nearest_group_entity(p.parent()))
+                .and_then(|pe| group_index.get(&pe).copied());
+            // Seed bounds with the former's own box (a former with no painted
+            // record — transparent fill — still bounds-anchors its subtree).
+            let own = by_entity.get(&e).map(|n| Rect {
+                min: n.position,
+                max: n.position + n.size,
+            });
+            EffectGroupExtract {
+                entity: e,
+                parent,
+                opacity,
+                reason,
+                bounds: own.unwrap_or(Rect {
+                    min: Vec2::ZERO,
+                    max: Vec2::ZERO,
+                }),
+            }
+        })
+        .collect();
 
     // Index every forming context by its root entity, then drive the recursive
     // tree walk (paint-order § 1.1): the root context paints its own box, then
@@ -452,6 +602,25 @@ pub fn extract_buiy_nodes(
         );
     }
 
+    // Tag every assembled node with its nearest-`EffectGroup`-ancestor index and
+    // grow that group's painted bounds by the member box. The walk emits a
+    // group's subtree contiguously (it descends a node's children before its
+    // siblings), so `pack_view` partitions the flat blob into contiguous per-group
+    // ranges off this tag (effect-compositor.md § 1.1 / decided fork 3). Bounds
+    // grow to the UNION of every member box (painted_bounds' descendant term).
+    if !groups.is_empty() {
+        for node in &mut all.nodes {
+            if let Some(ge) = nearest_group_entity(node.entity)
+                && let Some(&gi) = group_index.get(&ge)
+            {
+                node.group = Some(gi);
+                let b = &mut groups[gi].bounds;
+                b.min = b.min.min(node.position);
+                b.max = b.max.max(node.position + node.size);
+            }
+        }
+    }
+
     // Write the per-view ExtractedNodes onto the primary render view entity.
     // R6/R8 wire the exact main<->render view mapping and consume this component;
     // v1 inserts the single ExtractedNodes carrier (R5 owns the type — there is
@@ -459,6 +628,10 @@ pub fn extract_buiy_nodes(
     // target-entity resolution is the one piece that needs the render world and
     // is exercised only under the GPU e2e path (Task 8 / R6/R8).
     commands.insert_resource(ExtractedNodesView(all));
+    // The per-view effect-group list (effect-compositor.md § 1.1). Emitted on
+    // EVERY rebuild frame (incl. when empty) so a frame that drops the last group
+    // clears the carrier — mirrors the `ExtractedNodesView` overwrite contract.
+    commands.insert_resource(ExtractedEffectGroups(std::mem::take(&mut groups)));
 }
 
 /// v1 carrier-by-resource: the primary view's `ExtractedNodes`, inserted by

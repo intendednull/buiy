@@ -138,6 +138,7 @@ fn node(entity: u32, position: Vec2, size: Vec2, color: Color) -> ExtractedNode 
         size,
         color,
         clip: None,
+        group: None,
     }
 }
 
@@ -207,4 +208,112 @@ fn pack_view_skips_transparent_nodes() {
         layer: 0,
     };
     assert_eq!(buckets.len(quad0), 1);
+}
+
+// --- pack_view_partitioned (effect-group double-paint exclusion) -------------
+
+use buiy_core::render::buckets::pack_view_partitioned;
+
+// A node tagged with an effect group (or `None` for in-flow).
+fn grouped(entity: u32, color: Color, group: Option<usize>) -> ExtractedNode {
+    ExtractedNode {
+        entity: Entity::from_raw_u32(entity).unwrap(),
+        position: Vec2::ZERO,
+        size: Vec2::splat(10.0),
+        color,
+        clip: None,
+        group,
+    }
+}
+
+#[test]
+fn partition_no_groups_is_one_full_flat_run() {
+    // With zero groups every instance is in the single flat run `0..n` — the
+    // pre-compositor draw, byte-for-byte. group_ranges is empty.
+    let nodes = vec![
+        grouped(1, Color::WHITE, None),
+        grouped(2, Color::WHITE, None),
+        grouped(3, Color::WHITE, None),
+    ];
+    let p = pack_view_partitioned(&nodes, 0);
+    assert_eq!(p.instances.len(), 3);
+    assert!(p.group_ranges.is_empty());
+    assert_eq!(p.flat_ranges, vec![0..3]);
+}
+
+#[test]
+fn partition_all_group_members_leaves_flat_ranges_empty() {
+    // The regression that shipped the double-paint: when EVERY instance is a
+    // group member, flat_ranges MUST be empty (NOT a full `0..n` run) — the node
+    // draws nothing flat, the composite paints the content. group 0 owns 0..2.
+    let nodes = vec![
+        grouped(1, Color::WHITE, Some(0)),
+        grouped(2, Color::WHITE, Some(0)),
+    ];
+    let p = pack_view_partitioned(&nodes, 1);
+    assert_eq!(p.group_ranges, vec![0..2]);
+    assert!(
+        p.flat_ranges.is_empty(),
+        "all-group input has NO flat draw (not a full 0..n run)"
+    );
+}
+
+#[test]
+fn partition_group_between_flats_splits_into_three_runs() {
+    // [flat][group A][flat]: the flat draw is the two outer runs; group A's range
+    // is the contiguous middle. Proves the group is excluded from the flat draw.
+    let nodes = vec![
+        grouped(1, Color::WHITE, None),    // 0 flat
+        grouped(2, Color::WHITE, Some(0)), // 1 group 0
+        grouped(3, Color::WHITE, Some(0)), // 2 group 0
+        grouped(4, Color::WHITE, None),    // 3 flat
+    ];
+    let p = pack_view_partitioned(&nodes, 1);
+    assert_eq!(p.instances.len(), 4);
+    assert_eq!(p.group_ranges, vec![1..3]);
+    assert_eq!(p.flat_ranges, vec![0..1, 3..4]);
+}
+
+#[test]
+fn partition_skips_transparent_so_indices_are_instance_indices() {
+    // A transparent group member emits NO instance, so the ranges are INSTANCE
+    // indices (not node indices). Here node 2 (transparent) is dropped, so group
+    // 0's two opaque members (nodes 1,3) occupy instance range 0..2.
+    let nodes = vec![
+        grouped(1, Color::WHITE, Some(0)),
+        grouped(2, Color::NONE, Some(0)), // transparent → no instance
+        grouped(3, Color::WHITE, Some(0)),
+        grouped(4, Color::WHITE, None), // flat
+    ];
+    let p = pack_view_partitioned(&nodes, 1);
+    assert_eq!(p.instances.len(), 3);
+    assert_eq!(p.group_ranges, vec![0..2]);
+    assert_eq!(p.flat_ranges, vec![2..3]);
+}
+
+#[test]
+fn partition_group_with_no_opaque_member_is_empty_range() {
+    // A group whose only member is transparent has an empty `start == end` range
+    // (the node skips it — no off-screen pass for a group that paints nothing).
+    let nodes = vec![
+        grouped(1, Color::NONE, Some(0)), // transparent group member
+        grouped(2, Color::WHITE, None),   // flat
+    ];
+    let p = pack_view_partitioned(&nodes, 1);
+    assert_eq!(p.instances.len(), 1);
+    assert_eq!(p.group_ranges[0].start, p.group_ranges[0].end);
+    assert_eq!(p.flat_ranges, vec![0..1]);
+}
+
+#[test]
+fn partition_two_adjacent_groups_get_distinct_contiguous_ranges() {
+    // [group A][group B]: each group is its own contiguous run; no flat draw.
+    let nodes = vec![
+        grouped(1, Color::WHITE, Some(0)),
+        grouped(2, Color::WHITE, Some(0)),
+        grouped(3, Color::WHITE, Some(1)),
+    ];
+    let p = pack_view_partitioned(&nodes, 2);
+    assert_eq!(p.group_ranges, vec![0..2, 2..3]);
+    assert!(p.flat_ranges.is_empty());
 }

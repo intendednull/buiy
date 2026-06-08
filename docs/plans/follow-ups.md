@@ -654,3 +654,57 @@ entity's own resolved box (currently `0.0`); coordinate with the animation
 phase.
 
 **Spec touchpoint:** `transforms-and-containment.md § 1`, § 1.1.
+
+## Render — effect-compositor depends on the opacity stacking-context trigger (contiguity)
+
+**Originated:** render-pipeline GPU campaign item 5 (effect-compositor GPU
+orchestration), fresh-review finding.
+
+**Symptom:** the off-screen group composite partitions instances into one
+contiguous `[start,end)` range per `EffectGroup` (`pack_view_partitioned`,
+`render/buckets.rs`). That single-range model assumes a group's members are a
+contiguous run in `painters_z` — true only if the group is **atomic** (nothing
+non-descendant paints between its descendants). CSS makes an `opacity < 1`
+element atomic by forming a stacking context, but Buiy's layout does **not** yet
+form that SC (the deferred Phase-9 opacity/filter/blend SC trigger — see "Layout
+— Phase 9 render-side stacking-context formers" above). So a group member that
+carries its **own** z-index stacking context at a different paint tier than a
+non-member sibling can interleave, breaking contiguity. A `debug_assert_eq!` in
+`pack_view_partitioned` catches the violation loudly; in release the spanned
+non-member would double-paint (drawn into the group target AND flat).
+
+**Cause:** group membership is derived from the `EffectGroup` marker + the
+`ChildOf` subtree (a nearest-former ancestor climb), NOT from SC boundaries —
+because the SC boundary for opacity does not exist yet. Once the opacity SC
+trigger lands, the group's subtree is a contiguous `painters_z` slice by
+construction and the invariant holds without the assert.
+
+**Implementation sketch:** land the Phase-9 render-side SC trigger so a non-default
+`Opacity` (and later `Filter` / `MixBlendMode`) forms a `StackingContext`. This
+needs layout's `forms_stacking_context` to see the render-side opacity value (a
+cross-layer seam — the reason Phase 9 deferred it); resolve that seam, extend the
+trigger union, then the compositor's contiguity assert becomes a true invariant.
+A single non-contiguous group would otherwise require a multi-range-per-group
+partition, which would (wrongly) bake in non-atomic compositing — rejected.
+
+**Spec touchpoint:** `stacking-and-top-layer.md § 2` trigger 5;
+`effect-compositor.md § 3`; `2026-06-08-render-effect-compositor-gpu-design.md`
+(fork 5 deviation).
+
+## Render — glyphs bypass effect-group compositing (text-seam follow-up)
+
+**Originated:** render-pipeline GPU campaign item 5, fresh-review finding.
+
+**Symptom:** the glyph draw in `BuiyNode::run` paints into the flat window pass
+with no group mechanism. Latent today (`glyph_count == 0` — no v1 text producer),
+but once the text seam lands, a glyph inside an `EffectGroup` subtree would render
+at full opacity straight to the window, bypassing the group's off-screen target +
+the opacity composite (text in an `Opacity(0.5)` card would not dim).
+
+**Implementation sketch:** when the text seam connects, partition the glyph buffer
+into flat/group ranges exactly like the quad path (`pack_view_partitioned`), and
+draw a group's glyph instances into its `Rgba16Float` target in the step-1 group
+pass via a `Glyph@Rgba16Float` pipeline specialization (mirroring the
+`Quad@Rgba16Float` group pipeline). Marked `TODO(text-seam)` at the glyph draw.
+
+**Spec touchpoint:** `effect-compositor.md § 3 step 1`; `atlas-and-text-seam.md`.

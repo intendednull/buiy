@@ -211,6 +211,7 @@ fn assemble_preserves_clip_per_entity() {
             color: Color::WHITE,
             // Only entity 2 carries a clip; the others stay unclipped.
             clip: (x == e(2)).then_some(clip2),
+            group: None,
         })
     });
     let clips: Vec<Option<ClipRect>> = nodes.nodes.iter().map(|n| n.clip).collect();
@@ -341,6 +342,7 @@ fn assemble_emits_in_painters_z_order() {
             size: Vec2::ONE,
             color: Color::WHITE,
             clip: None,
+            group: None,
         })
     });
     let got: Vec<Entity> = nodes.nodes.iter().map(|n| n.entity).collect();
@@ -367,6 +369,7 @@ fn assemble_drops_skipped_entities() {
                 size: Vec2::ONE,
                 color: Color::WHITE,
                 clip: None,
+                group: None,
             })
         }
     });
@@ -401,6 +404,7 @@ fn hit_test_order_is_paint_order_reversed() {
             size: Vec2::ONE,
             color: Color::WHITE,
             clip: None,
+            group: None,
         })
     });
     // Paint order is painters_z forward.
@@ -454,6 +458,7 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
                 size: Vec2::ONE,
                 color: Color::WHITE,
                 clip: None,
+                group: None,
             })
         },
         &mut out,
@@ -489,6 +494,7 @@ fn tree_assembly_skips_dropped_entities_across_the_boundary() {
                     size: Vec2::ONE,
                     color: Color::WHITE,
                     clip: None,
+                    group: None,
                 })
             }
         },
