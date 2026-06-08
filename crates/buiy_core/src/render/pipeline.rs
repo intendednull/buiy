@@ -88,24 +88,14 @@ pub struct BuiyPipeline {
 pub(crate) fn register(render_app: &mut SubApp) {
     let world = render_app.world_mut();
 
-    // Load WGSL shader into the render world's Shader asset store.
-    // `Assets::insert` returns the previous asset at this id (always `None`
-    // here — `register` runs once during plugin finish). Explicit `_prev`
-    // documents that we are knowingly discarding it, not a fallible result.
-    {
-        let mut shaders = world.resource_mut::<Assets<Shader>>();
-        let _prev = shaders.insert(
-            shader_handle().id(),
-            Shader::from_wgsl(include_str!("shader.wgsl"), "buiy/render/shader.wgsl"),
-        );
-        // Box-shadow SDF shader (octet ..02), backing `shadow_shader_handle`.
-        // `BuiyPrimitives::specialize` references this handle for the `Shadow`
-        // primitive; registering it here makes the asset live at plugin finish.
-        let _prev = shaders.insert(
-            shadow_shader_handle().id(),
-            Shader::from_wgsl(include_str!("shadow.wgsl"), "buiy/render/shadow.wgsl"),
-        );
-    }
+    // NOTE: the WGSL shaders (`shader_handle`/`shadow_shader_handle`) are loaded
+    // into the MAIN world's `Assets<Shader>` by `BuiyRenderPlugin::build`
+    // (`load_internal_asset!`), NOT here — the render world has no
+    // `Assets<Shader>` resource, only the extracted GPU mirror the
+    // `PipelineCache` resolves the handle against. This function builds the
+    // device-dependent pieces (bind-group layout, vertex buffer, queued
+    // pipeline) that genuinely need the render world's `RenderDevice` /
+    // `PipelineCache`.
 
     // The SAME view-uniform layout feeds two consumers: the pipeline descriptor
     // (a `BindGroupLayoutDescriptor` the cache materializes + dedups, built by

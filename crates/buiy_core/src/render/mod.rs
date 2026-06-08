@@ -157,6 +157,34 @@ impl Plugin for BuiyRenderPlugin {
             .register_type::<color::ColorToken>()
             .register_type::<color::SystemColorKeyword>();
 
+        // Buiy's WGSL shaders are MAIN-world assets: `AssetPlugin` owns
+        // `Assets<Shader>` in the main world; the render world only receives the
+        // extracted GPU mirror (which the `PipelineCache` resolves the handle
+        // against). Load them into the MAIN world here — NOT into the render
+        // world (the render world has no `Assets<Shader>` resource, so a
+        // render-world insert panics at build). Guarded to the real render path:
+        // only when a RenderApp AND the asset store both exist, so the headless
+        // gate (MinimalPlugins, no AssetPlugin/RenderApp) is unaffected.
+        if app.get_sub_app(RenderApp).is_some()
+            && app
+                .world()
+                .get_resource::<Assets<bevy::shader::Shader>>()
+                .is_some()
+        {
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::shader_handle(),
+                "shader.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::shadow_shader_handle(),
+                "shadow.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
+        }
+
         // ExtractedDraws is render-world only — the main world does not read it.
         // Initialization lives below inside the RenderApp branch.
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -178,10 +206,11 @@ impl Plugin for BuiyRenderPlugin {
                 Render,
                 prepare::prepare_buiy_instances.in_set(RenderSystems::Prepare),
             );
-        // Phase 0: render-graph node + pipeline initialization.
-        // The actual pipeline + node wiring lives in pipeline.rs and node.rs.
+        // Render-graph node: graph TOPOLOGY only (add_render_graph_node + edges),
+        // device-free, so it stays in build. The device-dependent pipeline init
+        // (`pipeline::register`) runs in `finish` below — RenderDevice/PipelineCache
+        // do not exist until RenderPlugin's own `finish` runs the renderer init.
         node::register(render_app);
-        pipeline::register(render_app);
         // Shared texture atlas (atlas-and-text-seam.md § 2): the render-world
         // BuiyAtlas + AtlasWarmupQueue resources plus the pre-paint
         // `warmup_atlas` drain in ExtractSchedule. Coverage/image primitives
@@ -192,6 +221,19 @@ impl Plugin for BuiyRenderPlugin {
         // node::register / architecture § 1.3; the composite passes run inside
         // BuiyNode::run. No-op until prepare_effect_groups lands (Task 9).
         compositor::register(render_app);
+    }
+
+    /// Device-dependent render-world setup. MUST run in `finish`, not `build`:
+    /// `RenderPlugin` inserts `RenderDevice` / `PipelineCache` into the render
+    /// world during ITS `finish` (the async `initialize_renderer`), so they are
+    /// absent at `build` time. `pipeline::register` creates the view bind-group
+    /// layout + the unit-quad vertex buffer and queues the pipeline through the
+    /// `PipelineCache` — all of which need the device.
+    fn finish(&self, app: &mut App) {
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
+        pipeline::register(render_app);
     }
 }
 
