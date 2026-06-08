@@ -183,6 +183,16 @@ impl Plugin for BuiyRenderPlugin {
                 "shadow.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
+            // The coverage-glyph (alpha-as-color) shader (octet ..03). Loaded
+            // into the MAIN world exactly like the quad/shadow shaders — the
+            // glyph pipeline (primitive.rs::specialize for Glyph) resolves this
+            // handle through the PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::coverage_shader_handle(),
+                "coverage.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
         }
 
         // ExtractedDraws is render-world only — the main world does not read it.
@@ -201,6 +211,11 @@ impl Plugin for BuiyRenderPlugin {
             // RETAIN the prior buffer (architecture.md § 3.1 damage retention),
             // instead of the old one-frame warmup that returned without uploading.
             .init_resource::<prepare::BuiyInstanceBuffers>()
+            // The render-world glyph-instance list the text seam (unbuilt) fills
+            // per frame; empty in v1 production (no in-crate glyph producer — the
+            // seam is deferred), so the glyph draw is a no-op until text lands.
+            // The GPU atlas tests play the producer and fill it directly.
+            .init_resource::<prepare::ExtractedGlyphs>()
             // Phase-0 draw path (feeds node.rs today); retired by R6/R8 (the
             // node/instance rework) when node.rs reads the per-view
             // ExtractedNodes instead.
@@ -242,6 +257,12 @@ impl Plugin for BuiyRenderPlugin {
             return;
         };
         pipeline::register(render_app);
+        // The device-owning atlas half (`AtlasGpu`). MUST run AFTER
+        // `pipeline::register` so `BuiyPipeline.atlas_layout` exists when the
+        // first `prepare_atlas_textures` builds the coverage bind group, and in
+        // `finish` (not `build`) because `AtlasGpu::from_world` needs the
+        // `RenderDevice` that `RenderPlugin::finish` materializes.
+        atlas::register_gpu(render_app);
     }
 }
 

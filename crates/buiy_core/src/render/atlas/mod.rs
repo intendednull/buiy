@@ -31,6 +31,30 @@ pub enum AtlasFormat {
     ColorRgba8,
 }
 
+impl AtlasFormat {
+    /// Bytes per texel for this format: `CoverageR8` is single-channel `R8`
+    /// (1 byte), `ColorRgba8` is 4-channel `Rgba8` (4 bytes). Drives the blit
+    /// row-stride math and the `write_texture` `bytes_per_row` (spec § 2.2).
+    pub fn bytes_per_texel(self) -> u32 {
+        match self {
+            AtlasFormat::CoverageR8 => 1,
+            AtlasFormat::ColorRgba8 => 4,
+        }
+    }
+
+    /// The wgpu `TextureFormat` this atlas format maps to: `R8Unorm` for
+    /// coverage (stores no color — modulates the per-instance linear tint),
+    /// `Rgba8UnormSrgb` for color (hardware sRGB→linear decode on sample keeps
+    /// the all-linear shading invariant). Spec § 2.2.
+    pub fn texture_format(self) -> bevy::render::render_resource::TextureFormat {
+        use bevy::render::render_resource::TextureFormat;
+        match self {
+            AtlasFormat::CoverageR8 => TextureFormat::R8Unorm,
+            AtlasFormat::ColorRgba8 => TextureFormat::Rgba8UnormSrgb,
+        }
+    }
+}
+
 mod types;
 pub use types::{AtlasBitmap, AtlasConfig, AtlasEntry, AtlasEntryKind, AtlasKey};
 
@@ -48,22 +72,50 @@ mod atlas;
 pub use atlas::BuiyAtlas;
 
 mod primitive;
-pub use primitive::{GlyphAlphaInstance, IconInstance};
+pub use primitive::{GLYPH_ALPHA_INSTANCE_STRIDE_BYTES, GlyphAlphaInstance, IconInstance};
 
 mod warmup;
 pub use warmup::{AtlasWarmupQueue, AtlasWarmupRequest};
 
+mod gpu;
+pub use gpu::{AtlasGpu, maintain_atlas, prepare_atlas_textures};
+
 use bevy::prelude::*;
-use bevy::render::ExtractSchedule;
+use bevy::render::{ExtractSchedule, Render, RenderSystems};
 
 /// Insert the shared atlas resources into the render world and schedule the
-/// pre-paint warmup drain. Called from `BuiyRenderPlugin::build` inside the
-/// `RenderApp` branch. Spec § 2.1 (one resource per `RenderApp`), § 2.3.
+/// pre-paint warmup drain, the dirty-page GPU upload, and per-frame maintenance.
+/// Called from `BuiyRenderPlugin::build` inside the `RenderApp` branch. Spec
+/// § 2.1 (one resource per `RenderApp`), § 2.3.
+///
+/// `AtlasGpu` (the device-owning half) is NOT inserted here — it is `FromWorld`
+/// on the `RenderDevice`, which `RenderPlugin` only materializes in its `finish`,
+/// so [`register_gpu`] inits it at finish (mirroring `pipeline::register`).
+/// Scheduling the systems is device-free and stays in `build`.
 pub(crate) fn register(render_app: &mut SubApp) {
     render_app
         .insert_resource(BuiyAtlas::new(AtlasConfig::default()))
         .init_resource::<AtlasWarmupQueue>()
-        .add_systems(ExtractSchedule, warmup_atlas);
+        // Pre-paint warmup drain, THEN per-frame maintenance (begin_frame +
+        // grace drain + page pooling) — both in ExtractSchedule. Maintenance
+        // runs AFTER warmup so a just-warmed entry is not immediately drained,
+        // and its begin_frame advances the LRU clock the next warmup touches.
+        .add_systems(ExtractSchedule, (warmup_atlas, maintain_atlas).chain())
+        // The dirty-page GPU upload + `@group(1)` bind-group build, in Prepare
+        // (alongside `prepare_buiy_instances`). Reads the atlas's dirty pages,
+        // uploads via `write_texture`, stashes the bind group on `AtlasGpu`.
+        .add_systems(
+            Render,
+            prepare_atlas_textures.in_set(RenderSystems::Prepare),
+        );
+}
+
+/// Device-dependent atlas setup: insert the `AtlasGpu` render resource (its
+/// `FromWorld` needs the `RenderDevice`). Called from `BuiyRenderPlugin::finish`
+/// after `pipeline::register`, so `BuiyPipeline.atlas_layout` exists for the
+/// first `prepare_atlas_textures` run.
+pub(crate) fn register_gpu(render_app: &mut SubApp) {
+    render_app.init_resource::<AtlasGpu>();
 }
 
 /// Pre-paint warmup drain (spec § 2.3): force every queued residency request

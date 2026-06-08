@@ -362,7 +362,7 @@ changes don't require atlas regeneration." Buiy adopts this exactly.
 pub struct GlyphAlphaInstance {
     pub rect: [f32; 4],     // screen-space x, y, w, h (post-bridge GlobalTransform-resolved)
     pub uv: [f32; 4],       // CoverageR8 page UV from AtlasEntry.uv
-    pub color: [f32; 4],    // linear-light premultiplied tint (the "alpha as color" value)
+    pub color: [f32; 4],    // linear-light pre-linearized STRAIGHT-alpha tint ("alpha as color"; NOT premultiplied — the coverage frag scales only alpha, blends straight-alpha SrcOver)
     pub clip: [f32; 4],     // ClipRect, the GPUI per-instance clip (clip-and-transform.md)
     pub page: u32,          // which CoverageR8 page → selects the bind slot
 }

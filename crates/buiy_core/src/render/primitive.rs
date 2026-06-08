@@ -27,7 +27,8 @@ use bevy::render::render_resource::{
 // Owned by R6 (render::buckets) — imported, not redefined.
 use crate::render::buckets::BuiyPrimitiveKind;
 use crate::render::pipeline::{
-    shader_handle, shadow_shader_handle, view_uniform_layout_descriptor,
+    atlas_layout_descriptor, coverage_shader_handle, shader_handle, shadow_shader_handle,
+    view_uniform_layout_descriptor,
 };
 
 /// One `SpecializedRenderPipeline` variant: a primitive built for a specific
@@ -117,16 +118,90 @@ impl BuiyPrimitives {
         ]
     }
 
+    /// The two vertex-buffer layouts for the coverage-glyph primitive: the
+    /// static unit quad (stride 16, shared with the quad family — VBO 0) and the
+    /// per-instance [`GlyphAlphaInstance`] record (stride 68 — VBO 1,
+    /// `step_mode: Instance`). The attribute offsets/formats MUST match
+    /// `GlyphAlphaInstance`'s `#[repr(C)]` field offsets byte-for-byte and
+    /// `coverage.wgsl`'s `@location`s:
+    ///
+    /// | field   | offset | format       | `@location` |
+    /// |---------|--------|--------------|-------------|
+    /// | (vertex) position | 0  | Float32x2 | 0 |
+    /// | (vertex) uv       | 8  | Float32x2 | 1 |
+    /// | rect    | 0   | Float32x4    | 2 |
+    /// | uv      | 16  | Float32x4    | 3 |
+    /// | color   | 32  | Float32x4    | 4 |
+    /// | clip    | 48  | Float32x4    | 5 |
+    /// | page    | 64  | Uint32       | 6 |
+    ///
+    /// Total instance stride 68 B = [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`].
+    ///
+    /// [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`]: crate::render::atlas::GLYPH_ALPHA_INSTANCE_STRIDE_BYTES
+    fn glyph_vertex_buffers() -> Vec<VertexBufferLayout> {
+        vec![
+            VertexBufferLayout {
+                array_stride: 16,
+                step_mode: VertexStepMode::Vertex,
+                attributes: vec![
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                ],
+            },
+            VertexBufferLayout {
+                array_stride: 68,
+                step_mode: VertexStepMode::Instance,
+                attributes: vec![
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 0,
+                        shader_location: 2,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 3,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 32,
+                        shader_location: 4,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 48,
+                        shader_location: 5,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Uint32,
+                        offset: 64,
+                        shader_location: 6,
+                    },
+                ],
+            },
+        ]
+    }
+
     /// The shader handle for a primitive kind. Border folds into the quad
     /// SDF and outline is a clip-suppressed quad, so both paint through the
     /// quad shader — neither is a distinct `BuiyPrimitiveKind` variant.
-    /// `Glyph` / `Path` shaders are sibling-phase work (octets `..03` /
-    /// `..04`), not built here; this phase ships only `Quad` and `Shadow`.
+    /// `Glyph` paints through the coverage (alpha-as-color) shader (octet
+    /// `..03`); the `Path` shader (octet `..04`) is sibling-phase work, so it
+    /// still falls back to the quad shader as a placeholder.
     fn shader_for(kind: BuiyPrimitiveKind) -> bevy::asset::Handle<bevy::shader::Shader> {
         match kind {
             BuiyPrimitiveKind::Quad => shader_handle(),
             BuiyPrimitiveKind::Shadow => shadow_shader_handle(),
-            BuiyPrimitiveKind::Glyph | BuiyPrimitiveKind::Path => shader_handle(),
+            BuiyPrimitiveKind::Glyph => coverage_shader_handle(),
+            BuiyPrimitiveKind::Path => shader_handle(),
         }
     }
 }
@@ -136,20 +211,41 @@ impl SpecializedRenderPipeline for BuiyPrimitives {
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let shader = Self::shader_for(key.kind);
+        let is_glyph = key.kind == BuiyPrimitiveKind::Glyph;
+        // The glyph (coverage) pipeline samples the atlas, so it declares the
+        // additive `@group(1)` (texture + sampler) ON TOP OF the shared
+        // `@group(0)` view uniform. The non-sampling quad-family pipelines keep
+        // their single `@group(0)` layout byte-identical (design fork #2): a
+        // pipeline that declared a `@group(1)` its shader never binds is just
+        // wasted layout, and one whose shader binds a group the layout omits
+        // fails wgpu validation — so the layout tracks the shader exactly.
+        let layout = if is_glyph {
+            vec![view_uniform_layout_descriptor(), atlas_layout_descriptor()]
+        } else {
+            vec![view_uniform_layout_descriptor()]
+        };
+        // The glyph instance record is `GlyphAlphaInstance` (stride 68), a
+        // different layout from the quad family's `PackedInstance` (stride 52).
+        let buffers = if is_glyph {
+            Self::glyph_vertex_buffers()
+        } else {
+            Self::quad_family_vertex_buffers()
+        };
         RenderPipelineDescriptor {
             label: Some(format!("buiy_{:?}_pipeline", key.kind).into()),
             // Every quad-family shader binds the view uniform at
             // `@group(0) @binding(0)` (see `shader.wgsl`); the pipeline layout
             // must declare a matching group or wgpu validation rejects the
             // pipeline. This is the same `@group(0)` descriptor the Phase-0
-            // `register` path supplies, shared so the two cannot drift.
-            layout: vec![view_uniform_layout_descriptor()],
+            // `register` path supplies, shared so the two cannot drift. The
+            // glyph pipeline appends `@group(1)` for the atlas (see above).
+            layout,
             push_constant_ranges: vec![],
             vertex: VertexState {
                 shader: shader.clone(),
                 shader_defs: vec![],
                 entry_point: Some("vertex".into()),
-                buffers: Self::quad_family_vertex_buffers(),
+                buffers,
             },
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleStrip,

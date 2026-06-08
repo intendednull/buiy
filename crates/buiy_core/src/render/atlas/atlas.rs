@@ -134,8 +134,9 @@ impl BuiyAtlas {
     }
 
     /// Allocate the bitmap on the format's page set, appending a page if the
-    /// existing ones are full, and record the entry + live cell. (Eviction
-    /// under page-budget pressure is layered on in Task 7.)
+    /// existing ones are full, blit its texels into the chosen page (so the
+    /// dirty-gated upload picks them up — spec § 2.2), and record the entry +
+    /// live cell. Eviction under page-budget pressure runs in the loop below.
     fn allocate_and_record(
         &mut self,
         key: AtlasKey,
@@ -151,6 +152,7 @@ impl BuiyAtlas {
             let list = self.pages.entry(format).or_default();
             for (idx, page) in list.iter_mut().enumerate() {
                 if let Some((id, px)) = page.alloc(req) {
+                    page.blit(px, &bitmap.data);
                     page.insert_live(key.clone(), id, px);
                     let entry = entry_from(idx as u16, format, px, page_size);
                     self.entries.insert(key, entry);
@@ -179,6 +181,7 @@ impl BuiyAtlas {
             let list = self.pages.entry(format).or_default();
             for (idx, page) in list.iter_mut().enumerate() {
                 if let Some((id, px)) = page.alloc(req) {
+                    page.blit(px, &bitmap.data);
                     page.insert_live(key.clone(), id, px);
                     let entry = entry_from(idx as u16, format, px, page_size);
                     self.entries.insert(key, entry);
@@ -195,10 +198,11 @@ impl BuiyAtlas {
             .pooled
             .get_mut(&format)
             .and_then(|pool| pool.pop())
-            .unwrap_or_else(|| AtlasPage::new(page_size));
+            .unwrap_or_else(|| AtlasPage::new(page_size, format));
         let (id, px) = page
             .alloc(req)
             .expect("a fresh page must fit a sub-page-sized request");
+        page.blit(px, &bitmap.data);
         page.insert_live(key.clone(), id, px);
         let list = self.pages.entry(format).or_default();
         let idx = list.len();
@@ -245,6 +249,37 @@ impl BuiyAtlas {
     /// Test seam: evict a specific key (mirrors the per-frame eviction path).
     pub fn evict_for_test(&mut self, key: &AtlasKey) {
         self.evict_entry(key);
+    }
+
+    /// Immutable per-format page list (the upload + byte-identity consumers
+    /// walk this). `None` if the format has no pages yet.
+    pub fn pages_of(&self, format: AtlasFormat) -> Option<&[AtlasPage]> {
+        self.pages.get(&format).map(Vec::as_slice)
+    }
+
+    /// One resident page's CPU texels, by format + page index (the §7/§4.1
+    /// byte-identity test reads this). `None` if the page does not exist.
+    pub fn page_pixels(&self, format: AtlasFormat, page: usize) -> Option<&[u8]> {
+        self.pages.get(&format)?.get(page).map(AtlasPage::pixels)
+    }
+
+    /// Walk every (format, page index, page) so the prepare upload can pick out
+    /// the dirty ones via [`AtlasPage::is_dirty`]. Borrow-disjoint from
+    /// [`clear_all_dirty`](Self::clear_all_dirty), which clears them afterward.
+    pub fn iter_pages(&self) -> impl Iterator<Item = (AtlasFormat, usize, &AtlasPage)> {
+        self.pages
+            .iter()
+            .flat_map(|(fmt, list)| list.iter().enumerate().map(move |(i, p)| (*fmt, i, p)))
+    }
+
+    /// Clear every page's dirty flag after the upload has read their texels
+    /// (spec § 2.2: an unchanged page does not re-upload next frame).
+    pub fn clear_all_dirty(&mut self) {
+        for list in self.pages.values_mut() {
+            for page in list.iter_mut() {
+                page.clear_dirty();
+            }
+        }
     }
 }
 

@@ -146,11 +146,12 @@ fn view_uniform_carrier_is_a_valid_std140_uniform() {
 // Run locally with: `cargo test -p buiy_core --test render_prepare -- --ignored`.
 
 // Number of systems `BuiyRenderPlugin` adds to the `Render` schedule:
-// `prepare_buiy_instances` (render/mod.rs) and `prepare_effect_groups`
-// (render/compositor.rs `register`), both `.in_set(RenderSystems::Prepare)` and
-// both queued in `build`. Bump this in lockstep whenever the plugin's
-// `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 2;
+// `prepare_buiy_instances` (render/mod.rs), `prepare_effect_groups`
+// (render/compositor.rs `register`), and `prepare_atlas_textures` (atlas/mod.rs
+// `register` — the dirty-page GPU upload + `@group(1)` bind-group build), all
+// three `.in_set(RenderSystems::Prepare)` and queued in `build`. Bump this in
+// lockstep whenever the plugin's `add_systems(Render, …)` registrations change.
+const BUIY_RENDER_SYSTEM_COUNT: usize = 3;
 
 // Count the systems in a RenderApp's `Render` schedule. Reads the schedule graph
 // directly (`graph().systems`), which is populated at `add_systems` time — no

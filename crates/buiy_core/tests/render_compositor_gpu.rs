@@ -80,12 +80,12 @@ fn compositor_register_adds_no_extra_graph_node() {
 }
 
 // Number of systems `BuiyRenderPlugin` adds to the `Render` schedule:
-// `prepare_buiy_instances` (render/mod.rs) and `prepare_effect_groups`
-// (render/compositor.rs `register`), both `.in_set(RenderSystems::Prepare)` and
-// both queued in `build`. Mirrors `BUIY_RENDER_SYSTEM_COUNT` in
-// tests/render_prepare.rs; bump in lockstep whenever the plugin's
-// `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 2;
+// `prepare_buiy_instances` (render/mod.rs), `prepare_effect_groups`
+// (render/compositor.rs `register`), and `prepare_atlas_textures` (atlas/mod.rs
+// `register`), all `.in_set(RenderSystems::Prepare)` and queued in `build`.
+// Mirrors `BUIY_RENDER_SYSTEM_COUNT` in tests/render_prepare.rs; bump in
+// lockstep whenever the plugin's `add_systems(Render, …)` registrations change.
+const BUIY_RENDER_SYSTEM_COUNT: usize = 3;
 
 // Count the systems in a RenderApp's `Render` schedule graph. `graph().systems`
 // is populated at `add_systems` time (in `build`), so this is pure introspection
