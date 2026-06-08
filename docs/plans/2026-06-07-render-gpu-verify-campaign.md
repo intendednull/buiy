@@ -158,9 +158,23 @@ Update `CLAUDE.md` Build & Test and the campaign memory.
     siblings, despawn→0, theme-swap re-resolve) all green on the RX 6700 XT;
     headless 656/0; harness gained `support::gpu_test_app_with_layout` +
     `render_world_resource`.
-  - [ ] 2. Golden capture/readback harness (render-to-texture + readback +
-    `perceptual_diff`) — the infra ALL pixel-asserting stubs reuse:
-    `overlapping_semitransparent_fills_match_golden`. **NEXT.**
+  - [x] **2. Golden capture/readback harness.** `support::{gpu_render_app,
+    render_to_image, spawn_capture_camera, readback_rgba}` — render-to-texture via
+    a `Camera2d` + `RenderTarget::Image`, readback via Bevy's already-present
+    `GpuReadbackPlugin` (`Readback::texture` + `ReadbackComplete`, condition-polled,
+    no hand-rolled buffer copy). `overlapping_semitransparent_fills_match_golden`
+    now paints two semitransparent fills and asserts the exact SrcOver composite
+    pixel (`[124,21,169]`) on the GPU. Two findings: (a) **`gpu_test_app` lacks
+    `CorePipelinePlugin`** → no `Core2d` graph → `BuiyNode` was never wired/run, so
+    the spine `node_draws` test only checked buffers; `gpu_render_app` adds it and
+    `node_draws` now reads back non-clear pixels (the node truly runs). (b) **BUG #4
+    (real GPU bug):** `extract_buiy_nodes` left `ExtractedNodes.logical_size` at
+    `Vec2::ZERO` → the view uniform's `for_view` divided by zero (`sx = 2/0 = ∞`),
+    collapsing every quad off-screen — invisible to CPU buffer asserts, fatal on a
+    real adapter. Fixed: read the primary window's `resolution.size()`/`scale_factor()`
+    into the assembled set. Stored-PNG `--accept` golden machinery (image dep,
+    `tests/goldens/`, budget) deferred to verification-design — the inline pixel
+    assertion proves the shared capture infra. (gate-#2)
   - [ ] 4. Atlas upload + sampling: `warmed_glyph_uploads_and_samples_with_tint`,
     `retint_same_glyph_leaves_atlas_byte_identical`, `warmup_makes_first_frame_match_golden`,
     `gate15_atlas_entries_return_to_baseline_after_idle`.

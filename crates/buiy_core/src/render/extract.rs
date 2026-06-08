@@ -331,7 +331,16 @@ pub fn extract_buiy_nodes(
     // Reserved per-window structure: read ALL windows, not just primary
     // (architecture § 4) — v1 still resolves every Node to the primary view.
     _windows: Extract<Query<(Entity, &Window)>>,
-    primary: Extract<Query<Entity, With<PrimaryWindow>>>,
+    // The primary window's `Window`: its presence gates extraction (a vanished
+    // window clears the carrier, below) AND its resolution fills the per-view
+    // `logical_size` / `scale_factor` that build the logical→clip view uniform
+    // in prepare (`pack_extracted_nodes`). Reading the resolution here is what
+    // the assembler doc ("filled by the system that owns the window") defers to
+    // this system: without it `logical_size` stays `Vec2::ZERO` and the view
+    // transform divides by zero (`sx = 2/0 = ∞`), collapsing every quad off the
+    // GPU — invisible to the CPU-only buffer assertions but fatal on a real
+    // adapter (caught by the gate-#2 readback harness).
+    primary: Extract<Query<&Window, With<PrimaryWindow>>>,
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
@@ -346,7 +355,7 @@ pub fn extract_buiy_nodes(
     // the one damage source the `Changed` probe cannot see.
     let despawned = removed.read().count() > 0;
 
-    let Ok(_primary_window) = primary.single() else {
+    let Ok(primary_window) = primary.single() else {
         commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
         return;
     };
@@ -422,7 +431,17 @@ pub fn extract_buiy_nodes(
         .collect();
     roots.sort_unstable();
 
-    let mut all = ExtractedNodes::default();
+    // The view-level logical→clip terms (architecture § 4, D2: every Node
+    // resolves to the primary window's view). `BuiyViewUniform::for_view`
+    // consumes these in prepare; leaving them at the `Vec2::ZERO` default makes
+    // the transform degenerate. Logical (CSS-px) size + the device-pixel ratio
+    // come straight off the primary window's resolution. `nodes` is filled by
+    // the `assemble_context_tree` walk below (starts empty, Default).
+    let mut all = ExtractedNodes {
+        logical_size: primary_window.resolution.size(),
+        scale_factor: primary_window.resolution.scale_factor(),
+        ..Default::default()
+    };
     for root in roots {
         // R6/R8: merge cached records for unchanged painters here.
         assemble_context_tree(
