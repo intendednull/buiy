@@ -70,3 +70,25 @@ pub fn finish_and_run(app: &mut App, frames: usize) {
         app.update();
     }
 }
+
+/// [`gpu_test_app`] + [`buiy_core::layout::LayoutPlugin`] — for tests that spawn
+/// real `(Node, Style)` entities and need the full layout → stacking → transform
+/// bridge → extract path. Sub-pass 6f writes the `StackingContext` that
+/// `extract_buiy_nodes` walks; without it extract emits nothing, so a painted
+/// node never reaches `BuiyInstanceBuffers`. Kept SEPARATE from `gpu_test_app`
+/// so the resource/structural GPU tests on the base harness stay untouched.
+pub fn gpu_test_app_with_layout() -> App {
+    let mut app = gpu_test_app();
+    app.add_plugins(buiy_core::layout::LayoutPlugin);
+    app
+}
+
+/// Read a render-world resource back from the `RenderApp` after a frame — `None`
+/// if the `RenderApp` or the resource is absent. DRYs the
+/// `get_sub_app(RenderApp).world().get_resource::<R>()` idiom the spine / readback
+/// tests share.
+pub fn render_world_resource<R: Resource>(app: &App) -> Option<&R> {
+    app.get_sub_app(bevy::render::RenderApp)?
+        .world()
+        .get_resource::<R>()
+}

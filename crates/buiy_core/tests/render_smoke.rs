@@ -255,10 +255,38 @@ fn clip_aabb_pipeline_registers_with_stride_52() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); ported node draws persistent buffers"]
 fn node_draws_persistent_buffers_with_view_uniform() {
-    // Build a RenderApp with BuiyRenderPlugin, drive one frame with a single
-    // Buiy node + Visual, and assert the frame completes (no panic) and the
-    // BuiyInstanceBuffers quad_count == 1. Provisioned on a GPU runner by the
-    // visual-regression harness; documented GPU coverage point.
+    use buiy_core::Node;
+    use buiy_core::layout::Style;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use buiy_core::render::prepare::BuiyInstanceBuffers;
+    use std::borrow::Cow;
+
+    let mut app = support::gpu_test_app_with_layout();
+    // A 2D camera so a render view exists and the Core2d graph runs BuiyNode::run
+    // (the node is a ViewNode — it executes once per view).
+    app.world_mut().spawn(Camera2d);
+    app.world_mut().spawn((
+        Node,
+        Style::default().width_px(40.0).height_px(40.0),
+        Background {
+            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        },
+    ));
+    // The frame completing without panic proves BuiyNode::run built the view bind
+    // group and issued its draw against the persistent buffer on a live adapter.
+    support::finish_and_run(&mut app, 3);
+
+    let buffers = support::render_world_resource::<BuiyInstanceBuffers>(&app)
+        .expect("BuiyInstanceBuffers present after prepare");
+    assert_eq!(
+        buffers.quad_count, 1,
+        "the one opaque node is packed into the persistent quad buffer"
+    );
+    assert!(
+        buffers.view_uniform.binding().is_some(),
+        "the view-uniform UBO was uploaded (the @group(0) bind the node builds)"
+    );
 }
 
 // Same wgpu-adapter caveat as the other render_smoke #[ignore] tests. The v1
@@ -274,14 +302,75 @@ fn node_draws_persistent_buffers_with_view_uniform() {
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); top-layer composites last in one draw"]
 fn top_layer_composites_last_over_in_flow() {
-    // Build a RenderApp with BuiyRenderPlugin, drive one frame with an in-flow
-    // Buiy node and a top-layer (`Stacking { top_layer: Modal, .. }`) node whose
-    // box overlaps it, and assert the frame completes (no panic) with both
-    // instances packed — the top-layer member at the TAIL of the quad buffer
-    // (drawn last → over the in-flow node) and carrying the `[±INFINITY]`
-    // sentinel clip (unclipped over the full view). Provisioned on a GPU runner
-    // by the visual-regression harness; documented GPU coverage point for the
-    // single-draw top-layer composite (R9 reserves the multi-pass extension).
+    use buiy_core::Node;
+    use buiy_core::layout::{Style, TopLayer};
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use buiy_core::render::extract::ExtractedNodesView;
+    use buiy_core::render::prepare::BuiyInstanceBuffers;
+    use std::borrow::Cow;
+
+    let opaque = |token: &'static str| Background {
+        color: ColorToken::Token(Cow::Borrowed(token)),
+    };
+    let mut app = support::gpu_test_app_with_layout();
+    let in_flow = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(40.0).height_px(40.0),
+            opaque("color.surface.primary"),
+        ))
+        .id();
+    let modal = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(40.0)
+                .height_px(40.0)
+                .top_layer(TopLayer::Modal),
+            opaque("color.surface.secondary"),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[in_flow, modal]);
+    support::finish_and_run(&mut app, 3);
+
+    // The single-draw top-layer composite property, observed at the lowest layer
+    // that sees it (verification.md § 2): layout 6f tails the modal in the root
+    // painters_z, so it extracts LAST → packs last → the one instanced draw emits
+    // it OVER the in-flow node; and it escapes ancestor clip to the full-view
+    // sentinel (clip == None, paint-order § 3.2).
+    let view = support::render_world_resource::<ExtractedNodesView>(&app)
+        .expect("ExtractedNodesView present after extract");
+    let nodes = &view.0.nodes;
+    // The CPU records carry every node in the context tree — including the
+    // transparent root, which is dropped only at the GPU pack (pack_view skips
+    // Color::NONE). So the ordering claim is what matters, not the record count.
+    let modal_idx = nodes.iter().position(|n| n.entity == modal);
+    let in_flow_idx = nodes.iter().position(|n| n.entity == in_flow);
+    assert_eq!(
+        nodes.last().map(|n| n.entity),
+        Some(modal),
+        "the top-layer member tails painters_z (extracts last → packs last → \
+         drawn last over the in-flow node)"
+    );
+    assert!(
+        in_flow_idx < modal_idx,
+        "the in-flow node paints before the top-layer member"
+    );
+    assert!(
+        nodes.last().unwrap().clip.is_none(),
+        "the top-layer member escapes ancestor clip to the full-view sentinel"
+    );
+    let buffers = support::render_world_resource::<BuiyInstanceBuffers>(&app)
+        .expect("BuiyInstanceBuffers present after prepare");
+    assert_eq!(
+        buffers.quad_count, 2,
+        "the two OPAQUE nodes pack (the transparent root is skipped by pack_view)"
+    );
 }
 
 // Same RenderApp/wgpu-adapter caveat as the other render_smoke #[ignore] tests:

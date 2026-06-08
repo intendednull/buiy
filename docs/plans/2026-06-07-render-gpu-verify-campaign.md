@@ -141,19 +141,33 @@ Update `CLAUDE.md` Build & Test and the campaign memory.
   production bugs were #1 + #2 (Phase 1). The production GPU path (pipeline
   registration, graph topology, extract/prepare wiring, specialization cache,
   atlas resources) is correct. Phase 3 closes empty.
-- [ ] **Phase 4 — deferred orchestration** (the 10 empty stubs = the 4
+- [~] **Phase 4 — deferred orchestration** (the 10 empty stubs = the 4
   follow-ups.md render deferrals). Build order by dependency:
-  1. Buffer-upload round-trip (prepare → `BuiyInstanceBuffers` for a real node):
-     `prepare_uploads_persistent_buffers`, `node_draws_persistent_buffers_with_view_uniform`.
-  2. Golden capture/readback harness (render-to-texture + readback + `perceptual_diff`)
-     — the infra ALL pixel-asserting stubs reuse: `overlapping_semitransparent_fills_match_golden`.
-  3. Node actually paints + top-layer composite order: `top_layer_composites_last_over_in_flow`.
-  4. Atlas upload + sampling: `warmed_glyph_uploads_and_samples_with_tint`,
-     `retint_same_glyph_leaves_atlas_byte_identical`, `warmup_makes_first_frame_match_golden`,
-     `gate15_atlas_entries_return_to_baseline_after_idle`.
-  5. Effect-compositor GPU orchestration (extract→prepare effect-group dataflow +
-     off-screen RT composite): `group_opacity_overlap_is_single_layer_at_half`,
-     `rt_pool_returns_to_baseline_after_idle`.
-  Also the two non-test deferrals: subtree-visibility suppression pass; R11 §3.3
-  BoxShadow forced-colors draw-skip. Each lands with its now-real GPU `#[ignore]` test.
+  - [x] **1+3. Dataflow spine** (`prepare_uploads_persistent_buffers`,
+    `node_draws_persistent_buffers_with_view_uniform`,
+    `top_layer_composites_last_over_in_flow`). The exploration found the spine
+    already paints — but the GPU spine test surfaced a **real production bug** the
+    earlier single-frame smokes never hit: the R5 `Changed`-gated extract
+    full-*replaced* the carrier with the changed-only set (with no retention
+    cache), so a static node was extracted once then **vanished** (`quad_count`
+    flickered to 0). Root-caused + fixed (design note
+    `2026-06-07-render-extract-retain-damage-design.md`, fresh-reviewed twice):
+    un-gated full re-extract gated on a Changed-probe / despawn / `theme.is_changed()`,
+    prepare gates its upload on `is_changed()`, buffer init'd up front. 3 spine
+    stubs + 4 damage-retention regressions (retain/no-flicker, multi-node keeps
+    siblings, despawn→0, theme-swap re-resolve) all green on the RX 6700 XT;
+    headless 656/0; harness gained `support::gpu_test_app_with_layout` +
+    `render_world_resource`.
+  - [ ] 2. Golden capture/readback harness (render-to-texture + readback +
+    `perceptual_diff`) — the infra ALL pixel-asserting stubs reuse:
+    `overlapping_semitransparent_fills_match_golden`. **NEXT.**
+  - [ ] 4. Atlas upload + sampling: `warmed_glyph_uploads_and_samples_with_tint`,
+    `retint_same_glyph_leaves_atlas_byte_identical`, `warmup_makes_first_frame_match_golden`,
+    `gate15_atlas_entries_return_to_baseline_after_idle`.
+  - [ ] 5. Effect-compositor GPU orchestration (extract→prepare effect-group dataflow +
+    off-screen RT composite): `group_opacity_overlap_is_single_layer_at_half`,
+    `rt_pool_returns_to_baseline_after_idle`.
+  - [ ] Two non-test deferrals: subtree-visibility suppression pass (independent,
+    can land now); R11 §3.3 BoxShadow forced-colors draw-skip (blocked on the
+    nonexistent BoxShadow pipeline — stays deferred, can't verify yet).
 - [ ] Phase 5 — GPU gate lane.
