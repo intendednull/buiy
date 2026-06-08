@@ -184,4 +184,32 @@ Update `CLAUDE.md` Build & Test and the campaign memory.
   - [ ] Two non-test deferrals: subtree-visibility suppression pass (independent,
     can land now); R11 §3.3 BoxShadow forced-colors draw-skip (blocked on the
     nonexistent BoxShadow pipeline — stays deferred, can't verify yet).
-- [ ] Phase 5 — GPU gate lane.
+- [x] **Phase 5 — GPU gate lane.** Documented in `CLAUDE.md` § Build & Test: the
+  `cargo test -p buiy_core -j 2 -- --ignored --test-threads=1` lane (needs a real
+  adapter; Vulkan render-to-texture needs no display), additive to the headless
+  CI gate, building on `tests/support`. Locks in the 4 bug fixes + the spine /
+  readback verification against silent regression.
+
+## Remaining (large new-pipeline builds — scoped as their own efforts)
+
+Phase 4 items 4 + 5 are **not** orchestration tweaks; the exploration showed each
+is a new-render-phase-scale feature:
+
+- **Item 4 — atlas glyph/coverage GPU pipeline** (4 `atlas_gpu.rs` stubs). The
+  whole GPU half of the atlas does not exist: page `Image` creation + blit-into-
+  page + dirty/upload, a NEW CoverageR8 sampling pipeline + `coverage.wgsl`, an
+  atlas bind-group/layout (`@group(1)` texture+sampler), a `GlyphAlphaInstance`
+  buffer + pack + a node draw branch. This is the text-rendering foundation.
+- **Item 5 — effect-compositor GPU orchestration** (2 `render_compositor_gpu.rs`
+  stubs). Needs the extract→prepare effect-group dataflow (R5's flat extract
+  carries no group membership) + off-screen `Rgba16Float` RT acquire/composite in
+  `BuiyNode::run`, with the flat draw excluding group-member ranges.
+- **Item 3 — subtree-visibility suppression** (independent CPU render-prep pass,
+  latent: no v1 producer sets `CssVisibility::Hidden` on a non-leaf). Small.
+- **BoxShadow forced-colors draw-skip** — blocked on the nonexistent BoxShadow
+  pipeline; stays deferred.
+
+The capture infra (`support::render_to_image` / `readback_rgba`) + the verified
+spine are in place, so each of these is a self-contained build with a now-runnable
+GPU `#[ignore]` test. Exploration blueprints: workflow `wucy4tq5e`
+(`jq '.result[2]'` atlas, `.result[3]` compositor, `.result[4]` visibility).
