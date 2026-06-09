@@ -106,6 +106,16 @@ impl Plugin for BuiyPlugin {
         // Widgets so widgets see resolved layout + hit-test results in the same
         // frame. bevy_picking must come first because it registers PickingSystems
         // sets + Messages<PointerHits>; the two Buiy plugins consume both.
+        // bevy_picking::PickingPlugin registers the PickingSystems system sets
+        // and the Messages<PointerHits> message resource that both of Buiy's
+        // picking plugins depend on, so it must be added before them. Bevy 0.18's
+        // `DefaultPlugins` ALREADY includes it — adding it unconditionally
+        // panicked every real app ("plugin was already added", hit by
+        // `cargo run -p hello_button`) — so guard it: a library plugin supplies a
+        // dependency only when the app hasn't (the headless MinimalPlugins tests).
+        if !app.is_plugin_added::<bevy::picking::PickingPlugin>() {
+            app.add_plugins(bevy::picking::PickingPlugin);
+        }
         app.add_plugins((
             CorePlugin,
             buiy_core::theme::ThemePlugin,
@@ -113,19 +123,22 @@ impl Plugin for BuiyPlugin {
             buiy_core::a11y::AccessKitAdapterPlugin,
             buiy_core::focus::FocusPlugin,
             buiy_core::layout::LayoutPlugin,
-            // bevy_picking::PickingPlugin registers PickingSystems system sets
-            // and the Messages<PointerHits> message resource that both
-            // PickingPlugin and BuiyPickingBackendPlugin depend on. Must come
-            // before the two Buiy picking plugins.
-            bevy::picking::PickingPlugin,
             buiy_core::picking::PickingPlugin,
             buiy_core::picking::BuiyPickingBackendPlugin,
             WidgetsPlugin,
+            // The render plugin is added in `build`, NOT `finish`: Bevy's
+            // `App::finish` iterates `0..plugin_registry.len()` with the length
+            // captured BEFORE the loop, so a plugin added DURING another
+            // plugin's `finish` never gets its own `finish()` called — and
+            // `BuiyRenderPlugin::finish` is where the device-dependent
+            // `BuiyPipeline` / `AtlasGpu` register. The old finish-time add left
+            // them unregistered in every real app (`prepare_atlas_textures`
+            // panicked "Resource does not exist" on frame 1). Adding here is
+            // the standard ecosystem convention: `BuiyPlugin` is documented to
+            // come AFTER `DefaultPlugins`, so the `RenderApp` already exists;
+            // without one (headless tests) the plugin's own guard no-ops its
+            // render half.
+            buiy_core::render::BuiyRenderPlugin,
         ));
-    }
-
-    fn finish(&self, app: &mut App) {
-        // RenderApp is guaranteed to exist by `finish` time.
-        app.add_plugins(buiy_core::render::BuiyRenderPlugin);
     }
 }
