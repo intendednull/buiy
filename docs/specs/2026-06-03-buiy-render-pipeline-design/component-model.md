@@ -54,12 +54,16 @@ and it exists for the same three reasons:
   property family per component makes the change signal precise — mutating a
   background does not re-extract a border. This is the "damage tracking for
   free" the architecture relies on. The same gate must also cover the
-  **paint-skip** signals: the extract Or-set includes `Changed<CssVisibility>`
-  (§ 12.1), `Changed<OffscreenAuto>` (§ 12.2), and `Changed<Containment>`
-  (`content_visibility` toggle) — all three flip whether a subtree paints at all
-  (`visibility: hidden`, off-screen-`Auto` add/remove, `content-visibility`
-  change), so without them in the trigger set a paint-skip flip would never
-  re-extract and paint would go stale (architecture.md § 3.1).
+  **paint-skip** signals: as landed, the extract Or-set includes
+  `Changed<ComputedPaintSkip>` — the computed subtree marker the
+  `write_paint_skip` render-prep pass derives from `CssVisibility` (§ 12.1) and
+  `OffscreenAuto` (§ 12.2) — plus `Changed<Containment>` (`content_visibility`
+  toggle); both flip whether an entity paints at all. The marker's **removal**
+  (hide→show) emits no `Changed`, so it rides a dedicated
+  `RemovedComponents<ComputedPaintSkip>` stream. Without these in the trigger
+  set a paint-skip flip would never re-extract and paint would go stale
+  (architecture.md § 3.1;
+  [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md)).
 
 Components are inserted independently. An entity can carry `Background` without
 `Border`; `Outline` without `Opacity`. A missing component means "render the
@@ -498,8 +502,8 @@ angle surface is **C**).
 
 ## 9. `ClipRect` — F (computed, not authored)
 
-`ClipRect` is one of the **three computed** render components that are *not*
-author-set (alongside `AncestorClip` (clip-and-transform.md § A.2) and `EffectGroup` § 10); what distinguishes it is that it is read by **both** render and picking. Its type definition (fields + the accumulation algorithm) is owned
+`ClipRect` is one of the **computed** render components that are *not*
+author-set (alongside `AncestorClip` (clip-and-transform.md § A.2), `EffectGroup` § 10, and the subtree paint-skip marker `ComputedPaintSkip` — [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md)); what distinguishes it is that it is read by **both** render and picking. Its type definition (fields + the accumulation algorithm) is owned
 by [clip-and-transform.md § A.2](clip-and-transform.md#a2-the-cliprect-output-shape)
 — it is `ClipRect { min: Vec2, max: Vec2 }` (logical px, the accumulated clip
 AABB),
@@ -721,7 +725,8 @@ Every **author-set** component above is registered in the render plugin's
 `build` via `app.register_type::<T>()` so reflection, BSN, and inspectors resolve
 them — the same contract the layout plugin honors for its decomposed components
 ([layout/architecture.md § 2.1](../2026-05-08-buiy-layout-design/architecture.md#21-decomposed-components--canonical-storage)).
-The three computed components (`ClipRect`, `AncestorClip`, `EffectGroup`) are not author-set or
+The computed components (`ClipRect`, `AncestorClip`, `EffectGroup`,
+`ComputedPaintSkip`) are not author-set or
 serialized and so are not `register_type`'d; they exist only as render-prep
 outputs. The layout-written `OffscreenAuto` marker (§ 12.2) is likewise **not**
 registered by this spec's render plugin — it is layout-owned (README § 3.1), so
@@ -745,7 +750,7 @@ How these claims are proven (gate IDs from
 
 - **Reflection/registration** — a headless test asserts every author-set render
   component `register_type`s (no GPU needed), mirroring the layout plugin's
-  registration test (the computed `ClipRect` / `AncestorClip` / `EffectGroup` are exempt — they
+  registration test (the computed `ClipRect` / `AncestorClip` / `EffectGroup` / `ComputedPaintSkip` are exempt — they
   are not reflected). Defaults match CSS initial values (`Opacity(1.0)`,
   `Background::default()` transparent, `Border::default()` square + no stroke,
   empty `BoxShadow`, `MixBlendMode::Normal`).

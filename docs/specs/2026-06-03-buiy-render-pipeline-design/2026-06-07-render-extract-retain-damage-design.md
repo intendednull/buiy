@@ -115,6 +115,14 @@ with the minimum machinery, deferring only the per-entity *patch* micro-optimiza
 | 1 | no change → retain (no insert) | false | retain | **1** |
 | 2+ | retain | false | retain | **1** |
 
+> **Extension (2026-06-09).** The subtree visibility suppression
+> ([2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md))
+> added a SECOND removal stream beside the despawn one:
+> `RemovedComponents<ComputedPaintSkip>` — a hide→show flip removes the computed
+> paint-skip marker, which (like despawn) emits no `Changed`. The change-signal
+> union below reads with that stream included; everything else is as designed
+> here.
+
 ## Removal-detection caveat
 
 `RemovedComponents<ResolvedLayout>` read inside `Extract<…>` observes the **main**

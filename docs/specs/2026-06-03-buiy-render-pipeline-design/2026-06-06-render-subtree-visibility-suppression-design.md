@@ -1,9 +1,9 @@
 # Render subtree visibility suppression — design note
 
-**Status:** open design fork — decision deferred to R6/R8.
-**Date:** 2026-06-06.
+**Status:** implemented — Option A landed 2026-06-09 (see "As landed" below).
+**Date:** 2026-06-06 (decision); 2026-06-09 (landed).
 **Owners:** render-pipeline.
-**Related:** [paint-order-and-top-layer.md § 5.3 / § 5.4](paint-order-and-top-layer.md), [architecture.md § 3.1](architecture.md) (Changed-gated extract), R5 plan ([2026-06-03-buiy-render-r5-extract.md](../../plans/2026-06-03-buiy-render-r5-extract.md)), R6/R8 plans.
+**Related:** [paint-order-and-top-layer.md § 5.3 / § 5.4](paint-order-and-top-layer.md), [architecture.md § 3.1](architecture.md) (Changed-gated extract), R5 plan ([2026-06-03-buiy-render-r5-extract.md](../../plans/2026-06-03-buiy-render-r5-extract.md)), R6/R8 plans, [2026-06-07-render-extract-retain-damage-design.md](2026-06-07-render-extract-retain-damage-design.md) (the damage gate this extends).
 
 ## Problem
 
@@ -71,3 +71,42 @@ the first phase whose output actually paints the full set and would surface the 
 
 v1 semantics either way: a **blanket** subtree drop (no `visibility:visible` override),
 matching § 5.4's "entity and its descendants" — overrides wait for a visibility cascade.
+
+## As landed (2026-06-09)
+
+Option A, with two refinements over the sketch above:
+
+- **The marker is extract's SINGLE skip source.** The pass writes
+  `ComputedPaintSkip { reason: SkipReason }` (`render/components.rs`, lean
+  derives like the other computed components — not registered, § 13) on the
+  hidden/offscreen ROOT **and** every descendant, so extract reads only
+  `Option<&ComputedPaintSkip>` and no longer queries `CssVisibility` /
+  `OffscreenAuto` at all. The per-entity predicate `node_skip_reason` moved
+  producer-side unchanged (`render/visibility.rs`): it now answers "does this
+  entity ROOT a suppressed subtree". Runner-up — keeping the leaf predicate in
+  extract alongside the marker — was rejected as a second decision point that
+  the marker (present on the root too) makes redundant. An entity's OWN reason
+  wins over the inherited one, so an ancestor un-hide leaves a still-suppressed
+  descendant marked with its own reason.
+- **The walk is seed-gated, not run every frame.** `write_paint_skip` early-
+  returns unless a seed fired: `Changed<CssVisibility>` / `Changed<OffscreenAuto>`
+  / `Changed<Children>` / `Changed<ChildOf>` (adds included), or a
+  `RemovedComponents` event for `CssVisibility` / `OffscreenAuto` / `ChildOf` /
+  `Children` (un-hide by component removal; reparent/detach out of a hidden
+  subtree). Any seed triggers a FULL all-roots walk whose writes are
+  change-gated by the shared `reconcile_one` (render/clip.rs), so re-visits are
+  op-free and a steady-state frame is O(0) — no walk, no structural ops, no
+  `Changed<ComputedPaintSkip>` for extract's gate to hear.
+- **The damage gate covers both marker transitions.** Extract's `Or<…>` probe
+  swaps `Changed<CssVisibility>`/`Changed<OffscreenAuto>` for
+  `Changed<ComputedPaintSkip>` (the ADD direction), and a new
+  `Extract<RemovedComponents<ComputedPaintSkip>>` stream covers the REMOVE
+  direction (hide→show — invisible to `Changed`, exactly like the despawn
+  stream in the retain-damage design). Missing the stream leaves a re-shown
+  subtree permanently vanished; the GPU smoke in
+  `tests/render_paint_skip.rs` pins that failure mode.
+
+Coverage: headless pass/marker tests + steady-state quietness probe in
+`crates/buiy_core/tests/render_paint_skip.rs`; predicate unit tests in
+`render/visibility.rs`; one `#[ignore]` GPU smoke (hidden subtree packs 0
+quads → show packs 2 → re-hide packs 0).

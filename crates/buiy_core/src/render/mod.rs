@@ -33,15 +33,17 @@ pub mod prepare;
 pub mod primitive;
 pub mod top_layer;
 pub mod view_uniform;
+pub mod visibility;
 
 pub use bridge::ScrollDirty;
 pub use clip::write_clip_rects;
 pub use color::{ColorToken, SystemColorKeyword};
 pub use components::{
     AncestorClip, Angle, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius,
-    ClipRect, Corners, CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle,
-    MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow,
+    ClipRect, ComputedPaintSkip, Corners, CssVisibility, EffectGroup, EffectReason, Filter,
+    FilterFn, LineStyle, MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow, SkipReason,
 };
+pub use visibility::{node_skip_reason, write_paint_skip};
 
 /// What the render world needs from the main world per frame: a list of
 /// (rect, color, radius) tuples in window-local logical pixels, plus the
@@ -133,11 +135,25 @@ impl Plugin for BuiyRenderPlugin {
                 .before(crate::BuiySet::Picking),
         );
 
+        // Render-prep (main world): the subtree visibility-suppression walk
+        // (paint-order-and-top-layer.md § 5.3 / § 5.4) writes the computed
+        // ComputedPaintSkip marker across each CssVisibility::Hidden /
+        // OffscreenAuto subtree, in the same Animate→Picking window as the
+        // clip / effect passes, so extract reads a settled marker. Headless-
+        // safe for the same reason as its siblings.
+        app.add_systems(
+            Update,
+            visibility::write_paint_skip
+                .after(crate::BuiySet::Animate)
+                .before(crate::BuiySet::Picking),
+        );
+
         // Register author-set render components (reflection / BSN / inspectors)
         // in the MAIN world, before the RenderApp branch, so registration
         // happens even on headless hosts with no RenderApp (component-model.md
-        // § 13). The computed ClipRect/AncestorClip/EffectGroup and the
-        // layout-owned OffscreenAuto are deliberately NOT registered here.
+        // § 13). The computed ClipRect/AncestorClip/EffectGroup/
+        // ComputedPaintSkip and the layout-owned OffscreenAuto are
+        // deliberately NOT registered here.
         app.register_type::<components::Background>()
             .register_type::<components::Border>()
             .register_type::<components::BorderSide>()

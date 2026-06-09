@@ -2,8 +2,9 @@
 //! `register_type`'d by `BuiyRenderPlugin::build` (the registration runs in
 //! the main world, before the RenderApp branch, so this works under
 //! MinimalPlugins with no wgpu adapter). The computed components
-//! (`ClipRect`, `AncestorClip`, `EffectGroup`) and the layout-owned
-//! `OffscreenAuto` are deliberately NOT registered and are asserted absent.
+//! (`ClipRect`, `AncestorClip`, `EffectGroup`, `ComputedPaintSkip`) and the
+//! layout-owned `OffscreenAuto` are deliberately NOT registered and are
+//! asserted absent.
 
 use bevy::prelude::*;
 use buiy_core::CorePlugin;
@@ -11,7 +12,8 @@ use buiy_core::render::BuiyRenderPlugin;
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{
     AncestorClip, BackdropFilter, Background, Border, BoxShadow, ClipRadius, ClipRect,
-    CssVisibility, EffectGroup, Filter, MixBlendMode, OffscreenAuto, Opacity, Outline,
+    ComputedPaintSkip, CssVisibility, EffectGroup, Filter, MixBlendMode, OffscreenAuto, Opacity,
+    Outline,
 };
 
 #[test]
@@ -80,8 +82,9 @@ fn computed_and_layout_owned_components_are_not_registered_here() {
     let type_registry = app.world().resource::<AppTypeRegistry>().clone();
     let reg = type_registry.read();
 
-    // ClipRect / AncestorClip / EffectGroup are computed (no Reflect derive,
-    // so they cannot be in the registry); OffscreenAuto is layout-owned.
+    // ClipRect / AncestorClip / EffectGroup / ComputedPaintSkip are computed
+    // (no Reflect derive, so they cannot be in the registry); OffscreenAuto
+    // is layout-owned.
     assert!(
         reg.get(std::any::TypeId::of::<ClipRect>()).is_none(),
         "ClipRect must not be registered here"
@@ -93,6 +96,11 @@ fn computed_and_layout_owned_components_are_not_registered_here() {
     assert!(
         reg.get(std::any::TypeId::of::<EffectGroup>()).is_none(),
         "EffectGroup must not be registered here"
+    );
+    assert!(
+        reg.get(std::any::TypeId::of::<ComputedPaintSkip>())
+            .is_none(),
+        "ComputedPaintSkip is computed (write_paint_skip output) — not registered"
     );
     assert!(
         reg.get(std::any::TypeId::of::<OffscreenAuto>()).is_none(),

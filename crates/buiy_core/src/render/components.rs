@@ -3,9 +3,9 @@
 //! Replaces the temporary `crate::components::Visual`. Each author-set
 //! component is a small public-fielded decomposed component deriving
 //! `Reflect + Default + Clone + Component`; the computed components
-//! (`ClipRect`, `AncestorClip`, `EffectGroup`) carry leaner derives (no
-//! `Reflect`/`Default`) because they are render-prep outputs, never authored
-//! or serialized. `ColorToken`/`SystemColorKeyword` live in the sibling
+//! (`ClipRect`, `AncestorClip`, `EffectGroup`, `ComputedPaintSkip`) carry
+//! leaner derives (no `Reflect`/`Default`) because they are render-prep
+//! outputs, never authored or serialized. `ColorToken`/`SystemColorKeyword` live in the sibling
 //! `render/color.rs` (color-and-forced-colors.md § 2.0 owns them).
 //!
 //! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md.
@@ -277,10 +277,12 @@ pub enum CssVisibility {
 
 /// Zero-field marker placed by LAYOUT on entities whose
 /// `Containment.content_visibility == Auto` subtree is currently off-screen.
-/// Render's extract skips paint for an `OffscreenAuto` subtree. Layout-
+/// Render skips paint for an `OffscreenAuto` subtree: the `write_paint_skip`
+/// render-prep pass resolves the marker subtree-scoped into
+/// [`ComputedPaintSkip`], which extract consumes per entity. Layout-
 /// written, render-read; NOT registered by this spec's render plugin
 /// (layout owns its registration — README § 3.1). Defined here only so
-/// render extract has the type to read.
+/// the render-prep pass has the type to read.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 12.2.
 #[derive(Component, Clone, Copy, Debug)]
@@ -358,6 +360,42 @@ bitflags::bitflags! {
 pub struct EffectGroup {
     /// The OR of every reason that formed this group.
     pub reason: EffectReason,
+}
+
+/// Why the forward paint walk skips an entity (paint-order-and-top-layer.md
+/// § 5). `Display::None` is NOT a variant: such entities never reach extract
+/// (no `ResolvedLayout`, absent from `painters_z`), so there is nothing to
+/// skip — the absence IS the skip. `content-visibility: hidden` is likewise NOT
+/// a variant: § 5.2 keeps the Hidden entity's own box painting and prunes its
+/// descendants layout-side (they never enter `painters_z`), so render inherits
+/// the prune for free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkipReason {
+    /// `CssVisibility::Hidden` — render-owned paint-skip, keep the box (§ 5.4).
+    CssHidden,
+    /// Off-screen `content-visibility: auto` (the `OffscreenAuto` marker, § 5.3).
+    OffscreenAuto,
+}
+
+/// Computed subtree paint-skip marker. Written by the `write_paint_skip`
+/// render-prep pass onto a `CssVisibility::Hidden` / `OffscreenAuto` entity
+/// AND every descendant in its subtree (the subtree-scoped paint skip of
+/// paint-order-and-top-layer.md § 5.3 / § 5.4), removed when the entity is no
+/// longer inside a suppressed subtree. Extract reads it as the SINGLE skip
+/// source: presence ⇒ emit no primitives for this entity. NOT author-set or
+/// serialized — hence the leaner derives (no `Reflect`/`Default`), matching
+/// the computed `ClipRect`/`AncestorClip`/`EffectGroup`. v1 semantics are a
+/// blanket subtree drop — no `visibility: visible` override until a
+/// visibility cascade exists.
+///
+/// Design: docs/specs/2026-06-03-buiy-render-pipeline-design/
+/// 2026-06-06-render-subtree-visibility-suppression-design.md (Option A).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComputedPaintSkip {
+    /// Why this entity is paint-skipped: its own skip input when it has one
+    /// (`node_skip_reason` precedence), else the nearest suppressing
+    /// ancestor's reason.
+    pub reason: SkipReason,
 }
 
 #[cfg(test)]
@@ -552,5 +590,24 @@ mod tests {
         };
         assert!(g.reason.contains(EffectReason::OPACITY));
         assert!(g.reason.contains(EffectReason::FILTER));
+    }
+
+    #[test]
+    fn computed_paint_skip_carries_reason_and_compares_by_it() {
+        // PartialEq is load-bearing: the write_paint_skip reconcile only
+        // issues a structural op when the stored marker differs.
+        let a = ComputedPaintSkip {
+            reason: SkipReason::CssHidden,
+        };
+        let b = ComputedPaintSkip {
+            reason: SkipReason::OffscreenAuto,
+        };
+        assert_eq!(
+            a,
+            ComputedPaintSkip {
+                reason: SkipReason::CssHidden
+            }
+        );
+        assert_ne!(a, b);
     }
 }

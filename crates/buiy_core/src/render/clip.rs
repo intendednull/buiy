@@ -339,8 +339,10 @@ fn reconcile(
 
 /// Insert `next` only when it differs from `prev`; remove the component when
 /// `next` is absent but a stale one exists. The change-gate that makes a
-/// steady-state frame issue zero structural ops (spec § A.3).
-fn reconcile_one<C: Component + PartialEq>(
+/// steady-state frame issue zero structural ops (spec § A.3). `pub(crate)`:
+/// the `write_paint_skip` visibility pass (render/visibility.rs) shares this
+/// exact reconcile for its `ComputedPaintSkip` marker.
+pub(crate) fn reconcile_one<C: Component + PartialEq>(
     commands: &mut Commands,
     entity: Entity,
     next: Option<C>,

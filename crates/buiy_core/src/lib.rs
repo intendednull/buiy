@@ -40,8 +40,8 @@ pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
 pub use render::color::{ColorToken, SystemColorKeyword};
 pub use render::components::{
     AncestorClip, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius, ClipRect,
-    Corners, CssVisibility, EffectGroup, EffectReason, Filter, FilterFn, LineStyle, MixBlendMode,
-    Opacity, Outline, Radius, Shadow,
+    ComputedPaintSkip, Corners, CssVisibility, EffectGroup, EffectReason, Filter, FilterFn,
+    LineStyle, MixBlendMode, Opacity, Outline, Radius, Shadow, SkipReason,
 };
 pub use render::forced_colors::{PrePreferenceTheme, apply_forced_colors_theme};
 pub use render::forced_colors_analyzer::{
