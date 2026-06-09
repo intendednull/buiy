@@ -30,28 +30,43 @@ impl StubPipelineIds {
 }
 
 fn key(kind: BuiyPrimitiveKind, format: TextureFormat) -> BuiyPrimitiveKey {
-    BuiyPrimitiveKey { kind, format }
+    BuiyPrimitiveKey {
+        kind,
+        format,
+        samples: 1,
+    }
 }
 
 #[test]
-fn each_kind_x_format_gets_a_distinct_id() {
+fn each_kind_x_format_x_samples_gets_a_distinct_id() {
     use BuiyPrimitiveKind::*;
     let mut ids = StubPipelineIds::default();
     let formats = [TextureFormat::Rgba8UnormSrgb, TextureFormat::Rgba16Float];
     let mut seen = Vec::new();
-    // The landed R6 enum's four kinds; the key is `(kind, format)` so each
-    // (kind, format) pair is a distinct variant regardless of which kinds'
-    // shaders this phase ships.
+    // The landed R6 enum's four kinds; the key is `(kind, format, samples)` so
+    // each tuple is a distinct variant regardless of which kinds' shaders this
+    // phase ships. Sample counts 1 and 4 mirror the Msaa::Off / Msaa::Sample4
+    // (the bare-Camera2d default) view variants.
     for kind in [Shadow, Quad, Glyph, Path] {
         for format in formats {
-            seen.push(ids.id_for(key(kind, format)));
+            for samples in [1u32, 4] {
+                seen.push(ids.id_for(BuiyPrimitiveKey {
+                    kind,
+                    format,
+                    samples,
+                }));
+            }
         }
     }
-    // 4 kinds × 2 formats = 8 distinct variants → 8 distinct ids.
+    // 4 kinds × 2 formats × 2 sample counts = 16 distinct variants → 16 ids.
     let mut uniq = seen.clone();
     uniq.sort_unstable();
     uniq.dedup();
-    assert_eq!(uniq.len(), 8, "every (kind, format) variant is distinct");
+    assert_eq!(
+        uniq.len(),
+        16,
+        "every (kind, format, samples) variant is distinct"
+    );
 }
 
 #[test]

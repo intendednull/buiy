@@ -178,18 +178,31 @@ pub fn render_to_image(app: &mut App, width: u32, height: u32) -> Handle<Image> 
 /// black (`ClearColorConfig::Custom`) — a deterministic backdrop the SrcOver
 /// composite is asserted against (the global default `ClearColor` is an opaque
 /// dark gray, not a clean zero).
+///
+/// `Msaa::Off` — single-sampled for pixel determinism (most readback tests
+/// assert exact pixel values, and a 4x resolve antialiases edges). The Buiy
+/// pipelines specialize per-view on the sample count (`prepare_buiy_view_pipelines`),
+/// so both `Off` and `Sample4` views work; the multisampled path is covered by
+/// `tests/render_msaa.rs` via [`spawn_capture_camera_with_msaa`].
 pub fn spawn_capture_camera(app: &mut App, target: Handle<Image>) {
+    spawn_capture_camera_with_msaa(app, target, bevy::render::view::Msaa::Off);
+}
+
+/// [`spawn_capture_camera`] with an explicit per-view [`Msaa`](bevy::render::view::Msaa)
+/// mode — the MSAA regression tests (`tests/render_msaa.rs`) spawn the capture
+/// camera at `Msaa::Sample4` (the bare-`Camera2d` default a real app gets) to
+/// prove the per-view sample-count pipeline specialization.
+pub fn spawn_capture_camera_with_msaa(
+    app: &mut App,
+    target: Handle<Image>,
+    msaa: bevy::render::view::Msaa,
+) {
     app.world_mut().spawn((
         Camera2d,
         // `RenderTarget` is a standalone component in Bevy 0.18 (no longer a
         // `Camera` field); spawning it overrides the default primary-window target.
         RenderTarget::from(target),
-        // The v1 `BuiyPipeline` is built with a sample count of 1 (no
-        // `MultisampleState` override); the default camera `Msaa` is `Sample4`,
-        // which makes the render pass's 4x attachments incompatible with the
-        // 1x pipeline ("Incompatible sample count"). Force MSAA off so the pass
-        // matches the pipeline. (Production MSAA support is a later-phase concern.)
-        bevy::render::view::Msaa::Off,
+        msaa,
         Camera {
             clear_color: ClearColorConfig::Custom(Color::BLACK),
             ..default()
@@ -209,10 +222,26 @@ struct CapturedBytes(Arc<Mutex<Option<Vec<u8>>>>);
 /// count: the pipeline async-compiles, prepares, paints, copies, and maps across
 /// several frames, so the number of frames is not knowable up front. Bounded by
 /// `MAX_FRAMES`; panics with a clear message if the readback never fires.
-/// Returns the un-padded `width*height*4` RGBA8 bytes (GpuReadbackPlugin strips
-/// the 256-byte row padding for us).
+///
+/// Returns the un-padded `width*height*4` RGBA8 bytes. The raw readback buffer
+/// keeps wgpu's 256-byte ROW PADDING whenever `width * 4` is not already
+/// 256-aligned (a 32-px-wide target comes back as 256-byte rows = 2× the
+/// pixels; every 64-px-wide test was aligned by luck, which hid this). The
+/// padding is stripped HERE so callers can index `chunks_exact(4)` safely —
+/// padding bytes are `[0,0,0,0]`, which would otherwise satisfy a
+/// `px != clear` probe and false-green a "something painted" assertion.
 pub fn readback_rgba(app: &mut App, target: Handle<Image>) -> Vec<u8> {
     const MAX_FRAMES: usize = 60;
+
+    // The target's true extent — needed to detect + strip row padding below.
+    let (width, height) = {
+        let images = app.world().resource::<Assets<Image>>();
+        let image = images.get(&target).expect("readback target Image exists");
+        (
+            image.texture_descriptor.size.width as usize,
+            image.texture_descriptor.size.height as usize,
+        )
+    };
 
     let cell = CapturedBytes::default();
     app.insert_resource(cell.clone());
@@ -238,7 +267,8 @@ pub fn readback_rgba(app: &mut App, target: Handle<Image>) -> Vec<u8> {
         }
     }
 
-    cell.0
+    let data = cell
+        .0
         .lock()
         .expect("readback sink mutex")
         .take()
@@ -249,5 +279,27 @@ pub fn readback_rgba(app: &mut App, target: Handle<Image>) -> Vec<u8> {
                  the image carries COPY_SRC + RenderAssetUsages::all() and that a \
                  capture camera targets it)"
             )
-        })
+        });
+
+    // Strip wgpu's 256-byte row padding if present (see the doc comment).
+    let unpadded_row = width * 4;
+    let padded_row = unpadded_row.div_ceil(256) * 256;
+    if data.len() == unpadded_row * height {
+        data
+    } else if data.len() == padded_row * height {
+        let mut out = Vec::with_capacity(unpadded_row * height);
+        for row in 0..height {
+            let start = row * padded_row;
+            out.extend_from_slice(&data[start..start + unpadded_row]);
+        }
+        out
+    } else {
+        panic!(
+            "readback returned {} bytes for a {width}x{height} RGBA8 target — \
+             expected {} (unpadded) or {} (256-byte-padded rows)",
+            data.len(),
+            unpadded_row * height,
+            padded_row * height,
+        );
+    }
 }

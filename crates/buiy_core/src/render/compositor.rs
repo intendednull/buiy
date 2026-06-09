@@ -19,10 +19,10 @@ use bevy::render::render_resource::{
 };
 use bevy::render::renderer::RenderDevice;
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::ViewTarget;
+use bevy::render::view::{Msaa, ViewTarget};
 
 use crate::render::buckets::BuiyPrimitiveKind;
-use crate::render::composite::{BuiyGroupPipelines, CompositeKey, CompositePipeline};
+use crate::render::composite::{BuiySpecializedPipelines, CompositeKey, CompositePipeline};
 use crate::render::extract::ExtractedEffectGroups;
 use crate::render::prepare::BuiyInstanceBuffers;
 use crate::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
@@ -397,14 +397,16 @@ pub(crate) fn prepare_effect_groups(
     mut stats: ResMut<RtPoolStats>,
     pipeline_cache: Res<PipelineCache>,
     composite_pipeline: Res<CompositePipeline>,
-    mut group_pipelines: ResMut<BuiyGroupPipelines>,
+    mut group_pipelines: ResMut<BuiySpecializedPipelines>,
     // The view render entities `BuiyNode` runs on (those with a `ViewTarget`).
     // v1/D2: all groups resolve to the primary view, so the per-view
     // `ExtractedEffectGroups` resource shim is attached to every `ViewTarget`
     // entity — the carrier lands on the SAME entity the node's `ViewQuery`
     // resolves (decided fork 2 — NOT a resource). `ExtractedNodes` carries the
-    // view scale_factor used for bucketing.
-    views: Query<(Entity, &ViewTarget)>,
+    // view scale_factor used for bucketing. `Msaa` (extracted per view) keys
+    // the root-group composite's sample count — that pass draws into the
+    // window attachment, which is multisampled under MSAA.
+    views: Query<(Entity, &ViewTarget, &Msaa)>,
     nodes: Res<crate::render::extract::ExtractedNodesView>,
 ) {
     let extracted = &extracted.0;
@@ -414,7 +416,7 @@ pub(crate) fn prepare_effect_groups(
     // the empty groups vec. Reset the stat (no buckets held this frame).
     if extracted.is_empty() {
         *stats = RtPoolStats::default();
-        for (view, _) in &views {
+        for (view, _, _) in &views {
             commands
                 .entity(view)
                 .insert(PreparedEffectGroups::default())
@@ -423,30 +425,43 @@ pub(crate) fn prepare_effect_groups(
         return;
     }
 
-    // The window (root-group parent) attachment format — every live view shares
-    // it in v1/D2 (single primary view). The composite pipeline is specialized
-    // per parent format: root groups composite into the window format, nested
-    // groups into the `Rgba16Float` group-target format.
+    // The window (root-group parent) attachment format + sample count — every
+    // live view shares them in v1/D2 (single primary view). The composite
+    // pipeline is specialized per parent attachment: root groups composite into
+    // the window format AT the view's `Msaa` sample count (the window pass
+    // attachment is multisampled when MSAA is on), nested groups into the
+    // `Rgba16Float` single-sampled group-target format.
     //
     // v1/D2: a single primary view — the composite pipelines are specialized for
-    // the FIRST view's format and reused for every view below. A second window
-    // with a different attachment format (e.g. HDR) would need per-view format
-    // specialization; that rides the per-view-routing follow-up.
-    let window_format = views
+    // the FIRST view's format/samples and reused for every view below. A second
+    // window with a different attachment format (e.g. HDR) or MSAA mode would
+    // need per-view specialization; that rides the per-view-routing follow-up.
+    // No-views is unreachable here in practice: with no view entities there are
+    // no extracted groups either (the `extracted.is_empty()` early-return above
+    // fires first). Return loudly instead of a silent wrong-key fallback so a
+    // future multi-view regression cannot composite with a mismatched pipeline.
+    let Some((window_format, window_samples)) = views
         .iter()
         .next()
-        .map(|(_, vt)| vt.main_texture_format())
-        .unwrap_or(TextureFormat::Rgba8UnormSrgb);
+        .map(|(_, vt, msaa)| (vt.main_texture_format(), msaa.samples()))
+    else {
+        return;
+    };
 
     // Specialize the `Quad@Rgba16Float` group-pass pipeline + the two composite
     // variants HERE (prepare owns the mutable specialization cache; the node's
-    // `&World` cannot). The node only reads the resulting ids.
-    let quad_pipeline = Some(group_pipelines.quad.specialize(
+    // `&World` cannot). The node only reads the resulting ids. The group
+    // targets are created single-sampled (`group_target_descriptor`,
+    // `sample_count: 1`), so everything drawing INTO a group target — the
+    // step-1 quad pass and the step-2a nested composite — keys `samples: 1`;
+    // only the root composite (into the window pass) keys the view's samples.
+    let quad_pipeline = Some(group_pipelines.primitives.specialize(
         &pipeline_cache,
         &BuiyPrimitives,
         BuiyPrimitiveKey {
             kind: BuiyPrimitiveKind::Quad,
             format: TextureFormat::Rgba16Float,
+            samples: 1,
         },
     ));
     let composite_into_window = group_pipelines.composite.specialize(
@@ -454,6 +469,7 @@ pub(crate) fn prepare_effect_groups(
         &composite_pipeline,
         CompositeKey {
             parent_format: window_format,
+            samples: window_samples,
         },
     );
     let composite_into_group = group_pipelines.composite.specialize(
@@ -461,6 +477,7 @@ pub(crate) fn prepare_effect_groups(
         &composite_pipeline,
         CompositeKey {
             parent_format: TextureFormat::Rgba16Float,
+            samples: 1,
         },
     );
 
@@ -595,7 +612,7 @@ pub(crate) fn prepare_effect_groups(
     // node's `ViewQuery = (&ViewTarget, Option<&PreparedEffectGroups>)` resolves
     // them off this entity. A resource shim would be invisible to the node and
     // leave the loops inert (the false-green risk) — so these are COMPONENTS.
-    for (view, _) in &views {
+    for (view, _, _) in &views {
         commands
             .entity(view)
             .insert(prepared.clone())

@@ -23,26 +23,39 @@ fn kind_variants_are_distinct() {
 }
 
 #[test]
-fn key_equality_is_by_kind_and_format() {
+fn key_equality_is_by_kind_format_and_samples() {
     let a = BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     };
     let b = BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     };
     let diff_format = BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba16Float,
+        samples: 1,
     };
     let diff_kind = BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Shadow,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
+    };
+    // The MSAA seam: a 4x view-pass variant is a distinct pipeline from the 1x
+    // baseline (wgpu validates the pipeline's MultisampleState.count against
+    // the pass attachments at set_pipeline).
+    let diff_samples = BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+        samples: 4,
     };
     assert_eq!(a, b);
     assert_ne!(a, diff_format);
     assert_ne!(a, diff_kind);
+    assert_ne!(a, diff_samples);
 }
 
 #[test]
@@ -52,16 +65,25 @@ fn key_is_hashable_and_dedupes_in_a_set() {
     set.insert(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     // Same key inserted twice → one entry (Hash + Eq).
     set.insert(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     // Different format → distinct entry.
     set.insert(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba16Float,
+        samples: 1,
     });
-    assert_eq!(set.len(), 2);
+    // Different sample count → distinct entry (the Msaa::Sample4 view variant).
+    set.insert(BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+        samples: 4,
+    });
+    assert_eq!(set.len(), 3);
 }
