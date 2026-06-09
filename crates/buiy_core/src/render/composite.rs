@@ -7,9 +7,10 @@
 //! resources land here:
 //! - [`CompositePipeline`] — the composite bind-group layouts, the shared
 //!   sampler, the unit-quad VBO, and the per-parent-format `SpecializedRenderPipeline`.
-//! - [`BuiyGroupPipelines`] — the `SpecializedRenderPipelines<BuiyPrimitives>`
-//!   cache the node specializes `Quad@Rgba16Float` through (the step-1 group
-//!   passes draw the existing quad pipeline into the `Rgba16Float` target).
+//! - [`BuiySpecializedPipelines`] — the shared `SpecializedRenderPipelines`
+//!   caches every Buiy specialization goes through: the per-view view-pass
+//!   quad/glyph variants, the `Quad@Rgba16Float@1x` step-1 group-pass variant,
+//!   and the per-parent composite variants.
 
 use core::marker::PhantomData;
 
@@ -97,10 +98,13 @@ pub struct CompositePipeline {
 
 /// Key for the composite `SpecializedRenderPipeline`: the PARENT attachment
 /// format (the window `Rgba8UnormSrgb` for a root group, or `Rgba16Float` for a
-/// nested group's target).
+/// nested group's target) and its sample count (the view's `Msaa` samples for a
+/// root group — the window attachment is multisampled under MSAA — or 1 for a
+/// nested group's single-sampled `Rgba16Float` target).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CompositeKey {
     pub parent_format: TextureFormat,
+    pub samples: u32,
 }
 
 impl SpecializedRenderPipeline for CompositePipeline {
@@ -140,7 +144,12 @@ impl SpecializedRenderPipeline for CompositePipeline {
                 ..Default::default()
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            // Must match the parent attachment's sample count (a root-group
+            // composite draws into the multisampled window pass under MSAA).
+            multisample: MultisampleState {
+                count: key.samples,
+                ..Default::default()
+            },
             fragment: Some(FragmentState {
                 shader: composite_shader_handle(),
                 shader_defs: vec![],
@@ -158,14 +167,20 @@ impl SpecializedRenderPipeline for CompositePipeline {
     }
 }
 
-/// Render-world cache of the `BuiyPrimitives` (`Quad@Rgba16Float`) and composite
-/// specializations. The node specializes through this each frame; identical keys
-/// dedup to one `CachedRenderPipelineId` (architecture § 1.4).
+/// Render-world cache of every `BuiyPrimitives` and composite specialization:
+/// the per-view view-pass variants (`prepare_buiy_view_pipelines` — quad/glyph
+/// keyed on the view's format + `Msaa` samples), the `Quad@Rgba16Float@1x`
+/// group-pass variant, and the per-parent composite variants (both
+/// `prepare_effect_groups`). One shared cache so identical keys — including the
+/// eager `pipeline::register` baseline vs. a 1x view's per-view key — dedup to
+/// one `CachedRenderPipelineId` (architecture § 1.4). The prepare systems
+/// specialize; the node only reads the resulting ids.
 #[derive(Resource, Default)]
-pub struct BuiyGroupPipelines {
-    /// `Quad@Rgba16Float` (and any future per-format group-pass) specializations.
-    pub quad: SpecializedRenderPipelines<BuiyPrimitives>,
-    /// Per-parent-format composite specializations.
+pub struct BuiySpecializedPipelines {
+    /// Typed-primitive (`BuiyPrimitives`) specializations, every
+    /// `(kind, format, samples)` variant.
+    pub primitives: SpecializedRenderPipelines<BuiyPrimitives>,
+    /// Per-`(parent_format, samples)` composite specializations.
     pub composite: SpecializedRenderPipelines<CompositePipeline>,
 }
 
@@ -237,7 +252,7 @@ impl FromWorld for CompositePipeline {
 /// device) via `register_gpu`; this `build`-time half only inits the device-free
 /// specialization cache.
 pub(crate) fn register(render_app: &mut bevy::app::SubApp) {
-    render_app.init_resource::<BuiyGroupPipelines>();
+    render_app.init_resource::<BuiySpecializedPipelines>();
 }
 
 /// `finish`-time half: the device-owning `CompositePipeline` (`FromWorld` needs

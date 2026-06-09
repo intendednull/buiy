@@ -1,5 +1,9 @@
-//! Buiy render pipeline. The render-graph node in `node.rs` references
-//! `BuiyPipeline::id` to dispatch draws.
+//! Buiy render pipeline. The render-graph node in `node.rs` dispatches its
+//! VIEW-pass draws through the per-view [`BuiyViewPipelines`] ids (specialized
+//! to each view's attachment format + `Msaa` sample count by
+//! `prepare_buiy_view_pipelines`); [`BuiyPipeline`] carries the shared
+//! device objects (unit-quad VBO, bind-group layouts) plus the eager
+//! 1x-baseline ids.
 //!
 //! Full pipeline (multi-pass top-layer compositing, atlas binding,
 //! filter/blend mode passes) lives in `buiy-render-pipeline-design`.
@@ -11,13 +15,15 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BindGroupLayoutEntry,
     Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, PipelineCache,
-    SamplerBindingType, ShaderStages, SpecializedRenderPipeline, TextureFormat, TextureSampleType,
+    SamplerBindingType, ShaderStages, TextureFormat, TextureSampleType,
     binding_types::{sampler, texture_2d, uniform_buffer},
 };
 use bevy::render::renderer::RenderDevice;
+use bevy::render::view::{Msaa, ViewTarget};
 use bevy::shader::Shader;
 
 use crate::render::buckets::BuiyPrimitiveKind;
+use crate::render::composite::BuiySpecializedPipelines;
 use crate::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
 
 /// Stable UUID for the rounded-rect shader asset.
@@ -121,12 +127,20 @@ pub fn build_atlas_layout(device: &RenderDevice) -> BindGroupLayout {
 
 #[derive(Resource)]
 pub struct BuiyPipeline {
+    /// The eagerly-queued `Quad@Rgba8UnormSrgb@1x` baseline id. Specialized at
+    /// plugin finish through the shared [`BuiySpecializedPipelines`] cache, so a
+    /// single-sampled default-format view's per-view specialization
+    /// (`prepare_buiy_view_pipelines`) dedups onto this same id — no duplicate
+    /// compile. The node draws the per-view ids ([`BuiyViewPipelines`]), not
+    /// this field directly; it stays as the startup-time wgpu acceptance check
+    /// (pipeline creation validates the vertex layout + WGSL) the smoke tests
+    /// assert on.
     pub id: CachedRenderPipelineId,
-    /// Cached pipeline id for the coverage-glyph (alpha-as-color) primitive,
-    /// keyed to the view format (`Rgba8UnormSrgb`). The glyph node looks this up
-    /// to set the coverage pipeline before its glyph draw. Specialized through
-    /// the same `BuiyPrimitives` specializer as `id` (the `Glyph` kind), so it
-    /// reuses `coverage.wgsl` + the `@group(0)`/`@group(1)` layout.
+    /// The `Glyph@Rgba8UnormSrgb@1x` baseline id for the coverage-glyph
+    /// (alpha-as-color) primitive — same eager-baseline role as `id` (the node
+    /// draws [`BuiyViewPipelines::glyph`]). Specialized through the same
+    /// `BuiyPrimitives` specializer (the `Glyph` kind), so it reuses
+    /// `coverage.wgsl` + the `@group(0)`/`@group(1)` layout.
     pub glyph_id: CachedRenderPipelineId,
     /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
     /// at pipeline registration and reused every frame. Phase 0 closeout
@@ -176,34 +190,6 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // bind group against this copy.
     let atlas_layout = build_atlas_layout(world.resource::<RenderDevice>());
 
-    // Build pipeline descriptor and queue it.
-    let pipeline_cache = world.resource::<PipelineCache>();
-
-    // Build the quad / view-format pipeline through the typed-primitive
-    // specializer rather than an inline descriptor literal, so the Phase-0
-    // pipeline and the typed-primitive variants cannot drift (same vertex
-    // layout, `@group(0)` view-uniform layout, blend, and entry points). The
-    // main pass keys off `TextureFormat::Rgba8UnormSrgb` — exactly what
-    // `ViewTarget::main_texture_format()` returns for the default `Camera2d`
-    // view (architecture.md § 1.4) and what the Phase-0 descriptor hard-coded.
-    // `register` runs at plugin finish, before any `ViewTarget` exists, so the
-    // literal stands in for the view's default format here; per-format
-    // registration through `SpecializedRenderPipelines` in a prepare pass is a
-    // sibling phase.
-    let descriptor = BuiyPrimitives.specialize(BuiyPrimitiveKey {
-        kind: BuiyPrimitiveKind::Quad,
-        format: TextureFormat::Rgba8UnormSrgb,
-    });
-
-    // The coverage-glyph pipeline, same view format. Built through the SAME
-    // specializer so the glyph vertex layout + `@group(0)`/`@group(1)` cannot
-    // drift from the descriptor. Queued alongside the quad pipeline; the glyph
-    // node binds `glyph_id` + the atlas `@group(1)` for its glyph draw.
-    let glyph_descriptor = BuiyPrimitives.specialize(BuiyPrimitiveKey {
-        kind: BuiyPrimitiveKind::Glyph,
-        format: TextureFormat::Rgba8UnormSrgb,
-    });
-
     let render_device = world.resource::<RenderDevice>();
 
     // Unit quad in (pos, uv) interleaved layout, matching the vertex-buffer
@@ -242,8 +228,38 @@ pub(crate) fn register(render_app: &mut SubApp) {
         usage: BufferUsages::VERTEX,
     });
 
-    let id = pipeline_cache.queue_render_pipeline(descriptor);
-    let glyph_id = pipeline_cache.queue_render_pipeline(glyph_descriptor);
+    // Queue the quad + coverage-glyph baselines (`Rgba8UnormSrgb`, 1 sample —
+    // what `ViewTarget::main_texture_format()` returns for a non-HDR view, at
+    // the single-sample count) through the typed-primitive specializer, so the
+    // Phase-0 pipeline and the typed-primitive variants cannot drift (same
+    // vertex layouts, `@group(0)`/`@group(1)` layouts, blend, entry points).
+    // Specialized through the SHARED render-world cache (`BuiySpecializedPipelines`,
+    // initialized in `build` via `compositor::register`), NOT a bare
+    // `queue_render_pipeline`: the per-view prepare pass
+    // (`prepare_buiy_view_pipelines`) specializes the same keys for an
+    // `Msaa::Off` default-format view and dedups onto these very ids instead of
+    // compiling duplicates. `register` runs at plugin finish, before any
+    // `ViewTarget` exists, so the literals stand in for the default view here;
+    // a multisampled / HDR view gets its own variant from the prepare pass.
+    let (id, glyph_id) =
+        world.resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
+            let pipeline_cache = world.resource::<PipelineCache>();
+            let mut specialize = |kind| {
+                pipelines.primitives.specialize(
+                    pipeline_cache,
+                    &BuiyPrimitives,
+                    BuiyPrimitiveKey {
+                        kind,
+                        format: TextureFormat::Rgba8UnormSrgb,
+                        samples: 1,
+                    },
+                )
+            };
+            (
+                specialize(BuiyPrimitiveKind::Quad),
+                specialize(BuiyPrimitiveKind::Glyph),
+            )
+        });
     world.insert_resource(BuiyPipeline {
         id,
         glyph_id,
@@ -251,4 +267,61 @@ pub(crate) fn register(render_app: &mut SubApp) {
         view_layout,
         atlas_layout,
     });
+}
+
+/// Per-view pipeline ids for the VIEW pass (the flat window pass `BuiyNode::run`
+/// draws into `ViewTarget::get_color_attachment()`): the quad-family and
+/// coverage-glyph variants specialized to THIS view's attachment format AND
+/// sample count. Inserted on the view render entity by
+/// `prepare_buiy_view_pipelines` every frame (the same per-view-component
+/// carrier pattern as `PreparedEffectGroups` — decided fork 2); the node's
+/// `ViewQuery` resolves it and never reads a global id for the view pass. A
+/// bare `Camera2d` defaults to `Msaa::Sample4`, so without this per-view
+/// specialization the 1x baseline pipelines fail wgpu validation at the first
+/// `set_pipeline` ("Render pipeline targets are incompatible with render pass").
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BuiyViewPipelines {
+    /// `Quad @ (view format, view samples)` — the flat window-pass quad draw.
+    pub quad: CachedRenderPipelineId,
+    /// `Glyph @ (view format, view samples)` — the window-pass glyph draw.
+    pub glyph: CachedRenderPipelineId,
+}
+
+/// `RenderSystems::Prepare` system: specialize the view-pass quad + glyph
+/// pipelines per view, keyed on the view's `main_texture_format()` and its
+/// extracted [`Msaa`] sample count, and insert the ids as a
+/// [`BuiyViewPipelines`] component on the view render entity. Mirrors the
+/// compositor's established prepare-time specialization
+/// (`prepare_effect_groups` — prepare owns the mutable
+/// `SpecializedRenderPipelines` cache; the node's `&World` cannot) and Bevy's
+/// own per-view MSAA idiom (e.g. `prepare_skybox_pipelines`, keyed on
+/// `msaa.samples()`). Identical keys dedup in [`BuiySpecializedPipelines`], so
+/// steady-state frames re-use cached ids — no per-frame compiles.
+pub(crate) fn prepare_buiy_view_pipelines(
+    mut commands: Commands,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<BuiySpecializedPipelines>,
+    // `Msaa` is extracted onto the camera's view render entity
+    // (`ExtractComponentPlugin::<Msaa>` in bevy_render's view plugin); the
+    // `ViewTarget` lands on the same entity in `ManageViews`, before `Prepare`.
+    views: Query<(Entity, &ViewTarget, &Msaa)>,
+) {
+    for (entity, view_target, msaa) in &views {
+        let mut specialize = |kind| {
+            pipelines.primitives.specialize(
+                &pipeline_cache,
+                &BuiyPrimitives,
+                BuiyPrimitiveKey {
+                    kind,
+                    format: view_target.main_texture_format(),
+                    samples: msaa.samples(),
+                },
+            )
+        };
+        let view_pipelines = BuiyViewPipelines {
+            quad: specialize(BuiyPrimitiveKind::Quad),
+            glyph: specialize(BuiyPrimitiveKind::Glyph),
+        };
+        commands.entity(entity).insert(view_pipelines);
+    }
 }

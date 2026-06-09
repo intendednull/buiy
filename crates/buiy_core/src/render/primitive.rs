@@ -32,8 +32,8 @@ use crate::render::pipeline::{
 };
 
 /// One `SpecializedRenderPipeline` variant: a primitive built for a specific
-/// target color-attachment format. `Key` for the typed-primitive
-/// `SpecializedRenderPipeline` (architecture.md § 1.4).
+/// target color-attachment format and sample count. `Key` for the
+/// typed-primitive `SpecializedRenderPipeline` (architecture.md § 1.4).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BuiyPrimitiveKey {
     /// The typed primitive this variant draws. Owned by `render::buckets` (R6).
@@ -42,6 +42,16 @@ pub struct BuiyPrimitiveKey {
     /// (`Rgba8UnormSrgb` default / `Rgba16Float` HDR) or the fixed
     /// `Rgba16Float` for effect-group targets.
     pub format: TextureFormat,
+    /// The bound attachment's sample count — a wgpu invariant exactly like
+    /// `format`: a pipeline's `MultisampleState.count` must equal the pass
+    /// attachment's `sample_count` or `set_pipeline` fails validation
+    /// ("Render pipeline targets are incompatible with render pass"). The VIEW
+    /// pass keys off the per-view [`Msaa`](bevy::render::view::Msaa) (4 for a
+    /// bare `Camera2d` — `Msaa::Sample4` is the default), via
+    /// `pipeline::prepare_buiy_view_pipelines`; the off-screen effect-group
+    /// targets are created single-sampled (`group_target_descriptor`,
+    /// `sample_count: 1`), so the group passes always key `samples: 1`.
+    pub samples: u32,
 }
 
 /// The typed-primitive `SpecializedRenderPipeline`. One specializer builds
@@ -255,7 +265,13 @@ impl SpecializedRenderPipeline for BuiyPrimitives {
                 ..Default::default()
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            // The sample-count/edge seam: keyed off the bound attachment's
+            // sample count, like `format` below. The shaders are sample-count
+            // agnostic — MSAA changes only this state + the pass attachments.
+            multisample: MultisampleState {
+                count: key.samples,
+                ..Default::default()
+            },
             fragment: Some(FragmentState {
                 shader,
                 shader_defs: vec![],

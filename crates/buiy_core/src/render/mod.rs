@@ -261,6 +261,20 @@ impl Plugin for BuiyRenderPlugin {
             .add_systems(
                 Render,
                 prepare::prepare_buiy_instances.in_set(RenderSystems::Prepare),
+            )
+            // Per-view VIEW-pass pipeline specialization (quad + glyph keyed on
+            // the view's attachment format AND `Msaa` sample count — a bare
+            // `Camera2d` defaults to `Msaa::Sample4`, so the window pass is 4x
+            // and the 1x baseline ids cannot bind there). Inserts the
+            // `BuiyViewPipelines` carrier on the view render entity for
+            // `BuiyNode::run`. No explicit ordering vs the sibling Prepare
+            // systems: neither reads the other's output. NOTE: both this and
+            // `prepare_effect_groups` hold `ResMut<BuiySpecializedPipelines>`,
+            // so the scheduler serializes them in an arbitrary (harmless)
+            // order — each only inserts keys into the shared caches.
+            .add_systems(
+                Render,
+                pipeline::prepare_buiy_view_pipelines.in_set(RenderSystems::Prepare),
             );
         // Render-graph node: graph TOPOLOGY only (add_render_graph_node + edges),
         // device-free, so it stays in build. The device-dependent pipeline init

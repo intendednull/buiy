@@ -39,7 +39,7 @@ use super::{
     atlas::AtlasGpu,
     composite::CompositePipeline,
     compositor::{PreparedEffectGroups, PreparedEffectTargets},
-    pipeline::BuiyPipeline,
+    pipeline::{BuiyPipeline, BuiyViewPipelines},
     prepare::BuiyInstanceBuffers,
 };
 
@@ -52,8 +52,14 @@ impl ViewNode for BuiyNode {
     // component, or one with an empty `groups` vec) runs the existing flat pass
     // byte-for-byte unchanged. The prepare pass attaches it on views that have
     // live `EffectGroup`s (architecture § 4 / effect-compositor.md § 1.1).
+    //
+    // `BuiyViewPipelines` carries the quad/glyph ids specialized to THIS view's
+    // attachment format + `Msaa` sample count (`prepare_buiy_view_pipelines`).
+    // `Option<&...>` like its sibling carriers: absent only before the first
+    // Prepare touches the view, which is a skipped draw, not an error.
     type ViewQuery = (
         &'static ViewTarget,
+        Option<&'static BuiyViewPipelines>,
         Option<&'static PreparedEffectGroups>,
         Option<&'static PreparedEffectTargets>,
     );
@@ -62,12 +68,23 @@ impl ViewNode for BuiyNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (view_target, prepared, prepared_targets): QueryItem<'w, '_, Self::ViewQuery>,
+        (view_target, view_pipelines, prepared, prepared_targets): QueryItem<
+            'w,
+            '_,
+            Self::ViewQuery,
+        >,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
         let buiy_pipeline = world.resource::<BuiyPipeline>();
-        let Some(pipeline) = pipeline_cache.get_render_pipeline(buiy_pipeline.id) else {
+        // The view-pass pipelines are the PER-VIEW variants (this view's format
+        // + sample count) — never the 1x baseline `BuiyPipeline::id`: a bare
+        // `Camera2d` defaults to `Msaa::Sample4`, and a 1x pipeline in its 4x
+        // pass fails wgpu validation at `set_pipeline`.
+        let Some(view_pipelines) = view_pipelines else {
+            return Ok(());
+        };
+        let Some(pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.quad) else {
             return Ok(());
         };
 
@@ -279,7 +296,7 @@ impl ViewNode for BuiyNode {
         // step-1 group pass must draw glyph instances into the group target via a
         // `Glyph@Rgba16Float` specialization.
         if buffers.glyph_count > 0
-            && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(buiy_pipeline.glyph_id)
+            && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
             && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
             && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
             && let Some(glyph_buffer) = buffers.glyph.buffer()
