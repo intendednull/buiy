@@ -531,29 +531,35 @@ R8 Task 8 / R9 implement against it.
 `docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md`;
 `architecture.md § 2`, `paint-order-and-top-layer.md § 3/§ 4`, `effect-compositor.md`.
 
-## Render — subtree visibility suppression (`CssVisibility::Hidden` / `OffscreenAuto` descendants)
+## Render — subtree visibility suppression (`CssVisibility::Hidden` / `OffscreenAuto` descendants) — LANDED
 
-**Originated:** R5 (per-view extract) — `node_skip_reason` is a per-entity leaf
+**Originated:** R5 (per-view extract) — `node_skip_reason` was a per-entity leaf
 predicate; the spec requires a subtree-scoped paint skip.
 
-**Symptom:** `extract_buiy_nodes` drops the entity that carries
-`CssVisibility::Hidden` (or `OffscreenAuto`) but not its descendants, which stay in
-`painters_z` with valid `ResolvedLayout`. Buiy has no visibility cascade, so a
-`Visible`/default child of a `Hidden` parent would still paint — a divergence from
-paint-order-and-top-layer.md § 5.4 / § 5.3. Latent today: no v1 code sets
-`CssVisibility::Hidden` on a non-leaf entity and layout does not yet emit
-`OffscreenAuto`.
+**Status:** **Landed** 2026-06-09 (Option A of the design note, ratified). The
+`write_paint_skip` render-prep pass (`crates/buiy_core/src/render/visibility.rs`,
+`.after(Animate).before(Picking)` alongside the clip/effect passes) is a
+seed-gated top-down `Children` walk that writes the computed
+`ComputedPaintSkip { reason: SkipReason }` marker (render/components.rs, lean
+derives, not registered) onto each `CssVisibility::Hidden` / `OffscreenAuto`
+root AND every descendant, removing it when an entity leaves the suppressed
+subtree (an entity's own reason wins over the inherited one). Extract now reads
+the marker as its SINGLE skip source — `CssVisibility`/`OffscreenAuto` left the
+fan and probe; `node_skip_reason` moved producer-side — and its damage gate
+hears both transitions: `Changed<ComputedPaintSkip>` in the `Or<…>` probe (hide)
+plus a `RemovedComponents<ComputedPaintSkip>` stream (show, beside the despawn
+stream). Steady state is O(0): the walk early-returns without seeds, and the
+shared `reconcile_one` change-gate keeps re-walks op-free. v1 semantics: blanket
+subtree drop (no `visibility:visible` override until a visibility cascade
+exists). Coverage: `tests/render_paint_skip.rs` (headless subtree/flip/
+reparent/steady-state + one `#[ignore]` GPU smoke: hidden subtree packs 0 quads
+→ show packs 2 → re-hide packs 0).
 
-**Implementation sketch:** a render-prep `Children`-walk visibility-propagation pass
-(same shape as `write_clip_rects` / `write_buiy_transform`, in the
-`.after(Animate).before(Picking)` window) that writes a computed paint-skip marker
-across each hidden/offscreen subtree; extract reads the computed marker per entity.
-Recommended over a cache-coordinated drop in R6/R8's assembler. Land alongside or just
-before R6/R8 (the first phase whose output paints the full set). v1 semantics: blanket
-subtree drop (no `visibility:visible` override until a visibility cascade exists).
-
-**Spec touchpoint:** `paint-order-and-top-layer.md § 5.3 / § 5.4`; design fork in
-`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-subtree-visibility-suppression-design.md`.
+**Spec touchpoint:** `paint-order-and-top-layer.md § 5.3 / § 5.4` (status notes
+updated); `architecture.md § 1.2/§ 3.1` (fan + trigger union updated);
+`component-model.md` (computed-component set);
+`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-subtree-visibility-suppression-design.md`
+(now implemented, "As landed" section).
 
 ## Layout — Phase 9 stacking sub-pass 6f reads `ResolvedTransform` — LANDED
 

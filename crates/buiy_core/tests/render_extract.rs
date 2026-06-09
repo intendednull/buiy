@@ -71,57 +71,11 @@ fn system_color_resolves_through_forced_theme_on_the_r5_path() {
     );
 }
 
-use buiy_core::render::components::CssVisibility;
-use buiy_core::render::extract::{SkipReason, node_skip_reason};
-
-// Helper mirroring what extract binds per entity: Option of each skip input.
-fn skip(css_vis: Option<CssVisibility>, offscreen: bool) -> Option<SkipReason> {
-    node_skip_reason(css_vis.as_ref(), offscreen)
-}
-
-#[test]
-fn visible_entity_is_not_skipped() {
-    assert_eq!(skip(None, false), None);
-    assert_eq!(skip(Some(CssVisibility::Visible), false), None);
-}
-
-#[test]
-fn css_visibility_hidden_is_skipped() {
-    assert_eq!(
-        skip(Some(CssVisibility::Hidden), false),
-        Some(SkipReason::CssHidden)
-    );
-}
-
-#[test]
-fn css_visibility_collapse_is_not_a_paint_skip_in_v1() {
-    // Collapse is a deferred table/flex marker (component-model.md § 12.1) —
-    // v1 ships only the Hidden paint-skip, so Collapse paints normally.
-    assert_eq!(skip(Some(CssVisibility::Collapse), false), None);
-}
-
-#[test]
-fn offscreen_auto_is_skipped() {
-    assert_eq!(skip(None, true), Some(SkipReason::OffscreenAuto));
-}
-
-#[test]
-fn content_visibility_hidden_entity_still_paints_its_own_box() {
-    // paint-order-and-top-layer.md § 5.2: a `content-visibility: hidden`
-    // entity's OWN box paints; only its descendants are pruned, and that prune
-    // happens layout-side (they never reach painters_z). Render therefore does
-    // NOT skip the Hidden entity itself — Containment is not even a skip input.
-    assert_eq!(skip(None, false), None);
-}
-
-#[test]
-fn css_hidden_takes_precedence_over_offscreen() {
-    // Precedence is observable; CssHidden is checked first.
-    assert_eq!(
-        skip(Some(CssVisibility::Hidden), true),
-        Some(SkipReason::CssHidden)
-    );
-}
+// The per-entity skip-predicate tests (`node_skip_reason`) moved with the
+// predicate to `render/visibility.rs` (its `#[cfg(test)]` module) when the
+// subtree visibility-suppression pass made the computed `ComputedPaintSkip`
+// marker extract's single skip source — the predicate is now producer-side.
+// The pass itself is covered by tests/render_paint_skip.rs.
 
 use buiy_core::components::ResolvedLayout;
 use buiy_core::layout::{Stacking, TopLayer};

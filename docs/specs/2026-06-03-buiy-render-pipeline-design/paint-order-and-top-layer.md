@@ -311,7 +311,10 @@ entity by the same off-screen test layout already runs inline in `sync_styles`
 (`is_off_screen`, `crates/buiy_core/src/layout/systems.rs`; component-model § 12.2).
 That inline test persists nothing render can read today — emitting
 `OffscreenAuto` from it is the layout-side deliverable this rule depends on. Render
-extract reads `OffscreenAuto` to drop the subtree's primitives, keeping render a thin
+consumes `OffscreenAuto` to drop the subtree's primitives — as landed, the
+`write_paint_skip` render-prep pass resolves it (subtree-scoped) into the computed
+`ComputedPaintSkip` marker that extract reads per entity (§ 5.4 implementation
+status) — keeping render a thin
 consumer (README § 2 pillar 1) rather than a second visibility engine. The component
 is catalogued in [component-model.md § 12](component-model.md) and
 [README § 3.1](README.md); this file fixes the behavior (off-screen `Auto` → no
@@ -353,21 +356,25 @@ Render's extract drops the `CssVisibility::Hidden` entity *and its descendants* 
 primitive emission — the same subtree-scoped paint skip as the `OffscreenAuto` case
 (§ 5.3), just keyed on `CssVisibility::Hidden` instead of the off-screen marker.
 
-> **v1 implementation status (R5).** R5's `extract_buiy_nodes` implements the
-> per-entity **leaf** skip only: `node_skip_reason` drops the entity that carries
-> `CssVisibility::Hidden` (or `OffscreenAuto`), but does **not** yet drop its
-> descendants — Buiy has no visibility cascade, so a `Visible`/default child of a
-> `Hidden` parent stays in `painters_z` and would still paint. The subtree-scoped
-> suppression this section mandates is a tracked follow-up
-> ([follow-ups.md](../../plans/follow-ups.md) → "Render — subtree visibility
-> suppression"; design fork in
-> [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md)).
-> Deferred deliberately: R5 emits only the `Changed`-gated set and leaves full-set
-> assembly + the persistent unchanged-painter cache to R6/R8, and a cache-coherent
-> descendant drop must coordinate with that cache (or land as a separate render-prep
-> visibility-propagation pass). The leaf skip is sufficient today because no v1 code
-> sets `CssVisibility::Hidden` on a non-leaf entity and layout does not yet emit
-> `OffscreenAuto`.
+> **Implementation status (landed 2026-06-09).** The subtree-scoped suppression
+> is built as the `write_paint_skip` render-prep pass
+> (`crates/buiy_core/src/render/visibility.rs`): a seed-gated top-down
+> `Children` walk in the Animate→Picking window (the same shape as
+> `write_clip_rects` / `write_buiy_transform`) writes the computed
+> `ComputedPaintSkip { reason }` marker onto a `CssVisibility::Hidden` /
+> `OffscreenAuto` entity AND every descendant, and removes it when the entity
+> leaves the suppressed subtree. Extract reads the marker as its **single**
+> per-entity skip source (it no longer queries `CssVisibility` / `OffscreenAuto`
+> directly), and its damage gate hears both transitions:
+> `Changed<ComputedPaintSkip>` in the probe (hide) and a
+> `RemovedComponents<ComputedPaintSkip>` stream (show — invisible to `Changed`,
+> like despawn). Design + as-landed detail:
+> [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md)
+> (Option A, ratified). v1 is a **blanket** subtree drop — no
+> `visibility: visible` override inside a hidden subtree until a visibility
+> cascade exists. Layout still does not emit `OffscreenAuto` (the § 5.3
+> layout-side deliverable is a separate tracked dependency); the render half is
+> ready for it.
 
 Because
 the box is retained, the hit-test interaction is **not** decided here: per CSS,

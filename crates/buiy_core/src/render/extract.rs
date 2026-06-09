@@ -1,55 +1,24 @@
 //! The per-view extract mapping, factored into pure functions so the
-//! device-independent half (skip predicates, `painters_z` ordering, per-entity
-//! record build) is unit-testable on CI runners with no wgpu adapter. Color
-//! resolution is delegated to the single canonical resolver
+//! device-independent half (`painters_z` ordering, per-entity record build) is
+//! unit-testable on CI runners with no wgpu adapter. Color resolution is
+//! delegated to the single canonical resolver
 //! [`color::resolve_token`](crate::render::color::resolve_token) — this module
-//! holds no second token→`Color` mapping. The `extract_buiy_nodes` system
-//! (Task 6) is a thin wrapper that calls these.
+//! holds no second token→`Color` mapping. The paint-skip decision is likewise
+//! delegated: the `write_paint_skip` render-prep pass
+//! ([`crate::render::visibility`]) resolves the subtree-scoped
+//! `CssVisibility::Hidden` / `OffscreenAuto` suppression into the computed
+//! [`ComputedPaintSkip`] marker, and extract reads ONLY that marker (single
+//! skip source — paint-order-and-top-layer.md § 5.3 / § 5.4). The
+//! `extract_buiy_nodes` system (Task 6) is a thin wrapper that calls these.
 //!
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
 use crate::theme::Theme;
 use bevy::prelude::*;
 
-use crate::render::components::CssVisibility;
-
-/// Why the forward paint walk skips an entity (paint-order-and-top-layer.md
-/// § 5). `Display::None` is NOT a variant: such entities never reach extract
-/// (no `ResolvedLayout`, absent from `painters_z`), so there is nothing to
-/// skip — the absence IS the skip. `content-visibility: hidden` is likewise NOT
-/// a variant: § 5.2 keeps the Hidden entity's own box painting and prunes its
-/// descendants layout-side (they never enter `painters_z`), so render inherits
-/// the prune for free.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SkipReason {
-    /// `CssVisibility::Hidden` — render-owned paint-skip, keep the box (§ 5.4).
-    CssHidden,
-    /// Off-screen `content-visibility: auto` (the `OffscreenAuto` marker, § 5.3).
-    OffscreenAuto,
-}
-
-/// Decide whether a `Node` entity should be skipped at paint, and why.
-/// `None` => paint normally. Inputs are bound as `Option<&T>` / `bool` exactly
-/// as the extract fan binds them. Precedence (first match wins): render-owned
-/// `CssVisibility::Hidden`, then `OffscreenAuto`. `content-visibility: hidden`
-/// is deliberately NOT consulted here — the Hidden entity's own box paints
-/// (§ 5.2) and its descendants are pruned layout-side.
-pub fn node_skip_reason(
-    css_visibility: Option<&CssVisibility>,
-    offscreen_auto: bool,
-) -> Option<SkipReason> {
-    if matches!(css_visibility, Some(CssVisibility::Hidden)) {
-        return Some(SkipReason::CssHidden);
-    }
-    if offscreen_auto {
-        return Some(SkipReason::OffscreenAuto);
-    }
-    None
-}
-
 use crate::components::{Node, ResolvedLayout};
 use crate::render::components::{
-    AncestorClip, Background, ClipRect, EffectGroup, EffectReason, OffscreenAuto, Opacity,
+    AncestorClip, Background, ClipRect, ComputedPaintSkip, EffectGroup, EffectReason, Opacity,
 };
 
 /// One extracted effect group's CPU record (effect-compositor.md § 1.1). Emitted
@@ -325,8 +294,12 @@ pub fn extract_buiy_nodes(
                 &GlobalTransform,
                 &ResolvedLayout,
                 Option<&Background>,
-                Option<&CssVisibility>,
-                Option<&OffscreenAuto>,
+                // The computed subtree paint-skip marker (§ 5.3 / § 5.4) —
+                // the SINGLE skip source. `write_paint_skip` resolves the
+                // per-entity `CssVisibility` / `OffscreenAuto` inputs into it
+                // (root AND descendants), so extract never reads those
+                // author-set components directly.
+                Option<&ComputedPaintSkip>,
                 // Clip inputs (R8b): the computed per-entity clip AABB + its
                 // ancestor-only companion (consumed by `clip_for_primitive`),
                 // and `Stacking` so a top-layer member is forced to the
@@ -367,8 +340,13 @@ pub fn extract_buiy_nodes(
                     Changed<GlobalTransform>,
                     Changed<ResolvedLayout>,
                     Changed<Background>,
-                    Changed<CssVisibility>,
-                    Changed<OffscreenAuto>,
+                    // The paint-skip flip, ADD direction: an entity (or its
+                    // subtree) newly suppressed gets the computed marker
+                    // inserted by `write_paint_skip` the same frame
+                    // (`Changed` includes `Added`). The REMOVE direction
+                    // (hide→show) cannot fire `Changed` — it rides the
+                    // `RemovedComponents<ComputedPaintSkip>` stream below.
+                    Changed<ComputedPaintSkip>,
                     Changed<StackingContext>,
                     Changed<Stacking>,
                     Changed<ClipRect>,
@@ -389,6 +367,12 @@ pub fn extract_buiy_nodes(
     // despawn drops every component, emitting no `Changed`). A `Display::None`
     // hide is NOT here (it keeps `ResolvedLayout`); it rides `changed` above.
     mut removed: Extract<RemovedComponents<ResolvedLayout>>,
+    // The paint-skip flip, REMOVE direction: a hide→show transition removes
+    // the computed marker, which emits no `Changed` — without this stream the
+    // re-shown subtree would never re-extract and stay vanished forever (the
+    // exact mirror of the despawn stream above; retain-damage design § "The
+    // fix", trigger-union extension).
+    mut removed_skip: Extract<RemovedComponents<ComputedPaintSkip>>,
     // EVERY forming entity's StackingContext, keyed by its entity. The root
     // context(s) are the ones not listed as a painter in any other context's
     // painters_z; nested-context roots appear as a single atomic entry in their
@@ -417,11 +401,13 @@ pub fn extract_buiy_nodes(
     // never early-returns), so a vanished window clears to empty. Returning here
     // would instead leave the prior frame's nodes resident once the carrier is
     // `init_resource`'d (Task 7), and render would keep painting stale nodes.
-    // Drain the despawn stream FIRST, before any early-return, so the
-    // `RemovedComponents` cursor advances every frame and events never accumulate
-    // (incl. the vanished-window path below). A despawn drops `ResolvedLayout` —
-    // the one damage source the `Changed` probe cannot see.
+    // Drain the removal streams FIRST, before any early-return, so the
+    // `RemovedComponents` cursors advance every frame and events never
+    // accumulate (incl. the vanished-window path below). A despawn drops
+    // `ResolvedLayout`; a hide→show flip drops `ComputedPaintSkip` — the two
+    // damage sources the `Changed` probe cannot see.
     let despawned = removed.read().count() > 0;
+    let skip_lifted = removed_skip.read().count() > 0;
 
     let Ok(primary_window) = primary.single() else {
         commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
@@ -431,14 +417,16 @@ pub fn extract_buiy_nodes(
 
     // Damage gate (architecture.md § 3.1 / 2026-06-07-render-extract-retain-damage
     // -design.md). Rebuild only when something this view paints actually changed:
-    // a `Changed` paint input (incl. a paint-skip flip), an entity despawn, or a
-    // theme/forced-colors swap (a global token re-resolve that bypasses per-entity
-    // change detection — color-and-forced-colors.md § 3). On a steady-state frame,
+    // a `Changed` paint input (incl. a paint-skip ADD), a paint-skip LIFT (the
+    // marker-removal stream — a re-shown subtree must reappear), an entity
+    // despawn, or a theme/forced-colors swap (a global token re-resolve that
+    // bypasses per-entity change detection — color-and-forced-colors.md § 3).
+    // On a steady-state frame,
     // return WITHOUT touching the resource — the prior `ExtractedNodesView` stays
     // resident and `is_changed()` is false in prepare, which retains the persistent
     // buffers (the node re-binds + re-draws them). This is the O(0) steady-state
     // the spec's gate-#14 budget requires.
-    if changed.is_empty() && !despawned && !theme.is_changed() {
+    if changed.is_empty() && !despawned && !skip_lifted && !theme.is_changed() {
         return;
     }
 
@@ -463,8 +451,7 @@ pub fn extract_buiy_nodes(
         gt,
         layout,
         bg,
-        css_vis,
-        offscreen,
+        paint_skip,
         clip_rect,
         ancestor_clip,
         stacking,
@@ -472,8 +459,11 @@ pub fn extract_buiy_nodes(
         opacity,
     ) in nodes.iter()
     {
-        let skip = node_skip_reason(css_vis, offscreen.is_some());
-        if skip.is_some() {
+        // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
+        // computed marker ⇒ emit nothing for this entity. `write_paint_skip`
+        // stamps the marker on the hidden/offscreen ROOT and every
+        // descendant, so this one per-entity read covers the whole subtree.
+        if paint_skip.is_some() {
             continue;
         }
         if let Some(eg) = effect_group {
