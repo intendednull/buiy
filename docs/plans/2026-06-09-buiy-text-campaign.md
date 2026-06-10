@@ -67,6 +67,21 @@ consuming T7's painting primitives — not a T-phase here.
 - **Test surface:** headless only — two `FontSystem` constructions on a
   zero-system-font host resolve every default identically; the scan-swap emits
   exactly one `FontsGeneration` bump; no adapter anywhere.
+- **T1 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T1 plan's decisions 1–3; superseding context, not a
+  silent contradiction):
+  1. font-assets § 4 mentions `new_with_fonts(..)` — that constructor **scans
+     system fonts** (source-verified: it calls `db.load_system_fonts()`, same
+     as `FontSystem::new()`). Registered-only construction must use
+     `new_with_locale_and_db_and_fallback`; § 2.1's registered-only pin
+     governs, § 4's mention should be corrected.
+  2. font-assets § 1's "one direct dependency" cannot hold literally:
+     implementing `Fallback::script_fallback` requires naming
+     `unicode_script::Script` (not re-exported by cosmic-text), and the
+     registered-only constructors take an explicit locale `String` while
+     cosmic-text's own `get_locale()` is private, so Buiy needs `sys-locale`
+     too. Both are version-synced to cosmic-text 0.19's own pins, so cargo
+     unifies to one copy of each.
 
 ### T2 — Text component + Buffer lifecycle
 
@@ -231,7 +246,7 @@ consuming T7's painting primitives — not a T-phase here.
 
 | Phase | Title | Status |
 |---|---|---|
-| T1 | Engine foundation | proposed |
+| T1 | Engine foundation | landed |
 | T2 | Text component + Buffer lifecycle | proposed |
 | T3 | Measure + wrap/align | proposed |
 | T4 | First pixels | proposed |
