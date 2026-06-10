@@ -479,7 +479,19 @@ has no live producer yet.
 
 **Spec touchpoint:** `color-and-forced-colors.md § 3.3`; the gate-#11 section.
 
-## Render — effect-compositor GPU orchestration (R9 prepare body + composite draws)
+## Render — effect-compositor GPU orchestration (R9 prepare body + composite draws) — LANDED
+
+**Status:** **Landed** in the GPU-verify campaign (commit `c0a5fe0`,
+`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-08-render-effect-compositor-gpu-design.md`):
+extract carries per-group membership (`EffectGroupExtract` + `ExtractedNode.group`),
+`pack_view_partitioned` partitions contiguous per-group instance ranges,
+`prepare_effect_groups` is fully implemented (budget → pooled `Rgba16Float`
+targets → `PreparedEffectGroups`/`PreparedEffectTargets` on the view entity), and
+`BuiyNode::run` runs the step-1 group passes + step-2 composites; the flat draw
+excludes group ranges. The contiguity invariant now holds **by construction**
+since the trigger-5 opacity/filter/blend stacking-context formers landed (see the
+LANDED entry below); GPU regressions: `render_compositor_gpu.rs` +
+`render_group_contiguity_gpu.rs`. The original deferral text follows.
 
 **Originated:** R9 (effect compositor). R9 landed the full compositor MATH as
 headless-tested pure fns (`painted_bounds`, `bucket_extent`, `post_order_indices`,
@@ -571,32 +583,31 @@ updated); `architecture.md § 1.2/§ 3.1` (fan + trigger union updated);
 the composed `ResolvedTransform` (trigger 3). It implements the spec § 2 SC
 trigger union (positioned + z-index, isolation, transform, paint/strict
 containment, root), the § 2.1 five-tier z-index paint-order sort, and the
-§ 4 top-layer escape. The render-side trigger-5 formers and the will-change
-SC trigger remain deferred (separate follow-ups below).
+§ 4 top-layer escape. The render-side trigger-5 formers have since landed
+(next entry); the will-change SC trigger remains deferred (separate
+follow-up below).
 
 **Spec touchpoint:** `transforms-and-containment.md § 3`, § 6;
 `stacking-and-top-layer.md`.
 
-## Layout — Phase 9 render-side stacking-context formers (`opacity` / `filter` / `mix_blend_mode`)
+## Layout — Phase 9 render-side stacking-context formers (`opacity` / `filter` / `mix_blend_mode`) — LANDED
 
 **Originated:** Phase 9 (D1 — trigger-5 formers deferred).
 
-**Symptom:** CSS spec § 2 trigger 5 (a non-default `opacity`, `filter`, or
-`mix-blend-mode` forms a stacking context) is not detected by sub-pass 6f.
-Authors who set these properties get no `StackingContext` unless another
-trigger (positioned + z-index, isolation, transform, paint/strict containment,
-root) also fires.
-
-**Cause:** the `opacity` / `filter` / `mix_blend_mode` properties live on
-render-side components that do not exist in `buiy_core` yet (the
-render-pipeline spec is unbuilt). 6f cannot read a property that has no
-component.
-
-**Implementation sketch:** when the render-side components carrying these
-properties land, extend `forms_stacking_context` with an additional
-`|| render_side_former` clause (the predicate signature takes only the inputs
-available today; adding one is a localized change). Add the corresponding
-unit tests next to the existing trigger tests.
+**Status:** **Landed** in the render-followups campaign (2026-06-09). The
+render components (`Opacity`, `Filter`, `MixBlendMode`) have existed since
+render R1 in the SAME crate, so 6f reads them with a plain import — the
+"cross-layer seam" the deferral worried about was conceptual only.
+`forms_stacking_context` (layout/systems.rs) gained the spec § 2 trigger-5
+clause: `Opacity < 1.0`, non-empty `Filter`, or `MixBlendMode != Normal`
+forms a `StackingContext`. The clause delegates to
+`render::effect::forms_render_stacking_context`, which derives from the
+canonical effect-group former predicate (`effect_reason_for`) — ONE source
+of truth for the shared terms, so the SC trigger and the group former can
+never drift apart. `will-change` stays deferred (separate follow-up below);
+`BackdropFilter` deliberately forms an `EffectGroup` but never an SC
+(render component-model.md § 8). Unit tests sit beside the other trigger
+tests (layout/systems.rs); end-to-end coverage in tests/layout_stacking.rs.
 
 **Spec touchpoint:** `stacking-and-top-layer.md § 2` trigger 5, § 7.
 
@@ -661,41 +672,30 @@ phase.
 
 **Spec touchpoint:** `transforms-and-containment.md § 1`, § 1.1.
 
-## Render — effect-compositor depends on the opacity stacking-context trigger (contiguity)
+## Render — effect-compositor depends on the opacity stacking-context trigger (contiguity) — LANDED
 
 **Originated:** render-pipeline GPU campaign item 5 (effect-compositor GPU
 orchestration), fresh-review finding.
 
-**Symptom:** the off-screen group composite partitions instances into one
-contiguous `[start,end)` range per `EffectGroup` (`pack_view_partitioned`,
-`render/buckets.rs`). That single-range model assumes a group's members are a
-contiguous run in `painters_z` — true only if the group is **atomic** (nothing
-non-descendant paints between its descendants). CSS makes an `opacity < 1`
-element atomic by forming a stacking context, but Buiy's layout does **not** yet
-form that SC (the deferred Phase-9 opacity/filter/blend SC trigger — see "Layout
-— Phase 9 render-side stacking-context formers" above). So a group member that
-carries its **own** z-index stacking context at a different paint tier than a
-non-member sibling can interleave, breaking contiguity. A `debug_assert_eq!` in
-`pack_view_partitioned` catches the violation loudly; in release the spanned
-non-member would double-paint (drawn into the group target AND flat).
-
-**Cause:** group membership is derived from the `EffectGroup` marker + the
-`ChildOf` subtree (a nearest-former ancestor climb), NOT from SC boundaries —
-because the SC boundary for opacity does not exist yet. Once the opacity SC
-trigger lands, the group's subtree is a contiguous `painters_z` slice by
-construction and the invariant holds without the assert.
-
-**Implementation sketch:** land the Phase-9 render-side SC trigger so a non-default
-`Opacity` (and later `Filter` / `MixBlendMode`) forms a `StackingContext`. This
-needs layout's `forms_stacking_context` to see the render-side opacity value (a
-cross-layer seam — the reason Phase 9 deferred it); resolve that seam, extend the
-trigger union, then the compositor's contiguity assert becomes a true invariant.
-A single non-contiguous group would otherwise require a multi-range-per-group
-partition, which would (wrongly) bake in non-atomic compositing — rejected.
+**Status:** **Landed** with the Phase-9 render-side SC formers (entry above,
+2026-06-09). An `Opacity < 1` / non-empty `Filter` / non-Normal
+`MixBlendMode` former now forms a `StackingContext`, so a group's subtree is
+ONE atomic entry in its parent's `painters_z` — a non-member sibling can no
+longer interleave between group members, and `pack_view_partitioned`'s
+single-range-per-group partition (`render/buckets.rs`) holds **by
+construction**. The `debug_assert_eq!` stays as a tripwire for the two
+residual ways it could break: predicate drift (prevented structurally — the
+SC trigger derives from `effect_reason_for`) and a `backdrop-filter`-ONLY
+group (deliberately EffectGroup-but-not-SC; reserved, no v1 shader). Group
+**membership** derivation is unchanged (`EffectGroup` + `ChildOf`
+nearest-former climb — SC-agnostic); the SC's contribution is paint-order
+atomicity. GPU regression for the previously-impossible latent case (a
+z-indexed group member + an interleaving-tier non-member sibling renders
+without double-paint or assert trip): tests/render_group_contiguity_gpu.rs.
 
 **Spec touchpoint:** `stacking-and-top-layer.md § 2` trigger 5;
 `effect-compositor.md § 3`; `2026-06-08-render-effect-compositor-gpu-design.md`
-(fork 5 deviation).
+(fork 5 deviation + follow-up note).
 
 ## Render — glyphs bypass effect-group compositing (text-seam follow-up)
 

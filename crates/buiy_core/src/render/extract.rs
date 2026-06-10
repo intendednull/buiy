@@ -484,11 +484,13 @@ pub fn extract_buiy_nodes(
     }
 
     // Resolve each painted node's NEAREST `EffectGroup` ancestor (the group it
-    // belongs to). An effect group does not necessarily form a stacking context
-    // (opacity is a deferred SC trigger — layout/systems.rs `forms_stacking_context`),
-    // so membership is the `ChildOf` subtree of a former, NOT an SC boundary. The
-    // nearest-former climb (a node is its OWN group if it is a former) is the v1
-    // nesting source (effect-compositor.md § 1.1, decided fork 5).
+    // belongs to). Membership is the `ChildOf` subtree of a former, NOT an SC
+    // boundary: the nearest-former climb (a node is its OWN group if it is a
+    // former) is the v1 nesting source (effect-compositor.md § 1.1, decided
+    // fork 5). The trigger-5 SC formers have since landed (layout/systems.rs
+    // `forms_stacking_context`), making every SC-forming group's subtree one
+    // atomic `painters_z` slice — the climb stays because it is SC-agnostic
+    // and also covers the `backdrop-filter` former, which forms no SC.
     let nearest_group_entity = |start: Entity| -> Option<Entity> {
         let mut cur = start;
         loop {

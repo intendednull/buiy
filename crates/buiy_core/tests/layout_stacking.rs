@@ -5,9 +5,10 @@
 use bevy::prelude::*;
 use buiy_core::components::StackingContext;
 use buiy_core::layout::{
-    ContainFlags, Isolation, LayoutPlugin, PositionKind, Style, TopLayer, TopLayerActivation,
-    ZIndex,
+    ContainFlags, Isolation, LayoutPlugin, Length, PositionKind, Style, TopLayer,
+    TopLayerActivation, ZIndex,
 };
+use buiy_core::render::components::{Filter, FilterFn, MixBlendMode, Opacity};
 use buiy_core::{CorePlugin, Node};
 
 fn app() -> App {
@@ -253,6 +254,140 @@ fn isolation_forms_stacking_context() {
         .id();
     app.update();
     assert!(app.world().get::<StackingContext>(iso).is_some());
+}
+
+#[test]
+fn opacity_forms_stacking_context_and_paints_atomically() {
+    // Trigger 5 (render-side former) end-to-end: an `Opacity(0.5)` parent
+    // forms a stacking context, so its subtree is ONE atomic entry in the
+    // root's painters_z — its children paint inside the parent's OWN list.
+    // This is the paint-order atomicity the effect-compositor's contiguity
+    // invariant rests on (render/buckets.rs `pack_view_partitioned`): the
+    // member carries its OWN z-index stacking context at the positive-z tier
+    // (z=2), and the non-member sibling sits at z=1 — before the trigger
+    // landed, the root's tier sort interleaved the sibling BETWEEN the parent
+    // and its member, splitting the group's run.
+    let mut app = app();
+    let member = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Relative)
+                .z_index(ZIndex::Layer(2)),
+        ))
+        .id();
+    let parent = app
+        .world_mut()
+        .spawn((Node, Style::default(), Opacity(0.5)))
+        .add_child(member)
+        .id();
+    let sibling = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Relative)
+                .z_index(ZIndex::Layer(1)),
+        ))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[parent, sibling])
+        .id();
+    app.update();
+
+    let parent_sc = app
+        .world()
+        .get::<StackingContext>(parent)
+        .expect("Opacity(0.5) forms a stacking context (trigger 5)");
+    assert!(
+        parent_sc.painters_z.contains(&member),
+        "the member paints inside the parent's own context"
+    );
+    let root_sc = app.world().get::<StackingContext>(root).unwrap();
+    assert!(
+        root_sc.painters_z.contains(&parent),
+        "the parent is an atomic painter in the root context"
+    );
+    assert!(
+        !root_sc.painters_z.contains(&member),
+        "the member must NOT surface in the root's painters_z — the sibling \
+         could otherwise interleave between the parent and its member"
+    );
+    assert!(
+        root_sc.painters_z.contains(&sibling),
+        "the non-member sibling stays in the root context"
+    );
+}
+
+#[test]
+fn opaque_opacity_forms_no_stacking_context() {
+    // Trigger-5 boundary, end-to-end: `Opacity(1.0)` is the CSS-initial no-op
+    // — presence of the component alone must not form a context (guards a
+    // query-wiring bug that fires on presence instead of value).
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default(), Opacity(1.0)))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_none(),
+        "Opacity(1.0) (the no-op initial) must not form a stacking context"
+    );
+}
+
+#[test]
+fn filter_forms_stacking_context_end_to_end() {
+    // Trigger 5: a non-empty `Filter` forms a stacking context via the real
+    // 6f query path.
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Filter(vec![FilterFn::Blur(Length::px(2.0))]),
+        ))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_some(),
+        "a non-empty Filter forms a stacking context (trigger 5)"
+    );
+}
+
+#[test]
+fn mix_blend_mode_forms_stacking_context_end_to_end() {
+    // Trigger 5: a non-Normal `MixBlendMode` forms a stacking context via the
+    // real 6f query path.
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default(), MixBlendMode::Multiply))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_some(),
+        "a non-Normal MixBlendMode forms a stacking context (trigger 5)"
+    );
 }
 
 #[test]

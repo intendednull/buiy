@@ -182,13 +182,16 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
 /// with no opaque members is `start == end` (empty, never drawn). `flat_ranges`
 /// is every maximal run of consecutive non-group instances.
 ///
-/// Contiguity holds by construction: extract emits a group's subtree as a
-/// contiguous paint-order run (it descends a node's children before its
-/// siblings), so a group's instances form one run. The packer preserves node
+/// Contiguity holds by construction: every SC-forming effect former is a
+/// stacking context (layout 6f — the spec § 2 trigger-5 clause for
+/// `opacity`/`filter`/`mix-blend-mode`, trigger 2 for `isolation`), so a
+/// group's subtree is one atomic `painters_z` entry; extract emits that
+/// subtree as a contiguous paint-order run, and the packer preserves node
 /// order within the single `(Quad, 0)` batch, so the instance run stays
-/// contiguous. A degenerate interleaving (a group's run split by a non-member)
-/// would surface as a non-`start..end`-contiguous range and is asserted against
-/// in the bucket tests.
+/// contiguous. A degenerate interleaving (a group's run split by a
+/// non-member) would surface as a non-`start..end`-contiguous range and is
+/// asserted against below (a tripwire, not an expected state — see the
+/// comment at the assert).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PackedPartition {
     /// The full flat quad blob (every instance, in paint order) — identical to
@@ -230,23 +233,35 @@ pub fn pack_view_partitioned(nodes: &[ExtractedNode], group_count: usize) -> Pac
                     // assumption): a group's members must be a contiguous run in
                     // paint order, so the group draws as ONE [start,end) slice into
                     // its target and the flat draw is the exact complement. This
-                    // holds when the group is ATOMIC — CSS guarantees it because an
-                    // `opacity < 1` element forms a stacking context, so nothing
-                    // non-descendant can paint between its descendants. Buiy's layout
-                    // does NOT yet form that SC (the deferred Phase-9 opacity/filter/
-                    // blend SC trigger — follow-ups.md), so a group member carrying
-                    // its OWN z-index SC at a different paint tier than a non-member
-                    // sibling could interleave, breaking contiguity. A single-range
-                    // partition cannot express that (supporting it would bake in
-                    // NON-atomic semantics, which is wrong); the real fix is the
-                    // layout SC trigger. Catch the violation loudly rather than
-                    // silently double-painting the spanned non-member.
+                    // holds when the group is ATOMIC — and it now holds BY
+                    // CONSTRUCTION: layout sub-pass 6f forms a stacking context for
+                    // every SC-forming effect former (`opacity < 1` / `filter` /
+                    // `mix-blend-mode` via the spec § 2 trigger-5 clause, landed;
+                    // `isolation` via trigger 2), so a former's subtree is one
+                    // atomic painters_z entry and nothing non-descendant can paint
+                    // between its members. The SC trigger and the group-former
+                    // predicate share one source of truth
+                    // (`render::effect::effect_reason_for` /
+                    // `forms_render_stacking_context`) precisely so they cannot
+                    // drift apart. The assert stays as a TRIPWIRE for the two ways
+                    // the invariant could still break: predicate drift, and a
+                    // `backdrop-filter`-ONLY group (the one former that is
+                    // deliberately EffectGroup-but-not-SC — reserved, no v1 shader)
+                    // whose z-indexed member interleaves a non-member. A
+                    // single-range partition cannot express interleaving
+                    // (supporting it would bake in NON-atomic semantics, which is
+                    // wrong) — catch it loudly rather than silently double-painting
+                    // the spanned non-member. GPU regression:
+                    // tests/render_group_contiguity_gpu.rs.
                     debug_assert_eq!(
                         r.end, idx,
                         "effect group {gi} is non-contiguous in paint order (gap \
-                         before instance {idx}): a group member's z-index stacking \
-                         context interleaved a non-member. Blocked on the layout \
-                         opacity stacking-context trigger (follow-ups.md)."
+                         before instance {idx}): a group member painted outside its \
+                         former's stacking context — either the trigger-5 SC clause \
+                         (layout forms_stacking_context) drifted from the \
+                         effect-group former predicate (effect_reason_for), or a \
+                         backdrop-filter-only group (EffectGroup-but-not-SC) \
+                         interleaved a non-member."
                     );
                     r.end = idx + 1; // contiguous extension
                 }

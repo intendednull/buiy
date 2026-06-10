@@ -30,6 +30,8 @@ use super::types::{
     WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
+use crate::render::components::{Filter, MixBlendMode, Opacity};
+use crate::render::effect::forms_render_stacking_context;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
@@ -3712,20 +3714,27 @@ pub(super) fn compose_transform(
     t_mat * r_mat * s_mat * m_transform
 }
 
-/// The spec § 2 union of stacking-context-formation triggers that are
-/// implementable in `buiy_core` today (D1): (1) positioned + explicit
-/// `z_index`, (2) `Isolation::Isolate`, (3) non-identity transform,
-/// (4) `Containment.contain ⊇ PAINT/STRICT`, (6) root. Trigger (5)'s
-/// render-side formers (opacity/filter/blend) and the will-change SC
-/// former are deferred — their components don't exist yet (spec § 7);
-/// add an `|| render_side_former` clause here when they land.
+/// The spec § 2 union of stacking-context-formation triggers:
+/// (1) positioned with explicit `z_index`, (2) `Isolation::Isolate`,
+/// (3) non-identity transform, (4) `Containment.contain ⊇ PAINT/STRICT`,
+/// (5) the render-side formers (`Opacity < 1`, non-empty `Filter`,
+/// `MixBlendMode != Normal` — read from the render-owned components, same
+/// crate), (6) root. Trigger 5's `will-change` former is still deferred
+/// with the rest of `will-change` layer promotion (spec § 7);
+/// `BackdropFilter` is deliberately NOT a trigger — it forms an
+/// `EffectGroup` but never a stacking context (render component-model.md
+/// § 8).
 ///
 /// Driven by the `stacking_context` sub-pass (6f).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn forms_stacking_context(
     stacking: Option<&Stacking>,
     position_kind: PositionKind,
     has_transform: bool,
     containment: Option<&Containment>,
+    opacity: Option<&Opacity>,
+    filter: Option<&Filter>,
+    blend: Option<&MixBlendMode>,
     is_root: bool,
 ) -> bool {
     // Trigger 6 — root.
@@ -3751,6 +3760,14 @@ pub(super) fn forms_stacking_context(
         && c.contain
             .intersects(ContainFlags::PAINT | ContainFlags::STRICT)
     {
+        return true;
+    }
+    // Trigger 5 — render-side formers. Delegates to the render effect
+    // module so this trigger and the effect-group former predicate
+    // (`render::effect::effect_reason_for`) share one source of truth:
+    // every SC-forming `EffectGroup` is atomic in painters_z, which is the
+    // compositor's contiguity invariant (render/buckets.rs).
+    if forms_render_stacking_context(opacity, filter, blend) {
         return true;
     }
     false
@@ -3863,6 +3880,11 @@ pub(super) fn stacking_context(
     position_q: Query<&Position>,
     transformed: Query<(), With<crate::components::ResolvedTransform>>,
     containment_q: Query<&Containment>,
+    // Trigger-5 render-side former inputs (spec § 2 trigger 5): the
+    // render-owned `Opacity` / `Filter` / `MixBlendMode` components, read
+    // here so an effect former paints atomically. Grouped in one tuple
+    // param to stay within Bevy's 16-element SystemParam tuple.
+    render_formers: (Query<&Opacity>, Query<&Filter>, Query<&MixBlendMode>),
     display_q: Query<&Display>,
     existing_sc: Query<Option<&crate::components::StackingContext>>,
     have_sc: Query<Entity, With<crate::components::StackingContext>>,
@@ -3890,12 +3912,16 @@ pub(super) fn stacking_context(
             .map(|p| !tree.by_entity.contains_key(&p.parent()))
             .unwrap_or(true)
     };
+    let (opacity_q, filter_q, blend_q) = &render_formers;
     let forms = |e: Entity, root: bool| {
         forms_stacking_context(
             stacking_q.get(e).ok(),
             pos_kind(e),
             transformed.get(e).is_ok(),
             containment_q.get(e).ok(),
+            opacity_q.get(e).ok(),
+            filter_q.get(e).ok(),
+            blend_q.get(e).ok(),
             root,
         )
     };
@@ -4366,6 +4392,9 @@ mod tests {
             PositionKind::Relative,
             false,
             None,
+            None,
+            None,
+            None,
             false
         ));
     }
@@ -4379,6 +4408,9 @@ mod tests {
             PositionKind::Static,
             false,
             None,
+            None,
+            None,
+            None,
             false
         ));
     }
@@ -4390,6 +4422,9 @@ mod tests {
             Some(&s),
             PositionKind::Absolute,
             false,
+            None,
+            None,
+            None,
             None,
             false
         ));
@@ -4403,6 +4438,9 @@ mod tests {
             PositionKind::Static,
             false,
             None,
+            None,
+            None,
+            None,
             false
         ));
     }
@@ -4413,6 +4451,9 @@ mod tests {
             None,
             PositionKind::Static,
             true,
+            None,
+            None,
+            None,
             None,
             false
         ));
@@ -4429,6 +4470,9 @@ mod tests {
             PositionKind::Static,
             false,
             Some(&c),
+            None,
+            None,
+            None,
             false
         ));
     }
@@ -4444,6 +4488,9 @@ mod tests {
             PositionKind::Static,
             false,
             Some(&c),
+            None,
+            None,
+            None,
             false
         ));
     }
@@ -4454,6 +4501,9 @@ mod tests {
             None,
             PositionKind::Static,
             false,
+            None,
+            None,
+            None,
             None,
             true
         ));
@@ -4466,8 +4516,68 @@ mod tests {
             PositionKind::Static,
             false,
             None,
+            None,
+            None,
+            None,
             false
         ));
+    }
+
+    // ---- trigger 5 — render-side formers (spec § 2; shares term semantics
+    // with `render::effect::effect_reason_for` via
+    // `forms_render_stacking_context`) ----
+
+    /// `forms_stacking_context` with no other trigger but the given
+    /// render-side former inputs — DRYs the trigger-5 boundary tests below.
+    fn forms_via_render(
+        opacity: Option<&Opacity>,
+        filter: Option<&Filter>,
+        blend: Option<&MixBlendMode>,
+    ) -> bool {
+        forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            None,
+            opacity,
+            filter,
+            blend,
+            false,
+        )
+    }
+
+    #[test]
+    fn opacity_below_one_forms_context() {
+        assert!(forms_via_render(Some(&Opacity(0.99)), None, None));
+    }
+
+    #[test]
+    fn opacity_exactly_one_does_not_form_context() {
+        // The `< 1.0` boundary: 1.0 is the CSS-initial no-op — presence of
+        // the component alone must not form a context.
+        assert!(!forms_via_render(Some(&Opacity(1.0)), None, None));
+    }
+
+    #[test]
+    fn non_empty_filter_forms_context() {
+        use crate::render::components::FilterFn;
+        let f = Filter(vec![FilterFn::Blur(Length::px(2.0))]);
+        assert!(forms_via_render(None, Some(&f), None));
+    }
+
+    #[test]
+    fn empty_filter_does_not_form_context() {
+        assert!(!forms_via_render(None, Some(&Filter(vec![])), None));
+    }
+
+    #[test]
+    fn non_normal_mix_blend_forms_context() {
+        assert!(forms_via_render(None, None, Some(&MixBlendMode::Multiply)));
+    }
+
+    #[test]
+    fn normal_mix_blend_does_not_form_context() {
+        assert!(!forms_via_render(None, None, Some(&MixBlendMode::Normal)));
     }
 
     #[test]
