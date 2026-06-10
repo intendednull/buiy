@@ -10,35 +10,33 @@
 //! **The trigger-union ledger (architecture § 5.1 row 1).** As specced:
 //! `Or<(Changed<Text>, Changed<text-style carriers>, Added<TextBuffer>,
 //! Changed<WritingModeResolved>)>` ∪ `FontsGeneration` bump ∪ theme
-//! font-token swap. Carriers existing in T2: `Text`, `FontFamily`,
-//! `FontSize`, `FontWeight`, `WritingModeResolved`, `FontsGeneration`.
-//! Members that join with their carriers: line-height / white-space /
-//! text-wrap / text-align (**T3**), `TextDirection` (**T5**, with the
-//! § 5.4 strong-mark prepend), the theme font-token swap
+//! font-token swap. Carriers from T2: `Text`, `FontFamily`, `FontSize`,
+//! `FontWeight`, `WritingModeResolved`, `FontsGeneration`; joined in T3:
+//! `LineHeight` / `WhiteSpace` / `TextWrap` / `TextAlign` (measure
+//! §§ 5.1–5.3). Members that join with their carriers: `TextDirection`
+//! (**T5**, with the § 5.4 strong-mark prepend), the theme font-token swap
 //! (**buiy-theme-tokens-design**, font-assets § 9).
 
 use bevy::prelude::*;
-use cosmic_text::{Attrs, Family, Metrics, Weight, Wrap};
+use cosmic_text::{Attrs, Family, Metrics, Weight};
 
 use crate::layout::{LayoutTree, WritingModeResolved};
 
 use super::components::{
-    ComputedTextLayout, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, TEXT_SHAPING,
-    Text, TextBuffer, TextStyleDefaults,
+    ComputedTextLayout, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, LineHeight,
+    ResolvedBaseline, TEXT_SHAPING, Text, TextAlign, TextBuffer, TextStyleDefaults, TextWrap,
+    WhiteSpace, resolve_wrap,
 };
 use super::font_system::FontsGeneration;
-use super::whitespace::{CollapseMode, collapse_whitespace};
+use super::whitespace::collapse_whitespace;
 
-/// CSS `line-height: normal` stand-in (the common UA factor) until T3 lands
-/// the line-height carrier and the measure § 5.1 `Metrics` mapping.
+/// CSS `line-height: normal` — the common UA factor (measure § 5.1; the
+/// `LineHeight::Normal` arm of the carrier's `Metrics` mapping).
 pub(crate) const DEFAULT_LINE_HEIGHT_SCALE: f32 = 1.2;
 
-/// The white-space value table's `normal` row (measure § 5.2): collapse ×
-/// `Wrap::Word`. Pinned explicitly — `Buffer::new_empty` defaults to
-/// `Wrap::WordOrGlyph` (source-verified), the C-tier `overflow-wrap`
-/// behavior, not the CSS initial. T3's white-space/text-wrap carriers
-/// drive the full table.
-const DEFAULT_WRAP: Wrap = Wrap::Word;
+/// cosmic-text's `set_metrics` asserts BOTH fields non-zero
+/// (buffer.rs:729); authored data must degrade, never panic the app.
+const METRICS_FLOOR: f32 = 0.01;
 
 /// CSS `tab-size` initial (measure § 5.2 — "set to 8 … at `TextSync`");
 /// the C-tier `tab-size` property later drives the same lazy setter.
@@ -52,13 +50,21 @@ const DEFAULT_TAB_WIDTH: u16 = 8;
 #[derive(Resource, Default, Debug)]
 pub struct TextSyncAppliedCount(pub usize);
 
-/// The § 5.1 row-1 union over the carriers that exist in T2 (the module
-/// doc is the ledger for members that join later).
+/// The § 5.1 row-1 union over the T2 + T3 carriers (the module doc is the
+/// ledger for members that join later).
 type TextSyncTriggers = Or<(
     Changed<Text>,
     Changed<FontFamily>,
     Changed<FontSize>,
     Changed<FontWeight>,
+    // T3 carriers (measure §§ 5.1–5.3). TextAlign is TRIGGER-ONLY here:
+    // its value is applied at TextCommit (§ 5.3 — a finalize concern);
+    // union membership is the § 5.1 carrier pin (an align edit must
+    // dirty-mark the node like any other text-style change).
+    Changed<LineHeight>,
+    Changed<WhiteSpace>,
+    Changed<TextWrap>,
+    Changed<TextAlign>,
     Added<TextBuffer>,
     Changed<WritingModeResolved>,
 )>;
@@ -70,6 +76,9 @@ type SyncedText = (
     Option<&'static FontFamily>,
     Option<&'static FontSize>,
     Option<&'static FontWeight>,
+    Option<&'static LineHeight>,
+    Option<&'static WhiteSpace>,
+    Option<&'static TextWrap>,
 );
 
 type SyncedTextItem<'w> = (
@@ -79,6 +88,9 @@ type SyncedTextItem<'w> = (
     Option<&'w FontFamily>,
     Option<&'w FontSize>,
     Option<&'w FontWeight>,
+    Option<&'w LineHeight>,
+    Option<&'w WhiteSpace>,
+    Option<&'w TextWrap>,
 );
 
 /// The `BuiyLayoutStep::TextSync` body (measure-and-layout § 4.1).
@@ -103,6 +115,9 @@ pub fn text_sync_buffers(
             Option<&FontFamily>,
             Option<&FontSize>,
             Option<&FontWeight>,
+            Option<&LineHeight>,
+            Option<&WhiteSpace>,
+            Option<&TextWrap>,
         ),
         Without<TextBuffer>,
     >,
@@ -121,11 +136,26 @@ pub fn text_sync_buffers(
     // `Added<TextBuffer>` arm once more: an idempotent lazy re-apply,
     // before any shaping consumer exists (documented; tests `settle()`
     // across it).
-    for (entity, text, family, size, weight) in &unsynced {
-        let style = AuthoredStyle::resolve(ctx.defaults, family, size, weight);
+    for (entity, text, family, size, weight, line_height, white_space, text_wrap) in &unsynced {
+        let style = AuthoredStyle::resolve(
+            ctx.defaults,
+            family,
+            size,
+            weight,
+            line_height,
+            white_space,
+            text_wrap,
+        );
         let mut buffer = TextBuffer::new(style.metrics());
         apply_authored(&mut buffer, text, &style);
         commands.entity(entity).insert(buffer);
+        if let Some(tree) = ctx.tree.as_deref_mut() {
+            // Text added to an entity that ALREADY has a Taffy node
+            // (decision 1's edge (b)); no-op for brand-new entities,
+            // whose node is created with its context by sync_styles
+            // later this frame.
+            tree.set_text_context(entity);
+        }
         ctx.applied.0 += 1;
     }
 
@@ -145,13 +175,18 @@ pub fn text_sync_buffers(
     }
 
     // `Text` removed while the entity lives: the leaf stops being a text
-    // leaf — drop the buffer and the (T3-written) commit output. Despawned
-    // entities clean up for free; `get_entity` filters them out here. The
-    // Taffy `set_node_context` unregistration on this same edge is T3's
-    // (measure § 2.2 — it lands with the TaffyTree<Entity> migration).
+    // leaf — drop the buffer and the (T3-written) commit outputs, and
+    // unregister the Taffy measure context (measure § 2.2;
+    // `clear_text_context`'s internal mark_dirty forces the now-plain
+    // leaf to re-measure as zero). Despawned entities clean up for free
+    // (`gc_removed_nodes` + the `by_entity` guard); `get_entity` filters
+    // them out here.
     for entity in removed_texts.read() {
+        if let Some(tree) = ctx.tree.as_deref_mut() {
+            tree.clear_text_context(entity);
+        }
         if let Ok(mut entity_commands) = commands.get_entity(entity) {
-            entity_commands.remove::<(TextBuffer, ComputedTextLayout)>();
+            entity_commands.remove::<(TextBuffer, ComputedTextLayout, ResolvedBaseline)>();
         }
     }
 }
@@ -163,13 +198,22 @@ struct SyncContext<'a> {
 }
 
 fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>) {
-    let (entity, text, mut buffer, family, size, weight) = item;
+    let (entity, text, mut buffer, family, size, weight, line_height, white_space, text_wrap) =
+        item;
     // EVERY in-place TextBuffer write bypasses change detection
     // (measure-and-layout § 7): a sync write is not a damage signal —
     // damage keys on the commit outputs; `Changed<TextBuffer>` is reserved
     // for nothing (tests/text_sync.rs pins it never fires past insertion).
     let buffer = buffer.bypass_change_detection();
-    let style = AuthoredStyle::resolve(ctx.defaults, family, size, weight);
+    let style = AuthoredStyle::resolve(
+        ctx.defaults,
+        family,
+        size,
+        weight,
+        line_height,
+        white_space,
+        text_wrap,
+    );
     apply_authored(buffer, text, &style);
     if let Some(tree) = ctx.tree.as_deref_mut() {
         // Absent tree (standalone BuiyTextPlugin, no LayoutPlugin): nothing
@@ -180,11 +224,16 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>) {
 }
 
 /// The authored style snapshot TextSync lowers into cosmic-text state.
-/// Unset components fall back to `TextStyleDefaults` (font-assets § 8).
+/// Unset font components fall back to `TextStyleDefaults` (font-assets
+/// § 8 pins the resource to the font trio); the T3 carriers fall back to
+/// their `Default` impls — the CSS initials (measure §§ 5.1–5.2).
 struct AuthoredStyle<'a> {
     family: &'a FontStack,
     size: f32,
     weight: u16,
+    line_height: LineHeight,
+    white_space: WhiteSpace,
+    text_wrap: TextWrap,
 }
 
 impl<'a> AuthoredStyle<'a> {
@@ -193,18 +242,30 @@ impl<'a> AuthoredStyle<'a> {
         family: Option<&'a FontFamily>,
         size: Option<&FontSize>,
         weight: Option<&FontWeight>,
+        line_height: Option<&LineHeight>,
+        white_space: Option<&WhiteSpace>,
+        text_wrap: Option<&TextWrap>,
     ) -> Self {
         Self {
             family: family.map_or(&defaults.family, |component| &component.0),
             size: size.map_or(defaults.size, |component| component.0),
             weight: weight.map_or(defaults.weight, |component| component.0),
+            line_height: line_height.copied().unwrap_or_default(),
+            white_space: white_space.copied().unwrap_or_default(),
+            text_wrap: text_wrap.copied().unwrap_or_default(),
         }
     }
 
-    /// font-size → `Metrics`, with the line-height stand-in (T3 lands the
-    /// carrier and the measure § 5.1 mapping).
+    /// font-size + line-height → `Metrics` (measure § 5.1).
     fn metrics(&self) -> Metrics {
-        Metrics::relative(self.size, DEFAULT_LINE_HEIGHT_SCALE)
+        let font_size = self.size.max(METRICS_FLOOR);
+        let line_height = match self.line_height {
+            LineHeight::Normal => font_size * DEFAULT_LINE_HEIGHT_SCALE,
+            LineHeight::Scale(scale) => font_size * scale,
+            LineHeight::Px(px) => px,
+        }
+        .max(METRICS_FLOOR);
+        Metrics::new(font_size, line_height)
     }
 
     /// Lower to the per-buffer `Attrs`. T2 INTERIM: the stack's FIRST entry
@@ -232,16 +293,18 @@ impl<'a> AuthoredStyle<'a> {
 /// Apply authored content + style through the 0.19 LAZY setters — no
 /// FontSystem, no lock; shaping deferred (architecture §§ 1.2, 3.2).
 ///
-/// `alignment: None` = CSS `start` (the § 5.3 table: cosmic-text's
-/// unaligned default follows the line's BiDi direction); the align carrier
-/// is T3's. The § 5.4 direction strong-mark prepend (T5) slots between the
-/// collapse transform and `set_text`, AFTER the trim.
+/// `alignment: None` stays even with the `TextAlign` carrier landed
+/// (decision 8): `set_text` with `None` leaves reused lines' align
+/// untouched, so the `Some→None` transition is only correct in the pass
+/// that calls `set_align` on EVERY line — `TextCommit` (§ 5.3, a finalize
+/// concern). The § 5.4 direction strong-mark prepend (T5) slots between
+/// the collapse transform and `set_text`, AFTER the trim.
 fn apply_authored(buffer: &mut TextBuffer, text: &Text, style: &AuthoredStyle<'_>) {
-    // T2 pins the CSS `white-space: normal` initial (collapse mode); T3's
-    // carrier selects across the full § 5.2 value table.
-    let collapsed = collapse_whitespace(&text.0, CollapseMode::Collapse);
+    let collapsed = collapse_whitespace(&text.0, style.white_space.collapse_mode());
     buffer.buffer.set_metrics(style.metrics());
-    buffer.buffer.set_wrap(DEFAULT_WRAP);
+    buffer
+        .buffer
+        .set_wrap(resolve_wrap(style.white_space, style.text_wrap));
     buffer.buffer.set_tab_width(DEFAULT_TAB_WIDTH);
     buffer
         .buffer

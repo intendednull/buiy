@@ -623,9 +623,13 @@ fn map_scrollbar_width(w: ScrollbarWidth) -> f32 {
 }
 
 fn sizing_to_dim(s: Sizing) -> taffy::Dimension {
-    // Phase 1 ships Auto / None / Length / Stretch as the "real" surface;
-    // intrinsic keywords resolve silently to Auto until Phase 10 + text
-    // rendering integrate.
+    // Phase 1 ships Auto / None / Length / Stretch as the "real" surface.
+    // Intrinsic keywords still translate to `Dimension::auto()` — taffy
+    // 0.10.1's `Dimension` cannot carry them (text measure § 3.3). For
+    // TEXT LEAVES the T3 measure closure realizes `MinContent`/`MaxContent`
+    // from the cached intrinsics (`text/measure.rs`); container intrinsic
+    // sizing remains the Phase 10 half. `FitContent` and height-axis
+    // keywords stay auto-equivalent (named deferrals, plan decision 14).
     match s {
         Sizing::Auto | Sizing::MinContent | Sizing::MaxContent | Sizing::FitContent(_) => {
             taffy::Dimension::auto()

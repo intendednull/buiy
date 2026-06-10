@@ -51,7 +51,9 @@ pub use render::forced_colors_analyzer::{
 pub use render::golden::{GoldenConfig, perceptual_diff};
 pub use text::{
     BuiyTextPlugin, ComputedTextLayout, FontFamily, FontSize, FontWeight, FontsGeneration,
-    SharedFontSystem, Text, TextBuffer, TextStyleDefaults, TextSyncAppliedCount,
+    LineHeight, ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer,
+    TextCommitReshapeCount, TextMeasureCallCount, TextStyleDefaults, TextSyncAppliedCount,
+    TextWrap, WhiteSpace,
 };
 // `OffscreenAuto` is intentionally NOT root-exported: it is a layout-written
 // marker (layout owns its registration), reachable via `render::components`.

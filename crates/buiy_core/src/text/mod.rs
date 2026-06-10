@@ -12,20 +12,27 @@
 //! `FontStack` resolver + fallback correctness (T5).
 //! Campaign: `docs/plans/2026-06-09-buiy-text-campaign.md`.
 
+mod commit;
 mod components;
 mod font_system;
+// pub(crate): the layout compute sites (taffy_compute + the two cq re-runs)
+// call `measure::compute_roots_with_text_measure` directly (measure § 4.3).
+pub(crate) mod measure;
 mod swash;
 mod sync;
 mod system_scan;
 mod whitespace;
 
+pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
     ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
-    GenericFamily, IntrinsicWidths, TEXT_SHAPING, Text, TextBuffer, TextStyleDefaults,
+    GenericFamily, IntrinsicWidths, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text, TextAlign,
+    TextBuffer, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
 };
 pub use font_system::{
     BuiyFallback, DEFAULT_FONT_FAMILY, FontsGeneration, SharedFontSystem, registered_fonts_db,
 };
+pub use measure::{TextMeasureCallCount, TextMeasureParam};
 pub use swash::BuiySwashCache;
 pub use sync::{TextSyncAppliedCount, text_sync_buffers};
 pub use system_scan::{
@@ -67,16 +74,31 @@ impl Plugin for BuiyTextPlugin {
         app.register_type::<Text>()
             .register_type::<FontFamily>()
             .register_type::<FontSize>()
-            .register_type::<FontWeight>();
+            .register_type::<FontWeight>()
+            .register_type::<LineHeight>()
+            .register_type::<WhiteSpace>()
+            .register_type::<TextWrap>()
+            .register_type::<TextAlign>();
 
         app.init_resource::<TextSyncAppliedCount>();
+        // T3: the per-frame measure instrument (measure § 7). Incremented
+        // by the measure closure inside the layout compute sites; reset by
+        // `taffy_compute` (the LayoutTaffyComputeCount pattern).
+        app.init_resource::<TextMeasureCallCount>();
+        // T3: the per-frame commit instrument (spec § 8 item 4).
+        app.init_resource::<TextCommitReshapeCount>();
         // The TextSync step body (measure-and-layout § 4.1). The
-        // BuiyLayoutStep::TextSync set is configured by LayoutPlugin's
+        // BuiyLayoutStep sets are configured by LayoutPlugin's
         // configure_pipeline; without LayoutPlugin (the T1 standalone
-        // tests) the system runs unordered with empty queries — inert.
+        // tests) the systems run unordered with empty queries — inert.
         app.add_systems(
             Update,
-            text_sync_buffers.in_set(crate::layout::BuiyLayoutStep::TextSync),
+            (
+                text_sync_buffers.in_set(crate::layout::BuiyLayoutStep::TextSync),
+                // The new FINAL layout step (architecture § 4.2). Inert
+                // without LayoutPlugin (Option params return early).
+                text_commit.in_set(crate::layout::BuiyLayoutStep::TextCommit),
+            ),
         );
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert

@@ -108,6 +108,10 @@ fn layout_steps_are_chained_in_declared_order() {
         Update,
         make_tracker(o.clone(), "write").in_set(BuiyLayoutStep::WriteResolvedLayout),
     );
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "text_commit").in_set(BuiyLayoutStep::TextCommit),
+    );
 
     // Phase 5 Task 10: spawn one Container + one ContainerQuery + one
     // descendant with Cqw so cq_activate / cq_flip_check / cq_flip_rerun
@@ -288,12 +292,14 @@ fn layout_steps_are_chained_in_declared_order() {
     app.update();
 
     // Order assertion — the tracked step chain ran in declared order.
+    // (The tracked-label list skips the two untracked cq-descendant steps,
+    // so `text_commit` — the new final step, text T3 — follows "write".)
     let observed_full = order.lock().unwrap().clone();
     let n = observed_full.len();
     assert_eq!(
-        n, 10,
+        n, 11,
         "expected exactly one full pipeline cycle ({} entries); got {} entries: {:?}",
-        10, n, observed_full,
+        11, n, observed_full,
     );
     let observed = &observed_full[..];
     assert_eq!(
@@ -309,6 +315,7 @@ fn layout_steps_are_chained_in_declared_order() {
             "cq_rerun",
             "post_taffy",
             "write",
+            "text_commit",
         ],
         "BuiyLayoutStep sets did not run in declared order; full trace: {:?}",
         observed_full,
@@ -483,6 +490,57 @@ fn cq_descendant_rerun_runs_after_invalidate() {
     assert!(
         rerun_idx > invalidate_idx,
         "CqDescendantReRun (step 9) must run after CqDescendantInvalidate (step 8); \
+         observed order: {observed:?}",
+    );
+}
+
+#[test]
+fn text_commit_runs_after_cq_descendant_rerun() {
+    // Step 10 (TextCommit) must be ordered AFTER step 9
+    // (CqDescendantReRun): steps 8–9 can still rewrite `ResolvedLayout`,
+    // and committing earlier would shape against sizes step 9 immediately
+    // invalidates (text T3, measure-and-layout § 4.2). Same tracker-system
+    // ordering mechanism as the other pipeline-order tests in this file.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+
+    let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+
+    fn make_tracker(
+        order: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        label: &'static str,
+    ) -> impl Fn() + Send + Sync + 'static {
+        move || {
+            order.lock().unwrap().push(label);
+        }
+    }
+
+    let o = order.clone();
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "cq_descendant_rerun").in_set(BuiyLayoutStep::CqDescendantReRun),
+    );
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "text_commit").in_set(BuiyLayoutStep::TextCommit),
+    );
+
+    app.update();
+
+    let observed = order.lock().unwrap().clone();
+    let rerun_idx = observed
+        .iter()
+        .position(|&l| l == "cq_descendant_rerun")
+        .expect("cq_descendant_rerun step ran");
+    let commit_idx = observed
+        .iter()
+        .position(|&l| l == "text_commit")
+        .expect("text_commit step ran");
+    assert!(
+        commit_idx > rerun_idx,
+        "TextCommit (step 10) must run after CqDescendantReRun (step 9); \
          observed order: {observed:?}",
     );
 }

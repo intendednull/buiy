@@ -10,7 +10,7 @@ use buiy_core::layout::{
 };
 use buiy_core::text::{
     BuiyTextPlugin, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, FontsGeneration,
-    Text, TextBuffer, TextSyncAppliedCount,
+    LineHeight, Text, TextAlign, TextBuffer, TextSyncAppliedCount, TextWrap, WhiteSpace,
 };
 use buiy_core::{BuiySet, CorePlugin, Node};
 use cosmic_text::{Metrics, Wrap};
@@ -65,8 +65,9 @@ fn spawning_text_creates_a_buffer_with_collapsed_content() {
     );
     let buffer = app.world().get::<TextBuffer>(entity).unwrap();
     assert!(
-        buffer.intrinsics().is_none(),
-        "intrinsics start invalidated — the T3 measure closure computes them"
+        buffer.intrinsics().is_some(),
+        "TextSync leaves intrinsics invalidated; the same frame's measure \
+         closure computes and caches them (T3 Task 4)"
     );
     assert_eq!(
         buffer.buffer.wrap(),
@@ -179,6 +180,110 @@ fn writing_mode_resolved_change_resyncs() {
 }
 
 #[test]
+fn t3_carrier_changes_fire_the_union() {
+    let mut app = text_app();
+    let entity = spawn_text(&mut app, "carrier triggers");
+    settle(&mut app);
+
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(LineHeight::Px(30.0));
+    app.update();
+    assert_eq!(applied(&app), 1, "Changed<LineHeight> fires the union");
+    let metrics = app
+        .world()
+        .get::<TextBuffer>(entity)
+        .unwrap()
+        .buffer
+        .metrics();
+    assert_eq!(
+        metrics,
+        Metrics::new(16.0, 30.0),
+        "line-height → Metrics (§ 5.1)"
+    );
+
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(WhiteSpace::Nowrap);
+    app.update();
+    assert_eq!(applied(&app), 1, "Changed<WhiteSpace> fires the union");
+    assert_eq!(
+        app.world().get::<TextBuffer>(entity).unwrap().buffer.wrap(),
+        Wrap::None,
+        "§ 5.2 nowrap row"
+    );
+
+    app.world_mut().entity_mut(entity).insert(TextWrap::Balance);
+    app.update();
+    assert_eq!(applied(&app), 1, "Changed<TextWrap> fires the union");
+    assert_eq!(
+        app.world().get::<TextBuffer>(entity).unwrap().buffer.wrap(),
+        Wrap::None,
+        "balance degrades to the table value; nowrap's None wins here"
+    );
+
+    app.world_mut().entity_mut(entity).insert(TextAlign::Center);
+    app.update();
+    assert_eq!(
+        applied(&app),
+        1,
+        "Changed<TextAlign> fires the union (§ 5.1 carrier pin) — \
+         the VALUE is applied at TextCommit, not here"
+    );
+}
+
+/// § 5.2 preserve rows: `pre` keeps runs of spaces + hard breaks and
+/// maps to Wrap::None.
+#[test]
+fn white_space_pre_preserves_content_verbatim() {
+    let mut app = text_app();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("a  b\tc\nsecond  line")),
+            WhiteSpace::Pre,
+        ))
+        .id();
+    app.update();
+    assert_eq!(
+        buffer_lines(&app, entity),
+        vec!["a  b\tc", "second  line"],
+        "preserve mode: nothing collapses; segment breaks become buffer lines"
+    );
+    assert_eq!(
+        app.world().get::<TextBuffer>(entity).unwrap().buffer.wrap(),
+        Wrap::None
+    );
+}
+
+/// Authored zero metrics degrade instead of hitting cosmic's
+/// `set_metrics` assert (the METRICS_FLOOR clamp).
+#[test]
+fn zero_font_size_and_line_height_do_not_panic() {
+    let mut app = text_app();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("degenerate")),
+            FontSize(0.0),
+            LineHeight::Px(0.0),
+        ))
+        .id();
+    app.update(); // would panic inside set_metrics without the floor
+    let metrics = app
+        .world()
+        .get::<TextBuffer>(entity)
+        .unwrap()
+        .buffer
+        .metrics();
+    assert!(metrics.font_size > 0.0 && metrics.line_height > 0.0);
+}
+
+#[test]
 fn fonts_generation_bump_sweeps_every_buffer() {
     let mut app = text_app();
     spawn_text(&mut app, "one");
@@ -267,6 +372,76 @@ fn removing_text_drops_the_buffer() {
         app.world().get::<TextBuffer>(entity).is_none(),
         "a Text-less entity stops being a text leaf; the buffer dies on the edge"
     );
+}
+
+/// The TaffyTree<Entity> migration carried the registered context to the
+/// measure closure (T3 Task 4): a text leaf measures its content through
+/// `compute_roots_with_text_measure`, while non-text nodes carry no
+/// context and keep the zero-measure dispatch. (Until Task 4 this was the
+/// migration's does-not-change-behavior snapshot, asserting height zero.)
+#[test]
+fn text_leaf_measures_its_content_through_the_node_context() {
+    let mut app = text_app();
+    let entity = spawn_text(&mut app, "not yet measured");
+    let plain = app.world_mut().spawn((Node, Style::default())).id();
+    settle(&mut app);
+
+    let layout = app
+        .world()
+        .get::<buiy_core::ResolvedLayout>(entity)
+        .expect("text leaf has a layout");
+    assert!(layout.size.y > 0.0, "the measure closure is live (Task 4)");
+
+    let tree = app.world().non_send_resource::<LayoutTree>();
+    let node = *tree.by_entity().get(&entity).unwrap();
+    assert_eq!(
+        tree.tree_ref().get_node_context(node),
+        Some(&entity),
+        "text leaf registered its Entity as node context (measure § 2.1)"
+    );
+    let plain_node = *tree.by_entity().get(&plain).unwrap();
+    assert_eq!(
+        tree.tree_ref().get_node_context(plain_node),
+        None,
+        "non-text nodes carry no context"
+    );
+}
+
+/// measure § 2.2 — unregistration on the Text-removal edge.
+#[test]
+fn removing_text_clears_the_node_context() {
+    let mut app = text_app();
+    let entity = spawn_text(&mut app, "ephemeral context");
+    settle(&mut app);
+
+    app.world_mut().entity_mut(entity).remove::<Text>();
+    app.update();
+
+    let tree = app.world().non_send_resource::<LayoutTree>();
+    let node = *tree.by_entity().get(&entity).unwrap();
+    assert_eq!(
+        tree.tree_ref().get_node_context(node),
+        None,
+        "clear_text_context on the RemovedComponents<Text> edge"
+    );
+}
+
+/// measure § 2.2 — Text ADDED to an entity that already has a Taffy node
+/// (the existing-node half of the registration split, decision 1).
+#[test]
+fn adding_text_to_an_existing_node_registers_the_context() {
+    let mut app = text_app();
+    let entity = app.world_mut().spawn((Node, Style::default())).id();
+    settle(&mut app);
+
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(Text(String::from("late text")));
+    app.update();
+
+    let tree = app.world().non_send_resource::<LayoutTree>();
+    let node = *tree.by_entity().get(&entity).unwrap();
+    assert_eq!(tree.tree_ref().get_node_context(node), Some(&entity));
 }
 
 /// The deliberate § 5.1 exclusion: scroll moves glyph rects via transforms;
