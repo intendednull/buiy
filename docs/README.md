@@ -85,6 +85,16 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [2026-06-03-buiy-render-r10-atlas](plans/2026-06-03-buiy-render-r10-atlas.md) — the shared `BuiyAtlas` render resource (guillotiere allocation, LRU eviction, page-budget pressure, warmup, pooling), the glyph-alpha + icon primitive shapes, and the reserved gradient/mask entry kinds. Realizes atlas-and-text-seam.md. `[landed]`
 - [2026-06-03-buiy-render-r11-color-forced-colors-verify](plans/2026-06-03-buiy-render-r11-color-forced-colors-verify.md) — color + forced-colors + verification (color-and-forced-colors.md). Consolidates the token resolver to the single canonical `render::color::resolve_token` (R1's mod.rs + R5's extract copies removed; missing-token `warn!` preserved in `resolve_named`; `SystemColor(kw)` resolved through the active theme); `SystemColorKeyword::{token, ALL}`; the forced-colors stub theme + main-world `Theme`-swap system (`BuiySet::Style`, before extract) + `Theme::is_changed()` re-resolve; the WCAG contrast helper (`buiy_verify` delegates to `render::color::contrast_ratio`, no dup — gate #9); and the gate-#11 static analyzers (token-flow + no-shadow-only-affordance) over a `CatalogPaint` seam. Headless-gated; the gate-#2 golden harness is GPU `#[ignore]`. **Final render-pipeline phase.** `[landed]`
 
+### Text
+
+**Specs**
+
+- [Buiy text-rendering design](specs/2026-06-09-buiy-text-rendering-design/README.md) — cosmic-text 0.19 engine ownership, Taffy measure seam, glyph producer into the GPU-verified atlas, font assets, decoration/selection/caret painting, editing + IME (multi-file). `[draft]`
+
+**Plans**
+
+- [Buiy text campaign](plans/2026-06-09-buiy-text-campaign.md) — T1–T9 phasing realizing the text-rendering spec; editing/IME implementation deferred to a successor campaign. `[draft]`
+
 ### Docs infrastructure
 
 **Specs**
