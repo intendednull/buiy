@@ -29,6 +29,7 @@ pub use buiy_core::{
     picking::{BuiyPickingBackendPlugin, Hovered},
     render::color::ColorToken,
     render::components::{Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius},
+    text::{BuiyTextPlugin, FontsGeneration, SharedFontSystem},
     theme::{Theme, UserPreferences, default_light_theme},
 };
 pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};
@@ -125,6 +126,10 @@ impl Plugin for BuiyPlugin {
             buiy_core::layout::LayoutPlugin,
             buiy_core::picking::PickingPlugin,
             buiy_core::picking::BuiyPickingBackendPlugin,
+            // Text engine foundation (buiy-text-rendering-design T1): the
+            // shared FontSystem + the FontsGeneration reshape trigger.
+            // System-font scan stays opt-in/off in the composed default.
+            buiy_core::text::BuiyTextPlugin::default(),
             WidgetsPlugin,
             // The render plugin is added in `build`, NOT `finish`: Bevy's
             // `App::finish` iterates `0..plugin_registry.len()` with the length

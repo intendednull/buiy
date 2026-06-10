@@ -15,6 +15,7 @@ pub mod focus;
 pub mod layout;
 pub mod picking;
 pub mod render;
+pub mod text;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
@@ -48,6 +49,7 @@ pub use render::forced_colors_analyzer::{
     CatalogPaint, ForcedColorsViolation, analyze_forced_colors, analyze_shadow_only,
 };
 pub use render::golden::{GoldenConfig, perceptual_diff};
+pub use text::{BuiyTextPlugin, FontsGeneration, SharedFontSystem};
 // `OffscreenAuto` is intentionally NOT root-exported: it is a layout-written
 // marker (layout owns its registration), reachable via `render::components`.
 

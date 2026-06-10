@@ -94,6 +94,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 **Plans**
 
 - [Buiy text campaign](plans/2026-06-09-buiy-text-campaign.md) — T1–T9 phasing realizing the text-rendering spec; editing/IME implementation deferred to a successor campaign. `[draft]`
+- [Buiy text T1 — engine foundation](plans/2026-06-09-buiy-text-t1-engine-foundation.md) — cosmic-text 0.19 dep (default features only; `shape-run-cache` OFF), `buiy_core::text` module, embedded Fira Sans latin subset + `tools/fonts/subset_default_font.sh` provenance script (OFL-1.1, default-on `default_font` feature), `SharedFontSystem` + deterministic `BuiyFallback` + `BuiyTextPlugin`, render-world `BuiySwashCache` (uncached-only), opt-in background system-font scan + `FontsGeneration`. `[landed]`
 
 ### Docs infrastructure
 

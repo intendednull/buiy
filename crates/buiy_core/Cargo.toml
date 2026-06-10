@@ -14,6 +14,36 @@ accesskit_winit.workspace = true
 guillotiere = { workspace = true }
 smallvec = { workspace = true }
 bitflags = "2.11.1"
+# Text engine (buiy-text-rendering-design, architecture § 7): Buiy's OWN pin,
+# never ridden transitively (the bevy_cosmic_edit decay path). DEFAULT
+# FEATURES ONLY — `shape-run-cache` stays OFF (decided in spec review round 1;
+# architecture § 7 is the decision record): the retained TextBuffer's
+# per-line caches already amortize re-shaping, while the run cache grows
+# FontSystem-side without bound (gate #15). All fontdb types are consumed
+# through cosmic-text's crate-root `pub use fontdb` re-export — no second
+# fontdb pin (font-assets § 1). Every version bump re-verifies the
+# load-bearing API facts against docs.rs (architecture § 7) and re-runs
+# `cargo deny check` first (CLAUDE.md supply-chain gate).
+cosmic-text = "0.19"
+# The locale for FontSystem::new_with_locale_and_db_and_fallback
+# (architecture § 2.1 "Locale via the sys-locale default feature"):
+# cosmic-text keeps its own sys_locale call private, so Buiy mirrors it
+# exactly (get_locale().unwrap_or "en-US"). Version-synced to cosmic-text
+# 0.19's own pin (0.3.2) — cargo unifies to one copy.
+sys-locale = "0.3"
+# Names the `Script` parameter in cosmic_text::Fallback::script_fallback —
+# cosmic-text re-exports fontdb/skrifa/harfrust but NOT unicode-script.
+# Version-synced to cosmic-text 0.19's pin (0.5.8); an upstream bump to 0.6
+# surfaces here as a loud type-mismatch compile error, by design.
+unicode-script = "0.5"
+
+[features]
+default = ["default_font"]
+# Embed the deterministic default font (Fira Sans Regular latin subset,
+# OFL-1.1 — font-assets § 4) and pin all five generic families to it, so
+# Family::SansSerif etc. resolve identically on every host. Disable to ship
+# zero font bytes — the app must then register fonts before any text renders.
+default_font = []
 
 [dev-dependencies]
 naga = "27"
