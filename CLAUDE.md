@@ -54,9 +54,10 @@ If the test step link-OOMs under full `mold` parallelism, add `-j 2` to the
 The headless gate above runs WITHOUT `--ignored`, so it never instantiates a wgpu
 adapter and never exercises the render GPU path. The render-pipeline GPU tests
 (pipeline creation, the extract→prepare→node draw spine, render-to-texture +
-pixel readback, atlas, compositor) are `#[ignore]` and run on a host with a real
-GPU (or `lavapipe`). Vulkan render-to-texture needs **no** X server, so this works
-headless on any machine with an adapter — it does **not** require a display:
+pixel readback, atlas, compositor, the text glyph producer) are `#[ignore]` and
+run on a host with a real GPU (or `lavapipe`). Vulkan render-to-texture needs
+**no** X server, so this works headless on any machine with an adapter — it
+does **not** require a display:
 
 ```sh
 cargo test -p buiy_core -j 2 -- --ignored --test-threads=1

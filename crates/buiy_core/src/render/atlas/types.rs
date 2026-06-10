@@ -101,4 +101,17 @@ impl AtlasEntryKind {
             AtlasEntryKind::Icon | AtlasEntryKind::Gradient => AtlasFormat::ColorRgba8,
         }
     }
+
+    /// The leading `AtlasKey` byte partitioning the opaque key space per
+    /// producer kind (glyph-pipeline § 4): a future Icon/Gradient/Mask key
+    /// can never alias a glyph key. STABLE contract — extend, never
+    /// renumber (a renumber silently invalidates every content address).
+    pub fn key_byte(self) -> u8 {
+        match self {
+            AtlasEntryKind::Glyph => 0,
+            AtlasEntryKind::Icon => 1,
+            AtlasEntryKind::Gradient => 2,
+            AtlasEntryKind::Mask => 3,
+        }
+    }
 }

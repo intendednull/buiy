@@ -12,8 +12,10 @@
 //! `FontStack` resolver + fallback correctness (T5).
 //! Campaign: `docs/plans/2026-06-09-buiy-text-campaign.md`.
 
+mod atlas_key;
 mod commit;
 mod components;
+mod extract;
 mod font_system;
 // pub(crate): the layout compute sites (taffy_compute + the two cq re-runs)
 // call `measure::compute_roots_with_text_measure` directly (measure § 4.3).
@@ -23,11 +25,16 @@ mod sync;
 mod system_scan;
 mod whitespace;
 
+pub use atlas_key::{FontKeyInterner, GLYPH_KEY_LEN, glyph_atlas_key};
 pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
     ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
     GenericFamily, IntrinsicWidths, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text, TextAlign,
     TextBuffer, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+};
+pub use extract::{
+    GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
+    pack_clip, physical_offset,
 };
 pub use font_system::{
     BuiyFallback, DEFAULT_FONT_FAMILY, FontsGeneration, SharedFontSystem, registered_fonts_db,
@@ -123,10 +130,22 @@ impl Plugin for BuiyTextPlugin {
 /// The render-world half of text registration (mirrors `atlas::register`):
 /// the `SharedFontSystem` Arc clone — one engine, two worlds (architecture
 /// § 1.1; fontdb IDs are stable only within one engine, so a second instance
-/// would mis-key every glyph). Public so the headless `SubApp` registration
-/// test (and any external render setup) can drive it without a live
-/// `RenderApp`; the live wiring is exercised on the GPU lane from T4.
+/// would mis-key every glyph) — plus the T4 glyph producer and its retained
+/// state. `.after(maintain_atlas)` so inserts/touches use the just-advanced
+/// atlas frame clock (glyph-pipeline § 6.1; ordering against an absent
+/// system set is vacuously satisfied, so a bare `SubApp` without the atlas
+/// systems still registers cleanly). Public so the headless `SubApp`
+/// registration test (and any external render setup) can drive it without a
+/// live `RenderApp`; the live wiring is exercised on the GPU lane from T4.
 pub fn register_render_world(render_app: &mut SubApp, fonts: &SharedFontSystem) {
     render_app.insert_resource(fonts.clone());
     render_app.init_resource::<BuiySwashCache>();
+    render_app
+        .init_resource::<FontKeyInterner>()
+        .init_resource::<ResidentTextKeys>()
+        .init_resource::<GlyphMetaCache>()
+        .add_systems(
+            bevy::render::ExtractSchedule,
+            extract::extract_buiy_glyphs.after(crate::render::atlas::maintain_atlas),
+        );
 }

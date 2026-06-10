@@ -385,6 +385,12 @@ pub struct ComputedTextLayout {
     pub lines: Vec<ComputedTextLine>,
     /// Laid-out extent: (max line width, Σ line heights).
     pub size: Vec2,
+    /// Content-box top-left offset from the entity's border-box top-left
+    /// (border + padding, logical px). The glyph producer's § 5.1 content
+    /// origin term: run/glyph coordinates are content-box relative, while
+    /// `GlobalTransform` lands on the border box (T4 decision 2 — the
+    /// spec's unpinned "content origin" source, pinned here).
+    pub content_offset: Vec2,
 }
 
 /// Baseline offsets from the node's content-box top, from the first/last

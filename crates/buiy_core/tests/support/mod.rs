@@ -26,6 +26,8 @@
 //! `docs/plans/2026-06-07-render-gpu-verify-campaign.md`).
 #![allow(dead_code)]
 
+pub mod extract_harness;
+
 use bevy::asset::{AssetApp, RenderAssetUsages};
 use bevy::camera::RenderTarget;
 use bevy::image::Image;
@@ -56,6 +58,9 @@ pub fn gpu_test_app() -> App {
         // Buiy's `Res<Theme>` / `Res<UserPreferences>`, read by extract.
         .add_plugins(buiy_core::theme::ThemePlugin)
         .add_plugins(CorePlugin)
+        // The text engine + the T4 glyph producer (render half registers
+        // against the live RenderApp created by RenderPlugin above).
+        .add_plugins(buiy_core::text::BuiyTextPlugin::default())
         .add_plugins(BuiyRenderPlugin);
     // `Assets<Mesh>` + `Messages<AssetEvent<Mesh>>` — `RenderPlugin` extracts
     // meshes but does not add the asset (its doc: "Use MeshPlugin for that").
@@ -149,6 +154,9 @@ pub fn gpu_render_app(width: u32, height: u32) -> App {
         .add_plugins(buiy_core::theme::ThemePlugin)
         .add_plugins(buiy_core::layout::LayoutPlugin)
         .add_plugins(CorePlugin)
+        // The text engine + the T4 glyph producer (render half registers
+        // against the live RenderApp created by RenderPlugin above).
+        .add_plugins(buiy_core::text::BuiyTextPlugin::default())
         .add_plugins(BuiyRenderPlugin);
     app.init_asset::<Mesh>();
     app
@@ -216,6 +224,54 @@ pub fn spawn_capture_camera_with_msaa(
 /// the observer a small closure.
 #[derive(Resource, Clone, Default)]
 struct CapturedBytes(Arc<Mutex<Option<Vec<u8>>>>);
+
+/// Drive frames until the text fixture's `wait_for_fonts` predicate holds
+/// (verification § 3.2): the producer has emitted (`ResidentTextKeys`
+/// non-empty), the warmup queue is drained, and every emitted key is
+/// resident. Returns frames driven; panics past `max_frames`.
+pub fn wait_for_text_ready(app: &mut App, max_frames: usize) -> usize {
+    use buiy_core::render::atlas::{AtlasWarmupQueue, BuiyAtlas};
+    use buiy_core::render::golden::fonts_ready;
+    use buiy_core::text::ResidentTextKeys;
+
+    for frame in 0..max_frames {
+        app.update();
+        let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
+        let world = render_app.world();
+        let resident = world.resource::<ResidentTextKeys>();
+        if !resident.keys.is_empty()
+            && fonts_ready(
+                world.resource::<BuiyAtlas>(),
+                world.resource::<AtlasWarmupQueue>(),
+                &resident.keys,
+            )
+        {
+            return frame + 1;
+        }
+    }
+    panic!("text never became atlas-resident within {max_frames} frames");
+}
+
+/// Index one RGBA8 pixel out of an un-padded `w*h*4` readback buffer.
+pub fn px(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * w + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+}
+
+/// The sRGB8 the target stores for a FULL-coverage texel of linear
+/// straight-alpha `color` over the opaque-black clear: SrcOver in linear
+/// (dst = 0), then the Rgba8UnormSrgb linear→sRGB encode.
+pub fn expected_full_coverage_srgb(color: [f32; 4]) -> [u8; 4] {
+    let a = color[3];
+    let lin = LinearRgba::new(color[0] * a, color[1] * a, color[2] * a, 1.0);
+    let s = Srgba::from(lin);
+    [
+        (s.red * 255.0).round() as u8,
+        (s.green * 255.0).round() as u8,
+        (s.blue * 255.0).round() as u8,
+        255,
+    ]
+}
 
 /// Spawn `Readback::texture(target)`, observe its `ReadbackComplete`, and POLL
 /// `app.update()` until the bytes arrive — condition-based, NOT a fixed frame

@@ -67,6 +67,13 @@ pub fn text_commit(
         // equal and reshape forever.
         let content = layout.content_box_size();
         let target = (Some(content.width.max(0.0)), Some(content.height.max(0.0)));
+        // T4: the content origin the producer folds (decision 2). Part of
+        // the steady-state guard: a padding change with a constant content
+        // box moves the offset without moving the buffer target.
+        let content_offset = Vec2::new(
+            layout.border.left + layout.padding.left,
+            layout.border.top + layout.padding.top,
+        );
         // measure § 7: commit writes are not damage on TextBuffer —
         // damage keys on the OUTPUT components below.
         let text = text.bypass_change_detection();
@@ -81,8 +88,10 @@ pub fn text_commit(
             align_changed |= line.set_align(align);
         }
 
-        // § 4.2's steady-state short-circuit.
-        if !align_changed && text.buffer.size() == target {
+        let offset_stale =
+            existing_layout.is_none_or(|current| current.content_offset != content_offset);
+        // § 4.2's steady-state short-circuit (+ the T4 offset term).
+        if !align_changed && !offset_stale && text.buffer.size() == target {
             continue;
         }
 
@@ -101,7 +110,7 @@ pub fn text_commit(
 
         // § 6 outputs — idempotent-insert (write_resolved_layout's
         // discipline): tick only when the value actually changed.
-        let (computed, baseline) = computed_outputs(&text.buffer);
+        let (computed, baseline) = computed_outputs(&text.buffer, content_offset);
         if existing_layout.is_none_or(|current| *current != computed) {
             commands.entity(entity).insert(computed);
         }
@@ -129,6 +138,7 @@ pub fn text_commit(
 /// math and the measure-side height fold both count it).
 fn computed_outputs(
     buffer: &cosmic_text::Buffer,
+    content_offset: Vec2,
 ) -> (ComputedTextLayout, Option<ResolvedBaseline>) {
     let mut lines = Vec::new();
     let mut size = Vec2::ZERO;
@@ -152,5 +162,12 @@ fn computed_outputs(
         }),
         _ => None,
     };
-    (ComputedTextLayout { lines, size }, baseline)
+    (
+        ComputedTextLayout {
+            lines,
+            size,
+            content_offset,
+        },
+        baseline,
+    )
 }
