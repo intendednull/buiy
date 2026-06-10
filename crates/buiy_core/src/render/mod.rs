@@ -245,10 +245,10 @@ impl Plugin for BuiyRenderPlugin {
             // RETAIN the prior buffer (architecture.md § 3.1 damage retention),
             // instead of the old one-frame warmup that returned without uploading.
             .init_resource::<prepare::BuiyInstanceBuffers>()
-            // The render-world glyph-instance list the text seam (unbuilt) fills
-            // per frame; empty in v1 production (no in-crate glyph producer — the
-            // seam is deferred), so the glyph draw is a no-op until text lands.
-            // The GPU atlas tests play the producer and fill it directly.
+            // The render-world glyph-instance list, filled per frame by
+            // `text::extract_buiy_glyphs` (registered by `BuiyTextPlugin`, T4).
+            // Kept `init_resource`'d here so the prepare gate works even if the
+            // text plugin is absent (the glyph draw is then a no-op).
             .init_resource::<prepare::ExtractedGlyphs>()
             // Phase-0 draw path (feeds node.rs today); retired by R6/R8 (the
             // node/instance rework) when node.rs reads the per-view

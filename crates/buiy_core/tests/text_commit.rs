@@ -341,6 +341,97 @@ fn ancestor_resize_with_unchanged_leaf_size_still_reconciles_the_buffer() {
     );
 }
 
+/// Decision 2 (T4): glyph/run coordinates are content-box relative while
+/// GlobalTransform lands on the border box — TextCommit writes the
+/// border+padding offset so the producer can fold the § 5.1 content origin
+/// without Taffy access.
+#[test]
+fn commit_writes_the_content_box_offset() {
+    let mut app = text_app();
+    let text = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().padding(6.0).border(2.0),
+            Text(String::from("offset")),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(text);
+    settle(&mut app);
+
+    let layout = app.world().get::<ComputedTextLayout>(text).unwrap();
+    assert_eq!(
+        layout.content_offset,
+        Vec2::new(8.0, 8.0),
+        "border 2 + padding 6"
+    );
+}
+
+/// The steady-state short-circuit must not strand a stale offset: grow the
+/// padding while growing the box so the CONTENT size is unchanged — the
+/// buffer target compares equal, but the offset moved and must re-commit.
+/// `border_box()` is load-bearing: the fixture's "constant content box"
+/// arithmetic sizes the BORDER box (the default `BoxSizing` is ContentBox).
+#[test]
+fn padding_change_with_constant_content_box_updates_the_offset() {
+    let mut app = text_app();
+    let text = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .border_box()
+                .width_px(100.0)
+                .height_px(40.0)
+                .padding(5.0),
+            Text(String::from("x")),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(text);
+    settle(&mut app);
+    assert_eq!(
+        app.world()
+            .get::<ComputedTextLayout>(text)
+            .unwrap()
+            .content_offset,
+        Vec2::splat(5.0)
+    );
+
+    // 90x30 content box both times: (100-2*5) → (110-2*10).
+    app.world_mut().entity_mut(text).insert(
+        Style::default()
+            .border_box()
+            .width_px(110.0)
+            .height_px(50.0)
+            .padding(10.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        app.world()
+            .get::<ComputedTextLayout>(text)
+            .unwrap()
+            .content_offset,
+        Vec2::splat(10.0),
+        "offset re-committed even though the content-box size held"
+    );
+}
+
 /// architecture § 2.2 end-to-end: a FontsGeneration bump sweeps every
 /// buffer through sync → measure → commit in one frame.
 #[test]

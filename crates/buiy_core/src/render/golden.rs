@@ -9,6 +9,8 @@
 //! `buiy-verification-design`; this module commits to *having* a budget, not
 //! its value.
 
+use crate::render::atlas::{AtlasKey, AtlasWarmupQueue, BuiyAtlas};
+
 /// Deterministic-capture configuration. The three flake sources of § 4.3 are
 /// *necessary together*: a golden captured without all three is not
 /// reproducible. `accept` is the § 4.4 human-curated golden-update gate —
@@ -61,4 +63,25 @@ pub fn perceptual_diff(a: &[u8], b: &[u8]) -> f32 {
         .map(|(&x, &y)| (x as f64 - y as f64).abs())
         .sum();
     (sum / (a.len() as f64 * 255.0)) as f32
+}
+
+/// verification § 3.2 — [`GoldenConfig::wait_for_fonts`], flipped from
+/// declared flag to implemented predicate. With embedded deterministic
+/// fonts, registration is synchronous at `FontSystem` construction (nothing
+/// asynchronous exists to wait on), so "fonts ready" reduces to: the warmup
+/// queue is drained AND every glyph key the fixture's producer emitted is
+/// resident — probed via the **no-LRU-touch** [`BuiyAtlas::get`], so the
+/// check never perturbs eviction order.
+///
+/// § 3.3 (`warm_atlas`) is satisfied STRUCTURALLY for text fixtures: the
+/// producer inserts at extract, before Prepare's upload and the node's draw
+/// (glyph-pipeline § 6.4), so by the time this predicate holds the atlas is
+/// warm. `AtlasWarmupQueue` remains the seam for the optional production
+/// ASCII pre-warm (deferred — text campaign T9) and T6's solid stamp.
+pub fn fonts_ready(
+    atlas: &BuiyAtlas,
+    warmup: &AtlasWarmupQueue,
+    visible_keys: &[AtlasKey],
+) -> bool {
+    warmup.is_empty() && visible_keys.iter().all(|key| atlas.get(key).is_some())
 }

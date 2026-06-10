@@ -224,3 +224,48 @@ fn overlapping_semitransparent_fills_match_golden() {
          {overlap:?}, expected {expected:?})"
     );
 }
+
+/// verification § 3.2 — wait_for_fonts flips from declared flag to
+/// implemented predicate: warmup queue drained AND every fixture key
+/// resident, probed via the no-LRU-touch `BuiyAtlas::get`.
+#[test]
+fn fonts_ready_requires_drained_queue_and_resident_keys() {
+    use bevy::math::UVec2;
+    use buiy_core::render::atlas::{
+        AtlasBitmap, AtlasConfig, AtlasFormat, AtlasKey, AtlasWarmupQueue, AtlasWarmupRequest,
+        BuiyAtlas,
+    };
+    use buiy_core::render::golden::fonts_ready;
+
+    let bitmap = || AtlasBitmap {
+        size: UVec2::splat(4),
+        format: AtlasFormat::CoverageR8,
+        data: vec![0xFF; 16],
+    };
+    let mut atlas = BuiyAtlas::new(AtlasConfig::default());
+    let mut queue = AtlasWarmupQueue::default();
+    let key = AtlasKey::from_bytes(b"ready-probe");
+
+    assert!(
+        !fonts_ready(&atlas, &queue, std::slice::from_ref(&key)),
+        "missing key: not ready"
+    );
+
+    atlas.get_or_insert(key.clone(), AtlasFormat::CoverageR8, bitmap);
+    assert!(
+        fonts_ready(&atlas, &queue, std::slice::from_ref(&key)),
+        "resident + drained: ready"
+    );
+
+    queue.push(AtlasWarmupRequest {
+        key: AtlasKey::from_bytes(b"pending"),
+        format: AtlasFormat::CoverageR8,
+        bitmap: bitmap(),
+    });
+    assert!(
+        !fonts_ready(&atlas, &queue, std::slice::from_ref(&key)),
+        "pending warmup: not ready"
+    );
+    atlas.drain_warmup(&mut queue);
+    assert!(fonts_ready(&atlas, &queue, std::slice::from_ref(&key)));
+}

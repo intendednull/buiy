@@ -196,6 +196,37 @@ consuming T7's painting primitives — not a T-phase here.
   `hello_text` gate-#2 golden; retint byte-identity with real text;
   eviction-under-retention regression (touch pass disabled → corruption
   caught, enabled → prevented).
+- **T4 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T4 plan's decisions 2–5; superseding context, not a
+  silent contradiction):
+  1. *glyph-pipeline § 2 step 0 / § 6.1's `TextBufferAccess` read-only form*
+     — superseded by the T3 decision-12 deferral (already a T3 erratum): the
+     producer binds `&TextBuffer` directly until the editing campaign lands
+     `TextEditState`; the swap is mechanical.
+  2. *glyph-pipeline § 5.2's "`AtlasEntry.px` exists precisely for this snap
+     math"* — `px` carries the cell SIZE only; the bearings
+     (`Placement.left/top`) are not recoverable from the seam on a cache
+     hit. As built: a producer-owned `GlyphMetaCache(HashMap<AtlasKey,
+     GlyphBearing>)` written on rasterize and pruned to atlas residency
+     (bearings are a pure function of the `CacheKey`, so entries can never
+     go stale). Runner-ups (widen `AtlasEntry`; re-rasterize per rebuild)
+     rejected in the T4 plan.
+  3. *glyph-pipeline § 2 step 4's literal one-closure shape* cannot encode
+     the zero-coverage / `SwashContent::Color` skips (the closure must
+     return a bitmap): as built, residency probe + prebuilt-bitmap closure;
+     raster work and the lock still happen only on a miss (the lock is
+     taken lazily once per frame, the `text_commit` guard pattern).
+  4. *glyph-pipeline § 5.1's "content origin"* had no pinned source: as
+     built, `ComputedTextLayout.content_offset` (border + padding), written
+     idempotently by `TextCommit` — damage rides the existing
+     `Changed<ComputedTextLayout>` probe.
+  5. *glyph-pipeline Sources* say 0.19.0 resolves swash 0.2.7 — the lock
+     resolves **0.2.8** (`Placement`/`SwashContent`/`SwashImage` shapes
+     verified identical).
+  6. *§ 6.2's "rebuild `ExtractedTextQuads` alongside"* and the
+     `Changed<CaretVisual>`/`Changed<SelectionVisual>` union members are
+     T6/T7 joins (the carriers do not exist yet) — ledger comments in
+     `extract_buiy_glyphs` mark both seats.
 
 ### T5 — Fonts, fallback, and BiDi correctness
 
@@ -296,7 +327,7 @@ consuming T7's painting primitives — not a T-phase here.
 | T1 | Engine foundation | landed |
 | T2 | Text component + Buffer lifecycle | landed |
 | T3 | Measure + wrap/align | landed |
-| T4 | First pixels | proposed |
+| T4 | First pixels | landed |
 | T5 | Fonts, fallback, and BiDi correctness | proposed |
 | T6 | Decoration painting | proposed |
 | T7 | Selection + caret + placeholder painting | proposed |

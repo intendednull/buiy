@@ -36,12 +36,11 @@ use crate::render::extract::{ExtractedEffectGroups, ExtractedNodes, ExtractedNod
 use crate::render::view_uniform::BuiyViewUniform;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
-/// order. The text seam (`buiy-text-rendering-design`, unbuilt) is the in-app
-/// producer — it shapes glyphs, inserts coverage into the atlas, and pushes one
-/// [`GlyphAlphaInstance`] per visible glyph here. Until then this resource is
-/// empty in production and the glyph draw is a no-op; the GPU tests play the
-/// producer and fill it directly (the test-as-producer pattern `atlas_alloc.rs`
-/// already uses for `AtlasBitmap`). [`prepare_buiy_instances`] packs it into
+/// order. Produced by `text::extract_buiy_glyphs` in `ExtractSchedule` (T4):
+/// it shapes glyphs, inserts coverage into the atlas, and pushes one
+/// [`GlyphAlphaInstance`] per visible glyph here. Retained across steady
+/// frames — `is_changed()` is the § 6.2 damage signal the glyph gate in
+/// [`prepare_buiy_instances`] reads before packing it into
 /// [`BuiyInstanceBuffers::glyph`].
 #[derive(Resource, Default)]
 pub struct ExtractedGlyphs {

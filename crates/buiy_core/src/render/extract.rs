@@ -209,24 +209,59 @@ pub fn assemble_context_tree<'a>(
     build: &mut impl FnMut(Entity) -> Option<ExtractedNode>,
     out: &mut Vec<ExtractedNode>,
 ) {
+    let mut order = Vec::new();
+    context_tree_paint_order(root, painters_z_of, &mut order);
+    out.extend(order.into_iter().filter_map(build));
+}
+
+/// Flatten one stacking-context tree into entity paint order: the root's own
+/// box first, then its `painters_z` forward, descending into each nested
+/// context AS A UNIT at its position (paint-order § 1.1). The entity-order
+/// core of [`assemble_context_tree`], shared with the glyph producer
+/// (`text::extract_buiy_glyphs`) so the two walks can never diverge.
+pub fn context_tree_paint_order<'a>(
+    root: Entity,
+    painters_z_of: &impl Fn(Entity) -> Option<&'a [Entity]>,
+    out: &mut Vec<Entity>,
+) {
     // The context root paints its OWN box first (CSS painter's algorithm: the
     // SC root's background/borders sit at the bottom of its context). 6f builds
     // a context's `painters_z` from its DESCENDANTS, excluding the root itself,
     // so the root is emitted here, never via the list below.
-    if let Some(node) = build(root) {
-        out.push(node);
-    }
+    out.push(root);
     let Some(painters) = painters_z_of(root) else {
         return;
     };
     for &painter in painters {
         if painters_z_of(painter).is_some() {
             // Nested SC root: descend as a unit at this position (§ 1.1).
-            assemble_context_tree(painter, painters_z_of, build, out);
-        } else if let Some(node) = build(painter) {
-            out.push(node);
+            context_tree_paint_order(painter, painters_z_of, out);
+        } else {
+            out.push(painter);
         }
     }
+}
+
+/// The root context entities of a forming-context map — those no other
+/// context lists as a painter (a nested root appears in exactly its parent's
+/// list, paint-order § 1.1) — sorted by entity so a (degenerate) multi-root
+/// tree assembles deterministically rather than in archetype order (the
+/// `extract_buiy_nodes` tiebreak, hoisted so both producers share it).
+/// Cross-root order is unspecified by `painters_z`, so the tiebreak is
+/// render-local and never overrides an in-context order.
+pub fn context_roots(sc_by_entity: &std::collections::HashMap<Entity, &[Entity]>) -> Vec<Entity> {
+    let nested: std::collections::HashSet<Entity> = sc_by_entity
+        .values()
+        .flat_map(|painters| painters.iter().copied())
+        .filter(|e| sc_by_entity.contains_key(e))
+        .collect();
+    let mut roots: Vec<Entity> = sc_by_entity
+        .keys()
+        .copied()
+        .filter(|e| !nested.contains(e))
+        .collect();
+    roots.sort_unstable();
+    roots
 }
 
 use crate::components::StackingContext;
@@ -555,23 +590,10 @@ pub fn extract_buiy_nodes(
         .collect();
     let painters_z_of = |e: Entity| -> Option<&[Entity]> { sc_by_entity.get(&e).copied() };
 
-    // Root contexts are the forming entities that no other context lists as a
-    // painter (a nested root appears in exactly its parent's list, § 1.1). v1
-    // expects a single root (architecture § 4, D2); sort the roots by entity so
-    // a (degenerate) multi-root tree assembles deterministically rather than in
-    // archetype order — cross-root order is unspecified by painters_z, so this
-    // tiebreak is render-local and never overrides an in-context order.
-    let nested: std::collections::HashSet<Entity> = sc_by_entity
-        .values()
-        .flat_map(|painters| painters.iter().copied())
-        .filter(|e| sc_by_entity.contains_key(e))
-        .collect();
-    let mut roots: Vec<Entity> = sc_by_entity
-        .keys()
-        .copied()
-        .filter(|e| !nested.contains(e))
-        .collect();
-    roots.sort_unstable();
+    // Root contexts (the shared [`context_roots`] helper): the forming
+    // entities no other context lists as a painter, entity-sorted. v1 expects
+    // a single root (architecture § 4, D2).
+    let roots = context_roots(&sc_by_entity);
 
     // The view-level logical→clip terms (architecture § 4, D2: every Node
     // resolves to the primary window's view). `BuiyViewUniform::for_view`

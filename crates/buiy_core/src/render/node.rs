@@ -287,13 +287,13 @@ impl ViewNode for BuiyNode {
         // or before the first glyph warms an atlas page).
         //
         // TODO(text-seam): glyphs draw into the FLAT window pass with NO group
-        // mechanism. Correct only while the text seam is unconnected
-        // (`glyph_count == 0` in v1). When text lands, a glyph inside an
-        // `EffectGroup` subtree would render at full opacity straight to the
-        // window — bypassing the group's off-screen target + the opacity composite
-        // (text in an `Opacity(0.5)` card would not dim). The glyph buffer must
-        // then be partitioned (flat/group ranges, like the quad path) and the
-        // step-1 group pass must draw glyph instances into the group target via a
+        // mechanism. Text lands in T4 (`text::extract_buiy_glyphs`), so a glyph
+        // inside an `EffectGroup` subtree renders at full opacity straight to
+        // the window — bypassing the group's off-screen target + the opacity
+        // composite (text in an `Opacity(0.5)` card paints undimmed) until the
+        // T8 partition (follow-ups.md entry). The glyph buffer must then be
+        // partitioned (flat/group ranges, like the quad path) and the step-1
+        // group pass must draw glyph instances into the group target via a
         // `Glyph@Rgba16Float` specialization.
         if buffers.glyph_count > 0
             && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
