@@ -130,6 +130,44 @@ consuming T7's painting primitives — not a T-phase here.
   `shape_until_scroll` total-height pin, `ComputedTextLayout` idempotency
   (steady frame → tick unchanged; moved here from T2 — `TextCommit` is the
   writer), pipeline-order assertion grows `TextCommit`.
+- **T3 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T3 plan's decisions 7, 9, 12, and 15; superseding
+  context, not a silent contradiction):
+  1. *measure § 4.1/architecture § 5.1's `TextCommit` trigger row* ("the
+     TextSync-dirty set ∪ `Changed<ResolvedLayout>`") misses measure-touched
+     buffers whose resolved size did not change (ancestor resize re-probes
+     the leaf, the leaf's own resolved size holds — neither trigger fires,
+     yet the buffer is left at a probe width); as built, commit iterates all
+     text entities behind a cheap reconcile guard, with measure's
+     `height_opt = None` as the catch-all signal — measure never sets a
+     height, commit always does, so a probe-left buffer can never compare
+     equal (T3 plan decision 7).
+  2. *measure § 2.3's `TextBufferAccess`* is deferred to the
+     `buiy-text-editing` campaign — the `edit` arm binds `TextEditState`,
+     which does not exist yet; the measure closure and `TextCommit` bind
+     `&mut TextBuffer` directly, and the swap is mechanical when the editor
+     lands (supersedes T2's seam-table "built in T3" row; T3 plan
+     decision 12).
+  3. *measure § 4.2's `set_size(Some(w), Some(h))`* keeps cosmic's height
+     windowing, so `overflow: visible` text taller than its box does not
+     lay out past the content height (`shape_until_scroll` stops at
+     `scroll_end`; `LayoutRunIter` also cuts at `height_opt`) — such lines
+     are absent from `ComputedTextLayout` and from T4's emission until the
+     overflow seam is revisited with T4+'s overflow painting (T3 plan
+     decision 9).
+  4. The charter's compute-site line numbers drifted (`systems.rs`
+     2625/3602/2876 → 2627/3604/2878 at T3 plan time; they keep drifting) —
+     the spec's as-built references should pin the system names
+     (`taffy_compute` / `cq_flip_rerun` / `cq_descendant_rerun`), not lines.
+  5. *measure § 6 / decision 15's "no laid-out runs"* removal condition for
+     `ResolvedBaseline` never matches literally: cosmic-text synthesizes a
+     glyph-less `LayoutLine` for every empty `BufferLine` (shape.rs:
+     3025–3051, "create a visual line for empty lines"), so `Text("")`
+     still yields one run. As built, baseline presence keys on GLYPHS — the
+     synthetic line's `line_y` is the centering artifact of a zero-ascent
+     strut, not a baseline — while the synthetic line stays in
+     `ComputedTextLayout` as real `line_top`/`line_height` geometry (caret
+     math and the height fold both count it).
 
 ### T4 — First pixels
 
@@ -257,7 +295,7 @@ consuming T7's painting primitives — not a T-phase here.
 |---|---|---|
 | T1 | Engine foundation | landed |
 | T2 | Text component + Buffer lifecycle | landed |
-| T3 | Measure + wrap/align | proposed |
+| T3 | Measure + wrap/align | landed |
 | T4 | First pixels | proposed |
 | T5 | Fonts, fallback, and BiDi correctness | proposed |
 | T6 | Decoration painting | proposed |

@@ -3,8 +3,12 @@
 //! phase — the retained `TextBuffer` state and the `ComputedTextLayout`
 //! output type (architecture § 3).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use bevy::prelude::*;
-use cosmic_text::{Buffer, Metrics, Shaping};
+use cosmic_text::{Align, Buffer, Metrics, Shaping, Wrap};
+
+use super::whitespace::CollapseMode;
 
 /// The authored UTF-8 text content (measure-and-layout § 4.1) — the string
 /// `TextSync` feeds to `Buffer::set_text`, after the § 5.2 white-space
@@ -135,6 +139,148 @@ impl Default for TextStyleDefaults {
     }
 }
 
+/// CSS `line-height` (measure § 5.1, F) — feeds `Metrics.line_height`, the
+/// Σ term of measured height. Per-span line-height (`AttrsList`) is the
+/// C-tier rich-text path, named in § 5.1's runner-up, not built.
+#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub enum LineHeight {
+    /// `line-height: normal` — the common UA factor 1.2
+    /// (`DEFAULT_LINE_HEIGHT_SCALE`, the T2 stand-in, now the Normal arm).
+    #[default]
+    Normal,
+    /// Unitless number — multiplier on font-size (`Metrics::relative`).
+    Scale(f32),
+    /// Fixed logical px (`Metrics::new`).
+    Px(f32),
+}
+
+/// CSS `white-space` (measure § 5.2, F) — resolves to a
+/// (collapse mode × `Wrap`) pair via the normative value table.
+#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[reflect(Component, Default)]
+pub enum WhiteSpace {
+    #[default]
+    Normal,
+    Nowrap,
+    Pre,
+    PreWrap,
+    PreLine,
+}
+
+impl WhiteSpace {
+    /// The table's collapse column (pre-pass mode, CSS Text L3 § 4.1 phase I).
+    pub fn collapse_mode(self) -> CollapseMode {
+        match self {
+            WhiteSpace::Normal | WhiteSpace::Nowrap => CollapseMode::Collapse,
+            WhiteSpace::Pre | WhiteSpace::PreWrap => CollapseMode::Preserve,
+            WhiteSpace::PreLine => CollapseMode::PreserveBreaks,
+        }
+    }
+
+    /// The table's `Wrap` column. `text-wrap` composes over it
+    /// ([`resolve_wrap`]); the C-tier `overflow-wrap` later flips
+    /// `Word` → `WordOrGlyph`/`Glyph` (measure § 5.5 — named, not built).
+    pub fn base_wrap(self) -> Wrap {
+        match self {
+            WhiteSpace::Normal | WhiteSpace::PreWrap | WhiteSpace::PreLine => Wrap::Word,
+            WhiteSpace::Nowrap | WhiteSpace::Pre => Wrap::None,
+        }
+    }
+}
+
+/// CSS `text-wrap` (measure § 5.2, F). `balance`/`pretty`/`stable` parse
+/// and degrade to greedy `Word` wrap with a warn-once — no engine support
+/// (cosmic-text and Parley both lack balancing); promotable later without
+/// resharpening this seam.
+#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[reflect(Component, Default)]
+pub enum TextWrap {
+    #[default]
+    Wrap,
+    Nowrap,
+    Balance,
+    Pretty,
+    Stable,
+}
+
+/// measure § 5.2: `text-wrap` composes where CSS says it does —
+/// `nowrap` forces `Wrap::None` over the white-space table's wrap column;
+/// `wrap` keeps it; the style keywords degrade to it (warn-once).
+pub fn resolve_wrap(white_space: WhiteSpace, text_wrap: TextWrap) -> Wrap {
+    match text_wrap {
+        TextWrap::Nowrap => Wrap::None,
+        TextWrap::Wrap => white_space.base_wrap(),
+        TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable => {
+            warn_once_text_wrap_style_degrades();
+            white_space.base_wrap()
+        }
+    }
+}
+
+/// CSS `text-align` (measure § 5.3, F) — applied at `TextCommit` (a
+/// finalize concern: cosmic `Align` positions runs against the final line
+/// width), never during measure. `match-parent` is deliberately NOT a
+/// variant: per the § 5.3 table it is resolved at style time (the parent's
+/// computed value lowered against the parent's direction) and never
+/// reaches cosmic-text as a distinct value — a style-resolution-tier seam.
+#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[reflect(Component, Default)]
+pub enum TextAlign {
+    #[default]
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+    Justify,
+    JustifyAll,
+}
+
+impl TextAlign {
+    /// The § 5.3 value table. `Start` → `None`: cosmic-text's unaligned
+    /// default follows the line's BiDi direction — exactly CSS `start`.
+    /// `justify-all` degrades to `Justified` with a warn-once (last-line
+    /// justification is not exposed upstream; promotable without
+    /// reshaping this seam).
+    pub fn to_cosmic(self) -> Option<Align> {
+        match self {
+            TextAlign::Start => None,
+            TextAlign::End => Some(Align::End),
+            TextAlign::Left => Some(Align::Left),
+            TextAlign::Right => Some(Align::Right),
+            TextAlign::Center => Some(Align::Center),
+            TextAlign::Justify => Some(Align::Justified),
+            TextAlign::JustifyAll => {
+                warn_once_justify_all_degrades();
+                Some(Align::Justified)
+            }
+        }
+    }
+}
+
+static WARNED_TEXT_WRAP_STYLE: AtomicBool = AtomicBool::new(false);
+static WARNED_JUSTIFY_ALL: AtomicBool = AtomicBool::new(false);
+
+/// The translate.rs `warn_once_fr_outside_grid` precedent.
+fn warn_once_text_wrap_style_degrades() {
+    if !WARNED_TEXT_WRAP_STYLE.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: text-wrap balance/pretty/stable have no engine support; \
+             degrading to greedy word wrap (warned once)"
+        );
+    }
+}
+
+fn warn_once_justify_all_degrades() {
+    if !WARNED_JUSTIFY_ALL.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: text-align: justify-all degrades to justify — last-line \
+             justification is not exposed by cosmic-text (warned once)"
+        );
+    }
+}
+
 /// The one shaping mode Buiy ever passes to `set_text` (architecture § 3.2):
 /// `Shaping::Basic` breaks complex scripts for a micro-optimization and is
 /// never exposed. The unit test below is the drift tripwire.
@@ -160,8 +306,12 @@ pub const TEXT_SHAPING: Shaping = Shaping::Advanced;
 /// their authoritative buffer inside `TextEditState` (the successor
 /// `buiy-text-editing` campaign); the one shared accessor over both — the
 /// `TextBufferAccess` QueryData pinned by measure-and-layout § 2.3 — is
-/// built with its first consumers (T3's measure closure / `TextCommit`;
-/// T4's producer uses its read-only form), not in T2.
+/// DEFERRED to that campaign (T3 erratum, superseding T2's "built in T3"
+/// seam row): its `edit` arm binds `TextEditState`, which cannot exist
+/// before the editor lands, and a one-arm wrapper today is dead
+/// abstraction. The measure closure and `TextCommit` bind
+/// `&mut TextBuffer` directly; the swap is mechanical when the editor
+/// lands.
 #[derive(Component)]
 pub struct TextBuffer {
     /// The retained buffer. Logical px end-to-end (architecture § 6) —
@@ -197,6 +347,11 @@ impl TextBuffer {
     pub(crate) fn invalidate_intrinsics(&mut self) {
         self.intrinsics = None;
     }
+
+    /// Fill the cache (the T3 measure closure is the only writer).
+    pub(crate) fn cache_intrinsics(&mut self, widths: IntrinsicWidths) {
+        self.intrinsics = Some(widths);
+    }
 }
 
 /// Cached intrinsic widths (measure-and-layout §§ 2.3, 3.2), logical px.
@@ -230,6 +385,24 @@ pub struct ComputedTextLayout {
     pub lines: Vec<ComputedTextLine>,
     /// Laid-out extent: (max line width, Σ line heights).
     pub size: Vec2,
+}
+
+/// Baseline offsets from the node's content-box top, from the first/last
+/// `LayoutRun.line_y` ("Y offset to baseline of line", verified 0.19) —
+/// measure § 6. Written by `TextCommit` idempotently; REMOVED when no
+/// laid-out run carries glyphs (empty text has no baseline — consumers
+/// branch on presence; cosmic synthesizes a glyph-less run for empty
+/// lines, so presence keys on glyphs, not runs — the decision-15
+/// lowering, see `commit::computed_outputs`). Future consumers
+/// (vertical-align, inline baseline
+/// alignment, AccessKit text geometry) are C-tier seams named in measure
+/// § 5.5 — none are built in T3. Computed output — not reflect-registered.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct ResolvedBaseline {
+    /// First line's baseline offset.
+    pub first: f32,
+    /// Last line's baseline offset (== `first` for single-line text).
+    pub last: f32,
 }
 
 /// One laid-out line — the verified 0.19 `LayoutRun` per-line fields.

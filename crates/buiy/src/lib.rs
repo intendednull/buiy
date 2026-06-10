@@ -33,8 +33,9 @@ pub use buiy_core::{
     },
     text::{
         BuiyTextPlugin, ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize,
-        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, SharedFontSystem,
-        Text, TextBuffer, TextStyleDefaults, TextSyncAppliedCount,
+        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, LineHeight,
+        ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer, TextCommitReshapeCount,
+        TextMeasureCallCount, TextStyleDefaults, TextSyncAppliedCount, TextWrap, WhiteSpace,
     },
     theme::{Theme, UserPreferences, default_light_theme},
 };

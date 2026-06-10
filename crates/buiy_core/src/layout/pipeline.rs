@@ -2,11 +2,11 @@
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 //!
-//! Twelve ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the original
-//! eight; Phase 4 inserts `WritingModeInherit` between `RemovedNodesGc`
-//! and `SyncStyles` so step 1 sees the effective inherited writing-mode
-//! for every entity. Steps 2 (`CqActivate`), 4 (`CqFlipCheck`), 5
-//! (`CqFlipReRun`), and 6 (`PostTaffyOverrides`) remain no-ops in Phase 1.
+//! Thirteen ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the
+//! original eight; Phase 4 inserts `WritingModeInherit` between
+//! `RemovedNodesGc` and `SyncStyles` so step 1 sees the effective inherited
+//! writing-mode for every entity. Steps 2 (`CqActivate`), 4 (`CqFlipCheck`),
+//! 5 (`CqFlipReRun`), and 6 (`PostTaffyOverrides`) remain no-ops in Phase 1.
 //! Later phases attach systems to those sub-sets without reordering.
 //! Text T2 inserts `TextSync` between `WritingModeInherit` and
 //! `SyncStyles` (text architecture § 4.1); text T3 appends `TextCommit`
@@ -64,6 +64,16 @@ pub enum BuiyLayoutStep {
     /// dirty. Gated on `CqDescendantReRunRequested`; capped at one re-run
     /// per frame (D4). **Phase 14.**
     CqDescendantReRun,
+    /// Step 10 (text) — reshape each `TextBuffer` at its FINAL Taffy
+    /// content-box (the measured width can differ under stretch/grow, and
+    /// measure leaves `height_opt = None`), apply text-align (a finalize
+    /// concern — cosmic `Align` needs the final line width), and write
+    /// `ResolvedBaseline` + `ComputedTextLayout` idempotently. Must trail
+    /// `CqDescendantReRun`: steps 8–9 can still rewrite `ResolvedLayout`,
+    /// and committing earlier would shape against sizes step 9
+    /// immediately invalidates (text measure § 4.2).
+    /// **Text T3** (architecture § 4.2).
+    TextCommit,
 }
 
 /// Configure the ordered step chain inside `BuiySet::Layout`.
@@ -83,6 +93,7 @@ pub fn configure_pipeline(app: &mut App) {
             BuiyLayoutStep::WriteResolvedLayout,
             BuiyLayoutStep::CqDescendantInvalidate,
             BuiyLayoutStep::CqDescendantReRun,
+            BuiyLayoutStep::TextCommit,
         )
             .chain()
             .in_set(crate::BuiySet::Layout),

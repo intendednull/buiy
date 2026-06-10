@@ -34,7 +34,8 @@ use crate::render::components::{Filter, MixBlendMode, Opacity};
 use crate::render::effect::forms_render_stacking_context;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
-use taffy::{AvailableSpace, NodeId as TaffyNodeId, Size};
+use taffy::NodeId as TaffyNodeId;
+use taffy::prelude::TraversePartialTree as _;
 
 /// Resource — set by `cq_flip_check` (step 4) when one or more
 /// `ContainerQuery` activation states differ from this frame's
@@ -2070,6 +2071,11 @@ pub(super) fn sync_styles(
     content_vis_margin: Res<ContentVisibilityMargin>,
     mut iter_count: ResMut<SyncStylesIterCount>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
+    // Text-leaf probe (text measure § 2.1, decision 2): `With<Text>` —
+    // the AUTHORED component, present immediately at spawn — decides
+    // whether `translate_one_entity` creates the node with its measure
+    // context. Filter-only, conflict-free with every other query here.
+    text_leaves: Query<(), With<crate::text::Text>>,
 ) {
     let tree = &mut *tree;
 
@@ -2236,6 +2242,7 @@ pub(super) fn sync_styles(
             viewport_size,
             sentinel_size.get(&entity).copied(),
             tree,
+            text_leaves.contains(entity),
         );
     }
 
@@ -2292,6 +2299,12 @@ type NodeQueryItem<'w> = (
 /// `set_children` requires all child nodes to exist first, so it
 /// must run in a second pass after every entity has been translated.
 /// `sync_children_for_entity` is the matching helper.
+///
+/// `clippy::too_many_arguments` is silenced for the same reason as its
+/// three callers: the params are the explicitly-threaded per-frame
+/// context those systems share — bundling them into a struct would just
+/// move the argument list one level up.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn translate_one_entity(
     item: NodeQueryItem<'_>,
     parent_areas_for: &HashMap<Entity, GridAreas>,
@@ -2300,6 +2313,7 @@ pub(super) fn translate_one_entity(
     viewport_size: bevy::math::Vec2,
     content_visibility_intrinsic: Option<bevy::math::Vec2>,
     tree: &mut LayoutTree,
+    is_text_leaf: bool,
 ) {
     let (
         entity,
@@ -2347,18 +2361,30 @@ pub(super) fn translate_one_entity(
                 warn!(?entity, ?err, "buiy: layout set_style failed");
             }
         }
-        None => match tree.tree.new_leaf(taffy_style) {
-            Ok(id) => {
-                tree.by_entity.insert(entity, id);
+        None => {
+            // Text leaves are created WITH their measure context (text
+            // measure § 2.1/§ 2.2): new_leaf_with_context registers the
+            // entity at node birth, so a brand-new text entity is
+            // measurable on its FIRST frame. Plain nodes use new_leaf —
+            // no context, zero-measure dispatch never fires.
+            let created = if is_text_leaf {
+                tree.tree.new_leaf_with_context(taffy_style, entity)
+            } else {
+                tree.tree.new_leaf(taffy_style)
+            };
+            match created {
+                Ok(id) => {
+                    tree.by_entity.insert(entity, id);
+                }
+                Err(err) => {
+                    warn!(
+                        ?entity,
+                        ?err,
+                        "buiy: layout new_leaf failed; entity will be skipped this frame"
+                    );
+                }
             }
-            Err(err) => {
-                warn!(
-                    ?entity,
-                    ?err,
-                    "buiy: layout new_leaf failed; entity will be skipped this frame"
-                );
-            }
-        },
+        }
     }
 }
 
@@ -2525,7 +2551,7 @@ fn attach_fixed_to_root(
         // Append every Fixed node, skipping the root itself in the
         // degenerate "root is Fixed" case (a node cannot parent itself).
         child_ids.extend(fixed_node_ids.iter().copied().filter(|&fid| fid != root_id));
-        if let Err(err) = tree.tree.set_children(root_id, &child_ids) {
+        if let Err(err) = set_children_if_changed(tree, root_id, &child_ids) {
             warn!(
                 ?entity,
                 ?err,
@@ -2579,9 +2605,40 @@ fn sync_children_for_entity(
             .filter_map(|c| tree.by_entity.get(c).copied())
             .collect()
     };
-    if let Err(err) = tree.tree.set_children(parent_id, &child_ids) {
+    if let Err(err) = set_children_if_changed(tree, parent_id, &child_ids) {
         warn!(?entity, ?err, "buiy: layout set_children failed");
     }
+}
+
+/// Idempotent `set_children` — skip the call when the parent's Taffy
+/// child list already matches `child_ids`.
+///
+/// Taffy's `set_children` ends with an unconditional `mark_dirty(parent)`
+/// (taffy_tree.rs:727), and the children-sync pass runs over the FULL
+/// tree every frame (deliberately — the topology is a pure per-frame
+/// function of `Position.kind`, D3). Without this guard every node —
+/// childless leaves included, via their empty lists — has its layout
+/// cache cleared every frame. That was invisible pre-text (Taffy
+/// silently recomputed identical results each frame), but it breaks the
+/// measure protocol's O(0) steady state: every text leaf would re-invoke
+/// the measure closure every frame (measure § 7; the steady-state
+/// `TextMeasureCallCount == 0` assertions in tests/text_measure.rs).
+/// Same discipline as `write_resolved_layout`'s idempotent insert.
+fn set_children_if_changed(
+    tree: &mut LayoutTree,
+    parent_id: TaffyNodeId,
+    child_ids: &[TaffyNodeId],
+) -> Result<(), taffy::TaffyError> {
+    let unchanged = tree.tree.child_count(parent_id) == child_ids.len()
+        && tree
+            .tree
+            .child_ids(parent_id)
+            .zip(child_ids)
+            .all(|(current, &wanted)| current == wanted);
+    if unchanged {
+        return Ok(());
+    }
+    tree.tree.set_children(parent_id, child_ids)
 }
 
 /// Step 3 — call `tree.compute_layout` from each root. A root is an
@@ -2595,18 +2652,25 @@ fn sync_children_for_entity(
 /// `count == 2 * roots` and a non-flip frame with `count == roots`.
 /// The Phase 5 "cap at 2× Taffy per frame" architecture invariant
 /// is asserted by `tests/layout_container_queries.rs`.
+///
+/// Text T3: the compute rides `compute_roots_with_text_measure` — text
+/// leaves measure through their registered node context (measure § 4.3);
+/// the closure adds ZERO extra Taffy passes, so the counter semantics
+/// above are unchanged.
 pub(super) fn taffy_compute(
     mut tree: NonSendMut<LayoutTree>,
     nodes: Query<(Entity, Option<&ChildOf>), With<Node>>,
     windows: Query<&bevy::window::Window>,
     mut compute_count: ResMut<LayoutTaffyComputeCount>,
+    mut measure: crate::text::TextMeasureParam,
 ) {
     let tree = &mut *tree;
 
-    // Frame-start reset. `cq_flip_rerun` increments without resetting,
-    // so the counter ends each frame at exactly the number of Taffy
-    // invocations (1 for non-flip, 2 for flip).
+    // Frame-start resets. `cq_flip_rerun` / `cq_descendant_rerun`
+    // increment both counters without resetting, so each counter ends the
+    // frame at exactly the number of invocations.
     compute_count.0 = 0;
+    measure.reset_call_count();
 
     // Layout root sizing falls back to 800x600 if no Window exists (test
     // harnesses with MinimalPlugins). Phase 0 used the same default.
@@ -2616,30 +2680,24 @@ pub(super) fn taffy_compute(
         .map(|w| Vec2::new(w.width(), w.height()))
         .unwrap_or(Vec2::new(800.0, 600.0));
 
-    for (entity, parent) in nodes.iter() {
-        let is_root = parent
-            .map(|p| !tree.by_entity.contains_key(&p.parent()))
-            .unwrap_or(true);
-        if !is_root {
-            continue;
-        }
-        if let Some(id) = tree.by_entity.get(&entity).copied() {
-            match tree.tree.compute_layout(
-                id,
-                Size {
-                    width: AvailableSpace::Definite(window_size.x),
-                    height: AvailableSpace::Definite(window_size.y),
-                },
-            ) {
-                Ok(_) => {
-                    compute_count.0 += 1;
-                }
-                Err(err) => {
-                    warn!(?entity, ?err, "buiy: layout compute_layout failed");
-                }
-            }
-        }
-    }
+    let roots: Vec<(Entity, TaffyNodeId)> = nodes
+        .iter()
+        .filter(|(_, parent)| {
+            parent
+                .map(|p| !tree.by_entity.contains_key(&p.parent()))
+                .unwrap_or(true)
+        })
+        .filter_map(|(entity, _)| tree.by_entity.get(&entity).map(|&id| (entity, id)))
+        .collect();
+
+    crate::text::measure::compute_roots_with_text_measure(
+        tree,
+        &mut measure,
+        window_size,
+        &roots,
+        &mut compute_count,
+        "main pass",
+    );
 }
 
 /// Step 7 — read `tree.layout(id)` for every tracked entity and write
@@ -2759,6 +2817,13 @@ pub(super) fn cq_descendant_invalidate(
 /// Body is gated on `CqDescendantReRunRequested.0`; the flag is cleared at
 /// the top so the system is a no-op on non-cascade frames.
 ///
+/// Text T3: the re-run compute rides `compute_roots_with_text_measure`
+/// (site 3 of 3, measure § 4.3) — a container resize cascading into a
+/// text ancestor re-measures the leaf at its NEW width the SAME frame
+/// instead of zero-collapsing it. The helper takes its own
+/// `SharedFontSystem` lock, scoped per invocation, so the re-run never
+/// overlaps `taffy_compute`'s lock.
+///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/container-queries-and-writing-modes.md § 1.3, § 1.5.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn cq_descendant_rerun(
@@ -2774,24 +2839,37 @@ pub(super) fn cq_descendant_rerun(
     container_snapshot_source: Query<(Entity, &Container, &ResolvedLayout)>,
     primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     cq_parent_chain: Query<&ChildOf>,
-    roots: Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
-    windows: Query<&bevy::window::Window>,
-    rules: Query<
-        (
-            Entity,
-            &ContainerQuery,
-            Option<&ContainerQueryActive>,
-            Option<&ContainerQueryInactive>,
-        ),
-        With<Node>,
-    >,
-    containers: Query<(&Container, &ResolvedLayout)>,
+    // Grouped into ONE param like `rule_queries` below — the grouping
+    // frees the slot the measure param takes (text T3, decision 3).
+    (roots, windows): (
+        Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
+        Query<&bevy::window::Window>,
+    ),
+    // Grouped into ONE param (tuples of `SystemParam`s are themselves a
+    // single `SystemParam`) — this system sits at Bevy's 16-param cap, and
+    // the grouping frees the slot `text_leaves` takes (T3).
+    rule_queries: (
+        Query<
+            (
+                Entity,
+                &ContainerQuery,
+                Option<&ContainerQueryActive>,
+                Option<&ContainerQueryInactive>,
+            ),
+            With<Node>,
+        >,
+        Query<(&Container, &ResolvedLayout)>,
+    ),
+    // Text-leaf probe — see `sync_styles` (text measure § 2.1, decision 2).
+    text_leaves: Query<(), With<crate::text::Text>>,
+    mut measure: crate::text::TextMeasureParam,
 ) {
     if !rerun.0 {
         return;
     }
     rerun.0 = false;
 
+    let (rules, containers) = rule_queries;
     let tree = &mut *tree;
 
     // Snapshots rebuilt from the just-written ResolvedLayout (step 7),
@@ -2845,6 +2923,7 @@ pub(super) fn cq_descendant_rerun(
             viewport_size,
             None,
             tree,
+            text_leaves.contains(entity),
         );
     }
 
@@ -2859,40 +2938,33 @@ pub(super) fn cq_descendant_rerun(
         .collect();
     sync_children_pass(&rows, &HashSet::new(), tree);
 
-    // Re-invoke Taffy compute per root (same shape as cq_flip_rerun;
-    // NO compute_count reset — that lives only in taffy_compute, so a
-    // cascade frame ends with count incremented, observable for the 2x cap).
+    // Re-invoke Taffy compute per root through the shared measure helper
+    // (text measure § 4.3 — site 3 of 3; same shape as cq_flip_rerun).
+    // NO compute_count / measure-call-count reset — those live only in
+    // taffy_compute, so a cascade frame ends with count incremented,
+    // observable for the 2x cap.
     let window_size = windows
         .iter()
         .next()
         .map(|w| Vec2::new(w.width(), w.height()))
         .unwrap_or(Vec2::new(800.0, 600.0));
-    for (entity, _children, parent, _position) in roots.iter() {
-        let is_root = parent
-            .map(|p| !tree.by_entity.contains_key(&p.parent()))
-            .unwrap_or(true);
-        if !is_root {
-            continue;
-        }
-        if let Some(id) = tree.by_entity.get(&entity).copied() {
-            match tree.tree.compute_layout(
-                id,
-                Size {
-                    width: AvailableSpace::Definite(window_size.x),
-                    height: AvailableSpace::Definite(window_size.y),
-                },
-            ) {
-                Ok(_) => compute_count.0 += 1,
-                Err(err) => {
-                    warn!(
-                        ?entity,
-                        ?err,
-                        "buiy: layout compute_layout (descendant re-run) failed"
-                    )
-                }
-            }
-        }
-    }
+    let root_nodes: Vec<(Entity, TaffyNodeId)> = roots
+        .iter()
+        .filter(|(_, _, parent, _)| {
+            parent
+                .map(|p| !tree.by_entity.contains_key(&p.parent()))
+                .unwrap_or(true)
+        })
+        .filter_map(|(entity, ..)| tree.by_entity.get(&entity).map(|&id| (entity, id)))
+        .collect();
+    crate::text::measure::compute_roots_with_text_measure(
+        tree,
+        &mut measure,
+        window_size,
+        &root_nodes,
+        &mut compute_count,
+        "cq descendant re-run",
+    );
 
     // Re-write ResolvedLayout for the dirty set from the recomputed Taffy
     // tree (mirror write_resolved_layout, scoped to dirty).
@@ -3419,7 +3491,14 @@ pub(super) fn cq_flip_check(
 /// `clippy::too_many_arguments` is silenced because the param set is
 /// the (intentional) union of `sync_styles` + `taffy_compute` — not
 /// a function that could meaningfully be split. Bevy systems are
-/// allowed up to 16 params; this one uses 10.
+/// allowed up to 16 params; this one is AT the cap (`(roots, windows)`
+/// are grouped into one tuple param to make room for the measure param).
+///
+/// Text T3: the re-run compute rides `compute_roots_with_text_measure`
+/// (site 2 of 3, measure § 4.3) — a flip that changes a text ancestor's
+/// width re-measures the leaf the SAME frame instead of zero-collapsing
+/// it. The helper takes its own `SharedFontSystem` lock, scoped per
+/// invocation, so the re-run never overlaps `taffy_compute`'s lock.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn cq_flip_rerun(
     mut rerun: ResMut<CqReRunRequested>,
@@ -3465,9 +3544,14 @@ pub(super) fn cq_flip_rerun(
     // Full (UNfiltered) node set — serves both the children-sync pass (which
     // must rebuild every parent's Taffy child list from current Fixed-status,
     // not just the `Changed`-filtered `nodes`; see `sync_styles`) and the
-    // per-root Taffy `compute_layout` loop below.
-    roots: Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
-    windows: Query<&bevy::window::Window>,
+    // per-root compute below. Grouped with `windows` into ONE param (tuples
+    // of `SystemParam`s are themselves a single `SystemParam`) — this system
+    // sits at Bevy's 16-param cap, and the grouping frees the slot the
+    // measure param takes (text T3, decision 3).
+    (roots, windows): (
+        Query<(Entity, Option<&Children>, Option<&ChildOf>, &Position), With<Node>>,
+        Query<&bevy::window::Window>,
+    ),
     // content-visibility skip inputs (spec § 5.2, D8) — read-only and disjoint
     // from the mutable `tree`/`rerun`/`compute_count`, mirroring `sync_styles`'s
     // side queries. `containment_lookup` is the FULL (unfiltered) classification
@@ -3479,6 +3563,9 @@ pub(super) fn cq_flip_rerun(
     resolved_lookup: Query<&ResolvedLayout>,
     intrinsic_lookup: Query<&ContainIntrinsicSize>,
     content_vis_margin: Res<ContentVisibilityMargin>,
+    // Text-leaf probe — see `sync_styles` (text measure § 2.1, decision 2).
+    text_leaves: Query<(), With<crate::text::Text>>,
+    mut measure: crate::text::TextMeasureParam,
 ) {
     if !rerun.0 {
         // No activation flip this frame — the descendant pass (step 8) is
@@ -3568,6 +3655,7 @@ pub(super) fn cq_flip_rerun(
             viewport_size,
             sentinel_size.get(&entity).copied(),
             tree,
+            text_leaves.contains(entity),
         );
     }
     // Children-sync over the FULL tree (`roots`), not the `Changed`-filtered
@@ -3584,39 +3672,33 @@ pub(super) fn cq_flip_rerun(
     // `sync_styles` detached this frame stay detached across the flip re-run.
     sync_children_pass(&rows, &skip_children, tree);
 
-    // Re-invoke Taffy compute. Same code shape as `taffy_compute`,
-    // but WITHOUT the `compute_count.0 = 0` frame-reset (that lives
-    // only in `taffy_compute`, so a flip frame ends at `count == 2`,
-    // not `count == 1`).
+    // Re-invoke Taffy compute through the shared measure helper (text
+    // measure § 4.3 — site 2 of 3). Same code shape as `taffy_compute`,
+    // but WITHOUT the `compute_count.0 = 0` / `reset_call_count`
+    // frame-resets (those live only in `taffy_compute`, so a flip frame
+    // ends at `count == 2`, not `count == 1`).
     let window_size = windows
         .iter()
         .next()
         .map(|w| Vec2::new(w.width(), w.height()))
         .unwrap_or(Vec2::new(800.0, 600.0));
-    for (entity, _children, parent, _position) in roots.iter() {
-        let is_root = parent
-            .map(|p| !tree.by_entity.contains_key(&p.parent()))
-            .unwrap_or(true);
-        if !is_root {
-            continue;
-        }
-        if let Some(id) = tree.by_entity.get(&entity).copied() {
-            match tree.tree.compute_layout(
-                id,
-                Size {
-                    width: AvailableSpace::Definite(window_size.x),
-                    height: AvailableSpace::Definite(window_size.y),
-                },
-            ) {
-                Ok(_) => {
-                    compute_count.0 += 1;
-                }
-                Err(err) => {
-                    warn!(?entity, ?err, "buiy: layout compute_layout (re-run) failed");
-                }
-            }
-        }
-    }
+    let root_nodes: Vec<(Entity, TaffyNodeId)> = roots
+        .iter()
+        .filter(|(_, _, parent, _)| {
+            parent
+                .map(|p| !tree.by_entity.contains_key(&p.parent()))
+                .unwrap_or(true)
+        })
+        .filter_map(|(entity, ..)| tree.by_entity.get(&entity).map(|&id| (entity, id)))
+        .collect();
+    crate::text::measure::compute_roots_with_text_measure(
+        tree,
+        &mut measure,
+        window_size,
+        &root_nodes,
+        &mut compute_count,
+        "cq flip re-run",
+    );
 }
 
 /// Convert a `TransformMatrix` to a `Mat4`. `None` → identity.
