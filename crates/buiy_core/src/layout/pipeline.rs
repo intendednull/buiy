@@ -2,12 +2,15 @@
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 //!
-//! Eleven ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the original
+//! Twelve ordered sub-sets of `BuiySet::Layout`. Phase 1 wires the original
 //! eight; Phase 4 inserts `WritingModeInherit` between `RemovedNodesGc`
 //! and `SyncStyles` so step 1 sees the effective inherited writing-mode
 //! for every entity. Steps 2 (`CqActivate`), 4 (`CqFlipCheck`), 5
 //! (`CqFlipReRun`), and 6 (`PostTaffyOverrides`) remain no-ops in Phase 1.
 //! Later phases attach systems to those sub-sets without reordering.
+//! Text T2 inserts `TextSync` between `WritingModeInherit` and
+//! `SyncStyles` (text architecture § 4.1); text T3 appends `TextCommit`
+//! as the new final step.
 
 use bevy::prelude::*;
 
@@ -22,6 +25,16 @@ pub enum BuiyLayoutStep {
     /// inherited writing-mode for every entity.
     /// **Phase 4.**
     WritingModeInherit,
+    /// Pre-step-1 (text) — create/update `TextBuffer` from the authored
+    /// text components via the 0.19 lazy setters (lock-free) and mark the
+    /// entity's Taffy node dirty when content changed (Taffy caches measure
+    /// results — an un-dirtied node serves a stale measurement). After
+    /// `WritingModeInherit` (the trigger union includes
+    /// `Changed<WritingModeResolved>`), hard before `SyncStyles` (which
+    /// must know whether an entity is a measured text leaf when creating
+    /// its Taffy node — the T3 context migration).
+    /// **Text T2** (text architecture § 4.1; measure-and-layout § 4.1).
+    TextSync,
     /// Step 1 — translate changed Buiy components → `taffy::Style` and
     /// sync hierarchy.
     SyncStyles,
@@ -53,13 +66,14 @@ pub enum BuiyLayoutStep {
     CqDescendantReRun,
 }
 
-/// Configure the 9-step chain inside `BuiySet::Layout`.
+/// Configure the ordered step chain inside `BuiySet::Layout`.
 pub fn configure_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
             BuiyLayoutStep::RemovedNodesGc,
             BuiyLayoutStep::WritingModeInherit,
+            BuiyLayoutStep::TextSync,
             BuiyLayoutStep::SyncStyles,
             BuiyLayoutStep::CqActivate,
             BuiyLayoutStep::TaffyCompute,

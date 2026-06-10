@@ -1,4 +1,4 @@
-//! 9-step pipeline order asserted at the integration level.
+//! Layout pipeline order asserted at the integration level (text T2 grows the TextSync step).
 //!
 //! Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
 //!
@@ -75,6 +75,10 @@ fn layout_steps_are_chained_in_declared_order() {
     app.add_systems(
         Update,
         make_tracker(o.clone(), "wmi").in_set(BuiyLayoutStep::WritingModeInherit),
+    );
+    app.add_systems(
+        Update,
+        make_tracker(o.clone(), "text_sync").in_set(BuiyLayoutStep::TextSync),
     );
     app.add_systems(
         Update,
@@ -283,13 +287,13 @@ fn layout_steps_are_chained_in_declared_order() {
     // frame.
     app.update();
 
-    // Order assertion — the 9-step chain ran in declared order.
+    // Order assertion — the tracked step chain ran in declared order.
     let observed_full = order.lock().unwrap().clone();
     let n = observed_full.len();
     assert_eq!(
-        n, 9,
+        n, 10,
         "expected exactly one full pipeline cycle ({} entries); got {} entries: {:?}",
-        9, n, observed_full,
+        10, n, observed_full,
     );
     let observed = &observed_full[..];
     assert_eq!(
@@ -297,6 +301,7 @@ fn layout_steps_are_chained_in_declared_order() {
         &[
             "gc",
             "wmi",
+            "text_sync",
             "sync",
             "cq_activate",
             "taffy",

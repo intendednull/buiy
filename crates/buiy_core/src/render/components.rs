@@ -28,6 +28,30 @@ pub struct Background {
     pub color: ColorToken,
 }
 
+/// Glyph foreground color (v1 text) — the graduated `Visual.foreground_token`
+/// reservation the atlas seam hands to the text spec
+/// (atlas-and-text-seam.md § 1; glyph-pipeline.md § 7 owns the contract).
+///
+/// Consumed by `extract_buiy_glyphs` from T4: resolved at extract exactly
+/// like `Background` (`render::color::resolve_token`), CPU-linearized, and
+/// written **straight-alpha** into `GlyphAlphaInstance.color` — alpha-as-
+/// color means a color change re-emits instances; the atlas is never
+/// touched. Per-span `LayoutGlyph.color_opt` overrides it per-glyph when
+/// rich-text spans land (C-tier).
+///
+/// Default is `CurrentColor` — the theme default foreground (`CanvasText`
+/// under forced-colors, else `color.text.primary`) — NOT the derived
+/// `Transparent` default, which would render text invisible.
+#[derive(Component, Reflect, Clone, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct TextColor(pub ColorToken);
+
+impl Default for TextColor {
+    fn default() -> Self {
+        Self(ColorToken::CurrentColor)
+    }
+}
+
 /// Border / outline line style. Reuses the shape of `ColumnRuleStyle`
 /// (layout/types.rs) extended with the remaining CSS keywords.
 /// `Groove`/`Ridge`/`Inset`/`Outset` are C-tier and render as `Solid`

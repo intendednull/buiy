@@ -28,8 +28,14 @@ pub use buiy_core::{
     },
     picking::{BuiyPickingBackendPlugin, Hovered},
     render::color::ColorToken,
-    render::components::{Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius},
-    text::{BuiyTextPlugin, FontsGeneration, SharedFontSystem},
+    render::components::{
+        Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius, TextColor,
+    },
+    text::{
+        BuiyTextPlugin, ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize,
+        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, SharedFontSystem,
+        Text, TextBuffer, TextStyleDefaults, TextSyncAppliedCount,
+    },
     theme::{Theme, UserPreferences, default_light_theme},
 };
 pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};

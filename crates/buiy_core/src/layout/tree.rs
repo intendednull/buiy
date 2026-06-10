@@ -26,6 +26,20 @@ impl LayoutTree {
         self.by_entity.is_empty()
     }
 
+    /// Mark the Taffy node for `entity` dirty (recursive to ancestors —
+    /// taffy_tree.rs:873). Taffy caches measure results; an un-dirtied node
+    /// serves a stale measurement (text architecture § 4.1). No-op when the
+    /// entity has no node yet — a brand-new text leaf's node is created
+    /// fresh by `sync_styles` later the same frame, dirty by construction
+    /// (text measure-and-layout § 2.2).
+    pub(crate) fn mark_dirty_for_entity(&mut self, entity: Entity) {
+        if let Some(&node) = self.by_entity.get(&entity) {
+            self.tree
+                .mark_dirty(node)
+                .expect("LayoutTree: by_entity points at a live Taffy node");
+        }
+    }
+
     /// Test-only access to the entity-to-Taffy mapping. Read-only.
     #[doc(hidden)]
     pub fn by_entity(&self) -> &std::collections::HashMap<bevy::prelude::Entity, taffy::NodeId> {
