@@ -172,7 +172,8 @@ impl Plugin for BuiyRenderPlugin {
             .register_type::<components::CssVisibility>()
             .register_type::<components::ClipRadius>()
             .register_type::<color::ColorToken>()
-            .register_type::<color::SystemColorKeyword>();
+            .register_type::<color::SystemColorKeyword>()
+            .register_type::<components::TextColor>();
 
         // Buiy's WGSL shaders are MAIN-world assets: `AssetPlugin` owns
         // `Assets<Shader>` in the main world; the render world only receives the

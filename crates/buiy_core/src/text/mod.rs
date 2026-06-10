@@ -6,22 +6,32 @@
 //! font + `BuiyFallback`, the render-world swash cache, and the opt-in
 //! background system-font scan with the `FontsGeneration` reshape trigger.
 //!
-//! Later phases fill the module out: `TextBuffer` + the `TextSync`/
-//! `TextCommit` layout steps (T2–T3), the `extract_buiy_glyphs` producer
-//! (T4), font assets + the `FontStack` resolver + fallback correctness (T5).
+//! T2 (this phase) adds the authored components, `TextBuffer`, and
+//! `TextSync`; T3 adds measure + `TextCommit`. Later phases fill the module
+//! out further: the `extract_buiy_glyphs` producer (T4), font assets + the
+//! `FontStack` resolver + fallback correctness (T5).
 //! Campaign: `docs/plans/2026-06-09-buiy-text-campaign.md`.
 
+mod components;
 mod font_system;
 mod swash;
+mod sync;
 mod system_scan;
+mod whitespace;
 
+pub use components::{
+    ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
+    GenericFamily, IntrinsicWidths, TEXT_SHAPING, Text, TextBuffer, TextStyleDefaults,
+};
 pub use font_system::{
     BuiyFallback, DEFAULT_FONT_FAMILY, FontsGeneration, SharedFontSystem, registered_fonts_db,
 };
 pub use swash::BuiySwashCache;
+pub use sync::{TextSyncAppliedCount, text_sync_buffers};
 pub use system_scan::{
     PendingSystemFontScan, apply_system_font_scan, spawn_system_font_scan, swap_font_db,
 };
+pub use whitespace::{CollapseMode, collapse_whitespace};
 
 use bevy::app::SubApp;
 use bevy::prelude::*;
@@ -47,6 +57,27 @@ impl Plugin for BuiyTextPlugin {
         let fonts = SharedFontSystem::new();
         app.insert_resource(fonts.clone());
         app.init_resource::<FontsGeneration>();
+
+        // T2: the authoring-surface defaults (font-assets § 8) and the
+        // author-set component registrations (reflection / BSN / inspectors —
+        // the layout convention). The computed text state (TextBuffer,
+        // ComputedTextLayout) is deliberately NOT registered, matching the
+        // render components.rs convention for computed components.
+        app.init_resource::<TextStyleDefaults>();
+        app.register_type::<Text>()
+            .register_type::<FontFamily>()
+            .register_type::<FontSize>()
+            .register_type::<FontWeight>();
+
+        app.init_resource::<TextSyncAppliedCount>();
+        // The TextSync step body (measure-and-layout § 4.1). The
+        // BuiyLayoutStep::TextSync set is configured by LayoutPlugin's
+        // configure_pipeline; without LayoutPlugin (the T1 standalone
+        // tests) the system runs unordered with empty queries — inert.
+        app.add_systems(
+            Update,
+            text_sync_buffers.in_set(crate::layout::BuiyLayoutStep::TextSync),
+        );
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert
         // without a PendingSystemFontScan resource (zero steady-state cost),

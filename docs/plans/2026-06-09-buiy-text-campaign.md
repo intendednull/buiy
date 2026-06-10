@@ -100,6 +100,15 @@ consuming T7's painting primitives — not a T-phase here.
   (`Changed<TextBuffer>` never fires — the bypass discipline). (The
   `ComputedTextLayout` idempotency test moved to T3 — the component is only
   *written* by `TextCommit`, which lands there.)
+- **T2 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T2 plan's decision 14; superseding context, not a
+  silent contradiction):
+  1. architecture § 5.1's TextSync trigger row has no carrier-**removal**
+     member — removing a style carrier from a live entity (e.g. `FontSize`
+     removed → the entity should revert to the `TextStyleDefaults` fallback)
+     resyncs only on the next *other* trigger. The spec edit pass should
+     either add the `RemovedComponents` arms for the style carriers or pin
+     the exclusion explicitly.
 
 ### T3 — Measure + wrap/align
 
@@ -247,7 +256,7 @@ consuming T7's painting primitives — not a T-phase here.
 | Phase | Title | Status |
 |---|---|---|
 | T1 | Engine foundation | landed |
-| T2 | Text component + Buffer lifecycle | proposed |
+| T2 | Text component + Buffer lifecycle | landed |
 | T3 | Measure + wrap/align | proposed |
 | T4 | First pixels | proposed |
 | T5 | Fonts, fallback, and BiDi correctness | proposed |

@@ -95,6 +95,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Buiy text campaign](plans/2026-06-09-buiy-text-campaign.md) — T1–T9 phasing realizing the text-rendering spec; editing/IME implementation deferred to a successor campaign. `[draft]`
 - [Buiy text T1 — engine foundation](plans/2026-06-09-buiy-text-t1-engine-foundation.md) — cosmic-text 0.19 dep (default features only; `shape-run-cache` OFF), `buiy_core::text` module, embedded Fira Sans latin subset + `tools/fonts/subset_default_font.sh` provenance script (OFL-1.1, default-on `default_font` feature), `SharedFontSystem` + deterministic `BuiyFallback` + `BuiyTextPlugin`, render-world `BuiySwashCache` (uncached-only), opt-in background system-font scan + `FontsGeneration`. `[landed]`
+- [Buiy text T2 — Text component + Buffer lifecycle](plans/2026-06-10-buiy-text-t2-component-buffer-lifecycle.md) — the retained `TextBuffer` (0.19 lazy setters, `Shaping::Advanced` pin, bypass-change-detection discipline), `Text` + `FontFamily`/`FontSize`/`FontWeight` + `TextStyleDefaults` plugin defaults, `TextColor` (`CurrentColor` default), the `ComputedTextLayout` output type, the white-space collapse pre-pass (§ 5.2 value table), `BuiyLayoutStep::TextSync` (trigger union incl. the `FontsGeneration` sweep, intrinsics invalidation, Taffy `mark_dirty`, `Text`-removal cleanup). Measure/`TextCommit` are T3. `[landed]`
 
 ### Docs infrastructure
 
