@@ -154,9 +154,9 @@ pub struct Shadow {
 pub struct BoxShadow(pub Vec<Shadow>);
 
 /// Group opacity in `[0.0, 1.0]`. `1.0` (default) is a no-op. A value
-/// `< 1.0` forms an `EffectGroup` (off-screen composite boundary) and is a
-/// future SC-trigger layout sub-pass 6f will read once the trigger-5 clause
-/// lands. Absent == opaque.
+/// `< 1.0` forms an `EffectGroup` (off-screen composite boundary) AND a
+/// stacking context (layout sub-pass 6f, the trigger-5 clause — one shared
+/// predicate, `render::effect`). Absent == opaque.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 6.
 #[derive(Component, Reflect, Clone, Copy, PartialEq, Debug)]
@@ -211,10 +211,9 @@ pub enum FilterFn {
     DropShadow(Shadow),
 }
 
-/// C (reserved). Filter function list. `EffectGroup` former in v1 and a
-/// future SC-trigger (layout 6f reads it once its trigger-5 clause lands);
-/// the filter shaders are deferred. Non-empty == forms an `EffectGroup`.
-/// Empty / absent == no filter.
+/// C (reserved). Filter function list. Non-empty forms an `EffectGroup`
+/// AND a stacking context (layout sub-pass 6f, the trigger-5 clause); the
+/// filter shaders are deferred. Empty / absent == no filter.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
 #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
@@ -233,8 +232,9 @@ pub struct Filter(pub Vec<FilterFn>);
 pub struct BackdropFilter(pub Vec<FilterFn>);
 
 /// C (reserved). Blend mode against the backdrop. Any value other than
-/// `Normal` forms an `EffectGroup` in v1 and is a future SC-trigger; the
-/// blend shader is deferred. `Normal` (default) is a no-op.
+/// `Normal` forms an `EffectGroup` AND a stacking context (layout sub-pass
+/// 6f, the trigger-5 clause); the blend shader is deferred. `Normal`
+/// (default) is a no-op.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
 #[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Eq, Debug)]

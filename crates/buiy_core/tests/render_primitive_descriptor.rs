@@ -27,10 +27,12 @@ fn quad_descriptor_uses_key_format_not_hardcoded() {
     let srgb = specializer.specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     let hdr = specializer.specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba16Float,
+        samples: 1,
     });
     let srgb_fmt = srgb.fragment.as_ref().unwrap().targets[0]
         .as_ref()
@@ -50,6 +52,7 @@ fn quad_descriptor_keeps_alpha_blending_and_entry_points() {
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     let frag = d.fragment.as_ref().unwrap();
     assert_eq!(
@@ -70,6 +73,7 @@ fn quad_descriptor_has_two_vertex_buffers_with_phase0_strides() {
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     let buffers = &d.vertex.buffers;
     assert_eq!(buffers.len(), 2, "vertex + instance buffer layouts");
@@ -86,6 +90,7 @@ fn instance_buffer_stride_is_52_with_clip_fields() {
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     assert_eq!(d.vertex.buffers[1].array_stride, 52);
 }
@@ -98,6 +103,7 @@ fn instance_has_clip_min_at_location_6_offset_36() {
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     let attrs = &d.vertex.buffers[1].attributes;
     let clip_min = attrs
@@ -115,6 +121,7 @@ fn instance_has_clip_max_at_location_7_offset_44() {
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     let attrs = &d.vertex.buffers[1].attributes;
     let clip_max = attrs
@@ -136,6 +143,7 @@ fn quad_descriptor_declares_the_view_uniform_bind_group_layout() {
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     assert_eq!(
         d.layout.len(),
@@ -150,15 +158,47 @@ fn quad_descriptor_declares_the_view_uniform_bind_group_layout() {
 }
 
 #[test]
+fn descriptor_multisample_count_follows_key_samples() {
+    // The MSAA seam (the hello_button startup-crash fix): the descriptor's
+    // `MultisampleState.count` is keyed off the bound attachment's sample
+    // count, exactly like `format`. A bare `Camera2d` view is `Msaa::Sample4`,
+    // so the view-pass variants key `samples: 4`; the off-screen group targets
+    // are created `sample_count: 1`, so the group-pass variant keys 1. The
+    // mask/alpha-to-coverage stay at wgpu defaults.
+    let s = BuiyPrimitives::default();
+    for kind in [
+        BuiyPrimitiveKind::Quad,
+        BuiyPrimitiveKind::Shadow,
+        BuiyPrimitiveKind::Glyph,
+    ] {
+        for samples in [1u32, 4] {
+            let d = s.specialize(BuiyPrimitiveKey {
+                kind,
+                format: TextureFormat::Rgba8UnormSrgb,
+                samples,
+            });
+            assert_eq!(
+                d.multisample.count, samples,
+                "{kind:?} multisample count follows key.samples ({samples})"
+            );
+            assert_eq!(d.multisample.mask, !0);
+            assert!(!d.multisample.alpha_to_coverage_enabled);
+        }
+    }
+}
+
+#[test]
 fn quad_and_shadow_use_distinct_shaders() {
     let s = BuiyPrimitives::default();
     let quad = s.specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     let shadow = s.specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Shadow,
         format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
     });
     // The two F-tier pipelines this phase ships reference different shaders;
     // border (folded into quad) and outline (clip-suppressed quad) add no

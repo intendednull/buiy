@@ -50,7 +50,7 @@ An entity forms a *stacking context* — a sub-tree painted as one unit, ordered
 2. `Stacking::isolation = Isolate`.
 3. `Transform` is non-identity. (Detailed in [transforms-and-containment.md § 3](transforms-and-containment.md#3-stacking-context-formation).)
 4. `Containment::contain` includes `Paint` or `Strict`. (Detailed in [transforms-and-containment.md § 5](transforms-and-containment.md#5-containment).)
-5. Render-side properties form one too: `opacity < 1.0`, `filter != none`, `mix_blend_mode != normal`, `will_change` mentions an SC-forming property (will-change portion: tier-E, deferred — see [transforms-and-containment.md § 5.3](transforms-and-containment.md#53-will-change)). These live on render-side components but are *checked* during this spec's stacking-context detection so layout can hand a correct list to render.
+5. Render-side properties form one too: `opacity < 1.0`, `filter != none`, `mix_blend_mode != normal`, `will_change` mentions an SC-forming property (will-change portion: tier-E, deferred — see [transforms-and-containment.md § 5.3](transforms-and-containment.md#53-will-change)). These live on render-side components but are *checked* during this spec's stacking-context detection so layout can hand a correct list to render. *Status:* the `opacity` / `filter` / `mix_blend_mode` formers are **realized** in 6f (§ 7) via one predicate shared with the render effect-group former (`render::effect`); `backdrop-filter` is deliberately NOT an SC former — it forms only an `EffectGroup` (render component-model.md § 8).
 6. The root entity always forms one.
 
 The rule set is deliberately union — any single trigger is sufficient. The CSS spec is the source of truth; the foundation visuals.md § 3.2 enumeration anchors the trigger list.
@@ -175,6 +175,14 @@ each is tracked in [`../../plans/follow-ups.md`](../../plans/follow-ups.md).
   **2** (`Isolation::Isolate`), **3** (non-identity transform — read from the
   Phase-8 `ResolvedTransform`), **4** (`Containment.contain` ⊇ `PAINT` / `STRICT`),
   and **6** (root).
+- **Trigger 5 — render-side SC formers** (`opacity < 1`, non-empty `filter`,
+  `mix_blend_mode != normal`), landed post-Phase-9 (render-followups,
+  2026-06-09) once the render components existed: 6f reads them directly and
+  delegates the term semantics to the render effect-group former predicate
+  (`render::effect::forms_render_stacking_context`, derived from
+  `effect_reason_for`) so the SC trigger and the `EffectGroup` former share
+  one source of truth — the effect-compositor's group-contiguity invariant
+  (`render/buckets.rs`) holds by construction.
 - `StackingContext.painters_z` paint-order sort (§ 2.1, all five tiers; floats
   always empty).
 - `z_index` sibling ordering within a context (§ 3).
@@ -184,10 +192,6 @@ each is tracked in [`../../plans/follow-ups.md`](../../plans/follow-ups.md).
 
 **Deferred (target stands; not in Phase 9):**
 
-- **Trigger 5 — render-side SC formers** (`opacity < 1`, `filter`,
-  `mix_blend_mode`). These live on render-side components that do not exist in
-  `buiy_core` yet; 6f cannot check what is not present. When the render
-  components land, 6f's trigger predicate extends to read them.
 - **Trigger 5 — `will-change` SC former.** `WillChange` is stored by Phase 8
   (tier-E, no behavior); its SC-forming behavior is deferred with the rest of
   `will-change` layer promotion.

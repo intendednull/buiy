@@ -51,6 +51,21 @@ v1 carries the two SC-forming formers (opacity, isolation); `backdrop-filter`
    group IS a stacking context for both v1 formers, so the SC nesting the walk
    already encodes IS the post-order nesting — no second ancestor pass.
 
+   > **As-landed deviation + follow-up (2026-06-09):** the implementation derived
+   > membership/nesting from the `EffectGroup` marker + a `ChildOf` nearest-former
+   > climb in extract, NOT from SC boundaries — at the time `opacity` formed **no**
+   > stacking context (the deferred layout trigger-5), so "an effect group IS a
+   > stacking context" did not hold. That trigger has since landed
+   > (`forms_stacking_context`, follow-ups.md "Phase 9 render-side stacking-context
+   > formers"): an `opacity < 1` / `filter` / `mix-blend-mode` former now forms a
+   > `StackingContext`. The membership derivation **stays as-is** — the ChildOf
+   > climb is SC-agnostic, remains correct, and also covers the
+   > `backdrop-filter` former (EffectGroup-but-never-SC). The SC's contribution is
+   > paint-order **atomicity**: a group's subtree is one contiguous `painters_z`
+   > slice, so `pack_view_partitioned`'s single-range contiguity (fork 3) holds by
+   > construction (the buckets.rs `debug_assert` stays as a tripwire; GPU
+   > regression: `tests/render_group_contiguity_gpu.rs`).
+
 ## Dataflow (the spine extension)
 
 - `ExtractedNode` gains `group: Option<usize>` (index into the per-view group list).
