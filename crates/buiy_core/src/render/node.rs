@@ -109,7 +109,9 @@ impl ViewNode for BuiyNode {
 
         // Effect-group composite — step 1: each group's DIRECT members rasterize
         // into the group's own off-screen `Rgba16Float` target (effect-compositor.md
-        // § 3 step 1). A nested group's members tag the nested group, so a parent's
+        // § 3 step 1) — its QUADS, then its GLYPHS (T8: the within-group order
+        // mirrors the global shadow < quad < glyph rank, now scoped per region).
+        // A nested group's members tag the nested group, so a parent's
         // target receives only its OWN direct members here; the nested child's
         // composited result is blended in at step 2 (post-order, below). Target
         // RESIDENCY (§ 3): the `CachedTexture`s were acquired up-front in
@@ -117,19 +119,33 @@ impl ViewNode for BuiyNode {
         // on `PreparedEffectTargets`, so no child target is recycled before its
         // parent samples it. Both carriers ride the SAME view entity (decided fork
         // 2), so this fires iff prepare attached live groups — never a false-green.
-        if let (Some(prepared), Some(targets)) = (prepared, prepared_targets)
-            && let Some(quad_id) = prepared.quad_pipeline
-            && let Some(group_pipeline) = pipeline_cache.get_render_pipeline(quad_id)
-            && let Some(quad_buffer) = buffers.quad.buffer()
-        {
+        // Each half gates on its OWN pipeline/buffer readiness (D5) so a pure-text
+        // group (empty quad range — a backgroundless Opacity card) still clears +
+        // draws its glyphs and composites; an async-compile frame skips that half
+        // only (the established behavior class).
+        if let (Some(prepared), Some(targets)) = (prepared, prepared_targets) {
+            let group_quad_pipeline = prepared
+                .quad_pipeline
+                .and_then(|id| pipeline_cache.get_render_pipeline(id));
+            let group_glyph_pipeline = prepared
+                .glyph_pipeline
+                .and_then(|id| pipeline_cache.get_render_pipeline(id));
+            // The same page-0 atlas bind group the flat glyph draw binds
+            // (glyph-pipeline § 11.1 — the multi-page seam is unchanged by T8).
+            let atlas_bind_group = world
+                .get_resource::<AtlasGpu>()
+                .and_then(|a| a.coverage_bind_group());
             for group in &prepared.groups {
                 let Some(target) = targets.targets.get(group.index).and_then(|t| t.as_ref()) else {
-                    continue; // degraded group (no target) — drawn flat instead.
+                    // Degraded group (no target): members are SKIPPED, not drawn
+                    // flat — see the follow-ups entry T8 files.
+                    continue;
                 };
                 let placement = &targets.placements[group.index];
-                let range = placement.instance_range.clone();
-                if range.start == range.end {
-                    continue; // no opaque member instances.
+                let quad_range = placement.instance_range.clone();
+                let glyph_range = placement.glyph_range.clone();
+                if quad_range.is_empty() && glyph_range.is_empty() {
+                    continue; // nothing of EITHER tier to draw (D5).
                 }
                 // Per-group view uniform: logical px → THIS target's bucketed
                 // texel grid, anchored at the painted-bounds min (prepare built
@@ -166,11 +182,29 @@ impl ViewNode for BuiyNode {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-                pass.set_render_pipeline(group_pipeline);
                 pass.set_bind_group(0, &group_view_bg, &[]);
                 pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, quad_buffer.slice(..));
-                pass.draw(0..4, range);
+                if !quad_range.is_empty()
+                    && let Some(pipeline) = group_quad_pipeline
+                    && let Some(quad_buffer) = buffers.quad.buffer()
+                {
+                    pass.set_render_pipeline(pipeline);
+                    pass.set_vertex_buffer(1, quad_buffer.slice(..));
+                    pass.draw(0..4, quad_range);
+                }
+                // T8: the group's glyphs, into the same target. `@group(0)` stays
+                // bound (both pipelines declare the same view layout); the glyph
+                // pipeline adds the atlas `@group(1)` exactly like the flat draw.
+                if !glyph_range.is_empty()
+                    && let Some(pipeline) = group_glyph_pipeline
+                    && let Some(atlas_bg) = atlas_bind_group
+                    && let Some(glyph_buffer) = buffers.glyph.buffer()
+                {
+                    pass.set_render_pipeline(pipeline);
+                    pass.set_bind_group(1, atlas_bg, &[]);
+                    pass.set_vertex_buffer(1, glyph_buffer.slice(..));
+                    pass.draw(0..4, glyph_range);
+                }
             }
         }
 
@@ -286,15 +320,14 @@ impl ViewNode for BuiyNode {
         // disturbing the quad draw above (e.g. before the pipeline async-compiles
         // or before the first glyph warms an atlas page).
         //
-        // TODO(text-seam): glyphs draw into the FLAT window pass with NO group
-        // mechanism. Text lands in T4 (`text::extract_buiy_glyphs`), so a glyph
-        // inside an `EffectGroup` subtree renders at full opacity straight to
-        // the window — bypassing the group's off-screen target + the opacity
-        // composite (text in an `Opacity(0.5)` card paints undimmed) until the
-        // T8 partition (follow-ups.md entry). The glyph buffer must then be
-        // partitioned (flat/group ranges, like the quad path) and the step-1
-        // group pass must draw glyph instances into the group target via a
-        // `Glyph@Rgba16Float` specialization.
+        // Effect-group double-paint exclusion, glyph tier (T8 — the quad
+        // precedent above, verbatim semantics): draw ONLY the non-group glyph
+        // ranges. A group member's glyphs rasterized into its off-screen target
+        // in step 1 and composite back in step 2. `glyph_flat_ranges` is the
+        // complement of `glyph_group_ranges`: with no live group it is the
+        // single full `0..glyph_count` run (byte-for-byte the pre-T8 draw);
+        // when every glyph is a group member it is empty and this loop is
+        // correctly a no-op.
         if buffers.glyph_count > 0
             && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
             && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
@@ -306,7 +339,9 @@ impl ViewNode for BuiyNode {
             // `@group(1)` (texture + sampler) the coverage shader samples.
             pass.set_bind_group(1, atlas_bind_group, &[]);
             pass.set_vertex_buffer(1, glyph_buffer.slice(..));
-            pass.draw(0..4, 0..buffers.glyph_count);
+            for r in &buffers.glyph_flat_ranges {
+                pass.draw(0..4, r.clone());
+            }
         }
 
         // End the flat window pass before the root-group composites: a composite

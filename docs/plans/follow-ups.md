@@ -697,7 +697,24 @@ without double-paint or assert trip): tests/render_group_contiguity_gpu.rs.
 `effect-compositor.md § 3`; `2026-06-08-render-effect-compositor-gpu-design.md`
 (fork 5 deviation + follow-up note).
 
-## Render — glyphs bypass effect-group compositing (text-seam follow-up)
+## Render — glyphs bypass effect-group compositing (text-seam follow-up) — LANDED
+
+**Status:** **Landed** by text campaign T8
+([2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md](2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md)):
+the glyph buffer is partitioned into flat/group ranges exactly like the quad
+path — `partition_glyph_ranges` over the producer's per-entity `entity_runs`
+(`ExtractedGlyphs` attribution, zero new producer params), with group
+membership derived from the FRESH node list at prepare (the
+decoration-and-paint § 4.6 discipline; never recorded into the carrier). The
+step-1 group pass draws each group's glyph range into its `Rgba16Float`
+target via the `Glyph@Rgba16Float` pipeline specialization (after its quads,
+atlas `@group(1)` bound), and the flat glyph draw covers the complement —
+text inside an `Opacity(0.5)` card dims exactly once. The `TODO(text-seam)`
+block at the glyph draw is deleted. GPU regressions:
+`tests/text_effect_group_gpu.rs` (partition wiring + the composite golden) +
+the flipped `text_decoration_gpu.rs` asymmetry test
+(`opacity_group_dims_underline_line_through_and_ink`). The original deferral
+text follows.
 
 **Originated:** render-pipeline GPU campaign item 5, fresh-review finding.
 
@@ -714,3 +731,23 @@ pass via a `Glyph@Rgba16Float` pipeline specialization (mirroring the
 `Quad@Rgba16Float` group pipeline). Marked `TODO(text-seam)` at the glyph draw.
 
 **Spec touchpoint:** `effect-compositor.md § 3 step 1`; `atlas-and-text-seam.md`.
+
+## Render — degraded effect groups vanish instead of drawing flat
+
+**Originated:** text campaign T8 implementation reading (the T8 plan's D9).
+
+**Symptom:** a `plan_allocation == false` group gets no pooled target,
+`BuiyNode::run` step 1 `continue`s, and its members are excluded from
+`flat_ranges` / `glyph_flat_ranges` — so under RT-pool budget pressure a
+degraded group's quads AND glyphs paint nowhere, despite the "drawn flat
+instead" comments (node.rs step 1; compositor.rs `PreparedEffectTargets`).
+Latent under the 64 MiB budget (no fixture degrades today). T8 mirrored the
+quad semantics for glyphs (a degraded group's glyph range is likewise
+skipped) rather than silently widening scope.
+
+**Implementation sketch:** either re-route a degraded group's ranges into the
+flat draw at prepare (forward compositing, accepting the double-dim
+approximation v1 rejected for targets) or document skip-as-degradation;
+decide with `buiy-verification-design`'s budget calibration.
+
+**Spec touchpoint:** `effect-compositor.md § 2.3`.

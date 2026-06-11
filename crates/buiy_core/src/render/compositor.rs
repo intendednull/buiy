@@ -304,6 +304,12 @@ pub struct PreparedEffectGroups {
     /// prepare (`ResMut<SpecializedRenderPipelines>` is unavailable to the node's
     /// `&World`), so the node only reads. `None` until the pipeline async-compiles.
     pub quad_pipeline: Option<CachedRenderPipelineId>,
+    /// The `Glyph@Rgba16Float` pipeline id the step-1 group pass binds to
+    /// draw the group's GLYPH range into its target (T8 — the glyph
+    /// mirror of [`quad_pipeline`](Self::quad_pipeline); same machinery:
+    /// specialized in prepare, the node only reads; `None` until the
+    /// pipeline async-compiles).
+    pub glyph_pipeline: Option<CachedRenderPipelineId>,
 }
 
 /// Sibling carrier (decided fork 1): the device handles + per-group placement
@@ -333,6 +339,11 @@ pub struct GroupPlacement {
     /// The quad-instance range (`BuiyInstanceBuffers::group_ranges` index `==`
     /// this group's extract index) the step-1 pass draws into the target.
     pub instance_range: Range<u32>,
+    /// The glyph-instance range (`BuiyInstanceBuffers::glyph_group_ranges`
+    /// index == this group's extract index) the step-1 pass draws into the
+    /// target AFTER the quad range (T8; within-group order mirrors the
+    /// global shadow < quad < glyph rank).
+    pub glyph_range: Range<u32>,
     /// The logical→target-clip affine columns (`col0 = [sx,0,0,tx]`,
     /// `col1 = [0,sy,0,ty]`, `params = [scale_factor,0,0,0]`) — the per-group view
     /// uniform that maps logical px into THIS target's bucketed texel grid,
@@ -379,8 +390,9 @@ pub struct RtPoolStats {
 /// ([`plan_allocation`]), ACQUIRES the pooled `Rgba16Float` targets via
 /// `&mut TextureCache` + `&RenderDevice` (the node's `&World` cannot get the
 /// mutable cache handle — the `node.rs:88-96` precedent), specializes the
-/// `Quad@Rgba16Float` group-pass + the composite pipelines (the node only reads
-/// the resulting ids), computes the per-group view/composite transforms +
+/// `Quad@Rgba16Float` + `Glyph@Rgba16Float` group-pass + the composite
+/// pipelines (the node only reads the resulting ids), computes the per-group
+/// view/composite transforms +
 /// post-order ([`post_order_indices`]), and INSERTS both carriers onto the view
 /// render entity (decided fork 2 — NOT a resource, so the node's `ViewQuery`
 /// resolves them). Pinned to `Prepare` (after `prepare_buiy_instances`, so the
@@ -448,18 +460,31 @@ pub(crate) fn prepare_effect_groups(
         return;
     };
 
-    // Specialize the `Quad@Rgba16Float` group-pass pipeline + the two composite
-    // variants HERE (prepare owns the mutable specialization cache; the node's
-    // `&World` cannot). The node only reads the resulting ids. The group
-    // targets are created single-sampled (`group_target_descriptor`,
-    // `sample_count: 1`), so everything drawing INTO a group target — the
-    // step-1 quad pass and the step-2a nested composite — keys `samples: 1`;
-    // only the root composite (into the window pass) keys the view's samples.
+    // Specialize the `Quad@Rgba16Float` + `Glyph@Rgba16Float` group-pass
+    // pipelines + the two composite variants HERE (prepare owns the mutable
+    // specialization cache; the node's `&World` cannot). The node only reads
+    // the resulting ids. The group targets are created single-sampled
+    // (`group_target_descriptor`, `sample_count: 1`), so everything drawing
+    // INTO a group target — the step-1 quad + glyph passes and the step-2a
+    // nested composite — keys `samples: 1`; only the root composite (into the
+    // window pass) keys the view's samples.
     let quad_pipeline = Some(group_pipelines.primitives.specialize(
         &pipeline_cache,
         &BuiyPrimitives,
         BuiyPrimitiveKey {
             kind: BuiyPrimitiveKind::Quad,
+            format: TextureFormat::Rgba16Float,
+            samples: 1,
+        },
+    ));
+    // The glyph mirror (T8): same specializer, same key shape — `kind: Glyph`
+    // selects `coverage.wgsl` + the glyph vertex layout + the atlas
+    // `@group(1)`; the format/samples land in the descriptor unchanged.
+    let glyph_pipeline = Some(group_pipelines.primitives.specialize(
+        &pipeline_cache,
+        &BuiyPrimitives,
+        BuiyPrimitiveKey {
+            kind: BuiyPrimitiveKind::Glyph,
             format: TextureFormat::Rgba16Float,
             samples: 1,
         },
@@ -552,8 +577,10 @@ pub(crate) fn prepare_effect_groups(
             reason: g.reason,
         });
 
-        // The group's quad-instance range (extract index == group_ranges index).
+        // The group's quad-instance range (extract index == group_ranges index)
+        // and its glyph mirror (T8 — drawn into the target AFTER the quads).
         let instance_range = buffers.group_ranges.get(i).cloned().unwrap_or(0..0);
+        let glyph_range = buffers.glyph_group_ranges.get(i).cloned().unwrap_or(0..0);
 
         // Acquire the pooled target unless the group degraded under budget.
         let target = if allocate[i] {
@@ -585,6 +612,7 @@ pub(crate) fn prepare_effect_groups(
         };
         placements.push(GroupPlacement {
             instance_range,
+            glyph_range,
             target_view_columns: target_cols[i],
             composite_bounds: bounds,
             composite_view_columns,
@@ -603,6 +631,7 @@ pub(crate) fn prepare_effect_groups(
         groups,
         composite_order,
         quad_pipeline,
+        glyph_pipeline,
     };
     let prepared_targets = PreparedEffectTargets {
         targets,

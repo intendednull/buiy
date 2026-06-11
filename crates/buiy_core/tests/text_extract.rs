@@ -21,8 +21,9 @@ use std::borrow::Cow;
 use std::time::Duration;
 use support::extract_harness::TextExtractHarness;
 
-/// "Hi!" under a sized column root: 3 non-whitespace glyphs.
-fn spawn_text(h: &mut TextExtractHarness) -> Entity {
+/// "Hi!" under a sized column root: 3 non-whitespace glyphs. Returns the
+/// root too — the T8 entity-run tests add siblings / respawn under it.
+fn spawn_text_with_root(h: &mut TextExtractHarness) -> (Entity, Entity) {
     let text = h
         .app
         .world_mut()
@@ -33,7 +34,8 @@ fn spawn_text(h: &mut TextExtractHarness) -> Entity {
             FontSize(16.0),
         ))
         .id();
-    h.app
+    let root = h
+        .app
         .world_mut()
         .spawn((
             Node,
@@ -42,8 +44,14 @@ fn spawn_text(h: &mut TextExtractHarness) -> Entity {
                 .width_px(300.0)
                 .height_px(100.0),
         ))
-        .add_child(text);
-    text
+        .add_child(text)
+        .id();
+    (text, root)
+}
+
+/// "Hi!" under a sized column root: 3 non-whitespace glyphs.
+fn spawn_text(h: &mut TextExtractHarness) -> Entity {
+    spawn_text_with_root(h).0
 }
 
 fn set_cursor(h: &mut TextExtractHarness, pos: Vec2) {
@@ -75,6 +83,11 @@ fn emits_one_instance_per_visible_glyph_with_resident_keys() {
 
     assert_eq!(h.glyph_count(), 3, "one instance per non-whitespace glyph");
     assert_eq!(h.resident_keys().len(), 3);
+    assert_eq!(
+        h.glyphs().entity_runs.len(),
+        1,
+        "one entity-run for the single emitting entity (T8 D1)"
+    );
     for key in h.resident_keys() {
         assert!(
             h.atlas().get(&key).is_some(),
@@ -871,6 +884,135 @@ fn blocked_text_zero_alphas_the_stamp_too() {
     assert!(
         lifted.iter().all(|s| s.color[3] > 0.0),
         "the lifted block repaints the stamp at full alpha"
+    );
+}
+
+// --- T8 Task 1: per-entity instance runs on ExtractedGlyphs (D1/D4) ---
+
+/// T8 D1: the producer attributes every instance to its source entity as
+/// one contiguous run per entity, in emission (paint) order, covering the
+/// instance vec exactly — the input the prepare-time group partition
+/// derives from the FRESH node list (decoration-and-paint § 4.6 applied
+/// to the glyph buffer).
+#[test]
+fn entity_runs_cover_all_instances_one_run_per_entity() {
+    let mut h = TextExtractHarness::new();
+    let (a, root) = spawn_text_with_root(&mut h);
+    // A second text sibling under the same root → a second, later run.
+    let b = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Yo")),
+            FontSize(16.0),
+        ))
+        .id();
+    h.app.world_mut().entity_mut(root).add_child(b);
+    h.settle();
+
+    let glyphs = h.glyphs();
+    let runs = &glyphs.entity_runs;
+    assert_eq!(runs.len(), 2, "one run per emitting entity");
+    // Contiguous cover of [0, len), in emission order.
+    let mut next = 0u32;
+    for run in runs {
+        assert_eq!(run.instances.start, next, "runs are gapless from 0");
+        assert!(
+            run.instances.start < run.instances.end,
+            "runs are non-empty"
+        );
+        next = run.instances.end;
+    }
+    assert_eq!(
+        next as usize,
+        glyphs.glyphs.len(),
+        "runs cover every instance"
+    );
+    // Attribution: the two runs name the two entities, in paint order.
+    let entities: Vec<Entity> = runs.iter().map(|r| r.entity).collect();
+    assert!(entities.contains(&a) && entities.contains(&b));
+}
+
+/// An entity emitting no instance (whitespace-only) gets NO run.
+#[test]
+fn whitespace_only_entity_emits_no_run() {
+    let mut h = TextExtractHarness::new();
+    // The spawn_text shape, but whitespace-only content: zero-coverage
+    // glyphs emit no instance, so the entity must get no run either.
+    let text = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("   ")),
+            FontSize(16.0),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(text);
+    h.settle();
+    assert_eq!(h.glyph_count(), 0);
+    assert!(h.glyphs().entity_runs.is_empty());
+}
+
+/// D4: instance bytes can coincide across DIFFERENT entities (despawn +
+/// respawn an identical fixture in one frame) — the runs compare must
+/// republish so prepare re-derives the group partition for the new
+/// entity. Without entity_runs in the publish compare this is the silent
+/// stale-partition bug.
+#[test]
+fn respawn_with_identical_instances_republishes_for_entity_identity() {
+    let mut h = TextExtractHarness::new();
+    let (text, root) = spawn_text_with_root(&mut h);
+    h.settle();
+    let before = h.glyphs().glyphs.clone();
+    let publishes = h.changed_frames();
+
+    // Despawn + respawn the IDENTICAL leaf in one main-world step: the
+    // rebuild (despawn fires RemovedComponents<ResolvedLayout>) sees
+    // byte-identical instances under a NEW entity id.
+    h.app.world_mut().entity_mut(text).despawn();
+    let text2 = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Hi!")),
+            FontSize(16.0),
+        ))
+        .id();
+    h.app.world_mut().entity_mut(root).add_child(text2);
+    h.frame();
+
+    // Precondition: the pixels really are identical (same layout slot,
+    // same font, atlas-resident) — if this ever fails the fixture, not
+    // the contract, needs adjusting.
+    assert_eq!(
+        h.glyphs().glyphs,
+        before,
+        "identical instance bytes (precondition)"
+    );
+    assert_eq!(h.glyphs().entity_runs.len(), 1);
+    assert_eq!(
+        h.glyphs().entity_runs[0].entity,
+        text2,
+        "the run names the NEW entity"
+    );
+    assert!(
+        h.changed_frames() > publishes,
+        "the publish fired on runs inequality despite equal instance bytes (D4)"
     );
 }
 

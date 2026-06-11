@@ -239,13 +239,16 @@ everything:
   ordering (an overlay panel's background over another node's text) depends on
   the render paint-order layer work landing. This spec names that dependency
   rather than assuming it.
-- **Glyph stamps in effect groups.** Glyph draws currently bypass effect-group
-  compositing ([follow-ups.md "glyphs bypass effect-group compositing"](../../plans/follow-ups.md)):
-  until the glyph buffer is partitioned by group ranges like the quad path, a
-  v1 underline inside an `Opacity(0.5)` card would dim (quads ride
-  `pack_view_partitioned`) while its line-through and caret would not. No
-  editable-text-in-effect-group fixture may be claimed correct before that
-  partition lands ([verification.md § 4](verification.md#4-campaign-gates)).
+- **Glyph stamps in effect groups — landed (T8,
+  [2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md](../../plans/2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md)).**
+  The glyph buffer IS partitioned by effect-group ranges like the quad path
+  (per-entity `entity_runs` + fresh-node-list group derivation at prepare —
+  the § 4.6 discipline applied to the glyph buffer; the
+  [follow-ups.md "glyphs bypass effect-group compositing"](../../plans/follow-ups.md)
+  entry is closed): underline, line-through, caret, and the glyph ink all dim
+  together inside an `Opacity(0.5)` card — the
+  editable-text-in-effect-group fixture constraint is lifted
+  ([verification.md § 4](verification.md#4-campaign-gates)).
 
 ### 4.6 The quad carrier — `ExtractedTextQuads`
 
@@ -410,9 +413,16 @@ pinned here. **F**
 
 The damage property (the reason the caret is a glyph-tier stamp, § 4.2): a
 blink frame changes only `ExtractedGlyphs`, so the quad buffer is retained —
-structural per [prepare.rs:157–216](../../../crates/buiy_core/src/render/prepare.rs),
-asserted by a dedicated test
+structural per the independently-gated uploads in
+[prepare.rs:230–270](../../../crates/buiy_core/src/render/prepare.rs), asserted by a
+dedicated test
 ([verification.md § 1.3](verification.md#13-the-gpu-ignore-inventory)).
+Since T8 the property is also pinned at the GPU lane: `BufferUploadStats`
+(the observable render-world instrument prepare records its per-buffer
+`write_buffer` calls into) lets
+`caret_blink_reuploads_the_glyph_buffer_only`
+(tests/text_selection_caret_gpu.rs) assert a blink frame issues exactly one
+glyph upload and zero quad uploads.
 
 ---
 

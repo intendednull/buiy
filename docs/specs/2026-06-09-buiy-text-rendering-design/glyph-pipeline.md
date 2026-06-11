@@ -440,17 +440,24 @@ no one routes a quad-seat visual through the glyph path or vice versa.
    first page-1 allocation** (`AtlasEntry.page > 0`). Multi-page bind
    (texture-array or per-page batches) is the first follow-up, triggered by
    that warning firing in practice.
-2. **Glyphs bypass effect groups.** `node.rs:272-280` records the TODO: glyphs
-   draw in the flat window pass only, so text inside an `Opacity(0.5)` card
-   paints undimmed. Visible the moment text lands; the fix (partition the glyph
-   buffer into flat/group ranges + a `Glyph@Rgba16Float` specialization) is
-   compositor-side and tracked in
-   [follow-ups.md](../../plans/follow-ups.md) ("glyphs bypass effect-group
-   compositing").
+2. **Glyphs bypass effect groups — LANDED (T8,
+   [2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md](../../plans/2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md)).**
+   The glyph buffer is partitioned into flat/group ranges exactly like the
+   quad path (`partition_glyph_ranges` over the producer's per-entity
+   `entity_runs`; group membership derived from the fresh node list at
+   prepare — the decoration-and-paint § 4.6 discipline), and the step-1
+   group pass draws each group's glyph range into its `Rgba16Float` target
+   via the `Glyph@Rgba16Float` pipeline specialization (after its quads,
+   atlas `@group(1)` bound) while the flat draw covers the complement —
+   text inside an `Opacity(0.5)` card dims exactly once. GPU regressions:
+   `tests/text_effect_group_gpu.rs` + the flipped `text_decoration_gpu.rs`
+   asymmetry test; the follow-ups.md entry is closed.
 3. **Flat quad-then-glyph order.** All glyphs draw after all quads
-   (shadow < quad < glyph globally), so a later sibling's background cannot
-   cover an earlier sibling's text. Pending the per-(primitive, layer)
-   interleaved batching the render architecture targets.
+   (shadow < quad < glyph), so a later sibling's background cannot cover an
+   earlier sibling's text. Since T8 this holds **per region** — within each
+   effect-group target and within the flat complement — rather than
+   globally. Pending the per-(primitive, layer) interleaved batching the
+   render architecture targets.
 4. **Wholesale rebuild on any text damage** (§ 6.2) — per-entity patching is
    the named deferred optimization, same as the nodes path.
 5. **Cold-glyph storm.** Rasterization runs in the extract sync window; the

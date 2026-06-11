@@ -249,6 +249,11 @@ impl Plugin for BuiyRenderPlugin {
             // RETAIN the prior buffer (architecture.md § 3.1 damage retention),
             // instead of the old one-frame warmup that returned without uploading.
             .init_resource::<prepare::BuiyInstanceBuffers>()
+            // The cumulative upload counters `prepare_buiy_instances` records
+            // (the `RtPoolStats` observable idiom): the caret-blink GPU damage
+            // test reads them to pin "a blink frame re-uploads the glyph
+            // buffer ONLY" (decoration-and-paint § 6.3; verification § 1.3).
+            .init_resource::<prepare::BufferUploadStats>()
             // The render-world glyph-instance list, filled per frame by
             // `text::extract_buiy_glyphs` (registered by `BuiyTextPlugin`, T4).
             // Kept `init_resource`'d here so the prepare gate works even if the

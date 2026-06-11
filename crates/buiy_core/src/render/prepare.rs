@@ -28,10 +28,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{BufferUsages, RawBufferVec, UniformBuffer};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::render::atlas::GlyphAlphaInstance;
-use crate::render::buckets::{pack_view, pack_view_partitioned};
+use crate::render::buckets::{pack_view, pack_view_partitioned, partition_glyph_ranges};
 use crate::render::extract::{
     ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads,
 };
@@ -49,6 +50,26 @@ pub struct ExtractedGlyphs {
     /// One instance per visible glyph, in paint order (the node draws them in
     /// this order, after the quad draw — shadow < quad < glyph < path).
     pub glyphs: Vec<GlyphAlphaInstance>,
+    /// One run per emitting entity, in paint order, covering `glyphs`
+    /// exactly (empty ⇔ `glyphs` empty). Published in lockstep with
+    /// `glyphs` under ONE change tick (D4).
+    pub entity_runs: Vec<GlyphEntityRun>,
+}
+
+/// One emitting entity's contiguous slice of [`ExtractedGlyphs::glyphs`]
+/// (T8 / D1). The producer emits each entity's glyph-tier instances (run
+/// glyphs, line-through stamps, the caret stamp) inside one walk
+/// iteration, so one run per entity is exact; runs are gapless from 0 and
+/// cover the instance vec. The prepare partition maps `entity` to its
+/// `ExtractedNode.group` off the FRESH node list — group membership is
+/// never recorded here (it would go stale against node-walk rebuilds, the
+/// § 4.6 rejected runner-up).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphEntityRun {
+    /// The source main-world entity — the group-lookup key.
+    pub entity: Entity,
+    /// This entity's instance indices in [`ExtractedGlyphs::glyphs`].
+    pub instances: Range<u32>,
 }
 
 /// Persistent per-view GPU instance buffers (architecture.md § 3.2): one
@@ -104,6 +125,21 @@ pub struct BuiyInstanceBuffers {
     /// When no group is live this is the single full `0..quad_count` range, so
     /// the flat path is byte-for-byte the pre-compositor draw.
     pub flat_ranges: Vec<Range<u32>>,
+    /// Per-effect-group contiguous GLYPH-instance ranges (T8 —
+    /// `glyph_group_ranges[g]` = group `g`'s glyph members), the glyph mirror
+    /// of [`group_ranges`](Self::group_ranges). Recomputed CPU-only under the
+    /// UNION of the quad and glyph gates (D2): membership derives from the
+    /// fresh node list, instance indices from the (possibly retained) glyph
+    /// carrier — either side changing re-derives. The node's step-1 group
+    /// pass draws each range into the group's off-screen target via the
+    /// `Glyph@Rgba16Float` specialization.
+    pub glyph_group_ranges: Vec<Range<u32>>,
+    /// The complement: maximal runs of non-group glyph instances — the flat
+    /// window glyph draw covers exactly these (a group's glyph is never
+    /// painted twice). When no group is live: the single full
+    /// `0..glyph_count` run, so the flat path is byte-for-byte the pre-T8
+    /// draw.
+    pub glyph_flat_ranges: Vec<Range<u32>>,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -116,8 +152,24 @@ impl Default for BuiyInstanceBuffers {
             glyph_count: 0,
             group_ranges: Vec::new(),
             flat_ranges: Vec::new(),
+            glyph_group_ranges: Vec::new(),
+            glyph_flat_ranges: Vec::new(),
         }
     }
+}
+
+/// Observable render-world stat (the `RtPoolStats` idiom): cumulative
+/// per-buffer GPU upload counts from [`prepare_buiy_instances`]. The
+/// caret-blink GPU damage test (verification § 1.3) reads it through the
+/// test harness to assert a blink frame re-uploads the glyph buffer ONLY
+/// (decoration-and-paint § 6.3); `buiy-verification-design` may grow it
+/// (byte counts, percentiles) for the gate-#14 budget wiring.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BufferUploadStats {
+    /// Quad-buffer `write_buffer` calls (the quad gate fired).
+    pub quad_uploads: u64,
+    /// Glyph-buffer `write_buffer` calls (the glyph gate fired).
+    pub glyph_uploads: u64,
 }
 
 /// Pure CPU half of the prepare phase: pack one view's [`ExtractedNodes`] into
@@ -147,6 +199,7 @@ pub fn pack_extracted_nodes(nodes: &ExtractedNodes) -> (Vec<[f32; 13]>, [f32; 12
 /// v1 reads the single render-world [`ExtractedNodesView`] resource shim and
 /// maintains `BuiyInstanceBuffers` as the matching resource shim (see module
 /// docs); R6/R8 flips both to per-view-entity components together.
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_buiy_instances(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
@@ -155,6 +208,7 @@ pub fn prepare_buiy_instances(
     glyphs: Res<ExtractedGlyphs>,
     text_quads: Res<ExtractedTextQuads>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
+    mut stats: ResMut<BufferUploadStats>,
 ) {
     // Damage gate (architecture.md § 3.1): extract overwrites `ExtractedNodesView`
     // ONLY on a frame where a paint input actually changed (a despawn, a theme
@@ -173,7 +227,9 @@ pub fn prepare_buiy_instances(
     // decoration-only frame (e.g. a TextDecorations color edit: text probe
     // fires, node probe doesn't) must re-pack it. Quad and glyph buffers stay
     // INDEPENDENTLY gated — a caret blink (T7) re-uploads glyphs only.
-    if nodes.is_changed() || groups.is_changed() || text_quads.is_changed() {
+    let quad_dirty = nodes.is_changed() || groups.is_changed() || text_quads.is_changed();
+    let glyph_dirty = glyphs.is_changed();
+    if quad_dirty {
         // Consume R5's ExtractedNodes: pack its per-view records into the flat
         // quad blob, the per-group instance-range partition, and build the view
         // uniform (logical_size + scale_factor are R5's). The view uniform rides
@@ -196,6 +252,7 @@ pub fn prepare_buiy_instances(
         }
         buffers.quad_count = partition.instances.len() as u32;
         buffers.quad.write_buffer(&render_device, &render_queue);
+        stats.quad_uploads += 1;
         // When NO group is live, the whole buffer is the flat draw — `pack_view_
         // partitioned` returns it as the single non-group run, so the node's flat
         // path stays byte-for-byte the pre-compositor draw.
@@ -215,13 +272,41 @@ pub fn prepare_buiy_instances(
 
     // Glyph buffer (the coverage-glyph primitive). Gated on its own change
     // signal so a re-tint-only frame re-uploads glyphs without touching quads.
-    if glyphs.is_changed() {
+    if glyph_dirty {
         buffers.glyph.clear();
         for inst in &glyphs.glyphs {
             buffers.glyph.push(*inst);
         }
         buffers.glyph_count = glyphs.glyphs.len() as u32;
         buffers.glyph.write_buffer(&render_device, &render_queue);
+        stats.glyph_uploads += 1;
+    }
+
+    // T8 (D1/D2): derive the glyph partition from the FRESH node list — group
+    // membership is the entity's ExtractedNode.group (the § 4.6 discipline;
+    // never recorded into the carrier). Recompute under the UNION: a group
+    // can form/drop on a node-only frame while glyphs are retained
+    // (Changed<EffectGroup>/<Opacity> ride the nodes probe), and a glyph-only
+    // rebuild (a caret blink) moves the run boundaries. CPU-only — no upload
+    // rides this branch, so the independent buffer gating (and the
+    // blink-reuploads-glyphs-only property) is untouched.
+    if quad_dirty || glyph_dirty {
+        let group_count = groups.0.len();
+        let group_by_entity: HashMap<Entity, Option<usize>> =
+            nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
+        let (group_ranges, flat_ranges) = partition_glyph_ranges(
+            glyphs
+                .entity_runs
+                .iter()
+                .map(|r| (r.entity, r.instances.clone())),
+            // The carrier's count, not `buffers.glyph_count` — always
+            // consistent with `entity_runs` even on a quad-dirty-only frame.
+            glyphs.glyphs.len() as u32,
+            group_count,
+            |e| group_by_entity.get(&e).copied().flatten(),
+        );
+        buffers.glyph_group_ranges = group_ranges;
+        buffers.glyph_flat_ranges = flat_ranges;
     }
 }
 
