@@ -153,6 +153,52 @@ fn resolve_named(name: &str, theme: &Theme) -> Color {
     }
 }
 
+/// `::selection` background token name (decoration-and-paint § 5.1; the
+/// palette value is `buiy-theme-tokens-design`'s).
+pub const SELECTION_BG_TOKEN: &str = "color.selection.bg";
+/// `::selection` foreground (selected-text re-tint) token name (§ 5.2).
+pub const SELECTION_FG_TOKEN: &str = "color.selection.fg";
+/// The opt-in theme caret token (§ 6.2's middle tier). Deliberately NOT
+/// in the default theme — `caret-color: auto` (= currentColor) parity.
+pub const CARET_COLOR_TOKEN: &str = "color.caret";
+/// `::placeholder` foreground token name (§ 7).
+pub const PLACEHOLDER_COLOR_TOKEN: &str = "color.text.placeholder";
+
+/// `::selection` background (§ 5.1): prefer the CSS `Highlight` system key
+/// when the active theme carries it (the forced-colors case — the
+/// wholesale swap leaves no named tokens), else the named token. The
+/// `resolve_token` CurrentColor arm's prefer-when-present idiom, extended.
+pub fn resolve_selection_bg(theme: &Theme) -> Color {
+    if theme.color(SystemColorKeyword::Highlight.token()).is_some() {
+        resolve_named(SystemColorKeyword::Highlight.token(), theme)
+    } else {
+        resolve_named(SELECTION_BG_TOKEN, theme)
+    }
+}
+
+/// `::selection` foreground (§ 5.2): `HighlightText` under forced colors,
+/// else the named token. See [`resolve_selection_bg`].
+pub fn resolve_selection_fg(theme: &Theme) -> Color {
+    if theme
+        .color(SystemColorKeyword::HighlightText.token())
+        .is_some()
+    {
+        resolve_named(SystemColorKeyword::HighlightText.token(), theme)
+    } else {
+        resolve_named(SELECTION_FG_TOKEN, theme)
+    }
+}
+
+/// `caret-color` (§ 6.2): explicit token → the `color.caret` theme key if
+/// present (presence check — an opt-in tier, not a magenta miss) →
+/// `current` (the entity's resolved foreground = `caret-color: auto`).
+pub fn resolve_caret_color(explicit: Option<&ColorToken>, theme: &Theme, current: Color) -> Color {
+    if let Some(token) = explicit {
+        return resolve_token(token, theme);
+    }
+    theme.color(CARET_COLOR_TOKEN).unwrap_or(current)
+}
+
 /// WCAG 2.x relative luminance of a color (sRGB → linear, then the 0.2126 /
 /// 0.7152 / 0.0722 weighting). Operates on the sRGB-decoded channels; alpha is
 /// ignored (contrast is defined over opaque colors).

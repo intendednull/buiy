@@ -362,6 +362,47 @@ consuming T7's painting primitives — not a T-phase here.
   caret rect numbers + blink as a function of a stepped virtual clock. GPU
   lane — the mixed-BiDi `::selection` golden; the caret-blink fixed-clock
   pair.
+- **T7 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T7 plan's decisions 1, 4, 7 and 9; superseding
+  context, not a silent contradiction):
+  1. *decoration-and-paint § 6.3's "`SelectionVisual` — the § 5 rect list
+     plus re-tint ranges"* misstates the payload: § 5.1's own mechanism
+     line governs ("the **endpoints** reach the producer through the
+     render-prep-written `SelectionVisual` state") — as built,
+     `SelectionVisual` is the normalized `(Cursor, Cursor)` endpoint pair
+     (the `selection_bounds()` output shape), and the producer derives
+     rects AND re-tint from it inside the run walk it already owns; a
+     rect-list payload would be derived data going stale against reshape,
+     and "re-tint ranges" are the endpoints restated.
+  2. *glyph-pipeline § 6.2's "rebuild `ExtractedTextQuads` alongside" /
+     T6 decision 12's unconditional republish* conflicts with § 6.3's
+     damage property ("a blink frame changes only `ExtractedGlyphs`") and
+     verification § 1.2's damage row: as built, the rebuild stays
+     wholesale under the one damage decision but publication is
+     **value-compared** per carrier — a content-identical rebuild keeps
+     the carrier's tick, so a blink edge re-uploads the glyph buffer only
+     (T7 plan decision 4; `GlyphAlphaInstance` gained `PartialEq` for it).
+  3. *§ 6.1's `Editor::cursor_position() -> Option<(i32, i32)>`* — exists
+     (the int cast is a private helper, edit/mod.rs:30) but is NOT the
+     painting input: the rect arrives authored in `CaretVisual`, and the
+     editing campaign's f32-precise geometry source is
+     `LayoutRun::cursor_position -> Option<f32>` + run metrics (already
+     pinned by editing-and-ime § 4.1); the i32 mention should not be read
+     as a producer contract.
+  4. *§ 5.1's `highlight` framing* omits the **caller line-gate
+     contract**: for a run on a line outside `[start.line, end.line]` the
+     predicate degenerates to all-selected (source-verified; upstream's
+     own render gates at edit/editor.rs:103) — the producer gates first.
+     Also unstated: the two reference-render behaviors Buiy mirrors live
+     in `Editor::render`, not in `highlight` (internal-empty-line
+     full-width rect; last-rect extension to the line edge on non-final
+     selected lines, RTL-aware).
+  5. *Block interaction*: § 7 of font-assets zero-alphas text ink (and T6
+     extended that to decorations); as built the caret and selection
+     **background** paint normally under `font-display: Block` (editor
+     chrome, not ink — a focused loading input keeps its caret, web
+     parity), while the selected-glyph re-tint inherits the glyph
+     zero-alpha (T7 plan decision 9).
 
 ### T8 — Glyphs in effect groups + damage hardening
 
@@ -404,7 +445,7 @@ consuming T7's painting primitives — not a T-phase here.
 | T4 | First pixels | landed |
 | T5 | Fonts, fallback, and BiDi correctness | landed |
 | T6 | Decoration painting | landed |
-| T7 | Selection + caret + placeholder painting | proposed |
+| T7 | Selection + caret + placeholder painting | landed |
 | T8 | Glyphs in effect groups + damage hardening | proposed |
 | T9 | Verification closure + docs flip | proposed |
 

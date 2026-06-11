@@ -25,8 +25,14 @@ pub const GLYPH_ALPHA_INSTANCE_STRIDE_BYTES: usize = 68;
 /// `clip` AABB uses the SAME `[±INFINITY]` unclipped sentinel as
 /// [`PackedInstance`](crate::render::instance::PackedInstance) (`clip = [min.x,
 /// min.y, max.x, max.y]`).
+///
+/// `PartialEq` backs the glyph producer's value-compared publish
+/// (decoration-and-paint § 6.3 damage): a content-identical rebuild keeps
+/// the carrier's tick, so a caret-blink edge re-uploads the glyph buffer
+/// only. Plain `[f32; 4]`s + `u32` — derive bit-equality is exactly the
+/// "identical rebuilds produce bit-identical instances" compare.
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
 pub struct GlyphAlphaInstance {
     /// Screen-space x, y, w, h (post-bridge `GlobalTransform`-resolved).
     pub rect: [f32; 4],

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
 use bevy::reflect::impl_reflect_opaque;
-use cosmic_text::{Align, Buffer, Metrics, Shaping, Wrap};
+use cosmic_text::{Align, Buffer, Cursor, Metrics, Shaping, Wrap};
 
 use super::whitespace::CollapseMode;
 use crate::render::color::ColorToken;
@@ -364,6 +364,83 @@ pub struct TextDecorations {
     /// `text-decoration-color`; `None` = `currentColor` (§ 3.2 tier 3 via
     /// the span/entity fallbacks).
     pub color: Option<ColorToken>,
+}
+
+/// The caret's paint-input state (decoration-and-paint § 6.3 — the pinned
+/// shape, verbatim): whether the caret currently paints, and its rect in
+/// CONTENT-BOX-LOCAL logical px (`(caret_x, line_top)` → `(caret_x +
+/// caret_w, line_top + line_height)`, § 6.1's terms). The producer folds
+/// the entity origin and applies the § 3.3 physical-px snap to (x, width)
+/// at emission — the rect here is unsnapped, scale-agnostic geometry.
+///
+/// WRITERS: `rect` is authored by the editing model (the successor
+/// `buiy-text-editing` campaign; tests/examples until then — T7 paints
+/// FROM state, it does not own editing); `visible` is managed by the
+/// `write_caret_blink` render-prep writer (T7.2, edge-only — § 6.3).
+/// Presence = "an editor wants a caret here"; REMOVAL hides it (focus
+/// loss). Machinery state — not reflect-registered (the
+/// ComputedTextLayout convention).
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct CaretVisual {
+    /// Blink-phase visibility (square wave of the app clock; steady true
+    /// under prefers-reduced-motion). The producer emits no stamp when
+    /// false.
+    pub visible: bool,
+    /// Content-box-local caret rect, logical px, unsnapped.
+    pub rect: bevy::math::Rect,
+}
+
+impl Default for CaretVisual {
+    /// Visible (matches the t=0 blink phase and editing § 10's
+    /// "caret becomes visible" on focus gain), zero rect.
+    fn default() -> Self {
+        Self {
+            visible: true,
+            rect: bevy::math::Rect::default(),
+        }
+    }
+}
+
+/// The selection's paint-input state (decoration-and-paint § 5.1: "the
+/// endpoints reach the producer through the render-prep-written
+/// `SelectionVisual` state"): the NORMALIZED endpoint pair — the
+/// `Editor::selection_bounds() -> Option<(Cursor, Cursor)>` output shape
+/// verbatim. The producer derives the § 5.1 rects per run via
+/// `LayoutRun::highlight` and the § 5.2 re-tint per glyph from these same
+/// endpoints (one source of truth; § 6.3's "rect list plus re-tint
+/// ranges" phrasing is a T7 erratum — see the campaign plan).
+///
+/// Presence = "a selection exists"; REMOVAL clears it. A collapsed pair
+/// (`start == end`) paints nothing (a collapsed selection is a caret).
+/// v1 is single-range; the multi-range generalization is additive with
+/// the editing campaign's `TextSelection` (editing-and-ime § 4.2).
+/// Machinery state — not reflect-registered (carries `cosmic_text::Cursor`,
+/// which is legal here: this module IS the cosmic boundary, the
+/// `TextBuffer` precedent).
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct SelectionVisual {
+    /// Logically-first endpoint (`start ≤ end` — the constructor enforces).
+    pub start: Cursor,
+    /// Logically-last endpoint.
+    pub end: Cursor,
+}
+
+impl SelectionVisual {
+    /// Build from an UNORDERED endpoint pair, normalizing to
+    /// `start ≤ end` ((line, index) lexicographic — the
+    /// `selection_bounds()` ordering).
+    pub fn new(a: Cursor, b: Cursor) -> Self {
+        if (b.line, b.index) < (a.line, a.index) {
+            Self { start: b, end: a }
+        } else {
+            Self { start: a, end: b }
+        }
+    }
+
+    /// `start == end` (position-wise) — paints nothing.
+    pub fn is_collapsed(&self) -> bool {
+        (self.start.line, self.start.index) == (self.end.line, self.end.index)
+    }
 }
 
 static WARNED_TEXT_WRAP_STYLE: AtomicBool = AtomicBool::new(false);

@@ -173,7 +173,11 @@ impl Plugin for BuiyRenderPlugin {
             .register_type::<components::ClipRadius>()
             .register_type::<color::ColorToken>()
             .register_type::<color::SystemColorKeyword>()
-            .register_type::<components::TextColor>();
+            .register_type::<components::TextColor>()
+            // T7: the caret-color tier-1 override (decoration-and-paint
+            // § 6.2). CaretVisual/SelectionVisual are machinery state and
+            // deliberately NOT registered.
+            .register_type::<components::CaretColor>();
 
         // Buiy's WGSL shaders are MAIN-world assets: `AssetPlugin` owns
         // `Assets<Shader>` in the main world; the render world only receives the
