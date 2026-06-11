@@ -246,6 +246,52 @@ consuming T7's painting primitives — not a T-phase here.
   snapshots (Latin/Arabic/Devanagari/CJK/emoji-ZWJ/mixed-BiDi). GPU lane —
   1–2 goldens incl. the rebuild-storm bound (one frame of misses, page count
   returns to baseline).
+- **T5 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T5 plan's Orientation + decisions 1–9; superseding
+  context, not a silent contradiction):
+  1. *font-assets § 3.2's "every rebuild issues fresh IDs for every face"*
+     is wrong for the § 3.1 path: `into_locale_and_db` returns the SAME
+     `Database` by value (system.rs:297–299), and fontdb IDs are slotmap
+     keys — surviving faces keep their IDs across `remove_face`, and dead
+     IDs never alias in-lineage (version bump on slot reuse). The claim
+     holds only for FRESH-database rebuilds (the § 5 scan swap) — where the
+     real hazard is the opposite one: fresh databases REISSUE equal ID
+     values for different faces, so the render-side `FontKeyInterner` must
+     clear per database lineage with a monotonic seat counter
+     (`FontDbLineage`, bumped only by fresh-db swaps, always alongside
+     `FontsGeneration`). The AtlasKey-never-persisted rule alone does not
+     close it — a key rebuilt from a live ID can alias a grace-resident old
+     entry.
+  2. *architecture § 1.2's "exactly three lock sites"* is steady-frame
+     scoped, not absolute: `swap_font_db` has been a rare-event fourth
+     since T1, and T5 adds `apply_font_registry` (registration /
+     unregistration / hot-reload, event-driven, pre-Layout, one lazy hold
+     per batch). The spec edit should rescope the table to steady-frame
+     sites and list the rare-event sites beside it.
+  3. *font-assets §§ 2–3's `FontKey`* (the `register_font_bytes` return) is
+     dropped as-built: the registry's public identity is the declared
+     family name (the FontFaceSet model); `FontKey` is defined nowhere
+     else. Corollary: registration REQUIRES the declared family name (the
+     Loading state exists before the file's internal names are knowable —
+     `font-display: Block` is unimplementable without it); a declared/
+     internal mismatch warns loudly and cannot match until the § 9
+     family-alias seam lands.
+  4. *font-assets § 6's `FontFallbackIter`* — verified public-but-internal
+     in 0.19: reachable at `cosmic_text::fallback::FontFallbackIter`
+     (`pub mod fallback`, glob re-exported), but Buiy never constructs one;
+     it is the engine-internal per-glyph last resort inside shaping
+     (shape.rs:307/489/985). The spec's framing is accurate; the as-built
+     resolver leans on it implicitly by emitting concrete families only.
+  5. *coverage extraction*: `cosmic_text::Font::unicode_codepoints()` is
+     feature-gated behind the non-default `monospace_fallback` (returns
+     `&[]` under the default-features pin) and `Font::new` rejects
+     `Source::File` faces. As built, coverage is extracted Buiy-side via
+     `fontdb::Database::with_face_data` + the crate-root-re-exported
+     `skrifa` charmap — no new dependency, no feature flip.
+  6. *measure § 5.4*: marks are prepended per NON-EMPTY line only — a
+     shaped mark on an empty line could grow a phantom glyph and flip T3's
+     glyphs-keyed `ResolvedBaseline` for `Text("")`. Empty-line caret
+     direction is the editing campaign's offset-table seam.
 
 ### T6 — Decoration painting
 
@@ -328,7 +374,7 @@ consuming T7's painting primitives — not a T-phase here.
 | T2 | Text component + Buffer lifecycle | landed |
 | T3 | Measure + wrap/align | landed |
 | T4 | First pixels | landed |
-| T5 | Fonts, fallback, and BiDi correctness | proposed |
+| T5 | Fonts, fallback, and BiDi correctness | landed |
 | T6 | Decoration painting | proposed |
 | T7 | Selection + caret + placeholder painting | proposed |
 | T8 | Glyphs in effect groups + damage hardening | proposed |

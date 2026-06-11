@@ -12,8 +12,8 @@ use super::whitespace::CollapseMode;
 
 /// The authored UTF-8 text content (measure-and-layout § 4.1) — the string
 /// `TextSync` feeds to `Buffer::set_text`, after the § 5.2 white-space
-/// collapse pre-pass (the § 5.4 direction strong-mark prepend joins the
-/// pre-pass pipeline in T5).
+/// collapse pre-pass and the § 5.4 direction strong-mark prepend
+/// ([`TextDirection`]).
 ///
 /// Changing it is the canonical reshape trigger (architecture § 5.1):
 /// `TextSync` rewrites the entity's `TextBuffer` in place via the 0.19 lazy
@@ -27,10 +27,12 @@ pub struct Text(pub String);
 /// Ordered; first match wins. v1 components carry **explicit** stacks —
 /// theme token→stack indirection is the font-assets § 9 theme seam.
 ///
-/// T2 interim lowering: `TextSync` hands cosmic-text only the FIRST entry
-/// (misses fall through to `FontFallbackIter` + the deterministic
-/// `BuiyFallback`); the full Buiy-owned resolver — fontdb `Query` walk,
-/// coverage span-splitting, `unicode-range` — is T5's (font-assets § 6).
+/// Lowered by the Buiy-owned resolver (T5, [`resolve_spans`]): per-codepoint
+/// fontdb `Query` walk, coverage span-splitting, `unicode-range` filtering;
+/// stack misses fall through to cosmic-text's `FontFallbackIter` + the
+/// deterministic `BuiyFallback`.
+///
+/// [`resolve_spans`]: super::resolver::resolve_spans
 #[derive(Reflect, Clone, PartialEq, Eq, Debug)]
 pub struct FontStack(pub Vec<FamilyEntry>);
 
@@ -257,6 +259,24 @@ impl TextAlign {
             }
         }
     }
+}
+
+/// CSS `dir` analogue (measure § 5.4, F). Lowered ENTIRELY in the TextSync
+/// pre-pass as a strong direction mark prepended per non-empty buffer line
+/// AFTER the § 5.2 collapse: UAX #9 P2 finds the mark as the line's first
+/// strong character and forces the paragraph level — base direction then
+/// drives reordering, the unaligned `start` default, `Align::End`, and
+/// `ComputedTextLine.rtl`. Absent component = `Auto` (cosmic's
+/// first-strong default IS `dir=auto`). Inline span direction (`<bdi>`,
+/// isolates) is the rich-text seam — an isolate wrap can never set P2
+/// (the § 5.4 rejected runner-up).
+#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[reflect(Component, Default)]
+pub enum TextDirection {
+    Ltr,
+    Rtl,
+    #[default]
+    Auto,
 }
 
 static WARNED_TEXT_WRAP_STYLE: AtomicBool = AtomicBool::new(false);

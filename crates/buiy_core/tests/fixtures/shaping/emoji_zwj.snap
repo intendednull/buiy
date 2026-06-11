@@ -1,0 +1,5 @@
+# buiy shaping snapshot: emoji_zwj
+# text: "👨\u{200d}👩\u{200d}👧\u{200d}👦"
+# seat 0 = Noto Emoji
+# line_i glyph_id font_seat x y
+0 31 0 0.00 18.84
