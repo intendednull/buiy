@@ -305,6 +305,11 @@ fn assert_snapshot(name: &str, actual: &str) {
              text_shaping_snapshots, REVIEW the generated file, and commit it"
         )
     });
+    // Normalize CRLF defensively: the writer always emits LF and .gitattributes
+    // pins `*.snap -text`, but a checkout that eol-converted anyway (e.g. a
+    // pre-.gitattributes clone with core.autocrlf=true — the PR #56
+    // windows-latest failure) must not diverge every snapshot.
+    let expected = expected.replace("\r\n", "\n");
     if expected != actual {
         print_diff(name, &expected, actual);
         panic!(
