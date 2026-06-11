@@ -52,6 +52,32 @@ impl Default for TextColor {
     }
 }
 
+impl TextColor {
+    /// `::placeholder` styling (decoration-and-paint § 7): placeholder
+    /// text is ordinary text whose foreground resolves to the placeholder
+    /// token — same Buffer machinery, same producer, same decoration
+    /// seats; the one difference is this tint. (A placeholder is never
+    /// selectable — it simply carries no CaretVisual/SelectionVisual; the
+    /// editing campaign owns the when-empty swap.)
+    pub fn placeholder() -> Self {
+        Self(ColorToken::Token(
+            crate::render::color::PLACEHOLDER_COLOR_TOKEN.into(),
+        ))
+    }
+}
+
+/// CSS `caret-color` (decoration-and-paint § 6.2; text.md:90–91, F): the
+/// explicit tier-1 override of the caret tint. Resolution order, applied
+/// by the glyph producer at extract (`resolve_caret_color`): this token →
+/// the `color.caret` theme key when the active theme carries one
+/// (presence-checked, never a magenta miss) → the entity's resolved
+/// foreground (`caret-color: auto` — CSS parity; the default theme
+/// deliberately ships NO `color.caret`). The value lands in the stamp's
+/// per-instance color: changing it is a re-tint, never an atlas mutation.
+#[derive(Component, Reflect, Clone, PartialEq, Debug)]
+#[reflect(Component)]
+pub struct CaretColor(pub ColorToken);
+
 /// Border / outline line style. Reuses the shape of `ColumnRuleStyle`
 /// (layout/types.rs) extended with the remaining CSS keywords.
 /// `Groove`/`Ridge`/`Inset`/`Outset` are C-tier and render as `Solid`

@@ -30,15 +30,16 @@ mod stamp;
 mod swash;
 mod sync;
 mod system_scan;
+mod visual;
 mod whitespace;
 
 pub use atlas_key::{FontKeyInterner, GLYPH_KEY_LEN, glyph_atlas_key};
 pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
-    ComputedTextLayout, ComputedTextLine, DecorationLineStyle, DecorationLines, FamilyEntry,
-    FontFamily, FontSize, FontStack, FontWeight, GenericFamily, IntrinsicWidths, LineHeight,
-    ResolvedBaseline, TEXT_SHAPING, Text, TextAlign, TextBuffer, TextDecorations, TextDirection,
-    TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+    CaretVisual, ComputedTextLayout, ComputedTextLine, DecorationLineStyle, DecorationLines,
+    FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, GenericFamily, IntrinsicWidths,
+    LineHeight, ResolvedBaseline, SelectionVisual, TEXT_SHAPING, Text, TextAlign, TextBuffer,
+    TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
 };
 pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
@@ -66,6 +67,7 @@ pub use sync::{TextSyncAppliedCount, text_sync_buffers};
 pub use system_scan::{
     PendingSystemFontScan, apply_system_font_scan, spawn_system_font_scan, swap_font_db,
 };
+pub use visual::{CaretBlinkInterval, blink_phase, caret_stamp_rect, write_caret_blink};
 pub use whitespace::{CollapseMode, collapse_whitespace};
 
 use bevy::app::SubApp;
@@ -149,6 +151,18 @@ impl Plugin for BuiyTextPlugin {
                 // without LayoutPlugin (Option params return early).
                 text_commit.in_set(crate::layout::BuiyLayoutStep::TextCommit),
             ),
+        );
+
+        // T7 (decoration-and-paint § 6.3): the caret-blink render-prep
+        // writer — the same Animate→Picking window as write_clip_rects /
+        // write_paint_skip, so extract reads a settled CaretVisual.
+        // Main-world, headless-safe (no RenderApp dependency).
+        app.init_resource::<CaretBlinkInterval>();
+        app.add_systems(
+            Update,
+            visual::write_caret_blink
+                .after(crate::BuiySet::Animate)
+                .before(crate::BuiySet::Picking),
         );
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert

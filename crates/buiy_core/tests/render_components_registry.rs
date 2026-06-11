@@ -11,7 +11,7 @@ use buiy_core::CorePlugin;
 use buiy_core::render::BuiyRenderPlugin;
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{
-    AncestorClip, BackdropFilter, Background, Border, BoxShadow, ClipRadius, ClipRect,
+    AncestorClip, BackdropFilter, Background, Border, BoxShadow, CaretColor, ClipRadius, ClipRect,
     ComputedPaintSkip, CssVisibility, EffectGroup, Filter, MixBlendMode, OffscreenAuto, Opacity,
     Outline, TextColor,
 };
@@ -73,6 +73,10 @@ fn author_set_render_components_are_registered() {
     assert!(
         reg.get(std::any::TypeId::of::<TextColor>()).is_some(),
         "TextColor"
+    );
+    assert!(
+        reg.get(std::any::TypeId::of::<CaretColor>()).is_some(),
+        "CaretColor"
     );
 }
 

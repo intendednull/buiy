@@ -75,6 +75,16 @@ pub fn default_light_theme() -> Theme {
         .insert("color.accent".into(), Color::srgb(0.20, 0.45, 0.95));
     t.colors
         .insert("color.focus.ring".into(), Color::srgb(0.20, 0.45, 0.95));
+    t.colors.insert(
+        "color.selection.bg".into(),
+        Color::srgb(0.20, 0.45, 0.95), // the accent blue — web-typical highlight
+    );
+    t.colors.insert("color.selection.fg".into(), Color::WHITE);
+    t.colors.insert(
+        "color.text.placeholder".into(),
+        Color::srgb(0.55, 0.55, 0.55),
+    );
+    // NO "color.caret" entry — caret-color: auto parity (T7 decision 7).
 
     t.spaces.insert("space.0".into(), 0.0);
     t.spaces.insert("space.1".into(), 4.0);

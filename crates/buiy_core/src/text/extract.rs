@@ -24,8 +24,10 @@ use crate::layout::Stacking;
 use crate::render::atlas::{
     AtlasBitmap, AtlasEntry, AtlasFormat, AtlasKey, BuiyAtlas, GlyphAlphaInstance,
 };
-use crate::render::color::resolve_token;
-use crate::render::components::{AncestorClip, ClipRect, ComputedPaintSkip, TextColor};
+use crate::render::color::{
+    resolve_caret_color, resolve_selection_bg, resolve_selection_fg, resolve_token,
+};
+use crate::render::components::{AncestorClip, CaretColor, ClipRect, ComputedPaintSkip, TextColor};
 use crate::render::extract::{
     ExtractedTextQuads, TextQuad, context_roots, context_tree_paint_order, effective_clip,
 };
@@ -33,12 +35,15 @@ use crate::render::prepare::ExtractedGlyphs;
 use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
-use super::components::{ComputedTextLayout, TextBuffer, TextDecorations};
+use super::components::{
+    CaretVisual, ComputedTextLayout, SelectionVisual, TextBuffer, TextDecorations,
+};
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
 use super::font_system::{FontDbLineage, FontsGeneration, SharedFontSystem};
 use super::registry::PendingFontBlock;
 use super::stamp::{solid_stamp_bitmap, solid_stamp_key, stamp_uv};
 use super::swash::BuiySwashCache;
+use super::visual::caret_stamp_rect;
 
 /// A rasterized glyph's bearing — `Placement{left, top}` (top points UP),
 /// the § 5.2 terms `AtlasEntry` does not carry. Cached per `AtlasKey`
@@ -148,8 +153,10 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// and the `ExtractedTextQuads` co-carrier joined in T6 (same producer,
 /// same probe, one damage decision — both carriers rebuild and republish
 /// together on every dirty frame, and neither is touched on a steady one).
-/// Union members that join later, in lockstep with their carriers:
-/// `Changed<CaretVisual>` / `Changed<SelectionVisual>` (T7).
+/// `Changed<SelectionVisual>` (+ its removal stream — removal IS the clear
+/// mechanism) joined in T7's selection emission; `Changed<CaretVisual>`
+/// (+ its removal stream — focus loss hides) and `Changed<CaretColor>`
+/// joined with T7's caret emission. The ledger names zero open joins.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_glyphs(
     mut atlas: ResMut<BuiyAtlas>,
@@ -180,6 +187,14 @@ pub fn extract_buiy_glyphs(
                 // here (decision 1; the line bits already shaped the spans
                 // via TextSync).
                 Option<&TextDecorations>,
+                // T7: the editor visual paint-inputs (decoration-and-paint
+                // §§ 5–6) — selection endpoints in, rects + re-tint derived
+                // here — plus the caret rect/phase and the explicit
+                // caret-color tier. 13 of Bevy's 15-tuple limit — the next
+                // grower must start nesting.
+                Option<&SelectionVisual>,
+                Option<&CaretVisual>,
+                Option<&CaretColor>,
             ),
             With<Node>,
         >,
@@ -209,6 +224,13 @@ pub fn extract_buiy_glyphs(
                     // a color-only edit must re-emit even though
                     // ComputedTextLayout is idempotent.
                     Changed<TextDecorations>,
+                    // T7 (decoration-and-paint § 6.3): the render-prep-
+                    // written editor visual state — a caret-blink edge or
+                    // a selection endpoint change re-emits; steady phases
+                    // rebuild nothing.
+                    Changed<SelectionVisual>,
+                    Changed<CaretVisual>,
+                    Changed<CaretColor>,
                 )>,
             ),
         >,
@@ -220,6 +242,8 @@ pub fn extract_buiy_glyphs(
         Extract<RemovedComponents<ResolvedLayout>>,
         Extract<RemovedComponents<ComputedPaintSkip>>,
         Extract<RemovedComponents<PendingFontBlock>>,
+        Extract<RemovedComponents<SelectionVisual>>,
+        Extract<RemovedComponents<CaretVisual>>,
     ),
     contexts: Extract<Query<(Entity, &StackingContext)>>,
     theme: Extract<Res<Theme>>,
@@ -238,6 +262,13 @@ pub fn extract_buiy_glyphs(
     // The § 7 swap-to-visible: a lifted Block (load or timeout) repaints at
     // full alpha through a normal rebuild.
     let block_lifted = removed.2.read().count() > 0;
+    // T7: a selection clear is a REMOVAL — unlike the style carriers,
+    // removal here IS the hide mechanism (the T2-erratum-1 exclusion does
+    // not apply), so the cleared rects must repaint away.
+    let selection_cleared = removed.3.read().count() > 0;
+    // T7: same for the caret — removal = focus loss, the stamp must
+    // repaint away.
+    let caret_removed = removed.4.read().count() > 0;
 
     let Ok(window) = primary.single() else {
         // Vanished window: clear the carriers ONCE (an unconditional clear
@@ -257,6 +288,8 @@ pub fn extract_buiy_glyphs(
         || despawned
         || skip_lifted
         || block_lifted
+        || selection_cleared
+        || caret_removed
         || theme.is_changed()
         || scale_changed
         || fonts_changed;
@@ -282,10 +315,11 @@ pub fn extract_buiy_glyphs(
 
     // ---- Rebuild (wholesale, § 6.2 v1) -------------------------------
     let mut new_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
-    // The quad-tier co-carrier (T6): rebuilt and republished alongside the
-    // glyphs on every dirty frame (decision 12). ENTITY-GROUPED by
-    // construction — the walk below emits one entity at a time, and the
-    // pack debug_asserts the grouping (§ 4.6).
+    // The quad-tier co-carrier (T6): rebuilt alongside the glyphs on every
+    // dirty frame (decision 12), PUBLISHED value-compared (T7 decision 4 —
+    // see the publish block). ENTITY-GROUPED by construction — the walk
+    // below emits one entity at a time, and the pack debug_asserts the
+    // grouping (§ 4.6).
     let mut new_quads: Vec<TextQuad> = Vec::new();
     let mut new_keys: Vec<AtlasKey> = Vec::new();
     // Lock site #3 (architecture § 1.2 — the LAST of the exhaustive three):
@@ -327,6 +361,9 @@ pub fn extract_buiy_glyphs(
             stacking,
             pending_block,
             decorations,
+            selection_visual,
+            caret_visual,
+            caret_color,
         )) = texts.get(entity)
         else {
             continue; // not a text painter
@@ -350,6 +387,78 @@ pub fn extract_buiy_glyphs(
         let deco_override: Option<Color> = decorations
             .and_then(|d| d.color.as_ref())
             .map(|t| resolve_token(t, theme));
+
+        // T7 § 5.1: the selection pre-pass — seat 2 quads for the WHOLE
+        // entity before any seat-3 decoration quad (§ 4.4; a per-run
+        // interleave could paint an underline under the next line's
+        // selection where line boxes touch). Iteration only — no locks.
+        // Collapsed selections paint nothing (a collapsed selection is a
+        // caret; skipping also removes upstream's mid-grapheme re-tint
+        // edge). Paints normally under Block (chrome, not ink —
+        // decision 9).
+        let selection = selection_visual.filter(|s| !s.is_collapsed());
+        let mut selection_fg: Option<[f32; 4]> = None;
+        if let Some(sel) = selection {
+            let bg = resolve_selection_bg(theme);
+            selection_fg = Some(linear_color(resolve_selection_fg(theme)));
+            if bg.alpha() > 0.0 {
+                // Upstream's reference width source for the line-edge
+                // extension + empty-line fill; commit guarantees Some
+                // (T3 decision 9) — computed.size.x is defense, not a
+                // path (upstream's unwrap_or(0.0) would drop the
+                // extension silently).
+                let full_w = buffer.buffer.size().0.unwrap_or(computed.size.x);
+                for run in buffer.buffer.layout_runs() {
+                    // THE caller contract (Orientation § 1 of the T7 plan):
+                    // highlight's predicate degenerates to all-selected
+                    // outside [start.line, end.line] — gate first, like
+                    // upstream (edit/editor.rs:103).
+                    if run.line_i < sel.start.line || run.line_i > sel.end.line {
+                        continue;
+                    }
+                    let spans: SmallVec<[(f32, f32); 4]> =
+                        run.highlight(sel.start, sel.end).collect();
+                    if spans.is_empty() && run.glyphs.is_empty() && sel.end.line > run.line_i {
+                        // Internal fully-selected empty line: full width.
+                        push_selection_quad(
+                            &mut new_quads,
+                            entity,
+                            origin,
+                            0.0,
+                            full_w,
+                            &run,
+                            bg,
+                            eff_clip,
+                        );
+                    } else {
+                        let len = spans.len();
+                        for (idx, (x, w)) in spans.into_iter().enumerate() {
+                            let (mut min_x, mut max_x) = (x, x + w);
+                            // Non-final selected line: the last rect
+                            // extends to the line edge (newline made
+                            // visible) — RTL-aware, upstream verbatim.
+                            if idx + 1 == len && sel.end.line > run.line_i {
+                                if run.rtl {
+                                    min_x = 0.0;
+                                } else {
+                                    max_x = full_w;
+                                }
+                            }
+                            push_selection_quad(
+                                &mut new_quads,
+                                entity,
+                                origin,
+                                min_x,
+                                max_x - min_x,
+                                &run,
+                                bg,
+                                eff_clip,
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         let mut runs = 0usize;
         for run in buffer.buffer.layout_runs() {
@@ -428,8 +537,26 @@ pub fn extract_buiy_glyphs(
                 if entry.page > 0 {
                     warn_once_page_overflow(); // § 11.1 v1 mitigation
                 }
-                // Per-span Attrs color override rides through (§ 7).
-                let mut color = glyph.color_opt.map(span_color).unwrap_or(entity_color);
+                // T7 § 5.2: per-CLUSTER re-tint — a glyph whose bytes
+                // intersect the selection paints with the selection fg
+                // (over any rich-text span color, upstream-verbatim); the
+                // atlas is never touched. Granularity is the cluster: a
+                // partially selected ligature re-tints whole while its
+                // RECT stays grapheme-accurate (§ 5.2's accepted
+                // tradeoff). Upstream's text_color != selected_text_color
+                // short-circuit is dropped — equal resolved colors emit
+                // identical instances.
+                let selected = selection.is_some_and(|sel| {
+                    run.line_i >= sel.start.line
+                        && run.line_i <= sel.end.line
+                        && (sel.start.line != run.line_i || glyph.end > sel.start.index)
+                        && (sel.end.line != run.line_i || glyph.start < sel.end.index)
+                });
+                let mut color = match (selected, selection_fg) {
+                    (true, Some(fg)) => fg,
+                    // Per-span Attrs color override rides through (§ 7).
+                    _ => glyph.color_opt.map(span_color).unwrap_or(entity_color),
+                };
                 if blocked {
                     // font-assets § 7 Block: identical fallback LAYOUT,
                     // zero-alpha PAINT — instances ARE emitted (the atlas
@@ -496,6 +623,42 @@ pub fn extract_buiy_glyphs(
             computed.lines.len(),
             "TextBuffer dirty-unshaped at extract (mutated after TextCommit?)"
         );
+
+        // T7 § 6.1 — seat 6: the caret paints last, over glyphs and
+        // line-through, as a solid-stamp instance (pre-phase decision 2).
+        // Painted under Block too (chrome, not ink — decision 9: browsers
+        // keep the caret in a focused field whose font is loading).
+        if let Some(cv) = caret_visual
+            && cv.visible
+        {
+            // § 6.2: explicit token → theme caret key (presence check) →
+            // currentColor. Re-tint only — never an atlas mutation.
+            let color =
+                resolve_caret_color(caret_color.map(|c| &c.0), theme, resolved_entity_color);
+            if color.alpha() > 0.0 {
+                let entry = *stamp_entry.get_or_insert_with(|| {
+                    atlas.get_or_insert(
+                        solid_stamp_key(),
+                        AtlasFormat::CoverageR8,
+                        solid_stamp_bitmap,
+                    )
+                });
+                if entry.page > 0 {
+                    warn_once_page_overflow(); // § 11.1 v1 mitigation
+                }
+                new_glyphs.push(GlyphAlphaInstance {
+                    rect: caret_stamp_rect(origin, cv.rect, scale_factor),
+                    uv: stamp_uv(&entry),
+                    color: linear_color(color),
+                    clip,
+                    page: entry.page as u32,
+                });
+                // § 6.3: the stamp key joins the un-gated touch pass — a
+                // retained caret idling past eviction_grace must not lose
+                // its cell.
+                new_keys.push(solid_stamp_key());
+            }
+        }
     }
     drop(font_guard);
 
@@ -504,11 +667,22 @@ pub fn extract_buiy_glyphs(
     // glyph key has a bearing.
     meta.0.retain(|key, _| atlas.get(key).is_some());
 
-    // Publish (BOTH carriers, wholesale — decision 12), then the § 6.3
-    // touch pass over the NEW visible set (covers this frame's hits —
-    // `atlas.get` deliberately does not touch the LRU).
-    glyphs.glyphs = new_glyphs;
-    text_quads.quads = new_quads;
+    // Publish — wholesale REBUILD under the one § 6.2 damage decision
+    // (unchanged), VALUE-COMPARED publication per carrier (T7 decision 4,
+    // refining T6 decision 12): a blink edge changes only the glyph
+    // content, so the quad carrier keeps its tick and the GPU quad buffer
+    // is retained (decoration-and-paint § 6.3's damage property; prepare
+    // gates each buffer independently). Equal inputs produce bit-identical
+    // f32 outputs, so derive-PartialEq equality is deterministic. One
+    // O(instances) compare per DIRTY frame — steady frames return above.
+    // Then the § 6.3 touch pass over the NEW visible set (covers this
+    // frame's hits — `atlas.get` deliberately does not touch the LRU).
+    if glyphs.glyphs != new_glyphs {
+        glyphs.glyphs = new_glyphs;
+    }
+    if text_quads.quads != new_quads {
+        text_quads.quads = new_quads;
+    }
     resident.keys = new_keys;
     for key in &resident.keys {
         atlas.touch_existing(key);
@@ -566,6 +740,34 @@ fn resolve_glyph<'a>(
         }
         SwashContent::SubpixelMask => None,
     }
+}
+
+/// One § 5.1 selection rect: a highlight span unioned with the run's
+/// (line_top, line_height), origin-folded, at quad seat 2. No § 3.3 snap:
+/// selection rects are tall boxes, not hairlines (the snap rule exists
+/// for sub-pixel-thin analytics; box-edge AA here matches node
+/// backgrounds).
+#[allow(clippy::too_many_arguments)]
+fn push_selection_quad(
+    quads: &mut Vec<TextQuad>,
+    entity: Entity,
+    origin: Vec2,
+    x: f32,
+    w: f32,
+    run: &cosmic_text::LayoutRun,
+    color: Color,
+    clip: Option<ClipRect>,
+) {
+    if w <= 0.0 {
+        return;
+    }
+    quads.push(TextQuad {
+        entity,
+        position: Vec2::new(origin.x + x, origin.y + run.line_top),
+        size: Vec2::new(w, run.line_height),
+        color,
+        clip,
+    });
 }
 
 /// CPU-linearize a resolved color into the straight-alpha instance slot —

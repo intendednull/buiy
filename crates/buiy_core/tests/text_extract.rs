@@ -457,10 +457,13 @@ fn steady_state_retains_both_carriers_untouched() {
 }
 
 #[test]
-fn text_decorations_change_rebuilds_both_carriers() {
+fn text_decorations_change_republishes_quads_and_retains_glyphs() {
     // A color-only TextDecorations edit reaches extract via
     // Changed<TextDecorations> even though ComputedTextLayout is idempotent
     // (the line bits didn't move, so sync's lazy setters reshape nothing).
+    // Both carriers REBUILD wholesale (one damage decision, T6 decision 12)
+    // but publication is value-compared (T7 decision 4): only the quad
+    // content changed here, so the glyph carrier keeps its tick.
     let mut h = TextExtractHarness::new();
     h.app
         .world_mut()
@@ -486,13 +489,14 @@ fn text_decorations_change_rebuilds_both_carriers() {
     h.frame();
     assert_eq!(
         h.changed_frames(),
-        glyphs_settled + 1,
-        "one glyph-carrier rebuild (wholesale, decision 12)"
+        glyphs_settled,
+        "glyph carrier RETAINED — the rebuilt instances compare equal \
+         (value-compared publish, T7 decision 4)"
     );
     assert_eq!(
         h.quad_changed_frames(),
         quads_settled + 1,
-        "one quad-carrier rebuild"
+        "one quad-carrier republish"
     );
     assert_eq!(
         h.text_quads().quads[0].color,
@@ -500,7 +504,7 @@ fn text_decorations_change_rebuilds_both_carriers() {
         "the quad color re-resolved"
     );
     h.frame();
-    assert_eq!(h.changed_frames(), glyphs_settled + 1, "back to steady");
+    assert_eq!(h.changed_frames(), glyphs_settled, "back to steady");
     assert_eq!(h.quad_changed_frames(), quads_settled + 1);
 }
 
@@ -636,16 +640,23 @@ fn undecorated_text_emits_no_quads() {
     let text = spawn_text(&mut h);
     h.settle();
     assert!(h.text_quads().quads.is_empty());
-    // Wholesale publication (decision 12): the carrier is still PUBLISHED
-    // on every rebuild frame — its change log moves in lockstep with the
-    // glyph carrier's.
-    assert_eq!(h.quad_changed_frames(), h.changed_frames());
+    // Value-compared publication (T7 decision 4, refining decision 12's
+    // lockstep republish): the carrier is still REBUILT on every dirty
+    // frame, but an empty-to-empty rebuild compares equal and keeps its
+    // tick — a glyph-only edit retains the quad carrier.
+    let g0 = h.changed_frames();
+    let q0 = h.quad_changed_frames();
     h.app.world_mut().get_mut::<Text>(text).unwrap().0 = String::from("Hey");
     h.frame();
     assert_eq!(
-        h.quad_changed_frames(),
         h.changed_frames(),
-        "a glyph-only edit republished the (empty) quad carrier"
+        g0 + 1,
+        "the text edit republished glyphs"
+    );
+    assert_eq!(
+        h.quad_changed_frames(),
+        q0,
+        "the (empty, content-identical) quad carrier is RETAINED"
     );
     assert!(h.text_quads().quads.is_empty());
 }
