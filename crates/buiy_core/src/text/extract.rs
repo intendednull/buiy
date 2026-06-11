@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy::render::Extract;
 use bevy::window::PrimaryWindow;
 use cosmic_text::{CacheKey, FontSystem, SwashContent};
+use smallvec::SmallVec;
 
 use crate::components::{Node, ResolvedLayout, StackingContext};
 use crate::layout::Stacking;
@@ -25,14 +26,18 @@ use crate::render::atlas::{
 };
 use crate::render::color::resolve_token;
 use crate::render::components::{AncestorClip, ClipRect, ComputedPaintSkip, TextColor};
-use crate::render::extract::{context_roots, context_tree_paint_order, effective_clip};
+use crate::render::extract::{
+    ExtractedTextQuads, TextQuad, context_roots, context_tree_paint_order, effective_clip,
+};
 use crate::render::prepare::ExtractedGlyphs;
 use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
-use super::components::{ComputedTextLayout, TextBuffer};
+use super::components::{ComputedTextLayout, TextBuffer, TextDecorations};
+use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
 use super::font_system::{FontDbLineage, FontsGeneration, SharedFontSystem};
 use super::registry::PendingFontBlock;
+use super::stamp::{solid_stamp_bitmap, solid_stamp_key, stamp_uv};
 use super::swash::BuiySwashCache;
 
 /// A rasterized glyph's bearing — `Placement{left, top}` (top points UP),
@@ -139,14 +144,19 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// probes joined in T5 (a generation bump rebuilds; a lineage advance
 /// additionally reseats the interner), as did `Changed<PendingFontBlock>`
 /// with its removal stream (the font-display Block zero-alpha arm: onset,
-/// deadline rewrite, and the load/timeout lift). Union members that join
-/// later, in lockstep with their carriers: `Changed<CaretVisual>` /
-/// `Changed<SelectionVisual>` (T7); `ExtractedTextQuads` rebuilt alongside
-/// `ExtractedGlyphs` (T6, same producer, same probe, one damage decision).
+/// deadline rewrite, and the load/timeout lift). `Changed<TextDecorations>`
+/// and the `ExtractedTextQuads` co-carrier joined in T6 (same producer,
+/// same probe, one damage decision — both carriers rebuild and republish
+/// together on every dirty frame, and neither is touched on a steady one).
+/// Union members that join later, in lockstep with their carriers:
+/// `Changed<CaretVisual>` / `Changed<SelectionVisual>` (T7).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_glyphs(
     mut atlas: ResMut<BuiyAtlas>,
-    mut glyphs: ResMut<ExtractedGlyphs>,
+    // The two co-published carriers, tupled into ONE system param (params
+    // nest — the `removed` precedent): the producer sits at Bevy's 16-param
+    // cap, and T7's probe members need the headroom.
+    carriers: (ResMut<ExtractedGlyphs>, ResMut<ExtractedTextQuads>),
     mut interner: ResMut<FontKeyInterner>,
     mut resident: ResMut<ResidentTextKeys>,
     mut meta: ResMut<GlyphMetaCache>,
@@ -166,6 +176,10 @@ pub fn extract_buiy_glyphs(
                 Option<&AncestorClip>,
                 Option<&Stacking>,
                 Option<&PendingFontBlock>,
+                // T6: the decoration carrier — the `-color` token resolves
+                // here (decision 1; the line bits already shaped the spans
+                // via TextSync).
+                Option<&TextDecorations>,
             ),
             With<Node>,
         >,
@@ -190,6 +204,11 @@ pub fn extract_buiy_glyphs(
                     Changed<Stacking>,
                     // T5 (font-assets § 7): Block onset / deadline rewrite.
                     Changed<PendingFontBlock>,
+                    // T6 (decoration-and-paint § 2.2): the line bits change
+                    // shaping via TextSync; the COLOR tier resolves HERE, so
+                    // a color-only edit must re-emit even though
+                    // ComputedTextLayout is idempotent.
+                    Changed<TextDecorations>,
                 )>,
             ),
         >,
@@ -211,6 +230,7 @@ pub fn extract_buiy_glyphs(
     lineage: Extract<Res<FontDbLineage>>,
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
 ) {
+    let (mut glyphs, mut text_quads) = carriers;
     // Drain the removal streams FIRST so the cursors advance on every frame,
     // including early returns (the extract.rs:409 discipline).
     let despawned = removed.0.read().count() > 0;
@@ -220,11 +240,11 @@ pub fn extract_buiy_glyphs(
     let block_lifted = removed.2.read().count() > 0;
 
     let Ok(window) = primary.single() else {
-        // Vanished window: clear the carrier ONCE (an unconditional clear
-        // would mark ExtractedGlyphs changed and re-upload an empty buffer
-        // every frame).
-        if !glyphs.glyphs.is_empty() {
+        // Vanished window: clear the carriers ONCE (an unconditional clear
+        // would mark them changed and re-upload empty buffers every frame).
+        if !glyphs.glyphs.is_empty() || !text_quads.quads.is_empty() {
             glyphs.glyphs.clear();
+            text_quads.quads.clear();
             resident.keys.clear();
         }
         return;
@@ -262,6 +282,11 @@ pub fn extract_buiy_glyphs(
 
     // ---- Rebuild (wholesale, § 6.2 v1) -------------------------------
     let mut new_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
+    // The quad-tier co-carrier (T6): rebuilt and republished alongside the
+    // glyphs on every dirty frame (decision 12). ENTITY-GROUPED by
+    // construction — the walk below emits one entity at a time, and the
+    // pack debug_asserts the grouping (§ 4.6).
+    let mut new_quads: Vec<TextQuad> = Vec::new();
     let mut new_keys: Vec<AtlasKey> = Vec::new();
     // Lock site #3 (architecture § 1.2 — the LAST of the exhaustive three):
     // taken LAZILY, once per frame, only when at least one glyph misses the
@@ -269,6 +294,12 @@ pub fn extract_buiy_glyphs(
     // locks; extract runs in the pipelining sync window, so the lock is
     // uncontended by construction.
     let mut font_guard: Option<MutexGuard<'_, FontSystem>> = None;
+    // One stamp-residency probe per frame (T6, decoration-and-paint § 4.3):
+    // the solid stamp's closure never touches the `FontSystem`, so this
+    // stays outside lock site #3; a grace-evicted stamp self-heals here on
+    // the next line-through ("re-inserted on miss like any
+    // content-addressed entry").
+    let mut stamp_entry: Option<AtlasEntry> = None;
     let fonts: &SharedFontSystem = &fonts;
     let theme: &Theme = &theme;
 
@@ -295,6 +326,7 @@ pub fn extract_buiy_glyphs(
             ancestor_clip,
             stacking,
             pending_block,
+            decorations,
         )) = texts.get(entity)
         else {
             continue; // not a text painter
@@ -302,18 +334,79 @@ pub fn extract_buiy_glyphs(
         if skip.is_some() {
             continue; // the single computed skip source (§ 5.3/§ 5.4)
         }
-        // § 8: glyphs are CONTENT — self-inclusive clip (own ClipRect ∩
-        // ancestors); top-layer members force the unclipped sentinel.
-        let clip = pack_clip(effective_clip(stacking, clip_rect, ancestor_clip).as_ref());
+        // § 8: glyphs AND decorations are CONTENT — self-inclusive clip
+        // (own ClipRect ∩ ancestors); top-layer members force the unclipped
+        // sentinel.
+        let eff_clip = effective_clip(stacking, clip_rect, ancestor_clip);
+        let clip = pack_clip(eff_clip.as_ref());
         // § 7: resolved at extract like Background, CPU-linearized,
         // STRAIGHT alpha (premultiplying would double-dim — primitive.rs).
-        let entity_color = linear_color(resolve_token(&color.unwrap_or(&default_color).0, theme));
+        let resolved_entity_color = resolve_token(&color.unwrap_or(&default_color).0, theme);
+        let entity_color = linear_color(resolved_entity_color);
         let origin = gt.translation().truncate() + computed.content_offset;
         let blocked = pending_block.is_some();
+        // § 3.2 tier 1: the -color token, resolved at extract against the
+        // live theme (decision 1 — retheme re-emits, never reshapes).
+        let deco_override: Option<Color> = decorations
+            .and_then(|d| d.color.as_ref())
+            .map(|t| resolve_token(t, theme));
 
         let mut runs = 0usize;
         for run in buffer.buffer.layout_runs() {
             runs += 1;
+            // The decoration walk (§ 4.6: ONE run walk emits quads AND
+            // stamps AND glyphs, under the one damage decision).
+            // Underline/overline are quad-tier (§ 4.2) and paint UNDER the
+            // text by primitive rank; emitted before the glyph loop for
+            // § 4.4 carrier order. Line-through rects (rect, linearized
+            // color) buffer through the glyph loop into solid-stamp
+            // instances appended after it (§ 4.4 seat 5).
+            let mut strikes: SmallVec<[([f32; 4], [f32; 4]); 2]> = SmallVec::new();
+            for span in run.decorations {
+                let Some((x_start, width)) = span_x_extent(run.glyphs, &span.glyph_range) else {
+                    continue;
+                };
+                for deco in span_decoration_rects(
+                    origin,
+                    run.line_y,
+                    run.line_top,
+                    x_start,
+                    width,
+                    &span.data,
+                    span.font_size,
+                    span.color_opt,
+                    scale_factor,
+                ) {
+                    // § 3.2 precedence: token override → upstream tiers
+                    // (per-kind / span color) → currentColor.
+                    let mut color = deco_override
+                        .or(deco.color_opt.map(cosmic_color))
+                        .unwrap_or(resolved_entity_color);
+                    if blocked {
+                        // § 7 Block: paint-invisible, layout-identical.
+                        color = color.with_alpha(0.0);
+                    } else if color.alpha() == 0.0 {
+                        continue; // fully transparent: nothing to paint
+                    }
+                    match deco.kind {
+                        DecorationKind::Underline | DecorationKind::Overline => {
+                            new_quads.push(TextQuad {
+                                entity,
+                                position: Vec2::new(deco.rect[0], deco.rect[1]),
+                                size: Vec2::new(deco.rect[2], deco.rect[3]),
+                                color,
+                                clip: eff_clip,
+                            });
+                        }
+                        // § 4.4 seat 5: buffered through the glyph loop —
+                        // the solid stamp paints OVER the run's glyphs (the
+                        // CSS Text Decoration L3 painting order).
+                        DecorationKind::LineThrough => {
+                            strikes.push((deco.rect, linear_color(color)));
+                        }
+                    }
+                }
+            }
             for glyph in run.glyphs.iter() {
                 // § 5.1: cosmic-text's own binning, verbatim.
                 let phys = glyph.physical(
@@ -366,6 +459,34 @@ pub fn extract_buiy_glyphs(
                 });
                 new_keys.push(key);
             }
+            // § 4.4 seat 5: line-through paints OVER the run's glyphs —
+            // solid-stamp GlyphAlphaInstances appended after them (quad-tier
+            // rects could never paint over glyphs: § 4.1's fixed primitive
+            // rank).
+            if !strikes.is_empty() {
+                let entry = *stamp_entry.get_or_insert_with(|| {
+                    atlas.get_or_insert(
+                        solid_stamp_key(),
+                        AtlasFormat::CoverageR8,
+                        solid_stamp_bitmap,
+                    )
+                });
+                if entry.page > 0 {
+                    warn_once_page_overflow(); // § 11.1 v1 mitigation
+                }
+                for (rect, color) in strikes {
+                    new_glyphs.push(GlyphAlphaInstance {
+                        rect,
+                        uv: stamp_uv(&entry),
+                        color,
+                        clip,
+                        page: entry.page as u32,
+                    });
+                    // § 6.3: one key per instance — the un-gated touch pass
+                    // keeps a live stamp LRU-warm through retained frames.
+                    new_keys.push(solid_stamp_key());
+                }
+            }
         }
         // architecture § 3.2 tripwire: layout_runs TERMINATES at the first
         // unshaped line — a mismatch means something mutated the buffer
@@ -383,9 +504,11 @@ pub fn extract_buiy_glyphs(
     // glyph key has a bearing.
     meta.0.retain(|key, _| atlas.get(key).is_some());
 
-    // Publish, then the § 6.3 touch pass over the NEW visible set (covers
-    // this frame's hits — `atlas.get` deliberately does not touch the LRU).
+    // Publish (BOTH carriers, wholesale — decision 12), then the § 6.3
+    // touch pass over the NEW visible set (covers this frame's hits —
+    // `atlas.get` deliberately does not touch the LRU).
     glyphs.glyphs = new_glyphs;
+    text_quads.quads = new_quads;
     resident.keys = new_keys;
     for key in &resident.keys {
         atlas.touch_existing(key);
@@ -452,9 +575,15 @@ fn linear_color(color: Color) -> [f32; 4] {
     [lin.red, lin.green, lin.blue, lin.alpha]
 }
 
+/// One cosmic sRGB8 color into the Buiy `Color` tier — one conversion, two
+/// sinks: the per-span glyph override and the decoration precedence walk.
+fn cosmic_color(c: cosmic_text::Color) -> Color {
+    Color::srgba_u8(c.r(), c.g(), c.b(), c.a())
+}
+
 /// Per-span `LayoutGlyph.color_opt` override (§ 7) — cosmic carries sRGB8.
 fn span_color(c: cosmic_text::Color) -> [f32; 4] {
-    linear_color(Color::srgba_u8(c.r(), c.g(), c.b(), c.a()))
+    linear_color(cosmic_color(c))
 }
 
 static WARNED_COLOR_EMOJI: AtomicBool = AtomicBool::new(false);

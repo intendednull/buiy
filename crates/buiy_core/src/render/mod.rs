@@ -250,6 +250,11 @@ impl Plugin for BuiyRenderPlugin {
             // Kept `init_resource`'d here so the prepare gate works even if the
             // text plugin is absent (the glyph draw is then a no-op).
             .init_resource::<prepare::ExtractedGlyphs>()
+            // Text's quad-tier carrier (underline/overline, T6; selection T7),
+            // filled by `text::extract_buiy_glyphs`; init'd here so the prepare
+            // gate works even if the text plugin is absent — the
+            // `ExtractedGlyphs` rationale, verbatim.
+            .init_resource::<extract::ExtractedTextQuads>()
             // Phase-0 draw path (feeds node.rs today); retired by R6/R8 (the
             // node/instance rework) when node.rs reads the per-view
             // ExtractedNodes instead.

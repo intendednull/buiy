@@ -15,6 +15,7 @@
 mod atlas_key;
 mod commit;
 mod components;
+mod decoration;
 mod direction;
 mod extract;
 mod font_asset;
@@ -25,6 +26,7 @@ mod match_index;
 pub(crate) mod measure;
 mod registry;
 mod resolver;
+mod stamp;
 mod swash;
 mod sync;
 mod system_scan;
@@ -33,9 +35,13 @@ mod whitespace;
 pub use atlas_key::{FontKeyInterner, GLYPH_KEY_LEN, glyph_atlas_key};
 pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
-    ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
-    GenericFamily, IntrinsicWidths, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text, TextAlign,
-    TextBuffer, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+    ComputedTextLayout, ComputedTextLine, DecorationLineStyle, DecorationLines, FamilyEntry,
+    FontFamily, FontSize, FontStack, FontWeight, GenericFamily, IntrinsicWidths, LineHeight,
+    ResolvedBaseline, TEXT_SHAPING, Text, TextAlign, TextBuffer, TextDecorations, TextDirection,
+    TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+};
+pub use decoration::{
+    DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
 };
 pub use direction::prepend_strong_marks;
 pub use extract::{
@@ -54,6 +60,7 @@ pub use registry::{
     PendingFontBlock, UnicodeRanges, apply_font_registry, expire_font_block,
 };
 pub use resolver::{Resolution, ResolvedFamily, ResolvedSpan, resolve_spans};
+pub use stamp::{solid_stamp_bitmap, solid_stamp_key, solid_stamp_warmup_request, stamp_uv};
 pub use swash::BuiySwashCache;
 pub use sync::{TextSyncAppliedCount, text_sync_buffers};
 pub use system_scan::{
@@ -115,7 +122,13 @@ impl Plugin for BuiyTextPlugin {
             .register_type::<TextWrap>()
             .register_type::<TextAlign>()
             // T5: the § 5.4 direction carrier (absent = Auto).
-            .register_type::<TextDirection>();
+            .register_type::<TextDirection>()
+            // T6: the decoration carrier (decoration-and-paint § 2.2).
+            // DecorationLines rides its impl_reflect_opaque! registration
+            // (the ContainFlags precedent).
+            .register_type::<TextDecorations>()
+            .register_type::<DecorationLines>()
+            .register_type::<DecorationLineStyle>();
 
         app.init_resource::<TextSyncAppliedCount>();
         // T3: the per-frame measure instrument (measure § 7). Incremented
@@ -185,7 +198,8 @@ impl Plugin for BuiyTextPlugin {
 /// the `SharedFontSystem` Arc clone — one engine, two worlds (architecture
 /// § 1.1; fontdb IDs are stable only within one engine, so a second instance
 /// would mis-key every glyph) — plus the T4 glyph producer and its retained
-/// state. `.after(maintain_atlas)` so inserts/touches use the just-advanced
+/// state, and the T6 warmup-pinned solid-stamp push (decoration-and-paint
+/// § 4.3). `.after(maintain_atlas)` so inserts/touches use the just-advanced
 /// atlas frame clock (glyph-pipeline § 6.1; ordering against an absent
 /// system set is vacuously satisfied, so a bare `SubApp` without the atlas
 /// systems still registers cleanly). Public so the headless `SubApp`
@@ -194,6 +208,17 @@ impl Plugin for BuiyTextPlugin {
 pub fn register_render_world(render_app: &mut SubApp, fonts: &SharedFontSystem) {
     render_app.insert_resource(fonts.clone());
     render_app.init_resource::<BuiySwashCache>();
+    // T6 (decoration-and-paint § 4.3): the warmup-pinned solid stamp — the
+    // one committed AtlasWarmupQueue push of the text campaign. This runs
+    // inside the live-RenderApp guard (the render architecture § 1.1
+    // finish-ordering seam: BuiyPlugin adds this plugin after
+    // DefaultPlugins, so the sub-app exists). init_resource is insert-if-
+    // absent, so plugin order vs atlas::register is irrelevant.
+    render_app.init_resource::<crate::render::atlas::AtlasWarmupQueue>();
+    render_app
+        .world_mut()
+        .resource_mut::<crate::render::atlas::AtlasWarmupQueue>()
+        .push(stamp::solid_stamp_warmup_request());
     render_app
         .init_resource::<FontKeyInterner>()
         .init_resource::<ResidentTextKeys>()

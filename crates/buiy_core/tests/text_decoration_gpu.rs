@@ -1,0 +1,513 @@
+//! GPU end-to-end decoration tests (T6): real entities through TextSync →
+//! TextCommit → extract (quads + stamps) → the § 4.6 splice → pixels.
+//! decoration-and-paint §§ 3–4; one golden per kind (campaign T6 surface),
+//! the three quad-gate terms regression-pinned end-to-end, and the § 4.5
+//! group asymmetry pinned as EXPECTED (T8 flips a failing assertion here,
+//! not a silent behavior). All #[ignore]: need a wgpu adapter (CLAUDE.md
+//! GPU lane).
+//!
+//! Run: cargo test -p buiy_core --test text_decoration_gpu -- --ignored --test-threads=1
+//!
+//! ## Band classification (re-capture IS the golden — the text_gpu idiom)
+//!
+//! The two decoration tiers leave DIFFERENT pixel signatures, so the row
+//! classifiers below are derived from the shaders, not hand-tuned:
+//!
+//! - **Quad tier (underline/overline):** `shader.wgsl` antialiases the SDF
+//!   edge with `alpha = 1 − smoothstep(−aa, aa, d)`, `aa = fwidth(d) ≈ 1`
+//!   logical px. A § 3.3-floored 2-physical-px band therefore has NO
+//!   full-coverage row: both interior rows sit at pixel-center distance 0.5
+//!   from an edge → alpha `1 − smoothstep(−1, 1, −0.5)` = **0.84375**
+//!   (sRGB-encoded pure red ≈ 237), and one bleed row above + below reads
+//!   alpha **0.15625** (≈ 110). [`is_strong_red`]'s 200 threshold separates
+//!   band rows from bleed rows exactly; counting strong rows recovers the
+//!   floored thickness.
+//! - **Stamp tier (line-through):** a hard-edged coverage quad (no SDF) at
+//!   alpha 1 — interior pixels read the exact
+//!   [`support::expected_full_coverage_srgb`] encode ([`is_full_red`], ±4).
+//!
+//! This supersedes the plan's sketch of one ±4-of-full-coverage matcher for
+//! both tiers — that matcher can never see a thin AA'd quad row.
+
+mod support;
+
+use bevy::prelude::*;
+use buiy_core::Node;
+use buiy_core::layout::{Inset, Length, Sizing, Style};
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::{Background, Opacity, TextColor};
+use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
+use buiy_core::text::{DecorationLineStyle, DecorationLines, FontSize, Text, TextDecorations};
+use std::borrow::Cow;
+use std::ops::Range;
+
+const W: u32 = 128;
+const H: u32 = 64;
+/// Glyph tint: white — chroma-orthogonal to the red decoration token, so
+/// row classification never confuses ink with lines.
+const TEXT_TOKEN: &str = "test.text";
+/// `text-decoration-color`: pure red (tier 1 of the § 3.2 precedence).
+const DECO_TOKEN: &str = "test.deco";
+/// The recolor target for the gate-term test: pure blue.
+const DECO_BLUE_TOKEN: &str = "test.deco.blue";
+
+fn deco_red() -> Color {
+    Color::srgb(1.0, 0.0, 0.0)
+}
+
+fn deco_blue() -> Color {
+    Color::srgb(0.0, 0.0, 1.0)
+}
+
+/// `TextDecorations` with the shared red token (the fixtures' tier-1 color).
+fn red_deco(line: DecorationLines) -> TextDecorations {
+    TextDecorations {
+        line,
+        color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
+        ..Default::default()
+    }
+}
+
+fn insert_theme_tokens(app: &mut App) {
+    let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+    theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
+    theme.colors.insert(DECO_TOKEN.into(), deco_red());
+    theme.colors.insert(DECO_BLUE_TOKEN.into(), deco_blue());
+}
+
+/// The `text_gpu.rs::spawn_text_fixture` shape plus the decoration component:
+/// "Hi" at 40 px — no descenders, so glyph ink never crosses below the
+/// baseline and band classification is unambiguous. Returns
+/// `(text, root)` so tests can mutate the component / add siblings.
+fn spawn_decorated_fixture(app: &mut App, deco: TextDecorations) -> (Entity, Entity) {
+    insert_theme_tokens(app);
+    let text = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Hi")),
+            FontSize(40.0),
+            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            deco,
+        ))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(W as f32)
+                .height_px(H as f32),
+        ))
+        .add_child(text)
+        .id();
+    (text, root)
+}
+
+/// Build app → decorated fixture → capture the first text-ready frame.
+fn capture_decorated(deco: TextDecorations) -> Vec<u8> {
+    let _cfg = GoldenConfig::deterministic(); // the triad gates this fixture
+    let mut app = support::gpu_render_app(W, H);
+    spawn_decorated_fixture(&mut app, deco);
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+    support::finish_and_run(&mut app, 1);
+    support::wait_for_text_ready(&mut app, 60);
+    support::readback_rgba(&mut app, target)
+}
+
+// --- row classifiers (module doc: derived from the shader AA math) ---------
+
+/// Full-coverage red — the STAMP tier's interior (hard edges, alpha 1):
+/// within ±4/channel of the SrcOver-over-black sRGB encode of the red token.
+fn is_full_red(p: [u8; 4]) -> bool {
+    let lin = LinearRgba::from(deco_red());
+    let e = support::expected_full_coverage_srgb([lin.red, lin.green, lin.blue, lin.alpha]);
+    (0..3).all(|ch| (p[ch] as i32 - e[ch] as i32).abs() <= 4)
+}
+
+/// Quad-tier band row at FLAT (ungrouped) intensity: ≈237 passes, the
+/// ≈110 AA bleed rows fail (module doc) — and so does the Opacity(0.5)
+/// group-dimmed row (0.84375 × 0.5 linear → sRGB ≈ 174).
+fn is_strong_red(p: [u8; 4]) -> bool {
+    p[0] >= 200 && p[1] <= 20 && p[2] <= 20
+}
+
+/// Red at any painted-band strength: catches the group-dimmed quad rows
+/// (≈174) while still rejecting flat AA bleed (≈110).
+fn is_present_red(p: [u8; 4]) -> bool {
+    p[0] >= 140 && p[1] <= 20 && p[2] <= 20
+}
+
+fn is_strong_blue(p: [u8; 4]) -> bool {
+    p[2] >= 200 && p[0] <= 20 && p[1] <= 20
+}
+
+/// Glyph-ink white (the white text token at ≥ ~73% coverage).
+fn is_white(p: [u8; 4]) -> bool {
+    p[0] >= 200 && p[1] >= 200 && p[2] >= 200
+}
+
+/// Rows (top→bottom) where ANY pixel satisfies `pred`.
+fn rows_where(pixels: &[u8], pred: impl Fn([u8; 4]) -> bool) -> Vec<u32> {
+    (0..H)
+        .filter(|&y| (0..W).any(|x| pred(support::px(pixels, W, x, y))))
+        .collect()
+}
+
+/// Coalesce sorted row indices into contiguous bands.
+fn bands(rows: &[u32]) -> Vec<Range<u32>> {
+    let mut out: Vec<Range<u32>> = Vec::new();
+    for &r in rows {
+        match out.last_mut() {
+            Some(b) if b.end == r => b.end = r + 1,
+            _ => out.push(r..r + 1),
+        }
+    }
+    out
+}
+
+/// Quad-tier decoration bands at flat intensity.
+fn red_bands(pixels: &[u8]) -> Vec<Range<u32>> {
+    bands(&rows_where(pixels, is_strong_red))
+}
+
+/// The glyph-ink row envelope (first..last+1 white row).
+fn white_rows(pixels: &[u8]) -> Range<u32> {
+    let rows = rows_where(pixels, is_white);
+    let first = *rows.first().expect("the white glyph ink painted");
+    let last = *rows.last().expect("the white glyph ink painted");
+    first..last + 1
+}
+
+// --- the four kind goldens (campaign T6 test surface) -----------------------
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 underline golden (decoration-and-paint §§ 3.2–3.3)"]
+fn underline_paints_one_band_below_the_glyphs() {
+    let frame_a = capture_decorated(red_deco(DecorationLines::UNDERLINE));
+    let ink = white_rows(&frame_a);
+    let bands = red_bands(&frame_a);
+    assert_eq!(bands.len(), 1, "exactly one underline band: {bands:?}");
+    let band = &bands[0];
+    assert!(
+        band.start >= ink.end,
+        "the underline ({band:?}) sits entirely BELOW the glyph ink ({ink:?}) — \
+         'Hi' has no descenders, so no ink crosses the baseline"
+    );
+    // § 3.3: thickness = max(1, round(0.05 em × 40 px × scale 1)) = 2 whole
+    // physical px (the embedded font's pinned underlineThickness, see the
+    // text_decoration.rs drift guard) — the strong-row count recovers it.
+    assert_eq!(
+        band.end - band.start,
+        2,
+        "band height = the § 3.3 floored thickness in physical px"
+    );
+
+    // Re-capture determinism (the hello_text idiom): an independent fresh
+    // capture matches — the re-capture IS the golden.
+    let frame_b = capture_decorated(red_deco(DecorationLines::UNDERLINE));
+    let diff = perceptual_diff(&frame_a, &frame_b);
+    assert!(diff < 1e-4, "two fresh captures diverged: {diff}");
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 double-underline golden (§ 3.2: gap = thickness)"]
+fn double_underline_paints_two_bands_with_a_thickness_gap() {
+    let frame = capture_decorated(TextDecorations {
+        line: DecorationLines::UNDERLINE,
+        style: DecorationLineStyle::Double,
+        color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
+    });
+    let ink = white_rows(&frame);
+    let bands = red_bands(&frame);
+    assert_eq!(bands.len(), 2, "Double = exactly two bands: {bands:?}");
+    let (first, second) = (&bands[0], &bands[1]);
+    assert!(first.start >= ink.end, "both bands below the ink ({ink:?})");
+    let h1 = first.end - first.start;
+    let h2 = second.end - second.start;
+    assert_eq!(h1, h2, "equal thicknesses: {bands:?}");
+    // § 3.2: gap = thickness ⇒ the second rect at y + 2 × t; t is physically
+    // integral and y grid-snapped, so the gap is exactly t rows.
+    assert_eq!(
+        second.start - first.end,
+        h1,
+        "gap rows == band height (gap = thickness): {bands:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 overline golden (§ 3.2: ascent placement, line-box clamp)"]
+fn overline_paints_above_the_glyphs() {
+    let frame = capture_decorated(red_deco(DecorationLines::OVERLINE));
+    let ink = white_rows(&frame);
+    let bands = red_bands(&frame);
+    assert_eq!(bands.len(), 1, "exactly one overline band: {bands:?}");
+    let band = &bands[0];
+    // The overline sits at the ASCENT (0.935 em — the drift-guard pin),
+    // well above the cap height where the 'H' ink starts.
+    assert!(
+        band.end <= ink.start,
+        "the overline ({band:?}) sits entirely ABOVE the glyph ink ({ink:?})"
+    );
+    // Overline reuses the underline thickness (upstream mirror): 2 phys px.
+    assert_eq!(band.end - band.start, 2, "underline thickness reused");
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 line-through golden — THE § 4.4 seat-5 test (stamp paints OVER the text)"]
+fn line_through_paints_over_the_glyph_ink() {
+    let frame = capture_decorated(red_deco(DecorationLines::LINE_THROUGH));
+    let ink = white_rows(&frame);
+    // The stamp tier is hard-edged at alpha 1 → exact full-coverage red.
+    let bands = bands(&rows_where(&frame, is_full_red));
+    assert_eq!(bands.len(), 1, "exactly one line-through band: {bands:?}");
+    let band = &bands[0];
+    assert!(
+        band.start < ink.end && band.end > ink.start,
+        "the line-through ({band:?}) INTERSECTS the glyph ink ({ink:?})"
+    );
+    assert!(band.start > 0 && band.end < H, "band inside the frame");
+
+    // THE seat assertion: at columns where glyph ink is white directly above
+    // AND below the band, the band's own rows read RED — the solid stamp
+    // painted over the glyph coverage (CSS Text Decoration L3 painting
+    // order). A quad-tier line-through would read white here: quads draw
+    // under glyphs (§ 4.1's fixed primitive rank).
+    let mut stem_columns = 0;
+    for x in 0..W {
+        let above = support::px(&frame, W, x, band.start - 1);
+        let below = support::px(&frame, W, x, band.end);
+        if is_white(above) && is_white(below) {
+            stem_columns += 1;
+            for y in band.clone() {
+                let p = support::px(&frame, W, x, y);
+                assert!(
+                    is_full_red(p),
+                    "stamp painted over the glyph ink at ({x},{y}): got {p:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        stem_columns > 0,
+        "at least one glyph stem column crosses the band (the seat test is not vacuous)"
+    );
+}
+
+// --- the three quad-gate terms, regression-pinned end-to-end ----------------
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 gate-term regression: text_quads.is_changed() repacks the quad buffer"]
+fn decoration_recolor_repacks_the_quad_buffer() {
+    // The THIRD gate term: a TextDecorations color edit fires
+    // Changed<TextDecorations> in the TEXT probe union only — no
+    // extract_buiy_nodes union member fires (the ResolvedLayout /
+    // ComputedTextLayout writes are idempotent for a color-only edit), so
+    // without `text_quads.is_changed()` in prepare's quad gate the buffer
+    // never repacks and a STALE RED underline survives below.
+    let _cfg = GoldenConfig::deterministic();
+    let mut app = support::gpu_render_app(W, H);
+    let (text, _root) = spawn_decorated_fixture(&mut app, red_deco(DecorationLines::UNDERLINE));
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+    support::finish_and_run(&mut app, 1);
+    support::wait_for_text_ready(&mut app, 60);
+    let frame_a = support::readback_rgba(&mut app, target.clone());
+    let red_a = red_bands(&frame_a);
+    assert_eq!(red_a.len(), 1, "the red underline painted: {red_a:?}");
+
+    // Recolor through the component (NOT the theme — theme.is_changed() is
+    // a separate, already-pinned union member).
+    app.world_mut()
+        .get_mut::<TextDecorations>(text)
+        .expect("the fixture's TextDecorations")
+        .color = Some(ColorToken::Token(Cow::Borrowed(DECO_BLUE_TOKEN)));
+    for _ in 0..3 {
+        app.update();
+    }
+    let frame_b = support::readback_rgba(&mut app, target);
+
+    let blue_b = bands(&rows_where(&frame_b, is_strong_blue));
+    assert_eq!(
+        blue_b, red_a,
+        "the band is now BLUE at the same rows (color-only edit moves nothing)"
+    );
+    assert!(
+        rows_where(&frame_b, |p| p[0] >= 100 && p[1] <= 20 && p[2] <= 20).is_empty(),
+        "no red remains anywhere — incl. the AA bleed rows a stale quad buffer would keep"
+    );
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 gate-term regression: retained quads re-splice through the fresh node list"]
+fn sibling_background_change_resplices_retained_quads() {
+    // The NODES term + § 4.6 fact (b): a sibling Background edit rebuilds
+    // the node list (text union does NOT fire — ExtractedTextQuads is
+    // RETAINED), and the retained carrier must land at identical rows
+    // through the fresh-node-list walk. A stale-index merge (the spec's
+    // rejected round-1 painters_z key) would misplace or drop the band.
+    const BG_A: &str = "test.bg.a";
+    const BG_B: &str = "test.bg.b";
+    let bg_a = Color::srgb(0.0, 1.0, 0.0);
+    let bg_b = Color::srgb(0.0, 1.0, 1.0);
+
+    let _cfg = GoldenConfig::deterministic();
+    let mut app = support::gpu_render_app(W, H);
+    let (_text, root) = spawn_decorated_fixture(&mut app, red_deco(DecorationLines::UNDERLINE));
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme.colors.insert(BG_A.into(), bg_a);
+        theme.colors.insert(BG_B.into(), bg_b);
+    }
+    // The sibling: an absolute 8×8 box in the top-right corner — clear of
+    // the glyph ink, the underline rows, and the red/white classifiers
+    // (green/cyan match neither).
+    let sibling = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(2.0)),
+                    left: Sizing::Length(Length::px(116.0)),
+                    ..default()
+                })
+                .width_px(8.0)
+                .height_px(8.0),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed(BG_A)),
+            },
+        ))
+        .id();
+    app.world_mut().entity_mut(root).add_child(sibling);
+
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+    support::finish_and_run(&mut app, 1);
+    support::wait_for_text_ready(&mut app, 60);
+    let frame_a = support::readback_rgba(&mut app, target.clone());
+    let bands_a = red_bands(&frame_a);
+    assert_eq!(bands_a.len(), 1, "the underline painted: {bands_a:?}");
+    let box_px = |frame: &[u8], expected: Color| {
+        // Deep interior of the 8×8 box — full SDF coverage, exact encode.
+        let got = support::px(frame, W, 120, 6);
+        let lin = LinearRgba::from(expected);
+        let want = support::expected_full_coverage_srgb([lin.red, lin.green, lin.blue, lin.alpha]);
+        (0..3).all(|ch| (got[ch] as i32 - want[ch] as i32).abs() <= 4)
+    };
+    assert!(box_px(&frame_a, bg_a), "the sibling box painted green");
+
+    // The sibling-only edit: Changed<Background> → node walk rebuilds.
+    app.world_mut()
+        .get_mut::<Background>(sibling)
+        .expect("the sibling's Background")
+        .color = ColorToken::Token(Cow::Borrowed(BG_B));
+    for _ in 0..3 {
+        app.update();
+    }
+    let frame_b = support::readback_rgba(&mut app, target);
+    assert!(
+        box_px(&frame_b, bg_b),
+        "the sibling recolored — the node list really rebuilt"
+    );
+    assert_eq!(
+        red_bands(&frame_b),
+        bands_a,
+        "the RETAINED underline re-spliced at identical rows through the fresh node list"
+    );
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; T6 groups term + the § 4.5 asymmetry pin (T8 flips the line-through half)"]
+fn opacity_group_dims_the_underline_but_not_the_line_through() {
+    // The GROUPS term + the § 4.5 asymmetry, pinned as EXPECTED: the
+    // underline quad rides pack_view_partitioned and ADOPTS its entity's
+    // effect group (dimmed by the off-screen composite at 0.5); the
+    // line-through stamp rides the flat glyph draw and bypasses the group
+    // entirely (full intensity) until T8's glyph-buffer partition.
+    let _cfg = GoldenConfig::deterministic();
+    let mut app = support::gpu_render_app(W, H);
+    insert_theme_tokens(&mut app);
+    let text = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Hi")),
+            FontSize(40.0),
+            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            red_deco(DecorationLines::UNDERLINE | DecorationLines::LINE_THROUGH),
+        ))
+        .id();
+    // The Opacity(0.5) card — an EffectGroup former (write_effect_groups
+    // marks it) wrapping the text.
+    let card = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(W as f32)
+                .height_px(H as f32),
+            Opacity(0.5),
+        ))
+        .add_child(text)
+        .id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(W as f32)
+                .height_px(H as f32),
+        ))
+        .add_child(card);
+
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+    support::finish_and_run(&mut app, 4);
+    support::wait_for_text_ready(&mut app, 60);
+    let frame = support::readback_rgba(&mut app, target);
+    let ink = white_rows(&frame);
+
+    // Half 1 — the underline DIMMED (group adoption end-to-end): below the
+    // ink there is a red band at composite-dimmed intensity (≈174: quad row
+    // alpha 0.84375 × group 0.5), and NO row at flat strength (≈237) — a
+    // flat row there would mean the quad escaped its entity's group.
+    let strong_below: Vec<u32> = rows_where(&frame, is_strong_red)
+        .into_iter()
+        .filter(|&r| r >= ink.end)
+        .collect();
+    assert!(
+        strong_below.is_empty(),
+        "the underline rode the group's partition range — dimmed, never flat: {strong_below:?}"
+    );
+    let present_below: Vec<u32> = rows_where(&frame, is_present_red)
+        .into_iter()
+        .filter(|&r| r >= ink.end)
+        .collect();
+    assert!(
+        !present_below.is_empty(),
+        "the dimmed underline IS present below the ink ({ink:?})"
+    );
+
+    // Half 2 — the line-through at FULL intensity (the § 4.5 asymmetry:
+    // glyph draws bypass effect groups until T8's glyph-buffer partition).
+    // T8 flips THIS assertion — keep the two halves adjacent so it fails
+    // HERE, loudly, instead of silently changing pixels.
+    let full = bands(&rows_where(&frame, is_full_red));
+    assert_eq!(
+        full.len(),
+        1,
+        "the line-through band reads FULL red (undimmed): {full:?}"
+    );
+    assert!(
+        full[0].start < ink.end && full[0].end > ink.start,
+        "and it is the over-ink band ({:?} vs ink {ink:?})",
+        full[0]
+    );
+}

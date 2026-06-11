@@ -55,6 +55,16 @@ fn gate15_atlas_entries_return_to_baseline_after_idle() {
     support::spawn_capture_camera(&mut app, target.clone());
     support::finish_and_run(&mut app, 1);
 
+    // Settle to the idle floor before capturing baseline: the T6 warmup-pinned
+    // solid stamp (text::register_render_world) is resident on frame 1, and
+    // with no live stamp instance it drains after `eviction_grace` like any
+    // entry (warmup-pinned is not pin-forever — pinned by the headless test
+    // `idle_stamp_evicts_and_reinserts_on_miss`). Idling past grace=2 (+slack)
+    // here keeps `baseline` future-proof against further warmup pushes.
+    for _ in 0..5 {
+        app.update();
+    }
+
     let baseline = {
         let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
         render_app

@@ -235,7 +235,7 @@ fn partition_no_groups_is_one_full_flat_run() {
         grouped(2, Color::WHITE, None),
         grouped(3, Color::WHITE, None),
     ];
-    let p = pack_view_partitioned(&nodes, 0);
+    let p = pack_view_partitioned(&nodes, 0, &[]);
     assert_eq!(p.instances.len(), 3);
     assert!(p.group_ranges.is_empty());
     assert_eq!(p.flat_ranges, vec![0..3]);
@@ -250,7 +250,7 @@ fn partition_all_group_members_leaves_flat_ranges_empty() {
         grouped(1, Color::WHITE, Some(0)),
         grouped(2, Color::WHITE, Some(0)),
     ];
-    let p = pack_view_partitioned(&nodes, 1);
+    let p = pack_view_partitioned(&nodes, 1, &[]);
     assert_eq!(p.group_ranges, vec![0..2]);
     assert!(
         p.flat_ranges.is_empty(),
@@ -268,7 +268,7 @@ fn partition_group_between_flats_splits_into_three_runs() {
         grouped(3, Color::WHITE, Some(0)), // 2 group 0
         grouped(4, Color::WHITE, None),    // 3 flat
     ];
-    let p = pack_view_partitioned(&nodes, 1);
+    let p = pack_view_partitioned(&nodes, 1, &[]);
     assert_eq!(p.instances.len(), 4);
     assert_eq!(p.group_ranges, vec![1..3]);
     assert_eq!(p.flat_ranges, vec![0..1, 3..4]);
@@ -285,7 +285,7 @@ fn partition_skips_transparent_so_indices_are_instance_indices() {
         grouped(3, Color::WHITE, Some(0)),
         grouped(4, Color::WHITE, None), // flat
     ];
-    let p = pack_view_partitioned(&nodes, 1);
+    let p = pack_view_partitioned(&nodes, 1, &[]);
     assert_eq!(p.instances.len(), 3);
     assert_eq!(p.group_ranges, vec![0..2]);
     assert_eq!(p.flat_ranges, vec![2..3]);
@@ -299,7 +299,7 @@ fn partition_group_with_no_opaque_member_is_empty_range() {
         grouped(1, Color::NONE, Some(0)), // transparent group member
         grouped(2, Color::WHITE, None),   // flat
     ];
-    let p = pack_view_partitioned(&nodes, 1);
+    let p = pack_view_partitioned(&nodes, 1, &[]);
     assert_eq!(p.instances.len(), 1);
     assert_eq!(p.group_ranges[0].start, p.group_ranges[0].end);
     assert_eq!(p.flat_ranges, vec![0..1]);
@@ -313,7 +313,7 @@ fn partition_two_adjacent_groups_get_distinct_contiguous_ranges() {
         grouped(2, Color::WHITE, Some(0)),
         grouped(3, Color::WHITE, Some(1)),
     ];
-    let p = pack_view_partitioned(&nodes, 2);
+    let p = pack_view_partitioned(&nodes, 2, &[]);
     assert_eq!(p.group_ranges, vec![0..2, 2..3]);
     assert!(p.flat_ranges.is_empty());
 }

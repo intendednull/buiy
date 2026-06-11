@@ -656,3 +656,40 @@ pub fn extract_buiy_nodes(
 /// SUPERSEDED-BY: R6/R8 (node.rs/buckets read the per-view `ExtractedNodes`).
 #[derive(Resource, Default, Clone, Debug)]
 pub struct ExtractedNodesView(pub ExtractedNodes);
+
+/// One text quad-tier visual (decoration-and-paint § 4.6): selection rects
+/// (T7) and underline/overline (T6), keyed by the SOURCE entity. A flat
+/// `Copy` record — deliberately NO order and NO group field: paint order is
+/// the implicit `Vec` order of `ExtractedNodes.nodes`, and BOTH derive from
+/// the fresh node list at pack time (a recorded index would go stale
+/// whenever the node walk rebuilds while text quads are retained — the
+/// spec's rejected round-1 design). Carries no cosmic-text type (the seam
+/// contract).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextQuad {
+    /// The source main-world entity — the splice key.
+    pub entity: Entity,
+    /// Painted top-left, logical px, window space (origin-folded by the
+    /// producer; § 3.3 y already snapped).
+    pub position: Vec2,
+    /// Quad size, logical px (height = the § 3.3 floored thickness).
+    pub size: Vec2,
+    /// Resolved paint color (§ 3.2 precedence applied at extract);
+    /// `Color::NONE` = skip at pack (mirrors `ExtractedNode.color`).
+    pub color: Color,
+    /// The entity's SELF-INCLUSIVE clip (same resolution as its glyphs,
+    /// glyph-pipeline § 8); `None` = the full-view sentinel.
+    pub clip: Option<ClipRect>,
+}
+
+/// Render-world carrier for text's quad-tier visuals (decoration-and-paint
+/// § 4.6). Producer: `text::extract_buiy_glyphs` — rebuilt alongside
+/// `ExtractedGlyphs` under the same § 6.2 probe union (one damage decision),
+/// retained untouched on steady frames so `is_changed()` is the third quad
+/// gate term in `prepare_buiy_instances`. ENTITY-GROUPED: each entity's
+/// quads are contiguous, in § 4.4 emission order (the pack debug_asserts
+/// the grouping).
+#[derive(Resource, Default, Clone, Debug)]
+pub struct ExtractedTextQuads {
+    pub quads: Vec<TextQuad>,
+}

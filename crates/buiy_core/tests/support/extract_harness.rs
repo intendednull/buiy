@@ -15,6 +15,7 @@ use buiy_core::CorePlugin;
 use buiy_core::layout::LayoutPlugin;
 use buiy_core::render::BuiyRenderPlugin;
 use buiy_core::render::atlas::{AtlasConfig, AtlasKey, BuiyAtlas, maintain_atlas};
+use buiy_core::render::extract::ExtractedTextQuads;
 use buiy_core::render::prepare::ExtractedGlyphs;
 use buiy_core::text::{
     BuiySwashCache, BuiyTextPlugin, FontKeyInterner, GlyphMetaCache, ResidentTextKeys,
@@ -33,6 +34,20 @@ pub struct GlyphChangeLog {
 fn log_glyph_changes(glyphs: Res<ExtractedGlyphs>, mut log: ResMut<GlyphChangeLog>) {
     log.frames += 1;
     if glyphs.is_changed() {
+        log.changed_frames += 1;
+    }
+}
+
+/// The quad-carrier mirror of [`GlyphChangeLog`]: counts frames on which
+/// `ExtractedTextQuads` was rebuilt — the third quad-gate term in
+/// `prepare_buiy_instances` (T6, decoration-and-paint § 4.6).
+#[derive(Resource, Default)]
+pub struct TextQuadChangeLog {
+    pub changed_frames: usize,
+}
+
+fn log_text_quad_changes(quads: Res<ExtractedTextQuads>, mut log: ResMut<TextQuadChangeLog>) {
+    if quads.is_changed() {
         log.changed_frames += 1;
     }
 }
@@ -73,19 +88,29 @@ impl TextExtractHarness {
         let mut render = World::new();
         render.insert_resource(BuiyAtlas::new(config));
         render.init_resource::<ExtractedGlyphs>();
+        render.init_resource::<ExtractedTextQuads>();
         render.init_resource::<FontKeyInterner>();
         render.init_resource::<ResidentTextKeys>();
         render.init_resource::<GlyphMetaCache>();
         render.init_resource::<BuiySwashCache>();
         render.insert_resource(fonts);
         render.init_resource::<GlyphChangeLog>();
+        render.init_resource::<TextQuadChangeLog>();
         // The slot the live main world is swapped into per extract step.
         render.init_resource::<MainWorld>();
 
         // Mirror the real chain: maintenance advances the frame clock, then
-        // the producer (.after(maintain_atlas)), then the change probe.
+        // the producer (.after(maintain_atlas)), then the change probes.
         let mut schedule = Schedule::new(ExtractSchedule);
-        schedule.add_systems((maintain_atlas, extract_buiy_glyphs, log_glyph_changes).chain());
+        schedule.add_systems(
+            (
+                maintain_atlas,
+                extract_buiy_glyphs,
+                log_glyph_changes,
+                log_text_quad_changes,
+            )
+                .chain(),
+        );
 
         Self {
             app,
@@ -132,6 +157,14 @@ impl TextExtractHarness {
 
     pub fn changed_frames(&self) -> usize {
         self.render.resource::<GlyphChangeLog>().changed_frames
+    }
+
+    pub fn text_quads(&self) -> &ExtractedTextQuads {
+        self.render.resource::<ExtractedTextQuads>()
+    }
+
+    pub fn quad_changed_frames(&self) -> usize {
+        self.render.resource::<TextQuadChangeLog>().changed_frames
     }
 
     pub fn resident_keys(&self) -> Vec<AtlasKey> {

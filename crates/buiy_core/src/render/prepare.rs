@@ -32,7 +32,9 @@ use std::ops::Range;
 
 use crate::render::atlas::GlyphAlphaInstance;
 use crate::render::buckets::{pack_view, pack_view_partitioned};
-use crate::render::extract::{ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView};
+use crate::render::extract::{
+    ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads,
+};
 use crate::render::view_uniform::BuiyViewUniform;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
@@ -151,6 +153,7 @@ pub fn prepare_buiy_instances(
     nodes: Res<ExtractedNodesView>,
     groups: Res<ExtractedEffectGroups>,
     glyphs: Res<ExtractedGlyphs>,
+    text_quads: Res<ExtractedTextQuads>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
 ) {
     // Damage gate (architecture.md § 3.1): extract overwrites `ExtractedNodesView`
@@ -165,7 +168,12 @@ pub fn prepare_buiy_instances(
     // The quad and glyph buffers are gated INDEPENDENTLY: a frame that re-tints a
     // glyph (gate #2 test) changes only `ExtractedGlyphs`, so the quad buffer is
     // retained and only the glyph buffer re-uploads — and vice versa.
-    if nodes.is_changed() || groups.is_changed() {
+    // The quad gate (§ 4.6): nodes OR groups OR text quads — text's
+    // quad-tier visuals (underline/overline, T6) ride the SAME buffer, so a
+    // decoration-only frame (e.g. a TextDecorations color edit: text probe
+    // fires, node probe doesn't) must re-pack it. Quad and glyph buffers stay
+    // INDEPENDENTLY gated — a caret blink (T7) re-uploads glyphs only.
+    if nodes.is_changed() || groups.is_changed() || text_quads.is_changed() {
         // Consume R5's ExtractedNodes: pack its per-view records into the flat
         // quad blob, the per-group instance-range partition, and build the view
         // uniform (logical_size + scale_factor are R5's). The view uniform rides
@@ -173,8 +181,10 @@ pub fn prepare_buiy_instances(
         // scale_factor it is built from. The partition keys off `ExtractedNode.group`
         // (effect-compositor.md § 1.1): each group's contiguous range renders into
         // its own off-screen target (the node's step 1), the flat ranges into the
-        // window — so a group member is never double-painted.
-        let partition = pack_view_partitioned(&nodes.0.nodes, groups.0.len());
+        // window — so a group member is never double-painted. Text quads splice
+        // in by the § 4.6 fresh-node-list walk (each entity's quads land right
+        // after its node instance, adopting its group).
+        let partition = pack_view_partitioned(&nodes.0.nodes, groups.0.len(), &text_quads.quads);
         let uniform =
             BuiyViewUniform::for_view(nodes.0.logical_size, nodes.0.scale_factor).as_std140_array();
 

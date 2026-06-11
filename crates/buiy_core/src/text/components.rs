@@ -6,9 +6,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
+use bevy::reflect::impl_reflect_opaque;
 use cosmic_text::{Align, Buffer, Metrics, Shaping, Wrap};
 
 use super::whitespace::CollapseMode;
+use crate::render::color::ColorToken;
 
 /// The authored UTF-8 text content (measure-and-layout § 4.1) — the string
 /// `TextSync` feeds to `Buffer::set_text`, after the § 5.2 white-space
@@ -279,8 +281,94 @@ pub enum TextDirection {
     Auto,
 }
 
+bitflags::bitflags! {
+    /// CSS `text-decoration-line` value set (decoration-and-paint § 2.2;
+    /// text.md:51, F). A bitflag set: any combination of the three lines.
+    /// The plural component name (`TextDecorations`) deliberately avoids
+    /// colliding with `cosmic_text::TextDecoration`, which the sync
+    /// lowering binds.
+    #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+    pub struct DecorationLines: u8 {
+        /// Painted UNDER the text (quad tier, § 4.2).
+        const UNDERLINE    = 1 << 0;
+        /// Painted UNDER the text (quad tier, § 4.2).
+        const OVERLINE     = 1 << 1;
+        /// Painted OVER the text (solid-stamp glyph tier, § 4.2) — the CSS
+        /// Text Decoration L3 painting-order requirement.
+        const LINE_THROUGH = 1 << 2;
+    }
+}
+
+// `bitflags!` doesn't compose with `#[derive(Reflect)]` — register the
+// opaque type manually (the layout ContainFlags precedent).
+impl_reflect_opaque!((in crate::text::components) DecorationLines(Default, PartialEq));
+
+/// `text-decoration-style`, the § 9 strategy enum at the quad-emission seam
+/// — realized with its working arms (decoration-and-paint § 9; T6 plan
+/// decision 2): `Solid`/`Double` lower to cosmic's
+/// `UnderlineStyle::Single`/`Double`; `Dotted`/`Dashed`/`Wavy` parse and
+/// DEGRADE to `Solid` with a warn-once (the `TextWrap::Balance` precedent).
+/// Dotted/dashed are future Buiy emission patterns (segmented quads); the
+/// wavy unblock path of record is upstream-PR-first (the literal
+/// `// TODO: Wavy` in 0.19's enum) — never bake the fallback into F-tier
+/// types. Upstream carries `Double` for the underline only, so overline and
+/// line-through stay single-line under `Double` (the upstream asymmetry,
+/// documented not hidden).
+#[derive(Reflect, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DecorationLineStyle {
+    #[default]
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
+}
+
+impl DecorationLineStyle {
+    /// The cosmic `UnderlineStyle` this style lowers to (the sync mapping).
+    pub fn to_cosmic_underline(self) -> cosmic_text::UnderlineStyle {
+        match self {
+            DecorationLineStyle::Solid => cosmic_text::UnderlineStyle::Single,
+            DecorationLineStyle::Double => cosmic_text::UnderlineStyle::Double,
+            DecorationLineStyle::Dotted
+            | DecorationLineStyle::Dashed
+            | DecorationLineStyle::Wavy => {
+                warn_once_decoration_style_degrades();
+                cosmic_text::UnderlineStyle::Single
+            }
+        }
+    }
+}
+
+/// CSS `text-decoration` (decoration-and-paint § 2.2; text.md:51, F): which
+/// lines to draw, their style, and the optional `text-decoration-color`
+/// override. `color: None` = `currentColor` — the § 3.2 precedence, resolved
+/// AT EXTRACT against the live theme (decision 1: line bits ride
+/// `Attrs.text_decoration`; the color token never does — a theme swap
+/// re-emits instances, never reshapes).
+///
+/// The `style` field supersedes the spec's two-field § 2.2 pin (T6 erratum
+/// 2): § 3.2 specifies Double's paint math and the campaign demands its
+/// golden, so the knob ships here rather than behind a C-tier follow-up.
+///
+/// Component REMOVAL is not a resync trigger (the T2-erratum-1 carrier
+/// precedent): a removed `TextDecorations` resyncs on the next other
+/// trigger.
+#[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct TextDecorations {
+    /// Which decoration lines to draw (any combination).
+    pub line: DecorationLines,
+    /// Line style; `Solid` default. See [`DecorationLineStyle`].
+    pub style: DecorationLineStyle,
+    /// `text-decoration-color`; `None` = `currentColor` (§ 3.2 tier 3 via
+    /// the span/entity fallbacks).
+    pub color: Option<ColorToken>,
+}
+
 static WARNED_TEXT_WRAP_STYLE: AtomicBool = AtomicBool::new(false);
 static WARNED_JUSTIFY_ALL: AtomicBool = AtomicBool::new(false);
+static WARNED_DECORATION_STYLE: AtomicBool = AtomicBool::new(false);
 
 /// The translate.rs `warn_once_fr_outside_grid` precedent.
 fn warn_once_text_wrap_style_degrades() {
@@ -297,6 +385,16 @@ fn warn_once_justify_all_degrades() {
         warn!(
             "buiy: text-align: justify-all degrades to justify — last-line \
              justification is not exposed by cosmic-text (warned once)"
+        );
+    }
+}
+
+fn warn_once_decoration_style_degrades() {
+    if !WARNED_DECORATION_STYLE.swap(true, Ordering::Relaxed) {
+        warn!(
+            "buiy: text-decoration-style dotted/dashed/wavy are not built; \
+             degrading to solid (decoration-and-paint § 9 — wavy's unblock \
+             path is upstream-PR-first; warned once)"
         );
     }
 }
