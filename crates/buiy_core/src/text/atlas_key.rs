@@ -11,6 +11,7 @@
 //! ever sees the opaque byte key (atlas/mod.rs seam doc).
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use bevy::prelude::Resource;
 use cosmic_text::{CacheKey, SubpixelBin, fontdb};
@@ -21,29 +22,53 @@ use crate::render::atlas::{AtlasEntryKind, AtlasKey};
 /// `[kind u8][font u32][glyph_id u16][font_size_bits u32][x_bin u8][y_bin u8][weight u16][flags u32]`.
 pub const GLYPH_KEY_LEN: usize = 19;
 
-/// Render-world interner: `fontdb::ID` → sequential `u32` (monotonic, never
-/// evicted — fonts number in the dozens, glyph-pipeline § 4). One shared
-/// `FontSystem` is load-bearing here: ids are stable only within one engine
-/// (§ 3.1), so the interner is coherent for both shaping and rasterization.
+/// Render-world interner: `fontdb::ID` → stable `u32` seat (glyph-pipeline
+/// § 4). Seats are MONOTONIC for the life of the resource — never reused —
+/// because old atlas entries keyed under old seats stay grace-resident
+/// after any font-set change; a reused seat would alias them (stale-bitmap
+/// corruption, the § 3.2 hazard). The ID map is valid only within one
+/// database lineage (fontdb IDs are slotmap keys — equal VALUES name
+/// different faces across databases), so `begin_lineage` clears it whenever
+/// `FontDbLineage` advances; `next` survives the clear.
 #[derive(Resource, Default)]
 pub struct FontKeyInterner {
     ids: HashMap<fontdb::ID, u32>,
+    next: u32,
+    lineage: u64,
 }
 
 impl FontKeyInterner {
-    /// The stable `u32` for `font` — allocated on first sight, identical
-    /// forever after.
+    /// The stable `u32` seat for `font` — allocated on first sight within
+    /// the current lineage, identical until the next lineage change.
     pub fn intern(&mut self, font: fontdb::ID) -> u32 {
-        let next = self.ids.len() as u32;
-        *self.ids.entry(font).or_insert(next)
+        match self.ids.entry(font) {
+            Entry::Occupied(seat) => *seat.get(),
+            Entry::Vacant(slot) => {
+                let seat = self.next;
+                self.next += 1;
+                *slot.insert(seat)
+            }
+        }
     }
 
-    /// Number of fonts interned so far.
+    /// Synchronize with the main world's `FontDbLineage`: on a change,
+    /// clear the ID map (every fontdb ID was reissued — the § 3.2 storm)
+    /// while keeping `next` monotonic. Returns true when a clear happened.
+    pub fn begin_lineage(&mut self, lineage: u64) -> bool {
+        if self.lineage == lineage {
+            return false;
+        }
+        self.ids.clear();
+        self.lineage = lineage;
+        true
+    }
+
+    /// Number of fonts interned in the current lineage.
     pub fn len(&self) -> usize {
         self.ids.len()
     }
 
-    /// True when no font has been interned yet.
+    /// True when no font has been interned in the current lineage.
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }

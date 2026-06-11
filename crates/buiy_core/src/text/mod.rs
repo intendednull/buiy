@@ -15,11 +15,16 @@
 mod atlas_key;
 mod commit;
 mod components;
+mod direction;
 mod extract;
+mod font_asset;
 mod font_system;
+mod match_index;
 // pub(crate): the layout compute sites (taffy_compute + the two cq re-runs)
 // call `measure::compute_roots_with_text_measure` directly (measure § 4.3).
 pub(crate) mod measure;
+mod registry;
+mod resolver;
 mod swash;
 mod sync;
 mod system_scan;
@@ -30,16 +35,25 @@ pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
     ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
     GenericFamily, IntrinsicWidths, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text, TextAlign,
-    TextBuffer, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+    TextBuffer, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
 };
+pub use direction::prepend_strong_marks;
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
     pack_clip, physical_offset,
 };
+pub use font_asset::{BuiyFont, BuiyFontLoader, BuiyFontLoaderError, sniff_sfnt};
 pub use font_system::{
-    BuiyFallback, DEFAULT_FONT_FAMILY, FontsGeneration, SharedFontSystem, registered_fonts_db,
+    BuiyFallback, DEFAULT_FONT_FAMILY, FontDbLineage, FontsGeneration, SharedFontSystem,
+    registered_fonts_db,
 };
+pub use match_index::FontMatchIndex;
 pub use measure::{TextMeasureCallCount, TextMeasureParam};
+pub use registry::{
+    FONT_BLOCK_TIMEOUT_SECS, FontDisplay, FontFaceDescriptors, FontLoadState, FontRegistry,
+    PendingFontBlock, UnicodeRanges, apply_font_registry, expire_font_block,
+};
+pub use resolver::{Resolution, ResolvedFamily, ResolvedSpan, resolve_spans};
 pub use swash::BuiySwashCache;
 pub use sync::{TextSyncAppliedCount, text_sync_buffers};
 pub use system_scan::{
@@ -71,6 +85,20 @@ impl Plugin for BuiyTextPlugin {
         let fonts = SharedFontSystem::new();
         app.insert_resource(fonts.clone());
         app.init_resource::<FontsGeneration>();
+        // T5: the fresh-database lineage counter the render-world
+        // FontKeyInterner synchronizes against (font-assets § 3.2).
+        app.init_resource::<FontDbLineage>();
+
+        // T5: the `@font-face` byte source (font-assets § 2). The asset
+        // half is gated: init_asset/register_asset_loader PANIC without an
+        // AssetServer (bevy_asset lib.rs:590/637), and headless text
+        // fixtures carry no AssetPlugin. The bytes registration path (T5
+        // registry) needs no asset machinery at all.
+        if app.world().contains_resource::<bevy::asset::AssetServer>() {
+            use bevy::asset::AssetApp;
+            app.init_asset::<BuiyFont>()
+                .register_asset_loader(BuiyFontLoader);
+        }
 
         // T2: the authoring-surface defaults (font-assets § 8) and the
         // author-set component registrations (reflection / BSN / inspectors —
@@ -85,7 +113,9 @@ impl Plugin for BuiyTextPlugin {
             .register_type::<LineHeight>()
             .register_type::<WhiteSpace>()
             .register_type::<TextWrap>()
-            .register_type::<TextAlign>();
+            .register_type::<TextAlign>()
+            // T5: the § 5.4 direction carrier (absent = Auto).
+            .register_type::<TextDirection>();
 
         app.init_resource::<TextSyncAppliedCount>();
         // T3: the per-frame measure instrument (measure § 7). Incremented
@@ -116,6 +146,30 @@ impl Plugin for BuiyTextPlugin {
         app.add_systems(
             Update,
             apply_system_font_scan.before(crate::BuiySet::Layout),
+        );
+
+        // T5: the FontRegistry (font-assets § 3) — methods stage ops; ONE
+        // applier drains them + the AssetEvent stream per frame, after a
+        // possible scan swap and before Layout, so a frame never measures
+        // against a half-registered family. The message registration is
+        // unconditional (idempotent — bevy_asset lib.rs:656): the reader
+        // works without AssetPlugin; the bytes path needs no asset
+        // machinery at all.
+        app.init_resource::<FontRegistry>();
+        // T5: the resolver's lock-free match substrate (decision 2) — a db
+        // snapshot every engine-mutation site re-takes under its own lock
+        // hold (apply_font_registry, apply_system_font_scan).
+        app.insert_resource(FontMatchIndex::new(fonts.lock().db().clone()));
+        app.add_message::<bevy::asset::AssetEvent<BuiyFont>>();
+        app.add_systems(
+            Update,
+            (
+                apply_font_registry.after(apply_system_font_scan),
+                // T5: the font-display Block timeout (font-assets § 7) —
+                // removing the expired marker IS the swap-to-visible.
+                expire_font_block,
+            )
+                .before(crate::BuiySet::Layout),
         );
         if self.system_fonts {
             app.add_systems(Startup, spawn_system_font_scan);

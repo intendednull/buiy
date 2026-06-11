@@ -9,7 +9,7 @@ use buiy_core::Node;
 use buiy_core::layout::Style;
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{ClipRect, CssVisibility, TextColor};
-use buiy_core::text::{FontSize, Text};
+use buiy_core::text::{FontDbLineage, FontSize, FontsGeneration, Text};
 use buiy_core::theme::Theme;
 use std::borrow::Cow;
 use support::extract_harness::TextExtractHarness;
@@ -217,6 +217,45 @@ fn each_union_member_fires_exactly_one_rebuild() {
     assert_eq!(h.glyph_count(), 0);
     h.frame();
     assert_eq!(h.changed_frames(), expect, "empty steady state retains");
+}
+
+#[test]
+fn generation_bump_rebuilds_and_lineage_bump_reseats_the_interner() {
+    // § 6.2 grows two value-compare probes (T5): FontsGeneration (rebuild)
+    // and FontDbLineage (interner clear + monotonic reseat). A steady frame
+    // after the storm settles back to zero-change.
+    let mut h = TextExtractHarness::new();
+    spawn_text(&mut h);
+    h.settle();
+    let keys_before = h.resident_keys();
+    assert!(!keys_before.is_empty());
+    let settled = h.changed_frames();
+
+    // Simulate the swap's main-world face: bump both counters (the
+    // apply_system_font_scan contract — every lineage bump rides a
+    // generation bump).
+    h.app.world_mut().resource_mut::<FontsGeneration>().0 += 1;
+    h.app.world_mut().resource_mut::<FontDbLineage>().0 += 1;
+    h.frame();
+
+    assert!(
+        h.changed_frames() > settled,
+        "generation probe forced a rebuild"
+    );
+    let keys_after = h.resident_keys();
+    assert_eq!(keys_after.len(), keys_before.len(), "same glyphs, re-keyed");
+    assert!(
+        keys_before.iter().all(|k| !keys_after.contains(k)),
+        "lineage advance re-seated every key (the font-u32 bytes moved monotonically)"
+    );
+
+    let after_storm = h.changed_frames();
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        after_storm,
+        "steady again on the very next frame"
+    );
 }
 
 #[test]

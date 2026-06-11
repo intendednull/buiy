@@ -56,8 +56,10 @@ impl Default for SharedFontSystem {
 /// The deterministic app-global last-resort fallback (font-assets §§ 3.1, 5–6):
 /// injected at construction in place of cosmic-text's platform-varying
 /// `PlatformFallback`, so CI resolution never depends on the host platform.
-/// T1 ships the minimal deterministic lists; T5 grows per-script entries
-/// alongside the per-script OFL fixture fonts (seam named, not built).
+/// The per-script lists name the per-script OFL fixture families (T5 plan
+/// decision 14); absent families are skipped harmlessly, so apps that
+/// register their own fonts under those names get deterministic resolution
+/// and nothing platform-varying ever enters.
 pub struct BuiyFallback;
 
 impl Fallback for BuiyFallback {
@@ -71,10 +73,17 @@ impl Fallback for BuiyFallback {
         &[]
     }
 
-    fn script_fallback(&self, _script: Script, _locale: &str) -> &[&'static str] {
-        // Deliberately empty (never platform-dependent) until T5 pins
-        // deterministic per-script lists.
-        &[]
+    fn script_fallback(&self, script: Script, _locale: &str) -> &[&'static str] {
+        // The subsets' DECLARED family names, verbatim (fontdb matches by
+        // name; "Noto Sans CJK SC" is what NotoSansCJKsc-Regular.otf
+        // declares — not the google-fonts "Noto Sans SC" rebuild's name).
+        match script {
+            Script::Arabic => &["Noto Sans Arabic"],
+            Script::Hebrew => &["Noto Sans Hebrew"],
+            Script::Devanagari => &["Noto Sans Devanagari"],
+            Script::Han => &["Noto Sans CJK SC"],
+            _ => &[],
+        }
     }
 }
 
@@ -85,6 +94,20 @@ impl Fallback for BuiyFallback {
 /// late fonts never leave stale tofu.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FontsGeneration(pub u64);
+
+/// The font-database LINEAGE counter (T5; font-assets § 3.2 corrected —
+/// see the T5 plan's erratum 1): bumped ONLY when a FRESH `fontdb::Database`
+/// replaces the engine's (the system-scan swap). In-lineage mutations —
+/// registry adds, the § 3.1 unregister rebuild, hot-reload remove+re-add —
+/// keep surviving IDs valid (`into_locale_and_db` carries the same
+/// `Database` by value; slotmap keys of untouched faces never change) and
+/// MUST NOT bump this. Consumers: the render-world `FontKeyInterner` clears
+/// its ID map per lineage (equal fontdb ID values name DIFFERENT faces
+/// across databases — the AtlasKey-aliasing hazard § 3.2's
+/// never-persist rule exists for). Every lineage bump is accompanied by a
+/// `FontsGeneration` bump (the reshape + producer-rebuild trigger).
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FontDbLineage(pub u64);
 
 /// The registered-fonts-only database: the embedded default font plus the
 /// five generic-family pins (font-assets § 4). This is BOTH the construction
@@ -116,6 +139,13 @@ pub(crate) fn build_font_system() -> FontSystem {
         registered_fonts_db(),
         BuiyFallback,
     )
+}
+
+/// Briefly parked in the mutex during the § 3.1 mem::replace rebuild dance
+/// (`swap_font_db`, `apply_font_registry`); never observable — every swap
+/// completes under one lock hold.
+pub(crate) fn placeholder_font_system() -> FontSystem {
+    FontSystem::new_with_locale_and_db(String::from("en-US"), fontdb::Database::new())
 }
 
 /// The locale handed to the registered-only constructor: the system locale

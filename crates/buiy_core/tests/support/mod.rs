@@ -252,6 +252,36 @@ pub fn wait_for_text_ready(app: &mut App, max_frames: usize) -> usize {
     panic!("text never became atlas-resident within {max_frames} frames");
 }
 
+/// A committed per-script fixture font (verification § 2.2; produced ONLY
+/// by `tools/fonts/subset_fixture_fonts.sh` — pinned upstreams + sha256 +
+/// pinned fonttools, never hand-edited).
+pub fn fixture_font_bytes(file_name: &str) -> Arc<Vec<u8>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fonts")
+        .join(file_name);
+    Arc::new(std::fs::read(&path).unwrap_or_else(|e| {
+        panic!("fixture font {file_name} missing ({e}); run tools/fonts/subset_fixture_fonts.sh")
+    }))
+}
+
+/// Register a fixture font through the production bytes path
+/// (`FontRegistry::register_bytes` → `apply_font_registry`) and settle one
+/// update so the engine + `FontMatchIndex` see it. `family` must be the
+/// subset's declared family name verbatim (the resolver queries by name;
+/// a mismatch will not match — T5 plan decision 4).
+pub fn register_fixture_font(app: &mut App, family: &str, file_name: &str) {
+    use buiy_core::text::{FontFaceDescriptors, FontRegistry};
+
+    app.world_mut()
+        .resource_mut::<FontRegistry>()
+        .register_bytes(
+            family,
+            fixture_font_bytes(file_name),
+            FontFaceDescriptors::default(),
+        );
+    app.update();
+}
+
 /// Index one RGBA8 pixel out of an un-padded `w*h*4` readback buffer.
 pub fn px(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * w + x) * 4) as usize;

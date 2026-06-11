@@ -16,7 +16,9 @@ use buiy_core::render::atlas::{AtlasBitmap, AtlasConfig, AtlasFormat, AtlasKey, 
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::TextColor;
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
-use buiy_core::text::{FontSize, ResidentTextKeys, Text};
+use buiy_core::text::{
+    FamilyEntry, FontFamily, FontSize, FontStack, GenericFamily, ResidentTextKeys, Text,
+};
 use std::borrow::Cow;
 
 const W: u32 = 128;
@@ -267,5 +269,185 @@ fn touch_pass_prevents_stale_uv_corruption() {
         perceptual_diff(&frame_a, &frame_c) > 1e-4,
         "stale UVs sampled the filler — the silent corruption § 6.3's \
          un-gated touch pass exists to prevent"
+    );
+}
+
+// --- (d) T5: the multi-script golden (campaign: "1–2 goldens"). ----------
+#[test]
+#[ignore = "needs a wgpu adapter; T5 multi-script golden (verification § 1.3 pixels row)"]
+fn multi_script_text_renders_deterministically() {
+    // Two RTL lines through the fixture fonts — Arabic (joining) and the
+    // mixed-BiDi string (Hebrew + Latin) — registered via the production
+    // bytes path. Inline-golden discipline (the T4 stored-PNG deferral
+    // stands): capture twice in two independent app instances, assert
+    // byte-stability + non-emptiness. Glyph correctness lives headless in
+    // the corpus; THIS test proves the pixels lane end-to-end (resolver →
+    // set_rich_text → rasterize → atlas → draw) with non-Latin faces.
+    fn capture_bidi() -> Vec<u8> {
+        let _cfg = GoldenConfig::deterministic(); // the triad gates this fixture
+        let mut app = support::gpu_render_app(W, H);
+        // Finish BEFORE registering: `register_fixture_font` settles one
+        // update, and a pre-finish update would run the render schedule
+        // without the device/PipelineCache (both land in `finish`).
+        support::finish_and_run(&mut app, 0);
+        support::register_fixture_font(&mut app, "Noto Sans Arabic", "NotoSansArabic-arabic.ttf");
+        support::register_fixture_font(&mut app, "Noto Sans Hebrew", "NotoSansHebrew-hebrew.ttf");
+
+        {
+            let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+            theme
+                .colors
+                .insert(TOKEN.into(), Color::srgba(0.92, 0.92, 0.92, 1.0));
+        }
+        // The joining-RTL line: every glyph sits on the Arabic fixture face.
+        let arabic = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default(),
+                Text(String::from("السلام عليكم")),
+                FontFamily(FontStack(vec![
+                    FamilyEntry::Named(String::from("Noto Sans Arabic")),
+                    FamilyEntry::Generic(GenericFamily::SansSerif),
+                ])),
+                FontSize(20.0),
+                TextColor(ColorToken::Token(Cow::Borrowed(TOKEN))),
+            ))
+            .id();
+        // The verification § 2.2 mixed-BiDi string. Latin must hit the
+        // embedded face: the stack leads with the Hebrew fixture and the
+        // resolver's coverage split sends "hello"/"world" to sans-serif.
+        let bidi = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default(),
+                Text(String::from("hello עולם world")),
+                FontFamily(FontStack(vec![
+                    FamilyEntry::Named(String::from("Noto Sans Hebrew")),
+                    FamilyEntry::Generic(GenericFamily::SansSerif),
+                ])),
+                FontSize(20.0),
+                TextColor(ColorToken::Token(Cow::Borrowed(TOKEN))),
+            ))
+            .id();
+        app.world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .flex_column()
+                    .width_px(W as f32)
+                    .height_px(H as f32),
+            ))
+            .add_child(arabic)
+            .add_child(bidi);
+
+        let target = support::render_to_image(&mut app, W, H);
+        support::spawn_capture_camera(&mut app, target.clone());
+        support::wait_for_text_ready(&mut app, 60);
+        support::readback_rgba(&mut app, target)
+    }
+    let a = capture_bidi();
+    let b = capture_bidi();
+    assert!(
+        !a.chunks_exact(4).all(|p| p == &a[0..4]),
+        "something painted"
+    );
+    assert!(
+        perceptual_diff(&a, &b) < 1e-4,
+        "two independent captures are byte-stable (deterministic fonts + resolver)"
+    );
+}
+
+// --- (e) T5: THE rebuild-storm bound (font-assets §§ 3.2, 10). ------------
+#[test]
+#[ignore = "needs a wgpu adapter; T5 rebuild-storm bound (one frame of misses, baseline restored)"]
+fn font_db_rebuild_storm_is_bounded() {
+    // A fresh-db swap reissues EVERY fontdb ID: every AtlasKey goes stale
+    // at once. Bounded, not broken: one frame of misses re-rasterizes,
+    // old entries grace-evict, page count and entry count return to
+    // baseline, pixels never change (same font bytes, same shaping).
+    let mut app = support::gpu_render_app(W, H);
+    {
+        // Tight grace so the settle window is test-sized (the T4 fixture's
+        // AtlasConfig override pattern).
+        let render_app = app.get_sub_app_mut(RenderApp).expect("RenderApp");
+        render_app
+            .world_mut()
+            .insert_resource(BuiyAtlas::new(AtlasConfig {
+                page_size: 1024,
+                page_budget: 8,
+                eviction_grace: 3,
+            }));
+    }
+    spawn_text_fixture(&mut app, Color::srgba(0.9, 0.9, 0.2, 1.0));
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+    support::finish_and_run(&mut app, 1);
+    support::wait_for_text_ready(&mut app, 60);
+    let frame_before = support::readback_rgba(&mut app, target.clone());
+    let (entries_before, pages_before, keys_before) = {
+        let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+        let atlas = render_app.world().resource::<BuiyAtlas>();
+        (
+            atlas.live_entry_count(),
+            atlas.page_count(AtlasFormat::CoverageR8),
+            render_app
+                .world()
+                .resource::<ResidentTextKeys>()
+                .keys
+                .clone(),
+        )
+    };
+
+    // Trigger the swap through the production path: a completed scan task
+    // carrying a FRESH registered-baseline db (same bytes — pixels must
+    // not move; only the IDs do).
+    let task = bevy::tasks::AsyncComputeTaskPool::get()
+        .spawn(async move { buiy_core::text::registered_fonts_db() });
+    app.world_mut()
+        .insert_resource(buiy_core::text::PendingSystemFontScan(Some(task)));
+
+    // The storm frame(s): swap applies → generation+lineage bump → sweep
+    // reshape → producer rebuild, interner reseat, full re-rasterize.
+    app.update();
+    app.update();
+    {
+        let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+        let atlas = render_app.world().resource::<BuiyAtlas>();
+        let keys_after = &render_app.world().resource::<ResidentTextKeys>().keys;
+        assert!(!keys_after.is_empty());
+        assert!(
+            keys_after.iter().all(|k| !keys_before.contains(k)),
+            "every key re-seated (fresh lineage = fresh font u32s)"
+        );
+        assert!(
+            atlas.live_entry_count() > entries_before,
+            "old entries still grace-resident mid-storm (the double-resident window)"
+        );
+    }
+
+    // Settle past the grace window: baseline restored, pixels identical.
+    for _ in 0..8 {
+        app.update();
+    }
+    {
+        let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+        let atlas = render_app.world().resource::<BuiyAtlas>();
+        assert_eq!(
+            atlas.live_entry_count(),
+            entries_before,
+            "entry count returned to baseline"
+        );
+        assert_eq!(
+            atlas.page_count(AtlasFormat::CoverageR8),
+            pages_before,
+            "page count returned to baseline (the campaign's bound)"
+        );
+    }
+    let frame_after = support::readback_rgba(&mut app, target);
+    assert!(
+        perceptual_diff(&frame_before, &frame_after) < 1e-4,
+        "the storm is invisible: same bytes, same shaping, same pixels"
     );
 }

@@ -31,7 +31,8 @@ use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
 use super::components::{ComputedTextLayout, TextBuffer};
-use super::font_system::SharedFontSystem;
+use super::font_system::{FontDbLineage, FontsGeneration, SharedFontSystem};
+use super::registry::PendingFontBlock;
 use super::swash::BuiySwashCache;
 
 /// A rasterized glyph's bearing — `Placement{left, top}` (top points UP),
@@ -110,6 +111,10 @@ pub struct ResidentTextKeys {
     /// `None` until the first rebuild seeds it (the first frame rebuilds
     /// regardless via the Added/Changed fan).
     pub last_scale_factor: Option<f32>,
+    /// Last-seen `FontsGeneration` — the § 6.2 font-set probe (T5): the
+    /// same value-compare idiom (main-world change ticks are meaningless
+    /// across the extract boundary). `None` until the first rebuild.
+    pub last_generation: Option<u64>,
 }
 
 /// Producer-owned bearing cache (T4 decision 3): `Placement{left, top}` per
@@ -130,10 +135,14 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// the swap is mechanical when `TextEditState` exists). `layout_runs` is
 /// `&self`, so the main-world read stays read-only.
 ///
-/// § 6.2 ledger — union members that join later, in lockstep with their
-/// carriers: `Changed<CaretVisual>` / `Changed<SelectionVisual>` (T7);
-/// `ExtractedTextQuads` rebuilt alongside `ExtractedGlyphs` (T6, same
-/// producer, same probe, one damage decision).
+/// § 6.2 ledger — the `FontsGeneration`/`FontDbLineage` value-compare
+/// probes joined in T5 (a generation bump rebuilds; a lineage advance
+/// additionally reseats the interner), as did `Changed<PendingFontBlock>`
+/// with its removal stream (the font-display Block zero-alpha arm: onset,
+/// deadline rewrite, and the load/timeout lift). Union members that join
+/// later, in lockstep with their carriers: `Changed<CaretVisual>` /
+/// `Changed<SelectionVisual>` (T7); `ExtractedTextQuads` rebuilt alongside
+/// `ExtractedGlyphs` (T6, same producer, same probe, one damage decision).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_glyphs(
     mut atlas: ResMut<BuiyAtlas>,
@@ -156,6 +165,7 @@ pub fn extract_buiy_glyphs(
                 Option<&ClipRect>,
                 Option<&AncestorClip>,
                 Option<&Stacking>,
+                Option<&PendingFontBlock>,
             ),
             With<Node>,
         >,
@@ -178,21 +188,36 @@ pub fn extract_buiy_glyphs(
                     Changed<AncestorClip>,
                     Changed<ComputedPaintSkip>,
                     Changed<Stacking>,
+                    // T5 (font-assets § 7): Block onset / deadline rewrite.
+                    Changed<PendingFontBlock>,
                 )>,
             ),
         >,
     >,
-    // Despawn + hide→show: the two damage sources Changed cannot see.
-    mut removed: Extract<RemovedComponents<ResolvedLayout>>,
-    mut removed_skip: Extract<RemovedComponents<ComputedPaintSkip>>,
+    // Despawn + hide→show + Block lift: the damage sources Changed cannot
+    // see. Tupled into ONE system param (params nest): the producer hit
+    // Bevy's 16-param function-system cap when the Block stream joined.
+    mut removed: (
+        Extract<RemovedComponents<ResolvedLayout>>,
+        Extract<RemovedComponents<ComputedPaintSkip>>,
+        Extract<RemovedComponents<PendingFontBlock>>,
+    ),
     contexts: Extract<Query<(Entity, &StackingContext)>>,
     theme: Extract<Res<Theme>>,
+    // The main-world font-set counters (T5): VALUE-compared against the
+    // retained state below — the `theme` main-world-resource extraction
+    // precedent, the `last_scale_factor` compare idiom.
+    generation: Extract<Res<FontsGeneration>>,
+    lineage: Extract<Res<FontDbLineage>>,
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
 ) {
     // Drain the removal streams FIRST so the cursors advance on every frame,
     // including early returns (the extract.rs:409 discipline).
-    let despawned = removed.read().count() > 0;
-    let skip_lifted = removed_skip.read().count() > 0;
+    let despawned = removed.0.read().count() > 0;
+    let skip_lifted = removed.1.read().count() > 0;
+    // The § 7 swap-to-visible: a lifted Block (load or timeout) repaints at
+    // full alpha through a normal rebuild.
+    let block_lifted = removed.2.read().count() > 0;
 
     let Ok(window) = primary.single() else {
         // Vanished window: clear the carrier ONCE (an unconditional clear
@@ -206,9 +231,15 @@ pub fn extract_buiy_glyphs(
     };
     let scale_factor = window.resolution.scale_factor();
     let scale_changed = resident.last_scale_factor != Some(scale_factor);
+    let fonts_changed = resident.last_generation != Some(generation.0);
 
-    let dirty =
-        !changed.is_empty() || despawned || skip_lifted || theme.is_changed() || scale_changed;
+    let dirty = !changed.is_empty()
+        || despawned
+        || skip_lifted
+        || block_lifted
+        || theme.is_changed()
+        || scale_changed
+        || fonts_changed;
     if !dirty {
         // Steady state: return WITHOUT touching ExtractedGlyphs (so
         // `glyphs.is_changed()` stays false in prepare and the GPU glyph
@@ -222,6 +253,12 @@ pub fn extract_buiy_glyphs(
         return;
     }
     resident.last_scale_factor = Some(scale_factor);
+    resident.last_generation = Some(generation.0);
+    // § 3.2 (T5): a lineage advance means every fontdb ID was reissued —
+    // clear the interner's ID map BEFORE any interning so keys re-seat
+    // MONOTONICALLY (old entries grace-evict on their own; `GlyphMetaCache`
+    // prunes via the residency retain below). In-lineage rebuilds no-op.
+    interner.begin_lineage(lineage.0);
 
     // ---- Rebuild (wholesale, § 6.2 v1) -------------------------------
     let mut new_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
@@ -248,8 +285,17 @@ pub fn extract_buiy_glyphs(
 
     let default_color = TextColor::default();
     for entity in order {
-        let Ok((gt, buffer, computed, color, skip, clip_rect, ancestor_clip, stacking)) =
-            texts.get(entity)
+        let Ok((
+            gt,
+            buffer,
+            computed,
+            color,
+            skip,
+            clip_rect,
+            ancestor_clip,
+            stacking,
+            pending_block,
+        )) = texts.get(entity)
         else {
             continue; // not a text painter
         };
@@ -263,6 +309,7 @@ pub fn extract_buiy_glyphs(
         // STRAIGHT alpha (premultiplying would double-dim — primitive.rs).
         let entity_color = linear_color(resolve_token(&color.unwrap_or(&default_color).0, theme));
         let origin = gt.translation().truncate() + computed.content_offset;
+        let blocked = pending_block.is_some();
 
         let mut runs = 0usize;
         for run in buffer.buffer.layout_runs() {
@@ -289,8 +336,14 @@ pub fn extract_buiy_glyphs(
                     warn_once_page_overflow(); // § 11.1 v1 mitigation
                 }
                 // Per-span Attrs color override rides through (§ 7).
-                let color = glyph.color_opt.map(span_color).unwrap_or(entity_color);
-                if color[3] == 0.0 {
+                let mut color = glyph.color_opt.map(span_color).unwrap_or(entity_color);
+                if blocked {
+                    // font-assets § 7 Block: identical fallback LAYOUT,
+                    // zero-alpha PAINT — instances ARE emitted (the atlas
+                    // and the GPU buffer stay warm with the fallback's
+                    // glyphs), bypassing the transparent skip below.
+                    color[3] = 0.0;
+                } else if color[3] == 0.0 {
                     continue; // fully transparent: nothing to paint
                 }
                 new_glyphs.push(GlyphAlphaInstance {
