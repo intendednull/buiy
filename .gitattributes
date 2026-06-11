@@ -1,0 +1,8 @@
+# Committed byte-exact test fixtures: never eol-convert on checkout.
+# The shaping snapshots are compared content-exactly by
+# tests/text_shaping_snapshots.rs; a CRLF checkout on Windows would diverge
+# every snapshot (the PR #56 windows-latest CI failure).
+*.snap -text
+# Font binaries + their upstream license files ship byte-exact.
+*.ttf binary
+crates/buiy_core/assets/fonts/OFL-*.txt -text
