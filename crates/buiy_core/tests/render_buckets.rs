@@ -317,3 +317,69 @@ fn partition_two_adjacent_groups_get_distinct_contiguous_ranges() {
     assert_eq!(p.group_ranges, vec![0..2, 2..3]);
     assert!(p.flat_ranges.is_empty());
 }
+
+// --- partition_glyph_ranges (T8: the glyph buffer's group/flat partition) ----
+
+use buiy_core::render::buckets::partition_glyph_ranges;
+use std::ops::Range;
+
+// One producer entity-run: `(entity, instance range)` — the carrier-agnostic
+// shape of `ExtractedGlyphs::entity_runs`.
+fn run(entity: u32, range: Range<u32>) -> (Entity, Range<u32>) {
+    (Entity::from_raw_u32(entity).unwrap(), range)
+}
+
+/// No live group: ONE flat run covering everything — the flat glyph draw
+/// stays byte-for-byte the pre-T8 `0..glyph_count` (the quad precedent).
+#[test]
+fn glyph_partition_no_groups_is_single_full_flat_run() {
+    let (groups, flat) = partition_glyph_ranges([run(1, 0..3), run(2, 3..5)], 5, 0, |_| None);
+    assert!(groups.is_empty());
+    assert_eq!(flat, vec![0..5]);
+}
+
+/// A grouped middle entity: its range lands in group_ranges[g]; the flat
+/// complement is the two surrounding maximal runs.
+#[test]
+fn glyph_partition_grouped_middle_run() {
+    let g = |e: Entity| (e == Entity::from_raw_u32(2).unwrap()).then_some(0);
+    let (groups, flat) =
+        partition_glyph_ranges([run(1, 0..2), run(2, 2..6), run(3, 6..9)], 9, 1, g);
+    assert_eq!(groups, vec![2..6]);
+    assert_eq!(flat, vec![0..2, 6..9]);
+}
+
+/// A group with no glyph-emitting member keeps its empty `0..0` slot at
+/// its index (the group_ranges[g] == prepared group g alignment).
+#[test]
+fn glyph_partition_empty_group_slot() {
+    let (groups, flat) = partition_glyph_ranges([run(1, 0..4)], 4, 2, |_| Some(1));
+    assert_eq!(groups, vec![0..0, 0..4]);
+    assert!(flat.is_empty());
+}
+
+/// Adjacent same-group entities coalesce into one contiguous group range
+/// (two text entities inside one card).
+#[test]
+fn glyph_partition_coalesces_adjacent_same_group_runs() {
+    let (groups, flat) = partition_glyph_ranges([run(1, 0..2), run(2, 2..5)], 5, 1, |_| Some(0));
+    assert_eq!(groups, vec![0..5]);
+    assert!(flat.is_empty());
+}
+
+/// An out-of-bounds group index is filtered to flat — the
+/// `pack_view_partitioned` `g < group_count` filter, mirrored.
+#[test]
+fn glyph_partition_out_of_bounds_group_is_flat() {
+    let (groups, flat) = partition_glyph_ranges([run(1, 0..3)], 3, 1, |_| Some(7));
+    assert_eq!(groups, vec![0..0]);
+    assert_eq!(flat, vec![0..3]);
+}
+
+/// The producer contract is load-bearing: gapless runs from 0 covering
+/// `total`. A gap is a producer bug — caught loudly in debug builds.
+#[test]
+#[should_panic(expected = "entity runs must be contiguous")]
+fn glyph_partition_gap_trips_the_debug_assert() {
+    let _ = partition_glyph_ranges([run(1, 0..2), run(2, 3..4)], 4, 0, |_| None);
+}

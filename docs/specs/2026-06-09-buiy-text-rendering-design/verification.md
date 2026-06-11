@@ -86,8 +86,8 @@ real adapter ([CLAUDE.md § GPU lane](../../../CLAUDE.md)) — built on
 | Pixel correctness | Goldens (§ 4): hello-world text; one golden per decoration kind; the mixed-BiDi `::selection` golden; the caret-blink fixed-clock pair |
 | Warmup determinism | First painted frame matches its golden because warmup forced residency pre-paint (the existing warmup GPU test pattern, extended to text fixtures) |
 | Re-tint byte-identity | Already green for the pipeline (render GPU campaign Phase 4, [2026-06-07-render-gpu-verify-campaign.md](../../plans/2026-06-07-render-gpu-verify-campaign.md)); re-asserted with real text for theme swap + `::selection` re-tint |
-| Caret-blink damage | Blink frame re-uploads only the glyph buffer; quad buffer retained ([prepare.rs:157–216](../../../crates/buiy_core/src/render/prepare.rs)) |
-| Glyph-in-effect-group composite | Text inside `Opacity(0.5)` dims — gated on the glyph-partition follow-up ([decoration-and-paint.md § 4.5](decoration-and-paint.md#45-named-dependencies-not-owned-here)); not claimable before it lands |
+| Caret-blink damage | Landed (T8): a blink frame issues exactly one glyph `write_buffer` and zero quad uploads, observed through `BufferUploadStats` — `caret_blink_reuploads_the_glyph_buffer_only` (tests/text_selection_caret_gpu.rs) |
+| Glyph-in-effect-group composite | Landed (T8): text inside `Opacity(0.5)` dims exactly once — `tests/text_effect_group_gpu.rs` (the composite golden + the partition wiring assert) + the flipped `text_decoration_gpu.rs` asymmetry test ([decoration-and-paint.md § 4.5](decoration-and-paint.md#45-named-dependencies-not-owned-here)) |
 | Atlas churn (gate #15) | The typing-churn fixture: scripted edit loop, then idle; atlas entry count returns within ε of baseline |
 
 The boundary stays self-policing: a GPU-needing test without `#[ignore]`
@@ -230,10 +230,12 @@ The text campaign inherits the render campaign's gate discipline
   Text goldens inherit that gap: treat the local set as the **seed set**, with
   tolerance budgets owned by `buiy-verification-design`, and expect a one-time
   re-capture when the canonical runner exists.
-- **Effect-group ordering constraint.** No editable-text-in-effect-group
-  fixture is claimable until the glyph buffer is partitioned by group ranges
+- **Effect-group ordering constraint — lifted (T8).** The glyph buffer is
+  partitioned by group ranges since
+  [2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md](../../plans/2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md);
+  editable-text-in-effect-group fixtures are claimable
   ([decoration-and-paint.md § 4.5](decoration-and-paint.md#45-named-dependencies-not-owned-here),
-  [follow-ups.md "glyphs bypass effect-group compositing"](../../plans/follow-ups.md)).
+  [follow-ups.md "glyphs bypass effect-group compositing — LANDED"](../../plans/follow-ups.md)).
 
 The per-phase sequencing of these gates — which fixture lands with which
 phase — is the campaign plan's, not this file's.

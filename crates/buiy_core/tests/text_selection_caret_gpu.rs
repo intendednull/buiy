@@ -37,6 +37,7 @@ use buiy_core::layout::Style;
 use buiy_core::render::color::{ColorToken, SELECTION_BG_TOKEN, SELECTION_FG_TOKEN};
 use buiy_core::render::components::{CaretColor, TextColor};
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
+use buiy_core::render::prepare::BufferUploadStats;
 use buiy_core::text::{
     CaretVisual, ComputedTextLayout, FamilyEntry, FontFamily, FontSize, FontStack, SelectionVisual,
     Text,
@@ -219,25 +220,26 @@ fn mixed_bidi_selection_paints_disjoint_rects_and_retints() {
 const CARET_W: u32 = 128;
 const CARET_H: u32 = 64;
 
-#[test]
-#[ignore = "needs a wgpu adapter; T7 caret-blink fixed-clock pair (decoration-and-paint § 6.3; verification § 3.1)"]
-fn caret_blink_fixed_clock_pair() {
-    let _cfg = GoldenConfig::deterministic(); // fixed_clock, realized below
-    let mut app = support::gpu_render_app(CARET_W, CARET_H);
-    // GoldenConfig::fixed_clock, realized: PAUSE the virtual clock so the
-    // many real-time `app.update()`s the readback polls drive accrue ZERO
-    // virtual elapsed — captures land at exactly the chosen instants
-    // (t = 0 / 500 ms / 1000 ms) instead of drifting across a blink edge
-    // mid-capture. `advance_by` still moves a paused clock; the per-frame
-    // TimeSystem advance is what pausing zeroes.
+/// The shared blink fixture (the fixed-clock pair + the T8 damage assert
+/// pin the SAME scene — pixels there, uploads here — so it lives once).
+///
+/// GoldenConfig::fixed_clock, realized: PAUSE the virtual clock so the
+/// many real-time `app.update()`s the readback polls drive accrue ZERO
+/// virtual elapsed — captures land at exactly the chosen instants
+/// (t = 0 / 500 ms / 1000 ms) instead of drifting across a blink edge
+/// mid-capture. `advance_by` still moves a paused clock; the per-frame
+/// TimeSystem advance is what pausing zeroes.
+///
+/// The scene: the T6 no-descender fixture ("Hi" at 40 px, white) plus a
+/// 1×48 pure-red caret at x = 80 — a column safely right of the glyph
+/// ink — under a sized column root. Returns the text entity.
+fn spawn_blink_fixture(app: &mut App) -> Entity {
     app.world_mut().resource_mut::<Time<Virtual>>().pause();
     {
         let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
         theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
         theme.colors.insert(CARET_TOKEN.into(), sel_red());
     }
-    // The T6 no-descender fixture ("Hi" at 40 px) plus a 1×48 caret at
-    // x = 80 — a column safely right of the glyph ink.
     let text = app
         .world_mut()
         .spawn((
@@ -262,6 +264,15 @@ fn caret_blink_fixed_clock_pair() {
                 .height_px(CARET_H as f32),
         ))
         .add_child(text);
+    text
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; T7 caret-blink fixed-clock pair (decoration-and-paint § 6.3; verification § 3.1)"]
+fn caret_blink_fixed_clock_pair() {
+    let _cfg = GoldenConfig::deterministic(); // fixed_clock, realized in the fixture
+    let mut app = support::gpu_render_app(CARET_W, CARET_H);
+    let text = spawn_blink_fixture(&mut app);
 
     let target = support::render_to_image(&mut app, CARET_W, CARET_H);
     support::spawn_capture_camera(&mut app, target.clone());
@@ -360,4 +371,63 @@ fn caret_blink_fixed_clock_pair() {
         diff < 1e-4,
         "the visible phase re-renders identically a full period later: {diff}"
     );
+}
+
+// --- 3. the caret-blink GPU damage assert (T8; § 6.3; verification § 1.3) ---
+
+#[test]
+#[ignore = "needs a wgpu adapter; T8 caret-blink GPU damage assert (decoration-and-paint § 6.3 damage property; verification § 1.3 'Caret-blink damage' row)"]
+fn caret_blink_reuploads_the_glyph_buffer_only() {
+    // The blink-pair fixture + paused virtual clock, verbatim.
+    let _cfg = GoldenConfig::deterministic();
+    let mut app = support::gpu_render_app(CARET_W, CARET_H);
+    let _text = spawn_blink_fixture(&mut app);
+    let target = support::render_to_image(&mut app, CARET_W, CARET_H);
+    support::spawn_capture_camera(&mut app, target);
+    support::finish_and_run(&mut app, 1);
+    support::wait_for_text_ready(&mut app, 60);
+
+    let stats = |app: &App| {
+        *support::render_world_resource::<BufferUploadStats>(app).expect("BufferUploadStats")
+    };
+
+    // Drain to steady state: run frames until an update uploads nothing
+    // (pipeline warm-up + the readback poller can dirty early frames).
+    let mut base = stats(&app);
+    for _ in 0..10 {
+        app.update();
+        let now = stats(&app);
+        if now == base {
+            break;
+        }
+        base = now;
+    }
+    // Steady frame: O(0) — neither buffer re-uploads.
+    app.update();
+    assert_eq!(stats(&app), base, "a steady frame uploads NOTHING");
+
+    // The blink edge (paused clock, explicit advance — the pair test's
+    // idiom): the writer flips CaretVisual, the producer rebuilds, the
+    // value-compared publish leaves the quad carrier untouched…
+    app.world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_millis(500));
+    app.update();
+    let after_edge = stats(&app);
+    // …so prepare re-uploads the GLYPH buffer exactly once and RETAINS
+    // the quad buffer — the GPU half of § 6.3's damage property (T7
+    // landed the CPU half; this is the campaign's T8 assertion).
+    assert_eq!(
+        after_edge.glyph_uploads,
+        base.glyph_uploads + 1,
+        "the blink edge re-uploaded the glyph buffer exactly once"
+    );
+    assert_eq!(
+        after_edge.quad_uploads, base.quad_uploads,
+        "…and did NOT touch the quad buffer"
+    );
+
+    // The next frame is steady again (the edge writer is edge-only).
+    app.update();
+    assert_eq!(stats(&app), after_edge, "post-edge frame is steady");
 }

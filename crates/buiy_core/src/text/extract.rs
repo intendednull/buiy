@@ -31,7 +31,7 @@ use crate::render::components::{AncestorClip, CaretColor, ClipRect, ComputedPain
 use crate::render::extract::{
     ExtractedTextQuads, TextQuad, context_roots, context_tree_paint_order, effective_clip,
 };
-use crate::render::prepare::ExtractedGlyphs;
+use crate::render::prepare::{ExtractedGlyphs, GlyphEntityRun};
 use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
@@ -273,8 +273,12 @@ pub fn extract_buiy_glyphs(
     let Ok(window) = primary.single() else {
         // Vanished window: clear the carriers ONCE (an unconditional clear
         // would mark them changed and re-upload empty buffers every frame).
-        if !glyphs.glyphs.is_empty() || !text_quads.quads.is_empty() {
+        if !glyphs.glyphs.is_empty()
+            || !glyphs.entity_runs.is_empty()
+            || !text_quads.quads.is_empty()
+        {
             glyphs.glyphs.clear();
+            glyphs.entity_runs.clear();
             text_quads.quads.clear();
             resident.keys.clear();
         }
@@ -321,6 +325,10 @@ pub fn extract_buiy_glyphs(
     // below emits one entity at a time, and the pack debug_asserts the
     // grouping (§ 4.6).
     let mut new_quads: Vec<TextQuad> = Vec::new();
+    // Per-entity instance attribution (T8 D1): one contiguous run per
+    // emitting entity, in emission order — the prepare-time group
+    // partition's lookup key.
+    let mut new_runs: Vec<GlyphEntityRun> = Vec::new();
     let mut new_keys: Vec<AtlasKey> = Vec::new();
     // Lock site #3 (architecture § 1.2 — the LAST of the exhaustive three):
     // taken LAZILY, once per frame, only when at least one glyph misses the
@@ -371,6 +379,7 @@ pub fn extract_buiy_glyphs(
         if skip.is_some() {
             continue; // the single computed skip source (§ 5.3/§ 5.4)
         }
+        let entity_start = new_glyphs.len() as u32;
         // § 8: glyphs AND decorations are CONTENT — self-inclusive clip
         // (own ClipRect ∩ ancestors); top-layer members force the unclipped
         // sentinel.
@@ -659,6 +668,16 @@ pub fn extract_buiy_glyphs(
                 new_keys.push(solid_stamp_key());
             }
         }
+        // T8 D1: attribute this entity's contiguous instance slice. The
+        // prepare partition maps the entity to its ExtractedNode.group off
+        // the fresh node list — the producer learns nothing about groups.
+        let entity_end = new_glyphs.len() as u32;
+        if entity_end > entity_start {
+            new_runs.push(GlyphEntityRun {
+                entity,
+                instances: entity_start..entity_end,
+            });
+        }
     }
     drop(font_guard);
 
@@ -677,8 +696,15 @@ pub fn extract_buiy_glyphs(
     // O(instances) compare per DIRTY frame — steady frames return above.
     // Then the § 6.3 touch pass over the NEW visible set (covers this
     // frame's hits — `atlas.get` deliberately does not touch the LRU).
-    if glyphs.glyphs != new_glyphs {
+    // The glyph carrier compares (instances, entity_runs) TOGETHER under one
+    // tick (T8 D4): instance bytes can coincide across different entity sets
+    // (despawn + respawn of an identical fixture), and group membership keys
+    // on the ENTITY — runs inequality must republish even when instances
+    // compare equal, or prepare would never re-derive the group partition.
+    if glyphs.glyphs != new_glyphs || glyphs.entity_runs != new_runs {
+        let glyphs = &mut *glyphs;
         glyphs.glyphs = new_glyphs;
+        glyphs.entity_runs = new_runs;
     }
     if text_quads.quads != new_quads {
         text_quads.quads = new_quads;

@@ -2,9 +2,10 @@
 //! TextCommit → extract (quads + stamps) → the § 4.6 splice → pixels.
 //! decoration-and-paint §§ 3–4; one golden per kind (campaign T6 surface),
 //! the three quad-gate terms regression-pinned end-to-end, and the § 4.5
-//! group asymmetry pinned as EXPECTED (T8 flips a failing assertion here,
-//! not a silent behavior). All #[ignore]: need a wgpu adapter (CLAUDE.md
-//! GPU lane).
+//! group test — pinned by T6 as the EXPECTED asymmetry, FLIPPED by T8:
+//! everything inside the group (underline, line-through, ink) now dims
+//! exactly once through the glyph-buffer partition. All #[ignore]: need a
+//! wgpu adapter (CLAUDE.md GPU lane).
 //!
 //! Run: cargo test -p buiy_core --test text_decoration_gpu -- --ignored --test-threads=1
 //!
@@ -150,6 +151,14 @@ fn is_white(p: [u8; 4]) -> bool {
     p[0] >= 200 && p[1] >= 200 && p[2] >= 200
 }
 
+/// Dimmed glyph ink: the group's white text composited ONCE at 0.5 —
+/// full coverage reads ≈ sRGB 188/channel (linear 0.5); the old
+/// [`is_white`] ≥ 200 threshold (≈ 73 % coverage undimmed) maps to
+/// ≈ 162 dimmed, so ≥ 160 recovers the same row envelope.
+fn is_dim_white(p: [u8; 4]) -> bool {
+    (0..3).all(|ch| p[ch] >= 160)
+}
+
 /// Rows (top→bottom) where ANY pixel satisfies `pred`.
 fn rows_where(pixels: &[u8], pred: impl Fn([u8; 4]) -> bool) -> Vec<u32> {
     (0..H)
@@ -179,6 +188,15 @@ fn white_rows(pixels: &[u8]) -> Range<u32> {
     let rows = rows_where(pixels, is_white);
     let first = *rows.first().expect("the white glyph ink painted");
     let last = *rows.last().expect("the white glyph ink painted");
+    first..last + 1
+}
+
+/// The dimmed glyph-ink row envelope (the [`white_rows`] mirror for the
+/// Opacity(0.5)-group fixture, whose ink never reaches the ≥ 200 bar).
+fn dim_white_rows(pixels: &[u8]) -> Range<u32> {
+    let rows = rows_where(pixels, is_dim_white);
+    let first = *rows.first().expect("the dimmed glyph ink painted");
+    let last = *rows.last().expect("the dimmed glyph ink painted");
     first..last + 1
 }
 
@@ -422,13 +440,14 @@ fn sibling_background_change_resplices_retained_quads() {
 }
 
 #[test]
-#[ignore = "needs a wgpu adapter; T6 groups term + the § 4.5 asymmetry pin (T8 flips the line-through half)"]
-fn opacity_group_dims_the_underline_but_not_the_line_through() {
-    // The GROUPS term + the § 4.5 asymmetry, pinned as EXPECTED: the
-    // underline quad rides pack_view_partitioned and ADOPTS its entity's
-    // effect group (dimmed by the off-screen composite at 0.5); the
-    // line-through stamp rides the flat glyph draw and bypasses the group
-    // entirely (full intensity) until T8's glyph-buffer partition.
+#[ignore = "needs a wgpu adapter; T6 groups term + the § 4.5 asymmetry, FLIPPED by T8 — everything in the group dims exactly once"]
+fn opacity_group_dims_underline_line_through_and_ink() {
+    // The GROUPS term + the § 4.5 asymmetry, FLIPPED by T8: the underline
+    // quad rides pack_view_partitioned and ADOPTS its entity's effect group
+    // (dimmed by the off-screen composite at 0.5) — and the line-through
+    // stamp (a glyph-tier instance) now rides the group's GLYPH range
+    // through the same off-screen target, so the whole subtree dims
+    // exactly once.
     let _cfg = GoldenConfig::deterministic();
     let mut app = support::gpu_render_app(W, H);
     insert_theme_tokens(&mut app);
@@ -472,7 +491,10 @@ fn opacity_group_dims_the_underline_but_not_the_line_through() {
     support::finish_and_run(&mut app, 4);
     support::wait_for_text_ready(&mut app, 60);
     let frame = support::readback_rgba(&mut app, target);
-    let ink = white_rows(&frame);
+    // Post-T8 the ink itself dims (full coverage ≈ 188/channel), so the
+    // dimmed envelope locates it; zero rows survive at the undimmed
+    // `is_white` bar (asserted in half 2).
+    let ink = dim_white_rows(&frame);
 
     // Half 1 — the underline DIMMED (group adoption end-to-end): below the
     // ink there is a red band at composite-dimmed intensity (≈174: quad row
@@ -495,19 +517,26 @@ fn opacity_group_dims_the_underline_but_not_the_line_through() {
         "the dimmed underline IS present below the ink ({ink:?})"
     );
 
-    // Half 2 — the line-through at FULL intensity (the § 4.5 asymmetry:
-    // glyph draws bypass effect groups until T8's glyph-buffer partition).
-    // T8 flips THIS assertion — keep the two halves adjacent so it fails
-    // HERE, loudly, instead of silently changing pixels.
-    let full = bands(&rows_where(&frame, is_full_red));
-    assert_eq!(
-        full.len(),
-        1,
-        "the line-through band reads FULL red (undimmed): {full:?}"
-    );
+    // Half 2 — FLIPPED by T8: everything inside the group dims exactly
+    // once. (a) The ink itself: zero undimmed-white rows anywhere.
     assert!(
-        full[0].start < ink.end && full[0].end > ink.start,
-        "and it is the over-ink band ({:?} vs ink {ink:?})",
-        full[0]
+        rows_where(&frame, is_white).is_empty(),
+        "no undimmed glyph-ink row — the group's glyphs rode its target"
+    );
+    // (b) The line-through: zero FULL-strength stamp rows anywhere…
+    assert!(
+        rows_where(&frame, is_full_red).is_empty(),
+        "no full-strength line-through row — the stamp rode the group's glyph range"
+    );
+    // …and the DIMMED stamp band is present over the (dimmed) ink:
+    // red @ alpha 1 in the target → composite 0.5 over black ≈ sRGB 188
+    // red — passes is_present_red (≥140), fails is_strong_red (≥200).
+    let present_over_ink: Vec<u32> = rows_where(&frame, is_present_red)
+        .into_iter()
+        .filter(|&r| r >= ink.start && r < ink.end)
+        .collect();
+    assert!(
+        !present_over_ink.is_empty(),
+        "the dimmed line-through band sits over the ink ({ink:?})"
     );
 }

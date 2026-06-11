@@ -272,31 +272,68 @@ pub fn pack_view_partitioned(
 
 /// The run bookkeeping of [`pack_view_partitioned`], hoisted out of the node
 /// loop so a node's own instance and its spliced text quads share it: the
-/// instance blob, the per-group contiguous ranges (with the contiguity
-/// tripwire), and the complement flat runs.
+/// instance blob paired with the shared [`RangePartitioner`] that tracks the
+/// per-group contiguous ranges (with the contiguity tripwire) and the
+/// complement flat runs.
 struct Partitioner {
     instances: Vec<[f32; 13]>,
-    group_ranges: Vec<Range<u32>>,
-    flat_ranges: Vec<Range<u32>>,
-    /// Tracks the group of the previous instance to coalesce contiguous runs.
-    run_group: Option<Option<usize>>,
+    ranges: RangePartitioner,
 }
 
 impl Partitioner {
     fn new(capacity: usize, group_count: usize) -> Self {
         Self {
             instances: Vec::with_capacity(capacity),
-            group_ranges: vec![0..0; group_count],
-            flat_ranges: Vec::new(),
-            run_group: None,
+            ranges: RangePartitioner::new(group_count),
         }
     }
 
     /// Append one instance under group `g` (already bounds-filtered by the
     /// caller), extending or starting the group/flat run it belongs to.
     fn push(&mut self, instance: [f32; 13], g: Option<usize>) {
-        let idx = self.instances.len() as u32;
         self.instances.push(instance);
+        self.ranges.push(g);
+    }
+
+    fn finish(self) -> PackedPartition {
+        let (group_ranges, flat_ranges) = self.ranges.finish();
+        PackedPartition {
+            instances: self.instances,
+            group_ranges,
+            flat_ranges,
+        }
+    }
+}
+
+/// The instance-index run bookkeeping shared by the quad packer
+/// ([`Partitioner`]) and the glyph partition ([`partition_glyph_ranges`]):
+/// per-group contiguous ranges (with the contiguity tripwire) and the
+/// complement flat runs. Blob-free — it tracks indices only, so the glyph
+/// path (whose instances already live in `ExtractedGlyphs`) reuses the exact
+/// quad semantics without copying bytes.
+pub(crate) struct RangePartitioner {
+    next: u32,
+    group_ranges: Vec<Range<u32>>,
+    flat_ranges: Vec<Range<u32>>,
+    /// Tracks the group of the previous index to coalesce contiguous runs.
+    run_group: Option<Option<usize>>,
+}
+
+impl RangePartitioner {
+    pub(crate) fn new(group_count: usize) -> Self {
+        Self {
+            next: 0,
+            group_ranges: vec![0..0; group_count],
+            flat_ranges: Vec::new(),
+            run_group: None,
+        }
+    }
+
+    /// Claim the next instance index under group `g` (already bounds-filtered
+    /// by the caller), extending or starting the group/flat run it belongs to.
+    pub(crate) fn push(&mut self, g: Option<usize>) {
+        let idx = self.next;
+        self.next += 1;
         match g {
             Some(gi) => {
                 let r = &mut self.group_ranges[gi];
@@ -352,11 +389,53 @@ impl Partitioner {
         self.run_group = Some(g);
     }
 
-    fn finish(self) -> PackedPartition {
-        PackedPartition {
-            instances: self.instances,
-            group_ranges: self.group_ranges,
-            flat_ranges: self.flat_ranges,
+    pub(crate) fn finish(self) -> (Vec<Range<u32>>, Vec<Range<u32>>) {
+        (self.group_ranges, self.flat_ranges)
+    }
+}
+
+/// Partition the glyph instance buffer into per-effect-group contiguous
+/// ranges + the flat complement (T8 — the quad path's
+/// [`pack_view_partitioned`] partition applied to glyphs). `runs` is the
+/// producer's per-entity attribution (`ExtractedGlyphs::entity_runs` as
+/// `(entity, instance range)` pairs — carrier-agnostic so this module stays
+/// decoupled from the carrier type), `total` the instance count, and
+/// `group_of` resolves an entity to its `ExtractedNode.group` off the FRESH
+/// node list (decoration-and-paint § 4.6: membership derives from the node
+/// record at pack time, never from recorded indices — stale-proof by
+/// construction). Contiguity per group holds because the glyph producer walks
+/// the SAME `context_tree_paint_order` as the node extract (an SC-forming
+/// group's subtree is one atomic run in both); the `RangePartitioner`
+/// tripwire guards the residual drift cases exactly as it does for quads.
+///
+/// An entity `group_of` cannot resolve maps to FLAT — a transient
+/// impossibility (despawn/paint-skip fire BOTH probe unions, so the two
+/// carriers rebuild together; fact (a): every painted entity has a node
+/// record), kept as the conservative fallback rather than a drop because the
+/// instances are already in the buffer.
+pub fn partition_glyph_ranges(
+    runs: impl IntoIterator<Item = (Entity, Range<u32>)>,
+    total: u32,
+    group_count: usize,
+    group_of: impl Fn(Entity) -> Option<usize>,
+) -> (Vec<Range<u32>>, Vec<Range<u32>>) {
+    let mut p = RangePartitioner::new(group_count);
+    let mut covered = 0u32;
+    for (entity, range) in runs {
+        debug_assert_eq!(
+            range.start, covered,
+            "entity runs must be contiguous from 0 (the producer emits one \
+             run per entity, gapless, in emission order)"
+        );
+        covered = range.end;
+        let g = group_of(entity).filter(|&g| g < group_count);
+        for _ in range {
+            p.push(g);
         }
     }
+    debug_assert_eq!(
+        covered, total,
+        "entity runs must cover every glyph instance"
+    );
+    p.finish()
 }

@@ -419,6 +419,30 @@ consuming T7's painting primitives — not a T-phase here.
 - **Test surface:** GPU lane — text-in-effect-group composite golden (only
   claimable now); blink-damage assert; the latency fixture's budget wiring
   (numbers stay with `buiy-verification-design`).
+- **T8 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T8 plan's decisions D1, D7 and D9; superseding
+  context, not a silent contradiction):
+  1. *This charter's "partition `ExtractedGlyphs` by effect-group ranges"* —
+     as built, no group data is recorded INTO the carrier: it grows
+     per-entity instance attribution only (`entity_runs`), and the partition
+     is derived at prepare from the fresh node list (the
+     decoration-and-paint § 4.6 discipline — a recorded range/index would go
+     stale whenever the node walk rebuilds while glyphs are retained; the T8
+     plan D1's rejected runner-up B).
+  2. *This charter's "the latency fixture's budget wiring" under the GPU
+     lane* — seated HEADLESS on the adapterless extract harness (T8 plan
+     D7): the budget numbers are deferred to `buiy-verification-design` by
+     this charter itself, leaving a frame-count mechanism that needs no
+     adapter (`tests/text_typing_latency.rs`); T8's GPU damage surface is
+     the blink-reupload assert (`BufferUploadStats`).
+  3. *node.rs/compositor.rs "degraded groups draw flat instead"* — found
+     aspirational (a `plan_allocation == false` group's members paint
+     NOWHERE: no target, excluded from the flat ranges); filed as the
+     follow-ups.md "degraded effect groups vanish instead of drawing flat"
+     entry rather than fixed (quad-path scope).
+  4. *glyph-pipeline § 11.3's global "flat quad-then-glyph order"* — now
+     holds per region (within each group target and within the flat
+     complement); the cross-layer interleave note is otherwise unchanged.
 
 ### T9 — Verification closure + docs flip
 
@@ -446,7 +470,7 @@ consuming T7's painting primitives — not a T-phase here.
 | T5 | Fonts, fallback, and BiDi correctness | landed |
 | T6 | Decoration painting | landed |
 | T7 | Selection + caret + placeholder painting | landed |
-| T8 | Glyphs in effect groups + damage hardening | proposed |
+| T8 | Glyphs in effect groups + damage hardening | landed |
 | T9 | Verification closure + docs flip | proposed |
 
 Successor campaign (not phased here): **buiy-text-editing** — the

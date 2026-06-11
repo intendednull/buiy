@@ -32,7 +32,7 @@ pub const GLYPH_ALPHA_INSTANCE_STRIDE_BYTES: usize = 68;
 /// only. Plain `[f32; 4]`s + `u32` — derive bit-equality is exactly the
 /// "identical rebuilds produce bit-identical instances" compare.
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct GlyphAlphaInstance {
     /// Screen-space x, y, w, h (post-bridge `GlobalTransform`-resolved).
     pub rect: [f32; 4],
