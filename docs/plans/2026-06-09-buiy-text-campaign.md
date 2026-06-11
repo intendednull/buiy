@@ -315,6 +315,34 @@ consuming T7's painting primitives — not a T-phase here.
   fractional-scale floor, double-underline gap, color precedence — the
   upstream-drift guard). GPU lane — one golden per decoration kind (underline,
   double, overline, line-through).
+- **T6 errata for the spec edit pass** (mechanical inaccuracies found while
+  implementing — see the T6 plan's decisions 1–2 and 9; superseding context,
+  not a silent contradiction):
+  1. *decoration-and-paint § 3.2's "`DecorationSpan.color_opt` (the `-color`
+     property)"* misattributes the field: source-verified in 0.19.0, the
+     `-color` property is the per-kind
+     `TextDecoration.{underline,strikethrough,overline}_color_opt` inside
+     `span.data`, while `DecorationSpan.color_opt` is the span's TEXT color
+     ("Fallback color from the first glyph's `color_opt`", layout.rs:73) —
+     precedence tier 2, not tier 1. The precedence ORDER as specced is
+     correct; as built, tier 1 is Buiy's `TextDecorations.color` token
+     resolved at extract (the line bits ride `Attrs`, the color never does —
+     a theme swap re-emits, never reshapes).
+  2. *§ 2.2's two-field `TextDecorations { line, color }`* cannot author the
+     `Double` row whose paint math § 3.2 specifies and whose golden the
+     campaign mandates — as built the component carries
+     `style: DecorationLineStyle { Solid, Double, Dotted, Dashed, Wavy }`
+     (dotted/dashed/wavy degrade to solid warn-once): the § 9 reservation
+     realized as the enum + match arms, not a fourth component.
+  3. *§ 4.3's "bilinear filtering of a uniform texel is exact"* — the
+     as-built atlas sampler is the pinned **Nearest** (atlas/gpu.rs); as
+     built the stamp instance's `uv_rect` is the cell midpoint replicated,
+     which is exact under any filter and immune to edge-texel selection.
+  4. *decoration color tiers 1–2 are structurally dormant in v1* — Buiy
+     never sets `Attrs.*_color_opt` (erratum 1) nor `Attrs.color_opt`
+     (rich-text spans are C-tier), so upstream's first two tiers are always
+     `None` as-built; the pure mirror implements and unit-tests all three
+     anyway (it mirrors upstream — the drift guard's job).
 
 ### T7 — Selection + caret + placeholder painting
 
@@ -375,7 +403,7 @@ consuming T7's painting primitives — not a T-phase here.
 | T3 | Measure + wrap/align | landed |
 | T4 | First pixels | landed |
 | T5 | Fonts, fallback, and BiDi correctness | landed |
-| T6 | Decoration painting | proposed |
+| T6 | Decoration painting | landed |
 | T7 | Selection + caret + placeholder painting | proposed |
 | T8 | Glyphs in effect groups + damage hardening | proposed |
 | T9 | Verification closure + docs flip | proposed |

@@ -10,11 +10,12 @@
 //! into `StackingContext.painters_z` (§ 2.2); this phase threads it but
 //! defaults to 0 (real layers are the paint-order phase's job).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, hash_map::Entry};
+use std::ops::Range;
 
-use crate::render::extract::ExtractedNode;
-use crate::render::instance::{PackedInstance, pack_extracted};
-use bevy::prelude::Color;
+use crate::render::extract::{ExtractedNode, TextQuad};
+use crate::render::instance::{PackedInstance, pack_extracted, pack_text_quad};
+use bevy::prelude::{Color, Entity};
 use bytemuck::Pod;
 
 /// A typed render primitive — the shared primitive-kind enum (R6 owns it; R7
@@ -209,23 +210,96 @@ pub struct PackedPartition {
 /// effect-group list (so a group with zero opaque members still gets an empty
 /// range slot at its index). The flat draw uses `flat_ranges`; each group pass
 /// uses `group_ranges[g]`. See [`PackedPartition`] for the contiguity contract.
-pub fn pack_view_partitioned(nodes: &[ExtractedNode], group_count: usize) -> PackedPartition {
-    let mut instances: Vec<[f32; 13]> = Vec::with_capacity(nodes.len());
-    let mut group_ranges: Vec<std::ops::Range<u32>> = vec![0..0; group_count];
-    let mut flat_ranges: Vec<std::ops::Range<u32>> = Vec::new();
-    // Tracks the group of the previous instance to coalesce contiguous runs.
-    let mut run_group: Option<Option<usize>> = None;
-    for node in nodes {
-        if node.color == Color::NONE {
-            continue;
+///
+/// `text_quads` is text's quad-tier carrier (decoration-and-paint § 4.6 —
+/// underline/overline now, selection rects in T7): each entity's quads are
+/// spliced into the blob IMMEDIATELY after that entity's own node instance
+/// (or its `Color::NONE` skip), adopting the node's group, so within-entity
+/// § 4.4 order and the partition contiguity hold by construction. With an
+/// empty carrier the output is byte-identical to the pre-T6 pack.
+pub fn pack_view_partitioned(
+    nodes: &[ExtractedNode],
+    group_count: usize,
+    text_quads: &[TextQuad],
+) -> PackedPartition {
+    // Entity → contiguous carrier range (§ 4.6's "entity→quads lookup over
+    // the flat carrier"), rebuilt per pack — all ordering derives from the
+    // FRESH node walk below, so retained quads land correctly even on
+    // frames where the node list rebuilt for non-text reasons (fact (b);
+    // a recorded paint-order index would go stale — the rejected round-1
+    // merge key).
+    let mut quads_by_entity: HashMap<Entity, Range<usize>> = HashMap::new();
+    for (i, q) in text_quads.iter().enumerate() {
+        match quads_by_entity.entry(q.entity) {
+            Entry::Vacant(slot) => {
+                slot.insert(i..i + 1);
+            }
+            Entry::Occupied(mut range) => {
+                debug_assert_eq!(
+                    range.get().end,
+                    i,
+                    "ExtractedTextQuads must be entity-grouped (the producer \
+                     emits each entity's quads contiguously — § 4.6)"
+                );
+                range.get_mut().end = i + 1;
+            }
         }
-        let idx = instances.len() as u32;
-        instances.push(packed_to_raw(&pack_extracted(node)));
+    }
+
+    let mut p = Partitioner::new(nodes.len() + text_quads.len(), group_count);
+    for node in nodes {
         let g = node.group.filter(|&g| g < group_count);
-        // Extend or start the group/flat run this instance belongs to.
+        if node.color != Color::NONE {
+            p.push(packed_to_raw(&pack_extracted(node)), g);
+        }
+        // § 4.6: splice the entity's text quads IMMEDIATELY after its node
+        // record, adopting the node's group — partition placement can never
+        // disagree with the entity's, so contiguity holds by construction.
+        // A quad whose entity has no node record this pack is dropped
+        // silently (a transient impossibility — both trigger unions fire on
+        // every entity-set change; decision 7).
+        if let Some(range) = quads_by_entity.get(&node.entity) {
+            for quad in &text_quads[range.clone()] {
+                if quad.color == Color::NONE {
+                    continue;
+                }
+                p.push(packed_to_raw(&pack_text_quad(quad)), g);
+            }
+        }
+    }
+    p.finish()
+}
+
+/// The run bookkeeping of [`pack_view_partitioned`], hoisted out of the node
+/// loop so a node's own instance and its spliced text quads share it: the
+/// instance blob, the per-group contiguous ranges (with the contiguity
+/// tripwire), and the complement flat runs.
+struct Partitioner {
+    instances: Vec<[f32; 13]>,
+    group_ranges: Vec<Range<u32>>,
+    flat_ranges: Vec<Range<u32>>,
+    /// Tracks the group of the previous instance to coalesce contiguous runs.
+    run_group: Option<Option<usize>>,
+}
+
+impl Partitioner {
+    fn new(capacity: usize, group_count: usize) -> Self {
+        Self {
+            instances: Vec::with_capacity(capacity),
+            group_ranges: vec![0..0; group_count],
+            flat_ranges: Vec::new(),
+            run_group: None,
+        }
+    }
+
+    /// Append one instance under group `g` (already bounds-filtered by the
+    /// caller), extending or starting the group/flat run it belongs to.
+    fn push(&mut self, instance: [f32; 13], g: Option<usize>) {
+        let idx = self.instances.len() as u32;
+        self.instances.push(instance);
         match g {
             Some(gi) => {
-                let r = &mut group_ranges[gi];
+                let r = &mut self.group_ranges[gi];
                 if r.start == r.end {
                     *r = idx..idx + 1; // first member of this group
                 } else {
@@ -251,8 +325,9 @@ pub fn pack_view_partitioned(nodes: &[ExtractedNode], group_count: usize) -> Pac
                     // single-range partition cannot express interleaving
                     // (supporting it would bake in NON-atomic semantics, which is
                     // wrong) — catch it loudly rather than silently double-painting
-                    // the spanned non-member. GPU regression:
-                    // tests/render_group_contiguity_gpu.rs.
+                    // the spanned non-member. Text quads cannot trip it: they
+                    // adopt their anchoring node's group at the same position.
+                    // GPU regression: tests/render_group_contiguity_gpu.rs.
                     debug_assert_eq!(
                         r.end, idx,
                         "effect group {gi} is non-contiguous in paint order (gap \
@@ -267,18 +342,21 @@ pub fn pack_view_partitioned(nodes: &[ExtractedNode], group_count: usize) -> Pac
                 }
             }
             None => {
-                if run_group == Some(None) {
-                    flat_ranges.last_mut().expect("open flat run").end = idx + 1;
+                if self.run_group == Some(None) {
+                    self.flat_ranges.last_mut().expect("open flat run").end = idx + 1;
                 } else {
-                    flat_ranges.push(idx..idx + 1);
+                    self.flat_ranges.push(idx..idx + 1);
                 }
             }
         }
-        run_group = Some(g);
+        self.run_group = Some(g);
     }
-    PackedPartition {
-        instances,
-        group_ranges,
-        flat_ranges,
+
+    fn finish(self) -> PackedPartition {
+        PackedPartition {
+            instances: self.instances,
+            group_ranges: self.group_ranges,
+            flat_ranges: self.flat_ranges,
+        }
     }
 }

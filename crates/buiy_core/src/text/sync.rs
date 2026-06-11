@@ -17,8 +17,10 @@
 //! `FontWeight`, `WritingModeResolved`, `FontsGeneration`; joined in T3:
 //! `LineHeight` / `WhiteSpace` / `TextWrap` / `TextAlign` (measure
 //! §§ 5.1–5.3); joined in T5: `TextDirection` (with the § 5.4 strong-mark
-//! prepend). Carrier REMOVAL is not a member: like every other carrier
-//! (T2 erratum 1), a removed `TextDirection` resyncs on the next other
+//! prepend); joined in T6: `TextDecorations` — the line bits live in
+//! `Attrs`, `has_decoration` gates span creation. Carrier REMOVAL is not a
+//! member: like every other carrier (T2 erratum 1), a removed
+//! `TextDirection` (or `TextDecorations`) resyncs on the next other
 //! trigger — documented here, not special-cased. Members that join with
 //! their carriers later: the theme font-token swap
 //! (**buiy-theme-tokens-design**, font-assets § 9).
@@ -29,9 +31,9 @@ use cosmic_text::{Attrs, Family, Metrics, Weight};
 use crate::layout::{LayoutTree, WritingModeResolved};
 
 use super::components::{
-    ComputedTextLayout, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, LineHeight,
-    ResolvedBaseline, TEXT_SHAPING, Text, TextAlign, TextBuffer, TextDirection, TextStyleDefaults,
-    TextWrap, WhiteSpace, resolve_wrap,
+    ComputedTextLayout, DecorationLineStyle, DecorationLines, FamilyEntry, FontFamily, FontSize,
+    FontStack, FontWeight, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text, TextAlign, TextBuffer,
+    TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
 };
 use super::direction::prepend_strong_marks;
 use super::font_system::FontsGeneration;
@@ -78,6 +80,11 @@ type TextSyncTriggers = Or<(
     // T5 carrier (measure § 5.4): the strong-mark prepend changes buffer
     // content, so a direction flip must resync like a Text edit.
     Changed<TextDirection>,
+    // T6 carrier (decoration-and-paint § 2.2): the line bits ride
+    // Attrs.text_decoration and gate upstream span creation, so a
+    // decoration edit must reshape. (A color-only edit also lands here —
+    // component-granular; accepted, see the T6 plan's honesty pins.)
+    Changed<TextDecorations>,
     Added<TextBuffer>,
     Changed<WritingModeResolved>,
 )>;
@@ -93,6 +100,7 @@ type SyncedText = (
     Option<&'static WhiteSpace>,
     Option<&'static TextWrap>,
     Option<&'static TextDirection>,
+    Option<&'static TextDecorations>,
     // Read-only: the marker's CURRENT state, reconciled (insert/remove)
     // against this sync's resolution by `reconcile_font_block` (decision 9).
     Option<&'static PendingFontBlock>,
@@ -109,6 +117,7 @@ type SyncedTextItem<'w> = (
     Option<&'w WhiteSpace>,
     Option<&'w TextWrap>,
     Option<&'w TextDirection>,
+    Option<&'w TextDecorations>,
     Option<&'w PendingFontBlock>,
 );
 
@@ -141,6 +150,7 @@ pub fn text_sync_buffers(
             Option<&WhiteSpace>,
             Option<&TextWrap>,
             Option<&TextDirection>,
+            Option<&TextDecorations>,
             // A marker surviving a Text remove→re-add cycle reconciles
             // here like any other creation-time state.
             Option<&PendingFontBlock>,
@@ -175,6 +185,7 @@ pub fn text_sync_buffers(
         white_space,
         text_wrap,
         direction,
+        decorations,
         pending,
     ) in &unsynced
     {
@@ -187,6 +198,7 @@ pub fn text_sync_buffers(
             white_space,
             text_wrap,
             direction,
+            decorations,
         );
         let mut buffer = TextBuffer::new(style.metrics());
         let blocked = apply_authored(&mut buffer, text, &style, ctx.registry, ctx.index, ctx.now);
@@ -264,6 +276,7 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         white_space,
         text_wrap,
         direction,
+        decorations,
         pending,
     ) = item;
     // EVERY in-place TextBuffer write bypasses change detection
@@ -280,6 +293,7 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         white_space,
         text_wrap,
         direction,
+        decorations,
     );
     let blocked = apply_authored(buffer, text, &style, ctx.registry, ctx.index, ctx.now);
     reconcile_font_block(commands, entity, blocked, pending, &style, ctx);
@@ -333,6 +347,10 @@ struct AuthoredStyle<'a> {
     white_space: WhiteSpace,
     text_wrap: TextWrap,
     direction: TextDirection,
+    /// T6: the decoration LINE bits + style (decision 1: only these lower
+    /// into `Attrs`; the color token resolves at extract).
+    deco_lines: DecorationLines,
+    deco_style: DecorationLineStyle,
 }
 
 impl<'a> AuthoredStyle<'a> {
@@ -346,6 +364,7 @@ impl<'a> AuthoredStyle<'a> {
         white_space: Option<&WhiteSpace>,
         text_wrap: Option<&TextWrap>,
         direction: Option<&TextDirection>,
+        decorations: Option<&TextDecorations>,
     ) -> Self {
         Self {
             family: family.map_or(&defaults.family, |component| &component.0),
@@ -355,6 +374,8 @@ impl<'a> AuthoredStyle<'a> {
             white_space: white_space.copied().unwrap_or_default(),
             text_wrap: text_wrap.copied().unwrap_or_default(),
             direction: direction.copied().unwrap_or_default(),
+            deco_lines: decorations.map_or(DecorationLines::empty(), |d| d.line),
+            deco_style: decorations.map_or_else(Default::default, |d| d.style),
         }
     }
 
@@ -376,9 +397,30 @@ impl<'a> AuthoredStyle<'a> {
     /// `set_text` path — both deliberately the first-entry shape, matching
     /// the resolver's no-winner rule.
     fn attrs(&self) -> Attrs<'_> {
-        Attrs::new()
-            .family(self.first_family())
-            .weight(Weight(self.weight))
+        self.decorated(
+            Attrs::new()
+                .family(self.first_family())
+                .weight(Weight(self.weight)),
+        )
+    }
+
+    /// T6: apply the decoration line bits (decision 1 — bits only, never
+    /// the `*_color` builders; tokens resolve at extract). Shared by BOTH
+    /// attrs constructors ([`Self::attrs`] and [`span_attrs`]) so the two
+    /// can never diverge — every span of a decorated node carries the bits,
+    /// and upstream merges them back into whole-line spans.
+    fn decorated<'b>(&self, attrs: Attrs<'b>) -> Attrs<'b> {
+        let mut attrs = attrs;
+        if self.deco_lines.contains(DecorationLines::UNDERLINE) {
+            attrs = attrs.underline(self.deco_style.to_cosmic_underline());
+        }
+        if self.deco_lines.contains(DecorationLines::LINE_THROUGH) {
+            attrs = attrs.strikethrough();
+        }
+        if self.deco_lines.contains(DecorationLines::OVERLINE) {
+            attrs = attrs.overline();
+        }
+        attrs
     }
 
     fn first_family(&self) -> Family<'_> {
@@ -455,11 +497,13 @@ fn apply_authored(
 /// Base attrs + the span's resolved family. Weight rides the committed
 /// surface (`Attrs.weight` → `Query.weight` → `get_font(id, weight)` —
 /// variable weight works, font-assets § 6); style/stretch stay `Normal`
-/// (no carriers — C-tier).
+/// (no carriers — C-tier). T6: the decoration line bits ride every span
+/// (the shared [`AuthoredStyle::decorated`] lowering).
 fn span_attrs<'a>(style: &AuthoredStyle<'_>, family: &'a ResolvedFamily) -> Attrs<'a> {
     let base = Attrs::new().weight(Weight(style.weight));
-    match family {
+    let attrs = match family {
         ResolvedFamily::Named(name) => base.family(Family::Name(name)),
         ResolvedFamily::Generic(generic) => base.family(generic.to_cosmic()),
-    }
+    };
+    style.decorated(attrs)
 }

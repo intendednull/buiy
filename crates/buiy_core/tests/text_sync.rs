@@ -9,8 +9,9 @@ use buiy_core::layout::{
     BuiyLayoutStep, Direction, LayoutPlugin, LayoutTree, ScrollOffset, Style, WritingMode,
 };
 use buiy_core::text::{
-    BuiyTextPlugin, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, FontsGeneration,
-    LineHeight, Text, TextAlign, TextBuffer, TextSyncAppliedCount, TextWrap, WhiteSpace,
+    BuiyTextPlugin, DecorationLines, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
+    FontsGeneration, LineHeight, Text, TextAlign, TextBuffer, TextDecorations,
+    TextSyncAppliedCount, TextWrap, WhiteSpace,
 };
 use buiy_core::{BuiySet, CorePlugin, Node};
 use cosmic_text::{Metrics, Wrap};
@@ -230,6 +231,44 @@ fn t3_carrier_changes_fire_the_union() {
         "Changed<TextAlign> fires the union (§ 5.1 carrier pin) — \
          the VALUE is applied at TextCommit, not here"
     );
+}
+
+#[test]
+fn text_decorations_change_triggers_exactly_one_resync() {
+    // § 5.1 union growth (T6): the line bits live in Attrs and
+    // has_decoration() gates span creation upstream, so a TextDecorations
+    // edit must resync like any other text-style change.
+    let mut app = text_app();
+    let entity = spawn_text(&mut app, "decorate me");
+    settle(&mut app);
+    app.update();
+    assert_eq!(applied(&app), 0, "steady before the decoration edit");
+
+    app.world_mut().entity_mut(entity).insert(TextDecorations {
+        line: DecorationLines::UNDERLINE,
+        ..Default::default()
+    });
+    app.update();
+    assert_eq!(
+        applied(&app),
+        1,
+        "Changed<TextDecorations> (== Added) fires the union once"
+    );
+
+    // Mutating the existing component re-fires.
+    app.world_mut()
+        .get_mut::<TextDecorations>(entity)
+        .unwrap()
+        .line
+        .insert(DecorationLines::LINE_THROUGH);
+    app.update();
+    assert_eq!(
+        applied(&app),
+        1,
+        "in-place line-bit edit re-fires the union"
+    );
+    app.update();
+    assert_eq!(applied(&app), 0, "back to steady");
 }
 
 /// § 5.2 preserve rows: `pre` keeps runs of spaces + hard breaks and

@@ -3,15 +3,22 @@
 
 mod support;
 
+use bevy::asset::uuid_handle;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use buiy_core::Node;
 use buiy_core::layout::Style;
+use buiy_core::render::atlas::{AtlasConfig, GlyphAlphaInstance};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{ClipRect, CssVisibility, TextColor};
-use buiy_core::text::{FontDbLineage, FontSize, FontsGeneration, Text};
+use buiy_core::text::{
+    BuiyFont, DecorationLines, FamilyEntry, FontDbLineage, FontDisplay, FontFaceDescriptors,
+    FontFamily, FontRegistry, FontSize, FontStack, FontsGeneration, GenericFamily, Text,
+    TextDecorations, solid_stamp_key, stamp_uv,
+};
 use buiy_core::theme::Theme;
 use std::borrow::Cow;
+use std::time::Duration;
 use support::extract_harness::TextExtractHarness;
 
 /// "Hi!" under a sized column root: 3 non-whitespace glyphs.
@@ -306,6 +313,554 @@ fn clipped_text_packs_its_self_inclusive_clip() {
             "self-inclusive clip (§ 8) packed verbatim"
         );
     }
+}
+
+// --- T6: the decoration quad carrier (decoration-and-paint §§ 3–4, § 6.2) ---
+
+/// The spawn_text fixture plus a `TextDecorations` component.
+fn spawn_decorated(h: &mut TextExtractHarness, deco: TextDecorations) -> Entity {
+    let text = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Hi!")),
+            FontSize(16.0),
+            deco,
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(text);
+    text
+}
+
+#[test]
+fn decorated_text_emits_quads_alongside_glyphs() {
+    // One run walk emits both (§ 4.6): underline + overline = 2 quads,
+    // entity-keyed, world logical px, the entity's (here absent) clip.
+    let mut h = TextExtractHarness::new();
+    let text = spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::UNDERLINE | DecorationLines::OVERLINE,
+            ..Default::default()
+        },
+    );
+    h.settle();
+
+    assert_eq!(
+        h.glyph_count(),
+        3,
+        "glyph emission untouched by the quad walk"
+    );
+    let quads = &h.text_quads().quads;
+    assert_eq!(quads.len(), 2, "underline + overline = 2 quads");
+    assert!(quads.iter().all(|q| q.entity == text), "entity-keyed");
+    // Emission order mirrors span_decoration_rects (underline first); the
+    // underline sits BELOW the baseline, the overline at the line top.
+    assert!(
+        quads[0].position.y > quads[1].position.y,
+        "underline below overline"
+    );
+    // § 3.3 at scale 1.0: the embedded font's 0.05 em × 16 px = 0.8 logical
+    // raw → floored to one whole physical px = 1.0 logical (the drift-guard
+    // pin); the overline REUSES the underline thickness.
+    assert_eq!(quads[0].size.y, 1.0);
+    assert_eq!(quads[1].size.y, 1.0);
+    assert!(quads.iter().all(|q| q.size.x > 0.0), "span-extent width");
+    assert!(
+        quads.iter().all(|q| q.clip.is_none()),
+        "unclipped fixture: the full-view sentinel"
+    );
+}
+
+#[test]
+fn decoration_quads_carry_the_entitys_self_inclusive_clip() {
+    // § 8 applied to decorations: the quad rides the SAME self-inclusive
+    // clip resolution as the entity's glyphs.
+    use buiy_core::layout::OverflowMode;
+
+    let mut h = TextExtractHarness::new();
+    let text = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from(
+                "clipped text wraps and overflows its tiny box",
+            )),
+            TextDecorations {
+                line: DecorationLines::UNDERLINE,
+                ..Default::default()
+            },
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(60.0)
+                .height_px(24.0)
+                .overflow_x(OverflowMode::Hidden)
+                .overflow_y(OverflowMode::Hidden),
+        ))
+        .add_child(text);
+    h.settle();
+
+    let clip = *h
+        .app
+        .world()
+        .get::<ClipRect>(text)
+        .expect("write_clip_rects clipped the text leaf");
+    assert!(!h.text_quads().quads.is_empty());
+    for q in &h.text_quads().quads {
+        assert_eq!(q.clip, Some(clip), "self-inclusive clip, verbatim");
+    }
+}
+
+#[test]
+fn steady_state_retains_both_carriers_untouched() {
+    // After settle: N frames with no trigger → glyph AND quad changed
+    // counts both stay flat (the O(0) contract extends to the new carrier).
+    let mut h = TextExtractHarness::new();
+    spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::UNDERLINE,
+            ..Default::default()
+        },
+    );
+    h.settle();
+    let glyphs_settled = h.changed_frames();
+    let quads_settled = h.quad_changed_frames();
+    for _ in 0..5 {
+        h.frame();
+    }
+    assert_eq!(h.changed_frames(), glyphs_settled, "glyph carrier retained");
+    assert_eq!(
+        h.quad_changed_frames(),
+        quads_settled,
+        "quad carrier retained (the § 6.2 O(0) contract extends to it)"
+    );
+}
+
+#[test]
+fn text_decorations_change_rebuilds_both_carriers() {
+    // A color-only TextDecorations edit reaches extract via
+    // Changed<TextDecorations> even though ComputedTextLayout is idempotent
+    // (the line bits didn't move, so sync's lazy setters reshape nothing).
+    let mut h = TextExtractHarness::new();
+    h.app
+        .world_mut()
+        .resource_mut::<Theme>()
+        .colors
+        .insert("deco.test".into(), Color::srgb(1.0, 0.0, 0.0));
+    let text = spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::UNDERLINE,
+            ..Default::default()
+        },
+    );
+    h.settle();
+    let glyphs_settled = h.changed_frames();
+    let quads_settled = h.quad_changed_frames();
+
+    h.app
+        .world_mut()
+        .get_mut::<TextDecorations>(text)
+        .unwrap()
+        .color = Some(ColorToken::Token(Cow::Borrowed("deco.test")));
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        glyphs_settled + 1,
+        "one glyph-carrier rebuild (wholesale, decision 12)"
+    );
+    assert_eq!(
+        h.quad_changed_frames(),
+        quads_settled + 1,
+        "one quad-carrier rebuild"
+    );
+    assert_eq!(
+        h.text_quads().quads[0].color,
+        Color::srgb(1.0, 0.0, 0.0),
+        "the quad color re-resolved"
+    );
+    h.frame();
+    assert_eq!(h.changed_frames(), glyphs_settled + 1, "back to steady");
+    assert_eq!(h.quad_changed_frames(), quads_settled + 1);
+}
+
+#[test]
+fn decoration_color_precedence_at_the_producer() {
+    let mut h = TextExtractHarness::new();
+    {
+        let mut theme = h.app.world_mut().resource_mut::<Theme>();
+        theme
+            .colors
+            .insert("deco.line".into(), Color::srgb(1.0, 0.0, 0.0));
+        theme
+            .colors
+            .insert("text.fg".into(), Color::srgb(0.0, 1.0, 0.0));
+    }
+    let text = spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::UNDERLINE,
+            color: Some(ColorToken::Token(Cow::Borrowed("deco.line"))),
+            ..Default::default()
+        },
+    );
+    h.app
+        .world_mut()
+        .entity_mut(text)
+        .insert(TextColor(ColorToken::Token(Cow::Borrowed("text.fg"))));
+    h.settle();
+
+    // (a) Tier 1: the resolved -color token wins.
+    assert_eq!(h.text_quads().quads[0].color, Color::srgb(1.0, 0.0, 0.0));
+
+    // (c) Retheme = re-emit, never reshape (decision 1): swapping the
+    // token's value re-resolves on the theme.is_changed() rebuild.
+    h.app
+        .world_mut()
+        .resource_mut::<Theme>()
+        .colors
+        .insert("deco.line".into(), Color::srgb(0.0, 0.0, 1.0));
+    h.frame();
+    assert_eq!(h.text_quads().quads[0].color, Color::srgb(0.0, 0.0, 1.0));
+
+    // (b) color = None → the entity's resolved TextColor (tier 3,
+    // currentColor — tier 2 is structurally None in v1).
+    h.app
+        .world_mut()
+        .get_mut::<TextDecorations>(text)
+        .unwrap()
+        .color = None;
+    h.frame();
+    assert_eq!(h.text_quads().quads[0].color, Color::srgb(0.0, 1.0, 0.0));
+}
+
+#[test]
+fn scale_change_refloors_decoration_thickness() {
+    let mut h = TextExtractHarness::new();
+    spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::UNDERLINE,
+            ..Default::default()
+        },
+    );
+    h.settle();
+    // Scale 1.0: raw 0.05 em × 16 px = 0.8 logical → 1 whole physical px.
+    assert_eq!(h.text_quads().quads[0].size.y, 1.0);
+
+    set_scale(&mut h, 1.25);
+    h.frame();
+    // Scale 1.25: 0.8 × 1.25 = 1.0 physical — already whole, so the § 3.3
+    // floor keeps the exact 0.8 logical thickness (no logical-px floor).
+    assert_eq!(h.text_quads().quads[0].size.y, 0.8);
+}
+
+#[test]
+fn blocked_text_zero_alphas_decorations() {
+    // Decision 11: PendingFontBlock present → quads emit at alpha exactly
+    // 0.0 (layout-identical, paint-invisible, buffers warm); the timeout
+    // lift (the § 7 "then swap" arm) restores full alpha.
+    const NEVER_LOADS: Handle<BuiyFont> = uuid_handle!("7d3a5b2c-1e4f-4a6b-8c9d-0e1f2a3b4c5d");
+
+    let mut h = TextExtractHarness::new();
+    h.app
+        .world_mut()
+        .resource_mut::<FontRegistry>()
+        .register_asset(
+            "Pending Sans",
+            NEVER_LOADS.clone(),
+            FontFaceDescriptors {
+                font_display: FontDisplay::Block,
+                ..Default::default()
+            },
+        );
+    let text = spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::UNDERLINE,
+            ..Default::default()
+        },
+    );
+    h.app
+        .world_mut()
+        .entity_mut(text)
+        .insert(FontFamily(FontStack(vec![
+            FamilyEntry::Named(String::from("Pending Sans")),
+            FamilyEntry::Generic(GenericFamily::Serif),
+        ])));
+    h.settle();
+
+    assert!(
+        !h.text_quads().quads.is_empty(),
+        "quads ARE emitted while blocked (the zero-alpha skip is bypassed)"
+    );
+    assert!(
+        h.text_quads().quads.iter().all(|q| q.color.alpha() == 0.0),
+        "every blocked quad paints zero-alpha"
+    );
+
+    h.app
+        .world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_secs_f32(3.5));
+    h.frame();
+    assert!(
+        h.text_quads().quads.iter().all(|q| q.color.alpha() > 0.0),
+        "the lifted block repaints decorations at full alpha"
+    );
+}
+
+#[test]
+fn undecorated_text_emits_no_quads() {
+    let mut h = TextExtractHarness::new();
+    let text = spawn_text(&mut h);
+    h.settle();
+    assert!(h.text_quads().quads.is_empty());
+    // Wholesale publication (decision 12): the carrier is still PUBLISHED
+    // on every rebuild frame — its change log moves in lockstep with the
+    // glyph carrier's.
+    assert_eq!(h.quad_changed_frames(), h.changed_frames());
+    h.app.world_mut().get_mut::<Text>(text).unwrap().0 = String::from("Hey");
+    h.frame();
+    assert_eq!(
+        h.quad_changed_frames(),
+        h.changed_frames(),
+        "a glyph-only edit republished the (empty) quad carrier"
+    );
+    assert!(h.text_quads().quads.is_empty());
+}
+
+// --- T6 Task 4: the solid stamp + line-through over the text (§§ 4.3–4.4) ---
+
+/// The midpoint-uv signature (uv min == max, decision 9) picks stamp
+/// instances out of the glyph blob — a real glyph always samples a
+/// non-degenerate uv rect.
+fn stamp_instances(h: &TextExtractHarness) -> Vec<GlyphAlphaInstance> {
+    h.glyphs()
+        .glyphs
+        .iter()
+        .filter(|g| g.uv[0] == g.uv[2])
+        .copied()
+        .collect()
+}
+
+#[test]
+fn line_through_emits_a_stamp_instance_after_the_runs_glyphs() {
+    // The § 4.4 seat-5 order: the LAST instance of the entity's emission is
+    // the stamp — uv min == max (the midpoint signature), color = the § 3.2
+    // resolved decoration color (currentColor here), rect height = the
+    // § 3.3 floored strikeout thickness. resident_keys gains one
+    // solid_stamp_key() entry PER stamp instance (the one-key-per-instance
+    // invariant).
+    let mut h = TextExtractHarness::new();
+    spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::LINE_THROUGH,
+            ..Default::default()
+        },
+    );
+    h.settle();
+
+    let glyphs = &h.glyphs().glyphs;
+    assert_eq!(glyphs.len(), 4, "3 glyph instances + 1 solid stamp");
+    for g in &glyphs[..3] {
+        assert!(
+            g.uv[0] < g.uv[2] && g.uv[1] < g.uv[3],
+            "real glyphs sample a full uv rect"
+        );
+    }
+    let stamp = glyphs[3];
+    assert_eq!(stamp.uv[0], stamp.uv[2], "midpoint uv: constant x");
+    assert_eq!(stamp.uv[1], stamp.uv[3], "midpoint uv: constant y");
+    // § 3.3 at scale 1.0: the embedded font's strikeout thickness 0.05 em
+    // × 16 px = 0.8 logical raw → floored to one whole physical px.
+    assert_eq!(stamp.rect[3], 1.0);
+    // currentColor: the same resolved entity color the glyphs carry.
+    assert_eq!(stamp.color, glyphs[0].color);
+    // Line-through is glyph-tier (§ 4.2) — the quad carrier stays empty.
+    assert!(h.text_quads().quads.is_empty());
+
+    let keys = h.resident_keys();
+    assert_eq!(keys.len(), 4, "one key per instance, stamps included");
+    assert_eq!(keys[3], solid_stamp_key());
+    let entry = h
+        .atlas()
+        .get(&solid_stamp_key())
+        .expect("the stamp is resident");
+    assert_eq!(
+        stamp.uv,
+        stamp_uv(&entry),
+        "instance uv = the entry midpoint"
+    );
+    assert_eq!(stamp.page, entry.page as u32);
+}
+
+#[test]
+fn live_stamp_survives_eviction_grace_via_the_touch_pass() {
+    // glyph-pipeline § 6.3's join: a live stamp instance touches the key
+    // every frame (retained frames included), so it never grace-evicts
+    // while painted — the stale-uv cell-reuse hazard.
+    let mut h = TextExtractHarness::with_atlas_config(AtlasConfig {
+        eviction_grace: 5,
+        ..Default::default()
+    });
+    spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::LINE_THROUGH,
+            ..Default::default()
+        },
+    );
+    h.settle();
+    assert!(h.atlas().get(&solid_stamp_key()).is_some());
+    let settled = h.changed_frames();
+    for _ in 0..15 {
+        h.frame(); // 3× grace, all steady — the carriers are retained
+    }
+    assert_eq!(h.changed_frames(), settled, "steady frames: no rebuild");
+    assert!(
+        h.atlas().get(&solid_stamp_key()).is_some(),
+        "the un-gated touch pass kept the live stamp resident"
+    );
+}
+
+#[test]
+fn idle_stamp_evicts_and_reinserts_on_miss() {
+    // § 4.3 "re-inserted on miss": warmup-pinned is not pin-forever (gate
+    // #15) — with no live stamp instance the key ages out like any entry.
+    // The harness never runs warmup_atlas, so the re-add exercises the
+    // producer's get_or_insert-on-miss path end-to-end.
+    let mut h = TextExtractHarness::with_atlas_config(AtlasConfig {
+        eviction_grace: 5,
+        ..Default::default()
+    });
+    let text = spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::LINE_THROUGH,
+            ..Default::default()
+        },
+    );
+    h.settle();
+    assert!(h.atlas().get(&solid_stamp_key()).is_some());
+
+    // Drop the line: the rebuilt carriers emit no stamp instance, so the
+    // touch pass no longer covers the key.
+    h.app
+        .world_mut()
+        .get_mut::<TextDecorations>(text)
+        .unwrap()
+        .line = DecorationLines::empty();
+    h.frame();
+    assert!(
+        stamp_instances(&h).is_empty(),
+        "no stamp instances after the line drop"
+    );
+    for _ in 0..10 {
+        h.frame(); // idle past grace
+    }
+    assert!(
+        h.atlas().get(&solid_stamp_key()).is_none(),
+        "the idle stamp drained back out"
+    );
+
+    // Re-add → the rebuild's get_or_insert self-heals the miss; the new
+    // instance uv is valid for the NEW entry.
+    h.app
+        .world_mut()
+        .get_mut::<TextDecorations>(text)
+        .unwrap()
+        .line = DecorationLines::LINE_THROUGH;
+    h.frame();
+    let entry = h
+        .atlas()
+        .get(&solid_stamp_key())
+        .expect("re-inserted on miss");
+    let stamps = stamp_instances(&h);
+    assert_eq!(stamps.len(), 1, "the re-added line stamps again");
+    assert_eq!(stamps[0].uv, stamp_uv(&entry), "uv valid for the NEW entry");
+}
+
+#[test]
+fn blocked_text_zero_alphas_the_stamp_too() {
+    // Decision 11, stamp half: Block → stamp instances emit at alpha 0 (the
+    // stamp stays resident + touched); the timeout lift → full alpha.
+    const NEVER_LOADS: Handle<BuiyFont> = uuid_handle!("8e4b6c3d-2f5a-4b7c-9d0e-1f2a3b4c5d6e");
+
+    let mut h = TextExtractHarness::new();
+    h.app
+        .world_mut()
+        .resource_mut::<FontRegistry>()
+        .register_asset(
+            "Pending Sans",
+            NEVER_LOADS.clone(),
+            FontFaceDescriptors {
+                font_display: FontDisplay::Block,
+                ..Default::default()
+            },
+        );
+    let text = spawn_decorated(
+        &mut h,
+        TextDecorations {
+            line: DecorationLines::LINE_THROUGH,
+            ..Default::default()
+        },
+    );
+    h.app
+        .world_mut()
+        .entity_mut(text)
+        .insert(FontFamily(FontStack(vec![
+            FamilyEntry::Named(String::from("Pending Sans")),
+            FamilyEntry::Generic(GenericFamily::Serif),
+        ])));
+    h.settle();
+
+    let blocked = stamp_instances(&h);
+    assert!(
+        !blocked.is_empty(),
+        "stamps ARE emitted while blocked (buffers warm, paint invisible)"
+    );
+    assert!(
+        blocked.iter().all(|s| s.color[3] == 0.0),
+        "every blocked stamp paints zero-alpha"
+    );
+    assert!(
+        h.atlas().get(&solid_stamp_key()).is_some(),
+        "the stamp stays resident + touched while blocked"
+    );
+
+    h.app
+        .world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_secs_f32(3.5));
+    h.frame();
+    let lifted = stamp_instances(&h);
+    assert!(!lifted.is_empty());
+    assert!(
+        lifted.iter().all(|s| s.color[3] > 0.0),
+        "the lifted block repaints the stamp at full alpha"
+    );
 }
 
 #[test]

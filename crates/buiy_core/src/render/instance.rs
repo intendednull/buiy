@@ -13,7 +13,7 @@
 //! [`BuiyViewUniform`]: crate::render::view_uniform::BuiyViewUniform
 
 use crate::render::DrawData;
-use crate::render::extract::ExtractedNode;
+use crate::render::extract::{ExtractedNode, TextQuad};
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 
@@ -90,6 +90,25 @@ pub fn pack_extracted(node: &ExtractedNode) -> PackedInstance {
     PackedInstance {
         rect_pos: [node.position.x, node.position.y],
         rect_size: [node.size.x, node.size.y],
+        color: [lin.red, lin.green, lin.blue, lin.alpha],
+        radius: 0.0,
+        clip_min,
+        clip_max,
+    }
+}
+
+/// Pack one [`TextQuad`] (decoration-and-paint § 4.6) exactly like a node
+/// quad: CPU-linearized color, radius 0, clip sentinel. Same blob, same
+/// pipeline, no new GPU anything.
+pub fn pack_text_quad(quad: &TextQuad) -> PackedInstance {
+    let lin = LinearRgba::from(quad.color);
+    let (clip_min, clip_max) = match quad.clip {
+        Some(c) => ([c.min.x, c.min.y], [c.max.x, c.max.y]),
+        None => (CLIP_SENTINEL_MIN, CLIP_SENTINEL_MAX),
+    };
+    PackedInstance {
+        rect_pos: [quad.position.x, quad.position.y],
+        rect_size: [quad.size.x, quad.size.y],
         color: [lin.red, lin.green, lin.blue, lin.alpha],
         radius: 0.0,
         clip_min,
