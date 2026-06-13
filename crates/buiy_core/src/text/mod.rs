@@ -17,6 +17,11 @@ mod commit;
 mod components;
 mod decoration;
 mod direction;
+// pub: `text::edit` is the named editing facade — the boundary every other
+// module addresses by path (`crate::text::edit::ReadOnly`, the marker
+// registration below; `tests/text_facade_boundary.rs` is the tripwire). Its
+// internals (`state`, `access`) stay private behind the re-exports.
+pub mod edit;
 mod extract;
 mod font_asset;
 mod font_system;
@@ -45,6 +50,7 @@ pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
 };
 pub use direction::prepend_strong_marks;
+pub use edit::{Disabled, Placeholder, ReadOnly, SingleLine, TextBufferAccess, TextEditState};
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
     pack_clip, physical_offset,
@@ -125,6 +131,12 @@ impl Plugin for BuiyTextPlugin {
             .register_type::<TextAlign>()
             // T5: the § 5.4 direction carrier (absent = Auto).
             .register_type::<TextDirection>()
+            // E1: the four decomposed policy markers (editing-and-ime § 2.2)
+            // — authoring-surface components, reflect-registered like `Text`.
+            .register_type::<crate::text::edit::ReadOnly>()
+            .register_type::<crate::text::edit::Disabled>()
+            .register_type::<crate::text::edit::SingleLine>()
+            .register_type::<crate::text::edit::Placeholder>()
             // T6: the decoration carrier (decoration-and-paint § 2.2).
             // DecorationLines rides its impl_reflect_opaque! registration
             // (the ContainFlags precedent).

@@ -16,9 +16,8 @@ use std::sync::MutexGuard;
 
 use crate::layout::LayoutTree;
 
-use super::components::{
-    ComputedTextLayout, ComputedTextLine, ResolvedBaseline, TextAlign, TextBuffer,
-};
+use super::components::{ComputedTextLayout, ComputedTextLine, ResolvedBaseline, TextAlign};
+use super::edit::TextBufferAccess;
 use super::font_system::SharedFontSystem;
 
 /// Per-frame count of buffers `text_commit` actually reshaped (spec § 8
@@ -41,7 +40,12 @@ pub fn text_commit(
     mut reshaped: ResMut<TextCommitReshapeCount>,
     mut texts: Query<(
         Entity,
-        &mut TextBuffer,
+        // The editor-first accessor (E1): an editor entity reshapes its
+        // editor-owned buffer; a display entity reshapes `TextBuffer.buffer`.
+        // Both write the SAME `ComputedTextLayout`/`ResolvedBaseline` outputs
+        // — the glyph damage signal is identical, so extract needs no new
+        // trigger member.
+        TextBufferAccess,
         Option<&TextAlign>,
         Option<&ComputedTextLayout>,
         Option<&ResolvedBaseline>,
@@ -54,7 +58,7 @@ pub fn text_commit(
         return;
     };
     let mut font_system: Option<MutexGuard<'_, FontSystem>> = None;
-    for (entity, mut text, align, existing_layout, existing_baseline) in texts.iter_mut() {
+    for (entity, mut access, align, existing_layout, existing_baseline) in texts.iter_mut() {
         let Some(&node) = tree.by_entity.get(&entity) else {
             // Text on a non-Node entity (or GC'd this frame): no layout.
             continue;
@@ -74,24 +78,28 @@ pub fn text_commit(
             layout.border.left + layout.padding.left,
             layout.border.top + layout.padding.top,
         );
-        // measure § 7: commit writes are not damage on TextBuffer —
-        // damage keys on the OUTPUT components below.
-        let text = text.bypass_change_detection();
 
         // § 5.3 — text-align at commit, per line. set_align is internally
         // guarded (returns true only on change) and resets only that
         // line's layout; resolve_dirty's external-invalidation branch
-        // makes the shape pass below pick the reset up.
+        // makes the shape pass below pick the reset up. The accessor's
+        // `with_buffer_mut` bypasses change detection (measure § 7 — commit
+        // writes are not damage on the buffer; damage keys on the OUTPUT
+        // components below).
         let align = align.copied().unwrap_or_default().to_cosmic();
-        let mut align_changed = false;
-        for line in text.buffer.lines.iter_mut() {
-            align_changed |= line.set_align(align);
-        }
+        let align_changed = access.with_buffer_mut(|buffer| {
+            let mut changed = false;
+            for line in buffer.lines.iter_mut() {
+                changed |= line.set_align(align);
+            }
+            changed
+        });
 
         let offset_stale =
             existing_layout.is_none_or(|current| current.content_offset != content_offset);
         // § 4.2's steady-state short-circuit (+ the T4 offset term).
-        if !align_changed && !offset_stale && text.buffer.size() == target {
+        let size_stale = access.with_buffer(|buffer| buffer.size() != target);
+        if !align_changed && !offset_stale && !size_stale {
             continue;
         }
 
@@ -104,13 +112,15 @@ pub fn text_commit(
         // `height_opt`), so `overflow: visible` text taller than its box
         // is absent from `ComputedTextLayout` and from T4's emission
         // until the overflow seam is revisited with overflow painting.
-        text.buffer.set_size(target.0, target.1);
-        text.buffer.shape_until_scroll(font_system, false);
-        reshaped.0 += 1;
-
+        //
         // § 6 outputs — idempotent-insert (write_resolved_layout's
         // discipline): tick only when the value actually changed.
-        let (computed, baseline) = computed_outputs(&text.buffer, content_offset);
+        let (computed, baseline) = access.with_buffer_mut(|buffer| {
+            buffer.set_size(target.0, target.1);
+            buffer.shape_until_scroll(font_system, false);
+            computed_outputs(buffer, content_offset)
+        });
+        reshaped.0 += 1;
         if existing_layout.is_none_or(|current| *current != computed) {
             commands.entity(entity).insert(computed);
         }
