@@ -54,7 +54,8 @@ If the test step link-OOMs under full `mold` parallelism, add `-j 2` to the
 The headless gate above runs WITHOUT `--ignored`, so it never instantiates a wgpu
 adapter and never exercises the render GPU path. The render-pipeline GPU tests
 (pipeline creation, the extract→prepare→node draw spine, render-to-texture +
-pixel readback, atlas, compositor, the text glyph producer) are `#[ignore]` and
+pixel readback, atlas, compositor, the text pipeline (glyph producer,
+decorations, selection/caret, effect groups, golden suite)) are `#[ignore]` and
 run on a host with a real GPU (or `lavapipe`). Vulkan render-to-texture needs
 **no** X server, so this works headless on any machine with an adapter — it
 does **not** require a display:
@@ -80,6 +81,10 @@ Other useful one-offs:
 
 - `cargo test -p buiy_core` — fast loop on the core crate.
 - `cargo run --example hello_button` — visual smoke test of the Phase 0 widget.
+- `cargo run --example hello_text` — visual smoke test of the text stack.
+- `BUIY_ACCEPT_SHAPING=1 cargo test -p buiy_core --test text_shaping_snapshots`
+  — regenerate the `.snap` shaping snapshots (curated: review the diff before
+  committing).
 
 ## Code Conventions
 

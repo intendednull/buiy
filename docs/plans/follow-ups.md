@@ -751,3 +751,52 @@ approximation v1 rejected for targets) or document skip-as-degradation;
 decide with `buiy-verification-design`'s budget calibration.
 
 **Spec touchpoint:** `effect-compositor.md § 2.3`.
+
+## Text — production ASCII pre-warm (rejected as unmeasured)
+
+**Originated:** text campaign T9
+(`docs/plans/2026-06-11-buiy-text-t9-verification-closure.md` D1), deciding
+the architecture § 2.3 deferral carried since T4.
+
+**Status:** **rejected, not deferred** — no production pre-warm ships. The
+T4–T8 evidence: every golden passed with warmup satisfied structurally; the
+T8 gate-#14 fixture proved one frame from edit to publish including
+rasterize-on-miss, so the win is sub-frame CPU at most; grace eviction is
+unconditional, so pre-warmed keys no visible text uses drain `eviction_grace`
+(~1 s) after startup; and no theme-font/size enumeration exists to warm from.
+The seam stays named (`AtlasWarmupQueue`, T6's solid-stamp push as the worked
+example).
+
+**Re-open trigger:** a *measured* first-keystroke-latency miss against a
+`buiy-verification-design` latency budget — measurement, not speculation (the
+`shape-run-cache` precedent). Any revival must explicitly solve the
+grace-drain constraint: unused warm keys get no `ResidentTextKeys` touch and
+evict within `eviction_grace`, and the pin/refcount mechanism that would keep
+them resident was already rejected (glyph-pipeline § 6.3 runner-ups).
+
+**Spec touchpoint:** text `architecture.md § 2.3` (as-landed note).
+
+## Render / verification — stored-PNG golden machinery (`--accept`)
+
+**Originated:** render GPU campaign Phase 3 deferral
+([2026-06-07-render-gpu-verify-campaign.md](2026-06-07-render-gpu-verify-campaign.md)),
+carried unchanged through the text campaign's golden suite — every pixel
+golden T4–T9 uses the inline + double-capture discipline (capture in a fresh
+app, assert inline expected pixels, re-capture in a second fresh app,
+`perceptual_diff < 1e-4`; "the re-capture IS the golden").
+
+**What exists:** the declared `GoldenConfig.accept` flag
+(`crates/buiy_core/src/render/golden.rs` — no machinery behind it;
+`GoldenConfig::deterministic()` pins `accept: false`), `perceptual_diff`, and
+the `BUIY_ACCEPT_SHAPING` `.snap` regeneration flow
+(`tests/text_shaping_snapshots.rs`) as the curated-update precedent.
+
+**What's missing:** an image dependency, a stored-PNG corpus under
+`tests/goldens/`, and per-fixture tolerance budgets.
+
+**Owner:** `buiy-verification-design` — worth building once the canonical CI
+GPU class exists (render `verification.md § 4.1`); tolerance budgets are that
+design's numbers, never this backlog's.
+
+**Spec touchpoint:** render `verification.md § 4.1`; text `verification.md
+§ 4` (as-landed note).

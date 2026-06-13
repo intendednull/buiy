@@ -70,6 +70,18 @@ order discipline as `extract_buiy_nodes`):
 Whitespace and other zero-coverage glyphs (rasterizer returns `None` or a
 zero-area `Placement`) emit no instance and insert nothing.
 
+**As landed (T4, 2026-06-11):** step 0's read-only `TextBufferAccess` form
+is superseded by the T3 deferral
+([measure-and-layout.md § 2.3](measure-and-layout.md)'s as-landed note —
+`TextEditState` belongs to the `buiy-text-editing` campaign): the producer
+binds `&TextBuffer` directly until the editor lands; the swap is mechanical.
+
+**As landed (T4, 2026-06-11):** step 4's literal one-closure shape cannot
+encode the zero-coverage / `SwashContent::Color` skips (the closure must
+return a bitmap). As built: a residency probe + a prebuilt-bitmap closure —
+raster work and the lock still happen only on a miss, with the lock taken
+lazily once per frame (the `text_commit` guard pattern).
+
 Everything downstream is the frozen consumer: `prepare_buiy_instances` packs
 `ExtractedGlyphs` into the persistent glyph buffer when `glyphs.is_changed()`
 (`prepare.rs:207-216`), `prepare_atlas_textures` uploads dirty pages
@@ -83,7 +95,8 @@ Everything downstream is the frozen consumer: `prepare_buiy_instances` packs
 `SharedFontSystem(Arc<Mutex<FontSystem>>)` resource cloned into both worlds
 (legal — `FontSystem` is verified `Send + Sync` in 0.19; the prior-art folder's
 "non-Sync" note and its swash 0.2.6 figure are version drift from older releases
-and are superseded — 0.19.0 resolves swash 0.2.7). The pinned invariant this
+and are superseded — 0.19.0's lock resolves swash 0.2.8 (corrected from
+0.2.7 at T9; T4 erratum, edited in place)). The pinned invariant this
 file *consumes*: the main world locks around measure/shape; **render-world code
 locks only inside atlas miss closures** (§ 2 step 4). Those closures run in
 `ExtractSchedule` — pipelined rendering's sync window, where the main world is
@@ -173,6 +186,11 @@ per-instance, never a key input, so two themes hit byte-identical pages.
 live in an R8 page and breaks alpha-as-color structurally. The producer never
 requests it and `debug_assert!(image.content != SwashContent::SubpixelMask)`.
 
+**As landed (T4, 2026-06-11):** the "content origin" had no pinned source as
+specced. As built it is `ComputedTextLayout.content_offset` (border +
+padding), written idempotently by `TextCommit` — damage rides the existing
+`Changed<ComputedTextLayout>` probe.
+
 ### § 5.2 The rect formula — rasterize physical, position logical
 
 **Decision.** Rasterize at `font_size × scale_factor` (the `physical()` call
@@ -199,6 +217,14 @@ under the pinned Nearest/ClampToEdge sampler (`render/atlas/gpu.rs:62-73`).
 quad — bilinear-stretched coverage is visibly blurry on hiDPI, and the nearest
 sampler would render it blocky instead.
 
+**As landed (T4, 2026-06-11):** "`AtlasEntry.px` exists precisely for this
+snap math" is superseded — `px` carries the cell SIZE only; the bearings
+(`Placement.left`/`top`) are not recoverable from the seam on a cache hit.
+As built, a producer-owned `GlyphMetaCache(HashMap<AtlasKey, GlyphBearing>)`
+is written on rasterize and pruned to atlas residency (bearings are a pure
+function of the `CacheKey`, so entries can never go stale). Runner-ups
+(widen `AtlasEntry`; re-rasterize per rebuild) were rejected in the T4 plan.
+
 ## § 6 `extract_buiy_glyphs` — placement, damage gate, retention
 
 ### § 6.1 Where it runs
@@ -217,6 +243,11 @@ of § 3.
 Ordering after `maintain_atlas` means inserts and touches use the
 just-advanced frame clock — the same reasoning that ordered the existing chain
 (`atlas/mod.rs:99-103`).
+
+**As landed (T4, 2026-06-11):** the signature binds `&TextBuffer` directly —
+`TextBufferAccess` is deferred with `TextEditState` to the editing campaign
+(the § 2 step-0 as-landed note;
+[measure-and-layout.md § 2.3](measure-and-layout.md)).
 
 **Rationale.** Only extract gives all three at once: a **mutable atlas** (the
 residency decision stays atlas-side, the lazy-closure contract works as
@@ -293,6 +324,19 @@ self-contained per frame and mirrors the explicit-signal style the union
 already uses (`theme.is_changed()`). Either form is correct; the compare is
 the normative one.
 
+**As landed (T4/T7, 2026-06-11):** the `Changed<CaretVisual>` /
+`Changed<SelectionVisual>` union members and the "rebuild
+`ExtractedTextQuads` alongside" join were forward references at T4 (ledger
+comments in `extract_buiy_glyphs` marked both seats); the carriers landed at
+T6/T7. The wholesale rebuild is reconciled with the blink-damage property
+("a blink frame changes only `ExtractedGlyphs`",
+[decoration-and-paint.md § 6.3](decoration-and-paint.md)) and
+verification § 1.2's damage row by **value-compared per-carrier
+publication**: the rebuild stays wholesale under the one damage decision,
+but a content-identical rebuild keeps the carrier's tick, so a blink edge
+re-uploads the glyph buffer only (T7 plan decision 4; `GlyphAlphaInstance`
+gained `PartialEq` for it).
+
 ### § 6.3 The un-gated touch pass — the eviction-under-retention hazard
 
 **Hazard (real and silent).** Retained glyph buffers reference atlas UVs, but a
@@ -343,6 +387,10 @@ flags `FontSystem::new` slowness, cosmic-text issue #505).
 glyphs × sizes × fonts speculatively, couples the producer to theme font/size
 enumeration that belongs to [font-assets.md](font-assets.md),
 and buys nothing for goldens (determinism already holds).
+
+**As landed (T9, 2026-06-11):** the optional pre-warm was adjudicated at T9:
+**rejected** — see [architecture.md](architecture.md) § 2.3's as-landed note
+for the evidence and the re-open trigger.
 
 ## § 7 Text color — `TextColor` token, resolved at extract, straight alpha
 
@@ -529,4 +577,4 @@ Per the project's two-lane test discipline (CLAUDE.md "GPU lane"):
 - <https://docs.rs/cosmic-text/0.19.0/src/cosmic_text/layout.rs.html> — `physical()` body: offset applied post-scale; `truncf` on y pre-bin
 - <https://docs.rs/cosmic-text/0.19.0/cosmic_text/struct.CacheKey.html>, `struct.PhysicalGlyph.html`, `enum.SubpixelBin.html` — key fields + 4-bin quantization
 - <https://docs.rs/cosmic-text/0.19.0/cosmic_text/struct.SwashCache.html> — `get_image` / `get_image_uncached` signatures; `Send + Sync`
-- <https://docs.rs/cosmic-text/0.19.0/cosmic_text/struct.SwashImage.html>, `enum.SwashContent.html`, `struct.Placement.html` — swash 0.2.7 raster output types
+- <https://docs.rs/cosmic-text/0.19.0/cosmic_text/struct.SwashImage.html>, `enum.SwashContent.html`, `struct.Placement.html` — swash 0.2.8 raster output types (corrected from 0.2.7 at T9 — the 0.19.0 lock resolves 0.2.8; `Placement`/`SwashContent`/`SwashImage` shapes verified identical)

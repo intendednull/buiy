@@ -38,6 +38,14 @@ no second `FontSystem`, and no Bevy `default_font` in the binary). `bevy_asset`
 **is** enabled, which is what § 2's loader builds on. `cargo deny check`
 precedes the dependency bump (CLAUDE.md supply-chain gate).
 
+**As landed (T1, 2026-06-11):** "one direct dependency" cannot hold literally
+— implementing `Fallback::script_fallback` requires naming
+`unicode_script::Script` (not re-exported by cosmic-text), and the
+registered-only constructors take an explicit locale `String` while
+cosmic-text's own `get_locale()` is private, so Buiy needs `sys-locale` too.
+Both are version-synced to cosmic-text 0.19's own pins, so cargo unifies to
+one copy of each.
+
 The pin must be **Buiy's own, never transitive**: bevy_cosmic_edit's archive
 post-mortem names riding bevy_text's transitive cosmic-text pin as a cause of
 death ([prior-art/bevy-cosmic-edit/lessons.md](../../prior-art/bevy-cosmic-edit/lessons.md)).
@@ -87,6 +95,15 @@ pub struct BuiyFontLoader;
 pub fn register_font_bytes(registry: &mut FontRegistry, family_hint: Option<&str>,
                            bytes: Arc<Vec<u8>>, descriptors: FontFaceDescriptors) -> FontKey;
 ```
+
+**As landed (T5, 2026-06-11):** `FontKey` (the `register_font_bytes` return
+above — defined nowhere else in this spec) is dropped as-built: the
+registry's public identity is the **declared family name** (the
+`FontFaceSet` model, § 3). Corollary: registration REQUIRES the declared
+family name — the `Loading` state exists before the file's internal names
+are knowable, so `font-display: Block` is unimplementable without it; a
+declared/internal mismatch warns loudly and cannot match until the § 9
+family-alias seam lands.
 
 **v1 formats: ttf/otf/ttc/otc — exactly fontdb's native set** (verified:
 fontdb 0.23 "Will load ttf, otf, ttc and otc fonts"; no WOFF/WOFF2). The
@@ -208,6 +225,19 @@ producer rebuilds keys from live IDs every emission —
 [glyph-pipeline.md](glyph-pipeline.md)), and the rebuild storm is a load-test
 target ([verification.md](verification.md)).
 
+**As landed (T5, 2026-06-11):** "every rebuild issues fresh IDs for every
+face" is wrong for the § 3.1 path: `into_locale_and_db` returns the SAME
+`Database` by value (system.rs:297–299), and fontdb IDs are slotmap keys —
+surviving faces KEEP their IDs across `remove_face`, and dead IDs never
+alias in-lineage (version bump on slot reuse). The claim holds only for
+FRESH-database rebuilds (the § 5 scan swap) — where the real hazard is the
+opposite one: fresh databases REISSUE equal ID values for different faces,
+so the render-side `FontKeyInterner` must clear per database lineage with a
+monotonic seat counter (`FontDbLineage`, bumped only by fresh-db swaps,
+always alongside `FontsGeneration`). The AtlasKey-never-persisted rule alone
+does not close it — a key rebuilt from a live ID can alias a grace-resident
+old entry.
+
 ## 4. The embedded deterministic default font
 
 **Decision: embed one OFL-licensed sans subset — Fira Sans regular, latin
@@ -217,6 +247,12 @@ families at construction.** `include_bytes!` → `Source::Binary` in
 `db.set_sans_serif_family("Fira Sans")` (+ serif/monospace pins to the same
 embedded face until dedicated defaults justify their bytes), so
 `Family::SansSerif` resolves **identically on every host**.
+
+**As landed (T1, 2026-06-11):** the `new_with_fonts(..)` mention above is
+superseded — that constructor **scans system fonts** (source-verified: it
+calls `db.load_system_fonts()`, same as `FontSystem::new()`). Registered-only
+construction uses `new_with_locale_and_db_and_fallback`;
+[architecture.md § 2.1](architecture.md)'s registered-only pin governs.
 
 This deliberately overrides cosmic-text's verified built-in defaults — `new()`
 sets "Open Sans" / "DejaVu Serif" / "Noto Sans Mono" — which *dangle* when
@@ -334,6 +370,22 @@ deterministic five (`serif`/`sans-serif`/`monospace`/`cursive`/`fantasy`) map
 directly; the extended set (text.md:11, **C**) and token-driven rebinding are
 the theme seam (§ 9).
 
+**As landed (T5, 2026-06-11):** `FontFallbackIter` is verified
+public-but-internal in 0.19 — reachable at
+`cosmic_text::fallback::FontFallbackIter` (`pub mod fallback`, glob
+re-exported) — but Buiy never constructs one: it is the engine-internal
+per-glyph last resort inside shaping (shape.rs:307/489/985). This section's
+framing is accurate; the as-built resolver leans on it implicitly by
+emitting concrete families only.
+
+**As landed (T5, 2026-06-11):** coverage extraction —
+`cosmic_text::Font::unicode_codepoints()` is feature-gated behind the
+non-default `monospace_fallback` (it returns `&[]` under the
+default-features pin), and `Font::new` rejects `Source::File` faces. As
+built, coverage is extracted Buiy-side via
+`fontdb::Database::with_face_data` + the crate-root-re-exported `skrifa`
+charmap — no new dependency, no feature flip.
+
 ### 6.1 `unicode-range` — honored in the resolver
 
 **Decision: `unicode-range` is enforced by the Buiy resolver as a
@@ -380,6 +432,13 @@ already has:
 > from one taken after). Swap-by-default is also the prior-art-named pattern.
 >
 > **Runner-up rejected: deferring the whole field.** It is F-tier (text.md:28).
+
+**As landed (T7, 2026-06-11):** `Block`'s zero-alpha applies to text *ink*
+(and, since T6, decorations), but the caret and the selection **background**
+paint normally under `font-display: Block` — editor chrome, not ink (a
+focused loading input keeps its caret, web parity) — while the
+selected-glyph re-tint inherits the glyph zero-alpha
+([decoration-and-paint.md § 5.2](decoration-and-paint.md)).
 
 ## 8. Authoring surface — the phase-1 component slice
 

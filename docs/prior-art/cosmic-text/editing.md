@@ -24,6 +24,9 @@ The core editing types live in `src/edit/`:
 Verbatim variants (verified against `src/edit/editor.rs` in 0.19.0):
 
 - `Motion(Motion)` — caret movement. `Motion` covers `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `LeftWord`, `RightWord`, `ParagraphStart`, `ParagraphEnd`, `PageUp`, `PageDown`, `Vertical(i32)`, plus a `GotoLine(usize)` and `Soft{Home,End}`.
+
+  > **Correction (text campaign T9, 2026-06-11):** re-verified against 0.19.0 `src/cursor.rs:87` — `Motion` has **22 variants**: `LayoutCursor(LayoutCursor)`, `Previous`, `Next`, `Left`, `Right`, `Up`, `Down`, `Home`, `SoftHome`, `End`, `ParagraphStart`, `ParagraphEnd`, `PageUp`, `PageDown`, `Vertical(i32)`, `PreviousWord`, `NextWord`, `LeftWord`, `RightWord`, `BufferStart`, `BufferEnd`, `GotoLine(usize)`. Delta from the list above: there is **no `SoftEnd`** (only `SoftHome`); the list omits `LayoutCursor` (apply a specific layout cursor), `Previous`/`Next` (direction-aware character motion), `PreviousWord`/`NextWord` (direction-aware word motion), and `BufferStart`/`BufferEnd` (document endpoints). See [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger).
+
 - `Escape` — clears selection.
 - `Insert(char)` — single-char insert at cursor.
 - `Enter` — newline with optional auto-indent inheritance from the preceding line.
@@ -34,6 +37,8 @@ Verbatim variants (verified against `src/edit/editor.rs` in 0.19.0):
 - `TripleClick { x, y }` — set cursor + start line selection.
 - `Drag { x, y }` — extend the active selection to the hit-test position (granularity follows the active `Selection` variant).
 - `Scroll { lines: i32 }` — scroll without moving the cursor.
+
+  > **Correction (text campaign T9, 2026-06-11):** 0.19 is `Action::Scroll { pixels: f32 }` (`src/edit/mod.rs` @ 0.19.0) — pixel-based, not line-based. See [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger).
 
 The embedder maps OS input events (keyboard, mouse, IME commit) to `Action` and calls `Editor::action(font_system, action)`. The editor mutates the underlying `Buffer` and re-shapes affected lines.
 
@@ -58,6 +63,8 @@ The implication for embedders: the keyboard-handler maps `ArrowLeft` → `Motion
 ## Selection rendering
 
 cosmic-text **gives the embedder rectangles, not pixels**. `Editor::with_selection_bounds(|rects|)` is the geometric callback: cosmic-text computes one `(min, max)` rect per visual line covering the selected portion, in `Buffer`-local coordinates. The embedder paints them in its own color/blend pipeline. For mixed-direction lines cosmic-text emits multiple rects per line (one per BiDi run intersected by the selection), so visual selection on `"hello עולם world"` paints correctly without the embedder doing BiDi math.
+
+> **Correction (text campaign T9, 2026-06-11):** `Editor::with_selection_bounds(|rects|)` does not exist in 0.19. The real pair is `Editor::selection_bounds() -> Option<(Cursor, Cursor)>` (the normalized endpoints) + per-run `LayoutRun::highlight(cursor_start, cursor_end) -> impl Iterator<Item = (f32, f32)>` — `(x_left, width)` spans, multiple disjoint spans per mixed-BiDi run (`src/buffer.rs:58–113` @ 0.19.0) — which the embedder unions with the run's line geometry to form rects, so the multi-rect-per-line property described above survives. Buiy's producer-side finding: `highlight` carries a **caller line-gate contract** — for a run on a line outside `[start.line, end.line]` the predicate degenerates to all-selected, so the caller gates runs by line first, as upstream's own `Editor::render` does ([decoration-and-paint.md § 5.1 as-landed](../../specs/2026-06-09-buiy-text-rendering-design/decoration-and-paint.md#51-rectangles-via-layoutrunhighlight)). See [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger).
 
 ## Multi-line, soft-wrap, hard-wrap
 

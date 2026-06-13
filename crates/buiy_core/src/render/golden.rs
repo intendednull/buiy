@@ -77,7 +77,8 @@ pub fn perceptual_diff(a: &[u8], b: &[u8]) -> f32 {
 /// producer inserts at extract, before Prepare's upload and the node's draw
 /// (glyph-pipeline § 6.4), so by the time this predicate holds the atlas is
 /// warm. `AtlasWarmupQueue` remains the seam for the optional production
-/// ASCII pre-warm (deferred — text campaign T9) and T6's solid stamp.
+/// ASCII pre-warm (rejected — text campaign T9; architecture § 2.3) and T6's
+/// solid stamp.
 pub fn fonts_ready(
     atlas: &BuiyAtlas,
     warmup: &AtlasWarmupQueue,

@@ -8,6 +8,8 @@
 >
 > This folder is preserved as a **historical case study** of a third-party crate that tried to bridge two fast-moving Rust ecosystems (Bevy + cosmic-text) and got caught in the seam. It is **not a reference for active use**. The synthesis lives in [`lessons.md`](lessons.md) — read that first if you came here from a Buiy spec.
 
+2026-06-11 — correction pass (text campaign T9): 0.19-verified errata applied per [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger) — one historical-API note in [`architecture.md`](architecture.md) (selection rendering: `with_selection_bounds` is not in cosmic-text 0.19; the historical description of the archived crate stands).
+
 ## What it was
 
 bevy_cosmic_edit was a third-party Bevy plugin that bridged the [`cosmic-text`](../cosmic-text/README.md) crate into Bevy applications as a multi-line text-input widget. It worked on both `Sprite` (2D world) and `Node` (bevy_ui) entities, exposed an `EditorBuffer` query type wrapping a `CosmicEditor` + `CosmicEditBuffer` pair, painted glyphs into Bevy textures, and routed `winit` keyboard + mouse + clipboard input into cosmic-text `Action` calls. At peak it was the de-facto answer to "how do I get a real text input in a Bevy app" while bevy_ui's own `Text` widget was display-only.

@@ -1,7 +1,7 @@
 # Buiy Text Campaign (T1–T9)
 
 **Date:** 2026-06-09
-**Status:** proposed
+**Status:** landed
 **Spec:** [specs/2026-06-09-buiy-text-rendering-design/README.md](../specs/2026-06-09-buiy-text-rendering-design/README.md)
 
 > **For agentic workers:** this is a *campaign* plan, not a bite-sized TDD plan
@@ -456,6 +456,32 @@ consuming T7's painting primitives — not a T-phase here.
 - **Dependencies:** all of T1–T8.
 - **Test surface:** the full two-lane suite green; gate-#2/#14/#15 fixtures in
   place; `--accept` curation workflow exercised once end-to-end.
+- **T9 errata — the charter deviations as-landed** (recorded by T9 itself;
+  the spec carries the matching as-landed notes; see the T9 plan
+  [2026-06-11-buiy-text-t9-verification-closure.md](2026-06-11-buiy-text-t9-verification-closure.md)
+  D1/D2/D4):
+  1. *Gate-#15 seating* — the charter's single "typing-churn fixture" landed
+     as a **pair** (T9 plan D2): the headless mechanism fixture
+     (`tests/text_typing_churn.rs::typing_churn_returns_atlas_to_baseline`,
+     every-PR — CI never runs the GPU lane, so the entry-count property must
+     gate adapter-free) plus a GPU twin
+     (`tests/text_gpu.rs::typing_churn_is_bounded_and_invisible`) for the
+     pixels/upload half headless cannot see. ε = 0 as-built: the churn loop
+     ends on the baseline string, so counts and the resident key set return
+     exactly. Recorded at text verification § 1.3 (as-landed note).
+  2. *The "`--accept` curation workflow"* — realized as the as-built
+     `BUIY_ACCEPT_SHAPING` `.snap` flow (T9 plan D4); the stored-PNG
+     `--accept` machinery was never built — the render-campaign deferral
+     stands, filed in follow-ups.md ("stored-PNG golden machinery"), owned
+     by `buiy-verification-design`. Pixel goldens stay inline +
+     double-capture. Recorded at text verification § 4 (as-landed note).
+  3. *The ASCII pre-warm* — "decide/land" resolved as **reject** (T9 plan
+     D1): structural warmup sufficed for every golden, the gate-#14 fixture
+     bounds the win at sub-frame CPU, unconditional grace eviction drains
+     unused warm keys in ~1 s, and no theme-font/size enumeration exists to
+     warm from. Recorded at architecture § 2.3 (as-landed note); the re-open
+     trigger (a measured first-keystroke-latency miss) is filed in
+     follow-ups.md.
 
 ---
 
@@ -471,7 +497,7 @@ consuming T7's painting primitives — not a T-phase here.
 | T6 | Decoration painting | landed |
 | T7 | Selection + caret + placeholder painting | landed |
 | T8 | Glyphs in effect groups + damage hardening | landed |
-| T9 | Verification closure + docs flip | proposed |
+| T9 | Verification closure + docs flip | landed |
 
 Successor campaign (not phased here): **buiy-text-editing** — the
 `TextEditState`/keymap/IME/clipboard/undo/`TextInput` implementation of

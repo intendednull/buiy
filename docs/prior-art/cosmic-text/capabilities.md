@@ -89,7 +89,7 @@ Each row cites which Buiy `text.md` line it maps to where applicable. The Buiy t
 
 | Feature | text.md tier | Status | Buiy stance |
 |---|---|---|---|
-| Selection rendering (visual rects for mixed-direction) | **F** | **Geometries only.** cosmic-text gives `LayoutGlyph::level` and positions; the multi-rect selection algorithm is the embedder's. | **Build above.** Standard sweep — walk visible LayoutGlyphs inside the logical range, union rects per level run. |
+| Selection rendering (visual rects for mixed-direction) | **F** | **Geometries only.** cosmic-text gives `LayoutGlyph::level` and positions; the multi-rect selection algorithm is the embedder's. | **Build above.** Standard sweep — walk visible LayoutGlyphs inside the logical range, union rects per level run. **Correction (text campaign T9, 2026-06-11):** the build-the-sweep-yourself stance is superseded — 0.19 ships per-run `LayoutRun::highlight(start, end)` + `Editor::selection_bounds()`, and Buiy landed on `highlight` ([decoration-and-paint.md § 5.1](../../specs/2026-06-09-buiy-text-rendering-design/decoration-and-paint.md#51-rectangles-via-layoutrunhighlight)); see [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger). |
 | Caret blink with reduced-motion | **F** | Out of scope for cosmic-text. | **Build above.** Buiy timing layer respects `prefers-reduced-motion`. |
 | `caret-color` | **F** | Out of scope. | **Build above.** Renderer draws the caret. |
 | BiDi visual caret traversal | **F** | **Logical only** at editor layer. | **Build above.** See [bidi.md](bidi.md) and Agent B's `editing.md`. |

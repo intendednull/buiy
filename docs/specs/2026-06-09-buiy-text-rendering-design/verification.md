@@ -90,6 +90,21 @@ real adapter ([CLAUDE.md § GPU lane](../../../CLAUDE.md)) — built on
 | Glyph-in-effect-group composite | Landed (T8): text inside `Opacity(0.5)` dims exactly once — `tests/text_effect_group_gpu.rs` (the composite golden + the partition wiring assert) + the flipped `text_decoration_gpu.rs` asymmetry test ([decoration-and-paint.md § 4.5](decoration-and-paint.md#45-named-dependencies-not-owned-here)) |
 | Atlas churn (gate #15) | The typing-churn fixture: scripted edit loop, then idle; atlas entry count returns within ε of baseline |
 
+**As landed (T9, 2026-06-11):** the churn row's seat is split (the gate-#14
+precedent). The entry-count **mechanism** is fully CPU-visible (`BuiyAtlas`
+is device-free; the adapterless extract harness runs `maintain_atlas`), so
+the gate itself is the **headless** every-PR fixture
+(`tests/text_typing_churn.rs::typing_churn_returns_atlas_to_baseline`) —
+CI never runs the GPU lane, so a GPU-only fixture would protect nothing
+per-PR (§ 1.1's lowest-layer principle). This row's GPU twin
+(`tests/text_gpu.rs::typing_churn_is_bounded_and_invisible`) re-asserts the
+pixels half headless cannot see: byte-stable pixels through the REAL
+rasterize→upload→draw path across the churn-and-settle, plus the
+entry/page-count return. ε **= 0 as-built**: the edit loop ends on the
+baseline string, so the resident key set — and `live_entry_count` — must
+return exactly (the rebuild-storm `assert_eq` precedent); the ε allowance
+stands for future fixtures whose end state is not the start state.
+
 The boundary stays self-policing: a GPU-needing test without `#[ignore]`
 panics the headless run at adapter init
 ([render verification.md § 6](../2026-06-03-buiy-render-pipeline-design/verification.md#6-verification)).
@@ -103,7 +118,9 @@ panics the headless run at adapter init
 **Decision.** Test fixtures (and goldens) construct the `FontSystem` from an
 explicit, in-repo, version-pinned font set —
 `FontSystem::new_with_locale_and_db(locale, db)` over an explicit
-`fontdb::Database` (or `new_with_fonts`) — with the system-font scan **opt-in
+`fontdb::Database` (not `new_with_fonts`, which scans system fonts —
+the T1 erratum, edited in place; registered-only construction is
+`new_with_locale_and_db_and_fallback`) — with the system-font scan **opt-in
 and default OFF in fixtures**. Engine-side construction policy (lazy init,
 production opt-in scanning) is [architecture.md](architecture.md)'s;
 this file pins the *fixture* policy. **F**
@@ -187,6 +204,11 @@ steady-state baseline is established. The mechanism is built
 supplies the *what-to-warm* — the fixture glyph set in tests, the default
 font's ASCII range in production ([glyph-pipeline.md](glyph-pipeline.md)).
 
+**As landed (T9, 2026-06-11):** the production half ("the default font's
+ASCII range") is superseded — the pre-warm was rejected at T9 as unmeasured
+([architecture.md](architecture.md) § 2.3 as-landed note). The fixture glyph
+set and the solid stamp remain the only `AtlasWarmupQueue` pushes.
+
 ---
 
 ## 4. Campaign gates
@@ -209,6 +231,18 @@ The text campaign inherits the render campaign's gate discipline
   [render verification.md § 4.4](../2026-06-03-buiy-render-pipeline-design/verification.md#44-human-curated---accept-workflow));
   a re-shaped fixture is either a regression or a curated golden update, never
   an automatic overwrite.
+
+  **As landed (T9, 2026-06-11):** the as-built curation workflow is
+  `BUIY_ACCEPT_SHAPING=1` over the headless `.snap` shaping corpus
+  (`tests/text_shaping_snapshots.rs` — labeled unified diff, loud panic,
+  explicit regeneration gate with review-and-commit baked into the failure
+  message). `GoldenConfig.accept` remains a declared flag with no machinery
+  behind it, and pixel goldens stay **inline + double-capture** (the
+  re-capture IS the golden — the render GPU campaign's stored-PNG deferral
+  stands). The stored-PNG `--accept` machinery is filed in
+  [follow-ups.md](../../plans/follow-ups.md), owned by
+  `buiy-verification-design` (sensible once the canonical CI GPU class of
+  § 4.1's caveat exists).
 - **Gate #2 (visual regression) — the text fixture set.** Hello-world text;
   one golden per decoration kind (underline, double underline, overline,
   line-through); the mixed-BiDi `::selection` golden; the caret-blink
@@ -247,6 +281,12 @@ phase — is the campaign plan's, not this file's.
 Three prior-art claims are **superseded** by 0.19-verified facts (per the
 docs-system convention: supersede, don't silently contradict). The prior-art
 folder should be patched to point here as part of the campaign's closure phase.
+**Applied 2026-06-11 (T9):** the correction pass landed in
+`docs/prior-art/cosmic-text/` and `docs/prior-art/bevy-cosmic-edit/` —
+correction blockquotes at each stale line plus a dated correction-pass line in
+each folder README. The row-3 grep found **no** code sketch in either folder
+passing a font system to `set_text(` (the drift was prose-implied only), so no
+sketch annotation was needed; the as-built signature is recorded in the row.
 
 | Stale claim | Where | 0.19 fact |
 |---|---|---|

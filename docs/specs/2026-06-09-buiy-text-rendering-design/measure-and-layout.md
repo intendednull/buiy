@@ -148,6 +148,13 @@ producer's `Extract` query uses its read-only form. Display-only and editable
 entities take the same code path, and compatibility with `BufferRef::Owned`
 holds by construction — closing editing-and-ime.md's open question 4.
 
+**As landed (T3, 2026-06-11):** `TextBufferAccess` is **deferred to the
+`buiy-text-editing` campaign** — the `edit` arm binds `TextEditState`, which
+does not exist yet. The measure closure and `TextCommit` bind
+`&mut TextBuffer` directly (and the glyph producer binds `&TextBuffer`)
+until the editor lands; the swap is mechanical (T3 plan decision 12;
+supersedes the seam table's "built in T3" expectation).
+
 ---
 
 ## § 3 The measure protocol
@@ -300,7 +307,9 @@ equality short-circuits.
 
 **Why last, not folded into step 7.** `cq_descendant_rerun` (step 9) re-runs
 compute and **rewrites `ResolvedLayout` after** `write_resolved_layout` (step
-7) (`systems.rs:2876` is its compute site) — folding finalize into step 7
+7) (the `cq_descendant_rerun` system is its own compute site — system names
+pin the reference per the T3 erratum; line numbers drift) — folding finalize
+into step 7
 would reshape against sizes step 9 may immediately invalidate, producing
 one-frame-stale glyphs on exactly the cq-cascade frames the layout spec worked
 hardest to make same-frame-correct. **Runner-up rejected:** a separate system
@@ -309,12 +318,32 @@ mechanically but scatters the layout↔text contract across sets and leaves the
 step unprotected by `tests/layout_pipeline_order.rs`; finalize is the text
 half of the layout handshake and belongs in the asserted chain.
 
+**As landed (T3, 2026-06-11):** the trigger row for this step
+([architecture.md § 5.1](architecture.md): "the TextSync-dirty set ∪
+`Changed<ResolvedLayout>`") misses measure-touched buffers whose resolved
+size did not change — an ancestor resize re-probes the leaf at a probe
+width, the leaf's own resolved size holds, neither trigger fires, and the
+buffer would be left at the probe width. As built, commit iterates **all**
+text entities behind a cheap reconcile guard, with measure's
+`height_opt = None` as the catch-all signal: measure never sets a height,
+commit always does, so a probe-left buffer can never compare equal (T3 plan
+decision 7).
+
+**As landed (T3, 2026-06-11):** `set_size(Some(w), Some(h))` keeps cosmic's
+height windowing, so `overflow: visible` text taller than its box does not
+lay out past the content height (`shape_until_scroll` stops at `scroll_end`;
+`LayoutRunIter` also cuts at `height_opt`) — such lines are absent from
+`ComputedTextLayout` and from the glyph producer's emission until the
+overflow seam is revisited with overflow painting (T3 plan decision 9).
+
 ### § 4.3 One compute helper, three sites — re-entrancy and the ≤2× ceiling
 
 **Decision.** One helper — `compute_roots_with_text_measure(tree, fonts,
 text_query, window_size, …)` — replaces plain `compute_layout` at **all
-three** compute sites: `taffy_compute` (`systems.rs:2625`), `cq_flip_rerun`
-(`systems.rs:3602`), `cq_descendant_rerun` (`systems.rs:2876`). The closure is
+three** compute sites: the `taffy_compute`, `cq_flip_rerun`, and
+`cq_descendant_rerun` systems (system names, not line numbers, are the
+pinned references — the charter's `systems.rs` line refs drifted before T3
+even landed and keep drifting; T3 erratum, edited in place). The closure is
 rebuilt per call from current world state, holds no cross-call state, and
 never issues `Commands`. Re-entrancy is then free: a flip frame's second
 compute re-measures only nodes the flip dirtied (Taffy's cache covers the
@@ -451,6 +480,11 @@ content version (a `dir` flip is a content change). **Editing consequence
 its UTF-8 length (3 bytes); hit-testing and cursor↔source mapping must map
 through the same pre-pass offset table as the § 5.2 collapse transform.
 
+**As landed (T5, 2026-06-11):** marks are prepended per **non-empty** line
+only — a shaped mark on an empty line could grow a phantom glyph and flip
+T3's glyphs-keyed `ResolvedBaseline` for `Text("")` (§ 6's as-landed note).
+Empty-line caret direction is the editing campaign's offset-table seam.
+
 ### § 5.5 Named C-tier deferrals
 
 `overflow-wrap` (Wrap variant flip), `text-indent` (a measure-input offset on
@@ -484,6 +518,16 @@ wakeups and forces every idempotence check to compare it. Also rejected:
 recomputing from the `Buffer` at each consumer — future inline baseline
 alignment, AccessKit text geometry, and devtools shouldn't need `Buffer`
 access or a FontSystem lock to read a number layout already computed.
+
+**As landed (T3, 2026-06-11):** a "no laid-out runs" removal condition for
+`ResolvedBaseline` never matches literally — cosmic-text synthesizes a
+glyph-less `LayoutLine` for every empty `BufferLine` (shape.rs:3025–3051,
+"create a visual line for empty lines"), so `Text("")` still yields one run.
+As built, baseline presence keys on **glyphs**: the synthetic line's
+`line_y` is the centering artifact of a zero-ascent strut, not a baseline —
+while the synthetic line stays in `ComputedTextLayout` as real
+`line_top`/`line_height` geometry (caret math and the height fold both
+count it) (T3 plan decision 15).
 
 The commit→render handoff: `TextCommit` leaves the buffer shaped at its
 final size; the glyph producer ([glyph-pipeline.md](glyph-pipeline.md))

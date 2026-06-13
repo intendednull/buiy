@@ -31,7 +31,7 @@ Buiy's foundation spec ([`text.md`](../../specs/2026-05-07-buiy-foundation/text.
 | Steward | System76 (POP_OS / COSMIC desktop) |
 | Primary maintainer | Jeremy Soller (`jackpot51`) |
 | Shaper | **`harfrust 0.5.0`** (HarfBuzz v13.0.0 port) — replaced `rustybuzz` in **0.15.0** (PR #417, 2025-09-09) |
-| Rasterizer | `swash 0.2.6` (outlines, COLRv0/CPAL, sbix, CBDT/CBLC; **NOT** COLRv1) |
+| Rasterizer | `swash 0.2.6` (outlines, COLRv0/CPAL, sbix, CBDT/CBLC; **NOT** COLRv1). **Correction (text campaign T9, 2026-06-11):** `0.2.6` is the declared minimum; the 0.19.0 lock resolves **swash 0.2.8** |
 | Font data | `skrifa 0.40.0` (Google Fonts' `read-fonts` wrapper) |
 | Font discovery | `fontdb 0.23` |
 | BiDi | `unicode-bidi 0.3.18` (`hardcoded-data`) |
@@ -53,7 +53,7 @@ Buiy's foundation spec ([`text.md`](../../specs/2026-05-07-buiy-foundation/text.
 - [`history.md`](history.md) — Pre-cosmic-text Rust text landscape, COSMIC genesis, version timeline, downstream adoption.
 - [`governance.md`](governance.md) — System76 stewardship, commercial model, funding, licensing, release cadence, issue triage, contribution model.
 - [`ecosystem.md`](ecosystem.md) — Substrate (harfrust, swash, skrifa, fontdb, unicode-*); Parley contrast table; downstream apps and crates; community misattributions.
-- [`critiques.md`](critiques.md) — Performance issues (#505 `FontSystem::new` slow, full-buffer reshape, atlas churn), API friction (Buffer/Editor split, FontSystem non-Sync, Attrs lifetimes), missing features (vertical writing, hyphenation, COLRv1, variable-font axes), other open issues.
+- [`critiques.md`](critiques.md) — Performance issues (#505 `FontSystem::new` slow, full-buffer reshape, atlas churn), API friction (Buffer/Editor split, `&mut FontSystem` serialization, Attrs lifetimes), missing features (vertical writing, hyphenation, COLRv1, variable-font axes), other open issues.
 - [`lessons.md`](lessons.md) — **The consult-this-when-designing decision file.** Validates / Avoid / Borrow.
 - [`glossary.md`](glossary.md) — System-specific terms.
 
@@ -66,6 +66,8 @@ Read [`lessons.md`](lessons.md) first when you're designing anything text-shaped
 ## Internal contradictions to fix in a polish pass
 
 Internal contradictions surfaced during research have been fixed in a polish pass on 2026-05-22. The flagged Bevy adoption version and harfrust migration version are now consistent across all files.
+
+2026-06-11 — correction pass (text campaign T9): 0.19-verified errata applied per [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger) — `FontSystem` is `Send + Sync` in 0.19 (the `Arc<Mutex<>>` pattern stands on the `&mut` API); `with_selection_bounds` → `selection_bounds()` + `LayoutRun::highlight`; `Action::Scroll { pixels: f32 }`; the 22-variant `Motion` list; swash 0.2.8 as locked.
 
 ## Sources
 

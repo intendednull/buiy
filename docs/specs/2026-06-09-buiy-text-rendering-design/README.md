@@ -1,7 +1,7 @@
 # Buiy — text-rendering design
 
 **Date:** 2026-06-09
-**Status:** proposed
+**Status:** implemented (rendering, T1–T9)
 **Parent:** [`2026-05-07-buiy-foundation`](../2026-05-07-buiy-foundation/README.md) — sub-spec graduated from [foundation/text.md](../2026-05-07-buiy-foundation/text.md) and the foundation roadmap row `buiy-text-rendering-design`.
 **Plan:** [`2026-06-09-buiy-text-campaign.md`](../../plans/2026-06-09-buiy-text-campaign.md) (T1–T9 phase breakdown; per-phase TDD plans follow, one per phase).
 
@@ -198,7 +198,20 @@ added in review round 1); `TextEditState`, `EditCommand` (editing-and-ime).
 
 ## Status
 
-**Status: proposed.** Review round 1: FIX-THEN-SHIP, fixes applied
+**Status: implemented (rendering, T1–T9) — as landed 2026-06-11.** The
+rendering surface this spec designs is implemented: phases T1–T9 of the
+[text campaign](../../plans/2026-06-09-buiy-text-campaign.md) all landed,
+proven on the two-lane suite ([verification.md](verification.md) §§ 1, 4) —
+the headless geometry gate every PR plus the `#[ignore]` GPU pixels lane
+(the gate-#2 goldens including the T9 widget × state × theme × viewport
+matrix, the gate-#14 typing-latency fixture, the gate-#15 churn pair).
+[editing-and-ime.md](editing-and-ime.md) remains **target-state** for the
+named successor campaign `buiy-text-editing` — the editor/IME surface is
+designed here, not built. The paragraphs below are the proposal-time
+record, kept for history.
+
+**Status: proposed** *(superseded 2026-06-11 by the as-landed paragraph
+above)*. Review round 1: FIX-THEN-SHIP, fixes applied
 2026-06-09. Review round 2: FIX-THEN-SHIP (2 majors — both round-1-fix
 drift: the `Changed<Window>` scale probe, the `painters_z` merge key), fixes
 applied 2026-06-09. Review round 3: FIX-THEN-SHIP (1 major — the § 5.4
@@ -210,6 +223,8 @@ blueprints over verified cosmic-text 0.19 facts and the as-built render seam.
 The open questions below are annotated with their resolution status; the
 unresolved remainder must be settled before the corresponding campaign phases
 start. No code exists yet; `cosmic-text` is not in `Cargo.lock`.
+*(Superseded 2026-06-11, T9: `buiy_core::text` is built and GPU-verified —
+T1 pinned `cosmic-text = "0.19"` into `Cargo.lock`.)*
 
 **Review round 1: FIX-THEN-SHIP, fixes applied 2026-06-09.** The reviewer's
 contradictions and gaps were resolved in place — `shape-run-cache` OFF, the
@@ -238,6 +253,10 @@ orchestrator.
    `using-prior-art`) or the next reader re-derives `NonSend` wrongly.
    *Scheduled as campaign phase T9 (the errata ledger,
    [verification.md § 5](verification.md#5-prior-art-errata-ledger)).*
+   *Resolved: the correction pass was applied at T9 (2026-06-11) — the
+   [verification.md § 5](verification.md#5-prior-art-errata-ledger) ledger
+   landed on both prior-art folders as dated correction blockquotes; the
+   staleness this question flagged is resolved.*
 2. **Cross-layer glyph/quad interleaving.** `ExtractedGlyphs` is a flat global
    list drawn as one glyph batch after the quad batch (prepare.rs ~:46–51: "in
    paint order … after the quad draw"). Correct per-layer
@@ -249,6 +268,11 @@ orchestrator.
    *Review round 1: the sequencing note is now recorded in the campaign's T4
    (layered-fixture z-order artifacts are expected, not T4 bugs). Still open
    as render-spec work.*
+   *T9: carries forward — still the render spec's buckets/`painters_z` work.
+   T8 narrowed it: quad-then-glyph order now holds per region (within each
+   effect-group target and within the flat complement,
+   [glyph-pipeline.md](glyph-pipeline.md) § 11.2–11.3); the interleave
+   across overlapping stacking layers remains open.*
 
 ### From [measure-and-layout.md](measure-and-layout.md)
 
@@ -295,6 +319,11 @@ orchestrator.
    swaps in place under one lock hold), recording the contradiction rather
    than silently dropping it: revisiting the lock later costs § 3 only
    mechanical `lock()`→`ResMut` edits, no semantic changes.
+   *T9: stands as recorded — the `SharedFontSystem(Arc<Mutex<FontSystem>>)`
+   pin held through T1–T8 (the T5 erratum only rescoped "exactly three lock
+   sites" to steady-frame, architecture § 1.2 as-landed); the plain-Resource
+   shape remains the named revisit if the render world ever stops needing
+   the `FontSystem`.*
 
 ### From [glyph-pipeline.md](glyph-pipeline.md)
 
@@ -328,6 +357,10 @@ orchestrator.
    measure function and `shape_as_needed` scheduling); this file takes either
    answer without structural change, but the typing-latency gate (§ 12) depends
    on it.
+   *T9: carries to `buiy-text-editing` — the successor settles edit→layout
+   frame ordering. The T8 gate-#14 fixture already pinned the display-path
+   half: one frame from an Update-phase `Text` mutation to publish,
+   rasterize-on-miss included (`tests/text_typing_latency.rs`).*
 2. **Prior-art drift needs a correction note.** Verified against 0.19:
    `Editor::with_selection_bounds` does not exist (real pair:
    `selection_bounds()` + `LayoutRun::highlight`); `Action::Scroll` takes
@@ -337,8 +370,11 @@ orchestrator.
    scope), and sibling files citing those claims must re-verify.
    *Scheduled as campaign phase T9 via the
    [verification.md § 5](verification.md#5-prior-art-errata-ledger) ledger.*
+   *Resolved: the T9 correction pass (2026-06-11) applied the ledger to both
+   prior-art folders.*
 3. **arboard HTML read-side** is unverified (§ 7) — confirm before scheduling
    the HTML-clipboard slice.
+   *T9: carries to the successor campaign (`buiy-text-editing`).*
 4. **Shared-accessor type for the editor-owned Buffer** (§ 2.2a): the concrete
    QueryData shape is pinned by [measure-and-layout.md](measure-and-layout.md);
    if that file lands a Buffer-as-separate-component model incompatible with
@@ -347,6 +383,11 @@ orchestrator.
    `TextBufferAccess` (display component + optional editor, editor-preferred),
    explicitly compatible with `BufferRef::Owned`; editing-and-ime § 2.2a now
    names it.*
+   *T3 erratum (measure-and-layout § 2.3 as-landed): the accessor itself is
+   deferred to `buiy-text-editing` — its `edit` arm binds the
+   not-yet-existing `TextEditState`; until the editor lands, display paths
+   bind `&mut TextBuffer` / `&TextBuffer` directly, and the reconciliation
+   this question asked about moves to the editing campaign with it.*
 
 ### From [decoration-and-paint.md](decoration-and-paint.md)
 
@@ -401,6 +442,13 @@ orchestrator.
    warmup-pins the 1×1 solid stamp. Reconcilable (the stamp push is
    decoration's, the ASCII pre-warm a later latency optimization), but the
    campaign must sequence it explicitly — see the plan's T6/T9 notes.
+   *Resolved at T9: the production ASCII pre-warm is **rejected**
+   (architecture § 2.3 as-landed — unmeasured win; unconditional grace
+   eviction drains unpinned warm keys in ~1 s; no theme-font/size
+   enumeration exists to warm from). The 1×1 solid-stamp push (T6) was the
+   campaign's only warmup producer; the re-open trigger is a measured
+   first-keystroke-latency miss against a `buiy-verification-design`
+   budget.*
 
 ### Found in review round 1 (2026-06-09) — all resolved
 
