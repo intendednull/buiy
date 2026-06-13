@@ -132,13 +132,47 @@ pub fn render_world_resource<R: Resource>(app: &App) -> Option<&R> {
 /// use [`finish_and_run`]. Spawn `(Node, Style, Background)` entities + a
 /// capture camera ([`spawn_capture_camera`]) before driving frames.
 pub fn gpu_render_app(width: u32, height: u32) -> App {
+    // `WindowResolution::new` takes PHYSICAL units; at the default scale
+    // factor 1.0 physical == logical, so `width`×`height` is both.
+    gpu_render_app_with_resolution(bevy::window::WindowResolution::new(width, height))
+}
+
+/// [`gpu_render_app`] at an explicit window scale factor — the viewport-axis
+/// builder (text campaign T9): the SAME plugin stack, with the primary window
+/// LOGICAL `logical_w`×`logical_h` at `scale_factor` device pixels per
+/// logical pixel.
+///
+/// Bevy 0.18's `WindowResolution::new` takes **physical** units (verified at
+/// implementation, bevy_window-0.18.1 window.rs `new(physical_width,
+/// physical_height)`), and `with_scale_factor_override` does not touch the
+/// physical size — so this builder passes `logical × scale_factor` physical
+/// plus the override, and `resolution.size()` reads back the logical size the
+/// view uniform is built from.
+///
+/// **Contract:** the capture image must be sized to the window's **physical**
+/// size (`logical_w × scale_factor`, `logical_h × scale_factor`) — the view
+/// uniform maps logical (0,0)..(w,h) to the full clip square, so the
+/// offscreen target supplies the physical pixel grid.
+pub fn gpu_render_app_scaled(logical_w: u32, logical_h: u32, scale_factor: f32) -> App {
+    let resolution = bevy::window::WindowResolution::new(
+        (logical_w as f32 * scale_factor).round() as u32,
+        (logical_h as f32 * scale_factor).round() as u32,
+    )
+    .with_scale_factor_override(scale_factor);
+    gpu_render_app_with_resolution(resolution)
+}
+
+/// The one shared plugin stack behind [`gpu_render_app`] /
+/// [`gpu_render_app_scaled`] — a single body so the scaled builder cannot
+/// drift from the canonical one.
+fn gpu_render_app_with_resolution(resolution: bevy::window::WindowResolution) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         // Sized to the capture target so the primary-window-derived view uniform
         // matches the offscreen image's pixel grid (see module note above).
         .add_plugins(bevy::window::WindowPlugin {
             primary_window: Some(Window {
-                resolution: bevy::window::WindowResolution::new(width, height),
+                resolution,
                 ..default()
             }),
             ..default()

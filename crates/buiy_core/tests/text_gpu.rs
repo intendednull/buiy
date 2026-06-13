@@ -26,8 +26,9 @@ const H: u32 = 64;
 const TOKEN: &str = "test.text";
 
 /// One big themed line ("Hi", 40 px — thick stems guarantee full-coverage
-/// interior texels) under a sized column root.
-fn spawn_text_fixture(app: &mut App, color: Color) {
+/// interior texels) under a sized column root. Returns the text entity
+/// (the churn twin mutates it).
+fn spawn_text_fixture(app: &mut App, color: Color) -> Entity {
     {
         let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
         theme.colors.insert(TOKEN.into(), color);
@@ -51,6 +52,7 @@ fn spawn_text_fixture(app: &mut App, color: Color) {
                 .height_px(H as f32),
         ))
         .add_child(text);
+    text
 }
 
 /// Build app → fixture → capture the first text-ready frame.
@@ -449,5 +451,100 @@ fn font_db_rebuild_storm_is_bounded() {
     assert!(
         perceptual_diff(&frame_before, &frame_after) < 1e-4,
         "the storm is invisible: same bytes, same shaping, same pixels"
+    );
+}
+
+// --- (f) T9: the gate-#15 GPU churn twin (verification §§ 1.3, 4). --------
+#[test]
+#[ignore = "needs a wgpu adapter; gate-#15 typing-churn fixture (verification §§ 1.3, 4)"]
+fn typing_churn_is_bounded_and_invisible() {
+    // The headless fixture (text_typing_churn.rs) owns the gate-#15
+    // entry/page/key mechanism every PR (T9 plan D2); THIS twin re-asserts
+    // the § 1.3 pixels half through the REAL rasterize → upload → draw
+    // path: the frame after churn-and-settle is byte-stable against the
+    // frame before churn (stale-UV/upload corruption under churn is
+    // GPU-observable only), and the GPU-side counters return to baseline.
+    let mut app = support::gpu_render_app(W, H);
+    {
+        // Tight grace so the settle window is test-sized (the T4 fixture's
+        // AtlasConfig override pattern). Replace BEFORE any frame runs.
+        let render_app = app.get_sub_app_mut(RenderApp).expect("RenderApp");
+        render_app
+            .world_mut()
+            .insert_resource(BuiyAtlas::new(AtlasConfig {
+                page_size: 1024,
+                page_budget: 8,
+                eviction_grace: 3,
+            }));
+    }
+    let text = spawn_text_fixture(&mut app, Color::srgba(0.2, 0.8, 0.9, 1.0));
+    let target = support::render_to_image(&mut app, W, H);
+    support::spawn_capture_camera(&mut app, target.clone());
+    support::finish_and_run(&mut app, 1);
+    support::wait_for_text_ready(&mut app, 60);
+    let frame_before = support::readback_rgba(&mut app, target.clone());
+    let (entries_before, pages_before) = {
+        let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+        let atlas = render_app.world().resource::<BuiyAtlas>();
+        (
+            atlas.live_entry_count(),
+            atlas.page_count(AtlasFormat::CoverageR8),
+        )
+    };
+
+    // The edit loop — text_typing_churn.rs's sequence: every string is
+    // letter-disjoint from the "Hi" baseline AND from every other step, so
+    // each edit inserts fresh atlas keys (real churn, never re-touches of
+    // resident entries); the last edit returns to the baseline string (the
+    // ε = 0 premise below).
+    let edits = ["dgq", "hkx", "mvz", "rtw", "ufy", "jpn", "els", "Hi"];
+    for (i, s) in edits.iter().copied().enumerate() {
+        app.world_mut().get_mut::<Text>(text).expect("Text").0 = String::from(s);
+        app.update();
+        if i == edits.len() / 2 {
+            // Non-vacuity, built in: mid-loop the atlas really grew past
+            // the baseline (fresh inserts + grace-resident stale entries).
+            let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+            assert!(
+                render_app
+                    .world()
+                    .resource::<BuiyAtlas>()
+                    .live_entry_count()
+                    > entries_before,
+                "mid-loop entry count exceeds baseline — the fixture churned"
+            );
+        }
+    }
+
+    // Settle past the grace window: every churned key goes untouched and
+    // grace-evicts. ε = 0 (T9 plan D2): the loop ended ON the baseline
+    // string, so the counters must return EXACTLY (the rebuild-storm
+    // assert_eq idiom).
+    for _ in 0..8 {
+        app.update();
+    }
+    {
+        let render_app = app.get_sub_app(RenderApp).expect("RenderApp");
+        let atlas = render_app.world().resource::<BuiyAtlas>();
+        assert_eq!(
+            atlas.live_entry_count(),
+            entries_before,
+            "entry count returned to baseline after the churn (gate #15)"
+        );
+        assert_eq!(
+            atlas.page_count(AtlasFormat::CoverageR8),
+            pages_before,
+            "page count returned to baseline (pages pooled, never leaked)"
+        );
+    }
+
+    // The pixels half: same final text, same pixels — the churn is
+    // invisible through the real upload/draw path.
+    let frame_after = support::readback_rgba(&mut app, target);
+    let diff = perceptual_diff(&frame_before, &frame_after);
+    assert!(
+        diff < 1e-4,
+        "the churn is invisible: frame byte-stable across churn-and-settle \
+         (perceptual_diff = {diff})"
     );
 }

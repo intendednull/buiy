@@ -87,6 +87,14 @@ The 0.19 **lazy setters** keep `TextSync` lock-free: `set_text` / `set_size` /
 `set_metrics` / `set_wrap` take no `FontSystem` by signature — mutation is
 recorded, shaping deferred to the next lock-bearing site. **F**
 
+**As landed (T5, 2026-06-11):** "exactly three" is **steady-frame** scoped,
+not absolute. Two rare-event sites sit beside the table: `swap_font_db` (a
+fourth since T1 — the § 2.2 scan-merge / § 3.1-rebuild swap, one lock hold
+per swap) and T5's `apply_font_registry` (registration / unregistration /
+hot-reload — event-driven, pre-Layout, one lazy hold per batch). The table
+above remains exhaustive for steady frames; reviewers still reject a new
+steady-frame site.
+
 ### 1.3 `SwashCache`: a render-world-only `Resource`
 
 **Decision: `SwashCache` is a plain render-world `Resource`** (verified
@@ -156,6 +164,27 @@ spec decides *what* to warm: the ASCII range of the default theme font at the
 primary window's scale factor, pushed as `AtlasWarmupRequest`s.
 [glyph-pipeline.md](glyph-pipeline.md) owns request construction (it owns the
 `AtlasKey` shape). **F**
+
+**As landed (T9, 2026-06-11): no production pre-warm ships — the what-to-warm
+commitment above is superseded; rejected as unmeasured.** The T4–T8 evidence:
+(1) determinism never needed it — every golden passed with warmup satisfied
+*structurally* (the producer inserts at extract, before Prepare's upload and
+the node draw; [glyph-pipeline.md](glyph-pipeline.md) § 6.4 predicted exactly
+this); (2) the latency win is sub-frame only — the T8 gate-#14 fixture proved
+one frame from edit to publish *including* rasterize-on-miss, so a pre-warm
+saves intra-frame swash CPU at most, and no latency budget exists yet to
+measure it against; (3) it is structurally self-defeating as-built — grace
+eviction is unconditional, so pre-warmed keys no visible text uses get no
+touch and drain `eviction_grace` (~1 s) after startup, and the pin/refcount
+mechanism a useful pre-warm would need was already rejected
+(glyph-pipeline § 6.3 runner-ups); (4) the what-to-warm enumeration is
+unanchored — "default theme font" needs the unbuilt theme font-token system,
+and no size enumeration exists (`FontSize` is per-entity). The seam stays
+named: `AtlasWarmupQueue`, with T6's solid-stamp push as the worked example.
+**Re-open trigger:** a *measured* first-keystroke-latency miss against a
+`buiy-verification-design` budget; any revival must solve the grace-drain
+problem (3) explicitly. Tracked in
+[follow-ups.md](../../plans/follow-ups.md).
 
 ## 3. Per-text-entity state
 
@@ -361,6 +390,23 @@ perpetually hot.
 runs *after* `Layout`, so a font-style value resolved in `Style` reaches
 shaping on the **next** frame's `TextSync` — consistent with the existing
 style→layout latency for every other styled layout input.
+
+**As landed (T2, 2026-06-11):** the `TextSync` row has no
+carrier-**removal** member, and as built the **exclusion is pinned**, not
+closed with `RemovedComponents` arms: removing a style carrier from a live
+entity (e.g. `FontSize` removed → the entity should revert to the
+`TextStyleDefaults` fallback) resyncs only on the next *other* trigger.
+`text/sync.rs`'s trigger-union ledger documents the exclusion; the only
+removal stream the system reads is `RemovedComponents<Text>`, for buffer
+cleanup.
+
+**As landed (T3, 2026-06-11):** the `TextCommit` row's trigger summary ("the
+`TextSync`-dirty set ∪ `Changed<ResolvedLayout>`") defers to the as-built
+reconcile-guard sweep — the union misses measure-touched buffers whose
+resolved size did not change, so commit iterates all text entities behind a
+cheap reconcile guard with measure's `height_opt = None` as the catch-all
+signal ([measure-and-layout.md § 4.2](measure-and-layout.md)'s as-landed
+note carries the full mechanism).
 
 ### 5.2 `ExtractedGlyphs`: retain-with-probe + the every-frame key touch
 

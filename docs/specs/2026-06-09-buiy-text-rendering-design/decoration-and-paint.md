@@ -88,6 +88,14 @@ computes spans from `LayoutGlyph` ranges. Loses: duplicates upstream's
 span-merging and per-cluster fallback handling, and buys no capability the
 metrics-as-data path doesn't already give.
 
+**As landed (T6, 2026-06-11):** the two-field
+`TextDecorations { line, color }` cannot author the `Double` row whose paint
+math § 3.2 specifies and whose golden the campaign mandates — as built the
+component also carries
+`style: DecorationLineStyle { Solid, Double, Dotted, Dashed, Wavy }`
+(dotted/dashed/wavy degrade to solid, warn-once): the § 9 reservation
+realized as the enum + match arms, not a fourth component.
+
 ### 2.3 Metric semantics
 
 A decoration line's resolved logical-px geometry is
@@ -143,6 +151,23 @@ Color precedence, exactly upstream's:
 **or** the node's resolved foreground (`currentColor`). The resolved color is
 pre-linearized straight-alpha, like every instance color
 ([atlas/primitive.rs:35–42](../../../crates/buiy_core/src/render/atlas/primitive.rs)).
+
+**As landed (T6, 2026-06-11):** "`DecorationSpan.color_opt` (the `-color`
+property)" misattributes the field — source-verified in 0.19.0, the `-color`
+property is the per-kind
+`TextDecoration.{underline,strikethrough,overline}_color_opt` inside
+`span.data`, while `DecorationSpan.color_opt` is the span's TEXT color
+("Fallback color from the first glyph's `color_opt`", layout.rs:73) —
+precedence tier 2, not tier 1. The precedence ORDER above is correct; as
+built, tier 1 is Buiy's `TextDecorations.color` token resolved at extract
+(the line bits ride `Attrs`, the color never does — a theme swap re-emits,
+never reshapes).
+
+**As landed (T6, 2026-06-11):** decoration color tiers 1–2 are structurally
+dormant in v1 — Buiy never sets `Attrs.*_color_opt` (the previous note) nor
+`Attrs.color_opt` (rich-text spans are C-tier), so upstream's first two
+tiers are always `None` as-built; the pure mirror implements and unit-tests
+all three anyway (it mirrors upstream — the drift guard's job).
 
 ### 3.3 The physical-px minimum-thickness rule
 
@@ -215,6 +240,12 @@ evict the cell, a later insert reuses it, and the retained stamp instances'
 UVs sample someone else's bitmap. Stretched `rect`s sample its UV
 midpoint; bilinear filtering of a uniform texel is exact, so the stamp is
 resolution-independent. **F**
+
+**As landed (T6, 2026-06-11):** "bilinear filtering of a uniform texel is
+exact" — the as-built atlas sampler is the pinned **Nearest**
+(atlas/gpu.rs); as built the stamp instance's `uv_rect` is the cell
+**midpoint replicated**, which is exact under any filter and immune to
+edge-texel selection.
 
 ### 4.4 Emission order within a node
 
@@ -342,6 +373,15 @@ prior-art row is stale.
 the real contract is `selection_bounds()` + per-run `highlight`. Errata
 ledger: [verification.md § 5](verification.md#5-prior-art-errata-ledger).
 
+**As landed (T7, 2026-06-11):** the `highlight` framing above omits the
+**caller line-gate contract**: for a run on a line outside
+`[start.line, end.line]` the predicate degenerates to all-selected
+(source-verified; upstream's own render gates at edit/editor.rs:103) — the
+producer gates first. Also unstated: the two reference-render behaviors Buiy
+mirrors live in `Editor::render`, not in `highlight` — the
+internal-empty-line full-width rect, and the last-rect extension to the line
+edge on non-final selected lines (RTL-aware) (T7 plan decision 7).
+
 ### 5.2 Selected-text color: re-tint at emission
 
 **Decision.** Glyph instances whose cluster intersects the selection are
@@ -380,6 +420,14 @@ the caret is one solid-stamp `GlyphAlphaInstance` (§ 4.3) with
 travels to the producer in `CaretVisual` (§ 6.3). Emitted
 last (§ 4.4 seat 6), so it paints over glyphs and line-through. **F**
 
+**As landed (T7, 2026-06-11):**
+`Editor::cursor_position() -> Option<(i32, i32)>` exists (the int cast is a
+private helper, edit/mod.rs:30) but is NOT the painting input: the rect
+arrives authored in `CaretVisual`, and the editing campaign's f32-precise
+geometry source is `LayoutRun::cursor_position -> Option<f32>` + run metrics
+(already pinned by editing-and-ime § 4.1) — the i32 mention must not be read
+as a producer contract.
+
 ### 6.2 `caret-color`
 
 Resolution order: explicit `caret-color` → the theme caret token → the node's
@@ -410,6 +458,16 @@ virtual instants ([verification.md § 3.1](verification.md#31-fixed_clock--the-v
 Under `prefers-reduced-motion` the caret is **steady** (always visible, no
 blink), per text.md:90. The blink period is a theme/animation value, not
 pinned here. **F**
+
+**As landed (T7, 2026-06-11):** "`SelectionVisual` — the § 5 rect list plus
+re-tint ranges" misstates the payload; § 5.1's own mechanism line governs
+("the **endpoints** reach the producer through the render-prep-written
+`SelectionVisual` state"). As built, `SelectionVisual` is the normalized
+`(Cursor, Cursor)` endpoint pair (the `selection_bounds()` output shape),
+and the producer derives rects AND re-tint from it inside the run walk it
+already owns — a rect-list payload would be derived data going stale against
+reshape, and "re-tint ranges" are the endpoints restated (T7 plan
+decision 1).
 
 The damage property (the reason the caret is a glyph-tier stamp, § 4.2): a
 blink frame changes only `ExtractedGlyphs`, so the quad buffer is retained —

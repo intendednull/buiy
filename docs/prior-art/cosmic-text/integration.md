@@ -13,6 +13,9 @@ Cross-links: [architecture.md](architecture.md) (types and their ownership), [ed
 Every embedder ends up with roughly the same five-piece structure:
 
 1. **One `FontSystem` per process (effectively a singleton).** Owns the `fontdb::Database`, the locale, and the shape-result cache. Cloning is expensive; sharing is the rule. Implements neither `Send` nor `Sync` ergonomically in practice — embedders typically wrap it in `Arc<Mutex<FontSystem>>` or pin it to the UI thread.
+
+   > **Correction (text campaign T9, 2026-06-11):** verified against cosmic-text 0.19 — docs.rs lists `impl Send for FontSystem` **and** `impl Sync for FontSystem`. The `Arc<Mutex<>>` pattern stands on the `&mut`-only API (shaping takes `&mut FontSystem`), not on missing marker traits. See [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger).
+
 2. **One `SwashCache` per process (effectively a singleton).** Owns the rasterized glyph image cache. Held alongside `FontSystem`. The embedder reads `SwashImage`s out of it and uploads them to its own GPU atlas.
 3. **One `Buffer` per text node.** Holds the source text, the attrs, the layout result, the cursor scroll position. Re-laid-out whenever text, attrs, or width change. The embedder is responsible for change detection — cosmic-text doesn't track "is this Buffer dirty" itself.
 4. **One `Editor<'buffer>` per editable text node.** Wraps a mutable borrow of the Buffer and tracks `Cursor` + `Selection` + in-progress `Change`. Created on-demand in the input-handling path.
@@ -45,6 +48,9 @@ Bevy 0.15 also introduced system font support as the headline benefit — cosmic
 
 The Bevy shape:
 - A single `Res<CosmicFontSystem>` resource wraps `FontSystem` (which is non-Sync; the resource pins it to a thread).
+
+  > **Correction (text campaign T9, 2026-06-11):** `FontSystem` is `Send + Sync` in 0.19 (docs.rs lists both impls); the single-resource serialization stands on the `&mut FontSystem` API, not on a missing `Sync`. See [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger).
+
 - Each `Text` entity gets a `CosmicBuffer` component holding the per-text `Buffer`.
 - Glyph rasterization happens in a render-world system that consumes `LayoutRun`s and writes into Bevy's existing 2D text atlas (not a cosmic-text-specific one).
 - `bevy_cosmic_edit` (a separate crate by `Dimchikkk`, **archived 2025-03-21**) added an editing surface on top, but is no longer maintained.

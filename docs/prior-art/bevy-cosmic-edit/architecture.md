@@ -112,6 +112,8 @@ Buiy's text.md ([§ IME composition](../../specs/2026-05-07-buiy-foundation/text
 
 The crate painted the caret and selection rectangles **into the same CPU image** as the glyphs, before upload. Caret: a 1-or-2-pixel-wide rectangle stamped at the cursor position derived from `Editor::cursor()`. Selection: cosmic-text's `Editor::with_selection_bounds(|rects|)` returned a `Vec<Rect>` per visual run (multi-rect on mixed-direction lines per UAX #9); bevy_cosmic_edit stamped each rect into the image as a filled rectangle in `SelectionColor`, then painted text on top so glyphs inside selection were re-rendered in `SelectedTextColor`.
 
+> **Correction (text campaign T9, 2026-06-11):** historical description of the archived crate, retained as-is. Note that `with_selection_bounds` is not in cosmic-text 0.19 — the 0.19 contract is `Editor::selection_bounds() -> Option<(Cursor, Cursor)>` + per-run `LayoutRun::highlight(start, end)` (`src/buffer.rs:58–113` @ 0.19.0). See [text verification.md § 5](../../specs/2026-06-09-buiy-text-rendering-design/verification.md#5-prior-art-errata-ledger).
+
 This means selection and caret were **not** separate render passes. They couldn't blend or composite differently from the text; they couldn't use shader effects; the caret didn't blink (re-rendering on a blink cadence would have been a re-upload-per-blink cost).
 
 ## Focus model
