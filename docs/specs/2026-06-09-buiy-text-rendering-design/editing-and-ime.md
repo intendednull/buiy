@@ -38,6 +38,18 @@ existing GPU-verified paths — quads via the batched node, glyph recolor via
 `crates/buiy_core/src/render/atlas/primitive.rs:30-48`). No new GPU work is
 required by anything in this file (§ 5).
 
+> **Status: design-only (deferred build targets).** As of 2026-06-13, none of
+> the editor state machine described here is implemented. `TextEditState`,
+> `EditCommand`, `UndoStack`, `TextSelection`, the `ReadOnly` / `Disabled` /
+> `SingleLine` / `Placeholder` markers, `PreeditSpan`, and the IME machinery
+> (§§ 2.2, 3, 4, 6, 8) are **this campaign's implementation targets**, not
+> verified code — `TextEditState` is explicitly deferred at
+> `crates/buiy_core/src/text/components.rs`. The **painting surfaces** they drive
+> (`CaretVisual`, `SelectionVisual`) and every architectural seam (focus, Tab,
+> `ScrollOffset`, picking, `BuiySet` order, paint rank, damage gates) ARE built
+> and verified (T6–T8); see the readiness report
+> `docs/reports/2026-06-13-text-editing-design-readiness.md`.
+
 > **Supersession, stated up front.** The prior-art guidance to keep preedit as a
 > "parallel … render-layer overlay" that never mutates the `Buffer`
 > ([bevy-cosmic-edit lessons.md "IME without preedit rendering"](../../prior-art/bevy-cosmic-edit/lessons.md),
@@ -282,11 +294,12 @@ seats).** All editor visuals are existing-primitive emissions:
   quad caret cannot: v1 routes everything to layer 0 (per-layer interleave
   does not exist — buckets.rs:9–11, 146–153), so a quad always paints under
   glyphs, and a "next layer" would misuse the `painters_z` stacking index for
-  a within-node ordering concern. Split caret (§ 4.1) = **two stamps**.
+  a within-node ordering concern. Split caret (§ 4.1) = a **secondary
+  `CaretVisual` rect + a second stamp** (CPU geometry only — still no GPU work).
 - **Caret blink** is a `CaretVisual { visible, rect }` state edge written by
   render-prep ([decoration-and-paint.md § 6.3](decoration-and-paint.md)); the
   edge rebuilds `ExtractedGlyphs` through the **independent glyph damage
-  gate** (`prepare.rs:157-216`), so a blink re-uploads only the glyph buffer
+  gate** (`prepare.rs:230-283`), so a blink re-uploads only the glyph buffer
   — a quad caret would re-upload the whole quad buffer every blink. Timer
   resets on every edit and caret move; reduced-motion ⇒ steady caret, no
   blink — never a shader concern.
@@ -544,15 +557,34 @@ reduced-motion; auto-scroll via `ScrollOffset`; the § 11 taxonomy; the
 
 ## Open questions
 
-1. **Frame-ordering for edit→layout.** `BuiySet` chains Layout → … → Input → …
-   → Render (`crates/buiy_core/src/lib.rs:57-87`), so edits mutate the Buffer
-   *after* layout ran this frame: content-size changes and caret geometry either
-   re-enter layout same-frame (within the architecture's 2×-Taffy-per-frame cap)
-   or show one-frame latency. This must be settled **jointly with
-   [measure-and-layout.md](measure-and-layout.md)** (which owns the
-   measure function and `shape_as_needed` scheduling); this file takes either
-   answer without structural change, but the typing-latency gate (§ 12) depends
-   on it.
+1. **Frame-ordering for edit→layout — RESOLVED (accepted one-frame latency).**
+   `BuiySet` chains Layout → Style → Input → … → Render
+   (`crates/buiy_core/src/lib.rs:64-95`), and `TextSync` / `TextCommit` live
+   *inside* Layout (`pipeline.rs:80-101`). Editor input lands in `BuiySet::Input`,
+   two sets **after** Layout, so a keystroke mutates the Buffer after this frame's
+   layout already ran; the change is picked up by **next-frame** `TextSync` and
+   flows TextSync → measure → TextCommit → `extract_buiy_glyphs`, publishing one
+   frame later (N → N+1). Caret geometry, `ime_position` (§ 6.3), and auto-scroll
+   (§ 9) come current the **same** frame the edit's TextCommit publishes, because
+   the caret reads the `ComputedTextLayout` written in that TextCommit — no extra
+   caret lag. This inherits the accepted one-frame latency pinned by
+   [architecture.md § 5.1](architecture.md) (a `BuiySet::Style` value reaches
+   shaping next-frame TextSync; the editor Input path is the same structure one
+   set down).
+
+   **Same-frame re-entry is rejected (blocker-class wrong).** It would need a
+   fourth Taffy compute site beyond the architecture's 2×-per-frame cap; the only
+   same-frame Layout re-runs (`cq_flip_rerun`, `cq_descendant_rerun`) are
+   container-query driven and never fire from Input
+   (`measure-and-layout.md` § 4.3). The editing campaign **must not** attempt
+   same-frame re-entry — one-frame latency needs **zero** new machinery.
+
+   **Gate caveat.** The T8 typing-latency fixture
+   (`crates/buiy_core/tests/text_typing_latency.rs:80-109`) mutates the `Text`
+   component *before* Layout, so it proves the **sync-side** path one-frame, not
+   the editor Input path. The editor-input latency gate needs its **own**
+   Input-driven N→N+1 fixture (edit applied in `BuiySet::Input`, glyph publish
+   asserted at N+1); do not cite the T8 fixture as editor-path proof.
 2. **Prior-art drift needs a correction note.** Verified against 0.19:
    `Editor::with_selection_bounds` does not exist (real pair:
    `selection_bounds()` + `LayoutRun::highlight`); `Action::Scroll` takes

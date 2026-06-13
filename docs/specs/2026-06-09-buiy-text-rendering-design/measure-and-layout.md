@@ -361,6 +361,14 @@ same drift failure the shared `translate_one_entity` helper already guards
 against on the style side. Also rejected: a third text-driven re-run pass —
 text needs no extra pass.
 
+**Edit-to-layout latency cross-pin (jointly with
+[editing-and-ime.md](editing-and-ime.md) OQ#1).** Editor edits land in
+`BuiySet::Input`, after these three compute sites all ran; there is no fourth
+pass to re-enter, so the editor edit→layout path is **one frame** (N → N+1) by
+construction, not same-frame. This is the resolution of editing-and-ime.md's
+OQ#1 — recorded here because § 4.3 owns the ≤2× ceiling that forecloses same-frame
+re-entry.
+
 ---
 
 ## § 5 F-tier property mapping
