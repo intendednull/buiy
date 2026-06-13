@@ -11,12 +11,14 @@ use buiy_core::layout::Style;
 use buiy_core::render::atlas::{AtlasConfig, GlyphAlphaInstance};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{ClipRect, CssVisibility, TextColor};
+use buiy_core::text::edit::TextEditState;
 use buiy_core::text::{
     BuiyFont, DecorationLines, FamilyEntry, FontDbLineage, FontDisplay, FontFaceDescriptors,
     FontFamily, FontRegistry, FontSize, FontStack, FontsGeneration, GenericFamily, Text,
     TextDecorations, solid_stamp_key, stamp_uv,
 };
 use buiy_core::theme::Theme;
+use cosmic_text::Metrics;
 use std::borrow::Cow;
 use std::time::Duration;
 use support::extract_harness::TextExtractHarness;
@@ -1041,4 +1043,66 @@ fn vanished_window_clears_once_then_retains() {
         after_clear,
         "the clear happens ONCE, not per frame"
     );
+}
+
+// --- E1 Task 4: the editor entity emits glyphs through the same producer ---
+
+/// E1 flagship invariant, glyph half (E1 plan § Task 4.3): an editor entity
+/// (`Text` + `TextEditState`) contributes glyph instances IDENTICALLY to the
+/// equivalent display-only entity, because `extract_buiy_glyphs` reads the
+/// authoritative buffer through the read-only `TextBufferAccess`. The seam is
+/// transparent at the glyph tier too — same producer, same emission, same
+/// per-entity run length.
+#[test]
+fn editor_entity_emits_the_same_glyph_run_as_a_display_entity() {
+    let mut h = TextExtractHarness::new();
+    let display = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Hi!")),
+            FontSize(16.0),
+        ))
+        .id();
+    let editor = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Hi!")),
+            FontSize(16.0),
+            TextEditState::new(Metrics::new(16.0, 19.2)),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(display)
+        .add_child(editor);
+    h.settle();
+
+    let runs = &h.glyphs().entity_runs;
+    let span = |e: Entity| {
+        runs.iter()
+            .find(|r| r.entity == e)
+            .map(|r| r.instances.end - r.instances.start)
+    };
+    let d_span = span(display).expect("the display entity emitted a glyph run");
+    let e_span = span(editor).expect("the editor entity emitted a glyph run");
+    assert_eq!(
+        e_span, d_span,
+        "the editor entity emits the same glyph count as the display entity \
+         (the producer read the editor-owned buffer through the read-only accessor)"
+    );
+    // The display fixture is 3 non-whitespace glyphs — the editor matches it.
+    assert_eq!(d_span, 3, "the 'Hi!' fixture is three glyph instances");
 }

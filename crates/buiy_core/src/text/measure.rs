@@ -21,7 +21,8 @@ use taffy::{AvailableSpace, NodeId, Size as TaffySize};
 
 use crate::layout::{BoxModel, LayoutTaffyComputeCount, LayoutTree, Sizing};
 
-use super::components::{IntrinsicWidths, TextBuffer};
+use super::components::IntrinsicWidths;
+use super::edit::{TextBufferAccess, TextBufferAccessItem};
 use super::font_system::SharedFontSystem;
 
 /// Per-frame count of measure-closure invocations on text leaves (measure
@@ -41,7 +42,11 @@ pub struct TextMeasureCallCount(pub usize);
 #[derive(SystemParam)]
 pub struct TextMeasureParam<'w, 's> {
     fonts: Option<Res<'w, SharedFontSystem>>,
-    buffers: Query<'w, 's, (&'static mut TextBuffer, Option<&'static BoxModel>)>,
+    // The editor-first accessor (E1): an editor entity measures its
+    // editor-owned buffer; a display entity measures its `TextBuffer.buffer`
+    // (the `Option<&mut TextEditState>` member is `None`). Identical shaping
+    // either way — the seam is transparent.
+    buffers: Query<'w, 's, (TextBufferAccess, Option<&'static BoxModel>)>,
     call_count: Option<ResMut<'w, TextMeasureCallCount>>,
 }
 
@@ -126,20 +131,20 @@ pub(crate) fn compute_roots_with_text_measure(
 /// Definite arm answers at layout time.
 fn measure_text_node(
     font_system: &mut FontSystem,
-    buffers: &mut Query<(&'static mut TextBuffer, Option<&'static BoxModel>)>,
+    buffers: &mut Query<(TextBufferAccess, Option<&'static BoxModel>)>,
     entity: Entity,
     known_dimensions: TaffySize<Option<f32>>,
     available_space: TaffySize<AvailableSpace>,
 ) -> TaffySize<f32> {
-    let Ok((mut text, box_model)) = buffers.get_mut(entity) else {
+    let Ok((mut access, box_model)) = buffers.get_mut(entity) else {
         // The context outlived its TextBuffer within this frame (the
         // removal edge races the compute): measure as empty; the cleared
         // context lands at the next sync point.
         return TaffySize::ZERO;
     };
-    // measure § 7: a width probe is not a semantic change — never tick.
-    let text = text.bypass_change_detection();
-    let intrinsics = cached_intrinsics(text, font_system);
+    // measure § 7: a width probe is not a semantic change — the accessor's
+    // `with_buffer_mut`/`cache_intrinsics` bypass the tick internally.
+    let intrinsics = cached_intrinsics(&mut access, font_system);
     // § 3.3 — width-axis intrinsic keywords answer from the cache
     // regardless of the probe. A parent-resolved known width still
     // overrides the measured size downstream (leaf.rs:143–146) — the
@@ -163,9 +168,11 @@ fn measure_text_node(
     // protocol rides, § 3.2). Height stays None: measure never crops, and
     // the None is the catch-all signal TextCommit uses to recognize a
     // probe-left buffer (commit always sets Some — decision 7).
-    text.buffer.set_size(Some(width), None);
-    text.buffer.shape_until_scroll(font_system, false);
-    let (max_w, total_h) = fold_runs(&text.buffer);
+    let (max_w, total_h) = access.with_buffer_mut(|buffer| {
+        buffer.set_size(Some(width), None);
+        buffer.shape_until_scroll(font_system, false);
+        fold_runs(buffer)
+    });
     // Ceil: taffy's whole-px rounding must never round the final box
     // below the measured content (a <1px deficit re-wraps the last word
     // at commit — the bevy_text precedent; decision 5).
@@ -189,21 +196,25 @@ fn fold_runs(buffer: &cosmic_text::Buffer) -> (f32, f32) {
 /// `Wrap::None` nothing breaks ⇒ min == max — the CSS nowrap behavior),
 /// max-content via unconstrained layout. `TextSync` invalidates on every
 /// content change — that invalidation IS the cache key.
-fn cached_intrinsics(text: &mut TextBuffer, font_system: &mut FontSystem) -> IntrinsicWidths {
-    if let Some(cached) = text.intrinsics() {
+fn cached_intrinsics(
+    access: &mut TextBufferAccessItem,
+    font_system: &mut FontSystem,
+) -> IntrinsicWidths {
+    if let Some(cached) = access.intrinsics() {
         return cached;
     }
-    let buffer = &mut text.buffer;
-    buffer.set_size(Some(0.0), None);
-    buffer.shape_until_scroll(font_system, false);
-    let min_content = fold_runs(buffer).0;
-    buffer.set_size(None, None);
-    buffer.shape_until_scroll(font_system, false);
-    let max_content = fold_runs(buffer).0;
-    let widths = IntrinsicWidths {
-        min_content,
-        max_content,
-    };
-    text.cache_intrinsics(widths);
+    let widths = access.with_buffer_mut(|buffer| {
+        buffer.set_size(Some(0.0), None);
+        buffer.shape_until_scroll(font_system, false);
+        let min_content = fold_runs(buffer).0;
+        buffer.set_size(None, None);
+        buffer.shape_until_scroll(font_system, false);
+        let max_content = fold_runs(buffer).0;
+        IntrinsicWidths {
+            min_content,
+            max_content,
+        }
+    });
+    access.cache_intrinsics(widths);
     widths
 }

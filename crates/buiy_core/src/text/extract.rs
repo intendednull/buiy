@@ -39,6 +39,7 @@ use super::components::{
     CaretVisual, ComputedTextLayout, SelectionVisual, TextBuffer, TextDecorations,
 };
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
+use super::edit::TextBufferAccessReadOnly;
 use super::font_system::{FontDbLineage, FontsGeneration, SharedFontSystem};
 use super::registry::PendingFontBlock;
 use super::stamp::{solid_stamp_bitmap, solid_stamp_key, stamp_uv};
@@ -140,10 +141,11 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// Runs in `ExtractSchedule` `.after(maintain_atlas)` so inserts and touches
 /// use the just-advanced frame clock.
 ///
-/// Binds `&TextBuffer` directly — `TextBufferAccess` is deferred to the
-/// editing campaign (T3 decision 12 supersedes § 6.1's accessor mention;
-/// the swap is mechanical when `TextEditState` exists). `layout_runs` is
-/// `&self`, so the main-world read stays read-only.
+/// Binds the read-only `TextBufferAccess` form (E1): an editor entity emits
+/// glyphs from its editor-owned buffer, a display entity from
+/// `TextBuffer.buffer` — the seam is transparent (§ 6.1's accessor mention,
+/// realized). `Edit::with_buffer` / `layout_runs` are `&self`, so the
+/// main-world read stays read-only.
 ///
 /// § 6.2 ledger — the `FontsGeneration`/`FontDbLineage` value-compare
 /// probes joined in T5 (a generation bump rebuilds; a lineage advance
@@ -175,7 +177,11 @@ pub fn extract_buiy_glyphs(
         Query<
             (
                 &GlobalTransform,
-                &TextBuffer,
+                // The editor-first read-only accessor (E1): an editor entity
+                // emits glyphs from its editor-owned buffer; a display entity
+                // from `TextBuffer.buffer`. `Edit::with_buffer` is `&self`, so
+                // the main-world read stays read-only (architecture § 4.4).
+                TextBufferAccessReadOnly,
                 &ComputedTextLayout,
                 Option<&TextColor>,
                 Option<&ComputedPaintSkip>,
@@ -360,7 +366,7 @@ pub fn extract_buiy_glyphs(
     for entity in order {
         let Ok((
             gt,
-            buffer,
+            access,
             computed,
             color,
             skip,
@@ -416,214 +422,222 @@ pub fn extract_buiy_glyphs(
                 // (T3 decision 9) — computed.size.x is defense, not a
                 // path (upstream's unwrap_or(0.0) would drop the
                 // extension silently).
-                let full_w = buffer.buffer.size().0.unwrap_or(computed.size.x);
-                for run in buffer.buffer.layout_runs() {
-                    // THE caller contract (Orientation § 1 of the T7 plan):
-                    // highlight's predicate degenerates to all-selected
-                    // outside [start.line, end.line] — gate first, like
-                    // upstream (edit/editor.rs:103).
-                    if run.line_i < sel.start.line || run.line_i > sel.end.line {
-                        continue;
-                    }
-                    let spans: SmallVec<[(f32, f32); 4]> =
-                        run.highlight(sel.start, sel.end).collect();
-                    if spans.is_empty() && run.glyphs.is_empty() && sel.end.line > run.line_i {
-                        // Internal fully-selected empty line: full width.
-                        push_selection_quad(
-                            &mut new_quads,
-                            entity,
-                            origin,
-                            0.0,
-                            full_w,
-                            &run,
-                            bg,
-                            eff_clip,
-                        );
-                    } else {
-                        let len = spans.len();
-                        for (idx, (x, w)) in spans.into_iter().enumerate() {
-                            let (mut min_x, mut max_x) = (x, x + w);
-                            // Non-final selected line: the last rect
-                            // extends to the line edge (newline made
-                            // visible) — RTL-aware, upstream verbatim.
-                            if idx + 1 == len && sel.end.line > run.line_i {
-                                if run.rtl {
-                                    min_x = 0.0;
-                                } else {
-                                    max_x = full_w;
-                                }
-                            }
+                let full_w = access
+                    .with_buffer(|buffer| buffer.size().0)
+                    .unwrap_or(computed.size.x);
+                access.with_buffer(|buffer| {
+                    for run in buffer.layout_runs() {
+                        // THE caller contract (Orientation § 1 of the T7 plan):
+                        // highlight's predicate degenerates to all-selected
+                        // outside [start.line, end.line] — gate first, like
+                        // upstream (edit/editor.rs:103).
+                        if run.line_i < sel.start.line || run.line_i > sel.end.line {
+                            continue;
+                        }
+                        let spans: SmallVec<[(f32, f32); 4]> =
+                            run.highlight(sel.start, sel.end).collect();
+                        if spans.is_empty() && run.glyphs.is_empty() && sel.end.line > run.line_i {
+                            // Internal fully-selected empty line: full width.
                             push_selection_quad(
                                 &mut new_quads,
                                 entity,
                                 origin,
-                                min_x,
-                                max_x - min_x,
+                                0.0,
+                                full_w,
                                 &run,
                                 bg,
                                 eff_clip,
                             );
+                        } else {
+                            let len = spans.len();
+                            for (idx, (x, w)) in spans.into_iter().enumerate() {
+                                let (mut min_x, mut max_x) = (x, x + w);
+                                // Non-final selected line: the last rect
+                                // extends to the line edge (newline made
+                                // visible) — RTL-aware, upstream verbatim.
+                                if idx + 1 == len && sel.end.line > run.line_i {
+                                    if run.rtl {
+                                        min_x = 0.0;
+                                    } else {
+                                        max_x = full_w;
+                                    }
+                                }
+                                push_selection_quad(
+                                    &mut new_quads,
+                                    entity,
+                                    origin,
+                                    min_x,
+                                    max_x - min_x,
+                                    &run,
+                                    bg,
+                                    eff_clip,
+                                );
+                            }
                         }
                     }
-                }
+                });
             }
         }
 
-        let mut runs = 0usize;
-        for run in buffer.buffer.layout_runs() {
-            runs += 1;
-            // The decoration walk (§ 4.6: ONE run walk emits quads AND
-            // stamps AND glyphs, under the one damage decision).
-            // Underline/overline are quad-tier (§ 4.2) and paint UNDER the
-            // text by primitive rank; emitted before the glyph loop for
-            // § 4.4 carrier order. Line-through rects (rect, linearized
-            // color) buffer through the glyph loop into solid-stamp
-            // instances appended after it (§ 4.4 seat 5).
-            let mut strikes: SmallVec<[([f32; 4], [f32; 4]); 2]> = SmallVec::new();
-            for span in run.decorations {
-                let Some((x_start, width)) = span_x_extent(run.glyphs, &span.glyph_range) else {
-                    continue;
-                };
-                for deco in span_decoration_rects(
-                    origin,
-                    run.line_y,
-                    run.line_top,
-                    x_start,
-                    width,
-                    &span.data,
-                    span.font_size,
-                    span.color_opt,
-                    scale_factor,
-                ) {
-                    // § 3.2 precedence: token override → upstream tiers
-                    // (per-kind / span color) → currentColor.
-                    let mut color = deco_override
-                        .or(deco.color_opt.map(cosmic_color))
-                        .unwrap_or(resolved_entity_color);
+        let runs = access.with_buffer(|buffer| {
+            let mut runs = 0usize;
+            for run in buffer.layout_runs() {
+                runs += 1;
+                // The decoration walk (§ 4.6: ONE run walk emits quads AND
+                // stamps AND glyphs, under the one damage decision).
+                // Underline/overline are quad-tier (§ 4.2) and paint UNDER the
+                // text by primitive rank; emitted before the glyph loop for
+                // § 4.4 carrier order. Line-through rects (rect, linearized
+                // color) buffer through the glyph loop into solid-stamp
+                // instances appended after it (§ 4.4 seat 5).
+                let mut strikes: SmallVec<[([f32; 4], [f32; 4]); 2]> = SmallVec::new();
+                for span in run.decorations {
+                    let Some((x_start, width)) = span_x_extent(run.glyphs, &span.glyph_range)
+                    else {
+                        continue;
+                    };
+                    for deco in span_decoration_rects(
+                        origin,
+                        run.line_y,
+                        run.line_top,
+                        x_start,
+                        width,
+                        &span.data,
+                        span.font_size,
+                        span.color_opt,
+                        scale_factor,
+                    ) {
+                        // § 3.2 precedence: token override → upstream tiers
+                        // (per-kind / span color) → currentColor.
+                        let mut color = deco_override
+                            .or(deco.color_opt.map(cosmic_color))
+                            .unwrap_or(resolved_entity_color);
+                        if blocked {
+                            // § 7 Block: paint-invisible, layout-identical.
+                            color = color.with_alpha(0.0);
+                        } else if color.alpha() == 0.0 {
+                            continue; // fully transparent: nothing to paint
+                        }
+                        match deco.kind {
+                            DecorationKind::Underline | DecorationKind::Overline => {
+                                new_quads.push(TextQuad {
+                                    entity,
+                                    position: Vec2::new(deco.rect[0], deco.rect[1]),
+                                    size: Vec2::new(deco.rect[2], deco.rect[3]),
+                                    color,
+                                    clip: eff_clip,
+                                });
+                            }
+                            // § 4.4 seat 5: buffered through the glyph loop —
+                            // the solid stamp paints OVER the run's glyphs (the
+                            // CSS Text Decoration L3 painting order).
+                            DecorationKind::LineThrough => {
+                                strikes.push((deco.rect, linear_color(color)));
+                            }
+                        }
+                    }
+                }
+                for glyph in run.glyphs.iter() {
+                    // § 5.1: cosmic-text's own binning, verbatim.
+                    let phys = glyph.physical(
+                        physical_offset(origin, run.line_y, scale_factor),
+                        scale_factor,
+                    );
+                    let key = glyph_atlas_key(&phys.cache_key, &mut interner);
+                    let Some((entry, bearing)) = resolve_glyph(
+                        &mut atlas,
+                        &mut meta,
+                        fonts,
+                        &mut font_guard,
+                        &mut swash,
+                        &key,
+                        phys.cache_key,
+                    ) else {
+                        continue; // zero coverage (whitespace) or color-emoji skip (§ 9)
+                    };
+                    if entry.page > 0 {
+                        warn_once_page_overflow(); // § 11.1 v1 mitigation
+                    }
+                    // T7 § 5.2: per-CLUSTER re-tint — a glyph whose bytes
+                    // intersect the selection paints with the selection fg
+                    // (over any rich-text span color, upstream-verbatim); the
+                    // atlas is never touched. Granularity is the cluster: a
+                    // partially selected ligature re-tints whole while its
+                    // RECT stays grapheme-accurate (§ 5.2's accepted
+                    // tradeoff). Upstream's text_color != selected_text_color
+                    // short-circuit is dropped — equal resolved colors emit
+                    // identical instances.
+                    let selected = selection.is_some_and(|sel| {
+                        run.line_i >= sel.start.line
+                            && run.line_i <= sel.end.line
+                            && (sel.start.line != run.line_i || glyph.end > sel.start.index)
+                            && (sel.end.line != run.line_i || glyph.start < sel.end.index)
+                    });
+                    let mut color = match (selected, selection_fg) {
+                        (true, Some(fg)) => fg,
+                        // Per-span Attrs color override rides through (§ 7).
+                        _ => glyph.color_opt.map(span_color).unwrap_or(entity_color),
+                    };
                     if blocked {
-                        // § 7 Block: paint-invisible, layout-identical.
-                        color = color.with_alpha(0.0);
-                    } else if color.alpha() == 0.0 {
+                        // font-assets § 7 Block: identical fallback LAYOUT,
+                        // zero-alpha PAINT — instances ARE emitted (the atlas
+                        // and the GPU buffer stay warm with the fallback's
+                        // glyphs), bypassing the transparent skip below.
+                        color[3] = 0.0;
+                    } else if color[3] == 0.0 {
                         continue; // fully transparent: nothing to paint
                     }
-                    match deco.kind {
-                        DecorationKind::Underline | DecorationKind::Overline => {
-                            new_quads.push(TextQuad {
-                                entity,
-                                position: Vec2::new(deco.rect[0], deco.rect[1]),
-                                size: Vec2::new(deco.rect[2], deco.rect[3]),
-                                color,
-                                clip: eff_clip,
-                            });
-                        }
-                        // § 4.4 seat 5: buffered through the glyph loop —
-                        // the solid stamp paints OVER the run's glyphs (the
-                        // CSS Text Decoration L3 painting order).
-                        DecorationKind::LineThrough => {
-                            strikes.push((deco.rect, linear_color(color)));
-                        }
-                    }
-                }
-            }
-            for glyph in run.glyphs.iter() {
-                // § 5.1: cosmic-text's own binning, verbatim.
-                let phys = glyph.physical(
-                    physical_offset(origin, run.line_y, scale_factor),
-                    scale_factor,
-                );
-                let key = glyph_atlas_key(&phys.cache_key, &mut interner);
-                let Some((entry, bearing)) = resolve_glyph(
-                    &mut atlas,
-                    &mut meta,
-                    fonts,
-                    &mut font_guard,
-                    &mut swash,
-                    &key,
-                    phys.cache_key,
-                ) else {
-                    continue; // zero coverage (whitespace) or color-emoji skip (§ 9)
-                };
-                if entry.page > 0 {
-                    warn_once_page_overflow(); // § 11.1 v1 mitigation
-                }
-                // T7 § 5.2: per-CLUSTER re-tint — a glyph whose bytes
-                // intersect the selection paints with the selection fg
-                // (over any rich-text span color, upstream-verbatim); the
-                // atlas is never touched. Granularity is the cluster: a
-                // partially selected ligature re-tints whole while its
-                // RECT stays grapheme-accurate (§ 5.2's accepted
-                // tradeoff). Upstream's text_color != selected_text_color
-                // short-circuit is dropped — equal resolved colors emit
-                // identical instances.
-                let selected = selection.is_some_and(|sel| {
-                    run.line_i >= sel.start.line
-                        && run.line_i <= sel.end.line
-                        && (sel.start.line != run.line_i || glyph.end > sel.start.index)
-                        && (sel.end.line != run.line_i || glyph.start < sel.end.index)
-                });
-                let mut color = match (selected, selection_fg) {
-                    (true, Some(fg)) => fg,
-                    // Per-span Attrs color override rides through (§ 7).
-                    _ => glyph.color_opt.map(span_color).unwrap_or(entity_color),
-                };
-                if blocked {
-                    // font-assets § 7 Block: identical fallback LAYOUT,
-                    // zero-alpha PAINT — instances ARE emitted (the atlas
-                    // and the GPU buffer stay warm with the fallback's
-                    // glyphs), bypassing the transparent skip below.
-                    color[3] = 0.0;
-                } else if color[3] == 0.0 {
-                    continue; // fully transparent: nothing to paint
-                }
-                new_glyphs.push(GlyphAlphaInstance {
-                    rect: glyph_rect_logical(
-                        phys.x,
-                        phys.y,
-                        bearing,
-                        entry.px.size(),
-                        scale_factor,
-                    ),
-                    uv: [
-                        entry.uv.min.x,
-                        entry.uv.min.y,
-                        entry.uv.max.x,
-                        entry.uv.max.y,
-                    ],
-                    color,
-                    clip,
-                    page: entry.page as u32,
-                });
-                new_keys.push(key);
-            }
-            // § 4.4 seat 5: line-through paints OVER the run's glyphs —
-            // solid-stamp GlyphAlphaInstances appended after them (quad-tier
-            // rects could never paint over glyphs: § 4.1's fixed primitive
-            // rank).
-            if !strikes.is_empty() {
-                let entry = *stamp_entry.get_or_insert_with(|| {
-                    atlas.get_or_insert(
-                        solid_stamp_key(),
-                        AtlasFormat::CoverageR8,
-                        solid_stamp_bitmap,
-                    )
-                });
-                if entry.page > 0 {
-                    warn_once_page_overflow(); // § 11.1 v1 mitigation
-                }
-                for (rect, color) in strikes {
                     new_glyphs.push(GlyphAlphaInstance {
-                        rect,
-                        uv: stamp_uv(&entry),
+                        rect: glyph_rect_logical(
+                            phys.x,
+                            phys.y,
+                            bearing,
+                            entry.px.size(),
+                            scale_factor,
+                        ),
+                        uv: [
+                            entry.uv.min.x,
+                            entry.uv.min.y,
+                            entry.uv.max.x,
+                            entry.uv.max.y,
+                        ],
                         color,
                         clip,
                         page: entry.page as u32,
                     });
-                    // § 6.3: one key per instance — the un-gated touch pass
-                    // keeps a live stamp LRU-warm through retained frames.
-                    new_keys.push(solid_stamp_key());
+                    new_keys.push(key);
+                }
+                // § 4.4 seat 5: line-through paints OVER the run's glyphs —
+                // solid-stamp GlyphAlphaInstances appended after them (quad-tier
+                // rects could never paint over glyphs: § 4.1's fixed primitive
+                // rank).
+                if !strikes.is_empty() {
+                    let entry = *stamp_entry.get_or_insert_with(|| {
+                        atlas.get_or_insert(
+                            solid_stamp_key(),
+                            AtlasFormat::CoverageR8,
+                            solid_stamp_bitmap,
+                        )
+                    });
+                    if entry.page > 0 {
+                        warn_once_page_overflow(); // § 11.1 v1 mitigation
+                    }
+                    for (rect, color) in strikes {
+                        new_glyphs.push(GlyphAlphaInstance {
+                            rect,
+                            uv: stamp_uv(&entry),
+                            color,
+                            clip,
+                            page: entry.page as u32,
+                        });
+                        // § 6.3: one key per instance — the un-gated touch pass
+                        // keeps a live stamp LRU-warm through retained frames.
+                        new_keys.push(solid_stamp_key());
+                    }
                 }
             }
-        }
+            runs
+        });
         // architecture § 3.2 tripwire: layout_runs TERMINATES at the first
         // unshaped line — a mismatch means something mutated the buffer
         // after TextCommit.

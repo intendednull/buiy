@@ -26,7 +26,7 @@
 //! (**buiy-theme-tokens-design**, font-assets § 9).
 
 use bevy::prelude::*;
-use cosmic_text::{Attrs, Family, Metrics, Weight};
+use cosmic_text::{Attrs, Buffer, Family, Metrics, Weight};
 
 use crate::layout::{LayoutTree, WritingModeResolved};
 
@@ -36,6 +36,7 @@ use super::components::{
     TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
 };
 use super::direction::prepend_strong_marks;
+use super::edit::{TextBufferAccess, TextBufferAccessItem};
 use super::font_system::FontsGeneration;
 use super::match_index::FontMatchIndex;
 use super::registry::{FontRegistry, PendingFontBlock};
@@ -92,7 +93,12 @@ type TextSyncTriggers = Or<(
 type SyncedText = (
     Entity,
     &'static Text,
-    &'static mut TextBuffer,
+    // The editor-first accessor (E1): an editor entity's authored text lands
+    // in its editor-owned buffer; a display entity's lands in
+    // `TextBuffer.buffer` (the `Option<&mut TextEditState>` member is `None`).
+    // The accessor's display member still matches display-only entities, so no
+    // entity drops out of the sync set.
+    TextBufferAccess,
     Option<&'static FontFamily>,
     Option<&'static FontSize>,
     Option<&'static FontWeight>,
@@ -109,7 +115,9 @@ type SyncedText = (
 type SyncedTextItem<'w> = (
     Entity,
     &'w Text,
-    Mut<'w, TextBuffer>,
+    // The generated item carries TWO lifetimes in 0.18 (`Item<'__w, '__s>`,
+    // world + state — see access.rs's note), so the second elides here.
+    TextBufferAccessItem<'w, 'w>,
     Option<&'w FontFamily>,
     Option<&'w FontSize>,
     Option<&'w FontWeight>,
@@ -200,8 +208,25 @@ pub fn text_sync_buffers(
             direction,
             decorations,
         );
+        // The ONLY direct (non-accessor) write left, and it is correct: a
+        // freshly-built `TextBuffer` has no `TextEditState` reachable here
+        // (the `unsynced` query is `Without<TextBuffer>` and never binds the
+        // editor), so the display buffer IS authoritative at insert time. An
+        // entity that ALSO carries `TextEditState` (an editor) re-syncs next
+        // frame through the `Added<TextBuffer>` arm — `sync_one` then routes
+        // the authored text into the editor-owned buffer via the accessor.
+        // (`the_seam_preserves_the_zero_measure_steady_frame` pins that
+        // one-frame-later convergence.)
         let mut buffer = TextBuffer::new(style.metrics());
-        let blocked = apply_authored(&mut buffer, text, &style, ctx.registry, ctx.index, ctx.now);
+        let blocked = apply_authored_to_buffer(
+            &mut buffer.buffer,
+            text,
+            &style,
+            ctx.registry,
+            ctx.index,
+            ctx.now,
+        );
+        buffer.invalidate_intrinsics();
         commands.entity(entity).insert(buffer);
         reconcile_font_block(&mut commands, entity, blocked, pending, &style, &ctx);
         if let Some(tree) = ctx.tree.as_deref_mut() {
@@ -268,7 +293,7 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
     let (
         entity,
         text,
-        mut buffer,
+        mut access,
         family,
         size,
         weight,
@@ -279,11 +304,6 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         decorations,
         pending,
     ) = item;
-    // EVERY in-place TextBuffer write bypasses change detection
-    // (measure-and-layout § 7): a sync write is not a damage signal —
-    // damage keys on the commit outputs; `Changed<TextBuffer>` is reserved
-    // for nothing (tests/text_sync.rs pins it never fires past insertion).
-    let buffer = buffer.bypass_change_detection();
     let style = AuthoredStyle::resolve(
         ctx.defaults,
         family,
@@ -295,7 +315,19 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         direction,
         decorations,
     );
-    let blocked = apply_authored(buffer, text, &style, ctx.registry, ctx.index, ctx.now);
+    // Write through the accessor: the editor-owned buffer when present (§ 2.2a),
+    // else the display `TextBuffer.buffer`. EVERY in-place buffer write bypasses
+    // change detection (measure-and-layout § 7) — a sync write is not a damage
+    // signal; damage keys on the commit outputs. The accessor's `with_buffer_mut`
+    // performs the bypass internally on whichever side is authoritative
+    // (`tests/text_edit_substrate.rs` pins the editor arm;
+    // `tests/text_sync.rs` pins `Changed<TextBuffer>` never fires past insertion).
+    let blocked = access.with_buffer_mut(|buffer| {
+        apply_authored_to_buffer(buffer, text, &style, ctx.registry, ctx.index, ctx.now)
+    });
+    // Invalidate the AUTHORITATIVE cache (the accessor picks the right side) —
+    // every content change keys the intrinsics cache off this invalidation.
+    access.invalidate_intrinsics();
     reconcile_font_block(commands, entity, blocked, pending, &style, ctx);
     if let Some(tree) = ctx.tree.as_deref_mut() {
         // Absent tree (standalone BuiyTextPlugin, no LayoutPlugin): nothing
@@ -441,13 +473,20 @@ impl<'a> AuthoredStyle<'a> {
 /// `set_rich_text` (coverage splits), both lazy (decision 8). Returns the
 /// `font-display: block` flag ([`reconcile_font_block`] consumes it).
 ///
+/// Takes a bare `&mut Buffer` (E1): the AUTHORITATIVE buffer the accessor
+/// hands it — editor-owned when the entity carries `TextEditState`, else the
+/// display `TextBuffer.buffer`. The intrinsics-cache invalidation is the
+/// CALLER's job now (via `TextBufferAccess::invalidate_intrinsics` /
+/// `TextBuffer::invalidate_intrinsics`), because the cache lives on the
+/// authoritative side and only the accessor knows which that is.
+///
 /// `alignment: None` stays even with the `TextAlign` carrier landed
 /// (decision 8): `set_text` with `None` leaves reused lines' align
 /// untouched, so the `Some→None` transition is only correct in the pass
 /// that calls `set_align` on EVERY line — `TextCommit` (§ 5.3, a finalize
 /// concern).
-fn apply_authored(
-    buffer: &mut TextBuffer,
+fn apply_authored_to_buffer(
+    buffer: &mut Buffer,
     text: &Text,
     style: &AuthoredStyle<'_>,
     registry: &FontRegistry,
@@ -456,29 +495,25 @@ fn apply_authored(
 ) -> bool {
     let collapsed = collapse_whitespace(&text.0, style.white_space.collapse_mode());
     // § 5.4: AFTER collapse (the trim sees authored edges, never the mark).
-    // Direction joins the intrinsics content version for free — the wholesale
-    // invalidate_intrinsics() below covers every content change.
+    // Direction joins the intrinsics content version for free — the caller's
+    // invalidate_intrinsics() covers every content change.
     let directed = prepend_strong_marks(&collapsed, style.direction);
     let resolution = resolve_spans(&directed, style.family, style.weight, registry, index, now);
-    buffer.buffer.set_metrics(style.metrics());
-    buffer
-        .buffer
-        .set_wrap(resolve_wrap(style.white_space, style.text_wrap));
-    buffer.buffer.set_tab_width(DEFAULT_TAB_WIDTH);
+    buffer.set_metrics(style.metrics());
+    buffer.set_wrap(resolve_wrap(style.white_space, style.text_wrap));
+    buffer.set_tab_width(DEFAULT_TAB_WIDTH);
     match resolution.spans.as_slice() {
         // Empty text: the base attrs (there is nothing to resolve).
-        [] => buffer
-            .buffer
-            .set_text(&directed, &style.attrs(), TEXT_SHAPING, None),
+        [] => buffer.set_text(&directed, &style.attrs(), TEXT_SHAPING, None),
         // One span: the T2 set_text path — identical buffer state, no
         // AttrsList churn.
-        [only] => buffer.buffer.set_text(
+        [only] => buffer.set_text(
             &directed,
             &span_attrs(style, &only.family),
             TEXT_SHAPING,
             None,
         ),
-        spans => buffer.buffer.set_rich_text(
+        spans => buffer.set_rich_text(
             spans.iter().map(|span| {
                 (
                     &directed[span.range.clone()],
@@ -490,7 +525,6 @@ fn apply_authored(
             None,
         ),
     }
-    buffer.invalidate_intrinsics();
     resolution.blocked
 }
 
