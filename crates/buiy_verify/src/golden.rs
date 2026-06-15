@@ -47,6 +47,11 @@ pub use report::{TriageCard, TriageReport};
 /// `backend`; the field is part of the trace identity now so a future
 /// cross-backend corpus is a *new cell*, never a corpus-wide re-baseline
 /// (Skia-Gold "params/traces"; goldens.md §58).
+///
+/// [`Cpu`](Self::Cpu) is the structured-tier marker: the coverage matrix keys
+/// Tiers 1-3 (layout / display-list / invariant snapshots, no GPU) with it, so
+/// a [`CoverageKey`](crate::coverage::CoverageKey) and a GPU
+/// [`GoldenKey`](GoldenKey) share one `Backend` enum (coverage.md §146).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Backend {
     /// Software Vulkan (Mesa llvmpipe) — the pinned CI rasterizer.
@@ -59,6 +64,10 @@ pub enum Backend {
     Metal,
     /// Direct3D 12.
     Dx12,
+    /// No rasterizer — the structured CPU tiers (coverage Tiers 1-3). Never a
+    /// golden capture backend; reserved so the CPU and GPU coverage cells key
+    /// off the same enum.
+    Cpu,
 }
 
 impl Backend {
@@ -70,6 +79,7 @@ impl Backend {
             Backend::Gl => "gl",
             Backend::Metal => "metal",
             Backend::Dx12 => "dx12",
+            Backend::Cpu => "cpu",
         }
     }
 
@@ -81,6 +91,7 @@ impl Backend {
             "gl" => Backend::Gl,
             "metal" => Backend::Metal,
             "dx12" => Backend::Dx12,
+            "cpu" => Backend::Cpu,
             _ => return None,
         })
     }

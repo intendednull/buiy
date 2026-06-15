@@ -7,6 +7,11 @@ license.workspace = true
 [dependencies]
 bevy.workspace = true
 buiy_core = { path = "../buiy_core" }
+# The widget catalog the coverage fixtures generalize. `buiy_widgets` depends
+# only on `bevy` + `buiy_core` (no `buiy_verify`), so this edge is acyclic — the
+# fixtures spawn the live `Button::new()` bundle the `hello_button` example
+# uses, which is the catalog row the matrix enrolls. No new supply-chain crate.
+buiy_widgets = { path = "../buiy_widgets" }
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
@@ -38,3 +43,10 @@ toml.workspace = true
 # Tier-5 HTML triage report (goldens.md): base64-inline the PNGs so the report
 # is self-contained / offline-first (no external asset, no network).
 base64.workspace = true
+# Coverage catalog (coverage.md § "The fixture as single source of truth"):
+# distributed link-time registration so `catalog()` enumerates every `fixture!`
+# without a hand-maintained central list. MIT/Apache-2.0, already in the
+# lockfile (transitive); `cargo deny check licenses` clears it. Alternative
+# rejected: a hand-maintained `&[Fixture]` const (defeats "zero edits to
+# enroll a new fixture").
+inventory = "0.3"

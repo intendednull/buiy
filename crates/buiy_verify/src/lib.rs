@@ -6,6 +6,7 @@
 
 pub mod a11y;
 pub mod contrast;
+pub mod coverage;
 pub mod determinism;
 pub mod golden;
 pub mod invariant;
