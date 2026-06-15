@@ -59,3 +59,12 @@ accesskit_winit = "0.29"
 # bump cannot drop the atlas allocator. Spec atlas-and-text-seam.md § 2.1.
 guillotiere = "=0.6.2"
 smallvec = "1"
+# Tier-5 golden bless ledger (goldens.md § "The bless ledger"): `<slug>.toml`
+# beside the PNGs is the durable, human-diffable accept record reviewed as the
+# PR diff. MIT/Apache-2.0, already transitively present via cargo tooling;
+# `cargo deny check` gates the add.
+toml = "0.8"
+# Tier-5 self-contained HTML triage report (goldens.md § "Diff-PNG + HTML"):
+# base64-inline the actual/baseline/diff PNGs so the report is offline-first —
+# openable straight from CI artifacts, no external assets, no SaaS. MIT/Apache-2.0.
+base64 = "0.22"

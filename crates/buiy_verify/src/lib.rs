@@ -7,6 +7,7 @@
 pub mod a11y;
 pub mod contrast;
 pub mod determinism;
+pub mod golden;
 pub mod invariant;
 pub mod metric;
 pub mod reftest;

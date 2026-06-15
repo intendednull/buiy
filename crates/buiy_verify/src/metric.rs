@@ -39,7 +39,10 @@ pub struct Diff {
 
 /// The two-axis gate. A Diff PASSES iff BOTH hold. Default after determinism is
 /// (0, 0); widen per fixture with a documented reason.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Derives `serde` so the Tier-5 bless ledger (`golden::Positive.budget`) can
+/// persist a per-fixture widened budget directly to its `<slug>.toml`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FuzzBudget {
     /// No single channel of any pixel may differ by more than this (L∞).
     pub max_channel_delta: u8,

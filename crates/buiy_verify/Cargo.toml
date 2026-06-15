@@ -32,3 +32,9 @@ insta = { version = "=1.48.0", features = ["glob"] }
 # so it must name those types. NO new supply-chain crate, zero new `cargo deny`
 # surface (the version is pinned to buiy_core's `0.19`).
 cosmic-text = "0.19"
+# Tier-5 golden bless ledger (goldens.md): the durable accept record as
+# human-diffable TOML beside the PNGs — the `<slug>.toml` reviewed in the PR.
+toml.workspace = true
+# Tier-5 HTML triage report (goldens.md): base64-inline the PNGs so the report
+# is self-contained / offline-first (no external asset, no network).
+base64.workspace = true
