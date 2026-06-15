@@ -4,11 +4,16 @@
 
 use bevy::prelude::*;
 
-/// Build the headless painting app both reftest captures share. Until the
-/// determinism builder lands this delegates to the promoted
-/// `buiy_core::render::golden::capture_app` (Task 1b.6).
+/// Build the headless painting app both reftest captures share. Phase 3 swapped
+/// this single line from the bare `capture_app` seam to the
+/// [`DeterministicApp`](crate::determinism::DeterministicApp) builder — the
+/// `&mut App → RgbaImage` capture contract is identical, but every
+/// nondeterminism knob (fixed virtual clock, Ahem sole-family, DPR pin,
+/// MSAA/dither) is now pinned at the source. A reftest renders both halves in
+/// one app run, so the staged Ahem registration drains in the first capture's
+/// quiescence loop and the second half shares it.
 pub fn reftest_app(logical_w: u32, logical_h: u32) -> App {
-    buiy_core::render::golden::capture_app(logical_w, logical_h)
+    crate::determinism::DeterministicApp::new(logical_w, logical_h).build()
 }
 
 /// Despawn the previous scene's spawned roots between the two captures so the
