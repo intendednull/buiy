@@ -1,0 +1,24 @@
+Ahem.ttf — the W3C/WPT "Ahem" layout-determinism font.
+
+The Ahem font belongs to the public domain. In jurisdictions that do not
+recognize public domain ownership of these files, the following Creative
+Commons Zero declaration applies:
+
+    http://creativecommons.org/publicdomain/zero/1.0/
+
+Ahem is a deliberately featureless font in which (almost) every glyph is a
+solid em-square box, with a small set of glyphs rendered as empty space. It
+exists so that text-bearing tests can assert *layout* (box positions and
+sizes) without depending on host-specific glyph rasterization — the canonical
+trick the WPT and Flutter test suites use to make text goldens host-stable.
+
+Source (canonical upstream):
+    https://github.com/web-platform-tests/wpt/blob/master/fonts/Ahem.ttf
+    https://www.w3.org/Style/CSS/Test/Fonts/Ahem/
+
+Family name: "Ahem"  ·  Version 1.50  ·  21768 bytes
+sha256: b719ecb31c5b21fc573c03f6421c74ac63c271a5a3ff841e34f9705fb94b8448
+
+Used by buiy_core / buiy_verify's `FontMode::Ahem` determinism mode
+(docs/specs/2026-06-15-buiy-verification-design/determinism.md § "Ahem font
+mode") to collapse the font axis for non-fidelity pixel goldens.
