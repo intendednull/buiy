@@ -72,18 +72,37 @@ pub enum GoldenOutcome {
     },
 }
 
-/// `true` when the bless env (`BUIY_BLESS`) is set — the accept-FILE switch,
-/// modeled on `BUIY_ACCEPT_SHAPING`.
-fn bless_requested() -> bool {
-    std::env::var_os("BUIY_BLESS").is_some()
+/// How a check should treat the corpus: compare-and-gate, or bless `actual` as
+/// a positive. Resolving the bless decision into an explicit value (instead of
+/// reading `BUIY_BLESS` deep in the comparison) keeps the policy out of the
+/// process-global env so the harness's own tests — and the Phase-4 coverage
+/// matrix driver — can drive bless/assert deterministically without env races.
+/// The env is read **once**, at the public entry point ([`check_golden`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlessMode {
+    /// Compare against the corpus and gate (the CI / default path).
+    Assert,
+    /// Write `actual` as a positive. `Some(i)` replaces positive `i`; `None`
+    /// appends a new one (`BUIY_BLESS` set, optional `BUIY_BLESS_REPLACE=<i>`).
+    Bless {
+        /// `Some(i)` overwrites positive `i`; `None` appends a new positive.
+        replace: Option<usize>,
+    },
 }
 
-/// When `BUIY_BLESS_REPLACE=<i>` is set, bless replaces positive `i` instead of
-/// appending. `None` ⇒ append a new positive.
-fn bless_replace_index() -> Option<usize> {
-    std::env::var("BUIY_BLESS_REPLACE")
-        .ok()
-        .and_then(|v| v.parse().ok())
+/// Resolve the bless mode from the environment — the **single** place
+/// `BUIY_BLESS` / `BUIY_BLESS_REPLACE` are read (accept-FILE switch, modeled on
+/// `BUIY_ACCEPT_SHAPING`).
+fn mode_from_env() -> BlessMode {
+    if std::env::var_os("BUIY_BLESS").is_some() {
+        BlessMode::Bless {
+            replace: std::env::var("BUIY_BLESS_REPLACE")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+        }
+    } else {
+        BlessMode::Assert
+    }
 }
 
 /// Compare `actual` against the stored multi-positive baseline for `key` at the
@@ -93,14 +112,26 @@ fn bless_replace_index() -> Option<usize> {
 /// on an any-positive match, or [`Fail`](GoldenOutcome::Fail) (writing the
 /// diff-PNG + HTML triage report) on a miss or empty corpus.
 pub fn check_golden(key: &GoldenKey, actual: &RgbaImage, budget: &FuzzBudget) -> GoldenOutcome {
-    check_golden_in(&default_corpus_root(), &report_dir(), key, actual, budget)
+    check_golden_in(
+        &default_corpus_root(),
+        &report_dir(),
+        mode_from_env(),
+        key,
+        actual,
+        budget,
+    )
 }
 
-/// The corpus-root-parameterized core of [`check_golden`] — lets the harness's
-/// own tests bless/assert against a temp dir (the bless round-trip test).
-pub(crate) fn check_golden_in(
+/// The corpus-root- and mode-parameterized core of [`check_golden`] — lets the
+/// harness's own tests (and the Phase-4 coverage matrix driver) bless/assert
+/// against an explicit corpus root + report dir + [`BlessMode`], with **no**
+/// env races. `corpus_root` holds the `<key.slug()>/<stem>.<n>.png` positives +
+/// `<stem>.toml` ledgers; `report_root` receives the diff-PNG + HTML triage
+/// report on a fail.
+pub fn check_golden_in(
     corpus_root: &std::path::Path,
     report_root: &std::path::Path,
+    mode: BlessMode,
     key: &GoldenKey,
     actual: &RgbaImage,
     budget: &FuzzBudget,
@@ -108,8 +139,8 @@ pub(crate) fn check_golden_in(
     let dir = key.dir(corpus_root);
     let ledger_path = ledger_path(&dir);
 
-    if bless_requested() {
-        return bless(&dir, &ledger_path, key, actual, budget);
+    if let BlessMode::Bless { replace } = mode {
+        return bless(&dir, &ledger_path, replace, key, actual, budget);
     }
 
     let ledger = BlessLedger::load_or_empty(&ledger_path, key)
@@ -153,11 +184,12 @@ fn diff_score(d: &Diff) -> u64 {
 }
 
 /// Bless `actual`: write it as a positive PNG + record it in the ledger. With
-/// `BUIY_BLESS_REPLACE=<i>` set it overwrites positive `i`; otherwise it appends
-/// a new positive. **The human then reviews the PNG in the PR and commits it.**
+/// `replace = Some(i)` it overwrites positive `i`; otherwise it appends a new
+/// positive. **The human then reviews the PNG in the PR and commits it.**
 fn bless(
     dir: &std::path::Path,
     ledger_path: &std::path::Path,
+    replace: Option<usize>,
     key: &GoldenKey,
     actual: &RgbaImage,
     budget: &FuzzBudget,
@@ -166,7 +198,6 @@ fn bless(
     let mut ledger = BlessLedger::load_or_empty(ledger_path, key).expect("load ledger for bless");
 
     let stem = slug_stem(key);
-    let replace = bless_replace_index();
     let (index, was_new) = match replace {
         Some(i) if i < ledger.positives.len() => (i, false),
         _ => (ledger.positives.len(), true),
@@ -201,6 +232,22 @@ fn bless(
 /// `#[test]` calls.
 pub fn assert_golden(key: &GoldenKey, actual: &RgbaImage, budget: &FuzzBudget) {
     match check_golden(key, actual, budget) {
+        GoldenOutcome::Pass { .. } | GoldenOutcome::Blessed { .. } => {}
+        GoldenOutcome::Fail { best, report } => panic_fail(key, best.as_ref(), &report),
+    }
+}
+
+/// [`assert_golden`] against an explicit corpus root + report dir + mode — the
+/// no-env-race variant the harness's own fail-closed test drives.
+pub fn assert_golden_in(
+    corpus_root: &std::path::Path,
+    report_root: &std::path::Path,
+    mode: BlessMode,
+    key: &GoldenKey,
+    actual: &RgbaImage,
+    budget: &FuzzBudget,
+) {
+    match check_golden_in(corpus_root, report_root, mode, key, actual, budget) {
         GoldenOutcome::Pass { .. } | GoldenOutcome::Blessed { .. } => {}
         GoldenOutcome::Fail { best, report } => panic_fail(key, best.as_ref(), &report),
     }
