@@ -50,7 +50,10 @@ pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
 };
 pub use direction::prepend_strong_marks;
-pub use edit::{Disabled, Placeholder, ReadOnly, SingleLine, TextBufferAccess, TextEditState};
+pub use edit::{
+    Disabled, EditCommand, Keymap, Placeholder, ReadOnly, SingleLine, TextBufferAccess,
+    TextChanged, TextEditState, apply_keyboard_edits,
+};
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
     pack_clip, physical_offset,
@@ -175,6 +178,19 @@ impl Plugin for BuiyTextPlugin {
             visual::write_caret_blink
                 .after(crate::BuiySet::Animate)
                 .before(crate::BuiySet::Picking),
+        );
+
+        // E2 (editing-and-ime §§ 3, 11): the per-platform keymap (selected
+        // once at init by a data swap) and the focus-gated input system.
+        // Runs in BuiySet::Input — the `handle_tab` precedent (focus.rs:56),
+        // two sets after Layout, so an edit publishes N→N+1 (OQ#1: accepted
+        // one-frame latency). The TextChanged Message is registered so
+        // consumers (the a11y layer, the widget catalog) can subscribe.
+        app.init_resource::<crate::text::edit::Keymap>();
+        app.add_message::<crate::text::edit::TextChanged>();
+        app.add_systems(
+            Update,
+            crate::text::edit::apply_keyboard_edits.in_set(crate::BuiySet::Input),
         );
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert

@@ -10,9 +10,15 @@
 //! clipboard/undo (E4), IME (E5), and lifecycle/widget (E6) extend it.
 
 mod access;
+mod command;
+mod input;
+pub mod keymap;
 mod state;
 
 pub use access::{
     TextBufferAccess, TextBufferAccessItem, TextBufferAccessReadOnly, TextBufferAccessReadOnlyItem,
 };
+pub use command::EditCommand;
+pub use input::{EditOutcome, TextChanged, apply_keyboard_edits};
+pub use keymap::{Keymap, KeymapTable, Modifiers, default_keymap_for_platform};
 pub use state::{Disabled, Placeholder, ReadOnly, SingleLine, TextEditState};
