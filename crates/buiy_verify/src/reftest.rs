@@ -28,6 +28,35 @@ impl RefKind {
     }
 }
 
+use crate::metric::{Diff, FuzzBudget};
+use bevy::app::App;
+
+/// One reftest pairing. `test` and `reference` each build a scene into a
+/// fresh, deterministic `App` (spawn entities; do NOT drive frames —
+/// `run_reftest` owns the capture loop). Co-locate the expectation with the
+/// `#[test]` the `reftest!` macro generates.
+pub struct RefCase {
+    pub name: &'static str,
+    pub kind: RefKind,
+    /// Builds the scene exercising the feature under test.
+    pub test: fn(&mut App),
+    /// Builds the independent-oracle scene (see "Reference independence").
+    pub reference: fn(&mut App),
+    /// Per-pairing fuzz, à la Mozilla `fuzzy-if`. Default `(0,0)` once the
+    /// determinism stack is in (determinism.md); widen with a documented reason.
+    pub fuzz: FuzzBudget,
+}
+
+/// The result of running one [`RefCase`].
+#[derive(Debug)]
+pub struct RefOutcome {
+    pub passed: bool,
+    pub diff: Diff,
+    /// On failure, a self-contained local HTML triage report (test | ref |
+    /// diff). Path printed to stderr; never committed.
+    pub report_path: Option<std::path::PathBuf>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,5 +71,21 @@ mod tests {
     #[should_panic(expected = "must be `match` or `mismatch`")]
     fn reftest_kind_rejects_garbage() {
         let _ = RefKind::reftest_kind("nope");
+    }
+
+    #[test]
+    fn refcase_is_constructible_with_zero_fuzz_default() {
+        use crate::metric::FuzzBudget;
+        use bevy::app::App;
+        fn noop(_: &mut App) {}
+        let case = RefCase {
+            name: "constructs",
+            kind: RefKind::Match,
+            test: noop,
+            reference: noop,
+            fuzz: FuzzBudget::EXACT,
+        };
+        assert_eq!(case.name, "constructs");
+        assert_eq!(case.fuzz, FuzzBudget::EXACT);
     }
 }
