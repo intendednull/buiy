@@ -163,6 +163,67 @@ pub fn mismatch_floor_ok(kind: RefKind, fuzz: &FuzzBudget) -> bool {
     }
 }
 
+/// Pure-CPU per-pixel evaluation of the WGSL SDF + AA coverage step, the
+/// golden-free oracle for SDF corner AA (Tier 4.5). The SDF formula is shared
+/// 1:1 with `shader.wgsl:60` / `:76-:79` — the port and the shader must stay
+/// identical, pinned by the point-probe test that re-derives the values
+/// `tests/render_instance.rs:12` already asserts.
+pub mod sdf_oracle {
+    use bevy::math::Vec2;
+    use buiy_core::render::DrawData;
+
+    /// 1:1 CPU port of `shader.wgsl::sdf_rounded_rect`.
+    pub fn sdf_rounded_rect(p: Vec2, half_size: Vec2, r: f32) -> f32 {
+        let q = p.abs() - half_size + Vec2::splat(r);
+        q.max(Vec2::ZERO).length() + q.x.max(q.y).min(0.0) - r
+    }
+
+    /// Rasterize one `DrawData` rounded-rect into a `w×h` RGBA tile, mirroring
+    /// the fragment shader: SDF in logical px, AA via a `fwidth` estimate (the
+    /// per-pixel SDF gradient via central difference) fed to
+    /// `smoothstep(-aa, aa, d)`.
+    pub fn rasterize_sdf_rect(draw: &DrawData, w: u32, h: u32) -> image::RgbaImage {
+        let half = draw.size * 0.5;
+        let center = draw.position + half;
+        let r = draw.radius;
+        let lin = bevy::color::LinearRgba::from(draw.color);
+        let srgba = bevy::color::Srgba::from(lin);
+        let (rr, gg, bb) = (
+            (srgba.red * 255.0).round() as u8,
+            (srgba.green * 255.0).round() as u8,
+            (srgba.blue * 255.0).round() as u8,
+        );
+        let base_a = srgba.alpha;
+
+        let mut img = image::RgbaImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5) - center;
+                let d = sdf_rounded_rect(p, half, r);
+                let dx = (sdf_rounded_rect(p + Vec2::X, half, r)
+                    - sdf_rounded_rect(p - Vec2::X, half, r))
+                .abs()
+                    * 0.5;
+                let dy = (sdf_rounded_rect(p + Vec2::Y, half, r)
+                    - sdf_rounded_rect(p - Vec2::Y, half, r))
+                .abs()
+                    * 0.5;
+                let aa = (dx + dy).max(1e-4);
+                let coverage = 1.0 - smoothstep(-aa, aa, d);
+                let a = (base_a * coverage * 255.0).round().clamp(0.0, 255.0) as u8;
+                img.put_pixel(x, y, image::Rgba([rr, gg, bb, a]));
+            }
+        }
+        img
+    }
+
+    /// `smoothstep` matching WGSL `smoothstep(edge0, edge1, x)`.
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
 use bevy::prelude::World;
 
 /// A structural marker the independence lint can query for in a built world.
