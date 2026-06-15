@@ -163,6 +163,67 @@ pub fn mismatch_floor_ok(kind: RefKind, fuzz: &FuzzBudget) -> bool {
     }
 }
 
+/// Generate one `#[test] #[ignore]` per reftest pairing — keeps each case at
+/// the unit/integration tier under the existing `cargo test -- --ignored` GPU
+/// lane, no new CI infra, no manifest file (the type system IS the manifest).
+///
+/// ```ignore
+/// reftest!(match,    flex_justify_end, flex_test, literal_offsets_ref);
+/// reftest!(mismatch, cv_hidden_hides,  cv_visible, cv_hidden);
+/// reftest!(match,    transform_xy,     xfm_test,   literal_ref, fuzz = (1, 8));
+/// ```
+///
+/// A non-`(0,0)` fuzz floor on a `mismatch` fails to COMPILE (a `const`
+/// assertion), not at runtime — reftests.md § Verification #2.
+#[macro_export]
+macro_rules! reftest {
+    // mismatch with explicit fuzz → compile-time reject of a non-zero floor.
+    (mismatch, $fn:ident, $test:path, $reference:path, fuzz = ($d:literal, $p:literal)) => {
+        const _: () = assert!(
+            $d == 0 && $p == 0,
+            concat!(
+                "reftest mismatch `",
+                stringify!($fn),
+                "`: a non-(0,0) fuzz floor is vacuous"
+            ),
+        );
+        $crate::reftest!(@gen mismatch, $fn, $test, $reference, ($d, $p));
+    };
+    // match with explicit fuzz.
+    (match, $fn:ident, $test:path, $reference:path, fuzz = ($d:literal, $p:literal)) => {
+        $crate::reftest!(@gen match, $fn, $test, $reference, ($d, $p));
+    };
+    // no explicit fuzz → (0,0) for either kind.
+    ($kind:ident, $fn:ident, $test:path, $reference:path) => {
+        $crate::reftest!(@gen $kind, $fn, $test, $reference, (0, 0));
+    };
+    // internal: emit the #[ignore] test named $fn.
+    (@gen $kind:ident, $fn:ident, $test:path, $reference:path, ($d:literal, $p:literal)) => {
+        #[test]
+        #[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
+        fn $fn() {
+            let case = $crate::reftest::RefCase {
+                name: stringify!($fn),
+                kind: $crate::reftest::RefKind::reftest_kind(stringify!($kind)),
+                test: $test,
+                reference: $reference,
+                fuzz: $crate::metric::FuzzBudget {
+                    max_channel_delta: $d,
+                    max_diff_pixels: $p,
+                },
+            };
+            let outcome = $crate::reftest::run_reftest(&case);
+            assert!(
+                outcome.passed,
+                "reftest {} failed: {:?} (report: {:?})",
+                stringify!($fn),
+                outcome.diff,
+                outcome.report_path
+            );
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
