@@ -28,6 +28,13 @@ pub struct Diff {
     pub mssim: Option<f64>,
     /// Heatmap: AA pixels dimmed, differing pixels painted (pixelmatch palette).
     pub diff_image: Option<RgbaImage>,
+    /// Set only by the dimension-mismatch sentinel. A saturated `Diff` is an
+    /// *unconditional fail*: [`Diff::passes`] returns `false` for it against
+    /// EVERY budget — including a hypothetical maximal `(255, u32::MAX)` — so a
+    /// mis-sized capture reds the gate loudly (metric.md § compare). It is
+    /// distinct from an in-bounds all-different frame, which a wide-enough
+    /// budget may legitimately accept.
+    pub saturated: bool,
 }
 
 /// The two-axis gate. A Diff PASSES iff BOTH hold. Default after determinism is
@@ -86,9 +93,25 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
             total_pixels: 0,
             mssim: None,
             diff_image: None,
+            saturated: false,
         };
     }
-    // Dimension mismatch handled in 1a.4 (saturated Diff). For now assume equal.
+    if a.dimensions() != b.dimensions() {
+        // Loud-red sentinel (metric.md): a saturated Diff fails EVERY budget.
+        // total = max(area) so the saturation count is well-defined.
+        let total = a
+            .width()
+            .saturating_mul(a.height())
+            .max(b.width().saturating_mul(b.height()));
+        return Diff {
+            differing_pixels: total,
+            max_channel_delta: 255,
+            total_pixels: total,
+            mssim: Some(0.0),
+            diff_image: None,
+            saturated: true,
+        };
+    }
     let (w, h) = a.dimensions();
     let total_pixels = w * h;
     let max_delta = 35_215_f64 * opts.threshold * opts.threshold;
@@ -117,6 +140,29 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
         total_pixels,
         mssim: None,      // wired in 1a.5
         diff_image: None, // wired in 1a.6
+        saturated: false,
+    }
+}
+
+impl Diff {
+    /// PASS iff `max_channel_delta <= budget.max_channel_delta`
+    /// AND `differing_pixels <= budget.max_diff_pixels`. MSSIM is advisory and
+    /// never gates here. A [`saturated`](Self::saturated) (dimension-mismatch)
+    /// Diff is an unconditional fail — `false` for every budget, including a
+    /// maximal `(255, u32::MAX)` — so a mis-sized capture cannot squeak through.
+    pub fn passes(&self, budget: &FuzzBudget) -> bool {
+        !self.saturated
+            && self.max_channel_delta <= budget.max_channel_delta
+            && self.differing_pixels <= budget.max_diff_pixels
+    }
+
+    /// Mozilla `fuzzy-if` "ranges must not include 0": PASS iff the diff meets
+    /// the `max` budget AND exceeds the `min` floor on at least one axis, so a
+    /// suddenly-clean render (below an expected difference) is flagged.
+    pub fn within(&self, min: &FuzzBudget, max: &FuzzBudget) -> bool {
+        let over_floor = self.max_channel_delta > min.max_channel_delta
+            || self.differing_pixels > min.max_diff_pixels;
+        self.passes(max) && over_floor
     }
 }
 
@@ -396,6 +442,98 @@ mod tests {
             },
         );
         assert_eq!(d.differing_pixels, 1, "isolated defect is not AA-excluded");
+    }
+
+    #[test]
+    fn passes_requires_both_axes() {
+        // One pixel off by 255: trips max_channel_delta, one differing pixel.
+        let a = solid(8, 8, [0, 0, 0, 255]);
+        let mut b = a.clone();
+        b.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        let d = compare(
+            &a,
+            &b,
+            &CompareOpts {
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        assert!(!d.passes(&FuzzBudget::EXACT), "EXACT rejects any diff");
+        assert!(
+            !d.passes(&FuzzBudget {
+                max_channel_delta: 255,
+                max_diff_pixels: 0
+            }),
+            "diff-pixel axis still binds when channel axis is satisfied"
+        );
+        assert!(
+            !d.passes(&FuzzBudget {
+                max_channel_delta: 0,
+                max_diff_pixels: 1
+            }),
+            "channel axis still binds when diff-pixel axis is satisfied"
+        );
+        assert!(
+            d.passes(&FuzzBudget {
+                max_channel_delta: 255,
+                max_diff_pixels: 1
+            }),
+            "both axes satisfied -> pass"
+        );
+    }
+
+    #[test]
+    fn within_floor_catches_unexpectedly_clean() {
+        // A clean render (0,0) must FAIL a widened budget whose min floor is > 0.
+        let a = solid(8, 8, [5, 5, 5, 255]);
+        let clean = compare(
+            &a,
+            &a,
+            &CompareOpts {
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        let min = FuzzBudget {
+            max_channel_delta: 1,
+            max_diff_pixels: 1,
+        };
+        let max = FuzzBudget {
+            max_channel_delta: 10,
+            max_diff_pixels: 50,
+        };
+        assert!(
+            !clean.within(&min, &max),
+            "a clean render is below the expected floor"
+        );
+    }
+
+    #[test]
+    fn dimension_mismatch_is_saturated_and_fails_every_budget() {
+        let a = solid(4, 4, [0, 0, 0, 255]);
+        let b = solid(5, 4, [0, 0, 0, 255]);
+        let d = compare(&a, &b, &CompareOpts::default());
+        assert_eq!(d.max_channel_delta, 255);
+        assert_eq!(d.differing_pixels, d.total_pixels);
+        assert_eq!(d.total_pixels, 20, "total = max(area) = 5*4");
+        assert_eq!(d.mssim, Some(0.0));
+        // Fails even a hypothetical maximal budget.
+        let maximal = FuzzBudget {
+            max_channel_delta: 255,
+            max_diff_pixels: u32::MAX,
+        };
+        assert!(
+            !d.passes(&maximal),
+            "saturated diff fails the loudest budget too"
+        );
+    }
+
+    #[test]
+    fn empty_capture_forbidden_by_explicit_assertion() {
+        // The metric returns total_pixels == 0 for empty; harnesses forbid it.
+        let e = image::RgbaImage::new(0, 0);
+        let d = compare(&e, &e, &CompareOpts::default());
+        assert_eq!(d.total_pixels, 0);
     }
 
     #[test]
