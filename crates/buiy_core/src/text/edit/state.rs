@@ -12,10 +12,42 @@
 //! `blink`, E4 `undo`, E5 `preedit`, together with the system that consumes
 //! it. No orphan placeholder fields.
 
+use std::time::Duration;
+
 use bevy::prelude::*;
 use cosmic_text::{Buffer, Editor, Metrics};
 
+use super::selection::TextSelection;
 use crate::text::IntrinsicWidths;
+
+/// The per-entity caret-blink phase origin (editing-and-ime §§ 5, 10). The T7
+/// `write_caret_blink` writer was deliberately GLOBAL + stateless — a square
+/// wave of the raw app clock (visual.rs module doc: "per-entity phase reset on
+/// edit/caret-move is the editing campaign's `CaretBlink` state"). E3 lands that
+/// state: the blink is phase-relative to `origin`, which is RESET to the current
+/// app-clock instant on every edit and caret move, so the caret is always
+/// solid-on for one half-period immediately after the user acts (web parity).
+/// Reduced-motion steadiness is the writer's concern, not this type's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaretBlink {
+    /// App-clock instant (`Time::elapsed()`) of the last reset. The blink phase
+    /// is `now − origin`. Default `ZERO` = "blink from the start of time" (a
+    /// caret that has never moved blinks on the global phase, harmless).
+    pub origin: Duration,
+}
+
+impl CaretBlink {
+    /// Stamp `now` as the new phase origin (call on edit / caret move).
+    pub fn reset(&mut self, now: Duration) {
+        self.origin = now;
+    }
+
+    /// Elapsed time since the origin, saturating (a paused/rewound test clock
+    /// where `now < origin` yields `ZERO`, never an underflow panic).
+    pub fn phase_elapsed(&self, now: Duration) -> Duration {
+        now.saturating_sub(self.origin)
+    }
+}
 
 /// The editor state machine for an editable text entity (editing-and-ime
 /// § 2.2). Optional on a text entity: entities with only a display
@@ -46,6 +78,14 @@ pub struct TextEditState {
     /// every `TextSync` invalidation. Read/written only through
     /// `TextBufferAccess`'s cache methods.
     pub(crate) intrinsics: Option<IntrinsicWidths>,
+    /// The Buiy-owned mirror of the editor's primary selection (§ 4.2). A
+    /// PROJECTION: recomputed from the editor by `write_caret_and_selection`
+    /// each frame the editor changed; never a second source of truth. Read by
+    /// the geometry writer + the `SelectionChanged` emitter.
+    pub(crate) selection: TextSelection,
+    /// The per-entity caret-blink phase origin (§§ 5, 10). Reset on edit /
+    /// caret move by `write_caret_and_selection`; read by `write_caret_blink`.
+    pub(crate) blink: CaretBlink,
 }
 
 impl TextEditState {
@@ -58,6 +98,8 @@ impl TextEditState {
         Self {
             editor: Editor::new(Buffer::new_empty(metrics)),
             intrinsics: None,
+            selection: TextSelection::collapsed(cosmic_text::Cursor::new(0, 0)),
+            blink: CaretBlink::default(),
         }
     }
 
@@ -91,6 +133,32 @@ impl TextEditState {
             }
             out
         })
+    }
+
+    /// Project the editor's current `Selection` + cursor into a Buiy
+    /// `TextSelection` (§ 4.2). The editor owns BiDi-correct motion; this is the
+    /// READ-OUT mirror. A `selection_bounds()` of `None` (no selection) is a
+    /// collapsed caret at the live cursor.
+    pub fn mirror_selection(&self) -> TextSelection {
+        use cosmic_text::Edit;
+        let active = self.editor.cursor();
+        match self.editor.selection_bounds() {
+            Some((lo, hi)) if (lo.line, lo.index) != (hi.line, hi.index) => {
+                TextSelection::from_bounds(lo, hi, active)
+            }
+            _ => TextSelection::collapsed(active),
+        }
+    }
+
+    /// The live caret (the editor's cursor) — the `active` endpoint.
+    pub fn caret(&self) -> cosmic_text::Cursor {
+        use cosmic_text::Edit;
+        self.editor.cursor()
+    }
+
+    /// The per-entity caret-blink phase origin (the `write_caret_blink` reader).
+    pub fn blink_origin(&self) -> std::time::Duration {
+        self.blink.origin
     }
 
     /// Drop the cached intrinsic widths — the "buffer content changed,

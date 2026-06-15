@@ -81,6 +81,19 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      # Free ~25 GB of preinstalled toolchains the ubuntu runner ships with
+      # (.NET, Android SDK, GHC, CodeQL). The bevy workspace's debug target
+      # dir + the growing set of test binaries crossed the ~14 GB free-disk
+      # ceiling at E3, and a full disk surfaces as `ld ... signal 7 [Bus
+      # error] core dumped` / "No space left on device" mid-link — not a
+      # code failure. Runs before the cache restore so the cache lands on
+      # the freed volume.
+      - name: Free disk space (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /usr/local/share/boost /usr/lib/jvm /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux deps for Bevy
@@ -90,7 +103,15 @@ jobs:
           sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev xvfb at-spi2-core
       - name: cargo test (headless via xvfb on Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: xvfb-run -a cargo test --workspace
+        # debuginfo is the largest disk consumer for the bevy test binaries —
+        # disabling it for the test profiles shrinks the target dir enough to
+        # fit the runner alongside the disk-cleanup step above. -j 2 also caps
+        # peak concurrent link temp files. (Root cause was disk exhaustion,
+        # surfacing as ld SIGBUS — see the Free-disk step.)
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: xvfb-run -a cargo test --workspace -j 2
       - name: cargo test (macOS / Windows)
         if: matrix.os != 'ubuntu-latest'
         run: cargo test --workspace

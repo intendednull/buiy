@@ -51,8 +51,10 @@ pub use decoration::{
 };
 pub use direction::prepend_strong_marks;
 pub use edit::{
-    Disabled, EditCommand, Keymap, Placeholder, ReadOnly, SingleLine, TextBufferAccess,
-    TextChanged, TextEditState, apply_keyboard_edits,
+    CaretBlink, CaretMoved, ClickTracker, Disabled, EditCommand, Keymap, Placeholder,
+    PointerGesture, ReadOnly, SelectionChanged, SelectionRange, SingleLine, TextBufferAccess,
+    TextChanged, TextEditState, TextSelection, apply_keyboard_edits, pointer_selection,
+    pointer_to_cursor, write_caret_and_selection,
 };
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
@@ -180,6 +182,21 @@ impl Plugin for BuiyTextPlugin {
                 .before(crate::BuiySet::Picking),
         );
 
+        // E3 (editing-and-ime §§ 4.1, 4.3, 5, 11): the caret + selection
+        // geometry writer — mirrors editor state into the T7 paint seats,
+        // resets the per-entity blink, emits CaretMoved/SelectionChanged. Runs
+        // in the render-prep window, BEFORE write_caret_blink (which reads the
+        // CaretBlink origin this system resets). Net order:
+        // Input < write_caret_and_selection < write_caret_blink < Picking.
+        app.add_message::<crate::text::edit::CaretMoved>();
+        app.add_message::<crate::text::edit::SelectionChanged>();
+        app.add_systems(
+            Update,
+            crate::text::edit::write_caret_and_selection
+                .after(crate::BuiySet::Input)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
         // E2 (editing-and-ime §§ 3, 11): the per-platform keymap (selected
         // once at init by a data swap) and the focus-gated input system.
         // Runs in BuiySet::Input — the `handle_tab` precedent (focus.rs:56),
@@ -191,6 +208,16 @@ impl Plugin for BuiyTextPlugin {
         app.add_systems(
             Update,
             crate::text::edit::apply_keyboard_edits.in_set(crate::BuiySet::Input),
+        );
+
+        // E3 (editing-and-ime § 4): the focus-gated mouse-selection system —
+        // window→buffer-local mapping → cosmic Click/DoubleClick/TripleClick/
+        // Drag, setting FocusedEntity on press. BuiySet::Input, alongside
+        // apply_keyboard_edits; inert headless (Option params no-op without
+        // mouse/picking infra).
+        app.add_systems(
+            Update,
+            crate::text::edit::pointer_selection.in_set(crate::BuiySet::Input),
         );
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert

@@ -10,9 +10,15 @@
 //! Reduced motion (text.md:90): the caret is STEADY — phase pinned true,
 //! no blink. The blink PERIOD is a plugin resource (the Phase-0 Theme has
 //! no motion scale; the token indirection is buiy-theme-tokens-design's
-//! seam). Per-entity phase reset on edit/caret-move is the editing
-//! campaign's `CaretBlink` state — this writer is deliberately global and
-//! stateless (§ 6.3's literal "square-wave function of the app clock").
+//! seam).
+//!
+//! **E3 rework (editing-and-ime §§ 5, 10):** the blink is now PER-ENTITY
+//! phase-relative — `now − CaretBlink.origin`, where the origin is reset on
+//! every edit / caret move by `write_caret_and_selection`, so the caret is
+//! solid for one half-period immediately after the user acts (web parity).
+//! T7's original "square-wave function of the app clock" survives as the
+//! fallback for any caret WITHOUT a `TextEditState` (the `None` arm = the
+//! absolute-clock global phase), so bare display carets are unchanged.
 
 use std::time::Duration;
 
@@ -23,6 +29,7 @@ use crate::theme::UserPreferences;
 
 use super::components::CaretVisual;
 use super::decoration::{snap_thickness, snap_y};
+use super::edit::TextEditState;
 
 /// The blink HALF-period (time spent in each phase; a full cycle is 2×).
 /// Default 500 ms — the conventional desktop rate. Zero ⇒ steady visible.
@@ -52,21 +59,29 @@ pub fn blink_phase(elapsed: Duration, half_period: Duration) -> bool {
     (elapsed.as_nanos() / half_period.as_nanos()).is_multiple_of(2)
 }
 
-/// Render-prep (main world, `Update`,
-/// `.after(BuiySet::Animate).before(BuiySet::Picking)` — the
-/// write_clip_rects window): drive every `CaretVisual.visible` from the
-/// blink phase, edge-only. `UserPreferences` is `Option` so the plugin
-/// stays self-sufficient without `ThemePlugin` (the
-/// apply_forced_colors_theme precedent).
+/// Render-prep: drive every `CaretVisual.visible` from the caret's PER-ENTITY
+/// blink phase (editing-and-ime §§ 5, 10) — `now − CaretBlink.origin`, where the
+/// origin is reset on every edit / caret move by `write_caret_and_selection`. So
+/// the caret is solid for one half-period immediately after the user acts (web
+/// parity), instead of the T7 global square wave. Edge-only: `Mut` ticks only on
+/// a flip (the O(0) steady state). Carets WITHOUT a `TextEditState` (a bare T7
+/// display caret, if any) fall back to the global phase. Reduced-motion ⇒ steady.
+/// `UserPreferences` is `Option` so the plugin stays self-sufficient without
+/// `ThemePlugin` (the apply_forced_colors_theme precedent).
 pub fn write_caret_blink(
     time: Res<Time>,
     prefs: Option<Res<UserPreferences>>,
     interval: Res<CaretBlinkInterval>,
-    mut carets: Query<&mut CaretVisual>,
+    mut carets: Query<(&mut CaretVisual, Option<&TextEditState>)>,
 ) {
     let steady = prefs.is_some_and(|p| p.prefers_reduced_motion);
-    let phase = steady || blink_phase(time.elapsed(), interval.0);
-    for mut caret in &mut carets {
+    let now = time.elapsed();
+    for (mut caret, state) in &mut carets {
+        let elapsed = match state {
+            Some(s) => now.saturating_sub(s.blink_origin()),
+            None => now,
+        };
+        let phase = steady || blink_phase(elapsed, interval.0);
         // Edge-only: DerefMut (and the change tick) ONLY on a flip.
         if caret.visible != phase {
             caret.visible = phase;

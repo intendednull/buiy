@@ -236,6 +236,14 @@ When the caret sits on a direction boundary, **both** positions are emitted
 (BiDi split caret: primary full-height + secondary indicator), resolved from
 the two candidate runs the affinity pair names. **F**
 
+> **As landed (E3): the split caret is deferred to a follow-up.** E3 paints the
+> single primary caret. cosmic-text 0.19 surfaces no dual-caret position —
+> `LayoutRun::cursor_position`/`cursor_glyph` ignore `cursor.affinity` and a
+> line is one `LayoutRun`, so the "two candidate runs" the draft assumed do not
+> exist; the secondary mark needs glyph-edge geometry (a separate slice). See
+> [follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md).
+> Zero correctness risk — the caret is always present and correct.
+
 ### § 4.2 Decision: a multi-range-shaped Buiy selection type
 
 **Decision.** Buiy owns the selection type; the editor's single selection is a
@@ -550,7 +558,10 @@ reduced-motion; auto-scroll via `ScrollOffset`; the § 11 taxonomy; the
 `TextInput` bundle.
 
 **Deferred within F (named, next slice, not dropped):** multi-range selection
-*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7).
+*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7); the **BiDi split
+caret** secondary indicator (§§ 4.1, 5 — cosmic 0.19 has no dual-caret API;
+needs glyph-edge geometry; E3 ships the single primary caret —
+[follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md)).
 **Out (E-tier):** rich-text edit surface, document virtualization.
 
 ---
