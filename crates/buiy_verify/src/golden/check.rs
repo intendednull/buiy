@@ -170,8 +170,14 @@ pub fn check_golden_in(
         // emit_diff_image only on the candidate we end up reporting; here we run
         // the cheap (no heatmap) compare to gate, and recompute the heatmap for
         // the best candidate below only if we fail.
+        //
+        // Gate against the POSITIVE's own recorded budget, not the caller's
+        // (ledger.rs: "the budget this positive is asserted against"). A positive
+        // blessed with a per-fixture widened budget (known SDF/shadow jitter) is
+        // matched under that widening; the caller's check-time `budget` is the
+        // budget recorded when *blessing* a new positive, below.
         let diff = compare(actual, &baseline, &CompareOpts::default());
-        if diff.passes(budget) {
+        if diff.passes(&positive.budget) {
             return GoldenOutcome::Pass {
                 matched_positive: i,
                 diff,
@@ -344,6 +350,15 @@ fn emit_failure_report(
         Vec::new()
     };
 
+    // Report the budget the closest positive was actually gated against (its own
+    // recorded budget), not the caller's — so the card shows which bar was
+    // missed. Falls back to the caller budget when there is no positive (empty
+    // corpus).
+    let effective_budget = match best {
+        Some((i, _)) => ledger.positives[*i].budget,
+        None => *budget,
+    };
+
     let report_path = report_root.join("report.html");
     let mut report = TriageReport::open_or_create(&report_path);
     report.push(TriageCard {
@@ -352,7 +367,7 @@ fn emit_failure_report(
         baseline_png: png_bytes(&baseline_img),
         diff_png: diff_png_bytes,
         diff,
-        budget: *budget,
+        budget: effective_budget,
     });
     report.write().ok();
     report_path

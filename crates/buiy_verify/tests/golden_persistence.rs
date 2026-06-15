@@ -136,6 +136,62 @@ fn match_and_mismatch() {
 }
 
 // ---------------------------------------------------------------------------
+// Per-positive budget: each positive is gated by ITS OWN recorded budget
+// (ledger.rs: "the budget this positive is asserted against"), not the caller's.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn positive_is_gated_by_its_own_recorded_widened_budget() {
+    let root = temp_root("perpos-budget");
+    let report = temp_root("perpos-budget-report");
+    let key = key();
+    let base = solid(16, 16, [10, 120, 200, 255]);
+
+    // Bless with a WIDENED budget — the per-fixture tolerance an SDF / shadow
+    // baseline with known residual GPU jitter is accepted under. It is recorded
+    // on the positive.
+    let wide = FuzzBudget {
+        max_channel_delta: 40,
+        max_diff_pixels: 1,
+    };
+    check_golden_in(
+        &root,
+        &report,
+        BlessMode::Bless { replace: None },
+        &key,
+        &base,
+        &wide,
+    );
+
+    // A capture within that widened budget (one pixel off by 30) but OUTSIDE
+    // EXACT.
+    let off = one_pixel_off(&base, 30);
+
+    // The caller passes EXACT, yet the positive must be gated by its OWN recorded
+    // (widened) budget — so this PASSES. With the bug (caller budget used at the
+    // gate) the recorded budget was inert and this failed.
+    let outcome = check_golden_in(
+        &root,
+        &report,
+        BlessMode::Assert,
+        &key,
+        &off,
+        &FuzzBudget::EXACT,
+    );
+    assert!(
+        matches!(
+            outcome,
+            GoldenOutcome::Pass {
+                matched_positive: 0,
+                ..
+            }
+        ),
+        "a capture within the positive's recorded widened budget must pass even \
+         when the caller passes EXACT, got {outcome:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // #2 — multi-positive: any positive matches; an image matching the SECOND
 //      returns Pass { matched_positive: 1 }.
 // ---------------------------------------------------------------------------

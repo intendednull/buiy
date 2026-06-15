@@ -142,10 +142,11 @@ pub fn assert_layout_snapshot(app: &mut App, name: &str) {
 
 /// The format-versioned Display dump backing [`assert_layout_snapshot`]:
 /// `(name, position, size)` per [`ResolvedLayout`] entity, one per line,
-/// indented by `ChildOf` depth, siblings ordered by `Name` (then `Entity`
-/// index as a tiebreak). Floats round via [`round`]; an unnamed entity falls
-/// back to `entity#<index>` (a flagged, non-diff-stable fixture). The dump
-/// never prints raw `Entity` bits (snapshots.md § Tier 1).
+/// indented by `ChildOf` depth, siblings ordered by `Name` then rendered box
+/// (position, size) as a content tiebreak — never by `Entity` index. Floats
+/// round via [`round`]; an unnamed entity falls back to `entity#<index>` (a
+/// flagged, non-diff-stable fixture). The dump never prints raw `Entity` bits
+/// (snapshots.md § Tier 1).
 pub fn layout_dump(world: &World) -> String {
     let entries = collect_layout_entries(world);
 
