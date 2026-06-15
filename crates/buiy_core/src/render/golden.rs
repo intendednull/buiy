@@ -11,6 +11,35 @@
 
 use crate::render::atlas::{AtlasKey, AtlasWarmupQueue, BuiyAtlas};
 
+/// The set of asset handles a capture must see fully loaded before it reads
+/// back (quiescence condition 1, `determinism.md` § "Async-asset flush to
+/// quiescence"). A fixture that streams an image/shader/font asset declares it
+/// a precondition via [`PendingCaptureAssets::require`]; [`capture_to_image`]
+/// then refuses to capture until every required handle is loaded-with-
+/// dependencies, panicking (never silently capturing a half-streamed frame) if
+/// one never arrives.
+///
+/// Empty by default — programmatic fixtures that spawn entities directly (the
+/// common case) stream nothing, so the gate is a no-op for them. The resource
+/// is inserted by the capture-app builders so any fixture can reach it.
+#[derive(bevy::ecs::resource::Resource, Default, Clone)]
+pub struct PendingCaptureAssets {
+    handles: Vec<bevy::asset::UntypedHandle>,
+}
+
+impl PendingCaptureAssets {
+    /// Declare `handle` a capture precondition: the readback frame will not run
+    /// until it is loaded with all dependencies.
+    pub fn require(&mut self, handle: bevy::asset::UntypedHandle) {
+        self.handles.push(handle);
+    }
+
+    /// The declared preconditions (the capture path probes their load state).
+    pub fn handles(&self) -> &[bevy::asset::UntypedHandle] {
+        &self.handles
+    }
+}
+
 /// How the font axis is rasterized for a capture (verification-design
 /// `determinism.md` § "Ahem font mode"). Real glyph rasterization is the
 /// canonical per-platform flake source, but the bulk of text-bearing goldens
@@ -187,6 +216,10 @@ pub fn capture_app_with_resolution(resolution: bevy::window::WindowResolution) -
         .add_plugins(crate::text::BuiyTextPlugin::default())
         .add_plugins(crate::render::BuiyRenderPlugin);
     app.init_asset::<Mesh>();
+    // The quiescence-flush asset gate (condition 1): fixtures push streamed
+    // handles here; `capture_to_image` waits on them. Empty for programmatic
+    // fixtures (a no-op gate), so every capture app carries it.
+    app.init_resource::<PendingCaptureAssets>();
     app
 }
 
@@ -196,15 +229,23 @@ pub fn capture_app_with_resolution(resolution: bevy::window::WindowResolution) -
 /// `image::RgbaImage`. Re-runnable against one `App` (a reftest calls it twice
 /// on one device; spec § "Resolved during synthesis" #4).
 ///
-/// Phase-0 scope: the capture mechanics (size-to-physical, paint, readback,
-/// assemble). The four-condition quiescence flush and the
-/// `scale_factor == cfg.dpr` assertion are Phase 3.3's hardening of this same
-/// function (`determinism.md` § Async-asset flush).
+/// Before the readback frame it drives `app.update()` to **quiescence**
+/// (`determinism.md` § "Async-asset flush"), asserting all four conditions so
+/// the diff is signal, not a half-streamed or cold-atlas artifact:
 ///
-/// Drives `MAX_CAPTURE_FRAMES` update frames after finishing the app (pipeline
-/// async-compile + extract + prepare + paint settle), then reads back the
-/// offscreen target's un-padded RGBA8 bytes.
-pub fn capture_to_image(app: &mut bevy::app::App, _cfg: &GoldenConfig) -> image::RgbaImage {
+///   1. `PendingCaptureAssets` are all loaded-with-dependencies (no in-flight
+///      Image/Shader/Font load).
+///   2. the render-world [`AtlasWarmupQueue`] is empty (`warm_atlas`).
+///   3. [`fonts_ready`] over the resident text keys (`wait_for_fonts`).
+///   4. the `PipelineCache` has no `Queued`/`Creating` Buiy pipeline (shaders
+///      compiled).
+///
+/// Bounded by `MAX_SETTLE_FRAMES`; if any condition never holds it panics
+/// naming the unmet one (fail loudly — never green on a missing precondition).
+/// Time advances only via the virtual clock the app drives; this function
+/// never reads wall time. Finally it asserts the window `scale_factor` matches
+/// `cfg.dpr` (the DPR pin is an asserted capture invariant, not a tolerance).
+pub fn capture_to_image(app: &mut bevy::app::App, cfg: &GoldenConfig) -> image::RgbaImage {
     use bevy::asset::RenderAssetUsages;
     use bevy::camera::RenderTarget;
     use bevy::image::Image;
@@ -214,12 +255,23 @@ pub fn capture_to_image(app: &mut bevy::app::App, _cfg: &GoldenConfig) -> image:
     // Physical pixel grid the offscreen target must match: the primary
     // window's physical size (logical × scale_factor), which the view uniform
     // is built from (extract fills `logical_size` from the primary window).
+    // Assert the DPR pin here at the capture boundary: a 1× vs 2× render is a
+    // different rasterization, captured as a fixture axis, never fuzzed.
     let (phys_w, phys_h) = {
         let window = app
             .world_mut()
             .query::<&bevy::window::Window>()
             .single(app.world())
             .expect("primary window for capture sizing");
+        let scale = window.resolution.scale_factor();
+        assert_eq!(
+            Dpr::from_f32(scale),
+            cfg.dpr,
+            "capture window scale_factor {scale} ≠ cfg.dpr {:?} ({}×) — the DPR \
+             pin must hold at the capture boundary (determinism.md § DPR pin)",
+            cfg.dpr,
+            cfg.dpr.as_f32(),
+        );
         let r = window.resolution.physical_size();
         (r.x, r.y)
     };
@@ -246,18 +298,116 @@ pub fn capture_to_image(app: &mut bevy::app::App, _cfg: &GoldenConfig) -> image:
         },
     ));
 
-    // Finish materializes the device + pipelines; drive frames so layout →
-    // extract → prepare → paint settle before the readback poll.
-    const MAX_CAPTURE_FRAMES: usize = 3;
+    // Finish materializes the device + pipelines, then drive to quiescence so
+    // layout → extract → prepare → shader-compile → atlas-warmup all settle
+    // before the readback poll.
     app.finish();
     app.cleanup();
-    for _ in 0..MAX_CAPTURE_FRAMES {
-        app.update();
-    }
+    settle_to_quiescence(app);
 
     let bytes = readback_rgba_into(app, &target, phys_w, phys_h);
     image::RgbaImage::from_raw(phys_w, phys_h, bytes)
         .expect("readback byte count matches phys_w * phys_h * 4")
+}
+
+/// The maximum `app.update()` frames [`settle_to_quiescence`] will drive
+/// waiting for the four conditions. Generous: pipeline async-compile + several
+/// extract/prepare/upload hops cost a handful of frames; a never-satisfied
+/// condition (e.g. a never-loading asset) burns the budget then panics.
+const MAX_SETTLE_FRAMES: usize = 240;
+
+/// Drive `app.update()` until the four quiescence conditions hold
+/// (`determinism.md` § "Async-asset flush"), polling the device to `Wait` each
+/// frame so GPU work (pipeline creation, uploads) completes rather than
+/// trickling across frames. Panics naming the first still-unmet condition if
+/// the frame budget is exhausted — the harness fails loudly, never captures a
+/// non-quiescent frame.
+fn settle_to_quiescence(app: &mut bevy::app::App) {
+    use bevy::render::RenderApp;
+    use bevy::render::render_resource::PollType;
+    use bevy::render::renderer::RenderDevice;
+
+    for _ in 0..MAX_SETTLE_FRAMES {
+        app.update();
+
+        // Drain the device so in-flight GPU work (pipeline compile, buffer
+        // maps) lands this frame, not an indeterminate later one.
+        if let Some(render_app) = app.get_sub_app(RenderApp)
+            && let Some(device) = render_app.world().get_resource::<RenderDevice>()
+        {
+            let _ = device.poll(PollType::wait_indefinitely());
+        }
+
+        if quiescence_unmet(app).is_none() {
+            return;
+        }
+    }
+
+    // Budget exhausted: report which condition never held.
+    let unmet = quiescence_unmet(app).unwrap_or("unknown");
+    panic!(
+        "capture_to_image: scene never reached quiescence within \
+         {MAX_SETTLE_FRAMES} frames — unmet condition: {unmet} \
+         (determinism.md § Async-asset flush: fail loudly, never capture a \
+         non-quiescent frame)"
+    );
+}
+
+/// Probe the four quiescence conditions; returns `None` when all hold, else a
+/// static name of the first unmet one (used in the panic message and the
+/// loop's termination check). Split out so the budget-exhaustion panic can name
+/// the exact stuck condition.
+fn quiescence_unmet(app: &bevy::app::App) -> Option<&'static str> {
+    use bevy::asset::AssetServer;
+    use bevy::render::RenderApp;
+    use bevy::render::render_resource::CachedPipelineState;
+
+    // Condition 1 (main world): every declared capture asset loaded with deps.
+    let asset_server = app.world().resource::<AssetServer>();
+    let pending = app.world().resource::<PendingCaptureAssets>();
+    for handle in pending.handles() {
+        if !asset_server.is_loaded_with_dependencies(handle.id()) {
+            return Some("pending asset not loaded-with-dependencies");
+        }
+    }
+
+    // Conditions 2-4 live in the render sub-app. If it is absent (headless, no
+    // adapter) the GPU conditions are vacuously quiescent — capture is a GPU
+    // operation, so this branch is only reached in non-capture probes.
+    let world = app.get_sub_app(RenderApp)?.world();
+
+    // Condition 2: the atlas warmup queue is drained.
+    if let Some(warmup) = world.get_resource::<AtlasWarmupQueue>()
+        && !warmup.is_empty()
+    {
+        return Some("atlas warmup queue not drained");
+    }
+
+    // Condition 3: every resident text key is atlas-resident (fonts_ready). No
+    // resident keys (a non-text fixture) is vacuously ready.
+    if let (Some(atlas), Some(warmup), Some(resident)) = (
+        world.get_resource::<BuiyAtlas>(),
+        world.get_resource::<AtlasWarmupQueue>(),
+        world.get_resource::<crate::text::ResidentTextKeys>(),
+    ) && !fonts_ready(atlas, warmup, &resident.keys)
+    {
+        return Some("fonts not ready (text keys not atlas-resident)");
+    }
+
+    // Condition 4: no Buiy pipeline is still Queued/Creating (shaders compiled).
+    if let Some(cache) = world.get_resource::<bevy::render::render_resource::PipelineCache>() {
+        let compiling = cache.pipelines().any(|p| {
+            matches!(
+                p.state,
+                CachedPipelineState::Queued | CachedPipelineState::Creating(_)
+            )
+        }) || cache.waiting_pipelines().next().is_some();
+        if compiling {
+            return Some("pipeline cache has a Queued/Creating pipeline");
+        }
+    }
+
+    None
 }
 
 /// Resource cell the `ReadbackComplete` observer writes the captured bytes
