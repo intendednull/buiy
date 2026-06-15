@@ -11,20 +11,24 @@
 
 mod access;
 mod caret;
+mod clipboard;
 mod command;
 mod input;
 pub mod keymap;
 mod pointer;
 mod selection;
 mod state;
+mod undo;
 
 pub use access::{
     TextBufferAccess, TextBufferAccessItem, TextBufferAccessReadOnly, TextBufferAccessReadOnlyItem,
 };
 pub use caret::{CaretMoved, SelectionChanged, write_caret_and_selection};
+pub use clipboard::{ArboardClipboard, Clipboard, ClipboardProvider, MemClipboard};
 pub use command::EditCommand;
-pub use input::{EditOutcome, TextChanged, apply_keyboard_edits};
+pub use input::{EditContext, EditOutcome, TextChanged, apply_keyboard_edits};
 pub use keymap::{Keymap, KeymapTable, Modifiers, default_keymap_for_platform};
 pub use pointer::{ClickTracker, PointerGesture, pointer_selection, pointer_to_cursor};
 pub use selection::{SelectionRange, TextSelection};
 pub use state::{CaretBlink, Disabled, Placeholder, ReadOnly, SingleLine, TextEditState};
+pub use undo::{DEFAULT_UNDO_DEPTH, EditRedone, EditUndone, GroupKind, UndoStack, UndoUnit};
