@@ -1,13 +1,14 @@
 [key]
-widget = "rect-rounded"
+widget = "text-ahem"
 state = "default"
 theme = "dark"
 viewport = "sm"
+forced_colors = false
 backend = "Lavapipe"
 dpr = 1000
 
 [[positives]]
-file = "dark__sm__lavapipe__dpr1.0.png"
+file = "dark__sm__fc0__lavapipe__dpr1.0.png"
 blessed_commit = "491c85715bf9108eff6720ba4ff31ad8c34d75af"
 blessed_at = "2026-06-15T16:34:06Z"
 reason = "initial Tier-5 residue golden (RX 6700 XT)"

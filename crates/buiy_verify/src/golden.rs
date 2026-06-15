@@ -116,6 +116,13 @@ pub struct GoldenKey {
     pub theme: String,
     /// Named viewport (e.g. `sm` = 360×640).
     pub viewport: String,
+    /// Forced-colors **mode** (`UserPreferences::forced_colors`). A distinct
+    /// axis from `theme`: the same theme renders differently with forced-colors
+    /// on (e.g. the BoxShadow draw-skip), so the two modes get separate
+    /// baselines — exactly as [`CoverageKey`](crate::coverage::CoverageKey)
+    /// keys them (`fc0`/`fc1`). Dropping this collapses two distinct captures
+    /// onto one baseline and lets a forced-colors regression pass silently.
+    pub forced_colors: bool,
     /// The rasterizer the golden was captured on (one pinned lane today).
     pub backend: Backend,
     /// Device-pixel-ratio as canonical milliscale (`Dpr::X1` = 1×, `X2` = 2×).
@@ -128,26 +135,28 @@ pub struct GoldenKey {
 const FIELD_SEP: &str = "__";
 
 impl GoldenKey {
-    /// `widget/state/theme__viewport__backend__dpr` — a directory per
+    /// `widget/state/theme__viewport__fc__backend__dpr` — a directory per
     /// `widget/state/theme` keeps a fixture's whole row of cells together for
     /// review. Deterministic, lower-kebab, slug-safe (no raw `Debug`):
     /// components are lowercased and every run of non-`[a-z0-9]` collapses to a
-    /// single `-`. The DPR renders as `dpr<milli/1000-ish>` via `dpr_slug`.
+    /// single `-`. The forced-colors mode renders as `fc0`/`fc1` (`fc_slug`) and
+    /// the DPR as `dpr<milli/1000-ish>` (`dpr_slug`).
     pub fn slug(&self) -> String {
         format!(
-            "{}/{}/{}{FIELD_SEP}{}{FIELD_SEP}{}{FIELD_SEP}{}",
+            "{}/{}/{}{FIELD_SEP}{}{FIELD_SEP}{}{FIELD_SEP}{}{FIELD_SEP}{}",
             slug_component(&self.widget),
             slug_component(&self.state),
             slug_component(&self.theme),
             slug_component(&self.viewport),
+            fc_slug(self.forced_colors),
             self.backend.slug(),
             dpr_slug(self.dpr),
         )
     }
 
     /// Parse a [`slug`](Self::slug) back into a key. `None` if the shape is
-    /// wrong (not exactly `a/b/c` where `c` is `d__e__f__g`), the backend is
-    /// unknown, or the dpr token is malformed. Round-trips any key whose
+    /// wrong (not exactly `a/b/c` where `c` is `d__e__f__g__h`), the
+    /// forced-colors / backend / dpr token is malformed. Round-trips any key whose
     /// components are already slug-safe (lower-kebab); display-name
     /// normalization (uppercasing/spaces) is lossy by design and not expected to
     /// round-trip.
@@ -162,6 +171,7 @@ impl GoldenKey {
         let mut fields = tail.split(FIELD_SEP);
         let theme = fields.next()?.to_string();
         let viewport = fields.next()?.to_string();
+        let forced_colors = fc_from_slug(fields.next()?)?;
         let backend = Backend::from_slug(fields.next()?)?;
         let dpr = dpr_from_slug(fields.next()?)?;
         if fields.next().is_some() {
@@ -176,6 +186,7 @@ impl GoldenKey {
             state,
             theme,
             viewport,
+            forced_colors,
             backend,
             dpr,
         })
@@ -205,6 +216,26 @@ fn slug_component(s: &str) -> String {
         }
     }
     out.trim_matches('-').to_string()
+}
+
+/// `fc0` / `fc1` — the forced-colors mode token. Each mode gets its own
+/// baseline (the same theme renders differently with forced-colors on), so it
+/// is part of the slug, not collapsed away. Mirrors `CoverageKey`'s `fc_token`.
+fn fc_slug(forced_colors: bool) -> &'static str {
+    if forced_colors {
+        "fc1"
+    } else {
+        "fc0"
+    }
+}
+
+/// Parse an `fc_slug` token back to the forced-colors bool (the inverse).
+fn fc_from_slug(tok: &str) -> Option<bool> {
+    match tok {
+        "fc1" => Some(true),
+        "fc0" => Some(false),
+        _ => None,
+    }
 }
 
 /// Render a `Dpr` as a slug token: the common 1×/2× become `dpr1`/`dpr2`; any

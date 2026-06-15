@@ -45,6 +45,7 @@ fn key() -> GoldenKey {
         state: "default".into(),
         theme: "dark".into(),
         viewport: "sm".into(),
+        forced_colors: false,
         backend: Backend::Lavapipe,
         dpr: Dpr::X1,
     }
@@ -240,14 +241,14 @@ fn bless_round_trip() {
     // The PNG and the ledger exist on disk.
     let dir = key.dir(&root);
     assert!(
-        dir.join("dark__sm__lavapipe__dpr1.0.png").exists(),
+        dir.join("dark__sm__fc0__lavapipe__dpr1.0.png").exists(),
         "blessed PNG written"
     );
 
     let ledger = load_ledger(&root, &key);
     assert_eq!(ledger.positives.len(), 1);
     let pos = &ledger.positives[0];
-    assert_eq!(pos.file, "dark__sm__lavapipe__dpr1.0.png");
+    assert_eq!(pos.file, "dark__sm__fc0__lavapipe__dpr1.0.png");
     assert_eq!(pos.budget, FuzzBudget::EXACT);
     assert!(!pos.reason.is_empty(), "a reason was recorded");
     // RFC3339-shaped timestamp (the harness emits `YYYY-MM-DDThh:mm:ssZ`).

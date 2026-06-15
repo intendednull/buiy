@@ -14,11 +14,13 @@ use buiy_verify::golden::{Backend, BlessLedger, GoldenKey, Positive};
 use buiy_verify::metric::FuzzBudget;
 use proptest::prelude::*;
 
+#[allow(clippy::too_many_arguments)]
 fn key(
     widget: &str,
     state: &str,
     theme: &str,
     viewport: &str,
+    forced_colors: bool,
     backend: Backend,
     dpr: Dpr,
 ) -> GoldenKey {
@@ -27,6 +29,7 @@ fn key(
         state: state.into(),
         theme: theme.into(),
         viewport: viewport.into(),
+        forced_colors,
         backend,
         dpr,
     }
@@ -34,11 +37,28 @@ fn key(
 
 #[test]
 fn slug_is_deterministic_lower_kebab() {
-    let k = key("button", "hover", "dark", "sm", Backend::Lavapipe, Dpr::X2);
-    // Stable, documented stem schema: `widget/state/theme__viewport__backend__dpr`.
-    assert_eq!(k.slug(), "button/hover/dark__sm__lavapipe__dpr2");
+    let k = key("button", "hover", "dark", "sm", false, Backend::Lavapipe, Dpr::X2);
+    // Stable schema: `widget/state/theme__viewport__fc__backend__dpr`.
+    assert_eq!(k.slug(), "button/hover/dark__sm__fc0__lavapipe__dpr2");
     // Deterministic: the same key slugs identically every call.
     assert_eq!(k.slug(), k.slug());
+}
+
+#[test]
+fn forced_colors_mode_is_a_distinct_baseline() {
+    // The forced-colors axis is the trap the coverage matrix exists to cover:
+    // the same theme renders differently with forced-colors on, so the two
+    // modes MUST get separate slugs (else a regression in one passes against
+    // the other's baseline).
+    let off = key("button", "default", "forced", "md", false, Backend::Lavapipe, Dpr::X1);
+    let on = key("button", "default", "forced", "md", true, Backend::Lavapipe, Dpr::X1);
+    assert_ne!(off, on);
+    assert_ne!(
+        off.slug(),
+        on.slug(),
+        "fc0 and fc1 must get separate slugs — dropping the axis collapses two captures"
+    );
+    assert!(off.slug().contains("fc0") && on.slug().contains("fc1"));
 }
 
 #[test]
@@ -48,12 +68,13 @@ fn slug_lowercases_and_kebabs_mixed_case_input() {
         "Focus Ring",
         "High Contrast",
         "Large XL",
+        false,
         Backend::Vulkan,
         Dpr::X1,
     );
     let slug = k.slug();
     assert_eq!(
-        slug, "toggleswitch/focus-ring/high-contrast__large-xl__vulkan__dpr1",
+        slug, "toggleswitch/focus-ring/high-contrast__large-xl__fc0__vulkan__dpr1",
         "slug must be lower-kebab + slug-safe (no spaces, no raw Debug)"
     );
     // Slug-safe: no whitespace, no uppercase.
@@ -69,6 +90,7 @@ fn dir_places_corpus_under_widget_directory() {
         "default",
         "light",
         "md",
+        false,
         Backend::Lavapipe,
         Dpr::X1,
     );
@@ -77,18 +99,18 @@ fn dir_places_corpus_under_widget_directory() {
     // (Skia-Gold review ergonomics).
     assert!(dir.starts_with(root));
     assert!(
-        dir.ends_with("button/default/light__md__lavapipe__dpr1"),
+        dir.ends_with("button/default/light__md__fc0__lavapipe__dpr1"),
         "dir = root.join(slug); got {dir:?}"
     );
 }
 
 #[test]
 fn ledger_round_trips_through_toml() {
-    let k = key("button", "hover", "dark", "sm", Backend::Lavapipe, Dpr::X2);
+    let k = key("button", "hover", "dark", "sm", false, Backend::Lavapipe, Dpr::X2);
     let ledger = BlessLedger {
         key: k.clone(),
         positives: vec![Positive {
-            file: "button/hover/dark__sm__lavapipe__dpr2.0.png".into(),
+            file: "button/hover/dark__sm__fc0__lavapipe__dpr2.0.png".into(),
             blessed_commit: "deadbeef".into(),
             blessed_at: "2026-06-15T00:00:00Z".into(),
             budget: FuzzBudget::EXACT,
@@ -126,12 +148,13 @@ prop_compose! {
         state in arb_component(),
         theme in arb_component(),
         viewport in arb_component(),
+        forced_colors in prop::bool::ANY,
         backend in prop::sample::select(vec![
             Backend::Lavapipe, Backend::Vulkan, Backend::Gl, Backend::Metal, Backend::Dx12,
         ]),
         dpr_milli in 1u32..=4000,
     ) -> GoldenKey {
-        key(&widget, &state, &theme, &viewport, backend, Dpr(dpr_milli))
+        key(&widget, &state, &theme, &viewport, forced_colors, backend, Dpr(dpr_milli))
     }
 }
 

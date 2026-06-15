@@ -57,6 +57,9 @@ fn key(widget: &str, state: &str, theme: &str, viewport: &str, dpr: Dpr) -> Gold
         state: state.into(),
         theme: theme.into(),
         viewport: viewport.into(),
+        // The residue goldens capture at default user preferences (forced-colors
+        // off); a forced-colors residue fixture would be a separate cell.
+        forced_colors: false,
         backend: BACKEND,
         dpr,
     }

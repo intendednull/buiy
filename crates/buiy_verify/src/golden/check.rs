@@ -360,7 +360,7 @@ fn emit_failure_report(
 
 // --- small fs / format helpers -------------------------------------------------
 
-/// The `<stem>` of a key's slug (the path tail, e.g. `light__md__lavapipe__dpr1`),
+/// The `<stem>` of a key's slug (the path tail, e.g. `light__md__fc0__lavapipe__dpr1`),
 /// used to name `<stem>.<n>.png` and `<stem>.toml` inside the key dir.
 fn slug_stem(key: &GoldenKey) -> String {
     key.slug()
@@ -462,6 +462,7 @@ mod tests {
             state: "none".into(),
             theme: "dark".into(),
             viewport: "sm".into(),
+            forced_colors: false,
             backend: crate::golden::Backend::Lavapipe,
             dpr: buiy_core::render::golden::Dpr::X1,
         };

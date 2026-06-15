@@ -15,6 +15,7 @@ fn key() -> GoldenKey {
         state: "hover".into(),
         theme: "dark".into(),
         viewport: "sm".into(),
+        forced_colors: false,
         backend: Backend::Lavapipe,
         dpr: Dpr::X2,
     }

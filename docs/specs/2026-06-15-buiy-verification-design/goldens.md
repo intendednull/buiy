@@ -83,12 +83,18 @@ pub struct GoldenKey {
     pub state: String,         // default | hover | focus | pressed | disabled
     pub theme: String,         // light | dark | high-contrast | forced-*
     pub viewport: String,      // named viewport (e.g. "sm" 360x640)
-    pub backend: Backend,      // CPU(lavapipe) | Vulkan | Gl | Metal | Dx12
+    pub forced_colors: bool,   // forced-colors MODE (fc0/fc1) — a distinct axis
+                               // from theme: the same theme renders differently
+                               // with forced-colors on, so each mode is its own
+                               // baseline (mirrors CoverageKey; coverage.md).
+    pub backend: Backend,      // Lavapipe | Vulkan | Gl | Metal | Dx12 | Cpu
     pub dpr: Dpr,              // canonical buiy_core::render::golden::Dpr (milliscale)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum Backend { Lavapipe, Vulkan, Gl, Metal, Dx12 }
+// `Cpu` is the structured-tier marker (Tiers 1-3 share this enum with the GPU
+// golden tier); it is never a capture backend.
+pub enum Backend { Lavapipe, Vulkan, Gl, Metal, Dx12, Cpu }
 
 // `Dpr` is the canonical type from `buiy_core::render::golden` (defined in
 // determinism.md): integer milliscale (1000 = 1×, 2000 = 2×), `Eq + Hash + Ord`
@@ -97,9 +103,9 @@ pub enum Backend { Lavapipe, Vulkan, Gl, Metal, Dx12 }
 // definition site, so `GoldenKey`'s derives are satisfied.
 
 impl GoldenKey {
-    /// `widget/state/theme__viewport__backend__dpr` — directory per widget
-    /// keeps a fixture's whole row of cells together for review. Slug-safe;
-    /// no raw `Debug`.
+    /// `widget/state/theme__viewport__fc__backend__dpr` — directory per widget
+    /// keeps a fixture's whole row of cells together for review. The
+    /// forced-colors mode is `fc0`/`fc1`. Slug-safe; no raw `Debug`.
     pub fn slug(&self) -> String { /* deterministic, lower-kebab */ }
     /// Corpus directory holding `<slug>.<n>.png` (n = positive index) + the
     /// `<slug>.toml` ledger. Default `crates/buiy_verify/tests/goldens/`.

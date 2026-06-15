@@ -24,13 +24,16 @@ use buiy_verify::metric::FuzzBudget;
 /// Map a coverage cell's [`CoverageKey`] to the GPU [`GoldenKey`]: same trace
 /// identity, with the rasterizer set to the pinned CI lane (`Lavapipe`). The
 /// CPU `CoverageKey.backend` (`Cpu`) is replaced — a golden is captured on a
-/// real rasterizer, never on `cpu`.
+/// real rasterizer, never on `cpu`. Every OTHER axis — including
+/// `forced_colors`, which produces a *different capture* — carries through, so
+/// the mapping is injective (see `golden_key_is_injective_over_the_matrix`).
 fn golden_key(cov: &CoverageKey) -> GoldenKey {
     GoldenKey {
         widget: cov.widget.into(),
         state: cov.state.into(),
         theme: cov.theme.into(),
         viewport: cov.viewport.into(),
+        forced_colors: cov.forced_colors,
         backend: Backend::Lavapipe,
         dpr: cov.dpr,
     }
@@ -42,6 +45,38 @@ fn golden_key(cov: &CoverageKey) -> GoldenKey {
 /// `cov.widget`. Kept central so widening is one reviewed edit.
 fn budget_for(_cov: &CoverageKey) -> FuzzBudget {
     FuzzBudget::EXACT
+}
+
+/// `golden_key` must be **injective** over `Matrix::ci_default()`: every
+/// distinct coverage cell maps to a distinct [`GoldenKey`] slug. The
+/// forced-colors axis is the trap — two cells that differ ONLY in
+/// `forced_colors` produce *different captures* (the BoxShadow draw-skip reads
+/// `UserPreferences::forced_colors`), so if the key collapses them, a
+/// forced-colors regression silently passes against the other mode's baseline
+/// once blessed. Headless (no GPU): it only exercises the pure key mapping.
+#[test]
+fn golden_key_is_injective_over_the_matrix() {
+    use std::collections::HashSet;
+    let matrix = Matrix::ci_default();
+    let mut slugs = HashSet::new();
+    let mut cells = 0usize;
+    for fx in sorted_catalog() {
+        for cell in matrix.cells() {
+            let cov = CoverageKey::for_cell(fx, &cell, CovBackend::Cpu);
+            let slug = golden_key(&cov).slug();
+            assert!(
+                slugs.insert(slug.clone()),
+                "two coverage cells collapse onto one golden slug `{slug}` — \
+                 a dropped axis (forced_colors?) would let a regression pass silently"
+            );
+            cells += 1;
+        }
+    }
+    assert_eq!(
+        slugs.len(),
+        cells,
+        "every one of the {cells} coverage cells must map to a distinct golden key"
+    );
 }
 
 #[test]
