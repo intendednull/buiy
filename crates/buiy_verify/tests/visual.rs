@@ -1,39 +1,65 @@
-use buiy_verify::visual::{DiffResult, compare_images};
-use image::{DynamicImage, RgbaImage, open};
+//! Migrated from the deleted RMSE `visual::compare_images` to the unified
+//! `buiy_verify::metric` (metric.md § Migration). In-memory fixtures; the old
+//! baseline/tinted PNGs are gone.
 
-#[test]
-fn identical_images_diff_zero() {
-    let baseline = open("tests/fixtures/visual/baseline.png").unwrap();
-    let result: DiffResult = compare_images(&baseline, &baseline);
-    assert_eq!(result.score, 0.0);
-    assert!(result.passed(0.01), "identical images pass 0.01 tolerance");
+use buiy_verify::metric::{CompareOpts, FuzzBudget, compare};
+use image::{Rgba, RgbaImage};
+
+fn solid(w: u32, h: u32, px: [u8; 4]) -> RgbaImage {
+    RgbaImage::from_pixel(w, h, Rgba(px))
 }
 
 #[test]
-fn tinted_image_diff_nonzero() {
-    let a = open("tests/fixtures/visual/baseline.png").unwrap();
-    let b = open("tests/fixtures/visual/tinted.png").unwrap();
-    let result = compare_images(&a, &b);
-    assert!(result.score > 0.0, "different images produce nonzero diff");
-}
-
-#[test]
-fn dimension_mismatch_returns_one() {
-    let a = DynamicImage::ImageRgba8(RgbaImage::new(2, 2));
-    let b = DynamicImage::ImageRgba8(RgbaImage::new(3, 2));
-    let result = compare_images(&a, &b);
-    assert_eq!(result.score, 1.0);
-    assert!(!result.passed(0.5), "mismatched-dim sentinel exceeds 0.5");
-}
-
-#[test]
-fn empty_images_compare_identical_without_nan() {
-    let a = DynamicImage::ImageRgba8(RgbaImage::new(0, 0));
-    let b = DynamicImage::ImageRgba8(RgbaImage::new(0, 0));
-    let result = compare_images(&a, &b);
-    assert_eq!(result.score, 0.0, "0x0 vs 0x0 is identical, not NaN");
+fn identical_images_pass_exact() {
+    let img = solid(16, 16, [30, 60, 90, 255]);
+    let d = compare(&img, &img, &CompareOpts::default());
+    assert_eq!(d.differing_pixels, 0);
     assert!(
-        result.passed(0.01),
-        "empty-vs-empty must pass any non-negative tolerance"
+        d.passes(&FuzzBudget::EXACT),
+        "identical images pass the exact budget"
+    );
+}
+
+#[test]
+fn tinted_image_fails_exact() {
+    let a = solid(16, 16, [40, 40, 40, 255]);
+    let b = solid(16, 16, [40, 40, 200, 255]); // uniform blue tint
+    let d = compare(
+        &a,
+        &b,
+        &CompareOpts {
+            include_aa: true,
+            ..Default::default()
+        },
+    );
+    assert!(d.differing_pixels > 0, "a uniform tint differs");
+    assert!(
+        !d.passes(&FuzzBudget::EXACT),
+        "tinted image fails the exact budget"
+    );
+}
+
+#[test]
+fn dimension_mismatch_fails_every_budget() {
+    let a = solid(2, 2, [0, 0, 0, 255]);
+    let b = solid(3, 2, [0, 0, 0, 255]);
+    let d = compare(&a, &b, &CompareOpts::default());
+    assert!(
+        !d.passes(&FuzzBudget {
+            max_channel_delta: 255,
+            max_diff_pixels: u32::MAX
+        }),
+        "mismatched dims saturate and fail even a maximal budget"
+    );
+}
+
+#[test]
+fn empty_vs_empty_is_zero_diff() {
+    let e = RgbaImage::new(0, 0);
+    let d = compare(&e, &e, &CompareOpts::default());
+    assert_eq!(d.total_pixels, 0);
+    assert!(
+        d.passes(&FuzzBudget::EXACT),
+        "empty-vs-empty observes no difference"
     );
 }

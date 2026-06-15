@@ -1,4 +1,4 @@
-//! Buiy verification harness. Phase 0 ships visual regression, AccessKit
+//! Buiy verification harness. Phase 0 ships the perceptual metric, AccessKit
 //! tree snapshot, and WCAG 2 contrast linter. Full harness (15 CI gates)
 //! lives in `buiy-verification-design`.
 //!
@@ -7,4 +7,3 @@
 pub mod a11y;
 pub mod contrast;
 pub mod metric;
-pub mod visual;
