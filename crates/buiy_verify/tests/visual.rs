@@ -63,3 +63,39 @@ fn empty_vs_empty_is_zero_diff() {
         "empty-vs-empty observes no difference"
     );
 }
+
+#[test]
+fn empty_capture_against_real_baseline_saturates_both_orders() {
+    // A 0×0 image is a *dimension mismatch* against a real one — it must
+    // saturate (loud-fail), not slip through the empty fast-path. The golden
+    // gate (golden/check.rs) feeds the LIVE capture as arg `a`, so a render that
+    // emits a 0×0 image MUST be rejected against any stored golden; the
+    // mirror-image order must fail too. This is the asymmetric case the
+    // `empty_vs_empty` / equal-dim `dimension_mismatch` tests never exercised.
+    let real = solid(4, 4, [10, 20, 30, 255]);
+    let empty = RgbaImage::new(0, 0);
+    let maximal = FuzzBudget {
+        max_channel_delta: 255,
+        max_diff_pixels: u32::MAX,
+    };
+
+    let capture_empty = compare(&empty, &real, &CompareOpts::default());
+    assert!(
+        capture_empty.saturated,
+        "a 0×0 capture vs a real baseline is a dimension mismatch — it must saturate"
+    );
+    assert!(
+        !capture_empty.passes(&maximal),
+        "an empty capture must fail even a maximal budget (golden gate safety)"
+    );
+
+    let baseline_empty = compare(&real, &empty, &CompareOpts::default());
+    assert!(
+        baseline_empty.saturated,
+        "a real capture vs a 0×0 baseline must also saturate"
+    );
+    assert!(
+        !baseline_empty.passes(&maximal),
+        "the mirror-image order must fail too"
+    );
+}

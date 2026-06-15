@@ -103,17 +103,12 @@ impl CompareOpts {
 /// `Result`. (AA exclusion is layered in 1a.3; here every over-threshold pixel
 /// counts.)
 pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
-    // Empty: nothing to observe (matches compare_images's 0.0 empty case).
-    if a.width() == 0 || a.height() == 0 {
-        return Diff {
-            differing_pixels: 0,
-            max_channel_delta: 0,
-            total_pixels: 0,
-            mssim: None,
-            diff_image: None,
-            saturated: false,
-        };
-    }
+    // Dimension mismatch FIRST — before the empty fast-path. A 0×0 image is a
+    // mismatch against any non-empty one, so this ordering is load-bearing: the
+    // golden gate (golden/check.rs) feeds the LIVE capture as `a`, and a render
+    // that emits a 0×0 image must saturate (loud-fail) rather than slip through
+    // the empty case and silently pass every budget. (Regression caught by
+    // `empty_capture_against_real_baseline_saturates_both_orders`.)
     if a.dimensions() != b.dimensions() {
         // Loud-red sentinel (metric.md): a saturated Diff fails EVERY budget.
         // total = max(area) so the saturation count is well-defined.
@@ -128,6 +123,19 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
             mssim: Some(0.0),
             diff_image: None,
             saturated: true,
+        };
+    }
+    // Empty (and, given the guard above, equal-dim ⇒ both empty): nothing to
+    // observe (matches compare_images's 0.0 empty case). Kept as a fast-path so
+    // the MSSIM channel never runs on a 0×0 image.
+    if a.width() == 0 || a.height() == 0 {
+        return Diff {
+            differing_pixels: 0,
+            max_channel_delta: 0,
+            total_pixels: 0,
+            mssim: None,
+            diff_image: None,
+            saturated: false,
         };
     }
     let (w, h) = a.dimensions();
