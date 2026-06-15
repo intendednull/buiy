@@ -153,11 +153,14 @@ fn emit_report(
 }
 
 /// A `Mismatch` budget that tolerates difference is meaningless — its floor
-/// must be `(0,0)`. `Match` may carry any widening. (Task 1b.7 replaces this
-/// stub with the real guard + its meta-test; inlined `true` here only so the
-/// 1b.5/1b.6 engine compiles green.)
-fn mismatch_floor_ok(_kind: RefKind, _fuzz: &FuzzBudget) -> bool {
-    true
+/// must be `(0,0)`. `Match` may carry any widening. Pure CPU so it gates
+/// headless (reftests.md § Verification #2); the `reftest!` macro enforces the
+/// same at expansion time, and `run_reftest` asserts it as a belt.
+pub fn mismatch_floor_ok(kind: RefKind, fuzz: &FuzzBudget) -> bool {
+    match kind {
+        RefKind::Mismatch => *fuzz == FuzzBudget::EXACT,
+        RefKind::Match => true,
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +243,33 @@ mod tests {
             RefKind::Mismatch,
             &stub_diff(0, 0),
             &FuzzBudget::EXACT
+        ));
+    }
+
+    #[test]
+    fn mismatch_requires_zero_fuzz_floor() {
+        assert!(mismatch_floor_ok(RefKind::Mismatch, &FuzzBudget::EXACT));
+        assert!(!mismatch_floor_ok(
+            RefKind::Mismatch,
+            &FuzzBudget {
+                max_channel_delta: 1,
+                max_diff_pixels: 0
+            }
+        ));
+        assert!(!mismatch_floor_ok(
+            RefKind::Mismatch,
+            &FuzzBudget {
+                max_channel_delta: 0,
+                max_diff_pixels: 1
+            }
+        ));
+        // Match may carry any budget.
+        assert!(mismatch_floor_ok(
+            RefKind::Match,
+            &FuzzBudget {
+                max_channel_delta: 8,
+                max_diff_pixels: 4
+            }
         ));
     }
 }
