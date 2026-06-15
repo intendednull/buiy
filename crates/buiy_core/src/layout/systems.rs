@@ -3796,6 +3796,30 @@ pub(super) fn compose_transform(
     t_mat * r_mat * s_mat * m_transform
 }
 
+/// The top-layer **paint rank**: a total order over [`TopLayer`] variants where
+/// a SMALLER rank paints lower (earlier) and a larger rank paints higher
+/// (later). Fullscreen sits at the bottom of the top layer (`0`), Modal at the
+/// top (`3`); `None` (in-flow, not in the top layer) is the sentinel `u8::MAX`,
+/// so any escaping variant outranks (paints below) an in-flow node.
+///
+/// This is the SINGLE source of truth for top-layer dominance, shared by the
+/// layout escape sort (sub-pass 6f) and the verification harness's
+/// `top_layer_dominates` invariant. It is deliberately NOT the `TopLayer`
+/// enum's declared discriminant order (`None, Modal, Popover, Tooltip,
+/// Fullscreen`), so `#[derive(Ord)]` on `TopLayer` would give the WRONG
+/// dominance — callers must compare via this rank, never the discriminant.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 4.
+pub fn top_layer_paint_rank(t: TopLayer) -> u8 {
+    match t {
+        TopLayer::Fullscreen => 0,
+        TopLayer::Tooltip => 1,
+        TopLayer::Popover => 2,
+        TopLayer::Modal => 3,
+        TopLayer::None => u8::MAX,
+    }
+}
+
 /// The spec § 2 union of stacking-context-formation triggers:
 /// (1) positioned with explicit `z_index`, (2) `Isolation::Isolate`,
 /// (3) non-identity transform, (4) `Containment.contain ⊇ PAINT/STRICT`,
@@ -4110,15 +4134,8 @@ pub(super) fn stacking_context(
     // An entity that is itself a root does NOT escape (it has no parent
     // context to escape from) — it forms its own root context, so it is
     // excluded here to avoid a self-reference in its own `painters_z`.
-    fn tier_rank(t: TopLayer) -> u8 {
-        match t {
-            TopLayer::Fullscreen => 0,
-            TopLayer::Tooltip => 1,
-            TopLayer::Popover => 2,
-            TopLayer::Modal => 3,
-            TopLayer::None => u8::MAX,
-        }
-    }
+    // The tier rank is the SINGLE source of truth shared with the verification
+    // harness — see [`top_layer_paint_rank`].
     let root_ancestor = |start: Entity| -> Entity {
         let mut cur = start;
         while let Ok(parent) = parent_chain.get(cur) {
@@ -4132,7 +4149,7 @@ pub(super) fn stacking_context(
         cur
     };
     let mut top_sorted: Vec<Entity> = activation.order.iter().copied().collect();
-    top_sorted.sort_by_cached_key(|&e| tier_rank(top_layer_of(e)));
+    top_sorted.sort_by_cached_key(|&e| top_layer_paint_rank(top_layer_of(e)));
     let mut escaped_by_root: std::collections::HashMap<Entity, Vec<Entity>> =
         std::collections::HashMap::new();
     for &e in &top_sorted {
