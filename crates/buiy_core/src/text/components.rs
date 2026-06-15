@@ -443,6 +443,44 @@ impl SelectionVisual {
     }
 }
 
+/// The IME preedit underline paint-input state (editing-and-ime § 6.2;
+/// decoration-and-paint § 8 — a quad-tier underline FORCED over the composing
+/// byte range). The NORMALIZED endpoint pair (`start ≤ end`), the same shape
+/// as `SelectionVisual` but a distinct seat: its source is IME state, its
+/// geometry is an underline strip (not a full-height box), its color is the
+/// preedit token. Written/removed by the E5 geometry pass from
+/// `TextEditState::preedit`; read by the glyph producer, which derives the
+/// underline rects via `LayoutRun::highlight` (the selection-pre-pass idiom)
+/// and rides the existing `ExtractedTextQuads` carrier — no new GPU work.
+/// Presence = "a composition is underway"; REMOVAL clears it. A collapsed
+/// pair paints nothing. Machinery state — not reflect-registered (carries
+/// `cosmic_text::Cursor`; this module IS the cosmic boundary, the
+/// `SelectionVisual` precedent).
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct PreeditVisual {
+    /// Logically-first endpoint (`start ≤ end`).
+    pub start: Cursor,
+    /// Logically-last endpoint.
+    pub end: Cursor,
+}
+
+impl PreeditVisual {
+    /// Build from an UNORDERED endpoint pair, normalizing to `start ≤ end`
+    /// ((line, index) lexicographic).
+    pub fn new(a: Cursor, b: Cursor) -> Self {
+        if (b.line, b.index) < (a.line, a.index) {
+            Self { start: b, end: a }
+        } else {
+            Self { start: a, end: b }
+        }
+    }
+
+    /// `start == end` (position-wise) — paints nothing.
+    pub fn is_collapsed(&self) -> bool {
+        (self.start.line, self.start.index) == (self.end.line, self.end.index)
+    }
+}
+
 static WARNED_TEXT_WRAP_STYLE: AtomicBool = AtomicBool::new(false);
 static WARNED_JUSTIFY_ALL: AtomicBool = AtomicBool::new(false);
 static WARNED_DECORATION_STYLE: AtomicBool = AtomicBool::new(false);

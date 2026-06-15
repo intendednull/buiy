@@ -28,6 +28,10 @@ pub struct TextChanged(pub Entity);
 pub struct EditOutcome {
     pub value_changed: bool,
     pub submitted: bool,
+    /// The buffer content changed even if the logical value did not (an
+    /// Escape that cleared a preedit) — needs the M1 re-measure dirty-mark
+    /// but no `TextChanged` (editing-and-ime § 6.2: preedit is not value).
+    pub reshaped: bool,
 }
 
 /// Everything `apply_tracked` needs beyond the command itself. Carries the
@@ -124,6 +128,7 @@ impl TextEditState {
                     return EditOutcome {
                         value_changed: false,
                         submitted: true,
+                        reshaped: false,
                     };
                 }
                 if ctx.read_only {
@@ -166,12 +171,26 @@ impl TextEditState {
             }
             EditCommand::Escape => {
                 self.undo.seal();
+                // E5: Escape cancels an active composition (editing-and-ime
+                // § 6.2d) — remove the spliced span (no Change) before the
+                // editor's own Escape (which clears the selection). The buffer
+                // content changed but the logical value did not (the preedit was
+                // never in `value()`), so flag `reshaped` for the M1 re-measure
+                // without emitting `TextChanged`.
+                let cleared = self.has_preedit();
+                if cleared {
+                    self.remove_preedit(font_system);
+                }
                 self.editor.action(font_system, Action::Escape);
-                EditOutcome::default()
+                EditOutcome {
+                    reshaped: cleared,
+                    ..Default::default()
+                }
             }
             EditCommand::Submit => EditOutcome {
                 value_changed: false,
                 submitted: true,
+                reshaped: false,
             },
 
             // ── Undo / Redo (§ 8) ────────────────────────────────────────
@@ -266,6 +285,7 @@ impl TextEditState {
         EditOutcome {
             value_changed: self.value() != before,
             submitted: false,
+            reshaped: false,
         }
     }
 
@@ -286,6 +306,7 @@ impl TextEditState {
         EditOutcome {
             value_changed: changed,
             submitted: false,
+            reshaped: false,
         }
     }
 
@@ -300,6 +321,7 @@ impl TextEditState {
         EditOutcome {
             value_changed: changed,
             submitted: false,
+            reshaped: false,
         }
     }
 
@@ -521,6 +543,7 @@ pub fn apply_keyboard_edits(
     // The one lock hold — the apply burst (E2 erratum 2). Mirrors TextCommit.
     let mut font_system = fonts.lock();
     let mut any_value_change = false;
+    let mut any_reshape = false;
     for command in commands {
         // Capture the group BEFORE applying, for the undo/redo Messages.
         let was_undo = command == EditCommand::Undo;
@@ -538,6 +561,7 @@ pub fn apply_keyboard_edits(
         };
         let outcome = state.apply_tracked(&mut font_system, command, &mut ctx);
         any_value_change |= outcome.value_changed;
+        any_reshape |= outcome.reshaped;
         if was_undo
             && outcome.value_changed
             && let Some(g) = group_before_undo
@@ -559,14 +583,18 @@ pub fn apply_keyboard_edits(
     // caller) never runs for this entity. Do here exactly what `sync_one`
     // does after a Text change: drop the intrinsics cache and Taffy-dirty the
     // node, so next frame's measure → TextCommit → extract republish (N→N+1).
-    // Pure motion (any_value_change == false) reshapes nothing — no dirty.
-    if any_value_change {
+    // Pure motion reshapes nothing — no dirty. An Escape that cleared a preedit
+    // (`any_reshape`) changed the buffer WITHOUT changing the logical value, so
+    // it dirty-marks but emits no `TextChanged` (E5, editing-and-ime § 6.2).
+    if any_value_change || any_reshape {
         state.invalidate_intrinsics();
         if let Some(tree) = tree.as_deref_mut() {
             // Absent tree (standalone BuiyTextPlugin, no LayoutPlugin):
             // nothing measures, nothing to dirty — `sync_one`'s same guard.
             tree.mark_dirty_for_entity(entity);
         }
+    }
+    if any_value_change {
         changed.write(TextChanged(entity));
     }
 }

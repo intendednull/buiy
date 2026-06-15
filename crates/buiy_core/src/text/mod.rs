@@ -43,8 +43,9 @@ pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
     CaretVisual, ComputedTextLayout, ComputedTextLine, DecorationLineStyle, DecorationLines,
     FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, GenericFamily, IntrinsicWidths,
-    LineHeight, ResolvedBaseline, SelectionVisual, TEXT_SHAPING, Text, TextAlign, TextBuffer,
-    TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+    LineHeight, PreeditVisual, ResolvedBaseline, SelectionVisual, TEXT_SHAPING, Text, TextAlign,
+    TextBuffer, TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace,
+    resolve_wrap,
 };
 pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
@@ -55,7 +56,7 @@ pub use edit::{
     EditCommand, EditContext, EditRedone, EditUndone, GroupKind, Keymap, MemClipboard, Placeholder,
     PointerGesture, ReadOnly, SelectionChanged, SelectionRange, SingleLine, TextBufferAccess,
     TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit, apply_keyboard_edits,
-    pointer_selection, pointer_to_cursor, write_caret_and_selection,
+    pointer_selection, pointer_to_cursor, write_caret_and_selection, write_ime_window,
 };
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
@@ -198,6 +199,20 @@ impl Plugin for BuiyTextPlugin {
                 .before(crate::text::visual::write_caret_blink),
         );
 
+        // E5 (editing-and-ime § 6.3): the IME popup positioning writer — sets
+        // Window.ime_enabled (focus + markers) and Window.ime_position (the
+        // focused editor's caret rect bottom-left, once geometry committed).
+        // Same render-prep window as write_caret_and_selection (after Input,
+        // before write_caret_blink), so the position reads this frame's caret.
+        // Inert headless (Option focus + a single-PrimaryWindow guard no-op
+        // without a Window).
+        app.add_systems(
+            Update,
+            crate::text::edit::write_ime_window
+                .after(crate::BuiySet::Input)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
         // E2 (editing-and-ime §§ 3, 11): the per-platform keymap (selected
         // once at init by a data swap) and the focus-gated input system.
         // Runs in BuiySet::Input — the `handle_tab` precedent (focus.rs:56),
@@ -219,6 +234,19 @@ impl Plugin for BuiyTextPlugin {
         app.add_systems(
             Update,
             crate::text::edit::apply_keyboard_edits.in_set(crate::BuiySet::Input),
+        );
+
+        // E5 (editing-and-ime §§ 6, 11): the focus-gated IME system + the
+        // composition Message taxonomy. BuiySet::Input alongside the keyboard
+        // path — winit sends EITHER Ime OR KeyboardInput per keystroke
+        // (window.rs ime_enabled doc), so they do not race. Inert headless
+        // (Option params no-op without Ime / Focus / Layout infra).
+        app.add_message::<crate::text::edit::CompositionStart>();
+        app.add_message::<crate::text::edit::CompositionUpdate>();
+        app.add_message::<crate::text::edit::CompositionEnd>();
+        app.add_systems(
+            Update,
+            crate::text::edit::apply_ime.in_set(crate::BuiySet::Input),
         );
 
         // E3 (editing-and-ime § 4): the focus-gated mouse-selection system —

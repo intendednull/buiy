@@ -25,7 +25,8 @@ use crate::render::atlas::{
     AtlasBitmap, AtlasEntry, AtlasFormat, AtlasKey, BuiyAtlas, GlyphAlphaInstance,
 };
 use crate::render::color::{
-    resolve_caret_color, resolve_selection_bg, resolve_selection_fg, resolve_token,
+    resolve_caret_color, resolve_preedit_underline, resolve_selection_bg, resolve_selection_fg,
+    resolve_token,
 };
 use crate::render::components::{AncestorClip, CaretColor, ClipRect, ComputedPaintSkip, TextColor};
 use crate::render::extract::{
@@ -36,7 +37,7 @@ use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
 use super::components::{
-    CaretVisual, ComputedTextLayout, SelectionVisual, TextBuffer, TextDecorations,
+    CaretVisual, ComputedTextLayout, PreeditVisual, SelectionVisual, TextBuffer, TextDecorations,
 };
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
 use super::edit::TextBufferAccessReadOnly;
@@ -196,11 +197,14 @@ pub fn extract_buiy_glyphs(
                 // T7: the editor visual paint-inputs (decoration-and-paint
                 // §§ 5–6) — selection endpoints in, rects + re-tint derived
                 // here — plus the caret rect/phase and the explicit
-                // caret-color tier. 13 of Bevy's 15-tuple limit — the next
-                // grower must start nesting.
+                // caret-color tier.
                 Option<&SelectionVisual>,
                 Option<&CaretVisual>,
                 Option<&CaretColor>,
+                // E5: the preedit underline span (editing-and-ime § 6.2). Its
+                // own seat — distinct color + underline geometry — on the same
+                // quad carrier. 14 of Bevy's 15-tuple limit.
+                Option<&PreeditVisual>,
             ),
             With<Node>,
         >,
@@ -237,6 +241,10 @@ pub fn extract_buiy_glyphs(
                     Changed<SelectionVisual>,
                     Changed<CaretVisual>,
                     Changed<CaretColor>,
+                    // E5 (editing-and-ime § 6.2): a composition start/update/
+                    // end re-emits the preedit underline; steady frames
+                    // rebuild nothing.
+                    Changed<PreeditVisual>,
                 )>,
             ),
         >,
@@ -250,6 +258,10 @@ pub fn extract_buiy_glyphs(
         Extract<RemovedComponents<PendingFontBlock>>,
         Extract<RemovedComponents<SelectionVisual>>,
         Extract<RemovedComponents<CaretVisual>>,
+        // E5: a preedit clear (commit / cancel / focus-loss) is a REMOVAL —
+        // removal IS the clear, so the entity must re-emit (with no preedit
+        // quad) on commit/cancel.
+        Extract<RemovedComponents<PreeditVisual>>,
     ),
     contexts: Extract<Query<(Entity, &StackingContext)>>,
     theme: Extract<Res<Theme>>,
@@ -275,6 +287,9 @@ pub fn extract_buiy_glyphs(
     // T7: same for the caret — removal = focus loss, the stamp must
     // repaint away.
     let caret_removed = removed.4.read().count() > 0;
+    // E5: a preedit clear (commit / cancel / focus-loss) removes the
+    // component — removal IS the clear, so the underline must repaint away.
+    let preedit_removed = removed.5.read().count() > 0;
 
     let Ok(window) = primary.single() else {
         // Vanished window: clear the carriers ONCE (an unconditional clear
@@ -300,6 +315,7 @@ pub fn extract_buiy_glyphs(
         || block_lifted
         || selection_cleared
         || caret_removed
+        || preedit_removed
         || theme.is_changed()
         || scale_changed
         || fonts_changed;
@@ -378,6 +394,7 @@ pub fn extract_buiy_glyphs(
             selection_visual,
             caret_visual,
             caret_color,
+            preedit_visual,
         )) = texts.get(entity)
         else {
             continue; // not a text painter
@@ -473,6 +490,49 @@ pub fn extract_buiy_glyphs(
                                     eff_clip,
                                 );
                             }
+                        }
+                    }
+                });
+            }
+        }
+
+        // E5 (editing-and-ime § 6.2; decoration-and-paint § 8): the preedit
+        // underline — a forced single underline over the composing byte
+        // range, quad-tier. Mirrors the selection pre-pass: highlight the
+        // span per run, then push a THIN underline strip (not a full-height
+        // box) at the run baseline. Reuses the quad carrier; no new GPU.
+        let preedit = preedit_visual.filter(|p| !p.is_collapsed());
+        if let Some(pre) = preedit {
+            let color = resolve_preedit_underline(theme, resolved_entity_color);
+            let color = if blocked {
+                color.with_alpha(0.0)
+            } else {
+                color
+            };
+            if color.alpha() > 0.0 {
+                access.with_buffer(|buffer| {
+                    for run in buffer.layout_runs() {
+                        if run.line_i < pre.start.line || run.line_i > pre.end.line {
+                            continue;
+                        }
+                        // Underline strip thickness: 1 logical px at the run
+                        // baseline bottom (decoration-and-paint § 8 uses the
+                        // standard underline metric; a 1px strip is the v1
+                        // forced underline — the engine has no per-font
+                        // underline metric exposed at this seat).
+                        let thickness = 1.0_f32;
+                        let strip_top = run.line_top + run.line_height - thickness;
+                        for (x, w) in run.highlight(pre.start, pre.end) {
+                            if w <= 0.0 {
+                                continue;
+                            }
+                            new_quads.push(TextQuad {
+                                entity,
+                                position: Vec2::new(origin.x + x, origin.y + strip_top),
+                                size: Vec2::new(w, thickness),
+                                color,
+                                clip: eff_clip,
+                            });
                         }
                     }
                 });

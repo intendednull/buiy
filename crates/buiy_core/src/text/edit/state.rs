@@ -17,6 +17,7 @@ use std::time::Duration;
 use bevy::prelude::*;
 use cosmic_text::{Buffer, Editor, Metrics};
 
+use super::ime::PreeditSpan;
 use super::selection::TextSelection;
 use super::undo::UndoStack;
 use crate::text::IntrinsicWidths;
@@ -91,6 +92,11 @@ pub struct TextEditState {
     /// editor had no history (E2's edits were unrecorded). Read/written only
     /// by `apply_tracked` (input.rs) — the one mutation site.
     pub(crate) undo: UndoStack,
+    /// The live IME composition span (§ 6), `None` when not composing. E5
+    /// lands it. Written only by the `ime.rs` splice/remove/commit methods;
+    /// read by `value()` (byte-range exclusion, invariant b) and the geometry
+    /// writer (`PreeditVisual`).
+    pub(crate) preedit: Option<PreeditSpan>,
 }
 
 impl TextEditState {
@@ -125,6 +131,7 @@ impl TextEditState {
             selection: TextSelection::collapsed(cosmic_text::Cursor::new(0, 0)),
             blink: CaretBlink::default(),
             undo: UndoStack::default(),
+            preedit: None,
         }
     }
 
@@ -141,20 +148,29 @@ impl TextEditState {
         self.intrinsics
     }
 
-    /// The logical value: the editor buffer's full text. Pre-IME this is the
-    /// complete buffer content (editing-and-ime § 3); E5 refines this to
-    /// subtract the live preedit byte range (invariant § 6.2b). Lines are
-    /// joined with `\n` (the LF normalization the value contract uses; the
-    /// editor stores per-line endings separately, `BufferLine::ending`).
+    /// The logical value: the editor buffer's full text with the live preedit
+    /// byte range REMOVED (editing-and-ime § 6.2b — value reads exclude
+    /// preedit). When not composing this is the complete buffer content.
+    /// Lines are joined with `\n` (the LF value contract; per-line endings
+    /// live separately on `BufferLine::ending`).
     pub fn value(&self) -> String {
         use cosmic_text::Edit;
+        let preedit = self.preedit.clone();
         self.editor.with_buffer(|buffer| {
             let mut out = String::new();
             for (i, line) in buffer.lines.iter().enumerate() {
                 if i > 0 {
                     out.push('\n');
                 }
-                out.push_str(line.text());
+                let text = line.text();
+                match &preedit {
+                    Some(span) if span.line == i => {
+                        // Subtract [start, end): the bytes the preedit occupies.
+                        out.push_str(&text[..span.start]);
+                        out.push_str(&text[span.end()..]);
+                    }
+                    _ => out.push_str(text),
+                }
             }
             out
         })
@@ -195,6 +211,12 @@ impl TextEditState {
     /// The redo-stack depth. Test/inspection.
     pub fn redo_depth(&self) -> usize {
         self.undo.redo_len()
+    }
+
+    /// Test/inspection: the `GroupKind` Undo would pop next (top of the undo
+    /// stack). Stays inside the facade.
+    pub fn undo_top_group_for_test(&self) -> Option<super::undo::GroupKind> {
+        self.undo_top_group()
     }
 
     /// Drop the cached intrinsic widths — the "buffer content changed,
