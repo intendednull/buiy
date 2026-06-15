@@ -10,15 +10,21 @@
 //! clipboard/undo (E4), IME (E5), and lifecycle/widget (E6) extend it.
 
 mod access;
+mod caret;
 mod command;
 mod input;
 pub mod keymap;
+mod pointer;
+mod selection;
 mod state;
 
 pub use access::{
     TextBufferAccess, TextBufferAccessItem, TextBufferAccessReadOnly, TextBufferAccessReadOnlyItem,
 };
+pub use caret::{CaretMoved, SelectionChanged, write_caret_and_selection};
 pub use command::EditCommand;
 pub use input::{EditOutcome, TextChanged, apply_keyboard_edits};
 pub use keymap::{Keymap, KeymapTable, Modifiers, default_keymap_for_platform};
-pub use state::{Disabled, Placeholder, ReadOnly, SingleLine, TextEditState};
+pub use pointer::{ClickTracker, PointerGesture, pointer_selection, pointer_to_cursor};
+pub use selection::{SelectionRange, TextSelection};
+pub use state::{CaretBlink, Disabled, Placeholder, ReadOnly, SingleLine, TextEditState};

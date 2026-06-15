@@ -800,3 +800,34 @@ design's numbers, never this backlog's.
 
 **Spec touchpoint:** render `verification.md § 4.1`; text `verification.md
 § 4` (as-landed note).
+
+## Text editing — BiDi split caret (E3 deferral)
+
+**Status:** deferred from E3 ([2026-06-13-buiy-text-editing-e3-caret-selection.md](2026-06-13-buiy-text-editing-e3-caret-selection.md)).
+
+**What it is:** when the caret sits on a bidirectional direction boundary, the
+spec (editing-and-ime.md §§ 4.1, 5) calls for **two** caret marks — a primary
+full-height bar at one run's edge plus a secondary indicator at the other — so
+the user can tell which direction the next typed character will flow.
+
+**Why deferred:** cosmic-text 0.19 exposes no API for the dual position.
+`LayoutRun::cursor_position` → `cursor_glyph` (vendored `buffer.rs:148-179`)
+compares **only** `(cursor.line, cursor.index)` and never reads
+`cursor.affinity`, and a single unwrapped line is **one** `LayoutRun` — so
+repeated `cursor_position` calls cannot surface the second position, and there
+is no second run to scan. cosmic's own `Editor::draw` paints a single caret
+(`find_map` first run). E3 therefore paints the **single primary caret** (zero
+correctness risk — the caret is always present and correct; only the
+mixed-direction *secondary indicator* is missing), exactly as the multi-range
+selection *behavior* is a named deferral.
+
+**Correct approach (the work):** compute the secondary x from glyph-level
+geometry at the boundary byte index — the LTR glyph's trailing edge vs the RTL
+glyph's leading edge, using the affinity pair, à la `cursor_from_glyph_left` /
+`cursor_from_glyph_right` (vendored `buffer.rs:181-197`, which DO encode
+affinity). Paint as a secondary `CaretVisual`-style rect + a second solid stamp
+(CPU geometry only — no new GPU, the E3 paint path already stamps the primary).
+
+**Owner:** the text-editing campaign, as a focused follow-up slice after E3–E6.
+
+**Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 (as-landed deferral notes).
