@@ -152,6 +152,84 @@ fn emit_report(
     report
 }
 
+/// Render the same single primitive on the GPU (one-instance capture) and on
+/// the CPU oracle, diff with the AA-aware metric. Tolerates sub-pixel AA noise
+/// via `fuzz`; zero stored bytes. Catches SDF AA / implementation drift no
+/// markup reftest can, and is kept PERMANENTLY (one shared analytic
+/// `sdf_rounded_rect`). A *spec* error in `sdf_rounded_rect` is invisible here
+/// (both paths share it) — that is Tier 5's job.
+pub fn run_sdf_cross_check(draw: &buiy_core::render::DrawData, fuzz: &FuzzBudget) -> RefOutcome {
+    let (w, h) = REFTEST_LOGICAL;
+    let cfg = GoldenConfig::deterministic();
+
+    let mut app = crate::support::reftest_app(w, h);
+    crate::support::clear_reftest_scene(&mut app);
+    spawn_single_primitive(&mut app, draw);
+    let gpu = capture_to_image(&mut app, &cfg);
+
+    let cpu = sdf_oracle::rasterize_sdf_rect(draw, w, h);
+
+    let diff = compare(&gpu, &cpu, &CompareOpts::reftest_default());
+    let passed = diff.passes(fuzz);
+    let report_path = if passed {
+        None
+    } else {
+        Some(emit_report("sdf_cross_check", &gpu, &cpu, &diff))
+    };
+    RefOutcome {
+        passed,
+        diff,
+        report_path,
+    }
+}
+
+/// Spawn one rounded-rect under a root, mapping `DrawData`'s position/size/
+/// radius to the layout + render components the extract path turns back into one
+/// `DrawData`. The corner radius is carried on `Border.radius`
+/// (`Corners::all(Radius::circular(..))`) — that is the component
+/// `draw_for_node` reads for the quad radius (`render/mod.rs:373`); a bare
+/// `Radius` component is NOT consumed by the fill path. The `Border` band is
+/// zero-width (width lives in `BoxModel`), so only the rounded fill paints.
+fn spawn_single_primitive(app: &mut bevy::app::App, draw: &buiy_core::render::DrawData) {
+    use bevy::prelude::*;
+    use buiy_core::components::Node;
+    use buiy_core::layout::{Inset, Length, Sizing, Style};
+    use buiy_core::render::ColorToken;
+    use buiy_core::render::components::{Background, Border, Corners, Radius};
+    use std::borrow::Cow;
+    // The capture path resolves a token; install draw.color under a fixed key.
+    let key = "sdf.cross.fill";
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme.colors.insert(key.into(), draw.color);
+    }
+    let e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    left: Sizing::Length(Length::px(draw.position.x)),
+                    top: Sizing::Length(Length::px(draw.position.y)),
+                    ..default()
+                })
+                .width_px(draw.size.x)
+                .height_px(draw.size.y),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed(key)),
+            },
+            Border {
+                radius: Corners::all(Radius::circular(draw.radius)),
+                ..default()
+            },
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[e]);
+}
+
 /// A `Mismatch` budget that tolerates difference is meaningless — its floor
 /// must be `(0,0)`. `Match` may carry any widening. Pure CPU so it gates
 /// headless (reftests.md § Verification #2); the `reftest!` macro enforces the
@@ -178,22 +256,34 @@ pub mod sdf_oracle {
         q.max(Vec2::ZERO).length() + q.x.max(q.y).min(0.0) - r
     }
 
-    /// Rasterize one `DrawData` rounded-rect into a `w×h` RGBA tile, mirroring
-    /// the fragment shader: SDF in logical px, AA via a `fwidth` estimate (the
-    /// per-pixel SDF gradient via central difference) fed to
-    /// `smoothstep(-aa, aa, d)`.
+    /// Rasterize one `DrawData` rounded-rect into a `w×h` RGBA tile that matches
+    /// the **capture output**, not just the fragment shader. It mirrors the full
+    /// GPU chain so the cross-check compares like-for-like (`run_sdf_cross_check`
+    /// captures the GPU box over the capture camera's opaque-black clear):
+    ///
+    /// 1. **SDF + AA** — the shared `sdf_rounded_rect` in logical px, AA via a
+    ///    `fwidth` estimate (the per-pixel SDF gradient by central difference)
+    ///    fed to `smoothstep(-aa, aa, d)` → straight-alpha `coverage`
+    ///    (`shader.wgsl:60`/`:76-:79`).
+    /// 2. **Linear-space SrcOver over opaque black** — the pipeline blends
+    ///    `ALPHA_BLENDING` (SrcOver) in LINEAR space into the `Rgba8UnormSrgb`
+    ///    target, and the capture camera clears to **opaque black**. So the
+    ///    composite is `out_linear = src_linear · coverage` (the black backdrop
+    ///    contributes nothing) with the result fully opaque (alpha 255) — the
+    ///    same alpha the GPU readback carries everywhere, including OUTSIDE the
+    ///    box (where coverage 0 → opaque black). Comparing a transparent CPU
+    ///    backdrop against the GPU's opaque-black clear is exactly the
+    ///    every-pixel alpha-255-vs-0 mismatch this composite removes.
+    /// 3. **sRGB encode** — the target is `Rgba8UnormSrgb`, so the linear result
+    ///    is sRGB-encoded on write (matched here via `Srgba::from(LinearRgba)`).
     pub fn rasterize_sdf_rect(draw: &DrawData, w: u32, h: u32) -> image::RgbaImage {
         let half = draw.size * 0.5;
         let center = draw.position + half;
         let r = draw.radius;
-        let lin = bevy::color::LinearRgba::from(draw.color);
-        let srgba = bevy::color::Srgba::from(lin);
-        let (rr, gg, bb) = (
-            (srgba.red * 255.0).round() as u8,
-            (srgba.green * 255.0).round() as u8,
-            (srgba.blue * 255.0).round() as u8,
-        );
-        let base_a = srgba.alpha;
+        // Source color in LINEAR space (the space the GPU blends in), with its
+        // own straight alpha folded into the coverage below.
+        let src_lin = bevy::color::LinearRgba::from(draw.color);
+        let src_a = src_lin.alpha;
 
         let mut img = image::RgbaImage::new(w, h);
         for y in 0..h {
@@ -210,8 +300,27 @@ pub mod sdf_oracle {
                     * 0.5;
                 let aa = (dx + dy).max(1e-4);
                 let coverage = 1.0 - smoothstep(-aa, aa, d);
-                let a = (base_a * coverage * 255.0).round().clamp(0.0, 255.0) as u8;
-                img.put_pixel(x, y, image::Rgba([rr, gg, bb, a]));
+                // SrcOver over opaque black in LINEAR space: the black backdrop
+                // (0,0,0,1) contributes nothing to RGB, and the result is opaque.
+                let a_src = (src_a * coverage).clamp(0.0, 1.0);
+                let out_lin = bevy::color::LinearRgba::new(
+                    src_lin.red * a_src,
+                    src_lin.green * a_src,
+                    src_lin.blue * a_src,
+                    1.0,
+                );
+                // sRGB-encode on write (Rgba8UnormSrgb target).
+                let out = bevy::color::Srgba::from(out_lin);
+                img.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        (out.red * 255.0).round().clamp(0.0, 255.0) as u8,
+                        (out.green * 255.0).round().clamp(0.0, 255.0) as u8,
+                        (out.blue * 255.0).round().clamp(0.0, 255.0) as u8,
+                        255,
+                    ]),
+                );
             }
         }
         img
