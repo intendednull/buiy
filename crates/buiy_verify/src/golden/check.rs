@@ -30,6 +30,20 @@ pub(crate) fn default_corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens")
 }
 
+/// Number of committed positive baselines for `key` in the default corpus
+/// (`tests/goldens/`). `0` ⇒ the key is un-blessed (**bless-on-demand**): a
+/// matrix/coverage driver should treat the cell as *pending*, not a failure. A
+/// non-zero count means a committed golden exists, so a fresh capture MUST
+/// still match it — the fail-closed contract holds for blessed keys. This lets
+/// the GPU coverage lane stay green over an intentionally-partial residue
+/// corpus while still catching drift on every cell that has been blessed.
+pub fn committed_positives(key: &GoldenKey) -> usize {
+    let dir = key.dir(&default_corpus_root());
+    BlessLedger::load_or_empty(&ledger_path(&dir), key)
+        .map(|l| l.positives.len())
+        .unwrap_or(0)
+}
+
 fn report_dir() -> std::path::PathBuf {
     // `CARGO_TARGET_DIR` honored if set; else the workspace `target/`. We keep
     // it simple and stable: `<manifest>/../../target/buiy-goldens`.
@@ -436,5 +450,21 @@ mod tests {
             rfc3339_from_unix(1_781_481_600 + 3661),
             "2026-06-15T01:01:01Z"
         );
+    }
+
+    #[test]
+    fn committed_positives_is_zero_for_an_unblessed_key() {
+        // A key deliberately absent from the committed corpus has no ledger ⇒ 0
+        // positives ⇒ the coverage matrix driver treats it as pending, not a
+        // failure. (The blessed-key path is exercised by the GPU golden lane.)
+        let key = GoldenKey {
+            widget: "definitely-not-a-real-widget-xyz".into(),
+            state: "none".into(),
+            theme: "dark".into(),
+            viewport: "sm".into(),
+            backend: crate::golden::Backend::Lavapipe,
+            dpr: buiy_core::render::golden::Dpr::X1,
+        };
+        assert_eq!(committed_positives(&key), 0);
     }
 }

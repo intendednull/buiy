@@ -18,7 +18,7 @@
 
 use buiy_verify::coverage::{Backend as CovBackend, CoverageKey, Matrix, sorted_catalog};
 use buiy_verify::determinism::DeterministicApp;
-use buiy_verify::golden::{Backend, GoldenKey, assert_golden};
+use buiy_verify::golden::{Backend, GoldenKey, assert_golden, committed_positives};
 use buiy_verify::metric::FuzzBudget;
 
 /// Map a coverage cell's [`CoverageKey`] to the GPU [`GoldenKey`]: same trace
@@ -47,11 +47,31 @@ fn budget_for(_cov: &CoverageKey) -> FuzzBudget {
 #[test]
 #[ignore = "GPU lane — needs a wgpu adapter; run with --ignored --test-threads=1 (CLAUDE.md GPU lane)"]
 fn matrix_goldens() {
+    // Tier-5 goldens are the *minimal rasterization residue*, not every coverage
+    // cell — the corpus is blessed on demand (this file's header; goldens.md §
+    // Storage). So this driver is **bless-on-demand**: a cell with NO committed
+    // baseline is *pending* (skipped), while a cell that HAS been blessed must
+    // still match its golden on a fresh capture (fail-closed via `assert_golden`).
+    // Result: the GPU lane is green over the current 2-class residue corpus, yet
+    // any blessed cell that drifts fails loudly. `BUIY_BLESS=1` captures + blesses
+    // every cell (the `assert_golden` env path), so re-blessing still spans the
+    // full matrix.
+    let blessing = std::env::var_os("BUIY_BLESS").is_some();
     let matrix = Matrix::ci_default();
+    let mut asserted = 0usize;
+    let mut pending = 0usize;
+
     for fx in sorted_catalog() {
         for cell in matrix.cells() {
             let cov = CoverageKey::for_cell(fx, &cell, CovBackend::Cpu);
             let key = golden_key(&cov);
+
+            // Skip un-blessed cells (no GPU capture) unless we're actively
+            // blessing. A drifting *blessed* cell still fails below.
+            if !blessing && committed_positives(&key) == 0 {
+                pending += 1;
+                continue;
+            }
 
             // Build the GPU capture app at the cell viewport + DPR, install the
             // cell theme + forced-colors preference, spawn the fixture, capture.
@@ -66,6 +86,15 @@ fn matrix_goldens() {
 
             let img = buiy_core::render::golden::capture_to_image(&mut app, &cfg);
             assert_golden(&key, &img, &budget_for(&cov));
+            asserted += 1;
         }
     }
+
+    eprintln!("matrix_goldens: {asserted} asserted against the committed corpus, {pending} pending bless-on-demand");
+    // The enrollment itself must have produced cells (guards a silently-empty
+    // catalog/matrix regressing this coverage property to a vacuous pass).
+    assert!(
+        asserted + pending > 0,
+        "coverage matrix produced zero cells — catalog or Matrix::ci_default() is empty"
+    );
 }
