@@ -120,7 +120,7 @@ impl GoldenKey {
     /// `widget/state/theme` keeps a fixture's whole row of cells together for
     /// review. Deterministic, lower-kebab, slug-safe (no raw `Debug`):
     /// components are lowercased and every run of non-`[a-z0-9]` collapses to a
-    /// single `-`. The DPR renders as `dpr<milli/1000-ish>` via [`dpr_slug`].
+    /// single `-`. The DPR renders as `dpr<milli/1000-ish>` via `dpr_slug`.
     pub fn slug(&self) -> String {
         format!(
             "{}/{}/{}{FIELD_SEP}{}{FIELD_SEP}{}{FIELD_SEP}{}",
@@ -197,7 +197,7 @@ fn slug_component(s: &str) -> String {
 
 /// Render a `Dpr` as a slug token: the common 1×/2× become `dpr1`/`dpr2`; any
 /// other milliscale becomes `dprm<milli>` so it round-trips exactly (e.g.
-/// `Dpr(1500)` → `dprm1500`). [`dpr_from_slug`] is the inverse.
+/// `Dpr(1500)` → `dprm1500`). `dpr_from_slug` is the inverse.
 fn dpr_slug(dpr: Dpr) -> String {
     let milli = dpr.0;
     if milli.is_multiple_of(1000) {
@@ -207,7 +207,7 @@ fn dpr_slug(dpr: Dpr) -> String {
     }
 }
 
-/// Parse a [`dpr_slug`] token back to a `Dpr`. Accepts `dpr<n>` (= `n×1000`
+/// Parse a `dpr_slug` token back to a `Dpr`. Accepts `dpr<n>` (= `n×1000`
 /// milliscale) and `dprm<milli>` (raw milliscale).
 fn dpr_from_slug(tok: &str) -> Option<Dpr> {
     if let Some(rest) = tok.strip_prefix("dprm") {

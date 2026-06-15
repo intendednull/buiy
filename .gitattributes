@@ -6,3 +6,9 @@
 # Font binaries + their upstream license files ship byte-exact.
 *.ttf binary
 crates/buiy_core/assets/fonts/OFL-*.txt -text
+# Tier-5 golden baselines: byte-exact PNG fixtures, compared pixel-for-pixel by
+# tests/goldens.rs (verification-design goldens.md). The corpus nests one dir
+# per key (`<widget>/<state>/<slug-tail>/<stem>.<n>.png`), so the glob must
+# cross `/` — `**/*.png` under the corpus root. Treat as binary so git never
+# eol-converts them and the diff stays clean (mirrors the *.snap pin).
+crates/buiy_verify/tests/goldens/**/*.png binary
