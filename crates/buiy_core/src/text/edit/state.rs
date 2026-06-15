@@ -73,6 +73,40 @@ impl TextEditState {
     pub fn intrinsics(&self) -> Option<IntrinsicWidths> {
         self.intrinsics
     }
+
+    /// The logical value: the editor buffer's full text. Pre-IME this is the
+    /// complete buffer content (editing-and-ime § 3); E5 refines this to
+    /// subtract the live preedit byte range (invariant § 6.2b). Lines are
+    /// joined with `\n` (the LF normalization the value contract uses; the
+    /// editor stores per-line endings separately, `BufferLine::ending`).
+    pub fn value(&self) -> String {
+        use cosmic_text::Edit;
+        self.editor.with_buffer(|buffer| {
+            let mut out = String::new();
+            for (i, line) in buffer.lines.iter().enumerate() {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str(line.text());
+            }
+            out
+        })
+    }
+
+    /// Drop the cached intrinsic widths — the "buffer content changed,
+    /// re-measure me" half of the dirty-mark seam (M1). The input system
+    /// calls this on a reshaping edit, exactly as `sync_one` calls the
+    /// accessor's `invalidate_intrinsics` after a `Text` change
+    /// (`sync.rs:330`). Mutating `self.intrinsics` directly (not through the
+    /// accessor) is correct here: the system already holds `&mut
+    /// TextEditState` to apply the edit, and the `Changed<TextEditState>`
+    /// tick the apply incurs is harmless (nothing keys off it; the edit IS a
+    /// change). The other half — Taffy node dirtiness — is the system's
+    /// `mark_dirty_for_entity` call (Task 5), because the node lives in
+    /// `LayoutTree`, not on the component.
+    pub fn invalidate_intrinsics(&mut self) {
+        self.intrinsics = None;
+    }
 }
 
 /// Marker: editable but not mutable — caret + selection + copy yes, mutation
