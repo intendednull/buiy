@@ -50,8 +50,8 @@ pub use report::{TriageCard, TriageReport};
 ///
 /// [`Cpu`](Self::Cpu) is the structured-tier marker: the coverage matrix keys
 /// Tiers 1-3 (layout / display-list / invariant snapshots, no GPU) with it, so
-/// a [`CoverageKey`](crate::coverage::CoverageKey) and a GPU
-/// [`GoldenKey`](GoldenKey) share one `Backend` enum (coverage.md §146).
+/// a [`CoverageKey`](crate::coverage::CoverageKey) and a GPU [`GoldenKey`]
+/// share one `Backend` enum (coverage.md §146).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Backend {
     /// Software Vulkan (Mesa llvmpipe) — the pinned CI rasterizer.

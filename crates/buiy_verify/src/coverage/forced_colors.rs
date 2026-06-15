@@ -1,8 +1,8 @@
 //! Gate #11 live-catalog producer (coverage.md § "Wiring
 //! `forced_colors_analyzer` to the live catalog").
 //!
-//! The gate-#11 analyzers ([`analyze_forced_colors`] check (a),
-//! [`analyze_shadow_only`] check (b)) are unchanged — they still consume the
+//! The gate-#11 analyzers ([`analyze_forced_colors`](buiy_core::render::forced_colors_analyzer::analyze_forced_colors) check (a),
+//! [`analyze_shadow_only`](buiy_core::render::forced_colors_analyzer::analyze_shadow_only) check (b)) are unchanged — they still consume the
 //! existing [`CatalogPaint`] descriptor. What moves is the **input source**:
 //! instead of hand-built descriptors
 //! (`buiy_core/tests/render_forced_colors_analyzer.rs`), [`live_catalog_paint`]

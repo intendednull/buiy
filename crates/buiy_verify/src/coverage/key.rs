@@ -1,7 +1,7 @@
 //! The shared coverage key — `Cell × Fixture` (coverage.md § "The Matrix").
 //!
 //! A [`CoverageKey`] is the trace identity for one enrolled combination: a
-//! fixture (`widget × state`) crossed with one [`Cell`](super::matrix::Cell) of
+//! fixture (`widget × state`) crossed with one [`Cell`] of
 //! the global [`Matrix`](super::matrix::Matrix) (theme × viewport ×
 //! forced-colors × dpr), plus the rasterizer [`Backend`]. It is exactly the
 //! contract's storage schema and Skia Gold's params/traces identity

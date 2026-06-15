@@ -6,7 +6,7 @@
 //! everywhere with no adapter. Adding **one** fixture file auto-enrolls it
 //! across **every** tier by construction (the decisive coverage property).
 //!
-//! Fixtures register via the [`fixture!`] macro, which emits an
+//! Fixtures register via the [`fixture!`](crate::fixture) macro, which emits an
 //! [`inventory::submit!`] so [`catalog`] enumerates every fixture with **zero
 //! edits to a central list**. The `inventory` link-time registry is the typed
 //! `&[Fixture]` the GPU / invariant tiers iterate (they are not file-driven);
