@@ -6,4 +6,5 @@
 
 pub mod a11y;
 pub mod contrast;
+pub mod metric;
 pub mod visual;
