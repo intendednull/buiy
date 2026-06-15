@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c1e781fc4b74a574e5ba2a3d28068313f898c678711564d2619b363457dac0f2 # shrinks to scene = Scene { roots: [SceneNode { name: "n0", children: [], z_index: None, isolation: false, top_layer: Fullscreen, transform: GenTransform { translate: [0.0, 0.0, 0.0], rotate_axis: [0.0, 0.0, 1.0], rotate_angle: 0.0, scale: [1.0, 1.0, 1.0] }, size: (0.0, 0.0), background: None }] }
+cc f647226cb04c6d570ae3403a26e7abf6351f914a9bd841cfc07dc620945290ee # shrinks to scene = Scene { roots: [SceneNode { name: "n0", children: [], z_index: None, isolation: false, top_layer: None, transform: GenTransform { translate: [0.0, 0.0, 0.0], rotate_axis: [0.0, 0.0, 1.0], rotate_angle: 0.0, scale: [1.0, 1.0, 1.0] }, size: (0.0, 0.0), background: None }, SceneNode { name: "n1", children: [SceneNode { name: "n2", children: [], z_index: None, isolation: false, top_layer: None, transform: GenTransform { translate: [0.0, 0.0, 0.0], rotate_axis: [0.0, 0.0, 1.0], rotate_angle: 0.0, scale: [1.0, 1.0, 1.0] }, size: (0.0, 0.0), background: None }], z_index: None, isolation: false, top_layer: None, transform: GenTransform { translate: [0.0, 0.0, 0.0], rotate_axis: [0.0, 0.0, 1.0], rotate_angle: 0.0, scale: [1.0, 1.0, 1.0] }, size: (0.0, 0.0), background: None }] }
