@@ -1,7 +1,7 @@
 # Coverage-by-construction
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 4; `crates/buiy_verify/src/coverage/`; see § Landed)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
 Stop hand-writing per-widget tests; derive them from the BSN/widget catalog. This
@@ -303,6 +303,62 @@ The coverage layer is meta-machinery, so it is tested by asserting its
 
 All five are pure-CPU and run under the headless gate; only `coverage_golden`
 (which consumes the corpus) is `#[ignore]` GPU.
+
+## Landed (Phase 4, plan tasks 4.1–4.6)
+
+The module is implemented and gates green. As-built details and honest
+deviations:
+
+- **`coverage/{mod,fixture,matrix,key,enroll,forced_colors}.rs`** — `Fixture` +
+  the `fixture!` macro (emits an `inventory::submit!`), `catalog()` /
+  `sorted_catalog()`; `Matrix` / `ThemeAxis` / `Viewport` / `Cell` with
+  `Matrix::ci_default()` (2×3×2×2 = **24 cells/fixture**), `cells()` Cartesian
+  product, and `CELL_CEILING_PER_FIXTURE = 32` asserted by a self-test;
+  `CoverageKey` deriving `Eq + Hash` (because `dpr` is the canonical milliscale
+  `Dpr`, not `f32`), with `for_cell`, `stem()`, and a `from_stem() -> ParsedStem`
+  **lossless round-trip** (`ParsedStem` is the owned-fields parse result, kept
+  distinct from the `'static`-borrowed `CoverageKey`).
+- **`build_app(fx, cell) -> App`** — a CPU-only deterministic app: the cell theme
+  installed, a synthetic `PrimaryWindow` sized to viewport × dpr, `forced_colors`
+  on `UserPreferences`. `enroll_all(matrix, body)` drives the body over
+  `catalog × cells`; `enroll_fixtures(slice, …)` is the subset driver.
+- **Auto-enroll-by-construction is proven by `adding_one_fixture_grows_corpus_by_axes`**:
+  a new fixture grows the corpus by exactly |axes| (24) cells, and the per-tier
+  enrollment drivers (`coverage_{layout, display_list, invariants, golden,
+  forced_colors}.rs`) are thin `enroll_all` callers with zero per-widget test
+  code.
+- **`forced_colors::live_catalog_paint()`** builds each fixture's app, queries
+  the spawned `Background`/`Border`/`Outline` (+ `BoxShadow`-presence delta) off
+  the `Name`-tagged root, and projects them into the existing `CatalogPaint`. The
+  analyzers (`analyze_forced_colors` / `analyze_shadow_only`) run **unchanged** —
+  only the input source moved from hand-built descriptors to the live tree
+  (closes follow-ups.md:469–473). Teeth: `broken_fixture_produces_violation` (a
+  `#[cfg(test)]` brand-token fixture, excluded from the real catalog, MUST flag
+  `NonSystemColor`) proves the producer reads real paint;
+  `safe_fixture_produces_no_violation` proves it is not a constant-violation
+  function.
+- **Honest deviation — the default `Button::new()` is not forced-colors-safe.**
+  It paints the brand token `color.surface.secondary`, which under Buiy's
+  *wholesale* forced-colors theme swap resolves to the magenta missing-token
+  sentinel (a genuine gate-#11 violation per `color-and-forced-colors.md § 3.1`).
+  Making the default widget forced-colors-safe is a `buiy-widget-catalog-design`
+  concern, not this campaign. The catalog fixture therefore inserts
+  forced-colors-safe **system-color** paint (the catalog's target), and the
+  producer reads those live components. Consequence recorded faithfully: because
+  the swap is wholesale, no token resolves in *both* light and forced themes, so
+  the system-color button renders the magenta sentinel under the *light* theme —
+  captured in the committed `*.light.*` display-list baselines (48
+  CPU-deterministic `.snap`s: 24 layout + 24 display-list). Documented as
+  expected, not a harness bug.
+- **The forced-colors `BoxShadow` *visual* reftest stays BLOCKED.**
+  `boxshadow_visual_reftest_is_blocked` is an `#[ignore]`'d, assertion-free
+  placeholder documenting the dependency on the unlanded `BoxShadow` extract/draw
+  path (`extract_buiy_nodes` has no `BoxShadow` branch — follow-ups.md:474–478).
+  It is **not** authored as a green test. The structured
+  `analyze_forced_colors` / `analyze_shadow_only` scan covers the rest of gate
+  #11 today, with no dependency on that path.
+- **Added `Backend::Cpu` to the golden `Backend` enum** so CPU (Tiers 1-3) and
+  GPU golden cells key off one enum (`goldens.md` § As-landed).
 
 ## Sources
 

@@ -1,7 +1,7 @@
 # Tiers 1–2 — structured snapshots
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 2; `crates/buiy_verify/src/snapshot.rs`)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
 The two cheapest, most deterministic rungs of the pyramid: **Tier 1** snapshots resolved
@@ -73,7 +73,10 @@ root            pos=0,0      size=200,100
   under ECS archetype moves, so `Name` is the sort key).
 - Floats rounded to `ROUND_DP = 2` decimals (`const ROUND_DP: usize`) via a shared
   `round(f32) -> String` helper (Tier 1 + Tier 2 share it) — kills last-ULP churn from the
-  Taffy/clip-space math while staying diff-readable.
+  Taffy/clip-space math while staying diff-readable. **The round() rule (as-landed,
+  `snapshot.rs:60-75`):** round half-away to 2 dp via `{:.2}`, then *strip trailing zeros and a
+  bare trailing dot* (`50.0 → "50"`, `50.10 → "50.1"`), and *normalize any value that rounds to
+  zero to a single `"0"`* (so a sub-ULP negative never prints a spurious `-0`).
 
 ### What it replaces
 
@@ -103,7 +106,14 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String;
 /// Resolve Entity -> human name for the dump (Name component, else `entity#idx`).
 /// Built from the world once; passed in so the dump fn stays World-free/pure.
 pub struct NameLookup(/* HashMap<Entity, String> */);
-impl NameLookup { pub fn from_world(world: &World) -> Self; }
+impl NameLookup {
+    pub fn from_world(world: &World) -> Self;
+    /// World-free constructor from explicit `(entity, name)` pairs — for
+    /// pure-CPU tests that assemble synthetic `ExtractedNode`s (no spawned
+    /// `Name`). Mirrors `from_world`; an absent entity renders `entity#<index>`.
+    pub fn from_pairs<I, S>(pairs: I) -> Self
+    where I: IntoIterator<Item = (Entity, S)>, S: Into<String>;
+}
 ```
 
 Dump format (`display_list_dump`), version-headered:
@@ -111,8 +121,8 @@ Dump format (`display_list_dump`), version-headered:
 ```
 # buiy-display-list-dump v1
 [nodes painters_z]
-0  modal      rect pos=10,20  size=100,40  color=token:Surface  clip=none    group=none
-1  tooltip    rect pos=0,0    size=80,24   color=#ffffffff       clip=0,0..80,24  group=0
+0 modal rect pos=10,20 size=100,40 color=#1c1c1cff clip=none group=none
+1 tooltip rect pos=0,0 size=80,24 color=#ffffffff clip=0,0..80,24 group=0
 [buckets draw-order]
 (Quad,layer=0) x2
 (Glyph,layer=1) x5
@@ -121,10 +131,13 @@ Dump format (`display_list_dump`), version-headered:
 - **One paint command per line.** `ExtractedNode.nodes` is emitted in stored order (it is
   *never* re-sorted by render — `extract.rs:141` — so the snapshot is the paint order, and a
   z-sort regression shows as a line reorder, the exact bug class pixels name poorly).
-- **Color rendered as a token when resolvable, else `#rrggbbaa`.** `ExtractedNode.color` is
-  already theme-resolved (`extract.rs:77`), so a literal hex in a snapshot that should show a
-  token is itself a regression signal (the magenta `MISSING_TOKEN_FALLBACK` sentinel surfaces
-  as `#ff00ffff`).
+- **Color rendered as resolved `#rrggbbaa` (sRGB) — NOT as a token name** (as-landed,
+  `snapshot.rs:305-319,350-354`). `ExtractedNode.color` is already theme-resolved
+  (`extract.rs:77`), and the pinned `display_list_dump` signature carries no `Theme`, so the
+  hex IS the durable artifact. Token-name rendering is intentionally not done; the magenta
+  `MISSING_TOKEN_FALLBACK` sentinel therefore surfaces as the literal `#ff00ffff`, which is
+  itself the unresolved-token regression signal. *(The draft of this file showed a
+  `color=token:Surface` form; the landed dump always emits hex — reconciled here.)*
 - **`InstanceBuckets` appended in `BTreeMap` key order** (`buckets.rs:113`, `(layer, primitive
   paint-order)`) — the natural iteration *is* the deterministic draw order, so the dump pins
   both the per-node set and the batched draw order in one artifact. Per-batch instance *counts*
@@ -163,9 +176,8 @@ The low-density per-field `assert_eq!` named in the report become holistic snaps
 |---|---|---|
 | `tests/render_extract.rs` (459 L) | `assert_eq!(node.position, …)`, `node.size`, `node.color`, `node.clip`, the `assemble_context_tree` order `assert_eq!(got, vec![root,a,nested,c,d,b])` (`:423`) | `assert_display_list_snapshot` over the assembled `ExtractedNodes` |
 | `tests/render_buckets.rs` (385 L) | `b.len(q0)`, `total_instances`, `batch[0] == expect`, the `PackedPartition` field asserts (`:239`) | display-list dump (counts + draw order) + `assert_instance_hex_snapshot` for the exact payload |
-| `tests/render_paint_order.rs` (135 L) | `assert_eq!(tail, vec![fullscreen,tooltip,popover,modal])` (`:64`) | display-list dump of the assembled order (the tail ordering reads off the node lines) |
+| `tests/render_paint_order.rs` (135 L) | `assert_eq!(tail, vec![fullscreen,tooltip,popover,modal])` (`:64`) | display-list dump of the assembled order (the tail ordering reads off the node lines). **As-landed, the top-layer paint-order assertions live here in `render_paint_order.rs`** (the `partition_top_layer` tail ordering), not in a separate `top_layer.rs` migration row. |
 | `tests/render_instance.rs` (168 L) | per-field `PackedInstance` asserts incl. the half-size sign regression | `assert_instance_hex_snapshot` (byte-exact; the sign bug flips the hex) |
-| `tests/top_layer.rs` | `partition_top_layer` order asserts | display-list dump of `partition_top_layer` output |
 | `tests/layout.rs:33` | geometry `assert!` | `assert_layout_snapshot` (Tier 1) |
 
 **Replace, don't duplicate.** Each migrated test keeps its *scene construction* and *intent

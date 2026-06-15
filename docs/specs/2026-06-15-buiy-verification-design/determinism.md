@@ -1,7 +1,7 @@
 # Determinism stack
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 3; `buiy_core::render::golden` + `buiy_verify::determinism`; see § Landed)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
 The job of this tier is narrow and load-bearing: **make every pixel test reproducible so the diff is a signal, not noise.** It engineers nondeterminism out at the source ("remove the nondeterminism, don't just tolerate it") so the perceptual metric's default fuzz budget can be `(0, 0)`. It extends the *already-built* flake triad (`GoldenConfig::deterministic()` — `fixed_clock`/`wait_for_fonts`/`warm_atlas`, `golden.rs:38`) with the missing knobs — Ahem font mode, DPR pin, MSAA/dither pinned-off, async-asset flush — exposes them through a `DeterministicApp` builder in `buiy_verify`, and pins the CI software rasterizer (lavapipe) below all of it. Reftests need this stack *less* than goldens (both halves render in one process, so residual drift cancels) but reuse the same builder.
@@ -193,9 +193,11 @@ How the determinism harness verifies *itself* (these are tests of the test infra
 
 ## Landed (determinism stack, plan Phase 3 tasks 3.1–3.5, 3.10)
 
-The determinism substrate is implemented and verified; the Tier-5 stored-golden
-corpus (plan 3.6–3.9) remains future work. Status stays `draft` until the
-Phase 4.7 docs flip closes the whole campaign.
+The determinism substrate is implemented and verified, and the Tier-5
+stored-golden corpus (plan 3.6–3.9) is started (two blessed cells; `goldens.md`).
+The Phase 4.7 docs flip (this revision) closes the campaign — status is now
+`landed`. `PendingCaptureAssets`, `VK_DRIVER_FILES`, and the MSAA-inert finding
+below are all as-landed.
 
 - **`GoldenConfig` extension + `FontMode`** — `crates/buiy_core/src/render/golden.rs`: `FontMode { Real, Ahem }`, the `font_mode`/`dpr` fields, `deterministic()` (Ahem + `X1`), `fidelity()` (Real). Tests: `crates/buiy_core/tests/render_golden_config.rs`. (3.1)
 - **Ahem box-font** — the canonical W3C/WPT public-domain `Ahem.ttf` (em-box font) committed at `crates/buiy_core/tests/fixtures/fonts/Ahem.ttf` (+ `LICENSE-Ahem.txt`). Registered through the production bytes path and made the **sole resolvable family** by `buiy_verify::determinism::{register_ahem, stage_ahem}`. The obscure-text rectangle fallback the spec allowed was **not** needed — the genuine em-box font was obtainable. Tests: `crates/buiy_verify/tests/determinism_ahem.rs` (headless). (3.2)

@@ -1,14 +1,19 @@
 # Tier 4 — reftests + CPU/GPU cross-check
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 1b; `crates/buiy_verify/src/reftest.rs`, GPU `#[ignore]` cases on the real adapter)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
 The reftest harness — Buiy's highest-leverage pixel investment and the one mechanism wholly absent from the tree. A reftest renders a **test** scene and a **reference** scene with the *same engine in one process* and asserts their bitmaps match (`==`) or differ (`!=`), never against a stored baseline — so every platform-variance term (driver SDF rounding, glyph-atlas AA, sRGB encode, clock) cancels in the diff. This file specifies `RefCase`, the `reftest!` macro, `run_reftest`, the reference-independence discipline + its lint/review enforcement, the CSS-subset authoring patterns, and the Vello-style CPU-vs-GPU SDF rasterization cross-check (Tier 4.5). It is GPU-coupled (`#[ignore]`, runs under `cargo test -- --ignored` on a real adapter here and pinned lavapipe in CI).
 
-## Contract deviations
+## Contract deviations / as-landed reconciliation
 
-None. This file consumes `buiy_verify::metric` (`Diff`, `FuzzBudget`, `compare`, `Diff::passes`) and `CompareOpts` exactly as the contract defines them, and the promoted `buiy_core::render::golden::capture_to_image(&mut App, &GoldenConfig) -> image::RgbaImage` exactly as the crate-boundary clause defines it. One additive note flagged for the synthesizer, not a deviation: this tier needs `capture_to_image` to support **two captures in one `App`** (re-target the camera, re-readback) without rebuilding the device — see `run_reftest` below. If `golden.md` specs `capture_to_image` as one-shot-per-App, reconcile toward a `capture_scene(&mut App, scene: impl FnOnce(&mut App), &GoldenConfig) -> RgbaImage` shape that both tiers share.
+This file consumes `buiy_verify::metric` (`Diff`, `FuzzBudget`, `compare`, `Diff::passes`) and `CompareOpts` exactly as the contract defines them, and the promoted `buiy_core::render::golden::capture_to_image(&mut App, &GoldenConfig) -> image::RgbaImage` exactly as the crate-boundary clause defines it. Resolved as-landed:
+
+- **The two-captures-in-one-`App` need is met WITHOUT a new `capture_scene` shape.** `run_reftest` builds the app once (`support::reftest_app`, re-pointed at `DeterministicApp::build` in Phase 3) and calls the existing one-shot `capture_to_image` *twice* — a private `capture_to_image_with(app, scene, cfg)` helper clears the previous scene (`support::clear_reftest_scene`), spawns the new one, and calls `capture_to_image`. Both captures share one `wgpu::Device`/atlas/clock. No `capture_scene(&mut App, impl FnOnce, &GoldenConfig)` is introduced (the README "Resolved during synthesis #4" decision); `capture_to_image` is a re-runnable primitive against one built `App`.
+- **The independence lint markers map to the as-landed component model.** `ComponentMarker::TopLayer` is a field on the `Stacking` component (`s.top_layer != TopLayer::None`), not a component of its own — **TopLayer-via-Stacking** — so the lint queries `Stacking` and checks the field, structurally equivalent to the `ContentVisibilityHidden`/`Containment` routing (`reftest.rs:344-382`). `ContentVisibilityHidden` reads `Containment.content_visibility == Hidden`.
+- **Value-encoded independence caveat holds in code.** The registered `default_rules()` cover only marker-bearing features (`content-visibility`, `@container`, `top-layer`, `translate`); value-encoded features (`justify-content`, `direction`, `gap` — field *values* on a shared `Style`/`Node`) have **no** structural marker and fall to mechanism 1 (route the reference through the primitive literal-`Node` layer) + PR-time human review. This is documented inline on `assert_reference_independent`.
+- **`Style` is spawned as a bundle, built fluently.** Fixtures and reftest scenes spawn `(Node, Style::default().absolute().inset(..).width_px(..).height_px(..), Background { .. }, ..)` — `Style` is a builder that *is* the layout component bundle, so a literal-offset reference is `Style::default().absolute().inset(literal)` with no flex/grid fields set. The independence lint's no-marker limitation for value-encoded features is exactly because every such scene carries a (default-valued) `Style`.
 
 ## Module & public API
 
@@ -171,6 +176,11 @@ pub fn run_sdf_cross_check(draw: &buiy_core::render::DrawData, fuzz: &FuzzBudget
 ```
 
 **Boundary, stated once (vello/lessons.md):** the shared SDF catches *implementation* drift, not a *spec* error in the SDF itself — if `sdf_rounded_rect` is wrong, both paths are wrong identically and the buffer matches. That residual ("is the shape the *intended* shape") is exactly Tier 5's job; the oracle does not subsume goldens. Use the **same** AA-aware metric as reftests (the report's pixelmatch-YIQ+AA primary); FLIP-for-the-oracle-tier (vello/lessons.md Borrow #2) is deferred to metric.md's Open Question, not adopted here.
+
+**As-landed root-causes (two findings that made the cross-check green, `reftest.rs:186-327`):**
+
+1. **The corner radius is consumed off `Border.radius`, not a bare `Radius`.** `spawn_single_primitive` maps `DrawData.radius` onto `Border { radius: Corners::all(Radius::circular(r)), .. }` because that is the component `draw_for_node` reads for the quad fill radius (`render/mod.rs:373`); a standalone `Radius` component is **not** consumed by the fill path. The `Border` band is zero-width (width lives in `BoxModel`), so only the rounded fill paints. A reftest that put the radius on a bare `Radius` would compare a sharp GPU box against a rounded CPU oracle and fail spuriously.
+2. **The CPU oracle must mirror the whole capture chain's colorspace, not just the fragment shader.** `rasterize_sdf_rect` reproduces (a) the shared `sdf_rounded_rect` + a `fwidth`-style central-difference AA fed to `smoothstep(-aa, aa, d)` → straight-alpha coverage, **then** (b) **linear-space SrcOver over the capture camera's opaque-black clear** (`out_linear = src_linear · coverage`, result fully opaque alpha-255 *everywhere*, including outside the box where coverage→0→opaque black), **then** (c) **sRGB encode on write** to the `Rgba8UnormSrgb` target (`Srgba::from(LinearRgba)`). Without the opaque-black composite, the CPU tile carried a transparent backdrop (alpha 0) against the GPU readback's opaque-black clear (alpha 255) and every pixel mismatched. The colorspace round-trip (blend in linear, encode in sRGB) is what makes the cross-check pass at a tight budget.
 
 ## Determinism & the capture gate
 

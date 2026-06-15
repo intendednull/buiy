@@ -1,8 +1,26 @@
 # Tier 3 — metamorphic & property invariants (`buiy_verify::invariant`)
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 2; `crates/buiy_verify/src/invariant.rs` + `invariant/`)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
+
+> **As-landed reconciliation.** All three contract deviations below were resolved
+> exactly as flagged: (#1) the code cites `compose_transform` at `systems.rs:3775`;
+> (#2) `all_finite_packed` asserts `rect_size[1] ≥ 0` directly because the y-flip
+> lives in the per-view uniform; (#3) `tier_rank` was promoted to the public
+> `buiy_core::layout::top_layer_paint_rank(TopLayer) -> u8`
+> (`systems.rs:3816`) — the single source of truth consumed by both the layout
+> sort and `top_layer_dominates`. The BiDi caret round-trip (#6) consumes
+> `cosmic_text::Cursor` (cosmic-text's own type — `use cosmic_text::{Buffer,
+> Cursor}` in `invariant/bidi.rs`), not a Buiy struct, so the invariant tests
+> Buiy's *integration* of the shaper, not a re-implementation. The module is the
+> `invariant.rs` `#[cfg(test)]` proptest harness plus the `invariant/{scene,
+> predicates, bidi}.rs` children; `realize` threads a `Scene` through the
+> production `context_tree_paint_order` / `partition_top_layer` /
+> `top_layer_paint_rank`. All six predicates + their mutation fixtures gate
+> headless (no `#[ignore]`); proptest persists any minimized counterexample under
+> `crates/buiy_verify/proptest-regressions/` (no file yet — every property is
+> green, so no counterexample has been recorded).
 
 The `proptest`-driven middle tier (gate #12): generated scene strategies plus a
 fixed set of predicate functions asserting *relations* over the CPU display-list

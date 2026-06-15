@@ -1,8 +1,9 @@
 # Buiy verification design — the visual-bug-detection pyramid
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** active (harness landed: all seven child tiers built + gated; residue goldens renderer-blocked, tracked in `docs/plans/follow-ups.md`)
 **Realizes:** the strategy report [`reports/2026-06-14-visual-bug-detection-strategy.md`](../../reports/2026-06-14-visual-bug-detection-strategy.md) (five-tier pyramid, reftests-first) and the foundation verification gates #2 (visual), #5 (layout snapshots), #11 (forced-colors), #12 (proptest invariants) in `specs/2026-05-07-buiy-foundation/verification.md`.
+**Implemented by:** [`plans/2026-06-15-buiy-verification-impl.md`](../../plans/2026-06-15-buiy-verification-impl.md) (Phases 0–4).
 
 ## Thesis
 
@@ -71,13 +72,13 @@ The v1 CI gate is steps 1–2 (reftests + metric under the existing `cargo test`
 
 Read in dependency order: the metric is the shared primitive every pixel tier consumes, so it comes first; the pure-CPU tiers next; the GPU tiers and their determinism substrate after; coverage last because it composes all of them.
 
-1. [`metric.md`](metric.md) — `buiy_verify::metric`: the AA-aware two-axis perceptual diff (`Diff`, `FuzzBudget`, `compare`, `Diff::passes`), pixelmatch-YIQ + AA-sibling exclusion, advisory MSSIM, the migration of the two naive metrics. **Read first.**
-2. [`snapshots.md`](snapshots.md) — `buiy_verify::snapshot`: Tier 1 layout-number + Tier 2 display-list/paint-order `insta` dumps (purpose-built `Display`, not raw `Debug`/serde) + the `PackedInstance` byte-hex check.
-3. [`invariants.md`](invariants.md) — `buiy_verify::invariant`: Tier 3 proptest scene generators + predicate fns (`paint_order_is_total`, `transform_roundtrips`, `top_layer_dominates`, `all_finite`, `bidi_caret_roundtrips`), pure-CPU.
-4. [`reftests.md`](reftests.md) — `buiy_verify::reftest`: Tier 4 `RefCase`/`reftest!`/`run_reftest`, the reference-independence discipline + lint, and the CPU-vs-GPU SDF cross-check (Tier 4.5). GPU.
-5. [`goldens.md`](goldens.md) — `buiy_verify::golden`: Tier 5 `assert_golden` persistence, multi-positive corpus, `BUIY_BLESS` workflow, HTML triage report, storage migration, the Ahem/real-font split. GPU.
-6. [`determinism.md`](determinism.md) — `buiy_verify::determinism` + `buiy_core::render::golden`: `DeterministicApp`, the `GoldenConfig` extensions (font mode, DPR, MSAA/dither), the quiescence flush, the lavapipe CI pin vs. the local real-GPU lane.
-7. [`coverage.md`](coverage.md) — `buiy_verify::coverage`: the BSN-fixture single-source-of-truth, the `Matrix` Cartesian product auto-enrolling every tier, and the live-catalog wiring of `forced_colors_analyzer`.
+1. [`metric.md`](metric.md) — `buiy_verify::metric`: the AA-aware two-axis perceptual diff (`Diff` incl. `saturated`, `FuzzBudget`, `compare`, `Diff::passes`), the **vendored** pixelmatch-YIQ + AA-sibling exclusion (the crate itself is unusable — its algorithm is ported verbatim), advisory MSSIM, the migration of the two naive metrics. **Read first.** `[landed]`
+2. [`snapshots.md`](snapshots.md) — `buiy_verify::snapshot`: Tier 1 layout-number + Tier 2 display-list/paint-order `insta` dumps (purpose-built `Display`, not raw `Debug`/serde; color as resolved `#rrggbbaa` hex) + the `PackedInstance` byte-hex check. `[landed]`
+3. [`invariants.md`](invariants.md) — `buiy_verify::invariant`: Tier 3 proptest scene generators + predicate fns (`paint_order_is_total`, `transform_roundtrips`, `top_layer_dominates` via the promoted `top_layer_paint_rank`, `all_finite`, `bidi_caret_roundtrips` over `cosmic_text::Cursor`), pure-CPU. `[landed]`
+4. [`reftests.md`](reftests.md) — `buiy_verify::reftest`: Tier 4 `RefCase`/`reftest!`/`run_reftest`, the reference-independence discipline + lint (TopLayer-via-`Stacking`, value-encoded caveat), and the CPU-vs-GPU SDF cross-check (Tier 4.5; `Border.radius` + linear-blend/sRGB-encode capture chain). GPU. `[landed]`
+5. [`goldens.md`](goldens.md) — `buiy_verify::golden`: Tier 5 `assert_golden` persistence, multi-positive corpus, `BUIY_BLESS` workflow, HTML triage report, storage migration, the Ahem/real-font split (`Backend::Cpu` added; corpus started). GPU. `[landed]`
+6. [`determinism.md`](determinism.md) — `buiy_verify::determinism` + `buiy_core::render::golden`: `DeterministicApp`, the `GoldenConfig` extensions (font mode, DPR, MSAA/dither — MSAA verified inert), the `PendingCaptureAssets` quiescence flush, the lavapipe CI pin (`VK_DRIVER_FILES`) vs. the local real-GPU lane. `[landed]`
+7. [`coverage.md`](coverage.md) — `buiy_verify::coverage`: the BSN-fixture single-source-of-truth, the `Matrix` Cartesian product (24 cells/fixture) auto-enrolling every tier, and the live-catalog wiring of `forced_colors_analyzer`. `[landed]`
 
 ## Prior art
 

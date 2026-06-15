@@ -1,7 +1,7 @@
 # Perceptual metric — `buiy_verify::metric`
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 1a; `crates/buiy_verify/src/metric.rs`)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
 The one image-comparison metric for the whole pyramid: an AA-aware, two-axis
@@ -14,12 +14,42 @@ per-pixel decision is pixelmatch's luminance-weighted YIQ `colorDelta` with an
 antialias-sibling exclusion; an advisory MSSIM channel catches global drift a
 small pixel budget under-weights.
 
-## Contract deviations
+## Contract deviations / as-landed reconciliation
 
-None. Signatures below match the SHARED API CONTRACT. Two clarifications (not
-deviations): the gate uses the YIQ-weighted per-pixel delta while `max_channel_delta`
-is the raw L∞ kept for diagnostics; `mssim` is `Option` so it is skipped (`None`)
-on empty/disabled input, never silently `0.0`.
+The signatures match the SHARED API CONTRACT. Two facts where the as-landed code
+deviates from the draft of this file — both reconciled here against
+`crates/buiy_verify/src/metric.rs`:
+
+1. **pixelmatch is VENDORED, not a dependency.** The "Crate choice" section
+   below originally *selected* `pixelmatch = "0.1.0"` as a new dep. The published
+   crate is unusable as specified: its only public surface is
+   `pixelmatch(impl Read, impl Read, …) -> Result<usize>` — it consumes
+   PNG-encoded byte streams (not `image::RgbaImage`), returns only a flat
+   changed-pixel `usize` (no per-pixel YIQ delta or L∞ channel delta to feed
+   `Diff`'s `max_channel_delta`), keeps `color_delta`/`antialiased` **private**,
+   and is pinned to the `image` 0.24 API (does not compile against the workspace
+   `image = "0.25"`). Honoring metric.md's own directive ("adopt the reference
+   algorithm — don't re-derive the `35215`/YIQ constants"), the ~150-LOC
+   reference algorithm (`color_delta` luminance-weighted YIQ delta + the
+   `antialiased` brightest/darkest-sibling test + `has_many_siblings`) is **ported
+   verbatim from pixelmatch's MIT source onto `image` 0.25 / `RgbaImage`**, with a
+   provenance comment (`metric.rs:6-13,208`). The constants are guarded against
+   drift by the known-answer unit tests below — exactly the protection a version
+   pin would give. **Net new metric dep: `image-compare = "=0.5.0"` (MSSIM) only;
+   no `pixelmatch` dependency is added.**
+2. **`Diff` carries a `saturated: bool` field** (`metric.rs:31-37`). The
+   dimension-mismatch sentinel sets it `true`; `Diff::passes` returns `false` for
+   any saturated `Diff` against *every* budget (including a maximal
+   `(255, u32::MAX)`). This makes the loud-red fail direction unconditional —
+   distinct from an in-bounds all-different frame, which a wide-enough budget may
+   legitimately accept. It is an additive field, not a signature change.
+
+Two further clarifications (not deviations): the gate uses the YIQ-weighted
+per-pixel delta while `max_channel_delta` is the raw L∞ kept for diagnostics;
+`mssim` is `Option` so it is skipped (`None`) on empty/disabled input, never
+silently `0.0`. `compare` is **infallible** — it returns a `Diff`, never a
+`Result` (the saturated sentinel is the size-mismatch signal, so no error arm is
+needed and the crate stays `thiserror`-free).
 
 ## Why the naive metrics fail (report §4)
 
@@ -63,6 +93,12 @@ pub struct Diff {
     pub mssim: Option<f64>,
     /// Heatmap: AA pixels dimmed, differing pixels painted (pixelmatch palette).
     pub diff_image: Option<image::RgbaImage>,
+    /// Set only by the dimension-mismatch sentinel. A saturated `Diff` is an
+    /// *unconditional fail*: `passes` returns `false` for it against EVERY budget
+    /// (including a maximal `(255, u32::MAX)`), so a mis-sized capture reds the
+    /// gate loudly — distinct from an in-bounds all-different frame a wide budget
+    /// may legitimately accept.
+    pub saturated: bool,
 }
 
 /// The two-axis gate. A Diff PASSES iff BOTH hold. Default after determinism is
@@ -81,6 +117,9 @@ impl FuzzBudget {
     /// The post-determinism default: bit-exact within one pinned rasterizer.
     pub const EXACT: FuzzBudget = FuzzBudget { max_channel_delta: 0, max_diff_pixels: 0 };
 }
+// As-landed: `FuzzBudget` additionally derives `serde::{Serialize, Deserialize}`
+// so the Tier-5 bless ledger (`golden::Positive.budget`) persists a per-fixture
+// widened budget directly to its `<slug>.toml`.
 
 /// Per-pixel and AA-detection knobs. `threshold` feeds the pixelmatch
 /// `maxDelta = 35215 · threshold²` luminance model; `include_aa = true` makes
@@ -163,28 +202,35 @@ luminance) and is not a hard edge in *both* images. A differing pixel that is AA
 `FuzzBudget::EXACT` (0,0) hold across the pinned rasterizer's residual AA jitter
 while still catching a one-pixel real defect (a glyph shifted off the AA band).
 
-## Crate choice — vendor pixelmatch, don't hand-roll
+## Crate choice — vendor pixelmatch's algorithm, don't depend on it
 
 | Option | Verdict |
 |---|---|
 | **Hand-roll** the YIQ delta + sibling test | rejected — re-deriving battle-tested constants is the anti-pattern §4 warns against |
 | **`dify = "0.8.0"`** | rejected — packaged as a CLI binary; its diff core is not a clean library surface and pulls extra deps |
-| **`pixelmatch = "0.1.0"`** | **selected** — pure-Rust port of the canonical JS pixelmatch (YIQ `colorDelta` + AA sibling test) over `image` buffers, ~150 LOC, zero native/FFI cost |
+| **`pixelmatch = "0.1.0"`** as a dependency | rejected after inspection — the published crate consumes PNG byte streams, returns only a flat count, keeps `color_delta`/`antialiased` private, and is `image`-0.24-bound (won't compile on the workspace `image = "0.25"`); none of which fits `Diff`'s two-axis shape |
+| **Vendor the pixelmatch reference algorithm** (~150 LOC) onto `image` 0.25 | **selected** — the exact YIQ `colorDelta` + AA sibling test, ported verbatim from the MIT source with a provenance comment, giving `compare` the per-pixel hooks the two-axis `Diff` needs |
 
-Primary dep (new): **`pixelmatch = "0.1.0"`** in `buiy_verify` — pure Rust, no
-build script, MIT-licensed (compatible). It exposes the `colorDelta`/`antialiased`
-primitives `compare` wraps; the `FuzzBudget` two-axis gate, `Diff` shape, MSSIM
+The per-pixel core (`color_delta` + `antialiased` + `has_many_siblings`) is
+**vendored verbatim** from pixelmatch's MIT source (`metric.rs:208-332`), not
+depended on — see § "Contract deviations / as-landed reconciliation" #1 for why
+the crate itself is unusable. The `FuzzBudget` two-axis gate, `Diff` shape, MSSIM
 channel, and the saturated-`Diff` mismatch handling are Buiy's layer on top
-(pixelmatch returns only a flat changed-pixel count).
+(pixelmatch returns only a flat changed-pixel count). Vendoring is metric.md's
+"adopt the reference algorithm, don't re-derive the `35215`/YIQ constants"
+applied exactly, and is strictly *more* faithful than depending on an unusable,
+`image`-incompatible crate.
 
-> **`cargo deny check` note.** `pixelmatch = "0.1.0"` and `image-compare =
-> "0.5.0"` are both new workspace deps; run `cargo deny check` before adding
-> either (CLAUDE.md "supply-chain check"). pixelmatch is a thin, dependency-light
-> port; `image-compare` pulls `nalgebra` — confirm the license set
-> (MIT/Apache/BSD) and no `RUSTSEC` advisories in the same audit. Both ride the
-> existing `image = "0.25"`; no second image-decode stack enters the tree. Pin
-> exact patch versions (`=0.1.0`, `=0.5.0`) so a rasterizer-independent metric
-> bump cannot silently shift baselines.
+> **`cargo deny check` note.** The only new metric dep is **`image-compare =
+> "=0.5.0"`** (MSSIM); run `cargo deny check` before adding it (CLAUDE.md
+> "supply-chain check"). `image-compare` pulls `nalgebra`/`moxcms`/`pxfm` — the
+> license set (MIT/Apache/BSD) cleared and no `RUSTSEC` advisories confirmed in
+> the same audit. It rides the existing `image = "0.25"`; no second image-decode
+> stack enters the tree. Pin the exact patch version (`=0.5.0`) so a
+> rasterizer-independent metric bump cannot silently shift baselines. **No
+> `pixelmatch` dependency is added** — its algorithm is vendored, and the
+> known-answer unit tests below guard the constants against drift, exactly the
+> protection a version pin would give.
 
 ## Advisory MSSIM — `image-compare`
 

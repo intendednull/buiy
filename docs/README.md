@@ -46,12 +46,13 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 **Specs**
 
 - [Buiy foundation design](specs/2026-05-07-buiy-foundation/README.md) — feature inventory, architectural foundation, sub-spec roadmap (multi-file). `[draft]`
-- [Buiy verification design](specs/2026-06-15-buiy-verification-design/README.md) — realizes the foundation `verification.md` gates #2/#5/#11/#12 as a reftests-first 5-tier pyramid: perceptual metric, structured snapshots, property invariants, reftests + CPU/GPU cross-check, golden persistence + determinism + coverage-by-construction (multi-file). Realizes the [visual-bug detection report](reports/2026-06-14-visual-bug-detection-strategy.md). `[draft]`
+- [Buiy verification design](specs/2026-06-15-buiy-verification-design/README.md) — realizes the foundation `verification.md` gates #2/#5/#11/#12 as a reftests-first 5-tier pyramid: perceptual metric, structured snapshots, property invariants, reftests + CPU/GPU cross-check, golden persistence + determinism + coverage-by-construction (multi-file). Harness landed (all 7 child tiers built + gated; residue goldens renderer-blocked, tracked in follow-ups.md). Realizes the [visual-bug detection report](reports/2026-06-14-visual-bug-detection-strategy.md). `[active]`
 
 **Plans**
 
 - [Phase 0 foundations](plans/2026-05-07-buiy-phase-0-foundations.md) — workspace, BuiyPlugin, system sets, minimal render/layout/a11y/focus/picking/theme, verification harness skeleton, hello-world Button. `[landed]`
 - [Phase 0 closeout](plans/2026-05-08-buiy-phase-0-closeout.md) — render-pipeline draws, AccessKit per-window adapter, `bevy_picking` backend; closes the three substantive deferrals from the Phase 0 self-review. `[landed]`
+- [Buiy verification harness](plans/2026-06-15-buiy-verification-impl.md) — Phases 0–4 realizing `buiy-verification-design`: metric+reftests → snapshots+invariants → goldens+determinism → coverage-by-construction + forced-colors live wiring + docs flip. Harness landed; residue goldens renderer-blocked (follow-ups.md). `[landed]`
 
 ### Layout
 

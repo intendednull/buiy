@@ -3,9 +3,27 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development to implement task-by-task. Steps use checkbox (- [ ]) syntax.
 
 **Date:** 2026-06-15
-**Status:** active
+**Status:** landed (Phases 0–4 complete; spec flipped to `active`/`landed`; residue goldens renderer-blocked, tracked in `follow-ups.md`)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 **Goal:** Build the five-tier, reftests-first visual-bug-detection pyramid (`buiy_verify`: metric, snapshots, invariants, reftests, goldens, determinism, coverage) on the landed `GoldenConfig` capture path, retiring the two naive metrics and closing foundation gates #2/#5/#11/#12.
+
+> **Closeout (Phase 4.7).** All phases below are complete; the per-step `- [ ]`
+> checkboxes are left as the as-authored record. Phase exit criteria are
+> satisfied (each `Phase N exit criteria` block holds). Per-phase landed status:
+>
+> | Phase | Name | Status |
+> |---|---|---|
+> | 0 | Cross-cutting prerequisites (deps, dev-cycle, `Dpr`, `capture_to_image`) | **landed** |
+> | 1a | Perceptual metric + naive-metric retirement | **landed** (pixelmatch *vendored*, not depended on — see Phase 1a deviation) |
+> | 1b | Reftest harness + CPU/GPU SDF cross-check | **landed** (GPU `#[ignore]` on the RX 6700 XT) |
+> | 2 | Tier 1-2 snapshots + Tier 3 invariants | **landed** (headless) |
+> | 3 | Determinism stack + Tier 5 golden persistence | **landed**; golden corpus *started* (`rect-rounded`, `text-ahem`) |
+> | 4 | Coverage-by-construction + forced-colors live wiring + docs flip | **landed**; this revision is the 4.7 docs flip |
+>
+> Deferred (renderer-blocked / out-of-scope), tracked in `follow-ups.md`:
+> shadow-blur-kernel & color-emoji residue goldens, the forced-colors `BoxShadow`
+> *visual* reftest, multi-reference reftest aggregation, the `golden-prune` bin,
+> and the object-store golden migration.
 **Architecture:** The harness is `buiy_verify` (pure-CPU metric, snapshot/invariant formatters, reftest pairing logic, golden persistence, `DeterministicApp`, coverage matrix) plus a device-coupled capture seam promoted into `buiy_core::render::golden` (`capture_to_image` / `capture_app`). `buiy_core` cannot depend on `buiy_verify` in its normal graph, so the L1 `perceptual_diff` is deprecated in place and a dev-only dependency cycle lets `#[ignore]` GPU tests reach the unified metric. Pure-CPU tiers gate headless; GPU tiers are `#[ignore]` and run on a real adapter (RX 6700 XT locally, pinned lavapipe in CI).
 **Tech Stack:** Rust, Bevy 0.18, wgpu, `image` 0.25, `proptest`, `insta`, the vendored pixelmatch YIQ algorithm + `image-compare` MSSIM, `toml`/`base64` (golden ledger + triage), `inventory` (coverage catalog); GPU lane on a real adapter.
 

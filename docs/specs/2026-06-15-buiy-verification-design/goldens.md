@@ -1,8 +1,41 @@
 # Tier 5 — golden persistence + triage
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** landed (Phase 3; `crates/buiy_verify/src/golden.rs` + `golden/{check,ledger,report}.rs`; corpus started)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
+
+> **As-landed reconciliation.** The `GoldenKey` / `Backend` / `BlessLedger` /
+> `Positive` / `TriageReport` / `TriageCard` shapes match this spec verbatim, with
+> these landed details:
+> - **`Backend` gains a `Cpu` variant** (`golden.rs:67-70`) so the structured
+>   Tiers 1-3 coverage cells (`CoverageKey`, no GPU) and the GPU `GoldenKey` key
+>   off **one** enum. `Cpu` is never a golden capture backend; it is the
+>   coverage-tier marker.
+> - **`GoldenKey::slug()` uses `__` field separators** (e.g.
+>   `rect-rounded/default/dark__sm__lavapipe__dpr1`), with `from_slug` the lossless
+>   inverse. The directory-per-`widget/state` layout keeps a fixture's whole row of
+>   cells together.
+> - **The bless policy is a `BlessMode` enum threaded as a parameter, not an env
+>   read deep in the comparison.** `check_golden`/`assert_golden` read
+>   `BUIY_BLESS`/`BUIY_BLESS_REPLACE` once at the top (`mode_from_env`) and pass
+>   `BlessMode { Assert | Bless { replace } }` down; `check_golden_in` /
+>   `assert_golden_in` take an explicit corpus root + report dir + mode (no env,
+>   no process CWD) so the pure-CPU self-tests run hermetically against a temp
+>   corpus.
+> - **The corpus is started, not full:** two blessed cells exist —
+>   `rect-rounded` (SDF residue) and `text-ahem` (Ahem layout class) — at
+>   `dark/sm/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger under
+>   `crates/buiy_verify/tests/goldens/`. The full residue matrix (shadow kernel,
+>   color-emoji) is renderer-blocked and deferred (see § Sources / follow-ups).
+> - **Honest GPU-lane state:** because the corpus is started, the coverage
+>   enrollment driver `coverage_golden::matrix_goldens` (which `assert_golden`s
+>   the *whole* `Matrix::ci_default()` over the `button` fixture) **fail-closes**
+>   on the un-blessed `button` cells — the documented "bless-on-demand" contract,
+>   not a regression. The every-PR **headless** gate is unaffected (it never runs
+>   `--ignored`); the `--ignored` GPU lane is green except this one driver until
+>   the `button` corpus is blessed. Tracked in `follow-ups.md` (blessing it is
+>   gated on the default widget being forced-colors-safe — otherwise the wholesale
+>   swap would bless the magenta sentinel as a golden).
 
 Tier 5 is the stored-baseline regression tier for the irreducible rasterization
 residue — what Tiers 1–4 provably cannot reach: SDF corner AA (beyond the CPU
