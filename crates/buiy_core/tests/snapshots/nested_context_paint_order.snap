@@ -1,0 +1,14 @@
+---
+source: crates/buiy_core/tests/render_extract.rs
+expression: nested_context_paint_order
+---
+# buiy-display-list-dump v1
+[nodes painters_z]
+0 root rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+1 a rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+2 nested rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+3 c rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+4 d rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+5 b rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+[buckets draw-order]
+(Quad,layer=0) x6

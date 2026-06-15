@@ -7,9 +7,10 @@
 use bevy::prelude::*;
 use buiy_core::components::StackingContext;
 use buiy_core::layout::{LayoutPlugin, Stacking, Style, TopLayer};
-use buiy_core::render::extract::{ExtractedNode, assemble_context_tree};
+use buiy_core::render::extract::{ExtractedNode, ExtractedNodes, assemble_context_tree};
 use buiy_core::render::top_layer::partition_top_layer;
 use buiy_core::{CorePlugin, Node};
+use buiy_verify::snapshot::{NameLookup, assert_display_list_snapshot};
 
 fn app() -> App {
     let mut app = App::new();
@@ -30,26 +31,43 @@ fn top_layer_of(world: &World, e: Entity) -> TopLayer {
 fn top_layer_tail_is_tier_ordered_fullscreen_to_modal() {
     let mut app = app();
     // Spawn one of each non-None tier as children of a single root. Layout 6f
-    // escapes them to the root context's tail, tier-sorted.
+    // escapes them to the root context's tail, tier-sorted. Name-tagged so the
+    // display-list snapshot is diff-stable by Name (not raw Entity bits).
     let modal = app
         .world_mut()
-        .spawn((Node, Style::default().top_layer(TopLayer::Modal)))
+        .spawn((
+            Node,
+            Name::new("modal"),
+            Style::default().top_layer(TopLayer::Modal),
+        ))
         .id();
     let tooltip = app
         .world_mut()
-        .spawn((Node, Style::default().top_layer(TopLayer::Tooltip)))
+        .spawn((
+            Node,
+            Name::new("tooltip"),
+            Style::default().top_layer(TopLayer::Tooltip),
+        ))
         .id();
     let popover = app
         .world_mut()
-        .spawn((Node, Style::default().top_layer(TopLayer::Popover)))
+        .spawn((
+            Node,
+            Name::new("popover"),
+            Style::default().top_layer(TopLayer::Popover),
+        ))
         .id();
     let fullscreen = app
         .world_mut()
-        .spawn((Node, Style::default().top_layer(TopLayer::Fullscreen)))
+        .spawn((
+            Node,
+            Name::new("fullscreen"),
+            Style::default().top_layer(TopLayer::Fullscreen),
+        ))
         .id();
     let root = app
         .world_mut()
-        .spawn((Node, Style::default()))
+        .spawn((Node, Name::new("root"), Style::default()))
         .add_children(&[modal, tooltip, popover, fullscreen])
         .id();
     app.update();
@@ -62,12 +80,27 @@ fn top_layer_tail_is_tier_ordered_fullscreen_to_modal() {
     let world = app.world();
     let (_in_flow, tail) = partition_top_layer(&sc.painters_z, |e| top_layer_of(world, e));
 
-    // Render reads the tail verbatim; layout pinned the tier order. Assert it.
-    assert_eq!(
-        tail,
-        vec![fullscreen, tooltip, popover, modal],
-        "top-layer tail paints Fullscreen < Tooltip < Popover < Modal (paint-order § 3.1)"
-    );
+    // Render reads the tail verbatim; layout pinned the tier order. The
+    // `assert_eq!(tail, vec![fullscreen, tooltip, popover, modal])` order check
+    // becomes a Name-keyed display-list snapshot: the tail's paint order reads
+    // off the node line order (Fullscreen < Tooltip < Popover < Modal,
+    // paint-order § 3.1), so a tier-sort regression shows as a line reorder.
+    let nodes = ExtractedNodes {
+        nodes: tail
+            .iter()
+            .map(|&e| ExtractedNode {
+                entity: e,
+                position: Vec2::ZERO,
+                size: Vec2::ONE,
+                color: Color::WHITE,
+                clip: None,
+                group: None,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let names = NameLookup::from_world(world);
+    assert_display_list_snapshot(&nodes, "top_layer_tail_tier_order", &names);
 }
 
 #[test]

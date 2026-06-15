@@ -1,0 +1,12 @@
+---
+source: crates/buiy_core/tests/render_paint_order.rs
+expression: top_layer_tail_tier_order
+---
+# buiy-display-list-dump v1
+[nodes painters_z]
+0 fullscreen rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+1 tooltip rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+2 popover rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+3 modal rect pos=0,0 size=1,1 color=#ffffffff clip=none group=none
+[buckets draw-order]
+(Quad,layer=0) x4

@@ -270,6 +270,18 @@ impl NameLookup {
         Self(map)
     }
 
+    /// Build the lookup from explicit `(entity, name)` pairs — the World-free
+    /// constructor for pure-CPU tests that assemble synthetic `ExtractedNode`s
+    /// (no spawned `Name` component). Mirrors [`from_world`](Self::from_world);
+    /// an entity absent from the pairs renders as `entity#<index>`.
+    pub fn from_pairs<I, S>(pairs: I) -> Self
+    where
+        I: IntoIterator<Item = (Entity, S)>,
+        S: Into<String>,
+    {
+        Self(pairs.into_iter().map(|(e, n)| (e, n.into())).collect())
+    }
+
     /// The label for `e`: its stored `Name`, else `entity#<index>`.
     fn label(&self, e: Entity) -> String {
         self.0
