@@ -5,6 +5,7 @@
 //! need a wgpu adapter (CLAUDE.md GPU lane).
 //!
 //! Run: cargo test -p buiy_core --test text_gpu -- --ignored --test-threads=1
+#![allow(deprecated)] // TEMPORARY (Phase 1a.9): perceptual_diff deprecated; this file migrates to buiy_verify::metric::compare in 1a.10, which removes this allow.
 
 mod support;
 

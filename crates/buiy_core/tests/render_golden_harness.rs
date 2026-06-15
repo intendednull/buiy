@@ -1,6 +1,7 @@
 //! Golden-image harness (gate #2). The triad config + perceptual diff are
 //! device-free and gating; the actual capture needs a wgpu adapter and is
 //! #[ignore]. Spec: verification.md § 4.
+#![allow(deprecated)] // perceptual_diff is deprecated; these GPU sites migrate to buiy_verify::metric in Phase 3 (tier-5 goldens).
 
 mod support;
 

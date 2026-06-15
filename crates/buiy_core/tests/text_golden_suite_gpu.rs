@@ -6,6 +6,7 @@
 //! need a wgpu adapter (CLAUDE.md GPU lane).
 //!
 //! Run: cargo test -p buiy_core --test text_golden_suite_gpu -- --ignored --test-threads=1
+#![allow(deprecated)] // perceptual_diff is deprecated; these GPU sites migrate to buiy_verify::metric in Phase 3 (tier-5 goldens).
 
 mod support;
 

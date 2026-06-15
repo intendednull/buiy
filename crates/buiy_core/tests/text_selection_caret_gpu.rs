@@ -27,6 +27,7 @@
 //!   `min(r,g,b) ≥ 180` rejects every red/blue mix (their g ≈ 0).
 //! - **Caret (glyph-tier solid stamp, red):** hard-edged at alpha 1 (no SDF
 //!   AA) — a § 3.3-snapped 1-physical-px column of the exact red encode.
+#![allow(deprecated)] // perceptual_diff is deprecated; these GPU sites migrate to buiy_verify::metric in Phase 3 (tier-5 goldens).
 
 mod support;
 

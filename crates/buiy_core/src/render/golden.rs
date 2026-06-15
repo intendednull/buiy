@@ -259,6 +259,9 @@ pub fn readback_rgba_into(
 /// `buiy-verification-design`) — the budget is the line between jitter and
 /// regression. Frames must be the same length (same dimensions); mismatched
 /// lengths return `1.0` (maximal difference).
+#[deprecated(
+    note = "use buiy_verify::metric::compare; kept only for unmigrated ignored GPU re-capture tests"
+)]
 pub fn perceptual_diff(a: &[u8], b: &[u8]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 1.0;

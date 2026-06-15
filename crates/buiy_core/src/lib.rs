@@ -48,6 +48,7 @@ pub use render::forced_colors::{PrePreferenceTheme, apply_forced_colors_theme};
 pub use render::forced_colors_analyzer::{
     CatalogPaint, ForcedColorsViolation, analyze_forced_colors, analyze_shadow_only,
 };
+#[allow(deprecated)]
 pub use render::golden::{GoldenConfig, perceptual_diff};
 pub use text::{
     BuiyTextPlugin, ComputedTextLayout, FontFamily, FontSize, FontWeight, FontsGeneration,
