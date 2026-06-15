@@ -28,6 +28,8 @@ use std::fmt::Write as _;
 use bevy::prelude::*;
 
 use buiy_core::components::ResolvedLayout;
+#[cfg(doc)]
+use buiy_core::render::buckets::InstanceBuckets;
 use buiy_core::render::buckets::pack_view;
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_core::render::instance::PackedInstance;
