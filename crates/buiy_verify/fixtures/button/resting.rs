@@ -19,6 +19,17 @@
 //! LIVE spawned components, not a hand-built descriptor. The override is the
 //! single line of "what the catalog should be"; everything else is the real
 //! button bundle.
+//!
+//! **Why the light-theme display-list snapshot shows `#ff00ffff` (magenta).**
+//! Buiy's forced-colors model is a *wholesale theme swap*: the light theme holds
+//! only brand tokens, the forced theme only the 16 system-color tokens — no
+//! single token resolves in BOTH (theme.rs). A system-color token therefore
+//! misses under the light theme and renders the magenta sentinel; under the
+//! forced theme it resolves (e.g. `ButtonText` → white). The committed
+//! `*.light.*` display-list baselines record that magenta faithfully — it is the
+//! expected artifact of system-color tokens being forced-colors-only, NOT a
+//! harness bug. Reconciling the two-theme split (so one widget resolves cleanly
+//! in both) is the same `buiy-widget-catalog-design` / theme-tokens concern.
 
 use bevy::prelude::*;
 use buiy_core::render::color::{ColorToken, SystemColorKeyword};

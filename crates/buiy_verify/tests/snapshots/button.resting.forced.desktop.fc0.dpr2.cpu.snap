@@ -1,0 +1,6 @@
+---
+source: crates/buiy_verify/tests/coverage_layout.rs
+expression: button.resting.forced.desktop.fc0.dpr2.cpu
+---
+# buiy-layout-dump v1
+button pos=0,0 size=136,48

@@ -96,7 +96,21 @@ pub fn build_app(fx: &super::fixture::Fixture, cell: &Cell) -> App {
 /// `enrollment_fan_out` self-test pins: `body` runs exactly
 /// `fixtures × cells` times with no duplicate key.
 pub fn enroll_all(matrix: &Matrix, body: impl Fn(App, CoverageKey)) {
-    for fx in sorted_catalog() {
+    enroll_fixtures(&sorted_catalog(), matrix, body);
+}
+
+/// Drive a tier `body` over an EXPLICIT fixture slice × `matrix.cells()` — the
+/// seam [`enroll_all`] delegates to with the full [`sorted_catalog`]. Exposed so
+/// the `adding_one_fixture_grows_corpus_by_axes` self-test can prove the
+/// auto-enroll-by-construction property: a slice of `n` fixtures yields exactly
+/// `n × matrix.cells_per_fixture()` invocations, so adding one fixture grows the
+/// corpus by exactly `|axes|` cells.
+pub fn enroll_fixtures(
+    fixtures: &[&'static super::fixture::Fixture],
+    matrix: &Matrix,
+    body: impl Fn(App, CoverageKey),
+) {
+    for &fx in fixtures {
         for cell in matrix.cells() {
             let key = CoverageKey::for_cell(fx, &cell, Backend::Cpu);
             let app = build_app(fx, &cell);

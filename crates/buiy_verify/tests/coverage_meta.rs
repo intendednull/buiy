@@ -9,7 +9,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use buiy_verify::coverage::{
-    Backend, CELL_CEILING_PER_FIXTURE, CoverageKey, Matrix, build_app, enroll_all, sorted_catalog,
+    Backend, CELL_CEILING_PER_FIXTURE, CoverageKey, Fixture, Matrix, build_app, enroll_all,
+    enroll_fixtures, sorted_catalog,
 };
 
 /// Walk the on-disk fixture directory (`crates/buiy_verify/fixtures/<widget>/
@@ -171,5 +172,62 @@ fn build_app_pins_viewport_theme_and_dpr() {
     assert!(
         (window.resolution.scale_factor() - cell.dpr.as_f32()).abs() < 1e-6,
         "window scale_factor must equal the cell DPR"
+    );
+}
+
+/// A second `#[cfg(test)]`-only fixture (NOT `fixture!`-registered, so it never
+/// enters the real catalog) used to prove the auto-enroll-by-construction
+/// property below.
+fn spawn_synthetic_widget(app: &mut bevy::app::App) {
+    use bevy::prelude::*;
+    app.world_mut().spawn(Camera2d);
+    app.world_mut().spawn((
+        Name::new("synthetic"),
+        buiy_core::components::Node,
+        buiy_core::layout::Style::default()
+            .width_px(10.0)
+            .height_px(10.0),
+    ));
+}
+
+static SYNTHETIC_FIXTURE: Fixture = Fixture {
+    name: "synthetic",
+    state: "resting",
+    spawn: spawn_synthetic_widget,
+};
+
+/// The decisive coverage property: adding **one** fixture grows the enrolled
+/// corpus by exactly `|axes|` cells — `Matrix::cells_per_fixture()` — with no
+/// change to any tier body. Driven over an explicit slice (one fixture vs. two)
+/// so the growth is observed directly: the delta MUST equal the axis product.
+#[test]
+fn adding_one_fixture_grows_corpus_by_axes() {
+    let matrix = Matrix::ci_default();
+    let axes = matrix.cells_per_fixture();
+
+    let base = sorted_catalog();
+    let count = |fixtures: &[&'static Fixture]| -> usize {
+        let n = std::cell::Cell::new(0usize);
+        enroll_fixtures(fixtures, &matrix, |_app, _key| n.set(n.get() + 1));
+        n.get()
+    };
+
+    // The real catalog, then the real catalog + one new fixture.
+    let mut plus_one = base.clone();
+    plus_one.push(&SYNTHETIC_FIXTURE);
+
+    let before = count(&base);
+    let after = count(&plus_one);
+
+    assert_eq!(
+        after - before,
+        axes,
+        "adding one fixture must enroll exactly |axes| ({axes}) new cells — \
+         the auto-enroll-by-construction guarantee"
+    );
+    assert_eq!(
+        before,
+        base.len() * axes,
+        "the base corpus is exactly fixtures × cells_per_fixture"
     );
 }

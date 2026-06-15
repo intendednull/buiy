@@ -1,0 +1,9 @@
+---
+source: crates/buiy_verify/tests/coverage_display_list.rs
+expression: button.resting.light.tablet.fc0.dpr1.cpu@0
+---
+# buiy-display-list-dump v1
+[nodes painters_z]
+0 button rect pos=0,0 size=136,48 color=#ff00ffff clip=none group=none
+[buckets draw-order]
+(Quad,layer=0) x1
