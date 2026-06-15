@@ -24,7 +24,7 @@ pub struct Diff {
     pub max_channel_delta: u8,
     /// Total pixels compared (== w*h; 0 only for empty/degenerate input).
     pub total_pixels: u32,
-    /// Advisory MSSIM in [0,1] (1 == identical). `None` when skipped.
+    /// Advisory MSSIM in `[0,1]` (1 == identical). `None` when skipped.
     pub mssim: Option<f64>,
     /// Heatmap: AA pixels dimmed, differing pixels painted (pixelmatch palette).
     pub diff_image: Option<RgbaImage>,
@@ -60,7 +60,7 @@ impl FuzzBudget {
 /// AA pixels COUNT (for the few tests that assert AA exactly).
 #[derive(Clone, Copy, Debug)]
 pub struct CompareOpts {
-    /// Matching sensitivity in [0,1]; default 0.1. Smaller = stricter.
+    /// Matching sensitivity in `[0,1]`; default 0.1. Smaller = stricter.
     pub threshold: f64,
     /// Treat antialiased pixels as differences instead of excluding them.
     pub include_aa: bool,
