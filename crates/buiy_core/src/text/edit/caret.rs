@@ -21,7 +21,7 @@ use cosmic_text::Cursor;
 
 use super::selection::TextSelection;
 use super::state::TextEditState;
-use crate::text::{CaretVisual, SelectionVisual};
+use crate::text::{CaretVisual, PreeditVisual, SelectionVisual};
 
 /// Emitted when the caret position changes without a selection change
 /// (editing-and-ime § 11 row `CaretMoved`). Payload: the entity + the new
@@ -43,7 +43,10 @@ const CARET_W: f32 = 1.0;
 /// run that owns the cursor: `cursor_position` gives x, `line_top`/`line_height`
 /// give y/height (§ 4.1). Returns `None` if no run owns the cursor (degenerate /
 /// not-yet-shaped buffer).
-fn caret_rect_for(buffer: &cosmic_text::Buffer, caret: &Cursor) -> Option<Rect> {
+///
+/// `pub(crate)` so `ime.rs`'s `write_ime_window` reuses it for the caret rect
+/// the IME popup anchors to (`Window.ime_position`, editing-and-ime § 6.3).
+pub(crate) fn caret_rect_for(buffer: &cosmic_text::Buffer, caret: &Cursor) -> Option<Rect> {
     for run in buffer.layout_runs() {
         if let Some(x) = run.cursor_position(caret) {
             return Some(Rect::new(
@@ -70,6 +73,7 @@ pub fn write_caret_and_selection(
             &mut TextEditState,
             Option<&CaretVisual>,
             Option<&SelectionVisual>,
+            Option<&PreeditVisual>,
         ),
         Without<super::state::Disabled>,
     >,
@@ -81,7 +85,7 @@ pub fn write_caret_and_selection(
         return;
     };
 
-    for (entity, mut state, prev_caret, prev_sel) in &mut editors {
+    for (entity, mut state, prev_caret, prev_sel, prev_preedit) in &mut editors {
         // Only the focused editor shows a caret (§ 10). A non-focused editor
         // keeps its SelectionVisual (web-parity retention is E6; here a
         // non-focused editor simply isn't recomputed — its seats persist).
@@ -138,6 +142,30 @@ pub fn write_caret_and_selection(
             commands.entity(entity).insert(SelectionVisual::new(lo, hi));
         } else if prev_sel.is_some() {
             commands.entity(entity).remove::<SelectionVisual>();
+        }
+
+        // --- Preedit underline geometry into PreeditVisual (E5) ---------------
+        // Project the live span into the paint seat: a composition yields a
+        // non-collapsed PreeditVisual over [start, end) on the span's line;
+        // no composition removes it. The byte range indexes the SAME spliced
+        // buffer the underline emitter reads (one source of truth).
+        let new_preedit = state
+            .preedit_span()
+            .map(|p| (Cursor::new(p.line, p.start), Cursor::new(p.line, p.end())));
+        match (new_preedit, prev_preedit) {
+            (Some((lo, hi)), _) => {
+                let v = PreeditVisual::new(lo, hi);
+                // Compare against the existing seat so a steady composition does
+                // not re-tick `Changed<PreeditVisual>` every frame (the
+                // selection seat's idiom).
+                if prev_preedit.copied() != Some(v) {
+                    commands.entity(entity).insert(v);
+                }
+            }
+            (None, Some(_)) => {
+                commands.entity(entity).remove::<PreeditVisual>();
+            }
+            (None, None) => {}
         }
 
         // --- Transition detection + Messages + blink reset -------------------

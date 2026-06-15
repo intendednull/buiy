@@ -13,6 +13,7 @@ mod access;
 mod caret;
 mod clipboard;
 mod command;
+mod ime;
 mod input;
 pub mod keymap;
 mod pointer;
@@ -26,6 +27,10 @@ pub use access::{
 pub use caret::{CaretMoved, SelectionChanged, write_caret_and_selection};
 pub use clipboard::{ArboardClipboard, Clipboard, ClipboardProvider, MemClipboard};
 pub use command::EditCommand;
+pub use ime::{
+    CompositionEnd, CompositionStart, CompositionUpdate, PREEDIT_METADATA, PreeditSpan, apply_ime,
+    write_ime_window,
+};
 pub use input::{EditContext, EditOutcome, TextChanged, apply_keyboard_edits};
 pub use keymap::{Keymap, KeymapTable, Modifiers, default_keymap_for_platform};
 pub use pointer::{ClickTracker, PointerGesture, pointer_selection, pointer_to_cursor};
