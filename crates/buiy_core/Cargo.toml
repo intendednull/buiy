@@ -13,6 +13,7 @@ accesskit.workspace = true
 accesskit_winit.workspace = true
 guillotiere = { workspace = true }
 smallvec = { workspace = true }
+arboard = { workspace = true }
 bitflags = "2.11.1"
 # Text engine (buiy-text-rendering-design, architecture § 7): Buiy's OWN pin,
 # never ridden transitively (the bevy_cosmic_edit decay path). DEFAULT
@@ -47,3 +48,4 @@ default_font = []
 
 [dev-dependencies]
 naga = "27"
+proptest = { workspace = true }

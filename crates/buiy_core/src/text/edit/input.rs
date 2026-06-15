@@ -4,11 +4,15 @@
 //! NAMES `Action` (the lowering), so it MUST stay inside the facade — the
 //! boundary tripwire (`tests/text_facade_boundary.rs`) enforces it.
 
-use bevy::prelude::*;
-use cosmic_text::{Action, Edit, FontSystem, Selection};
+use std::time::Duration;
 
+use bevy::prelude::*;
+use cosmic_text::{Action, Cursor, Edit, FontSystem, Selection};
+
+use super::clipboard::{ClipboardProvider, MemClipboard};
 use super::command::EditCommand;
 use super::state::TextEditState;
+use super::undo::{GroupKind, UndoUnit};
 
 /// Emitted when an editor's logical value changes (editing-and-ime § 11 row
 /// `TextChanged`). Never emitted for caret motion or for preedit (E5). The
@@ -26,17 +30,28 @@ pub struct EditOutcome {
     pub submitted: bool,
 }
 
+/// Everything `apply_tracked` needs beyond the command itself. Carries the
+/// policy flags (E2's `single_line`/`read_only`), the virtual-clock instant
+/// for undo coalescing (deterministic in tests), and the clipboard provider
+/// for cut/copy/paste. A struct (not 4 positional args) keeps the call sites
+/// readable and leaves room for E5 to add IME context without churning every
+/// caller.
+pub struct EditContext<'a> {
+    pub single_line: bool,
+    pub read_only: bool,
+    pub now: Duration,
+    pub clipboard: &'a mut dyn ClipboardProvider,
+}
+
 impl TextEditState {
-    /// Lower one `EditCommand` to cosmic `Action`s and apply it to the
-    /// editor (editing-and-ime § 3). This is the ONE place `EditCommand`
-    /// meets `Action`.
-    ///
-    /// - `single_line` (the `SingleLine` marker): `Enter ⇒ Submit`; inserted
-    ///   text is newline-stripped (§ 3.3).
-    /// - `read_only` (the `ReadOnly` marker): mutation is refused; motion /
-    ///   selection / escape still apply (§ 2.2).
-    ///
-    /// Returns an [`EditOutcome`] describing what the caller must signal.
+    /// E2/E3-compatible apply (the 4-arg signature those test files and any
+    /// non-system caller use). Delegates to `apply_tracked` with a zero clock
+    /// and an EPHEMERAL in-memory clipboard — so motion/insert/select-all
+    /// record-or-seal undo units harmlessly, and a stray Copy/Paste through
+    /// this path touches a throwaway clipboard, never the OS. The SYSTEM
+    /// (`apply_keyboard_edits`) does NOT use this shim — it builds a real
+    /// `EditContext` with the shared `Time<Virtual>` clock + the `Clipboard`
+    /// resource. Kept (not renamed) so E4 changes ZERO E2/E3 call sites (M1).
     pub fn apply(
         &mut self,
         font_system: &mut FontSystem,
@@ -44,81 +59,87 @@ impl TextEditState {
         single_line: bool,
         read_only: bool,
     ) -> EditOutcome {
-        // Value-changed is measured by comparing the buffer text across the
-        // mutation (cheap: only mutating commands take this branch, and the
-        // buffer is small for F-tier inputs). Motion/Escape never change it,
-        // so they skip the snapshot.
+        let mut fallback = MemClipboard::default();
+        let mut ctx = EditContext {
+            single_line,
+            read_only,
+            now: Duration::ZERO,
+            clipboard: &mut fallback,
+        };
+        self.apply_tracked(font_system, command, &mut ctx)
+    }
+}
+
+impl TextEditState {
+    /// Lower one `EditCommand` to cosmic `Action`s, apply it, and maintain the
+    /// undo history (editing-and-ime §§ 3, 7, 8). This is the ONE place
+    /// `EditCommand` meets `Action` AND the one place edits are recorded as
+    /// undo units — so E5's IME commit reuses the same `record` seam.
+    ///
+    /// Mutating commands are wrapped in a `start_change`/`finish_change` pair;
+    /// the resulting non-empty `Change` is recorded (grouped by `GroupKind`).
+    /// Non-mutating commands (Motion/SelectAll/Escape) SEAL the open run.
+    pub fn apply_tracked(
+        &mut self,
+        font_system: &mut FontSystem,
+        command: EditCommand,
+        ctx: &mut EditContext<'_>,
+    ) -> EditOutcome {
         match command {
-            // ── Mutations (gated on !read_only) ──────────────────────────
+            // ── Mutations (gated on !read_only), recorded as undo units ──
             EditCommand::Insert(text) => {
-                if read_only {
+                if ctx.read_only {
                     return EditOutcome::default();
                 }
-                let before = self.value();
-                // Single-line strips newlines (§ 3.3); the editor's
-                // Action::Insert self-routes '\n' to Enter, so stripping at
-                // the source is the policy.
-                for ch in text.chars() {
-                    if single_line && (ch == '\n' || ch == '\r') {
-                        continue;
+                // Hoist the policy flag so the closure captures a `bool`, not
+                // the `&mut EditContext` (n3 — same capture style as Paste).
+                let single_line = ctx.single_line;
+                self.tracked_edit(font_system, GroupKind::TypingRun, ctx.now, |ed, fs| {
+                    for ch in text.chars() {
+                        if single_line && (ch == '\n' || ch == '\r') {
+                            continue; // § 3.3 single-line newline strip
+                        }
+                        ed.action(fs, Action::Insert(ch));
                     }
-                    self.editor.action(font_system, Action::Insert(ch));
-                }
-                EditOutcome {
-                    value_changed: self.value() != before,
-                    submitted: false,
-                }
+                })
             }
             EditCommand::Backspace => {
-                if read_only {
+                if ctx.read_only {
                     return EditOutcome::default();
                 }
-                let before = self.value();
-                self.editor.action(font_system, Action::Backspace);
-                EditOutcome {
-                    value_changed: self.value() != before,
-                    submitted: false,
-                }
+                self.tracked_edit(font_system, GroupKind::DeleteRun, ctx.now, |ed, fs| {
+                    ed.action(fs, Action::Backspace);
+                })
             }
             EditCommand::Delete => {
-                if read_only {
+                if ctx.read_only {
                     return EditOutcome::default();
                 }
-                let before = self.value();
-                self.editor.action(font_system, Action::Delete);
-                EditOutcome {
-                    value_changed: self.value() != before,
-                    submitted: false,
-                }
+                self.tracked_edit(font_system, GroupKind::DeleteRun, ctx.now, |ed, fs| {
+                    ed.action(fs, Action::Delete);
+                })
             }
             EditCommand::Enter => {
-                if single_line {
-                    // § 3.3: single-line Enter submits, never inserts a
-                    // newline. No mutation, so read_only is irrelevant.
+                if ctx.single_line {
                     return EditOutcome {
                         value_changed: false,
                         submitted: true,
                     };
                 }
-                if read_only {
+                if ctx.read_only {
                     return EditOutcome::default();
                 }
-                let before = self.value();
-                self.editor.action(font_system, Action::Enter);
-                EditOutcome {
-                    value_changed: self.value() != before,
-                    submitted: false,
-                }
+                // A newline is a discrete edit (web parity: undo removes the
+                // whole line break as one step, not coalesced with prior typing).
+                self.undo.seal();
+                self.tracked_edit(font_system, GroupKind::Discrete, ctx.now, |ed, fs| {
+                    ed.action(fs, Action::Enter);
+                })
             }
 
-            // ── Motion (allowed under read_only) ─────────────────────────
+            // ── Motion / selection / escape: seal the run, never record ──
             EditCommand::Motion(motion, extend) => {
-                // Action::Motion does NOT manage the selection anchor
-                // (editor.rs:520-528 — the motion arm only updates the
-                // cursor). Extend ⇒ ensure an anchor at the current caret
-                // before moving; non-extend ⇒ collapse the selection first.
-                // The editor moves in VISUAL order (§ 4.1) — we never compute
-                // BiDi.
+                self.undo.seal();
                 if extend {
                     if self.editor.selection() == Selection::None {
                         let anchor = self.editor.cursor();
@@ -130,11 +151,8 @@ impl TextEditState {
                 self.editor.action(font_system, Action::Motion(motion));
                 EditOutcome::default()
             }
-
             EditCommand::SelectAll => {
-                // Anchor at buffer start, active at buffer end — a single
-                // Normal selection spanning everything. Motion-only (no
-                // value change), allowed under read_only.
+                self.undo.seal();
                 self.editor.set_selection(Selection::None);
                 self.editor.action(
                     font_system,
@@ -146,31 +164,168 @@ impl TextEditState {
                     .action(font_system, Action::Motion(cosmic_text::Motion::BufferEnd));
                 EditOutcome::default()
             }
-
             EditCommand::Escape => {
+                self.undo.seal();
                 self.editor.action(font_system, Action::Escape);
                 EditOutcome::default()
             }
-
-            // ── Submit (internal) ────────────────────────────────────────
             EditCommand::Submit => EditOutcome {
                 value_changed: false,
                 submitted: true,
             },
 
-            // ── E4 verbs: recognized, no behavior yet ────────────────────
-            // Clipboard (§ 7) and undo (§ 8) land in E4. They must NOT fall
-            // through to text insertion; routing them to a no-op here keeps
-            // the keymap rows valid from E2 without faking behavior.
-            EditCommand::Cut
-            | EditCommand::Copy
-            | EditCommand::Paste
-            | EditCommand::Undo
-            | EditCommand::Redo => {
-                // TODO(E4): clipboard + undo engine.
+            // ── Undo / Redo (§ 8) ────────────────────────────────────────
+            EditCommand::Undo => self.apply_undo(),
+            EditCommand::Redo => self.apply_redo(),
+
+            // ── Clipboard (§ 7) — plain text only (decision 4) ───────────
+            EditCommand::Copy => {
+                // copy_selection() is None when there is no selection; a bare
+                // caret Copy is a no-op (web parity).
+                if let Some(text) = self.editor.copy_selection() {
+                    ctx.clipboard.set_text(text);
+                }
                 EditOutcome::default()
             }
+            EditCommand::Cut => {
+                if ctx.read_only {
+                    return EditOutcome::default(); // ReadOnly: copy yes, cut no
+                }
+                let Some(text) = self.editor.copy_selection() else {
+                    return EditOutcome::default(); // nothing selected
+                };
+                ctx.clipboard.set_text(text);
+                // Delete the selection as one DISCRETE undoable unit (a cut is
+                // a deliberate single action — never coalesced with neighbors).
+                self.undo.seal();
+                self.tracked_edit(font_system, GroupKind::Discrete, ctx.now, |ed, fs| {
+                    let _ = fs; // delete_selection needs no FontSystem
+                    ed.delete_selection();
+                })
+            }
+            EditCommand::Paste => {
+                if ctx.read_only {
+                    return EditOutcome::default();
+                }
+                let Some(text) = ctx.clipboard.get_text() else {
+                    return EditOutcome::default(); // empty clipboard
+                };
+                // A paste is one DISCRETE unit, newline-stripped on single-line
+                // (§ 3.3 — the same policy as a single-line Insert).
+                self.undo.seal();
+                let single_line = ctx.single_line;
+                self.tracked_edit(font_system, GroupKind::Discrete, ctx.now, |ed, fs| {
+                    for ch in text.chars() {
+                        if single_line && (ch == '\n' || ch == '\r') {
+                            continue;
+                        }
+                        ed.action(fs, Action::Insert(ch));
+                    }
+                })
+            }
         }
+    }
+
+    /// Run a mutating `edit` closure wrapped in a `start_change`/`finish_change`
+    /// pair and record the resulting NON-EMPTY change as an undo unit grouped
+    /// by `group`. Captures caret + selection on both sides via the live
+    /// `mirror_selection()` read-out (the E3 mirror-direction invariant — never
+    /// the stale `selection` field). Returns whether the value changed.
+    fn tracked_edit(
+        &mut self,
+        font_system: &mut FontSystem,
+        group: GroupKind,
+        now: Duration,
+        edit: impl FnOnce(&mut cosmic_text::Editor<'static>, &mut FontSystem),
+    ) -> EditOutcome {
+        let before = self.value();
+        let caret_before = self.editor.cursor();
+        let selection_before = self.mirror_selection();
+
+        self.editor.start_change();
+        edit(&mut self.editor, font_system);
+        let change = self.editor.finish_change().unwrap_or_default();
+
+        let caret_after = self.editor.cursor();
+        let selection_after = self.mirror_selection();
+
+        // Empty change ⇒ no-op edit (e.g. Backspace at 0); record_grouped drops
+        // it, so the undo stack stays clean and value_changed stays false.
+        self.undo.record_grouped(
+            UndoUnit {
+                change,
+                caret_before,
+                caret_after,
+                selection_before,
+                selection_after,
+                group,
+            },
+            now,
+        );
+
+        EditOutcome {
+            value_changed: self.value() != before,
+            submitted: false,
+        }
+    }
+
+    /// Undo the most recent unit: replay the reversed change, restore the
+    /// `_before` caret + selection (§ 8). The reversed change deletes the
+    /// inserted text / re-inserts the deleted text. No `FontSystem` needed —
+    /// `apply_change` mutates buffer lines + sets redraw; reshape is next
+    /// frame's `TextCommit` (the one-frame path). `value_changed` is whether
+    /// the text actually moved (always true for a non-empty unit).
+    fn apply_undo(&mut self) -> EditOutcome {
+        let Some(unit) = self.undo.pop_undo() else {
+            return EditOutcome::default();
+        };
+        let mut reversed = unit.change.clone();
+        reversed.reverse();
+        let changed = self.editor.apply_change(&reversed);
+        self.restore_cursor(unit.caret_before, unit.selection_before);
+        EditOutcome {
+            value_changed: changed,
+            submitted: false,
+        }
+    }
+
+    /// Redo the most recent undone unit: replay the change forward, restore the
+    /// `_after` caret + selection (§ 8).
+    fn apply_redo(&mut self) -> EditOutcome {
+        let Some(unit) = self.undo.pop_redo() else {
+            return EditOutcome::default();
+        };
+        let changed = self.editor.apply_change(&unit.change);
+        self.restore_cursor(unit.caret_after, unit.selection_after);
+        EditOutcome {
+            value_changed: changed,
+            submitted: false,
+        }
+    }
+
+    /// Restore the caret + the editor's selection after an undo/redo. The
+    /// editor's `Selection` is the authoritative one E3 mirrors OUT next pass;
+    /// we set both the cursor and (for a non-collapsed range) the anchor.
+    fn restore_cursor(&mut self, caret: Cursor, selection: super::selection::TextSelection) {
+        self.editor.set_cursor(caret);
+        if selection.is_collapsed() {
+            self.editor.set_selection(Selection::None);
+        } else {
+            self.editor
+                .set_selection(Selection::Normal(selection.primary.anchor));
+            self.editor.set_cursor(selection.primary.active);
+        }
+    }
+
+    /// The `GroupKind` of the unit Undo would pop next (the top of the undo
+    /// stack), for the `EditUndone` Message payload.
+    pub(crate) fn undo_top_group(&self) -> Option<GroupKind> {
+        self.undo.undo.last().map(|u| u.group)
+    }
+
+    /// The `GroupKind` Redo would pop next (top of the redo stack).
+    pub(crate) fn redo_top_group(&self) -> Option<GroupKind> {
+        self.undo.redo.last().map(|u| u.group)
     }
 }
 
@@ -182,6 +337,8 @@ use super::state::{Disabled, ReadOnly, SingleLine};
 use crate::FocusedEntity;
 use crate::layout::LayoutTree;
 use crate::text::SharedFontSystem;
+
+use super::clipboard::Clipboard;
 
 /// Map a live logical `Key` to the table's `KeyKind`, plus the inserted text
 /// for a character key. Returns `None` for keys the editor does not bind
@@ -274,10 +431,14 @@ pub fn apply_keyboard_edits(
     focused: Option<Res<FocusedEntity>>,
     keymap: Res<Keymap>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    time: Res<Time>,
     fonts: Res<SharedFontSystem>,
+    mut clipboard: Option<ResMut<Clipboard>>,
     mut tree: Option<NonSendMut<LayoutTree>>,
     mut editors: Query<(&mut TextEditState, Has<SingleLine>, Has<ReadOnly>), Without<Disabled>>,
     mut changed: MessageWriter<TextChanged>,
+    mut undone: MessageWriter<super::undo::EditUndone>,
+    mut redone: MessageWriter<super::undo::EditRedone>,
 ) {
     // No input infrastructure (no `InputPlugin` and no manual seed) ⇒ the
     // `KeyboardInput` Message and the `ButtonInput<KeyCode>` resource are
@@ -345,14 +506,50 @@ pub fn apply_keyboard_edits(
         return; // NO lock on an idle / non-editing frame.
     }
 
+    // A clipboard is required to lower Cut/Copy/Paste; without the resource
+    // (a bare BuiyTextPlugin harness that didn't insert one) fall back to an
+    // ephemeral in-memory clipboard so the system still runs (the Option-param
+    // inert-harness discipline). Clipboard verbs then no-op across frames,
+    // which is correct for a harness with no clipboard configured.
+    let mut fallback = super::clipboard::MemClipboard::default();
+    let clip: &mut dyn ClipboardProvider = match clipboard.as_deref_mut() {
+        Some(Clipboard(boxed)) => boxed.as_mut(),
+        None => &mut fallback,
+    };
+    let now = time.elapsed();
+
     // The one lock hold — the apply burst (E2 erratum 2). Mirrors TextCommit.
     let mut font_system = fonts.lock();
     let mut any_value_change = false;
     for command in commands {
-        let outcome = state.apply(&mut font_system, command, single_line, read_only);
+        // Capture the group BEFORE applying, for the undo/redo Messages.
+        let was_undo = command == EditCommand::Undo;
+        let was_redo = command == EditCommand::Redo;
+        let group_before_undo = state.undo_top_group();
+        let group_before_redo = state.redo_top_group();
+        let mut ctx = EditContext {
+            single_line,
+            read_only,
+            now,
+            // Reborrow each iteration: `&mut` is not `Copy`, so `clipboard: clip`
+            // would MOVE it on iteration 1 and fail to compile on iteration 2
+            // ("use of moved value"). `&mut *clip` reborrows for this ctx only.
+            clipboard: &mut *clip,
+        };
+        let outcome = state.apply_tracked(&mut font_system, command, &mut ctx);
         any_value_change |= outcome.value_changed;
-        // `outcome.submitted` is consumed internally in E2 (the host-facing
-        // EditSubmitted is E6). A submit does not change the value.
+        if was_undo
+            && outcome.value_changed
+            && let Some(g) = group_before_undo
+        {
+            undone.write(super::undo::EditUndone(entity, g));
+        }
+        if was_redo
+            && outcome.value_changed
+            && let Some(g) = group_before_redo
+        {
+            redone.write(super::undo::EditRedone(entity, g));
+        }
     }
     drop(font_system);
 

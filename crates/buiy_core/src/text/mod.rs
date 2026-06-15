@@ -51,10 +51,11 @@ pub use decoration::{
 };
 pub use direction::prepend_strong_marks;
 pub use edit::{
-    CaretBlink, CaretMoved, ClickTracker, Disabled, EditCommand, Keymap, Placeholder,
+    ArboardClipboard, CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled,
+    EditCommand, EditContext, EditRedone, EditUndone, GroupKind, Keymap, MemClipboard, Placeholder,
     PointerGesture, ReadOnly, SelectionChanged, SelectionRange, SingleLine, TextBufferAccess,
-    TextChanged, TextEditState, TextSelection, apply_keyboard_edits, pointer_selection,
-    pointer_to_cursor, write_caret_and_selection,
+    TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit, apply_keyboard_edits,
+    pointer_selection, pointer_to_cursor, write_caret_and_selection,
 };
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
@@ -204,7 +205,17 @@ impl Plugin for BuiyTextPlugin {
         // one-frame latency). The TextChanged Message is registered so
         // consumers (the a11y layer, the widget catalog) can subscribe.
         app.init_resource::<crate::text::edit::Keymap>();
+        // E4 (editing-and-ime § 7): the OS clipboard, behind the facade. On a
+        // headless build with no display arboard construction fails and the
+        // provider degrades to "empty" (ArboardClipboard::handle returns None) —
+        // never a panic. Tests override this resource with a MemClipboard.
+        app.insert_resource(crate::text::edit::Clipboard(Box::new(
+            crate::text::edit::ArboardClipboard::new(),
+        )));
         app.add_message::<crate::text::edit::TextChanged>();
+        // E4 (editing-and-ime § 8, 11): the undo/redo transition Messages.
+        app.add_message::<crate::text::edit::EditUndone>();
+        app.add_message::<crate::text::edit::EditRedone>();
         app.add_systems(
             Update,
             crate::text::edit::apply_keyboard_edits.in_set(crate::BuiySet::Input),

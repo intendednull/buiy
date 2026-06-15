@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use cosmic_text::{Buffer, Editor, Metrics};
 
 use super::selection::TextSelection;
+use super::undo::UndoStack;
 use crate::text::IntrinsicWidths;
 
 /// The per-entity caret-blink phase origin (editing-and-ime §§ 5, 10). The T7
@@ -86,6 +87,10 @@ pub struct TextEditState {
     /// The per-entity caret-blink phase origin (§§ 5, 10). Reset on edit /
     /// caret move by `write_caret_and_selection`; read by `write_caret_blink`.
     pub(crate) blink: CaretBlink,
+    /// The per-entity undo/redo history (§ 8). E4 lands it; before E4 the
+    /// editor had no history (E2's edits were unrecorded). Read/written only
+    /// by `apply_tracked` (input.rs) — the one mutation site.
+    pub(crate) undo: UndoStack,
 }
 
 impl TextEditState {
@@ -94,12 +99,32 @@ impl TextEditState {
     /// `Editor::new` is pure struct construction (verified,
     /// `cosmic-text-0.19.0/src/edit/editor.rs:37`) — so construction is NOT
     /// a lock site (architecture § 1.2), mirroring `TextBuffer::new`.
+    ///
+    /// The buffer is seeded with one empty line via `set_text("")`. cosmic-text
+    /// REQUIRES at least one `BufferLine` before any action that indexes lines
+    /// — its `new_empty` doc: "You must populate the Buffer with at least one
+    /// BufferLine before shaping and layout" — and `Action::Delete` indexes
+    /// `buffer.lines[cursor.line]` UNCONDITIONALLY (`editor.rs:612`), so a
+    /// never-shaped editor panics on a first-keystroke Delete. `set_text("")`
+    /// is the FontSystem-free seam cosmic-text's own `Buffer::new` uses for
+    /// exactly this (`buffer.rs:407-408`): it pushes one empty `BufferLine`
+    /// without shaping, so construction stays lock-free AND the buffer stays
+    /// unshaped (zero layout runs) until measure. TextSync's later `set_text`
+    /// reuses this line.
     pub fn new(metrics: Metrics) -> Self {
+        let mut buffer = Buffer::new_empty(metrics);
+        buffer.set_text(
+            "",
+            &cosmic_text::Attrs::new(),
+            cosmic_text::Shaping::Advanced,
+            None,
+        );
         Self {
-            editor: Editor::new(Buffer::new_empty(metrics)),
+            editor: Editor::new(buffer),
             intrinsics: None,
             selection: TextSelection::collapsed(cosmic_text::Cursor::new(0, 0)),
             blink: CaretBlink::default(),
+            undo: UndoStack::default(),
         }
     }
 
@@ -159,6 +184,17 @@ impl TextEditState {
     /// The per-entity caret-blink phase origin (the `write_caret_blink` reader).
     pub fn blink_origin(&self) -> std::time::Duration {
         self.blink.origin
+    }
+
+    /// The undo-stack depth (units available to undo). Test/inspection; stays
+    /// inside the facade.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.undo_len()
+    }
+
+    /// The redo-stack depth. Test/inspection.
+    pub fn redo_depth(&self) -> usize {
+        self.undo.redo_len()
     }
 
     /// Drop the cached intrinsic widths — the "buffer content changed,
