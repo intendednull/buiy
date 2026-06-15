@@ -11,6 +11,11 @@ serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
 proptest.workspace = true
+# Already a workspace dep (used by buiy_core for the `PackedInstance` POD layout).
+# The Tier-2 byte-exact hex check (snapshots.md § byte-exact) needs
+# `bytemuck::bytes_of` / `pod_read_unaligned` over the same `PackedInstance` —
+# no NEW supply-chain crate, no new `cargo deny` surface.
+bytemuck.workspace = true
 # Advisory MSSIM channel (metric.md § "Advisory MSSIM"): catches global
 # gamma/blend drift a small pixel budget under-weights. NEVER the primary
 # gate — surfaced as `Diff::mssim: Option<f64>`. The `cargo deny check` below

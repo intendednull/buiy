@@ -8,4 +8,5 @@ pub mod a11y;
 pub mod contrast;
 pub mod metric;
 pub mod reftest;
+pub mod snapshot;
 pub mod support;
