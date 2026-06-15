@@ -46,6 +46,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 **Specs**
 
 - [Buiy foundation design](specs/2026-05-07-buiy-foundation/README.md) — feature inventory, architectural foundation, sub-spec roadmap (multi-file). `[draft]`
+- [Buiy verification design](specs/2026-06-15-buiy-verification-design/README.md) — realizes the foundation `verification.md` gates #2/#5/#11/#12 as a reftests-first 5-tier pyramid: perceptual metric, structured snapshots, property invariants, reftests + CPU/GPU cross-check, golden persistence + determinism + coverage-by-construction (multi-file). Realizes the [visual-bug detection report](reports/2026-06-14-visual-bug-detection-strategy.md). `[draft]`
 
 **Plans**
 
@@ -111,6 +112,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 ### Reports
 
 - [Text-editing design-readiness review](reports/2026-06-13-text-editing-design-readiness.md) — three-verifier audit of `editing-and-ime.md` against current `main` before the `buiy-text-editing` campaign: every integration seam confirmed in code, the no-new-GPU-work painting claim upheld, and OQ#1 (edit→layout frame-ordering) resolved as accepted one-frame latency. Verdict: ready-with-patches (now applied). `[2026-06-13]`
+- [Visual-bug detection strategy](reports/2026-06-14-visual-bug-detection-strategy.md) — how to catch visual regressions as Buiy scales: a five-tier pyramid (layout-number → display-list/paint-order → metamorphic/property → reftests + CPU-cross-check → golden screenshots), reftests-first, grounded on canonical `main`. Audits the existing golden/forced-colors/text-shaping infra and names the gaps; input to `buiy-verification-design`. Pairs with the five `prior-art/` folders below. `[2026-06-14]`
 
 ### Docs infrastructure
 
@@ -172,6 +174,16 @@ The reference *implementations* of the CSS modules Buiy implements a typed Rust 
 - [cosmic-text](prior-art/cosmic-text/) — load-bearing Rust text engine; harfrust (since 0.15.0, NOT rustybuzz) + swash + skrifa + unicode-bidi. System76-stewarded. Bevy 0.19-dev migrated to parley+swash — post-0.19 Buiy diverges from bevy_ui on text shaper. Consult before any spec on text shaping, BiDi, editing, IME, color emoji, or font fallback. `[active]`
 - [AccessKit](prior-art/accesskit/) — load-bearing cross-platform a11y bridge; Pneuma Solutions-stewarded. Windows / macOS / Linux production; Android pre-1.0; **iOS adapter shipped 2026-05-11** (Buiy spec needs update); web adapter NOT yet shipped. Buiy is the *producer*, `accesskit_consumer` is for adapter-side code. Consult before any spec on a11y tree construction, AccessKit integration, ACCNAME 1.2, focus model, or per-window adapter ownership. `[active]`
 - [WAI-ARIA APG](prior-art/wai-aria-apg/) — the W3C contract source Buiy implements: WAI-ARIA 1.2 Recommendation (6 June 2023) + ACCNAME 1.2 Working Draft (20 May 2026) + WCAG 2.2 Recommendation (5 October 2023). The Authoring Practices Guide enumerates **32 widget design patterns** at <https://www.w3.org/WAI/ARIA/apg/patterns/>, each pinning keyboard contract + ARIA role/state/property emission + name/description sourcing. **Inverted framing** (not "learns from"; this is the contract Buiy MUST implement): Implements (every Buiy widget follows the APG keyboard contract + ARIA mapping; ACCNAME 1.2 lives in `buiy_core`; WCAG 2.2 Level A + AA gated in CI; live regions via global announcer; `:focus-visible` + roving tabindex + `aria-activedescendant` + `inert` are foundation-tier). Diverge (gamepad navigation, spatial focus, 3D-anchored / diegetic UI, render-to-texture surfaces, game-specific widgets — APG covers none of these; Buiy extends honestly). Implementation strategy (per-widget specs under `buiy-widget-catalog-design`; verification gates 3 / 4 / 7 + linters; real-AT testing as manual-release-gate). Consult before any spec on a widget contract, keyboard interaction, ACCNAME, WCAG verification, focus management, or platform a11y bindings. `[active]`
+
+### Verification & visual testing
+
+External systems Buiy's visual-bug-detection strategy ([report](reports/2026-06-14-visual-bug-detection-strategy.md)) learns from. Created 2026-06-14.
+
+- [wpt-reftests](prior-art/wpt-reftests/) — reference-comparison visual testing (Gecko reftests + web-platform-tests): the `==`/`!=` model, `fuzzy-if()` two-axis matching, and the shared WPT CSS-conformance corpus that needs ZERO stored goldens, plus how Servo/Blink consume it. The methodology behind Buiy's reftests-first Tier 4. Consult before any spec on the reftest harness or fuzzy-tolerance budgets. `[active]`
+- [vello](prior-art/vello/) — Linebender's GPU-compute 2D renderer (wgpu); the closest neighbor for the CPU-vs-GPU reference-oracle pattern (`vello_cpu` as an f32 oracle), the sparse-strip hybrid, and the FLIP/Kompari perceptual metric. Consult before any spec on the CPU-SDF cross-check or the perceptual metric. `[active]`
+- [skia-gold](prior-art/skia-gold/) — Skia/Chromium Gold + the golden storage & triage ecosystem (reg-suit, Chromatic, Argos): content-addressed digests, multi-positive baselines, time-boxed ignores — the escape hatch for when a golden set explodes. Consult before any spec on golden storage/triage at scale. `[active]`
+- [flutter-golden-testing](prior-art/flutter-golden-testing/) — Flutter golden-file regression: `matchesGoldenFile`, the obscure-text/Ahem layout-determinism font, `debugDisableShadows`, golden_toolkit + Alchemist. The canonical glyph-golden flake fight. Consult before any spec on text goldens or determinism knobs. `[active]`
+- [wgpu-testing](prior-art/wgpu-testing/) — wgpu's CI/GPU test infrastructure: the `#[gpu_test]` harness, `FailureCase`-per-backend expectations, the pinned-lavapipe determinism recipe, and `nv_flip` image comparison. Buiy's closest determinism model (same wgpu abstraction). Consult before any spec on the determinism stack or CI GPU class. `[active]`
 
 ### Archived
 
