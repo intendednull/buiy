@@ -162,37 +162,12 @@ pub fn gpu_render_app_scaled(logical_w: u32, logical_h: u32, scale_factor: f32) 
 }
 
 /// The one shared plugin stack behind [`gpu_render_app`] /
-/// [`gpu_render_app_scaled`] — a single body so the scaled builder cannot
-/// drift from the canonical one.
+/// [`gpu_render_app_scaled`] — delegates to the promoted src builder
+/// `buiy_core::render::golden::capture_app_with_resolution` so the canonical
+/// plugin stack lives in exactly one place (anti-drift: the reftest / golden
+/// tiers and these test-support builders are now the SAME body).
 fn gpu_render_app_with_resolution(resolution: bevy::window::WindowResolution) -> App {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-        // Sized to the capture target so the primary-window-derived view uniform
-        // matches the offscreen image's pixel grid (see module note above).
-        .add_plugins(bevy::window::WindowPlugin {
-            primary_window: Some(Window {
-                resolution,
-                ..default()
-            }),
-            ..default()
-        })
-        .add_plugins(bevy::asset::AssetPlugin::default())
-        .add_plugins(bevy::render::RenderPlugin::default())
-        .add_plugins(bevy::image::ImagePlugin::default())
-        .add_plugins(bevy::camera::CameraPlugin)
-        // The 2D render graph: `Core2dPlugin` (inside `CorePipelinePlugin`)
-        // creates the `Core2d` sub-graph that `BuiyRenderPlugin` wires its node
-        // into. MUST precede `BuiyRenderPlugin` (plugins build in add order).
-        .add_plugins(bevy::core_pipeline::CorePipelinePlugin)
-        .add_plugins(buiy_core::theme::ThemePlugin)
-        .add_plugins(buiy_core::layout::LayoutPlugin)
-        .add_plugins(CorePlugin)
-        // The text engine + the T4 glyph producer (render half registers
-        // against the live RenderApp created by RenderPlugin above).
-        .add_plugins(buiy_core::text::BuiyTextPlugin::default())
-        .add_plugins(BuiyRenderPlugin);
-    app.init_asset::<Mesh>();
-    app
+    buiy_core::render::golden::capture_app_with_resolution(resolution)
 }
 
 /// Create an offscreen `Rgba8UnormSrgb` render-target image of `width`×`height`,

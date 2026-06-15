@@ -90,6 +90,63 @@ pub const CAPTURE_MSAA: bevy::render::view::Msaa = bevy::render::view::Msaa::Off
 /// camera spawns with no `DebandDither::Enabled`).
 pub const CAPTURE_DITHER_OFF: bool = true;
 
+/// Build the canonical headless painting App at a logical viewport size,
+/// promoted from `tests/support/mod.rs` into src so `buiy_verify`'s reftest /
+/// golden tiers build their app without the test crate. NOT finished:
+/// [`capture_to_image`] finishes + drives to quiescence + reads back.
+pub fn capture_app(logical_w: u32, logical_h: u32) -> bevy::app::App {
+    capture_app_scaled(logical_w, logical_h, 1.0)
+}
+
+/// [`capture_app`] at an explicit window scale factor (the DPR-pin builder
+/// determinism.md sizes the offscreen target through). Bevy 0.18
+/// `WindowResolution::new` takes PHYSICAL units; pass `logical × scale` plus
+/// the override so `resolution.size()` reads back the logical size the view
+/// uniform is built from.
+pub fn capture_app_scaled(logical_w: u32, logical_h: u32, scale_factor: f32) -> bevy::app::App {
+    use bevy::window::WindowResolution;
+    let resolution = WindowResolution::new(
+        (logical_w as f32 * scale_factor).round() as u32,
+        (logical_h as f32 * scale_factor).round() as u32,
+    )
+    .with_scale_factor_override(scale_factor);
+    capture_app_with_resolution(resolution)
+}
+
+/// The one shared plugin stack behind [`capture_app`] / [`capture_app_scaled`]
+/// (and, via delegation, the test-support `gpu_render_app*` builders) — a
+/// single body so the scaled / test-support builders cannot drift. The plugin
+/// set + init order MUST stay byte-identical to the documented capture stack
+/// (the offscreen `Core2d` graph `BuiyRenderPlugin` wires into requires
+/// `CorePipelinePlugin` before it).
+pub fn capture_app_with_resolution(resolution: bevy::window::WindowResolution) -> bevy::app::App {
+    use bevy::app::App;
+    use bevy::prelude::*;
+    use bevy::window::{Window, WindowPlugin};
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(WindowPlugin {
+            primary_window: Some(Window {
+                resolution,
+                ..default()
+            }),
+            ..default()
+        })
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::render::RenderPlugin::default())
+        .add_plugins(bevy::image::ImagePlugin::default())
+        .add_plugins(bevy::camera::CameraPlugin)
+        .add_plugins(bevy::core_pipeline::CorePipelinePlugin)
+        .add_plugins(crate::theme::ThemePlugin)
+        .add_plugins(crate::layout::LayoutPlugin)
+        .add_plugins(crate::CorePlugin)
+        .add_plugins(crate::text::BuiyTextPlugin::default())
+        .add_plugins(crate::render::BuiyRenderPlugin);
+    app.init_asset::<Mesh>();
+    app
+}
+
 /// **The shared capture seam** (verification-design README § Architecture):
 /// render the already-built, fixture-populated `app` into an offscreen target
 /// sized to the window's PHYSICAL pixel grid and read it back as an

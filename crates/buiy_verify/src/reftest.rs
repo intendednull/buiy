@@ -69,6 +69,97 @@ pub fn evaluate_outcome(kind: RefKind, diff: &Diff, fuzz: &FuzzBudget) -> bool {
     }
 }
 
+use crate::metric::{CompareOpts, compare};
+use buiy_core::render::golden::{GoldenConfig, capture_to_image};
+
+/// The capture viewport for reftest pairings, in logical px. Both halves are
+/// captured at this size in one app run; large enough that a single 40px box
+/// and a 120px-shifted twin do not overlap (so a moved box is a real diff).
+const REFTEST_LOGICAL: (u32, u32) = (200, 120);
+
+/// Render BOTH scenes via the buiy_core capture seam in ONE app run and diff
+/// with `metric::compare`. Platform variance cancels because both halves share
+/// one `wgpu::Device`, driver, atlas, and virtual clock. GPU-coupled.
+///
+/// Until the determinism stack lands this builds the app via `reftest_app`
+/// (the canonical `capture_app` seam); Phase 3 swaps that one line for
+/// `DeterministicApp::build` with an identical `&mut App`→capture contract.
+pub fn run_reftest(case: &RefCase) -> RefOutcome {
+    assert!(
+        mismatch_floor_ok(case.kind, &case.fuzz),
+        "reftest `{}`: a Mismatch with a non-(0,0) fuzz floor is vacuous",
+        case.name
+    );
+    let (w, h) = REFTEST_LOGICAL;
+    let mut app = crate::support::reftest_app(w, h);
+    let cfg = GoldenConfig::deterministic();
+
+    let test_img = capture_to_image_with(&mut app, case.test, &cfg);
+    let ref_img = capture_to_image_with(&mut app, case.reference, &cfg);
+
+    let diff = compare(&test_img, &ref_img, &CompareOpts::reftest_default());
+    let passed = evaluate_outcome(case.kind, &diff, &case.fuzz);
+    let report_path = if passed {
+        None
+    } else {
+        Some(emit_report(case.name, &test_img, &ref_img, &diff))
+    };
+    RefOutcome {
+        passed,
+        diff,
+        report_path,
+    }
+}
+
+/// Clear the previous scene, spawn `scene`, capture via the buiy_core seam.
+fn capture_to_image_with(
+    app: &mut bevy::app::App,
+    scene: fn(&mut bevy::app::App),
+    cfg: &GoldenConfig,
+) -> image::RgbaImage {
+    crate::support::clear_reftest_scene(app);
+    scene(app);
+    capture_to_image(app, cfg)
+}
+
+/// Write a self-contained HTML triage report (test | ref | diff) to a temp
+/// path and return it. Phase 3 swaps this for the golden-tier emitter; until
+/// then, a minimal three-PNG dump. Never committed.
+fn emit_report(
+    name: &str,
+    test: &image::RgbaImage,
+    reference: &image::RgbaImage,
+    diff: &Diff,
+) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("buiy-reftest");
+    let _ = std::fs::create_dir_all(&dir);
+    let base = dir.join(name);
+    let _ = test.save(base.with_extension("test.png"));
+    let _ = reference.save(base.with_extension("ref.png"));
+    if let Some(img) = &diff.diff_image {
+        let _ = img.save(base.with_extension("diff.png"));
+    }
+    let report = base.with_extension("html");
+    let _ = std::fs::write(
+        &report,
+        format!(
+            "<h1>reftest {name} FAILED</h1><p>differing_pixels={} max_channel_delta={}</p>\
+             <img src='{name}.test.png'><img src='{name}.ref.png'><img src='{name}.diff.png'>",
+            diff.differing_pixels, diff.max_channel_delta
+        ),
+    );
+    eprintln!("reftest {name} report: {}", report.display());
+    report
+}
+
+/// A `Mismatch` budget that tolerates difference is meaningless — its floor
+/// must be `(0,0)`. `Match` may carry any widening. (Task 1b.7 replaces this
+/// stub with the real guard + its meta-test; inlined `true` here only so the
+/// 1b.5/1b.6 engine compiles green.)
+fn mismatch_floor_ok(_kind: RefKind, _fuzz: &FuzzBudget) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
