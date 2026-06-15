@@ -47,3 +47,11 @@ default_font = []
 
 [dev-dependencies]
 naga = "27"
+# Dev-only dependency edge for the #[ignore] GPU re-capture tests, which
+# migrate off the deprecated `render::golden::perceptual_diff` (L1) onto
+# `buiy_verify::metric::compare` (metric.md § Migration). This forms a
+# DEV-ONLY cycle (buiy_core → buiy_verify → buiy_core): a [dev-dependencies]
+# edge is excluded from the normal build graph, so Cargo permits it, the
+# production `cargo build -p buiy_core` is unaffected, and it adds no
+# `cargo deny` surface. Confined to #[cfg(test)].
+buiy_verify = { path = "../buiy_verify" }
