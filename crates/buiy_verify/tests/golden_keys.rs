@@ -37,7 +37,15 @@ fn key(
 
 #[test]
 fn slug_is_deterministic_lower_kebab() {
-    let k = key("button", "hover", "dark", "sm", false, Backend::Lavapipe, Dpr::X2);
+    let k = key(
+        "button",
+        "hover",
+        "dark",
+        "sm",
+        false,
+        Backend::Lavapipe,
+        Dpr::X2,
+    );
     // Stable schema: `widget/state/theme__viewport__fc__backend__dpr`.
     assert_eq!(k.slug(), "button/hover/dark__sm__fc0__lavapipe__dpr2");
     // Deterministic: the same key slugs identically every call.
@@ -50,8 +58,24 @@ fn forced_colors_mode_is_a_distinct_baseline() {
     // the same theme renders differently with forced-colors on, so the two
     // modes MUST get separate slugs (else a regression in one passes against
     // the other's baseline).
-    let off = key("button", "default", "forced", "md", false, Backend::Lavapipe, Dpr::X1);
-    let on = key("button", "default", "forced", "md", true, Backend::Lavapipe, Dpr::X1);
+    let off = key(
+        "button",
+        "default",
+        "forced",
+        "md",
+        false,
+        Backend::Lavapipe,
+        Dpr::X1,
+    );
+    let on = key(
+        "button",
+        "default",
+        "forced",
+        "md",
+        true,
+        Backend::Lavapipe,
+        Dpr::X1,
+    );
     assert_ne!(off, on);
     assert_ne!(
         off.slug(),
@@ -106,7 +130,15 @@ fn dir_places_corpus_under_widget_directory() {
 
 #[test]
 fn ledger_round_trips_through_toml() {
-    let k = key("button", "hover", "dark", "sm", false, Backend::Lavapipe, Dpr::X2);
+    let k = key(
+        "button",
+        "hover",
+        "dark",
+        "sm",
+        false,
+        Backend::Lavapipe,
+        Dpr::X2,
+    );
     let ledger = BlessLedger {
         key: k.clone(),
         positives: vec![Positive {

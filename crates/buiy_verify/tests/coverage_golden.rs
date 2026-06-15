@@ -125,7 +125,9 @@ fn matrix_goldens() {
         }
     }
 
-    eprintln!("matrix_goldens: {asserted} asserted against the committed corpus, {pending} pending bless-on-demand");
+    eprintln!(
+        "matrix_goldens: {asserted} asserted against the committed corpus, {pending} pending bless-on-demand"
+    );
     // The enrollment itself must have produced cells (guards a silently-empty
     // catalog/matrix regressing this coverage property to a vacuous pass).
     assert!(

@@ -167,7 +167,38 @@ pub fn layout_dump(world: &World) -> String {
     out
 }
 
-/// One resolved-layout row, pre-sorted into a stable, `Name`-keyed pre-order
+/// Total order on a laid-out node's `(name, position, size)` — `Name`, then the
+/// rendered box compared component-wise via `f32::total_cmp` (a total order over
+/// all floats incl. NaN/±0). Content-derived, so it is a deterministic function
+/// of the layout, never of ECS allocation order.
+fn cmp_layout_content(a: &(String, Vec2, Vec2), b: &(String, Vec2, Vec2)) -> std::cmp::Ordering {
+    a.0.cmp(&b.0)
+        .then_with(|| a.1.x.total_cmp(&b.1.x))
+        .then_with(|| a.1.y.total_cmp(&b.1.y))
+        .then_with(|| a.2.x.total_cmp(&b.2.x))
+        .then_with(|| a.2.y.total_cmp(&b.2.y))
+}
+
+/// Sort `sibs` into the deterministic content order, then assert no two are
+/// indistinguishable. Two siblings identical in `Name` AND box have no
+/// content-derived order — their relative order, and their subtrees' order in
+/// the dump, would fall back to spawn order. Rather than silently emit a flaky
+/// snapshot, refuse: the fixture must give them distinct `Name`s or positions.
+fn sort_siblings_by_content(sibs: &mut [Entity], boxes: &HashMap<Entity, (String, Vec2, Vec2)>) {
+    sibs.sort_by(|x, y| cmp_layout_content(&boxes[x], &boxes[y]));
+    for pair in sibs.windows(2) {
+        if cmp_layout_content(&boxes[&pair[0]], &boxes[&pair[1]]) == std::cmp::Ordering::Equal {
+            let (name, pos, size) = &boxes[&pair[0]];
+            panic!(
+                "ambiguous siblings: two entities share Name `{name}`, position {pos:?} and \
+                 size {size:?} — the layout dump cannot be made spawn-order-independent. \
+                 Give them distinct Names or positions."
+            );
+        }
+    }
+}
+
+/// One resolved-layout row, pre-sorted into a stable, content-keyed pre-order
 /// tree walk (depth carries the `ChildOf` indentation).
 struct LayoutEntry {
     name: String,
@@ -178,8 +209,9 @@ struct LayoutEntry {
 
 /// Gather every `ResolvedLayout` entity into a stable pre-order list: roots
 /// (entities with no `ChildOf`) first, then a depth-first descent through
-/// `Children`, siblings ordered by `Name` then `Entity` index. The `Name`-key
-/// is what makes the dump invariant to ECS spawn/archetype order.
+/// `Children`, siblings ordered by `Name` then rendered box (position, size).
+/// The content key is what makes the dump invariant to ECS spawn/archetype
+/// order — even when siblings share a `Name`.
 fn collect_layout_entries(world: &World) -> Vec<LayoutEntry> {
     // entity -> (name, position, size) for every laid-out entity. `Name` is
     // looked up per-entity via `world.get` (not in the query) because `Name`
@@ -216,15 +248,18 @@ fn collect_layout_entries(world: &World) -> Vec<LayoutEntry> {
         }
     }
 
-    // Stable sibling order: by Name (the label) then Entity index.
-    let sort_key = |boxes: &HashMap<Entity, (String, Vec2, Vec2)>, e: &Entity| {
-        (boxes[e].0.clone(), e.index().index())
-    };
+    // Stable sibling order keyed by CONTENT, not Entity index: by Name, then by
+    // the rendered box (position, then size). `Entity::index()` is allocation /
+    // spawn-order dependent, so using it as the tiebreak made same-Name siblings
+    // (e.g. list rows all `Name::new("row")`) dump in spawn order — a flaky,
+    // non-reproducible snapshot. The box is a deterministic function of the
+    // layout, so the dump is now genuinely invariant to spawn/archetype order;
+    // two siblings identical in name AND box fail loudly (see `sort_siblings_by_content`).
     for siblings in children.values_mut() {
-        siblings.sort_by_key(|e| sort_key(&boxes, e));
+        sort_siblings_by_content(siblings, &boxes);
     }
     let mut roots: Vec<Entity> = boxes.keys().copied().filter(|e| !has_parent[e]).collect();
-    roots.sort_by_key(|e| sort_key(&boxes, e));
+    sort_siblings_by_content(&mut roots, &boxes);
 
     let mut out = Vec::with_capacity(boxes.len());
     let mut stack: Vec<(Entity, usize)> = roots.into_iter().rev().map(|e| (e, 0)).collect();
@@ -437,6 +472,16 @@ pub fn assert_instance_hex_snapshot(p: &PackedInstance, name: &str) {
 /// Default sampling is three logical timestamps named by the caller.
 #[track_caller]
 pub fn assert_display_list_snapshot_at(app: &mut App, name: &str, steps: &[std::time::Duration]) {
+    // Pin the virtual clock to manual stepping FIRST: under the default
+    // `TimeUpdateStrategy::Automatic`, every `app.update()` advances
+    // `Time<Virtual>` by the wall-clock delta since the previous update, so the
+    // captured frame's logical time would be `t + (accumulated wall-clock)` —
+    // non-reproducible, and once the wall-clock drift exceeds a step gap
+    // `advance_virtual_to`'s `checked_sub` underflows to ZERO and silently stops
+    // advancing. Pinning makes `advance_virtual_to` the SOLE clock driver, which
+    // is the byte-for-byte determinism this function's contract promises.
+    // (Regression: `wall_clock_does_not_leak_into_the_per_timestamp_clock`.)
+    pin_manual_virtual_clock(app);
     for &t in steps {
         // Drive the manual virtual clock to the ABSOLUTE logical time `t` (the
         // landed `Time<Virtual>::advance_by` mechanism, text_caret_selection.rs),
@@ -454,10 +499,23 @@ pub fn assert_display_list_snapshot_at(app: &mut App, name: &str, steps: &[std::
     }
 }
 
+/// Pin `Time<Virtual>` to manual stepping by installing
+/// [`TimeUpdateStrategy::ManualDuration(ZERO)`], so each `app.update()` advances
+/// the virtual clock by zero and [`advance_virtual_to`] is the only thing that
+/// moves it. Idempotent — overwriting the resource each call is harmless. This
+/// is the substrate of the per-timestamp determinism guarantee; without it the
+/// `TimePlugin`'s automatic wall-clock advance contaminates the logical time.
+fn pin_manual_virtual_clock(app: &mut App) {
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::ZERO,
+    ));
+}
+
 /// Advance `Time<Virtual>` to an absolute logical time `t` (since clock start)
 /// by stepping the remaining delta. Steps are expected monotonic; a backwards
-/// `t` is a no-op (`advance_by` cannot rewind) — the determinism guarantee that
-/// makes per-timestamp snapshots reproducible byte-for-byte.
+/// `t` is a no-op (`advance_by` cannot rewind). Combined with
+/// [`pin_manual_virtual_clock`] (the manual-clock pin) this makes per-timestamp
+/// snapshots reproducible byte-for-byte regardless of wall-clock.
 fn advance_virtual_to(app: &mut App, t: std::time::Duration) {
     let mut virt = app.world_mut().resource_mut::<Time<Virtual>>();
     let elapsed = virt.elapsed();
@@ -467,8 +525,9 @@ fn advance_virtual_to(app: &mut App, t: std::time::Duration) {
 
 /// Build an `ExtractedNodes` from a laid-out world by reading each entity's
 /// resolved box + background through the production `extracted_node_for`,
-/// ordered by `Name` then `Entity` index for determinism. Pure-CPU: this is the
-/// same single record builder the RenderApp's extract uses, with no GPU.
+/// ordered by `Name` then rendered box (position, size) for determinism — never
+/// by `Entity` index (spawn-order dependent; same fix as the Tier-1 layout
+/// sort). Pure-CPU: the same single record builder the RenderApp's extract uses.
 fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
     use buiy_core::render::components::Background;
     use buiy_core::render::extract::extracted_node_for;
@@ -476,7 +535,7 @@ fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
 
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
 
-    let mut rows: Vec<(String, u32, ExtractedNode)> = Vec::new();
+    let mut rows: Vec<(String, ExtractedNode)> = Vec::new();
     // Query only the always-registered `ResolvedLayout`; the optional paint
     // inputs (`GlobalTransform`/`Background`/`Name`) are looked up per-entity
     // via `world.get`, which tolerates an unregistered component (a fixture
@@ -491,16 +550,72 @@ fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
             .unwrap_or(GlobalTransform::IDENTITY);
         let bg = world.get::<Background>(e);
         let node = extracted_node_for(e, &gt, layout, bg, None, &theme);
-        rows.push((
-            entity_label(world.get::<Name>(e), e),
-            e.index().index(),
-            node,
-        ));
+        rows.push((entity_label(world.get::<Name>(e), e), node));
     }
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    // Content tiebreak (position, then size) via `total_cmp`, NOT `Entity::index`
+    // — so same-`Name` nodes (e.g. list rows) order deterministically by their
+    // rendered box rather than by spawn order.
+    rows.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.position.x.total_cmp(&b.1.position.x))
+            .then_with(|| a.1.position.y.total_cmp(&b.1.position.y))
+            .then_with(|| a.1.size.x.total_cmp(&b.1.size.x))
+            .then_with(|| a.1.size.y.total_cmp(&b.1.size.y))
+    });
 
     ExtractedNodes {
-        nodes: rows.into_iter().map(|(_, _, n)| n).collect(),
+        nodes: rows.into_iter().map(|(_, n)| n).collect(),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod time_determinism {
+    use super::*;
+    use std::time::Duration;
+
+    /// The per-timestamp snapshot determinism guarantee: `advance_virtual_to`
+    /// must be the SOLE driver of `Time<Virtual>`, so wall-clock between updates
+    /// never leaks into the captured logical time.
+    ///
+    /// Phase (a) proves the bug is real — on the default `Automatic` clock a
+    /// `sleep` between updates DOES advance the virtual clock past the requested
+    /// time. Phase (b) proves [`pin_manual_virtual_clock`] fixes it: the same
+    /// sequence lands EXACTLY on the logical time regardless of wall-clock.
+    #[test]
+    fn wall_clock_does_not_leak_into_the_per_timestamp_clock() {
+        // (a) precondition — the Automatic clock leaks wall-clock.
+        {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins);
+            advance_virtual_to(&mut app, Duration::from_millis(100));
+            app.update();
+            std::thread::sleep(Duration::from_millis(20));
+            app.update(); // no advance — yet the Automatic clock moves anyway
+            let leaked = app.world().resource::<Time<Virtual>>().elapsed();
+            assert!(
+                leaked > Duration::from_millis(100),
+                "precondition: the default Automatic clock must leak wall-clock \
+                 (got {leaked:?}); if this fails the bug model changed"
+            );
+        }
+
+        // (b) fix — pinning the manual clock makes advance_virtual_to the sole
+        // driver, so the identical sequence lands exactly on 100ms.
+        {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins);
+            pin_manual_virtual_clock(&mut app);
+            advance_virtual_to(&mut app, Duration::from_millis(100));
+            app.update();
+            std::thread::sleep(Duration::from_millis(20));
+            app.update(); // no advance — the pinned clock must NOT move
+            let elapsed = app.world().resource::<Time<Virtual>>().elapsed();
+            assert_eq!(
+                elapsed,
+                Duration::from_millis(100),
+                "pinned clock: wall-clock must not leak into the virtual clock"
+            );
+        }
     }
 }

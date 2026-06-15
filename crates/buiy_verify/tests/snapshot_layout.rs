@@ -71,6 +71,68 @@ fn dump_is_entity_order_invariant() {
     assert!(da.contains("row.item[0]"), "dump names the first child");
 }
 
+/// Two siblings that SHARE a `Name` (the realistic case: list rows all tagged
+/// `Name::new("row")`) but differ in size, spawned in both orders. The original
+/// sibling tiebreak fell back to `Entity::index()` (spawn-order dependent), so
+/// this produced a flaky, byte-divergent dump — the worst failure mode for a
+/// verification harness. The content tiebreak (position then size) makes the
+/// order a deterministic function of the rendered boxes. The existing
+/// `dump_is_entity_order_invariant` test uses UNIQUE names, so it never hit this.
+fn same_name_rows_app(reversed: bool) -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+
+    let spawn_row = |app: &mut App, w: f32| {
+        app.world_mut()
+            .spawn((
+                Node,
+                Name::new("row"), // SAME name for both siblings
+                Style::default().width_px(w).height_px(50.0),
+            ))
+            .id()
+    };
+
+    // Distinct widths ⇒ distinct sizes/positions ⇒ content distinguishes them.
+    let (a, b) = if reversed {
+        let b = spawn_row(&mut app, 60.0);
+        let a = spawn_row(&mut app, 40.0);
+        (a, b)
+    } else {
+        let a = spawn_row(&mut app, 40.0);
+        let b = spawn_row(&mut app, 60.0);
+        (a, b)
+    };
+
+    let root = app
+        .world_mut()
+        .spawn((
+            Node,
+            Name::new("root"),
+            Style::default().flex_row().width_px(200.0).height_px(100.0),
+        ))
+        .id();
+    app.world_mut().entity_mut(root).add_children(&[a, b]);
+    app
+}
+
+#[test]
+fn dump_is_invariant_for_same_name_siblings() {
+    let mut a = same_name_rows_app(false);
+    let mut b = same_name_rows_app(true);
+    a.update();
+    b.update();
+    let da = layout_dump(a.world());
+    let db = layout_dump(b.world());
+    assert_eq!(
+        da, db,
+        "same-Name siblings must dump identically regardless of spawn order \
+         (content tiebreak, not Entity::index)"
+    );
+    assert_eq!(da.matches("row pos=").count(), 2, "both rows are present");
+}
+
 #[test]
 fn layout_dump_has_version_header() {
     // snapshots.md § Verification #4: line 1 is the format-version constant, so

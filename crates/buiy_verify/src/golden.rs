@@ -222,11 +222,7 @@ fn slug_component(s: &str) -> String {
 /// baseline (the same theme renders differently with forced-colors on), so it
 /// is part of the slug, not collapsed away. Mirrors `CoverageKey`'s `fc_token`.
 fn fc_slug(forced_colors: bool) -> &'static str {
-    if forced_colors {
-        "fc1"
-    } else {
-        "fc0"
-    }
+    if forced_colors { "fc1" } else { "fc0" }
 }
 
 /// Parse an `fc_slug` token back to the forced-colors bool (the inverse).
