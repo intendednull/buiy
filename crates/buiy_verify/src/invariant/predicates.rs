@@ -34,7 +34,9 @@ pub struct Violation {
 }
 
 impl Violation {
-    fn new(rule: &'static str, detail: impl Into<String>) -> Self {
+    /// Construct a violation. `pub(crate)` so sibling invariant modules (e.g.
+    /// `bidi`) can report their own relations through the shared type.
+    pub(crate) fn new(rule: &'static str, detail: impl Into<String>) -> Self {
         Self {
             rule,
             detail: detail.into(),

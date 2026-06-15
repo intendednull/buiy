@@ -36,3 +36,6 @@ pub use predicates::{
     EPS, Violation, all_finite, all_finite_packed, contexts_do_not_interleave, mat4_is_identity,
     mat4_is_pure_scale, paint_order_is_total, top_layer_dominates, transform_roundtrips,
 };
+
+pub mod bidi;
+pub use bidi::{arb_bidi_text, bidi_caret_roundtrips, caret_in_cluster};
