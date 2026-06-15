@@ -11,3 +11,13 @@ serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
 proptest.workspace = true
+# Advisory MSSIM channel (metric.md § "Advisory MSSIM"): catches global
+# gamma/blend drift a small pixel budget under-weights. NEVER the primary
+# gate — surfaced as `Diff::mssim: Option<f64>`. The `cargo deny check` below
+# confirms its license set + no RUSTSEC advisories.
+image-compare = "=0.5.0"
+# Tier-1/2 snapshot assertions (snapshots.md): insta drives the layout-number
+# and display-list `Display` dumps. Dev-time crate, but lives in `[dependencies]`
+# because the harness re-exports snapshot helpers from `src/`. The `glob` feature
+# drives the coverage fixture-dir fan-out (Phase 4).
+insta = { version = "=1.48.0", features = ["glob"] }
