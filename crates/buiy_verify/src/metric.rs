@@ -116,6 +116,7 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
     let total_pixels = w * h;
     let max_delta = 35_215_f64 * opts.threshold * opts.threshold;
 
+    let mut diff_image = opts.emit_diff_image.then(|| RgbaImage::new(w, h));
     let mut differing_pixels = 0u32;
     let mut max_channel_delta = 0u8;
     for (x, y, pa) in a.enumerate_pixels() {
@@ -128,8 +129,15 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
         if delta.abs() > max_delta {
             let is_aa = !opts.include_aa
                 && (antialiased(a, x, y, w, h, b) || antialiased(b, x, y, w, h, a));
-            if !is_aa {
+            if is_aa {
+                if let Some(out) = &mut diff_image {
+                    out.put_pixel(x, y, image::Rgba([255, 255, 0, 255])); // AA: yellow
+                }
+            } else {
                 differing_pixels += 1;
+                if let Some(out) = &mut diff_image {
+                    out.put_pixel(x, y, image::Rgba([255, 0, 0, 255])); // diff: red
+                }
             }
         }
     }
@@ -152,7 +160,7 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
         max_channel_delta,
         total_pixels,
         mssim,
-        diff_image: None, // wired in 1a.6
+        diff_image,
         saturated: false,
     }
 }
@@ -509,6 +517,33 @@ mod tests {
             "MSSIM is advisory — a sub-1 MSSIM does not gate passes() when both \
              pixel axes are satisfied"
         );
+    }
+
+    #[test]
+    fn diff_image_paints_differing_pixels() {
+        let a = solid(8, 8, [0, 0, 0, 255]);
+        let mut b = a.clone();
+        b.put_pixel(3, 3, image::Rgba([255, 255, 255, 255]));
+        let d = compare(
+            &a,
+            &b,
+            &CompareOpts {
+                emit_diff_image: true,
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        let img = d.diff_image.expect("emit_diff_image fills the heatmap");
+        assert_eq!(img.dimensions(), (8, 8));
+        // The differing pixel is painted red (pixelmatch diff_color).
+        assert_eq!(*img.get_pixel(3, 3), image::Rgba([255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn diff_image_absent_by_default() {
+        let a = solid(4, 4, [10, 10, 10, 255]);
+        let d = compare(&a, &a, &CompareOpts::default());
+        assert!(d.diff_image.is_none());
     }
 
     #[test]
