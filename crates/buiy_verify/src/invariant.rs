@@ -26,4 +26,13 @@
 //! `cargo test` gate.
 
 pub mod scene;
-pub use scene::{GenTransform, Realized, Scene, SceneNode, SceneParams, arb_scene, realize};
+pub use scene::{
+    GenTransform, Realized, Scene, SceneNode, SceneParams, arb_scene, arb_transform, realize,
+    realize_full,
+};
+
+pub mod predicates;
+pub use predicates::{
+    EPS, Violation, all_finite, all_finite_packed, contexts_do_not_interleave, mat4_is_identity,
+    mat4_is_pure_scale, paint_order_is_total, top_layer_dominates, transform_roundtrips,
+};

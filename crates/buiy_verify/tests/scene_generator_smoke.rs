@@ -54,23 +54,29 @@ proptest! {
     #[test]
     fn arb_scene_respects_bounds(scene in arb_scene(SceneParams::default())) {
         let p = SceneParams::default();
+        // `prop_recursive(depth, …)` HARD-caps the number of recursive
+        // combinator LEVELS at `depth`; the base (non-recursive) leaf adds the
+        // final level, so a realized tree nests at most `max_depth + 1` deep (a
+        // single-node scene is depth 1). This is still a hard bound, never the
+        // soft node count.
+        let max_levels = p.max_depth + 1;
         prop_assert!(
-            scene_depth(&scene) <= p.max_depth,
-            "depth {} exceeds max_depth {}",
+            scene_depth(&scene) <= max_levels,
+            "depth {} exceeds max_depth+1 = {}",
             scene_depth(&scene),
-            p.max_depth,
+            max_levels,
         );
 
-        // Structural hard cap: at most `Σ breadth^level` nodes per root tree.
-        let per_root: usize = (0..p.max_depth)
+        // Structural hard cap: at most `Σ breadth^level` nodes over the
+        // `max_depth + 1` levels of the single root tree.
+        let cap: usize = (0..max_levels)
             .map(|l| (p.max_breadth as usize).pow(l))
             .sum();
-        let forest_cap = per_root.saturating_mul(2); // up to 2 roots
         prop_assert!(
-            scene_node_count(&scene) <= forest_cap,
+            scene_node_count(&scene) <= cap,
             "node count {} exceeds structural cap {}",
             scene_node_count(&scene),
-            forest_cap,
+            cap,
         );
 
         // Names are unique (the pre-order rename) and cover `n0..nK`.

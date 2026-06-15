@@ -3769,10 +3769,13 @@ pub(super) fn multicol_length_px(l: Option<Length>, fallback: f32) -> f32 {
 /// innermost. A child point `p` is transformed as `M · p`, so it
 /// feels the rightmost (innermost) factor first.
 ///
-/// Pure function — no Bevy queries, no Taffy reads. Easy to unit test.
+/// Pure function — no Bevy queries, no Taffy reads. Easy to unit test, and
+/// consumed by the Tier-3 `transform_roundtrips` invariant (the metamorphic
+/// `translate∘-translate ≈ I`, `rotate(2π) ≈ I`, `scale(k)` checks assert on
+/// THIS composed matrix, never a re-implementation), hence `pub`.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 1.1.
-pub(super) fn compose_transform(
+pub fn compose_transform(
     ui: &UiTransform,
     t: Option<&Translate>,
     r: Option<&Rotate>,

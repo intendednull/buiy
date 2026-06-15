@@ -130,11 +130,12 @@ impl Default for SceneParams {
     }
 }
 
-/// Strategy for a single `GenTransform`. Skewed to the identity (the common +
+/// Strategy for a single [`GenTransform`]. Skewed to the identity (the common +
 /// shrink case) but reaches a finite, well-conditioned non-identity transform:
 /// translate in `-512..512`, rotate angle in `0..2π` about an axis with a
-/// non-zero component, scale in `0.1..8.0` per axis (away from `0`).
-fn arb_transform() -> impl Strategy<Value = GenTransform> {
+/// non-zero component, scale in `0.1..8.0` per axis (away from `0`). Public so
+/// the `transform_roundtrips` proptest can draw inputs directly.
+pub fn arb_transform() -> impl Strategy<Value = GenTransform> {
     prop_oneof![
         // Weighted heavily toward identity so most generated nodes are in-flow.
         3 => Just(GenTransform::IDENTITY),
@@ -204,10 +205,11 @@ fn arb_top_layer(p_top: f64) -> impl Strategy<Value = TopLayer> {
     prop::option::weighted(p_top, escape).prop_map(|opt| opt.unwrap_or(TopLayer::None))
 }
 
-/// Generate a bounded, shrinkable [`Scene`]. `prop_recursive` bounds depth +
-/// node count so the tree is finite and shrinks toward the empty/shallow scene
-/// (invariants.md § "Strategy budget"). Names are assigned by a final pre-order
-/// rename (`n0..nK`) so a shrunk counterexample is reproducible and printable.
+/// Generate a bounded, shrinkable single-root [`Scene`]. `prop_recursive` bounds
+/// depth + node count so the tree is finite and shrinks toward the shallow
+/// scene (invariants.md § "Strategy budget"). Names are assigned by a final
+/// pre-order rename (`n0..nK`) so a shrunk counterexample is reproducible and
+/// printable.
 pub fn arb_scene(p: SceneParams) -> impl Strategy<Value = Scene> {
     let leaf = arb_leaf(p);
     let tree = leaf.prop_recursive(p.max_depth, p.max_nodes, p.max_breadth, move |inner| {
@@ -220,14 +222,22 @@ pub fn arb_scene(p: SceneParams) -> impl Strategy<Value = Scene> {
                 node
             })
     });
-    // A scene is a small forest (1..=2 roots) so the multi-root cross-tree
-    // case is reachable, but most scenes are single-rooted (the common case).
-    prop::collection::vec(tree, 1..=2).prop_map(|mut roots| {
+    // A scene is a SINGLE root tree — the Buiy model is one root context per
+    // window (cross-window scoping is a deferred follow-up, per the layout
+    // code). One root fully exercises every invariant (nesting, z-order,
+    // top-layer escape, context isolation); a multi-root forest would only add
+    // a cross-tree paint order that `painters_z` leaves unspecified, forcing
+    // every predicate to special-case it without testing anything new.
+    tree.prop_map(|mut root| {
+        // The ROOT is never a top-layer member: the top layer is an ESCAPE
+        // mechanism (a node leaves its parent context to paint at the root), so a
+        // node with no parent has nothing to escape. Forcing the root to `None`
+        // keeps the model faithful — every top-layer node has a parent to escape
+        // from — and `top_layer_dominates` well-defined.
+        root.top_layer = TopLayer::None;
         let mut counter = 0u32;
-        for root in &mut roots {
-            rename_preorder(root, &mut counter);
-        }
-        Scene { roots }
+        rename_preorder(&mut root, &mut counter);
+        Scene { roots: vec![root] }
     })
 }
 
@@ -254,6 +264,19 @@ pub struct Realized {
     pub nodes: ExtractedNodes,
     /// `entity → owning stacking-context root entity`, for every painted node.
     pub context_of: std::collections::HashMap<Entity, Entity>,
+    /// `context-root entity → every entity painted WITHIN that context's
+    /// subtree` (the root + all transitive descendants, including nested
+    /// contexts). A stacking context paints as a UNIT, so each such set must be
+    /// a contiguous run in the paint order — the property
+    /// `contexts_do_not_interleave` checks.
+    pub context_members: std::collections::HashMap<Entity, Vec<Entity>>,
+    /// `entity → EFFECTIVE top-layer membership`: the nearest top-layer ancestor's
+    /// [`TopLayer`] (inclusive of self), or `None` for a purely in-flow node. A
+    /// descendant of an escaped node paints INSIDE that escaped context, so it
+    /// is part of the top layer and inherits its rank. `ExtractedNode` carries no
+    /// top-layer field (a render-only signal), so the dominance predicate
+    /// recovers membership from here.
+    pub top_layer_of: std::collections::HashMap<Entity, TopLayer>,
     /// `entity → node name`, for diagnostics.
     pub name_of: std::collections::HashMap<Entity, String>,
 }
@@ -447,12 +470,52 @@ pub fn realize_full(scene: &Scene) -> Realized {
         })
         .collect();
 
-    // context membership map (entity → owning context root entity).
+    // context membership map (entity → owning context root entity) + the
+    // top-layer membership map, both over the painted entities.
     let context_of: std::collections::HashMap<Entity, Entity> = order
         .iter()
         .map(|&e| {
             let idx = idx_of_entity[&e];
             (e, entity_of[&root_context(idx)])
+        })
+        .collect();
+    // Effective top-layer membership: a node is "in the top layer" iff it OR a
+    // document ancestor escaped (a descendant of an escaped node paints INSIDE
+    // that escaped context, so it is part of the top layer). The value is the
+    // NEAREST top-layer ancestor's variant (inclusive of self) — the rank source
+    // for the dominance tail — or `None` for a purely in-flow node. The
+    // dominance predicate reads this, not the per-node own membership, so a
+    // normal child of a top-layer node is not mistaken for an in-flow node that
+    // "paints after the top layer".
+    let effective_top_layer = |mut idx: usize| -> TopLayer {
+        loop {
+            let tl = by_idx[&idx].top_layer;
+            if tl != TopLayer::None {
+                return tl;
+            }
+            match by_idx[&idx].parent {
+                Some(p) => idx = p,
+                None => return TopLayer::None,
+            }
+        }
+    };
+    let top_layer_of: std::collections::HashMap<Entity, TopLayer> = order
+        .iter()
+        .map(|&e| (e, effective_top_layer(idx_of_entity[&e])))
+        .collect();
+
+    // Each forming context's full PAINTED region — exactly what the production
+    // `context_tree_paint_order` emits for that context root (root + every
+    // nested context's region as a unit; for the tree root, including the
+    // escaped top-layer tail). Because the global `order` is the concatenation
+    // of these walks descending as units, each region is a contiguous run — the
+    // property `contexts_do_not_interleave` checks.
+    let context_members: std::collections::HashMap<Entity, Vec<Entity>> = forms
+        .iter()
+        .map(|&ctx| {
+            let mut region = Vec::new();
+            context_tree_paint_order(entity_of[&ctx], &painters_z_of, &mut region);
+            (entity_of[&ctx], region)
         })
         .collect();
 
@@ -462,6 +525,8 @@ pub fn realize_full(scene: &Scene) -> Realized {
             ..Default::default()
         },
         context_of,
+        context_members,
+        top_layer_of,
         name_of,
     }
 }
@@ -616,11 +681,44 @@ mod tests {
         }
     }
 
-    /// Regression: a MULTI-root forest realizes EVERY root's subtree, not just
-    /// the first. (The first cut marked only `roots[0]` as `is_root`, so a
-    /// plain second root formed no context and silently dropped its children.)
+    /// A normal CHILD of an escaped top-layer node is itself "in the top layer"
+    /// (it paints inside the escaped context), so it inherits the top-layer
+    /// membership — it must NOT be treated as an in-flow node that "paints after
+    /// the top layer". Scene `n0 > n1 > {n2(Fullscreen) > {n3}}`.
     #[test]
-    fn two_root_forest_realizes_all() {
+    fn descendant_of_escaped_node_is_in_top_layer() {
+        let mut n2 = plain("n2", vec![plain("n3", vec![])]);
+        n2.top_layer = TopLayer::Fullscreen;
+        let n1 = plain("n1", vec![n2]);
+        let scene = Scene {
+            roots: vec![plain("n0", vec![n1])],
+        };
+        let r = realize_full(&scene);
+        // n3's effective membership is Fullscreen (via its escaped parent n2).
+        let n3 = r
+            .nodes
+            .nodes
+            .iter()
+            .find(|n| r.name_of[&n.entity] == "n3")
+            .expect("n3 realized")
+            .entity;
+        assert_eq!(
+            r.top_layer_of[&n3],
+            TopLayer::Fullscreen,
+            "a descendant of an escaped node inherits its top-layer membership"
+        );
+        assert!(
+            crate::invariant::top_layer_dominates(&r).is_ok(),
+            "n3 painting inside n2's escaped region is not a dominance violation"
+        );
+    }
+
+    /// Regression: `realize` handles a multi-root forest (every root forms its
+    /// own context — the early cut marked only `roots[0]` as `is_root`, dropping
+    /// later roots' subtrees). The GENERATOR only emits single-root scenes, but
+    /// `realize` stays multi-root-correct as a robustness property.
+    #[test]
+    fn multi_root_forest_realizes_all() {
         let scene = Scene {
             roots: vec![plain("n0", vec![]), plain("n1", vec![plain("n2", vec![])])],
         };
@@ -629,6 +727,28 @@ mod tests {
             nodes.nodes.len(),
             3,
             "all 3 nodes across both roots realized"
+        );
+    }
+
+    /// A nested isolated context paints AS A UNIT at its document position
+    /// among its parent's painters — its region is one contiguous block and the
+    /// parent's region (which INCLUDES the nested block) is also contiguous.
+    /// `n0 > n1(plain) > {n2(isolation), n3(plain)}`: the order is
+    /// `[n0, n1, n2, n3]`, n2 forms its own context spanning just `[2..=2]`, and
+    /// n0's region is the whole `[0..=3]` — neither interleaves.
+    #[test]
+    fn nested_isolated_context_is_a_contiguous_unit() {
+        let mut n2 = plain("n2", vec![]);
+        n2.isolation = true;
+        let n1 = plain("n1", vec![n2, plain("n3", vec![])]);
+        let scene = Scene {
+            roots: vec![plain("n0", vec![n1])],
+        };
+        let r = realize_full(&scene);
+        assert_eq!(r.nodes.nodes.len(), 4);
+        assert!(
+            crate::invariant::contexts_do_not_interleave(&r).is_ok(),
+            "a nested isolated context is a contiguous unit, not interleaving"
         );
     }
 
