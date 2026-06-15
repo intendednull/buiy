@@ -134,11 +134,24 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
         }
     }
 
+    let mssim = if opts.mssim {
+        // Advisory MSSIM via image-compare's rgba blended hybrid compare,
+        // premultiplied against an opaque (white) background — captures are
+        // opaque, so the background is never sampled in practice.
+        use image_compare::{BlendInput, rgba_blended_hybrid_compare};
+        let bg = image::Rgb([255u8, 255, 255]);
+        rgba_blended_hybrid_compare(BlendInput::from(a), BlendInput::from(b), bg)
+            .map(|sim| sim.score)
+            .ok()
+    } else {
+        None
+    };
+
     Diff {
         differing_pixels,
         max_channel_delta,
         total_pixels,
-        mssim: None,      // wired in 1a.5
+        mssim,
         diff_image: None, // wired in 1a.6
         saturated: false,
     }
@@ -442,6 +455,60 @@ mod tests {
             },
         );
         assert_eq!(d.differing_pixels, 1, "isolated defect is not AA-excluded");
+    }
+
+    #[test]
+    fn identity_reports_full_mssim() {
+        let img = solid(16, 16, [40, 90, 160, 255]);
+        let d = compare(&img, &img, &CompareOpts::default()); // mssim on by default
+        assert_eq!(d.differing_pixels, 0);
+        let s = d.mssim.expect("mssim computed when opts.mssim");
+        assert!(s > 0.999, "identical images report MSSIM ~1.0, got {s}");
+    }
+
+    #[test]
+    fn mssim_skipped_when_disabled() {
+        let img = solid(8, 8, [1, 2, 3, 255]);
+        let d = compare(
+            &img,
+            &img,
+            &CompareOpts {
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(d.mssim, None);
+    }
+
+    #[test]
+    fn mssim_never_gates() {
+        // A global 1-LSB wash: 0 differing pixels (the YIQ delta 0.5 is far
+        // under max_delta=352) but a measurably-below-1 MSSIM. Against a budget
+        // that admits the 1-LSB L∞ channel delta the wash introduces, the diff
+        // PASSES — proving MSSIM does not participate in the gate. (EXACT would
+        // reject this on the *channel* axis, not because of MSSIM, so it cannot
+        // isolate the property; the budget here tolerates the L∞ delta and 0
+        // diff pixels, leaving only MSSIM as a possible gate — which must not
+        // bind.)
+        let a = solid(32, 32, [128, 128, 128, 255]);
+        let b = solid(32, 32, [129, 129, 129, 255]);
+        let d = compare(&a, &b, &CompareOpts::default());
+        assert_eq!(
+            d.differing_pixels, 0,
+            "1-LSB shift is under the YIQ threshold"
+        );
+        assert_eq!(d.max_channel_delta, 1, "the wash is a 1-LSB L∞ delta");
+        let s = d.mssim.expect("mssim computed by default");
+        assert!(s < 1.0, "a uniform wash measurably lowers MSSIM below 1.0");
+        let budget = FuzzBudget {
+            max_channel_delta: 1,
+            max_diff_pixels: 0,
+        };
+        assert!(
+            d.passes(&budget),
+            "MSSIM is advisory — a sub-1 MSSIM does not gate passes() when both \
+             pixel axes are satisfied"
+        );
     }
 
     #[test]
