@@ -16,9 +16,7 @@ use std::borrow::Cow;
 /// scene is self-contained across the two captures `run_reftest` drives.
 fn box_at(app: &mut App, left: f32, token: &'static str) {
     {
-        let mut theme = app
-            .world_mut()
-            .resource_mut::<buiy_core::theme::Theme>();
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
         theme
             .colors
             .insert(token.into(), Color::srgb(0.90, 0.10, 0.10));

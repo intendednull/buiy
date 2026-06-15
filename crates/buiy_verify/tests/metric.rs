@@ -92,6 +92,9 @@ fn reftest_default_excludes_aa_and_skips_diff_image() {
     let opts = buiy_verify::metric::CompareOpts::reftest_default();
     assert!(!opts.include_aa, "reftest excludes AA-sibling pixels");
     assert!(opts.mssim, "MSSIM stays computed (advisory)");
-    assert!(!opts.emit_diff_image, "hot reftest path allocates no diff image");
+    assert!(
+        !opts.emit_diff_image,
+        "hot reftest path allocates no diff image"
+    );
     assert_eq!(opts.threshold, 0.1, "pixelmatch default sensitivity");
 }

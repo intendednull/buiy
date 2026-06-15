@@ -360,23 +360,23 @@ impl ComponentMarker {
     /// True iff ANY entity in `world` carries this marker.
     fn present_in(self, world: &mut World) -> bool {
         use buiy_core::layout::{
-            Containment, ContainerQuery, ContentVisibility, Stacking, TopLayer, Translate,
+            ContainerQuery, Containment, ContentVisibility, Stacking, TopLayer, Translate,
         };
         match self {
             ComponentMarker::ContentVisibilityHidden => world
                 .query::<&Containment>()
                 .iter(world)
                 .any(|c| c.content_visibility == ContentVisibility::Hidden),
-            ComponentMarker::ContainerQuery => {
-                world.query::<&ContainerQuery>().iter(world).next().is_some()
-            }
+            ComponentMarker::ContainerQuery => world
+                .query::<&ContainerQuery>()
+                .iter(world)
+                .next()
+                .is_some(),
             ComponentMarker::TopLayer => world
                 .query::<&Stacking>()
                 .iter(world)
                 .any(|s| s.top_layer != TopLayer::None),
-            ComponentMarker::Translate => {
-                world.query::<&Translate>().iter(world).next().is_some()
-            }
+            ComponentMarker::Translate => world.query::<&Translate>().iter(world).next().is_some(),
         }
     }
 }
@@ -427,6 +427,11 @@ pub fn default_rules() -> Vec<IndependenceRule> {
 /// marker-bearing features.
 pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) {
     let mut app = bevy::app::App::new();
+    // `ThemePlugin` + `LayoutPlugin` — no render/asset plugins, no GPU. Theme is
+    // present because real reference scenes install fill tokens
+    // (`Theme.colors.insert`) while building; the lint only needs the components
+    // to exist as DATA, not the render systems to run.
+    app.add_plugins(buiy_core::theme::ThemePlugin);
     app.add_plugins(buiy_core::layout::LayoutPlugin);
     (case.reference)(&mut app);
     let world = app.world_mut();
