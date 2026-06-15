@@ -43,6 +43,11 @@ unicode-script = "0.5"
 # a bare `serde::Serialize` derive). Rides the workspace `serde` pin — no new
 # crate enters the tree.
 serde.workspace = true
+# The promoted `render::golden::capture_to_image` returns an
+# `image::RgbaImage` (verification-design README § Crate-dependency note: the
+# ONLY new GPU dep buiy_core gains). Rides the existing workspace `image`
+# pin — no second image-decode stack enters the tree.
+image.workspace = true
 
 [features]
 default = ["default_font"]
