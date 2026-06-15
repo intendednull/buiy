@@ -57,6 +57,18 @@ pub struct RefOutcome {
     pub report_path: Option<std::path::PathBuf>,
 }
 
+/// The pure pass-decision: `Match` passes iff the diff fits the budget;
+/// `Mismatch` passes iff it does NOT (the feature must *do* something). Split
+/// out of `run_reftest` so it gates headless via the aggregation truth table —
+/// no GPU. The `(0,0)`-floor enforcement for `Mismatch` lives at macro
+/// expansion time, so `evaluate_outcome` takes the budget as given.
+pub fn evaluate_outcome(kind: RefKind, diff: &Diff, fuzz: &FuzzBudget) -> bool {
+    match kind {
+        RefKind::Match => diff.passes(fuzz),
+        RefKind::Mismatch => !diff.passes(fuzz),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +99,56 @@ mod tests {
         };
         assert_eq!(case.name, "constructs");
         assert_eq!(case.fuzz, FuzzBudget::EXACT);
+    }
+
+    use crate::metric::Diff;
+
+    /// A stub Diff with `n` differing pixels and `max_channel_delta = d`, no MSSIM.
+    fn stub_diff(n: u32, d: u8) -> Diff {
+        Diff {
+            differing_pixels: n,
+            max_channel_delta: d,
+            total_pixels: 1024,
+            mssim: None,
+            diff_image: None,
+            saturated: false,
+        }
+    }
+
+    #[test]
+    fn match_passes_within_fuzz_fails_outside() {
+        assert!(evaluate_outcome(
+            RefKind::Match,
+            &stub_diff(0, 0),
+            &FuzzBudget::EXACT
+        ));
+        assert!(!evaluate_outcome(
+            RefKind::Match,
+            &stub_diff(1, 200),
+            &FuzzBudget::EXACT
+        ));
+        assert!(evaluate_outcome(
+            RefKind::Match,
+            &stub_diff(1, 8),
+            &FuzzBudget {
+                max_channel_delta: 8,
+                max_diff_pixels: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn mismatch_passes_outside_fuzz_fails_within() {
+        assert!(evaluate_outcome(
+            RefKind::Mismatch,
+            &stub_diff(50, 200),
+            &FuzzBudget::EXACT
+        ));
+        // A scene that did NOT change (zero diff) FAILS a mismatch — the no-op guard.
+        assert!(!evaluate_outcome(
+            RefKind::Mismatch,
+            &stub_diff(0, 0),
+            &FuzzBudget::EXACT
+        ));
     }
 }
