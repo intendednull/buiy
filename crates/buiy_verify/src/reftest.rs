@@ -63,6 +63,13 @@ pub struct RefOutcome {
 /// no GPU. The `(0,0)`-floor enforcement for `Mismatch` lives at macro
 /// expansion time, so `evaluate_outcome` takes the budget as given.
 pub fn evaluate_outcome(kind: RefKind, diff: &Diff, fuzz: &FuzzBudget) -> bool {
+    // A saturated diff is a structural capture error (dimension mismatch), not a
+    // legitimate render difference — fail BOTH kinds. Without this, a `Mismatch`
+    // would pass vacuously through `!passes` on a broken capture, inverting the
+    // metric's loud-fail contract.
+    if diff.saturated {
+        return false;
+    }
     match kind {
         RefKind::Match => diff.passes(fuzz),
         RefKind::Mismatch => !diff.passes(fuzz),
@@ -591,6 +598,24 @@ mod tests {
             &stub_diff(0, 0),
             &FuzzBudget::EXACT
         ));
+    }
+
+    #[test]
+    fn saturated_diff_fails_both_kinds() {
+        // A saturated diff is a structural capture error (dimension mismatch),
+        // not a legitimate render difference. It must FAIL both kinds — in
+        // particular a Mismatch must NOT pass vacuously through `!passes` on a
+        // broken capture (that would invert the metric's loud-fail contract).
+        let mut saturated = stub_diff(1024, 255);
+        saturated.saturated = true;
+        assert!(
+            !evaluate_outcome(RefKind::Match, &saturated, &FuzzBudget::EXACT),
+            "saturated diff fails a Match"
+        );
+        assert!(
+            !evaluate_outcome(RefKind::Mismatch, &saturated, &FuzzBudget::EXACT),
+            "saturated diff must FAIL a Mismatch, not pass via !passes"
+        );
     }
 
     #[test]
