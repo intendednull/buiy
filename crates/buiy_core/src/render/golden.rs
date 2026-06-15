@@ -11,10 +11,32 @@
 
 use crate::render::atlas::{AtlasKey, AtlasWarmupQueue, BuiyAtlas};
 
+/// How the font axis is rasterized for a capture (verification-design
+/// `determinism.md` § "Ahem font mode"). Real glyph rasterization is the
+/// canonical per-platform flake source, but the bulk of text-bearing goldens
+/// test *boxes*, not glyphs — so `Ahem` collapses the font axis to a bundled
+/// em-box face whose every glyph is a solid square, making any non-fidelity
+/// golden byte-identical across hosts. `Real` is the narrow fidelity suite
+/// (glyph hinting / subpixel / color-emoji / decorations).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontMode {
+    /// Rasterize the fixture's actual fonts — the narrow real-glyph fidelity
+    /// suite. The shaping `.snap` fixtures and the real-font golden suite pin
+    /// this.
+    Real,
+    /// Substitute the bundled Ahem em-box font so any text-bearing golden is
+    /// host-stable. Made the *sole resolvable family* for fixture text under
+    /// this mode, so fallback cannot reintroduce a platform font.
+    Ahem,
+}
+
 /// Deterministic-capture configuration. The three flake sources of § 4.3 are
 /// *necessary together*: a golden captured without all three is not
 /// reproducible. `accept` is the § 4.4 human-curated golden-update gate —
-/// never an automatic overwrite.
+/// never an automatic overwrite. The determinism spec grows the font and DPR
+/// axes (`determinism.md` § "Extending GoldenConfig"); MSAA / dither stay
+/// module constants ([`CAPTURE_MSAA`] / [`CAPTURE_DITHER_OFF`]), never
+/// per-fixture knobs.
 #[derive(Clone, Copy, Debug)]
 pub struct GoldenConfig {
     /// Drive time from a fixed/virtual clock, not wall time, so any time-
@@ -30,17 +52,38 @@ pub struct GoldenConfig {
     /// `--accept`: update the stored golden instead of failing on mismatch.
     /// Off by default; gated behind human PR review (§ 4.4).
     pub accept: bool,
+    /// Collapse the font axis. `Real` rasterizes the fixture's actual fonts
+    /// (the narrow fidelity suite); `Ahem` substitutes the em-box font so any
+    /// text-bearing golden is byte-identical across hosts (§ "Ahem font mode").
+    pub font_mode: FontMode,
+    /// Device-pixel-ratio pin. A 1× vs 2× render is a *different rasterization*,
+    /// not a tolerance — captured as a fixture axis, never fuzzed (§ "DPR pin").
+    pub dpr: Dpr,
 }
 
 impl GoldenConfig {
     /// The capture config with the full flake-mitigation triad pinned and
-    /// `accept` off — the configuration every golden is captured under.
+    /// `accept` off — the configuration every golden is captured under. The
+    /// font axis collapses to the Ahem box-font and the DPR pins to 1× (layout
+    /// goldens are the common case; the fidelity / HiDPI variants opt out).
     pub fn deterministic() -> Self {
         Self {
             fixed_clock: true,
             wait_for_fonts: true,
             warm_atlas: true,
             accept: false,
+            font_mode: FontMode::Ahem,
+            dpr: Dpr::X1,
+        }
+    }
+
+    /// The real-glyph fidelity variant: `FontMode::Real`, everything else
+    /// pinned exactly as [`GoldenConfig::deterministic`]. The narrow suite that
+    /// asserts genuine glyph rasterization (hinting / subpixel / color-emoji).
+    pub fn fidelity() -> Self {
+        Self {
+            font_mode: FontMode::Real,
+            ..Self::deterministic()
         }
     }
 }
