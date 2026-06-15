@@ -1,0 +1,8 @@
+---
+source: crates/buiy_core/tests/layout.rs
+expression: flex_row_basic
+---
+# buiy-layout-dump v1
+root pos=0,0 size=200,100
+  row.item[0] pos=0,0 size=50,50
+  row.item[1] pos=50,0 size=50,50

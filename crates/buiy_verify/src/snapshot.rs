@@ -179,30 +179,38 @@ struct LayoutEntry {
 /// `Children`, siblings ordered by `Name` then `Entity` index. The `Name`-key
 /// is what makes the dump invariant to ECS spawn/archetype order.
 fn collect_layout_entries(world: &World) -> Vec<LayoutEntry> {
-    // entity -> (name, position, size) for every laid-out entity.
+    // entity -> (name, position, size) for every laid-out entity. `Name` is
+    // looked up per-entity via `world.get` (not in the query) because `Name`
+    // may be UNREGISTERED in a fixture that tags no entity — `try_query` over
+    // an unregistered component returns `None`. `ResolvedLayout` is always
+    // registered by `LayoutPlugin`, so its query never fails.
     let mut boxes: HashMap<Entity, (String, Vec2, Vec2)> = HashMap::new();
     let mut q = world
-        .try_query::<(Entity, &ResolvedLayout, Option<&Name>)>()
-        .unwrap();
-    for (e, layout, name) in q.iter(world) {
-        boxes.insert(e, (entity_label(name, e), layout.position, layout.size));
+        .try_query::<(Entity, &ResolvedLayout)>()
+        .expect("ResolvedLayout is registered by LayoutPlugin");
+    for (e, layout) in q.iter(world) {
+        let label = entity_label(world.get::<Name>(e), e);
+        boxes.insert(e, (label, layout.position, layout.size));
     }
 
-    // Adjacency: parent -> children (only over laid-out entities).
+    // Adjacency: parent -> children (only over laid-out entities). `ChildOf`
+    // may be unregistered (a flat fixture with no children) — then every
+    // entity is a root.
     let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
     let mut has_parent: HashMap<Entity, bool> = HashMap::new();
     for &e in boxes.keys() {
         has_parent.entry(e).or_insert(false);
     }
-    let mut cq = world.try_query::<(Entity, &ChildOf)>().unwrap();
-    for (e, child_of) in cq.iter(world) {
-        if !boxes.contains_key(&e) {
-            continue;
-        }
-        let parent = child_of.parent();
-        if boxes.contains_key(&parent) {
-            children.entry(parent).or_default().push(e);
-            has_parent.insert(e, true);
+    if let Some(mut cq) = world.try_query::<(Entity, &ChildOf)>() {
+        for (e, child_of) in cq.iter(world) {
+            if !boxes.contains_key(&e) {
+                continue;
+            }
+            let parent = child_of.parent();
+            if boxes.contains_key(&parent) {
+                children.entry(parent).or_default().push(e);
+                has_parent.insert(e, true);
+            }
         }
     }
 
@@ -252,9 +260,12 @@ impl NameLookup {
     /// absent from the map renders as `entity#<index>` (the unnamed fallback).
     pub fn from_world(world: &World) -> Self {
         let mut map = HashMap::new();
-        let mut q = world.try_query::<(Entity, &Name)>().unwrap();
-        for (e, name) in q.iter(world) {
-            map.insert(e, name.as_str().to_string());
+        // `Name` may be unregistered (no entity is named) — then the map is
+        // empty and every entity falls back to `entity#<index>`.
+        if let Some(mut q) = world.try_query::<(Entity, &Name)>() {
+            for (e, name) in q.iter(world) {
+                map.insert(e, name.as_str().to_string());
+            }
         }
         Self(map)
     }
@@ -452,19 +463,25 @@ fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
 
     let mut rows: Vec<(String, u32, ExtractedNode)> = Vec::new();
+    // Query only the always-registered `ResolvedLayout`; the optional paint
+    // inputs (`GlobalTransform`/`Background`/`Name`) are looked up per-entity
+    // via `world.get`, which tolerates an unregistered component (a fixture
+    // that tags none) where `try_query` would return `None`.
     let mut q = world
-        .try_query::<(
-            Entity,
-            &ResolvedLayout,
-            Option<&GlobalTransform>,
-            Option<&Background>,
-            Option<&Name>,
-        )>()
-        .unwrap();
-    for (e, layout, gt, bg, name) in q.iter(world) {
-        let gt = gt.copied().unwrap_or(GlobalTransform::IDENTITY);
+        .try_query::<(Entity, &ResolvedLayout)>()
+        .expect("ResolvedLayout is registered by LayoutPlugin");
+    for (e, layout) in q.iter(world) {
+        let gt = world
+            .get::<GlobalTransform>(e)
+            .copied()
+            .unwrap_or(GlobalTransform::IDENTITY);
+        let bg = world.get::<Background>(e);
         let node = extracted_node_for(e, &gt, layout, bg, None, &theme);
-        rows.push((entity_label(name, e), e.index().index(), node));
+        rows.push((
+            entity_label(world.get::<Name>(e), e),
+            e.index().index(),
+            node,
+        ));
     }
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
