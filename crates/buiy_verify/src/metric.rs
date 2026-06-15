@@ -81,6 +81,21 @@ impl Default for CompareOpts {
     }
 }
 
+impl CompareOpts {
+    /// The reftest-tier options: AA-sibling pixels excluded (two CSS-subset
+    /// code paths can legitimately differ by one AA pixel on a shared corner),
+    /// MSSIM advisory-on, and no diff-image allocation in the hot capture loop
+    /// (the report is emitted with `emit_diff_image` only on failure).
+    pub fn reftest_default() -> Self {
+        Self {
+            threshold: 0.1,
+            include_aa: false,
+            mssim: true,
+            emit_diff_image: false,
+        }
+    }
+}
+
 /// Compare two RGBA images. **Infallible** — returns a `Diff`, never a
 /// `Result`. (AA exclusion is layered in 1a.3; here every over-threshold pixel
 /// counts.)
