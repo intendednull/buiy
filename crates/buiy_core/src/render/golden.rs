@@ -45,6 +45,39 @@ impl GoldenConfig {
     }
 }
 
+/// **Canonical device-pixel-ratio type.** Integer *milliscale* (1000 = 1.0×,
+/// 2000 = 2.0×) so it is `Eq + Hash + Ord` without float pitfalls — it is a
+/// *fixture axis* that keys a golden / coverage cell, **never** a tolerance.
+///
+/// Defined ONCE here; `buiy_verify::golden::GoldenKey.dpr` and
+/// `buiy_verify::coverage::{Matrix.dprs, CoverageKey.dpr}` import this type,
+/// they do **not** redefine it (verification-design `determinism.md`). The
+/// capture boundary converts the window's `f32` `scale_factor` via
+/// [`Dpr::from_f32`] and back via [`Dpr::as_f32`] when sizing the offscreen
+/// target. Derives `serde` so the golden bless ledger can persist it directly.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct Dpr(pub u32);
+
+impl Dpr {
+    /// 1.0× device-pixel-ratio (the headless capture default).
+    pub const X1: Self = Dpr(1000);
+    /// 2.0× device-pixel-ratio (the HiDPI fixture axis).
+    pub const X2: Self = Dpr(2000);
+
+    /// Round an `f32` scale factor to integer milliscale (`1.0 → Dpr(1000)`).
+    /// Rounds to nearest so a `1.5×` window maps to `Dpr(1500)` exactly.
+    pub fn from_f32(scale: f32) -> Self {
+        Dpr((scale * 1000.0).round() as u32)
+    }
+
+    /// Back to the `f32` scale factor the window / extract path consumes.
+    pub fn as_f32(&self) -> f32 {
+        self.0 as f32 / 1000.0
+    }
+}
+
 /// Perceptual difference between two RGBA8 frames, as a normalized mean
 /// per-channel difference in `[0.0, 1.0]` (0 == identical). Comparison is
 /// *perceptual*, not exact byte equality (§ 4.2): sub-LSB float jitter in the
@@ -85,4 +118,37 @@ pub fn fonts_ready(
     visible_keys: &[AtlasKey],
 ) -> bool {
     warmup.is_empty() && visible_keys.iter().all(|key| atlas.get(key).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dpr_milliscale_round_trips_f32() {
+        // The canonical fixture axis: integer milliscale so it is Eq+Hash+Ord,
+        // but it must convert losslessly to/from the f32 scale_factor the
+        // window/extract path carries (determinism.md § Extending GoldenConfig).
+        assert_eq!(Dpr::from_f32(1.0), Dpr::X1);
+        assert_eq!(Dpr::from_f32(2.0), Dpr::X2);
+        assert_eq!(Dpr::X1.as_f32(), 1.0);
+        assert_eq!(Dpr::X2.as_f32(), 2.0);
+        // Round-trip through both directions for a fractional ratio (1.5×).
+        assert_eq!(Dpr::from_f32(1.5), Dpr(1500));
+        assert_eq!(Dpr(1500).as_f32(), 1.5);
+        // from_f32 rounds to nearest milliscale (no truncation drift).
+        assert_eq!(Dpr::from_f32(1.2345), Dpr(1235));
+    }
+
+    #[test]
+    fn dpr_is_ord_and_hashable() {
+        // It keys a golden/coverage cell, so Ord + Hash must hold (the reason
+        // for milliscale over f32). A plain compile-and-run proof.
+        use std::collections::HashSet;
+        assert!(Dpr::X1 < Dpr::X2);
+        let mut set = HashSet::new();
+        assert!(set.insert(Dpr::X1));
+        assert!(!set.insert(Dpr::X1)); // already present — Hash + Eq agree
+        assert!(set.insert(Dpr::X2));
+    }
 }

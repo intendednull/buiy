@@ -36,6 +36,13 @@ sys-locale = "0.3"
 # Version-synced to cosmic-text 0.19's pin (0.5.8); an upstream bump to 0.6
 # surfaces here as a loud type-mismatch compile error, by design.
 unicode-script = "0.5"
+# The canonical `render::golden::Dpr` derives `serde::{Serialize, Deserialize}`
+# so the verification golden bless ledger (`buiy_verify`) can persist it
+# directly. `serde` is a workspace dep already; buiy_core names it directly
+# because the derive emits `::serde::…` paths (bevy's re-export does not satisfy
+# a bare `serde::Serialize` derive). Rides the workspace `serde` pin — no new
+# crate enters the tree.
+serde.workspace = true
 
 [features]
 default = ["default_font"]
