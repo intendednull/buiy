@@ -163,6 +163,117 @@ pub fn mismatch_floor_ok(kind: RefKind, fuzz: &FuzzBudget) -> bool {
     }
 }
 
+use bevy::prelude::World;
+
+/// A structural marker the independence lint can query for in a built world.
+/// Each variant maps to a `buiy_core` component (or a distinguishing field on
+/// one) whose *presence* proves a reference re-used the feature under test.
+/// Value-encoded features (`justify-content`, `direction`, `gap` — fields on a
+/// shared `Style`) have NO marker here and fall to human review (see
+/// [`assert_reference_independent`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ComponentMarker {
+    /// A `Containment` whose `content_visibility` is `Hidden`.
+    ContentVisibilityHidden,
+    /// Any `ContainerQuery` component.
+    ContainerQuery,
+    /// A `Stacking` whose `top_layer` is non-`None` (top-layer participation).
+    /// `TopLayer` is a field on the `Stacking` component, not a component of its
+    /// own, so the lint queries `Stacking` and checks the field — structurally
+    /// equivalent to the `ContentVisibilityHidden`/`Containment` routing.
+    TopLayer,
+    /// Any `Translate` component.
+    Translate,
+}
+
+impl ComponentMarker {
+    /// True iff ANY entity in `world` carries this marker.
+    fn present_in(self, world: &mut World) -> bool {
+        use buiy_core::layout::{
+            Containment, ContainerQuery, ContentVisibility, Stacking, TopLayer, Translate,
+        };
+        match self {
+            ComponentMarker::ContentVisibilityHidden => world
+                .query::<&Containment>()
+                .iter(world)
+                .any(|c| c.content_visibility == ContentVisibility::Hidden),
+            ComponentMarker::ContainerQuery => {
+                world.query::<&ContainerQuery>().iter(world).next().is_some()
+            }
+            ComponentMarker::TopLayer => world
+                .query::<&Stacking>()
+                .iter(world)
+                .any(|s| s.top_layer != TopLayer::None),
+            ComponentMarker::Translate => {
+                world.query::<&Translate>().iter(world).next().is_some()
+            }
+        }
+    }
+}
+
+/// What a reference scene is FORBIDDEN to contain, per feature under test.
+pub struct IndependenceRule {
+    pub feature: &'static str,
+    pub forbidden_in_reference: &'static [ComponentMarker],
+}
+
+/// The registered marker rules for marker-bearing features. Value-encoded
+/// features (flex `justify-content`, `direction`, `gap`) are deliberately
+/// ABSENT — component-presence cannot distinguish them, so they fall to the
+/// PR-time review checklist. A pairing whose feature has no rule here fails the
+/// lint until a rule (or documented waiver) is added — independence is
+/// opt-out-impossible by construction for marker features.
+pub fn default_rules() -> Vec<IndependenceRule> {
+    vec![
+        IndependenceRule {
+            feature: "content-visibility",
+            forbidden_in_reference: &[ComponentMarker::ContentVisibilityHidden],
+        },
+        IndependenceRule {
+            feature: "@container",
+            forbidden_in_reference: &[ComponentMarker::ContainerQuery],
+        },
+        IndependenceRule {
+            feature: "top-layer",
+            forbidden_in_reference: &[ComponentMarker::TopLayer],
+        },
+        IndependenceRule {
+            feature: "translate",
+            forbidden_in_reference: &[ComponentMarker::Translate],
+        },
+    ]
+}
+
+/// Assert the case's `reference` scene carries NONE of the marker components a
+/// rule forbids. Builds the reference into a headless **no-GPU** `App` (layout
+/// types registered, no render plugins) and queries the built world. Panics
+/// naming the feature + marker on violation.
+///
+/// **Limit — value-encoded features fall to human review.** Features that are
+/// field *values* on a shared `Style`/`Node` (`justify-content`, `direction`,
+/// `gap`) have no distinct marker, so this lint cannot see them; mechanism 1
+/// (route the reference through the primitive literal-`Node` layer) keeps THOSE
+/// independent, and the PR-time checklist enforces it. This backstops only
+/// marker-bearing features.
+pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) {
+    let mut app = bevy::app::App::new();
+    app.add_plugins(buiy_core::layout::LayoutPlugin);
+    (case.reference)(&mut app);
+    let world = app.world_mut();
+    for rule in rules {
+        for &marker in rule.forbidden_in_reference {
+            assert!(
+                !marker.present_in(world),
+                "reference for `{}` illegally contains {:?} — it re-uses the \
+                 feature under test, so the comparison would pass vacuously \
+                 (reftests.md § Reference independence)",
+                rule.feature,
+                marker
+            );
+        }
+    }
+}
+
 /// Generate one `#[test] #[ignore]` per reftest pairing — keeps each case at
 /// the unit/integration tier under the existing `cargo test -- --ignored` GPU
 /// lane, no new CI infra, no manifest file (the type system IS the manifest).
