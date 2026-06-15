@@ -95,15 +95,19 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, opts: &CompareOpts) -> Diff {
 
     let mut differing_pixels = 0u32;
     let mut max_channel_delta = 0u8;
-    for (pa, pb) in a.pixels().zip(b.pixels()) {
+    for (x, y, pa) in a.enumerate_pixels() {
+        let pb = b.get_pixel(x, y);
         for ch in 0..4 {
             let d = (pa[ch] as i16 - pb[ch] as i16).unsigned_abs() as u8;
             max_channel_delta = max_channel_delta.max(d);
         }
         let delta = color_delta(pa, pb, false);
         if delta.abs() > max_delta {
-            // AA exclusion is layered in 1a.3; here every over-threshold pixel counts.
-            differing_pixels += 1;
+            let is_aa = !opts.include_aa
+                && (antialiased(a, x, y, w, h, b) || antialiased(b, x, y, w, h, a));
+            if !is_aa {
+                differing_pixels += 1;
+            }
         }
     }
 
@@ -168,6 +172,78 @@ fn rgb2i(r: f64, g: f64, b: f64) -> f64 {
 }
 fn rgb2q(r: f64, g: f64, b: f64) -> f64 {
     r * 0.211_470_17 - g * 0.522_617_11 + b * 0.311_146_94
+}
+
+// Vendored from pixelmatch (MIT): "Anti-aliased Pixel and Intensity Slope
+// Detector" (Vyšniauskas, 2009). A pixel is AA iff it has a strictly brighter
+// and a strictly darker sibling and that extreme has 3+ equal siblings in BOTH
+// images (so it is an intensity slope, not a real edge in both).
+fn antialiased(img1: &RgbaImage, x: u32, y: u32, w: u32, h: u32, img2: &RgbaImage) -> bool {
+    let mut zeroes: u8 = u8::from(x == 0 || y == 0 || x == w - 1 || y == h - 1);
+    let (mut min, mut max) = (0.0f64, 0.0f64);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (0u32, 0u32, 0u32, 0u32);
+    let center = img1.get_pixel(x, y);
+
+    let x0 = x.saturating_sub(1);
+    let x1 = if x < w - 1 { x + 1 } else { x };
+    let y0 = y.saturating_sub(1);
+    let y1 = if y < h - 1 { y + 1 } else { y };
+    for ax in x0..=x1 {
+        for ay in y0..=y1 {
+            if ax == x && ay == y {
+                continue;
+            }
+            let delta = color_delta(center, img1.get_pixel(ax, ay), true);
+            if delta == 0.0 {
+                zeroes += 1;
+                if zeroes > 2 {
+                    return false;
+                }
+                continue;
+            }
+            if delta < min {
+                min = delta;
+                min_x = ax;
+                min_y = ay;
+                continue;
+            }
+            if delta > max {
+                max = delta;
+                max_x = ax;
+                max_y = ay;
+            }
+        }
+    }
+    if min == 0.0 || max == 0.0 {
+        return false;
+    }
+    (has_many_siblings(img1, min_x, min_y, w, h) && has_many_siblings(img2, min_x, min_y, w, h))
+        || (has_many_siblings(img1, max_x, max_y, w, h)
+            && has_many_siblings(img2, max_x, max_y, w, h))
+}
+
+// Vendored from pixelmatch (MIT): 3+ adjacent pixels of identical color.
+fn has_many_siblings(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> bool {
+    let mut zeroes: u8 = u8::from(x == 0 || y == 0 || x == w - 1 || y == h - 1);
+    let center = img.get_pixel(x, y);
+    let x0 = x.saturating_sub(1);
+    let x1 = if x < w - 1 { x + 1 } else { x };
+    let y0 = y.saturating_sub(1);
+    let y1 = if y < h - 1 { y + 1 } else { y };
+    for ax in x0..=x1 {
+        for ay in y0..=y1 {
+            if ax == x && ay == y {
+                continue;
+            }
+            if center == img.get_pixel(ax, ay) {
+                zeroes += 1;
+                if zeroes > 2 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -239,6 +315,87 @@ mod tests {
             dc.differing_pixels, 0,
             "chroma-leaning shift is under-weighted below threshold"
         );
+    }
+
+    /// An antialiased vertical edge — black | one gray AA column | white —
+    /// whose gray column value JITTERS between `a` and `b`, modeling the
+    /// sub-LSB SDF/sRGB re-rasterization the metric must tolerate. Every
+    /// differing (gray) pixel has a strictly brighter (white) and strictly
+    /// darker (black) horizontal sibling, and those extremes have 3+ identical
+    /// siblings in both images, so pixelmatch's slope detector reads them as AA.
+    /// A hard 2-tone edge would NOT work: a pure black/white step has no pixel
+    /// with both a brighter and a darker neighbor, so pixelmatch (correctly)
+    /// never classifies it as AA.
+    fn aa_edge_pair() -> (image::RgbaImage, image::RgbaImage) {
+        let (w, h) = (16u32, 16u32);
+        let build = |gray: u8| {
+            let mut img = image::RgbaImage::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    let p = if x < 7 {
+                        [0, 0, 0, 255]
+                    } else if x == 7 {
+                        [gray, gray, gray, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    };
+                    img.put_pixel(x, y, image::Rgba(p));
+                }
+            }
+            img
+        };
+        // The gray AA column is sampled at 128 in `a`, 180 in `b` — sub-edge
+        // jitter, above the YIQ threshold so the pixels are over-threshold but
+        // AA-excluded.
+        (build(128), build(180))
+    }
+
+    #[test]
+    fn aa_pixels_excluded_by_default_but_counted_with_include_aa() {
+        let (a, b) = aa_edge_pair();
+        let excluded = compare(
+            &a,
+            &b,
+            &CompareOpts {
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        let counted = compare(
+            &a,
+            &b,
+            &CompareOpts {
+                include_aa: true,
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            excluded.differing_pixels, 0,
+            "edge pixels read as AA, excluded"
+        );
+        assert!(
+            counted.differing_pixels > 0,
+            "include_aa counts the same pixels"
+        );
+    }
+
+    #[test]
+    fn real_defect_is_not_excluded_as_aa() {
+        // An isolated wrong pixel on a flat field has no brighter+darker sibling
+        // pair, so it is NOT AA — it must still count with default opts.
+        let a = solid(16, 16, [0, 0, 0, 255]);
+        let mut b = a.clone();
+        b.put_pixel(8, 8, image::Rgba([200, 200, 200, 255]));
+        let d = compare(
+            &a,
+            &b,
+            &CompareOpts {
+                mssim: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(d.differing_pixels, 1, "isolated defect is not AA-excluded");
     }
 
     #[test]
