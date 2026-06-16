@@ -135,6 +135,23 @@ impl TextEditState {
         }
     }
 
+    /// Construct an editor from a Buiy logical font size (logical px), computing
+    /// the cosmic `Metrics` internally with the default 1.2 line-height scale.
+    /// This is the seam that keeps `cosmic_text::Metrics` OUT of downstream
+    /// crates (`buiy_widgets::TextInput::new` calls this — it never names a
+    /// cosmic type, preserving the § 2.1 facade boundary).
+    pub fn for_font_size(font_size: f32) -> Self {
+        Self::new(Metrics::new(font_size, font_size * 1.2))
+    }
+
+    /// Test/inspection: the editor buffer's `(font_size, line_height)` metrics.
+    /// Stays inside the facade.
+    pub fn metrics_for_test(&self) -> (f32, f32) {
+        use cosmic_text::Edit;
+        self.editor
+            .with_buffer(|b| (b.metrics().font_size, b.metrics().line_height))
+    }
+
     /// Read the editor's owned buffer. Test/inspection convenience that
     /// stays INSIDE the facade (it lives in `text::edit`); production
     /// readers go through `TextBufferAccess`. Mirrors `Edit::with_buffer`.
@@ -211,6 +228,19 @@ impl TextEditState {
     /// The redo-stack depth. Test/inspection.
     pub fn redo_depth(&self) -> usize {
         self.undo.redo_len()
+    }
+
+    /// Test/inspection: whether a coalescing undo run is currently open
+    /// (the focus-loss seal closes it). Stays inside the facade.
+    pub fn undo_open_for_test(&self) -> bool {
+        self.undo.has_open_group()
+    }
+
+    /// Seal the open undo coalescing run (editing-and-ime § 10: focus loss
+    /// seals). A motion-equivalent boundary — the next edit starts a fresh
+    /// unit. Names the private `undo` field, so it lives on the facade.
+    pub fn seal_undo_for_lifecycle(&mut self) {
+        self.undo.seal();
     }
 
     /// Test/inspection: the `GroupKind` Undo would pop next (top of the undo

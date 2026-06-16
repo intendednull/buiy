@@ -11,7 +11,7 @@ use buiy_core::layout::Style;
 use buiy_core::render::atlas::{AtlasConfig, GlyphAlphaInstance};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{ClipRect, CssVisibility, TextColor};
-use buiy_core::text::edit::TextEditState;
+use buiy_core::text::edit::{Placeholder, PlaceholderActive, TextEditState};
 use buiy_core::text::{
     BuiyFont, DecorationLines, FamilyEntry, FontDbLineage, FontDisplay, FontFaceDescriptors,
     FontFamily, FontRegistry, FontSize, FontStack, FontsGeneration, GenericFamily, Text,
@@ -1105,4 +1105,82 @@ fn editor_entity_emits_the_same_glyph_run_as_a_display_entity() {
     );
     // The display fixture is 3 non-whitespace glyphs — the editor matches it.
     assert_eq!(d_span, 3, "the 'Hi!' fixture is three glyph instances");
+}
+
+/// E6 / M4 damage-gate regression: editing the `Placeholder` string WHILE the
+/// placeholder is already active must re-emit. The reshape happens entirely
+/// off the producer's other triggers — `PlaceholderActive` stays present (no
+/// toggle), and the empty editor value leaves `ComputedTextLayout` idempotent
+/// (no tick) — so only a `Changed<Placeholder>` probe wakes the producer.
+/// Without it the screen keeps the OLD placeholder glyphs. (FontSize rides the
+/// same nested-Or group for the same reason.)
+#[test]
+fn already_active_placeholder_string_reshape_re_emits() {
+    let mut h = TextExtractHarness::new();
+    let editor = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::new()),
+            FontSize(16.0),
+            TextEditState::new(Metrics::new(16.0, 19.2)),
+            Placeholder(String::from("Hi")),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(editor);
+    h.settle();
+
+    // Steady: the placeholder is active and its glyphs are resident. "Hi" is
+    // two non-whitespace glyphs; the editor value is empty so it adds no ink.
+    assert!(
+        h.app.world().get::<PlaceholderActive>(editor).is_some(),
+        "an empty editor with a Placeholder is active"
+    );
+    assert_eq!(h.glyph_count(), 2, "the 'Hi' placeholder is two glyphs");
+    // Quiesce: prove we are at a steady frame (no pending rebuild).
+    h.frame();
+    let baseline = h.changed_frames();
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        baseline,
+        "steady state — no rebuild without a trigger"
+    );
+
+    // Edit the Placeholder STRING while still active: no toggle, no value
+    // change. Pre-fix this re-shapes the PlaceholderBuffer but the producer
+    // never re-runs, so the old "Hi" glyphs stay on screen.
+    h.app.world_mut().get_mut::<Placeholder>(editor).unwrap().0 = String::from("Hello");
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        baseline + 1,
+        "the already-active Placeholder reshape fired exactly one rebuild"
+    );
+    assert!(
+        h.app.world().get::<PlaceholderActive>(editor).is_some(),
+        "still active (the marker never toggled — this is the gate gap)"
+    );
+    assert_eq!(
+        h.glyph_count(),
+        5,
+        "the new 'Hello' placeholder (five glyphs) reached the carrier"
+    );
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        baseline + 1,
+        "…and settled — the reshape is a one-shot rebuild"
+    );
 }

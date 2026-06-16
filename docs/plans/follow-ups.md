@@ -831,3 +831,65 @@ affinity). Paint as a secondary `CaretVisual`-style rect + a second solid stamp
 **Owner:** the text-editing campaign, as a focused follow-up slice after E3–E6.
 
 **Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 (as-landed deferral notes).
+
+## Text editing — multi-range selection *behavior* (E-campaign deferral)
+
+**Status:** deferred from the `buiy-text-editing` campaign (E1–E6;
+[campaign plan](2026-06-13-buiy-text-editing-campaign.md)).
+
+**What it is:** the `TextSelection` type is multi-range-**shaped** (`primary` +
+`secondary: SmallVec<[…; 2]>`, editing-and-ime § 4.2) and the geometry pipeline,
+`SelectionChanged` payload, and `::selection` APIs all carry the shape — but v1
+ships single-range **behavior** (`secondary` always empty). Multi-cursor editing
+(multiple simultaneous carets/ranges, e.g. Ctrl-click-to-add-caret) is the named
+next slice.
+
+**Why deferred:** cosmic-text's `Selection` is structurally single-range;
+multi-range behavior is Buiy-layer aggregation over N mirrored ranges + N-caret
+input routing — a focused slice, cheap because the type is already shaped (no
+reshape needed).
+
+**Owner:** a focused follow-up slice after E1–E6.
+
+**Spec touchpoint:** editing-and-ime.md §§ 4.2, 13 (named deferral).
+
+## Text editing — HTML + image clipboard flavors (E-campaign deferral)
+
+**Status:** deferred from the `buiy-text-editing` campaign (E4 shipped plain
+text).
+
+**What it is:** the F row names text + HTML + image MIME for cut/copy/paste; E4
+ships **plain text only** (`Cut`/`Copy` via `copy_selection`, `Paste` through the
+§ 3.3 newline policy) behind the `ClipboardProvider` facade. HTML + image flavors
+are the named next slice.
+
+**Why deferred:** arboard's HTML *read-side* support is unverified
+(editing-and-ime OQ#3) and must be confirmed before the slice is promised; the
+facade makes adding flavors local (no API churn).
+
+**Owner:** a focused follow-up slice; gated on confirming arboard HTML read.
+
+**Spec touchpoint:** editing-and-ime.md §§ 7, 13 (named deferral); OQ#3.
+
+## Text editing — compose-over-selection (E5 deferral)
+
+**Status:** deferred from the `buiy-text-editing` campaign (E5 IME;
+[E5 plan](2026-06-13-buiy-text-editing-e5-ime.md)).
+
+**What it is:** when text is selected and the user starts an IME composition,
+the platform/web convention is to **replace the selection** with the preedit
+(the selection is deleted, composition begins at the caret). E5's
+`splice_preedit` (`text/edit/ime.rs`) splices the preedit at the editor cursor
+and does **not** delete an active selection first, so composing over a selection
+leaves the selected text in place and inserts the preedit beside it.
+
+**Why deferred:** plain-text IME composition (the F-tier core path — preedit
+splice + reflow + the four § 6.2 invariants) is complete and correct for the
+unselected-caret case, which is the overwhelmingly common one. Compose-over-
+selection needs a `delete_selection` (as one undo unit, paired with the
+composition group per § 6.2c) before the first splice plus a re-anchor of the
+preedit span — a focused behavioral slice, no new GPU and no new event surface.
+
+**Owner:** a focused follow-up slice after E1–E6.
+
+**Spec touchpoint:** editing-and-ime.md §§ 6.1, 6.2, 13.

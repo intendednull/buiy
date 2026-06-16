@@ -37,10 +37,11 @@ use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
 use super::components::{
-    CaretVisual, ComputedTextLayout, PreeditVisual, SelectionVisual, TextBuffer, TextDecorations,
+    CaretVisual, ComputedTextLayout, FontSize, PreeditVisual, SelectionVisual, TextBuffer,
+    TextDecorations,
 };
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
-use super::edit::TextBufferAccessReadOnly;
+use super::edit::{Placeholder, PlaceholderActive, PlaceholderBuffer, TextBufferAccessReadOnly};
 use super::font_system::{FontDbLineage, FontsGeneration, SharedFontSystem};
 use super::registry::PendingFontBlock;
 use super::stamp::{solid_stamp_bitmap, solid_stamp_key, stamp_uv};
@@ -205,6 +206,13 @@ pub fn extract_buiy_glyphs(
                 // own seat — distinct color + underline geometry — on the same
                 // quad carrier. 14 of Bevy's 15-tuple limit.
                 Option<&PreeditVisual>,
+                // E6 (editing-and-ime § 10): the display-only placeholder buffer
+                // (M2 — exactly ONE slot, the 15th, at Bevy's tuple cap). Present
+                // iff the editor value is empty (sync_placeholder inserts it only
+                // when active), so presence IS the "paint the placeholder" signal
+                // — the PlaceholderActive marker stays OUT of the tuple (it would
+                // be the 16th) and drives only the damage gate below.
+                Option<&PlaceholderBuffer>,
             ),
             With<Node>,
         >,
@@ -245,6 +253,24 @@ pub fn extract_buiy_glyphs(
                     // end re-emits the preedit underline; steady frames
                     // rebuild nothing.
                     Changed<PreeditVisual>,
+                    // E6 (editing-and-ime § 10): the placeholder triggers,
+                    // nested in their own Or so the outer union stays at Bevy's
+                    // 15-element filter-tuple cap (this group is the 15th slot).
+                    //  • PlaceholderActive — the empty↔non-empty TOGGLE: the
+                    //    cheap Copy gate signal whose presence the producer's
+                    //    PlaceholderBuffer paint branch mirrors.
+                    //  • Placeholder / FontSize — a reshape WHILE already
+                    //    active: editing the string (or size) re-shapes the
+                    //    PlaceholderBuffer with NO PlaceholderActive insert (the
+                    //    marker stays present) and NO ComputedTextLayout tick
+                    //    (the empty editor value is unchanged), so without these
+                    //    the screen keeps the stale placeholder glyphs. Both are
+                    //    small runtime-mutable components — cheap, exact gates.
+                    Or<(
+                        Changed<PlaceholderActive>,
+                        Changed<Placeholder>,
+                        Changed<FontSize>,
+                    )>,
                 )>,
             ),
         >,
@@ -395,6 +421,7 @@ pub fn extract_buiy_glyphs(
             caret_visual,
             caret_color,
             preedit_visual,
+            placeholder_buffer,
         )) = texts.get(entity)
         else {
             continue; // not a text painter
@@ -603,21 +630,6 @@ pub fn extract_buiy_glyphs(
                         physical_offset(origin, run.line_y, scale_factor),
                         scale_factor,
                     );
-                    let key = glyph_atlas_key(&phys.cache_key, &mut interner);
-                    let Some((entry, bearing)) = resolve_glyph(
-                        &mut atlas,
-                        &mut meta,
-                        fonts,
-                        &mut font_guard,
-                        &mut swash,
-                        &key,
-                        phys.cache_key,
-                    ) else {
-                        continue; // zero coverage (whitespace) or color-emoji skip (§ 9)
-                    };
-                    if entry.page > 0 {
-                        warn_once_page_overflow(); // § 11.1 v1 mitigation
-                    }
                     // T7 § 5.2: per-CLUSTER re-tint — a glyph whose bytes
                     // intersect the selection paints with the selection fg
                     // (over any rich-text span color, upstream-verbatim); the
@@ -647,25 +659,21 @@ pub fn extract_buiy_glyphs(
                     } else if color[3] == 0.0 {
                         continue; // fully transparent: nothing to paint
                     }
-                    new_glyphs.push(GlyphAlphaInstance {
-                        rect: glyph_rect_logical(
-                            phys.x,
-                            phys.y,
-                            bearing,
-                            entry.px.size(),
-                            scale_factor,
-                        ),
-                        uv: [
-                            entry.uv.min.x,
-                            entry.uv.min.y,
-                            entry.uv.max.x,
-                            entry.uv.max.y,
-                        ],
+                    // The SHARED per-glyph emit (the placeholder branch reuses it).
+                    emit_glyph(
+                        &mut atlas,
+                        &mut meta,
+                        fonts,
+                        &mut font_guard,
+                        &mut swash,
+                        &mut interner,
+                        &mut new_glyphs,
+                        &mut new_keys,
+                        &phys,
                         color,
                         clip,
-                        page: entry.page as u32,
-                    });
-                    new_keys.push(key);
+                        scale_factor,
+                    );
                 }
                 // § 4.4 seat 5: line-through paints OVER the run's glyphs —
                 // solid-stamp GlyphAlphaInstances appended after them (quad-tier
@@ -706,6 +714,41 @@ pub fn extract_buiy_glyphs(
             computed.lines.len(),
             "TextBuffer dirty-unshaped at extract (mutated after TextCommit?)"
         );
+
+        // E6 — placeholder paint (editing-and-ime § 10, decoration-and-paint
+        // § 7). A SEPARATE additive emission: the placeholder is its own display
+        // buffer with its own runs — NOT part of the editor's ComputedTextLayout,
+        // so it does NOT feed the § 3.2 run-count assert above (M4). Painted only
+        // when a shaped PlaceholderBuffer is present (sync_placeholder inserts it
+        // iff the editor value is empty ⇒ the editor loop above emitted no ink),
+        // tinted to the placeholder token. Reuses the shared per-glyph emitter.
+        if let Some(ph) = placeholder_buffer {
+            let ph_color = linear_color(resolve_token(&TextColor::placeholder().0, theme));
+            if ph_color[3] > 0.0 {
+                for run in ph.buffer.layout_runs() {
+                    for glyph in run.glyphs.iter() {
+                        let phys = glyph.physical(
+                            physical_offset(origin, run.line_y, scale_factor),
+                            scale_factor,
+                        );
+                        emit_glyph(
+                            &mut atlas,
+                            &mut meta,
+                            fonts,
+                            &mut font_guard,
+                            &mut swash,
+                            &mut interner,
+                            &mut new_glyphs,
+                            &mut new_keys,
+                            &phys,
+                            ph_color,
+                            clip,
+                            scale_factor,
+                        );
+                    }
+                }
+            }
+        }
 
         // T7 § 6.1 — seat 6: the caret paints last, over glyphs and
         // line-through, as a solid-stamp instance (pre-phase decision 2).
@@ -840,6 +883,54 @@ fn resolve_glyph<'a>(
         }
         SwashContent::SubpixelMask => None,
     }
+}
+
+/// Emit ONE shaped glyph as a `GlyphAlphaInstance` into `new_glyphs` (+ its
+/// `AtlasKey` into `new_keys`): resolve the atlas cell (rasterizing on miss —
+/// lock site #3), then push the straight-alpha instance with the caller's
+/// already-resolved `color` and `clip`. A zero-coverage glyph (whitespace /
+/// color-emoji skip) pushes NOTHING. The caller owns the COLOR decision (the
+/// editor loop's selection re-tint + Block alpha; the placeholder branch's flat
+/// token tint) — this is the SHARED emit body the two paths reuse verbatim (M4:
+/// the placeholder is its own buffer, but the per-glyph atlas-and-push is one
+/// emitter).
+#[allow(clippy::too_many_arguments)]
+fn emit_glyph<'a>(
+    atlas: &mut BuiyAtlas,
+    meta: &mut GlyphMetaCache,
+    fonts: &'a SharedFontSystem,
+    font_guard: &mut Option<MutexGuard<'a, FontSystem>>,
+    swash: &mut BuiySwashCache,
+    interner: &mut FontKeyInterner,
+    new_glyphs: &mut Vec<GlyphAlphaInstance>,
+    new_keys: &mut Vec<AtlasKey>,
+    phys: &cosmic_text::PhysicalGlyph,
+    color: [f32; 4],
+    clip: [f32; 4],
+    scale_factor: f32,
+) {
+    let key = glyph_atlas_key(&phys.cache_key, interner);
+    let Some((entry, bearing)) =
+        resolve_glyph(atlas, meta, fonts, font_guard, swash, &key, phys.cache_key)
+    else {
+        return; // zero coverage (whitespace) or color-emoji skip (§ 9)
+    };
+    if entry.page > 0 {
+        warn_once_page_overflow(); // § 11.1 v1 mitigation
+    }
+    new_glyphs.push(GlyphAlphaInstance {
+        rect: glyph_rect_logical(phys.x, phys.y, bearing, entry.px.size(), scale_factor),
+        uv: [
+            entry.uv.min.x,
+            entry.uv.min.y,
+            entry.uv.max.x,
+            entry.uv.max.y,
+        ],
+        color,
+        clip,
+        page: entry.page as u32,
+    });
+    new_keys.push(key);
 }
 
 /// One § 5.1 selection rect: a highlight span unioned with the run's
