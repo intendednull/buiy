@@ -1,0 +1,109 @@
+# Install a version-PINNED Mesa lavapipe (software Vulkan) and select it as the
+# ONLY Vulkan adapter, for the deterministic golden-image CI leg.
+#
+# Why pinned-and-self-hosted, not the distro PPA (determinism.md § "CI
+# software-rasterizer pin"; prior-art/wgpu-testing/determinism-rasterizer.md):
+# Buiy owns its renderer, so it stores ONE golden per cell against ONE canonical
+# rasterizer. A rolling distro lavapipe is a MOVING reference image — wgpu
+# abandoned `ppa:oibaf` for exactly this (day-to-day flakes from unrelated
+# llvmpipe regressions). We consume gfx-rs/ci-build's prebuilt, version-tagged
+# lavapipe tarball directly (no self-build) and pin MESA_VERSION + the
+# ci-binary-build tag explicitly. Bump deliberately in a tracked issue,
+# regenerating affected goldens in the SAME PR.
+#
+# Determinism comes from the PINNED MESA VERSION, not from thread count.
+# LP_NUM_THREADS is deliberately NOT set (determinism.md deviation #1): Mesa
+# documents it only as a perf knob, llvmpipe tiles per-thread so output is
+# stable regardless of thread count, and wgpu's own install-mesa never sets it.
+#
+# This action is a CONFIG/DOC deliverable. It is validated against a REAL GPU
+# (AMD RX 6700 XT / RADV) locally — the cross-rasterizer pixels are
+# non-comparable, so the local lane runs the determinism/reftest checks
+# (rasterizer-internal invariants), not the stored lavapipe baseline. The
+# lavapipe leg is the stored-baseline gate and runs only in CI.
+
+name: install-mesa
+description: >-
+  Install a version-pinned Mesa lavapipe software-Vulkan ICD and export the
+  adapter-selection env contract (VK_DRIVER_FILES + WGPU_ADAPTER_NAME=llvmpipe).
+
+inputs:
+  mesa-version:
+    description: >-
+      The exact Mesa version to install (must match a gfx-rs/ci-build release
+      tag). Bump deliberately + regenerate affected goldens in the same PR.
+    required: false
+    # Pin EXACTLY. This is the canonical rasterizer version every stored golden
+    # is blessed against; changing it is a baseline change, never incidental.
+    default: "24.3.4"
+  ci-build-tag:
+    description: >-
+      The gfx-rs/ci-build `ci-binary-build` release tag carrying the prebuilt
+      lavapipe tarball for `mesa-version`. NOTE: the tag and version are paired
+      per release — `mesa-24.3.4` ships under `build20` (build19 carries 24.2.3,
+      so `build19` + `24.3.4` 404s). When bumping `mesa-version`, find the
+      release that actually hosts `mesa-<version>-linux-x86_64.tar.xz`.
+    required: false
+    default: "build20"
+
+runs:
+  using: composite
+  steps:
+    # 1. Fetch the prebuilt, version-pinned lavapipe tarball from gfx-rs/ci-build
+    #    (the same artifact wgpu's CI consumes — no self-build). The tarball
+    #    carries libvulkan_lvp.so + the loader libs under ./lib.
+    - name: Download pinned Mesa lavapipe
+      shell: bash
+      run: |
+        set -euo pipefail
+        MESA_VERSION="${{ inputs.mesa-version }}"
+        CI_BUILD_TAG="${{ inputs.ci-build-tag }}"
+        echo "Installing pinned Mesa lavapipe ${MESA_VERSION} (ci-build ${CI_BUILD_TAG})"
+        curl -fsSL \
+          "https://github.com/gfx-rs/ci-build/releases/download/${CI_BUILD_TAG}/mesa-${MESA_VERSION}-linux-x86_64.tar.xz" \
+          -o "${RUNNER_TEMP}/mesa.tar.xz"
+        mkdir -p "${RUNNER_TEMP}/mesa"
+        tar -xf "${RUNNER_TEMP}/mesa.tar.xz" -C "${RUNNER_TEMP}/mesa"
+
+    # 2. Write our OWN ICD JSON pointing at the extracted lavapipe .so. The
+    #    upstream ICD path is build-host-absolute, so we author a fresh manifest
+    #    with the runner-local library path.
+    - name: Write lavapipe ICD manifest
+      shell: bash
+      run: |
+        set -euo pipefail
+        MESA_VERSION="${{ inputs.mesa-version }}"
+        LVP_SO="$(find "${RUNNER_TEMP}/mesa" -name 'libvulkan_lvp.so' | head -n1)"
+        if [ -z "${LVP_SO}" ]; then
+          echo "::error::libvulkan_lvp.so not found in the extracted Mesa tarball"
+          exit 1
+        fi
+        ICD_JSON="${RUNNER_TEMP}/lvp_icd.x86_64.json"
+        cat > "${ICD_JSON}" <<EOF
+        {
+          "file_format_version": "1.0.0",
+          "ICD": {
+            "library_path": "${LVP_SO}",
+            "api_version": "1.3.0"
+          }
+        }
+        EOF
+        echo "Wrote ICD manifest -> ${ICD_JSON} (library_path=${LVP_SO})"
+        echo "BUIY_LVP_ICD=${ICD_JSON}" >> "${GITHUB_ENV}"
+
+    # 3. Export the adapter-selection env contract (determinism.md § "Adapter
+    #    selection"):
+    #      - VK_DRIVER_FILES   → the Vulkan loader sees ONLY lavapipe; it cannot
+    #        pick a hardware GPU. (The modern variable; VK_ICD_FILENAMES is
+    #        deprecated — deviation #2. The loader still honors the old name, but
+    #        new CI wiring must not encode a deprecated path.)
+    #      - WGPU_ADAPTER_NAME=llvmpipe → wgpu's case-insensitive substring match
+    #        nails the exact device, so a future multi-adapter image can't drift.
+    #    NOT exported: LP_NUM_THREADS (deviation #1 — not a determinism knob).
+    - name: Export adapter-selection env contract
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "VK_DRIVER_FILES=${BUIY_LVP_ICD}" >> "${GITHUB_ENV}"
+        echo "WGPU_ADAPTER_NAME=llvmpipe" >> "${GITHUB_ENV}"
+        echo "Pinned lavapipe selected: VK_DRIVER_FILES=${BUIY_LVP_ICD}, WGPU_ADAPTER_NAME=llvmpipe"

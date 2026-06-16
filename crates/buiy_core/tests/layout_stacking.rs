@@ -417,3 +417,39 @@ fn mixed_top_layer_tiers_order_tooltip_below_modal() {
         "tooltip paints below modal (earlier in painters_z) regardless of activation"
     );
 }
+
+#[test]
+fn paint_rank_matches_documented_order() {
+    use buiy_core::layout::top_layer_paint_rank;
+
+    // The single source of truth for top-layer dominance — Fullscreen paints
+    // BOTTOM (rank 0), Modal paints TOP (rank 3), `None` is the in-flow
+    // sentinel (`u8::MAX`). The *declared* enum order
+    // (`None, Modal, Popover, Tooltip, Fullscreen`) is deliberately NOT this
+    // order, so `#[derive(Ord)]` on `TopLayer` would give the WRONG dominance;
+    // the rank fn is what callers compare on (spec stacking-and-top-layer.md
+    // § 4 / verification invariants.md deviation #3).
+    assert_eq!(top_layer_paint_rank(TopLayer::Fullscreen), 0);
+    assert_eq!(top_layer_paint_rank(TopLayer::Tooltip), 1);
+    assert_eq!(top_layer_paint_rank(TopLayer::Popover), 2);
+    assert_eq!(top_layer_paint_rank(TopLayer::Modal), 3);
+    assert_eq!(top_layer_paint_rank(TopLayer::None), u8::MAX);
+
+    // The rank is strictly increasing along the documented dominance chain,
+    // and every escaping variant outranks (paints below) the in-flow sentinel.
+    let chain = [
+        TopLayer::Fullscreen,
+        TopLayer::Tooltip,
+        TopLayer::Popover,
+        TopLayer::Modal,
+    ];
+    for pair in chain.windows(2) {
+        assert!(
+            top_layer_paint_rank(pair[0]) < top_layer_paint_rank(pair[1]),
+            "{:?} must paint below {:?}",
+            pair[0],
+            pair[1],
+        );
+        assert!(top_layer_paint_rank(pair[0]) < top_layer_paint_rank(TopLayer::None));
+    }
+}

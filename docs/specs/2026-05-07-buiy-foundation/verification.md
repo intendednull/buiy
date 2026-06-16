@@ -30,6 +30,18 @@ The pipeline has two tiers: **CI gates** (every PR; failure blocks merge; no hum
 | 14 | Performance regression | F | Per-frame layout time + render time + AccessKit-update time relative to main-branch baseline on a fixed self-hosted runner. | The CI gate's *mechanism* (relative-to-main, fixed runner, ±10% default slack) is committed. The *actual budget numbers* per fixture are an open question ([README.md § 5](README.md#5-open-questions)) owned by `buiy-verification-design`. The gate exists at v1; the numbers calibrate over time. |
 | 15 | Memory leak tests | F | RSS slope and atlas-entry count return to baseline after a defined long-running fixture (~10 minutes of scripted activity, then idle). | Threshold: RSS slope < 1 MB / minute after warmup; atlas entries return within ε of baseline. |
 
+### Gate realization status (verification-design)
+
+The *mechanisms* for gates **#2, #5, #11, #12** are realized by the
+[`buiy-verification-design`](../2026-06-15-buiy-verification-design/README.md)
+harness (the reftests-first five-tier pyramid in `buiy_verify`). This is a
+realization note only — the gate definitions above are unchanged.
+
+- **#5 — Layout snapshots:** **landed.** Tier 1 `buiy_verify::snapshot::assert_layout_snapshot` dumps `ResolvedLayout` positions/sizes as stable `Name`-keyed `insta` snapshots (`snapshots.md`). Pure-CPU, headless.
+- **#12 — Property tests / fuzzing:** **landed** (the visual half). Tier 3 `buiy_verify::invariant` ships the six proptest predicates incl. "BiDi caret round-trip equals identity" over the live cosmic-text shaper, with mutation-fixture teeth (`invariants.md`). The a11y-tree invariants (focus reachability, no orphans, accessible-name) remain owned by the a11y subsystem, not this harness.
+- **#11 — Forced-colors compatibility scan:** **landed** (check (a) token-flow + check (b) no-shadow-only) via the live-catalog `forced_colors_analyzer` wiring (`coverage.md` § Wiring). The forced-colors *visual* golden/reftest half (BoxShadow draw-skip) is **renderer-blocked** and deferred (`follow-ups.md`).
+- **#2 — Visual regression:** **mechanism landed, residue deferred.** The metric (`metric.md`), `DeterministicApp` capture + lavapipe CI pin (`determinism.md`), reftests + CPU/GPU SDF cross-check (`reftests.md`), and `assert_golden` persistence + `BUIY_BLESS` accept workflow + HTML triage (`goldens.md`) are all built and gated; the golden corpus is *started* (two blessed cells). The full residue golden matrix (shadow blur kernel, color-emoji) is **renderer-blocked** and tracked in `follow-ups.md`.
+
 ### CI platform matrix
 
 - **Desktop (Windows UIA, macOS NSAccessibility, Linux AT-SPI)** — full CI matrix for v1, all categories above.

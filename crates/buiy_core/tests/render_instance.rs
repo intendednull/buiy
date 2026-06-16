@@ -6,6 +6,7 @@
 
 use bevy::prelude::*;
 use buiy_core::render::DrawData;
+use buiy_verify::snapshot::assert_instance_hex_snapshot;
 
 // Pure-CPU port of `shader.wgsl::sdf_rounded_rect` (logical px). The view-uniform
 // path keeps the SDF in logical px with a POSITIVE half_size — no abs() hack.
@@ -54,6 +55,10 @@ fn packed_instance_stride_matches_logical_pipeline_descriptor() {
 fn pack_instance_keeps_position_and_size_in_logical_px() {
     // No clip conversion, no y-flip baked into the size. The raw logical box
     // is forwarded; the GPU view uniform (Task 1) does the clip transform.
+    // The per-field pos/size/radius asserts collapse into one byte-exact hex
+    // snapshot — it pins every f32 of the packed payload (positive height = NO
+    // y-flip, radius in logical px = NO 2/min(w,h)), so the half-size sign bug
+    // or a radius approximation flips the hex (snapshots.md § byte-exact).
     let draw = DrawData::new(
         Vec2::new(100.0, 50.0),
         Vec2::new(200.0, 80.0),
@@ -61,9 +66,7 @@ fn pack_instance_keeps_position_and_size_in_logical_px() {
         12.0,
     );
     let p = pack_instance(&draw);
-    assert_eq!(p.rect_pos, [100.0, 50.0]);
-    assert_eq!(p.rect_size, [200.0, 80.0]); // positive height — NO y-flip here
-    assert_eq!(p.radius, 12.0); // logical px — NO 2/min(w,h)
+    assert_instance_hex_snapshot(&p, "pack_instance_logical_px");
 }
 
 #[test]
@@ -118,23 +121,25 @@ fn packed_instance_stride_is_52() {
 #[test]
 fn pack_extracted_sets_clip_min_max_from_node_clip() {
     // A node carrying a finite ClipRect packs that box verbatim into
-    // clip_min/clip_max (the same logical-px space as ClipRect.min/.max).
+    // clip_min/clip_max (the same logical-px space as ClipRect.min/.max). The
+    // per-field clip_min/clip_max asserts become one byte-exact hex snapshot
+    // (it pins the whole packed payload, clip bytes included).
     let clip = ClipRect {
         min: Vec2::new(5.0, 6.0),
         max: Vec2::new(105.0, 206.0),
     };
     let p = pack_extracted(&node_with_clip(Some(clip)));
-    assert_eq!(p.clip_min, [5.0, 6.0]);
-    assert_eq!(p.clip_max, [105.0, 206.0]);
+    assert_instance_hex_snapshot(&p, "pack_extracted_finite_clip");
 }
 
 #[test]
 fn pack_extracted_uses_full_view_sentinel_when_clip_absent() {
     // clip == None packs to clip_min = [-INF; 2], clip_max = [+INF; 2] — for any
     // finite frag_pos the discard never fires, so the node paints unclipped.
+    // The hex snapshot pins the ±INFINITY sentinel bytes exactly (so a regression
+    // to a finite default flips the hex).
     let p = pack_extracted(&node_with_clip(None));
-    assert_eq!(p.clip_min, [f32::NEG_INFINITY, f32::NEG_INFINITY]);
-    assert_eq!(p.clip_max, [f32::INFINITY, f32::INFINITY]);
+    assert_instance_hex_snapshot(&p, "pack_extracted_sentinel_clip");
 }
 
 #[test]

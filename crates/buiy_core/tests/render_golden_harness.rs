@@ -1,6 +1,7 @@
 //! Golden-image harness (gate #2). The triad config + perceptual diff are
 //! device-free and gating; the actual capture needs a wgpu adapter and is
 //! #[ignore]. Spec: verification.md § 4.
+#![allow(deprecated)] // perceptual_diff is deprecated; these GPU sites migrate to buiy_verify::metric in Phase 3 (tier-5 goldens).
 
 mod support;
 
@@ -268,4 +269,69 @@ fn fonts_ready_requires_drained_queue_and_resident_keys() {
     );
     atlas.drain_warmup(&mut queue);
     assert!(fonts_ready(&atlas, &queue, std::slice::from_ref(&key)));
+}
+
+// Needs a wgpu adapter (real GPU or lavapipe). Proves the promoted
+// `capture_to_image` seam paints a fixture and returns an `image::RgbaImage`
+// of the expected PHYSICAL dimensions (logical × dpr). Run with:
+//   cargo test -p buiy_core --test render_golden_harness -- --ignored --nocapture
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); run with --ignored"]
+fn capture_to_image_returns_physical_dimensions() {
+    use bevy::prelude::*;
+    use buiy_core::Node;
+    use buiy_core::layout::{Inset, Length, Sizing, Style};
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use buiy_core::render::golden::{GoldenConfig, capture_to_image};
+    use std::borrow::Cow;
+
+    const LOGICAL_W: u32 = 48;
+    const LOGICAL_H: u32 = 32;
+
+    // 1.0× capture: physical == logical. (Phase 0.4 sizes via the literal 1.0
+    // path; GoldenConfig has no `dpr` field until Phase 3.1.)
+    let cfg = GoldenConfig::deterministic();
+    let mut app = support::gpu_render_app_scaled(LOGICAL_W, LOGICAL_H, 1.0);
+
+    // A known opaque fill so the capture is non-trivial (a blank frame would
+    // pass the dimension check vacuously; this proves real paint flows through).
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme
+            .colors
+            .insert("cap.fill".into(), Color::srgb(0.2, 0.6, 0.9));
+    }
+    let fill = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(4.0)),
+                    left: Sizing::Length(Length::px(4.0)),
+                    ..default()
+                })
+                .width_px(16.0)
+                .height_px(16.0),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed("cap.fill")),
+            },
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[fill]);
+
+    let img = capture_to_image(&mut app, &cfg);
+
+    assert_eq!(
+        (img.width(), img.height()),
+        (LOGICAL_W, LOGICAL_H),
+        "1× capture is logical-sized in physical pixels"
+    );
+    // Non-vacuous: at least one pixel differs from the opaque-black clear.
+    let any_painted = img.pixels().any(|p| p.0 != [0, 0, 0, 255]);
+    assert!(any_painted, "capture produced non-clear pixels");
 }

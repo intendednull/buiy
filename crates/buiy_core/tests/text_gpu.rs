@@ -15,15 +15,36 @@ use buiy_core::layout::Style;
 use buiy_core::render::atlas::{AtlasBitmap, AtlasConfig, AtlasFormat, AtlasKey, BuiyAtlas};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::TextColor;
-use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
+use buiy_core::render::golden::GoldenConfig;
 use buiy_core::text::{
     FamilyEntry, FontFamily, FontSize, FontStack, GenericFamily, ResidentTextKeys, Text,
 };
+use buiy_verify::metric::{CompareOpts, FuzzBudget, compare};
 use std::borrow::Cow;
 
 const W: u32 = 128;
 const H: u32 = 64;
 const TOKEN: &str = "test.text";
+
+/// Wrap a raw RGBA readback (W×H) as an `RgbaImage` for `metric::compare`.
+fn img(bytes: &[u8]) -> image::RgbaImage {
+    image::RgbaImage::from_raw(W, H, bytes.to_vec()).expect("readback length == W*H*4")
+}
+
+/// The stable-recapture spelling: two fresh captures of the same scene must
+/// agree bit-exactly within the pinned rasterizer (metric.md § re-capture
+/// determinism). `FuzzBudget::EXACT` is `(0, 0)`.
+fn assert_stable(a: &[u8], b: &[u8], msg: &str) {
+    let d = compare(&img(a), &img(b), &CompareOpts::default());
+    assert!(d.passes(&FuzzBudget::EXACT), "{msg}");
+}
+
+/// The anti-test spelling: two captures must NOT match at the exact budget —
+/// proof the input change actually moved pixels (metric.md § anti-tests).
+fn assert_differs(a: &[u8], b: &[u8], msg: &str) {
+    let d = compare(&img(a), &img(b), &CompareOpts::default());
+    assert!(!d.passes(&FuzzBudget::EXACT), "{msg}");
+}
 
 /// One big themed line ("Hi", 40 px — thick stems guarantee full-coverage
 /// interior texels) under a sized column root. Returns the text entity
@@ -111,10 +132,10 @@ fn hello_text_first_frame_is_deterministic_and_tinted() {
     // gate-#2 determinism: an independent fresh capture matches (the
     // stored-PNG machinery stays deferred; the re-capture IS the golden).
     let frame_b = capture(tint);
-    let diff = perceptual_diff(&frame_a, &frame_b);
-    assert!(
-        diff < 1e-4,
-        "two fresh captures diverged: perceptual_diff = {diff}"
+    assert_stable(
+        &frame_a,
+        &frame_b,
+        "two fresh captures diverged (must be bit-exact within the pinned rasterizer)",
     );
 }
 
@@ -148,9 +169,10 @@ fn retint_real_text_leaves_atlas_byte_identical() {
         "CoverageR8 page byte-identical across the retint — tint is \
          per-instance, never a key input (§ 5.1/§ 7)"
     );
-    assert!(
-        perceptual_diff(&frame_a, &frame_b) > 5e-4,
-        "the retint is visible in the framebuffer (byte-identity is not vacuous)"
+    assert_differs(
+        &frame_a,
+        &frame_b,
+        "the retint is visible in the framebuffer (byte-identity is not vacuous)",
     );
 }
 
@@ -212,10 +234,7 @@ fn touch_pass_prevents_stale_uv_corruption() {
         }
     }
     let frame_b = support::readback_rgba(&mut app, target.clone());
-    assert!(
-        perceptual_diff(&frame_a, &frame_b) < 1e-4,
-        "retained frames render identically"
-    );
+    assert_stable(&frame_a, &frame_b, "retained frames render identically");
 
     // Half 2 — the hazard a DISABLED touch pass would allow, simulated
     // (decision 7: no prod flag — we force the eviction directly): evict a
@@ -267,10 +286,11 @@ fn touch_pass_prevents_stale_uv_corruption() {
         );
     }
     let frame_c = support::readback_rgba(&mut app, target);
-    assert!(
-        perceptual_diff(&frame_a, &frame_c) > 1e-4,
+    assert_differs(
+        &frame_a,
+        &frame_c,
         "stale UVs sampled the filler — the silent corruption § 6.3's \
-         un-gated touch pass exists to prevent"
+         un-gated touch pass exists to prevent",
     );
 }
 
@@ -355,9 +375,10 @@ fn multi_script_text_renders_deterministically() {
         !a.chunks_exact(4).all(|p| p == &a[0..4]),
         "something painted"
     );
-    assert!(
-        perceptual_diff(&a, &b) < 1e-4,
-        "two independent captures are byte-stable (deterministic fonts + resolver)"
+    assert_stable(
+        &a,
+        &b,
+        "two independent captures are byte-stable (deterministic fonts + resolver)",
     );
 }
 
@@ -448,9 +469,10 @@ fn font_db_rebuild_storm_is_bounded() {
         );
     }
     let frame_after = support::readback_rgba(&mut app, target);
-    assert!(
-        perceptual_diff(&frame_before, &frame_after) < 1e-4,
-        "the storm is invisible: same bytes, same shaping, same pixels"
+    assert_stable(
+        &frame_before,
+        &frame_after,
+        "the storm is invisible: same bytes, same shaping, same pixels",
     );
 }
 
@@ -541,10 +563,9 @@ fn typing_churn_is_bounded_and_invisible() {
     // The pixels half: same final text, same pixels — the churn is
     // invisible through the real upload/draw path.
     let frame_after = support::readback_rgba(&mut app, target);
-    let diff = perceptual_diff(&frame_before, &frame_after);
-    assert!(
-        diff < 1e-4,
-        "the churn is invisible: frame byte-stable across churn-and-settle \
-         (perceptual_diff = {diff})"
+    assert_stable(
+        &frame_before,
+        &frame_after,
+        "the churn is invisible: frame byte-stable across churn-and-settle",
     );
 }

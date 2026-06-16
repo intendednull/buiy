@@ -29,6 +29,7 @@
 //!
 //! This supersedes the plan's sketch of one ±4-of-full-coverage matcher for
 //! both tiers — that matcher can never see a thin AA'd quad row.
+#![allow(deprecated)] // perceptual_diff is deprecated; these GPU sites migrate to buiy_verify::metric in Phase 3 (tier-5 goldens).
 
 mod support;
 

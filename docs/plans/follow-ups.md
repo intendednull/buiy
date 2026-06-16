@@ -466,18 +466,32 @@ over a `CatalogPaint` descriptor seam, and the forced-colors `BoxShadow` draw-sk
 has no live producer yet.
 
 **Symptom / what's deferred:**
-1. `forced_colors_analyzer::{analyze_forced_colors, analyze_shadow_only}` analyze
+1. ~~`forced_colors_analyzer::{analyze_forced_colors, analyze_shadow_only}` analyze
    `CatalogPaint` descriptors that tests construct by hand — there is no live
-   widget-catalog source. When the `Background`/`Border`/`Outline`/`BoxShadow`
-   component-model phase lands real painted components, the analyzer seam must be
-   re-pointed at them (the gate then runs over the actual catalog, not fixtures).
-2. color-and-forced-colors.md § 3.3: in forced-colors mode, extract must read
-   `UserPreferences.forced_colors` and SKIP the `BoxShadow` batch (shadows are
-   decorative, suppressed under forced colors). `extract_buiy_nodes` has no such
-   branch — it lands when `BoxShadow` gets a real extract/draw path (the BoxShadow
-   primitive pipeline is itself a later-tier seam, R7 bucket-reserved only).
+   widget-catalog source.~~ **DONE** (`buiy-verification-design` Phase 4.6,
+   commit `a73de05`). `buiy_verify::coverage::forced_colors::live_catalog_paint`
+   builds each fixture's app, queries the spawned `Background`/`Border`/`Outline`
+   (+ `BoxShadow`-presence delta) off the `Name`-tagged root, and projects them
+   into the existing `CatalogPaint`; the analyzers run **unchanged** — only the
+   input source moved from hand-built descriptors to the live tree. Teeth: a
+   `#[cfg(test)]` brand-token fixture (excluded from the real catalog) MUST flag
+   `NonSystemColor`, proving the producer reads real paint. Gate #11 now
+   auto-enrolls every new widget by construction. (`coverage.md` § Wiring /
+   § Landed.)
+2. **STILL DEFERRED (renderer-blocked).** color-and-forced-colors.md § 3.3: in
+   forced-colors mode, extract must read `UserPreferences.forced_colors` and SKIP
+   the `BoxShadow` batch (shadows are decorative, suppressed under forced colors).
+   `extract_buiy_nodes` has no such branch — it lands when `BoxShadow` gets a real
+   extract/draw path (the BoxShadow primitive pipeline is itself a later-tier
+   seam, R7 bucket-reserved only). The forced-colors **visual** reftest that would
+   exercise the draw-skip is therefore specified but BLOCKED; it is an
+   `#[ignore]`'d, assertion-free placeholder
+   (`coverage::forced_colors::boxshadow_visual_reftest_is_blocked`), not a green
+   test. The structured token-flow / no-shadow-only analyzers cover the rest of
+   gate #11 now, with no dependency on this path.
 
-**Spec touchpoint:** `color-and-forced-colors.md § 3.3`; the gate-#11 section.
+**Spec touchpoint:** `color-and-forced-colors.md § 3.3`; the gate-#11 section;
+`buiy-verification-design` `coverage.md` / `reftests.md`.
 
 ## Render — effect-compositor GPU orchestration (R9 prepare body + composite draws) — LANDED
 
@@ -776,7 +790,12 @@ them resident was already rejected (glyph-pipeline § 6.3 runner-ups).
 
 **Spec touchpoint:** text `architecture.md § 2.3` (as-landed note).
 
-## Render / verification — stored-PNG golden machinery (`--accept`)
+## Render / verification — stored-PNG golden machinery (`--accept`) — LANDED
+
+**Status:** **Landed** by `buiy-verification-design`
+([spec](../specs/2026-06-15-buiy-verification-design/README.md),
+[plan](2026-06-15-buiy-verification-impl.md), Phases 0–4). The original deferral
+text follows.
 
 **Originated:** render GPU campaign Phase 3 deferral
 ([2026-06-07-render-gpu-verify-campaign.md](2026-06-07-render-gpu-verify-campaign.md)),
@@ -785,21 +804,108 @@ golden T4–T9 uses the inline + double-capture discipline (capture in a fresh
 app, assert inline expected pixels, re-capture in a second fresh app,
 `perceptual_diff < 1e-4`; "the re-capture IS the golden").
 
-**What exists:** the declared `GoldenConfig.accept` flag
-(`crates/buiy_core/src/render/golden.rs` — no machinery behind it;
-`GoldenConfig::deterministic()` pins `accept: false`), `perceptual_diff`, and
-the `BUIY_ACCEPT_SHAPING` `.snap` regeneration flow
-(`tests/text_shaping_snapshots.rs`) as the curated-update precedent.
+**Now landed (the machinery the deferral asked for):**
+- **Stored-PNG golden machinery + `--accept`** — `buiy_verify::golden`
+  (`assert_golden`/`check_golden`, multi-positive `tests/goldens/` corpus, the
+  `BUIY_BLESS`/`BUIY_BLESS_REPLACE` accept-FILE workflow modeled on
+  `BUIY_ACCEPT_SHAPING`, the `BlessLedger` durable accept record, the
+  self-contained offline HTML triage report + diff-PNG). Corpus **started**:
+  `rect-rounded` + `text-ahem` cells blessed.
+- **Unified perceptual metric** — `buiy_verify::metric` (AA-aware two-axis
+  pixelmatch-YIQ diff, vendored; advisory MSSIM), replacing the L1
+  `perceptual_diff` (now `#[deprecated]`) and the RMSE `compare_images` (deleted).
+- **Determinism stack** — `DeterministicApp` + `GoldenConfig` extensions
+  (`FontMode` Ahem/Real, `Dpr` pin, MSAA/dither pinned, the `PendingCaptureAssets`
+  quiescence flush), the lavapipe CI pin (`VK_DRIVER_FILES` + `WGPU_ADAPTER_NAME`).
+- **Layout snapshots (gate #5)** — `assert_layout_snapshot` over `ResolvedLayout`.
+- **Property invariants (gate #12, visual half)** — the six `buiy_verify::invariant`
+  proptest predicates incl. BiDi caret round-trip, with mutation-fixture teeth.
+- **Forced-colors live wiring (gate #11)** — `live_catalog_paint` re-points the
+  analyzers at the live catalog (see the R11 entry above).
 
-**What's missing:** an image dependency, a stored-PNG corpus under
-`tests/goldens/`, and per-fixture tolerance budgets.
+**Still DEFERRED (renderer-blocked or out-of-scope, tracked here):**
+- **Shadow-blur-kernel & color-emoji goldens** — the two residue golden classes
+  `goldens.md` names as Tier-5-only. **Renderer-blocked**: the shadow draw path
+  and color-emoji atlas output are not yet exercised end-to-end by a capturable
+  fixture; the corpus is started with `rect-rounded`/`text-ahem` and these classes
+  are added when the renderer paths land.
+- **`coverage_golden::matrix_goldens` is RED on the GPU lane until the `button`
+  fixture corpus is blessed.** The Tier-5 enrollment driver (`coverage_golden.rs`,
+  committed in `a73de05`) iterates `Matrix::ci_default()` over the `button`
+  fixture and `assert_golden`s each cell, but **no `button` golden PNGs are
+  committed** (only `rect-rounded` + `text-ahem` are blessed), so it correctly
+  fail-closes (`check.rs:261`, "no golden committed for `button/resting/…`"). The
+  test's own header documents this as "bless-on-demand." This is the documented
+  fail-closed contract, NOT a regression — but it means the `--ignored` GPU lane
+  is not green for this one driver. **Blessing `button` cells is non-trivial**:
+  the coverage report flagged that the default `Button` under Buiy's *wholesale*
+  forced-colors swap paints the magenta missing-token sentinel
+  (`color-and-forced-colors.md § 3.1`), so blessing those cells verbatim would
+  cement a known-wrong pixel as a golden. Resolution options (a campaign-owner
+  decision, not a doc fix): (i) make `matrix_goldens` skip un-blessed cells
+  (treat "no positive" as `ignored`, not `fail`) so the lane is green until cells
+  are deliberately blessed; or (ii) bless only the forced-colors-*safe* cells once
+  the default widget is forced-colors-safe (`buiy-widget-catalog-design`). Until
+  then the headless gate (the every-PR CI gate, which never runs `--ignored`)
+  stays fully green and unaffected.
+- **Forced-colors `BoxShadow` *visual* reftest** — blocked on the unlanded
+  `BoxShadow` extract/draw path (see the R11 entry above); kept as an `#[ignore]`'d
+  assertion-free placeholder, not a green test.
+- **Multi-reference reftest aggregation** — the `RefCase::multi` OR/AND
+  aggregation (`reftests.md` § Reference independence #3) is specified but not
+  built; single-reference reftests cover the current pairings.
+- **`golden-prune` bin** — the advisory stale-positive pruner (`goldens.md`
+  § Stale-positive guard) is a design hook, machinery deferred.
+- **Object-store golden migration** — in-git PNGs until the named trigger
+  (>50 MB total or >500 positives); the `GoldenKey`/`BlessLedger` schema is fixed
+  now so the migration is mechanical (`goldens.md` § Storage staging).
+- **Invariant generator — `PositionKind` (tier-2 positioned/auto-z) coverage** —
+  `invariant/scene.rs`'s `SceneNode` carries no `PositionKind`, so the production
+  paint `paint_key`'s tier-2 *(positioned, auto-z)* class is unrepresentable and
+  never exercised by the metamorphic suite. On the generated domain
+  `positioned ⟺ z_index.is_some()` so the realized order still matches production
+  there; closing the gap means adding a `PositionKind` axis to the generator.
+  Surfaced by the 2026-06-15 fresh-agent quality review (scene.rs module doc
+  records the bound).
+- **Invariant `realize` mirrors the painters_z assembly instead of calling it** —
+  `invariant/scene.rs`'s `realize` re-implements layout sub-pass 6f (the per-
+  context `painters_z` z-tier sort) and passes its OWN `painters_z_of` into the
+  production `context_tree_paint_order`. **Empirically confirmed (2026-06-15
+  fault-injection):** reversing the production 6f sort (`layout/systems.rs` z-tier
+  `sort_by_cached_key`) was NOT caught by the Tier-3 invariant suite — only by
+  buiy_core's own `z_index_*` unit tests (`static_z_index_paints_in_document_order`,
+  `z_index_ordering_neg_zero_pos`). So the metamorphic tier verifies a *parallel
+  copy* of 6f, not the real assembly; a 6f-only regression relies on buiy_core's
+  z-index tests + the GPU golden tier. Harden by having `realize` CALL the
+  production `painters_z` assembly (extract it to a pure fn) so the invariant
+  exercises the real code path. The CPU display-list helper
+  (`snapshot::extract_nodes_from_world`) likewise re-sorts by `Name`, so it does
+  not observe production paint order either — Tier-2 paint-order coverage is the
+  GPU golden tier's job. (The `Name`-sort is correct for the *dump's* determinism;
+  the point is only that Tier-2's CPU dump is not a paint-order oracle.)
+- **Quiescence gate — conditions 2-4 headless coverage** — `capture_to_image`'s
+  `quiescence_unmet` (`buiy_core::render::golden`) checks four conditions; only
+  condition 1 (the `PendingCaptureAssets` asset gate) is reachable without a
+  render sub-app, and it now has a headless unit test. Conditions 2-4 (atlas
+  warmup drained, fonts-resident, no Queued/Creating pipeline) need a hand-built
+  render world to unit-test headlessly, so a vacuous-check regression in those
+  three is currently caught only by the GPU lane. Extract each probe behind a
+  pure helper + unit-test against synthetic resources. Surfaced by the
+  2026-06-15 review (its top-3 recommendation).
+- **CPU SDF oracle ↔ shader numeric pin** — the reftest CPU oracle
+  (`reftest.rs`) and `render/shader.wgsl`'s `sdf_rounded_rect` are textual
+  twins; the point-probe pins only sign invariants, so a numeric `d`-value drift
+  between them is caught only by the GPU cross-check lane. Add a numeric
+  `d`-value agreement test (or share one Rust SDF fn across oracle + probe).
+  Surfaced by the 2026-06-15 review (`reftests.md` § SDF cross-check).
 
 **Owner:** `buiy-verification-design` — worth building once the canonical CI
 GPU class exists (render `verification.md § 4.1`); tolerance budgets are that
 design's numbers, never this backlog's.
 
-**Spec touchpoint:** render `verification.md § 4.1`; text `verification.md
-§ 4` (as-landed note).
+**Spec touchpoint:** `buiy-verification-design` (`goldens.md`, `determinism.md`,
+`metric.md`, `reftests.md`, `coverage.md`); render `verification.md § 4.1`; text
+`verification.md § 4` (as-landed note).
 
 ## Text editing — BiDi split caret (E3 deferral)
 

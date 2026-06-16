@@ -269,6 +269,7 @@ fn extracted_node_position_follows_global_transform() {
 use buiy_core::render::extract::{
     ExtractedNode, ExtractedNodes, assemble_context_tree, assemble_in_paint_order,
 };
+use buiy_verify::snapshot::{NameLookup, assert_display_list_snapshot};
 
 #[test]
 fn extracted_nodes_default_is_empty_with_unit_scale() {
@@ -395,6 +396,12 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
     // guards: flat-concatenating each context's painters_z paints the nested
     // descendants [C, D] at the END of their own list instead of between the
     // parent's A and B. Tree: root R = [A, NESTED, B]; NESTED = [C, D].
+    //
+    // The `assert_eq!(got, vec![root, a, nested, c, d, b])` order check becomes
+    // a Name-keyed display-list snapshot: the assembled paint order IS the node
+    // line order in the dump, so the flat-concat regression shows as a line
+    // reorder (snapshots.md § Tier 2 — "a z-sort regression shows as a line
+    // reorder, the exact bug class pixels name poorly").
     let (root, a, nested, b, c, d) = (e(1), e(2), e(3), e(4), e(5), e(6));
     let mut map: std::collections::HashMap<Entity, Vec<Entity>> = std::collections::HashMap::new();
     map.insert(root, vec![a, nested, b]);
@@ -417,10 +424,22 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
         },
         &mut out,
     );
-    let got: Vec<Entity> = out.iter().map(|n| n.entity).collect();
-    // Root's OWN box paints first, then A, then the whole nested unit (its own
-    // box NESTED, then C, D), then B — never A, NESTED, B, C, D.
-    assert_eq!(got, vec![root, a, nested, c, d, b]);
+    let nodes = ExtractedNodes {
+        nodes: out,
+        ..Default::default()
+    };
+    // Name the synthetic entities so the dump is diff-stable by Name (not raw
+    // Entity bits). The dump's node lines read root, a, nested, c, d, b — the
+    // expected atomic-descent order.
+    let names = NameLookup::from_pairs([
+        (root, "root"),
+        (a, "a"),
+        (nested, "nested"),
+        (b, "b"),
+        (c, "c"),
+        (d, "d"),
+    ]);
+    assert_display_list_snapshot(&nodes, "nested_context_paint_order", &names);
 }
 
 #[test]

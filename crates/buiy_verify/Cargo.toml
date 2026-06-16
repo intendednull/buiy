@@ -7,7 +7,46 @@ license.workspace = true
 [dependencies]
 bevy.workspace = true
 buiy_core = { path = "../buiy_core" }
+# The widget catalog the coverage fixtures generalize. `buiy_widgets` depends
+# only on `bevy` + `buiy_core` (no `buiy_verify`), so this edge is acyclic — the
+# fixtures spawn the live `Button::new()` bundle the `hello_button` example
+# uses, which is the catalog row the matrix enrolls. No new supply-chain crate.
+buiy_widgets = { path = "../buiy_widgets" }
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
 proptest.workspace = true
+# Already a workspace dep (used by buiy_core for the `PackedInstance` POD layout).
+# The Tier-2 byte-exact hex check (snapshots.md § byte-exact) needs
+# `bytemuck::bytes_of` / `pod_read_unaligned` over the same `PackedInstance` —
+# no NEW supply-chain crate, no new `cargo deny` surface.
+bytemuck.workspace = true
+# Advisory MSSIM channel (metric.md § "Advisory MSSIM"): catches global
+# gamma/blend drift a small pixel budget under-weights. NEVER the primary
+# gate — surfaced as `Diff::mssim: Option<f64>`. The `cargo deny check` below
+# confirms its license set + no RUSTSEC advisories.
+image-compare = "=0.5.0"
+# Tier-1/2 snapshot assertions (snapshots.md): insta drives the layout-number
+# and display-list `Display` dumps. Dev-time crate, but lives in `[dependencies]`
+# because the harness re-exports snapshot helpers from `src/`. The `glob` feature
+# drives the coverage fixture-dir fan-out (Phase 4).
+insta = { version = "=1.48.0", features = ["glob"] }
+# Already in the lockfile (a direct dep of buiy_core, the text shaper). The
+# Tier-3 BiDi caret round-trip (invariants.md predicate #6) asserts relations
+# over the LANDED shaper's output — `cosmic_text::{Buffer, Cursor, LayoutRun}` —
+# so it must name those types. NO new supply-chain crate, zero new `cargo deny`
+# surface (the version is pinned to buiy_core's `0.19`).
+cosmic-text = "0.19"
+# Tier-5 golden bless ledger (goldens.md): the durable accept record as
+# human-diffable TOML beside the PNGs — the `<slug>.toml` reviewed in the PR.
+toml.workspace = true
+# Tier-5 HTML triage report (goldens.md): base64-inline the PNGs so the report
+# is self-contained / offline-first (no external asset, no network).
+base64.workspace = true
+# Coverage catalog (coverage.md § "The fixture as single source of truth"):
+# distributed link-time registration so `catalog()` enumerates every `fixture!`
+# without a hand-maintained central list. MIT/Apache-2.0, already in the
+# lockfile (transitive); `cargo deny check licenses` clears it. Alternative
+# rejected: a hand-maintained `&[Fixture]` const (defeats "zero edits to
+# enroll a new fixture").
+inventory = "0.3"

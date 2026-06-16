@@ -13,6 +13,11 @@
 //!
 //! Run: cargo test -p buiy_core --test text_ime_preedit_gpu -- --ignored --test-threads=1
 
+// perceptual_diff is deprecated (use buiy_verify::metric::compare); this
+// unmigrated #[ignore] GPU re-capture test joins the migration backlog like the
+// other golden suites (follow-ups.md, text verification.md § 4).
+#![allow(deprecated)]
+
 mod support;
 
 use bevy::prelude::*;

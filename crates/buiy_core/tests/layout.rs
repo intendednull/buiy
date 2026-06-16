@@ -4,6 +4,7 @@ use buiy_core::{
     components::{Node, ResolvedLayout},
     layout::{LayoutPlugin, LayoutTree, Style},
 };
+use buiy_verify::snapshot::assert_layout_snapshot;
 
 #[test]
 fn layout_resolves_a_simple_flex_row() {
@@ -12,29 +13,43 @@ fn layout_resolves_a_simple_flex_row() {
     app.add_plugins(CorePlugin);
     app.add_plugins(LayoutPlugin);
 
+    // A 200x100 flex-row root with two 50x50 children. `Name`-tagging is what
+    // makes the Tier-1 layout snapshot diff-stable (entity-by-Name, never raw
+    // Entity bits). The trailing per-field `(size.x - 50.0).abs() < 0.5` pair
+    // is now one holistic `assert_layout_snapshot` — the .snap pins EVERY box's
+    // position+size (root + both children), strictly more than the old child-
+    // only width/height tolerance asserts (snapshots.md § Tier 1).
     let parent = app
         .world_mut()
         .spawn((
             Node,
+            Name::new("root"),
             Style::default().flex_row().width_px(200.0).height_px(100.0),
         ))
         .id();
 
-    let child = app
+    let child0 = app
         .world_mut()
-        .spawn((Node, Style::default().width_px(50.0).height_px(50.0)))
+        .spawn((
+            Node,
+            Name::new("row.item[0]"),
+            Style::default().width_px(50.0).height_px(50.0),
+        ))
+        .id();
+    let child1 = app
+        .world_mut()
+        .spawn((
+            Node,
+            Name::new("row.item[1]"),
+            Style::default().width_px(50.0).height_px(50.0),
+        ))
         .id();
 
-    app.world_mut().entity_mut(parent).add_child(child);
+    app.world_mut()
+        .entity_mut(parent)
+        .add_children(&[child0, child1]);
 
-    app.update();
-
-    let layout = app
-        .world()
-        .get::<ResolvedLayout>(child)
-        .expect("child has ResolvedLayout after Update");
-    assert!((layout.size.x - 50.0).abs() < 0.5, "child width ~ 50");
-    assert!((layout.size.y - 50.0).abs() < 0.5, "child height ~ 50");
+    assert_layout_snapshot(&mut app, "flex_row_basic");
 }
 
 #[test]

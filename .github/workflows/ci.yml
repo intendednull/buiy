@@ -115,3 +115,71 @@ jobs:
       - name: cargo test (macOS / Windows)
         if: matrix.os != 'ubuntu-latest'
         run: cargo test --workspace
+
+  # ----------------------------------------------------------------------------
+  # GPU lane: the #[ignore] render/determinism/reftest tests that need a real
+  # wgpu adapter, run against a version-PINNED Mesa lavapipe software rasterizer
+  # (the determinism stack's CI rasterizer pin; determinism.md § "CI
+  # software-rasterizer pin"). One canonical rasterizer ⇒ one golden per cell,
+  # no per-OS/per-GPU matrix. This leg needs NO X server — Vulkan
+  # render-to-texture is headless — so no xvfb.
+  #
+  # The headless `test` job above runs WITHOUT --ignored and never touches an
+  # adapter, so it stays green on runners with no GPU; this leg is ADDITIVE.
+  # Locally the same #[ignore] tests run on the real RX 6700 XT (the determinism
+  # / reftest checks are rasterizer-internal invariants, not a stored-baseline
+  # comparison, so they hold on either rasterizer).
+  gpu:
+    name: GPU (pinned lavapipe)
+    runs-on: ubuntu-latest
+    env:
+      # This lane links the large bevy #[ignore] test binaries AFTER also
+      # building wgpu-info (release) + running the buiy_core GPU suite, so it has
+      # far less headroom than the plain Test job and `ld` SIGBUSes (signal 7)
+      # linking buiy_verify's test binaries. Debug info is the bulk of that link
+      # size, and GPU pixel/invariant checks don't need backtraces — drop it for
+      # this lane only. Keep the workspace-wide `-D warnings`.
+      RUSTFLAGS: "-D warnings -C debuginfo=0"
+    steps:
+      # Reclaim ~25 GB by removing preinstalled SDKs this job never uses. The
+      # release `wgpu-info` build + the large bevy `#[ignore]` GPU test binaries
+      # + the pinned Mesa otherwise exhaust the ~14 GB runner disk ("No space
+      # left on device" during `cargo test`). Must run before the rust-cache
+      # restore + the compiles below.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # Install the version-pinned lavapipe + export VK_DRIVER_FILES /
+      # WGPU_ADAPTER_NAME=llvmpipe (NOT LP_NUM_THREADS — deviation #1).
+      - name: Install pinned Mesa lavapipe
+        uses: ./.github/actions/install-mesa
+      # Smoke guard (determinism.md § Verification #5): before any golden runs,
+      # confirm the selected adapter is lavapipe — the pin is active, not
+      # silently falling back to a hardware adapter. `wgpu-info` reports the
+      # adapter the same env contract selects.
+      - name: Assert pinned lavapipe adapter is selected
+        run: |
+          set -euo pipefail
+          cargo install --locked wgpu-info || true
+          ADAPTERS="$(wgpu-info 2>/dev/null || true)"
+          echo "${ADAPTERS}"
+          echo "${ADAPTERS}" | grep -iq 'llvmpipe' \
+            || { echo "::error::pinned lavapipe (llvmpipe) adapter not selected — VK_DRIVER_FILES/WGPU_ADAPTER_NAME wiring did not take effect"; exit 1; }
+      # The GPU lane: serialize one adapter context at a time (--test-threads=1).
+      # No --ignored on the headless job above; this is the only leg that
+      # instantiates an adapter.
+      - name: cargo test (GPU #[ignore] lane on pinned lavapipe)
+        run: |
+          cargo test -p buiy_core -j 2 -- --ignored --test-threads=1
+          cargo test -p buiy_verify -j 2 -- --ignored --test-threads=1

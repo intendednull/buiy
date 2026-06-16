@@ -37,6 +37,18 @@ sys-locale = "0.3"
 # Version-synced to cosmic-text 0.19's pin (0.5.8); an upstream bump to 0.6
 # surfaces here as a loud type-mismatch compile error, by design.
 unicode-script = "0.5"
+# The canonical `render::golden::Dpr` derives `serde::{Serialize, Deserialize}`
+# so the verification golden bless ledger (`buiy_verify`) can persist it
+# directly. `serde` is a workspace dep already; buiy_core names it directly
+# because the derive emits `::serde::…` paths (bevy's re-export does not satisfy
+# a bare `serde::Serialize` derive). Rides the workspace `serde` pin — no new
+# crate enters the tree.
+serde.workspace = true
+# The promoted `render::golden::capture_to_image` returns an
+# `image::RgbaImage` (verification-design README § Crate-dependency note: the
+# ONLY new GPU dep buiy_core gains). Rides the existing workspace `image`
+# pin — no second image-decode stack enters the tree.
+image.workspace = true
 
 [features]
 default = ["default_font"]
@@ -49,3 +61,11 @@ default_font = []
 [dev-dependencies]
 naga = "27"
 proptest = { workspace = true }
+# Dev-only dependency edge for the #[ignore] GPU re-capture tests, which
+# migrate off the deprecated `render::golden::perceptual_diff` (L1) onto
+# `buiy_verify::metric::compare` (metric.md § Migration). This forms a
+# DEV-ONLY cycle (buiy_core → buiy_verify → buiy_core): a [dev-dependencies]
+# edge is excluded from the normal build graph, so Cargo permits it, the
+# production `cargo build -p buiy_core` is unaffected, and it adds no
+# `cargo deny` surface. Confined to #[cfg(test)].
+buiy_verify = { path = "../buiy_verify" }

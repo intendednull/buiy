@@ -32,10 +32,9 @@ use bevy::asset::{AssetApp, RenderAssetUsages};
 use bevy::camera::RenderTarget;
 use bevy::image::Image;
 use bevy::prelude::*;
-use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use buiy_core::{CorePlugin, render::BuiyRenderPlugin};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Build the canonical headless-GPU Buiy app. The returned [`App`] is **not yet
 /// finished** — the caller must `finish()` it (or use [`finish_and_run`]) before
@@ -163,37 +162,12 @@ pub fn gpu_render_app_scaled(logical_w: u32, logical_h: u32, scale_factor: f32) 
 }
 
 /// The one shared plugin stack behind [`gpu_render_app`] /
-/// [`gpu_render_app_scaled`] — a single body so the scaled builder cannot
-/// drift from the canonical one.
+/// [`gpu_render_app_scaled`] — delegates to the promoted src builder
+/// `buiy_core::render::golden::capture_app_with_resolution` so the canonical
+/// plugin stack lives in exactly one place (anti-drift: the reftest / golden
+/// tiers and these test-support builders are now the SAME body).
 fn gpu_render_app_with_resolution(resolution: bevy::window::WindowResolution) -> App {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-        // Sized to the capture target so the primary-window-derived view uniform
-        // matches the offscreen image's pixel grid (see module note above).
-        .add_plugins(bevy::window::WindowPlugin {
-            primary_window: Some(Window {
-                resolution,
-                ..default()
-            }),
-            ..default()
-        })
-        .add_plugins(bevy::asset::AssetPlugin::default())
-        .add_plugins(bevy::render::RenderPlugin::default())
-        .add_plugins(bevy::image::ImagePlugin::default())
-        .add_plugins(bevy::camera::CameraPlugin)
-        // The 2D render graph: `Core2dPlugin` (inside `CorePipelinePlugin`)
-        // creates the `Core2d` sub-graph that `BuiyRenderPlugin` wires its node
-        // into. MUST precede `BuiyRenderPlugin` (plugins build in add order).
-        .add_plugins(bevy::core_pipeline::CorePipelinePlugin)
-        .add_plugins(buiy_core::theme::ThemePlugin)
-        .add_plugins(buiy_core::layout::LayoutPlugin)
-        .add_plugins(CorePlugin)
-        // The text engine + the T4 glyph producer (render half registers
-        // against the live RenderApp created by RenderPlugin above).
-        .add_plugins(buiy_core::text::BuiyTextPlugin::default())
-        .add_plugins(BuiyRenderPlugin);
-    app.init_asset::<Mesh>();
-    app
+    buiy_core::render::golden::capture_app_with_resolution(resolution)
 }
 
 /// Create an offscreen `Rgba8UnormSrgb` render-target image of `width`×`height`,
@@ -251,13 +225,6 @@ pub fn spawn_capture_camera_with_msaa(
         },
     ));
 }
-
-/// Resource cell the `ReadbackComplete` observer writes the captured bytes into.
-/// `Arc<Mutex<…>>` so the observer (which `move`s its capture) and the test poll
-/// loop share one slot; an ECS resource would also work but the shared cell keeps
-/// the observer a small closure.
-#[derive(Resource, Clone, Default)]
-struct CapturedBytes(Arc<Mutex<Option<Vec<u8>>>>);
 
 /// Drive frames until the text fixture's `wait_for_fonts` predicate holds
 /// (verification § 3.2): the producer has emitted (`ResidentTextKeys`
@@ -351,75 +318,17 @@ pub fn expected_full_coverage_srgb(color: [f32; 4]) -> [u8; 4] {
 /// padding bytes are `[0,0,0,0]`, which would otherwise satisfy a
 /// `px != clear` probe and false-green a "something painted" assertion.
 pub fn readback_rgba(app: &mut App, target: Handle<Image>) -> Vec<u8> {
-    const MAX_FRAMES: usize = 60;
-
-    // The target's true extent — needed to detect + strip row padding below.
+    // The target's true extent — the promoted readback needs it to detect +
+    // strip wgpu's 256-byte row padding.
     let (width, height) = {
         let images = app.world().resource::<Assets<Image>>();
         let image = images.get(&target).expect("readback target Image exists");
         (
-            image.texture_descriptor.size.width as usize,
-            image.texture_descriptor.size.height as usize,
+            image.texture_descriptor.size.width,
+            image.texture_descriptor.size.height,
         )
     };
-
-    let cell = CapturedBytes::default();
-    app.insert_resource(cell.clone());
-
-    let sink = cell.0.clone();
-    app.world_mut().spawn(Readback::texture(target)).observe(
-        move |trigger: On<ReadbackComplete>| {
-            // `ReadbackComplete` derefs to its `data: Vec<u8>`; clone the raw
-            // RGBA8 into the shared slot. First completion wins (the readback
-            // re-fires every frame until its entity is despawned, but the poll
-            // loop stops at the first non-empty slot).
-            let mut slot = sink.lock().expect("readback sink mutex");
-            if slot.is_none() {
-                slot.replace(trigger.event().data.clone());
-            }
-        },
-    );
-
-    for _ in 0..MAX_FRAMES {
-        app.update();
-        if cell.0.lock().expect("readback sink mutex").is_some() {
-            break;
-        }
-    }
-
-    let data = cell
-        .0
-        .lock()
-        .expect("readback sink mutex")
-        .take()
-        .unwrap_or_else(|| {
-            panic!(
-                "GPU readback never delivered bytes within {MAX_FRAMES} frames — \
-                 the texture→buffer copy or buffer map never completed (check that \
-                 the image carries COPY_SRC + RenderAssetUsages::all() and that a \
-                 capture camera targets it)"
-            )
-        });
-
-    // Strip wgpu's 256-byte row padding if present (see the doc comment).
-    let unpadded_row = width * 4;
-    let padded_row = unpadded_row.div_ceil(256) * 256;
-    if data.len() == unpadded_row * height {
-        data
-    } else if data.len() == padded_row * height {
-        let mut out = Vec::with_capacity(unpadded_row * height);
-        for row in 0..height {
-            let start = row * padded_row;
-            out.extend_from_slice(&data[start..start + unpadded_row]);
-        }
-        out
-    } else {
-        panic!(
-            "readback returned {} bytes for a {width}x{height} RGBA8 target — \
-             expected {} (unpadded) or {} (256-byte-padded rows)",
-            data.len(),
-            unpadded_row * height,
-            padded_row * height,
-        );
-    }
+    // Delegate to the promoted src twin so the readback poll + row-padding
+    // strip live in exactly one place (Phase 0.4 anti-drift).
+    buiy_core::render::golden::readback_rgba_into(app, &target, width, height)
 }

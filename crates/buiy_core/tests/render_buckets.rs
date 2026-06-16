@@ -127,6 +127,7 @@ use bevy::prelude::*;
 use buiy_core::render::buckets::pack_view;
 use buiy_core::render::extract::ExtractedNode;
 use buiy_core::render::instance::{pack_extracted, packed_raw_stride_agrees};
+use buiy_verify::snapshot::assert_instance_hex_snapshot;
 
 // pack_view consumes R5's ExtractedNode records (the prepare seam, Task 6) — the
 // bucketing assertions below are unchanged from the DrawData era; only the input
@@ -168,6 +169,13 @@ fn pack_view_routes_every_draw_to_quad_layer_0() {
 
 #[test]
 fn pack_view_preserves_packed_values_in_order() {
+    // pack_view's single batch holds each node packed verbatim. The old
+    // `batch[0] == packed_to_raw(pack_extracted(node))` oracle cross-check
+    // becomes a byte-exact hex snapshot of the packed payload: it pins the
+    // EXACT instance bytes pack_view emits (snapshots.md § Tier 2 — the bucket
+    // dump pins counts, the hex pins the payload). The asserts below still
+    // prove the batch's bytes equal the packing-fn output (the preserved
+    // oracle), and the hex pins what those bytes ARE.
     let nodes = vec![node(
         1,
         Vec2::new(7.0, 9.0),
@@ -176,8 +184,11 @@ fn pack_view_preserves_packed_values_in_order() {
     )];
     let buckets = pack_view(&nodes);
     let (_, batch) = buckets.batches().next().expect("one batch");
-    let expect = buiy_core::render::buckets::packed_to_raw(&pack_extracted(&nodes[0]));
-    assert_eq!(batch[0], expect);
+    let packed = pack_extracted(&nodes[0]);
+    // Preserved oracle: the batch's raw row equals the packing fn's output.
+    assert_eq!(batch[0], buiy_core::render::buckets::packed_to_raw(&packed));
+    // Pinned payload: snapshot the exact bytes pack_view emits for this node.
+    assert_instance_hex_snapshot(&packed, "pack_view_node_payload");
 }
 
 #[test]
