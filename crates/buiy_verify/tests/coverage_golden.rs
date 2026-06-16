@@ -125,11 +125,27 @@ fn matrix_goldens() {
         }
     }
 
-    eprintln!(
-        "matrix_goldens: {asserted} asserted against the committed corpus, {pending} pending bless-on-demand"
-    );
-    // The enrollment itself must have produced cells (guards a silently-empty
-    // catalog/matrix regressing this coverage property to a vacuous pass).
+    // HONEST status line: `asserted` is the number of cells actually COMPARED
+    // against a committed PNG; `pending` cells compared NOTHING (no baseline
+    // blessed yet). A green run with `asserted == 0` means the GPU golden tier
+    // verified zero images — green here is "no blessed cell drifted", NOT "the
+    // matrix is covered". The loud-flag below makes that explicit.
+    if asserted == 0 {
+        eprintln!(
+            "matrix_goldens: 0 cells COMPARED — all {pending} are pending bless-on-demand \
+             (no committed golden). This run verified nothing at the GPU tier; bless a \
+             residue cell to gain real coverage."
+        );
+    } else {
+        eprintln!(
+            "matrix_goldens: {asserted} cells compared against the committed corpus, \
+             {pending} pending bless-on-demand"
+        );
+    }
+    // NB: this guard ONLY catches a silently-empty catalog/matrix — it does NOT
+    // assert non-vacuity (an all-pending run passes on `pending` alone, by the
+    // bless-on-demand design). The eprintln above is what surfaces a zero-compare
+    // run; do not mistake this assert for a coverage check.
     assert!(
         asserted + pending > 0,
         "coverage matrix produced zero cells — catalog or Matrix::ci_default() is empty"

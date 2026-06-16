@@ -859,6 +859,29 @@ app, assert inline expected pixels, re-capture in a second fresh app,
 - **Object-store golden migration** — in-git PNGs until the named trigger
   (>50 MB total or >500 positives); the `GoldenKey`/`BlessLedger` schema is fixed
   now so the migration is mechanical (`goldens.md` § Storage staging).
+- **Invariant generator — `PositionKind` (tier-2 positioned/auto-z) coverage** —
+  `invariant/scene.rs`'s `SceneNode` carries no `PositionKind`, so the production
+  paint `paint_key`'s tier-2 *(positioned, auto-z)* class is unrepresentable and
+  never exercised by the metamorphic suite. On the generated domain
+  `positioned ⟺ z_index.is_some()` so the realized order still matches production
+  there; closing the gap means adding a `PositionKind` axis to the generator.
+  Surfaced by the 2026-06-15 fresh-agent quality review (scene.rs module doc
+  records the bound).
+- **Quiescence gate — conditions 2-4 headless coverage** — `capture_to_image`'s
+  `quiescence_unmet` (`buiy_core::render::golden`) checks four conditions; only
+  condition 1 (the `PendingCaptureAssets` asset gate) is reachable without a
+  render sub-app, and it now has a headless unit test. Conditions 2-4 (atlas
+  warmup drained, fonts-resident, no Queued/Creating pipeline) need a hand-built
+  render world to unit-test headlessly, so a vacuous-check regression in those
+  three is currently caught only by the GPU lane. Extract each probe behind a
+  pure helper + unit-test against synthetic resources. Surfaced by the
+  2026-06-15 review (its top-3 recommendation).
+- **CPU SDF oracle ↔ shader numeric pin** — the reftest CPU oracle
+  (`reftest.rs`) and `render/shader.wgsl`'s `sdf_rounded_rect` are textual
+  twins; the point-probe pins only sign invariants, so a numeric `d`-value drift
+  between them is caught only by the GPU cross-check lane. Add a numeric
+  `d`-value agreement test (or share one Rust SDF fn across oracle + probe).
+  Surfaced by the 2026-06-15 review (`reftests.md` § SDF cross-check).
 
 **Spec touchpoint:** `buiy-verification-design` (`goldens.md`, `determinism.md`,
 `metric.md`, `reftests.md`, `coverage.md`); render `verification.md § 4.1`; text

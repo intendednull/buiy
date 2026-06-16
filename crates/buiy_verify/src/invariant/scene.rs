@@ -12,7 +12,15 @@
 //! [`context_tree_paint_order`] over a tree whose tails were split with
 //! [`partition_top_layer`](buiy_core::render::top_layer::partition_top_layer)
 //! and ranked with the promoted [`top_layer_paint_rank`], so the realized order
-//! can never diverge from what the engine actually paints.
+//! cannot diverge from the engine **over the generated domain**.
+//!
+//! SCOPE (honest bound): the generator's `paint_key` keys on `(Stacking,
+//! z_index)`, not the production `(Stacking, PositionKind)` four-tier key — a
+//! `SceneNode` carries no `PositionKind`, so the tier-2 *(positioned, auto-z)*
+//! paint tier is unrepresentable and never exercised. On the generated domain
+//! `positioned ⟺ z_index.is_some()`, so the two keys agree there; a fixture
+//! that needs the positioned-auto-z tier is a generator-coverage gap, tracked
+//! in `docs/plans/follow-ups.md`.
 
 use bevy::prelude::*;
 use proptest::prelude::*;

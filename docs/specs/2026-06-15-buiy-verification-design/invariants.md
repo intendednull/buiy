@@ -252,8 +252,14 @@ teeth with **mutation fixtures** — hand-built scenes that VIOLATE exactly one
 relation, asserted to be rejected, plus a known-good control asserted to pass:
 
 - `paint_order_is_total`: a fixture whose realized list duplicates one entity ⇒
-  `Err`; a stable-but-equal-key pair in reversed document order ⇒ `Err`; the
-  generator's output on a fixed seed ⇒ `Ok`.
+  `Err`; the generator's output on a fixed seed ⇒ `Ok`. **Landed note:** the
+  stability clause (a reversed-equal-key pair ⇒ `Err`) is NOT assertable at this
+  predicate's input boundary — the predicate sees only the already-realized flat
+  list, in which the stable z-tier sort has *already* run, so an equal-key pair
+  is indistinguishable from a legitimately-ordered one. Stability is instead
+  exercised by `realize`'s production-mirror stable sort itself; the predicate
+  asserts only totality (no duplicates). The waiver lives in the predicate's
+  code comment.
 - `transform_roundtrips`: feed a deliberately mis-composed matrix (e.g. `S·R·T`
   instead of `T·R·S·M`) ⇒ `Err`; identity inputs ⇒ `Ok`. Pin `EPS` and add a
   boundary fixture at `EPS ± 1 ULP`.

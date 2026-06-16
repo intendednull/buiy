@@ -577,4 +577,47 @@ mod tests {
         assert!(!set.insert(Dpr::X1)); // already present — Hash + Eq agree
         assert!(set.insert(Dpr::X2));
     }
+
+    /// Headless teeth for the determinism gate's first probe (quiescence
+    /// condition 1, the `PendingCaptureAssets` asset gate). A render sub-app is
+    /// GPU-only, so conditions 2-4 are skipped here via `get_sub_app(RenderApp)?`
+    /// — but condition 1 lives in the main world and MUST be exercised without an
+    /// adapter, else a vacuous-check regression (the gate always returning
+    /// `None`) would slip past the headless gate and only fail on a GPU host.
+    #[test]
+    fn quiescence_gate_blocks_on_an_unloaded_required_asset() {
+        use bevy::asset::AssetServer;
+
+        // AssetServer (via AssetPlugin/ImagePlugin) but NO RenderPlugin ⇒ no GPU.
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::app::TaskPoolPlugin::default())
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::image::ImagePlugin::default());
+        app.init_resource::<PendingCaptureAssets>();
+
+        // Nothing required + no render sub-app ⇒ quiescent (the gate is a no-op).
+        assert_eq!(
+            quiescence_unmet(&app),
+            None,
+            "an empty asset gate with no render sub-app is quiescent"
+        );
+
+        // Require an asset that never loads (no backing file, and we never run an
+        // update to drive the load). The gate must now report condition 1 unmet —
+        // proving it inspects load state rather than stubbing `None`.
+        let handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<bevy::image::Image>("buiy-test/never-exists.png")
+            .untyped();
+        app.world_mut()
+            .resource_mut::<PendingCaptureAssets>()
+            .require(handle);
+
+        assert_eq!(
+            quiescence_unmet(&app),
+            Some("pending asset not loaded-with-dependencies"),
+            "an unloaded required asset must block quiescence (condition 1)"
+        );
+    }
 }

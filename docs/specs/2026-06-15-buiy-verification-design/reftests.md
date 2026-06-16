@@ -132,6 +132,8 @@ The whole bet (wpt-reftests/lessons.md, "Top of file"): **the reference must not
 
 3. **Multiple references where one disjoint path is impossible** (logical↔physical, transform↔literal where the literal still routes through one shared packer). Support `reference: &[fn(&mut App)]` semantics via a `RefCase::multi` constructor: for `Match`, **≥1** reference must match (OR); for `Mismatch`, **all** must mismatch (AND) — the WPT/Gecko aggregation (wpt-reftests/lessons.md Borrow #1). Build this into the harness deliberately; Blink supports neither multiple nor chained references, so it is not free (wpt-reftests/lessons.md Avoid row).
 
+   > **Landed status (DEFERRED):** `RefCase` ships single-reference only; the `RefCase::multi` OR/AND aggregation above is **not yet implemented** — no current reftest pairing needs it, and adding it speculatively would ship untested aggregation logic. Tracked in `docs/plans/follow-ups.md`. The aggregation *truth table* (Verification 1 below) is therefore likewise deferred; `evaluate_outcome` covers the single-reference `Match`/`Mismatch` decision today.
+
 **Review checklist** (PR-time, complements the lint): (a) does the reference invoke the feature under test? (lint catches the structural cases; reviewer catches semantic ones the marker map misses); (b) is the fuzz floor `(0,0)` for a `Mismatch`?; (c) does a `Match` with non-zero fuzz cite a measured run-to-run jitter reason, ranges not including 0 (Mozilla discipline, wpt-reftests/lessons.md Avoid)?
 
 ## Authoring patterns — mapped to Buiy's CSS-subset

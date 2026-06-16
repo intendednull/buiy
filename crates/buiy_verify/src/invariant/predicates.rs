@@ -97,8 +97,13 @@ pub fn paint_order_is_total(nodes: &ExtractedNodes) -> Result<(), Violation> {
 /// - `scale(k)` scales every basis vector by its axis factor and leaves the
 ///   off-diagonals zero (a pure diagonal scale touches nothing else).
 ///
-/// Operates on `compose_transform` OUTPUTS, never a re-implementation — a
-/// transposed/ dropped factor in the production composition reds this.
+/// Operates on `compose_transform` OUTPUTS, never a re-implementation, so a
+/// mis-applied *single* factor (a dropped term, a wrong sign, a transposed
+/// matrix) reds this. Note the SCOPE: each relation feeds exactly one
+/// non-identity factor, so an INTER-factor order swap (`T·R·S` vs `T·S·R`) is
+/// invisible here by construction — that ordering is pinned independently by
+/// buiy_core's own `compose_longhands_with_matrix_order` /
+/// `compose_matrix_compose_product_order` unit tests, not by this predicate.
 pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
     // (a) translate(d) · translate(-d) ≈ I.
     let d = Vec3::from_array(t.translate);
