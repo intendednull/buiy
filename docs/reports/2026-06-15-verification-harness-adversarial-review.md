@@ -1,7 +1,7 @@
 # Adversarial fresh-agent review of the `buiy_verify` visual-bug-detection harness
 
 **Date:** 2026-06-15
-**Verdict:** Architecture sound; 7 real bugs (2 high, 3 medium, 2 low) + 1 maintainability trap found by independent review and **fixed** (TDD); 3 coverage gaps recorded as follow-ups. Both gates green.
+**Verdict:** Architecture sound; 7 real bugs (2 high, 3 medium, 2 low) + 1 maintainability trap found by independent review and **fixed** (TDD); 3 coverage gaps recorded as follow-ups. Both gates green. **Fault-injection confirmed** the gate goes RED on injected production layout, color, and paint-order bugs (see § Fault-injection verification), surfacing one hardening follow-up (the Tier-3 invariant mirrors the paint-order assembly).
 
 One-shot investigation: after the `buiy-verification-design` harness (`crate buiy_verify`, ~9.7 k LOC, the five-tier pyramid) landed, a fresh-agent adversarial review re-examined it with no prior context — 7 independent module reviewers (one per tier), each finding bug found verified by a separate skeptic, plus a ground-truth agent that re-ran the real test gates. This report records what it found and how each was dispositioned. Audience: Buiy maintainers and the next person to touch `buiy_verify`.
 
@@ -47,6 +47,24 @@ Architecture **excellent** — the Tier-3 metamorphic layer threads generated sc
 - **Quiescence conditions 2–4 headless coverage** — condition 1 now has a headless test; the three GPU-world conditions need a hand-built render world to test without an adapter.
 - **CPU SDF oracle ↔ shader numeric pin** — the oracle and shader are textual twins; numeric drift is caught only by the GPU cross-check lane today.
 
+## Fault-injection verification — does it actually catch bugs?
+
+The regression tests prove each *fix* works; they don't prove the harness catches a real bug end-to-end. So I injected real one-line bugs into `buiy_core` **production** code and confirmed the gate goes RED (then reverted each):
+
+| Injected production bug | Result | Caught by |
+|---|---|---|
+| **Layout:** `+7px` on every `ResolvedLayout.position` | **RED ✓** | Tier-1 layout snapshot (`coverage_layout::layout_snapshots`) |
+| **Color/visual:** kill the red channel in `extracted_node_for` | **RED ✓** | Tier-2 display-list snapshot (`#ff00ffff` → `#0000ffff`) |
+| **Paint order:** reverse the production `painters_z` z-tier sort (sub-pass 6f) | **RED ✓** | buiy_core's own `z_index_*` unit tests — **NOT** the new Tier-3 invariant |
+
+Two findings worth their weight:
+
+1. **A color R↔B swap was initially NOT caught** — because the button fixture's only colors are white `#ffffffff` and the magenta sentinel `#ff00ffff`, both *symmetric* under R↔B. A red-channel *kill* (asymmetric) was caught immediately. Lesson: the harness catches color bugs, but the corpus needs fixtures with asymmetric colors to make any given mutation observable — a fixture-coverage note, not a harness defect.
+
+2. **A production paint-order bug is NOT caught by the new Tier-3 invariant** — only by buiy_core's pre-existing `z_index_*` tests. Root cause: `invariant/scene.rs`'s `realize` *re-implements* the painters_z assembly (sub-pass 6f) and feeds its own copy into `context_tree_paint_order`, so the metamorphic suite verifies a parallel copy, not the real assembly. The gate still catches the bug (via buiy_core's tests), but the cheap structured tier we built doesn't. Recorded as a hardening follow-up: make `realize` CALL the production assembly. This confirms the adversarial review's "scene.rs over-claims it builds painters_z exactly as 6f does" with a live reproduction.
+
+Net: **layout bugs, color/visual bugs, and paint-order bugs all produce a RED gate.** The structured tiers catch layout and color directly; paint-order is caught by buiy_core's own tests today, with a clear path to also cover it in the metamorphic tier.
+
 ## Process note
 
-Run as a background `Workflow` (20 agents, find → adversarially-verify → synthesize). One reported a `SIGSEGV` in `coverage_forced_colors`; re-running the headless gate **alone** exits 0 — it was build-cache contention from 20 agents sharing one `target/`, not a code defect. Every claimed bug was confirmed against the actual code before fixing; every fix is TDD (red test first) with a named regression test.
+Run as a background `Workflow` (20 agents, find → adversarially-verify → synthesize). One reported a `SIGSEGV` in `coverage_forced_colors`; re-running the headless gate **alone** exits 0 — it was build-cache contention from 20 agents sharing one `target/`, not a code defect. Every claimed bug was confirmed against the actual code before fixing; every fix is TDD (red test first) with a named regression test. The fault-injection pass above was inline (one production mutation at a time, reverted after each).

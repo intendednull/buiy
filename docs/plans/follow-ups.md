@@ -867,6 +867,22 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   there; closing the gap means adding a `PositionKind` axis to the generator.
   Surfaced by the 2026-06-15 fresh-agent quality review (scene.rs module doc
   records the bound).
+- **Invariant `realize` mirrors the painters_z assembly instead of calling it** —
+  `invariant/scene.rs`'s `realize` re-implements layout sub-pass 6f (the per-
+  context `painters_z` z-tier sort) and passes its OWN `painters_z_of` into the
+  production `context_tree_paint_order`. **Empirically confirmed (2026-06-15
+  fault-injection):** reversing the production 6f sort (`layout/systems.rs` z-tier
+  `sort_by_cached_key`) was NOT caught by the Tier-3 invariant suite — only by
+  buiy_core's own `z_index_*` unit tests (`static_z_index_paints_in_document_order`,
+  `z_index_ordering_neg_zero_pos`). So the metamorphic tier verifies a *parallel
+  copy* of 6f, not the real assembly; a 6f-only regression relies on buiy_core's
+  z-index tests + the GPU golden tier. Harden by having `realize` CALL the
+  production `painters_z` assembly (extract it to a pure fn) so the invariant
+  exercises the real code path. The CPU display-list helper
+  (`snapshot::extract_nodes_from_world`) likewise re-sorts by `Name`, so it does
+  not observe production paint order either — Tier-2 paint-order coverage is the
+  GPU golden tier's job. (The `Name`-sort is correct for the *dump's* determinism;
+  the point is only that Tier-2's CPU dump is not a paint-order oracle.)
 - **Quiescence gate — conditions 2-4 headless coverage** — `capture_to_image`'s
   `quiescence_unmet` (`buiy_core::render::golden`) checks four conditions; only
   condition 1 (the `PendingCaptureAssets` asset gate) is reachable without a
