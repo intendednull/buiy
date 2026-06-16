@@ -1,7 +1,12 @@
 # Buiy Text-Editing Campaign (E1–E6)
 
 **Date:** 2026-06-13
-**Status:** active
+**Status:** landed — all six phases E1–E6 merged to main (PRs #62–#67); the
+F-tier editor surface is implemented and gate-green (headless + the additive
+GPU lane). The spec's editing surface is flipped to implemented; the named
+deferrals (multi-range selection *behavior*, HTML/image clipboard, the BiDi
+split caret, compose-over-selection) are filed in
+[follow-ups.md](follow-ups.md).
 **Spec:** [specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md)
 **Readiness:** [reports/2026-06-13-text-editing-design-readiness.md](../reports/2026-06-13-text-editing-design-readiness.md)
 
@@ -129,7 +134,15 @@ not per frame, so volume stays bounded.
   full buffer text; E5 refines it to exclude the preedit range, invariant (b))
   and the `TextChanged` Message on logical-value change are born here, since
   edits originate in this phase. The OQ#1 one-frame path is realized here (no new
-  machinery). (spec §§ 3, 3.1, 3.2, 3.3, 11.)
+  Taffy **compute pass** — scheduling is unchanged). It does, however, need the
+  editor edit to **dirty-mark** its node into the existing measure pipeline: an
+  `Action` into the editor-owned buffer trips none of the `TextSyncTriggers`
+  (the `Text` component is unchanged), so `apply_keyboard_edits` must
+  `invalidate_intrinsics()` + `mark_dirty_for_entity()` — exactly `sync_one`'s
+  gesture for a `Text` edit — to enter measure → commit → extract. That seam is
+  the editor-input latency gate's load-bearing fact (the E2 plan's M1); the
+  Input-driven N→N+1 fixture is its regression guard. (spec §§ 3, 3.1, 3.2, 3.3,
+  11.)
 - **Dependencies:** E1.
 - **Test surface:** headless — keymap table tests per platform (key + modifiers
   → `EditCommand`); character insertion from synthetic `KeyboardInput.text`;

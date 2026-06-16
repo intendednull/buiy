@@ -899,6 +899,103 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   `d`-value agreement test (or share one Rust SDF fn across oracle + probe).
   Surfaced by the 2026-06-15 review (`reftests.md` § SDF cross-check).
 
+**Owner:** `buiy-verification-design` — worth building once the canonical CI
+GPU class exists (render `verification.md § 4.1`); tolerance budgets are that
+design's numbers, never this backlog's.
+
 **Spec touchpoint:** `buiy-verification-design` (`goldens.md`, `determinism.md`,
 `metric.md`, `reftests.md`, `coverage.md`); render `verification.md § 4.1`; text
-`verification.md § 4`.
+`verification.md § 4` (as-landed note).
+
+## Text editing — BiDi split caret (E3 deferral)
+
+**Status:** deferred from E3 ([2026-06-13-buiy-text-editing-e3-caret-selection.md](2026-06-13-buiy-text-editing-e3-caret-selection.md)).
+
+**What it is:** when the caret sits on a bidirectional direction boundary, the
+spec (editing-and-ime.md §§ 4.1, 5) calls for **two** caret marks — a primary
+full-height bar at one run's edge plus a secondary indicator at the other — so
+the user can tell which direction the next typed character will flow.
+
+**Why deferred:** cosmic-text 0.19 exposes no API for the dual position.
+`LayoutRun::cursor_position` → `cursor_glyph` (vendored `buffer.rs:148-179`)
+compares **only** `(cursor.line, cursor.index)` and never reads
+`cursor.affinity`, and a single unwrapped line is **one** `LayoutRun` — so
+repeated `cursor_position` calls cannot surface the second position, and there
+is no second run to scan. cosmic's own `Editor::draw` paints a single caret
+(`find_map` first run). E3 therefore paints the **single primary caret** (zero
+correctness risk — the caret is always present and correct; only the
+mixed-direction *secondary indicator* is missing), exactly as the multi-range
+selection *behavior* is a named deferral.
+
+**Correct approach (the work):** compute the secondary x from glyph-level
+geometry at the boundary byte index — the LTR glyph's trailing edge vs the RTL
+glyph's leading edge, using the affinity pair, à la `cursor_from_glyph_left` /
+`cursor_from_glyph_right` (vendored `buffer.rs:181-197`, which DO encode
+affinity). Paint as a secondary `CaretVisual`-style rect + a second solid stamp
+(CPU geometry only — no new GPU, the E3 paint path already stamps the primary).
+
+**Owner:** the text-editing campaign, as a focused follow-up slice after E3–E6.
+
+**Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 (as-landed deferral notes).
+
+## Text editing — multi-range selection *behavior* (E-campaign deferral)
+
+**Status:** deferred from the `buiy-text-editing` campaign (E1–E6;
+[campaign plan](2026-06-13-buiy-text-editing-campaign.md)).
+
+**What it is:** the `TextSelection` type is multi-range-**shaped** (`primary` +
+`secondary: SmallVec<[…; 2]>`, editing-and-ime § 4.2) and the geometry pipeline,
+`SelectionChanged` payload, and `::selection` APIs all carry the shape — but v1
+ships single-range **behavior** (`secondary` always empty). Multi-cursor editing
+(multiple simultaneous carets/ranges, e.g. Ctrl-click-to-add-caret) is the named
+next slice.
+
+**Why deferred:** cosmic-text's `Selection` is structurally single-range;
+multi-range behavior is Buiy-layer aggregation over N mirrored ranges + N-caret
+input routing — a focused slice, cheap because the type is already shaped (no
+reshape needed).
+
+**Owner:** a focused follow-up slice after E1–E6.
+
+**Spec touchpoint:** editing-and-ime.md §§ 4.2, 13 (named deferral).
+
+## Text editing — HTML + image clipboard flavors (E-campaign deferral)
+
+**Status:** deferred from the `buiy-text-editing` campaign (E4 shipped plain
+text).
+
+**What it is:** the F row names text + HTML + image MIME for cut/copy/paste; E4
+ships **plain text only** (`Cut`/`Copy` via `copy_selection`, `Paste` through the
+§ 3.3 newline policy) behind the `ClipboardProvider` facade. HTML + image flavors
+are the named next slice.
+
+**Why deferred:** arboard's HTML *read-side* support is unverified
+(editing-and-ime OQ#3) and must be confirmed before the slice is promised; the
+facade makes adding flavors local (no API churn).
+
+**Owner:** a focused follow-up slice; gated on confirming arboard HTML read.
+
+**Spec touchpoint:** editing-and-ime.md §§ 7, 13 (named deferral); OQ#3.
+
+## Text editing — compose-over-selection (E5 deferral)
+
+**Status:** deferred from the `buiy-text-editing` campaign (E5 IME;
+[E5 plan](2026-06-13-buiy-text-editing-e5-ime.md)).
+
+**What it is:** when text is selected and the user starts an IME composition,
+the platform/web convention is to **replace the selection** with the preedit
+(the selection is deleted, composition begins at the caret). E5's
+`splice_preedit` (`text/edit/ime.rs`) splices the preedit at the editor cursor
+and does **not** delete an active selection first, so composing over a selection
+leaves the selected text in place and inserts the preedit beside it.
+
+**Why deferred:** plain-text IME composition (the F-tier core path — preedit
+splice + reflow + the four § 6.2 invariants) is complete and correct for the
+unselected-caret case, which is the overwhelmingly common one. Compose-over-
+selection needs a `delete_selection` (as one undo unit, paired with the
+composition group per § 6.2c) before the first splice plus a re-anchor of the
+preedit span — a focused behavioral slice, no new GPU and no new event surface.
+
+**Owner:** a focused follow-up slice after E1–E6.
+
+**Spec touchpoint:** editing-and-ime.md §§ 6.1, 6.2, 13.

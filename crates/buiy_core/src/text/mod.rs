@@ -43,14 +43,22 @@ pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
     CaretVisual, ComputedTextLayout, ComputedTextLine, DecorationLineStyle, DecorationLines,
     FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, GenericFamily, IntrinsicWidths,
-    LineHeight, ResolvedBaseline, SelectionVisual, TEXT_SHAPING, Text, TextAlign, TextBuffer,
-    TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+    LineHeight, PreeditVisual, ResolvedBaseline, SelectionVisual, TEXT_SHAPING, Text, TextAlign,
+    TextBuffer, TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace,
+    resolve_wrap,
 };
 pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
 };
 pub use direction::prepend_strong_marks;
-pub use edit::{Disabled, Placeholder, ReadOnly, SingleLine, TextBufferAccess, TextEditState};
+pub use edit::{
+    ArboardClipboard, CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled,
+    EditCommand, EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
+    MemClipboard, Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange,
+    SingleLine, TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
+    apply_keyboard_edits, pointer_selection, pointer_to_cursor, write_caret_and_selection,
+    write_ime_window,
+};
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
     pack_clip, physical_offset,
@@ -159,6 +167,12 @@ impl Plugin for BuiyTextPlugin {
             Update,
             (
                 text_sync_buffers.in_set(crate::layout::BuiyLayoutStep::TextSync),
+                // E6 (editing-and-ime § 10): maintain the PlaceholderActive
+                // marker + display-only PlaceholderBuffer for empty editors.
+                // Same TextSync step as text_sync_buffers (the measure-pipeline
+                // lock window) — it shapes a display-only buffer the same way,
+                // before TextCommit / extract. Inert without an editor.
+                crate::text::edit::sync_placeholder.in_set(crate::layout::BuiyLayoutStep::TextSync),
                 // The new FINAL layout step (architecture § 4.2). Inert
                 // without LayoutPlugin (Option params return early).
                 text_commit.in_set(crate::layout::BuiyLayoutStep::TextCommit),
@@ -175,6 +189,110 @@ impl Plugin for BuiyTextPlugin {
             visual::write_caret_blink
                 .after(crate::BuiySet::Animate)
                 .before(crate::BuiySet::Picking),
+        );
+
+        // E3 (editing-and-ime §§ 4.1, 4.3, 5, 11): the caret + selection
+        // geometry writer — mirrors editor state into the T7 paint seats,
+        // resets the per-entity blink, emits CaretMoved/SelectionChanged. Runs
+        // in the render-prep window, BEFORE write_caret_blink (which reads the
+        // CaretBlink origin this system resets). Net order:
+        // Input < write_caret_and_selection < write_caret_blink < Picking.
+        app.add_message::<crate::text::edit::CaretMoved>();
+        app.add_message::<crate::text::edit::SelectionChanged>();
+        app.add_systems(
+            Update,
+            crate::text::edit::write_caret_and_selection
+                .after(crate::BuiySet::Input)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
+        // E5 (editing-and-ime § 6.3): the IME popup positioning writer — sets
+        // Window.ime_enabled (focus + markers) and Window.ime_position (the
+        // focused editor's caret rect bottom-left, once geometry committed).
+        // Same render-prep window as write_caret_and_selection (after Input,
+        // before write_caret_blink), so the position reads this frame's caret.
+        // Inert headless (Option focus + a single-PrimaryWindow guard no-op
+        // without a Window).
+        app.add_systems(
+            Update,
+            crate::text::edit::write_ime_window
+                .after(crate::BuiySet::Input)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
+        // E6 (editing-and-ime § 10): the focus lifecycle writer — on focus loss
+        // seals the open undo group + removes any live preedit (+ the M1
+        // dirty-mark); on focus gain resets the blink origin. Caret VISIBILITY is
+        // owned by write_caret_blink (M1), not here. Same render-prep window
+        // (after Input, before write_caret_blink). Inert headless (Option focus +
+        // Option LayoutTree no-op without FocusPlugin / LayoutPlugin).
+        app.add_systems(
+            Update,
+            crate::text::edit::focus_lifecycle
+                .after(crate::BuiySet::Input)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
+        // E6 (editing-and-ime § 9): auto-scroll-into-view — pan the focused
+        // editor's ScrollOffset so the caret stays in the content-box viewport
+        // (x single-line / y multi-line). Runs .after(write_caret_and_selection)
+        // so it reads the caret rect that writer just published this frame; the
+        // ScrollOffset it writes is consumed by the transform bridge later this
+        // frame (seed_scroll_dirty, .after(BuiySet::Animate)) — same-frame pan.
+        // Still .before(write_caret_blink) to stay inside the render-prep window.
+        app.add_systems(
+            Update,
+            crate::text::edit::auto_scroll_caret
+                .after(crate::text::edit::write_caret_and_selection)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
+        // E2 (editing-and-ime §§ 3, 11): the per-platform keymap (selected
+        // once at init by a data swap) and the focus-gated input system.
+        // Runs in BuiySet::Input — the `handle_tab` precedent (focus.rs:56),
+        // two sets after Layout, so an edit publishes N→N+1 (OQ#1: accepted
+        // one-frame latency). The TextChanged Message is registered so
+        // consumers (the a11y layer, the widget catalog) can subscribe.
+        app.init_resource::<crate::text::edit::Keymap>();
+        // E4 (editing-and-ime § 7): the OS clipboard, behind the facade. On a
+        // headless build with no display arboard construction fails and the
+        // provider degrades to "empty" (ArboardClipboard::handle returns None) —
+        // never a panic. Tests override this resource with a MemClipboard.
+        app.insert_resource(crate::text::edit::Clipboard(Box::new(
+            crate::text::edit::ArboardClipboard::new(),
+        )));
+        app.add_message::<crate::text::edit::TextChanged>();
+        // E6 (editing-and-ime § 11): the host-facing single-line submit Message.
+        app.add_message::<crate::text::edit::EditSubmitted>();
+        // E4 (editing-and-ime § 8, 11): the undo/redo transition Messages.
+        app.add_message::<crate::text::edit::EditUndone>();
+        app.add_message::<crate::text::edit::EditRedone>();
+        app.add_systems(
+            Update,
+            crate::text::edit::apply_keyboard_edits.in_set(crate::BuiySet::Input),
+        );
+
+        // E5 (editing-and-ime §§ 6, 11): the focus-gated IME system + the
+        // composition Message taxonomy. BuiySet::Input alongside the keyboard
+        // path — winit sends EITHER Ime OR KeyboardInput per keystroke
+        // (window.rs ime_enabled doc), so they do not race. Inert headless
+        // (Option params no-op without Ime / Focus / Layout infra).
+        app.add_message::<crate::text::edit::CompositionStart>();
+        app.add_message::<crate::text::edit::CompositionUpdate>();
+        app.add_message::<crate::text::edit::CompositionEnd>();
+        app.add_systems(
+            Update,
+            crate::text::edit::apply_ime.in_set(crate::BuiySet::Input),
+        );
+
+        // E3 (editing-and-ime § 4): the focus-gated mouse-selection system —
+        // window→buffer-local mapping → cosmic Click/DoubleClick/TripleClick/
+        // Drag, setting FocusedEntity on press. BuiySet::Input, alongside
+        // apply_keyboard_edits; inert headless (Option params no-op without
+        // mouse/picking infra).
+        app.add_systems(
+            Update,
+            crate::text::edit::pointer_selection.in_set(crate::BuiySet::Input),
         );
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert

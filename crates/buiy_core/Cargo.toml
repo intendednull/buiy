@@ -13,6 +13,7 @@ accesskit.workspace = true
 accesskit_winit.workspace = true
 guillotiere = { workspace = true }
 smallvec = { workspace = true }
+arboard = { workspace = true }
 bitflags = "2.11.1"
 # Text engine (buiy-text-rendering-design, architecture § 7): Buiy's OWN pin,
 # never ridden transitively (the bevy_cosmic_edit decay path). DEFAULT
@@ -59,6 +60,7 @@ default_font = []
 
 [dev-dependencies]
 naga = "27"
+proptest = { workspace = true }
 # Dev-only dependency edge for the #[ignore] GPU re-capture tests, which
 # migrate off the deprecated `render::golden::perceptual_diff` (L1) onto
 # `buiy_verify::metric::compare` (metric.md § Migration). This forms a

@@ -91,7 +91,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 **Specs**
 
-- [Buiy text-rendering design](specs/2026-06-09-buiy-text-rendering-design/README.md) — cosmic-text 0.19 engine ownership, Taffy measure seam, glyph producer into the GPU-verified atlas, font assets, decoration/selection/caret painting, editing + IME (multi-file). The rendering surface is implemented (text campaign T1–T9); `editing-and-ime.md` remains target-state for the named successor campaign `buiy-text-editing`. `[landed]`
+- [Buiy text-rendering design](specs/2026-06-09-buiy-text-rendering-design/README.md) — cosmic-text 0.19 engine ownership, Taffy measure seam, glyph producer into the GPU-verified atlas, font assets, decoration/selection/caret painting, editing + IME (multi-file). The whole text subsystem is implemented: the rendering surface (text campaign T1–T9) and the editing/IME surface (the `buiy-text-editing` campaign E1–E6). `[landed]`
 
 **Plans**
 
@@ -108,7 +108,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 **Editing campaign**
 
-- [Buiy text-editing campaign](plans/2026-06-13-buiy-text-editing-campaign.md) — E1–E6 phasing realizing `editing-and-ime.md`: editor substrate over `cosmic_text::Editor` → input/keymap → caret/selection → clipboard/undo → IME → lifecycle/widget/closure. Consumes T7's painting primitives; OQ#1 (edit→layout) resolved as one-frame latency; no new GPU work. `[active]`
+- [Buiy text-editing campaign](plans/2026-06-13-buiy-text-editing-campaign.md) — E1–E6 phasing realizing `editing-and-ime.md`: editor substrate over `cosmic_text::Editor` → input/keymap → caret/selection → clipboard/undo → IME → lifecycle/widget/closure. Consumes T7's painting primitives; OQ#1 (edit→layout) resolved as one-frame latency; no new GPU work. `[landed]`
 
 ### Reports
 

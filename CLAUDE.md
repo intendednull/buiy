@@ -80,8 +80,9 @@ cargo deny check
 Other useful one-offs:
 
 - `cargo test -p buiy_core` — fast loop on the core crate.
-- `cargo run --example hello_button` — visual smoke test of the Phase 0 widget.
-- `cargo run --example hello_text` — visual smoke test of the text stack.
+- `cargo run -p hello_button` — visual smoke test of the Phase 0 widget.
+- `cargo run -p hello_text` — visual smoke test of the text stack.
+- `cargo run -p capture` — regenerate the README screenshots headlessly (offscreen render-to-texture + GPU readback; needs a real wgpu adapter).
 - `BUIY_ACCEPT_SHAPING=1 cargo test -p buiy_core --test text_shaping_snapshots`
   — regenerate the `.snap` shaping snapshots (curated: review the diff before
   committing).

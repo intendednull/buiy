@@ -24,6 +24,7 @@ members = [
     "crates/buiy_verify",
     "examples/hello_button",
     "examples/hello_text",
+    "examples/capture",
 ]
 
 [workspace.package]
@@ -49,6 +50,21 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = "0.25"
 proptest = "1"
+# Clipboard for the text editor (editing-and-ime § 7). arboard is the
+# ecosystem standard (egui/bevy_egui lineage), 1Password-stewarded,
+# MIT/Apache. v1 ships PLAIN TEXT only — HTML/image flavors are the named
+# follow-up slice (spec § 13, pre-campaign decision 4) — so default features
+# are OFF: `image-data` (the default) drags in the `image` crate +
+# `objc2-core-graphics` on macOS for image clipboard, which the text-only
+# adoption never uses (m2). The text backends — x11rb (Linux/X11),
+# clipboard-win (Windows), objc2-app-kit (macOS) — are NOT behind
+# `image-data`, so text cut/copy/paste works with default features disabled.
+# Linux defaults to X11 (`x11rb`); native Wayland needs the non-default
+# `wayland-data-control` feature, deferred — v1 reaches Wayland via XWayland,
+# and `ArboardClipboard::new()` degrades gracefully if no backend is present
+# (m3). Behind the ClipboardProvider facade so tests inject a fake and the
+# dep stays swappable.
+arboard = { version = "3.6", default-features = false }
 tracing = "0.1"
 # Phase 0 closeout deps (closeout plan 2026-05-08).
 bytemuck = { version = "1", features = ["derive"] }

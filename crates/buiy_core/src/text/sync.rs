@@ -110,6 +110,10 @@ type SyncedText = (
     // Read-only: the marker's CURRENT state, reconciled (insert/remove)
     // against this sync's resolution by `reconcile_font_block` (decision 9).
     Option<&'static PendingFontBlock>,
+    // § 3.3: bind the SingleLine marker (NOT a filter) so `sync_one` lays an
+    // editor's buffer with `Wrap::None`. Display-only and multi-line editors
+    // get `false` and are unaffected.
+    Has<super::edit::SingleLine>,
 );
 
 type SyncedTextItem<'w> = (
@@ -127,6 +131,7 @@ type SyncedTextItem<'w> = (
     Option<&'w TextDirection>,
     Option<&'w TextDecorations>,
     Option<&'w PendingFontBlock>,
+    bool,
 );
 
 /// The `BuiyLayoutStep::TextSync` body (measure-and-layout § 4.1).
@@ -225,6 +230,7 @@ pub fn text_sync_buffers(
             ctx.registry,
             ctx.index,
             ctx.now,
+            false, // insert path: no editor here, single-line wrap is moot
         );
         buffer.invalidate_intrinsics();
         commands.entity(entity).insert(buffer);
@@ -303,6 +309,7 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         direction,
         decorations,
         pending,
+        single_line,
     ) = item;
     let style = AuthoredStyle::resolve(
         ctx.defaults,
@@ -323,7 +330,15 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
     // (`tests/text_edit_substrate.rs` pins the editor arm;
     // `tests/text_sync.rs` pins `Changed<TextBuffer>` never fires past insertion).
     let blocked = access.with_buffer_mut(|buffer| {
-        apply_authored_to_buffer(buffer, text, &style, ctx.registry, ctx.index, ctx.now)
+        apply_authored_to_buffer(
+            buffer,
+            text,
+            &style,
+            ctx.registry,
+            ctx.index,
+            ctx.now,
+            single_line,
+        )
     });
     // Invalidate the AUTHORITATIVE cache (the accessor picks the right side) —
     // every content change keys the intrinsics cache off this invalidation.
@@ -492,6 +507,7 @@ fn apply_authored_to_buffer(
     registry: &FontRegistry,
     index: &mut FontMatchIndex,
     now: f64,
+    single_line: bool,
 ) -> bool {
     let collapsed = collapse_whitespace(&text.0, style.white_space.collapse_mode());
     // § 5.4: AFTER collapse (the trim sees authored edges, never the mark).
@@ -500,7 +516,14 @@ fn apply_authored_to_buffer(
     let directed = prepend_strong_marks(&collapsed, style.direction);
     let resolution = resolve_spans(&directed, style.family, style.weight, registry, index, now);
     buffer.set_metrics(style.metrics());
-    buffer.set_wrap(resolve_wrap(style.white_space, style.text_wrap));
+    // § 3.3: a SingleLine editor never wraps, regardless of white-space /
+    // text-wrap. The marker wins over the resolved wrap.
+    let wrap = if single_line {
+        cosmic_text::Wrap::None
+    } else {
+        resolve_wrap(style.white_space, style.text_wrap)
+    };
+    buffer.set_wrap(wrap);
     buffer.set_tab_width(DEFAULT_TAB_WIDTH);
     match resolution.spans.as_slice() {
         // Empty text: the base attrs (there is nothing to resolve).

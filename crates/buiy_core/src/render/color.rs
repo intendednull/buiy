@@ -199,6 +199,19 @@ pub fn resolve_caret_color(explicit: Option<&ColorToken>, theme: &Theme, current
     theme.color(CARET_COLOR_TOKEN).unwrap_or(current)
 }
 
+/// Preedit (IME composition) underline token (editing-and-ime § 6.2;
+/// decoration-and-paint § 8). Opt-in like the caret token; absent ⇒ the
+/// entity's resolved foreground (currentColor parity — the composing text
+/// is underlined in its own ink).
+pub const PREEDIT_UNDERLINE_TOKEN: &str = "color.text.preedit-underline";
+
+/// `preedit-underline` color: the `color.text.preedit-underline` theme key
+/// if present (presence check — an opt-in tier, not a magenta miss), else
+/// `current` (the entity's resolved foreground).
+pub fn resolve_preedit_underline(theme: &Theme, current: Color) -> Color {
+    theme.color(PREEDIT_UNDERLINE_TOKEN).unwrap_or(current)
+}
+
 /// WCAG 2.x relative luminance of a color (sRGB → linear, then the 0.2126 /
 /// 0.7152 / 0.0722 weighting). Operates on the sRGB-decoded channels; alpha is
 /// ignored (contrast is defined over opaque colors).
