@@ -39,7 +39,7 @@ pub use buiy_core::{
     },
     theme::{Theme, UserPreferences, default_light_theme},
 };
-pub use buiy_widgets::{Button, OnPress, WidgetsPlugin};
+pub use buiy_widgets::{Button, OnPress, TextInput, WidgetsPlugin};
 
 // `buiy_core::render::ExtractedDraws` is intentionally NOT re-exported at
 // the crate root: it is a render-world resource only, populated during the

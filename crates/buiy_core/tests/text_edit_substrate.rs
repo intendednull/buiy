@@ -31,6 +31,19 @@ fn text_edit_state_constructs_without_a_font_system() {
     );
 }
 
+/// `for_font_size` is the core constructor that keeps `cosmic_text::Metrics`
+/// out of downstream crates (`buiy_widgets::TextInput::new` calls it). A Buiy
+/// `f32` size in ⇒ an editor whose buffer metrics are `(size, size * 1.2)`.
+#[test]
+fn for_font_size_constructs_an_editor_with_matching_metrics() {
+    // for_font_size(16.0) ⇒ an editor whose buffer metrics are (16, 19.2).
+    let state = buiy_core::text::edit::TextEditState::for_font_size(16.0);
+    let (fs, lh) = state.metrics_for_test();
+    assert_eq!(fs, 16.0);
+    assert!((lh - 19.2).abs() < 1e-4, "line height = size * 1.2: {lh}");
+    assert_eq!(state.value(), "", "a fresh editor is empty");
+}
+
 /// The four policy markers are plain zero-size / string components: they
 /// construct, compare, and (Task 1.4) reflect-register. Behavior is E2–E6;
 /// E1 only proves they exist and gate (a query can filter on them).

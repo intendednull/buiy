@@ -21,6 +21,14 @@ use super::undo::{GroupKind, UndoUnit};
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextChanged(pub Entity);
 
+/// Emitted when a single-line editor is submitted (editing-and-ime § 11 row
+/// `EditSubmitted`, § 3.3). Born from `EditCommand::Submit` — the focused
+/// single-line Enter. Payload: the entity (the value is read via the
+/// component, per the § 11 contract). This FINALIZES the § 11 taxonomy
+/// (the host-facing surface of E2's internal `EditOutcome.submitted` flag).
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditSubmitted(pub Entity);
+
 /// What one `apply` did, so the system can emit the right Messages. `value`
 /// changes drive `TextChanged`; `submitted` drives the internal Submit path
 /// (E6 turns it into the host-facing `EditSubmitted`).
@@ -461,6 +469,7 @@ pub fn apply_keyboard_edits(
     mut changed: MessageWriter<TextChanged>,
     mut undone: MessageWriter<super::undo::EditUndone>,
     mut redone: MessageWriter<super::undo::EditRedone>,
+    mut submitted: MessageWriter<EditSubmitted>,
 ) {
     // No input infrastructure (no `InputPlugin` and no manual seed) ⇒ the
     // `KeyboardInput` Message and the `ButtonInput<KeyCode>` resource are
@@ -544,6 +553,7 @@ pub fn apply_keyboard_edits(
     let mut font_system = fonts.lock();
     let mut any_value_change = false;
     let mut any_reshape = false;
+    let mut any_submit = false;
     for command in commands {
         // Capture the group BEFORE applying, for the undo/redo Messages.
         let was_undo = command == EditCommand::Undo;
@@ -562,6 +572,7 @@ pub fn apply_keyboard_edits(
         let outcome = state.apply_tracked(&mut font_system, command, &mut ctx);
         any_value_change |= outcome.value_changed;
         any_reshape |= outcome.reshaped;
+        any_submit |= outcome.submitted;
         if was_undo
             && outcome.value_changed
             && let Some(g) = group_before_undo
@@ -596,5 +607,8 @@ pub fn apply_keyboard_edits(
     }
     if any_value_change {
         changed.write(TextChanged(entity));
+    }
+    if any_submit {
+        submitted.write(EditSubmitted(entity));
     }
 }

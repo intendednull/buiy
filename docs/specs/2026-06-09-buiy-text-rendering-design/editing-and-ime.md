@@ -38,17 +38,35 @@ existing GPU-verified paths — quads via the batched node, glyph recolor via
 `crates/buiy_core/src/render/atlas/primitive.rs:30-48`). No new GPU work is
 required by anything in this file (§ 5).
 
-> **Status: design-only (deferred build targets).** As of 2026-06-13, none of
-> the editor state machine described here is implemented. `TextEditState`,
-> `EditCommand`, `UndoStack`, `TextSelection`, the `ReadOnly` / `Disabled` /
-> `SingleLine` / `Placeholder` markers, `PreeditSpan`, and the IME machinery
-> (§§ 2.2, 3, 4, 6, 8) are **this campaign's implementation targets**, not
-> verified code — `TextEditState` is explicitly deferred at
-> `crates/buiy_core/src/text/components.rs`. The **painting surfaces** they drive
-> (`CaretVisual`, `SelectionVisual`) and every architectural seam (focus, Tab,
-> `ScrollOffset`, picking, `BuiySet` order, paint rank, damage gates) ARE built
-> and verified (T6–T8); see the readiness report
-> `docs/reports/2026-06-13-text-editing-design-readiness.md`.
+> **Status: implemented (editing, E1–E6) — as landed 2026-06-13.** The editor
+> surface this file designs is built and proven on the two-lane suite (the
+> headless geometry gate every PR plus the `#[ignore]` GPU pixels lane): the
+> `buiy-text-editing` campaign (E1–E6,
+> [campaign plan](../../plans/2026-06-13-buiy-text-editing-campaign.md)) landed
+> `TextEditState` over `Editor<'static>`, the `ReadOnly` / `Disabled` /
+> `SingleLine` / `Placeholder` markers, the focus-gated `EditCommand` keymap,
+> the caret + multi-range-shaped `TextSelection`, the IME display-splice preedit
+> (the four § 6.2 invariants), the arboard clipboard facade, the two-stack
+> `UndoUnit` model with composition grouping, auto-scroll via `ScrollOffset`,
+> the placeholder, the § 11 Message taxonomy, and the
+> `buiy_widgets::TextInput` bundle. Per-section **"As landed (E_n)"** notes
+> below record the mechanical errata folded at closure. The **named deferrals**
+> (multi-range selection *behavior*, HTML/image clipboard, the BiDi split caret,
+> compose-over-selection) are filed in
+> [follow-ups.md](../../plans/follow-ups.md) (§ 13).
+>
+> *(Superseded 2026-06-13 by the as-landed paragraph above — the
+> proposal-time record, kept for history.)* **Status: design-only (deferred
+> build targets).** As of 2026-06-13, none of the editor state machine described
+> here is implemented. `TextEditState`, `EditCommand`, `UndoStack`,
+> `TextSelection`, the `ReadOnly` / `Disabled` / `SingleLine` / `Placeholder`
+> markers, `PreeditSpan`, and the IME machinery (§§ 2.2, 3, 4, 6, 8) are **this
+> campaign's implementation targets**, not verified code — `TextEditState` is
+> explicitly deferred at `crates/buiy_core/src/text/components.rs`. The
+> **painting surfaces** they drive (`CaretVisual`, `SelectionVisual`) and every
+> architectural seam (focus, Tab, `ScrollOffset`, picking, `BuiySet` order,
+> paint rank, damage gates) ARE built and verified (T6–T8); see the readiness
+> report `docs/reports/2026-06-13-text-editing-design-readiness.md`.
 
 > **Supersession, stated up front.** The prior-art guidance to keep preedit as a
 > "parallel … render-layer overlay" that never mutates the `Buffer`
@@ -136,6 +154,15 @@ The accessor is pinned: `TextBufferAccess`
 `Option<&mut TextEditState>` with `with_buffer`/`with_buffer_mut` preferring
 the editor's owned buffer when present.
 
+> **As landed (E1): the intrinsics cache lives on `TextEditState`.** The
+> `IntrinsicWidths` cache that measure reads moved off `TextBuffer` onto
+> `TextEditState.intrinsics` (`text/edit/state.rs`) so it keys to the
+> AUTHORITATIVE (editor-owned) buffer it describes; `TextBufferAccess` gained
+> editor-first `intrinsics()` / `cache_intrinsics()` / `invalidate_intrinsics()`
+> methods (`text/edit/access.rs`) that dispatch to whichever side owns the
+> authoritative buffer. A display-only entity's cache stays on its `TextBuffer`.
+> Zero behavior change — the cache just keys to the right buffer.
+
 Markers decompose rather than aggregate (ReadOnly as marker is
 [Borrow #3](../../prior-art/bevy-cosmic-edit/lessons.md); decomposed style/behavior
 components are Borrow #2). `ReadOnly` keeps caret/selection/copy and IME-disabled;
@@ -158,6 +185,16 @@ the widget in core — sizes, tokens, and submit-on-Enter are catalog policy.
 Focus-on-click is widget policy too, not core mechanism
 ([Borrow #7](../../prior-art/bevy-cosmic-edit/lessons.md)): the `TextInput`
 bundle opts in; core never auto-focuses.
+
+> **As landed (E6): the `TextInput` bundle + the `cosmic_text`-free seam.** The
+> `buiy_widgets::TextInput` bundle (`crates/buiy_widgets/src/text_input.rs`)
+> composes the core editor + markers + focus + node/style + catalog tokens with
+> a widget-side `focus_on_click` system. Two facts from the as-built code: (1)
+> the Phase-0 `A11yRole` taxonomy has no `TextInput` / `TextField` variant, so
+> the bundle uses `A11yRole::Text` (a richer role is a later a11y-taxonomy
+> slice); (2) the bundle never names a `cosmic_text` type — the core
+> `TextEditState::for_font_size(f32)` constructor is the seam that keeps the
+> facade boundary (`buiy_widgets` does not depend on `cosmic-text`).
 
 ---
 
@@ -382,6 +419,13 @@ caret-sized rect — it races bevy_winit's cache-diff writes of the same propert
 and couples Buiy to bevy_winit internals, exactly the bridge-crate coupling the
 post-mortem warns against. Revisit only after the upstream size plumbing lands.
 
+> **As landed (E5): `Window.ime_position` is `Vec2`, not `Option<Vec2>`.**
+> bevy_window 0.18.1 types `ime_position: Vec2` (a plain field, not optional),
+> so `write_ime_window` (`text/edit/ime.rs`) writes the caret bottom-left
+> directly (value-compared to avoid re-ticking `Changed<Window>`); there is no
+> "clear to `None`" — when no editor is focused, `ime_enabled` goes false and
+> the stale position is inert.
+
 Composition Messages (`CompositionStart/Update/End`, § 11) emit on the
 `Preedit`-empty→non-empty, non-empty→non-empty, and `Commit`/cancel transitions
 respectively. Platform variance in `Preedit.cursor` semantics is a named
@@ -436,6 +480,14 @@ discrete command seals the open group. Undo restores `caret_before` /
 `selection_before`; redo restores the `_after` pair. The redo stack clears on
 any new edit. The stack is depth-bounded (config; v1 default 1000 units). **F**
 
+> **As landed (E4): a no-op edit yields an empty `Change`, dropped at record.**
+> cosmic 0.19's `finish_change` returns `Some(Change { items: [] })` (not
+> `None`) for an edit that changed nothing — Backspace at offset 0, Delete at
+> end. `UndoStack::record` / `record_grouped` (`text/edit/undo.rs`) drop a change
+> whose `items` are empty, so the stack stays clean and the logical value stays
+> unchanged. The replay pair (`Change::reverse` + `Edit::apply_change`) is
+> otherwise exactly as designed.
+
 **Rationale.** The differentiating F requirement — composition-as-one-unit plus
 caret/selection restoration — is Buiy-layer aggregation **no** option provides;
 once grouping exists, the residual stack is ~a hundred lines. **Runner-up
@@ -470,6 +522,16 @@ Buiy's clip rect. **Accepted cost:** very large documents shape fully (no
 virtualization) — fine for F-tier inputs; virtualization is E-tier rich-editor
 territory.
 
+> **As landed (E6): the clamp uses `ResolvedLayout.size`, not a content-box
+> extent.** `auto_scroll_caret` (`text/edit/scroll.rs`) clamps the caret rect
+> into the node's **border-box** viewport (`ResolvedLayout.size`) with a
+> generous `SCROLL_MARGIN` that absorbs the small border/padding inset for v1,
+> rather than resolving the content box — `Edges.border` / `Edges.padding` are
+> `Length` (not `f32`), so a precise content-box extent would need a `Length`→px
+> resolution this v1 deliberately skips (a trivial follow-up if a fixture ever
+> shows the margin is too coarse). `SingleLine` ⇒ pan x; multi-line ⇒ pan y;
+> `ScrollOffset` still does not invalidate Taffy.
+
 ---
 
 ## § 10 Focus and lifecycle
@@ -486,6 +548,18 @@ resets on every edit and caret move; reduced-motion ⇒ steady caret (§ 5).
 `Placeholder` string renders as a styled display-only Buffer (`::placeholder`
 token); the placeholder never enters the editor Buffer and is replaced the
 moment a real or preedit character exists. **F**
+
+> **As landed (E6): the placeholder buffer shapes itself under the lock.** The
+> `sync_placeholder` system (`text/edit/placeholder.rs`) maintains a distinct
+> display-only `PlaceholderBuffer` (not the dormant display `TextBuffer`),
+> gated on `value().is_empty() && !has_preedit()`. Because nothing downstream
+> reaches a `PlaceholderBuffer` (`TextCommit` reshapes only the buffer
+> `TextBufferAccess` reaches), the system locks `SharedFontSystem` and shapes
+> its own buffer: cosmic 0.19's `Buffer::set_text` / `set_metrics` are
+> **lock-free** (they only record + dirty), so the lone lock-bearing call is the
+> trailing `buffer.shape_until_scroll(&mut fs, false)`. The placeholder paints
+> as a SEPARATE additive producer branch that does not feed the editor buffer's
+> §3.2 run-count assert.
 
 ---
 
@@ -561,7 +635,10 @@ reduced-motion; auto-scroll via `ScrollOffset`; the § 11 taxonomy; the
 *behavior* (§ 4.2); HTML + image clipboard flavors (§ 7); the **BiDi split
 caret** secondary indicator (§§ 4.1, 5 — cosmic 0.19 has no dual-caret API;
 needs glyph-edge geometry; E3 ships the single primary caret —
-[follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md)).
+[follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md));
+**compose-over-selection** (§§ 6.1, 6.2 — E5 splices the preedit at the caret
+and does not replace an active selection first;
+[follow-ups.md § Text editing — compose-over-selection](../../plans/follow-ups.md)).
 **Out (E-tier):** rich-text edit surface, document virtualization.
 
 ---

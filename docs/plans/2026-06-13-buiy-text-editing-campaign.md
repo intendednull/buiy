@@ -1,7 +1,12 @@
 # Buiy Text-Editing Campaign (E1–E6)
 
 **Date:** 2026-06-13
-**Status:** active
+**Status:** landed — all six phases E1–E6 merged to main (PRs #62–#67); the
+F-tier editor surface is implemented and gate-green (headless + the additive
+GPU lane). The spec's editing surface is flipped to implemented; the named
+deferrals (multi-range selection *behavior*, HTML/image clipboard, the BiDi
+split caret, compose-over-selection) are filed in
+[follow-ups.md](follow-ups.md).
 **Spec:** [specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md)
 **Readiness:** [reports/2026-06-13-text-editing-design-readiness.md](../reports/2026-06-13-text-editing-design-readiness.md)
 

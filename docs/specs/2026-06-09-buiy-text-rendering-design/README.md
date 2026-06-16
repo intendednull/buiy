@@ -1,7 +1,7 @@
 # Buiy — text-rendering design
 
 **Date:** 2026-06-09
-**Status:** implemented (rendering, T1–T9)
+**Status:** implemented (rendering T1–T9 + editing E1–E6)
 **Parent:** [`2026-05-07-buiy-foundation`](../2026-05-07-buiy-foundation/README.md) — sub-spec graduated from [foundation/text.md](../2026-05-07-buiy-foundation/text.md) and the foundation roadmap row `buiy-text-rendering-design`.
 **Plan:** [`2026-06-09-buiy-text-campaign.md`](../../plans/2026-06-09-buiy-text-campaign.md) (T1–T9 phase breakdown; per-phase TDD plans follow, one per phase).
 
@@ -198,17 +198,28 @@ added in review round 1); `TextEditState`, `EditCommand` (editing-and-ime).
 
 ## Status
 
-**Status: implemented (rendering, T1–T9) — as landed 2026-06-11.** The
-rendering surface this spec designs is implemented: phases T1–T9 of the
-[text campaign](../../plans/2026-06-09-buiy-text-campaign.md) all landed,
-proven on the two-lane suite ([verification.md](verification.md) §§ 1, 4) —
-the headless geometry gate every PR plus the `#[ignore]` GPU pixels lane
-(the gate-#2 goldens including the T9 widget × state × theme × viewport
-matrix, the gate-#14 typing-latency fixture, the gate-#15 churn pair).
-[editing-and-ime.md](editing-and-ime.md) remains **target-state** for the
-named successor campaign `buiy-text-editing` — the editor/IME surface is
-designed here, not built. The paragraphs below are the proposal-time
-record, kept for history.
+**Status: implemented (rendering T1–T9 + editing E1–E6) — rendering as landed
+2026-06-11, editing as landed 2026-06-13.** The whole text subsystem this spec
+designs — rendering *and* editing — is built. The rendering surface landed
+through phases T1–T9 of the
+[text campaign](../../plans/2026-06-09-buiy-text-campaign.md); the editor/IME
+surface landed through phases E1–E6 of the
+[text-editing campaign](../../plans/2026-06-13-buiy-text-editing-campaign.md).
+Both are proven on the two-lane suite ([verification.md](verification.md) §§ 1,
+4) — the headless geometry gate every PR plus the `#[ignore]` GPU pixels lane
+(the gate-#2 goldens including the T9 widget × state × theme × viewport matrix
+and the E6 `TextInput` golden, the gate-#14 typing-latency fixture, the gate-#15
+churn pair).
+[editing-and-ime.md](editing-and-ime.md) is **implemented** — the
+`buiy-text-editing` campaign (E1–E6) landed the F-tier editor surface
+(`TextEditState` over `Editor<'static>`, the focus-gated keymap, the BiDi caret +
+multi-range-shaped selection, the IME display-splice, the arboard clipboard, the
+two-stack undo with composition grouping, auto-scroll via `ScrollOffset`,
+placeholder, the § 11 taxonomy, and the `buiy_widgets::TextInput` bundle). The
+named deferrals (multi-range selection *behavior*, HTML/image clipboard, the
+BiDi split-caret secondary indicator, compose-over-selection) are filed in
+[follow-ups.md](../../plans/follow-ups.md). The paragraphs below are the
+proposal-time record, kept for history.
 
 **Status: proposed** *(superseded 2026-06-11 by the as-landed paragraph
 above)*. Review round 1: FIX-THEN-SHIP, fixes applied
@@ -361,6 +372,10 @@ orchestrator.
    frame ordering. The T8 gate-#14 fixture already pinned the display-path
    half: one frame from an Update-phase `Text` mutation to publish,
    rasterize-on-miss included (`tests/text_typing_latency.rs`).*
+   *E6: realized — the OQ#1 one-frame path landed in E2 (the Input-driven
+   N→N+1 latency fixture); caret geometry, `ime_position`, and auto-scroll
+   come current the same frame the edit's `TextCommit` publishes
+   (editing-and-ime § 9, OQ#1). Resolved.*
 2. **Prior-art drift needs a correction note.** Verified against 0.19:
    `Editor::with_selection_bounds` does not exist (real pair:
    `selection_bounds()` + `LayoutRun::highlight`); `Action::Scroll` takes
@@ -375,6 +390,9 @@ orchestrator.
 3. **arboard HTML read-side** is unverified (§ 7) — confirm before scheduling
    the HTML-clipboard slice.
    *T9: carries to the successor campaign (`buiy-text-editing`).*
+   *E6: still deferred — v1 ships plain-text clipboard (E4); the HTML/image
+   slice is filed in [follow-ups.md](../../plans/follow-ups.md), gated on
+   confirming arboard's HTML read first.*
 4. **Shared-accessor type for the editor-owned Buffer** (§ 2.2a): the concrete
    QueryData shape is pinned by [measure-and-layout.md](measure-and-layout.md);
    if that file lands a Buffer-as-separate-component model incompatible with

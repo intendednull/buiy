@@ -53,10 +53,11 @@ pub use decoration::{
 pub use direction::prepend_strong_marks;
 pub use edit::{
     ArboardClipboard, CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled,
-    EditCommand, EditContext, EditRedone, EditUndone, GroupKind, Keymap, MemClipboard, Placeholder,
-    PointerGesture, ReadOnly, SelectionChanged, SelectionRange, SingleLine, TextBufferAccess,
-    TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit, apply_keyboard_edits,
-    pointer_selection, pointer_to_cursor, write_caret_and_selection, write_ime_window,
+    EditCommand, EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
+    MemClipboard, Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange,
+    SingleLine, TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
+    apply_keyboard_edits, pointer_selection, pointer_to_cursor, write_caret_and_selection,
+    write_ime_window,
 };
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
@@ -166,6 +167,12 @@ impl Plugin for BuiyTextPlugin {
             Update,
             (
                 text_sync_buffers.in_set(crate::layout::BuiyLayoutStep::TextSync),
+                // E6 (editing-and-ime § 10): maintain the PlaceholderActive
+                // marker + display-only PlaceholderBuffer for empty editors.
+                // Same TextSync step as text_sync_buffers (the measure-pipeline
+                // lock window) — it shapes a display-only buffer the same way,
+                // before TextCommit / extract. Inert without an editor.
+                crate::text::edit::sync_placeholder.in_set(crate::layout::BuiyLayoutStep::TextSync),
                 // The new FINAL layout step (architecture § 4.2). Inert
                 // without LayoutPlugin (Option params return early).
                 text_commit.in_set(crate::layout::BuiyLayoutStep::TextCommit),
@@ -213,6 +220,33 @@ impl Plugin for BuiyTextPlugin {
                 .before(crate::text::visual::write_caret_blink),
         );
 
+        // E6 (editing-and-ime § 10): the focus lifecycle writer — on focus loss
+        // seals the open undo group + removes any live preedit (+ the M1
+        // dirty-mark); on focus gain resets the blink origin. Caret VISIBILITY is
+        // owned by write_caret_blink (M1), not here. Same render-prep window
+        // (after Input, before write_caret_blink). Inert headless (Option focus +
+        // Option LayoutTree no-op without FocusPlugin / LayoutPlugin).
+        app.add_systems(
+            Update,
+            crate::text::edit::focus_lifecycle
+                .after(crate::BuiySet::Input)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
+        // E6 (editing-and-ime § 9): auto-scroll-into-view — pan the focused
+        // editor's ScrollOffset so the caret stays in the content-box viewport
+        // (x single-line / y multi-line). Runs .after(write_caret_and_selection)
+        // so it reads the caret rect that writer just published this frame; the
+        // ScrollOffset it writes is consumed by the transform bridge later this
+        // frame (seed_scroll_dirty, .after(BuiySet::Animate)) — same-frame pan.
+        // Still .before(write_caret_blink) to stay inside the render-prep window.
+        app.add_systems(
+            Update,
+            crate::text::edit::auto_scroll_caret
+                .after(crate::text::edit::write_caret_and_selection)
+                .before(crate::text::visual::write_caret_blink),
+        );
+
         // E2 (editing-and-ime §§ 3, 11): the per-platform keymap (selected
         // once at init by a data swap) and the focus-gated input system.
         // Runs in BuiySet::Input — the `handle_tab` precedent (focus.rs:56),
@@ -228,6 +262,8 @@ impl Plugin for BuiyTextPlugin {
             crate::text::edit::ArboardClipboard::new(),
         )));
         app.add_message::<crate::text::edit::TextChanged>();
+        // E6 (editing-and-ime § 11): the host-facing single-line submit Message.
+        app.add_message::<crate::text::edit::EditSubmitted>();
         // E4 (editing-and-ime § 8, 11): the undo/redo transition Messages.
         app.add_message::<crate::text::edit::EditUndone>();
         app.add_message::<crate::text::edit::EditRedone>();

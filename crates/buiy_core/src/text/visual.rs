@@ -68,20 +68,38 @@ pub fn blink_phase(elapsed: Duration, half_period: Duration) -> bool {
 /// display caret, if any) fall back to the global phase. Reduced-motion ⇒ steady.
 /// `UserPreferences` is `Option` so the plugin stays self-sufficient without
 /// `ThemePlugin` (the apply_forced_colors_theme precedent).
+///
+/// E6: this is the single focus-aware owner of `CaretVisual.visible` — a
+/// non-focused editor caret is forced steady-hidden; bare carets and harnesses
+/// without a `FocusedEntity` resource keep the global phase.
 pub fn write_caret_blink(
     time: Res<Time>,
     prefs: Option<Res<UserPreferences>>,
     interval: Res<CaretBlinkInterval>,
-    mut carets: Query<(&mut CaretVisual, Option<&TextEditState>)>,
+    // E6 (M1): the SINGLE focus-aware owner of caret visibility. A non-focused
+    // editor's caret is forced steady-hidden; only the focused editor blinks.
+    // `Option` so a harness without `FocusPlugin` keeps the pre-E6 behavior.
+    focused: Option<Res<crate::FocusedEntity>>,
+    mut carets: Query<(Entity, &mut CaretVisual, Option<&TextEditState>)>,
 ) {
     let steady = prefs.is_some_and(|p| p.prefers_reduced_motion);
     let now = time.elapsed();
-    for (mut caret, state) in &mut carets {
-        let elapsed = match state {
-            Some(s) => now.saturating_sub(s.blink_origin()),
-            None => now,
+    let focused_entity = focused.as_ref().and_then(|f| f.0);
+    for (entity, mut caret, state) in &mut carets {
+        // An EDITOR caret (has TextEditState) that is not the focused entity is
+        // forced hidden — blurred editors do not blink (§ 10). A bare caret (no
+        // TextEditState) is focus-blind: the global phase, the pre-E6 behavior
+        // the E3/E5 goldens depend on. When there is no FocusedEntity resource
+        // at all, every editor is treated as "not unfocused" (no focus infra ⇒
+        // keep blinking) so a standalone BuiyTextPlugin harness is unchanged.
+        let phase = match state {
+            // Editor caret + a focus resource present: hide unless focused.
+            Some(_) if focused.is_some() && focused_entity != Some(entity) => false,
+            // Editor caret, focused (or no focus resource): per-entity phase.
+            Some(s) => steady || blink_phase(now.saturating_sub(s.blink_origin()), interval.0),
+            // Bare caret: the global phase, focus-blind (unchanged).
+            None => steady || blink_phase(now, interval.0),
         };
-        let phase = steady || blink_phase(elapsed, interval.0);
         // Edge-only: DerefMut (and the change tick) ONLY on a flip.
         if caret.visible != phase {
             caret.visible = phase;
