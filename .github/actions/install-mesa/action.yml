@@ -39,9 +39,12 @@ inputs:
   ci-build-tag:
     description: >-
       The gfx-rs/ci-build `ci-binary-build` release tag carrying the prebuilt
-      lavapipe tarball for `mesa-version`.
+      lavapipe tarball for `mesa-version`. NOTE: the tag and version are paired
+      per release — `mesa-24.3.4` ships under `build20` (build19 carries 24.2.3,
+      so `build19` + `24.3.4` 404s). When bumping `mesa-version`, find the
+      release that actually hosts `mesa-<version>-linux-x86_64.tar.xz`.
     required: false
-    default: "build19"
+    default: "build20"
 
 runs:
   using: composite
