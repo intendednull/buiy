@@ -24,6 +24,7 @@ members = [
     "crates/buiy_verify",
     "examples/hello_button",
     "examples/hello_text",
+    "examples/capture",
 ]
 
 [workspace.package]

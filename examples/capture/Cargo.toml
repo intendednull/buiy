@@ -1,0 +1,15 @@
+[package]
+name = "capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Headless screenshot capture for README assets — renders Buiy scenes offscreen on a real wgpu adapter and writes PNGs."
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline"] }
+buiy = { path = "../../crates/buiy" }
+buiy_core = { path = "../../crates/buiy_core" }
+image = { workspace = true }
