@@ -133,6 +133,18 @@ jobs:
     name: GPU (pinned lavapipe)
     runs-on: ubuntu-latest
     steps:
+      # Reclaim ~25 GB by removing preinstalled SDKs this job never uses. The
+      # release `wgpu-info` build + the large bevy `#[ignore]` GPU test binaries
+      # + the pinned Mesa otherwise exhaust the ~14 GB runner disk ("No space
+      # left on device" during `cargo test`). Must run before the rust-cache
+      # restore + the compiles below.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
