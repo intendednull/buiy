@@ -186,12 +186,11 @@ jobs:
 
   # One-off: re-capture + bless the stored residue goldens ON the pinned CI
   # lavapipe so they are EXACT-stable there, then upload them as an artifact to
-  # commit. Runs only while the `BLESS_GOLDENS_NOW` sentinel file is present
-  # (so it does not run on every CI). Remove the sentinel + this job once the
-  # lavapipe-native goldens are committed.
+  # commit. TEMPORARY — runs unconditionally; REMOVE this whole job once the
+  # lavapipe-native goldens are committed (it only writes to the runner's
+  # ephemeral checkout + uploads an artifact, never commits back).
   bless-goldens:
-    name: Bless goldens on lavapipe (sentinel)
-    if: hashFiles('BLESS_GOLDENS_NOW') != ''
+    name: Bless goldens on lavapipe (temporary)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-D warnings -C debuginfo=0"
