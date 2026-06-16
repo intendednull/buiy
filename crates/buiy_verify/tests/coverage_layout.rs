@@ -8,7 +8,7 @@
 //! property). The `.snap`s are CPU-deterministic (no GPU, fixed clock, no
 //! system fonts), so they are byte-stable and reviewable in-repo.
 
-use buiy_verify::coverage::{Matrix, enroll_all};
+use buiy_verify::coverage::{Matrix, enroll_all, sorted_catalog};
 use buiy_verify::snapshot::{assert_layout_snapshot, layout_dump};
 
 /// The Tier-1 fan-out: snapshot every cell's layout dump, keyed by stem. First
@@ -49,9 +49,14 @@ fn every_enrolled_cell_has_a_well_formed_layout_dump() {
         );
         cells.set(cells.get() + 1);
     });
+    // Derive the expected count from the catalog × matrix, NOT a hardcoded 24 —
+    // adding a fixture must NOT require editing this assert (the central
+    // "zero test edits to add a fixture" guarantee). The literal cell count is
+    // pinned once, in matrix.rs's `cells_per_fixture` unit test.
+    let expected = sorted_catalog().len() * Matrix::ci_default().cells_per_fixture();
     assert_eq!(
         cells.get(),
-        24,
-        "the button enrolls into all 24 ci_default cells"
+        expected,
+        "every fixture must enroll into all {expected} ci_default cells"
     );
 }
