@@ -132,6 +132,14 @@ jobs:
   gpu:
     name: GPU (pinned lavapipe)
     runs-on: ubuntu-latest
+    env:
+      # This lane links the large bevy #[ignore] test binaries AFTER also
+      # building wgpu-info (release) + running the buiy_core GPU suite, so it has
+      # far less headroom than the plain Test job and `ld` SIGBUSes (signal 7)
+      # linking buiy_verify's test binaries. Debug info is the bulk of that link
+      # size, and GPU pixel/invariant checks don't need backtraces — drop it for
+      # this lane only. Keep the workspace-wide `-D warnings`.
+      RUSTFLAGS: "-D warnings -C debuginfo=0"
     steps:
       # Reclaim ~25 GB by removing preinstalled SDKs this job never uses. The
       # release `wgpu-info` build + the large bevy `#[ignore]` GPU test binaries
