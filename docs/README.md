@@ -114,6 +114,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Text-editing design-readiness review](reports/2026-06-13-text-editing-design-readiness.md) — three-verifier audit of `editing-and-ime.md` against current `main` before the `buiy-text-editing` campaign: every integration seam confirmed in code, the no-new-GPU-work painting claim upheld, and OQ#1 (edit→layout frame-ordering) resolved as accepted one-frame latency. Verdict: ready-with-patches (now applied). `[2026-06-13]`
 - [Visual-bug detection strategy](reports/2026-06-14-visual-bug-detection-strategy.md) — how to catch visual regressions as Buiy scales: a five-tier pyramid (layout-number → display-list/paint-order → metamorphic/property → reftests + CPU-cross-check → golden screenshots), reftests-first, grounded on canonical `main`. Audits the existing golden/forced-colors/text-shaping infra and names the gaps; input to `buiy-verification-design`. Pairs with the five `prior-art/` folders below. `[2026-06-14]`
+- [Verification-harness adversarial review](reports/2026-06-15-verification-harness-adversarial-review.md) — fresh-agent cold-context review of the landed `buiy_verify` harness (20-agent find → verify → synthesize workflow). Found + **fixed** 7 real bugs (2 high: a blank render silently passing any golden; `GoldenKey` dropping the forced-colors axis), 1 maintainability trap, and the recurring "docstrings oversell coverage" theme; recorded 3 coverage gaps as follow-ups. Both gates green. `[2026-06-15]`
 
 ### Docs infrastructure
 
