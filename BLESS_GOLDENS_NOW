@@ -1,0 +1,4 @@
+Sentinel: while this file exists, the CI `bless-goldens` job re-captures the
+residue goldens on the pinned lavapipe and uploads them as the
+`lavapipe-blessed-goldens` artifact. Delete this file (and the bless-goldens job)
+once the lavapipe-native goldens are committed.
