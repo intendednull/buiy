@@ -1051,20 +1051,10 @@ pub enum LayoutWarnOnceKey {
     /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
     StickyFrUnsupported(Entity),
 
-    /// Sticky entity uses a `Length::Cq*` inset (container query
-    /// unit). Full cq-context resolution for sticky is deferred to
-    /// a Phase 7.x follow-up (port from Phase 6 `length_inset_to_px`).
-    /// v1 resolves to 0.0. One warn per (entity, session).
-    ///
-    /// Spec: plan decision D3 in
-    /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
-    StickyCqDeferred(Entity),
-
     /// Sticky entity uses a `Length::AnchorSize` inset. `anchor-size()`
     /// reads the anchor target's box, but a sticky element has no anchor
     /// box — the term is meaningless here, so the inset resolves to 0.0.
-    /// One warn per (entity, session), mirroring `StickyFrUnsupported` /
-    /// `StickyCqDeferred`.
+    /// One warn per (entity, session), mirroring `StickyFrUnsupported`.
     ///
     /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
     StickyAnchorSizeUnsupported(Entity),

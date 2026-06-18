@@ -94,6 +94,7 @@ This spec is target-state. The Phase 0 → target migration (the decomposed-comp
 - **`writing-mode: sideways-*` Taffy support.** Taffy 0.10 has logical properties but doesn't fully model sideways modes. Whether to ship a Buiy-side rotation pass or wait on Taffy is open. [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details.
 - **Top-layer ordering across windows.** When a Buiy app has multiple windows each with its own modal, modal stacking is per-window. Cross-window top-layer (a modal that visually escapes its window) is out of scope; tracked in `buiy-window-and-surface-design`.
 - **`anchor-size()` in `PositionTry::inset` — RESOLVED.** Previously deferred to v1.x with no API surface; now ships as `Length::AnchorSize(AxisDimension)`, resolved against the per-try anchor box at anchor-resolution time (no Taffy re-layout). See [display-and-positioning.md § 3.4](display-and-positioning.md#34-performance-and-ordering).
+- **Sticky `Length::Cq*` inset — RESOLVED.** Previously deferred (`StickyCqDeferred` warn-once, resolved to 0); now resolves via the shared `resolve_cq_unit_px` against the sticky entity's own nearest container-query ancestor (size read current-frame from Taffy), `Cqi`/`Cqb` on the writing-mode inline/block axes, viewport fallback when there is no CQ ancestor. See [display-and-positioning.md § 2.3](display-and-positioning.md#23-sticky-positioning).
 
 ## References
 
