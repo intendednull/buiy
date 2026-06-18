@@ -250,7 +250,8 @@ impl SpecializedRenderPipeline for BuiyPrimitives {
             // `register` path supplies, shared so the two cannot drift. The
             // glyph pipeline appends `@group(1)` for the atlas (see above).
             layout,
-            push_constant_ranges: vec![],
+            // wgpu 28: push constants → "immediates". Buiy uses none.
+            immediate_size: 0,
             vertex: VertexState {
                 shader: shader.clone(),
                 shader_defs: vec![],

@@ -66,7 +66,7 @@ fn layout_tree_garbage_collects_despawned_entities() {
 
     app.update();
     assert_eq!(
-        app.world().non_send_resource::<LayoutTree>().len(),
+        app.world().non_send::<LayoutTree>().len(),
         1,
         "spawned entity registered in LayoutTree after first update",
     );
@@ -75,7 +75,7 @@ fn layout_tree_garbage_collects_despawned_entities() {
     app.update();
 
     assert!(
-        app.world().non_send_resource::<LayoutTree>().is_empty(),
+        app.world().non_send::<LayoutTree>().is_empty(),
         "despawned entity dropped from LayoutTree by gc system",
     );
 }
@@ -94,7 +94,7 @@ fn layout_tree_garbage_collects_within_a_single_tick() {
 
     app.update();
     assert_eq!(
-        app.world().non_send_resource::<LayoutTree>().len(),
+        app.world().non_send::<LayoutTree>().len(),
         1,
         "first entity registered after first update",
     );
@@ -107,7 +107,7 @@ fn layout_tree_garbage_collects_within_a_single_tick() {
 
     app.update();
 
-    let tree = app.world().non_send_resource::<LayoutTree>();
+    let tree = app.world().non_send::<LayoutTree>();
     assert_eq!(
         tree.len(),
         1,

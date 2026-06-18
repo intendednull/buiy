@@ -9,5 +9,6 @@ description = "A comprehensive UI library for Bevy with web-quality accessibilit
 
 [dependencies]
 bevy.workspace = true
+buiy_bsn = { path = "../buiy_bsn" }
 buiy_core = { path = "../buiy_core" }
 buiy_widgets = { path = "../buiy_widgets" }

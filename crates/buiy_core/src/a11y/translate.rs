@@ -80,6 +80,10 @@ pub fn build_tree_update(views: &[A11yNodeView], focused: Option<NodeId>) -> Tre
     TreeUpdate {
         nodes,
         tree: Some(Tree::new(ROOT_NODE_ID)),
+        // Required since accesskit 0.23 (multi-tree). `TreeId::ROOT` (the nil
+        // UUID) is the single root tree — exactly Buiy's one-tree-per-window
+        // model; subtrees (`buiy-accessibility-design`) would key off this.
+        tree_id: accesskit::TreeId::ROOT,
         focus: focused.unwrap_or(ROOT_NODE_ID),
     }
 }

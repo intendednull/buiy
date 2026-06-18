@@ -34,15 +34,15 @@ Buiy is a parallel UI stack to bevy_ui, integrating the same underlying primitiv
 ## 2.4 Authoring: ECS-native and BSN, both first-class
 
 - **ECS spawn:** `commands.spawn((buiy::Button, OnPress(submit), children![buiy::Text::new("Save")]))`. Always works.
-- **BSN** (Bevy 0.18+): `bsn! { Button [ Text("Save") ] }` or hot-reloadable `.bsn` files.
+- **BSN** (Bevy 0.19+): `bsn! { Button [ Text("Save") ] }`. The BSN baseline (`bsn!` / Templates) landed in Bevy 0.19 via PR #23413 (`bevy_scene` crate); Buiy authors inline `bsn!` today. The hot-reloadable `.bsn` **asset-file** form is deferred upstream (its loader was not part of #23413) — see [`2026-06-18-buiy-bsn-integration-design.md`](../2026-06-18-buiy-bsn-integration-design.md) §§ 1, 4.4.
 
 The BSN-friendliness constraint on every Buiy component is **not optional**:
 
 - Small, public-fielded, observable, decomposed by concern. No megacomponents, no private setters.
-- Every component derives `Reflect + FromReflect + Default + Clone + Component`.
-- Every component is type-registered via `app.register_type::<T>()` in the owning crate's plugin so `.bsn` asset loading can resolve it.
+- Every component derives `Reflect + FromReflect + Default + Clone + Component`. Note: inline `bsn!` itself is **compile-time and reflection-free** — its plain-data template path needs only `Clone + Default` (a `bsn!` patch layers onto a component's `Default` base). The `Reflect + FromReflect` derives are retained for the *future* reflection-driven consumers — the deferred `.bsn` asset-file loader and the editor/inspector — not for inline `bsn!`.
+- Every component is type-registered via `app.register_type::<T>()` in the owning crate's plugin. Likewise, the type registry is consumed by the future `.bsn` loader / inspector, **not** by inline `bsn!` (which resolves component types at compile time); registration is kept so those consumers can resolve every component when they land.
 
-These constraints follow from BSN's reflection-driven asset format (PR #20158) and from the lesson of bevy issue #17644 (megacomponents are BSN-hostile).
+These constraints follow from the lesson of bevy issue #17644 (megacomponents are BSN-hostile) and keep every component authorable in BSN: inline `bsn!` (landed in Bevy 0.19, PR #23413 in `bevy_scene`) via the `Clone + Default` template contract today, and the reflection-driven `.bsn` asset format (deferred upstream — original draft PR #20158 framing) when its loader lands. See [`2026-06-18-buiy-bsn-integration-design.md`](../2026-06-18-buiy-bsn-integration-design.md) §§ 4, 6.
 
 ## 2.5 Theming: token-based design system
 
@@ -79,7 +79,7 @@ Buiy ships as a workspace of focused crates. The principle is **modular subsyste
 - `buiy_forms` — form state machine, validation, constraint pseudo-classes.
 - `buiy_devtools` — inspector, contrast linter, focus visualizer, AccessKit tree viewer.
 - `buiy_3d` — 3D-anchored / diegetic UI.
-- `buiy_bsn` — BSN authoring helpers when on Bevy 0.18+.
+- `buiy_bsn` — BSN authoring helpers (Bevy 0.19+): re-exports `bsn!` / `bsn_list!` + spawn ext traits into a `buiy_bsn::prelude`; reached via `buiy::bsn` and folded into `buiy::prelude`.
 - `buiy_verify` — verification harness; consumed as `dev-dependency` by every other crate; usable by downstream Buiy users.
 
 **`BuiyPlugin` sub-plugin order.** The top-level plugin adds sub-plugins in this order so dependents see their dependencies on construction: `core` → `theme` → `a11y` → `focus` → `input` → `text` → `widgets` → `animation` → `forms` → `devtools`. Render registration happens in `Plugin::finish` (after `RenderApp` exists).
@@ -96,6 +96,7 @@ Sub-specs hang their systems off these labels. UI animations advance in the `Upd
 ## 2.9 Compatibility & policy
 
 - **Rolling latest-stable Bevy.** Bevy minor releases drive migration events for underlying primitives. wgpu is a version-pinned dependency of Bevy (Bevy re-exports many wgpu types but the wgpu crate is owned upstream); we follow Bevy's pin. AccessKit releases on its own cadence and is **the open question** of [README.md § 5](README.md#5-open-questions): the policy proposed here is "AccessKit major release between Bevy minors triggers a Buiy patch release with a documented migration note," but this is not yet committed. No back-compat across Bevy minors.
+  - **Active exception (2026-06-18): pinned to `0.19.0-rc.3`.** Buiy currently pins a Bevy **release candidate**, a deliberate, scoped exception to "rolling latest-stable," taken because BSN authoring (goal 3) is unreachable on any stable Bevy and the user chose to build real `bsn!` now (the BSN baseline ships only in the 0.19 line — PR #23413 — and 0.19 has no stable tag yet). The exception is bounded: when 0.19.0 stable releases, Buiy bumps to it and the exception closes (a likely small rc.3→stable follow-up). Owned by [`2026-06-18-buiy-bsn-integration-design.md § 2`](../2026-06-18-buiy-bsn-integration-design.md#2-decision-pin-bevy-0190-rc3-policy-exception); tracked in [`follow-ups.md`](../../plans/follow-ups.md).
 - **MSRV** tracks Bevy's MSRV.
 - **`std` only.** AccessKit requires it.
 - **Platform support — staged.** Desktop (Windows / macOS / Linux) is committed for v1 with full CI coverage. Android (TalkBack), iOS (UIAccessibility — currently in-progress upstream in AccessKit), and web (AccessKit web adapter — not yet shipped) are deferred until each platform's AccessKit adapter exposes a headless harness usable in CI; until then they live as manual-release-gate platforms.

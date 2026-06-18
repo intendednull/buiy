@@ -64,6 +64,14 @@ pub fn gpu_test_app() -> App {
     // `Assets<Mesh>` + `Messages<AssetEvent<Mesh>>` — `RenderPlugin` extracts
     // meshes but does not add the asset (its doc: "Use MeshPlugin for that").
     app.init_asset::<Mesh>();
+    // The SECOND asset `MeshPlugin` inits internally alongside `Mesh`. Bevy 0.19's
+    // `bevy::camera::CameraPlugin` (added above) registers `update_skinned_mesh_bounds`,
+    // which reads `Res<Assets<SkinnedMeshInverseBindposes>>` as a non-`Option`
+    // param. Under 0.18 a missing `Res` silently skipped the system; 0.19 errors
+    // through the default handler and PANICS. A real app (`DefaultPlugins` →
+    // `MeshPlugin`) always has this asset, so initializing it — mirroring the
+    // `init_asset::<Mesh>()` above — is the correct fix, not silencing the reader.
+    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
     app
 }
 
@@ -107,15 +115,15 @@ pub fn render_world_resource<R: Resource>(app: &App) -> Option<&R> {
 //
 // `gpu_test_app` proves the harness drives a frame and packs the instance
 // buffers, but it deliberately omits `CorePipelinePlugin`, so the `Core2d`
-// sub-graph never exists — `node::register`'s `add_render_graph_node(Core2d, …)`
-// only *warns* when the sub-graph is missing (bevy_render render_graph/app.rs),
-// so the Buiy node is never wired into a graph and never executes. NO pixels are
-// painted. This builder is the painting-capable sibling: it adds
-// `CorePipelinePlugin` (→ `Core2dPlugin`, which `add_render_sub_graph(Core2d)`s
-// the 2D graph) BEFORE `BuiyRenderPlugin`, so the Buiy node lands inside a live
-// `Core2d` graph and its `StartMainPassPostProcessing → BuiyRenderLabel →
-// Tonemapping` edges resolve. A `CameraDriverNode` then runs that graph for the
-// offscreen view, painting into the render-target image read back below.
+// schedule never exists — `node::register`'s `add_systems(Core2d, buiy_pass…)`
+// adds the pass to a schedule that is never run, so the Buiy pass never
+// executes. NO pixels are painted. This builder is the painting-capable
+// sibling: it adds `CorePipelinePlugin` (→ `Core2dPlugin`, which installs the
+// `Core2d` render schedule and its `MainPass`/`EarlyPostProcess`/`PostProcess`
+// sets) BEFORE `BuiyRenderPlugin`, so `buiy_pass` lands inside the live `Core2d`
+// schedule in `Core2dSystems::EarlyPostProcess` (after the main pass, before
+// tonemapping). The camera-driver then runs that schedule for the offscreen
+// view, painting into the render-target image read back below.
 //
 // The primary window resolution is set to the capture size so the per-view
 // `BuiyViewUniform` (built in prepare from `ExtractedNodes.logical_size`, which

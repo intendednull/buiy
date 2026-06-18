@@ -216,6 +216,18 @@ pub fn capture_app_with_resolution(resolution: bevy::window::WindowResolution) -
         .add_plugins(crate::text::BuiyTextPlugin::default())
         .add_plugins(crate::render::BuiyRenderPlugin);
     app.init_asset::<Mesh>();
+    // The SECOND asset bevy's `MeshPlugin` inits internally (alongside `Mesh`):
+    // `Assets<SkinnedMeshInverseBindposes>`. `bevy::camera::CameraPlugin` adds
+    // `update_skinned_mesh_bounds` (a `PostUpdate` `VisibilitySystems::CalculateBounds`
+    // system) which reads it as a non-`Option` `Res`. Under Bevy 0.18 a missing
+    // `Res` silently SKIPPED the system; Bevy 0.19's param validation errors
+    // through the default handler and PANICS instead. A real Buiy app uses
+    // `DefaultPlugins` → `MeshPlugin`, so this asset always exists in production;
+    // this hand-rolled stack replicates `MeshPlugin`'s inits (the `init_asset::<Mesh>()`
+    // above) and must replicate this sibling too. NOT an `Option<>`/`run_if` guard:
+    // the resource SHOULD exist (production always has it), so initializing it —
+    // not silencing the reader — is the correct fix.
+    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
     // The quiescence-flush asset gate (condition 1): fixtures push streamed
     // handles here; `capture_to_image` waits on them. Empty for programmatic
     // fixtures (a no-op gate), so every capture app carries it.

@@ -1,0 +1,21 @@
+[package]
+name = "buiy_bsn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "BSN (Bevy Scene Notation) authoring surface for Buiy: ergonomic re-exports of the bevy_scene `bsn!` macro + spawn extension traits."
+
+[dependencies]
+# `bevy.workspace = true` inherits the workspace `bevy_scene` feature
+# additively (resolver-2 union) — no per-crate feature edit needed. `bsn!`,
+# `bsn_list!`, the `Scene`/`Template` machinery, and the spawn extension traits
+# all ship inside the `bevy_scene` crate, reached here via `bevy::scene`.
+bevy.workspace = true
+
+[dev-dependencies]
+# The round-trip authorability tests author real Buiy components/widgets via
+# `bsn!` and spawn them against a `World`, asserting the resulting components.
+buiy_core = { path = "../buiy_core" }
+buiy_widgets = { path = "../buiy_widgets" }

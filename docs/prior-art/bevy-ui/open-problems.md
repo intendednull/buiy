@@ -1,10 +1,10 @@
-**Date:** 2026-05-22
+**Date:** 2026-06-18
 **Status:** active
-**Subject:** bevy_ui — what's structurally missing or unfinished as of 0.18.1 / 0.19-rc.1
+**Subject:** bevy_ui — what's structurally missing or unfinished as of 0.18.1 / 0.19-rc.3
 
 # Open problems
 
-What bevy_ui does not yet do, or does only at a stub level, as of 2026-05-22 (Bevy 0.18.1 stable, 0.19.0-rc.1 in pre-release). Each entry is what a Buiy designer or downstream consumer would hit if they tried to use bevy_ui for the matching scenario. Cross-link to [critiques.md](critiques.md) for the criticism layer and to [history.md](history.md) for the timeline.
+What bevy_ui does not yet do, or does only at a stub level, as of 2026-06-18 (Bevy 0.18.1 stable; 0.19 is at 0.19.0-rc.3 — no 0.19.0 stable yet). Each entry is what a Buiy designer or downstream consumer would hit if they tried to use bevy_ui for the matching scenario. Cross-link to [critiques.md](critiques.md) for the criticism layer and to [history.md](history.md) for the timeline.
 
 ## Renderer feature gaps
 
@@ -28,9 +28,9 @@ Each of these is a hard *renderer-level* limit. Buiy's response: implement them 
 
 ## BSN ergonomics maturity (post-#17644)
 
-- **BSN itself isn't merged.** PR #20158 is draft / closed-unmerged as of 2026-05-22. The orchestrator pre-amble's claim that BSN "landed in 0.18" was wrong (see [history.md](history.md) for the correction).
-- **The decomposition lesson generalizes beyond bevy_a11y.** Every existing megacomponent in the Bevy workspace will need to be decomposed before BSN can patch its properties. As of 0.18 this audit is incomplete.
-- **`Construct` trait (cited in #14437) is not merged.** This is the proposed mechanism for components that need `World` state (asset handles, OS-pref resources) at construction time, since Required Components currently demand `Default`.
+- **BSN's baseline merged in 0.19 (not 0.18).** The original draft PR #20158 never merged in its own form; the BSN baseline (`bsn!` / Templates) landed via successor **PR #23413** (2026-03-27, milestoned Bevy 0.19, in the `bevy_scene` crate). Inline `bsn!` is the landed surface; the `.bsn` **asset-file loader** is still deferred upstream. 0.19 is rc-only as of 2026-06-18 (see [history.md](history.md) § "BSN" for the full lineage and the Buiy rc-pin).
+- **The decomposition lesson generalizes beyond bevy_a11y.** Every existing megacomponent in the Bevy workspace will need to be decomposed before BSN can patch its properties. As of 0.19-rc this audit is incomplete (the `bevy_a11y::AccessibilityNode` megacomponent remains — issue #17644).
+- **`Construct` trait (cited in #14437) never shipped — its role is now `Template` / `FromTemplate`.** The originally-proposed `Construct` / `ConstructContext` do **not** exist in shipped 0.19-rc.3; the BSN baseline (PR #23413) landed **`Template` / `FromTemplate` / `TemplateContext`** (`bevy_ecs::template`) instead. Components that need `World` state at construction (asset handles from string paths, entity refs) derive `#[derive(FromTemplate)]` — Required Components still demand `Default` for the blanket path, but `FromTemplate` covers the context-bearing case.
 
 ## Text editing maturity
 
@@ -63,8 +63,8 @@ Buiy plans a dedicated `buiy_animation` crate (foundation architecture.md § 2.8
 
 ## Hot-reload of components
 
-- **`.bsn` asset reload is part of the BSN proposal, but BSN is unmerged.** Hot-reload of components is therefore not currently a bevy_ui feature.
-- Foundation README § 5 lists "hot-reload of components (not just themes)" as an open question for Buiy.
+- **`.bsn` asset reload depends on the `.bsn` asset-file loader, which is still deferred upstream.** The BSN *baseline* merged in 0.19 (PR #23413), but it ships **inline `bsn!` only** — the `.bsn` asset-file loader (`asset_server.load("x.bsn")`) was deferred out of #23413 to a future PR and has no runtime backing yet. So component hot-reload via `.bsn` is not yet a bevy_ui feature.
+- Foundation README § 5 lists "hot-reload of components (not just themes)" as an open question for Buiy; Buiy likewise targets inline `bsn!` only for now and defers the `.bsn` loader + component hot-reload with upstream (`2026-06-18-buiy-bsn-integration-design.md` § 4.4).
 
 ## 3D-anchored UI
 

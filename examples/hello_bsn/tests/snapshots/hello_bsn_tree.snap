@@ -1,0 +1,10 @@
+---
+source: examples/hello_bsn/tests/layout_snapshot.rs
+expression: hello_bsn_tree
+---
+# buiy-layout-dump v1
+Toolbar pos=0,0 size=364,128
+  Actions pos=12,68 size=320,48
+    Cancel pos=164,0 size=136,48
+    Save pos=0,0 size=156,48
+  Search pos=12,12 size=216,48
