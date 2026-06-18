@@ -829,25 +829,27 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   and color-emoji atlas output are not yet exercised end-to-end by a capturable
   fixture; the corpus is started with `rect-rounded`/`text-ahem` and these classes
   are added when the renderer paths land.
-- **`coverage_golden::matrix_goldens` is RED on the GPU lane until the `button`
-  fixture corpus is blessed.** The Tier-5 enrollment driver (`coverage_golden.rs`,
-  committed in `a73de05`) iterates `Matrix::ci_default()` over the `button`
-  fixture and `assert_golden`s each cell, but **no `button` golden PNGs are
-  committed** (only `rect-rounded` + `text-ahem` are blessed), so it correctly
-  fail-closes (`check.rs:261`, "no golden committed for `button/resting/…`"). The
-  test's own header documents this as "bless-on-demand." This is the documented
-  fail-closed contract, NOT a regression — but it means the `--ignored` GPU lane
-  is not green for this one driver. **Blessing `button` cells is non-trivial**:
-  the coverage report flagged that the default `Button` under Buiy's *wholesale*
+- **`coverage_golden::matrix_goldens` — skip-as-pending LANDED; remaining work is
+  blessing the real residue cells.** The Tier-5 enrollment driver
+  (`coverage_golden.rs`) iterates `Matrix::ci_default()` over the catalog and
+  `assert_golden`s each cell. Resolution option (i) — *skip un-blessed cells
+  instead of fail-closing the lane* — has shipped: `coverage_golden.rs:104-114`
+  skips any cell whose `committed_positives(&key) == 0` (counting it as
+  `pending`) unless `BUIY_BLESS` is set, so the `--ignored` GPU lane is now
+  **green**, not RED, while the corpus is still being built. The test asserts
+  only non-vacuity (`asserted + pending > 0`, `coverage_golden.rs:149`) and
+  prints an HONEST status line distinguishing cells *compared* from cells
+  *pending*; a *blessed* cell still fails closed on drift (the "no golden
+  committed for `<slug>`" message is `golden/check.rs:282`, reached only on the
+  bless/assert path — never for skipped cells). Only `rect-rounded` + `text-ahem`
+  are blessed so far. **Still deferred — blessing the residue cells (e.g.
+  `button`):** non-trivial because the default `Button` under Buiy's *wholesale*
   forced-colors swap paints the magenta missing-token sentinel
   (`color-and-forced-colors.md § 3.1`), so blessing those cells verbatim would
-  cement a known-wrong pixel as a golden. Resolution options (a campaign-owner
-  decision, not a doc fix): (i) make `matrix_goldens` skip un-blessed cells
-  (treat "no positive" as `ignored`, not `fail`) so the lane is green until cells
-  are deliberately blessed; or (ii) bless only the forced-colors-*safe* cells once
-  the default widget is forced-colors-safe (`buiy-widget-catalog-design`). Until
-  then the headless gate (the every-PR CI gate, which never runs `--ignored`)
-  stays fully green and unaffected.
+  cement a known-wrong pixel as a golden. Bless only the forced-colors-*safe*
+  cells once the default widget is forced-colors-safe
+  (`buiy-widget-catalog-design`). The headless every-PR gate never runs
+  `--ignored` and is unaffected throughout.
 - **Forced-colors `BoxShadow` *visual* reftest** — blocked on the unlanded
   `BoxShadow` extract/draw path (see the R11 entry above); kept as an `#[ignore]`'d
   assertion-free placeholder, not a green test.
