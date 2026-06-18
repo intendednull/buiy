@@ -192,7 +192,7 @@ after 6d). The corrections are invisible to 6d.
 Option 1 preserves spec order and is the more flexible long-term
 shape.
 
-## Anchor positioning — `AnchorRef::Entity` integration test gap
+## Anchor positioning — `AnchorRef::Entity` integration test gap — LANDED
 
 **Originated:** Phase 6 (final whole-branch review).
 
@@ -206,6 +206,20 @@ it indirectly, but a regression in the direct-reference path inside
 its `Entity` handle, and uses `AnchorRef::Entity(e)` as the anchor
 reference (no name registry involved). Assert the anchored entity's
 position tracks the target.
+
+**Status:** **Landed.** Two end-to-end tests added to
+`crates/buiy_core/tests/layout_anchor_positioning.rs` —
+`anchor_entity_ref_positions_relative_to_target` (positive: a direct
+`AnchorRef::Entity` to a plain-Node target with no registry entry
+resolves to the target box edge + inset; override `y == 60`, no
+`LayoutAnchorBroken`) and `anchor_entity_ref_display_none_target_is_missing`
+(negative: `AnchorRef::Entity` at a `Display::None` target → the D9 guard
+in `resolve_target` fires via the Entity arm → zero override +
+`LayoutAnchorBroken` + `TargetMissing` warn). Test-only; no production
+change — the `AnchorRef::Entity(t) => Some(*t)` arm and the `Display::None`
+guard already existed inside `build_anchor_edge_map`'s `resolve_target`
+closure. Fills declared coverage of spec §4 'Test surface'; no
+target-state change.
 
 ## Anchor positioning — extract `anchor_resolution` into sub-helpers — LANDED
 
