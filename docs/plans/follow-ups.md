@@ -419,23 +419,57 @@ band-shorter-than-box case. The 10-arg signature is unchanged.
 **Spec touchpoint:** `display-and-positioning.md § 2.3`; CSS spec § 6.3
 (positioned layout).
 
-## Layout — sticky inside sticky
+## Layout — sticky inside sticky — LANDED
 
 **Originated:** Phase 7 (documented v1 limitation).
+
+**Status:** **Landed.** A sticky element nested inside a
+sticky-displaced ancestor now tracks the ancestor's DISPLACED position,
+same-frame. Two coordinated changes inside sub-pass 6a (`sticky_offset`):
+(1) the qualifying sticky entities are DEPTH-SORTED by `ChildOf`-chain
+depth ascending (`child_of_depth`) so a shallower (outer) sticky resolves
+and inserts its `PostTaffyPositionOverrides` entry BEFORE a deeper (inner)
+sticky reads it — same-frame eventual consistency via depth ordering, NOT
+two-frame; (2) `world_position` takes an `&HashMap<Entity, Vec2>` override
+map and, per ancestor-walk segment, uses the just-written override
+(`natural_rel + displacement` = that entity's displaced rel-to-parent
+location) when present, else the Taffy `.location`. The per-call `memo`
+is CLEARED at the top of each sticky-entity iteration (its only purpose is
+reuse between the `e` and `parent` walks of the SAME entity; sharing it
+across the depth-ordered loop would return values cached before an outer
+override existed). The override map is passed as `&overrides.by_entity`
+(shared borrow); the current entity's own `.insert` happens at the END of
+its loop body after both reads, so no borrow conflict and no per-frame
+clone. A's displacement reaches B's final render position through the
+normal parent→child `ResolvedLayout`/`Transform` composition (applied via
+A's own override), NOT by baking it into B's stored value — so it is not
+double-counted. Siblings at equal depth in unrelated subtrees have no
+ordering dependency, so an unstable sort by depth alone suffices (no full
+toposort). Covered by `sticky_inside_sticky_inner_tracks_displaced_outer`
+(inner tracks displaced outer → no over-displacement) and
+`sticky_inside_sticky_override_value_is_not_double_counted` (pins the
+exact inner override value to prove the outer displacement is not
+re-added) in `tests/layout_sticky.rs`; the single-level
+`sticky_pins_to_top_during_scroll` and nested-scroll
+`sticky_in_nested_scroll_containers_uses_innermost` tests stay green
+(no regression — single-level depth-sort is trivial, no ancestor override
+means `world_position` falls back to Taffy `.location` exactly as before).
 
 **Symptom:** When entity A is sticky-displaced and entity B is a sticky
 child of A, B's `world_position` walks Taffy positions (un-displaced);
 B's threshold computation uses A's *natural* position, not displaced.
 Rare authoring case.
 
-**Implementation sketch:** consult `PostTaffyPositionOverrides`
-(just-written by 6a) when walking the ancestor chain in
-`world_position`, so inner sticky sees displaced outer. Requires careful
-ordering (inner sticky must run after outer; topological pre-pass or
-two-frame eventual-consistency are both options).
+**Implementation sketch (as landed):** depth-sort the sticky set in
+`sticky_offset` (outer resolves first), and consult the just-written
+`PostTaffyPositionOverrides` per segment when walking the ancestor chain
+in `world_position`, clearing the `world_position` memo between sticky
+entities. L4 (the widened `resolve_sticky_inset` Cq/viewport/wmr params,
+the `sticky_offset` container_q/wmr_q/primary_window plumbing, the
+current-frame `container_index`) and L5 (the dual-clamp form of
+`compute_sticky_displacement`) are untouched.
 
-**Spec touchpoint:** `display-and-positioning.md § 2.3` (does not
-explicitly address nested-sticky).
+**Spec touchpoint:** `display-and-positioning.md § 2.3`.
 
 ## Layout — `clear_warned_once_on_exit` lifecycle wire-up
 

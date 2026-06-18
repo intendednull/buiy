@@ -849,6 +849,134 @@ fn sticky_in_nested_scroll_containers_uses_innermost() {
 }
 
 // =====================================================================
+// Sticky inside sticky (L6) — an inner sticky tracks its sticky
+// ancestor's DISPLACED position, not the ancestor's natural Taffy
+// position. Sub-pass 6a depth-sorts the sticky set (outer resolves
+// before inner) and `world_position` consults the same-frame override
+// map when walking the ancestor chain.
+// =====================================================================
+
+#[test]
+fn sticky_inside_sticky_inner_tracks_displaced_outer() {
+    // Fixture: S(300x500, scroll_y=100) > block(1000) > [50px spacer, A].
+    // A is sticky_top(0), 100x200. Inside A: [20px spacer, B], B is
+    // sticky_top(0), 100x30.
+    //
+    // A: natural-in-S = 50, visible_top = 100, threshold = 100.
+    //    desired = max(50, 100) = 100; parent band block [0, 800] → 100.
+    //    displacement_A = (0, 50); override[A].y = 50 + 50 = 100.
+    //    => A's DISPLACED position-in-S = 100.
+    //
+    // B (FIXED — uses A's displaced position):
+    //    B natural-in-S = 100 (A displaced) + 20 (spacer in A) = 120.
+    //    threshold = 100; desired = max(120, 100) = 120;
+    //    parent band A [100, 100+200-30=270] → 120.
+    //    displacement_B = 0 → NO override entry for B.
+    //
+    // B (BUGGY — uses A's natural position):
+    //    B natural-in-S = 50 (A natural) + 20 = 70.
+    //    threshold = 100; desired = max(70, 100) = 100;
+    //    parent band A-natural [50, 50+200-30=220] → 100.
+    //    displacement_B = 30 → override[B] PRESENT (y = 20 + 30 = 50).
+    //
+    // The two paths give DIFFERENT B outcomes: fixed → absent, buggy →
+    // present. Assert ABSENCE (the fixed expectation).
+    let mut app = app();
+    let scroll = scroll_container(&mut app, 100.0);
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let a = sticky_child(&mut app, block, 100.0, 200.0, sticky_top(0.0));
+    let _inner_spacer = content_block(&mut app, a, 20.0);
+    let b = sticky_child(&mut app, a, 100.0, 30.0, sticky_top(0.0));
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    // A displaces.
+    let a_pos = overrides
+        .by_entity
+        .get(&a)
+        .copied()
+        .unwrap_or_else(|| panic!("outer sticky A should displace; got none"));
+    assert_eq!(
+        a_pos.y, 100.0,
+        "outer sticky A pins to y=100; got {:?}",
+        a_pos
+    );
+    // B does NOT displace once it tracks A's DISPLACED position. Under
+    // the buggy natural-A path it would over-displace and get an entry.
+    assert!(
+        !overrides.by_entity.contains_key(&b),
+        "inner sticky B should track A's DISPLACED position (no displacement); \
+         a present override (y≈50) means B used A's NATURAL position. got {:?}",
+        overrides.by_entity.get(&b),
+    );
+}
+
+#[test]
+fn sticky_inside_sticky_override_value_is_not_double_counted() {
+    // Fixture where the inner sticky B DOES displace, so we can pin its
+    // exact stored override value and prove A's displacement is NOT
+    // baked into it (A's displacement reaches B via normal parent→child
+    // ResolvedLayout composition, applied to A's own override).
+    //
+    // S(300x500, scroll_y=100) > block(1000) > [50px spacer, A].
+    // A is sticky_top(0), 100x600. Inside A: [500px spacer, B], B is
+    // sticky_bottom(0), 100x30.
+    //
+    // A: natural-in-S = 50, visible_top = 100, threshold = 100.
+    //    desired = max(50, 100) = 100; parent band block [0, 1000-600=400]
+    //    → 100. displacement_A = 50; override[A].y = 50 + 50 = 100.
+    //    => A's DISPLACED position-in-S = 100; A bottom = 700.
+    //
+    // B (FIXED — uses A's displaced position):
+    //    B natural-rel-to-A = 500; B natural-in-S = 100 + 500 = 600.
+    //    sticky_bottom(0): visible_bottom = 100 + 500 = 600.
+    //    desired = min(600, 600 - 0 - 30 = 570) = 570;
+    //    parent band A [100, 100+600-30=670] → 570.
+    //    displacement_B = 570 - 600 = -30.
+    //    override[B].y = B_natural_rel_to_A(500) + (-30) = 470.
+    //
+    // B (BUGGY — uses A's natural position):
+    //    B natural-in-S = 50 + 500 = 550. desired = min(550, 570) = 550;
+    //    parent band A-natural [50, 50+600-30=620] → 550.
+    //    displacement_B = 0 → NO override (buggy path would be absent).
+    //
+    // Assert override[B].y == 470 exactly. The value is B's natural-rel
+    // -to-A plus B's OWN displacement only — A's +50 is NOT added in.
+    let mut app = app();
+    let scroll = scroll_container(&mut app, 100.0);
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let a = sticky_child(&mut app, block, 100.0, 600.0, sticky_top(0.0));
+    let _inner_spacer = content_block(&mut app, a, 500.0);
+    let b = sticky_child(&mut app, a, 100.0, 30.0, sticky_bottom(0.0));
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let a_pos = overrides
+        .by_entity
+        .get(&a)
+        .copied()
+        .unwrap_or_else(|| panic!("outer sticky A should displace; got none"));
+    assert_eq!(a_pos.y, 100.0, "outer A pins to y=100; got {:?}", a_pos);
+
+    let b_pos = overrides
+        .by_entity
+        .get(&b)
+        .copied()
+        .unwrap_or_else(|| panic!("inner sticky B should displace; got none"));
+    assert_eq!(
+        b_pos.y, 470.0,
+        "B's override = natural-rel-to-A (500) + B's own displacement (-30) = 470; \
+         a value inflated by A's +50 (e.g. 520) means A's displacement was \
+         double-counted into B's stored override. got {:?}",
+        b_pos,
+    );
+}
+
+// =====================================================================
 // Display::None skip (D10)
 // =====================================================================
 

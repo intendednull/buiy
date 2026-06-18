@@ -368,25 +368,54 @@ fn nearest_scroll_container(
     }
 }
 
+/// Number of `ChildOf` steps from `entity` up to the root (root = 0).
+/// L6 uses this to depth-sort the sticky set so an outer (shallower)
+/// sticky resolves and writes its override before an inner (deeper)
+/// one reads it via `world_position`. Mirrors `nearest_scroll_container`'s
+/// `.parent()` walk.
+fn child_of_depth(entity: Entity, parent_chain: &Query<&ChildOf>) -> usize {
+    let mut depth = 0usize;
+    let mut current = entity;
+    while let Ok(co) = parent_chain.get(current) {
+        depth += 1;
+        current = co.parent();
+    }
+    depth
+}
+
 /// Compute `entity`'s position in `ancestor`'s content-box coordinate
 /// system by walking `ChildOf` from `entity` up to (but not including)
-/// `ancestor`, summing the Taffy `.location` of each step.
+/// `ancestor`, summing each step's rel-to-parent location.
+///
+/// L6 (sticky-inside-sticky): for each step the location is the
+/// just-written `overrides.get(&step)` when present, else the Taffy
+/// `.location`. A sticky ancestor's override stores `natural_rel +
+/// displacement` (its DISPLACED position in its-parent's frame, the
+/// exact per-segment location this walk needs), so an inner sticky
+/// sees its ancestor's displacement same-frame. The depth-sorted 6a
+/// loop guarantees a shallower (outer) sticky's override is inserted
+/// before a deeper (inner) one reads it here. Non-sticky ancestors and
+/// undisplaced sticky ancestors have no override entry and contribute
+/// their plain Taffy `.location` (correct).
 ///
 /// Uses the provided `memo` cache to avoid re-walking shared subpaths
 /// (mirrors `resolve_writing_mode`'s memoization pattern). Memoization
 /// key is `(entity, ancestor)` to handle multiple scroll-container
-/// frames in the same call.
+/// frames in the same call. The 6a loop MUST clear `memo` between
+/// sticky entities so a value cached before an outer override existed
+/// is never returned stale.
 ///
 /// Returns `None` if (a) `entity` has no `LayoutTree` mapping, (b) the
 /// walk leaves `ancestor`'s subtree without finding `ancestor`, or
 /// (c) a `tree.tree.layout()` read fails.
 ///
-/// Phase 7 — sub-pass 6a (`sticky_offset`).
+/// Phase 7 — sub-pass 6a (`sticky_offset`). L6 — override-consult.
 fn world_position(
     entity: Entity,
     ancestor: Entity,
     tree: &LayoutTree,
     parent_chain: &Query<&ChildOf>,
+    overrides: &HashMap<Entity, Vec2>,
     memo: &mut HashMap<(Entity, Entity), Vec2>,
 ) -> Option<Vec2> {
     if entity == ancestor {
@@ -397,10 +426,16 @@ fn world_position(
     }
     // ChildOf accessor is `.parent()` in Bevy 0.18.
     let parent = parent_chain.get(entity).ok()?.parent();
-    let parent_position = world_position(parent, ancestor, tree, parent_chain, memo)?;
+    let parent_position = world_position(parent, ancestor, tree, parent_chain, overrides, memo)?;
     let node_id = tree.by_entity.get(&entity)?;
     let layout = tree.tree.layout(*node_id).ok()?;
-    let position = parent_position + Vec2::new(layout.location.x, layout.location.y);
+    // L6: a same-frame override for this segment IS its displaced
+    // rel-to-parent location; fall back to Taffy `.location` otherwise.
+    let seg = overrides
+        .get(&entity)
+        .copied()
+        .unwrap_or_else(|| Vec2::new(layout.location.x, layout.location.y));
+    let position = parent_position + seg;
     memo.insert((entity, ancestor), position);
     Some(position)
 }
@@ -661,12 +696,32 @@ pub(super) fn sticky_offset(
         .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
         .unwrap_or(Vec2::ZERO);
 
-    for (e, pos, display) in sticky_query.iter() {
-        // D14 — filter in Rust (no Bevy `Without<Display::None>` exists,
-        // `Or<>` slots are scarce). D10 — skip `Display::None`.
-        if !matches!(pos.kind, PositionKind::Sticky) || matches!(display, Display::None) {
-            continue;
-        }
+    // L6 — depth-sort the qualifying sticky entities so an outer
+    // (shallower) sticky resolves and inserts its override BEFORE a
+    // deeper (inner) sticky reads that displaced position via
+    // `world_position`. Same-frame eventual consistency via depth
+    // ordering (NOT two-frame). Siblings at equal depth in unrelated
+    // subtrees have no ordering dependency (one can't be the other's
+    // sticky ancestor), so an unstable sort by depth alone suffices —
+    // no full topological sort needed. Filter D14 / D10 here so the
+    // depth walk only runs on real candidates.
+    let mut sticky_sorted: Vec<(Entity, &Position)> = sticky_query
+        .iter()
+        .filter(|(_, pos, display)| {
+            matches!(pos.kind, PositionKind::Sticky) && !matches!(display, Display::None)
+        })
+        .map(|(e, pos, _)| (e, pos))
+        .collect();
+    sticky_sorted.sort_by_cached_key(|(e, _)| child_of_depth(*e, &parent_chain));
+
+    for (e, pos) in sticky_sorted {
+        // L6 — reset the `world_position` memo per sticky entity. Its
+        // only purpose is reuse between the `e` and `parent` walks of
+        // the SAME entity; sharing it across the depth-ordered loop
+        // would return values cached before an outer override was
+        // inserted (stale, pre-displacement), making the fix
+        // order-dependent and flaky.
+        memo.clear();
         // D5 — no scroll container, silent no-op.
         let Some(scroll_container) = nearest_scroll_container(e, &parent_chain, &overflow_q) else {
             continue;
@@ -705,13 +760,30 @@ pub(super) fn sticky_offset(
         };
         let s_size = Vec2::new(s_layout.size.width, s_layout.size.height);
 
-        let Some(e_in_s) = world_position(e, scroll_container, &tree, &parent_chain, &mut memo)
-        else {
+        // L6 — pass the override map (shared `&HashMap`) so the
+        // ancestor walk sees any already-resolved outer sticky's
+        // displaced position. `e`'s own override is written only at the
+        // END of this iteration (after both reads), so the immutable
+        // borrow of `overrides.by_entity` has ended before the `&mut`
+        // insert below — no borrow conflict.
+        let Some(e_in_s) = world_position(
+            e,
+            scroll_container,
+            &tree,
+            &parent_chain,
+            &overrides.by_entity,
+            &mut memo,
+        ) else {
             continue;
         };
-        let Some(parent_in_s) =
-            world_position(parent, scroll_container, &tree, &parent_chain, &mut memo)
-        else {
+        let Some(parent_in_s) = world_position(
+            parent,
+            scroll_container,
+            &tree,
+            &parent_chain,
+            &overrides.by_entity,
+            &mut memo,
+        ) else {
             continue;
         };
 
