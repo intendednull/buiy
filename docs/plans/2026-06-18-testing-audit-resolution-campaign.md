@@ -23,12 +23,14 @@
 - **Worktree/branch:** campaign runs on `worktree-testing-audit-report` (the report + this plan are its first commit). Findings touch many subsystems but rarely the same file; subagents can fan out within a phase. Use `isolation: worktree` only if two tasks mutate the same file concurrently.
 - **Review gates:** after each phase, dispatch a fresh-context review agent (correctness + did-the-test-actually-bind, anti-vacuity) before advancing. Don't carry unreviewed work forward.
 
-## Decision gates (resolve before the dependent phase)
+## Decision gates — RESOLVED 2026-06-18 (user)
 
-- **DG-1 (blocks T0.4, #16): MSRV policy.** Add a `@1.85 cargo check --workspace` job, OR raise/remove `rust-version`? First **confirm Bevy 0.18's actual MSRV** — if it's above 1.85 the declared floor is already false. Recommendation: pin the job to the real floor, or drop `rust-version` if not maintaining one.
-- **DG-2 (blocks Phase 5, #9 + nextest): consolidation approach.** Consolidating ~162 per-file test binaries into <10 is a large structural change (every test file becomes a `mod` of a grouping binary). Decide: (a) group binaries by subsystem (`layout`, `render`, `text`, `text_edit`, `crosscut`, `verify_*`) via `mod` includes, and/or (b) adopt `cargo-nextest` in CI (better isolation + flaky-retry). This may warrant its own mini design note. Recommendation: do both — subsystem grouping + nextest.
-- **DG-3 (blocks T4.2, #40): performance-testing posture.** Criterion bench on shape→layout→extract, OR an allocation-count assertion via a counting allocator on the per-frame hot path, OR just document "no perf gate" as an accepted gap for now? Recommendation: a small criterion bench gated informational (not a hard CI fail yet) + the documented gap.
-- **DG-4 (blocks T0.8, #41): coverage tooling.** `cargo llvm-cov` as an informational artifact only, or a hard coverage floor on the pure-logic modules? Recommendation: informational first; add a floor on `layout/translate`, `focus`, `picking`, `text/edit` ops once a baseline number is known.
+All four resolved to the recommended option; recorded here so they are durable and not re-litigated after compaction.
+
+- **DG-1 (#16, T0.4): MSRV — RESOLVED: pin a real MSRV + job.** Confirm Bevy 0.18's actual MSRV first; set `Cargo.toml rust-version` to that real floor; add a CI job `dtolnay/rust-toolchain@<floor>` → `cargo check --workspace --locked` enforcing it. (Not "keep 1.85" — pin to the *true* floor.)
+- **DG-2 (#9, Phase 5): consolidation — RESOLVED: group binaries + nextest (both).** Group the ~162 per-file tests into <10 subsystem binaries (`layout`/`render`/`text`/`text_edit`/`crosscut` in buiy_core; `verify_headless`/`verify_gpu` in buiy_verify) via `mod`/`#[path]` includes, AND adopt `cargo-nextest` in CI (isolation + flaky-retry). Keep `cargo test --doc` separate (nextest skips doctests).
+- **DG-3 (#40, T4.2): perf posture — RESOLVED: criterion bench, informational.** Add a `criterion` bench on shape→layout→extract for a large scene; wire it non-gating (signal, not a hard CI fail). Also fix the misleading `text_*_latency.rs` intent comments.
+- **DG-4 (#41, T0.8): coverage tooling — RESOLVED: llvm-cov informational.** Wire `cargo llvm-cov` as a CI artifact/report, no pass/fail gate yet. (A floor on the pure-logic modules can come later once a baseline number exists.)
 
 ---
 
@@ -134,7 +136,7 @@ All 43 + 2 cleanups mapped.
 
 ## Current state / next action (post-compaction pickup)
 
-- **Done:** audit report + this plan written on branch `worktree-testing-audit-report`; both committed as the campaign baseline; suite green at baseline (1154 passed / 0 failed headless, 2026-06-18).
-- **Next action:** resolve **DG-1** (MSRV — confirm Bevy 0.18 MSRV first), then start **Phase 0** via `subagent-driven-development` (T0.1 commit Cargo.lock first — it unblocks reliable `--locked` verification for everything after).
-- **Decisions still open:** DG-1 (Phase 0), DG-4 (Phase 0 T0.8), DG-2 (Phase 5), DG-3 (Phase 4 T4.2). Surface DG-2/DG-3/DG-4 to the user when their phase approaches; DG-1 before Phase 0 completes.
-- **Pointers:** evidence = the audit report (the Spec above). Memory = `buiy-testing-audit-campaign`.
+- **Done:** audit report + this plan written + committed on branch `worktree-testing-audit-report` (baseline `3397414`); all 4 decision gates resolved (see above); suite green at baseline (1154 passed / 0 failed headless, 2026-06-18).
+- **Next action:** start **Phase 0** via `subagent-driven-development`. T0.1 first (commit the gitignored Cargo.lock — unblocks reliable `--locked` verification for everything after). For T0.4, confirm Bevy 0.18's real MSRV, then pin it per DG-1.
+- **Decisions:** all four RESOLVED (no further user input required to execute; surface only if a phase reveals a resolved decision was wrong).
+- **Pointers:** evidence = the audit report (the Spec above). Cross-session memory = `buiy-testing-audit-campaign`.
