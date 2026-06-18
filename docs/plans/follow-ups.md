@@ -569,19 +569,26 @@ nodes are kept alive. Hidden never warns (fully implemented). Mirrored in
 
 **Spec touchpoint:** `transforms-and-containment.md § 5.2`.
 
-## Layout / render — `will-change` layer promotion + SC trigger
+## Layout / render — `will-change` layer promotion + SC trigger — SC TRIGGER LANDED; layer promotion DEFERRED
 
 **Originated:** Phase 8 (D7 — tier-E, stored-only).
 
-**Symptom:** `WillChange` is stored on `Containment` but no layer
-promotion or stacking-context trigger behavior is produced.
+**Status — SC trigger (landed):** the stacking-context half is **landed**.
+`forms_stacking_context` (layout/systems.rs) now reads `Containment.will_change`
+and forms a `StackingContext` when the list names an SC-forming property. The
+SC-forming subset is encoded once in `WillChangeProperty::forms_stacking_context`
+(Transform / Opacity / Filter; `ZIndex` / `ScrollPosition` excluded — `will-change:
+z-index` does not form an SC, matching CSS). Unit tests sit beside the other
+trigger tests (layout/systems.rs); end-to-end coverage in tests/layout_stacking.rs.
+See the "Phase 9 `will-change` stacking-context former" entry below.
 
-**Implementation sketch:** honor `WillChange::Properties` as a render
-layer-promotion hint and a stacking-context trigger when the list mentions
-an SC-forming property (`WillChangeProperty::Transform` etc.) — coordinates
-with Phase 9 stacking.
+**Status — layer promotion (deferred):** the **render layer-promotion hint**
+remains deferred. There is no composition-layer / `RenderLayers` concept in
+render/ to hang a promotion hint on, so this half is not yet actionable — it
+stays open until such a mechanism exists.
 
-**Spec touchpoint:** `transforms-and-containment.md § 5.3`.
+**Spec touchpoint:** `transforms-and-containment.md § 5.3`;
+`stacking-and-top-layer.md § 2` trigger 5, § 7.
 
 ## Render — `UiTransform` paint + `Containment` PAINT clip rect + perspective / backface
 
@@ -737,7 +744,7 @@ the composed `ResolvedTransform` (trigger 3). It implements the spec § 2 SC
 trigger union (positioned + z-index, isolation, transform, paint/strict
 containment, root), the § 2.1 five-tier z-index paint-order sort, and the
 § 4 top-layer escape. The render-side trigger-5 formers have since landed
-(next entry); the will-change SC trigger remains deferred (separate
+(next entry); the will-change SC trigger has since landed too (separate
 follow-up below).
 
 **Spec touchpoint:** `transforms-and-containment.md § 3`, § 6;
@@ -757,33 +764,33 @@ forms a `StackingContext`. The clause delegates to
 `render::effect::forms_render_stacking_context`, which derives from the
 canonical effect-group former predicate (`effect_reason_for`) — ONE source
 of truth for the shared terms, so the SC trigger and the group former can
-never drift apart. `will-change` stays deferred (separate follow-up below);
-`BackdropFilter` deliberately forms an `EffectGroup` but never an SC
+never drift apart. The `will-change` SC trigger has since landed (separate
+follow-up below); `BackdropFilter` deliberately forms an `EffectGroup` but never an SC
 (render component-model.md § 8). Unit tests sit beside the other trigger
 tests (layout/systems.rs); end-to-end coverage in tests/layout_stacking.rs.
 
 **Spec touchpoint:** `stacking-and-top-layer.md § 2` trigger 5, § 7.
 
-## Layout — Phase 9 `will-change` stacking-context former
+## Layout — Phase 9 `will-change` stacking-context former — LANDED
 
 **Originated:** Phase 9 (D1) — coordinates with the Phase-8 "will-change
 layer promotion + SC trigger" follow-up (above).
 
-**Symptom:** a `WillChange` value naming an SC-forming property (e.g.
-`WillChangeProperty::Transform`, `Opacity`) should form a stacking context,
-but sub-pass 6f does not treat `will-change` as a trigger. `WillChange` is
-Phase-8 tier-E, stored-only with no behavior.
+**Status:** **Landed.** `forms_stacking_context` (layout/systems.rs) gained a
+trigger-5b clause: when `Containment.will_change` is `WillChange::Properties`
+and names an SC-forming property, the entity forms a `StackingContext`. The
+SC-forming subset is encoded once as `WillChangeProperty::forms_stacking_context`
+(types.rs) = Transform / Opacity / Filter; `ZIndex` and `ScrollPosition` are
+excluded (CSS: `will-change: z-index` does not create an SC — z-index needs
+positioning). No signature change was needed: the 6f `forms` closure already
+passed `containment_q.get(e).ok()`, so the unit-level predicate and the
+end-to-end 6f path lit up together. Unit tests sit beside the other trigger
+tests (layout/systems.rs) and the subset helper (types.rs); end-to-end
+coverage (positive + layout-only negative) in tests/layout_stacking.rs.
 
-**Cause:** Phase 8 stores `WillChange` on `Containment` but ships no behavior
-(D7); Phase 9 deliberately did not wire it as an SC trigger to keep the
-deferral consistent. The two concerns (render layer promotion + SC trigger)
-are the same underlying feature and should land together.
-
-**Implementation sketch:** when honoring `WillChange`, extend
-`forms_stacking_context` to return `true` when the `Containment.will_change`
-list names an SC-forming property, in the same change that adds the render
-layer-promotion hint. Cross-links the existing Phase-8 "will-change layer
-promotion + SC trigger" follow-up.
+Only the SC-trigger half landed. The `will-change` **render layer-promotion
+hint** stays deferred (see the combined Phase-8 entry above) — there is no
+composition-layer / `RenderLayers` concept in render/ to honor it.
 
 **Spec touchpoint:** `transforms-and-containment.md § 5.3`;
 `stacking-and-top-layer.md § 2` trigger 5, § 7.

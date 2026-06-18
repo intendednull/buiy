@@ -1242,6 +1242,25 @@ pub enum WillChangeProperty {
     ScrollPosition,
 }
 
+impl WillChangeProperty {
+    /// The SC-forming subset of `will-change` properties.
+    ///
+    /// CSS rule: a property named in `will-change` forms a stacking
+    /// context iff that property *would* form one at a non-initial value.
+    /// So `Transform` (trigger 3), `Opacity` (`< 1`), and `Filter`
+    /// (`!= none`) qualify. `ZIndex` does NOT — `z-index` only forms an
+    /// SC on a positioned element, so `will-change: z-index` alone never
+    /// creates one. `ScrollPosition` is not SC-forming either. Extend the
+    /// match here (the single source of truth) when new SC-forming
+    /// variants are added.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 2 (trigger 5);
+    /// transforms-and-containment.md § 5.3.
+    pub(crate) fn forms_stacking_context(self) -> bool {
+        matches!(self, Self::Transform | Self::Opacity | Self::Filter)
+    }
+}
+
 // ============================================================
 // Phase 9 — stacking value types (stacking-and-top-layer.md § 1)
 // ============================================================
@@ -1364,6 +1383,19 @@ mod tests {
     fn content_visibility_and_will_change_defaults() {
         assert_eq!(ContentVisibility::default(), ContentVisibility::Visible);
         assert_eq!(WillChange::default(), WillChange::Auto);
+    }
+
+    #[test]
+    fn will_change_property_sc_forming_subset() {
+        // SC-forming: the properties that would form a stacking context at
+        // a non-initial value (transform / opacity<1 / filter!=none).
+        assert!(WillChangeProperty::Transform.forms_stacking_context());
+        assert!(WillChangeProperty::Opacity.forms_stacking_context());
+        assert!(WillChangeProperty::Filter.forms_stacking_context());
+        // Not SC-forming: z-index needs positioning to form an SC, and
+        // scroll-position never forms one.
+        assert!(!WillChangeProperty::ZIndex.forms_stacking_context());
+        assert!(!WillChangeProperty::ScrollPosition.forms_stacking_context());
     }
 
     #[test]

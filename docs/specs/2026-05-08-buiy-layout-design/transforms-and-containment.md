@@ -228,15 +228,17 @@ When the Auto skip fires, the entity's own Taffy node receives the `ContainIntri
 
 ### 5.3 `will-change`
 
-`will-change` is foundation tier-E ([visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout)) — v1 ships the `WillChange` API surface for forward compatibility, but the layer-promotion hint and the SC-forming behavior below are deferred until user demand. Prioritization waits on user demand.
+`will-change` is foundation tier-E ([visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout)) — v1 ships the `WillChange` API surface for forward compatibility. The **SC-forming behavior is realized** (layout reads `will-change` as a stacking-context trigger, below); the **layer-promotion hint remains deferred** until a composition-layer concept exists in render/.
 
-Hint to the optimizer. Render uses it to promote the entity to its own composition layer. Layout uses it as a stacking-context trigger when its property list mentions an SC-forming property (e.g. `WillChangeProperty::Transform`).
+Hint to the optimizer. Layout uses it as a stacking-context trigger when its property list mentions an SC-forming property (e.g. `WillChangeProperty::Transform`): `forms_stacking_context` forms an SC when `Containment.will_change` names a property in the SC-forming subset. (The render-side use — promoting the entity to its own composition layer — is the deferred half; there is no `RenderLayers`/composition-layer mechanism yet.)
 
 ```rust
 pub enum WillChangeProperty {
     Transform, Opacity, Filter, ZIndex, ScrollPosition, /* ... */
 }
 ```
+
+The SC-forming subset (CSS: a property named in `will-change` forms an SC iff it would at a non-initial value) is `Transform` / `Opacity` / `Filter`, encoded once in `WillChangeProperty::forms_stacking_context`. `ZIndex` and `ScrollPosition` are excluded (`will-change: z-index` does not form an SC — z-index needs positioning).
 
 Authors should use sparingly — `will-change` consumes memory by promoting layers eagerly.
 
@@ -248,7 +250,7 @@ Consolidating from this file and [stacking-and-top-layer.md § 2](stacking-and-t
 2. `Stacking::isolation = Isolate`.
 3. `UiTransform` non-identity (this file).
 4. `Containment::contain` includes `ContainFlags::PAINT` or `ContainFlags::STRICT` (this file).
-5. `Containment::will_change` lists an SC-forming property (this file) — tier-E, deferred (see [§ 5.3](#53-will-change)).
+5. `Containment::will_change` lists an SC-forming property (this file) — realized (see [§ 5.3](#53-will-change); subset = Transform/Opacity/Filter). Only the layer-promotion hint stays deferred.
 6. `TopLayer != None` (handled separately — top layer escapes the stacking system entirely).
 7. Render-side triggers (`opacity < 1`, `filter != none`, `mix_blend_mode != normal`) — checked here for completeness; the components live in render-spec.
 8. The root entity always forms a stacking context (matches [stacking-and-top-layer.md § 2](stacking-and-top-layer.md#2-stacking-context-formation) trigger 6).

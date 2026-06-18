@@ -27,7 +27,7 @@ use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, AxisDimension, BreakAfter, BreakBefore, ColumnCount,
     ColumnFill, ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation,
     LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix,
-    TryCondition, WritingModeKind, ZIndex,
+    TryCondition, WillChange, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use crate::render::components::{Filter, MixBlendMode, Opacity};
@@ -4073,11 +4073,15 @@ pub fn top_layer_paint_rank(t: TopLayer) -> u8 {
 /// (3) non-identity transform, (4) `Containment.contain ⊇ PAINT/STRICT`,
 /// (5) the render-side formers (`Opacity < 1`, non-empty `Filter`,
 /// `MixBlendMode != Normal` — read from the render-owned components, same
-/// crate), (6) root. Trigger 5's `will-change` former is still deferred
-/// with the rest of `will-change` layer promotion (spec § 7);
+/// crate), (5b) `Containment.will_change` naming an SC-forming property
+/// (CSS: a property named in `will-change` forms a stacking context iff
+/// it would at a non-initial value — the subset is
+/// `WillChangeProperty::forms_stacking_context` = Transform/Opacity/Filter;
+/// `ZIndex`/`ScrollPosition` are excluded), (6) root.
 /// `BackdropFilter` is deliberately NOT a trigger — it forms an
 /// `EffectGroup` but never a stacking context (render component-model.md
-/// § 8).
+/// § 8). The `will-change` *layer-promotion* hint stays deferred (spec
+/// § 7) — only the SC-trigger half is realized here.
 ///
 /// Driven by the `stacking_context` sub-pass (6f).
 #[allow(clippy::too_many_arguments)]
@@ -4122,6 +4126,17 @@ pub(super) fn forms_stacking_context(
     // every SC-forming `EffectGroup` is atomic in painters_z, which is the
     // compositor's contiguity invariant (render/buckets.rs).
     if forms_render_stacking_context(opacity, filter, blend) {
+        return true;
+    }
+    // Trigger 5b — `will-change` naming an SC-forming property. CSS treats
+    // a property named in `will-change` as already forming a stacking
+    // context if it would at a non-initial value; the SC-forming subset is
+    // named once in `WillChangeProperty::forms_stacking_context`
+    // (Transform/Opacity/Filter — z-index and scroll-position excluded).
+    if let Some(c) = containment
+        && let WillChange::Properties(props) = &c.will_change
+        && props.iter().any(|p| p.forms_stacking_context())
+    {
         return true;
     }
     false
@@ -4483,7 +4498,9 @@ mod cq_tests {
 mod tests {
     use super::*;
     use crate::layout::components::{Containment, Position, Stacking};
-    use crate::layout::types::{ContainFlags, Isolation, PositionKind, TopLayer, ZIndex};
+    use crate::layout::types::{
+        ContainFlags, Isolation, PositionKind, TopLayer, WillChange, WillChangeProperty, ZIndex,
+    };
 
     use crate::layout::components::Display;
 
@@ -4925,6 +4942,59 @@ mod tests {
     #[test]
     fn normal_mix_blend_does_not_form_context() {
         assert!(!forms_via_render(None, None, Some(&MixBlendMode::Normal)));
+    }
+
+    // ---- trigger 5b — will-change SC former (spec § 2 trigger 5;
+    // transforms-and-containment.md § 5.3). A `will-change` naming an
+    // SC-forming property is treated as already forming a stacking
+    // context (CSS: a property that would form one at a non-initial value
+    // forms one when named in will-change). ----
+
+    /// `forms_stacking_context` with no other trigger but a `Containment`
+    /// whose `will_change` names the given properties — DRYs the
+    /// trigger-5b boundary tests below.
+    fn forms_via_will_change(props: Vec<WillChangeProperty>) -> bool {
+        let c = Containment {
+            will_change: WillChange::Properties(props),
+            ..Default::default()
+        };
+        forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            Some(&c),
+            None,
+            None,
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn will_change_transform_forms_context() {
+        assert!(forms_via_will_change(vec![WillChangeProperty::Transform]));
+        assert!(forms_via_will_change(vec![WillChangeProperty::Opacity]));
+        assert!(forms_via_will_change(vec![WillChangeProperty::Filter]));
+    }
+
+    #[test]
+    fn will_change_layout_only_does_not_form_context() {
+        // z-index / scroll-position are not SC-forming on their own.
+        assert!(!forms_via_will_change(vec![
+            WillChangeProperty::ZIndex,
+            WillChangeProperty::ScrollPosition,
+        ]));
+        // `will-change: auto` (the Containment default) forms nothing.
+        assert!(!forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            Some(&Containment::default()),
+            None,
+            None,
+            None,
+            false,
+        ));
     }
 
     #[test]
