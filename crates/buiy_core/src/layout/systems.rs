@@ -1653,51 +1653,10 @@ pub(super) fn anchor_resolution(
         .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
         .unwrap_or(Vec2::splat(f32::MAX));
 
-    // 2. Build edge map. The Kahn helper does its own pre-pass for
-    // external target nodes (D10), so we don't insert plain-Node
-    // targets here.
-    let mut edges: std::collections::HashMap<Entity, Option<Entity>> =
-        std::collections::HashMap::new();
-    let mut new_warns: Vec<(Entity, AnchorErrorKind)> = Vec::new();
-
-    // Helper: target resolution honoring Display::None (D9). Returns
-    // Some(entity) only when the target is name-resolvable AND not
-    // Display::None.
-    let resolve_target = |r: &AnchorRef| -> Option<Entity> {
-        let candidate = match r {
-            AnchorRef::Entity(t) => Some(*t),
-            AnchorRef::Name(n) => reg.find_entity_by_name(n),
-        }?;
-        if let Ok(Display::None) = display_query.get(candidate) {
-            return None;
-        }
-        Some(candidate)
-    };
-
-    for (e, anchor, _) in anchored_query.iter() {
-        let target = anchor.position_anchor.as_ref().and_then(&resolve_target);
-        edges.insert(e, target);
-        if anchor.position_anchor.is_some() && target.is_none() {
-            new_warns.push((e, AnchorErrorKind::TargetMissing));
-        }
-    }
-
-    // 3. Kahn sort. The helper handles external-target pre-pass and
-    // cycle-edge dropping.
-    let entity_epochs_fn = |e: Entity| reg.entity_epoch(e);
-    let (order, dropped) = kahn_anchor_sort(&edges, &entity_epochs_fn);
-
-    // D8 — both endpoints of a dropped cycle edge get
-    // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
-    // other end of each dropped edge (read from the pre-drop edges
-    // map).
-    let mut dropped_targets: std::collections::HashSet<Entity> = std::collections::HashSet::new();
-    for d in &dropped {
-        new_warns.push((*d, AnchorErrorKind::InCycle));
-        if let Some(Some(target)) = edges.get(d).copied() {
-            dropped_targets.insert(target);
-        }
-    }
+    // 2 + 3. Build edge map and topologically order the anchored
+    // entities (Kahn sort with cycle-edge dropping).
+    let (edges, order, dropped, dropped_targets, mut new_warns) =
+        build_anchor_edge_map(&anchored_query, &reg, &display_query);
 
     // 4. DuplicateName detection (D11). Scan registry buckets;
     // `bucket.len() > 1` means duplicate; the last entry is the
@@ -1821,11 +1780,102 @@ pub(super) fn anchor_resolution(
         }
     }
 
-    // 6. Idempotent `LayoutAnchorBroken` marker management. Iterate
-    // over every entity that could currently have or need the marker —
-    // anchored entities (anchored_query) AND dropped_targets (which
-    // may be plain Nodes without Anchor). Use `broken_query` to read
-    // the current marker state for the non-anchored set.
+    // 6. Idempotent `LayoutAnchorBroken` marker management.
+    apply_anchor_broken_markers(
+        &mut commands,
+        &broken_set,
+        &dropped_targets,
+        &anchored_query,
+        &broken_query,
+    );
+
+    // 7. Emit warns (one per unique `(entity, kind)` per frame).
+    emit_anchor_warns(new_warns, &mut warned);
+}
+
+/// Steps 2 + 3 of `anchor_resolution` — build the anchor edge map and
+/// produce the topological order via `kahn_anchor_sort`.
+///
+/// The Kahn helper does its own pre-pass for external target nodes
+/// (D10), so plain-Node targets are not inserted here. `dropped` is a
+/// `HashSet` (mirroring `kahn_anchor_sort`'s return) — the driver
+/// consumes it with set semantics. `TargetMissing` (edge build) and
+/// `InCycle` (per dropped endpoint) warns are accumulated into the
+/// returned `new_warns`; the driver appends the remaining kinds.
+#[allow(clippy::type_complexity)]
+fn build_anchor_edge_map(
+    anchored_query: &Query<(Entity, &Anchor, Option<&LayoutAnchorBroken>), With<Node>>,
+    reg: &AnchorNameRegistry,
+    display_query: &Query<&Display>,
+) -> (
+    std::collections::HashMap<Entity, Option<Entity>>,
+    Vec<Entity>,
+    std::collections::HashSet<Entity>,
+    std::collections::HashSet<Entity>,
+    Vec<(Entity, AnchorErrorKind)>,
+) {
+    let mut edges: std::collections::HashMap<Entity, Option<Entity>> =
+        std::collections::HashMap::new();
+    let mut new_warns: Vec<(Entity, AnchorErrorKind)> = Vec::new();
+
+    // Helper: target resolution honoring Display::None (D9). Returns
+    // Some(entity) only when the target is name-resolvable AND not
+    // Display::None.
+    let resolve_target = |r: &AnchorRef| -> Option<Entity> {
+        let candidate = match r {
+            AnchorRef::Entity(t) => Some(*t),
+            AnchorRef::Name(n) => reg.find_entity_by_name(n),
+        }?;
+        if let Ok(Display::None) = display_query.get(candidate) {
+            return None;
+        }
+        Some(candidate)
+    };
+
+    for (e, anchor, _) in anchored_query.iter() {
+        let target = anchor.position_anchor.as_ref().and_then(&resolve_target);
+        edges.insert(e, target);
+        if anchor.position_anchor.is_some() && target.is_none() {
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+        }
+    }
+
+    // 3. Kahn sort. The helper handles external-target pre-pass and
+    // cycle-edge dropping.
+    let entity_epochs_fn = |e: Entity| reg.entity_epoch(e);
+    let (order, dropped) = kahn_anchor_sort(&edges, &entity_epochs_fn);
+
+    // D8 — both endpoints of a dropped cycle edge get
+    // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
+    // other end of each dropped edge (read from the pre-drop edges
+    // map).
+    let mut dropped_targets: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for d in &dropped {
+        new_warns.push((*d, AnchorErrorKind::InCycle));
+        if let Some(Some(target)) = edges.get(d).copied() {
+            dropped_targets.insert(target);
+        }
+    }
+
+    (edges, order, dropped, dropped_targets, new_warns)
+}
+
+/// Step 6 of `anchor_resolution` — idempotent `LayoutAnchorBroken`
+/// marker management. Iterates over every entity that could currently
+/// have or need the marker: anchored entities (`anchored_query`) AND
+/// `dropped_targets` (which may be plain Nodes without `Anchor`), then
+/// cleans up the marker on stale non-anchored entities. The loop order
+/// and the `anchored_query.get(t).is_err()` cleanup guard are
+/// load-bearing and must stay verbatim.
+fn apply_anchor_broken_markers(
+    commands: &mut Commands,
+    broken_set: &std::collections::HashSet<Entity>,
+    dropped_targets: &std::collections::HashSet<Entity>,
+    anchored_query: &Query<(Entity, &Anchor, Option<&LayoutAnchorBroken>), With<Node>>,
+    broken_query: &Query<(Entity, Option<&LayoutAnchorBroken>)>,
+) {
+    // Use `broken_query` to read the current marker state for the
+    // non-anchored set.
     for (e, _, existing_broken) in anchored_query.iter() {
         let is_broken = broken_set.contains(&e);
         if is_broken && existing_broken.is_none() {
@@ -1836,7 +1886,7 @@ pub(super) fn anchor_resolution(
     }
     // Also handle plain-Node targets in `dropped_targets` (they may not
     // be in anchored_query but still need the marker per D8).
-    for &t in &dropped_targets {
+    for &t in dropped_targets {
         if let Ok((_, existing_broken)) = broken_query.get(t)
             && existing_broken.is_none()
         {
@@ -1853,8 +1903,17 @@ pub(super) fn anchor_resolution(
             commands.entity(t).remove::<LayoutAnchorBroken>();
         }
     }
+}
 
-    // 7. Emit warns (one per unique `(entity, kind)` per frame).
+/// Step 7 of `anchor_resolution` — emit one `warn!` per unique
+/// `(entity, kind)` pair this frame. `warned.set.insert` is the
+/// per-frame dedupe gate; the match must stay exhaustive over all
+/// `AnchorErrorKind` arms (including `AnchorSizeUsed`, which is
+/// currently unreachable from this path but kept for exhaustiveness).
+fn emit_anchor_warns(
+    new_warns: Vec<(Entity, AnchorErrorKind)>,
+    warned: &mut LayoutAnchorWarnedThisFrame,
+) {
     for (entity, kind) in new_warns {
         if warned.set.insert((entity, kind)) {
             match kind {

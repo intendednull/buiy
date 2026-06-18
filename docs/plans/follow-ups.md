@@ -189,17 +189,44 @@ its `Entity` handle, and uses `AnchorRef::Entity(e)` as the anchor
 reference (no name registry involved). Assert the anchored entity's
 position tracks the target.
 
-## Anchor positioning — extract `anchor_resolution` into sub-helpers
+## Anchor positioning — extract `anchor_resolution` into sub-helpers — LANDED
 
 **Originated:** Phase 6 (final whole-branch review).
 
-**Symptom:** `anchor_resolution` spans ~252 lines (`systems.rs` lines
-497-749) following 7 numbered algorithm steps. Pure refactor candidate
-when Phase 7 extends the sub-pass set.
+**Symptom:** `anchor_resolution` (`crates/buiy_core/src/layout/systems.rs`,
+~265 lines) followed 7 numbered algorithm steps inline. Pure refactor
+candidate to keep later anchor edits rebasing onto clean helpers.
 
-**Implementation sketch:** split into `build_anchor_edge_map`,
-`apply_anchor_broken_markers`, `emit_anchor_warns`. No behavior change;
-makes future extension cleaner.
+**Status:** **Landed.** Behavior-preserving extraction — zero observable
+change; the existing anchor + pipeline-order suites stayed green throughout.
+`anchor_resolution` is now a thin driver delegating to three private free
+helpers, co-located directly below it (matching the existing
+`kahn_anchor_sort` / `try_anchored_position` / `try_conditions_pass`
+neighbors):
+
+- `build_anchor_edge_map` (steps 2 + 3) — owns the `resolve_target` and
+  `entity_epochs_fn` closures (capturing `&AnchorNameRegistry` /
+  `&Query<&Display>` by shared ref), the per-entity edge insert +
+  `TargetMissing` warn, the `kahn_anchor_sort` call, and the
+  cycle-endpoint `InCycle` warn / `dropped_targets` loop. Returns
+  `(edges, order, dropped, dropped_targets, new_warns)`; `dropped` is a
+  `HashSet<Entity>` mirroring `kahn_anchor_sort`'s return so the driver's
+  set-membership consumption (`dropped.contains`, the seeding loops) is
+  unchanged.
+- `apply_anchor_broken_markers` (step 6) — idempotent `LayoutAnchorBroken`
+  insert/remove across the anchored set, the `dropped_targets` plain-Node
+  set, and the non-anchored cleanup set (loop order + the
+  `anchored_query.get(t).is_err()` cleanup guard kept verbatim).
+- `emit_anchor_warns` (step 7) — the `warned.set.insert` dedupe gate + the
+  exhaustive per-`AnchorErrorKind` `warn!` match.
+
+The step-5 topological walk was **intentionally left inline** in the driver
+(out of the named sketch): it is the most entangled body — it closes over
+`tree` + `overrides` + `reg` + `display_query` + `viewport` +
+`anchored_query` and mutates `overrides` / `broken_set` / `new_warns` — so
+extracting it was out of this slice's scope.
+
+**Spec touchpoint:** none — pure internal refactor, no target-state change.
 
 ## Layout — `Position::Fixed` implementation — LANDED
 
