@@ -98,6 +98,8 @@ If no queried ancestor exists, container units fall back to viewport units (`cqw
 
 `cqi` / `cqb` against a container with `ContainerType::InlineSize` resolve only on the inline axis; querying the block axis falls back to the same warn-and-degrade path. (See [README § 5 — open questions](README.md#5-open-questions) for nested-container subtleties.)
 
+**Consumers.** The shared `resolve_cq_unit_px` resolver is used by sizing, grid tracks, edge translation, *and* sticky positioning insets — a sticky `Length::Cq*` inset resolves against the sticky entity's own nearest queried ancestor (size read current-frame from Taffy). See [display-and-positioning.md § 2.3](display-and-positioning.md).
+
 ### 1.5 Test surface
 
 - **Activation flip** — fixture with one `@container (min-width: 600px)` rule; resize container from 500 → 700 in two frames; assert this frame's `ResolvedLayout` reflects the activated rule.

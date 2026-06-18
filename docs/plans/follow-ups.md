@@ -324,21 +324,45 @@ metrics deferred).
 
 **Spec touchpoint:** `flex-and-grid.md § 3` (multi-column).
 
-## Layout — sticky `Length::Cq*` inset resolution
+## Layout — sticky `Length::Cq*` inset resolution — LANDED
 
 **Originated:** Phase 7 (D3 deferral).
 
+**Status:** **Landed.** Sticky `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax`
+insets now resolve via the shared `translate.rs::resolve_cq_unit_px`
+against the sticky entity's own nearest container-query ancestor
+(`Container { container_type != Normal }`, found by walking `ChildOf`
+from the sticky entity — distinct from anchor's per-try "anchor target
+box" frame). The CQ-ancestor size is read CURRENT-frame from Taffy
+(`tree.by_entity` + `tree.tree.layout`), NOT from last-frame
+`&ResolvedLayout`: `sticky_offset` runs in `PostTaffyOverrides` (after
+`TaffyCompute`, before `WriteResolvedLayout`), so a container's
+`ResolvedLayout` is stale there but its Taffy size is fresh — this keeps
+sticky `Cq*` same-frame-consistent with the self/parent/scroll sizes
+`sticky_offset` already reads from Taffy, and collapses the tests to a
+single `app.update()`. Cqi/Cqb resolve on the writing-mode inline/block
+axes (per-entity `WritingModeResolved`); the no-CQ-ancestor case rides
+`resolve_cq_unit_px`'s existing viewport fallback, identical to every
+other Cq* site. The `StickyCqDeferred` warn variant was **retired**
+(delegating to `resolve_cq_unit_px` makes it dead; keeping it would
+double-warn). Covered by `sticky_cqw_inset_resolves_against_nearest_cq_ancestor`,
+`sticky_cqi_inset_resolves_on_inline_axis_under_vertical_writing_mode`,
+`sticky_cqb_inset_resolves_on_block_axis_under_vertical_writing_mode`,
+and `sticky_cqw_resolves_against_inner_cq_ancestor_not_scroll_container`
+in `tests/layout_sticky.rs`.
+
 **Symptom:** Sticky entity with `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax`
-inset emits `LayoutWarnOnceKey::StickyCqDeferred(Entity)` and resolves to
+inset emitted `LayoutWarnOnceKey::StickyCqDeferred(Entity)` and resolved to
 0.0.
 
-**Implementation sketch:** port Phase 6's `length_inset_to_px` cq-context
-resolver. Sticky's reference frame is the sticky entity's own nearest CQ
-ancestor (distinct from anchor's "anchor target box" frame). Multi-axis
-fixture needed (Cqi/Cqb resolve against writing-mode inline/block axes).
+**Implementation sketch (as landed):** reuse `resolve_cq_unit_px` (the
+same resolver sizing/tracks/edges use) instead of porting Phase 6's
+anchor-box-shaped `length_inset_to_px`. Sticky's reference frame is the
+sticky entity's own nearest CQ ancestor. Multi-axis fixtures pin the
+Cqi/Cqb writing-mode axis swap.
 
 **Spec touchpoint:** `display-and-positioning.md § 2.3`,
-`container-queries-and-writing-modes.md § 1`.
+`container-queries-and-writing-modes.md § 1.4`.
 
 ## Layout — sticky em/rem/Vh/Vw/Vmin/Vmax inset support
 

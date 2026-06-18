@@ -21,7 +21,7 @@ use super::components::{
     LayoutAnchorBroken, MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset,
     Stacking, Translate, UiTransform, WritingMode, WritingModeResolved,
 };
-use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
+use super::translate::{ContainerSnapshot, StyleView, resolve_cq_unit_px, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, AxisDimension, BreakAfter, BreakBefore, ColumnCount,
@@ -409,8 +409,10 @@ fn world_position(
 /// reference frame, per D3 / D11.
 ///
 /// Returns `Some(px)` for "this edge is sticky-active" or `None` for
-/// "this edge is not set." Inputs that are deferred (`Cq*`) or
-/// semantically invalid (`Fr` — grid-only) return `Some(0.0)` and
+/// "this edge is not set." `Cq*` insets resolve against `cq_frame` (the
+/// sticky entity's own nearest CQ ancestor) via the shared
+/// `resolve_cq_unit_px`. Semantically-invalid inputs (`Fr` — grid-only,
+/// `AnchorSize` — sticky has no anchor box) return `Some(0.0)` and
 /// record one `warn!` per (entity, session) via `warned`.
 ///
 /// v2 — `Length` has only `Px / Percent / Fr / Cq*`. `Vh/Vw/Vmin/Vmax/
@@ -420,9 +422,13 @@ fn world_position(
 /// deliberate decision per future variant.
 ///
 /// Phase 7 — sub-pass 6a (`sticky_offset`).
+#[allow(clippy::too_many_arguments)]
 fn resolve_sticky_inset(
     s: &Sizing,
     scroll_container_axis_size: f32,
+    cq_frame: Option<ContainerSnapshot>,
+    viewport: Vec2,
+    wmr: &WritingModeResolved,
     entity: Entity,
     warned: &mut LayoutWarnedOnceSession,
 ) -> Option<f32> {
@@ -453,31 +459,22 @@ fn resolve_sticky_inset(
             }
             0.0
         }
-        // All Cq* variants — full resolution is deferred to a Phase
-        // 7.x follow-up (would port Phase 6's `length_inset_to_px`,
-        // which takes an anchor-box second argument; sticky's
-        // reference frame is the sticky entity's own cq-ancestor, a
-        // different shape). v1: warn once per entity, resolve to 0.0.
+        // All Cq* variants resolve against the sticky entity's OWN
+        // nearest container-query ancestor (the `cq_frame` snapshot),
+        // via the shared `resolve_cq_unit_px` resolver — the same path
+        // sizing, tracks, and edges use. Cqi/Cqb resolve on the
+        // writing-mode inline/block axes; no-CQ-ancestor (cq_frame ==
+        // None) falls back to viewport inside `resolve_cq_unit_px`,
+        // identical to every other Cq* site.
         Length::Cqw(_)
         | Length::Cqh(_)
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => {
-            if warned
-                .set
-                .insert(LayoutWarnOnceKey::StickyCqDeferred(entity))
-            {
-                warn!(
-                    "Sticky entity {:?} uses Cq* inset; sticky-cq resolution is deferred to a Phase 7.x follow-up. Inset resolves to 0.0.",
-                    entity,
-                );
-            }
-            0.0
-        }
+        | Length::Cqmax(_) => resolve_cq_unit_px(*length, cq_frame, viewport, wmr),
         // `anchor-size()` reads an anchor box; sticky has none. Resolve
         // to 0.0, warn once per (entity, session) — same channel + dedup
-        // shape as the Fr / Cq* sticky-deferred arms above.
+        // shape as the Fr sticky-deferred arm above.
         Length::AnchorSize(_) => {
             if warned
                 .set
@@ -589,8 +586,13 @@ fn compute_sticky_displacement(
 /// Sticky behaves as `Relative` when no scroll-container ancestor is
 /// in scope (D5, silent no-op) — useful for sticky-in-static-context
 /// placeholder patterns. Percent insets resolve against the scroll
-/// container's content-box axis size (D11). `Length::Fr` and
-/// `Length::Cq*` insets warn-once-per-session and resolve to 0.0.
+/// container's content-box axis size (D11). `Length::Cq*` insets
+/// resolve against the sticky entity's own nearest container-query
+/// ancestor (size read CURRENT-frame from Taffy) via the shared
+/// `resolve_cq_unit_px`; the no-CQ-ancestor case falls back to the
+/// viewport like every other Cq* site. `Length::Fr` (grid-only) and
+/// `Length::AnchorSize` (sticky has no anchor box) warn-once-per-session
+/// and resolve to 0.0.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.3.
 #[allow(clippy::too_many_arguments)]
@@ -600,6 +602,9 @@ pub(super) fn sticky_offset(
     overflow_q: Query<&Overflow>,
     scroll_offset_q: Query<&ScrollOffset>,
     parent_chain: Query<&ChildOf>,
+    container_q: Query<(Entity, &Container)>,
+    wmr_q: Query<&WritingModeResolved>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     mut overrides: ResMut<PostTaffyPositionOverrides>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
@@ -607,6 +612,39 @@ pub(super) fn sticky_offset(
     // sticky set share `ChildOf` chain prefixes, so memoizing avoids
     // redundant walks.
     let mut memo: HashMap<(Entity, Entity), Vec2> = HashMap::new();
+
+    // CQ-ancestor frame source for `Length::Cq*` insets. Read
+    // CURRENT-frame from Taffy (NOT last-frame `&ResolvedLayout`):
+    // `sticky_offset` runs in `PostTaffyOverrides` (AFTER `TaffyCompute`,
+    // BEFORE `WriteResolvedLayout`), so a container's `ResolvedLayout` is
+    // stale here but its Taffy size is fresh — consistent with the
+    // self/parent/scroll sizes read from Taffy below. Entities Taffy
+    // hasn't placed yet are skipped (`.ok()`), same skip-this-frame
+    // semantics as the self/parent/scroll reads.
+    let container_index: HashMap<Entity, ContainerSnapshot> = container_q
+        .iter()
+        .filter(|(_, c)| c.container_type != ContainerType::Normal)
+        .filter_map(|(entity, c)| {
+            let node = tree.by_entity.get(&entity)?;
+            let layout = tree.tree.layout(*node).ok()?;
+            Some((
+                entity,
+                ContainerSnapshot {
+                    container_type: c.container_type,
+                    size: Vec2::new(layout.size.width, layout.size.height),
+                },
+            ))
+        })
+        .collect();
+
+    // Viewport fallback for the no-CQ-ancestor case (mirrors
+    // `sync_styles`). `resolve_cq_unit_px` uses this when an entity has
+    // no queried ancestor.
+    let viewport_size = primary_window
+        .single()
+        .ok()
+        .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(Vec2::ZERO);
 
     for (e, pos, display) in sticky_query.iter() {
         // D14 — filter in Rust (no Bevy `Without<Display::None>` exists,
@@ -669,14 +707,55 @@ pub(super) fn sticky_offset(
             .copied()
             .unwrap_or_default();
 
+        // CQ frame + writing mode for any `Length::Cq*` inset — the
+        // sticky entity's OWN nearest CQ ancestor (walks `ChildOf` from
+        // the sticky entity, distinct from anchor's per-try anchor-box
+        // frame). Resolved once per entity (not per edge) to keep the
+        // `resolve_sticky_inset` signature L6-clean.
+        let cq_frame = nearest_container_with_size(e, &container_index, &parent_chain);
+        let wmr = wmr_q.get(e).copied().unwrap_or_default();
+
         // D3 / D11 — per-axis inset resolution. The caller passes the
         // correct scroll-container axis size (height for top/bottom,
-        // width for left/right); `resolve_sticky_inset` does not need
-        // an axis-tag parameter.
-        let top = resolve_sticky_inset(&pos.inset.top, s_size.y, e, &mut warned);
-        let bottom = resolve_sticky_inset(&pos.inset.bottom, s_size.y, e, &mut warned);
-        let left = resolve_sticky_inset(&pos.inset.left, s_size.x, e, &mut warned);
-        let right = resolve_sticky_inset(&pos.inset.right, s_size.x, e, &mut warned);
+        // width for left/right) for `Percent`; `resolve_sticky_inset`
+        // does not need an axis-tag parameter. `Cq*` resolves against
+        // the CQ frame + writing mode (not the scroll axis).
+        let top = resolve_sticky_inset(
+            &pos.inset.top,
+            s_size.y,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
+        let bottom = resolve_sticky_inset(
+            &pos.inset.bottom,
+            s_size.y,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
+        let left = resolve_sticky_inset(
+            &pos.inset.left,
+            s_size.x,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
+        let right = resolve_sticky_inset(
+            &pos.inset.right,
+            s_size.x,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
 
         let displacement = compute_sticky_displacement(
             e_in_s,

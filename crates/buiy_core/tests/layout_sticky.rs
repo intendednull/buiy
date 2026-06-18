@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use buiy_core::layout::{
     Anchor, AnchorRef, Display, Inset, LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession,
     Length, OverflowMode, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
-    ScrollOffset, Sizing, Style,
+    ScrollOffset, Sizing, Style, WritingModeKind,
 };
 use buiy_core::{Node, ResolvedLayout};
 
@@ -497,12 +497,29 @@ fn sticky_percent_inset_against_scroll_container() {
 // =====================================================================
 
 #[test]
-fn sticky_cq_inset_deferred_resolves_to_zero_with_warn() {
-    // Cqw inset on sticky → resolves to 0 and warns. With inset 0,
-    // top-pin threshold = visible_top + 0 = scroll_offset. natural
-    // y_in_block = 50, scroll_offset = 0 → no displacement.
+fn sticky_cqw_inset_resolves_against_nearest_cq_ancestor() {
+    // The scroll container is ALSO a size-container (the sticky's own
+    // nearest CQ ancestor). 300-wide → Cqw(10) top inset = 10% of 300 =
+    // 30px. With scroll_offset.y = 100, visible_top = 100, threshold =
+    // 100 + 30 = 130. natural y_in_block = 50. max(50, 130) = 130,
+    // clamped by the tall parent (no clamp). Override carries (0, 130).
+    //
+    // SINGLE update: the CQ-ancestor size is read CURRENT-frame from
+    // Taffy (the same source as sticky's self/parent/scroll reads), so
+    // no two-frame establishment is needed.
     let mut app = app();
-    let scroll = scroll_container(&mut app, 0.0);
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(300.0)
+                .height_px(500.0)
+                .overflow_y(OverflowMode::Scroll)
+                .container_size(),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
     let block = content_block(&mut app, scroll, 1000.0);
     let _spacer = content_block(&mut app, block, 50.0);
     let sticky = sticky_child(
@@ -510,27 +527,187 @@ fn sticky_cq_inset_deferred_resolves_to_zero_with_warn() {
         block,
         100.0,
         30.0,
-        sticky_top_sizing(Sizing::Length(Length::Cqw(20.0))),
+        sticky_top_sizing(Sizing::Length(Length::Cqw(10.0))),
     );
 
     app.update();
 
-    // Inset resolves to 0; with scroll_offset=0 there's no
-    // displacement, so the override map should NOT contain the sticky
-    // entry. (Test ensures the no-op-write invariant holds in this
-    // path.) The warn is the focus assertion.
     let overrides = app.world().resource::<PostTaffyPositionOverrides>();
-    assert!(
-        !overrides.by_entity.contains_key(&sticky),
-        "Cq inset → 0; scroll_offset=0 → no displacement → no override entry",
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for Cqw-inset case"));
+    assert_eq!(
+        pos.y, 130.0,
+        "Cqw(10) of 300px CQ-ancestor width = 30px inset → threshold 130 \
+         at scroll_y=100; got {:?}",
+        pos,
+    );
+}
+
+#[test]
+fn sticky_cqi_inset_resolves_on_inline_axis_under_vertical_writing_mode() {
+    // Scroll container is a size-container 400-wide x 600-tall, with
+    // width != height so the axis swap is observable. The sticky child
+    // is in VerticalRl: inline axis = container HEIGHT (600), block axis
+    // = container WIDTH (400). Cqi(10) top inset = 10% of inline (600) =
+    // 60px (NOT 40px = 10% of width). scroll_y=100 → threshold 160.
+    // natural y_in_block = 50 → override.y = 160.
+    let mut app = app();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(600.0)
+                .overflow_y(OverflowMode::Scroll)
+                .container_size(),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let sticky = app
+        .world_mut()
+        .spawn((Node, {
+            let mut s = Style::default()
+                .width_px(100.0)
+                .height_px(30.0)
+                .writing_mode_kind(WritingModeKind::VerticalRl);
+            s.position = sticky_top_sizing(Sizing::Length(Length::Cqi(10.0)));
+            s
+        }))
+        .id();
+    app.world_mut().entity_mut(block).add_children(&[sticky]);
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for Cqi-inset case"));
+    assert_eq!(
+        pos.y, 160.0,
+        "Cqi(10) under VerticalRl = 10%% of inline=HEIGHT(600) = 60px → \
+         threshold 160 at scroll_y=100 (NOT 140 = 10%% of width); got {:?}",
+        pos,
+    );
+}
+
+#[test]
+fn sticky_cqb_inset_resolves_on_block_axis_under_vertical_writing_mode() {
+    // Same fixture/writing mode as the Cqi test. Cqb resolves on the
+    // BLOCK axis = container WIDTH (400) under VerticalRl. Cqb(10) =
+    // 10% of 400 = 40px. scroll_y=100 → threshold 140. natural y = 50 →
+    // override.y = 140. A full size-container (not inline-size) is used
+    // so Cqb resolves on the real block axis (inline-size containers
+    // can't answer the block axis — they viewport-fall-back).
+    let mut app = app();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(600.0)
+                .overflow_y(OverflowMode::Scroll)
+                .container_size(),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let sticky = app
+        .world_mut()
+        .spawn((Node, {
+            let mut s = Style::default()
+                .width_px(100.0)
+                .height_px(30.0)
+                .writing_mode_kind(WritingModeKind::VerticalRl);
+            s.position = sticky_top_sizing(Sizing::Length(Length::Cqb(10.0)));
+            s
+        }))
+        .id();
+    app.world_mut().entity_mut(block).add_children(&[sticky]);
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for Cqb-inset case"));
+    assert_eq!(
+        pos.y, 140.0,
+        "Cqb(10) under VerticalRl = 10%% of block=WIDTH(400) = 40px → \
+         threshold 140 at scroll_y=100 (NOT 160 = 10%% of height); got {:?}",
+        pos,
+    );
+}
+
+#[test]
+fn sticky_cqw_resolves_against_inner_cq_ancestor_not_scroll_container() {
+    // Three-level fixture proving the nearest-CQ walk is decoupled from
+    // the scroll-container walk:
+    //   scroll container (overflow, NOT a size-container) 300-wide
+    //     → middle size-container 500-wide (the nearest CQ ancestor)
+    //       → sticky child, Cqw(10) top inset
+    // Cqw must resolve against the MIDDLE's width (500 → 50px), NOT the
+    // scroll container's width (300 → would be 30px). scroll_y=100 →
+    // threshold 150. natural y inside middle = 50 (50px spacer) →
+    // override.y = 150 (in middle's frame, which equals scroll frame
+    // here since middle starts at y=0).
+    let mut app = app();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(300.0)
+                .height_px(500.0)
+                .overflow_y(OverflowMode::Scroll),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    // Middle: a size-container 500-wide, tall enough to scroll within.
+    let middle = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(500.0)
+                .height_px(1000.0)
+                .container_size(),
+        ))
+        .id();
+    app.world_mut().entity_mut(scroll).add_children(&[middle]);
+    let _spacer = content_block(&mut app, middle, 50.0);
+    let sticky = sticky_child(
+        &mut app,
+        middle,
+        100.0,
+        30.0,
+        sticky_top_sizing(Sizing::Length(Length::Cqw(10.0))),
     );
 
-    let warned = app.world().resource::<LayoutWarnedOnceSession>();
-    assert!(
-        warned
-            .set
-            .contains(&LayoutWarnOnceKey::StickyCqDeferred(sticky)),
-        "Cq inset should record a StickyCqDeferred warn for the sticky entity",
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for inner-CQ-ancestor case"));
+    assert_eq!(
+        pos.y, 150.0,
+        "Cqw(10) resolves against the MIDDLE CQ ancestor width (500 → 50px), \
+         NOT the scroll container (300 → 30px) → threshold 150; got {:?}",
+        pos,
     );
 }
 
