@@ -3951,19 +3951,22 @@ pub(super) fn cq_flip_rerun(
 /// `Compose([A, B, …])` folds to the matrix product `A · B · …`
 /// (outermost first; rightmost transforms a child point first).
 ///
-/// `Length`s in `Translate` resolve as px today (percent/cq transform
-/// translates resolve against the entity's own box — deferred to the
-/// render/animation phase; px is the only meaningful unit at compose
-/// time for Phase 8). Non-px `Length` variants resolve to their px
-/// magnitude via `Length::Px` only; other variants contribute 0.0.
+/// `Length`s in `Translate` resolve via [`translate_length_px`]: `Px` as-is,
+/// `Percent` against the entity's own current-frame border `box_size`
+/// (x = width, y = height; z-percent is invalid → 0), `Cq*` as a 0.0 residual
+/// (warned once), `Fr`/`AnchorSize` as 0.0. The other arms ignore `box_size`,
+/// but `Compose` threads it through so a nested `Translate` percent still
+/// resolves against the same own box.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
-fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
+fn transform_matrix_to_mat4(m: &TransformMatrix, box_size: Vec2) -> Mat4 {
     match m {
         TransformMatrix::None => Mat4::IDENTITY,
-        TransformMatrix::Translate(x, y, z) => {
-            Mat4::from_translation(Vec3::new(length_px(x), length_px(y), length_px(z)))
-        }
+        TransformMatrix::Translate(x, y, z) => Mat4::from_translation(Vec3::new(
+            translate_length_px(x, box_size.x),
+            translate_length_px(y, box_size.y),
+            translate_length_px(z, 0.0),
+        )),
         TransformMatrix::Rotate(q) => Mat4::from_quat(*q),
         TransformMatrix::Scale(x, y, z) => Mat4::from_scale(Vec3::new(*x, *y, *z)),
         TransformMatrix::Skew(ax, ay) => {
@@ -3975,19 +3978,53 @@ fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
         }
         TransformMatrix::Matrix(mat) => *mat,
         TransformMatrix::Compose(list) => list.iter().fold(Mat4::IDENTITY, |acc, item| {
-            acc * transform_matrix_to_mat4(item)
+            acc * transform_matrix_to_mat4(item, box_size)
         }),
     }
 }
 
-/// Resolve a `Length` to px for transform translation. Only `Px` is
-/// meaningful at compose time in Phase 8; other units (percent /
-/// cq) resolve against the entity's own box and are deferred to the
-/// render/animation phase — they contribute 0.0 here.
-fn length_px(l: &Length) -> f32 {
+/// Warn-once for a `Cq*` transform-translate term. `Cq*` translate needs
+/// the entity's nearest CQ-ancestor frame (sticky L4 territory) which sub-pass
+/// 6e does not gather, so it stays a documented residual that contributes 0.0.
+/// Warn once rather than per-frame so authors learn it is unresolved without
+/// log spam (mirrors `translate::warn_once_cq_no_ancestor`).
+fn warn_once_cq_translate_residual() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        warn!(
+            "buiy: container unit (cqw/cqh/cqi/cqb/cqmin/cqmax) used in a \
+             transform translate — unresolved (needs the nearest CQ-ancestor \
+             frame, a residual deferral) and contributes 0.0 (warned once)"
+        );
+    }
+}
+
+/// Resolve a `Length` to px for transform translation along ONE axis.
+///
+/// `Px(p)` resolves to `p`. `Percent(p)` resolves against the entity's own
+/// current-frame border box on the relevant axis per CSS Transforms —
+/// `translateX(p%) = p% of width`, `translateY(p%) = p% of height` — so the
+/// caller passes the matching `axis_px` (`box.x` for x, `box.y` for y). The
+/// z axis passes `axis_px = 0.0`: CSS makes `translateZ` percentages invalid,
+/// so a z-percent resolves to 0.0.
+///
+/// `Cq*` translate is a RESIDUAL deferral (needs the nearest CQ-ancestor
+/// frame, like sticky L4) — it contributes 0.0 and fires a one-shot warn.
+/// `Fr` / `AnchorSize` are meaningless on a transform and likewise yield 0.0.
+fn translate_length_px(l: &Length, axis_px: f32) -> f32 {
     match l {
         Length::Px(p) => *p,
-        _ => 0.0,
+        Length::Percent(p) => p * 0.01 * axis_px,
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => {
+            warn_once_cq_translate_residual();
+            0.0
+        }
+        Length::Fr(_) | Length::AnchorSize(_) => 0.0,
     }
 }
 
@@ -4019,17 +4056,27 @@ pub(super) fn multicol_length_px(l: Option<Length>, fallback: f32) -> f32 {
 /// `translate∘-translate ≈ I`, `rotate(2π) ≈ I`, `scale(k)` checks assert on
 /// THIS composed matrix, never a re-implementation), hence `pub`.
 ///
+/// `box_size` is the entity's own current-frame border box — the percent
+/// basis for translate terms (x = width, y = height; z-percent → 0) per CSS
+/// Transforms. The caller (sub-pass 6e) reads it from the current-frame Taffy
+/// tree; unit tests pass an explicit box (`Vec2::ZERO` when no percent is in
+/// play, so px composition is unchanged). `Cq*` translate is a 0.0 residual
+/// (needs the nearest CQ-ancestor frame, like sticky L4).
+///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 1.1.
 pub fn compose_transform(
     ui: &UiTransform,
     t: Option<&Translate>,
     r: Option<&Rotate>,
     s: Option<&Scale>,
+    box_size: Vec2,
 ) -> Mat4 {
     let t_mat = match t {
-        Some(Translate(x, y, z)) => {
-            Mat4::from_translation(Vec3::new(length_px(x), length_px(y), length_px(z)))
-        }
+        Some(Translate(x, y, z)) => Mat4::from_translation(Vec3::new(
+            translate_length_px(x, box_size.x),
+            translate_length_px(y, box_size.y),
+            translate_length_px(z, 0.0),
+        )),
         None => Mat4::IDENTITY,
     };
     let r_mat = match r {
@@ -4040,7 +4087,7 @@ pub fn compose_transform(
         Some(Scale(x, y, z)) => Mat4::from_scale(Vec3::new(*x, *y, *z)),
         None => Mat4::IDENTITY,
     };
-    let m_transform = transform_matrix_to_mat4(&ui.matrix);
+    let m_transform = transform_matrix_to_mat4(&ui.matrix, box_size);
     t_mat * r_mat * s_mat * m_transform
 }
 
@@ -4197,6 +4244,7 @@ pub(super) fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind
 #[allow(clippy::type_complexity)]
 pub(super) fn transform_composition(
     mut commands: Commands,
+    tree: NonSend<LayoutTree>,
     query: Query<
         (
             Entity,
@@ -4214,7 +4262,21 @@ pub(super) fn transform_composition(
         if matches!(display, Display::None) {
             continue;
         }
-        let m = compose_transform(ui, t, r, s);
+        // Percent translate resolves against the entity's OWN current-frame
+        // border box. 6e runs in PostTaffyOverrides — BEFORE
+        // WriteResolvedLayout — so `ResolvedLayout.size` is last-frame here;
+        // read the current-frame box straight from the Taffy tree, mirroring
+        // `anchor_resolution` (the preceding 6d sub-pass). An entity with no
+        // Taffy node (just-spawned) falls back to ZERO → percent yields 0 this
+        // frame, self-healing next frame (anchor_resolution's precedent).
+        let box_size = tree
+            .by_entity
+            .get(&e)
+            .copied()
+            .and_then(|id| tree.tree.layout(id).ok())
+            .map(|l| Vec2::new(l.size.width, l.size.height))
+            .unwrap_or(Vec2::ZERO);
+        let m = compose_transform(ui, t, r, s, box_size);
         if m == Mat4::IDENTITY {
             // Identity → no ResolvedTransform; remove a stale one.
             if existing.is_some() {
@@ -5135,7 +5197,7 @@ mod tests {
     #[test]
     fn compose_identity_is_identity() {
         let ui = UiTransform::default();
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         assert_eq!(m, Mat4::IDENTITY);
     }
 
@@ -5145,7 +5207,7 @@ mod tests {
             matrix: TransformMatrix::Translate(Length::px(10.0), Length::px(20.0), Length::ZERO),
             ..Default::default()
         };
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         assert_eq!(m, Mat4::from_translation(Vec3::new(10.0, 20.0, 0.0)));
     }
 
@@ -5155,7 +5217,7 @@ mod tests {
             matrix: TransformMatrix::Scale(2.0, 3.0, 1.0),
             ..Default::default()
         };
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         assert_eq!(m, Mat4::from_scale(Vec3::new(2.0, 3.0, 1.0)));
     }
 
@@ -5172,7 +5234,7 @@ mod tests {
         };
         let t = Translate(Length::px(10.0), Length::ZERO, Length::ZERO);
         let s = Scale(2.0, 2.0, 1.0);
-        let m = compose_transform(&ui, Some(&t), None, Some(&s));
+        let m = compose_transform(&ui, Some(&t), None, Some(&s), Vec2::ZERO);
         let expected = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(2.0, 2.0, 1.0))
             * Mat4::from_quat(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
@@ -5188,7 +5250,7 @@ mod tests {
             matrix: TransformMatrix::Compose(vec![a, b]),
             ..Default::default()
         };
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         let expected = Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(2.0, 1.0, 1.0));
         assert_eq!(m, expected);
