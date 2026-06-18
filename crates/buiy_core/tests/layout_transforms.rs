@@ -5,8 +5,26 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout, ResolvedTransform,
-    layout::{Display, FlexAxis, LayoutPlugin, Length, Sizing, Style},
+    layout::{
+        Display, FlexAxis, LayoutPlugin, Length, Sizing, Style, TransformMatrix, UiTransform,
+    },
 };
+
+/// Spawn a single sized `Node` with the given `style` and return the composed
+/// `ResolvedTransform.matrix` after one update (or identity if none was
+/// inserted — sub-pass 6e omits `ResolvedTransform` for an identity matrix).
+fn resolved_matrix(width: Length, height: Length, style: Style) -> Mat4 {
+    let mut app = app();
+    let mut s = style;
+    s.box_model.width = Sizing::Length(width);
+    s.box_model.height = Sizing::Length(height);
+    let e = app.world_mut().spawn((Node, s)).id();
+    app.update();
+    app.world()
+        .get::<ResolvedTransform>(e)
+        .map(|rt| rt.matrix)
+        .unwrap_or(Mat4::IDENTITY)
+}
 
 fn app() -> App {
     let mut app = App::new();
@@ -115,6 +133,89 @@ fn transform_does_not_change_sibling_positions() {
             "child {i} position must be unaffected by a sibling's transform"
         );
     }
+}
+
+#[test]
+fn translate_percent_x_resolves_against_own_width() {
+    // translateX(50%) on a 100px-wide box → 50px x (CSS: x% of border-box width).
+    let m = resolved_matrix(
+        Length::px(100.0),
+        Length::px(40.0),
+        Style::default().translate(Length::percent(50.0), Length::px(0.0)),
+    );
+    assert_eq!(m, Mat4::from_translation(Vec3::new(50.0, 0.0, 0.0)));
+}
+
+#[test]
+fn translate_percent_y_resolves_against_own_height() {
+    // translateY(25%) on an 80px-tall box → 20px y (y% is of HEIGHT, not width).
+    let m = resolved_matrix(
+        Length::px(40.0),
+        Length::px(80.0),
+        Style::default().translate(Length::px(0.0), Length::percent(25.0)),
+    );
+    assert_eq!(m, Mat4::from_translation(Vec3::new(0.0, 20.0, 0.0)));
+}
+
+#[test]
+fn translate_mixed_percent_and_px() {
+    // 200x100 box; translate (10% , 15px) → x = 0.1*200 = 20, y = 15.
+    // (`p * 0.01 * axis` carries a tiny float error, so compare within EPS.)
+    fn assert_translation(m: Mat4, expected: Vec3) {
+        let got = m.w_axis.truncate();
+        assert!(
+            got.abs_diff_eq(expected, 1e-4),
+            "translation {got:?} != expected {expected:?}",
+        );
+        // The linear part stays identity (no rotation/scale leaked in).
+        assert_eq!(m.x_axis, Vec4::new(1.0, 0.0, 0.0, 0.0));
+        assert_eq!(m.y_axis, Vec4::new(0.0, 1.0, 0.0, 0.0));
+        assert_eq!(m.z_axis, Vec4::new(0.0, 0.0, 1.0, 0.0));
+    }
+
+    let m = resolved_matrix(
+        Length::px(200.0),
+        Length::px(100.0),
+        Style::default().translate(Length::percent(10.0), Length::px(15.0)),
+    );
+    assert_translation(m, Vec3::new(20.0, 15.0, 0.0));
+
+    // Same percent resolution on the UiTransform.matrix path (not just the
+    // Translate longhand) — TransformMatrix::Translate with a Percent term.
+    let m_matrix = resolved_matrix(
+        Length::px(200.0),
+        Length::px(100.0),
+        Style::default().ui_transform(UiTransform {
+            matrix: TransformMatrix::Translate(
+                Length::percent(10.0),
+                Length::px(15.0),
+                Length::ZERO,
+            ),
+            ..Default::default()
+        }),
+    );
+    assert_translation(m_matrix, Vec3::new(20.0, 15.0, 0.0));
+}
+
+#[test]
+fn cq_translate_is_residual_zero() {
+    // Cqw translate is a RESIDUAL deferral (needs the nearest CQ-ancestor
+    // frame, like sticky L4) — it resolves to 0.0 here, NOT to a cqw value.
+    // With every other term identity, the matrix collapses to identity, so
+    // sub-pass 6e inserts no ResolvedTransform. This documents scope discipline.
+    let m = resolved_matrix(
+        Length::px(100.0),
+        Length::px(100.0),
+        Style::default().ui_transform(UiTransform {
+            matrix: TransformMatrix::Translate(Length::Cqw(50.0), Length::ZERO, Length::ZERO),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        m,
+        Mat4::IDENTITY,
+        "Cq* translate is unresolved (0.0 residual) → identity matrix"
+    );
 }
 
 #[test]

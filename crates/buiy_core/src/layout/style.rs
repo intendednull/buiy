@@ -487,11 +487,17 @@ impl Style {
         self
     }
 
-    /// Ergonomic setter — 2D translate in logical pixels (z = 0).
-    pub fn translate_px(mut self, x: f32, y: f32) -> Self {
-        self.ui_transform.matrix =
-            TransformMatrix::Translate(Length::px(x), Length::px(y), Length::ZERO);
+    /// Ergonomic setter — 2D translate from arbitrary [`Length`]s (z = 0).
+    /// `Percent` resolves against the entity's own border box at compose time
+    /// (x = width, y = height) per CSS Transforms.
+    pub fn translate(mut self, x: Length, y: Length) -> Self {
+        self.ui_transform.matrix = TransformMatrix::Translate(x, y, Length::ZERO);
         self
+    }
+
+    /// Ergonomic setter — 2D translate in logical pixels (z = 0).
+    pub fn translate_px(self, x: f32, y: f32) -> Self {
+        self.translate(Length::px(x), Length::px(y))
     }
 
     /// Ergonomic setter — rotate about the z axis (radians).

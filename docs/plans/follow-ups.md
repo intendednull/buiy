@@ -819,18 +819,38 @@ window's root context instead of `roots.first()`.
 
 **Spec touchpoint:** `stacking-and-top-layer.md § 4.4`, § 7.
 
-## Layout — non-px translate units in `compose_transform`
+## Layout — non-px translate units in `compose_transform` — PERCENT LANDED (Cq* residual)
 
 **Originated:** Phase 8 (CHANGELOG deferral note).
 
 **Symptom:** `compose_transform` resolves only `Length::Px` for translate;
 percent / `Cq*` translate contributes `0.0`.
 
-**Implementation sketch:** resolve percent / `Cq*` translate against the
-entity's own resolved box (currently `0.0`); coordinate with the animation
-phase.
+**Status — PERCENT landed (2026-06-18).** As landed: `compose_transform` and
+`transform_matrix_to_mat4` now take the entity's own current-frame border box
+and resolve a `Percent` translate term against it per CSS Transforms —
+`translateX(p%)` = `p%` of border-box **width**, `translateY(p%)` = `p%` of
+**height** (each axis against its own dimension), `translateZ` percent (invalid
+in CSS) → `0`. Sub-pass 6e (`transform_composition`) reads the box straight from
+the **current-frame** Taffy tree (`tree.tree.layout(node).size`, mirroring
+`anchor_resolution` (6d)) — *not* `ResolvedLayout`, which is still last-frame at
+6e time. The `Length::Px` translate path is byte-for-byte unchanged (regression
+guarded by `translate_transform_composes_to_resolved_transform`). Tests:
+`translate_percent_x_resolves_against_own_width`,
+`translate_percent_y_resolves_against_own_height`,
+`translate_mixed_percent_and_px`, `cq_translate_is_residual_zero`
+(`crates/buiy_core/tests/layout_transforms.rs`); the `Style::translate(Length,
+Length)` builder was added to express percent translate.
 
-**Spec touchpoint:** `transforms-and-containment.md § 1`, § 1.1.
+**RESIDUAL — `Cq*` translate still deferred.** `Cq*` translate
+(`cqw/cqh/cqi/cqb/cqmin/cqmax`) needs the entity's nearest CQ-ancestor container
+frame (the sticky-L4 / `resolve_cq_unit_px` machinery), which sub-pass 6e does
+not gather. It resolves to `0.0` and fires a one-shot warn
+(`warn_once_cq_translate_residual`). Resolving it requires threading the nearest
+CQ-ancestor `ContainerSnapshot` into 6e — held out for scope discipline.
+
+**Spec touchpoint:** `transforms-and-containment.md § 1` ("Translate length
+units"), § 1.1.
 
 ## Render — effect-compositor depends on the opacity stacking-context trigger (contiguity) — LANDED
 

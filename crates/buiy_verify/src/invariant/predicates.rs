@@ -107,8 +107,21 @@ pub fn paint_order_is_total(nodes: &ExtractedNodes) -> Result<(), Violation> {
 pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
     // (a) translate(d) · translate(-d) ≈ I.
     let d = Vec3::from_array(t.translate);
-    let fwd = compose_transform(&UiTransform::default(), Some(&translate_of(d)), None, None);
-    let back = compose_transform(&UiTransform::default(), Some(&translate_of(-d)), None, None);
+    // Px translates are box-independent → ZERO box is fine.
+    let fwd = compose_transform(
+        &UiTransform::default(),
+        Some(&translate_of(d)),
+        None,
+        None,
+        Vec2::ZERO,
+    );
+    let back = compose_transform(
+        &UiTransform::default(),
+        Some(&translate_of(-d)),
+        None,
+        None,
+        Vec2::ZERO,
+    );
     mat4_is_identity("transform_roundtrips/translate", fwd * back)?;
 
     // (b) rotate(2π) ≈ I. A full turn about the generated axis.
@@ -124,6 +137,7 @@ pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
         None,
         Some(&Rotate(full_turn)),
         None,
+        Vec2::ZERO,
     );
     mat4_is_identity("transform_roundtrips/rotate2pi", rot)?;
 
@@ -134,6 +148,7 @@ pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
         None,
         None,
         Some(&Scale(k[0], k[1], k[2])),
+        Vec2::ZERO,
     );
     mat4_is_pure_scale("transform_roundtrips/scale", s, k)?;
     Ok(())
