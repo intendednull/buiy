@@ -91,10 +91,28 @@ frame N+1 applies B's" — currently the assertion would never fire
 because B never updates.
 
 
-## Anchor positioning — `anchor-size()` term
+## Anchor positioning — `anchor-size()` term — LANDED
 
 **Originated:** Phase 6 (anchor positioning), spec § 3.4 line 231
 ("tier-C feature deferred to v1.x").
+
+**Status:** **Landed.** `anchor-size()` ships as
+`Length::AnchorSize(AxisDimension)` (no `AnchorRef` payload — the
+over-specified sketch below is superseded; the per-try anchor box is
+already known at the resolution site `try_anchored_position`, so only the
+axis selector is needed). The `to_px` closure resolves
+`AnchorSize(Width) → anchor_size.x` / `AnchorSize(Height) → anchor_size.y`
+against the per-try box; every non-anchor `Length` match site degrades it
+to `0`/`auto` alongside the existing `Cq*` defensive arms. Sticky has no
+anchor box, so `resolve_sticky_inset` resolves it to `0.0` and warns once
+via the new session-scoped `LayoutWarnOnceKey::StickyAnchorSizeUnsupported`.
+The previously-unreachable `AnchorErrorKind::AnchorSizeUsed` variant +
+warn arm were **deleted** (not repurposed): anchor-size now resolves to a
+real value, so an error/warn kind is semantically wrong; the variant had
+no Reflect/serialization consumer worth preserving (it never fired).
+Spec § 3.4 + README § 5 deferral reversed. Covered by
+`try_anchored_position_resolves_anchor_size_{height,width...}` (unit) and
+`anchor_size_inset_resolves_to_anchor_height` (integration).
 
 **Symptom:** authors using `anchor-size()` in a `PositionTry::inset` term
 get a `0.0` resolution and a per-frame warn via

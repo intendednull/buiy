@@ -93,6 +93,7 @@ This spec is target-state. The Phase 0 → target migration (the decomposed-comp
 - **Stacking-context performance.** The set of triggers is large (positioned + non-`auto` z-index, opacity < 1, transform, filter, will-change, isolation, mix-blend-mode). Whether to detect lazily (during paint) or eagerly (during layout) is open. [stacking-and-top-layer.md](stacking-and-top-layer.md) discusses.
 - **`writing-mode: sideways-*` Taffy support.** Taffy 0.10 has logical properties but doesn't fully model sideways modes. Whether to ship a Buiy-side rotation pass or wait on Taffy is open. [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details.
 - **Top-layer ordering across windows.** When a Buiy app has multiple windows each with its own modal, modal stacking is per-window. Cross-window top-layer (a modal that visually escapes its window) is out of scope; tracked in `buiy-window-and-surface-design`.
+- **`anchor-size()` in `PositionTry::inset` — RESOLVED.** Previously deferred to v1.x with no API surface; now ships as `Length::AnchorSize(AxisDimension)`, resolved against the per-try anchor box at anchor-resolution time (no Taffy re-layout). See [display-and-positioning.md § 3.4](display-and-positioning.md#34-performance-and-ordering).
 
 ## References
 
