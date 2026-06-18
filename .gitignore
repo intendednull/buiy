@@ -7,4 +7,8 @@
 .superpowers/
 
 target/
-Cargo.lock
+
+# Pending (unaccepted) insta snapshots — never committed; `cargo insta review`
+# either accepts them into the committed `.snap` or discards them. A CI guard
+# fails if any are present (see ci.yml snapshot-hygiene step).
+*.snap.new

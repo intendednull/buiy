@@ -32,7 +32,12 @@ version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/intendednull/buiy"
-rust-version = "1.85"
+# Real, CI-verified MSRV (the `msrv` job in ci.yml pins this toolchain and runs
+# `cargo check --workspace --locked`). 1.85 was the previously-declared-but-
+# unenforced floor; the true floor of the resolved (locked) dependency graph is
+# 1.89 (audit finding #16, DG-1). Cargo's convention here is major.minor; the
+# CI job pins the exact patch `1.89.0`. Bump deliberately when a dep raises it.
+rust-version = "1.89"
 
 [workspace.dependencies]
 # Phase 0 keeps the workspace dep set minimal: only crates that have a
@@ -84,3 +89,25 @@ toml = "0.8"
 # base64-inline the actual/baseline/diff PNGs so the report is offline-first —
 # openable straight from CI artifacts, no external assets, no SaaS. MIT/Apache-2.0.
 base64 = "0.22"
+
+# --- Build profiles --------------------------------------------------------
+# Disable debuginfo for the dev + test profiles. The bulk of CI target-dir disk
+# is the bevy DEPENDENCY artifacts, which under `cargo test` build with the dev
+# profile; their debuginfo is what crossed the runner's ~14 GB free-disk ceiling
+# and surfaced as `ld ... signal 7 [Bus error]` / "No space left on device"
+# mid-link (audit finding #10). Setting this here (rather than via per-job
+# CARGO_PROFILE_* env / per-job `-C debuginfo=0` RUSTFLAGS) keeps every CI lane
+# consistent AND lets all lanes share one Swatinem/rust-cache key (RUSTFLAGS is
+# part of that key, so divergent `-C debuginfo=0` previously fragmented the GPU
+# lane's cache). These two settings exactly replace the removed
+# CARGO_PROFILE_DEV_DEBUG=0 / CARGO_PROFILE_TEST_DEBUG=0.
+#
+# Tradeoff: this also disables debuginfo for LOCAL dev builds, so local
+# backtraces lose line info. `debug = 0` is the proven disk fix; if local DX
+# matters more, `debug = "line-tables-only"` keeps backtrace line numbers at a
+# larger target dir — flagged for the coordinator, not silently chosen here.
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

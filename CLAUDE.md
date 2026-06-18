@@ -39,15 +39,27 @@ The "run all checks" command (mirrors what CI runs):
 
 ```sh
 cargo fmt --all -- --check && \
-  cargo clippy --workspace --all-targets -- -D warnings && \
-  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && \
-  xvfb-run -a cargo test --workspace
+  cargo clippy --workspace --all-targets --locked -- -D warnings && \
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked && \
+  xvfb-run -a cargo test --workspace --locked
 ```
 
 On macOS / Windows drop the `xvfb-run -a` prefix; tests run headlessly without it.
 
+`--locked` mirrors CI: `Cargo.lock` is committed and every CI cargo step runs
+`--locked`, so a build that needs to change the lockfile is a real failure to
+surface, not silently paper over (audit finding #1). Run `cargo update` (or
+`generate-lockfile`) deliberately in its own commit when a bump is intended.
+
 If the test step link-OOMs under full `mold` parallelism, add `-j 2` to the
 `cargo test` step (the large bevy test binaries link in parallel otherwise).
+
+Local debuginfo: root `Cargo.toml` sets `[profile.dev]`/`[profile.test]`
+`debug = 0` (audit finding #10 — the bevy dep artifacts' debuginfo is what
+overran the CI runner disk). The cost is that **local** dev/test backtraces lose
+line numbers. If you want them back locally without re-bloating CI, switch those
+profiles to `debug = "line-tables-only"` (keeps line info at a larger target
+dir); don't set full `debug = 2` or CI will OOM-link again.
 
 ### GPU lane (`#[ignore]` tests — needs a real wgpu adapter)
 

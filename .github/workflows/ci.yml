@@ -4,6 +4,25 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly cadence (audit findings #15 + #30): re-exercise the EXACT(0,0)
+  # Mesa-brittle goldens and the non-deterministic proptest invariants on a
+  # schedule, independent of code changes, so a silent Mesa/toolchain drift is
+  # caught within a week rather than only on the next unrelated PR. Monday
+  # 06:00 UTC. The heavy llvm-cov job is gated to push/schedule only (see its
+  # `if:`), so PRs are not slowed by this trigger.
+  schedule:
+    - cron: "0 6 * * 1"
+
+# Cancel superseded in-flight runs for the same ref (audit finding #43): a new
+# push to a branch/PR cancels the previous run instead of burning duplicate
+# runner-hours on stale commits. `github.workflow`-`github.ref` scopes the group
+# per workflow + branch/PR. SCHEDULED runs get a unique group suffix
+# (`github.run_id`) so the weekly cadence (findings #15/#30) is NOT cancelled by
+# a coincident push-to-main — its whole purpose is to run independently of code
+# changes, so a push must not pre-empt it (and it must not cancel the push).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'schedule' && github.run_id || '' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,12 +32,21 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Share one cache across lint/doc/test/gpu/msrv (audit finding #10).
+          # All these lanes build the same dep graph with the same RUSTFLAGS now
+          # that debuginfo is controlled via [profile.*] in Cargo.toml rather
+          # than divergent per-job env, so a single key lets them warm-start
+          # each other. (llvm-cov is excluded — coverage instrumentation
+          # produces different artifacts.)
+          shared-key: buiy
       # Bevy's wayland/x11/udev features pull crates whose build.rs runs
       # pkg-config; clippy still drives those build scripts even though it
       # doesn't link, so the lint job needs the same system libs as test.
@@ -29,15 +57,18 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   doc:
     name: Doc
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: buiy
       # rustdoc still drives Bevy's pkg-config-touching build scripts even
       # though it doesn't link, so this job needs the same Linux deps as
       # lint and test.
@@ -48,11 +79,12 @@ jobs:
       - name: cargo doc (warnings as errors)
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --locked
 
   deny:
     name: Deny
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -68,13 +100,38 @@ jobs:
       # Runs all four checks (advisories, bans, licenses, sources).
       # The advisories check fails CI on RustSec vulnerabilities and on
       # `unmaintained` advisories that we have not explicitly ignored
-      # in deny.toml.
+      # in deny.toml. `--locked` (a top-level cargo-deny flag) asserts the
+      # committed Cargo.lock is used unchanged, so the advisory/ban/license
+      # graph is the reproducible locked graph (audit finding #1).
       - name: cargo deny check
-        run: cargo deny check
+        run: cargo deny --locked check
+
+  msrv:
+    name: MSRV (1.89.0)
+    runs-on: ubuntu-latest
+    # A real correctness gate (audit finding #16, DG-1): the declared
+    # [workspace.package] rust-version floor must actually build. Runs on PRs
+    # too. `cargo check` (not a full build/test) is enough to enforce the floor.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Pin the exact MSRV patch; Cargo.toml records major.minor (1.89) per
+      # convention. Bump both together when a dep raises the floor.
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: buiy
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: cargo check (MSRV)
+        run: cargo check --workspace --locked --all-targets
 
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -96,25 +153,48 @@ jobs:
           df -h /
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: buiy
       - name: Install Linux deps for Bevy
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev xvfb at-spi2-core
+      # debuginfo for the dev/test profiles is disabled in root Cargo.toml
+      # ([profile.dev]/[profile.test] debug = 0) — the largest disk consumer for
+      # the bevy test binaries — so the per-job CARGO_PROFILE_* env that used to
+      # live here is gone (audit finding #10). -j 2 still caps peak concurrent
+      # link temp files. (Root cause was disk exhaustion, surfacing as ld
+      # SIGBUS — see the Free-disk step.)
       - name: cargo test (headless via xvfb on Linux)
         if: matrix.os == 'ubuntu-latest'
-        # debuginfo is the largest disk consumer for the bevy test binaries —
-        # disabling it for the test profiles shrinks the target dir enough to
-        # fit the runner alongside the disk-cleanup step above. -j 2 also caps
-        # peak concurrent link temp files. (Root cause was disk exhaustion,
-        # surfacing as ld SIGBUS — see the Free-disk step.)
-        env:
-          CARGO_PROFILE_DEV_DEBUG: "0"
-          CARGO_PROFILE_TEST_DEBUG: "0"
-        run: xvfb-run -a cargo test --workspace -j 2
+        run: xvfb-run -a cargo test --workspace --locked -j 2
       - name: cargo test (macOS / Windows)
         if: matrix.os != 'ubuntu-latest'
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
+      # Snapshot hygiene (audit finding #17). What IS and ISN'T gated here:
+      #  • A snapshot MISMATCH is already caught by the test step above — insta's
+      #    CI default (CI=true makes INSTA_UPDATE=auto resolve to NoUpdate) fails
+      #    the assertion on any drift and writes NOTHING (no *.snap.new, no
+      #    in-place rewrite). So no extra step is needed to catch a drift, and a
+      #    post-`cargo test` `find *.snap.new` / `git diff` guard would be inert.
+      #  • This guard catches a *.snap.new (pending/unaccepted) snapshot that was
+      #    force-committed into the tree. They are gitignored, so only `git add -f`
+      #    can land one; cheap defense-in-depth, no suite re-run.
+      #  • NOT gated here: UNREFERENCED/stale committed .snap orphans. Detecting
+      #    those needs `cargo insta test --unreferenced=reject` (a full-suite run
+      #    via the cargo-insta runner) — folded into Phase 5's nextest/cargo-insta
+      #    adoption (campaign plan T5.2), not a separate ~63-min run now.
+      - name: Snapshot hygiene (no committed pending snapshots)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          pending="$(git ls-files '*.snap.new')"
+          if [ -n "${pending}" ]; then
+            echo "::error::pending insta snapshots are committed — run cargo insta review; never commit *.snap.new:"
+            echo "${pending}"
+            exit 1
+          fi
 
   # ----------------------------------------------------------------------------
   # GPU lane: the #[ignore] render/determinism/reftest tests that need a real
@@ -132,14 +212,13 @@ jobs:
   gpu:
     name: GPU (pinned lavapipe)
     runs-on: ubuntu-latest
-    env:
-      # This lane links the large bevy #[ignore] test binaries AFTER also
-      # building wgpu-info (release) + running the buiy_core GPU suite, so it has
-      # far less headroom than the plain Test job and `ld` SIGBUSes (signal 7)
-      # linking buiy_verify's test binaries. Debug info is the bulk of that link
-      # size, and GPU pixel/invariant checks don't need backtraces — drop it for
-      # this lane only. Keep the workspace-wide `-D warnings`.
-      RUSTFLAGS: "-D warnings -C debuginfo=0"
+    timeout-minutes: 60
+    # No per-job env: this lane inherits the workflow-level `RUSTFLAGS: -D warnings`
+    # (audit finding #10). debuginfo is disabled via [profile.dev]/[profile.test]
+    # in root Cargo.toml, not a per-job `-C debuginfo=0` — that divergent flag was
+    # the sole reason the GPU lane never warm-started from the shared `buiy`
+    # rust-cache key (RUSTFLAGS is part of that key). Inheriting the global value
+    # guarantees key parity by construction rather than by keeping two strings in sync.
     steps:
       # Reclaim ~25 GB by removing preinstalled SDKs this job never uses. The
       # release `wgpu-info` build + the large bevy `#[ignore]` GPU test binaries
@@ -156,6 +235,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: buiy
       - name: Install Linux deps for Bevy
         run: |
           sudo apt-get update
@@ -178,8 +259,51 @@ jobs:
             || { echo "::error::pinned lavapipe (llvmpipe) adapter not selected — VK_DRIVER_FILES/WGPU_ADAPTER_NAME wiring did not take effect"; exit 1; }
       # The GPU lane: serialize one adapter context at a time (--test-threads=1).
       # No --ignored on the headless job above; this is the only leg that
-      # instantiates an adapter.
+      # instantiates an adapter. The buiy crate's facade render-finish test
+      # (crates/buiy/tests/plugin.rs:50,
+      # facade_render_finish_registers_device_resources) is #[ignore] and runs
+      # in NO other lane — it must run here (audit finding #8).
       - name: cargo test (GPU #[ignore] lane on pinned lavapipe)
         run: |
-          cargo test -p buiy_core -j 2 -- --ignored --test-threads=1
-          cargo test -p buiy_verify -j 2 -- --ignored --test-threads=1
+          cargo test -p buiy_core --locked -j 2 -- --ignored --test-threads=1
+          cargo test -p buiy_verify --locked -j 2 -- --ignored --test-threads=1
+          cargo test -p buiy --locked -j 2 -- --ignored --test-threads=1
+
+  # ----------------------------------------------------------------------------
+  # Coverage (INFORMATIONAL — audit finding #41, DG-4). Produces an lcov.info
+  # artifact for the headless suite; there is NO coverage threshold gate, so a
+  # coverage NUMBER never fails the build (a coverage RUN failing IS a real
+  # failure). Heavy, so gated off PRs — runs on push-to-main + the weekly
+  # schedule only. Headless only (no --ignored / no GPU): GPU residue paths are
+  # not covered here. Its own cache key (coverage instrumentation produces
+  # different artifacts than the shared `buiy` key).
+  llvm-cov:
+    name: Coverage (informational)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /usr/local/share/boost /usr/lib/jvm /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev xvfb at-spi2-core
+      - name: cargo llvm-cov (headless, informational)
+        run: xvfb-run -a cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov.info
+          path: lcov.info
