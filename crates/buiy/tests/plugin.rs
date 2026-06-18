@@ -1,6 +1,74 @@
 use bevy::prelude::*;
 use buiy::BuiyPlugin;
 
+/// The meta-crate BSN wiring (spec § 4.2): `use buiy::prelude::*;` must bring
+/// the `bsn!` macro + the `spawn_scene` extension trait into scope, and a Buiy
+/// component re-exported through `buiy` must author through them. Without this
+/// wiring, `hello_bsn` (which depends only on `buiy`) could not reach `bsn!`.
+#[test]
+fn bsn_authoring_is_reachable_through_buiy_prelude() {
+    use buiy::prelude::*;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::scene::ScenePlugin);
+
+    // `Background`, `ColorToken`, `bsn!`, and `spawn_scene` all resolve through
+    // `buiy::prelude::*` — the single import a downstream user needs.
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! {
+            Background { color: { ColorToken::CurrentColor } }
+        })
+        .expect("spawn_scene via buiy::prelude")
+        .id();
+
+    assert_eq!(
+        app.world().get::<Background>(id).expect("Background").color,
+        ColorToken::CurrentColor,
+    );
+}
+
+/// The widget scene-fns reach `hello_bsn` through `use buiy::prelude::*;` too,
+/// and `button(label)` patches MERGE field-wise (the styled-authoring path):
+/// patching `width` keeps the canonical padding. This is the form `hello_bsn`
+/// uses to author styled widgets.
+#[test]
+fn widget_scene_fns_merge_through_buiy_prelude() {
+    use buiy::prelude::*;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::scene::ScenePlugin)
+        .add_plugins(BuiyPlugin)
+        .add_plugins(bevy::input::InputPlugin);
+
+    // `button` (the scene-fn), `bsn!`, `spawn_scene`, `BoxModel`, `Sizing`,
+    // `Length` all resolve through `buiy::prelude::*`.
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! {
+            button("Save")
+            BoxModel { width: { Sizing::Length(Length::Px(240.0)) } }
+        })
+        .expect("spawn_scene")
+        .id();
+
+    let bm = app.world().get::<BoxModel>(id).expect("BoxModel");
+    assert_eq!(bm.width, Sizing::Length(Length::Px(240.0)), "width patched");
+    assert_eq!(
+        bm.padding,
+        Edges::all(8.0),
+        "canonical padding merges through (scene-fn, not the suppression gotcha)"
+    );
+    assert_eq!(
+        app.world().get::<A11yLabel>(id).expect("A11yLabel").0,
+        "Save"
+    );
+}
+
 #[test]
 fn buiy_plugin_loads_in_correct_order() {
     let mut app = App::new();
@@ -64,6 +132,12 @@ fn facade_render_finish_registers_device_resources() {
         .add_plugins(bevy::input::InputPlugin)
         .add_plugins(BuiyPlugin);
     app.init_asset::<Mesh>();
+    // Bevy 0.19: `CameraPlugin`'s `update_skinned_mesh_bounds` reads
+    // `Res<Assets<SkinnedMeshInverseBindposes>>` (the second asset `MeshPlugin`
+    // inits alongside `Mesh`). A missing `Res` silently skipped under 0.18 but
+    // PANICS under 0.19's param validation. Real apps get it via `DefaultPlugins`
+    // → `MeshPlugin`; this hand-rolled stack must init it like `Mesh`.
+    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
     app.finish();
     app.cleanup();
     // The first frame is where the missing-resource param validation fired.

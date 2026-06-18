@@ -1,4 +1,4 @@
-**Date:** 2026-05-22
+**Date:** 2026-06-18
 **Status:** active
 **Subject:** bevy_ui — Bevy's official ECS-native UI crate; the anchor reference for the Buiy parallel-stack design bet
 
@@ -32,7 +32,7 @@
 | `bevy_ui_widgets` (headless) | 0.17, 2025-09-30 |
 | `AutoDirectionalNavigation` | 0.18, 2026-01-13 |
 | cosmic-text → parley + swash | 0.19-dev (issue #21765, 2025-11-06; **post-0.19 divergence point with Buiy**) |
-| BSN (PR #20158) | **Still draft / unmerged** as of 2026-05-22; cart wrote: `"not intended to be merged in current form"` |
+| BSN | Draft PR #20158 never merged in its own form; **baseline landed via successor PR #23413** (2026-03-27, **0.19**, `bevy_scene` crate): `bsn!` + Templates. Inline `bsn!` only; `.bsn` asset loader deferred upstream. 0.19 rc-only (`0.19.0-rc.3`) as of 2026-06-18. |
 | Bevy Foundation status | Washington 501(c)(3) public charity |
 | Foundation board | cart (President + Interim Treasurer), Alice Cecile (Secretary), François Mockers, Robert Swain, James Liu |
 
@@ -70,7 +70,7 @@ These were flagged during synthesis. Each is resolved in the linked file but cal
 
 - **AccessKit version pin.** `bevy_feathers` HEAD depends on `accesskit 0.24`; the 0.17.3 stable tag depended on `accesskit 0.21`. Both numbers are right for different refs. [`component-model.md`](component-model.md) reports the HEAD version; [`lessons.md`](lessons.md) carries this as a "verify-per-release" reminder.
 - **cosmic-text adoption release.** Adoption PR #10193 was merged 2024-07-04 (during the 0.14 cycle); the migration *shipped* in 0.15 (2024-11-29). [`text-and-input.md`](text-and-input.md) and [`history.md`](history.md) both report shipped-in-0.15.
-- **BSN landed in 0.18.** Pre-amble incorrectly assumed BSN had landed. PR #20158 is **still draft / unmerged as of 2026-05-22**; cart wrote it is `"not intended to be merged in current form."` This is the single most important finding in [`lessons.md`](lessons.md) and reframes the Buiy foundation spec's BSN-friendly-components rule from "design *because* BSN landed" to "design *so that* BSN can land later."
+- **Which BSN PR/version landed.** An earlier pre-amble's "BSN landed in 0.18" claim was wrong on both PR and version: the original draft PR #20158 never merged in its own form; the BSN **baseline landed via successor PR #23413** (2026-03-27, **0.19**, `bevy_scene` crate — `bsn!` + Templates, inline only, `.bsn` loader deferred). 0.19 is rc-only as of 2026-06-18, and Buiy now pins `0.19.0-rc.3` to author real `bsn!` (scoped policy exception, `2026-06-18-buiy-bsn-integration-design.md` §§ 1–2). See [`lessons.md`](lessons.md) § 1 and [`history.md`](history.md) § "BSN"; the foundation BSN-friendly-components rule now pays off directly (every component is `bsn!`-authorable today via the `Clone + Default` template contract).
 - **bevy_feathers release.** Shipped in 0.17 (2025-09-30), not 0.16 — confirmed in [`history.md`](history.md), [`component-model.md`](component-model.md), and [`ecosystem.md`](ecosystem.md).
 - **Post-0.19 text-shaper divergence.** Bevy main migrated `bevy_text` from cosmic-text to parley + swash (issue #21765, opened 2025-11-06). Buiy commits to cosmic-text (foundation [`architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.2). Buiy and post-0.19 bevy_ui therefore diverge on text shaper from this point forward. The second most important finding in [`lessons.md`](lessons.md).
 
@@ -95,7 +95,8 @@ A secondary disclosure: bevy_ui is a load-bearing **architectural neighbour** (B
 - Issue #17644 (bevy_a11y BSN-unfriendly) — https://github.com/bevyengine/bevy/issues/17644
 - Issue #22345 (Unified Bevy User Interface) — https://github.com/bevyengine/bevy/issues/22345
 - Issue #21765 (cosmic-text → parley migration) — https://github.com/bevyengine/bevy/issues/21765
-- PR #20158 (BSN, still draft) — https://github.com/bevyengine/bevy/pull/20158
+- PR #20158 (BSN, original draft — never merged) — https://github.com/bevyengine/bevy/pull/20158
+- PR #23413 (BSN baseline merged, 0.19, `bevy_scene`) — https://github.com/bevyengine/bevy/pull/23413
 - AccessKit project — https://accesskit.dev
 - Buiy foundation spec — ../../specs/2026-05-07-buiy-foundation/README.md
 - Buiy architecture — ../../specs/2026-05-07-buiy-foundation/architecture.md

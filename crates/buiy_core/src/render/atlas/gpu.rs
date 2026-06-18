@@ -67,7 +67,8 @@ fn make_sampler(device: &RenderDevice) -> Sampler {
         address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
         mag_filter: bevy::render::render_resource::FilterMode::Nearest,
         min_filter: bevy::render::render_resource::FilterMode::Nearest,
-        mipmap_filter: bevy::render::render_resource::FilterMode::Nearest,
+        // wgpu 28+: `mipmap_filter` is `MipmapFilterMode` (mag/min stay `FilterMode`).
+        mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Nearest,
         ..Default::default()
     })
 }
@@ -136,10 +137,10 @@ fn upload_page(queue: &RenderQueue, tex: &Texture, size: u32, format: AtlasForma
 /// CoverageR8 page, ensure a GPU `Texture` exists (creating one when the page
 /// set grew — pooled recycles reuse the slot, spec § 2.5), upload its texels via
 /// `write_texture`, then (re)build the `@group(1)` coverage bind group into
-/// [`AtlasGpu`] so [`BuiyNode::run`] only reads. Clears the atlas dirty flags
+/// [`AtlasGpu`] so [`buiy_pass`] only reads. Clears the atlas dirty flags
 /// after reading so an unchanged page does not re-upload (spec § 2.2).
 ///
-/// [`BuiyNode::run`]: crate::render::node::BuiyNode
+/// [`buiy_pass`]: crate::render::node::buiy_pass
 pub fn prepare_atlas_textures(
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,

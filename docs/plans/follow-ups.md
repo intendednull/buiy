@@ -999,3 +999,164 @@ preedit span — a focused behavioral slice, no new GPU and no new event surface
 **Owner:** a focused follow-up slice after E1–E6.
 
 **Spec touchpoint:** editing-and-ime.md §§ 6.1, 6.2, 13.
+
+## BSN / Bevy 0.19 — rc.3 → 0.19.0 stable bump (closes the rc-pin exception)
+
+**Originated:** the Bevy 0.19-rc + BSN migration
+([plan](2026-06-18-bevy-0.19-bsn-migration.md);
+[spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 2).
+
+**Status:** deferred — gated on the upstream 0.19.0 **stable** release.
+
+**What it is:** Buiy pins `bevy 0.19.0-rc.3` (with `bevy_scene`) to reach
+`bsn!` authoring — a deliberate, scoped exception to the foundation's
+"rolling latest-stable Bevy" policy (architecture.md § 2.9). When Bevy
+0.19.0 stable releases, Buiy bumps to it and the exception **closes**.
+
+**Why deferred:** the BSN baseline (PR #23413) ships only in the 0.19
+line, and 0.19 has no stable tag yet. The rc is API-frozen enough that
+the rc.3→stable delta is expected to be small (a likely-mechanical
+version bump + a re-resolve + `cargo deny check`), but it must be done
+when stable lands. Watch for any BSN / render-graph API churn between
+rc.3 and stable.
+
+**Implementation sketch:** bump the `bevy` pin in the workspace
+`Cargo.toml` to `0.19.0`, regenerate the on-disk lock, verify single
+resolved versions (`cargo tree -i`), re-run `cargo deny check`, then run
+both gates (headless + the GPU `--ignored` lane). Remove the rc-exception
+note from foundation architecture.md § 2.9 and the
+`2026-06-18-buiy-bsn-integration-design.md` § 2 callout once closed.
+
+**Owner:** a focused version-bump slice when 0.19.0 stable releases.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 2, § 7;
+foundation `architecture.md` § 2.9.
+
+## BSN — `.bsn` asset-file loader + component hot-reload (await upstream loader)
+
+**Originated:** the BSN integration design
+([spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 4.4, § 7).
+
+**Status:** deferred — blocked on the upstream `.bsn` asset-file loader.
+
+**What it is:** Buiy targets **inline `bsn!`** (and function / `SceneList`
+scenes) only. The `.bsn` **asset-file** form
+(`asset_server.load("x.bsn")`) and component hot-reload via it are not in
+scope for the initial BSN work.
+
+**Why deferred:** the `.bsn` asset-file loader was explicitly deferred out
+of Bevy's BSN baseline (PR #23413) to a future upstream PR — it has no
+runtime backing in `0.19.0-rc.3`. Component hot-reload depends on that
+loader, so it defers with it. The reflection registry that the loader (and
+the editor/inspector) will consume is already maintained by Buiy's
+per-crate `register_type` plugins (spec § 4.3) — no reflect work is
+blocked, only the consumer.
+
+**Implementation sketch:** when the upstream `.bsn` loader lands, wire it
+through Buiy's asset pipeline (`buiy-asset-pipeline-design`), add a `.bsn`
+asset-load + hot-reload path, and verify the registered Buiy components
+resolve from a `.bsn` file. Until then, inline `bsn!` is the authoring
+surface.
+
+**Owner:** `buiy-asset-pipeline-design` (the still-unwritten asset-pipeline
+sub-spec), gated on the upstream loader.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.4, § 7;
+foundation README § 5 ("hot-reload of components"); bevy-ui prior-art
+`open-problems.md` § "Hot-reload of components".
+
+## BSN — widget scene-fn coverage as the widget catalog grows
+
+**Originated:** the BSN integration design
+([spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 4.1c) + Phase 4
+([plan](2026-06-18-bevy-0.19-bsn-migration.md) T4.3/T4.4).
+
+**Status:** incremental — extend per widget as the catalog grows.
+
+**What it is:** Buiy ships parameterized **widget scene-fns** in
+`buiy_widgets` (`button(label) -> impl Scene`, `text_input_single_line`,
+`text_input_multi_line`) that spell a widget's styling as explicit `bsn!`
+field-patches so `bsn! { button("Save") BoxModel { … } }` merges
+field-wise and keeps the widget's other canonical defaults (the § 4.1c
+require-suppression remedy). Today's catalog is `Button` + `TextInput`.
+
+**Why incremental:** every new widget added to `buiy_widgets` needs its own
+`#[require]` contract **and** a matching scene-fn (reusing the same private
+require-initializer fns as the one source of truth, so `bsn!{ widget() }`
+stays byte-equal to `spawn(Widget)`). This is mechanical per-widget work
+that lands with each widget, not a one-shot task.
+
+**Implementation sketch:** when a widget is added under
+`buiy-widget-catalog-design`, add its `#[require(...)]` markers and a
+`buiy_widgets` scene-fn re-exported through `buiy::prelude`, and extend the
+round-trip test's styled-widget cases (§ 5) to cover it.
+
+**Owner:** `buiy-widget-catalog-design`, per widget.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.1a,
+§ 4.1c, § 5.
+
+## BSN — round-trip test full-`BoxModel`-equality robustness (optional nicety)
+
+**Originated:** the BSN integration Phase 4 round-trip test
+([plan](2026-06-18-bevy-0.19-bsn-migration.md) T4.5;
+[spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 5).
+
+**Status:** optional hardening — not blocking; current assertions are
+correct.
+
+**What it is:** the round-trip authorability test asserts patched field
+values on the resulting entity components. A nicety would assert the
+**full** `BoxModel` (every field) equals the expected materialized value
+after a scene-fn merge — not only the patched fields — to pin the § 4.1c
+field-wise-merge behavior end-to-end (patched field changed, all others
+retain the widget's canonical defaults) against any future drift in the
+require-initializers or scene-fn bodies.
+
+**Why deferred:** the current per-field assertions already cover the
+load-bearing cases (the patch applied; the suppression gotcha; the scene-fn
+merge keeps padding). A full-struct equality assertion is stricter
+regression insurance, not a correctness gap.
+
+**Implementation sketch:** in the styled-widget round-trip case, construct
+the expected `BoxModel` explicitly (widget defaults with the one patched
+field overridden) and assert struct equality, rather than spot-checking
+individual fields.
+
+**Owner:** a focused test-hardening slice (low priority).
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.1c, § 5.
+
+## Verify — `rect-rounded` lavapipe golden re-bless on CI Mesa after the wgpu29/naga29 bump
+
+**Originated:** the Bevy 0.19-rc migration final gate
+([plan](2026-06-18-bevy-0.19-bsn-migration.md) Phase 3 / T3.2).
+
+**Status:** CI action item — NOT a regression; do not bless on a dev host.
+
+**What it is:** the zero-tolerance `buiy_verify` golden
+`rect-rounded/default/dark__sm__fc0__lavapipe__dpr1` (`tests/goldens.rs ::
+golden_sdf_corner`) diverges by `max_channel_delta=35` (0 differing pixels,
+`mssim=0.9995`) when run on a dev host. The baseline was blessed on **CI
+pinned lavapipe Mesa 24.3.4**; dev hosts run a different Mesa (e.g. 26.0.2),
+and the render path also crossed **naga 27 → 29** — both produce sub-pixel
+AA deltas at the curved SDF corner on the lavapipe *software* rasterizer.
+This is the ONLY golden that diverges; the Button reftest, all `buiy_core`
+self-validating GPU goldens (the project's actual dev GPU lane), and the
+other `buiy_verify` goldens all pass. It is a structural no-op (mssim
+0.9995), not a paint regression.
+
+**Why not blessed here:** re-blessing on a dev host would commit non-CI-Mesa
+output and break the CI gate. The CI-pinned baseline is the authority.
+
+**Action:** on the next CI run on the pinned lavapipe (Mesa 24.3.4), if
+`golden_sdf_corner` diverges from the wgpu29/naga29 toolchain (vs. the
+pre-bump baseline), review the triage diff (`target/buiy-goldens/report.html`)
+to confirm it is corner-AA-only, then re-bless with
+`BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored
+--test-threads=1` and commit. The dev-host divergence above is expected and
+not the signal — only the CI-Mesa result is.
+
+**Owner:** the CI maintainer at the 0.19 toolchain bump.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 7.

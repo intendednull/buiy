@@ -1,4 +1,4 @@
-**Date:** 2026-05-22
+**Date:** 2026-06-18
 **Status:** active
 **Subject:** bevy_ui — system-specific terms used across this corpus
 
@@ -56,10 +56,11 @@ Definitions for bevy_ui-specific identifiers, type names, and ecosystem terms us
 
 ## Scenes and authoring
 
-- **BSN (Bevy Scene Notation)** — text-based scene format proposed in PR [#20158](https://github.com/bevyengine/bevy/pull/20158) (cart, 2025-07-16). Compose UI from layered component patches. **Still draft / unmerged as of 2026-05-22**; cart explicitly wrote it is `"not intended to be merged in current form."` Discussion #14437 tracks the design.
-- **`bsn!` macro** — proposed Rust macro for inline BSN authoring (`bsn! { Button [ Text("Save") ] }`). Part of PR #20158. Status follows BSN itself.
-- **`.bsn` asset** — proposed hot-reloadable scene asset file (`asset_server.load("button.bsn")`). Part of PR #20158, not yet shipped.
-- **`Construct` trait** — proposed mechanism (discussion #14437) for components that need `World` state (asset handles, OS-pref resources) at construction time, beyond what Required Components' `Default` constraint allows. Not yet merged.
+- **BSN (Bevy Scene Notation)** — text-based scene format for composing UI from layered component patches. First drafted in PR [#20158](https://github.com/bevyengine/bevy/pull/20158) (cart, 2025-07-16, never merged in its own form); the **baseline merged via successor PR [#23413](https://github.com/bevyengine/bevy/pull/23413)** (2026-03-27, milestoned **Bevy 0.19**, in the **`bevy_scene`** crate). Discussion #14437 tracks the design. As of 2026-06-18, 0.19 is rc-only (`0.19.0-rc.3`).
+- **`bsn!` / `bsn_list!` macros** — Rust macros for inline BSN authoring (`bsn! { Button [ Text("Save") ] }`). **Landed** in `bevy_scene` via PR #23413 (0.19). Compile-time and reflection-free — the plain-data path needs only `Clone + Default`.
+- **`Template` / `Scene`** — the BSN system landed by PR #23413: a `bsn!` patch layers onto a component's `Default` base; `Scene for TemplatePatch<F, T>` requires `T: Template<Output: Component>` (so `bsn!` patches Components, not Bundles).
+- **`.bsn` asset** — hot-reloadable scene asset file (`asset_server.load("button.bsn")`). The asset-file **loader was deferred out of PR #23413** to a future upstream PR — not yet shipped, so `.bsn` files (and component hot-reload via them) have no runtime backing. Inline `bsn!` is the only landed authoring surface.
+- **`Construct` trait** — the *originally proposed* mechanism (discussion #14437) for components that need `World` state (asset handles, OS-pref resources) at construction time, beyond what Required Components' `Default` constraint allows. **`Construct` / `ConstructContext` do NOT exist in shipped 0.19-rc.3** — the role was superseded by **`Template` / `FromTemplate` / `TemplateContext`** (`bevy_ecs::template`), which **landed via PR #23413** as part of the BSN baseline. A `#[derive(FromTemplate)]` component generates a `…Template` whose fields are themselves `FromTemplate` (e.g. `Handle<T>` resolves a string path via `AssetServer` at spawn), which is how context-bearing fields are constructed in the landed model.
 
 ## A11y / external
 
@@ -82,6 +83,7 @@ Definitions for bevy_ui-specific identifiers, type names, and ecosystem terms us
 - parley — https://github.com/linebender/parley
 - swash — https://github.com/dfrg/swash
 - Taffy — https://github.com/DioxusLabs/taffy
-- BSN PR #20158 — https://github.com/bevyengine/bevy/pull/20158
+- BSN PR #20158 (original draft, never merged) — https://github.com/bevyengine/bevy/pull/20158
+- BSN PR #23413 (baseline merged, 0.19, `bevy_scene`) — https://github.com/bevyengine/bevy/pull/23413
 - Discussion #14437 (BSN tracking) — https://github.com/bevyengine/bevy/discussions/14437
 - Discussion #16900 (Standard Headless Widgets) — https://github.com/bevyengine/bevy/discussions/16900

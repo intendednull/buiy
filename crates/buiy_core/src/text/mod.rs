@@ -131,6 +131,15 @@ impl Plugin for BuiyTextPlugin {
         app.init_resource::<TextStyleDefaults>();
         app.register_type::<Text>()
             .register_type::<FontFamily>()
+            // The `FontFamily` nested value types: a reflect round-trip of a
+            // `FontFamily` traverses `FontStack` → `FamilyEntry` →
+            // `GenericFamily`, so all three must be registered or the
+            // serializer/inspector hits an unregistered subtype. (`bsn!`
+            // authoring is reflection-free, but the future inspector / `.bsn`
+            // loader reads this registry — spec § 6.)
+            .register_type::<FontStack>()
+            .register_type::<FamilyEntry>()
+            .register_type::<GenericFamily>()
             .register_type::<FontSize>()
             .register_type::<FontWeight>()
             .register_type::<LineHeight>()

@@ -120,7 +120,7 @@ pub struct LayoutTaffyComputeCount(pub u32);
 pub struct SyncStylesIterCount(pub usize);
 
 /// Phase 6 — anchor-name lookup table maintained by observers on
-/// `On<Insert, Anchor>` / `On<Replace, Anchor>` / `On<Remove, Anchor>`.
+/// `On<Insert, Anchor>` / `On<Discard, Anchor>` / `On<Remove, Anchor>`.
 ///
 /// Storage:
 /// - `by_name`: anchor name → ordered `Vec<(Entity, u64)>`. Last entry
@@ -186,7 +186,7 @@ impl AnchorNameRegistry {
 
     /// Remove every entry for this entity from every name bucket and
     /// from `entity_epochs`. Called on `On<Remove, Anchor>` and
-    /// `On<Replace, Anchor>` (the replace path removes then re-inserts
+    /// `On<Discard, Anchor>` (the discard path removes then re-inserts
     /// using the new anchor_name).
     pub fn remove(&mut self, entity: Entity) {
         for bucket in self.by_name.values_mut() {
@@ -1999,7 +1999,7 @@ pub(super) fn sync_styles(
                 // ancestor size flows through. Phase 2 invariant intact:
                 // ScrollOffset / ScrollSnapItem stay excluded, and
                 // ResolvedLayout in steady-state does not refresh
-                // (Bevy 0.18 `Commands::insert` increments the change
+                // (Bevy's `Commands::insert` increments the change
                 // tick on every write, but the per-frame work this
                 // produces is bounded by the actual size cascade —
                 // entities whose computed Taffy size is genuinely
@@ -2008,7 +2008,7 @@ pub(super) fn sync_styles(
                 Changed<ResolvedLayout>,
                 // Phase 5 Task 9 / Phase 6 Task 9: container/CQ + Anchor
                 // change set. Nested under a single inner `Or` so the
-                // outer tuple stays at 15 entries (Bevy 0.18 caps `Or`
+                // outer tuple stays at 15 entries (Bevy caps `Or`
                 // tuples at 15). The semantics are identical to spelling
                 // the entries at the top level — `Or<(A, Or<(B, C)>)>`
                 // matches exactly when `A || B || C`.
@@ -5434,7 +5434,7 @@ mod observer_tests {
             },
         );
         app.add_observer(
-            |trigger: On<bevy::ecs::lifecycle::Replace, Anchor>,
+            |trigger: On<bevy::ecs::lifecycle::Discard, Anchor>,
              mut reg: ResMut<AnchorNameRegistry>| {
                 reg.remove(trigger.event().entity);
             },

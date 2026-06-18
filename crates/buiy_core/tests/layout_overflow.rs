@@ -29,7 +29,7 @@ fn run_one_frame_with_overflow(overflow: Overflow) -> taffy::Style {
         ))
         .id();
     app.update();
-    let tree = app.world().non_send_resource::<LayoutTree>();
+    let tree = app.world().non_send::<LayoutTree>();
     let id = *tree.by_entity().get(&entity).expect("Taffy node assigned");
     tree.tree_ref()
         .style(id)

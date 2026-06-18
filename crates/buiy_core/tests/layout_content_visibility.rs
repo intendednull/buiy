@@ -30,7 +30,7 @@ fn app() -> App {
 fn taffy_child_count(app: &App, entity: Entity) -> usize {
     let tree = app
         .world()
-        .get_non_send_resource::<LayoutTree>()
+        .get_non_send::<LayoutTree>()
         .expect("LayoutTree present");
     let id = tree.by_entity()[&entity];
     tree.tree_ref()

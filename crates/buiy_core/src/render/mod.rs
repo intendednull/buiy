@@ -282,7 +282,7 @@ impl Plugin for BuiyRenderPlugin {
             // `Camera2d` defaults to `Msaa::Sample4`, so the window pass is 4x
             // and the 1x baseline ids cannot bind there). Inserts the
             // `BuiyViewPipelines` carrier on the view render entity for
-            // `BuiyNode::run`. No explicit ordering vs the sibling Prepare
+            // the `buiy_pass` system. No explicit ordering vs the sibling Prepare
             // systems: neither reads the other's output. NOTE: both this and
             // `prepare_effect_groups` hold `ResMut<BuiySpecializedPipelines>`,
             // so the scheduler serializes them in an arbitrary (harmless)
@@ -291,10 +291,11 @@ impl Plugin for BuiyRenderPlugin {
                 Render,
                 pipeline::prepare_buiy_view_pipelines.in_set(RenderSystems::Prepare),
             );
-        // Render-graph node: graph TOPOLOGY only (add_render_graph_node + edges),
-        // device-free, so it stays in build. The device-dependent pipeline init
-        // (`pipeline::register`) runs in `finish` below — RenderDevice/PipelineCache
-        // do not exist until RenderPlugin's own `finish` runs the renderer init.
+        // Render pass: registers the `buiy_pass` system into the `Core2d`
+        // schedule (`Core2dSystems::EarlyPostProcess`), device-free, so it stays
+        // in build. The device-dependent pipeline init (`pipeline::register`)
+        // runs in `finish` below — RenderDevice/PipelineCache do not exist until
+        // RenderPlugin's own `finish` runs the renderer init.
         node::register(render_app);
         // Shared texture atlas (atlas-and-text-seam.md § 2): the render-world
         // BuiyAtlas + AtlasWarmupQueue resources plus the pre-paint
@@ -302,9 +303,9 @@ impl Plugin for BuiyRenderPlugin {
         // (glyph/icon/gradient/mask) sample this one warehouse.
         atlas::register(render_app);
         // Compositor resources/pipelines (effect-compositor.md § 3): adds NO
-        // render-graph node — the BuiyRenderLabel group + edges are owned by
-        // node::register / architecture § 1.3; the composite passes run inside
-        // BuiyNode::run. No-op until prepare_effect_groups lands (Task 9).
+        // pass system — the `buiy_pass` system is owned by node::register; the
+        // composite passes run straight-line inside `buiy_pass` (one shared
+        // RenderContext encoder). No-op until prepare_effect_groups lands (Task 9).
         compositor::register(render_app);
     }
 

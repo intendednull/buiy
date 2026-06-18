@@ -40,6 +40,31 @@ pub use buiy_core::{
     theme::{Theme, UserPreferences, default_light_theme},
 };
 pub use buiy_widgets::{Button, OnPress, TextInput, WidgetsPlugin};
+// Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
+// `text_input_single_line(placeholder)`, `text_input_multi_line(placeholder)`.
+// They live in `buiy_widgets` (so they reuse the `#[require]` initializer fns —
+// one source of truth) and surface here, where the widget + BSN surfaces
+// converge, so `use buiy::prelude::*;` brings them in next to `bsn!`. (They are
+// NOT re-exported through `buiy_bsn`, which stays widget-agnostic per spec
+// § 4.2 — it must not take a `buiy_widgets` dependency.)
+pub use buiy_widgets::scene::{button, text_input_multi_line, text_input_single_line};
+
+// BSN authoring (docs/specs/2026-06-18-buiy-bsn-integration-design.md § 4.2).
+// `buiy::bsn` is the named path to the authoring crate; the BSN prelude
+// (`bsn!`, `bsn_list!`, the spawn extension traits) is folded into the
+// `buiy` crate root so the existing `use buiy::*;` convention
+// (`hello_button` / `hello_text`) brings `bsn!` into scope — and into the
+// `buiy::prelude` module below for the explicit `use buiy::prelude::*;` form.
+pub use buiy_bsn as bsn;
+pub use buiy_bsn::prelude::*;
+
+/// The Buiy prelude. `use buiy::prelude::*;` brings the common Buiy surface —
+/// components, plugins, widgets — and the BSN authoring macros (`bsn!`,
+/// `bsn_list!`) + spawn extension traits into scope in one import. Mirrors the
+/// flat crate-root re-export the examples use via `use buiy::*;`.
+pub mod prelude {
+    pub use crate::*;
+}
 
 // `buiy_core::render::ExtractedDraws` is intentionally NOT re-exported at
 // the crate root: it is a render-world resource only, populated during the

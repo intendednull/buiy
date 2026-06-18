@@ -12,10 +12,49 @@
 
 use bevy::prelude::*;
 
+// The `Node` `#[require]` list references the Style-decomposition components by
+// their fully-qualified `crate::layout::components::…` paths rather than `use`-
+// importing them: several names (`Scroll`, `Display`, …) collide with
+// `bevy::prelude` glob entries, so an unqualified `#[require(Scroll)]` would
+// resolve to bevy's input `Scroll`, not Buiy's layout component.
+
 /// A Buiy node — the parallel-to-`bevy_ui::Node` primitive. Marker that
 /// this entity participates in Buiy's layout / render / a11y trees.
+///
+/// `Node` `#[require]`s the full **`Style` decomposition** — the layout-input
+/// components `sync_styles` queries **non-optionally** (`layout/systems.rs`):
+/// `Display`, `BoxModel`, `Position`, `FlexParams`, `Overflow`, `Scroll`,
+/// `GridParams`, `WritingMode`, `Container`, `MultiColumn`, `UiTransform`,
+/// `Containment`, `Stacking`, `ContainIntrinsicSize` (all at their `Default`).
+/// Without this, an entity with `Node` but missing any of them is **silently
+/// skipped by layout** and never gets a `ResolvedLayout`. Requiring them makes
+/// "this entity participates in layout" structural rather than conventional —
+/// so a `bsn! { Node Display::… BoxModel { … } Children […] }` container is
+/// layout-valid by construction, exactly the way the `Style` bundle was on the
+/// `commands.spawn` path. (`WritingModeResolved` is *computed* by
+/// `inherit_writing_mode` for every `Node`, so it is not required here.)
+///
+/// The `commands.spawn` ergonomic sugar — the [`Style`](crate::layout::Style)
+/// bundle — still decomposes into these same components; the two authoring
+/// paths now agree on the contract a layout node carries.
 #[derive(Component, Reflect, Default, Clone, Debug)]
 #[reflect(Component)]
+#[require(
+    crate::layout::Display,
+    crate::layout::BoxModel,
+    crate::layout::Position,
+    crate::layout::FlexParams,
+    crate::layout::Overflow,
+    crate::layout::Scroll,
+    crate::layout::GridParams,
+    crate::layout::WritingMode,
+    crate::layout::Container,
+    crate::layout::MultiColumn,
+    crate::layout::UiTransform,
+    crate::layout::Containment,
+    crate::layout::Stacking,
+    crate::layout::ContainIntrinsicSize
+)]
 pub struct Node;
 
 /// Resolved layout output, written by `BuiyLayoutStep::WriteResolvedLayout`.
