@@ -348,44 +348,38 @@ fn sticky_bottom_clamped_by_parent_top() {
 }
 
 // =====================================================================
-// Both-active conflict
+// Both-active dual-clamp (CSS § 6.3)
 // =====================================================================
 
+/// Construct a sticky `Position` with BOTH top and bottom px insets.
+fn sticky_both_insets(top_px: f32, bottom_px: f32) -> Position {
+    Position {
+        kind: PositionKind::Sticky,
+        inset: Inset {
+            top: Sizing::Length(Length::Px(top_px)),
+            bottom: Sizing::Length(Length::Px(bottom_px)),
+            ..Default::default()
+        },
+    }
+}
+
 #[test]
-fn sticky_both_top_and_bottom_inset_top_wins() {
-    // v1 deviation per CHANGELOG: when both insets are set, the
-    // top-pin branch fires first and the bottom inset is ignored.
-    // Future correct dual-clamp implementation will replace this test
-    // with one that asserts an "upper-stuck vs lower-stuck, smallest
-    // perturbation wins" rule.
-    //
-    // Setup: sticky at natural y_in_S = 50, top inset 10, bottom inset
-    // 10, scroll_offset.y = 100. Top-pin branch: visible_top=100,
-    // threshold=110, max(50, 110)=110. Clamped by parent_bottom-size
-    // = 1000-30 = 970 → 110. displacement = 60.
-    //
-    // If bottom-pin were applied first (wrong), it'd push the element
-    // up — different displacement. The test pins the top-wins choice.
+fn sticky_both_top_and_bottom_bottom_honored_near_scroll_end() {
+    // both insets set → bottom honored when scroll near end (dual-clamp,
+    // supersedes v1 top-wins). Mirrors `sticky_bottom_pins_when_scroll_
+    // near_bottom`: 300x500 scroll container, scroll_offset.y=400,
+    // 1000-tall block, 900-px spacer → sticky natural y_in_S=900.
+    //   visible_top=400 → U=410; 900 > 410, top-clamp inactive.
+    //   visible_bottom=900 → L=900-10-30=860; .min(L)=860.
+    //   U(410) <= L(860): no re-max. band [0,970] keeps 860.
+    //   override.y = 900 + (860-900) = 860.
+    // Under the v1 "top-wins" helper the top branch returned displacement
+    // 0 → no override entry → the .get().unwrap_or_else panics (valid RED).
     let mut app = app();
-    let scroll = scroll_container(&mut app, 100.0);
+    let scroll = scroll_container(&mut app, 400.0);
     let block = content_block(&mut app, scroll, 1000.0);
-    let _spacer = content_block(&mut app, block, 50.0);
-    let sticky = app
-        .world_mut()
-        .spawn((Node, {
-            let mut s = Style::default().width_px(100.0).height_px(30.0);
-            s.position = Position {
-                kind: PositionKind::Sticky,
-                inset: Inset {
-                    top: Sizing::Length(Length::Px(10.0)),
-                    bottom: Sizing::Length(Length::Px(10.0)),
-                    ..Default::default()
-                },
-            };
-            s
-        }))
-        .id();
-    app.world_mut().entity_mut(block).add_children(&[sticky]);
+    let _spacer = content_block(&mut app, block, 900.0);
+    let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_both_insets(10.0, 10.0));
 
     app.update();
 
@@ -394,13 +388,72 @@ fn sticky_both_top_and_bottom_inset_top_wins() {
         .by_entity
         .get(&sticky)
         .copied()
-        .unwrap_or_else(|| panic!("expected sticky entry for both-active case"));
-    // Top branch wins: y_in_block = 50 + 60 = 110.
+        .unwrap_or_else(|| panic!("expected sticky entry for both-active dual-clamp case"));
     assert_eq!(
-        pos.y, 110.0,
-        "both insets set → top wins (v1 deviation); got {:?}",
+        pos.y, 860.0,
+        "both insets set → bottom honored when scroll near end (dual-clamp § 6.3, supersedes v1 top-wins); got {:?}",
         pos,
     );
+}
+
+#[test]
+fn sticky_both_insets_clamp_at_both_extremes() {
+    // Symmetry fixture: the same both-insets sticky element pins to the
+    // TOP line U at a top-extreme scroll and to the BOTTOM line L at a
+    // bottom-extreme scroll. Drives two independent apps so the suite
+    // documents top-extreme and bottom-extreme distinctly.
+    //
+    // Case (a) — top-extreme: scroll_offset.y=300, 50-px spacer.
+    //   natural y_in_S=50; visible_top=300 → U=310; .max(U)=310.
+    //   visible_bottom=800 → L=800-10-30=760; .min(L)=310.
+    //   U(310) <= L(760): no re-max. band [0,970] keeps 310.
+    //   override.y = 50 + (310-50) = 310. (Old top-wins code also yields
+    //   310 here — case (a) is the symmetry counterpart, not the RED.)
+    {
+        let mut app = app();
+        let scroll = scroll_container(&mut app, 300.0);
+        let block = content_block(&mut app, scroll, 1000.0);
+        let _spacer = content_block(&mut app, block, 50.0);
+        let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_both_insets(10.0, 10.0));
+
+        app.update();
+
+        let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+        let pos = overrides
+            .by_entity
+            .get(&sticky)
+            .copied()
+            .unwrap_or_else(|| panic!("expected sticky entry for top-extreme dual-clamp case"));
+        assert_eq!(
+            pos.y, 310.0,
+            "top-extreme: both-insets sticky pins to the top line U=310; got {:?}",
+            pos,
+        );
+    }
+
+    // Case (b) — bottom-extreme: scroll_offset.y=400, 900-px spacer.
+    //   natural y_in_S=900; visible_bottom=900 → L=860; pins to 860.
+    {
+        let mut app = app();
+        let scroll = scroll_container(&mut app, 400.0);
+        let block = content_block(&mut app, scroll, 1000.0);
+        let _spacer = content_block(&mut app, block, 900.0);
+        let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_both_insets(10.0, 10.0));
+
+        app.update();
+
+        let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+        let pos = overrides
+            .by_entity
+            .get(&sticky)
+            .copied()
+            .unwrap_or_else(|| panic!("expected sticky entry for bottom-extreme dual-clamp case"));
+        assert_eq!(
+            pos.y, 860.0,
+            "bottom-extreme: both-insets sticky pins to the bottom line L=860; got {:?}",
+            pos,
+        );
+    }
 }
 
 // =====================================================================

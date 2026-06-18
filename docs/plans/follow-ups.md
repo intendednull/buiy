@@ -379,23 +379,45 @@ these `Length` variants, extend `resolve_sticky_inset` with new arms
 **Spec touchpoint:** Phase 10 — viewport units; future font-rendering
 spec — em/rem.
 
-## Layout — sticky both-top-and-bottom dual clamp
+## Layout — sticky both-top-and-bottom dual clamp — LANDED
 
 **Originated:** Phase 7 (D4 — v1 "top wins" deviation).
 
+**Status:** **Landed.** `compute_sticky_displacement` now honors the
+bottom inset: when both `inset_top` and `inset_bottom` (or both
+`inset_left`/`inset_right`) are set, both clamps apply simultaneously per
+CSS § 6.3. Each axis applies the top line `U = visible_top + top_px`
+(`.max(U)`), then the bottom line `L = (visible_bottom − bottom_px) −
+size` (`.min(L)`); when the band is shorter than the box (`U > L`) it
+re-applies `.max(U)` so the top edge takes precedence. The band clamp
+stays an explicit `.max(parent_lo).min(parent_hi)` (NOT `f32::clamp`,
+which panics when `lo > hi`). Each axis reduces to the prior single-edge
+formula when only one inset is set (the single-edge regression tests stay
+green). The v1 "top wins" tests were flipped: the integration regression
+test `sticky_both_top_and_bottom_inset_top_wins` →
+`sticky_both_top_and_bottom_bottom_honored_near_scroll_end` and the pure
+unit test `sticky_both_top_and_bottom_active_top_wins` →
+`sticky_both_top_and_bottom_dual_clamp_bottom_honored` (both now assert
+the bottom inset wins near the scroll end). New fixtures: the
+`sticky_both_top_and_bottom_conflict_top_precedence` unit test locks the
+`U > L` top-precedence re-max branch (verified anti-vacuous: deleting the
+branch breaks it), and `sticky_both_insets_clamp_at_both_extremes`
+(integration) proves both edges clamp at their respective scroll
+extremes.
+
 **Symptom:** Sticky element with both `inset_top` and `inset_bottom` set
-ignores the bottom inset (top wins). CSS spec § 6.3 implies dual-clamp
+ignored the bottom inset (top wins). CSS spec § 6.3 implies dual-clamp
 behavior where the element sticks to whichever edge the scroll position
 is closer to.
 
-**Implementation sketch:** implement dual-clamp in
-`compute_sticky_displacement` — likely requires storing both upper and
-lower sticky thresholds and computing midpoint logic. The v2 test
-`sticky_both_top_and_bottom_inset_top_wins` (in `tests/layout_sticky.rs`)
-is the regression test for the v1 "top wins" behavior — flipping it
-documents the algorithm upgrade.
+**Implementation sketch (as landed):** replace each axis's
+`if-top else-if-bottom` chain (which left the bottom branch unreachable
+when both were set) with a single dual-clamp expression applying both
+thresholds, plus the `U > L` top-precedence re-max for the degenerate
+band-shorter-than-box case. The 10-arg signature is unchanged.
 
-**Spec touchpoint:** CSS spec § 6.3 (positioned layout).
+**Spec touchpoint:** `display-and-positioning.md § 2.3`; CSS spec § 6.3
+(positioned layout).
 
 ## Layout — sticky inside sticky
 

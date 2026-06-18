@@ -500,12 +500,21 @@ fn resolve_sticky_inset(
 /// natural-relative-to-parent position to get the final
 /// position-in-parent-frame.
 ///
-/// **v1 deviation: when both `inset_top` and `inset_bottom` are set,
-/// top wins.** A future correct dual-clamp implementation will replace
-/// this if-else with an "upper-stuck vs lower-stuck, smallest
-/// perturbation from natural wins" rule (CSS spec § 6.3). Documented in
-/// CHANGELOG; the `sticky_both_top_and_bottom_active_top_wins` test
-/// pins the current behavior.
+/// **Dual-clamp (CSS positioned-layout § 6.3): when both `inset_top`
+/// and `inset_bottom` are set, both clamps apply simultaneously.** The
+/// box pins to the top line `U = visible_top + top_px` when scroll
+/// pushes its natural position above `U`, pins to the bottom line
+/// `L = (visible_bottom - bottom_px) - size` when scroll pushes it below
+/// `L`, and sits at its natural flow position in between. When the box
+/// is shorter than the sticky band the two clamps don't conflict and it
+/// follows whichever edge the scroll has reached. In the degenerate case
+/// where the band is shorter than the box (`U > L`, thresholds collide),
+/// CSS gives the TOP edge precedence — re-applied with `.max(U)` *after*
+/// the bottom `.min(L)` so the bottom clamp cannot win. Each axis
+/// degenerates to the single-edge formula when only one inset is set.
+/// The `sticky_both_top_and_bottom_dual_clamp_bottom_honored` and
+/// `sticky_both_top_and_bottom_conflict_top_precedence` unit tests pin
+/// this behavior (the latter locks the `U > L` re-max branch).
 ///
 /// Pure function — no Bevy queries, no Taffy reads. Easy to unit test.
 ///
@@ -531,38 +540,44 @@ fn compute_sticky_displacement(
     let parent_bottom = parent_in_s.y + parent_size.y;
     let parent_right = parent_in_s.x + parent_size.x;
 
-    let desired_y = if let Some(top_px) = inset_top {
-        let threshold = visible_top + top_px;
-        e_natural_in_s
-            .y
-            .max(threshold)
-            .min(parent_bottom - e_size.y)
-            .max(parent_in_s.y)
-    } else if let Some(bottom_px) = inset_bottom {
-        let threshold = visible_bottom - bottom_px;
-        (threshold - e_size.y)
-            .min(e_natural_in_s.y)
-            .max(parent_in_s.y)
-            .min(parent_bottom - e_size.y)
-    } else {
-        e_natural_in_s.y
-    };
-    let desired_x = if let Some(left_px) = inset_left {
-        let threshold = visible_left + left_px;
-        e_natural_in_s
-            .x
-            .max(threshold)
-            .min(parent_right - e_size.x)
-            .max(parent_in_s.x)
-    } else if let Some(right_px) = inset_right {
-        let threshold = visible_right - right_px;
-        (threshold - e_size.x)
-            .min(e_natural_in_s.x)
-            .max(parent_in_s.x)
-            .min(parent_right - e_size.x)
-    } else {
-        e_natural_in_s.x
-    };
+    // Dual-clamp per CSS § 6.3 (see doc comment). Apply the top line U
+    // (.max), then the bottom line L (.min); when both are set and the
+    // band is shorter than the box (U > L) re-apply .max(U) so the top
+    // edge takes precedence. Then clamp into the parent band with an
+    // explicit .max(lo).min(hi) — NOT f32::clamp, which panics when
+    // lo > hi (box taller than the parent band; the
+    // sticky_clamped_by_parent_* tests depend on graceful degradation).
+    let mut desired_y = e_natural_in_s.y;
+    if let Some(top_px) = inset_top {
+        desired_y = desired_y.max(visible_top + top_px);
+    }
+    if let Some(bottom_px) = inset_bottom {
+        desired_y = desired_y.min((visible_bottom - bottom_px) - e_size.y);
+    }
+    if let (Some(top_px), Some(bottom_px)) = (inset_top, inset_bottom) {
+        let u = visible_top + top_px;
+        let l = (visible_bottom - bottom_px) - e_size.y;
+        if u > l {
+            desired_y = desired_y.max(u);
+        }
+    }
+    let desired_y = desired_y.max(parent_in_s.y).min(parent_bottom - e_size.y);
+
+    let mut desired_x = e_natural_in_s.x;
+    if let Some(left_px) = inset_left {
+        desired_x = desired_x.max(visible_left + left_px);
+    }
+    if let Some(right_px) = inset_right {
+        desired_x = desired_x.min((visible_right - right_px) - e_size.x);
+    }
+    if let (Some(left_px), Some(right_px)) = (inset_left, inset_right) {
+        let u = visible_left + left_px;
+        let l = (visible_right - right_px) - e_size.x;
+        if u > l {
+            desired_x = desired_x.max(u);
+        }
+    }
+    let desired_x = desired_x.max(parent_in_s.x).min(parent_right - e_size.x);
 
     Vec2::new(desired_x - e_natural_in_s.x, desired_y - e_natural_in_s.y)
 }
@@ -5394,29 +5409,68 @@ mod tests {
         assert_eq!(d, Vec2::new(0.0, -180.0));
     }
 
-    // ---- v2 — both-top-and-bottom-active behavior (test-reviewer BLOCKER B2) ----
+    // ---- dual-clamp — both-top-and-bottom (CSS § 6.3) ----
 
     #[test]
-    fn sticky_both_top_and_bottom_active_top_wins() {
-        // v1 deviation: when both insets are set, top wins. This test
-        // documents the behavior — a future correct dual-clamp impl
-        // will fail this test and that's the signal to flip it.
+    fn sticky_both_top_and_bottom_dual_clamp_bottom_honored() {
+        // both insets set → bottom honored when scroll near end
+        // (dual-clamp § 6.3, supersedes v1 top-wins). Scroll near the
+        // bottom so the TOP clamp is inactive and the BOTTOM clamp fires:
+        // e_natural_in_s.y=900, scroll_offset.y=400.
+        //   visible_top=400 → U=410; 900 > 410 so the top-clamp does not
+        //     move the box (desired stays 900 after .max(U)).
+        //   visible_bottom=900 → L=900-10-30=860; .min(L) pulls to 860.
+        //   U(410) <= L(860): no conflict re-max.
+        //   band [0, 1000-30=970] keeps 860.
+        //   displacement = 860 - 900 = -40.
+        // Under the v1 "top wins" helper the bottom branch was unreachable
+        // and the top branch returned displacement 0 (Vec2::ZERO), so this
+        // assertion is RED against the pre-dual-clamp code.
         let d = compute_sticky_displacement(
-            Vec2::new(0.0, 50.0),
+            Vec2::new(0.0, 900.0),
             Vec2::new(100.0, 30.0),
             Vec2::new(0.0, 0.0),
             Vec2::new(300.0, 1000.0),
             Vec2::new(300.0, 500.0),
-            Vec2::new(0.0, 100.0),
+            Vec2::new(0.0, 400.0),
             Some(10.0),
             Some(10.0),
             None,
             None, // both insets set
         );
-        // Top-pin branch fires: visible_top=100, threshold=110,
-        // max(50, 110)=110. Clamped by parent_bottom - e_h = 970 → 110.
-        // Displacement = 60. Bottom inset is ignored.
-        assert_eq!(d, Vec2::new(0.0, 60.0));
+        assert_eq!(d, Vec2::new(0.0, -40.0));
+    }
+
+    #[test]
+    fn sticky_both_top_and_bottom_conflict_top_precedence() {
+        // U>L conflict (band shorter than box): top-precedence pins to U,
+        // NOT the naive bottom clamp. This is the ONLY test that exercises
+        // the `if U>L { desired = desired.max(U) }` re-max branch — its
+        // job is to LOCK that branch (the anti-vacuous check: deleting the
+        // branch must break this test). Its RED signal is the
+        // branch-deletion check, not the legacy helper (the old top-wins
+        // single-edge branch happens to return the same value here).
+        //
+        // Geometry: scroll_container_size.y=40 (band only 40px tall),
+        // e_size=(100,30), both insets 10, scroll_offset ZERO.
+        //   visible_top=0 → U=10; visible_bottom=40 → L=40-10-30=0.
+        //   U(10) > L(0) → conflict.
+        //   e_natural_in_s.y=5: .max(U=10)=10, .min(L=0)=0 (naive would
+        //     stop here at 0), re-.max(U=10)=10 (top-precedence wins).
+        //   band [0, 1000-30=970] keeps 10. displacement = 10 - 5 = 5.
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 5.0),
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(300.0, 40.0),
+            Vec2::ZERO,
+            Some(10.0),
+            Some(10.0),
+            None,
+            None,
+        );
+        assert_eq!(d, Vec2::new(0.0, 5.0));
     }
 
     // -----------------------------------------------------------------
