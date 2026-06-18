@@ -78,3 +78,63 @@ fn shadow_shader_with_clip_parses() {
         "shadow clip inputs bound at @location(6)/(7) (matches the vertex layout)"
     );
 }
+
+#[test]
+fn quad_shader_applies_affine_via_mat2x2() {
+    // R1: the quad shader declares the 2D affine basis instance inputs at
+    // @location(8)/(9), builds the window-logical corner via a `mat2x2`, and
+    // interpolates `frag_logical` for the clip discard — `rect_center` is GONE
+    // (it was the axis-aligned corner, wrong under rotation). naga PARSES (not
+    // string-grep) so a malformed VertexOut/fragment-input mismatch is rejected.
+    let m = parse_wgsl("quad", QUAD_WGSL);
+    assert!(has_entry_point(&m, "vertex"));
+    assert!(has_entry_point(&m, "fragment"));
+    assert!(
+        QUAD_WGSL.contains("@location(8)") && QUAD_WGSL.contains("@location(9)"),
+        "quad affine inputs bound at @location(8)/(9) (matches the vertex layout)"
+    );
+    assert!(
+        QUAD_WGSL.contains("affine_col0") && QUAD_WGSL.contains("affine_col1"),
+        "quad shader declares the affine basis columns"
+    );
+    assert!(
+        QUAD_WGSL.contains("mat2x2"),
+        "quad vertex builds the logical corner via a mat2x2 affine"
+    );
+    assert!(
+        QUAD_WGSL.contains("frag_logical"),
+        "quad carries the affine-transformed window-logical corner for the clip discard"
+    );
+    assert!(
+        !QUAD_WGSL.contains("rect_center"),
+        "rect_center (the axis-aligned corner) is dropped — replaced by frag_logical"
+    );
+}
+
+#[test]
+fn shadow_shader_applies_affine_via_mat2x2() {
+    // The shadow shader mirrors the quad shader's affine path identically.
+    let m = parse_wgsl("shadow", SHADOW_WGSL);
+    assert!(has_entry_point(&m, "vertex"));
+    assert!(has_entry_point(&m, "fragment"));
+    assert!(
+        SHADOW_WGSL.contains("@location(8)") && SHADOW_WGSL.contains("@location(9)"),
+        "shadow affine inputs bound at @location(8)/(9)"
+    );
+    assert!(
+        SHADOW_WGSL.contains("affine_col0") && SHADOW_WGSL.contains("affine_col1"),
+        "shadow shader declares the affine basis columns"
+    );
+    assert!(
+        SHADOW_WGSL.contains("mat2x2"),
+        "shadow vertex builds the logical corner via a mat2x2 affine"
+    );
+    assert!(
+        SHADOW_WGSL.contains("frag_logical"),
+        "shadow carries the affine-transformed window-logical corner"
+    );
+    assert!(
+        !SHADOW_WGSL.contains("rect_center"),
+        "rect_center is dropped in the shadow shader too"
+    );
+}

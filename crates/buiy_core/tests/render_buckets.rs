@@ -74,9 +74,9 @@ fn buckets_group_pushed_instances_by_key() {
         primitive: BuiyPrimitiveKind::Shadow,
         layer: 0,
     };
-    b.push(q0, [0.0; 13]);
-    b.push(q0, [1.0; 13]);
-    b.push(s0, [2.0; 13]);
+    b.push(q0, [0.0; 17]);
+    b.push(q0, [1.0; 17]);
+    b.push(s0, [2.0; 17]);
     assert_eq!(b.len(q0), 2);
     assert_eq!(b.len(s0), 1);
     assert_eq!(b.total_instances(), 3);
@@ -98,21 +98,21 @@ fn buckets_iterate_in_paint_order() {
             primitive: BuiyPrimitiveKind::Quad,
             layer: 0,
         },
-        [0.0; 13],
+        [0.0; 17],
     );
     b.push(
         PrimitiveBatchKey {
             primitive: BuiyPrimitiveKind::Shadow,
             layer: 0,
         },
-        [0.0; 13],
+        [0.0; 17],
     );
     b.push(
         PrimitiveBatchKey {
             primitive: BuiyPrimitiveKind::Quad,
             layer: 1,
         },
-        [0.0; 13],
+        [0.0; 17],
     );
     let order: Vec<_> = b.batches().map(|(k, _)| *k).collect();
     // shadow@0, quad@0, then quad@1 — sorted ascending.
@@ -140,16 +140,32 @@ fn node(entity: u32, position: Vec2, size: Vec2, color: Color) -> ExtractedNode 
         color,
         clip: None,
         group: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
     }
 }
 
 #[test]
 fn raw_layout_stride_agrees_with_struct() {
-    // The [f32;13] the bucket holds must be byte-identical in size to the
-    // PackedInstance struct the pipeline descriptor declares (52 B). If this
+    // The [f32;17] the bucket holds must be byte-identical in size to the
+    // PackedInstance struct the pipeline descriptor declares (68 B). If this
     // ever drifts, the instanced draw reads garbage.
     assert!(packed_raw_stride_agrees());
-    assert_eq!(std::mem::size_of::<[f32; 13]>(), 52);
+    assert_eq!(std::mem::size_of::<[f32; 17]>(), 68);
+}
+
+#[test]
+fn packed_to_raw_appends_affine_via_offset_consts() {
+    // packed_to_raw returns 17 floats: the affine basis at [13..17], and the
+    // alpha at ALPHA_FLOAT_OFFSET unchanged (the R2 re-tint invariant).
+    use buiy_core::render::buckets::packed_to_raw;
+    use buiy_core::render::instance::ALPHA_FLOAT_OFFSET;
+    let mut n = node(1, Vec2::ZERO, Vec2::splat(10.0), Color::WHITE);
+    n.affine = [[2.0, 0.0], [0.0, 3.0]];
+    let p = pack_extracted(&n);
+    let raw = packed_to_raw(&p);
+    assert_eq!(raw.len(), 17);
+    assert_eq!(&raw[13..17], &[2.0, 0.0, 0.0, 3.0]);
+    assert_eq!(raw[ALPHA_FLOAT_OFFSET], p.color[3]);
 }
 
 #[test]
@@ -234,6 +250,7 @@ fn grouped(entity: u32, color: Color, group: Option<usize>) -> ExtractedNode {
         color,
         clip: None,
         group,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
     }
 }
 

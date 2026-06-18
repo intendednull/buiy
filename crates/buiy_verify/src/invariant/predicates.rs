@@ -307,7 +307,7 @@ pub fn all_finite(nodes: &ExtractedNodes) -> Result<(), Violation> {
 /// clip" and are checked separately.
 pub fn all_finite_packed(packed: &[PackedInstance]) -> Result<(), Violation> {
     for (i, p) in packed.iter().enumerate() {
-        let finite_fields: [(&str, f32); 9] = [
+        let finite_fields: [(&str, f32); 13] = [
             ("rect_pos.x", p.rect_pos[0]),
             ("rect_pos.y", p.rect_pos[1]),
             ("rect_size.x", p.rect_size[0]),
@@ -317,6 +317,12 @@ pub fn all_finite_packed(packed: &[PackedInstance]) -> Result<(), Violation> {
             ("color.b", p.color[2]),
             ("color.a", p.color[3]),
             ("radius", p.radius),
+            // The 2D affine basis (R1) — always finite for a valid
+            // GlobalTransform; a NaN/inf here is a real packing bug.
+            ("affine.m00", p.affine[0]),
+            ("affine.m10", p.affine[1]),
+            ("affine.m01", p.affine[2]),
+            ("affine.m11", p.affine[3]),
         ];
         for (field, v) in finite_fields {
             if !v.is_finite() {
