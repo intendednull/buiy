@@ -5,8 +5,8 @@
 use bevy::prelude::*;
 use buiy_core::components::StackingContext;
 use buiy_core::layout::{
-    ContainFlags, Isolation, LayoutPlugin, Length, PositionKind, Style, TopLayer,
-    TopLayerActivation, ZIndex,
+    ContainFlags, Containment, Isolation, LayoutPlugin, Length, PositionKind, Style, TopLayer,
+    TopLayerActivation, WillChange, WillChangeProperty, ZIndex,
 };
 use buiy_core::render::components::{Filter, FilterFn, MixBlendMode, Opacity};
 use buiy_core::{CorePlugin, Node};
@@ -104,6 +104,67 @@ fn paint_containment_forms_stacking_context_end_to_end() {
     assert!(
         app.world().get::<StackingContext>(child).is_some(),
         "PAINT containment forms a stacking context (trigger 4)"
+    );
+}
+
+#[test]
+fn will_change_forms_stacking_context_end_to_end() {
+    // Trigger 5b via the real `containment_q.get(e)` path in 6f: a
+    // `will-change` naming an SC-forming property (Transform) forms a
+    // stacking context even though no transform is actually applied.
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().containment(Containment {
+                will_change: WillChange::Properties(vec![WillChangeProperty::Transform]),
+                ..default()
+            }),
+        ))
+        .id();
+    let root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_some(),
+        "will-change: transform forms a stacking context (trigger 5b)"
+    );
+    let root_sc = app.world().get::<StackingContext>(root).unwrap();
+    assert!(
+        root_sc.painters_z.contains(&child),
+        "the will-change child is an atomic painter in the root context"
+    );
+}
+
+#[test]
+fn will_change_layout_only_forms_no_stacking_context() {
+    // Trigger 5b negative: `will-change: z-index` is layout-only and not
+    // SC-forming (z-index needs positioning to create one), so no
+    // stacking context is formed.
+    let mut app = app();
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().containment(Containment {
+                will_change: WillChange::Properties(vec![WillChangeProperty::ZIndex]),
+                ..default()
+            }),
+        ))
+        .id();
+    let _root = app
+        .world_mut()
+        .spawn((Node, Style::default()))
+        .add_child(child)
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<StackingContext>(child).is_none(),
+        "will-change: z-index is layout-only and forms no stacking context"
     );
 }
 
