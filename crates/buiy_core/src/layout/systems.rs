@@ -24,10 +24,10 @@ use super::components::{
 use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, BreakAfter, BreakBefore, ColumnCount, ColumnFill,
-    ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey,
-    Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition,
-    WritingModeKind, ZIndex,
+    AnchorErrorKind, AnchorName, AnchorRef, AxisDimension, BreakAfter, BreakBefore, ColumnCount,
+    ColumnFill, ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation,
+    LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix,
+    TryCondition, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use crate::render::components::{Filter, MixBlendMode, Opacity};
@@ -470,6 +470,21 @@ fn resolve_sticky_inset(
             {
                 warn!(
                     "Sticky entity {:?} uses Cq* inset; sticky-cq resolution is deferred to a Phase 7.x follow-up. Inset resolves to 0.0.",
+                    entity,
+                );
+            }
+            0.0
+        }
+        // `anchor-size()` reads an anchor box; sticky has none. Resolve
+        // to 0.0, warn once per (entity, session) — same channel + dedup
+        // shape as the Fr / Cq* sticky-deferred arms above.
+        Length::AnchorSize(_) => {
+            if warned
+                .set
+                .insert(LayoutWarnOnceKey::StickyAnchorSizeUnsupported(entity))
+            {
+                warn!(
+                    "Sticky entity {:?} uses anchor-size() inset; sticky has no anchor box, so it resolves to 0.0.",
                     entity,
                 );
             }
@@ -1467,6 +1482,10 @@ fn length_inset_to_px(l: Length, axis: f32, _viewport: Vec2) -> f32 {
         | Length::Cqb(_)
         | Length::Cqmin(_)
         | Length::Cqmax(_) => 0.0,
+        // `anchor-size()` is intercepted by `try_anchored_position`'s
+        // `to_px` closure before delegating here, so this arm is the
+        // defensive no-anchor-box fallback (resolve to 0.0).
+        Length::AnchorSize(_) => 0.0,
     }
 }
 
@@ -1502,6 +1521,11 @@ fn try_anchored_position(
         match s {
             Sizing::Auto => 0.0,
             Sizing::None => 0.0,
+            // `anchor-size(<axis>)` resolves to the per-try anchor box's
+            // size on the *named* axis (independent of which edge it sits
+            // on); every other `Length` delegates to `length_inset_to_px`.
+            Sizing::Length(Length::AnchorSize(AxisDimension::Width)) => anchor_size.x,
+            Sizing::Length(Length::AnchorSize(AxisDimension::Height)) => anchor_size.y,
             Sizing::Length(l) => length_inset_to_px(*l, axis, viewport),
             // B4: `FitContent` is a tuple variant `FitContent(Length)`;
             // the wildcard `(_)` discards the inner Length (no
@@ -1907,9 +1931,8 @@ fn apply_anchor_broken_markers(
 
 /// Step 7 of `anchor_resolution` — emit one `warn!` per unique
 /// `(entity, kind)` pair this frame. `warned.set.insert` is the
-/// per-frame dedupe gate; the match must stay exhaustive over all
-/// `AnchorErrorKind` arms (including `AnchorSizeUsed`, which is
-/// currently unreachable from this path but kept for exhaustiveness).
+/// per-frame dedupe gate; the match stays exhaustive over every
+/// `AnchorErrorKind` arm.
 fn emit_anchor_warns(
     new_warns: Vec<(Entity, AnchorErrorKind)>,
     warned: &mut LayoutAnchorWarnedThisFrame,
@@ -1933,12 +1956,6 @@ fn emit_anchor_warns(
                     warn!(
                         ?entity,
                         "buiy: duplicate anchor_name — late inserter wins, shadowed entries lose name lookup"
-                    );
-                }
-                AnchorErrorKind::AnchorSizeUsed => {
-                    warn!(
-                        ?entity,
-                        "buiy: anchor-size() in PositionTry::inset is deferred to v1.x; resolving to 0"
                     );
                 }
             }
@@ -3217,14 +3234,17 @@ fn length_to_px(len: Length, axis_basis: f32) -> f32 {
         // condition value would be a degenerate case (a rule about
         // a container, sized in units of that same container). Warn
         // is unnecessary because authors compose with Length::Px.
-        // Fr is a grid-only unit; degrades to 0 here.
+        // Fr is a grid-only unit; degrades to 0 here. anchor-size() is
+        // only meaningful inside anchor inset resolution; in a container-
+        // query condition value it has no anchor box, so it degrades to 0.
         Length::Fr(_)
         | Length::Cqw(_)
         | Length::Cqh(_)
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => 0.0,
+        | Length::Cqmax(_)
+        | Length::AnchorSize(_) => 0.0,
     }
 }
 
@@ -5471,6 +5491,44 @@ mod tests {
             !is_off_screen(None, vp),
             "never skip without last-frame geometry (D3)"
         );
+    }
+
+    #[test]
+    fn try_anchored_position_resolves_anchor_size_height() {
+        // anchor-size(height): `inset.top` resolves to the anchor's own
+        // height (40), so the anchored entity is placed at
+        // anchor.y(0) + anchor.height(40) + resolved_top(40) = 80.
+        let inset = Inset {
+            top: Sizing::Length(Length::AnchorSize(AxisDimension::Height)),
+            ..Default::default()
+        };
+        let pos = try_anchored_position(
+            Vec2::ZERO,
+            Vec2::new(80.0, 40.0),
+            Vec2::new(10.0, 10.0),
+            &inset,
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(pos.y, 80.0);
+    }
+
+    #[test]
+    fn try_anchored_position_resolves_anchor_size_width_on_left_edge() {
+        // anchor-size(width) on the `left` edge resolves to the anchor's
+        // width (80) regardless of axis, so x =
+        // anchor.x(0) + anchor.width(80) + resolved_left(80) = 160.
+        let inset = Inset {
+            left: Sizing::Length(Length::AnchorSize(AxisDimension::Width)),
+            ..Default::default()
+        };
+        let pos = try_anchored_position(
+            Vec2::ZERO,
+            Vec2::new(80.0, 40.0),
+            Vec2::new(10.0, 10.0),
+            &inset,
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(pos.x, 160.0);
     }
 }
 

@@ -5,9 +5,9 @@
 use bevy::prelude::*;
 use buiy_core::components::{Node, ResolvedLayout};
 use buiy_core::layout::{
-    Anchor, AnchorErrorKind, AnchorName, AnchorNameRegistry, AnchorRef, Display, Inset,
-    LayoutAnchorBroken, LayoutAnchorWarnedThisFrame, LayoutPlugin, Length, PositionTry, Style,
-    SyncStylesIterCount, TryCondition,
+    Anchor, AnchorErrorKind, AnchorName, AnchorNameRegistry, AnchorRef, AxisDimension, Display,
+    Inset, LayoutAnchorBroken, LayoutAnchorWarnedThisFrame, LayoutPlugin, Length, PositionTry,
+    Sizing, Style, SyncStylesIterCount, TryCondition,
 };
 
 fn app() -> App {
@@ -115,6 +115,62 @@ fn write_resolved_layout_prefers_anchor_override_over_taffy_position() {
     assert!(overrides.by_entity.contains_key(&anchored_e));
     assert!(!overrides.by_entity.contains_key(&plain));
     assert!(!overrides.by_entity.contains_key(&anchor_e)); // anchor target, not anchored
+}
+
+#[test]
+fn anchor_size_inset_resolves_to_anchor_height() {
+    use buiy_core::layout::PostTaffyPositionOverrides;
+    let mut app = app();
+
+    // Anchor: 80x40 at the default Taffy origin (0,0).
+    let _anchor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(80.0).height_px(40.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("a".into())),
+                ..default()
+            },
+        ))
+        .id();
+
+    // Anchored: 10x10, placed BELOW the anchor by `anchor-size(height)`.
+    // The `top` inset resolves to the anchor's own height (40), so the
+    // anchored entity lands at anchor.y(0) + anchor.height(40) +
+    // resolved_top(40) = 80 — explicitly NOT 0.0 (the old deferred path).
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(10.0).height_px(10.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("a".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset {
+                        top: Sizing::Length(Length::AnchorSize(AxisDimension::Height)),
+                        ..default()
+                    },
+                    conditions: vec![], // no conditions = always passes
+                }],
+                ..default()
+            },
+        ))
+        .id();
+
+    app.update();
+    app.update();
+
+    let anchored_rl = app.world().get::<ResolvedLayout>(anchored).unwrap();
+    assert_eq!(
+        anchored_rl.position.y, 80.0,
+        "anchor-size(height) must resolve to the anchor's real height (40), not 0.0"
+    );
+
+    // Confirm the override channel carried the anchor-size-derived position.
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    assert!(overrides.by_entity.contains_key(&anchored));
+    assert_eq!(overrides.by_entity.get(&anchored).unwrap().y, 80.0);
 }
 
 #[test]

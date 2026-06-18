@@ -25,7 +25,7 @@ pub use systems::{
 };
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
+    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, AxisDimension,
     BackfaceVisibility, BoxSizing, BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill,
     ColumnRule, ColumnRuleStyle, ColumnSpan, ContainFlags, ContainerType, ContentVisibility,
     Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
@@ -139,6 +139,7 @@ impl Plugin for LayoutPlugin {
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
+            .register_type::<AxisDimension>()
             .register_type::<AspectRatio>()
             .register_type::<Inset>()
             .register_type::<TrackSize>()
