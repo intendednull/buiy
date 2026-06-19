@@ -1,5 +1,8 @@
 # Texture Atlas Infrastructure + Glyph/Icon Seam Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the shared render-world `BuiyAtlas` resource (guillotiere allocation, LRU eviction, page-budget pressure, warmup, pooling) plus the two F-tier atlas-sampling primitive shapes (`GlyphAlphaInstance`, `IconInstance`) and the `get_or_insert`/`AtlasEntry` seam that `buiy-text-rendering-design` plugs into.

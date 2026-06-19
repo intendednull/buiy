@@ -140,5 +140,5 @@ For Buiy specifically:
 - `accesskit` 0.24.0 docs.rs top-level item list (structs + enums + traits): https://docs.rs/accesskit/0.24.0/accesskit/
 - `accesskit_consumer` 0.36.0 release notes (LocalNodeId / TreeId lookup; iOS adapter support): https://github.com/AccessKit/accesskit/releases
 - AccessKit README "single-line and multi-line text input controls … but not rich text or hypertext" limitation: https://github.com/AccessKit/accesskit/blob/main/README.md
-- Buiy ARIA-1.2 taxonomy: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md`
+- Buiy ARIA-1.2 taxonomy: `docs/specs/2026-05-07-buiy-foundation/accessibility.md`
 - Sibling: [architecture.md](architecture.md), [platform-adapters.md](platform-adapters.md), [api.md](api.md)

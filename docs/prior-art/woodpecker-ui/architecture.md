@@ -65,7 +65,7 @@ Mechanics:
 - `Custom(WidgetRenderCustom)` — escape hatch to emit raw vello scene fragments.
 - Layer / Clip — push/pop vello layers; the `Clip` widget uses this.
 
-**Implication for Buiy.** This is a useful proof point that **vello is a viable Bevy UI renderer**, but it ships a single-scene-per-frame compositor — not a render-graph node integration the way Buiy's foundation architecture commits to (`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3). Vello can do rounded clip, `clip-path`, gradients, drop-shadow, blur — the features `bevy_ui` lacks ([`bevy-ui/lessons.md`](../bevy-ui/lessons.md) "Renderer that caps web-parity features"). woodpecker_ui doesn't *expose* most of those capabilities through `WoodpeckerStyle`, but the underlying vello primitives are available via `WidgetRenderCustom`. See [`lessons.md`](lessons.md) entry on "borrow vello as renderer substrate."
+**Implication for Buiy.** This is a useful proof point that **vello is a viable Bevy UI renderer**, but it ships a single-scene-per-frame compositor — not a render-graph node integration the way Buiy's foundation architecture commits to (`docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3). Vello can do rounded clip, `clip-path`, gradients, drop-shadow, blur — the features `bevy_ui` lacks ([`bevy-ui/lessons.md`](../bevy-ui/lessons.md) "Renderer that caps web-parity features"). woodpecker_ui doesn't *expose* most of those capabilities through `WoodpeckerStyle`, but the underlying vello primitives are available via `WidgetRenderCustom`. See [`lessons.md`](lessons.md) entry on "borrow vello as renderer substrate."
 
 ## Layout
 
@@ -86,7 +86,7 @@ The `Units` enum supports `Pixels`, `Percentage`, `Auto`. Taffy is bridged via c
 ## Picking and focus
 
 - **Picking:** woodpecker_ui registers its own backend with `bevy_picking` (Bevy 0.16's standard picking framework). Hit-testing follows the laid-out widget tree.
-- **Focus:** Single `CurrentFocus` resource (`Entity::PLACEHOLDER` when no focus). `WidgetFocus` and `WidgetBlur` events fire on transitions. No `:focus-visible` distinction, no focus trap primitive, no inert subtrees, no roving-tabindex, no spatial/gamepad navigation. This is well short of the Buiy focus model (`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3, "Buiy owns a single focus tree with `:focus-visible`, traps, restoration, inert subtrees, roving tabindex").
+- **Focus:** Single `CurrentFocus` resource (`Entity::PLACEHOLDER` when no focus). `WidgetFocus` and `WidgetBlur` events fire on transitions. No `:focus-visible` distinction, no focus trap primitive, no inert subtrees, no roving-tabindex, no spatial/gamepad navigation. This is well short of the Buiy focus model (`docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3, "Buiy owns a single focus tree with `:focus-visible`, traps, restoration, inert subtrees, roving tabindex").
 
 ## Reactivity model
 

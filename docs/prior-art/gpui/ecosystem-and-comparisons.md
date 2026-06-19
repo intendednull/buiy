@@ -66,7 +66,7 @@ Per the HN founder comment ([47005761](https://news.ycombinator.com/item?id=4700
 
 GPUI sits in a specific quadrant of the Rust UI design space: **GPU-accelerated, retained-mode (with immediate-mode escape hatch), custom paradigm, native-API-first**. The neighbors are different bets.
 
-### vs egui ([`/home/user/buiy/docs/prior-art/egui/`](../egui/))
+### vs egui ([`docs/prior-art/egui/`](../egui/))
 
 | | egui | GPUI |
 |---|---|---|
@@ -83,7 +83,7 @@ GPUI sits in a specific quadrant of the Rust UI design space: **GPU-accelerated,
 
 GPUI wins on **idle cost** and **production-app polish**. egui wins on **simplicity** and **dev-tool fit**. They don't compete directly — egui is the dev-tool/debug/inspector default, GPUI is the production-app retained-mode bet. Buiy plans to **use bevy_egui for its own dev tooling** (foundation `cross-cutting.md` § 3.18 and bevy-egui lessons) while building production UI on its own retained-mode pipeline more analogous to GPUI's shape.
 
-### vs Iced ([`/home/user/buiy/docs/prior-art/iced/`](../iced/))
+### vs Iced ([`docs/prior-art/iced/`](../iced/))
 
 | | Iced | GPUI |
 |---|---|---|
@@ -101,7 +101,7 @@ GPUI wins on **idle cost** and **production-app polish**. egui wins on **simplic
 
 GPUI vs Iced is the **mutability** debate played out at framework scale. Iced's Elm purity is intellectually satisfying and produces clean code; GPUI's mutability is pragmatic and produces fast code. Both ship production apps. Neither has shipped accessibility. The renderer-uniformity bet (Iced = wgpu everywhere; GPUI = native where possible) is the cleanest empirical comparison — both produce shippable cross-platform apps, but Iced has uniform behavior while GPUI has platform-native polish at the cost of three code paths.
 
-### vs Slint ([`/home/user/buiy/docs/prior-art/slint/`](../slint/))
+### vs Slint ([`docs/prior-art/slint/`](../slint/))
 
 | | Slint | GPUI |
 |---|---|---|
@@ -116,7 +116,7 @@ GPUI vs Iced is the **mutability** debate played out at framework scale. Iced's 
 
 Slint and GPUI represent **two different bets on where UI authoring lives**. Slint compiles a separate DSL into UI code; GPUI is "the UI is Rust." Slint's hot-reload at the DSL level is a Buiy-relevant feature (Buiy commits to hot-reloadable BSN); GPUI lacks any equivalent and likely never will because the UI _is_ Rust source.
 
-### vs Dioxus ([`/home/user/buiy/docs/prior-art/dioxus/`](../dioxus/))
+### vs Dioxus ([`docs/prior-art/dioxus/`](../dioxus/))
 
 | | Dioxus | GPUI |
 |---|---|---|
@@ -163,6 +163,6 @@ The right summary: **Buiy is "GPUI with Bevy's ECS doing the ownership work, Acc
 - HN reference "almost no usage": https://news.ycombinator.com/item?id=45721667
 - HN gpui-ce founder reflection: https://news.ycombinator.com/item?id=47005761
 - Glass-HQ/gpui (unrelated namespace collision): https://github.com/Glass-HQ/gpui
-- Cross-link prior-art folders: egui, Iced, Slint, Dioxus in [`/home/user/buiy/docs/prior-art/`](../)
+- Cross-link prior-art folders: egui, Iced, Slint, Dioxus in [`docs/prior-art/`](../)
 - Xilem: https://github.com/linebender/xilem
 - Vello: https://github.com/linebender/vello

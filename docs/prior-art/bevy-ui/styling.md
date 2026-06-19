@@ -27,7 +27,7 @@ What is *not* present in bevy_ui core:
 
 bevy_ui ships *property-level components* but not a token vocabulary. There is no `Token<color::surface::primary>` indirection, no theme registry that maps a semantic name to a `Color`. Every component carries a literal value. Sharing a color across a UI is on the application — typically by extracting the color into a `Resource` or const and referencing it at spawn time.
 
-This is a deliberate "primitives first" stance and is the layer Buiy's foundation spec critiques: see `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.5 (semantic-tokens-only authoring, OS-pref-bound variants, hot-reloadable theme assets).
+This is a deliberate "primitives first" stance and is the layer Buiy's foundation spec critiques: see `docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.5 (semantic-tokens-only authoring, OS-pref-bound variants, hot-reloadable theme assets).
 
 ## bevy_feathers theming
 

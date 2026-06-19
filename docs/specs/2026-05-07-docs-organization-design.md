@@ -1,7 +1,7 @@
 # Docs organization — target structure
 
 **Date:** 2026-05-07
-**Status:** draft
+**Status:** landed
 
 ## Purpose
 
@@ -112,6 +112,12 @@ plan in `ls` output. Plans omit it. Prior-art uses the system name (lowercase,
 kebab-case) with no date prefix — folders are living docs and revision
 history lives in git, not in filenames.
 
+*Exception to the dated-plan rule:* a rolling, intentionally-undated backlog
+file (`docs/plans/follow-ups.md`) is permitted. It is a living cross-phase
+tracker, not a one-shot dated migration, so it carries no date prefix — its
+entries are flipped to `LANDED` in place as work ships rather than being
+superseded by a new dated plan.
+
 ## Document headers
 
 Every new spec, plan, and report opens with a small header. Existing files
@@ -164,6 +170,12 @@ Rules:
   every child.
 - Children do not carry their own date — they inherit the parent's date. If a
   child genuinely needs its own date, it is a separate spec, not a child.
+  *Exception:* a dated **design-note / ADR** child that records its own
+  decision date and status is permitted inside a spec folder. These read like a
+  miniature dated report scoped to the parent design (e.g. the render-pipeline
+  folder's `2026-06-*` children), and the date is load-bearing — it marks when
+  that decision was made. They are the only children that may carry a date
+  prefix.
 - Children are kebab-case topic names, not phase numbers. Phases imply
   ordering; children are facets of one design.
 - The same nesting rule applies to plans, but use is rare — plans usually

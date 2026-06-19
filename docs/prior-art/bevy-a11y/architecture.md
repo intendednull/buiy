@@ -42,7 +42,7 @@ A one-variant enum. All accessibility systems hang off `AccessibilitySystems::Up
 - `poll_receivers` — drains the `WinitActionRequestHandlers` queues, converts `accesskit::ActionRequest` → Bevy `ActionRequest` message
 - `update_accessibility_nodes` — rebuilds the tree from `AccessibilityNode` components and pushes to the adapter via `update_if_active`
 
-Order is roughly `window_closed` then `poll_receivers` then `update_accessibility_nodes`, all conditional on activation flags. This is *the* system set Buiy's `BuiySet::A11yUpdate` parallels; the activation-gating pattern is sound and Buiy borrows it (see [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — "AccessibilityRequested activation gate").
+Order is roughly `window_closed` then `poll_receivers` then `update_accessibility_nodes`, all conditional on activation flags. This is *the* system set Buiy's `BuiySet::A11yUpdate` parallels; the activation-gating pattern is sound and Buiy borrows it (see [`../accesskit/lessons.md`](../accesskit/lessons.md) — "AccessibilityRequested activation gate").
 
 ## The activation gate — `AccessibilityRequested`
 
@@ -74,7 +74,7 @@ The `allow_ambiguous_component::<AccessibilityNode>()` call in the plugin is a w
 /// `ActionRequest` as a Bevy `Event`.
 ```
 
-A thin newtype around `accesskit::ActionRequest`. Required because Bevy's `Event` (now `Message`) trait can't be derived on a foreign type. The newtype is created in `bevy_winit`'s `poll_receivers` system from queued action requests (see "Action handler routing" below) and surfaced as a Bevy event for apps to read. Buiy bypasses this newtype — Buiy's own action plumbing routes `accesskit::ActionRequest` directly to Buiy entities by `NodeId` (= `Entity::to_bits()`), no event-bus indirection (see [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.6).
+A thin newtype around `accesskit::ActionRequest`. Required because Bevy's `Event` (now `Message`) trait can't be derived on a foreign type. The newtype is created in `bevy_winit`'s `poll_receivers` system from queued action requests (see "Action handler routing" below) and surfaced as a Bevy event for apps to read. Buiy bypasses this newtype — Buiy's own action plumbing routes `accesskit::ActionRequest` directly to Buiy entities by `NodeId` (= `Entity::to_bits()`), no event-bus indirection (see [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.6).
 
 ## Per-window adapter ownership (lives in `bevy_winit`)
 
@@ -146,8 +146,8 @@ This matters for Buiy: the upstream decomposition trajectory is "split one field
 - [`api.md`](api.md) — public API surface
 - [`coexistence.md`](coexistence.md) — per-window coexistence with Buiy
 - [`focus-model.md`](focus-model.md) — focus tracking (which mostly lives in `bevy_input_focus`, not `bevy_a11y`)
-- [`/home/user/buiy/docs/prior-art/accesskit/architecture.md`](../accesskit/architecture.md) — the underlying AccessKit protocol
-- [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — Buiy's borrow / avoid table for the AccessKit shape
+- [`../accesskit/architecture.md`](../accesskit/architecture.md) — the underlying AccessKit protocol
+- [`../accesskit/lessons.md`](../accesskit/lessons.md) — Buiy's borrow / avoid table for the AccessKit shape
 
 ## Sources
 

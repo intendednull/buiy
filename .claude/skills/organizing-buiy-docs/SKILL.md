@@ -48,6 +48,8 @@ Implications:
 
 The date is **when the doc was written**, not the implementation target. The `-design.md` suffix on specs is what visually distinguishes specs from plans in `ls` output. Plans omit it. Prior-art files use the system name (no date prefix) because they're living docs — track revision history via git, not filename.
 
+**Exception to the dated-plan rule:** a rolling, intentionally-undated backlog file (`docs/plans/follow-ups.md`) is permitted. It is a living cross-phase tracker, not a one-shot dated migration, so it carries no date prefix — its entries are flipped to `LANDED` in place as work ships rather than being superseded by a new dated plan.
+
 **Existing files predating these rules are not renamed.** The convention applies to new docs only; the master index labels older entries explicitly so the missing suffix does not affect discovery.
 
 ## Document headers
@@ -87,7 +89,7 @@ Use a folder (`docs/specs/YYYY-MM-DD-<topic>/`) only when one logical document i
 Rules:
 
 - The parent `README.md` is **required**. It states the folder's purpose and links every child.
-- Children use kebab-case topic names with **no date prefix** — they inherit the parent's date.
+- Children use kebab-case topic names with **no date prefix** — they inherit the parent's date. *Exception:* a dated **design-note / ADR** child that records its own decision date and status is permitted inside a spec folder (it reads like a miniature dated report scoped to the parent design — e.g. the render-pipeline folder's `2026-06-*` children — where the date marks when that decision was made). These are the only children that may carry a date prefix.
 - Children are facets of one design, not phase numbers. Phases imply ordering; children do not.
 - Maximum one level deep. If a child needs its own children, promote it to a top-level spec.
 

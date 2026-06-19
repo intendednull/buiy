@@ -93,7 +93,7 @@ A secondary disclosure: Iced is *not* an integration target — it is a peer in 
 - cosmic-text — https://github.com/pop-os/cosmic-text
 - Iced issue #552 (accessibility) — https://github.com/iced-rs/iced/issues/552
 - Bevy issue #21765 (cosmic-text → Parley migration) — https://github.com/bevyengine/bevy/issues/21765
-- Buiy foundation README — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/README.md`
-- Buiy foundation architecture — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`
+- Buiy foundation README — `docs/specs/2026-05-07-buiy-foundation/README.md`
+- Buiy foundation architecture — `docs/specs/2026-05-07-buiy-foundation/architecture.md`
 - cosmic-text prior-art folder — [`../cosmic-text/`](../cosmic-text/)
 - bevy-ui prior-art folder — [`../bevy-ui/`](../bevy-ui/)

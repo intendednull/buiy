@@ -76,7 +76,7 @@ Coordination happens via:
 - **Godot Engine Contributors Conference** (GodotCon) — annual in-person event; talks are recorded.
 - **Discord, Reddit, forum** — informal community channels.
 
-No formal RFC process — design state lives across godot-proposals discussions and core-developer PR review. This is similar to Bevy's lightweight design-state model (see [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) "Avoid" row 10) with the same upsides (low overhead, contributor-friendly) and the same downsides (design history is scattered).
+No formal RFC process — design state lives across godot-proposals discussions and core-developer PR review. This is similar to Bevy's lightweight design-state model (see [`docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) "Avoid" row 10) with the same upsides (low overhead, contributor-friendly) and the same downsides (design history is scattered).
 
 ## Platform support
 

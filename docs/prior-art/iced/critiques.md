@@ -159,5 +159,5 @@ The Kraken/Cryptowatch sponsorship gives Héctor financial runway; this does not
 - PR #2662 (reactive rendering) — https://github.com/iced-rs/iced/pull/2662
 - PR #2757 (Animation API) — https://github.com/iced-rs/iced/pull/2757
 - PR #1697 (text shaping overhaul / iced_wgpu refactor) — https://github.com/iced-rs/iced/pull/1697
-- Buiy foundation architecture — /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md
-- Buiy bevy-ui lessons — /home/user/buiy/docs/prior-art/bevy-ui/lessons.md
+- Buiy foundation architecture — docs/specs/2026-05-07-buiy-foundation/architecture.md
+- Buiy bevy-ui lessons — docs/prior-art/bevy-ui/lessons.md

@@ -1,7 +1,7 @@
 # Buiy — text-rendering design
 
 **Date:** 2026-06-09
-**Status:** implemented (rendering T1–T9 + editing E1–E6)
+**Status:** landed (rendering T1–T9 + editing E1–E6)
 **Parent:** [`2026-05-07-buiy-foundation`](../2026-05-07-buiy-foundation/README.md) — sub-spec graduated from [foundation/text.md](../2026-05-07-buiy-foundation/text.md) and the foundation roadmap row `buiy-text-rendering-design`.
 **Plan:** [`2026-06-09-buiy-text-campaign.md`](../../plans/2026-06-09-buiy-text-campaign.md) (T1–T9 phase breakdown; per-phase TDD plans follow, one per phase).
 
@@ -208,8 +208,10 @@ surface landed through phases E1–E6 of the
 Both are proven on the two-lane suite ([verification.md](verification.md) §§ 1,
 4) — the headless geometry gate every PR plus the `#[ignore]` GPU pixels lane
 (the gate-#2 goldens including the T9 widget × state × theme × viewport matrix
-and the E6 `TextInput` golden, the gate-#14 typing-latency fixture, the gate-#15
-churn pair).
+and the E6 placeholder golden (`text_placeholder_gpu.rs`), the gate-#14
+typing-latency fixture, the gate-#15 churn pair). The
+`buiy_widgets::TextInput` bundle itself is verified headlessly only (a
+composition test, no GPU golden).
 [editing-and-ime.md](editing-and-ime.md) is **implemented** — the
 `buiy-text-editing` campaign (E1–E6) landed the F-tier editor surface
 (`TextEditState` over `Editor<'static>`, the focus-gated keymap, the BiDi caret +
@@ -360,8 +362,9 @@ orchestrator.
 ### From [editing-and-ime.md](editing-and-ime.md)
 
 1. **Frame-ordering for edit→layout.** `BuiySet` chains Layout → … → Input → …
-   → Render (`crates/buiy_core/src/lib.rs:57-87`), so edits mutate the Buffer
-   *after* layout ran this frame: content-size changes and caret geometry either
+   → Render (`BuiySet` in `crates/buiy_core/src/lib.rs`), so edits mutate the
+   Buffer *after* layout ran this frame: content-size changes and caret geometry
+   either
    re-enter layout same-frame (within the architecture's 2×-Taffy-per-frame cap)
    or show one-frame latency. This must be settled **jointly with
    [measure-and-layout.md](measure-and-layout.md)** (which owns the

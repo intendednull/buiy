@@ -124,5 +124,5 @@ Buiy's render pipeline (`buiy-render-pipeline-design` sub-spec, not yet written)
 - glyphon — https://github.com/grovesNL/glyphon
 - Floem Cargo.toml — https://github.com/lapce/floem/blob/main/Cargo.toml (uses Parley, not cosmic-text)
 - Freya Cargo.toml — https://github.com/marc2332/freya/blob/main/Cargo.toml (uses freya-skia-safe)
-- Buiy foundation spec text.md — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/text.md`
+- Buiy foundation spec text.md — `docs/specs/2026-05-07-buiy-foundation/text.md`
 - winit `Ime` event — https://docs.rs/winit/latest/winit/event/enum.Ime.html

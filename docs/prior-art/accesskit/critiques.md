@@ -160,7 +160,7 @@ When AccessKit bumps a major version, the data schema (`Node`, `Role`, `Action` 
 - https://github.com/AccessKit/accesskit/releases
 - https://crates.io/crates/accesskit
 - https://github.com/bevyengine/bevy/issues/17644
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/verification.md
+- docs/specs/2026-05-07-buiy-foundation/accessibility.md
+- docs/specs/2026-05-07-buiy-foundation/architecture.md
+- docs/specs/2026-05-07-buiy-foundation/cross-cutting.md
+- docs/specs/2026-05-07-buiy-foundation/verification.md

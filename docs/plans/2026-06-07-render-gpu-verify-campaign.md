@@ -1,5 +1,15 @@
 # Render GPU-Verification Campaign
 
+**Date:** 2026-06-07
+**Status:** landed
+**Spec:** [2026-06-03-buiy-render-pipeline-design](../specs/2026-06-03-buiy-render-pipeline-design/README.md)
+**Realizes the render design notes:**
+[2026-06-07-render-extract-retain-damage-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-07-render-extract-retain-damage-design.md)
+(damage-retention re-extract), [2026-06-08-render-atlas-glyph-gpu-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-08-render-atlas-glyph-gpu-design.md)
+(coverage-glyph atlas GPU pipeline), and [2026-06-08-render-effect-compositor-gpu-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-08-render-effect-compositor-gpu-design.md)
+(effect-group GPU orchestration); the [2026-06-06-render-node-draw-model-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md)
+spine landed via [2026-06-07-buiy-render-r8b-node-draw.md](2026-06-07-buiy-render-r8b-node-draw.md).
+
 > **For agentic workers:** this is a *campaign* plan, not a bite-sized TDD plan.
 > The bug-fix work is exploratory — the exact bugs are discovered by running the
 > GPU suite, then each fix is driven TDD-style as it surfaces. Phases are run as

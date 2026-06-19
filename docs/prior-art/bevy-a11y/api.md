@@ -2,7 +2,7 @@
 **Status:** active
 **Subject:** bevy_a11y — public API surface (resources, components, events, system set, plugin) as of v0.18.1 stable + main HEAD (0.19.0-dev)
 
-This file inventories what an app can reach when it depends on `bevy_a11y`. For architectural context see [`architecture.md`](architecture.md); for the BSN-unfriendliness story see [`component-model-incident.md`](component-model-incident.md); for how Buiy bypasses this API see [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.6.
+This file inventories what an app can reach when it depends on `bevy_a11y`. For architectural context see [`architecture.md`](architecture.md); for the BSN-unfriendliness story see [`component-model-incident.md`](component-model-incident.md); for how Buiy bypasses this API see [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.6.
 
 ## Crate item inventory
 
@@ -98,7 +98,7 @@ fn toggle_disabled(mut q: Query<&mut AccessibilityNode, With<MyWidget>>) {
 }
 ```
 
-The `Deref<Target = accesskit::Node>` + `DerefMut` impl is why this works — the component is a thin wrapper. The setter-zoo lives on `accesskit::Node`, not on `AccessibilityNode`. See [`/home/user/buiy/docs/prior-art/accesskit/api.md`](../accesskit/api.md) for the full setter inventory.
+The `Deref<Target = accesskit::Node>` + `DerefMut` impl is why this works — the component is a thin wrapper. The setter-zoo lives on `accesskit::Node`, not on `AccessibilityNode`. See [`../accesskit/api.md`](../accesskit/api.md) for the full setter inventory.
 
 Change detection is on the `AccessibilityNode` component, so any method-call mutation flags the entire wrapper as changed. Per-field change-detection is not available.
 
@@ -146,10 +146,10 @@ fn handle_actions(mut events: MessageReader<bevy_a11y::ActionRequest>) {
 }
 ```
 
-Lookup from `NodeId` → `Entity` is the app's responsibility. Bevy uses `Entity::to_bits()` as the producer's NodeId convention, so `Entity::from_bits(node_id.0)` is the typical inverse (though the producer can choose any NodeId scheme). The brittleness — no canonical lookup map, no resolver — is one reason Buiy routes `ActionRequest` directly to Buiy entities via its own action plumbing, bypassing this event bus (see [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.6).
+Lookup from `NodeId` → `Entity` is the app's responsibility. Bevy uses `Entity::to_bits()` as the producer's NodeId convention, so `Entity::from_bits(node_id.0)` is the typical inverse (though the producer can choose any NodeId scheme). The brittleness — no canonical lookup map, no resolver — is one reason Buiy routes `ActionRequest` directly to Buiy entities via its own action plumbing, bypassing this event bus (see [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.6).
 
 `accesskit::ActionRequest` carries:
-- `action: accesskit::Action` (22-variant enum; see [`/home/user/buiy/docs/prior-art/accesskit/tree-model.md`](../accesskit/tree-model.md))
+- `action: accesskit::Action` (22-variant enum; see [`../accesskit/tree-model.md`](../accesskit/tree-model.md))
 - `target: accesskit::NodeId`
 - `data: Option<ActionData>` (carries `SetTextSelection` `TextSelection`, `SetValue` value, scroll target, custom action data, etc.)
 
@@ -189,7 +189,7 @@ There's no built-in action-dispatch layer; per-widget plumbing is what `bevy_ui/
 | 0.18.1 (2026-03) | 0.21 | Same shape. |
 | 0.19.0-dev (main) | 0.24 | Same `bevy_a11y` shape. PR #24308 adds `AccessibleLabel` to `bevy_ui` (not `bevy_a11y`). |
 
-The `bevy_a11y`-crate itself has been stable in shape for the last several releases; the underlying `accesskit` API changes drove the upgrade churn (NodeBuilder → Node was the 0.14/0.15 migration upstream; the recent 0.21 → 0.24 jump tracks AccessKit's faster cadence — see [`/home/user/buiy/docs/prior-art/accesskit/history.md`](../accesskit/history.md)).
+The `bevy_a11y`-crate itself has been stable in shape for the last several releases; the underlying `accesskit` API changes drove the upgrade churn (NodeBuilder → Node was the 0.14/0.15 migration upstream; the recent 0.21 → 0.24 jump tracks AccessKit's faster cadence — see [`../accesskit/history.md`](../accesskit/history.md)).
 
 ## Cross-references
 
@@ -197,8 +197,8 @@ The `bevy_a11y`-crate itself has been stable in shape for the last several relea
 - [`component-model-incident.md`](component-model-incident.md) — why the API has the inconsistent-setter shape
 - [`focus-model.md`](focus-model.md) — `bevy_input_focus` exposes `InputFocus` / `InputFocusVisible` separately (not via `bevy_a11y`)
 - [`coexistence.md`](coexistence.md) — `disable::<AccessibilityPlugin>()` vs `ManageAccessibilityUpdates = false` tradeoff
-- [`/home/user/buiy/docs/prior-art/accesskit/api.md`](../accesskit/api.md) — the underlying AccessKit setter inventory the megacomponent wraps
-- [`/home/user/buiy/docs/prior-art/accesskit/tree-model.md`](../accesskit/tree-model.md) — `Role`, `Action`, `ActionData`, tri-state enums
+- [`../accesskit/api.md`](../accesskit/api.md) — the underlying AccessKit setter inventory the megacomponent wraps
+- [`../accesskit/tree-model.md`](../accesskit/tree-model.md) — `Role`, `Action`, `ActionData`, tri-state enums
 
 ## Sources
 

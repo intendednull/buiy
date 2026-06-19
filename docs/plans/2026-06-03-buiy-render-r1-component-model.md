@@ -1,5 +1,8 @@
 # Render component model (R1) Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Depends on:** nothing. **Execution order:** R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11. R1 is the FIRST phase and the **sole creator** of `crates/buiy_core/src/render/components.rs` and `crates/buiy_core/src/render/color.rs`, and the **sole definer** of every shared render type: `Background`, `Border` (+ `BorderSide`, `Radius`, `Corners`, `LineStyle`), `BoxShadow` (+ `Shadow`), `Opacity` (manual `Default 1.0`), `Outline`, `CssVisibility`, `OffscreenAuto`, `ClipRect`, `AncestorClip`, `EffectGroup` (+ `EffectReason`), `Filter` (+ full 10-variant `FilterFn`), `MixBlendMode`, `BackdropFilter`, `Angle`, `ClipRadius`, and `ColorToken` (+ `SystemColorKeyword`, in `render/color.rs`). Every later phase imports these from `render::components` / `render::color` and MUST NOT redefine them, re-`pub mod`, or re-`register_type` them.

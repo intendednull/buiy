@@ -1,6 +1,6 @@
 # Render subtree visibility suppression — design note
 
-**Status:** implemented — Option A landed 2026-06-09 (see "As landed" below).
+**Status:** landed — Option A, 2026-06-09 (see "As landed" below).
 **Date:** 2026-06-06 (decision); 2026-06-09 (landed).
 **Owners:** render-pipeline.
 **Related:** [paint-order-and-top-layer.md § 5.3 / § 5.4](paint-order-and-top-layer.md), [architecture.md § 3.1](architecture.md) (Changed-gated extract), R5 plan ([2026-06-03-buiy-render-r5-extract.md](../../plans/2026-06-03-buiy-render-r5-extract.md)), R6/R8 plans, [2026-06-07-render-extract-retain-damage-design.md](2026-06-07-render-extract-retain-damage-design.md) (the damage gate this extends).

@@ -107,7 +107,7 @@ fn on_press(mut presses: MessageReader<OnPress>) {
 
 ## Demos
 
-Two runnable example crates live under `examples/`:
+Two runnable visual demos (plus the headless `capture` tool) live under `examples/`:
 
 ```sh
 cargo run -p hello_button   # a single clickable "Save" button; logs OnPress to stdout
@@ -124,7 +124,7 @@ cargo run -p hello_text     # a themed title above a wrapped body paragraph
 
 ### Requirements
 
-- **Rust:** stable, edition 2024 (MSRV 1.85) — selected automatically via `rust-toolchain.toml`.
+- **Rust:** stable, edition 2024. The MSRV (1.85) is enforced by `rust-version` in the workspace manifest; `rust-toolchain.toml` pins the floating `stable` channel and the `rustfmt`/`clippy` components.
 - **Bevy:** 0.18.
 - **Linux system deps** (Bevy needs these to open a window):
 

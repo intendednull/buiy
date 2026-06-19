@@ -74,4 +74,4 @@ The effect: an integrator can install sickle_ui via `cargo add`, but the upstrea
 - Deleted upstream (404) — https://github.com/UmbraLuminosa/sickle_ui
 - UmbraLuminosa org — https://github.com/UmbraLuminosa
 - bevy-assets UI listing (no sickle entry) — https://github.com/bevyengine/bevy-assets/tree/main/Assets/UI
-- Buiy CLAUDE.md (dev guidelines) — `/home/user/buiy/CLAUDE.md`
+- Buiy CLAUDE.md (dev guidelines) — `CLAUDE.md`

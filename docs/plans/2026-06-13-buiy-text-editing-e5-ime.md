@@ -1,10 +1,11 @@
 # Buiy text-editing E5 — IME composition
 
 **Date:** 2026-06-15
+**Status:** landed
 **Phase:** E5 (of the E1–E6 text-editing campaign)
 **Branch:** `text-editing-e5` (off `main`, which now includes E1 + E2 + E3 + E4)
 **Campaign plan:** [2026-06-13-buiy-text-editing-campaign.md](2026-06-13-buiy-text-editing-campaign.md) § "E5 — IME composition"
-**Spec realized:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 6.1 (display-splice decision), 6.2 (the four invariants), 6.3 (popup positioning), 11 (`CompositionStart/Update/End` Messages); § 1 supersession note; § 10 focus-loss preedit removal.
+**Spec:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 6.1 (display-splice decision), 6.2 (the four invariants), 6.3 (popup positioning), 11 (`CompositionStart/Update/End` Messages); § 1 supersession note; § 10 focus-loss preedit removal.
 **Readiness:** [2026-06-13-text-editing-design-readiness.md](../reports/2026-06-13-text-editing-design-readiness.md)
 
 ---

@@ -177,7 +177,7 @@ What this folder documents about egui's theming model translates directly to Bui
 - [`architecture.md`](architecture.md) — how `Style` and `Visuals` live on `Context`.
 - [`api-surface.md`](api-surface.md) — which widgets consume which Style/Visuals fields.
 - [`text-rendering.md`](text-rendering.md) — `TextStyle` and `FontDefinitions` in depth.
-- [`../bevy-egui/styling.md`](../bevy-egui/styling.md) — how Buiy adjacent stacks handle theming (cross-stack styling comparison).
+- [`../bevy-egui/api-surface.md`](../bevy-egui/api-surface.md) — how Buiy adjacent stacks handle theming (cross-stack styling comparison; see § Styling: `Style`, `Visuals`, `Spacing`).
 
 ## Sources
 

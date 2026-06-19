@@ -68,7 +68,7 @@ A small number of WCAG-tied items in this section carry **dual tiers** of the fo
 - Per-widget contracts enumerated in `buiy-widget-catalog-design`.
 
 **Screen reader interop**
-- AccessKit drives Windows UIA, macOS NSAccessibility, Linux AT-SPI (X11 + Wayland), Android TalkBack, iOS UIAccessibility (in progress upstream), web ARIA (planned upstream). **F**
+- AccessKit drives Windows UIA, macOS NSAccessibility, Linux AT-SPI (X11 + Wayland), Android TalkBack, iOS UIAccessibility (`accesskit_ios 0.1.0` shipped 2026-05-11; still a deferred CI platform pending a headless harness), web ARIA (planned upstream). **F**
 - Tested against: NVDA, JAWS, Narrator, VoiceOver (mac/iOS), Orca, TalkBack. **F** (via verification harness — see [verification.md](verification.md))
 - Braille via OS where AccessKit + OS support. **C**
 

@@ -65,10 +65,6 @@ Each file is independently skimmable with its own `## Sources`.
 
 This folder is written from Buiy's stance: an ECS-native (Bevy 0.18) retained-mode Rust GUI library with a custom `wgpu` pipeline, designing a reftests-first visual-bug-detection pyramid. Because Buiy is *built on the same wgpu*, this is the only prior-art folder whose mechanisms are nearly copy-pasteable rather than adapted — the `VK_DRIVER_FILES` recipe, the `FailureCase` primitive, and `nv_flip` itself are all directly reusable, and the `gfx-rs/ci-build` artifacts can be consumed as-is. "Implications for Buiy" lines therefore lean toward direct reuse. The evidence files describe wgpu's systems on their own terms and surface unflattering facts verbatim (lavapipe's "testing use only" self-warning, the abandoned daily-PPA, the substring-brittleness wart); Buiy implications are confined to clearly-labelled subsections and to [lessons.md](lessons.md). One dossier claim — that wgpu pins `LP_NUM_THREADS` for FP determinism — is **flagged as not how wgpu does it**; see [determinism-rasterizer.md](determinism-rasterizer.md).
 
-## How to use
-
-**Framing disclosure.** These docs are written from Buiy's stance — an AccessKit-first, wgpu + Taffy + cosmic-text, parallel-to-bevy_ui retained-mode engine building a reftests-first layered visual-bug-detection strategy. The "Implications for Buiy" / lessons framing reads wgpu's CI / GPU test infrastructure through that lens; readers auditing whether that strategy is itself right should weigh the corpus accordingly — it is a learn-from artifact, not a neutral catalog.
-
 ## Sources
 
 - wgpu crate (crates.io API): https://crates.io/api/v1/crates/wgpu

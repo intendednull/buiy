@@ -63,10 +63,6 @@ Buiy is designing its visual-bug-detection strategy as a 5-tier pyramid (layout-
 5. **[open-problems.md](open-problems.md)** — the irreducible limit that defines the Tier-4/Tier-5 boundary.
 6. **[lessons.md](lessons.md)** — the distilled decisions, written for the author of the Buiy reftest harness.
 
-## How to use
-
-**Framing disclosure.** These docs are written from Buiy's stance — an AccessKit-first, wgpu + Taffy + cosmic-text, parallel-to-bevy_ui retained-mode engine building a reftests-first layered visual-bug-detection strategy. The "Implications for Buiy" / lessons framing reads Reference-comparison visual testing through that lens; readers auditing whether that strategy is itself right should weigh the corpus accordingly — it is a learn-from artifact, not a neutral catalog.
-
 ## Framing disclosure
 
 This folder is written from Buiy's stance: an ECS-native (Bevy 0.18) retained-mode Rust GUI library with a custom `wgpu` pipeline and a typed CSS-subset above Taffy, designing a reftests-first visual-bug-detection pyramid. The "Implications for Buiy" subsections and [lessons.md](lessons.md) read the methodology through that lens — programmatic typed scenes instead of HTML strings, an offscreen `wgpu` texture instead of a browser window, `reftest!(match/mismatch, …)` as the manifest-as-code analogue. The evidence files ([methodology.md](methodology.md), [gecko-reftests.md](gecko-reftests.md), [fuzzy-matching.md](fuzzy-matching.md), [wpt.md](wpt.md), [consumers.md](consumers.md)) describe the systems on their own terms; Buiy implications are confined to clearly-labelled subsections and to [lessons.md](lessons.md).

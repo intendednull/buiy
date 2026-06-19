@@ -104,4 +104,4 @@ Hedge: a comprehensive talk inventory was not assembled for this folder. AccessK
 - https://github.com/linebender/druid
 - https://pneumasolutions.com/about/
 - https://nvaccess.org/about-nv-access/
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md
+- docs/specs/2026-05-07-buiy-foundation/architecture.md

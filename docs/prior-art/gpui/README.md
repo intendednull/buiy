@@ -70,11 +70,11 @@ Three slots in Buiy's foundation map directly onto questions GPUI has already an
 
 ## Cross-links into the Buiy corpus
 
-- [`/home/user/buiy/docs/prior-art/bevy-egui/lessons.md`](../bevy-egui/lessons.md) — the "Zed uses GPUI, NOT egui" anti-conflation note.
-- [`/home/user/buiy/docs/prior-art/egui/lessons.md`](../egui/lessons.md) — the immediate-mode-only counterpoint to GPUI's hybrid.
-- [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — names GPUI as a verified-false AccessKit adopter.
-- [`/home/user/buiy/docs/prior-art/iced/`](../iced/) — Iced ships on `iced_wgpu` end-to-end; useful as the wgpu-only counterpoint.
-- [`/home/user/buiy/docs/prior-art/slint/`](../slint/), [`/home/user/buiy/docs/prior-art/dioxus/`](../dioxus/) — the DSL-driven and React-style alternatives GPUI explicitly rejects.
+- [`docs/prior-art/bevy-egui/lessons.md`](../bevy-egui/lessons.md) — the "Zed uses GPUI, NOT egui" anti-conflation note.
+- [`docs/prior-art/egui/lessons.md`](../egui/lessons.md) — the immediate-mode-only counterpoint to GPUI's hybrid.
+- [`docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — names GPUI as a verified-false AccessKit adopter.
+- [`docs/prior-art/iced/`](../iced/) — Iced ships on `iced_wgpu` end-to-end; useful as the wgpu-only counterpoint.
+- [`docs/prior-art/slint/`](../slint/), [`docs/prior-art/dioxus/`](../dioxus/) — the DSL-driven and React-style alternatives GPUI explicitly rejects.
 
 ## Sources
 

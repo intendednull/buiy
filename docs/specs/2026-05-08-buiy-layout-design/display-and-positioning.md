@@ -195,7 +195,7 @@ pub enum TryCondition {
 
 // `Named`/`Name` use `String` (not `SmolStr`): Phase 6 follows the Phase 3
 // `GridAreas` precedent and avoids a new direct dep (see the String-choice
-// note on `GridLine`/`AnchorName` in types.rs, ~types.rs:787-789).
+// note on `GridLine`/`AnchorName` in `types.rs`).
 #[derive(Reflect, Clone, Debug, PartialEq, Eq, Default)]
 pub enum AnchorName {
     #[default]

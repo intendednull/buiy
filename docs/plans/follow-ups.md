@@ -1,4 +1,4 @@
-# Layout follow-ups
+# Cross-phase follow-ups
 
 **Date:** 2026-05-21
 **Status:** active
@@ -680,7 +680,19 @@ goldens (group-opacity correctness, RSS return-to-baseline) run under an adapter
 
 **Spec touchpoint:** `effect-compositor.md § 1.1 / § 2 / § 3`; architecture.md § 1.4 / § 4.
 
-## Render — node-draw model: per-entity clip + composite passes (R8 Task 8 / R9 blocker)
+## Render — node-draw model: per-entity clip + composite passes (R8 Task 8 / R9 blocker) — LANDED
+
+**Status:** **Landed** as R8b
+([2026-06-07-buiy-render-r8b-node-draw.md](2026-06-07-buiy-render-r8b-node-draw.md)),
+ratified as Option C of the design note
+(`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md`).
+The recommended **hybrid** shipped: per-instance clip-AABB fragment-discard
+(`clip_for_primitive` → `PackedInstance` `clip_min`/`clip_max`, threaded into R6's
+instance layout + WGSL) plus the multi-pass composite node (`BuiyNode::run` —
+normal pass → `partition_top_layer`-driven top-layer composite pass), which the R9
+effect-compositor passes then build on (see the **effect-compositor GPU
+orchestration** LANDED entry above). So this is no longer a blocker before R8 Task
+8 / R9: both consumed the ratified model. The original deferral text follows.
 
 **Originated:** R8 (paint/clip/toplayer). R8 landed the pure consumer helpers
 (`scissor_rect`, `clip_for_primitive`, `partition_top_layer`) but **not** the GPU
@@ -995,25 +1007,21 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   and color-emoji atlas output are not yet exercised end-to-end by a capturable
   fixture; the corpus is started with `rect-rounded`/`text-ahem` and these classes
   are added when the renderer paths land.
-- **`coverage_golden::matrix_goldens` is RED on the GPU lane until the `button`
-  fixture corpus is blessed.** The Tier-5 enrollment driver (`coverage_golden.rs`,
-  committed in `a73de05`) iterates `Matrix::ci_default()` over the `button`
-  fixture and `assert_golden`s each cell, but **no `button` golden PNGs are
-  committed** (only `rect-rounded` + `text-ahem` are blessed), so it correctly
-  fail-closes (`check.rs:261`, "no golden committed for `button/resting/…`"). The
-  test's own header documents this as "bless-on-demand." This is the documented
-  fail-closed contract, NOT a regression — but it means the `--ignored` GPU lane
-  is not green for this one driver. **Blessing `button` cells is non-trivial**:
-  the coverage report flagged that the default `Button` under Buiy's *wholesale*
-  forced-colors swap paints the magenta missing-token sentinel
+- **`coverage_golden::matrix_goldens` skips un-blessed cells — LANDED, lane
+  green.** The Tier-5 enrollment driver (`coverage_golden.rs`) iterates
+  `Matrix::ci_default()` over the `button` fixture and `assert_golden`s each cell;
+  cells with **no committed positive** are now skipped (treated as `ignored`, not
+  `fail` — `coverage_golden.rs:106-109`) rather than fail-closing, so the
+  `--ignored` GPU lane is green until cells are deliberately blessed. (This is the
+  landed resolution; the original entry listed it as an open campaign-owner option
+  (i).) **Residual note — blessing `button` cells is non-trivial:** the coverage
+  report flagged that the default `Button` under Buiy's *wholesale* forced-colors
+  swap paints the magenta missing-token sentinel
   (`color-and-forced-colors.md § 3.1`), so blessing those cells verbatim would
-  cement a known-wrong pixel as a golden. Resolution options (a campaign-owner
-  decision, not a doc fix): (i) make `matrix_goldens` skip un-blessed cells
-  (treat "no positive" as `ignored`, not `fail`) so the lane is green until cells
-  are deliberately blessed; or (ii) bless only the forced-colors-*safe* cells once
-  the default widget is forced-colors-safe (`buiy-widget-catalog-design`). Until
-  then the headless gate (the every-PR CI gate, which never runs `--ignored`)
-  stays fully green and unaffected.
+  cement a known-wrong pixel as a golden; bless only the forced-colors-*safe*
+  cells once the default widget is forced-colors-safe
+  (`buiy-widget-catalog-design`). The headless gate (the every-PR CI gate, which
+  never runs `--ignored`) stays fully green and unaffected.
 - **Forced-colors `BoxShadow` *visual* reftest** — blocked on the unlanded
   `BoxShadow` extract/draw path (see the R11 entry above); kept as an `#[ignore]`'d
   assertion-free placeholder, not a green test.

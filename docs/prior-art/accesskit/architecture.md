@@ -97,7 +97,7 @@ Multi-window apps allocate one adapter per window, keyed by winit `WindowId`. `N
 - `common/src/lib.rs` (TreeUpdate, Tree, NodeId, Role, Action): https://github.com/AccessKit/accesskit/tree/main/common/src
 - `consumer/README.md` (adapter-side library, "not meant for direct application integration"): https://github.com/AccessKit/accesskit/blob/main/consumer/README.md
 - `accesskit_winit` 0.33.0 docs: https://docs.rs/accesskit_winit/0.33.0/accesskit_winit/
-- Buiy foundation spec — accessibility: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md`
-- Buiy foundation spec — architecture §2.6: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`
-- Buiy cross-cutting §3.18: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md`
+- Buiy foundation spec — accessibility: `docs/specs/2026-05-07-buiy-foundation/accessibility.md`
+- Buiy foundation spec — architecture §2.6: `docs/specs/2026-05-07-buiy-foundation/architecture.md`
+- Buiy cross-cutting §3.18: `docs/specs/2026-05-07-buiy-foundation/cross-cutting.md`
 - Sibling: [tree-model.md](tree-model.md), [platform-adapters.md](platform-adapters.md), [api.md](api.md)

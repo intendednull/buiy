@@ -71,7 +71,7 @@ Throughout this corpus, **"UGUI"** and **"UI Toolkit"** are kept distinct. Where
 1. **If you are designing a Buiy feature** that has a web-platform analog — start at [`lessons.md`](lessons.md), then dive into [`uxml-uss-web-parallels.md`](uxml-uss-web-parallels.md) and [`ui-toolkit-architecture.md`](ui-toolkit-architecture.md). UI Toolkit is the worked example for what shipping web-flavored UI inside a game engine looks like at scale.
 2. **If you are designing BSN authoring** (foundation §2.4) — start at [`editor-ui-migration.md`](editor-ui-migration.md). The IMGUI→UI Toolkit migration is a 7-year cautionary tale Buiy must learn from.
 3. **If you are auditing accessibility** — start at [`accessibility.md`](accessibility.md), then [`critiques-and-open-problems.md`](critiques-and-open-problems.md) § "Accessibility lag." Unity's a11y module is recent (2023.2), partial, and has no ARIA model.
-4. **If you are scoping the USS / stylesheet open question** (foundation README §5) — [`uxml-uss-web-parallels.md`](uxml-uss-web-parallels.md) catalogs exactly which CSS features Unity ships, which it deviates on, and which it does not have. Pair with [`/home/user/buiy/docs/prior-art/bevy-flair/`](../bevy-flair/).
+4. **If you are scoping the USS / stylesheet open question** (foundation README §5) — [`uxml-uss-web-parallels.md`](uxml-uss-web-parallels.md) catalogs exactly which CSS features Unity ships, which it deviates on, and which it does not have. Pair with [`../bevy-flair/`](../bevy-flair/).
 5. **If you are evaluating proprietary-substrate governance risk** — [`distribution-and-governance.md`](distribution-and-governance.md) covers the Runtime Fee 2023 saga.
 
 ## Framing disclosure

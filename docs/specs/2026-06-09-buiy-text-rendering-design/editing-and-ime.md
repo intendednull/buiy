@@ -340,7 +340,9 @@ seats).** All editor visuals are existing-primitive emissions:
   does not exist — buckets.rs:9–11, 146–153), so a quad always paints under
   glyphs, and a "next layer" would misuse the `painters_z` stacking index for
   a within-node ordering concern. Split caret (§ 4.1) = a **secondary
-  `CaretVisual` rect + a second stamp** (CPU geometry only — still no GPU work).
+  `CaretVisual` rect + a second stamp** (CPU geometry only — still no GPU work);
+  *as landed (E3): the secondary indicator is deferred (§§ 4.1, 13) — cosmic 0.19
+  surfaces no dual-caret position — so v1 paints only the single primary stamp.*
 - **Caret blink** is a `CaretVisual { visible, rect }` state edge written by
   render-prep ([decoration-and-paint.md § 6.3](decoration-and-paint.md)); the
   edge rebuilds `ExtractedGlyphs` through the **independent glyph damage
@@ -624,7 +626,7 @@ headless — synthetic `KeyboardInput` / `Ime` Messages need no winit window:
 single-range selection behavior on the multi-range type; caret + selection +
 preedit painting via the decoration-and-paint seats (selection + preedit
 underline = quads via `ExtractedTextQuads`; caret = glyph-tier stamp; BiDi
-multi-rects; split caret = two stamps); full IME
+multi-rects); full IME
 lifecycle (§ 6); grapheme-correct delete (inherited); plain-text
 cut/copy/paste; `UndoStack` with composition grouping + typing coalescing;
 `ReadOnly`/`Disabled`/`Placeholder`/`SingleLine`; caret blink with
@@ -647,8 +649,8 @@ and does not replace an active selection first;
 
 1. **Frame-ordering for edit→layout — RESOLVED (accepted one-frame latency).**
    `BuiySet` chains Layout → Style → Input → … → Render
-   (`crates/buiy_core/src/lib.rs:64-95`), and `TextSync` / `TextCommit` live
-   *inside* Layout (`pipeline.rs:80-101`). Editor input lands in `BuiySet::Input`,
+   (`BuiySet` in `crates/buiy_core/src/lib.rs`), and `TextSync` / `TextCommit`
+   live *inside* Layout (`pipeline.rs`). Editor input lands in `BuiySet::Input`,
    two sets **after** Layout, so a keystroke mutates the Buffer after this frame's
    layout already ran; the change is picked up by **next-frame** `TextSync` and
    flows TextSync → measure → TextCommit → `extract_buiy_glyphs`, publishing one

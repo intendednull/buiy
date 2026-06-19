@@ -194,6 +194,6 @@ Everything else (Color, TextSelection, custom-action machinery, ListStyle, AriaC
 - `accesskit_winit` 0.33.0 docs.rs: https://docs.rs/accesskit_winit/0.33.0/accesskit_winit/
 - `common/src/lib.rs` (NodeId, TreeUpdate, Tree, Live, Toggled, Invalid definitions): https://github.com/AccessKit/accesskit/tree/main/common/src
 - crates.io release history (versions, dates, co-release pattern): https://crates.io/crates/accesskit
-- Buiy spec — accessibility integration: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md`
-- Buiy spec — architecture §2.6, §2.9: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`
+- Buiy spec — accessibility integration: `docs/specs/2026-05-07-buiy-foundation/accessibility.md`
+- Buiy spec — architecture §2.6, §2.9: `docs/specs/2026-05-07-buiy-foundation/architecture.md`
 - Sibling: [architecture.md](architecture.md), [tree-model.md](tree-model.md), [platform-adapters.md](platform-adapters.md)

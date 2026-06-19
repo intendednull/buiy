@@ -1,7 +1,7 @@
 # Buiy Text T9: Verification Closure + Docs Flip — Implementation Plan
 
 **Date:** 2026-06-11
-**Status:** proposed
+**Status:** landed
 **Spec:** [specs/2026-06-09-buiy-text-rendering-design/verification.md](../specs/2026-06-09-buiy-text-rendering-design/verification.md) §§ 1.3, 3.3, 4, 5 + [architecture.md](../specs/2026-06-09-buiy-text-rendering-design/architecture.md) § 2.3 + [README.md](../specs/2026-06-09-buiy-text-rendering-design/README.md) (Status block + Open-questions ledger)
 **Campaign:** [plans/2026-06-09-buiy-text-campaign.md](2026-06-09-buiy-text-campaign.md) — phase T9, the FINAL phase (depends on all of T1–T8; the implementer starts from a branch with T1–T8 merged — T8 landed @ `12cb830`)
 **Closes:** the text campaign. After this plan the campaign's phase table is all-landed, the spec Status flips from proposed, and the prior-art folders carry their owed correction pass.
@@ -734,7 +734,7 @@ line in Orientation § 7, per D6 (correction blockquotes, no rewrites).
   Attrs lifetimes)"); key-facts table swash row → 0.2.8-as-locked
   annotation; add one dated line: "2026-06-11 — correction pass (text
   campaign T9): 0.19-verified errata applied per
-  [text verification.md § 5](…)".
+  [text verification.md § 5](../specs/2026-06-09-buiy-text-rendering-design/verification.md)".
 - [ ] `grep -rn "set_text(" docs/prior-art/cosmic-text/ docs/prior-art/bevy-cosmic-edit/`
   — annotate every sketch passing a font system (the lazy-setter 0.19
   signature: `set_text(&mut self, text, attrs: &Attrs, shaping,

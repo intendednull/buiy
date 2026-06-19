@@ -426,11 +426,16 @@ proven where they are cheapest:
   and `painters_z` membership** (§ 5.4) — the render-owned paint skip, sharing the
   `OffscreenAuto` subtree-scoped mechanism (§ 5.3) and distinguished from `Display::None`
   by the kept box.
-  **Landed (headless):** the per-entity leaf skip is R5's `node_skip_reason`
-  (`render::extract` — `CssVisibility::Hidden` and `OffscreenAuto` skip, `Visible`/`Collapse`
-  paint in v1), exercised by the skip tests in `crates/buiy_core/tests/render_extract.rs`.
-  The clip-side consumption is `render::clip` (`scissor_rect` derivation + `clip_for_primitive`
-  selector — `Outline` against `AncestorClip`, fills against own `ClipRect`).
+  **Landed (headless):** the per-entity leaf predicate `node_skip_reason` lives
+  producer-side in `render::visibility.rs` (`CssVisibility::Hidden` and `OffscreenAuto`
+  skip, `Visible`/`Collapse` paint in v1) and answers "does this entity root a
+  suppressed subtree"; the `write_paint_skip` pass (same module) resolves it into the
+  subtree-scoped `ComputedPaintSkip` marker, and **extract reads only that marker** —
+  it no longer queries `CssVisibility` / `OffscreenAuto`. Exercised by the pass/marker
+  + steady-state-quietness tests in `crates/buiy_core/tests/render_paint_skip.rs`
+  (plus predicate unit tests in `render/visibility.rs`). The clip-side consumption is
+  `render::clip` (`scissor_rect` derivation + `clip_for_primitive` selector — `Outline`
+  against `AncestorClip`, fills against own `ClipRect`).
 
 ---
 

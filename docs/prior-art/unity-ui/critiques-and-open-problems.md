@@ -29,7 +29,7 @@ This file collects the critiques Unity UI has accumulated across twelve years (U
 7. **Accessibility integration is parallel, not unified.** The 2023.2+ Accessibility module is **a separate API stack**, not integrated into UXML authoring. There is no `aria-*` attribute on `<Button>` in UXML; application code must construct the AccessibilityHierarchy. See [`accessibility.md`](accessibility.md).
 8. **World-space UI lag.** Unity 6.2 (2025) finally added world-space UI Toolkit. UGUI has had it since 2014 — eleven years of capability gap.
 9. **Data binding is two competing APIs.** SerializedObject binding (Editor-first, asset-driven) and runtime `dataSource` binding (POCO-driven) are separate surfaces with different mental models. Authoring code commonly has to choose; documentation churn followed.
-10. **Renderer caps that map to web-feature gaps.** No `mix-blend-mode`, no `backdrop-filter`, no `filter` as a USS property (separate post-processing API), no true CSS top layer, no elliptical border-radius. Mirrors the bevy_ui gaps documented in [`/home/user/buiy/docs/prior-art/bevy-ui/critiques.md`](../bevy-ui/critiques.md).
+10. **Renderer caps that map to web-feature gaps.** No `mix-blend-mode`, no `backdrop-filter`, no `filter` as a USS property (separate post-processing API), no true CSS top layer, no elliptical border-radius. Mirrors the bevy_ui gaps documented in [`docs/prior-art/bevy-ui/critiques.md`](../bevy-ui/critiques.md).
 
 ### Cross-cutting (both stacks)
 

@@ -1,8 +1,10 @@
 # Buiy — render-pipeline design
 
 **Date:** 2026-06-03
-**Status:** draft
+**Status:** active
 **Parent:** [`2026-05-07-buiy-foundation`](../2026-05-07-buiy-foundation/README.md) — sub-spec graduated from [foundation/visuals.md § 3.3](../2026-05-07-buiy-foundation/visuals.md#33-visual-styling-and-rendering) and the foundation roadmap row [`buiy-render-pipeline-design`](../2026-05-07-buiy-foundation/README.md#4-sub-spec-roadmap).
+
+> **Status note.** R1–R11 plus the GPU-verify campaign all landed — the §3.2 component model and every pass described here exist in `render/*.rs` and are verified on real hardware. The remaining C-tier seams (the `filter` / `backdrop-filter` / `mix-blend-mode` shaders and `ClipRadius` rounded-clip corners) are reserved here and tracked in [`docs/plans/follow-ups.md`](../../plans/follow-ups.md); their absence is why this is `active` rather than `landed`.
 
 ## Purpose
 
@@ -26,8 +28,8 @@ This is a multi-file spec. The catalog is split across the children below; the p
 - [atlas-and-text-seam.md](atlas-and-text-seam.md) — the F-tier texture atlas (glyph / icon / gradient / mask): allocation, warmup, eviction, pooling; the two owned F-tier primitives — the **shipped** glyph-alpha primitive (alpha-as-color) and the icon/sprite primitive — plus the **reserved** (C-tier) gradient / mask entry kinds; and the shared `TextureAtlas` resource that `buiy-text-rendering-design` plugs into without this spec owning glyph shaping.
 - [color-and-forced-colors.md](color-and-forced-colors.md) — linear-light render, sRGB output pre-tonemapping, theme-token resolution against `Res<Theme>`, the forced-colors contract (gate #11), and the boundary against deferred C-tier color management.
 - [verification.md](verification.md) — how render correctness is proven: the headless-no-GPU constraint, the gate mapping (#2 visual-regression, #5 layout-snapshot for `ClipRect`, #10 hit-target, #11 forced-colors, #14 render-time, #15 atlas/RSS), and the e2e golden-image harness.
-- [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md) — **implemented** (Option A landed 2026-06-09): the subtree-scoped paint skip for `CssVisibility::Hidden` / `OffscreenAuto` — the seed-gated `write_paint_skip` render-prep propagation pass writes the computed `ComputedPaintSkip` marker across each suppressed subtree; extract reads the marker as its single skip source, with the marker-removal `RemovedComponents` stream extending the damage gate.
-- [2026-06-06-render-node-draw-model-design.md](2026-06-06-render-node-draw-model-design.md) — open design decision (blocks R8 Task 8 + R9): how `BuiyNode::run` does per-entity clip + the top-layer / effect-group composite passes on R6's single persistent-buffer draw (fragment-discard clip vs hardware-scissor batches vs a hybrid multi-pass node). Recommends the hybrid.
+- [2026-06-06-render-subtree-visibility-suppression-design.md](2026-06-06-render-subtree-visibility-suppression-design.md) — **landed** (Option A, 2026-06-09): the subtree-scoped paint skip for `CssVisibility::Hidden` / `OffscreenAuto` — the seed-gated `write_paint_skip` render-prep propagation pass writes the computed `ComputedPaintSkip` marker across each suppressed subtree; extract reads the marker as its single skip source, with the marker-removal `RemovedComponents` stream extending the damage gate.
+- [2026-06-06-render-node-draw-model-design.md](2026-06-06-render-node-draw-model-design.md) — **decided** (Option C / hybrid, ratified 2026-06-07; landed via R8b): how `BuiyNode::run` does per-entity clip + the top-layer / effect-group composite passes on R6's single persistent-buffer draw. The hybrid — per-instance fragment-discard clip (chosen over hardware-scissor batches) plus the reserved multi-pass node — threads the clip AABB into `PackedInstance` and reserves the top-layer / R9 effect-group passes in the node.
 
 Reading order: architecture first (it sets the integration seams and the handoff every other file relies on), then component-model, then any topic in any order.
 

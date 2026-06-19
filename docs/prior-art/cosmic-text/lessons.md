@@ -67,7 +67,7 @@ When designing a Buiy text feature: (1) Find the row in **Avoid** that names a p
 ## Sources
 
 - All sibling files in this folder.
-- Buiy foundation spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/`
+- Buiy foundation spec — `docs/specs/2026-05-07-buiy-foundation/`
 - cosmic-text repo — https://github.com/pop-os/cosmic-text
 - Bevy issue #21765 (bevy_text → Parley migration) — https://github.com/bevyengine/bevy/issues/21765
 - cosmic-text PR #417 (rustybuzz → harfrust) — https://github.com/pop-os/cosmic-text/pull/417

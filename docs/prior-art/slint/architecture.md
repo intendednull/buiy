@@ -6,7 +6,7 @@
 
 Slint's load-bearing architectural choice is that the **`.slint` DSL is the source of truth**, not the host language. A `.slint` file is parsed by the Slint compiler at build time (Rust: macro `slint!` or `slint_build` in `build.rs`; C++: CMake invocation; JS / Python: `npm install` / `pip install` ships the compiler as a native binary), and the compiler emits host-language code that constructs and mutates a tree of native UI objects at runtime. The runtime is **retained-mode** — the object tree persists across frames; property bindings re-evaluate when their inputs change; the renderer redraws only dirty regions.
 
-This shape is the *opposite* of Bevy's ECS-first model. In Bevy, the host language (Rust) constructs entities and components; UI is one consumer of the ECS. In Slint, the DSL constructs the UI; the host language is glue. Buiy commits to the Bevy shape ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.4, BSN-native goal 3); Slint is the comparison case.
+This shape is the *opposite* of Bevy's ECS-first model. In Bevy, the host language (Rust) constructs entities and components; UI is one consumer of the ECS. In Slint, the DSL constructs the UI; the host language is glue. Buiy commits to the Bevy shape ([`docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.4, BSN-native goal 3); Slint is the comparison case.
 
 ## The compiler pipeline
 
@@ -57,7 +57,7 @@ The renderer choice is orthogonal to the platform backend (winit, Qt, ESP-IDF, e
 
 The single most-studied piece of Slint's runtime is the property binding evaluator. Properties form a directed dependency graph; binding expressions are pure (compiler-enforced); evaluation is lazy and memoized; updates propagate via dirty marking. This is the "reactive" core that lets the DSL look declarative without paying for per-frame full re-evaluation.
 
-The property binding model is what Buiy's foundation spec ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md`](../../specs/2026-05-07-buiy-foundation/cross-cutting.md) § state/data/reactivity, currently observers+change-detection-only-in-v1) explicitly *defers* — Bevy's observers + change-detection are Buiy's primitive instead. But "should a signal/computed/effect layer ship as a follow-up sub-spec?" is open (foundation README § 5), and Slint's binding evaluator is the canonical Rust-ecosystem reference for what that would look like.
+The property binding model is what Buiy's foundation spec ([`docs/specs/2026-05-07-buiy-foundation/cross-cutting.md`](../../specs/2026-05-07-buiy-foundation/cross-cutting.md) § state/data/reactivity, currently observers+change-detection-only-in-v1) explicitly *defers* — Bevy's observers + change-detection are Buiy's primitive instead. But "should a signal/computed/effect layer ship as a follow-up sub-spec?" is open (foundation README § 5), and Slint's binding evaluator is the canonical Rust-ecosystem reference for what that would look like.
 
 ## Implications for Buiy
 

@@ -180,7 +180,7 @@ Storing logical and translating per-frame would require knowing the writing-mode
 
 ## 5. Units
 
-The variants and constructors marked **Phase 10** below are *target state* — they are not yet shipped. The current `Length` (Phases 1/3/5) ships only `Px`, `Percent`, `Fr`, and the container-query family (`Cqw`/`Cqh`/`Cqi`/`Cqb`/`Cqmin`/`Cqmax`), with `px()` / `percent()` constructors. Font-relative, viewport, and `Calc` variants land in Phase 10 (`buiy-layout-units-calc`).
+The variants and constructors marked **units/calc()** below are *target state* — they are not yet shipped. The current `Length` (Phases 1/3/5) ships only `Px`, `Percent`, `Fr`, and the container-query family (`Cqw`/`Cqh`/`Cqi`/`Cqb`/`Cqmin`/`Cqmax`), with `px()` / `percent()` constructors. Font-relative, viewport, and `Calc` variants are the unbuilt `buiy-layout-units-calc` follow-up — an unscheduled phase, tracked in `follow-ups.md`. (It is *not* the landed Phase 10, which shipped `position: fixed`; the original "Phase 10" planning number was reused for position-fixed, so this work is referenced by its plan slug, not a number.)
 
 ```rust
 pub enum Length {
@@ -191,7 +191,7 @@ pub enum Length {
     Cqw(f32), Cqh(f32),         // container-query units
     Cqi(f32), Cqb(f32),
     Cqmin(f32), Cqmax(f32),
-    // --- Phase 10 (buiy-layout-units-calc), not yet shipped ---
+    // --- buiy-layout-units-calc follow-up (unscheduled), not yet shipped ---
     Em(f32),                    // relative to current font-size
     Rem(f32),                   // relative to root font-size
     Vw(f32), Vh(f32),           // viewport units
@@ -206,7 +206,7 @@ impl Length {
     pub const ZERO: Self = Self::Px(0.0);
     pub fn px(v: f32) -> Self;
     pub fn percent(v: f32) -> Self;
-    // --- Phase 10 (buiy-layout-units-calc), not yet shipped ---
+    // --- buiy-layout-units-calc follow-up (unscheduled), not yet shipped ---
     pub fn rem(v: f32) -> Self;
     pub fn calc(expr: CalcExpr) -> Self;
     // ... etc
@@ -228,7 +228,7 @@ Each unit resolves at one of four points:
 
 ### 5.2 `Calc`
 
-**Phase 10 (`buiy-layout-units-calc`) target state — not implemented.** `CalcExpr`, the `Length::Calc` variant, and the `Length::calc` constructor ship together in Phase 10; nothing in this section exists in the current code.
+**`buiy-layout-units-calc` follow-up (unscheduled) — not implemented.** `CalcExpr`, the `Length::Calc` variant, and the `Length::calc` constructor ship together in that follow-up; nothing in this section exists in the current code.
 
 ```rust
 pub enum CalcExpr {
@@ -259,5 +259,5 @@ This is documented behavior, not a bug. The lag is one frame and matches contain
 - **Aspect ratio** (target test, not yet present) — fixture with `width: auto, height: 100px, aspect_ratio: 16/9` produces `width: 177.7..px`. The `aspect_ratio → taffy` wiring exists (`translate.rs` populates `s.aspect_ratio`) but is not asserted by a box-model fixture; `layout_box_sizing.rs` covers only the `ContentBox`/`BorderBox` cases.
 - **Intrinsic sizing fall-through** (target test, not yet present) — until text-rendering integrates, `MinContent` produces `Auto` semantics; a test should assert this so the cutover is visible. The behavior exists (`translate.rs`'s `sizing_to_dim` maps `MinContent` / `MaxContent` / `FitContent` to Taffy `auto`) but no test currently asserts it.
 - **Logical → physical translation** — a test constructs `LogicalBoxModel` with `inline_size: 100px` and calls `to_box_model(&wm)` for a `VerticalRl` writing mode; assert the resulting `BoxModel.height == 100px` (`LogicalBoxModel` is a builder, not a `Component` — see [§ 4.1](#41-api-shape)).
-- **Unit resolution** — percentage resolution against the containing block is exercised in `layout_container_queries.rs` (`Cqw(50)` of an 800px container resolves to `400px`); the exact `100%` → `800px` box-model fixture is not present. (`2rem` resolving to `2 × root_font_size` is a **Phase 10** target test, not yet present.) `Cqw(50)` resolution lives under container-queries, not a box-model fixture — see [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md).
-- **`Calc` evaluation** (**Phase 10** target test, not yet present) — `min(100%, 800px)` of a 600px container = 600px; of a 1000px container = 800px.
+- **Unit resolution** — percentage resolution against the containing block is exercised in `layout_container_queries.rs` (`Cqw(50)` of an 800px container resolves to `400px`); the exact `100%` → `800px` box-model fixture is not present. (`2rem` resolving to `2 × root_font_size` is a **`buiy-layout-units-calc`** target test, not yet present.) `Cqw(50)` resolution lives under container-queries, not a box-model fixture — see [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md).
+- **`Calc` evaluation** (**`buiy-layout-units-calc`** target test, not yet present) — `min(100%, 800px)` of a 600px container = 600px; of a 1000px container = 800px.
