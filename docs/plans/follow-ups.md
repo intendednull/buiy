@@ -1169,21 +1169,52 @@ reshape needed).
 
 **Spec touchpoint:** editing-and-ime.md §§ 4.2, 13 (named deferral).
 
-## Text editing — HTML + image clipboard flavors (E-campaign deferral)
+## Text editing — HTML + image clipboard flavors (E-campaign deferral) — LANDED
 
-**Status:** deferred from the `buiy-text-editing` campaign (E4 shipped plain
+**Status:** **Landed.** The `ClipboardProvider` facade gained `get_html`/
+`set_html` (always available) and `get_image`/`set_image` over a Buiy-owned
+`ClipboardImage { width, height, bytes }` (behind the new `buiy_core`
+`clipboard-image` cargo feature, which forwards to arboard's `image-data`).
+Both impls carry the new flavors: `MemClipboard` stores an html slot and (gated)
+an image slot — the headless-testable path; `ArboardClipboard` delegates to
+arboard `Get::html()`/`Set::html()` and (gated) `get_image`/`set_image`,
+converting at the borrowed-`ImageData<'a>` boundary. `Cut`/`Copy` now set BOTH
+the plain-text flavor and an escaped-html flavor (`escape_html` escapes
+`& < > " '`; a plain-text editor has no rich runs, so its html is just the
+escaped text). **`Paste` is unchanged** — it takes the § 3.3 newline-strip text
+path and never consults the html getter (the getter is for rich-content
+callers); a regression test (`paste_prefers_text_and_ignores_html`) pins this.
+OQ#3 **resolved**: arboard 3.6.1 `Get::html()`/`Set::html()` are on the
+cross-platform builder and not feature-gated (verified against the locked
+source); only image needs `image-data`. **Implementing files:**
+`crates/buiy_core/src/text/edit/clipboard.rs` (trait + `ClipboardImage` + both
+impls), `crates/buiy_core/src/text/edit/input.rs` (Copy/Cut dual-set +
+`escape_html`), `crates/buiy_core/src/text/edit/mod.rs` (gated re-export),
+`crates/buiy_core/Cargo.toml` (`clipboard-image = ["arboard/image-data"]`).
+**Tests:** `crates/buiy_core/tests/text_clipboard_undo.rs` (MemClipboard html
+round-trip + independent slots + trait-object; `#[cfg(feature="clipboard-image")]`
+image round-trip + independent slots) and
+`crates/buiy_core/tests/text_undo_ops.rs` (copy/cut dual-set the escaped-html
+flavor; paste-prefers-text-and-ignores-html). **CI note:** the default
+`cargo test --workspace` / `clippy --workspace --all-targets` gate runs with
+`clipboard-image` **OFF** (the image module compiles out); the gated lane is
+`cargo test -p buiy_core --features clipboard-image` (and a matching clippy run)
+— add it to CI so the image path cannot rot silently. No new GPU, no new event
+surface; arboard real-OS clipboard is not headless-testable, so only MemClipboard
+is asserted (matching the E4 decision). The original deferral context is
+preserved below.
+
+**Originally deferred** from the `buiy-text-editing` campaign (E4 shipped plain
 text).
 
-**What it is:** the F row names text + HTML + image MIME for cut/copy/paste; E4
-ships **plain text only** (`Cut`/`Copy` via `copy_selection`, `Paste` through the
-§ 3.3 newline policy) behind the `ClipboardProvider` facade. HTML + image flavors
-are the named next slice.
+**What it was:** the F row names text + HTML + image MIME for cut/copy/paste; E4
+shipped **plain text only** (`Cut`/`Copy` via `copy_selection`, `Paste` through
+the § 3.3 newline policy) behind the `ClipboardProvider` facade. HTML + image
+flavors were the named next slice.
 
-**Why deferred:** arboard's HTML *read-side* support is unverified
-(editing-and-ime OQ#3) and must be confirmed before the slice is promised; the
-facade makes adding flavors local (no API churn).
-
-**Owner:** a focused follow-up slice; gated on confirming arboard HTML read.
+**Why it was deferred:** arboard's HTML *read-side* support was unverified
+(editing-and-ime OQ#3) and had to be confirmed before the slice was promised; the
+facade made adding flavors local (no API churn).
 
 **Spec touchpoint:** editing-and-ime.md §§ 7, 13 (named deferral); OQ#3.
 
