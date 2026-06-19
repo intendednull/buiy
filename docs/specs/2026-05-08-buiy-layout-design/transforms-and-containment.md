@@ -73,6 +73,8 @@ M = T_translate · R_rotate · S_scale · M_transform
 
 a matrix product written left-to-right in outermost-to-innermost order: `T_translate` is the outermost factor and `M_transform` the innermost, so a child point `p` is transformed as `M · p` and therefore feels the *rightmost* (innermost) factor first. For `TransformMatrix::Compose([A, B, …])` the list is written outermost-first and applied as the matrix product `A · B · …` — same rule: the rightmost/innermost entry transforms a child point first. This is exactly the convention CSS uses for a `transform:` list written left-to-right. Phase 8 implemented this product; there is no separate "right-to-left" rule to reconcile — "rightmost-applied-first" is just what reading the matrix product `M · p` means.
 
+**Translate length units.** A translate term carries a [`Length`](container-queries-and-writing-modes.md) per axis. `Px` resolves to its magnitude. **`Percent` resolves against the entity's OWN border box** per CSS Transforms — `translateX(p%)` = `p%` of border-box **width**, `translateY(p%)` = `p%` of **height** (each axis against its own dimension); `translateZ` percentages are invalid in CSS and resolve to **0**. This resolution happens in sub-pass **6e** (`transform_composition`), which reads the entity's **current-frame** Taffy border box (`tree.tree.layout(node).size`, the same box `anchor_resolution` (6d) reads — *not* `ResolvedLayout`, which is still last-frame at 6e time since `WriteResolvedLayout` runs later). `Cq*` translate (`cqw/cqh/cqi/cqb/cqmin/cqmax`) is a **residual deferral**: it needs the entity's nearest CQ-ancestor container frame (the sticky-L4 / `resolve_cq_unit_px` machinery), which 6e does not gather, so it resolves to **0.0** and fires a one-shot warn. `Fr`/`anchor-size()` are meaningless on a transform and likewise resolve to 0.
+
 ### 1.1 Longhand components
 
 CSS exposes `translate`, `rotate`, `scale` as separate properties applied independently of `transform`. Buiy mirrors:
@@ -98,7 +100,7 @@ impl Default for Scale {
 }
 ```
 
-When present, these compose with `UiTransform.matrix` per the single convention in [§ 1](#1-transform): `M = T_translate · R_rotate · S_scale · M_transform` (the written order `translate → rotate → scale → transform.matrix` is outermost-to-innermost, so `M_transform` transforms a child point first). The composition runs as `PostTaffyOverrides` sub-pass **6e** (landed Phase 8, extending the sub-pass chain 6a sticky → 6b table → 6c multicol → 6d anchor → 6e transform; per [architecture.md § 3](architecture.md#3-system-pipeline)); the composed matrix is written to the private `ResolvedTransform` component, which the render bridge consumes (`write_buiy_transform`, [§ 2](#2-mapping-to-bevy-transform)). Transform-triggered stacking-context detection (landed Phase 9, [stacking-and-top-layer.md](stacking-and-top-layer.md)) runs as sub-pass **6f**, *after* 6e, since it reads the composed matrix produced by 6e.
+When present, these compose with `UiTransform.matrix` per the single convention in [§ 1](#1-transform): `M = T_translate · R_rotate · S_scale · M_transform` (the written order `translate → rotate → scale → transform.matrix` is outermost-to-innermost, so `M_transform` transforms a child point first). The composition runs as `PostTaffyOverrides` sub-pass **6e** (landed Phase 8, extending the shipped sub-pass chain 6a sticky → 6b table → 6c multicol → 6d anchor → 6e transform; per [architecture.md § 3](architecture.md#3-system-pipeline)); the composed matrix is written to the private `ResolvedTransform` component, which the render bridge consumes (`write_buiy_transform`, [§ 2](#2-mapping-to-bevy-transform)). Translate percent terms resolve against the entity's own current-frame border box at this sub-pass (see [§ 1](#1-transform), "Translate length units"); `Cq*` translate is a residual `0.0` deferral. Transform-triggered stacking-context detection (landed Phase 9, [stacking-and-top-layer.md](stacking-and-top-layer.md)) runs as sub-pass **6f**, *after* 6e, since it reads the composed matrix produced by 6e.
 
 ### 1.2 Layout impact
 
@@ -228,15 +230,17 @@ When the Auto skip fires, the entity's own Taffy node receives the `ContainIntri
 
 ### 5.3 `will-change`
 
-`will-change` is foundation tier-E ([visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout)) — v1 ships the `WillChange` API surface for forward compatibility, but the layer-promotion hint and the SC-forming behavior below are deferred until user demand. Prioritization waits on user demand.
+`will-change` is foundation tier-E ([visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout)) — v1 ships the `WillChange` API surface for forward compatibility. The **SC-forming behavior is realized** (layout reads `will-change` as a stacking-context trigger, below); the **layer-promotion hint remains deferred** until a composition-layer concept exists in render/.
 
-Hint to the optimizer. Render uses it to promote the entity to its own composition layer. Layout uses it as a stacking-context trigger when its property list mentions an SC-forming property (e.g. `WillChangeProperty::Transform`).
+Hint to the optimizer. Layout uses it as a stacking-context trigger when its property list mentions an SC-forming property (e.g. `WillChangeProperty::Transform`): `forms_stacking_context` forms an SC when `Containment.will_change` names a property in the SC-forming subset. (The render-side use — promoting the entity to its own composition layer — is the deferred half; there is no `RenderLayers`/composition-layer mechanism yet.)
 
 ```rust
 pub enum WillChangeProperty {
     Transform, Opacity, Filter, ZIndex, ScrollPosition, /* ... */
 }
 ```
+
+The SC-forming subset (CSS: a property named in `will-change` forms an SC iff it would at a non-initial value) is `Transform` / `Opacity` / `Filter`, encoded once in `WillChangeProperty::forms_stacking_context`. `ZIndex` and `ScrollPosition` are excluded (`will-change: z-index` does not form an SC — z-index needs positioning).
 
 Authors should use sparingly — `will-change` consumes memory by promoting layers eagerly.
 
@@ -248,7 +252,7 @@ Consolidating from this file and [stacking-and-top-layer.md § 2](stacking-and-t
 2. `Stacking::isolation = Isolate`.
 3. `UiTransform` non-identity (this file).
 4. `Containment::contain` includes `ContainFlags::PAINT` or `ContainFlags::STRICT` (this file).
-5. `Containment::will_change` lists an SC-forming property (this file) — tier-E, deferred (see [§ 5.3](#53-will-change)).
+5. `Containment::will_change` lists an SC-forming property (this file) — realized (see [§ 5.3](#53-will-change); subset = Transform/Opacity/Filter). Only the layer-promotion hint stays deferred.
 6. `TopLayer != None` (handled separately — top layer escapes the stacking system entirely).
 7. Render-side triggers (`opacity < 1`, `filter != none`, `mix_blend_mode != normal`) — checked here for completeness; the components live in render-spec.
 8. The root entity always forms a stacking context (matches [stacking-and-top-layer.md § 2](stacking-and-top-layer.md#2-stacking-context-formation) trigger 6).

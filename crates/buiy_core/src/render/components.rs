@@ -75,8 +75,21 @@ impl TextColor {
 /// deliberately ships NO `color.caret`). The value lands in the stamp's
 /// per-instance color: changing it is a re-tint, never an atlas mutation.
 #[derive(Component, Reflect, Clone, PartialEq, Debug)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub struct CaretColor(pub ColorToken);
+
+impl Default for CaretColor {
+    /// `caret-color: auto` — defer to the resolved foreground (mirroring
+    /// `TextColor`'s `CurrentColor` default). The glyph producer's
+    /// `resolve_caret_color` walks token → `color.caret` theme key →
+    /// `CurrentColor` (the entity's resolved foreground), so the absent /
+    /// default `CaretColor` and an explicit `CaretColor(CurrentColor)` tint
+    /// the caret identically. NOT the derived `Transparent` default, which
+    /// would render the caret invisible.
+    fn default() -> Self {
+        Self(ColorToken::CurrentColor)
+    }
+}
 
 /// Border / outline line style. Reuses the shape of `ColumnRuleStyle`
 /// (layout/types.rs) extended with the remaining CSS keywords.
@@ -240,7 +253,7 @@ pub struct Outline {
 /// with the units fast-follow, which may re-home this type.
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 8.
-#[derive(Reflect, Clone, Copy, PartialEq, Debug)]
+#[derive(Reflect, Default, Clone, Copy, PartialEq, Debug)]
 pub struct Angle(pub f32);
 
 /// Reserved filter-function value. Shapes ship now so authors can write
@@ -259,6 +272,17 @@ pub enum FilterFn {
     Sepia(f32),
     HueRotate(Angle),
     DropShadow(Shadow),
+}
+
+impl Default for FilterFn {
+    /// Default = a zero-radius blur (the identity filter: `Blur(0px)` leaves
+    /// the source untouched), so a defaulted `FilterFn` is a no-op rather
+    /// than an arbitrary tint/black-out. `Filter`/`BackdropFilter` carry an
+    /// empty `Vec` when no filter applies; this `Default` only matters for
+    /// the reflect/`Default`-parity surface (spec § 6, note-level).
+    fn default() -> Self {
+        Self::Blur(Length::ZERO)
+    }
 }
 
 /// C (reserved). Filter function list. Non-empty forms an `EffectGroup`

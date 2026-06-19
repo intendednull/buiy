@@ -25,7 +25,7 @@ pub use systems::{
 };
 pub use tree::LayoutTree;
 pub use types::{
-    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
+    AlignContent, AlignItems, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio, AxisDimension,
     BackfaceVisibility, BoxSizing, BreakAfter, BreakBefore, BreakInside, ColumnCount, ColumnFill,
     ColumnRule, ColumnRuleStyle, ColumnSpan, ContainFlags, ContainerType, ContentVisibility,
     Direction, Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, GridLine, Inset,
@@ -43,7 +43,7 @@ pub struct LayoutPlugin;
 
 impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
-        app.init_non_send_resource::<LayoutTree>();
+        app.init_non_send::<LayoutTree>();
         // Phase 5 Task 8: re-run flag set by step 4 and observed/cleared
         // by step 5. `LayoutTaffyComputeCount` is a per-frame instrument
         // used by tests to assert the "cap at 2× Taffy per frame"
@@ -106,7 +106,7 @@ impl Plugin for LayoutPlugin {
             },
         );
         app.add_observer(
-            |trigger: On<bevy::ecs::lifecycle::Replace, Anchor>,
+            |trigger: On<bevy::ecs::lifecycle::Discard, Anchor>,
              mut reg: ResMut<systems::AnchorNameRegistry>| {
                 reg.remove(trigger.event().entity);
             },
@@ -139,6 +139,7 @@ impl Plugin for LayoutPlugin {
             .register_type::<Edges>()
             .register_type::<Sizing>()
             .register_type::<Length>()
+            .register_type::<AxisDimension>()
             .register_type::<AspectRatio>()
             .register_type::<Inset>()
             .register_type::<TrackSize>()

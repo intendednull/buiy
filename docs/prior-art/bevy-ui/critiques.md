@@ -1,4 +1,4 @@
-**Date:** 2026-05-22
+**Date:** 2026-06-18
 **Status:** active
 **Subject:** bevy_ui — first-party and third-party critiques of design, renderer, ergonomics
 
@@ -91,7 +91,7 @@ In discussion **#14437** ("Bevy's Next Generation Scene/UI System") cart writes:
 
 On bundles: "They are an additional object-defining concept, which must be learned separately from components. Notably, Bundles are not present at runtime, which is confusing and limiting." This is cart's own self-critique of the bundle pattern that bevy_ui used through 0.14.
 
-On `Construct`: "Some components require `World` state to be constructed, which prevents them from being initialized using parameterless constructors like `Default`." A subtle but pointed critique of the Required Components design as it landed in 0.15 — Required Components need `Default`, but a11y, picking, and theme components often need world context (asset handles, OS-pref resources). `Construct` is the proposed fix; not yet landed.
+On `Construct`: "Some components require `World` state to be constructed, which prevents them from being initialized using parameterless constructors like `Default`." A subtle but pointed critique of the Required Components design as it landed in 0.15 — Required Components need `Default`, but a11y, picking, and theme components often need world context (asset handles, OS-pref resources). `Construct` was the originally-proposed fix; it **never shipped under that name** — the role is served in the landed BSN baseline (PR #23413, 0.19) by **`Template` / `FromTemplate`** (`bevy_ecs::template`): a `#[derive(FromTemplate)]` component resolves context-bearing fields (e.g. a `Handle<T>` from a string path via `AssetServer`) at spawn time, the world-state-at-construction gap `Construct` was meant to close.
 
 ## Sources
 

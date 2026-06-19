@@ -12,49 +12,96 @@ use buiy_core::{
     a11y::{A11yLabel, A11yRole},
     components::Node,
     focus::Focusable,
-    layout::Style,
+    layout::{BoxModel, Style},
     picking::Hovered,
     render::color::ColorToken,
     render::components::{Background, Border, Corners, Radius},
 };
 use std::borrow::Cow;
 
+/// Button widget marker. The `#[require(...)]` contract is the single source
+/// of the Phase-0 button shape — required-components are "the architectural
+/// prerequisite for BSN" (bevy-ui prior-art; spec § 4.1a): the bare marker —
+/// `world.spawn(Button)` or `bsn! { Button }` — materializes the full
+/// layout-visible + paintable + focusable + accessible entity.
+/// `Button::new(label)` layers only the a11y label on top.
+///
+/// The require list reproduces what `Button::new()` used to assemble by hand:
+/// - `Node` — the layout marker, which itself `#[require]`s the full `Style`
+///   decomposition (`Display`/`Position`/`FlexParams`/…), so a button is
+///   layout-visible without the widget re-spelling those here.
+/// - `BoxModel = button_box_model()` — the one style override (the canonical
+///   120×32 / 8px-padding box); a *direct* `#[require]` initializer wins over
+///   `Node`'s transitive `BoxModel` default.
+/// - `Background` / `Border` — the paint companions.
+/// - `Focusable` + `A11yRole::Button` + `A11yLabel` — interaction + a11y.
+///
+/// The initializer fns below are the shared canonical defaults, so the
+/// constructor and the `#[require]` path can never diverge.
 #[derive(Component, Reflect, Default, Clone, Debug)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
+#[require(
+    Node,
+    BoxModel = button_box_model(),
+    Background = button_background(),
+    Border = button_border(),
+    Focusable,
+    A11yRole = A11yRole::Button,
+    A11yLabel,
+)]
 pub struct Button;
 
 #[derive(Message, Debug, Clone, Copy)]
 pub struct OnPress(pub Entity);
 
+// The three initializer fns below are `pub(crate)` so the `scene` module's
+// `button()` scene-fn can spell the SAME canonical values as `bsn!`
+// field-patches — one source of truth shared between the `#[require]`
+// initializers here and the mergeable scene-fn there.
+
+/// The canonical button box: 120×32 logical px, 8px padding. The hit target
+/// already meets WCAG 2.5.8 (≥24×24).
+// TODO(buiy-widget-catalog-design): replace hardcoded sizes with size
+// tokens (space.button.width, space.2).
+pub(crate) fn button_box_model() -> BoxModel {
+    // Build through the `Style` fluent builder (the canonical authoring path
+    // for the box), then extract the one decomposed component the require
+    // needs. Keeps the numbers expressed once, the way an author would write
+    // them.
+    Style::default()
+        .width_px(120.0)
+        .height_px(32.0)
+        .padding(8.0)
+        .box_model
+}
+
+/// The default button surface fill (the `color.surface.secondary` token).
+pub(crate) fn button_background() -> Background {
+    Background {
+        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+    }
+}
+
+/// The default button border: rounded corners ("radius.md"), no painted line.
+pub(crate) fn button_border() -> Border {
+    Border {
+        radius: Corners::all(Radius::circular(6.0)),
+        ..Default::default()
+    }
+}
+
 impl Button {
     /// Spawn-ready bundle for a labelled button. Returns `impl Bundle`
-    /// (not `Self`) so callers get the full Phase 0 button contract —
-    /// marker + node + style + focusable + a11y role + a11y label —
-    /// without having to assemble it themselves.
+    /// (not `Self`) so callers get the full Phase 0 button contract.
+    ///
+    /// The `Button` marker's `#[require(...)]` materializes the node, style,
+    /// paint, focus, and a11y companions; this constructor only layers the
+    /// a11y label on top. The bare-marker path (`spawn(Button)` /
+    /// `bsn! { Button }`) and this path therefore produce the same entity,
+    /// differing only in the label string.
     #[allow(clippy::new_ret_no_self)]
     pub fn new(label: impl Into<String>) -> impl Bundle {
-        let label = label.into();
-        (
-            Button,
-            Node,
-            // TODO(buiy-widget-catalog-design): replace hardcoded sizes
-            // with size tokens (space.button.width, space.2). Hit target
-            // 120x32 already meets WCAG 2.5.8 (>=24x24).
-            Style::default()
-                .width_px(120.0)
-                .height_px(32.0)
-                .padding(8.0),
-            Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
-            },
-            Border {
-                radius: Corners::all(Radius::circular(6.0)), // matches "radius.md"
-                ..Default::default()
-            },
-            Focusable::default(),
-            A11yRole::Button,
-            A11yLabel(label),
-        )
+        (Button, A11yLabel(label.into()))
     }
 }
 

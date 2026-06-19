@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use buiy_core::layout::{
     Anchor, AnchorRef, Display, Inset, LayoutPlugin, LayoutWarnOnceKey, LayoutWarnedOnceSession,
     Length, OverflowMode, Position, PositionKind, PositionTry, PostTaffyPositionOverrides,
-    ScrollOffset, Sizing, Style,
+    ScrollOffset, Sizing, Style, WritingModeKind,
 };
 use buiy_core::{Node, ResolvedLayout};
 
@@ -348,44 +348,38 @@ fn sticky_bottom_clamped_by_parent_top() {
 }
 
 // =====================================================================
-// Both-active conflict
+// Both-active dual-clamp (CSS § 6.3)
 // =====================================================================
 
+/// Construct a sticky `Position` with BOTH top and bottom px insets.
+fn sticky_both_insets(top_px: f32, bottom_px: f32) -> Position {
+    Position {
+        kind: PositionKind::Sticky,
+        inset: Inset {
+            top: Sizing::Length(Length::Px(top_px)),
+            bottom: Sizing::Length(Length::Px(bottom_px)),
+            ..Default::default()
+        },
+    }
+}
+
 #[test]
-fn sticky_both_top_and_bottom_inset_top_wins() {
-    // v1 deviation per CHANGELOG: when both insets are set, the
-    // top-pin branch fires first and the bottom inset is ignored.
-    // Future correct dual-clamp implementation will replace this test
-    // with one that asserts an "upper-stuck vs lower-stuck, smallest
-    // perturbation wins" rule.
-    //
-    // Setup: sticky at natural y_in_S = 50, top inset 10, bottom inset
-    // 10, scroll_offset.y = 100. Top-pin branch: visible_top=100,
-    // threshold=110, max(50, 110)=110. Clamped by parent_bottom-size
-    // = 1000-30 = 970 → 110. displacement = 60.
-    //
-    // If bottom-pin were applied first (wrong), it'd push the element
-    // up — different displacement. The test pins the top-wins choice.
+fn sticky_both_top_and_bottom_bottom_honored_near_scroll_end() {
+    // both insets set → bottom honored when scroll near end (dual-clamp,
+    // supersedes v1 top-wins). Mirrors `sticky_bottom_pins_when_scroll_
+    // near_bottom`: 300x500 scroll container, scroll_offset.y=400,
+    // 1000-tall block, 900-px spacer → sticky natural y_in_S=900.
+    //   visible_top=400 → U=410; 900 > 410, top-clamp inactive.
+    //   visible_bottom=900 → L=900-10-30=860; .min(L)=860.
+    //   U(410) <= L(860): no re-max. band [0,970] keeps 860.
+    //   override.y = 900 + (860-900) = 860.
+    // Under the v1 "top-wins" helper the top branch returned displacement
+    // 0 → no override entry → the .get().unwrap_or_else panics (valid RED).
     let mut app = app();
-    let scroll = scroll_container(&mut app, 100.0);
+    let scroll = scroll_container(&mut app, 400.0);
     let block = content_block(&mut app, scroll, 1000.0);
-    let _spacer = content_block(&mut app, block, 50.0);
-    let sticky = app
-        .world_mut()
-        .spawn((Node, {
-            let mut s = Style::default().width_px(100.0).height_px(30.0);
-            s.position = Position {
-                kind: PositionKind::Sticky,
-                inset: Inset {
-                    top: Sizing::Length(Length::Px(10.0)),
-                    bottom: Sizing::Length(Length::Px(10.0)),
-                    ..Default::default()
-                },
-            };
-            s
-        }))
-        .id();
-    app.world_mut().entity_mut(block).add_children(&[sticky]);
+    let _spacer = content_block(&mut app, block, 900.0);
+    let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_both_insets(10.0, 10.0));
 
     app.update();
 
@@ -394,13 +388,72 @@ fn sticky_both_top_and_bottom_inset_top_wins() {
         .by_entity
         .get(&sticky)
         .copied()
-        .unwrap_or_else(|| panic!("expected sticky entry for both-active case"));
-    // Top branch wins: y_in_block = 50 + 60 = 110.
+        .unwrap_or_else(|| panic!("expected sticky entry for both-active dual-clamp case"));
     assert_eq!(
-        pos.y, 110.0,
-        "both insets set → top wins (v1 deviation); got {:?}",
+        pos.y, 860.0,
+        "both insets set → bottom honored when scroll near end (dual-clamp § 6.3, supersedes v1 top-wins); got {:?}",
         pos,
     );
+}
+
+#[test]
+fn sticky_both_insets_clamp_at_both_extremes() {
+    // Symmetry fixture: the same both-insets sticky element pins to the
+    // TOP line U at a top-extreme scroll and to the BOTTOM line L at a
+    // bottom-extreme scroll. Drives two independent apps so the suite
+    // documents top-extreme and bottom-extreme distinctly.
+    //
+    // Case (a) — top-extreme: scroll_offset.y=300, 50-px spacer.
+    //   natural y_in_S=50; visible_top=300 → U=310; .max(U)=310.
+    //   visible_bottom=800 → L=800-10-30=760; .min(L)=310.
+    //   U(310) <= L(760): no re-max. band [0,970] keeps 310.
+    //   override.y = 50 + (310-50) = 310. (Old top-wins code also yields
+    //   310 here — case (a) is the symmetry counterpart, not the RED.)
+    {
+        let mut app = app();
+        let scroll = scroll_container(&mut app, 300.0);
+        let block = content_block(&mut app, scroll, 1000.0);
+        let _spacer = content_block(&mut app, block, 50.0);
+        let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_both_insets(10.0, 10.0));
+
+        app.update();
+
+        let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+        let pos = overrides
+            .by_entity
+            .get(&sticky)
+            .copied()
+            .unwrap_or_else(|| panic!("expected sticky entry for top-extreme dual-clamp case"));
+        assert_eq!(
+            pos.y, 310.0,
+            "top-extreme: both-insets sticky pins to the top line U=310; got {:?}",
+            pos,
+        );
+    }
+
+    // Case (b) — bottom-extreme: scroll_offset.y=400, 900-px spacer.
+    //   natural y_in_S=900; visible_bottom=900 → L=860; pins to 860.
+    {
+        let mut app = app();
+        let scroll = scroll_container(&mut app, 400.0);
+        let block = content_block(&mut app, scroll, 1000.0);
+        let _spacer = content_block(&mut app, block, 900.0);
+        let sticky = sticky_child(&mut app, block, 100.0, 30.0, sticky_both_insets(10.0, 10.0));
+
+        app.update();
+
+        let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+        let pos = overrides
+            .by_entity
+            .get(&sticky)
+            .copied()
+            .unwrap_or_else(|| panic!("expected sticky entry for bottom-extreme dual-clamp case"));
+        assert_eq!(
+            pos.y, 860.0,
+            "bottom-extreme: both-insets sticky pins to the bottom line L=860; got {:?}",
+            pos,
+        );
+    }
 }
 
 // =====================================================================
@@ -497,12 +550,29 @@ fn sticky_percent_inset_against_scroll_container() {
 // =====================================================================
 
 #[test]
-fn sticky_cq_inset_deferred_resolves_to_zero_with_warn() {
-    // Cqw inset on sticky → resolves to 0 and warns. With inset 0,
-    // top-pin threshold = visible_top + 0 = scroll_offset. natural
-    // y_in_block = 50, scroll_offset = 0 → no displacement.
+fn sticky_cqw_inset_resolves_against_nearest_cq_ancestor() {
+    // The scroll container is ALSO a size-container (the sticky's own
+    // nearest CQ ancestor). 300-wide → Cqw(10) top inset = 10% of 300 =
+    // 30px. With scroll_offset.y = 100, visible_top = 100, threshold =
+    // 100 + 30 = 130. natural y_in_block = 50. max(50, 130) = 130,
+    // clamped by the tall parent (no clamp). Override carries (0, 130).
+    //
+    // SINGLE update: the CQ-ancestor size is read CURRENT-frame from
+    // Taffy (the same source as sticky's self/parent/scroll reads), so
+    // no two-frame establishment is needed.
     let mut app = app();
-    let scroll = scroll_container(&mut app, 0.0);
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(300.0)
+                .height_px(500.0)
+                .overflow_y(OverflowMode::Scroll)
+                .container_size(),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
     let block = content_block(&mut app, scroll, 1000.0);
     let _spacer = content_block(&mut app, block, 50.0);
     let sticky = sticky_child(
@@ -510,27 +580,187 @@ fn sticky_cq_inset_deferred_resolves_to_zero_with_warn() {
         block,
         100.0,
         30.0,
-        sticky_top_sizing(Sizing::Length(Length::Cqw(20.0))),
+        sticky_top_sizing(Sizing::Length(Length::Cqw(10.0))),
     );
 
     app.update();
 
-    // Inset resolves to 0; with scroll_offset=0 there's no
-    // displacement, so the override map should NOT contain the sticky
-    // entry. (Test ensures the no-op-write invariant holds in this
-    // path.) The warn is the focus assertion.
     let overrides = app.world().resource::<PostTaffyPositionOverrides>();
-    assert!(
-        !overrides.by_entity.contains_key(&sticky),
-        "Cq inset → 0; scroll_offset=0 → no displacement → no override entry",
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for Cqw-inset case"));
+    assert_eq!(
+        pos.y, 130.0,
+        "Cqw(10) of 300px CQ-ancestor width = 30px inset → threshold 130 \
+         at scroll_y=100; got {:?}",
+        pos,
+    );
+}
+
+#[test]
+fn sticky_cqi_inset_resolves_on_inline_axis_under_vertical_writing_mode() {
+    // Scroll container is a size-container 400-wide x 600-tall, with
+    // width != height so the axis swap is observable. The sticky child
+    // is in VerticalRl: inline axis = container HEIGHT (600), block axis
+    // = container WIDTH (400). Cqi(10) top inset = 10% of inline (600) =
+    // 60px (NOT 40px = 10% of width). scroll_y=100 → threshold 160.
+    // natural y_in_block = 50 → override.y = 160.
+    let mut app = app();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(600.0)
+                .overflow_y(OverflowMode::Scroll)
+                .container_size(),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let sticky = app
+        .world_mut()
+        .spawn((Node, {
+            let mut s = Style::default()
+                .width_px(100.0)
+                .height_px(30.0)
+                .writing_mode_kind(WritingModeKind::VerticalRl);
+            s.position = sticky_top_sizing(Sizing::Length(Length::Cqi(10.0)));
+            s
+        }))
+        .id();
+    app.world_mut().entity_mut(block).add_children(&[sticky]);
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for Cqi-inset case"));
+    assert_eq!(
+        pos.y, 160.0,
+        "Cqi(10) under VerticalRl = 10%% of inline=HEIGHT(600) = 60px → \
+         threshold 160 at scroll_y=100 (NOT 140 = 10%% of width); got {:?}",
+        pos,
+    );
+}
+
+#[test]
+fn sticky_cqb_inset_resolves_on_block_axis_under_vertical_writing_mode() {
+    // Same fixture/writing mode as the Cqi test. Cqb resolves on the
+    // BLOCK axis = container WIDTH (400) under VerticalRl. Cqb(10) =
+    // 10% of 400 = 40px. scroll_y=100 → threshold 140. natural y = 50 →
+    // override.y = 140. A full size-container (not inline-size) is used
+    // so Cqb resolves on the real block axis (inline-size containers
+    // can't answer the block axis — they viewport-fall-back).
+    let mut app = app();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(600.0)
+                .overflow_y(OverflowMode::Scroll)
+                .container_size(),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let sticky = app
+        .world_mut()
+        .spawn((Node, {
+            let mut s = Style::default()
+                .width_px(100.0)
+                .height_px(30.0)
+                .writing_mode_kind(WritingModeKind::VerticalRl);
+            s.position = sticky_top_sizing(Sizing::Length(Length::Cqb(10.0)));
+            s
+        }))
+        .id();
+    app.world_mut().entity_mut(block).add_children(&[sticky]);
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for Cqb-inset case"));
+    assert_eq!(
+        pos.y, 140.0,
+        "Cqb(10) under VerticalRl = 10%% of block=WIDTH(400) = 40px → \
+         threshold 140 at scroll_y=100 (NOT 160 = 10%% of height); got {:?}",
+        pos,
+    );
+}
+
+#[test]
+fn sticky_cqw_resolves_against_inner_cq_ancestor_not_scroll_container() {
+    // Three-level fixture proving the nearest-CQ walk is decoupled from
+    // the scroll-container walk:
+    //   scroll container (overflow, NOT a size-container) 300-wide
+    //     → middle size-container 500-wide (the nearest CQ ancestor)
+    //       → sticky child, Cqw(10) top inset
+    // Cqw must resolve against the MIDDLE's width (500 → 50px), NOT the
+    // scroll container's width (300 → would be 30px). scroll_y=100 →
+    // threshold 150. natural y inside middle = 50 (50px spacer) →
+    // override.y = 150 (in middle's frame, which equals scroll frame
+    // here since middle starts at y=0).
+    let mut app = app();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(300.0)
+                .height_px(500.0)
+                .overflow_y(OverflowMode::Scroll),
+            ScrollOffset { x: 0.0, y: 100.0 },
+        ))
+        .id();
+    // Middle: a size-container 500-wide, tall enough to scroll within.
+    let middle = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(500.0)
+                .height_px(1000.0)
+                .container_size(),
+        ))
+        .id();
+    app.world_mut().entity_mut(scroll).add_children(&[middle]);
+    let _spacer = content_block(&mut app, middle, 50.0);
+    let sticky = sticky_child(
+        &mut app,
+        middle,
+        100.0,
+        30.0,
+        sticky_top_sizing(Sizing::Length(Length::Cqw(10.0))),
     );
 
-    let warned = app.world().resource::<LayoutWarnedOnceSession>();
-    assert!(
-        warned
-            .set
-            .contains(&LayoutWarnOnceKey::StickyCqDeferred(sticky)),
-        "Cq inset should record a StickyCqDeferred warn for the sticky entity",
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let pos = overrides
+        .by_entity
+        .get(&sticky)
+        .copied()
+        .unwrap_or_else(|| panic!("expected sticky in overrides for inner-CQ-ancestor case"));
+    assert_eq!(
+        pos.y, 150.0,
+        "Cqw(10) resolves against the MIDDLE CQ ancestor width (500 → 50px), \
+         NOT the scroll container (300 → 30px) → threshold 150; got {:?}",
+        pos,
     );
 }
 
@@ -615,6 +845,134 @@ fn sticky_in_nested_scroll_containers_uses_innermost() {
         "sticky should resolve against innermost (inner scroll_offset=0) \
          and NOT the outer (scroll_offset=200) — D9; got {:?}",
         overrides.by_entity.get(&sticky),
+    );
+}
+
+// =====================================================================
+// Sticky inside sticky (L6) — an inner sticky tracks its sticky
+// ancestor's DISPLACED position, not the ancestor's natural Taffy
+// position. Sub-pass 6a depth-sorts the sticky set (outer resolves
+// before inner) and `world_position` consults the same-frame override
+// map when walking the ancestor chain.
+// =====================================================================
+
+#[test]
+fn sticky_inside_sticky_inner_tracks_displaced_outer() {
+    // Fixture: S(300x500, scroll_y=100) > block(1000) > [50px spacer, A].
+    // A is sticky_top(0), 100x200. Inside A: [20px spacer, B], B is
+    // sticky_top(0), 100x30.
+    //
+    // A: natural-in-S = 50, visible_top = 100, threshold = 100.
+    //    desired = max(50, 100) = 100; parent band block [0, 800] → 100.
+    //    displacement_A = (0, 50); override[A].y = 50 + 50 = 100.
+    //    => A's DISPLACED position-in-S = 100.
+    //
+    // B (FIXED — uses A's displaced position):
+    //    B natural-in-S = 100 (A displaced) + 20 (spacer in A) = 120.
+    //    threshold = 100; desired = max(120, 100) = 120;
+    //    parent band A [100, 100+200-30=270] → 120.
+    //    displacement_B = 0 → NO override entry for B.
+    //
+    // B (BUGGY — uses A's natural position):
+    //    B natural-in-S = 50 (A natural) + 20 = 70.
+    //    threshold = 100; desired = max(70, 100) = 100;
+    //    parent band A-natural [50, 50+200-30=220] → 100.
+    //    displacement_B = 30 → override[B] PRESENT (y = 20 + 30 = 50).
+    //
+    // The two paths give DIFFERENT B outcomes: fixed → absent, buggy →
+    // present. Assert ABSENCE (the fixed expectation).
+    let mut app = app();
+    let scroll = scroll_container(&mut app, 100.0);
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let a = sticky_child(&mut app, block, 100.0, 200.0, sticky_top(0.0));
+    let _inner_spacer = content_block(&mut app, a, 20.0);
+    let b = sticky_child(&mut app, a, 100.0, 30.0, sticky_top(0.0));
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    // A displaces.
+    let a_pos = overrides
+        .by_entity
+        .get(&a)
+        .copied()
+        .unwrap_or_else(|| panic!("outer sticky A should displace; got none"));
+    assert_eq!(
+        a_pos.y, 100.0,
+        "outer sticky A pins to y=100; got {:?}",
+        a_pos
+    );
+    // B does NOT displace once it tracks A's DISPLACED position. Under
+    // the buggy natural-A path it would over-displace and get an entry.
+    assert!(
+        !overrides.by_entity.contains_key(&b),
+        "inner sticky B should track A's DISPLACED position (no displacement); \
+         a present override (y≈50) means B used A's NATURAL position. got {:?}",
+        overrides.by_entity.get(&b),
+    );
+}
+
+#[test]
+fn sticky_inside_sticky_override_value_is_not_double_counted() {
+    // Fixture where the inner sticky B DOES displace, so we can pin its
+    // exact stored override value and prove A's displacement is NOT
+    // baked into it (A's displacement reaches B via normal parent→child
+    // ResolvedLayout composition, applied to A's own override).
+    //
+    // S(300x500, scroll_y=100) > block(1000) > [50px spacer, A].
+    // A is sticky_top(0), 100x600. Inside A: [500px spacer, B], B is
+    // sticky_bottom(0), 100x30.
+    //
+    // A: natural-in-S = 50, visible_top = 100, threshold = 100.
+    //    desired = max(50, 100) = 100; parent band block [0, 1000-600=400]
+    //    → 100. displacement_A = 50; override[A].y = 50 + 50 = 100.
+    //    => A's DISPLACED position-in-S = 100; A bottom = 700.
+    //
+    // B (FIXED — uses A's displaced position):
+    //    B natural-rel-to-A = 500; B natural-in-S = 100 + 500 = 600.
+    //    sticky_bottom(0): visible_bottom = 100 + 500 = 600.
+    //    desired = min(600, 600 - 0 - 30 = 570) = 570;
+    //    parent band A [100, 100+600-30=670] → 570.
+    //    displacement_B = 570 - 600 = -30.
+    //    override[B].y = B_natural_rel_to_A(500) + (-30) = 470.
+    //
+    // B (BUGGY — uses A's natural position):
+    //    B natural-in-S = 50 + 500 = 550. desired = min(550, 570) = 550;
+    //    parent band A-natural [50, 50+600-30=620] → 550.
+    //    displacement_B = 0 → NO override (buggy path would be absent).
+    //
+    // Assert override[B].y == 470 exactly. The value is B's natural-rel
+    // -to-A plus B's OWN displacement only — A's +50 is NOT added in.
+    let mut app = app();
+    let scroll = scroll_container(&mut app, 100.0);
+    let block = content_block(&mut app, scroll, 1000.0);
+    let _spacer = content_block(&mut app, block, 50.0);
+    let a = sticky_child(&mut app, block, 100.0, 600.0, sticky_top(0.0));
+    let _inner_spacer = content_block(&mut app, a, 500.0);
+    let b = sticky_child(&mut app, a, 100.0, 30.0, sticky_bottom(0.0));
+
+    app.update();
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    let a_pos = overrides
+        .by_entity
+        .get(&a)
+        .copied()
+        .unwrap_or_else(|| panic!("outer sticky A should displace; got none"));
+    assert_eq!(a_pos.y, 100.0, "outer A pins to y=100; got {:?}", a_pos);
+
+    let b_pos = overrides
+        .by_entity
+        .get(&b)
+        .copied()
+        .unwrap_or_else(|| panic!("inner sticky B should displace; got none"));
+    assert_eq!(
+        b_pos.y, 470.0,
+        "B's override = natural-rel-to-A (500) + B's own displacement (-30) = 470; \
+         a value inflated by A's +50 (e.g. 520) means A's displacement was \
+         double-counted into B's stored override. got {:?}",
+        b_pos,
     );
 }
 

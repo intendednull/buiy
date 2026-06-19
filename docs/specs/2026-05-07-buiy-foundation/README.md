@@ -94,7 +94,7 @@ Each subsystem below graduates to its own design spec at `docs/specs/YYYY-MM-DD-
 | `buiy-3d-anchored-ui-design` | Billboards, worldspace UI, render-to-texture surface API, hit-testing. |
 | [`buiy-verification-design`](../2026-06-15-buiy-verification-design/README.md) | Automated pipeline, harness API, WCAG-SC test fixtures + tolerances, CI matrix, manual release-gate cadences, perf baselines, `--accept` workflow. *(graduated — built: the `buiy_verify` harness landed.)* |
 | `buiy-devtools-design` | Inspector, overlays, contrast checker, focus visualizer, theme editor. |
-| `buiy-bsn-integration-design` | BSN authoring helpers, decomposed-component conventions, reflection-registration ergonomics, hot-reload semantics including component reload. |
+| [`buiy-bsn-integration-design`](../2026-06-18-buiy-bsn-integration-design.md) | BSN authoring helpers, decomposed-component conventions, reflection-registration ergonomics, hot-reload semantics including component reload. *(landed — `[landed]`; couples the Bevy 0.19-rc migration + the `buiy_bsn` `bsn!` authoring layer. `.bsn` asset-file format + component hot-reload are deferred — await the upstream `.bsn` loader.)* |
 | `buiy-asset-pipeline-design` | Theme assets, font assets, `.bsn` assets, icon atlases, vector assets, hot-reload semantics, asset GC, atlas-warmup strategy. |
 | `buiy-coexistence-design` | (Conditional sub-spec — only if same-window coexistence with bevy_ui becomes required.) AccessKit-adapter coordinator, render-pass ordering across stacks, picking-backend priority across stacks, IME ownership, focus arbitration. |
 | `buiy-window-and-surface-design` | Multi-window, render targets, render-to-texture contracts, off-screen rendering, fullscreen surface, top-layer per-window. |
@@ -113,7 +113,7 @@ Each sub-spec gets one or more plans (`docs/plans/`) for implementation.
 - **Coexistence policy with `bevy_feathers` / `bevy_ui_widgets`.** Coexistence at the app level is committed; whether Buiy ships migration adapters from bevy_ui widgets is open.
 - **Performance budgets — concrete numbers.** The CI gate ([verification.md § CI gate #14](verification.md)) is committed; the per-fixture *budget numbers* (target frame-time per fixture, allowed regression slack) calibrate over time and live in `buiy-verification-design`.
 - **Platform support staging.** All platforms (Windows / macOS / Linux / Android / iOS / web) at v1, or staged?
-- **Hot-reload of components (not just themes).** In scope as part of `buiy-bsn-integration-design`?
+- **Hot-reload of components (not just themes).** ~~In scope as part of `buiy-bsn-integration-design`?~~ **Resolved (deferred):** `buiy-bsn-integration-design` § 4.4 scopes it out of the initial BSN work — component hot-reload rides the `.bsn` asset-file loader, which is itself deferred upstream (not part of Bevy's PR #23413). Tracked in `follow-ups.md` and owned by `buiy-asset-pipeline-design` when the upstream loader lands.
 - **Render-to-texture surface API contract.** Feeds `buiy_3d`; the boundary is open.
 - **Animation library substrate.** Roll our own springs, depend on `bevy_animation`, or wrap an existing crate?
 - **OS spellchecker integration.** Where the OS exposes a spellchecker, Buiy uses it; where not, software fallback. The fallback library choice is open.

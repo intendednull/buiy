@@ -1,10 +1,10 @@
-**Date:** 2026-05-22
+**Date:** 2026-06-18
 **Status:** active
-**Subject:** bevy_ui — chronological history (Bevy 0.4 → 0.19-rc.1)
+**Subject:** bevy_ui — chronological history (Bevy 0.4 → 0.19-rc.3)
 
 # History
 
-`bevy_ui` is the official ECS-native UI crate in the Bevy workspace. It first appeared in Bevy 0.4 (December 2020) and has shipped on Bevy's ~3-month minor cadence ever since. The crate has been rewritten or substantially re-plumbed at three distinct moments: the **Stretch → Taffy** layout-engine swap (0.8), the **ab_glyph → cosmic-text** text-stack swap (0.15), and the **Required Components / NodeBundle deprecation** refactor (also 0.15). It has *not* yet absorbed BSN — PR #20158 is still draft and explicitly slated to *not* land in 0.18.
+`bevy_ui` is the official ECS-native UI crate in the Bevy workspace. It first appeared in Bevy 0.4 (December 2020) and has shipped on Bevy's ~3-month minor cadence ever since. The crate has been rewritten or substantially re-plumbed at three distinct moments: the **Stretch → Taffy** layout-engine swap (0.8), the **ab_glyph → cosmic-text** text-stack swap (0.15), and the **Required Components / NodeBundle deprecation** refactor (also 0.15). BSN's *baseline* landed in **0.19** (the `bsn!` macro + Templates, via successor PR #23413 — see § "BSN" below; the original draft PR #20158 never merged in its own form, and the `.bsn` **asset-file loader** is still deferred upstream).
 
 ## Release timeline (crates.io-verified dates)
 
@@ -29,6 +29,8 @@
 | **0.18.0** | **2026-01-13** | `Popover` (floating-ui-inspired), `MenuPopup` (keyboard-nav dropdown), improved `RadioButton`/`RadioGroup` event propagation, `ColorPlane` (2D color picker) in Feathers. Font variations: variable weights, strikethroughs, underlines, OpenType features. Pickable text sections. `IgnoreScroll` for sticky headers. `AutoDirectionalNavigation` for arrow-keys / gamepad. `TryStableInterpolate` for animating `Val`. **BSN did NOT merge** (PR #20158 still draft per cart's own commentary; the orchestrator pre-amble's claim that BSN "landed in 0.18" is a fabrication. It is *expected* to land "in some form in 0.18" per cart's July-2025 PR description, but the PR has not been merged). |
 | 0.18.1 | 2026-03-04 | Patch release; no major UI changes. |
 | **0.19.0-rc.1** | **2026-05-13** | Workspace HEAD is `0.19.0-dev`; MSRV is `1.95.0`. The `Cargo.toml` confirms four features only: `default`, `serialize`, `bevy_picking` (optional), `ghost_nodes` (experimental). |
+| **0.19** (BSN baseline) | merged 2026-03-27 | **BSN baseline lands** via PR #23413 ("Next Generation Scenes") in the **`bevy_scene`** crate: `bsn!` / `bsn_list!` macros, `Template` / `Scene` system, spawn ext traits. Inline `bsn!` only; the `.bsn` asset-file loader is deferred upstream. Milestoned 0.19; ships in the rc, not in any stable tag yet. |
+| **0.19.0-rc.3** | as of 2026-06-18 | Latest 0.19 rc; still no 0.19.0 stable. Buiy pins this rc to reach `bsn!` (policy exception — `2026-06-18-buiy-bsn-integration-design.md` §§ 1–2). |
 
 ## Major rewrites in detail
 
@@ -48,9 +50,13 @@ The single most consequential refactor for Buiy's BSN-friendly-components stance
 
 Filed by **@viridia** on 2025-02-02 (per WebFetch summary; date approximate). Title: "Design of bevy_a11y is BSN-unfriendly." Core argument: the `AccessibilityNode` component bundles all a11y properties together with **private fields exposed only via inconsistent method-style setters**, so BSN — which composes templates by *merging and patching component properties* — cannot patch a11y attributes from layered templates. Viridia: "Because of this, I can well imagine wanting to merge together multiple BSN templates, each of which has opinions about various accessibility attributes." Issue #17644 closed with PR #24308 (a partial fix per viridia's own comment "not a 100% fix"); the megacomponent remains as of Bevy 0.19.0-rc.1. **The general lesson** Buiy embeds (per architecture.md § 2.4 + foundation README goal 3) is: every Buiy component must be small, public-fielded, observable, and decomposed by concern. No megacomponents, no private setters. This is the lesson the orchestrator pre-amble correctly highlights.
 
-### BSN (PR #20158) — *NOT* yet merged
+### BSN — draft PR #20158 (never merged) → baseline landed via successor PR #23413 (0.19)
 
-Opened by cart on 2025-07-16 as a **draft**. The PR is explicitly framed as a "public experimentation phase, not intended to be merged in current form." cart wrote that BSN is "unlikely to land in the upcoming Bevy 0.17, but very likely to land in some form in Bevy 0.18." The 0.18 release notes (published 2026-01-13) make **no mention** of BSN landing. As of 2026-05-22 the PR is still draft / closed-but-unmerged. The orchestrator pre-amble's claim that BSN landed in 0.18 is **incorrect**; this doc reports the verified state.
+**The original draft (PR #20158).** Opened by cart on 2025-07-16 as a **draft**, explicitly framed as a "public experimentation phase, not intended to be merged in current form." cart wrote that BSN is "unlikely to land in the upcoming Bevy 0.17, but very likely to land in some form in Bevy 0.18." The 0.18 release notes (published 2026-01-13) make **no mention** of BSN, and #20158 **never merged in its own form**.
+
+**The successor that landed (PR #23413, 2026-03-27, milestoned Bevy 0.19).** "Next Generation Scenes: core scene system, `bsn!` macro, Templates" merged the BSN **baseline** into the **`bevy_scene`** crate: the `bsn!` / `bsn_list!` macros, the `Template` / `Scene` system, and the spawn extension traits. Inline `bsn! { … }` (and function / `SceneList` scenes) is the landed authoring surface. The `.bsn` **asset-file loader** (`asset_server.load("x.bsn")`) was explicitly deferred out of #23413 to a future upstream PR — it has no runtime backing yet, so component hot-reload via `.bsn` is also still deferred upstream.
+
+**rc-only as of 2026-06-18.** Bevy 0.19 is at **0.19.0-rc.3** — a release candidate, not a stable tag — so the BSN baseline ships only in the rc, not in any stable Bevy. Buiy now pins `0.19.0-rc.3` (a deliberate, scoped policy exception to "rolling latest-stable Bevy") to reach `bsn!` authoring; see [`docs/specs/2026-06-18-buiy-bsn-integration-design.md`](../../specs/2026-06-18-buiy-bsn-integration-design.md) §§ 1–2. (Correction note: an earlier orchestrator pre-amble's claim that BSN "landed in 0.18" was incorrect; this section reports the verified #20158-draft → #23413-merged lineage.)
 
 ## People
 
@@ -81,7 +87,8 @@ bevy_ui is maintained by Bevy's UI subject-matter experts. Recent UI commits clu
 - Discussion #14437 BSN tracking — `https://github.com/bevyengine/bevy/discussions/14437`.
 - Discussion #16900 Standard Headless Widgets — `https://github.com/bevyengine/bevy/discussions/16900`.
 - Discussion #11100 10 Challenges — `https://github.com/bevyengine/bevy/issues/11100`.
-- PR #20158 BSN — `https://github.com/bevyengine/bevy/pull/20158`.
+- PR #20158 BSN (original draft, never merged) — `https://github.com/bevyengine/bevy/pull/20158`.
+- PR #23413 BSN baseline ("Next Generation Scenes", merged 2026-03-27, Bevy 0.19) — `https://github.com/bevyengine/bevy/pull/23413`.
 - PR #19730 bevy_feathers — `https://github.com/bevyengine/bevy/pull/19730`.
 - AccessKit blog "Bevy first general-purpose game engine with built-in accessibility" — `https://accesskit.dev/accesskit-integration-makes-bevy-the-first-general-purpose-game-engine-with-built-in-accessibility-support/`.
 - This Week in Bevy (cosmic-text adoption issue) — `https://thisweekinbevy.com/issue/2024-07-08-bevy-014s-release-cosmic-text-and-water-reflections`.

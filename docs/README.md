@@ -102,6 +102,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [2026-06-03-buiy-render-r11-color-forced-colors-verify](plans/2026-06-03-buiy-render-r11-color-forced-colors-verify.md) — color + forced-colors + verification (color-and-forced-colors.md). Consolidates the token resolver to the single canonical `render::color::resolve_token` (R1's mod.rs + R5's extract copies removed; missing-token `warn!` preserved in `resolve_named`; `SystemColor(kw)` resolved through the active theme); `SystemColorKeyword::{token, ALL}`; the forced-colors stub theme + main-world `Theme`-swap system (`BuiySet::Style`, before extract) + `Theme::is_changed()` re-resolve; the WCAG contrast helper (`buiy_verify` delegates to `render::color::contrast_ratio`, no dup — gate #9); and the gate-#11 static analyzers (token-flow + no-shadow-only-affordance) over a `CatalogPaint` seam. Headless-gated; the gate-#2 golden harness is GPU `#[ignore]`. **Final render-pipeline phase.** `[landed]`
 - [2026-06-07-render-gpu-verify-campaign](plans/2026-06-07-render-gpu-verify-campaign.md) — verified the R6–R11 GPU path on real hardware; built the deferred atlas-glyph + effect-compositor + node-draw GPU orchestration (R8b/R9 GPU consumers); added the `--ignored` GPU CI lane; fixed 4 real GPU bugs. `[landed]`
 - [Cross-phase follow-ups](plans/follow-ups.md) — rolling cross-phase deferral backlog (layout / render / text / verification items, with `LANDED` flips); intentionally undated. `[active]`
+- [Buiy follow-ups drain](plans/2026-06-18-followups-drain.md) — campaign plan to drain every actionable open follow-up in `follow-ups.md` (layout / render / text-editing tracks by file-locality), updating each spec + backlog entry as it lands and re-classifying the blocked/superseded/deferred ones. `[active]`
 
 ### Text
 
@@ -132,11 +133,24 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Buiy text-editing E5 — IME composition](plans/2026-06-13-buiy-text-editing-e5-ime.md) — IME composition (preedit, candidate window, commit). `[landed]`
 - [Buiy text-editing E6 — focus/lifecycle + widget + closure](plans/2026-06-13-buiy-text-editing-e6-lifecycle-widget-closure.md) — focus/lifecycle, placeholder, auto-scroll, the `TextInput` widget, and campaign closure. `[landed]`
 
+### Authoring / BSN
+
+Cross-cutting render + authoring: the Bevy 0.18→0.19-rc migration (the enabler) plus the `buiy_bsn` authoring layer (`bsn!` re-exports + widget scene-fns + component conformance). The `.bsn` asset-file loader and component hot-reload stay deferred (await the upstream loader).
+
+**Specs**
+
+- [Buiy BSN integration design](specs/2026-06-18-buiy-bsn-integration-design.md) — Bevy 0.19-rc.3 pin (policy exception), render-graph→`Core2d` systems, `buiy_bsn` (`bsn!` re-exports + widget `#[require]` + scene-fns), reflect-gap closure; `.bsn` loader + hot-reload deferred. `[landed]`
+
+**Plans**
+
+- [Bevy 0.19-rc + BSN migration](plans/2026-06-18-bevy-0.19-bsn-migration.md) — dependency-ordered phases (deps → compile → headless → GPU → `buiy_bsn` → `hello_bsn` → docs) realizing the BSN integration design. `[landed]`
+
 ### Reports
 
 - [Text-editing design-readiness review](reports/2026-06-13-text-editing-design-readiness.md) — three-verifier audit of `editing-and-ime.md` against current `main` before the `buiy-text-editing` campaign: every integration seam confirmed in code, the no-new-GPU-work painting claim upheld, and OQ#1 (edit→layout frame-ordering) resolved as accepted one-frame latency. Verdict: ready-with-patches (now applied). Its readiness premise is overtaken: the campaign it gated landed as E1–E6 (PRs #62–#67). `[superseded]`
 - [Visual-bug detection strategy](reports/2026-06-14-visual-bug-detection-strategy.md) — how to catch visual regressions as Buiy scales: a five-tier pyramid (layout-number → display-list/paint-order → metamorphic/property → reftests + CPU-cross-check → golden screenshots), reftests-first, grounded on canonical `main`. Audits the existing golden/forced-colors/text-shaping infra and names the gaps; input to `buiy-verification-design`. Pairs with the five `prior-art/` folders below. Realized by the [verification design](specs/2026-06-15-buiy-verification-design/README.md) + the landed `buiy_verify` harness. `[superseded]`
 - [Verification-harness adversarial review](reports/2026-06-15-verification-harness-adversarial-review.md) — fresh-agent cold-context review of the landed `buiy_verify` harness (20-agent find → verify → synthesize workflow). Found + **fixed** 7 real bugs (2 high: a blank render silently passing any golden; `GoldenKey` dropping the forced-colors axis), 1 maintainability trap, and the recurring "docstrings oversell coverage" theme; recorded 3 coverage gaps as follow-ups. Both gates green. `[landed]`
+- [Bevy 0.19-rc + BSN migration research](reports/2026-06-18-bevy-0.19-bsn-migration-research.md) — file:line inventory of the Bevy 0.18.1→0.19.0-rc.3 bump (render graph removed → `Core2d` systems, wgpu 27→29, accesskit, ECS/reflect) and the `bsn!` authoring surface, mapped onto `buiy_core`. Input to the BSN integration spec/plan; realized by the landed bump (PR #70). `[landed]`
 - [Documentation audit](reports/2026-06-18-docs-audit.md) — full accuracy/quality/spec-alignment pass over all of `docs/` (26-agent workflow + adversarial code-verification): 110 findings, ~50 distinct issues. Headline: docs lag the code, zero code defects; dominant failure is stale "deferred/draft" tags left in place after work shipped. `[landed]`
 - [Code-side findings from the docs audit](reports/2026-06-18-spec-code-findings.md) — the code-adjacent observations split out of the docs audit (stale in-code comments, dead-legacy `extract_buiy_draws` path, spec targets not yet built); no functional code defects found. `[active]`
 

@@ -21,13 +21,13 @@ use super::components::{
     LayoutAnchorBroken, MultiColumn, Overflow, Position, Rotate, Scale, Scroll, ScrollOffset,
     Stacking, Translate, UiTransform, WritingMode, WritingModeResolved,
 };
-use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
+use super::translate::{ContainerSnapshot, StyleView, resolve_cq_unit_px, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
-    AnchorErrorKind, AnchorName, AnchorRef, BreakAfter, BreakBefore, ColumnCount, ColumnFill,
-    ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey,
-    Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition,
-    WritingModeKind, ZIndex,
+    AnchorErrorKind, AnchorName, AnchorRef, AxisDimension, BreakAfter, BreakBefore, ColumnCount,
+    ColumnFill, ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation,
+    LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix,
+    TryCondition, WillChange, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use crate::render::components::{Filter, MixBlendMode, Opacity};
@@ -120,7 +120,7 @@ pub struct LayoutTaffyComputeCount(pub u32);
 pub struct SyncStylesIterCount(pub usize);
 
 /// Phase 6 — anchor-name lookup table maintained by observers on
-/// `On<Insert, Anchor>` / `On<Replace, Anchor>` / `On<Remove, Anchor>`.
+/// `On<Insert, Anchor>` / `On<Discard, Anchor>` / `On<Remove, Anchor>`.
 ///
 /// Storage:
 /// - `by_name`: anchor name → ordered `Vec<(Entity, u64)>`. Last entry
@@ -186,7 +186,7 @@ impl AnchorNameRegistry {
 
     /// Remove every entry for this entity from every name bucket and
     /// from `entity_epochs`. Called on `On<Remove, Anchor>` and
-    /// `On<Replace, Anchor>` (the replace path removes then re-inserts
+    /// `On<Discard, Anchor>` (the discard path removes then re-inserts
     /// using the new anchor_name).
     pub fn remove(&mut self, entity: Entity) {
         for bucket in self.by_name.values_mut() {
@@ -368,25 +368,54 @@ fn nearest_scroll_container(
     }
 }
 
+/// Number of `ChildOf` steps from `entity` up to the root (root = 0).
+/// L6 uses this to depth-sort the sticky set so an outer (shallower)
+/// sticky resolves and writes its override before an inner (deeper)
+/// one reads it via `world_position`. Mirrors `nearest_scroll_container`'s
+/// `.parent()` walk.
+fn child_of_depth(entity: Entity, parent_chain: &Query<&ChildOf>) -> usize {
+    let mut depth = 0usize;
+    let mut current = entity;
+    while let Ok(co) = parent_chain.get(current) {
+        depth += 1;
+        current = co.parent();
+    }
+    depth
+}
+
 /// Compute `entity`'s position in `ancestor`'s content-box coordinate
 /// system by walking `ChildOf` from `entity` up to (but not including)
-/// `ancestor`, summing the Taffy `.location` of each step.
+/// `ancestor`, summing each step's rel-to-parent location.
+///
+/// L6 (sticky-inside-sticky): for each step the location is the
+/// just-written `overrides.get(&step)` when present, else the Taffy
+/// `.location`. A sticky ancestor's override stores `natural_rel +
+/// displacement` (its DISPLACED position in its-parent's frame, the
+/// exact per-segment location this walk needs), so an inner sticky
+/// sees its ancestor's displacement same-frame. The depth-sorted 6a
+/// loop guarantees a shallower (outer) sticky's override is inserted
+/// before a deeper (inner) one reads it here. Non-sticky ancestors and
+/// undisplaced sticky ancestors have no override entry and contribute
+/// their plain Taffy `.location` (correct).
 ///
 /// Uses the provided `memo` cache to avoid re-walking shared subpaths
 /// (mirrors `resolve_writing_mode`'s memoization pattern). Memoization
 /// key is `(entity, ancestor)` to handle multiple scroll-container
-/// frames in the same call.
+/// frames in the same call. The 6a loop MUST clear `memo` between
+/// sticky entities so a value cached before an outer override existed
+/// is never returned stale.
 ///
 /// Returns `None` if (a) `entity` has no `LayoutTree` mapping, (b) the
 /// walk leaves `ancestor`'s subtree without finding `ancestor`, or
 /// (c) a `tree.tree.layout()` read fails.
 ///
-/// Phase 7 — sub-pass 6a (`sticky_offset`).
+/// Phase 7 — sub-pass 6a (`sticky_offset`). L6 — override-consult.
 fn world_position(
     entity: Entity,
     ancestor: Entity,
     tree: &LayoutTree,
     parent_chain: &Query<&ChildOf>,
+    overrides: &HashMap<Entity, Vec2>,
     memo: &mut HashMap<(Entity, Entity), Vec2>,
 ) -> Option<Vec2> {
     if entity == ancestor {
@@ -397,10 +426,16 @@ fn world_position(
     }
     // ChildOf accessor is `.parent()` in Bevy 0.18.
     let parent = parent_chain.get(entity).ok()?.parent();
-    let parent_position = world_position(parent, ancestor, tree, parent_chain, memo)?;
+    let parent_position = world_position(parent, ancestor, tree, parent_chain, overrides, memo)?;
     let node_id = tree.by_entity.get(&entity)?;
     let layout = tree.tree.layout(*node_id).ok()?;
-    let position = parent_position + Vec2::new(layout.location.x, layout.location.y);
+    // L6: a same-frame override for this segment IS its displaced
+    // rel-to-parent location; fall back to Taffy `.location` otherwise.
+    let seg = overrides
+        .get(&entity)
+        .copied()
+        .unwrap_or_else(|| Vec2::new(layout.location.x, layout.location.y));
+    let position = parent_position + seg;
     memo.insert((entity, ancestor), position);
     Some(position)
 }
@@ -409,8 +444,10 @@ fn world_position(
 /// reference frame, per D3 / D11.
 ///
 /// Returns `Some(px)` for "this edge is sticky-active" or `None` for
-/// "this edge is not set." Inputs that are deferred (`Cq*`) or
-/// semantically invalid (`Fr` — grid-only) return `Some(0.0)` and
+/// "this edge is not set." `Cq*` insets resolve against `cq_frame` (the
+/// sticky entity's own nearest CQ ancestor) via the shared
+/// `resolve_cq_unit_px`. Semantically-invalid inputs (`Fr` — grid-only,
+/// `AnchorSize` — sticky has no anchor box) return `Some(0.0)` and
 /// record one `warn!` per (entity, session) via `warned`.
 ///
 /// v2 — `Length` has only `Px / Percent / Fr / Cq*`. `Vh/Vw/Vmin/Vmax/
@@ -420,9 +457,13 @@ fn world_position(
 /// deliberate decision per future variant.
 ///
 /// Phase 7 — sub-pass 6a (`sticky_offset`).
+#[allow(clippy::too_many_arguments)]
 fn resolve_sticky_inset(
     s: &Sizing,
     scroll_container_axis_size: f32,
+    cq_frame: Option<ContainerSnapshot>,
+    viewport: Vec2,
+    wmr: &WritingModeResolved,
     entity: Entity,
     warned: &mut LayoutWarnedOnceSession,
 ) -> Option<f32> {
@@ -453,23 +494,29 @@ fn resolve_sticky_inset(
             }
             0.0
         }
-        // All Cq* variants — full resolution is deferred to a Phase
-        // 7.x follow-up (would port Phase 6's `length_inset_to_px`,
-        // which takes an anchor-box second argument; sticky's
-        // reference frame is the sticky entity's own cq-ancestor, a
-        // different shape). v1: warn once per entity, resolve to 0.0.
+        // All Cq* variants resolve against the sticky entity's OWN
+        // nearest container-query ancestor (the `cq_frame` snapshot),
+        // via the shared `resolve_cq_unit_px` resolver — the same path
+        // sizing, tracks, and edges use. Cqi/Cqb resolve on the
+        // writing-mode inline/block axes; no-CQ-ancestor (cq_frame ==
+        // None) falls back to viewport inside `resolve_cq_unit_px`,
+        // identical to every other Cq* site.
         Length::Cqw(_)
         | Length::Cqh(_)
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => {
+        | Length::Cqmax(_) => resolve_cq_unit_px(*length, cq_frame, viewport, wmr),
+        // `anchor-size()` reads an anchor box; sticky has none. Resolve
+        // to 0.0, warn once per (entity, session) — same channel + dedup
+        // shape as the Fr sticky-deferred arm above.
+        Length::AnchorSize(_) => {
             if warned
                 .set
-                .insert(LayoutWarnOnceKey::StickyCqDeferred(entity))
+                .insert(LayoutWarnOnceKey::StickyAnchorSizeUnsupported(entity))
             {
                 warn!(
-                    "Sticky entity {:?} uses Cq* inset; sticky-cq resolution is deferred to a Phase 7.x follow-up. Inset resolves to 0.0.",
+                    "Sticky entity {:?} uses anchor-size() inset; sticky has no anchor box, so it resolves to 0.0.",
                     entity,
                 );
             }
@@ -488,12 +535,21 @@ fn resolve_sticky_inset(
 /// natural-relative-to-parent position to get the final
 /// position-in-parent-frame.
 ///
-/// **v1 deviation: when both `inset_top` and `inset_bottom` are set,
-/// top wins.** A future correct dual-clamp implementation will replace
-/// this if-else with an "upper-stuck vs lower-stuck, smallest
-/// perturbation from natural wins" rule (CSS spec § 6.3). Documented in
-/// CHANGELOG; the `sticky_both_top_and_bottom_active_top_wins` test
-/// pins the current behavior.
+/// **Dual-clamp (CSS positioned-layout § 6.3): when both `inset_top`
+/// and `inset_bottom` are set, both clamps apply simultaneously.** The
+/// box pins to the top line `U = visible_top + top_px` when scroll
+/// pushes its natural position above `U`, pins to the bottom line
+/// `L = (visible_bottom - bottom_px) - size` when scroll pushes it below
+/// `L`, and sits at its natural flow position in between. When the box
+/// is shorter than the sticky band the two clamps don't conflict and it
+/// follows whichever edge the scroll has reached. In the degenerate case
+/// where the band is shorter than the box (`U > L`, thresholds collide),
+/// CSS gives the TOP edge precedence — re-applied with `.max(U)` *after*
+/// the bottom `.min(L)` so the bottom clamp cannot win. Each axis
+/// degenerates to the single-edge formula when only one inset is set.
+/// The `sticky_both_top_and_bottom_dual_clamp_bottom_honored` and
+/// `sticky_both_top_and_bottom_conflict_top_precedence` unit tests pin
+/// this behavior (the latter locks the `U > L` re-max branch).
 ///
 /// Pure function — no Bevy queries, no Taffy reads. Easy to unit test.
 ///
@@ -519,38 +575,44 @@ fn compute_sticky_displacement(
     let parent_bottom = parent_in_s.y + parent_size.y;
     let parent_right = parent_in_s.x + parent_size.x;
 
-    let desired_y = if let Some(top_px) = inset_top {
-        let threshold = visible_top + top_px;
-        e_natural_in_s
-            .y
-            .max(threshold)
-            .min(parent_bottom - e_size.y)
-            .max(parent_in_s.y)
-    } else if let Some(bottom_px) = inset_bottom {
-        let threshold = visible_bottom - bottom_px;
-        (threshold - e_size.y)
-            .min(e_natural_in_s.y)
-            .max(parent_in_s.y)
-            .min(parent_bottom - e_size.y)
-    } else {
-        e_natural_in_s.y
-    };
-    let desired_x = if let Some(left_px) = inset_left {
-        let threshold = visible_left + left_px;
-        e_natural_in_s
-            .x
-            .max(threshold)
-            .min(parent_right - e_size.x)
-            .max(parent_in_s.x)
-    } else if let Some(right_px) = inset_right {
-        let threshold = visible_right - right_px;
-        (threshold - e_size.x)
-            .min(e_natural_in_s.x)
-            .max(parent_in_s.x)
-            .min(parent_right - e_size.x)
-    } else {
-        e_natural_in_s.x
-    };
+    // Dual-clamp per CSS § 6.3 (see doc comment). Apply the top line U
+    // (.max), then the bottom line L (.min); when both are set and the
+    // band is shorter than the box (U > L) re-apply .max(U) so the top
+    // edge takes precedence. Then clamp into the parent band with an
+    // explicit .max(lo).min(hi) — NOT f32::clamp, which panics when
+    // lo > hi (box taller than the parent band; the
+    // sticky_clamped_by_parent_* tests depend on graceful degradation).
+    let mut desired_y = e_natural_in_s.y;
+    if let Some(top_px) = inset_top {
+        desired_y = desired_y.max(visible_top + top_px);
+    }
+    if let Some(bottom_px) = inset_bottom {
+        desired_y = desired_y.min((visible_bottom - bottom_px) - e_size.y);
+    }
+    if let (Some(top_px), Some(bottom_px)) = (inset_top, inset_bottom) {
+        let u = visible_top + top_px;
+        let l = (visible_bottom - bottom_px) - e_size.y;
+        if u > l {
+            desired_y = desired_y.max(u);
+        }
+    }
+    let desired_y = desired_y.max(parent_in_s.y).min(parent_bottom - e_size.y);
+
+    let mut desired_x = e_natural_in_s.x;
+    if let Some(left_px) = inset_left {
+        desired_x = desired_x.max(visible_left + left_px);
+    }
+    if let Some(right_px) = inset_right {
+        desired_x = desired_x.min((visible_right - right_px) - e_size.x);
+    }
+    if let (Some(left_px), Some(right_px)) = (inset_left, inset_right) {
+        let u = visible_left + left_px;
+        let l = (visible_right - right_px) - e_size.x;
+        if u > l {
+            desired_x = desired_x.max(u);
+        }
+    }
+    let desired_x = desired_x.max(parent_in_s.x).min(parent_right - e_size.x);
 
     Vec2::new(desired_x - e_natural_in_s.x, desired_y - e_natural_in_s.y)
 }
@@ -574,8 +636,13 @@ fn compute_sticky_displacement(
 /// Sticky behaves as `Relative` when no scroll-container ancestor is
 /// in scope (D5, silent no-op) — useful for sticky-in-static-context
 /// placeholder patterns. Percent insets resolve against the scroll
-/// container's content-box axis size (D11). `Length::Fr` and
-/// `Length::Cq*` insets warn-once-per-session and resolve to 0.0.
+/// container's content-box axis size (D11). `Length::Cq*` insets
+/// resolve against the sticky entity's own nearest container-query
+/// ancestor (size read CURRENT-frame from Taffy) via the shared
+/// `resolve_cq_unit_px`; the no-CQ-ancestor case falls back to the
+/// viewport like every other Cq* site. `Length::Fr` (grid-only) and
+/// `Length::AnchorSize` (sticky has no anchor box) warn-once-per-session
+/// and resolve to 0.0.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 2.3.
 #[allow(clippy::too_many_arguments)]
@@ -585,6 +652,9 @@ pub(super) fn sticky_offset(
     overflow_q: Query<&Overflow>,
     scroll_offset_q: Query<&ScrollOffset>,
     parent_chain: Query<&ChildOf>,
+    container_q: Query<(Entity, &Container)>,
+    wmr_q: Query<&WritingModeResolved>,
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     mut overrides: ResMut<PostTaffyPositionOverrides>,
     mut warned: ResMut<LayoutWarnedOnceSession>,
 ) {
@@ -593,12 +663,65 @@ pub(super) fn sticky_offset(
     // redundant walks.
     let mut memo: HashMap<(Entity, Entity), Vec2> = HashMap::new();
 
-    for (e, pos, display) in sticky_query.iter() {
-        // D14 — filter in Rust (no Bevy `Without<Display::None>` exists,
-        // `Or<>` slots are scarce). D10 — skip `Display::None`.
-        if !matches!(pos.kind, PositionKind::Sticky) || matches!(display, Display::None) {
-            continue;
-        }
+    // CQ-ancestor frame source for `Length::Cq*` insets. Read
+    // CURRENT-frame from Taffy (NOT last-frame `&ResolvedLayout`):
+    // `sticky_offset` runs in `PostTaffyOverrides` (AFTER `TaffyCompute`,
+    // BEFORE `WriteResolvedLayout`), so a container's `ResolvedLayout` is
+    // stale here but its Taffy size is fresh — consistent with the
+    // self/parent/scroll sizes read from Taffy below. Entities Taffy
+    // hasn't placed yet are skipped (`.ok()`), same skip-this-frame
+    // semantics as the self/parent/scroll reads.
+    let container_index: HashMap<Entity, ContainerSnapshot> = container_q
+        .iter()
+        .filter(|(_, c)| c.container_type != ContainerType::Normal)
+        .filter_map(|(entity, c)| {
+            let node = tree.by_entity.get(&entity)?;
+            let layout = tree.tree.layout(*node).ok()?;
+            Some((
+                entity,
+                ContainerSnapshot {
+                    container_type: c.container_type,
+                    size: Vec2::new(layout.size.width, layout.size.height),
+                },
+            ))
+        })
+        .collect();
+
+    // Viewport fallback for the no-CQ-ancestor case (mirrors
+    // `sync_styles`). `resolve_cq_unit_px` uses this when an entity has
+    // no queried ancestor.
+    let viewport_size = primary_window
+        .single()
+        .ok()
+        .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
+        .unwrap_or(Vec2::ZERO);
+
+    // L6 — depth-sort the qualifying sticky entities so an outer
+    // (shallower) sticky resolves and inserts its override BEFORE a
+    // deeper (inner) sticky reads that displaced position via
+    // `world_position`. Same-frame eventual consistency via depth
+    // ordering (NOT two-frame). Siblings at equal depth in unrelated
+    // subtrees have no ordering dependency (one can't be the other's
+    // sticky ancestor), so an unstable sort by depth alone suffices —
+    // no full topological sort needed. Filter D14 / D10 here so the
+    // depth walk only runs on real candidates.
+    let mut sticky_sorted: Vec<(Entity, &Position)> = sticky_query
+        .iter()
+        .filter(|(_, pos, display)| {
+            matches!(pos.kind, PositionKind::Sticky) && !matches!(display, Display::None)
+        })
+        .map(|(e, pos, _)| (e, pos))
+        .collect();
+    sticky_sorted.sort_by_cached_key(|(e, _)| child_of_depth(*e, &parent_chain));
+
+    for (e, pos) in sticky_sorted {
+        // L6 — reset the `world_position` memo per sticky entity. Its
+        // only purpose is reuse between the `e` and `parent` walks of
+        // the SAME entity; sharing it across the depth-ordered loop
+        // would return values cached before an outer override was
+        // inserted (stale, pre-displacement), making the fix
+        // order-dependent and flaky.
+        memo.clear();
         // D5 — no scroll container, silent no-op.
         let Some(scroll_container) = nearest_scroll_container(e, &parent_chain, &overflow_q) else {
             continue;
@@ -637,13 +760,30 @@ pub(super) fn sticky_offset(
         };
         let s_size = Vec2::new(s_layout.size.width, s_layout.size.height);
 
-        let Some(e_in_s) = world_position(e, scroll_container, &tree, &parent_chain, &mut memo)
-        else {
+        // L6 — pass the override map (shared `&HashMap`) so the
+        // ancestor walk sees any already-resolved outer sticky's
+        // displaced position. `e`'s own override is written only at the
+        // END of this iteration (after both reads), so the immutable
+        // borrow of `overrides.by_entity` has ended before the `&mut`
+        // insert below — no borrow conflict.
+        let Some(e_in_s) = world_position(
+            e,
+            scroll_container,
+            &tree,
+            &parent_chain,
+            &overrides.by_entity,
+            &mut memo,
+        ) else {
             continue;
         };
-        let Some(parent_in_s) =
-            world_position(parent, scroll_container, &tree, &parent_chain, &mut memo)
-        else {
+        let Some(parent_in_s) = world_position(
+            parent,
+            scroll_container,
+            &tree,
+            &parent_chain,
+            &overrides.by_entity,
+            &mut memo,
+        ) else {
             continue;
         };
 
@@ -654,14 +794,55 @@ pub(super) fn sticky_offset(
             .copied()
             .unwrap_or_default();
 
+        // CQ frame + writing mode for any `Length::Cq*` inset — the
+        // sticky entity's OWN nearest CQ ancestor (walks `ChildOf` from
+        // the sticky entity, distinct from anchor's per-try anchor-box
+        // frame). Resolved once per entity (not per edge) to keep the
+        // `resolve_sticky_inset` signature L6-clean.
+        let cq_frame = nearest_container_with_size(e, &container_index, &parent_chain);
+        let wmr = wmr_q.get(e).copied().unwrap_or_default();
+
         // D3 / D11 — per-axis inset resolution. The caller passes the
         // correct scroll-container axis size (height for top/bottom,
-        // width for left/right); `resolve_sticky_inset` does not need
-        // an axis-tag parameter.
-        let top = resolve_sticky_inset(&pos.inset.top, s_size.y, e, &mut warned);
-        let bottom = resolve_sticky_inset(&pos.inset.bottom, s_size.y, e, &mut warned);
-        let left = resolve_sticky_inset(&pos.inset.left, s_size.x, e, &mut warned);
-        let right = resolve_sticky_inset(&pos.inset.right, s_size.x, e, &mut warned);
+        // width for left/right) for `Percent`; `resolve_sticky_inset`
+        // does not need an axis-tag parameter. `Cq*` resolves against
+        // the CQ frame + writing mode (not the scroll axis).
+        let top = resolve_sticky_inset(
+            &pos.inset.top,
+            s_size.y,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
+        let bottom = resolve_sticky_inset(
+            &pos.inset.bottom,
+            s_size.y,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
+        let left = resolve_sticky_inset(
+            &pos.inset.left,
+            s_size.x,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
+        let right = resolve_sticky_inset(
+            &pos.inset.right,
+            s_size.x,
+            cq_frame,
+            viewport_size,
+            &wmr,
+            e,
+            &mut warned,
+        );
 
         let displacement = compute_sticky_displacement(
             e_in_s,
@@ -1467,6 +1648,10 @@ fn length_inset_to_px(l: Length, axis: f32, _viewport: Vec2) -> f32 {
         | Length::Cqb(_)
         | Length::Cqmin(_)
         | Length::Cqmax(_) => 0.0,
+        // `anchor-size()` is intercepted by `try_anchored_position`'s
+        // `to_px` closure before delegating here, so this arm is the
+        // defensive no-anchor-box fallback (resolve to 0.0).
+        Length::AnchorSize(_) => 0.0,
     }
 }
 
@@ -1502,6 +1687,11 @@ fn try_anchored_position(
         match s {
             Sizing::Auto => 0.0,
             Sizing::None => 0.0,
+            // `anchor-size(<axis>)` resolves to the per-try anchor box's
+            // size on the *named* axis (independent of which edge it sits
+            // on); every other `Length` delegates to `length_inset_to_px`.
+            Sizing::Length(Length::AnchorSize(AxisDimension::Width)) => anchor_size.x,
+            Sizing::Length(Length::AnchorSize(AxisDimension::Height)) => anchor_size.y,
             Sizing::Length(l) => length_inset_to_px(*l, axis, viewport),
             // B4: `FitContent` is a tuple variant `FitContent(Length)`;
             // the wildcard `(_)` discards the inner Length (no
@@ -1653,51 +1843,10 @@ pub(super) fn anchor_resolution(
         .map(|w| Vec2::new(w.resolution.width(), w.resolution.height()))
         .unwrap_or(Vec2::splat(f32::MAX));
 
-    // 2. Build edge map. The Kahn helper does its own pre-pass for
-    // external target nodes (D10), so we don't insert plain-Node
-    // targets here.
-    let mut edges: std::collections::HashMap<Entity, Option<Entity>> =
-        std::collections::HashMap::new();
-    let mut new_warns: Vec<(Entity, AnchorErrorKind)> = Vec::new();
-
-    // Helper: target resolution honoring Display::None (D9). Returns
-    // Some(entity) only when the target is name-resolvable AND not
-    // Display::None.
-    let resolve_target = |r: &AnchorRef| -> Option<Entity> {
-        let candidate = match r {
-            AnchorRef::Entity(t) => Some(*t),
-            AnchorRef::Name(n) => reg.find_entity_by_name(n),
-        }?;
-        if let Ok(Display::None) = display_query.get(candidate) {
-            return None;
-        }
-        Some(candidate)
-    };
-
-    for (e, anchor, _) in anchored_query.iter() {
-        let target = anchor.position_anchor.as_ref().and_then(&resolve_target);
-        edges.insert(e, target);
-        if anchor.position_anchor.is_some() && target.is_none() {
-            new_warns.push((e, AnchorErrorKind::TargetMissing));
-        }
-    }
-
-    // 3. Kahn sort. The helper handles external-target pre-pass and
-    // cycle-edge dropping.
-    let entity_epochs_fn = |e: Entity| reg.entity_epoch(e);
-    let (order, dropped) = kahn_anchor_sort(&edges, &entity_epochs_fn);
-
-    // D8 — both endpoints of a dropped cycle edge get
-    // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
-    // other end of each dropped edge (read from the pre-drop edges
-    // map).
-    let mut dropped_targets: std::collections::HashSet<Entity> = std::collections::HashSet::new();
-    for d in &dropped {
-        new_warns.push((*d, AnchorErrorKind::InCycle));
-        if let Some(Some(target)) = edges.get(d).copied() {
-            dropped_targets.insert(target);
-        }
-    }
+    // 2 + 3. Build edge map and topologically order the anchored
+    // entities (Kahn sort with cycle-edge dropping).
+    let (edges, order, dropped, dropped_targets, mut new_warns) =
+        build_anchor_edge_map(&anchored_query, &reg, &display_query);
 
     // 4. DuplicateName detection (D11). Scan registry buckets;
     // `bucket.len() > 1` means duplicate; the last entry is the
@@ -1821,11 +1970,102 @@ pub(super) fn anchor_resolution(
         }
     }
 
-    // 6. Idempotent `LayoutAnchorBroken` marker management. Iterate
-    // over every entity that could currently have or need the marker —
-    // anchored entities (anchored_query) AND dropped_targets (which
-    // may be plain Nodes without Anchor). Use `broken_query` to read
-    // the current marker state for the non-anchored set.
+    // 6. Idempotent `LayoutAnchorBroken` marker management.
+    apply_anchor_broken_markers(
+        &mut commands,
+        &broken_set,
+        &dropped_targets,
+        &anchored_query,
+        &broken_query,
+    );
+
+    // 7. Emit warns (one per unique `(entity, kind)` per frame).
+    emit_anchor_warns(new_warns, &mut warned);
+}
+
+/// Steps 2 + 3 of `anchor_resolution` — build the anchor edge map and
+/// produce the topological order via `kahn_anchor_sort`.
+///
+/// The Kahn helper does its own pre-pass for external target nodes
+/// (D10), so plain-Node targets are not inserted here. `dropped` is a
+/// `HashSet` (mirroring `kahn_anchor_sort`'s return) — the driver
+/// consumes it with set semantics. `TargetMissing` (edge build) and
+/// `InCycle` (per dropped endpoint) warns are accumulated into the
+/// returned `new_warns`; the driver appends the remaining kinds.
+#[allow(clippy::type_complexity)]
+fn build_anchor_edge_map(
+    anchored_query: &Query<(Entity, &Anchor, Option<&LayoutAnchorBroken>), With<Node>>,
+    reg: &AnchorNameRegistry,
+    display_query: &Query<&Display>,
+) -> (
+    std::collections::HashMap<Entity, Option<Entity>>,
+    Vec<Entity>,
+    std::collections::HashSet<Entity>,
+    std::collections::HashSet<Entity>,
+    Vec<(Entity, AnchorErrorKind)>,
+) {
+    let mut edges: std::collections::HashMap<Entity, Option<Entity>> =
+        std::collections::HashMap::new();
+    let mut new_warns: Vec<(Entity, AnchorErrorKind)> = Vec::new();
+
+    // Helper: target resolution honoring Display::None (D9). Returns
+    // Some(entity) only when the target is name-resolvable AND not
+    // Display::None.
+    let resolve_target = |r: &AnchorRef| -> Option<Entity> {
+        let candidate = match r {
+            AnchorRef::Entity(t) => Some(*t),
+            AnchorRef::Name(n) => reg.find_entity_by_name(n),
+        }?;
+        if let Ok(Display::None) = display_query.get(candidate) {
+            return None;
+        }
+        Some(candidate)
+    };
+
+    for (e, anchor, _) in anchored_query.iter() {
+        let target = anchor.position_anchor.as_ref().and_then(&resolve_target);
+        edges.insert(e, target);
+        if anchor.position_anchor.is_some() && target.is_none() {
+            new_warns.push((e, AnchorErrorKind::TargetMissing));
+        }
+    }
+
+    // 3. Kahn sort. The helper handles external-target pre-pass and
+    // cycle-edge dropping.
+    let entity_epochs_fn = |e: Entity| reg.entity_epoch(e);
+    let (order, dropped) = kahn_anchor_sort(&edges, &entity_epochs_fn);
+
+    // D8 — both endpoints of a dropped cycle edge get
+    // `LayoutAnchorBroken`. `dropped_targets`: the target Entity at the
+    // other end of each dropped edge (read from the pre-drop edges
+    // map).
+    let mut dropped_targets: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for d in &dropped {
+        new_warns.push((*d, AnchorErrorKind::InCycle));
+        if let Some(Some(target)) = edges.get(d).copied() {
+            dropped_targets.insert(target);
+        }
+    }
+
+    (edges, order, dropped, dropped_targets, new_warns)
+}
+
+/// Step 6 of `anchor_resolution` — idempotent `LayoutAnchorBroken`
+/// marker management. Iterates over every entity that could currently
+/// have or need the marker: anchored entities (`anchored_query`) AND
+/// `dropped_targets` (which may be plain Nodes without `Anchor`), then
+/// cleans up the marker on stale non-anchored entities. The loop order
+/// and the `anchored_query.get(t).is_err()` cleanup guard are
+/// load-bearing and must stay verbatim.
+fn apply_anchor_broken_markers(
+    commands: &mut Commands,
+    broken_set: &std::collections::HashSet<Entity>,
+    dropped_targets: &std::collections::HashSet<Entity>,
+    anchored_query: &Query<(Entity, &Anchor, Option<&LayoutAnchorBroken>), With<Node>>,
+    broken_query: &Query<(Entity, Option<&LayoutAnchorBroken>)>,
+) {
+    // Use `broken_query` to read the current marker state for the
+    // non-anchored set.
     for (e, _, existing_broken) in anchored_query.iter() {
         let is_broken = broken_set.contains(&e);
         if is_broken && existing_broken.is_none() {
@@ -1836,7 +2076,7 @@ pub(super) fn anchor_resolution(
     }
     // Also handle plain-Node targets in `dropped_targets` (they may not
     // be in anchored_query but still need the marker per D8).
-    for &t in &dropped_targets {
+    for &t in dropped_targets {
         if let Ok((_, existing_broken)) = broken_query.get(t)
             && existing_broken.is_none()
         {
@@ -1853,8 +2093,16 @@ pub(super) fn anchor_resolution(
             commands.entity(t).remove::<LayoutAnchorBroken>();
         }
     }
+}
 
-    // 7. Emit warns (one per unique `(entity, kind)` per frame).
+/// Step 7 of `anchor_resolution` — emit one `warn!` per unique
+/// `(entity, kind)` pair this frame. `warned.set.insert` is the
+/// per-frame dedupe gate; the match stays exhaustive over every
+/// `AnchorErrorKind` arm.
+fn emit_anchor_warns(
+    new_warns: Vec<(Entity, AnchorErrorKind)>,
+    warned: &mut LayoutAnchorWarnedThisFrame,
+) {
     for (entity, kind) in new_warns {
         if warned.set.insert((entity, kind)) {
             match kind {
@@ -1874,12 +2122,6 @@ pub(super) fn anchor_resolution(
                     warn!(
                         ?entity,
                         "buiy: duplicate anchor_name — late inserter wins, shadowed entries lose name lookup"
-                    );
-                }
-                AnchorErrorKind::AnchorSizeUsed => {
-                    warn!(
-                        ?entity,
-                        "buiy: anchor-size() in PositionTry::inset is deferred to v1.x; resolving to 0"
                     );
                 }
             }
@@ -1999,7 +2241,7 @@ pub(super) fn sync_styles(
                 // ancestor size flows through. Phase 2 invariant intact:
                 // ScrollOffset / ScrollSnapItem stay excluded, and
                 // ResolvedLayout in steady-state does not refresh
-                // (Bevy 0.18 `Commands::insert` increments the change
+                // (Bevy's `Commands::insert` increments the change
                 // tick on every write, but the per-frame work this
                 // produces is bounded by the actual size cascade —
                 // entities whose computed Taffy size is genuinely
@@ -2008,7 +2250,7 @@ pub(super) fn sync_styles(
                 Changed<ResolvedLayout>,
                 // Phase 5 Task 9 / Phase 6 Task 9: container/CQ + Anchor
                 // change set. Nested under a single inner `Or` so the
-                // outer tuple stays at 15 entries (Bevy 0.18 caps `Or`
+                // outer tuple stays at 15 entries (Bevy caps `Or`
                 // tuples at 15). The semantics are identical to spelling
                 // the entries at the top level — `Or<(A, Or<(B, C)>)>`
                 // matches exactly when `A || B || C`.
@@ -3158,14 +3400,17 @@ fn length_to_px(len: Length, axis_basis: f32) -> f32 {
         // condition value would be a degenerate case (a rule about
         // a container, sized in units of that same container). Warn
         // is unnecessary because authors compose with Length::Px.
-        // Fr is a grid-only unit; degrades to 0 here.
+        // Fr is a grid-only unit; degrades to 0 here. anchor-size() is
+        // only meaningful inside anchor inset resolution; in a container-
+        // query condition value it has no anchor box, so it degrades to 0.
         Length::Fr(_)
         | Length::Cqw(_)
         | Length::Cqh(_)
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => 0.0,
+        | Length::Cqmax(_)
+        | Length::AnchorSize(_) => 0.0,
     }
 }
 
@@ -3706,19 +3951,22 @@ pub(super) fn cq_flip_rerun(
 /// `Compose([A, B, …])` folds to the matrix product `A · B · …`
 /// (outermost first; rightmost transforms a child point first).
 ///
-/// `Length`s in `Translate` resolve as px today (percent/cq transform
-/// translates resolve against the entity's own box — deferred to the
-/// render/animation phase; px is the only meaningful unit at compose
-/// time for Phase 8). Non-px `Length` variants resolve to their px
-/// magnitude via `Length::Px` only; other variants contribute 0.0.
+/// `Length`s in `Translate` resolve via [`translate_length_px`]: `Px` as-is,
+/// `Percent` against the entity's own current-frame border `box_size`
+/// (x = width, y = height; z-percent is invalid → 0), `Cq*` as a 0.0 residual
+/// (warned once), `Fr`/`AnchorSize` as 0.0. The other arms ignore `box_size`,
+/// but `Compose` threads it through so a nested `Translate` percent still
+/// resolves against the same own box.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1.
-fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
+fn transform_matrix_to_mat4(m: &TransformMatrix, box_size: Vec2) -> Mat4 {
     match m {
         TransformMatrix::None => Mat4::IDENTITY,
-        TransformMatrix::Translate(x, y, z) => {
-            Mat4::from_translation(Vec3::new(length_px(x), length_px(y), length_px(z)))
-        }
+        TransformMatrix::Translate(x, y, z) => Mat4::from_translation(Vec3::new(
+            translate_length_px(x, box_size.x),
+            translate_length_px(y, box_size.y),
+            translate_length_px(z, 0.0),
+        )),
         TransformMatrix::Rotate(q) => Mat4::from_quat(*q),
         TransformMatrix::Scale(x, y, z) => Mat4::from_scale(Vec3::new(*x, *y, *z)),
         TransformMatrix::Skew(ax, ay) => {
@@ -3730,19 +3978,53 @@ fn transform_matrix_to_mat4(m: &TransformMatrix) -> Mat4 {
         }
         TransformMatrix::Matrix(mat) => *mat,
         TransformMatrix::Compose(list) => list.iter().fold(Mat4::IDENTITY, |acc, item| {
-            acc * transform_matrix_to_mat4(item)
+            acc * transform_matrix_to_mat4(item, box_size)
         }),
     }
 }
 
-/// Resolve a `Length` to px for transform translation. Only `Px` is
-/// meaningful at compose time in Phase 8; other units (percent /
-/// cq) resolve against the entity's own box and are deferred to the
-/// render/animation phase — they contribute 0.0 here.
-fn length_px(l: &Length) -> f32 {
+/// Warn-once for a `Cq*` transform-translate term. `Cq*` translate needs
+/// the entity's nearest CQ-ancestor frame (sticky L4 territory) which sub-pass
+/// 6e does not gather, so it stays a documented residual that contributes 0.0.
+/// Warn once rather than per-frame so authors learn it is unresolved without
+/// log spam (mirrors `translate::warn_once_cq_no_ancestor`).
+fn warn_once_cq_translate_residual() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        warn!(
+            "buiy: container unit (cqw/cqh/cqi/cqb/cqmin/cqmax) used in a \
+             transform translate — unresolved (needs the nearest CQ-ancestor \
+             frame, a residual deferral) and contributes 0.0 (warned once)"
+        );
+    }
+}
+
+/// Resolve a `Length` to px for transform translation along ONE axis.
+///
+/// `Px(p)` resolves to `p`. `Percent(p)` resolves against the entity's own
+/// current-frame border box on the relevant axis per CSS Transforms —
+/// `translateX(p%) = p% of width`, `translateY(p%) = p% of height` — so the
+/// caller passes the matching `axis_px` (`box.x` for x, `box.y` for y). The
+/// z axis passes `axis_px = 0.0`: CSS makes `translateZ` percentages invalid,
+/// so a z-percent resolves to 0.0.
+///
+/// `Cq*` translate is a RESIDUAL deferral (needs the nearest CQ-ancestor
+/// frame, like sticky L4) — it contributes 0.0 and fires a one-shot warn.
+/// `Fr` / `AnchorSize` are meaningless on a transform and likewise yield 0.0.
+fn translate_length_px(l: &Length, axis_px: f32) -> f32 {
     match l {
         Length::Px(p) => *p,
-        _ => 0.0,
+        Length::Percent(p) => p * 0.01 * axis_px,
+        Length::Cqw(_)
+        | Length::Cqh(_)
+        | Length::Cqi(_)
+        | Length::Cqb(_)
+        | Length::Cqmin(_)
+        | Length::Cqmax(_) => {
+            warn_once_cq_translate_residual();
+            0.0
+        }
+        Length::Fr(_) | Length::AnchorSize(_) => 0.0,
     }
 }
 
@@ -3774,17 +4056,27 @@ pub(super) fn multicol_length_px(l: Option<Length>, fallback: f32) -> f32 {
 /// `translate∘-translate ≈ I`, `rotate(2π) ≈ I`, `scale(k)` checks assert on
 /// THIS composed matrix, never a re-implementation), hence `pub`.
 ///
+/// `box_size` is the entity's own current-frame border box — the percent
+/// basis for translate terms (x = width, y = height; z-percent → 0) per CSS
+/// Transforms. The caller (sub-pass 6e) reads it from the current-frame Taffy
+/// tree; unit tests pass an explicit box (`Vec2::ZERO` when no percent is in
+/// play, so px composition is unchanged). `Cq*` translate is a 0.0 residual
+/// (needs the nearest CQ-ancestor frame, like sticky L4).
+///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/transforms-and-containment.md § 1, § 1.1.
 pub fn compose_transform(
     ui: &UiTransform,
     t: Option<&Translate>,
     r: Option<&Rotate>,
     s: Option<&Scale>,
+    box_size: Vec2,
 ) -> Mat4 {
     let t_mat = match t {
-        Some(Translate(x, y, z)) => {
-            Mat4::from_translation(Vec3::new(length_px(x), length_px(y), length_px(z)))
-        }
+        Some(Translate(x, y, z)) => Mat4::from_translation(Vec3::new(
+            translate_length_px(x, box_size.x),
+            translate_length_px(y, box_size.y),
+            translate_length_px(z, 0.0),
+        )),
         None => Mat4::IDENTITY,
     };
     let r_mat = match r {
@@ -3795,7 +4087,7 @@ pub fn compose_transform(
         Some(Scale(x, y, z)) => Mat4::from_scale(Vec3::new(*x, *y, *z)),
         None => Mat4::IDENTITY,
     };
-    let m_transform = transform_matrix_to_mat4(&ui.matrix);
+    let m_transform = transform_matrix_to_mat4(&ui.matrix, box_size);
     t_mat * r_mat * s_mat * m_transform
 }
 
@@ -3828,11 +4120,15 @@ pub fn top_layer_paint_rank(t: TopLayer) -> u8 {
 /// (3) non-identity transform, (4) `Containment.contain ⊇ PAINT/STRICT`,
 /// (5) the render-side formers (`Opacity < 1`, non-empty `Filter`,
 /// `MixBlendMode != Normal` — read from the render-owned components, same
-/// crate), (6) root. Trigger 5's `will-change` former is still deferred
-/// with the rest of `will-change` layer promotion (spec § 7);
+/// crate), (5b) `Containment.will_change` naming an SC-forming property
+/// (CSS: a property named in `will-change` forms a stacking context iff
+/// it would at a non-initial value — the subset is
+/// `WillChangeProperty::forms_stacking_context` = Transform/Opacity/Filter;
+/// `ZIndex`/`ScrollPosition` are excluded), (6) root.
 /// `BackdropFilter` is deliberately NOT a trigger — it forms an
 /// `EffectGroup` but never a stacking context (render component-model.md
-/// § 8).
+/// § 8). The `will-change` *layer-promotion* hint stays deferred (spec
+/// § 7) — only the SC-trigger half is realized here.
 ///
 /// Driven by the `stacking_context` sub-pass (6f).
 #[allow(clippy::too_many_arguments)]
@@ -3877,6 +4173,17 @@ pub(super) fn forms_stacking_context(
     // every SC-forming `EffectGroup` is atomic in painters_z, which is the
     // compositor's contiguity invariant (render/buckets.rs).
     if forms_render_stacking_context(opacity, filter, blend) {
+        return true;
+    }
+    // Trigger 5b — `will-change` naming an SC-forming property. CSS treats
+    // a property named in `will-change` as already forming a stacking
+    // context if it would at a non-initial value; the SC-forming subset is
+    // named once in `WillChangeProperty::forms_stacking_context`
+    // (Transform/Opacity/Filter — z-index and scroll-position excluded).
+    if let Some(c) = containment
+        && let WillChange::Properties(props) = &c.will_change
+        && props.iter().any(|p| p.forms_stacking_context())
+    {
         return true;
     }
     false
@@ -3937,6 +4244,7 @@ pub(super) fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind
 #[allow(clippy::type_complexity)]
 pub(super) fn transform_composition(
     mut commands: Commands,
+    tree: NonSend<LayoutTree>,
     query: Query<
         (
             Entity,
@@ -3954,7 +4262,21 @@ pub(super) fn transform_composition(
         if matches!(display, Display::None) {
             continue;
         }
-        let m = compose_transform(ui, t, r, s);
+        // Percent translate resolves against the entity's OWN current-frame
+        // border box. 6e runs in PostTaffyOverrides — BEFORE
+        // WriteResolvedLayout — so `ResolvedLayout.size` is last-frame here;
+        // read the current-frame box straight from the Taffy tree, mirroring
+        // `anchor_resolution` (the preceding 6d sub-pass). An entity with no
+        // Taffy node (just-spawned) falls back to ZERO → percent yields 0 this
+        // frame, self-healing next frame (anchor_resolution's precedent).
+        let box_size = tree
+            .by_entity
+            .get(&e)
+            .copied()
+            .and_then(|id| tree.tree.layout(id).ok())
+            .map(|l| Vec2::new(l.size.width, l.size.height))
+            .unwrap_or(Vec2::ZERO);
+        let m = compose_transform(ui, t, r, s, box_size);
         if m == Mat4::IDENTITY {
             // Identity → no ResolvedTransform; remove a stale one.
             if existing.is_some() {
@@ -4238,7 +4560,9 @@ mod cq_tests {
 mod tests {
     use super::*;
     use crate::layout::components::{Containment, Position, Stacking};
-    use crate::layout::types::{ContainFlags, Isolation, PositionKind, TopLayer, ZIndex};
+    use crate::layout::types::{
+        ContainFlags, Isolation, PositionKind, TopLayer, WillChange, WillChangeProperty, ZIndex,
+    };
 
     use crate::layout::components::Display;
 
@@ -4682,6 +5006,59 @@ mod tests {
         assert!(!forms_via_render(None, None, Some(&MixBlendMode::Normal)));
     }
 
+    // ---- trigger 5b — will-change SC former (spec § 2 trigger 5;
+    // transforms-and-containment.md § 5.3). A `will-change` naming an
+    // SC-forming property is treated as already forming a stacking
+    // context (CSS: a property that would form one at a non-initial value
+    // forms one when named in will-change). ----
+
+    /// `forms_stacking_context` with no other trigger but a `Containment`
+    /// whose `will_change` names the given properties — DRYs the
+    /// trigger-5b boundary tests below.
+    fn forms_via_will_change(props: Vec<WillChangeProperty>) -> bool {
+        let c = Containment {
+            will_change: WillChange::Properties(props),
+            ..Default::default()
+        };
+        forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            Some(&c),
+            None,
+            None,
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn will_change_transform_forms_context() {
+        assert!(forms_via_will_change(vec![WillChangeProperty::Transform]));
+        assert!(forms_via_will_change(vec![WillChangeProperty::Opacity]));
+        assert!(forms_via_will_change(vec![WillChangeProperty::Filter]));
+    }
+
+    #[test]
+    fn will_change_layout_only_does_not_form_context() {
+        // z-index / scroll-position are not SC-forming on their own.
+        assert!(!forms_via_will_change(vec![
+            WillChangeProperty::ZIndex,
+            WillChangeProperty::ScrollPosition,
+        ]));
+        // `will-change: auto` (the Containment default) forms nothing.
+        assert!(!forms_stacking_context(
+            None,
+            PositionKind::Static,
+            false,
+            Some(&Containment::default()),
+            None,
+            None,
+            None,
+            false,
+        ));
+    }
+
     #[test]
     fn top_layer_activation_default_is_empty() {
         assert!(TopLayerActivation::default().order.is_empty());
@@ -4820,7 +5197,7 @@ mod tests {
     #[test]
     fn compose_identity_is_identity() {
         let ui = UiTransform::default();
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         assert_eq!(m, Mat4::IDENTITY);
     }
 
@@ -4830,7 +5207,7 @@ mod tests {
             matrix: TransformMatrix::Translate(Length::px(10.0), Length::px(20.0), Length::ZERO),
             ..Default::default()
         };
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         assert_eq!(m, Mat4::from_translation(Vec3::new(10.0, 20.0, 0.0)));
     }
 
@@ -4840,7 +5217,7 @@ mod tests {
             matrix: TransformMatrix::Scale(2.0, 3.0, 1.0),
             ..Default::default()
         };
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         assert_eq!(m, Mat4::from_scale(Vec3::new(2.0, 3.0, 1.0)));
     }
 
@@ -4857,7 +5234,7 @@ mod tests {
         };
         let t = Translate(Length::px(10.0), Length::ZERO, Length::ZERO);
         let s = Scale(2.0, 2.0, 1.0);
-        let m = compose_transform(&ui, Some(&t), None, Some(&s));
+        let m = compose_transform(&ui, Some(&t), None, Some(&s), Vec2::ZERO);
         let expected = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(2.0, 2.0, 1.0))
             * Mat4::from_quat(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
@@ -4873,7 +5250,7 @@ mod tests {
             matrix: TransformMatrix::Compose(vec![a, b]),
             ..Default::default()
         };
-        let m = compose_transform(&ui, None, None, None);
+        let m = compose_transform(&ui, None, None, None, Vec2::ZERO);
         let expected = Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(2.0, 1.0, 1.0));
         assert_eq!(m, expected);
@@ -5236,29 +5613,68 @@ mod tests {
         assert_eq!(d, Vec2::new(0.0, -180.0));
     }
 
-    // ---- v2 — both-top-and-bottom-active behavior (test-reviewer BLOCKER B2) ----
+    // ---- dual-clamp — both-top-and-bottom (CSS § 6.3) ----
 
     #[test]
-    fn sticky_both_top_and_bottom_active_top_wins() {
-        // v1 deviation: when both insets are set, top wins. This test
-        // documents the behavior — a future correct dual-clamp impl
-        // will fail this test and that's the signal to flip it.
+    fn sticky_both_top_and_bottom_dual_clamp_bottom_honored() {
+        // both insets set → bottom honored when scroll near end
+        // (dual-clamp § 6.3, supersedes v1 top-wins). Scroll near the
+        // bottom so the TOP clamp is inactive and the BOTTOM clamp fires:
+        // e_natural_in_s.y=900, scroll_offset.y=400.
+        //   visible_top=400 → U=410; 900 > 410 so the top-clamp does not
+        //     move the box (desired stays 900 after .max(U)).
+        //   visible_bottom=900 → L=900-10-30=860; .min(L) pulls to 860.
+        //   U(410) <= L(860): no conflict re-max.
+        //   band [0, 1000-30=970] keeps 860.
+        //   displacement = 860 - 900 = -40.
+        // Under the v1 "top wins" helper the bottom branch was unreachable
+        // and the top branch returned displacement 0 (Vec2::ZERO), so this
+        // assertion is RED against the pre-dual-clamp code.
         let d = compute_sticky_displacement(
-            Vec2::new(0.0, 50.0),
+            Vec2::new(0.0, 900.0),
             Vec2::new(100.0, 30.0),
             Vec2::new(0.0, 0.0),
             Vec2::new(300.0, 1000.0),
             Vec2::new(300.0, 500.0),
-            Vec2::new(0.0, 100.0),
+            Vec2::new(0.0, 400.0),
             Some(10.0),
             Some(10.0),
             None,
             None, // both insets set
         );
-        // Top-pin branch fires: visible_top=100, threshold=110,
-        // max(50, 110)=110. Clamped by parent_bottom - e_h = 970 → 110.
-        // Displacement = 60. Bottom inset is ignored.
-        assert_eq!(d, Vec2::new(0.0, 60.0));
+        assert_eq!(d, Vec2::new(0.0, -40.0));
+    }
+
+    #[test]
+    fn sticky_both_top_and_bottom_conflict_top_precedence() {
+        // U>L conflict (band shorter than box): top-precedence pins to U,
+        // NOT the naive bottom clamp. This is the ONLY test that exercises
+        // the `if U>L { desired = desired.max(U) }` re-max branch — its
+        // job is to LOCK that branch (the anti-vacuous check: deleting the
+        // branch must break this test). Its RED signal is the
+        // branch-deletion check, not the legacy helper (the old top-wins
+        // single-edge branch happens to return the same value here).
+        //
+        // Geometry: scroll_container_size.y=40 (band only 40px tall),
+        // e_size=(100,30), both insets 10, scroll_offset ZERO.
+        //   visible_top=0 → U=10; visible_bottom=40 → L=40-10-30=0.
+        //   U(10) > L(0) → conflict.
+        //   e_natural_in_s.y=5: .max(U=10)=10, .min(L=0)=0 (naive would
+        //     stop here at 0), re-.max(U=10)=10 (top-precedence wins).
+        //   band [0, 1000-30=970] keeps 10. displacement = 10 - 5 = 5.
+        let d = compute_sticky_displacement(
+            Vec2::new(0.0, 5.0),
+            Vec2::new(100.0, 30.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(300.0, 1000.0),
+            Vec2::new(300.0, 40.0),
+            Vec2::ZERO,
+            Some(10.0),
+            Some(10.0),
+            None,
+            None,
+        );
+        assert_eq!(d, Vec2::new(0.0, 5.0));
     }
 
     // -----------------------------------------------------------------
@@ -5413,6 +5829,44 @@ mod tests {
             "never skip without last-frame geometry (D3)"
         );
     }
+
+    #[test]
+    fn try_anchored_position_resolves_anchor_size_height() {
+        // anchor-size(height): `inset.top` resolves to the anchor's own
+        // height (40), so the anchored entity is placed at
+        // anchor.y(0) + anchor.height(40) + resolved_top(40) = 80.
+        let inset = Inset {
+            top: Sizing::Length(Length::AnchorSize(AxisDimension::Height)),
+            ..Default::default()
+        };
+        let pos = try_anchored_position(
+            Vec2::ZERO,
+            Vec2::new(80.0, 40.0),
+            Vec2::new(10.0, 10.0),
+            &inset,
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(pos.y, 80.0);
+    }
+
+    #[test]
+    fn try_anchored_position_resolves_anchor_size_width_on_left_edge() {
+        // anchor-size(width) on the `left` edge resolves to the anchor's
+        // width (80) regardless of axis, so x =
+        // anchor.x(0) + anchor.width(80) + resolved_left(80) = 160.
+        let inset = Inset {
+            left: Sizing::Length(Length::AnchorSize(AxisDimension::Width)),
+            ..Default::default()
+        };
+        let pos = try_anchored_position(
+            Vec2::ZERO,
+            Vec2::new(80.0, 40.0),
+            Vec2::new(10.0, 10.0),
+            &inset,
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(pos.x, 160.0);
+    }
 }
 
 #[cfg(test)]
@@ -5434,7 +5888,7 @@ mod observer_tests {
             },
         );
         app.add_observer(
-            |trigger: On<bevy::ecs::lifecycle::Replace, Anchor>,
+            |trigger: On<bevy::ecs::lifecycle::Discard, Anchor>,
              mut reg: ResMut<AnchorNameRegistry>| {
                 reg.remove(trigger.event().entity);
             },

@@ -650,10 +650,10 @@ pub(crate) fn prepare_effect_groups(
 }
 
 /// Register compositor pipelines/resources in the render app. Per
-/// effect-compositor.md § 3 this adds **no** render-graph node and **no**
-/// edge — the `BuiyRenderLabel` node group and its edges are owned by
-/// architecture.md § 1.3; the compositor's passes run *inside*
-/// [`BuiyNode::run`](super::node). It registers the per-`EffectGroup`
+/// effect-compositor.md § 3 this adds **no** render-pass system of its own —
+/// the Core2d Buiy pass (`node::register`) owns the schedule slot
+/// (architecture.md § 1.3); the compositor's passes run *inside*
+/// [`buiy_pass`](super::node::buiy_pass). It registers the per-`EffectGroup`
 /// [`prepare_effect_groups`] system, the [`RtPoolStats`] observable, and (via
 /// [`super::composite::register`]) the composite-pipeline specialization cache.
 /// The device-owning composite resources (`CompositePipeline`) init in
@@ -672,9 +672,9 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // in `RenderSystems::Prepare`. It runs AFTER `prepare_buiy_instances` so the
     // per-group instance ranges (`BuiyInstanceBuffers::group_ranges`) are written
     // before this reads them. The view `scale_factor` / `ViewTarget` exist in
-    // `Prepare` (after `ManageViews`). This adds a *system*, NOT a render-graph
-    // node: the `BuiyRenderLabel` node group + edges remain owned by
-    // `node::register`; the composite passes run inside `BuiyNode::run`.
+    // `Prepare` (after `ManageViews`). This adds a *prepare* system; the Core2d
+    // render-pass slot remains owned by `node::register` (`buiy_pass`), where
+    // the composite passes run inline.
     render_app.add_systems(
         Render,
         prepare_effect_groups

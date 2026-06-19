@@ -65,41 +65,69 @@ fn pipeline_registers_in_render_app() {
     assert!(pipeline.is_some(), "BuiyPipeline registered");
 }
 
+// Count the systems in a RenderApp's `Core2d` schedule graph. `graph().systems`
+// is populated at `add_systems` time (in `build`), so this is pure introspection
+// — no executor init, no `finish()`. Mirrors `render_schedule_system_count` in
+// tests/render_compositor_gpu.rs but for the `Core2d` schedule.
+fn core2d_schedule_system_count(app: &App) -> usize {
+    use bevy::core_pipeline::Core2d;
+    use bevy::render::RenderApp;
+    app.get_sub_app(RenderApp)
+        .expect("RenderApp")
+        .world()
+        .resource::<bevy::ecs::schedule::Schedules>()
+        .get(Core2d)
+        .expect("Core2d schedule present in the RenderApp")
+        .graph()
+        .systems
+        .len()
+}
+
 // Same RenderApp/wgpu-adapter caveat as `pipeline_registers_in_render_app`.
-// We assert that the Buiy node is present in the Core2d sub-graph after the
-// main 2D pass has been wired up by Bevy's Core2dPlugin.
+//
+// Bevy 0.19 removed the `RenderGraph` `Node`/`ViewNode` API: render passes are
+// now SYSTEMS added to the `Core2d` schedule. Buiy's pass (`buiy_pass`,
+// node::register) is added via
+// `add_systems(Core2d, buiy_pass.in_set(Core2dSystems::EarlyPostProcess))` —
+// the verified successor to the removed 0.18 `StartMainPassPostProcessing →
+// Buiy → Tonemapping` slot. We can no longer assert on graph topology; instead
+// we assert that installing `BuiyRenderPlugin` adds exactly ONE system to the
+// `Core2d` schedule (the single `buiy_pass`). System *name* matching is
+// unusable here — without `bevy_utils/debug` (this workspace does not enable
+// it) `System::name()` is a placeholder — so the membership signal is the
+// count delta, the same proven idiom as `prepare_effect_groups_runs_in_prepare_set`
+// in tests/render_compositor_gpu.rs. The pass's actual EarlyPostProcess
+// ORDERING (after main pass, before tonemapping) and paint correctness are
+// verified by the golden/compositor GPU lane (Phase 3), not here.
 //
 // Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
-fn render_graph_node_inserted_after_main_2d_pass() {
-    use bevy::core_pipeline::core_2d::graph::Core2d;
-    use bevy::render::render_graph::RenderGraph;
+fn render_pass_system_inserted_into_core2d_schedule() {
+    fn app_with(buiy: bool) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::render::RenderPlugin::default());
+        // `CorePipelinePlugin` pulls in `TonemappingPlugin::build`, which reads
+        // `Assets<Image>` to register its LUT images; that asset is owned by
+        // `ImagePlugin`, so it must be added (before `CorePipelinePlugin`) or the
+        // tonemapping build panics with "Requested resource … does not exist".
+        app.add_plugins(bevy::image::ImagePlugin::default());
+        app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
+        if buiy {
+            app.add_plugins(buiy_core::render::BuiyRenderPlugin);
+        }
+        app
+    }
 
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    // `CorePipelinePlugin` pulls in `TonemappingPlugin::build`, which reads
-    // `Assets<Image>` to register its LUT images; that asset is owned by
-    // `ImagePlugin`, so it must be added (before `CorePipelinePlugin`) or the
-    // tonemapping build panics with "Requested resource … does not exist".
-    app.add_plugins(bevy::image::ImagePlugin::default());
-    app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
-
-    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
-    let render_graph = render_app
-        .world()
-        .get_resource::<RenderGraph>()
-        .expect("RenderGraph resource");
-    let sub = render_graph
-        .get_sub_graph(Core2d)
-        .expect("Core2d sub-graph present");
-    assert!(
-        sub.get_node_state(buiy_core::render::node::BuiyRenderLabel)
-            .is_ok(),
-        "BuiyRenderLabel registered in Core2d"
+    let baseline = core2d_schedule_system_count(&app_with(false));
+    let with_buiy = core2d_schedule_system_count(&app_with(true));
+    assert_eq!(
+        with_buiy - baseline,
+        1,
+        "BuiyRenderPlugin must add exactly one system (buiy_pass) to the Core2d \
+         schedule (baseline={baseline}, with_buiy={with_buiy})"
     );
 }
 

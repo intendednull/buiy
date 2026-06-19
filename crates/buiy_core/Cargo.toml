@@ -59,7 +59,7 @@ default = ["default_font"]
 default_font = []
 
 [dev-dependencies]
-naga = "27"
+naga = "29"
 proptest = { workspace = true }
 # Dev-only dependency edge for the #[ignore] GPU re-capture tests, which
 # migrate off the deprecated `render::golden::perceptual_diff` (L1) onto
