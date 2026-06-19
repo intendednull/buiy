@@ -24,15 +24,17 @@ struct Instance {
     @location(5) radius: f32,            // logical px
     @location(6) clip_min: vec2<f32>,   // logical px, clip AABB min (-inf = none)
     @location(7) clip_max: vec2<f32>,   // logical px, clip AABB max (+inf = none)
+    @location(8) affine_col0: vec2<f32>, // 2D affine basis col0 = [m00, m10]
+    @location(9) affine_col1: vec2<f32>, // 2D affine basis col1 = [m01, m11]
 };
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) local_uv: vec2<f32>,   // -1..+1 across the rect
-    @location(1) half_size: vec2<f32>,  // logical px
+    @location(0) local_uv: vec2<f32>,   // -1..+1 across the rect (box-local, rotation-invariant)
+    @location(1) half_size: vec2<f32>,  // logical px (box-local SDF half-extent)
     @location(2) color: vec4<f32>,
     @location(3) radius: f32,            // logical px
-    @location(4) rect_center: vec2<f32>, // logical px, window-relative
+    @location(4) frag_logical: vec2<f32>, // affine-transformed window-logical corner (slot 4, was the axis-aligned center)
     @location(5) clip_min: vec2<f32>,   // logical px (clip AABB, ClipRect space)
     @location(6) clip_max: vec2<f32>,   // logical px (clip AABB, ClipRect space)
 };
@@ -44,13 +46,20 @@ fn logical_to_clip(p: vec2<f32>) -> vec2<f32> {
 @vertex
 fn vertex(v: Vertex, i: Instance) -> VertexOut {
     var out: VertexOut;
-    let logical = i.rect_pos + v.uv * i.rect_size; // logical-px corner
+    // R1: transform the box-local corner by the 2D affine BEFORE the
+    // logical->clip view map. The affine maps box-local 0 -> 0 for a pure
+    // rotation/scale, so an identity basis [1,0,0,1] yields rect_pos + local
+    // (byte-identical to the pre-R1 axis-aligned path).
+    let local = v.uv * i.rect_size;                // box-local corner (top-left at 0)
+    let logical = i.rect_pos + mat2x2<f32>(i.affine_col0, i.affine_col1) * local;
     out.clip_position = vec4<f32>(logical_to_clip(logical), 0.0, 1.0);
     out.local_uv = v.uv * 2.0 - 1.0;
     out.half_size = i.rect_size * 0.5;             // positive — no abs needed
     out.color = i.color;
     out.radius = i.radius;
-    out.rect_center = i.rect_pos + out.half_size;  // logical px, window-relative
+    // The affine is linear, so the interpolated frag_logical is the correct
+    // transformed window-space point for the clip-AABB discard.
+    out.frag_logical = logical;
     out.clip_min = i.clip_min;
     out.clip_max = i.clip_max;
     return out;
@@ -67,7 +76,9 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // Per-primitive clip AABB (R8b): discard fragments outside [clip_min,
     // clip_max] in logical-px window space — the same space as ClipRect. The
     // full-view sentinel (±inf) makes this never fire (unclipped / top-layer).
-    let frag_pos = in.rect_center + in.local_uv * in.half_size;
+    // frag_logical is the affine-transformed window-logical corner (R1) — the
+    // correct post-transform point, not the old axis-aligned box center.
+    let frag_pos = in.frag_logical;
     if any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }

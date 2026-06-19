@@ -72,6 +72,20 @@ pub struct ExtractedNode {
     pub position: Vec2,
     /// Box size in logical px, from `ResolvedLayout.size`.
     pub size: Vec2,
+    /// The 2D linear part of `GlobalTransform`'s affine — the box-local →
+    /// window-logical basis, as column vectors `[col0, col1]` where
+    /// `col0 = [m00, m10]` and `col1 = [m01, m11]`. Applied per-vertex in the
+    /// quad/shadow vertex stage about the box-local origin (the corner the
+    /// composed matrix maps `0` to), so a rotated/scaled element paints with the
+    /// right orientation and size. Identity `[[1,0],[0,1]]` == no rotation/scale
+    /// (the byte-identical fast path). Pillar 5: this reads the propagated
+    /// `GlobalTransform`, NOT `ResolvedTransform` — the bridge already folded
+    /// `ResolvedTransform.matrix` into `Transform` so render == picking by
+    /// construction. FIDELITY: faithful for rotation + (non-)uniform scale;
+    /// skew / general `TransformMatrix::Matrix` are bounded by the bridge's
+    /// TRS-only `Transform::from_matrix` decompose (a lossy shear) — a separate
+    /// residual (clip-and-transform.md § B.5).
+    pub affine: [[f32; 2]; 2],
     /// Resolved background fill (already theme-resolved; `Color::NONE` ==
     /// transparent, extract emits no quad for it downstream).
     pub color: Color,
@@ -111,6 +125,13 @@ pub fn extracted_node_for(
     theme: &Theme,
 ) -> ExtractedNode {
     let translation = global_transform.translation();
+    // The 2D linear part of the composed affine (glam `Affine3A.matrix3`): xy of
+    // the x-axis is col0, xy of the y-axis is col1 (COLUMNS, not rows — a
+    // transpose would rotate the wrong way). For a pure rotation/scale the
+    // matrix maps box-local `0 -> 0`, so `translation.xy` stays the painted
+    // top-left and an identity transform yields the `[[1,0],[0,1]]` fast path.
+    let m = global_transform.affine().matrix3;
+    let affine = [[m.x_axis.x, m.x_axis.y], [m.y_axis.x, m.y_axis.y]];
     let color = match background {
         Some(bg) => crate::render::color::resolve_token(&bg.color, theme),
         None => Color::NONE,
@@ -122,6 +143,7 @@ pub fn extracted_node_for(
         color,
         clip: clip.copied(),
         group: None,
+        affine,
     }
 }
 

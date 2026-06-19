@@ -590,20 +590,57 @@ stays open until such a mechanism exists.
 **Spec touchpoint:** `transforms-and-containment.md § 5.3`;
 `stacking-and-top-layer.md § 2` trigger 5, § 7.
 
-## Render — `UiTransform` paint + `Containment` PAINT clip rect + perspective / backface
+## Render — `UiTransform` paint + `Containment` PAINT clip rect + perspective / backface — TRANSFORM-PAINT + PAINT-CLIP LANDED (R1); perspective / backface / transform-origin / skew DEFERRED
 
 **Originated:** Phase 8 (spec § 4 — render-side concerns stored only).
 
-**Symptom:** `perspective`, `TransformStyle::Preserve3d`, and
-`BackfaceVisibility::Hidden` are stored on `UiTransform` and the
-`LAYOUT` / `PAINT` / `STYLE` contain flags are stored on `Containment`,
-but render does not yet consume them.
+**Status:** transform-paint (rotation + (non-)uniform scale) LANDED (R1); the
+PAINT clip rect was ALREADY done; perspective / `Preserve3d` /
+`BackfaceVisibility` remain C-tier deferred. Do NOT close — the residuals below
+keep this entry open.
 
-**Implementation sketch:** render consumes `ResolvedTransform` + the
-containment flags — applies the composed matrix, the PAINT clip rect, and
-honors perspective / backface / `transform-style`.
+**LANDED (R1, as landed):** the 2D affine paint. Extract consumes the
+`GlobalTransform` 2D linear part (`global_transform.affine().matrix3` xy columns
+— NOT a re-read of `ResolvedTransform`; pillar-5 contract, the bridge already
+folded `ResolvedTransform.matrix` into `Transform`) and carries it as
+`ExtractedNode.affine`. `PackedInstance` grew by APPENDING the 2x2 basis
+(`[m00,m10,m01,m11]`) AFTER the existing 13 floats so every prior offset stays
+byte-stable; the named `COLOR_FLOAT_OFFSET = 4` / `ALPHA_FLOAT_OFFSET = 7`
+consts were added for R2's degraded-group re-tint. The quad + shadow vertex
+stages apply the affine to each box-local corner (`mat2x2 * local`) before the
+logical→clip view map, interpolating `frag_logical` for the clip-AABB discard
+(stride 52 B → 68 B, vertex attrs `@location(8)/(9)`). Identity basis
+`[1,0,0,1]` is byte-identical to the pre-R1 axis-aligned path. GPU rotate/scale
+reftest: `tests/render_transform_paint_gpu.rs` (`#[ignore]`).
 
-**Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
+**ALREADY done (pre-R1):** the `Containment` PAINT clip rect — the per-primitive
+clip AABB via `clip::clip_for_primitive` + `write_clip_rects` (clip.rs ~196),
+packed onto every instance (the R8b fragment discard).
+
+**Residual (still C-tier deferred):** `perspective`, `TransformStyle::Preserve3d`,
+and `BackfaceVisibility::Hidden` are stored on `UiTransform` but render does not
+consume them (render/mod.rs ~388). The 2D affine path does not carry a
+projective channel.
+
+**Residual A (newly surfaced — layout side):** `transform-origin` is NOT honored
+by layout sub-pass 6e (`compose_transform` ignores `ui.origin`), so the composed
+matrix rotates/scales about the box-local TOP-LEFT, not the 50%/50% center.
+Render transports the affine EXACTLY as `GlobalTransform` encodes it so render ==
+picking by construction; it must NOT independently re-apply an origin (a
+double-apply would diverge from picking). Honoring `transform-origin` is a
+layout-side follow-up (a 6e change + a picking re-verify).
+
+**Residual B (newly surfaced — bridge fidelity):** skew (`TransformMatrix::Skew`)
+and general `TransformMatrix::Matrix` paint are BOUNDED by the bridge's lossy
+TRS-only `Transform::from_matrix` decompose (bridge.rs; proven lossy by
+`from_matrix_drops_projective_perspective_row_keeps_affine`). A Bevy `Transform`
+is TRS-only and cannot represent a general shear, so the extracted 2D linear part
+is FAITHFUL for rotation + non-uniform scale but skew/general-matrix do NOT paint
+faithfully yet. Faithful skew needs the bridge to stop round-tripping through TRS
+(or render to read a non-TRS source).
+
+**Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1;
+`clip-and-transform.md § B.5`.
 
 ## Render — R11 forced-colors cross-phase seams (CatalogPaint + BoxShadow draw-skip)
 
@@ -941,6 +978,12 @@ skipped) rather than silently widening scope.
 flat draw at prepare (forward compositing, accepting the double-dim
 approximation v1 rejected for targets) or document skip-as-degradation;
 decide with `buiy-verification-design`'s budget calibration.
+
+**Unblocked by R1 (as of transform-paint landing):** the forward-composite
+re-tint reads the per-instance alpha at a stable float offset; R1 added the
+named `ALPHA_FLOAT_OFFSET = 7` const (`render/instance.rs`) and the
+append-after-13 `PackedInstance` layout exists precisely to keep that offset
+byte-stable, so R2's hard PackedInstance-offset dependency is now satisfied.
 
 **Spec touchpoint:** `effect-compositor.md § 2.3`.
 

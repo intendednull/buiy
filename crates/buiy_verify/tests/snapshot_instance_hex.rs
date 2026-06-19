@@ -9,7 +9,7 @@ use buiy_verify::snapshot::instance_hex;
 fn hex_round_trips_bytes() {
     // `instance_hex(p)` → parse hex → `bytemuck::pod_read_unaligned` must
     // reconstruct the ORIGINAL `PackedInstance` bit-for-bit, proving the hex is
-    // lossless and matches the GPU upload payload (52 B → 104 hex chars).
+    // lossless and matches the GPU upload payload (68 B → 136 hex chars).
     let p = PackedInstance {
         rect_pos: [10.0, 20.0],
         rect_size: [100.0, 40.0],
@@ -17,10 +17,11 @@ fn hex_round_trips_bytes() {
         radius: 8.0,
         clip_min: [0.0, 0.0],
         clip_max: [200.0, 100.0],
+        affine: [1.0, 0.0, 0.0, 1.0],
     };
 
     let hex = instance_hex(&p);
-    assert_eq!(hex.len(), 104, "52 bytes → 104 hex chars");
+    assert_eq!(hex.len(), 136, "68 bytes → 136 hex chars");
 
     // Parse the hex back into the 52 bytes.
     let bytes: Vec<u8> = (0..hex.len())
@@ -49,6 +50,7 @@ fn hex_flips_on_a_packing_change() {
         radius: 0.0,
         clip_min: [f32::NEG_INFINITY, f32::NEG_INFINITY],
         clip_max: [f32::INFINITY, f32::INFINITY],
+        affine: [1.0, 0.0, 0.0, 1.0],
     };
     let mut flipped = base;
     // The half-size sign bug `render_instance.rs` regression-tests: a negated

@@ -13,8 +13,10 @@
 //! module imports it and adds only the `(kind, format)` specialization key.
 //!
 //! The per-instance vertex layout carries the R8b clip AABB
-//! (`clip_min`/`clip_max`) at `@location(6)`/`(7)`, lifting the instance stride
-//! to 52 B; the quad-family shaders discard fragments outside it.
+//! (`clip_min`/`clip_max`) at `@location(6)`/`(7)` and the R1 2D affine basis
+//! (`affine_col0`/`affine_col1`) at `@location(8)`/`(9)`, lifting the instance
+//! stride to 68 B; the quad-family shaders discard fragments outside the clip
+//! and transform each box-local corner by the affine.
 
 use bevy::mesh::VertexBufferLayout;
 use bevy::render::render_resource::{
@@ -62,10 +64,10 @@ pub struct BuiyPrimitives;
 
 impl BuiyPrimitives {
     /// The two interleaved vertex-buffer layouts shared by every quad-family
-    /// primitive (static unit quad, stride 16; per-instance record, stride 52).
+    /// primitive (static unit quad, stride 16; per-instance record, stride 68).
     /// The instance record carries the per-primitive clip AABB at
-    /// `@location(6)`/`(7)` (R8b); its `array_stride` tracks
-    /// [`PACKED_INSTANCE_STRIDE_BYTES`] (52 B).
+    /// `@location(6)`/`(7)` (R8b) and the 2D affine basis at `@location(8)`/`(9)`
+    /// (R1); its `array_stride` tracks [`PACKED_INSTANCE_STRIDE_BYTES`] (68 B).
     ///
     /// [`PACKED_INSTANCE_STRIDE_BYTES`]: crate::render::instance::PACKED_INSTANCE_STRIDE_BYTES
     fn quad_family_vertex_buffers() -> Vec<VertexBufferLayout> {
@@ -87,7 +89,7 @@ impl BuiyPrimitives {
                 ],
             },
             VertexBufferLayout {
-                array_stride: 52,
+                array_stride: 68,
                 step_mode: VertexStepMode::Instance,
                 attributes: vec![
                     VertexAttribute {
@@ -122,6 +124,20 @@ impl BuiyPrimitives {
                         format: VertexFormat::Float32x2,
                         offset: 44,
                         shader_location: 7,
+                    },
+                    // R1 2D affine basis: `affine_col0` @ 52, `affine_col1` @ 60
+                    // — appended AFTER the clip fields so offsets 0..52 stay
+                    // byte-stable (the R2 dependency). See `PackedInstance.affine`
+                    // and both quad-family shaders' `Instance.affine_col0/1`.
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 52,
+                        shader_location: 8,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 60,
+                        shader_location: 9,
                     },
                 ],
             },
@@ -235,7 +251,9 @@ impl SpecializedRenderPipeline for BuiyPrimitives {
             vec![view_uniform_layout_descriptor()]
         };
         // The glyph instance record is `GlyphAlphaInstance` (stride 68), a
-        // different layout from the quad family's `PackedInstance` (stride 52).
+        // DISTINCT layout from the quad family's `PackedInstance` — even though
+        // both strides are now 68 B (R1), the attr sets, raw types ([f32;17] vs
+        // GlyphAlphaInstance), and pipelines differ and must not be conflated.
         let buffers = if is_glyph {
             Self::glyph_vertex_buffers()
         } else {
