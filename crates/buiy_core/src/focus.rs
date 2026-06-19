@@ -82,7 +82,7 @@ fn advance_focus(
     focused.0 = compute_next_focus(&entries, focused.0, forward);
 }
 
-fn compute_next_focus(
+pub(crate) fn compute_next_focus(
     focusables: &[(Entity, Focusable)],
     current: Option<Entity>,
     forward: bool,
@@ -107,4 +107,80 @@ fn compute_next_focus(
         (Some(i), false) => (i + n - 1) % n,
     };
     Some(entries[next_idx].0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::Entity;
+
+    fn e(i: u32) -> Entity {
+        Entity::from_raw_u32(i).unwrap()
+    }
+
+    fn f(tab_order: i32) -> Focusable {
+        Focusable { tab_order }
+    }
+
+    /// Audit #5 (T2.17): the `Skip` branch — a `Focusable` with a negative
+    /// `tab_order` is filtered out (`tab_order >= 0`, line 92) and must never
+    /// be returned by traversal, even when it is the only other candidate and
+    /// even across a wrap. With the skip filter removed this test reddens:
+    /// the negative entity would re-enter the candidate list and be reachable.
+    #[test]
+    fn negative_tab_order_is_skipped() {
+        // One focusable, one Skip(-1). The skipped entity is given the LOWER
+        // entity index so a broken filter (or an `e.index()`-only sort) would
+        // surface it first.
+        let skip = e(1);
+        let auto = e(2);
+        let entries = vec![(skip, f(-1)), (auto, f(0))];
+
+        // From nothing, forward, the only reachable focusable is the Auto one.
+        assert_eq!(
+            compute_next_focus(&entries, None, true),
+            Some(auto),
+            "negative tab_order must be skipped, leaving only the Auto focusable"
+        );
+        // Advancing from the Auto entity wraps back to itself — the skip
+        // candidate is never reached.
+        assert_eq!(
+            compute_next_focus(&entries, Some(auto), true),
+            Some(auto),
+            "skip candidate must not appear in the wrap"
+        );
+        // Backward is identical: still only the Auto focusable.
+        assert_eq!(
+            compute_next_focus(&entries, None, false),
+            Some(auto),
+            "negative tab_order is skipped in both directions"
+        );
+    }
+
+    /// Audit #5 (T2.17): the explicit-priority sort — positive `tab_order`s
+    /// come before Auto(0), and positives are ordered ascending by their value
+    /// (sort key `(if >0 {0} else {1}, tab_order, index)`, line 99). The
+    /// entity indices are chosen to FIGHT the sort key: the Auto entity has the
+    /// lowest index and the higher-priority positive (tab_order=1) has the
+    /// highest index, so an index-only or group-dropped sort would order them
+    /// differently and redden this test.
+    #[test]
+    fn positive_tab_orders_precede_auto_in_ascending_order() {
+        let auto = e(1); // tab_order 0, lowest index
+        let pos2 = e(2); // tab_order 2
+        let pos1 = e(3); // tab_order 1, highest index
+
+        let entries = vec![(auto, f(0)), (pos2, f(2)), (pos1, f(1))];
+
+        // Resolved traversal order must be: pos1 (1) -> pos2 (2) -> auto (0).
+        let first = compute_next_focus(&entries, None, true);
+        assert_eq!(first, Some(pos1), "lowest positive tab_order comes first");
+        let second = compute_next_focus(&entries, first, true);
+        assert_eq!(second, Some(pos2), "positives ascend by tab_order value");
+        let third = compute_next_focus(&entries, second, true);
+        assert_eq!(third, Some(auto), "Auto(0) comes after all positives");
+        // Wrap back to the first positive.
+        let wrapped = compute_next_focus(&entries, third, true);
+        assert_eq!(wrapped, Some(pos1), "traversal wraps to the first positive");
+    }
 }

@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
-    a11y::{A11yLabel, A11yPlugin, A11yRole, A11yTreeBuilder},
+    a11y::{A11yDescription, A11yLabel, A11yPlugin, A11yRole, A11yTreeBuilder},
+    components::Node,
     focus::Focusable,
 };
 
@@ -61,4 +62,75 @@ fn tree_builder_emits_one_node_per_focusable_with_role_and_label() {
     assert_eq!(count, 1, "exactly one button node in tree");
     let names: Vec<String> = snapshot.iter().map(|n| n.name.clone()).collect();
     assert!(names.contains(&"Save".to_string()), "Save name present");
+}
+
+/// Audit #20 (T2.18): the description-extraction branch (`a11y/mod.rs:110`).
+/// `A11yDescription` is spawned in zero existing tests, so its surfacing into
+/// the built tree is unexercised. Spawn an entity carrying one and assert the
+/// description text appears on its node. A regression that drops the
+/// `desc.map(...)` extraction (or extracts the wrong component) reddens this.
+#[test]
+fn description_component_surfaces_in_tree() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Save".to_string()),
+            A11yDescription("Saves the current document".to_string()),
+        ))
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let node = builder
+        .snapshot()
+        .iter()
+        .find(|n| n.entity == entity)
+        .expect("the entity with an A11yDescription must appear in the tree");
+    assert_eq!(
+        node.description, "Saves the current document",
+        "A11yDescription text must surface as the node's description"
+    );
+}
+
+/// Audit #20 (T2.18): the skip-empty branch (`a11y/mod.rs:103`). An entity with
+/// no a11y content at all (no role/label/description/focusable) must be skipped
+/// — it never becomes a tree node. Here a plain `Node`-only entity is the
+/// non-a11y entity; only the a11y-bearing sibling should surface. Removing the
+/// `continue` (so empty entities are pushed) reddens this.
+#[test]
+fn entity_without_a11y_content_is_skipped() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    // Non-a11y entity: carries only a layout `Node`, none of the four a11y
+    // components the skip branch checks.
+    let plain = app.world_mut().spawn(Node).id();
+    // An a11y-bearing entity so the tree is non-empty (proves the system ran
+    // and the skip is selective, not a blanket "nothing surfaces").
+    let labeled = app
+        .world_mut()
+        .spawn((A11yRole::Button, A11yLabel("OK".to_string())))
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let snapshot = builder.snapshot();
+    assert!(
+        snapshot.iter().any(|n| n.entity == labeled),
+        "the a11y-bearing entity must be present"
+    );
+    assert!(
+        !snapshot.iter().any(|n| n.entity == plain),
+        "an entity with no a11y content must be skipped from the tree"
+    );
 }

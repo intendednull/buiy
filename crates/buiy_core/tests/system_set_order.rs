@@ -94,6 +94,129 @@ fn layout_runs_before_animate() {
     assert!(idx[0] < idx[1], "Layout must run before Animate: {idx:?}");
 }
 
+/// Audit #34 (T2.20): set *membership*, not just inter-set ordering. The tests
+/// above pin that the seven sets run in the documented order, but they say
+/// nothing about which plugin's systems actually land in each set — with only
+/// CorePlugin (and its empty downstream sets) the membership is unexercised. A
+/// plugin that silently drops `.in_set(BuiySet::X)` from its registration would
+/// leave the ordering test green while its system runs unordered.
+///
+/// Mirrors the delta-count idiom in `tests/render_forced_colors_swap.rs`: count
+/// a set's systems with the plugin minus without it, so CorePlugin's own
+/// membership (and any unrelated growth) cancels and only the plugin's
+/// contribution remains. In this Bevy build the system *objects* are moved into
+/// the executable and aren't retained in `graph.systems` after `app.update()`
+/// (see the note below), so membership can only be counted, not name-matched —
+/// the delta-count is the deterministic discriminator available without GPU.
+fn set_membership_delta(set: BuiySet, add_plugin: impl Fn(&mut App) + Copy) -> usize {
+    let count = |with_plugin: bool| -> usize {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(CorePlugin);
+        if with_plugin {
+            add_plugin(&mut app);
+        }
+        // Forces `Schedule::initialize` so set membership is populated.
+        app.update();
+
+        let schedules = app.world().resource::<Schedules>();
+        let schedule = schedules
+            .get(Update)
+            .expect("CorePlugin registered systems on Update");
+        schedule
+            .graph()
+            .systems_in_set(set.intern())
+            .map(|keys| keys.len())
+            .unwrap_or(0)
+    };
+    count(true) - count(false)
+}
+
+#[test]
+fn layout_plugin_populates_layout_set() {
+    // `LayoutPlugin` schedules its pipeline (sync_styles → Taffy → write
+    // resolved layout → the sub-pass chain) into `BuiySet::Layout`
+    // (`layout/pipeline.rs:99`). Dropping that `.in_set(BuiySet::Layout)` would
+    // collapse the delta to 0. Asserting `>= 1` (not a hardcoded count) keeps
+    // the test robust to the pipeline growing more sub-pass systems.
+    let delta = set_membership_delta(BuiySet::Layout, |app| {
+        app.add_plugins(buiy_core::layout::LayoutPlugin);
+    });
+    assert!(
+        delta >= 1,
+        "LayoutPlugin must place its pipeline systems in BuiySet::Layout (delta was {delta})"
+    );
+}
+
+#[test]
+fn focus_plugin_populates_input_set() {
+    // `FocusPlugin::build` adds `handle_tab.in_set(BuiySet::Input)`
+    // (`focus.rs:56`).
+    let delta = set_membership_delta(BuiySet::Input, |app| {
+        // `handle_tab` reads `Res<ButtonInput<KeyCode>>`; MinimalPlugins omits
+        // InputPlugin, so seed the resource (mirrors tests/focus.rs) to keep
+        // `app.update()` from panicking on a missing param.
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.add_plugins(buiy_core::focus::FocusPlugin);
+    });
+    assert!(
+        delta >= 1,
+        "FocusPlugin must place handle_tab in BuiySet::Input (delta was {delta})"
+    );
+}
+
+#[test]
+fn picking_plugin_populates_picking_set() {
+    // `PickingPlugin::build` adds `update_hovered.in_set(BuiySet::Picking)`
+    // (`picking/mod.rs:28`).
+    let delta = set_membership_delta(BuiySet::Picking, |app| {
+        // `update_hovered` reads `MessageReader<PointerHits>`; bevy's
+        // PickingPlugin provides the `Messages<PointerHits>` resource it needs.
+        app.add_plugins(bevy::picking::PickingPlugin);
+        app.add_plugins(buiy_core::picking::PickingPlugin);
+    });
+    assert!(
+        delta >= 1,
+        "PickingPlugin must place update_hovered in BuiySet::Picking (delta was {delta})"
+    );
+}
+
+#[test]
+fn a11y_plugin_populates_a11y_update_set() {
+    // `A11yPlugin::build` adds `build_tree.in_set(BuiySet::A11yUpdate)`
+    // (`a11y/mod.rs:85`).
+    let delta = set_membership_delta(BuiySet::A11yUpdate, |app| {
+        app.add_plugins(buiy_core::a11y::A11yPlugin);
+    });
+    assert!(
+        delta >= 1,
+        "A11yPlugin must place build_tree in BuiySet::A11yUpdate (delta was {delta})"
+    );
+}
+
+#[test]
+fn plugins_only_populate_their_own_set() {
+    // Membership is *selective*: A11yPlugin must NOT inflate the Input set, and
+    // FocusPlugin must NOT inflate the A11yUpdate set. This gives the membership
+    // assertions teeth — a plugin that mis-tags its system into the wrong set
+    // would still pass a lone `>= 1` on the right set, but reddens here.
+    let a11y_into_input = set_membership_delta(BuiySet::Input, |app| {
+        app.add_plugins(buiy_core::a11y::A11yPlugin);
+    });
+    assert_eq!(
+        a11y_into_input, 0,
+        "A11yPlugin must not add systems to BuiySet::Input"
+    );
+    let focus_into_a11y = set_membership_delta(BuiySet::A11yUpdate, |app| {
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.add_plugins(buiy_core::focus::FocusPlugin);
+    });
+    assert_eq!(
+        focus_into_a11y, 0,
+        "FocusPlugin must not add systems to BuiySet::A11yUpdate"
+    );
+}
+
 // NOTE: the plan's belt-and-suspenders name-probe (locating
 // `write_buiy_transform` / `mark_dirty_trees` / `propagate_parent_transforms`
 // / `sync_simple_transforms` by name in the Update toposort) is intentionally
