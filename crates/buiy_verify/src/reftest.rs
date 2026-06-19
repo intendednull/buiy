@@ -522,6 +522,17 @@ macro_rules! reftest {
     };
 }
 
+/// Compile-check probe for the [`reftest!`] macro (it has no runnable form — it
+/// expands to `#[test]` items that reference per-case scene fns defined
+/// elsewhere). This `no_run` doctest exercises the macro's no-fuzz `match`
+/// expansion against stub scene fns, so a malformed macro arm is caught at
+/// `cargo test --doc` time. (The macro's own doc shows the full grammar as
+/// `text`, since those `$test`/`$reference` args are placeholders.) `doc(hidden)`
+/// — this exists only to host the doctest, not as public API. Placed before the
+/// test module so the `#[cfg(test)] mod tests` stays last (`items_after_test_module`).
+#[doc(hidden)]
+pub fn probe() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,12 +661,3 @@ mod tests {
         ));
     }
 }
-
-/// Probe doc.
-///
-/// ```no_run
-/// fn flex_test(_: &mut bevy::app::App) {}
-/// fn literal_offsets_ref(_: &mut bevy::app::App) {}
-/// buiy_verify::reftest!(match, flex_justify_end, flex_test, literal_offsets_ref);
-/// ```
-pub fn probe() {}
