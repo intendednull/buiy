@@ -109,4 +109,4 @@ Explicitly out of scope. cosmic-text does not link any dictionary library, does 
 - Issue #10 "IME support" — https://github.com/pop-os/cosmic-text/issues/10
 - `cosmic_undo_2` crate — https://crates.io/crates/cosmic_undo_2
 - `modit` crate (vi-keys parser) — https://crates.io/crates/modit
-- Buiy foundation spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/text.md`
+- Buiy foundation spec — `docs/specs/2026-05-07-buiy-foundation/text.md`

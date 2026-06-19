@@ -111,7 +111,7 @@ The lineage is clear: every immediate-mode UI library since 2005 inherits the Ca
 
 ## Why Buiy is retained-mode (the foundation spec's reasoning)
 
-Buiy's foundation spec ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.3) commits to a retained component model — `buiy::Node`, `buiy::Style`, focus components, a11y components, animation components — and ECS + BSN authoring (§ 2.4). The reasoning, restated through the immediate-mode lens:
+Buiy's foundation spec ([`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.3) commits to a retained component model — `buiy::Node`, `buiy::Style`, focus components, a11y components, animation components — and ECS + BSN authoring (§ 2.4). The reasoning, restated through the immediate-mode lens:
 
 1. **Web-platform parity** ([README.md § 1.1](../../specs/2026-05-07-buiy-foundation/README.md)). The web platform is retained-mode — the DOM is a persistent tree, CSS cascades on stable nodes, layout invalidation is on dirty subtrees, accessibility surfaces a persistent role tree. Parity requires a persistent surface to mirror.
 2. **Accessibility tree shape.** AccessKit nodes survive frames; ATs are happier with stable IDs. Buiy's `A11yRole` / `A11yLabel` / `A11yStates` components are entity-backed and survive frames by construction ([architecture.md § 2.6](../../specs/2026-05-07-buiy-foundation/architecture.md)).

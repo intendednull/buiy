@@ -110,5 +110,5 @@ The fact that AccessKit *deliberately doesn't ship an ACCNAME 1.2 implementation
 - https://github.com/zed-industries/zed
 - https://crates.io/crates/accesskit
 - https://www.w3.org/TR/accname-1.2/
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/verification.md
+- docs/specs/2026-05-07-buiy-foundation/accessibility.md
+- docs/specs/2026-05-07-buiy-foundation/verification.md

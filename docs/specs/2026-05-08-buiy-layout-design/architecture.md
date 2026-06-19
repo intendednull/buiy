@@ -13,12 +13,13 @@ The bridge is one-directional. Buiy never patches Taffy in place; features Taffy
 ### 1.1 `LayoutTree` — the bridge state
 
 ```rust
-#[derive(Default)]
 pub struct LayoutTree {
-    tree: TaffyTree<()>,
+    tree: TaffyTree<Entity>,
     by_entity: HashMap<Entity, TaffyNodeId>,
 }
 ```
+
+The Taffy node context is `Entity`, not `()`: text leaves register their owning entity as the node context so Taffy's measure closure can resolve the entity behind a measured node. `TaffyTree<Entity>` is not itself `Default` (the `()` node-context form is), so `LayoutTree` carries a hand-written `impl Default` rather than `#[derive(Default)]`. (The `<Entity>` context was introduced by the text campaign when text leaves needed shrink-to-fit measurement.)
 
 Stored as a `NonSendResource`. Lifetime: app-long. Reused frame-to-frame so Taffy's internal cache stays warm.
 
@@ -45,18 +46,18 @@ Or<(
     Or<(
         Changed<Container>, Changed<ContainerQuery>,
         Changed<ContainerQueryActive>, Changed<ContainerQueryInactive>,
-        Changed<Anchor>, Changed<MultiColumn>,
+        Changed<Anchor>, Changed<MultiColumn>, Changed<Containment>,
     )>,
 )>
 ```
 
 The `Children` / `ChildOf` triggers cover hierarchy mutations (re-parenting, sibling insertion, despawn). The `LayoutTree` GC (step 0) handles the despawn case via `RemovedComponents<Node>`; `SyncStyles`'s `Changed<Children>` covers the *parent-side* invalidation.
 
-`Changed<ResolvedLayout>` feeds the container-unit cascade (Phase 5): an entity whose size shifts to track an ancestor's resolved size re-translates on the next frame. The four `Container` / `ContainerQuery*` triggers cover query-container changes and marker toggles; `Changed<Anchor>` keeps a freshly spawned anchored entity's Taffy node in sync for sub-pass 6d. `Changed<MultiColumn>` is wired now but is currently a no-op (multicol does not feed Taffy in v1 — sub-pass 6c is a warn-once-per-session stub).
+`Changed<ResolvedLayout>` feeds the container-unit cascade (Phase 5): an entity whose size shifts to track an ancestor's resolved size re-translates on the next frame. The four `Container` / `ContainerQuery*` triggers cover query-container changes and marker toggles; `Changed<Anchor>` keeps a freshly spawned anchored entity's Taffy node in sync for sub-pass 6d. `Changed<MultiColumn>` re-syncs an entity whose multi-column declaration changed so sub-pass 6c (`multicol_pack`, the Phase-13 position-only packer — see [flex-and-grid.md § 3.2](flex-and-grid.md#32-algorithm)) re-packs it; multicol still does not feed Taffy directly (the packer is a post-Taffy override), so the trigger keeps the entity's Taffy node current for the surrounding block-flow pass. `Changed<Containment>` joins the inner `Or` because containment landed in the shipped trigger set (Phase 8 — see below).
 
 `WritingModeResolved` is a private cache component set by the `WritingModeInherit` pass (step 0b, before step 1); `Changed<WritingModeResolved>` re-triggers `SyncStyles` for an entity whose effective inherited writing-mode actually changed (the inherit pass skips writes when the value is unchanged, preserving the O(0) steady-state contract). `Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are intentionally **excluded** — they are runtime/snap state, not layout inputs.
 
-`Stacking`, `Transform`, and `Containment` are **not** in the shipped trigger set: their components are not yet wired into layout (future Phases 8/9 — see § 2.1). They join the filter when those phases land.
+`Containment` **joined the trigger set in Phase 8** (`Changed<Containment>` in the inner `Or` above): its layout-affecting bits (size containment, `content-visibility`) feed `style_to_taffy`, so a containment change must re-translate. `Stacking` and `UiTransform` remain **excluded**: neither feeds Taffy compute (stacking-context formation and the transform composition run as post-Taffy passes, sub-passes 6e/6f, reading `Changed` directly inside their own systems rather than gating `SyncStyles`).
 
 ## 2. Public API: hybrid builder + decomposed
 
@@ -76,16 +77,16 @@ Per the project convention (foundation goal §1.3, `buiy-bsn-integration-design`
 | `FlexItem` | [flex-and-grid.md](flex-and-grid.md) | flex-grow/shrink/basis, order, align-self |
 | `GridParams` | [flex-and-grid.md](flex-and-grid.md) | grid-template-{columns,rows,areas}, auto-flow, gap |
 | `GridItem` | [flex-and-grid.md](flex-and-grid.md) | grid-{column,row,area}, justify-self, align-self |
-| `MultiColumn` | [flex-and-grid.md](flex-and-grid.md) | column-count/width/gap/rule/span/fill, break-{inside,before,after} (tier-E, stub in v1) |
+| `MultiColumn` | [flex-and-grid.md](flex-and-grid.md) | column-count/width/gap/rule/span/fill, break-{inside,before,after} (tier-E; real position-only packer landed Phase 13 — true fragmentation still deferred, see [flex-and-grid.md § 3.2](flex-and-grid.md#32-algorithm)) |
 | `Container` | [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) | container-type, container-name |
 | `WritingMode` | [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) | writing-mode, direction, text-orientation, unicode-bidi |
 | `Overflow` | [overflow-and-scrolling.md](overflow-and-scrolling.md) | overflow per axis, scrollbar-gutter, scroll-behavior, overscroll-behavior |
 | `Scroll` | [overflow-and-scrolling.md](overflow-and-scrolling.md) | snap-type/align/stop, snap padding/margin |
 | `Stacking` † | [stacking-and-top-layer.md](stacking-and-top-layer.md) | z-index, isolation, top-layer marker |
-| `Transform` † | [transforms-and-containment.md](transforms-and-containment.md) | transform, translate/rotate/scale longhands, transform-origin, perspective |
+| `UiTransform` † | [transforms-and-containment.md](transforms-and-containment.md) | transform, translate/rotate/scale longhands, transform-origin, perspective (named `UiTransform`, not `Transform`, to avoid colliding with Bevy's prelude `Transform`) |
 | `Containment` † | [transforms-and-containment.md](transforms-and-containment.md) | contain, content-visibility, will-change |
 
-† **Future (Phases 8/9, unimplemented).** As of Phase 7, `Stacking`, `Transform`, and `Containment` are not yet defined, exported, or registered in `LayoutPlugin::build`; the rows describe the target surface. The shipped Phase-7 author-set surface is the rows above them.
+† **Landed (Phases 8/9).** `Stacking`, `UiTransform` (the CSS `transform` surface — named `UiTransform` to avoid Bevy's prelude `Transform`, see [transforms-and-containment.md § 1](transforms-and-containment.md#1-uitransform)), and `Containment` are all defined, exported, and registered in the layout plugin's `build` (`layout/mod.rs`): `Containment` and the transform components shipped in Phase 8, `Stacking` + top-layer in Phase 9. They are full author-set components like the rows above them; the `†` marks which phase introduced them, not a deferral.
 
 Every component derives `Reflect + Default + Clone + Component`. Every component is registered in the layout plugin's `build` so reflection / BSN / inspectors find them.
 
@@ -172,20 +173,28 @@ One ordered chain runs in `BuiySet::Layout`:
                             6b. TableLayout       — Buiy-side table algorithm
                             6c. MulticolPack      — multi-column packing
                             6d. AnchorResolution  — anchor + position-try
+                            6e. TransformCompose  — compose UiTransform/longhand → ResolvedTransform (Phase 8)
+                            6f. StackingDetect    — stacking-context formation (Phase 9), reads 6e's matrix
 7.  WriteResolvedLayout  — push positions+sizes to Bevy components
+8.  CqDescendantInvalidate — collect descendants of resized query containers (Phase 14)
+9.  CqDescendantReRun    — drain the dirty set; re-resolve Cq* descendants same-frame (Phase 14)
 ```
 
-`WritingModeInherit` (step 0b) was inserted after `RemovedNodesGc` in Phase 4 so step 1 sees each entity's effective inherited writing-mode. `CqFlipReRun` (step 5) is a real sub-set, not an inline annotation: when step 4 signals a flip it re-runs the work of steps 1+3 (it shares their system code). The first link in step 6's chain is a `clear_post_taffy_overrides` system that empties the shared override map; the four sub-passes (6a-6d) then write into it.
+`WritingModeInherit` (step 0b) was inserted after `RemovedNodesGc` in Phase 4 so step 1 sees each entity's effective inherited writing-mode. `CqFlipReRun` (step 5) is a real sub-set, not an inline annotation: when step 4 signals a flip it re-runs the work of steps 1+3 (it shares their system code). The first link in step 6's chain is a `clear_post_taffy_overrides` system that empties the shared override map; the six sub-passes (6a-6f) then write into it (6e composes the transform matrix into `ResolvedTransform`, Phase 8; 6f detects stacking-context formation off 6e's composed matrix, Phase 9 — see [transforms-and-containment.md § 1.1](transforms-and-containment.md#11-longhand-components)).
 
-Each sub-pass of step 6 mutates `ResolvedLayout` (via the shared override map) for entities matching its concern; sub-passes are independent (sticky doesn't read tables, multi-column doesn't read anchors), so the relative order is the order in which their writes get composed for entities that hit more than one. Sub-passes that have no work (no sticky elements, no `Display::Table*`, no `MultiColumn`, no `Anchor`) are no-ops.
+Steps 8 (`CqDescendantInvalidate`) and 9 (`CqDescendantReRun`) were appended in **Phase 14** to extend the same-frame container-query settle to the *multi-level geometric* cascade: step 8 collects the descendants of any query container whose `ResolvedLayout` changed and step 9 (gated on a request flag, like step 5) re-resolves their `Length::Cq*` values and re-evaluates their rules the same frame, capped at one re-run. [container-queries-and-writing-modes.md § 1.3](container-queries-and-writing-modes.md#13-activation-same-frame-re-layout) details the algorithm.
 
-**Commands-flush boundary.** All nine system sets run as a single chained system set inside `BuiySet::Layout`; the sub-passes of step 6 (6a-6d) share one `Commands` buffer and one query state with the other steps. The buffer is applied at `BuiySet::Layout`'s end (step 7's completion). This means a despawn issued by sub-pass 6c is **not visible** to sub-pass 6d's queries — both see the same world snapshot established at step 0. Authors must not depend on intra-pipeline despawn visibility; if a despawn must take effect mid-pipeline, schedule it in an earlier `BuiySet`.
+**Layout owns steps 0–9. Text adds two more sub-sets.** The text-rendering subsystem registers `TextSync` and `TextCommit` inside `BuiySet::Layout` around the layout chain (shaping feeds layout's measure closure; the committed glyph geometry is read after `WriteResolvedLayout`), bringing the full count inside `BuiySet::Layout` to **thirteen sub-sets**: layout's eleven (steps 0, 0b, 1–9) plus text's two.
 
-The always-scheduled sets are steps 0, 0b, 1, 3, 6, 7. The container-query steps — 2 (`CqActivate`), 4 (`CqFlipCheck`), 5 (`CqFlipReRun`) — do work only when `Container` components exist on any entity.
+The geometric sub-passes of step 6 (6a-6d) mutate `ResolvedLayout` (via the shared override map) for entities matching their concern; they are independent (sticky doesn't read tables, multi-column doesn't read anchors), so the relative order is the order in which their writes get composed for entities that hit more than one. The two later sub-passes consume rather than displace geometry: 6e writes the composed matrix to `ResolvedTransform`, and 6f reads 6e's matrix to detect stacking-context formation — neither moves `ResolvedLayout`. Sub-passes with no matching entities (no sticky elements, no `Display::Table*`, no `MultiColumn`, no `Anchor`, no non-identity transform) are no-ops.
+
+**Commands-flush boundary.** All eleven layout system sets (steps 0, 0b, 1–9) run as a single chained system set inside `BuiySet::Layout`; the sub-passes of step 6 (6a-6f) share one `Commands` buffer and one query state with the other steps. The buffer is applied at `BuiySet::Layout`'s end (after step 9 completes). This means a despawn issued by sub-pass 6c is **not visible** to sub-pass 6d's queries — both see the same world snapshot established at step 0. Authors must not depend on intra-pipeline despawn visibility; if a despawn must take effect mid-pipeline, schedule it in an earlier `BuiySet`.
+
+The always-scheduled sets are steps 0, 0b, 1, 3, 6, 7. The container-query steps — 2 (`CqActivate`), 4 (`CqFlipCheck`), 5 (`CqFlipReRun`), 8 (`CqDescendantInvalidate`), 9 (`CqDescendantReRun`) — do work only when `Container` components exist on any entity.
 
 ### 3.1 Scheduling
 
-All nine system sets live in `BuiySet::Layout` and are chained with `.before` / `.after` constraints. (Step 5, `CqFlipReRun`, is a conditional re-run of steps 1+3 when step 4 signals a flip; it is its own sub-set but shares the step-1/3 system code.) The chain is asserted by a test (see [foundation/verification.md § CI gates](../2026-05-07-buiy-foundation/verification.md)) — any reordering must update the test, which surfaces the change in code review.
+All eleven layout system sets (steps 0, 0b, 1–9) live in `BuiySet::Layout` and are chained with `.before` / `.after` constraints. (Step 5, `CqFlipReRun`, is a conditional re-run of steps 1+3 when step 4 signals a flip; step 9, `CqDescendantReRun`, is the analogous Phase-14 re-run gated on `CqDescendantReRunRequested`; both are their own sub-sets but share the system code they re-run.) The chain is asserted by a test (see [foundation/verification.md § CI gates](../2026-05-07-buiy-foundation/verification.md)) — any reordering must update the test, which surfaces the change in code review.
 
 The chain composes with the rest of `BuiySet`: the `CorePlugin` order is `Layout → Style → Input → Animate → Picking → A11yUpdate → Render`, so layout runs **before** `BuiySet::Animate` and `BuiySet::Render`. (Pinned by `tests/system_set_order.rs::layout_runs_before_animate` and `::layout_runs_before_render`.)
 
@@ -282,7 +291,7 @@ The decision is independent of this spec — every type and system named here mo
 
 Tests live alongside the realizing code (Phase 0: `crates/buiy_core/tests/`; future: wherever layout splits to). Coverage required by this spec:
 
-1. **System order** — assert the pipeline (nine system sets: eight numbered steps 0–7 plus the `WritingModeInherit` pre-pass) runs in declared order; step 5 (`CqFlipReRun`, conditional re-run) is exercised by a separate fixture.
+1. **System order** — assert the pipeline (eleven layout system sets: ten numbered steps 0–9 plus the `WritingModeInherit` pre-pass) runs in declared order; the conditional re-runs (step 5 `CqFlipReRun`, step 9 `CqDescendantReRun`) are exercised by separate fixtures.
 2. **GC** — spawn Node, despawn, assert `LayoutTree` is empty.
 3. **Topological invariant** — fixture with a 4-deep tree; assert parent resolves before children every frame.
 4. **Hybrid API equivalence** — same logical layout produced via struct literal and fluent form yields identical decomposed components.

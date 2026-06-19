@@ -6,8 +6,8 @@
 
 The one image-comparison metric for the whole pyramid: an AA-aware, two-axis
 fuzzy diff that replaces the two naive metrics on `main` — the L1
-`perceptual_diff` (`render/golden.rs:56`) and the global RMSE `compare_images`
-(`buiy_verify/src/visual.rs:18`). It is the shared primitive consumed by
+`perceptual_diff` (`render/golden.rs`) and the global RMSE `compare_images`
+(the former `buiy_verify` RMSE `compare_images`, since removed and unified into `metric::compare`). It is the shared primitive consumed by
 **tier-4 reftests** (fuzzy `==`/`!=` in one process) and **tier-5 goldens**
 (stored-baseline regression), so both tiers express tolerance the same way. The
 per-pixel decision is pixelmatch's luminance-weighted YIQ `colorDelta` with an
@@ -154,7 +154,7 @@ impl Default for CompareOpts {
 /// budget: `differing_pixels == total_pixels`, `max_channel_delta == 255`,
 /// `mssim == Some(0.0)`. This mirrors the existing `compare_images` /
 /// `perceptual_diff`, which return a maximal-difference sentinel on a size
-/// mismatch (`visual.rs:19`, `golden.rs:58`) — but, crucially, it is the
+/// mismatch (the former `compare_images`, and `render/golden.rs`'s `perceptual_diff`) — but, crucially, it is the
 /// *fail* direction, not the silent-pass bug §4 removes: the naive `1.0` was a
 /// problem only because a separate code path let a `1.0` score satisfy a max
 /// budget. Here the saturated `Diff` makes `passes(&_)` false for **every**
@@ -194,7 +194,7 @@ errors then outweigh chroma, unlike L1/RMSE's equal channel weighting (report §
 ### Antialias exclusion — the brightest/darkest-neighbor sibling test
 
 The single feature both naive metrics lack and the biggest GPU-pipeline flake
-source (SDF `smoothstep` edge + linear→sRGB encode jitter sub-LSB, `golden.rs:52`).
+source (SDF `smoothstep` edge + linear→sRGB encode jitter sub-LSB, `render/golden.rs`).
 pixelmatch's `antialiased(img, x, y, …)` predicate: a pixel is AA iff it has a
 neighbor that is the **brightest** and one the **darkest** relative to it (by YIQ
 luminance) and is not a hard edge in *both* images. A differing pixel that is AA in
@@ -265,7 +265,7 @@ rewrite. Per Vello, the metric may legitimately differ per failure mode; the sha
   `FuzzBudget` near `EXACT` holds. `RefCase.kind = Match` asserts `passes`;
   `Mismatch` asserts `!passes` (the feature must *do* something). Same call backs
   the CPU-vs-GPU SDF cross-check (CPU `sdf_rounded_rect` oracle vs GPU readback).
-- **tier-5 goldens** (`buiy_verify::golden`): `assert_golden(name, &img,
+- **tier-5 goldens** (`buiy_verify::golden`): `assert_golden(&key, &img,
   &budget)` loads `tests/goldens/<key>.png` and calls the *same* `compare`;
   `emit_diff_image` is on so the triage HTML embeds the heatmap. One metric, one
   budget vocabulary across both tiers — the §4 unification.
@@ -371,8 +371,8 @@ adapter) — the metric is pure CPU, so its self-test needs no GPU lane.
 
 ## Sources
 
-Code: `crates/buiy_core/src/render/golden.rs:48-66` (L1 `perceptual_diff`),
-`crates/buiy_verify/src/visual.rs:18-45` (RMSE `compare_images`),
+Code: `crates/buiy_core/src/render/golden.rs` (L1 `perceptual_diff`),
+`crates/buiy_verify/src/visual.rs` (the RMSE `compare_images` — since removed; unified into `metric::compare`),
 `crates/buiy_core/src/render/instance.rs:40-58` (`PackedInstance`, the
 byte-snapshot sibling primitive), `crates/buiy_core/tests/text_gpu.rs:114`/`:152`/`:271`
 (re-capture `perceptual_diff` call sites to migrate — `:114` stable, `:152`/`:271`

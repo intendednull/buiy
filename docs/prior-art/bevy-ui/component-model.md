@@ -65,7 +65,7 @@ The mechanical consequence: BSN patches/templates can't merge into private-sette
 
 The recommendation in #17644 is to keep an idiomatic decomposed Bevy-side API and *transform* it into AccessKit's structure at the boundary, rather than exposing AccessKit's tree shape as the component model.
 
-This is the single most-cited lesson in the Buiy foundation spec — see `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.4 and § 2.6. Every Buiy component is therefore mandated small, public-fielded, observable, decomposed; AccessKit is reached via Buiy's own decomposed `A11yRole` / `A11yLabel` / `A11yDescription` / `A11yStates` / `A11yRelations` components.
+This is the single most-cited lesson in the Buiy foundation spec — see `docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.4 and § 2.6. Every Buiy component is therefore mandated small, public-fielded, observable, decomposed; AccessKit is reached via Buiy's own decomposed `A11yRole` / `A11yLabel` / `A11yDescription` / `A11yStates` / `A11yRelations` components.
 
 bevy_ui's own components are *closer* to the BSN-friendly shape than `AccessibilityNode` is — `Node` has public fields, `BackgroundColor` is decomposed, `Text` is a newtype — but the residual coupling inside `Node` (layout fields + `border_radius` + position-type all bundled together) is the same pattern at smaller scale. A BSN patch that wants to change only `border_radius` still pulls the whole `Node` into the patch.
 

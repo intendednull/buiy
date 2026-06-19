@@ -126,4 +126,4 @@ Buiy's foundation §3.7 commits to drag-and-drop with a **drag a11y replacement 
 - DeepWiki GPUI section: https://deepwiki.com/zed-industries/zed/2.2-ui-framework-(gpui)
 - Zed on Windows (DirectWrite + DX11): https://zed.dev/windows
 - bevy#21765 (Bevy main migration to Parley): https://github.com/bevyengine/bevy/issues/21765
-- Cross-link: cosmic-text prior-art: [`/home/user/buiy/docs/prior-art/cosmic-text/`](../cosmic-text/)
+- Cross-link: cosmic-text prior-art: [`docs/prior-art/cosmic-text/`](../cosmic-text/)

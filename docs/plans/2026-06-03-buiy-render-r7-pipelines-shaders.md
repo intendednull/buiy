@@ -1,5 +1,8 @@
 # Typed-primitive pipelines + SDF shaders Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Depends on:** R6 (`render/buckets.rs` — owns the shared `BuiyPrimitiveKind { Shadow, Quad, Glyph, Path }` enum and CPU instance bucketing; R7 **imports** that enum, it does not redefine it). Execution order: R1 → R2 → R3 → R4 → R5 → R6 → **R7** → R8 → (R9, R10) → R11. R7 must land after R6 so `BuiyPrimitiveKind` exists to import.

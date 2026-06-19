@@ -81,7 +81,7 @@ Verified as of 0.18.1 / 0.19-rc.1 against current source and a January 2026 issu
 
 These limitations are not bugs — they are the result of bevy_ui being a CSS-flavoured rectangular-stacking renderer optimised for the game-HUD case. Issue #22345 is the upstream proposal to lift several of them, but its status (as of 2026-05) is `S-Needs-Design-Doc` and the listed scope (clipping in particular) is described as "`require substantial architectural redesign`." See [open-problems.md](open-problems.md) (Agent B) for the current Bevy-side issue status.
 
-For Buiy, the chosen response is parallel rather than patch: own the render-graph node, own the clip-path primitive, own backdrop-filter, own top-layer compositing. See `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3.
+For Buiy, the chosen response is parallel rather than patch: own the render-graph node, own the clip-path primitive, own backdrop-filter, own top-layer compositing. See `docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3.
 
 ## Sources
 

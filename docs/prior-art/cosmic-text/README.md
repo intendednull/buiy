@@ -2,6 +2,8 @@
 **Status:** active
 **Subject:** cosmic-text — pure-Rust text shaping, BiDi, layout, editing, and color-emoji rasterization
 
+# cosmic-text
+
 ## What it is
 
 [`cosmic-text`](https://github.com/pop-os/cosmic-text) is the pure-Rust text engine built and maintained by System76 for the COSMIC desktop and Pop!_OS. It composes a HarfBuzz-port shaper (`harfrust`), a font-format rasterizer (`swash`), Servo's UAX #9 BiDi (`unicode-bidi`), Google Fonts' `read-fonts` wrapper (`skrifa`), and `fontdb` font discovery into a single crate that does shape + layout + cursor + selection + glyph caching for multi-line, multi-script, BiDi-correct text. It is the substrate Iced has used since 0.10.0 (2023-07-28) and the substrate Bevy adopted in 0.15 (2024-11-29, PR #10193 merged 2024-07-04 during the 0.14 cycle), replacing the script-coverage-capped `ab_glyph` engine.
@@ -30,7 +32,7 @@ Buiy's foundation spec ([`text.md`](../../specs/2026-05-07-buiy-foundation/text.
 | Recent downloads | 1,299,778 |
 | Steward | System76 (POP_OS / COSMIC desktop) |
 | Primary maintainer | Jeremy Soller (`jackpot51`) |
-| Shaper | **`harfrust 0.5.0`** (HarfBuzz v13.0.0 port) — replaced `rustybuzz` in **0.15.0** (PR #417, 2025-09-09) |
+| Shaper | **`harfrust 0.5.0`** (HarfBuzz v13.0.0 port) — replaced `rustybuzz` in **0.15.0** (PR #417, 2025-10-30) |
 | Rasterizer | `swash 0.2.6` (outlines, COLRv0/CPAL, sbix, CBDT/CBLC; **NOT** COLRv1). **Correction (text campaign T9, 2026-06-11):** `0.2.6` is the declared minimum; the 0.19.0 lock resolves **swash 0.2.8** |
 | Font data | `skrifa 0.40.0` (Google Fonts' `read-fonts` wrapper) |
 | Font discovery | `fontdb 0.23` |
@@ -73,8 +75,8 @@ Internal contradictions surfaced during research have been fixed in a polish pas
 
 - cosmic-text repo and main-branch source — https://github.com/pop-os/cosmic-text
 - crates.io metadata — https://crates.io/crates/cosmic-text
-- Buiy text spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/text.md`
-- Buiy foundation spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/README.md`
+- Buiy text spec — `docs/specs/2026-05-07-buiy-foundation/text.md`
+- Buiy foundation spec — `docs/specs/2026-05-07-buiy-foundation/README.md`
 - Bevy PR #10193 (cosmic-text adoption) — https://github.com/bevyengine/bevy/pull/10193
 - Bevy issue #21765 (cosmic-text → Parley migration) — https://github.com/bevyengine/bevy/issues/21765
 - cosmic-text PR #417 (rustybuzz → harfrust) — https://github.com/pop-os/cosmic-text/pull/417

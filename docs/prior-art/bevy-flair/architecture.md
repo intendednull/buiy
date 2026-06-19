@@ -122,7 +122,7 @@ In practice (per README + community discussion): hot-reload is one of the headli
 ## 8. Cross-references
 
 - The cascade-engine choice (Servo `selectors` 0.32) parallels bevy_ui's own choice to lean on Taffy for layout: lease a real-spec implementation rather than reinvent it. Same lesson as [`bevy-ui/architecture.md`](../bevy-ui/architecture.md) § Taffy integration.
-- The eleven-stage `PostUpdate` pipeline is a parallel to bevy_ui's `BuiySet::Layout → Style → Input → Animate → Picking → A11yUpdate → Render` ordering ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.8). bevy_flair runs in `PostUpdate`; Buiy's would run in its own `BuiySet::Style` stage.
+- The eleven-stage `PostUpdate` pipeline is a parallel to bevy_ui's `BuiySet::Layout → Style → Input → Animate → Picking → A11yUpdate → Render` ordering ([`docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.8). bevy_flair runs in `PostUpdate`; Buiy's would run in its own `BuiySet::Style` stage.
 - Reflection-driven property mapping aligns with Buiy's BSN-friendly reflection requirement ([architecture.md § 2.4](../../specs/2026-05-07-buiy-foundation/architecture.md#24-authoring-ecs-native-and-bsn-both-first-class)) — `bevy_flair_core::ComponentProperty` is essentially what a stylesheet layer over BSN-friendly Buiy components would need.
 
 ## Sources

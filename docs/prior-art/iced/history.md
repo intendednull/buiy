@@ -57,7 +57,7 @@ Concrete effects:
 - `iced_glow` and `iced_glutin` (OpenGL renderers) are deprecated in this same release. The renderer pair becomes `iced_wgpu` (GPU) + `iced_tiny_skia` (CPU software fallback).
 - The CHANGELOG also lists *"Software renderer, runtime renderer fallback, and core consolidation"* — `iced_tiny_skia` is introduced.
 
-This is a load-bearing fact for Buiy: **iced's text stack is cosmic-text, not Parley**. The brief that produced this folder asserted "Parley text"; that is wrong as of 0.14. Buiy's own cosmic-text commitment (foundation [architecture.md § 2.2](../../specs/2026-05-07-buiy-foundation/architecture.md)) thus shares a substrate with iced, not a competing engine. See [Agent A's `text-and-cosmic.md`](text-and-cosmic.md) for the full text-rendering walkthrough and [`/home/user/buiy/docs/prior-art/cosmic-text/lessons.md`](../cosmic-text/lessons.md) for cosmic-text's own state.
+This is a load-bearing fact for Buiy: **iced's text stack is cosmic-text, not Parley**. The brief that produced this folder asserted "Parley text"; that is wrong as of 0.14. Buiy's own cosmic-text commitment (foundation [architecture.md § 2.2](../../specs/2026-05-07-buiy-foundation/architecture.md)) thus shares a substrate with iced, not a competing engine. See [Agent A's `text-and-cosmic.md`](text-and-cosmic.md) for the full text-rendering walkthrough and [`docs/prior-art/cosmic-text/lessons.md`](../cosmic-text/lessons.md) for cosmic-text's own state.
 
 ## 0.11 — never released
 
@@ -67,7 +67,7 @@ There is no `0.11.x` on crates.io. The 0.10 → 0.12 gap (~7 months) corresponds
 
 PR [#1964](https://github.com/iced-rs/iced/pull/1964) — *Multi-window support*. The single most-requested feature in the previous two years. The single `Application` trait becomes capable of managing multiple winit windows from one `Model` / `update` / `view` triad. Each window can have its own `view` projection.
 
-This is the architectural decision that, for Buiy, makes iced's per-window approach legible: iced commits to *one process = one Model = many windows*, exactly the model bevy_ui adopted via its `Window` entity per winit `WindowId`. See [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) § Borrow #7 for the parallel.
+This is the architectural decision that, for Buiy, makes iced's per-window approach legible: iced commits to *one process = one Model = many windows*, exactly the model bevy_ui adopted via its `Window` entity per winit `WindowId`. See [`docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) § Borrow #7 for the parallel.
 
 `0.12.1` (2024-02-22) followed with bug fixes.
 

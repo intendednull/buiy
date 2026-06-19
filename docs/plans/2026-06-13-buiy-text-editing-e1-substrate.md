@@ -1,7 +1,7 @@
 # Buiy text-editing E1 — Editor substrate + Buffer ownership
 
 **Date:** 2026-06-13
-**Status:** ready to execute
+**Status:** landed
 **Campaign:** [2026-06-13-buiy-text-editing-campaign.md](2026-06-13-buiy-text-editing-campaign.md) § "E1 — Editor substrate + Buffer ownership"
 **Spec:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 2.1, 2.2, 2.2a, 2.3; [measure-and-layout.md](../specs/2026-06-09-buiy-text-rendering-design/measure-and-layout.md) § 2.3
 

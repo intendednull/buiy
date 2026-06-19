@@ -4,7 +4,7 @@
 **Status:** landed (Phase 3; `buiy_core::render::golden` + `buiy_verify::determinism`; see § Landed)
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
-The job of this tier is narrow and load-bearing: **make every pixel test reproducible so the diff is a signal, not noise.** It engineers nondeterminism out at the source ("remove the nondeterminism, don't just tolerate it") so the perceptual metric's default fuzz budget can be `(0, 0)`. It extends the *already-built* flake triad (`GoldenConfig::deterministic()` — `fixed_clock`/`wait_for_fonts`/`warm_atlas`, `golden.rs:38`) with the missing knobs — Ahem font mode, DPR pin, MSAA/dither pinned-off, async-asset flush — exposes them through a `DeterministicApp` builder in `buiy_verify`, and pins the CI software rasterizer (lavapipe) below all of it. Reftests need this stack *less* than goldens (both halves render in one process, so residual drift cancels) but reuse the same builder.
+The job of this tier is narrow and load-bearing: **make every pixel test reproducible so the diff is a signal, not noise.** It engineers nondeterminism out at the source ("remove the nondeterminism, don't just tolerate it") so the perceptual metric's default fuzz budget can be `(0, 0)`. It extends the *already-built* flake triad (`GoldenConfig::deterministic()` — `fixed_clock`/`wait_for_fonts`/`warm_atlas`, `render/golden.rs`) with the missing knobs — Ahem font mode, DPR pin, MSAA/dither pinned-off, async-asset flush — exposes them through a `DeterministicApp` builder in `buiy_verify`, and pins the CI software rasterizer (lavapipe) below all of it. Reftests need this stack *less* than goldens (both halves render in one process, so residual drift cancels) but reuse the same builder.
 
 ## Contract deviations
 
@@ -17,7 +17,7 @@ Two deviations from the SHARED API CONTRACT, both forced by verified prior-art (
 
 The crate split follows the contract: **app-coupled capture stays in `buiy_core::render`**, **pure config/builder lives in `buiy_verify::determinism`**.
 
-- `buiy_core::render::golden` — extend `GoldenConfig` (below), define the **canonical `Dpr` type** (the single definition site every other tier imports — see § "Extending `GoldenConfig`"), and promote the capture entry point `capture_to_image(&mut App, &GoldenConfig) -> image::RgbaImage` out of `tests/support/mod.rs` into `golden.rs` src (the contract's shared seam; consumes the existing `gpu_render_app_scaled` / `wait_for_text_ready` / `readback_rgba` machinery, `tests/support/mod.rs:156`/`:266`/`:353`).
+- `buiy_core::render::golden` — extend `GoldenConfig` (below), define the **canonical `Dpr` type** (the single definition site every other tier imports — see § "Extending `GoldenConfig`"), and promote the capture entry point `capture_to_image(&mut App, &GoldenConfig) -> image::RgbaImage` out of `tests/support/mod.rs` into `render/golden.rs` src (the contract's shared seam; consumes the existing `gpu_render_app_scaled` / `wait_for_text_ready` / `readback_rgba` machinery in `tests/support/mod.rs`).
 - `buiy_verify::determinism` — the `DeterministicApp` builder and the asserted-setup-step checklist. It *re-exports* the `FontMode`/`Dpr` config types from `buiy_core::render::golden` (their canonical home, since `GoldenConfig` carries them) rather than redefining them. Pure / app-independent: it *configures* an `App`, it does not own the GPU.
 - CI rasterizer pin — a composite GitHub Action under `.github/actions/install-mesa/` + an env contract; not Rust, but specified here so the plan author wires it.
 
@@ -94,7 +94,7 @@ impl GoldenConfig {
 /// Single-sampled: the 4× MSAA resolve antialiases edges nondeterministically
 /// across drivers. Buiy's in-shader analytic AA is deterministic given identical
 /// FP, so MSAA buys nothing here and costs determinism. Mirrors the existing
-/// `spawn_capture_camera`'s `Msaa::Off` (tests/support/mod.rs:229).
+/// `spawn_capture_camera`'s `Msaa::Off` (tests/support/mod.rs).
 pub const CAPTURE_MSAA: bevy::render::view::Msaa = bevy::render::view::Msaa::Off;
 /// Deband dither perturbs the low bits of the tonemapped output. Capture cameras
 /// pin it off; assert no `DebandDither::Enabled` on the capture camera.
@@ -103,14 +103,14 @@ pub const CAPTURE_DITHER_OFF: bool = true;
 
 ## DPR pin
 
-`ExtractedNodes.scale_factor` already carries the ratio (filled from the primary window, `extract.rs:606`; default `1.0`, `extract.rs:156`), and `gpu_render_app_scaled(logical_w, logical_h, scale_factor)` already builds an app at an explicit `with_scale_factor_override` (`tests/support/mod.rs:156`–`:161`). The pin is therefore **plumbing that exists** — the determinism contribution is to make it an *asserted* capture invariant: `capture_to_image` sizes the offscreen target to `logical × dpr` physical pixels (the existing scaled-builder contract) and asserts `ExtractedNodes.scale_factor == cfg.dpr.as_f32()` before readback (the `f32`→`Dpr` conversion lives at this capture boundary). DPR is a *fixture axis* fed by `coverage::Matrix.dprs`, never a tolerance widening.
+`ExtractedNodes.scale_factor` already carries the ratio (filled from the primary window, `extract.rs:606`; default `1.0`, `extract.rs:156`), and `gpu_render_app_scaled(logical_w, logical_h, scale_factor)` already builds an app at an explicit `with_scale_factor_override` (`tests/support/mod.rs`). The pin is therefore **plumbing that exists** — the determinism contribution is to make it an *asserted* capture invariant: `capture_to_image` sizes the offscreen target to `logical × dpr` physical pixels (the existing scaled-builder contract) and asserts `ExtractedNodes.scale_factor == cfg.dpr.as_f32()` before readback (the `f32`→`Dpr` conversion lives at this capture boundary). DPR is a *fixture axis* fed by `coverage::Matrix.dprs`, never a tolerance widening.
 
 ## Ahem font mode (collapse the font axis)
 
 The bulk of text-bearing goldens test *boxes*, not glyphs; real glyph rasterization is the canonical per-platform flake source (Flutter's entire `matchesGoldenFile` Ahem trick, `prior-art/flutter-golden-testing/obscure-text-font.md`). `FontMode::Ahem` substitutes a bundled Ahem face (every glyph a solid em-square box) so any non-fidelity golden is byte-identical across hosts; the narrow fidelity suite runs `FontMode::Real`.
 
 - **Asset:** a committed `Ahem.ttf` (MIT, the WPT/Web-Platform Ahem) under `crates/buiy_core/tests/fixtures/fonts/`, alongside the existing per-script subsets (`tests/fixtures/fonts/`). License file beside it, mirroring the `OFL-*.txt` precedent.
-- **Wiring:** `DeterministicApp` registers it through the production bytes path — `FontRegistry::register_bytes("Ahem", ahem_bytes, FontFaceDescriptors::default())` (`registry.rs:165`) — under family name `"Ahem"`, and when `font_mode == Ahem` makes it the **sole resolvable family** for fixture text so fallback cannot reintroduce a platform font. Concretely: the deterministic app disables system-font loading (fixtures already run bundled-only; `fixture_font_bytes`/`register_fixture_font`, `tests/support/mod.rs:292`/`:306`) and the fixture's BSN sets `font-family: Ahem`. This is a *capture-time* substitution; the shaping `.snap` fixtures and the real-glyph fidelity suite are unaffected (they pin `FontMode::Real`).
+- **Wiring:** `DeterministicApp` registers it through the production bytes path — `FontRegistry::register_bytes("Ahem", ahem_bytes, FontFaceDescriptors::default())` (`registry.rs:165`) — under family name `"Ahem"`, and when `font_mode == Ahem` makes it the **sole resolvable family** for fixture text so fallback cannot reintroduce a platform font. Concretely: the deterministic app disables system-font loading (fixtures already run bundled-only; `fixture_font_bytes`/`register_fixture_font` in `tests/support/mod.rs`) and the fixture's BSN sets `font-family: Ahem`. This is a *capture-time* substitution; the shaping `.snap` fixtures and the real-glyph fidelity suite are unaffected (they pin `FontMode::Real`).
 - **Boundary (Open Q #7 in the report):** which goldens are Real vs Ahem is a per-fixture declaration on the fixture, not global. Default Ahem; opt into Real only for the fidelity suite (glyph hinting/subpixel, color-emoji, decorations).
 
 ## Async-asset flush to quiescence
@@ -120,13 +120,13 @@ The bulk of text-bearing goldens test *boxes*, not glyphs; real glyph rasterizat
 ```rust
 /// All must hold before the readback frame, in `capture_to_image`:
 ///   1. asset_server pending loads == 0   (no in-flight Image/Shader/Font load)
-///   2. AtlasWarmupQueue::is_empty()       (warm_atlas; golden.rs:87)
-///   3. fonts_ready(atlas, warmup, &keys)  (wait_for_fonts; golden.rs:82)
+///   2. AtlasWarmupQueue::is_empty()       (warm_atlas; render/golden.rs)
+///   3. fonts_ready(atlas, warmup, &keys)  (wait_for_fonts; render/golden.rs)
 ///   4. PipelineCache has no Queued/Compiling Buiy pipeline (shaders ready)
 /// Bounded by MAX_SETTLE_FRAMES; panic with which condition never held.
 ```
 
-This generalizes the existing `wait_for_text_ready` poll (`tests/support/mod.rs:266`, conditions 2+3) by adding the asset-server (1) and pipeline-cache (4) gates. The fixed clock means the loop terminates deterministically: time is advanced by `Time::<Virtual>::advance_by` (the landed manual-clock mechanism, `tests/text_caret_selection.rs:178`), never `Instant::now()`, so `fixed_clock` is "drive `Time<Virtual>` at explicit virtual timestamps."
+This generalizes the existing `wait_for_text_ready` poll (`tests/support/mod.rs`, conditions 2+3) by adding the asset-server (1) and pipeline-cache (4) gates. The fixed clock means the loop terminates deterministically: time is advanced by `Time::<Virtual>::advance_by` (the landed manual-clock mechanism, `tests/text_caret_selection.rs:178`), never `Instant::now()`, so `fixed_clock` is "drive `Time<Virtual>` at explicit virtual timestamps."
 
 ## `DeterministicApp` builder (`buiy_verify::determinism`)
 
@@ -156,7 +156,7 @@ impl DeterministicApp {
 }
 ```
 
-`build` is a thin, **single-bodied** wrapper over the landed `gpu_render_app_scaled` so it cannot drift from the canonical plugin stack (the same anti-drift discipline `gpu_render_app_with_resolution` already enforces, `tests/support/mod.rs:168`).
+`build` is a thin, **single-bodied** wrapper over the landed `gpu_render_app_scaled` so it cannot drift from the canonical plugin stack (the same anti-drift discipline `gpu_render_app_with_resolution` already enforces, `tests/support/mod.rs`).
 
 ## CI software-rasterizer pin (lavapipe) vs. the local real-GPU lane
 
@@ -208,4 +208,4 @@ below are all as-landed.
 
 ## Sources
 
-Code: `crates/buiy_core/src/render/golden.rs:18`–`:88` (GoldenConfig, deterministic(), fonts_ready); `crates/buiy_core/tests/support/mod.rs:156` (gpu_render_app_scaled), `:161` (with_scale_factor_override), `:229`/`:237` (Msaa::Off capture camera), `:266` (wait_for_text_ready quiescence poll), `:292`/`:306` (bundled-font registration), `:353` (readback_rgba); `crates/buiy_core/src/render/extract.rs:156`/`:606` (scale_factor default + fill); `crates/buiy_core/src/text/registry.rs:165` (register_bytes); `crates/buiy_core/tests/text_caret_selection.rs:178` (Time<Virtual>::advance_by). Prior-art: `docs/prior-art/wgpu-testing/{lessons.md,determinism-rasterizer.md}` (lavapipe pin, VK_DRIVER_FILES, the LP_NUM_THREADS myth); `docs/prior-art/flutter-golden-testing/obscure-text-font.md` (Ahem). Report: `docs/reports/2026-06-14-visual-bug-detection-strategy.md` § Cross-cutting mechanisms ("Deterministic-rendering stack for wgpu CI").
+Code: `crates/buiy_core/src/render/golden.rs` (GoldenConfig, deterministic(), fonts_ready); `crates/buiy_core/tests/support/mod.rs` (gpu_render_app_scaled, with_scale_factor_override, the Msaa::Off capture camera, wait_for_text_ready quiescence poll, bundled-font registration, readback_rgba); `crates/buiy_core/src/render/extract.rs:156`/`:606` (scale_factor default + fill); `crates/buiy_core/src/text/registry.rs:165` (register_bytes); `crates/buiy_core/tests/text_caret_selection.rs:178` (Time<Virtual>::advance_by). Prior-art: `docs/prior-art/wgpu-testing/{lessons.md,determinism-rasterizer.md}` (lavapipe pin, VK_DRIVER_FILES, the LP_NUM_THREADS myth); `docs/prior-art/flutter-golden-testing/obscure-text-font.md` (Ahem). Report: `docs/reports/2026-06-14-visual-bug-detection-strategy.md` § Cross-cutting mechanisms ("Deterministic-rendering stack for wgpu CI").

@@ -74,8 +74,8 @@ See [`lessons.md`](lessons.md) for the structured Validates / Avoid / Borrow dec
 ## Cross-links
 
 - Bevy comparison: [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md), [`../bevy-ui/comparisons.md`](../bevy-ui/comparisons.md).
-- Unity comparison: `../unity-ui/lessons.md` (sibling folder; cross-link once written).
-- DSL-above-runtime comparison: [`../makepad/README.md`](../makepad/README.md), [`../slint/`](../slint/) (pending).
+- Unity comparison: [`../unity-ui/lessons.md`](../unity-ui/lessons.md) (sibling folder).
+- DSL-above-runtime comparison: [`../makepad/README.md`](../makepad/README.md), [`../slint/`](../slint/).
 - Buiy foundation: [`../../specs/2026-05-07-buiy-foundation/README.md`](../../specs/2026-05-07-buiy-foundation/README.md), [`architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md).
 
 ## Sources

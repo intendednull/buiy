@@ -164,5 +164,5 @@ Three things Buiy can learn from GPUI's element model:
 - GPUI docs.rs (Render, Element, Div, Styled): https://docs.rs/gpui/latest/gpui/
 - _Ownership and data flow in GPUI_: https://zed.dev/blog/gpui-ownership
 - GPUI README: https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md
-- Cross-link: bevy_egui lessons (Zed-vs-egui comparison): [`/home/user/buiy/docs/prior-art/bevy-egui/lessons.md`](../bevy-egui/lessons.md)
-- Cross-link: Iced Elm-architecture: [`/home/user/buiy/docs/prior-art/iced/elm-architecture.md`](../iced/elm-architecture.md)
+- Cross-link: bevy_egui lessons (Zed-vs-egui comparison): [`docs/prior-art/bevy-egui/lessons.md`](../bevy-egui/lessons.md)
+- Cross-link: Iced Elm-architecture: [`docs/prior-art/iced/elm-architecture.md`](../iced/elm-architecture.md)

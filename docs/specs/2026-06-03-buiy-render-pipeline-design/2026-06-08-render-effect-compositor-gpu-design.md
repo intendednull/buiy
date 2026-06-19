@@ -1,16 +1,20 @@
 # Effect-compositor GPU orchestration — design note
 
 **Date:** 2026-06-08
-**Status:** proposed (GPU-verify campaign Phase 4, item 5)
-**Implements** effect-compositor.md §1.1/§2/§3 — the GPU dataflow R9 left inert
-(the pure math + structural seams landed + headless-tested; `prepare_effect_groups`
-has an empty body, the `BuiyNode::run` composite loops are `let _ = group`, and
-extract emits a FLAT node list with no group membership).
+**Status:** landed (GPU-verify campaign Phase 4, item 5)
+**Implements** effect-compositor.md §1.1/§2/§3 — the GPU dataflow R9 had left inert
+and the campaign built. R9 shipped the pure math + structural seams (headless-tested)
+but left `prepare_effect_groups` an empty body, the `BuiyNode::run` composite loops a
+`let _ = group`, and extract emitting a FLAT node list with no group membership; this
+note's "Dataflow"/"Node two-pass" design is what filled those in (the
+`prepare_effect_groups` body, the group/composite passes, and per-view group
+membership are now live — see the "As-landed deviation" note in the forks below and
+[effect-compositor.md](effect-compositor.md)).
 
 ## Scope
 
 Make group `opacity` (and `isolation`) composite **once** through an off-screen
-`Rgba16Float` target, so the 2 `render_compositor_gpu.rs` stubs become real:
+`Rgba16Float` target — which made the 2 `render_compositor_gpu.rs` stubs real:
 `group_opacity_overlap_is_single_layer_at_half`, `rt_pool_returns_to_baseline_after_idle`.
 v1 carries the two SC-forming formers (opacity, isolation); `backdrop-filter`
 (EffectGroup-but-not-SC) + filters stay reserved (no v1 shader).

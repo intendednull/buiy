@@ -58,7 +58,7 @@ This is what gamepad users / arrow-key users get for spatial movement. It runs i
 
 `bevy_feathers` is Bevy's first-party styled-widget catalog (post-0.18). Its `:focus-visible` styling reads `InputFocusVisible` (the `bevy_input_focus` resource) and `IsFocused` (the trait) to decide whether to render the focus ring. The styling is per-widget; there is no unified focus-ring primitive.
 
-Per [`/home/user/buiy/docs/prior-art/bevy-feathers/`](../bevy-feathers/) (sibling folder), bevy_feathers' focus visualization is intentionally minimal — a default outline color, no positioning rules, no contrast-checking against background. Per the foundation spec ([`accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md)), Buiy commits to ≥2 px perimeter, ≥3:1 contrast vs unfocused (WCAG 2.4.11); bevy_feathers does not.
+Per [`../bevy-feathers/`](../bevy-feathers/) (sibling folder), bevy_feathers' focus visualization is intentionally minimal — a default outline color, no positioning rules, no contrast-checking against background. Per the foundation spec ([`accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md)), Buiy commits to ≥2 px perimeter, ≥3:1 contrast vs unfocused (WCAG 2.4.11); bevy_feathers does not.
 
 ## What's missing from the Bevy focus stack (relative to web / APG / Buiy needs)
 
@@ -80,7 +80,7 @@ Each of these is **foundation-tier in Buiy** ([`accessibility.md`](../../specs/2
 
 ## Buiy's focus model — what it owns
 
-Per [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.3 and [`accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md) "Focus management":
+Per [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.3 and [`accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md) "Focus management":
 
 - **Single focus tree per Buiy window**, derived from the Buiy hierarchy, with `:focus-visible` semantics derived from input-source tracking (last input was keyboard or programmatic → `focus-visible`; last input was pointer → focus but not `focus-visible`).
 - **Focus traps** automatic for `Dialog` / `AlertDialog`. Inert subtrees excluded.
@@ -93,7 +93,7 @@ Per [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](..
 - **Focus ring** ≥2 px perimeter, ≥3:1 contrast vs unfocused (WCAG 2.4.11), with per-theme tokens.
 - **Skip-link primitive** as a Buiy widget (visible on focus, jumps to main / a region).
 
-The `TreeUpdate.focus: NodeId` field in AccessKit is set every frame from Buiy's focus state (Buiy's `Entity::to_bits()` is the NodeId). Whether the focus *changed* or not, the field is set on every update — AccessKit treats the focus field as authoritative-per-update, not as a transition signal (see [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — "Treating `is_focused` as a node-state field" pitfall, mitigation: focus is `TreeUpdate.focus`, not a per-node bool).
+The `TreeUpdate.focus: NodeId` field in AccessKit is set every frame from Buiy's focus state (Buiy's `Entity::to_bits()` is the NodeId). Whether the focus *changed* or not, the field is set on every update — AccessKit treats the focus field as authoritative-per-update, not as a transition signal (see [`../accesskit/lessons.md`](../accesskit/lessons.md) — "Treating `is_focused` as a node-state field" pitfall, mitigation: focus is `TreeUpdate.focus`, not a per-node bool).
 
 ## Why Buiy can't borrow `bevy_input_focus`
 
@@ -113,10 +113,10 @@ Net: Buiy owns its focus tree. `bevy_input_focus` continues to exist for bevy_ui
 - [`api.md`](api.md) — bevy_a11y has no focus API
 - [`coexistence.md`](coexistence.md) — Buiy windows don't use `bevy_input_focus` either
 - [`component-model-incident.md`](component-model-incident.md) — separate but related case study (the megacomponent problem)
-- [`/home/user/buiy/docs/prior-art/accesskit/tree-model.md`](../accesskit/tree-model.md) — `Tree.focus: NodeId` semantics
-- [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — focus-as-`TreeUpdate.focus` pitfall row
-- [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3](../../specs/2026-05-07-buiy-foundation/architecture.md) — Buiy focus model
-- [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md) — focus-management feature list
+- [`../accesskit/tree-model.md`](../accesskit/tree-model.md) — `Tree.focus: NodeId` semantics
+- [`../accesskit/lessons.md`](../accesskit/lessons.md) — focus-as-`TreeUpdate.focus` pitfall row
+- [`../../specs/2026-05-07-buiy-foundation/architecture.md` § 2.3](../../specs/2026-05-07-buiy-foundation/architecture.md) — Buiy focus model
+- [`../../specs/2026-05-07-buiy-foundation/accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md) — focus-management feature list
 
 ## Sources
 

@@ -82,7 +82,9 @@ Buiy ships as a workspace of focused crates. The principle is **modular subsyste
 - `buiy_bsn` — BSN authoring helpers when on Bevy 0.18+.
 - `buiy_verify` — verification harness; consumed as `dev-dependency` by every other crate; usable by downstream Buiy users.
 
-**`BuiyPlugin` sub-plugin order.** The top-level plugin adds sub-plugins in this order so dependents see their dependencies on construction: `core` → `theme` → `a11y` → `focus` → `input` → `text` → `widgets` → `animation` → `forms` → `devtools`. Render registration happens in `Plugin::finish` (after `RenderApp` exists).
+**`BuiyPlugin` sub-plugin order (long-term target).** The top-level plugin adds sub-plugins in this order so dependents see their dependencies on construction: `core` → `theme` → `a11y` → `focus` → `input` → `text` → `widgets` → `animation` → `forms` → `devtools`. This is the target shape once every subsystem has a plugin.
+
+**As built today (Phase 0).** The realized order is `core` → `theme` → `a11y` (the `A11yPlugin` plus its `AccessKitAdapter`) → `focus` → `layout` → `picking` → `text` → `widgets` → `render`. Notes on the divergence: `input` is not a sub-plugin — it is the `BuiySet::Input` system set (see below), not a separate plugin; `layout` and `picking` are present as their own sub-plugins; and `animation` / `forms` / `devtools` are not yet present (those subsystems are unbuilt). Render is registered in the render sub-plugin's `build()` (not deferred to `Plugin::finish`).
 
 **System-set partitioning.** Per-frame Buiy work is partitioned into named `SystemSet`s, ordered:
 
@@ -98,6 +100,6 @@ Sub-specs hang their systems off these labels. UI animations advance in the `Upd
 - **Rolling latest-stable Bevy.** Bevy minor releases drive migration events for underlying primitives. wgpu is a version-pinned dependency of Bevy (Bevy re-exports many wgpu types but the wgpu crate is owned upstream); we follow Bevy's pin. AccessKit releases on its own cadence and is **the open question** of [README.md § 5](README.md#5-open-questions): the policy proposed here is "AccessKit major release between Bevy minors triggers a Buiy patch release with a documented migration note," but this is not yet committed. No back-compat across Bevy minors.
 - **MSRV** tracks Bevy's MSRV.
 - **`std` only.** AccessKit requires it.
-- **Platform support — staged.** Desktop (Windows / macOS / Linux) is committed for v1 with full CI coverage. Android (TalkBack), iOS (UIAccessibility — currently in-progress upstream in AccessKit), and web (AccessKit web adapter — not yet shipped) are deferred until each platform's AccessKit adapter exposes a headless harness usable in CI; until then they live as manual-release-gate platforms.
+- **Platform support — staged.** Desktop (Windows / macOS / Linux) is committed for v1 with full CI coverage. Android (TalkBack), iOS (UIAccessibility — `accesskit_ios 0.1.0` shipped 2026-05-11), and web (AccessKit web adapter — not yet shipped) are deferred until each platform's AccessKit adapter exposes a headless harness usable in CI; until then they live as manual-release-gate platforms. (The iOS adapter shipping does not change the deferred-platform CI posture — the blocker is a CI-usable headless harness, not adapter availability.)
 - **Render passes & picking** — Buiy registers its own render-graph node and its own `bevy_picking` backend. Render-graph node ordering and picking-backend priority versus bevy_ui's own passes / backend are defined per-window (see [cross-cutting.md § 3.18](cross-cutting.md)); Buiy's own passes do not contractually cooperate with bevy_ui's.
 - **Coexistence with bevy_ui** — see [cross-cutting.md § 3.18](cross-cutting.md). Coexistence is **per-window**, not per-app-shared-window.

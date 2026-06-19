@@ -61,11 +61,11 @@ These docs are written from Buiy's **parallel-to-bevy_ui, web-platform-parity, A
 
 ## Cross-links into the Buiy corpus
 
-- [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — the sister "game engine UI" corpus closest to Buiy.
-- [`/home/user/buiy/docs/prior-art/accesskit/`](../accesskit/) — the a11y bridge Godot 4.5 adopted (validating AccessKit's reach into game engines).
-- [`/home/user/buiy/docs/prior-art/cosmic-text/`](../cosmic-text/) — the text-shaper Buiy commits to; Godot uses HarfBuzz directly instead.
-- [`/home/user/buiy/docs/prior-art/taffy/`](../taffy/) — the layout engine Buiy commits to; Godot does its own anchor+container model.
-- _(Unity UGUI / UI Toolkit and Unreal Slate / UMG folders — pending; Godot is the open-source third leg of the game-engine UI trio.)_
+- [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md) — the sister "game engine UI" corpus closest to Buiy.
+- [`../accesskit/`](../accesskit/) — the a11y bridge Godot 4.5 adopted (validating AccessKit's reach into game engines).
+- [`../cosmic-text/`](../cosmic-text/) — the text-shaper Buiy commits to; Godot uses HarfBuzz directly instead.
+- [`../taffy/`](../taffy/) — the layout engine Buiy commits to; Godot does its own anchor+container model.
+- [`../unity-ui/`](../unity-ui/) (UGUI / UI Toolkit) and [`../unreal-slate-umg/`](../unreal-slate-umg/) (Slate / UMG) — the other two legs of the game-engine UI trio; Godot is the open-source one.
 
 ## Sources
 

@@ -88,6 +88,6 @@ The Buiy spec states: "AccessKit allows exactly one tree per `accesskit_winit::A
 - https://github.com/iced-rs/iced/pulls?q=accesskit
 - https://github.com/iced-rs/iced/blob/master/CHANGELOG.md
 - https://raw.githubusercontent.com/marc2332/freya/main/Cargo.toml
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md
+- docs/specs/2026-05-07-buiy-foundation/accessibility.md
+- docs/specs/2026-05-07-buiy-foundation/architecture.md
+- docs/specs/2026-05-07-buiy-foundation/cross-cutting.md

@@ -62,12 +62,12 @@ These GPUI design ideas are worth studying and clean-room reimplementing in Buiy
 
 ## Cross-link map
 
-- [`/home/user/buiy/docs/prior-art/bevy-egui/lessons.md`](../bevy-egui/lessons.md) — corrects "Zed uses egui" conflation; names GPUI as the actual Zed UI stack.
-- [`/home/user/buiy/docs/prior-art/egui/lessons.md`](../egui/lessons.md) — immediate-mode-only counterpoint to GPUI's hybrid.
-- [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — names GPUI as verified-false AccessKit adopter; reinforces a11y-first commitment.
-- [`/home/user/buiy/docs/prior-art/iced/lessons.md`](../iced/lessons.md) — wgpu-uniform retained-mode counterpoint to GPUI's three-backend native-API strategy.
-- [`/home/user/buiy/docs/prior-art/cosmic-text/`](../cosmic-text/) — text-stack alternative to GPUI's OS-native shaping.
-- [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) §§2.2-2.3 — the foundation sections this corpus most directly informs.
+- [`docs/prior-art/bevy-egui/lessons.md`](../bevy-egui/lessons.md) — corrects "Zed uses egui" conflation; names GPUI as the actual Zed UI stack.
+- [`docs/prior-art/egui/lessons.md`](../egui/lessons.md) — immediate-mode-only counterpoint to GPUI's hybrid.
+- [`docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — names GPUI as verified-false AccessKit adopter; reinforces a11y-first commitment.
+- [`docs/prior-art/iced/lessons.md`](../iced/lessons.md) — wgpu-uniform retained-mode counterpoint to GPUI's three-backend native-API strategy.
+- [`docs/prior-art/cosmic-text/`](../cosmic-text/) — text-stack alternative to GPUI's OS-native shaping.
+- [`docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) §§2.2-2.3 — the foundation sections this corpus most directly informs.
 
 ## Sources
 

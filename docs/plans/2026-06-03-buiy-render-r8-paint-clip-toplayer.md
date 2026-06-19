@@ -1,5 +1,8 @@
 # Paint-order walk + clip scissor + top-layer composite Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** superseded (Task 8 superseded by R8b; Tasks 1–7 landed)
+
 > **STATUS (2026-06-06): partially landed + partially superseded.** Executed
 > against the landed R5/R6 state, several tasks turned out to be already shipped by
 > R5: the forward `painters_z` walk (Task 2 `flatten_paint_order`) duplicates R5's
@@ -15,6 +18,8 @@
 > with R9. See
 > [2026-06-06-render-node-draw-model-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md)
 > and the follow-ups.md entry. Tasks below are the original plan, kept for context.
+> **Task 8 landed via R8b** (per-instance fragment-discard clip); see
+> [2026-06-07-buiy-render-r8b-node-draw.md](2026-06-07-buiy-render-r8b-node-draw.md).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

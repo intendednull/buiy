@@ -1,5 +1,8 @@
 # Off-screen Effect-Group Compositor Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the v1 off-screen effect-group compositor — pure-CPU prepare-phase geometry (painted-bounds transitive union, next-pow2-capped-at-view bucketing, post-order indexing, `rt_pool_budget` degradation decision) gating green headless, plus the GPU prepare system, pooled `Rgba16Float` targets, and bottom-up composite passes (group `Opacity` linear + `isolation`) wired into `BuiyNode::run` behind the `#[ignore]` GPU path.
@@ -9,6 +12,19 @@
 **Architecture:** A render-world prepare pass (`RenderSystems::Prepare`) computes, per live `EffectGroup`, its painted bounds (group root box ∪ transitive descendant boxes ∪ resolved-px ink, folded through `GlobalTransform`, clipped by `ClipRect`, × `scale_factor`), a next-pow2-capped-at-view `TextureDescriptor`, and a post-order composite index — stored as a per-view component. `BuiyNode::run` acquires all pooled `TextureCache` `Rgba16Float` targets up-front, renders each group's subtree into its target innermost-first, then composites bottom-up applying `Opacity` (linear `SrcOver`) + isolation. `rt_pool_budget` (64 MiB v1) bounds the concurrent live set with a forward-compositing degradation fallback; return-to-baseline rides Bevy's `update_texture_cache_system` (`frames_since_last_use < 3`).
 
 **Tier/Test reality:** Split. The prepare-phase geometry and budget logic are **pure functions** in `render::compositor` — HEADLESS (unit tests on CI, no wgpu adapter). Everything that needs a wgpu adapter — the `RenderSystems::Prepare` system constructed in the `RenderApp`, the pooled-target acquisition, the actual composite draws, the group-opacity golden, and the RSS-leak fixture — is **GPU (code + `#[ignore]`)**, mirroring `tests/render_smoke.rs` (no wgpu adapter on CI or this host).
+
+> **As-landed (2026-06-07):** the GPU orchestration this plan scaffolded — the
+> `prepare_effect_groups` body, the extract→prepare effect-group dataflow
+> (`EffectGroupExtract` + per-group buffer partition), the pooled `Rgba16Float`
+> targets, and the bottom-up `BuiyNode::run` composite passes — was **built and
+> verified on real hardware** in the
+> [render GPU-verification campaign](2026-06-07-render-gpu-verify-campaign.md)
+> (Phase 4 item 5; the overlap-composites-once-at-0.5 and RT-pool-returns-to-baseline
+> tests are green on the GPU lane). The `#[ignore]` markers below stay — they gate
+> the wgpu-adapter tests off the headless CI gate, which still runs without an
+> adapter — but `prepare_effect_groups` and the composite passes are live code, not
+> inert stubs. Design note:
+> [2026-06-08-render-effect-compositor-gpu-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-08-render-effect-compositor-gpu-design.md).
 
 ---
 
@@ -1155,4 +1171,6 @@ Steps:
 
 ## Cross-phase dependency assumed
 
-The prepare-system **body** (Task 9) and the node **subtree-render** (Task 10) consume types/inputs owned by sibling phases not landed here: `Opacity`/`BoxShadow`/`Outline`/`EffectGroup` (component-model phase), `WriteEffectGroups` (render-prep phase), `ClipRect`/`AncestorClip` (clip-and-transform phase), and the per-view `ExtractedNodes`/extract-of-group-members (architecture phase). To keep the gate green without them, this phase's pure core is written against plain geometry inputs and the component-reading glue rides the `#[ignore]` GPU path — an un-landed upstream phase cannot redden CI. `EffectReason` is defined locally here (Task 1) and unifies with component-model's `EffectGroup` when that lands.
+The prepare-system **body** (Task 9) and the node **subtree-render** (Task 10) consume types/inputs owned by sibling phases not yet landed *at plan time*: `Opacity`/`BoxShadow`/`Outline`/`EffectGroup` (component-model phase), `WriteEffectGroups` (render-prep phase), `ClipRect`/`AncestorClip` (clip-and-transform phase), and the per-view `ExtractedNodes`/extract-of-group-members (architecture phase). To keep the gate green without them, this phase's pure core is written against plain geometry inputs and the component-reading glue rides the `#[ignore]` GPU path — an un-landed upstream phase cannot redden CI. `EffectReason` is defined locally here (Task 1) and unifies with component-model's `EffectGroup` when that lands.
+
+> **As-landed:** all of those sibling phases (R1 component-model, R4 `WriteEffectGroups`, R2 clip-and-transform, R5 extract) shipped, and the prepare-system body + node composite passes were filled in and verified on real hardware in the [render GPU-verification campaign](2026-06-07-render-gpu-verify-campaign.md). The local `EffectReason` unified onto the component-model `EffectGroup` as planned.

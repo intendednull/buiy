@@ -169,6 +169,6 @@ Not applicable — cosmic-text is not a web engine. Buiy's asset pipeline handle
 - Issue #493 (pixel font 1px offset) — https://github.com/pop-os/cosmic-text/issues/493
 - Issue #499 (fontconfig aliases) — https://github.com/pop-os/cosmic-text/issues/499
 - Issue #505 (FontSystem::new slow) — https://github.com/pop-os/cosmic-text/issues/505
-- Buiy text spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/text.md`
+- Buiy text spec — `docs/specs/2026-05-07-buiy-foundation/text.md`
 - swash COLRv1 status — https://github.com/dfrg/swash (4+-year-open issue noted in #446 reporter's analysis)
 - winit IME events — https://docs.rs/winit/latest/winit/event/enum.Ime.html

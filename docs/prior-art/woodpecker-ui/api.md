@@ -102,7 +102,7 @@ A `Mounted` marker fires once when an entity is first inserted; `PassedChildren`
 
 `Edge` is a four-side struct (`new(top, right, bottom, left)` + `all(v)`); `Corner` is the four-corner radius. `Units` is `Pixels(f32) | Percentage(f32) | Auto`.
 
-**Critique vs Buiy.** This is a *megacomponent* in exactly the shape [`bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid-row "Megacomponents that are BSN-hostile" warns against. All ~50 fields live on one struct; BSN templates (when they land) cannot patch `background_color` independently of `display`. Buiy's foundation architecture commits to decomposed visual components (`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3) — `BackgroundColor`, `BorderColor`, `BorderRadius`, etc., are each their own component. woodpecker_ui made the opposite call. See [`lessons.md`](lessons.md) entry on "Avoid: megacomponent styles."
+**Critique vs Buiy.** This is a *megacomponent* in exactly the shape [`bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid-row "Megacomponents that are BSN-hostile" warns against. All ~50 fields live on one struct; BSN templates (when they land) cannot patch `background_color` independently of `display`. Buiy's foundation architecture commits to decomposed visual components (`docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3) — `BackgroundColor`, `BorderColor`, `BorderRadius`, etc., are each their own component. woodpecker_ui made the opposite call. See [`lessons.md`](lessons.md) entry on "Avoid: megacomponent styles."
 
 ## Widget vocabulary
 

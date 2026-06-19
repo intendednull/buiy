@@ -67,7 +67,7 @@ When designing a Buiy feature: start at [`lessons.md`](lessons.md); read [`why-a
 - [`docs/prior-art/bevy-cosmic-edit/`](../bevy-cosmic-edit/) — sister archived case study (deliberate archive, bridge-crate failure mode). Read [`bevy-cosmic-edit/lessons.md`](../bevy-cosmic-edit/lessons.md) for the deliberate-archive counterpart pattern.
 - [`docs/prior-art/bevy-ui/`](../bevy-ui/) — the host ecosystem. Read [`bevy-ui/lessons.md`](../bevy-ui/lessons.md) § Top-of-file finding 1 ("BSN has not landed; design for it") — kayak_ui's `rsx!` macro is exactly the *wrong shape* for the BSN-friendly-by-construction stance.
 - [`docs/prior-art/taffy/`](../taffy/) — the layout engine bevy_ui + Buiy use. kayak_ui chose **morphorm** instead; see [`architecture.md` § Layout](architecture.md#layout).
-- (future) `docs/prior-art/woodpecker-ui/` — kayak_ui's successor by the same maintainer. Not yet documented; cross-link when that folder lands.
+- [`docs/prior-art/woodpecker-ui/`](../woodpecker-ui/) — kayak_ui's successor by the same maintainer.
 - [`docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) — the Buiy architecture spec this folder informs (parallel-stack rationale, ECS-native authoring, no-custom-DSL stance).
 
 ## Glossary stub

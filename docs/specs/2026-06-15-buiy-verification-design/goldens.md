@@ -7,14 +7,15 @@
 > **As-landed reconciliation.** The `GoldenKey` / `Backend` / `BlessLedger` /
 > `Positive` / `TriageReport` / `TriageCard` shapes match this spec verbatim, with
 > these landed details:
-> - **`Backend` gains a `Cpu` variant** (`golden.rs:67-70`) so the structured
+> - **`Backend` gains a `Cpu` variant** (`Backend::Cpu` in `golden.rs`) so the structured
 >   Tiers 1-3 coverage cells (`CoverageKey`, no GPU) and the GPU `GoldenKey` key
 >   off **one** enum. `Cpu` is never a golden capture backend; it is the
 >   coverage-tier marker.
 > - **`GoldenKey::slug()` uses `__` field separators** (e.g.
->   `rect-rounded/default/dark__sm__lavapipe__dpr1`), with `from_slug` the lossless
->   inverse. The directory-per-`widget/state` layout keeps a fixture's whole row of
->   cells together.
+>   `rect-rounded/default/dark__sm__fc0__lavapipe__dpr1` — the forced-colors mode
+>   `fc0`/`fc1` is its own field), with `from_slug` the lossless inverse. The
+>   directory-per-`widget/state` layout keeps a fixture's whole row of cells
+>   together.
 > - **The bless policy is a `BlessMode` enum threaded as a parameter, not an env
 >   read deep in the comparison.** `check_golden`/`assert_golden` read
 >   `BUIY_BLESS`/`BUIY_BLESS_REPLACE` once at the top (`mode_from_env`) and pass
@@ -24,9 +25,10 @@
 >   corpus.
 > - **The corpus is started, not full:** two blessed cells exist —
 >   `rect-rounded` (SDF residue) and `text-ahem` (Ahem layout class) — at
->   `dark/sm/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger under
->   `crates/buiy_verify/tests/goldens/`. The full residue matrix (shadow kernel,
->   color-emoji) is renderer-blocked and deferred (see § Sources / follow-ups).
+>   `dark/sm/fc0/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger
+>   under `crates/buiy_verify/tests/goldens/`. The full residue matrix (shadow
+>   kernel, color-emoji) is renderer-blocked and deferred (see § Sources /
+>   follow-ups).
 > - **Honest GPU-lane state:** because the corpus is started, the coverage
 >   enrollment driver `coverage_golden::matrix_goldens` (which `assert_golden`s
 >   the *whole* `Matrix::ci_default()` over the `button` fixture) **fail-closes**
@@ -58,7 +60,7 @@ None. This file consumes `buiy_verify::metric` (`Diff`/`FuzzBudget`),
 `buiy_core::render::golden::capture_to_image` exactly as the shared contract
 defines them, and extends `GoldenConfig` only as `determinism.md` already
 mandates. `assert_golden` matches the contract signature
-(`name, &RgbaImage, &FuzzBudget`); the `GoldenKey`, `BlessLedger`, and
+(`key: &GoldenKey, &RgbaImage, &FuzzBudget`); the `GoldenKey`, `BlessLedger`, and
 HTML-report types below are additive and live entirely in `buiy_verify::golden`.
 
 ## Module: `buiy_verify::golden`
@@ -119,8 +121,8 @@ impl GoldenKey {
 /// Compare `actual` against the stored multi-positive baseline set for `key`,
 /// gated by `budget`. On `BUIY_BLESS=1` this *blesses* instead of asserting
 /// (see below). On a non-bless failure: writes the diff PNG, appends an HTML
-/// triage card, and panics with the report path. Contract alias
-/// `assert_golden(name, &RgbaImage, &FuzzBudget)` takes a pre-built key.
+/// triage card, and panics with the report path. The contract signature
+/// `assert_golden(key: &GoldenKey, &RgbaImage, &FuzzBudget)` takes a pre-built key.
 pub fn assert_golden(key: &GoldenKey, actual: &RgbaImage, budget: &FuzzBudget);
 
 /// The same comparison without the panic — for the harness's own tests and for
@@ -242,19 +244,19 @@ deferred (skia-gold/lessons §Borrow 5, 8).
 The pure/GPU split (shared contract): the device-coupled capture lives in
 `buiy_core::render::golden`, callable by `buiy_verify`. Promote the
 `render_to_image`/`readback_rgba`/`spawn_capture_camera` triad from
-`tests/support/mod.rs:204,353,229` into a library fn:
+`tests/support/mod.rs` into a library fn:
 
 ```rust
 // crates/buiy_core/src/render/golden.rs  (new, src — not tests)
 /// Render `app` to an offscreen Rgba8UnormSrgb target sized to the window's
 /// physical pixels and read it back as an `image::RgbaImage`. Honors
-/// `cfg.wait_for_fonts` (drives frames until `fonts_ready`, support/mod.rs:266)
+/// `cfg.wait_for_fonts` (drives frames until `fonts_ready`, support/mod.rs)
 /// before capture. The single GPU-coupled primitive every Tier-4/5 test shares.
 pub fn capture_to_image(app: &mut bevy::app::App, cfg: &GoldenConfig) -> image::RgbaImage;
 ```
 
 This adds `image = "0.25"` (already a workspace dep) to `buiy_core`; no new
-crate. The existing naive `perceptual_diff` (`golden.rs:56`) is deprecated —
+crate. The existing naive `perceptual_diff` (`render/golden.rs`) is deprecated —
 its callers move to `buiy_verify::metric::compare` (shared contract).
 
 ## The Ahem / obscure-text split — keep real glyphs out of *layout* goldens
@@ -270,7 +272,7 @@ Two classes of golden, per the Flutter/Alchemist two-class trick
   §Avoid "boxes instead of curves"). This collapses the font axis: any
   layout-class golden is byte-identical across hosts. Wired through the same
   `FontRegistry::register_bytes` path the shaping fixtures use
-  (`support/mod.rs:306`); selected by `DeterministicApp::test_font()`
+  (`support/mod.rs`); selected by `DeterministicApp::test_font()`
   (determinism.md). Shadows in this class swap to a flat fill via
   `BUIY_DISABLE_SHADOWS` (engine-side, release-safe — flutter-golden/lessons
   §Avoid "debug-build-only killswitch"; spec'd in determinism.md).
@@ -363,9 +365,9 @@ The harness is mostly pure CPU; only capture needs the GPU lane.
 
 ## Sources
 
-- Code: `crates/buiy_core/src/render/golden.rs:18,38,56,82` (GoldenConfig,
+- Code: `crates/buiy_core/src/render/golden.rs` (GoldenConfig,
   deterministic(), perceptual_diff, fonts_ready);
-  `crates/buiy_core/tests/support/mod.rs:204,229,266,306,353` (render_to_image,
+  `crates/buiy_core/tests/support/mod.rs` (render_to_image,
   spawn_capture_camera, wait_for_text_ready, register_fixture_font,
   readback_rgba); `crates/buiy_core/tests/text_shaping_snapshots.rs:296,301`
   (BUIY_ACCEPT_SHAPING accept-FILE precedent + fail-closed panic);

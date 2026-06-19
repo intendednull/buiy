@@ -1,5 +1,8 @@
 # Clip Render-Prep (WriteClipRects) Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Depends on:** R1 (component model — owns `render/components.rs`, the sole home of `ClipRect` / `AncestorClip`). Execution order: R1 → **R2** → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11.

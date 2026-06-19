@@ -1,5 +1,8 @@
 # Color, Forced-Colors, and the Verification Harness Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the render-side color contract — `ColorToken` resolution against `Res<Theme>`, the `Theme::is_changed()` re-extract edge, a main-world forced-colors `Theme` swap with a v1 stub system-color map, the two gate-#11 static analyzers (token-flow + no-shadow-only-affordance), and the scaffolded gate-#2 golden-image harness — all proven headless except the goldens.

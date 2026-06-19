@@ -62,7 +62,13 @@ does **not** require a display:
 
 ```sh
 cargo test -p buiy_core -j 2 -- --ignored --test-threads=1
+cargo test -p buiy_verify -j 2 -- --ignored --test-threads=1
 ```
+
+The GPU lane has **two legs**, both of which CI runs: `buiy_core` (the render
+GPU path above) and `buiy_verify` (the visual-bug verification suite — goldens,
+reftests, the perceptual metric). Run both before pushing, or you skip the
+`buiy_verify` GPU tests and can land a regression that fails CI's GPU lane.
 
 `--test-threads=1` serializes the GPU work (one adapter context at a time). This
 lane is **additive** — it must pass on a GPU host, and the headless gate above

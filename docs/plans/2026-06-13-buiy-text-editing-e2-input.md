@@ -1,10 +1,11 @@
 # Buiy text-editing E2 — input translation + editing operations + the latency gate
 
 **Date:** 2026-06-13
+**Status:** landed
 **Phase:** E2 (of the E1–E6 text-editing campaign)
 **Branch:** `text-editing-e2` (off `main`, which now includes E1)
 **Campaign plan:** [2026-06-13-buiy-text-editing-campaign.md](2026-06-13-buiy-text-editing-campaign.md) § "E2 — Input translation + editing operations + the latency gate"
-**Spec realized:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 3, 3.1, 3.2, 3.3, 11
+**Spec:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 3, 3.1, 3.2, 3.3, 11
 **Readiness:** [2026-06-13-text-editing-design-readiness.md](../reports/2026-06-13-text-editing-design-readiness.md) (OQ#1 resolved: one-frame latency; the new Input-driven N→N+1 fixture is E2's gate)
 
 ---
