@@ -67,9 +67,9 @@ fn quad_descriptor_keeps_alpha_blending_and_entry_points() {
 
 #[test]
 fn quad_descriptor_has_two_vertex_buffers_with_phase0_strides() {
-    // Static unit-quad VBO (stride 16) + per-instance buffer (stride 52 after
-    // R8b appends the clip AABB at @location(6)/(7)); the unit-quad VBO is
-    // untouched.
+    // Static unit-quad VBO (stride 16) + per-instance buffer (stride 68 after
+    // R1 appends the 2x2 affine basis at @location(8)/(9), on top of R8b's clip
+    // AABB at @location(6)/(7)); the unit-quad VBO is untouched.
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
@@ -78,21 +78,55 @@ fn quad_descriptor_has_two_vertex_buffers_with_phase0_strides() {
     let buffers = &d.vertex.buffers;
     assert_eq!(buffers.len(), 2, "vertex + instance buffer layouts");
     assert_eq!(buffers[0].array_stride, 16);
-    assert_eq!(buffers[1].array_stride, 52);
+    assert_eq!(buffers[1].array_stride, 68);
 }
 
 #[test]
-fn instance_buffer_stride_is_52_with_clip_fields() {
-    // The per-instance record grew from 36 B (R7) to 52 B (R8b) when the clip
-    // AABB (`clip_min`/`clip_max`, two Float32x2) was appended; the vertex
-    // layout's `array_stride` must track `PackedInstance`'s 52-byte stride or
-    // wgpu mis-strides the instance buffer.
+fn instance_buffer_stride_is_68_with_clip_and_affine_fields() {
+    // The per-instance record grew from 52 B (R8b) to 68 B (R1) when the 2x2
+    // affine basis (two Float32x2 columns) was appended after the clip AABB; the
+    // vertex layout's `array_stride` must track `PackedInstance`'s 68-byte stride
+    // or wgpu mis-strides the instance buffer.
+    use buiy_core::render::instance::PACKED_INSTANCE_STRIDE_BYTES;
     let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
         kind: BuiyPrimitiveKind::Quad,
         format: TextureFormat::Rgba8UnormSrgb,
         samples: 1,
     });
-    assert_eq!(d.vertex.buffers[1].array_stride, 52);
+    assert_eq!(d.vertex.buffers[1].array_stride, 68);
+    assert_eq!(
+        d.vertex.buffers[1].array_stride as usize,
+        PACKED_INSTANCE_STRIDE_BYTES
+    );
+}
+
+#[test]
+fn instance_keeps_clip_attrs_byte_stable_and_appends_affine() {
+    // R1 HARD CONSTRAINT: the existing 6 instance attrs (locations 2..7, offsets
+    // 0..44) are UNCHANGED, and two NEW Float32x2 affine columns append at
+    // @location(8) offset 52 (col0 = [m00,m10]) and @location(9) offset 60
+    // (col1 = [m01,m11]).
+    let d = BuiyPrimitives::default().specialize(BuiyPrimitiveKey {
+        kind: BuiyPrimitiveKind::Quad,
+        format: TextureFormat::Rgba8UnormSrgb,
+        samples: 1,
+    });
+    let attrs = &d.vertex.buffers[1].attributes;
+    let at = |loc: u32| attrs.iter().find(|a| a.shader_location == loc).copied();
+    // Existing six attrs unchanged.
+    assert_eq!(at(2).unwrap().offset, 0);
+    assert_eq!(at(3).unwrap().offset, 8);
+    assert_eq!(at(4).unwrap().offset, 16); // color
+    assert_eq!(at(5).unwrap().offset, 32); // radius/blur
+    assert_eq!(at(6).unwrap().offset, 36); // clip_min
+    assert_eq!(at(7).unwrap().offset, 44); // clip_max
+    // New affine columns appended.
+    let col0 = at(8).expect("instance layout has @location(8) affine col0");
+    assert_eq!(col0.format, VertexFormat::Float32x2);
+    assert_eq!(col0.offset, 52);
+    let col1 = at(9).expect("instance layout has @location(9) affine col1");
+    assert_eq!(col1.format, VertexFormat::Float32x2);
+    assert_eq!(col1.offset, 60);
 }
 
 #[test]

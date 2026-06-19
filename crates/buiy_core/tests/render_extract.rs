@@ -166,6 +166,7 @@ fn assemble_preserves_clip_per_entity() {
             // Only entity 2 carries a clip; the others stay unclipped.
             clip: (x == e(2)).then_some(clip2),
             group: None,
+            affine: [[1.0, 0.0], [0.0, 1.0]],
         })
     });
     let clips: Vec<Option<ClipRect>> = nodes.nodes.iter().map(|n| n.clip).collect();
@@ -266,6 +267,103 @@ fn extracted_node_position_follows_global_transform() {
     assert_eq!(node.position, Vec2::new(200.0, 300.0));
 }
 
+#[test]
+fn extracted_node_carries_affine_basis_from_global_transform() {
+    // The 2D linear part of GlobalTransform's affine is carried onto the record
+    // so the GPU vertex stage can apply rotation/scale (not just the
+    // translation). A 90deg z-rotation is ASYMMETRIC, so it catches a transpose:
+    // R(90) maps x_axis -> (0,1) and y_axis -> (-1,0), so col0 = [0,1] and
+    // col1 = [-1,0]. The translation.xy must still be the painted top-left.
+    use std::f32::consts::FRAC_PI_2;
+    let theme = Theme::default();
+    let layout = ResolvedLayout {
+        position: Vec2::ZERO,
+        size: Vec2::splat(50.0),
+    };
+    let affine3 = bevy::math::Affine3A::from_rotation_translation(
+        Quat::from_rotation_z(FRAC_PI_2),
+        Vec3::new(11.0, 22.0, 0.0),
+    );
+    let gt = GlobalTransform::from(affine3);
+    let node = extracted_node_for(
+        Entity::from_raw_u32(3).unwrap(),
+        &gt,
+        &layout,
+        None,
+        None,
+        &theme,
+    );
+    // col0 = xy of x_axis, col1 = xy of y_axis (columns, NOT rows).
+    let eps = 1e-5;
+    assert!(
+        (node.affine[0][0] - 0.0).abs() < eps,
+        "m00 = {}",
+        node.affine[0][0]
+    );
+    assert!(
+        (node.affine[0][1] - 1.0).abs() < eps,
+        "m10 = {}",
+        node.affine[0][1]
+    );
+    assert!(
+        (node.affine[1][0] - -1.0).abs() < eps,
+        "m01 = {}",
+        node.affine[1][0]
+    );
+    assert!(
+        (node.affine[1][1] - 0.0).abs() < eps,
+        "m11 = {}",
+        node.affine[1][1]
+    );
+    assert_eq!(node.position, Vec2::new(11.0, 22.0));
+}
+
+#[test]
+fn extracted_node_identity_affine_is_identity_basis() {
+    // An identity GlobalTransform yields the [[1,0],[0,1]] basis — the
+    // byte-identical fast path (every pre-affine pixel/test stays unchanged).
+    let theme = Theme::default();
+    let layout = ResolvedLayout {
+        position: Vec2::ZERO,
+        size: Vec2::splat(10.0),
+    };
+    let node = extracted_node_for(
+        Entity::from_raw_u32(4).unwrap(),
+        &GlobalTransform::IDENTITY,
+        &layout,
+        None,
+        None,
+        &theme,
+    );
+    assert_eq!(node.affine, [[1.0, 0.0], [0.0, 1.0]]);
+}
+
+#[test]
+fn extracted_node_nonuniform_scale_basis() {
+    // A (2,3) non-uniform scale yields the diagonal basis [[2,0],[0,3]] —
+    // faithful for non-uniform scale (within the bridge's TRS range).
+    let theme = Theme::default();
+    let layout = ResolvedLayout {
+        position: Vec2::ZERO,
+        size: Vec2::splat(10.0),
+    };
+    let affine3 = bevy::math::Affine3A::from_scale(Vec3::new(2.0, 3.0, 1.0));
+    let gt = GlobalTransform::from(affine3);
+    let node = extracted_node_for(
+        Entity::from_raw_u32(5).unwrap(),
+        &gt,
+        &layout,
+        None,
+        None,
+        &theme,
+    );
+    let eps = 1e-5;
+    assert!((node.affine[0][0] - 2.0).abs() < eps);
+    assert!((node.affine[0][1] - 0.0).abs() < eps);
+    assert!((node.affine[1][0] - 0.0).abs() < eps);
+    assert!((node.affine[1][1] - 3.0).abs() < eps);
+}
+
 use buiy_core::render::extract::{
     ExtractedNode, ExtractedNodes, assemble_context_tree, assemble_in_paint_order,
 };
@@ -298,6 +396,7 @@ fn assemble_emits_in_painters_z_order() {
             color: Color::WHITE,
             clip: None,
             group: None,
+            affine: [[1.0, 0.0], [0.0, 1.0]],
         })
     });
     let got: Vec<Entity> = nodes.nodes.iter().map(|n| n.entity).collect();
@@ -325,6 +424,7 @@ fn assemble_drops_skipped_entities() {
                 color: Color::WHITE,
                 clip: None,
                 group: None,
+                affine: [[1.0, 0.0], [0.0, 1.0]],
             })
         }
     });
@@ -360,6 +460,7 @@ fn hit_test_order_is_paint_order_reversed() {
             color: Color::WHITE,
             clip: None,
             group: None,
+            affine: [[1.0, 0.0], [0.0, 1.0]],
         })
     });
     // Paint order is painters_z forward.
@@ -420,6 +521,7 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
                 color: Color::WHITE,
                 clip: None,
                 group: None,
+                affine: [[1.0, 0.0], [0.0, 1.0]],
             })
         },
         &mut out,
@@ -468,6 +570,7 @@ fn tree_assembly_skips_dropped_entities_across_the_boundary() {
                     color: Color::WHITE,
                     clip: None,
                     group: None,
+                    affine: [[1.0, 0.0], [0.0, 1.0]],
                 })
             }
         },

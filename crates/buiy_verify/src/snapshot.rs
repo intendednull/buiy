@@ -431,7 +431,7 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
 // ---------------------------------------------------------------------------
 
 /// Hex-dump a [`PackedInstance`] as `bytemuck::bytes_of(p)` — a byte-exact
-/// snapshot of the GPU upload payload (52 B → 104 hex chars), independent of
+/// snapshot of the GPU upload payload (68 B → 136 hex chars), independent of
 /// the Display dump's format version. A packing arithmetic change (e.g. the
 /// half-size sign bug `render_instance.rs` regression-tests) flips the hex even
 /// when the rounded Display dump rounds it away (snapshots.md § byte-exact).

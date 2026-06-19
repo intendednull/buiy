@@ -95,6 +95,7 @@ fn top_layer_tail_is_tier_ordered_fullscreen_to_modal() {
                 color: Color::WHITE,
                 clip: None,
                 group: None,
+                affine: [[1.0, 0.0], [0.0, 1.0]],
             })
             .collect(),
         ..Default::default()
@@ -149,6 +150,7 @@ fn modal_is_first_hit_candidate_over_popover() {
                 color: Color::WHITE,
                 clip: None,
                 group: None,
+                affine: [[1.0, 0.0], [0.0, 1.0]],
             })
         },
         &mut assembled,

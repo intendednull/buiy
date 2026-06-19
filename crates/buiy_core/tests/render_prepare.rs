@@ -51,6 +51,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 color: Color::srgb(1.0, 0.0, 0.0),
                 clip: None,
                 group: None,
+                affine: [[1.0, 0.0], [0.0, 1.0]],
             },
             ExtractedNode {
                 entity: Entity::from_raw_u32(2).unwrap(),
@@ -59,6 +60,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 color: Color::srgb(0.0, 1.0, 0.0),
                 clip: None,
                 group: None,
+                affine: [[1.0, 0.0], [0.0, 1.0]],
             },
         ],
     };
@@ -71,6 +73,12 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
         2,
         "populated carrier must yield one quad per node"
     );
+    // R1: each raw instance is 17 floats (the affine basis appended at [13..17]).
+    assert_eq!(
+        instances[0].len(),
+        17,
+        "raw instance carries 17 floats (incl. the appended affine basis)"
+    );
     // The uniform is built from the carrier's logical_size + scale_factor: the
     // std140 array carries scale_factor at slot 8.
     assert!(
@@ -82,6 +90,32 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
     // An EMPTY carrier yields an empty batch (no stale instances).
     let (empty, _) = pack_extracted_nodes(&ExtractedNodes::default());
     assert!(empty.is_empty(), "empty carrier yields no quads");
+}
+
+#[test]
+fn pack_extracted_nodes_carries_non_identity_affine() {
+    // A node with a non-identity affine carries the flattened basis at [13..17]
+    // through the prepare pack (the GPU vertex stage reads it as the 2x2 mat).
+    let nodes = ExtractedNodes {
+        logical_size: Vec2::new(800.0, 600.0),
+        scale_factor: 1.0,
+        nodes: vec![ExtractedNode {
+            entity: Entity::from_raw_u32(1).unwrap(),
+            position: Vec2::new(10.0, 20.0),
+            size: Vec2::new(100.0, 50.0),
+            color: Color::srgb(1.0, 0.0, 0.0),
+            clip: None,
+            group: None,
+            affine: [[0.0, 1.0], [-1.0, 0.0]], // 90deg rotation basis
+        }],
+    };
+    let (instances, _) = pack_extracted_nodes(&nodes);
+    assert_eq!(instances.len(), 1);
+    assert_eq!(
+        &instances[0][13..17],
+        &[0.0, 1.0, -1.0, 0.0],
+        "the 2D affine basis rides the packed instance at [13..17]"
+    );
 }
 
 #[test]
@@ -103,6 +137,7 @@ fn extracted_nodes_pack_view_routes_records_to_quad_layer_0() {
         color: Color::srgb(1.0, 0.0, 0.0),
         clip: None,
         group: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
     });
     let buckets = pack_view(&view.nodes);
     let quad0 = PrimitiveBatchKey {

@@ -42,13 +42,14 @@ use buiy_core::render::instance::{PACKED_INSTANCE_STRIDE_BYTES, PackedInstance, 
 #[test]
 fn packed_instance_stride_matches_logical_pipeline_descriptor() {
     // pos(2*4) + size(2*4) + color(4*4) + radius(1*4) + clip_min(2*4) +
-    // clip_max(2*4) = 52, in LOGICAL px (not clip). The clip AABB rides every
-    // instance (R8b fragment discard); the const must equal the struct stride.
+    // clip_max(2*4) + affine(4*4) = 68, in LOGICAL px (not clip). The clip AABB
+    // and the 2D affine basis ride every instance (R8b fragment discard + R1
+    // transform paint); the const must equal the struct stride.
     assert_eq!(
         std::mem::size_of::<PackedInstance>(),
         PACKED_INSTANCE_STRIDE_BYTES
     );
-    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 52);
+    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 68);
 }
 
 #[test]
@@ -102,20 +103,68 @@ fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
         color: Color::WHITE,
         clip,
         group: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
     }
 }
 
 #[test]
-fn packed_instance_stride_is_52() {
-    // R8b: pos(2)+size(2)+color(4)+radius(1)+clip_min(2)+clip_max(2) = 13 f32 = 52 B.
-    // The struct stride, the const, and the raw [f32;13] must all agree (52 B);
-    // any drift makes the instanced draw read garbage.
-    assert_eq!(std::mem::size_of::<PackedInstance>(), 52);
+fn packed_instance_stride_is_68() {
+    // R8b + R1: pos(2)+size(2)+color(4)+radius(1)+clip_min(2)+clip_max(2)
+    // +affine(4) = 17 f32 = 68 B. The struct stride, the const, and the raw
+    // [f32;17] must all agree (68 B); any drift makes the instanced draw read
+    // garbage.
+    assert_eq!(std::mem::size_of::<PackedInstance>(), 68);
     assert_eq!(
         std::mem::size_of::<PackedInstance>(),
-        std::mem::size_of::<[f32; 13]>()
+        std::mem::size_of::<[f32; 17]>()
     );
-    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 52);
+    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 68);
+}
+
+#[test]
+fn packed_instance_appends_affine_after_existing_thirteen() {
+    // R1 HARD CONSTRAINT (campaign-review MAJOR — R2 depends on it): the 2x2
+    // affine basis appends AFTER the existing 13 floats so every existing field
+    // offset is UNCHANGED (notably color@4 / alpha@7). The raw record carries
+    // the flattened basis [m00,m10,m01,m11] at [13..17], and raw[0..13] is
+    // byte-identical to the pre-R1 layout.
+    use buiy_core::render::buckets::packed_to_raw;
+    let mut node = node_with_clip(Some(ClipRect {
+        min: Vec2::new(5.0, 6.0),
+        max: Vec2::new(105.0, 206.0),
+    }));
+    node.affine = [[2.0, 3.0], [4.0, 5.0]]; // col0 = [m00,m10], col1 = [m01,m11]
+    let p = pack_extracted(&node);
+    let raw = packed_to_raw(&p);
+    assert_eq!(
+        &raw[13..17],
+        &[2.0, 3.0, 4.0, 5.0],
+        "affine appended at [13..17]"
+    );
+    // The pre-R1 layout is byte-identical: pos/size/color/radius/clip unchanged.
+    assert_eq!(raw[0], 10.0);
+    assert_eq!(raw[1], 20.0);
+    assert_eq!(raw[2], 30.0);
+    assert_eq!(raw[3], 40.0);
+    let lin = LinearRgba::from(Color::WHITE);
+    assert_eq!(&raw[4..8], &[lin.red, lin.green, lin.blue, lin.alpha]);
+    assert_eq!(raw[8], 0.0); // radius
+    assert_eq!(&raw[9..13], &[5.0, 6.0, 105.0, 206.0]); // clip min/max
+}
+
+#[test]
+fn color_and_alpha_offset_consts_point_at_color() {
+    // R2 (degraded-group re-tint) reads alpha via ALPHA_FLOAT_OFFSET, so the
+    // named consts must point at the color block (color@4, alpha@7) — the
+    // invariant the append-after-13 layout exists to preserve.
+    use buiy_core::render::buckets::packed_to_raw;
+    use buiy_core::render::instance::{ALPHA_FLOAT_OFFSET, COLOR_FLOAT_OFFSET};
+    assert_eq!(COLOR_FLOAT_OFFSET, 4);
+    assert_eq!(ALPHA_FLOAT_OFFSET, 7);
+    let p = pack_extracted(&node_with_clip(None));
+    let raw = packed_to_raw(&p);
+    assert_eq!(raw[ALPHA_FLOAT_OFFSET], p.color[3]);
+    assert_eq!(&raw[COLOR_FLOAT_OFFSET..COLOR_FLOAT_OFFSET + 4], &p.color);
 }
 
 #[test]
@@ -143,8 +192,8 @@ fn pack_extracted_uses_full_view_sentinel_when_clip_absent() {
 }
 
 #[test]
-fn packed_raw_stride_agrees_with_thirteen_floats() {
-    // The raw bucket layout is [f32;13] and byte-equal to PackedInstance's stride.
+fn packed_raw_stride_agrees_with_seventeen_floats() {
+    // The raw bucket layout is [f32;17] and byte-equal to PackedInstance's stride.
     assert!(buiy_core::render::instance::packed_raw_stride_agrees());
 }
 

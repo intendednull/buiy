@@ -497,10 +497,18 @@ Key points:
   steady-state frame, matching the layout pipeline's steady-state contract. This
   is one re-run trigger feeding one writer, not two competing filters.
 - **The transform origin** (`UiTransform.origin`, default `50% 50% 0`) is
-  *already baked into* `ResolvedTransform.matrix` by sub-pass 6e (it composes
-  `M = T·R·S·M_transform` around the resolved origin), so the bridge does a
-  flat `base * matrix` and never re-derives origin. Render and the bridge thus
-  agree with picking, which applies the inverse of the same matrix
+  *intended to be baked into* `ResolvedTransform.matrix` by sub-pass 6e (it would
+  compose `M = T·R·S·M_transform` around the resolved origin), so the bridge does
+  a flat `base * matrix` and never re-derives origin. **As of R1 (transform-paint
+  landed), this is the TARGET state, not current:** sub-pass 6e's
+  `compose_transform` does NOT yet read `ui.origin`, so the composed matrix
+  rotates/scales about the box-local TOP-LEFT, not the 50%/50% center (a
+  layout-side residual surfaced by R1 — see the
+  [follow-up](../../plans/follow-ups.md) residual A). The contract that matters
+  for render holds regardless: render applies the affine EXACTLY as
+  `GlobalTransform` encodes it (it does NOT independently re-apply an origin), so
+  render and the bridge cannot diverge from picking, which applies the inverse of
+  the same matrix
   ([transforms-and-containment.md § 1.2](../2026-05-08-buiy-layout-design/transforms-and-containment.md#12-layout-impact)).
 - **Buiy owns the whole `Transform`.** An author positions UI via Buiy's
   `Position` / `UiTransform`, never Bevy's `Transform`; the bridge owns the
@@ -709,12 +717,31 @@ so it does not perturb the contract). Picking applies the inverse
 
 ### B.5 Perspective / `transform-style` / `backface-visibility` consumption
 
+**Status (R1, transform-paint landed):** the **2D affine** half of the
+transform-paint follow-up now LANDS via the GPU vertex stage. Extract reads the
+`GlobalTransform` 2D linear part (`global_transform.affine().matrix3` xy columns
+— NOT a re-read of `ResolvedTransform`, per the pillar-5 contract in § B.2) and
+the quad + shadow shaders transform each box-local corner by it before the
+logical→clip view map (`PackedInstance` grew 52 B → 68 B by appending the 2x2
+basis after the clip fields; vertex attrs `@location(8)/(9)`). The
+**PAINT-clip half** was already done (§ A.3 rule 3 / `clip_for_primitive`). The
+**perspective channel / `Preserve3d` / `backface-visibility`** stay C-tier
+deferred (the bullets below).
+
+**Fidelity bound (R1):** render faithfully reproduces **rotation + non-uniform
+scale**, but **skew (`TransformMatrix::Skew`) and general
+`TransformMatrix::Matrix`** are BOUNDED by the bridge's TRS-only
+`Transform::from_matrix` decompose (§ B.2 — a Bevy `Transform` cannot represent
+a general shear, lossy by the same decompose that drops the projective row).
+Faithful skew is a separate residual; it needs the bridge to stop round-tripping
+through TRS (or render to read a non-TRS source). Not covered by R1.
+
 Phase 8 *stored* three `UiTransform` fields with no consumer
 ([components.rs `UiTransform`](../../../crates/buiy_core/src/layout/components.rs);
 [transforms-and-containment.md § 4](../2026-05-08-buiy-layout-design/transforms-and-containment.md#4-perspective-and-3d)).
-This bridge consumes them — resolving the
+The remaining (C-tier) consumption — resolving the
 [*"`UiTransform` paint + `Containment` PAINT clip + perspective/backface"*](../../plans/follow-ups.md)
-follow-up's transform half (the PAINT-clip half is § A.3):
+follow-up's perspective/3D half:
 
 - **`perspective: Option<Length>`** — the 3D viewing distance for `Preserve3d`
   children. Resolved to logical px and folded into the **perspective matrix
