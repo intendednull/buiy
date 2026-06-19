@@ -252,6 +252,7 @@ fn spawn_blink_fixture(app: &mut App) -> Entity {
             CaretVisual {
                 visible: true,
                 rect: Rect::new(80.0, 0.0, 81.0, 48.0),
+                secondary: None,
             },
             CaretColor(ColorToken::Token(Cow::Borrowed(CARET_TOKEN))),
         ))

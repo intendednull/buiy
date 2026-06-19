@@ -388,15 +388,25 @@ pub struct CaretVisual {
     pub visible: bool,
     /// Content-box-local caret rect, logical px, unsnapped.
     pub rect: bevy::math::Rect,
+    /// The SECONDARY split-caret indicator rect (§§ 4.1, 5), content-box-local,
+    /// logical px, unsnapped. `Some` only when the caret sits on a bidirectional
+    /// DIRECTION BOUNDARY — the BEFORE glyph's logical-end visual edge, a shorter
+    /// mark that tells the user which direction the next typed char flows.
+    /// `None` for a normal caret (no second insertion point). Rides this
+    /// component (not a standalone one) because the extract producer's
+    /// query/trigger/removal params are at Bevy's 15-tuple cap (extract.rs § 6.1),
+    /// so it reuses `Changed<CaretVisual>` as its damage trigger.
+    pub secondary: Option<bevy::math::Rect>,
 }
 
 impl Default for CaretVisual {
     /// Visible (matches the t=0 blink phase and editing § 10's
-    /// "caret becomes visible" on focus gain), zero rect.
+    /// "caret becomes visible" on focus gain), zero rect, no secondary.
     fn default() -> Self {
         Self {
             visible: true,
             rect: bevy::math::Rect::default(),
+            secondary: None,
         }
     }
 }
@@ -690,5 +700,12 @@ mod tests {
         });
         buffer.invalidate_intrinsics();
         assert_eq!(buffer.intrinsics(), None);
+    }
+
+    /// §§ 4.1, 5: a fresh caret has no split-caret secondary indicator — the
+    /// secondary lands only when the writer finds a bidi direction boundary.
+    #[test]
+    fn caret_visual_default_has_no_secondary() {
+        assert_eq!(CaretVisual::default().secondary, None);
     }
 }

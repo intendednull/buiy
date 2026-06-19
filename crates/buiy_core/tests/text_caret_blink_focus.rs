@@ -36,6 +36,7 @@ fn unfocused_editor_caret_is_forced_hidden() {
             CaretVisual {
                 visible: true,
                 rect: Rect::new(0.0, 0.0, 1.0, 16.0),
+                secondary: None,
             },
         ))
         .id();
@@ -59,6 +60,7 @@ fn focused_editor_caret_blinks_visible_at_phase_zero() {
             CaretVisual {
                 visible: false,
                 rect: Rect::new(0.0, 0.0, 1.0, 16.0),
+                secondary: None,
             },
         ))
         .id();
@@ -84,6 +86,7 @@ fn bare_caret_without_editor_keeps_global_phase() {
             CaretVisual {
                 visible: false,
                 rect: Rect::new(0.0, 0.0, 1.0, 16.0),
+                secondary: None,
             },
         ))
         .id();

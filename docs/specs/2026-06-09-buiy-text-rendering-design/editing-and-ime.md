@@ -51,9 +51,10 @@ required by anything in this file (§ 5).
 > the placeholder, the § 11 Message taxonomy, and the
 > `buiy_widgets::TextInput` bundle. Per-section **"As landed (E_n)"** notes
 > below record the mechanical errata folded at closure. The **named deferrals**
-> (multi-range selection *behavior*, HTML/image clipboard, the BiDi split caret,
+> (multi-range selection *behavior*, HTML/image clipboard,
 > compose-over-selection) are filed in
-> [follow-ups.md](../../plans/follow-ups.md) (§ 13).
+> [follow-ups.md](../../plans/follow-ups.md) (§ 13). The **BiDi split caret**
+> secondary indicator landed as a post-E3 follow-up (§§ 4.1, 5).
 >
 > *(Superseded 2026-06-13 by the as-landed paragraph above — the
 > proposal-time record, kept for history.)* **Status: design-only (deferred
@@ -273,13 +274,20 @@ When the caret sits on a direction boundary, **both** positions are emitted
 (BiDi split caret: primary full-height + secondary indicator), resolved from
 the two candidate runs the affinity pair names. **F**
 
-> **As landed (E3): the split caret is deferred to a follow-up.** E3 paints the
-> single primary caret. cosmic-text 0.19 surfaces no dual-caret position —
-> `LayoutRun::cursor_position`/`cursor_glyph` ignore `cursor.affinity` and a
-> line is one `LayoutRun`, so the "two candidate runs" the draft assumed do not
-> exist; the secondary mark needs glyph-edge geometry (a separate slice). See
-> [follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md).
-> Zero correctness risk — the caret is always present and correct.
+> **As landed: the secondary indicator now lands (follow-up after E3).** E3
+> shipped only the primary caret; a post-E3 slice added the secondary
+> (`secondary_caret_rect_for`, caret.rs). The honest residual the draft's
+> "two candidate runs" framing got wrong: cosmic 0.19's `cursor_glyph`
+> (buffer.rs:151-174) is affinity-blind AND order-defined — it resolves
+> `index == glyph.start` BEFORE `index == glyph.end`, so its single
+> `cursor_position` only ever surfaces the AFTER (start-glyph) edge, which the
+> primary already paints. Buiy computes the SECONDARY directly as the BEFORE
+> glyph's (`end == index`) LOGICAL-END visual edge — LTR → `x + w`, RTL → `x`
+> (cosmic's own convention, buffer.rs:120-142 / `cursor_from_glyph_right`). It
+> rides `CaretVisual.secondary: Option<Rect>` and paints as a second solid
+> stamp (CPU geometry only — no new GPU). A line is one `LayoutRun`, so there
+> are no "two candidate runs"; the second position is glyph-level, not run-level.
+> See [follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md).
 
 ### § 4.2 Decision: a multi-range-shaped Buiy selection type
 
@@ -341,8 +349,15 @@ seats).** All editor visuals are existing-primitive emissions:
   glyphs, and a "next layer" would misuse the `painters_z` stacking index for
   a within-node ordering concern. Split caret (§ 4.1) = a **secondary
   `CaretVisual` rect + a second stamp** (CPU geometry only — still no GPU work);
-  *as landed (E3): the secondary indicator is deferred (§§ 4.1, 13) — cosmic 0.19
-  surfaces no dual-caret position — so v1 paints only the single primary stamp.*
+  *as landed (follow-up after E3): the secondary indicator NOW lands as a
+  `secondary: Option<Rect>` FIELD on `CaretVisual` (not a standalone component)
+  + a second solid-stamp instance reusing the primary's entry/color/clip/page;
+  the secondary sits at the boundary's BEFORE-glyph logical-end visual edge.
+  Why a field, not a component: the extract producer's component
+  query/`Changed` trigger/`RemovedComponents` params are all at Bevy's 15-tuple
+  cap (extract.rs § 6.1), so a 16th seat is impossible without refactoring the
+  hottest text system — the field rides `Changed<CaretVisual>` damage and
+  `RemovedComponents<CaretVisual>` clear for free.*
 - **Caret blink** is a `CaretVisual { visible, rect }` state edge written by
   render-prep ([decoration-and-paint.md § 6.3](decoration-and-paint.md)); the
   edge rebuilds `ExtractedGlyphs` through the **independent glyph damage
@@ -633,11 +648,17 @@ cut/copy/paste; `UndoStack` with composition grouping + typing coalescing;
 reduced-motion; auto-scroll via `ScrollOffset`; the § 11 taxonomy; the
 `TextInput` bundle.
 
+**Landed as a follow-up after E3:** the **BiDi split caret** secondary indicator
+(§§ 4.1, 5) — `secondary_caret_rect_for` (the before-glyph logical-end edge) on
+`CaretVisual.secondary: Option<Rect>` + a second solid stamp. No residual:
+the secondary now paints at every LTR↔RTL direction boundary, INCLUDING one on a
+soft-wrapped continuation segment — `secondary_caret_rect_for` mirrors the
+primary's all-runs scan over the multiple `LayoutRun`s a wrapped logical line
+emits (continue past a non-owning wrap run; only conclude `None` after the last),
+rather than inspecting just the first `line_i`-matching run.
+
 **Deferred within F (named, next slice, not dropped):** multi-range selection
-*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7); the **BiDi split
-caret** secondary indicator (§§ 4.1, 5 — cosmic 0.19 has no dual-caret API;
-needs glyph-edge geometry; E3 ships the single primary caret —
-[follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md));
+*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7);
 **compose-over-selection** (§§ 6.1, 6.2 — E5 splices the preedit at the caret
 and does not replace an active selection first;
 [follow-ups.md § Text editing — compose-over-selection](../../plans/follow-ups.md)).

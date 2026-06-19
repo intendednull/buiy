@@ -131,6 +131,7 @@ fn text_in_opacity_group_dims_exactly_once() {
         CaretVisual {
             visible: true,
             rect: Rect::new(60.0, 0.0, 61.0, 24.0),
+            secondary: None,
         },
         CaretColor(ColorToken::Token(Cow::Borrowed(CARET_TOKEN))),
     ));

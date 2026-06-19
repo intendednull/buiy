@@ -597,6 +597,7 @@ fn caret_emits_one_snapped_stamp_after_all_glyphs() {
             CaretVisual {
                 visible: true,
                 rect: Rect::new(12.3, 0.0, 13.3, 19.2),
+                secondary: None,
             },
         ))
         .id();
@@ -649,6 +650,7 @@ fn caret_color_chain_resolves_at_emission() {
             CaretVisual {
                 visible: true,
                 rect: Rect::new(0.0, 0.0, 1.0, 19.2),
+                secondary: None,
             },
         ))
         .id();
@@ -700,6 +702,7 @@ fn invisible_or_removed_caret_emits_nothing() {
             CaretVisual {
                 visible: true,
                 rect: Rect::new(0.0, 0.0, 1.0, 19.2),
+                secondary: None,
             },
         ))
         .id();
@@ -743,6 +746,7 @@ fn empty_text_still_carries_a_caret() {
         CaretVisual {
             visible: true,
             rect: Rect::new(0.0, 0.0, 1.0, 19.2),
+            secondary: None,
         },
     ));
     h.settle();
@@ -769,6 +773,7 @@ fn blink_edges_rebuild_glyphs_only_and_steady_phases_rebuild_nothing() {
         CaretVisual {
             visible: true,
             rect: Rect::new(2.0, 0.0, 3.0, 19.2),
+            secondary: None,
         },
     ));
     h.settle();
