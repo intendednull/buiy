@@ -16,6 +16,8 @@ fn has_entry_point(module: &naga::Module, name: &str) -> bool {
 
 const QUAD_WGSL: &str = include_str!("../src/render/shader.wgsl");
 const SHADOW_WGSL: &str = include_str!("../src/render/shadow.wgsl");
+const COVERAGE_WGSL: &str = include_str!("../src/render/coverage.wgsl");
+const COMPOSITE_WGSL: &str = include_str!("../src/render/composite.wgsl");
 
 #[test]
 fn quad_shader_parses_and_has_entry_points() {
@@ -76,5 +78,64 @@ fn shadow_shader_with_clip_parses() {
     assert!(
         SHADOW_WGSL.contains("@location(6)") && SHADOW_WGSL.contains("@location(7)"),
         "shadow clip inputs bound at @location(6)/(7) (matches the vertex layout)"
+    );
+}
+
+#[test]
+fn coverage_shader_parses_and_has_entry_points() {
+    // The alpha-as-color glyph shader (coverage.wgsl) is loaded via
+    // `Shader::from_wgsl` (render/mod.rs) but only device-compiled in the
+    // `#[ignore]` GPU lane, so naga is the only headless guard against a
+    // syntax/binding regression. naga rejects a malformed attribute index,
+    // type, or binding, so a clean parse + present entry points proves the
+    // shader is well-formed WGSL.
+    let m = parse_wgsl("coverage", COVERAGE_WGSL);
+    assert!(
+        has_entry_point(&m, "vertex"),
+        "coverage shader has `vertex`"
+    );
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "coverage shader has `fragment`"
+    );
+    // Pin the additive atlas binding (the quad/shadow pipelines never bind
+    // `@group(1)`; coverage adds the R8 atlas texture + sampler there — a
+    // dropped or moved binding is a real regression the parse alone misses).
+    assert!(
+        COVERAGE_WGSL.contains("@group(1) @binding(0) var atlas")
+            && COVERAGE_WGSL.contains("@group(1) @binding(1) var atlas_samp"),
+        "coverage shader binds the atlas texture+sampler on @group(1)"
+    );
+    // The view uniform is byte-identically shared with the quad shader at
+    // @group(0) @binding(0) (the same `BuiyView`).
+    assert!(
+        COVERAGE_WGSL.contains("@group(0) @binding(0) var<uniform> view"),
+        "coverage shader shares the quad view uniform at @group(0) @binding(0)"
+    );
+}
+
+#[test]
+fn composite_shader_parses_and_has_entry_points() {
+    // The effect-group composite shader (composite.wgsl) samples a group's
+    // off-screen target and blends it into the parent. Same headless-only
+    // exposure as coverage.wgsl: device compilation rides the `#[ignore]`
+    // lane, so naga is the merge-gate guard.
+    let m = parse_wgsl("composite", COMPOSITE_WGSL);
+    assert!(
+        has_entry_point(&m, "vertex"),
+        "composite shader has `vertex`"
+    );
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "composite shader has `fragment`"
+    );
+    // Pin the source-target binding (the off-screen group target + its
+    // sampler ride `@group(1)`; the composite params uniform rides
+    // `@group(0)`) so a binding regression is caught, not just a syntax error.
+    assert!(
+        COMPOSITE_WGSL.contains("@group(0) @binding(0) var<uniform> comp")
+            && COMPOSITE_WGSL.contains("@group(1) @binding(0) var src_tex")
+            && COMPOSITE_WGSL.contains("@group(1) @binding(1) var src_samp"),
+        "composite shader binds the params uniform (@group(0)) + the source target+sampler (@group(1))"
     );
 }

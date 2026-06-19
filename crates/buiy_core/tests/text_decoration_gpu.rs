@@ -1,11 +1,17 @@
 //! GPU end-to-end decoration tests (T6): real entities through TextSync →
 //! TextCommit → extract (quads + stamps) → the § 4.6 splice → pixels.
-//! decoration-and-paint §§ 3–4; one golden per kind (campaign T6 surface),
-//! the three quad-gate terms regression-pinned end-to-end, and the § 4.5
-//! group test — pinned by T6 as the EXPECTED asymmetry, FLIPPED by T8:
-//! everything inside the group (underline, line-through, ink) now dims
-//! exactly once through the glyph-buffer partition. All #[ignore]: need a
-//! wgpu adapter (CLAUDE.md GPU lane).
+//! decoration-and-paint §§ 3–4. The decoration GEOMETRY (band count, position
+//! relative to the glyph ink, thickness, the double-underline gap) is pinned
+//! HEADLESS off the extract carriers in `text_decoration_extract.rs` (audit
+//! 2026-06-18 #28 / T2.9) and as closed-form algebra in `text_decoration.rs`;
+//! the goldens here keep only the rasterization RESIDUE the cheaper tiers
+//! cannot see — the quad tier's antialiased band signature (underline) and the
+//! § 4.4 paint-ORDER seat (line-through draws OVER the glyphs). Plus the three
+//! quad-gate terms regression-pinned end-to-end, and the § 4.5 group test —
+//! pinned by T6 as the EXPECTED asymmetry, FLIPPED by T8: everything inside the
+//! group (underline, line-through, ink) now dims exactly once through the
+//! glyph-buffer partition. All #[ignore]: need a wgpu adapter (CLAUDE.md GPU
+//! lane).
 //!
 //! Run: cargo test -p buiy_core --test text_decoration_gpu -- --ignored --test-threads=1
 //!
@@ -39,7 +45,7 @@ use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{Background, Opacity, TextColor};
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
-use buiy_core::text::{DecorationLineStyle, DecorationLines, FontSize, Text, TextDecorations};
+use buiy_core::text::{DecorationLines, FontSize, Text, TextDecorations};
 use std::borrow::Cow;
 use std::ops::Range;
 
@@ -201,28 +207,46 @@ fn dim_white_rows(pixels: &[u8]) -> Range<u32> {
     first..last + 1
 }
 
-// --- the four kind goldens (campaign T6 test surface) -----------------------
+// --- the per-kind AA-residue goldens (geometry pushed headless, T2.9) --------
+
+// NOTE (audit 2026-06-18, #28 / T2.9): the decoration GEOMETRY — band count,
+// position relative to the glyph ink, thickness, and the double-underline gap —
+// moved DOWN to the headless extract tier (`text_decoration_extract.rs`, off
+// `ExtractedTextQuads` + `ExtractedGlyphs`, no adapter). It is also pinned as
+// closed-form algebra on hand fixtures in `text_decoration.rs`. The goldens
+// below keep exactly ONE per kind, asserting only the rasterization RESIDUE the
+// cheaper tiers cannot observe: the quad tier's antialiased band SIGNATURE (the
+// `is_strong_red` ≈237 / bleed ≈110 split derived from `shader.wgsl`'s SDF AA),
+// re-capture determinism, and — for line-through — the § 4.4 paint-ORDER seat
+// (the solid stamp draws OVER the glyph coverage), which is a pixel fact, not a
+// carrier fact.
 
 #[test]
-#[ignore = "needs a wgpu adapter; T6 underline golden (decoration-and-paint §§ 3.2–3.3)"]
-fn underline_paints_one_band_below_the_glyphs() {
+#[ignore = "needs a wgpu adapter; T6 underline AA-residue golden (quad-tier SDF antialiasing signature)"]
+fn underline_band_has_the_antialiased_quad_signature() {
+    // RESIDUE confidence only (geometry is headless now): the quad-tier band
+    // rasterizes through `shader.wgsl`'s SDF AA, so a strong-red interior
+    // (≈237) exists with NO full-coverage row, and the re-capture is
+    // bit-stable. A band that read flat full-coverage everywhere would mean
+    // the AA path regressed — that is the pixel fact this golden guards.
     let frame_a = capture_decorated(red_deco(DecorationLines::UNDERLINE));
-    let ink = white_rows(&frame_a);
     let bands = red_bands(&frame_a);
-    assert_eq!(bands.len(), 1, "exactly one underline band: {bands:?}");
-    let band = &bands[0];
-    assert!(
-        band.start >= ink.end,
-        "the underline ({band:?}) sits entirely BELOW the glyph ink ({ink:?}) — \
-         'Hi' has no descenders, so no ink crosses the baseline"
-    );
-    // § 3.3: thickness = max(1, round(0.05 em × 40 px × scale 1)) = 2 whole
-    // physical px (the embedded font's pinned underlineThickness, see the
-    // text_decoration.rs drift guard) — the strong-row count recovers it.
     assert_eq!(
-        band.end - band.start,
-        2,
-        "band height = the § 3.3 floored thickness in physical px"
+        bands.len(),
+        1,
+        "the AA'd underline band rasterized: {bands:?}"
+    );
+    // The AA signature (module doc): a § 3.3-floored 2-physical-px quad band
+    // has NO full-coverage row — both interior rows sit at AA alpha 0.84375
+    // (≈237 strong-red), not the flat full-coverage red a non-AA'd path would
+    // leave. A regressed AA path would paint a full-coverage row here.
+    assert!(
+        rows_where(&frame_a, is_full_red).is_empty(),
+        "the AA'd quad band has NO full-coverage row (the SDF antialiasing signature)"
+    );
+    assert!(
+        !rows_where(&frame_a, is_strong_red).is_empty(),
+        "the band's interior reads strong-red ≈237 (AA alpha 0.84375)"
     );
 
     // Re-capture determinism (the hello_text idiom): an independent fresh
@@ -233,51 +257,13 @@ fn underline_paints_one_band_below_the_glyphs() {
 }
 
 #[test]
-#[ignore = "needs a wgpu adapter; T6 double-underline golden (§ 3.2: gap = thickness)"]
-fn double_underline_paints_two_bands_with_a_thickness_gap() {
-    let frame = capture_decorated(TextDecorations {
-        line: DecorationLines::UNDERLINE,
-        style: DecorationLineStyle::Double,
-        color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
-    });
-    let ink = white_rows(&frame);
-    let bands = red_bands(&frame);
-    assert_eq!(bands.len(), 2, "Double = exactly two bands: {bands:?}");
-    let (first, second) = (&bands[0], &bands[1]);
-    assert!(first.start >= ink.end, "both bands below the ink ({ink:?})");
-    let h1 = first.end - first.start;
-    let h2 = second.end - second.start;
-    assert_eq!(h1, h2, "equal thicknesses: {bands:?}");
-    // § 3.2: gap = thickness ⇒ the second rect at y + 2 × t; t is physically
-    // integral and y grid-snapped, so the gap is exactly t rows.
-    assert_eq!(
-        second.start - first.end,
-        h1,
-        "gap rows == band height (gap = thickness): {bands:?}"
-    );
-}
-
-#[test]
-#[ignore = "needs a wgpu adapter; T6 overline golden (§ 3.2: ascent placement, line-box clamp)"]
-fn overline_paints_above_the_glyphs() {
-    let frame = capture_decorated(red_deco(DecorationLines::OVERLINE));
-    let ink = white_rows(&frame);
-    let bands = red_bands(&frame);
-    assert_eq!(bands.len(), 1, "exactly one overline band: {bands:?}");
-    let band = &bands[0];
-    // The overline sits at the ASCENT (0.935 em — the drift-guard pin),
-    // well above the cap height where the 'H' ink starts.
-    assert!(
-        band.end <= ink.start,
-        "the overline ({band:?}) sits entirely ABOVE the glyph ink ({ink:?})"
-    );
-    // Overline reuses the underline thickness (upstream mirror): 2 phys px.
-    assert_eq!(band.end - band.start, 2, "underline thickness reused");
-}
-
-#[test]
-#[ignore = "needs a wgpu adapter; T6 line-through golden — THE § 4.4 seat-5 test (stamp paints OVER the text)"]
+#[ignore = "needs a wgpu adapter; T6 line-through AA-residue golden — THE § 4.4 seat-5 paint-order test (stamp paints OVER the text)"]
 fn line_through_paints_over_the_glyph_ink() {
+    // RESIDUE confidence: the line-through stamp's PAINT ORDER over the glyph
+    // ink is a pixel fact the extract carriers cannot observe (they carry the
+    // stamp instance, not its composited result). Geometry — that exactly one
+    // stamp intersects the ink at the floored thickness — is headless in
+    // `text_decoration_extract.rs`; here we keep only the over-paint seat.
     let frame = capture_decorated(red_deco(DecorationLines::LINE_THROUGH));
     let ink = white_rows(&frame);
     // The stamp tier is hard-edged at alpha 1 → exact full-coverage red.
