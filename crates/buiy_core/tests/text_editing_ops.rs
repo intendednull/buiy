@@ -151,6 +151,80 @@ fn motion_does_not_change_the_value() {
     assert_eq!(state.value(), "abc");
 }
 
+/// Audit #38 (T4.6): word-navigation MOTION behavior. The keymap tier
+/// (`text_keymap.rs`) already pins that Ctrl/Option+arrow RESOLVES to
+/// `Motion::LeftWord`/`RightWord`; this pins what those motions DO when applied —
+/// the caret jumps a whole word, not a single grapheme. Starting at the buffer
+/// end of `"foo bar baz"`, `LeftWord` walks back over word boundaries
+/// (`baz`→`bar`→`foo`→start) and `RightWord` walks forward, so the caret lands on
+/// word starts/ends, never mid-word. A regression that lowered word-nav to a
+/// single-step `Left`/`Right` (or dropped the word granularity) would move by one
+/// index and redden this.
+#[test]
+fn word_nav_motions_jump_whole_words() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    // "foo bar baz" — three words, two spaces. Byte offsets: foo[0..3] sp[3]
+    // bar[4..7] sp[7] baz[8..11]. The caret starts at the end (index 11) after
+    // the insert.
+    state.apply(
+        &mut fs,
+        EditCommand::Insert("foo bar baz".into()),
+        false,
+        false,
+    );
+    assert_eq!(state.caret().index, 11, "caret starts at the buffer end");
+
+    // A non-mutating word motion; returns the resulting caret byte index.
+    fn word(state: &mut TextEditState, fs: &mut cosmic_text::FontSystem, motion: Motion) -> usize {
+        let out = state.apply(fs, EditCommand::Motion(motion, false), false, false);
+        assert!(!out.value_changed, "word-nav is a caret move, not an edit");
+        state.caret().index
+    }
+
+    // LeftWord steps back over each word boundary, not one grapheme at a time.
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::LeftWord),
+        8,
+        "back to start of 'baz'"
+    );
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::LeftWord),
+        4,
+        "back to start of 'bar'"
+    );
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::LeftWord),
+        0,
+        "back to start of 'foo'"
+    );
+    // Already at the start: another LeftWord cannot move past index 0.
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::LeftWord),
+        0,
+        "clamped at line start"
+    );
+
+    // RightWord steps forward over each word, landing past each word's end.
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::RightWord),
+        3,
+        "forward to end of 'foo'"
+    );
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::RightWord),
+        7,
+        "forward to end of 'bar'"
+    );
+    assert_eq!(
+        word(&mut state, &mut fs, Motion::RightWord),
+        11,
+        "forward to end of 'baz'"
+    );
+}
+
 /// On a `SingleLine` editor, `Enter` submits (never inserts a newline) and
 /// reports `submitted`; the value is unchanged.
 #[test]

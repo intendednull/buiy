@@ -8,6 +8,8 @@ use std::collections::HashSet;
 
 use buiy_verify::invariant::{Scene, SceneNode, SceneParams, arb_scene, realize};
 use proptest::prelude::*;
+use proptest::strategy::ValueTree;
+use proptest::test_runner::TestRunner;
 
 /// Max nesting depth of a scene forest (a single root is depth 1).
 fn scene_depth(scene: &Scene) -> u32 {
@@ -41,6 +43,113 @@ fn collect_names(node: &SceneNode, out: &mut Vec<String>) {
     for child in &node.children {
         collect_names(child, out);
     }
+}
+
+/// Visit every node of a scene forest (pre-order), running `f` on each.
+fn for_each_node(scene: &Scene, mut f: impl FnMut(&SceneNode)) {
+    fn rec(node: &SceneNode, f: &mut impl FnMut(&SceneNode)) {
+        f(node);
+        for child in &node.children {
+            rec(child, f);
+        }
+    }
+    for root in &scene.roots {
+        rec(root, &mut f);
+    }
+}
+
+/// Audit #38 (T4.6): generator axis-distinctness self-test. The Tier-3 invariant
+/// proptests only *pass* — they say nothing about whether the generator actually
+/// EXERCISES each axis. If a strategy silently regressed to a constant (e.g.
+/// `arb_position_kind` always `Static`, `arb_transform` always identity, sizes
+/// pinned to one box — the "constant box" the audit named), every invariant would
+/// still pass over a strictly smaller domain and nothing would catch the lost
+/// coverage. This self-test draws a fixed-seed sample of scenes and asserts each
+/// generated axis takes **≥ 2 distinct values** across the sample — direct
+/// evidence the domain is non-degenerate. It is deterministic (a pinned RNG seed)
+/// so it never flakes and a regression reproduces exactly.
+#[test]
+fn generator_exercises_every_axis_with_distinct_values() {
+    // TestRunner::deterministic() PINS the RNG seed, so the SAMPLES draws below
+    // are reproducible (no OS-entropy flake; a failure reproduces exactly) —
+    // unlike Config::default(), whose rng_seed is Random. (`Config.cases` is
+    // irrelevant here: the SAMPLES loop drives `new_tree` directly, not
+    // `TestRunner::run`, so the draw count is SAMPLES, not `cases`.)
+    let mut runner = TestRunner::deterministic();
+    let strategy = arb_scene(SceneParams::default());
+
+    // Distinct-value accumulators, one per axis. Enums key on their `Debug`
+    // string so the self-test need not import every axis type; the numeric axes
+    // key on bit patterns (NaN-free by construction here).
+    let mut position_kinds: HashSet<String> = HashSet::new();
+    let mut z_indices: HashSet<Option<i32>> = HashSet::new();
+    let mut isolations: HashSet<bool> = HashSet::new();
+    let mut top_layers: HashSet<String> = HashSet::new();
+    let mut transform_identity: HashSet<bool> = HashSet::new();
+    let mut sizes: HashSet<(u32, u32)> = HashSet::new();
+    let mut background_present: HashSet<bool> = HashSet::new();
+
+    const SAMPLES: usize = 400;
+    for _ in 0..SAMPLES {
+        let tree = strategy
+            .new_tree(&mut runner)
+            .expect("arb_scene produces a value");
+        let scene = tree.current();
+        for_each_node(&scene, |node| {
+            position_kinds.insert(format!("{:?}", node.position_kind));
+            z_indices.insert(node.z_index);
+            isolations.insert(node.isolation);
+            top_layers.insert(format!("{:?}", node.top_layer));
+            transform_identity.insert(node.transform.is_identity());
+            sizes.insert((node.size.0.to_bits(), node.size.1.to_bits()));
+            background_present.insert(node.background.is_some());
+        });
+    }
+
+    // Each axis must show variation — a degenerate (constant) strategy fails here.
+    assert!(
+        position_kinds.len() >= 2,
+        "position_kind is pinned to a single value {position_kinds:?} — the \
+         generator must reach both Static and a positioned kind (testing-audit #13)"
+    );
+    assert!(
+        z_indices.len() >= 2,
+        "z_index never varies ({z_indices:?}) — auto + explicit z must both occur"
+    );
+    assert!(
+        isolations.len() >= 2,
+        "isolation is constant ({isolations:?}) — both Isolate and Auto must occur"
+    );
+    assert!(
+        top_layers.len() >= 2,
+        "top_layer is pinned ({top_layers:?}) — an escaping variant must occur \
+         (else `top_layer_dominates` runs over an empty top layer)"
+    );
+    assert!(
+        transform_identity.len() >= 2,
+        "transform is always identity (or always non-identity) — both must occur \
+         so the context-forming transform branch is exercised"
+    );
+    assert!(
+        sizes.len() >= 2,
+        "size is a single constant box ({} distinct) — the generator must vary the \
+         box geometry, not pin it (the audit's 'constant box' regression)",
+        sizes.len()
+    );
+    assert!(
+        background_present.len() >= 2,
+        "background presence never varies ({background_present:?}) — both painted \
+         and color-less nodes must occur"
+    );
+    // The positioned kinds specifically: at least one NON-static kind must appear
+    // (a stricter check than ≥2 distinct, since {Static, <one other>} satisfies
+    // the count but we also want to know a positioned node is genuinely reachable
+    // for the tier-2 paint class — testing-audit #13).
+    assert!(
+        position_kinds.iter().any(|k| k != "Static"),
+        "no positioned kind ever generated — tier-2 (positioned, auto-z) is \
+         unreachable, the very gap #13 widened the generator to close"
+    );
 }
 
 proptest! {

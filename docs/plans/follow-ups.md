@@ -858,6 +858,19 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   built; single-reference reftests cover the current pairings.
 - **`golden-prune` bin** — the advisory stale-positive pruner (`goldens.md`
   § Stale-positive guard) is a design hook, machinery deferred.
+- **Shaping-corpus breadth (pure-Hebrew / VS16 / Thai / Khmer fixtures)** —
+  named in audit #38 (T4.6), deliberately DEFERRED rather than landed in the
+  testing-audit campaign. The shaping corpus is a curated, byte-reproducible
+  artifact: every fixture font is a `pyftsubset` subset of a SHA256-pinned
+  upstream produced ONLY by `tools/fonts/subset_fixture_fonts.sh`, which hard-pins
+  `fontTools==4.56.0`. Adding new script arms is a font-acquisition task (new
+  pinned OFL upstreams + digests + provenance) run through that pipeline, not a
+  low/info test cleanup — and the dev box has fontTools 4.63.0, so any subset
+  produced here would diverge byte-wise and break the corpus's reproducibility
+  guarantee. Existing fixtures already cover the shaper behaviors (Hebrew RTL via
+  `mixed_bidi`; Arabic joining; Devanagari reordering; CJK; emoji-ZWJ ligation).
+  Land the new arms when a fontTools-4.56.0 environment + the pinned upstreams are
+  available; verify via `BUIY_ACCEPT_SHAPING=1` + a reviewed `.snap` diff.
 - **Object-store golden migration** — in-git PNGs until the named trigger
   (>50 MB total or >500 positives); the `GoldenKey`/`BlessLedger` schema is fixed
   now so the migration is mechanical (`goldens.md` § Storage staging).

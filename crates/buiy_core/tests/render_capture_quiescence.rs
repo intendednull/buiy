@@ -10,34 +10,86 @@
 
 mod support;
 
-/// § Verification #4: `Instant::now()` (and `SystemTime::now()`) must NOT
-/// appear in the capture path source — a wall-clock read would make a
-/// time-dependent capture non-reproducible. The fixed virtual clock
-/// (`Time::<Virtual>`) is the only time source. A grep-lint over `golden.rs`,
-/// the home of `capture_to_image` + its quiescence loop.
-#[test]
-fn capture_path_has_no_instant_now() {
-    let src = include_str!("../src/render/golden.rs");
-    // Strip line comments so a doc-comment MENTIONING the ban does not trip it;
-    // we only care about real code reading wall time.
+use std::path::Path;
+
+/// Scan one source file for a real (non-comment) wall-clock read and panic with a
+/// precise `file:line` if found. Strips line comments so a doc-comment MENTIONING
+/// the ban does not trip it; we only care about code that actually reads wall
+/// time. Bans both `Instant::now` and `SystemTime::now` (the two
+/// `std::time` wall-clock entry points).
+fn assert_no_wall_clock_read(rel_path: &str, src: &str) {
     for (lineno, line) in src.lines().enumerate() {
         let code = match line.split_once("//") {
             Some((before, _)) => before,
             None => line,
         };
-        assert!(
-            !code.contains("Instant::now"),
-            "golden.rs:{} reads wall time via Instant::now() — the capture path \
-             must drive Time::<Virtual> only (determinism.md § Verification #4): {line}",
-            lineno + 1,
-        );
-        assert!(
-            !code.contains("SystemTime::now"),
-            "golden.rs:{} reads wall time via SystemTime::now() — the capture \
-             path must drive Time::<Virtual> only: {line}",
-            lineno + 1,
-        );
+        for banned in ["Instant::now", "SystemTime::now"] {
+            assert!(
+                !code.contains(banned),
+                "{rel_path}:{} reads wall time via {banned}() — determinism-sensitive \
+                 render code must drive Time::<Virtual> only (determinism.md \
+                 § Verification #4): {line}",
+                lineno + 1,
+            );
+        }
     }
+}
+
+/// § Verification #4: `Instant::now()` (and `SystemTime::now()`) must NOT appear
+/// in ANY determinism-sensitive render module — a wall-clock read would make the
+/// rasterized frame time-dependent and the capture non-reproducible. The fixed
+/// virtual clock (`Time::<Virtual>`) is the only time source on this path.
+///
+/// Audit #38 (T4.6): the lint previously scoped ONLY `golden.rs` (the home of
+/// `capture_to_image`), but the determinism contract covers the WHOLE frame
+/// production spine — extract → prepare → instance → bucket → composite → effect
+/// → top-layer → clip → bridge → visibility — not just the capture loop. An
+/// `Instant::now()` creeping into any of those (e.g. a per-frame "animate by
+/// elapsed wall time" shortcut) would non-deterministically change WHAT gets
+/// rasterized, defeating the `(0,0)` fuzz budget while leaving `golden.rs`
+/// pristine. So the lint now walks every `.rs` in `src/render/` (any new module
+/// is covered automatically — no allow-list to keep in sync).
+///
+/// Scope note: this bans wall time only in `buiy_core`'s render modules. The
+/// bless-ledger timestamp in `buiy_verify` (`golden/check.rs::now_rfc3339`) is a
+/// LEGITIMATE `SystemTime::now()` — it records when a golden was blessed and is
+/// not on the deterministic capture path — so it is deliberately out of scope.
+#[test]
+fn render_path_has_no_wall_clock_read() {
+    let render_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/render");
+    let mut scanned = 0usize;
+    // Walk src/render/ RECURSIVELY (stack, no walkdir dep) so SUBDIRECTORIES are
+    // covered — a non-recursive read_dir silently skips src/render/atlas/ (lru.rs
+    // etc.), exactly where an "evict by elapsed wall-time" shortcut could creep in
+    // on the determinism path.
+    let mut stack = vec![render_dir.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("src/render/ subdir exists") {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue; // skip the .wgsl shader sources
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let rel = path.strip_prefix(&render_dir).unwrap().to_string_lossy();
+            assert_no_wall_clock_read(&format!("render/{rel}"), &src);
+            scanned += 1;
+        }
+    }
+    // Non-vacuity guard: a renamed/moved render dir, or a walk that stopped
+    // descending into subdirs, must fail loudly rather than silently pass over too
+    // few files. The recursive render module set (incl. atlas/, effect/, …) is
+    // ~29 .rs files; a floor of 25 sits well above the top-level-only count, so a
+    // regression that drops the recursion trips it.
+    assert!(
+        scanned >= 25,
+        "expected to scan the full recursive render module set, only saw \
+         {scanned} files — did src/render/ move, or did the walk stop descending \
+         into subdirectories?"
+    );
 }
 
 // § Verification #3: inject an asset that never finishes loading and assert
