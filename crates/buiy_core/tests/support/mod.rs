@@ -44,7 +44,7 @@ use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use buiy_core::{CorePlugin, render::BuiyRenderPlugin};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // ---------------------------------------------------------------------------
 // Headless (no-adapter) App builders — the shared layout/text plugin stacks.
@@ -521,6 +521,102 @@ pub fn register_fixture_font(app: &mut App, family: &str, file_name: &str) {
             FontFaceDescriptors::default(),
         );
     app.update();
+}
+
+// ---------------------------------------------------------------------------
+// Adapter probe: is the SELECTED wgpu adapter the pinned lavapipe (llvmpipe)?
+//
+// `buiy_verify::support::on_pinned_lavapipe` is the workspace source of truth
+// for this (the golden gates consult it), but `buiy_core` CANNOT depend on
+// `buiy_verify` (wrong dep direction — `buiy_verify` depends on `buiy_core`),
+// so the GPU `#[ignore]` tests in `buiy_core/tests/` carry their OWN small twin
+// here. It is a faithful mirror: the same env fast-path + the same
+// RenderAdapterInfo name/driver substring check, over `buiy_core`'s OWN capture
+// stack (`gpu_render_app`), and memoized once per process.
+//
+// Why a probe at all: stored-baseline / SDF-AA pixel claims are blessed against
+// the canonical CI rasterizer (pinned lavapipe / Mesa llvmpipe). On any other
+// adapter the rim/AA pixels diverge (this host's RX 6700 XT / RADV hard-edges
+// the SDF-AA quad band where lavapipe leaves a 0.84375-alpha row), so a
+// lavapipe-specific pixel assertion must run ONLY when this returns `true` and
+// skip-as-pending otherwise. See `determinism.md` § "CI software-rasterizer
+// pin" and `buiy_verify::support::on_pinned_lavapipe` (the twin this mirrors).
+// ---------------------------------------------------------------------------
+
+/// The case-insensitive substring identifying the pinned Mesa software
+/// rasterizer in a wgpu adapter name/driver AND in the CI `WGPU_ADAPTER_NAME`
+/// env contract (the device reports `llvmpipe (LLVM …)`; the CI install-mesa
+/// action exports `WGPU_ADAPTER_NAME=llvmpipe`).
+const LAVAPIPE_MARKER: &str = "llvmpipe";
+
+/// Memoized [`on_pinned_lavapipe`] result — the probe instantiates a wgpu
+/// adapter (or reads the env), so a serialized GPU lane pays it at most once.
+static ON_PINNED_LAVAPIPE: OnceLock<bool> = OnceLock::new();
+
+/// Is the SELECTED wgpu adapter the pinned lavapipe (Mesa llvmpipe)?
+///
+/// The gate for every lavapipe-specific PIXEL assertion in the `buiy_core` GPU
+/// `#[ignore]` tests (the SDF-AA band signature, exact rim encodes — pixels
+/// blessed against the pinned CI rasterizer that do not hold on real hardware).
+/// Compare against the lavapipe-specific value only when `true`; otherwise skip
+/// it as pending after the rasterizer-internal legs (band count, re-capture
+/// determinism) have run. Mirror of
+/// [`buiy_verify::support::on_pinned_lavapipe`] (`buiy_core` cannot depend on
+/// `buiy_verify`). Two signals, first decisive wins:
+///
+///  1. **CI env contract** — `WGPU_ADAPTER_NAME` contains `llvmpipe`
+///     (`.github/actions/install-mesa` exports it): the pin is active, return
+///     `true` without instantiating an adapter.
+///  2. **Real adapter probe** — otherwise build the canonical capture stack,
+///     finish it (materializing `RenderAdapterInfo`), and check the selected
+///     adapter's `name`/`driver` for `llvmpipe`. Returns `false` on the RX
+///     (RADV) and `true` if `VK_DRIVER_FILES` points at lavapipe locally.
+///
+/// Conservative: any failure to materialize an adapter returns `false` —
+/// "not provably lavapipe" must gate OFF the lavapipe-specific assertion.
+pub fn on_pinned_lavapipe() -> bool {
+    *ON_PINNED_LAVAPIPE.get_or_init(|| {
+        if let Some(name) = std::env::var_os("WGPU_ADAPTER_NAME")
+            && name
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains(LAVAPIPE_MARKER)
+        {
+            return true;
+        }
+        probe_selected_adapter_is_lavapipe()
+    })
+}
+
+/// Build a minimal capture app, finish it (materializing the wgpu device +
+/// `RenderAdapterInfo`), and report whether the selected adapter is lavapipe.
+/// `false` if no `RenderApp` / adapter info materializes (no adapter).
+fn probe_selected_adapter_is_lavapipe() -> bool {
+    use bevy::render::RenderApp;
+    use bevy::render::renderer::RenderAdapterInfo;
+
+    // The same capture stack a GPU test selects (1×1 — we only read the info),
+    // so the probed adapter is byte-identical to the one captures use.
+    let mut app = gpu_render_app(1, 1);
+    app.finish();
+    app.cleanup();
+
+    let Some(render_app) = app.get_sub_app(RenderApp) else {
+        return false;
+    };
+    let Some(info) = render_app.world().get_resource::<RenderAdapterInfo>() else {
+        return false;
+    };
+    adapter_info_is_lavapipe(&info.name, &info.driver)
+}
+
+/// Pure predicate: does this adapter `name`/`driver` identify lavapipe (Mesa
+/// llvmpipe)? Split out so it is unit-testable without an adapter. The device
+/// reports `name = "llvmpipe (LLVM …)"`, `driver = "llvmpipe"`; matching either
+/// (case-insensitive) covers both surfaces.
+fn adapter_info_is_lavapipe(name: &str, driver: &str) -> bool {
+    name.to_ascii_lowercase().contains(LAVAPIPE_MARKER)
+        || driver.to_ascii_lowercase().contains(LAVAPIPE_MARKER)
 }
 
 /// Index one RGBA8 pixel out of an un-padded `w*h*4` readback buffer.

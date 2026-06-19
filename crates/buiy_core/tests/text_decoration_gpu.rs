@@ -22,13 +22,19 @@
 //!
 //! - **Quad tier (underline/overline):** `shader.wgsl` antialiases the SDF
 //!   edge with `alpha = 1 − smoothstep(−aa, aa, d)`, `aa = fwidth(d) ≈ 1`
-//!   logical px. A § 3.3-floored 2-physical-px band therefore has NO
-//!   full-coverage row: both interior rows sit at pixel-center distance 0.5
-//!   from an edge → alpha `1 − smoothstep(−1, 1, −0.5)` = **0.84375**
-//!   (sRGB-encoded pure red ≈ 237), and one bleed row above + below reads
-//!   alpha **0.15625** (≈ 110). [`is_strong_red`]'s 200 threshold separates
-//!   band rows from bleed rows exactly; counting strong rows recovers the
-//!   floored thickness.
+//!   logical px. **On the pinned lavapipe** a § 3.3-floored 2-physical-px band
+//!   therefore has NO full-coverage row: both interior rows sit at pixel-center
+//!   distance 0.5 from an edge → alpha `1 − smoothstep(−1, 1, −0.5)` =
+//!   **0.84375** (sRGB-encoded pure red ≈ 237), and one bleed row above + below
+//!   reads alpha **0.15625** (≈ 110). [`is_strong_red`]'s 200 threshold
+//!   separates band rows from bleed rows; counting strong rows recovers the
+//!   floored thickness. This AA SIGNATURE is rasterizer-SPECIFIC: `fwidth` is a
+//!   derivative the rasterizer computes, and it diverges across hardware — this
+//!   host's RX 6700 XT / RADV hard-edges the SAME band to full-coverage red on
+//!   BOTH rows (probe: 255 everywhere, zero sub-255 pixels). So the no-full-row
+//!   / strong-≈237 pixel CLAIM is gated on [`support::on_pinned_lavapipe`]
+//!   (audit #28; mirrors `golden_sdf_corner` / T3.3); the rasterizer-INTERNAL
+//!   legs (band count, re-capture determinism) run on EVERY adapter.
 //! - **Stamp tier (line-through):** a hard-edged coverage quad (no SDF) at
 //!   alpha 1 — interior pixels read the exact
 //!   [`support::expected_full_coverage_srgb`] encode ([`is_full_red`], ±4).
@@ -225,32 +231,64 @@ fn dim_white_rows(pixels: &[u8]) -> Range<u32> {
 #[ignore = "needs a wgpu adapter; T6 underline AA-residue golden (quad-tier SDF antialiasing signature)"]
 fn underline_band_has_the_antialiased_quad_signature() {
     // RESIDUE confidence only (geometry is headless now): the quad-tier band
-    // rasterizes through `shader.wgsl`'s SDF AA, so a strong-red interior
-    // (≈237) exists with NO full-coverage row, and the re-capture is
-    // bit-stable. A band that read flat full-coverage everywhere would mean
-    // the AA path regressed — that is the pixel fact this golden guards.
+    // rasterizes through `shader.wgsl`'s SDF AA. On the pinned lavapipe a
+    // strong-red interior (≈237) exists with NO full-coverage row — a band that
+    // read flat full-coverage everywhere would mean the AA path regressed, the
+    // pixel fact this golden guards (gated to lavapipe below — fwidth diverges
+    // across rasterizers, see audit #28). The band rasterized + re-capture
+    // bit-stability legs are rasterizer-internal and run on EVERY adapter.
     let frame_a = capture_decorated(red_deco(DecorationLines::UNDERLINE));
     let bands = red_bands(&frame_a);
+    // Band rasterized (rasterizer-INTERNAL, runs on EVERY adapter): the quad
+    // tier painted exactly one contiguous strong-red band where the floored
+    // 2-physical-px underline lands. A dropped/duplicated band fails here on the
+    // RX and on lavapipe alike.
     assert_eq!(
         bands.len(),
         1,
         "the AA'd underline band rasterized: {bands:?}"
     );
-    // The AA signature (module doc): a § 3.3-floored 2-physical-px quad band
-    // has NO full-coverage row — both interior rows sit at AA alpha 0.84375
-    // (≈237 strong-red), not the flat full-coverage red a non-AA'd path would
-    // leave. A regressed AA path would paint a full-coverage row here.
-    assert!(
-        rows_where(&frame_a, is_full_red).is_empty(),
-        "the AA'd quad band has NO full-coverage row (the SDF antialiasing signature)"
-    );
-    assert!(
-        !rows_where(&frame_a, is_strong_red).is_empty(),
-        "the band's interior reads strong-red ≈237 (AA alpha 0.84375)"
-    );
 
-    // Re-capture determinism (the hello_text idiom): an independent fresh
-    // capture matches — the re-capture IS the golden.
+    // The SDF AA SIGNATURE is lavapipe-SPECIFIC (audit #28; determinism.md
+    // § "CI software-rasterizer pin"). `shader.wgsl` antialiases the SDF edge
+    // with `aa = fwidth(d)`, and `fwidth` is a derivative the rasterizer
+    // computes — its value diverges across hardware. On the PINNED lavapipe a
+    // floored 2-physical-px band reads NO full-coverage row (both interior rows
+    // at AA alpha 0.84375 ≈ 237 strong-red); this host's RX 6700 XT / RADV
+    // hard-edges the SAME band to full-coverage red (probe: both band rows are
+    // 255 everywhere, zero sub-255 pixels), so the no-full-row / strong-≈237
+    // pixel claims hold ONLY on lavapipe. Gate them (mirror golden_sdf_corner /
+    // T3.3); off lavapipe skip-as-pending after the band-count + determinism
+    // legs (which ARE rasterizer-internal) have run. The CI lavapipe leg keeps
+    // the AA-signature coverage.
+    if !support::on_pinned_lavapipe() {
+        eprintln!(
+            "underline_band_has_the_antialiased_quad_signature: selected adapter \
+             is not the pinned lavapipe — SKIPPING the lavapipe-specific SDF-AA \
+             pixel signature (no-full-coverage-row / strong-red ≈237). This host \
+             hard-edges the band; the AA alpha is an fwidth-dependent lavapipe \
+             fact, not a portable one (determinism.md § \"the local lane does not \
+             compare against the stored lavapipe baseline\"). The band-count and \
+             re-capture-determinism legs above/below DID run."
+        );
+    } else {
+        // The AA signature (module doc): a § 3.3-floored 2-physical-px quad band
+        // has NO full-coverage row — both interior rows sit at AA alpha 0.84375
+        // (≈237 strong-red), not the flat full-coverage red a non-AA'd path would
+        // leave. A regressed AA path would paint a full-coverage row here.
+        assert!(
+            rows_where(&frame_a, is_full_red).is_empty(),
+            "the AA'd quad band has NO full-coverage row (the SDF antialiasing signature)"
+        );
+        assert!(
+            !rows_where(&frame_a, is_strong_red).is_empty(),
+            "the band's interior reads strong-red ≈237 (AA alpha 0.84375)"
+        );
+    }
+
+    // Re-capture determinism (the hello_text idiom; rasterizer-INTERNAL, runs on
+    // EVERY adapter): an independent fresh capture matches — the re-capture IS
+    // the golden.
     let frame_b = capture_decorated(red_deco(DecorationLines::UNDERLINE));
     let diff = perceptual_diff(&frame_a, &frame_b);
     assert!(diff < 1e-4, "two fresh captures diverged: {diff}");
