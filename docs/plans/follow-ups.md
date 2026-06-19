@@ -139,6 +139,13 @@ known at try-evaluation time) but the term type is missing from
 
 **Originated:** Phase 6 + README § 5 open question.
 
+**Status:** **Deferred (not built)** — reviewed by the follow-ups-drain campaign
+(`2026-06-18-followups-drain.md`) and deliberately left deferred: both spec § 3.5
+and README § 5 gate this on "if profiling surfaces a hot path", and no profiling
+evidence exists, so the cap would be a speculative unused knob. **Re-open
+trigger:** a *measured* deeply-nested-fallback hot path against a perf budget.
+The implementation sketch below stands when that trigger fires.
+
 **Symptom:** an anchor with a deeply-nested `position_try` chain (e.g.,
 20+ fallbacks) is evaluated linearly. No cap is enforced. If profiling
 surfaces this as a hot path, a resource-configurable cap should bound
@@ -165,7 +172,16 @@ to query, or a global `LayoutTree` with window-tagged entries.
 **Implementation sketch:** depends on `buiy-window-and-surface-design`
 (currently incomplete). Out of Phase 6 scope.
 
-## Anchor positioning — anchor target IS sticky/table/multicol (Phase 7 interaction)
+## Anchor positioning — anchor target IS sticky/table/multicol (Phase 7 interaction) — LANDED
+
+**Status:** **Landed** in Phase 7 (Task 9, the D1 fix), confirmed by the
+follow-ups-drain campaign. `anchor_resolution` (6d) reads the anchor target's
+position from `PostTaffyPositionOverrides.by_entity` (written by sticky 6a /
+table 6b / multicol 6c) first, falling back to Taffy only when absent — exactly
+**Option 1** below (the shared per-entity correction buffer all four sub-passes
+contribute to). Tested end-to-end in
+`tests/layout_sticky.rs::anchor_target_is_sticky_anchored_tracks_displaced_position`.
+The original analysis follows.
 
 **Originated:** Phase 6 (architectural quirk surfaced during plan
 review).
@@ -1115,9 +1131,13 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   assertion-free placeholder, not a green test.
 - **Multi-reference reftest aggregation** — the `RefCase::multi` OR/AND
   aggregation (`reftests.md` § Reference independence #3) is specified but not
-  built; single-reference reftests cover the current pairings.
+  built; single-reference reftests cover the current pairings. (Follow-ups-drain
+  reviewed and left deferred — re-open when a real logical-vs-physical, ≥2-reference
+  pairing appears; building it now is tested-but-unused machinery.)
 - **`golden-prune` bin** — the advisory stale-positive pruner (`goldens.md`
-  § Stale-positive guard) is a design hook, machinery deferred.
+  § Stale-positive guard) is a design hook, machinery deferred. (Follow-ups-drain
+  reviewed and left deferred — re-open when the golden corpus grows enough that
+  stale positives are plausible; nothing to prune at the current few cells.)
 - **Object-store golden migration** — in-git PNGs until the named trigger
   (>50 MB total or >500 positives); the `GoldenKey`/`BlessLedger` schema is fixed
   now so the migration is mechanical (`goldens.md` § Storage staging).
