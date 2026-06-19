@@ -105,11 +105,18 @@ pub fn sorted_catalog() -> Vec<&'static Fixture> {
 /// [`Fixture::paints_cell`]); omit it for the common case (resolves in every
 /// theme). The CPU snapshot tiers skip the cells it rejects.
 ///
-/// ```ignore
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy_verify::coverage::matrix::ThemeAxis;
+/// use buiy_verify::fixture;
+///
 /// fixture! {
 ///     name  = "button",
 ///     state = "resting",
-///     spawn = |app| { /* spawn Camera2d + Name-tagged button */ },
+///     spawn = |app: &mut App| {
+///         // A real fixture spawns a `Camera2d` and a `Name`-tagged root here.
+///         app.world_mut().spawn((Camera2d, Name::new("button")));
+///     },
 ///     // system-color-only: skip the brand-token light theme.
 ///     paints_cell = |cell| cell.theme == ThemeAxis::ForcedColors,
 /// }

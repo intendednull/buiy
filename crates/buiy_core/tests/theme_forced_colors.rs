@@ -34,8 +34,12 @@ fn forced_theme_values_are_not_magenta_sentinel() {
 }
 
 #[test]
-fn forced_theme_canvas_and_canvastext_contrast() {
-    // High-contrast mode: Canvas (surface) and CanvasText (text) must differ.
+fn forced_theme_canvas_and_canvastext_differ() {
+    // High-contrast mode: Canvas (surface) and CanvasText (text) must be
+    // distinct colors. This asserts *inequality* (`assert_ne!`), NOT a WCAG
+    // contrast-ratio bound — the real ratio gate is deferred until the
+    // forced-colors palette lands real values (`forced_colors_theme` is a
+    // documented v1 stub; audit 2026-06-18 #36).
     let theme = forced_colors_theme();
     assert_ne!(
         theme.color("Canvas").unwrap(),

@@ -59,7 +59,10 @@ pub use buiy_widgets::{Button, OnPress, TextInput, WidgetsPlugin};
 /// includes it; if you build your app with `MinimalPlugins`, add it
 /// explicitly:
 ///
-/// ```ignore
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy::BuiyPlugin;
+///
 /// App::new()
 ///     .add_plugins(MinimalPlugins)
 ///     .add_plugins(bevy::input::InputPlugin)

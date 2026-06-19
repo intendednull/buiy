@@ -553,15 +553,23 @@ pub struct ScrollSnapItem {
 /// because anchored elements are rare (tooltips, popovers) and each
 /// carries a non-trivial `position_try` chain. Spawn alongside `Style`:
 ///
-/// ```ignore
-/// commands.spawn((
-///     Style::default(),
-///     Anchor {
-///         position_anchor: Some(AnchorRef::Name("submit-btn".into())),
-///         position_try: vec![PositionTry { /* ... */ }],
-///         ..default()
-///     },
-/// ));
+/// ```
+/// use bevy::prelude::*;
+/// use buiy_core::layout::{Anchor, AnchorRef, PositionTry, Style, TryCondition};
+///
+/// fn spawn_tooltip(mut commands: Commands) {
+///     commands.spawn((
+///         Style::default(),
+///         Anchor {
+///             position_anchor: Some(AnchorRef::Name("submit-btn".into())),
+///             position_try: vec![PositionTry {
+///                 conditions: vec![TryCondition::FitsInViewport],
+///                 ..default()
+///             }],
+///             ..default()
+///         },
+///     ));
+/// }
 /// ```
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.1.

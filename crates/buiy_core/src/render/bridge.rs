@@ -55,6 +55,30 @@ pub fn seed_scroll_dirty(
     }
 }
 
+/// The pure Buiy→Bevy transform composition (the seam the walk writes).
+///
+/// Folds an entity's logical-px `position`, the accumulated ancestor
+/// `scroll` sum, and its optional composed `ResolvedTransform.matrix` into one
+/// `Transform`:
+///   `base = from_translation(position − scroll)`,
+///   then `base * matrix` (identity fast-path when `matrix` is `None`).
+/// `Transform::from_matrix` decomposes to TRS, dropping any projective row
+/// (clip-and-transform.md § B.2 / § B.5). Stays in logical-px, y-down,
+/// window-relative space — NO y-flip / scale here (§ B.4); those live in the
+/// GPU view uniform.
+///
+/// Distinct from `crate::layout`'s 6e `compose_transform` (which builds the
+/// `ResolvedTransform.matrix` from the layout `UiTransform`); this is the
+/// render-prep bridge step that consumes that matrix.
+pub fn compose_buiy_transform(position: Vec2, scroll: Vec2, matrix: Option<Mat4>) -> Transform {
+    let base = Mat4::from_translation((position - scroll).extend(0.0));
+    let composed = match matrix {
+        Some(m) => base * m,
+        None => base,
+    };
+    Transform::from_matrix(composed)
+}
+
 /// Render-prep — the SOLE writer of a laid-out entity's Bevy `Transform`.
 /// Top-down `Children` walk: per entity compose
 ///   `base = from_translation(position − accumulated_ancestor_scroll)`
@@ -135,12 +159,11 @@ fn walk(
     let mut child_acc = acc;
     if let Ok((resolved, resolved_transform, scroll, overflow)) = layout.get(entity) {
         if seeded {
-            let base = Mat4::from_translation((resolved.position - acc).extend(0.0));
-            let composed = match resolved_transform {
-                Some(rt) => base * rt.matrix,
-                None => base,
-            };
-            let new_t = Transform::from_matrix(composed);
+            let new_t = compose_buiy_transform(
+                resolved.position,
+                acc,
+                resolved_transform.map(|rt| rt.matrix),
+            );
             // Change-gate: only write when the translation actually moved
             // (steady-state frames recompose nothing because the walk does
             // not descend unseeded subtrees, but a seeded subtree whose
@@ -168,5 +191,75 @@ fn walk(
                 child, child_acc, seeded, commands, layout, children, existing, dirty,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compose_no_matrix_is_position_minus_scroll_y_down_no_flip() {
+        // No ResolvedTransform: translation is exactly (position − scroll), in
+        // logical-px y-down space (NO flip — § B.4), z = 0.
+        let t = compose_buiy_transform(Vec2::new(30.0, 80.0), Vec2::new(0.0, 30.0), None);
+        assert_eq!(t.translation, Vec3::new(30.0, 50.0, 0.0));
+        assert_eq!(t.rotation, Quat::IDENTITY);
+        assert_eq!(t.scale, Vec3::ONE);
+    }
+
+    #[test]
+    fn compose_zero_scroll_no_matrix_equals_position() {
+        let t = compose_buiy_transform(Vec2::new(12.0, 34.0), Vec2::ZERO, None);
+        assert_eq!(t.translation, Vec3::new(12.0, 34.0, 0.0));
+    }
+
+    #[test]
+    fn compose_folds_translation_matrix_after_base() {
+        // base = from_translation(position − scroll); composed = base * matrix.
+        // A pure-translation matrix adds onto the base translation.
+        let position = Vec2::new(10.0, 20.0);
+        let scroll = Vec2::new(4.0, 0.0);
+        let matrix = Mat4::from_translation(Vec3::new(15.0, 25.0, 0.0));
+        let t = compose_buiy_transform(position, scroll, Some(matrix));
+        // (10−4 + 15, 20−0 + 25) = (21, 45).
+        assert!((t.translation.x - 21.0).abs() < 1e-5, "{}", t.translation.x);
+        assert!((t.translation.y - 45.0).abs() < 1e-5, "{}", t.translation.y);
+        assert_eq!(t.translation.z, 0.0);
+    }
+
+    #[test]
+    fn compose_matrix_order_is_base_times_matrix_not_matrix_times_base() {
+        // Composition is base * matrix (the matrix applies in the node's local
+        // pre-translation frame). For a scale matrix this differs from the
+        // reversed order: base*scale leaves the base translation untouched,
+        // whereas scale*base would scale the translation. Pin the production
+        // order so a swap reddens here.
+        let position = Vec2::new(100.0, 0.0);
+        let scroll = Vec2::ZERO;
+        let scale = Mat4::from_scale(Vec3::new(2.0, 2.0, 1.0));
+        let t = compose_buiy_transform(position, scroll, Some(scale));
+        // base translation (100,0) is preserved (base * scale), NOT doubled.
+        assert!(
+            (t.translation.x - 100.0).abs() < 1e-5,
+            "{}",
+            t.translation.x
+        );
+        assert!((t.scale.x - 2.0).abs() < 1e-5, "{}", t.scale.x);
+    }
+
+    #[test]
+    fn compose_drops_projective_perspective_row() {
+        // Transform::from_matrix decomposes to TRS, dropping any projective
+        // row (§ B.2 / § B.5) — perspective cannot survive the bridge.
+        let mut m = Mat4::from_translation(Vec3::new(7.0, 0.0, 0.0));
+        m.z_axis.w = -0.01; // perspective on z
+        let t = compose_buiy_transform(Vec2::ZERO, Vec2::ZERO, Some(m));
+        assert_eq!(
+            t.to_matrix().z_axis.w,
+            0.0,
+            "projective z-perspective dropped"
+        );
+        assert!((t.translation.x - 7.0).abs() < 1e-5);
     }
 }

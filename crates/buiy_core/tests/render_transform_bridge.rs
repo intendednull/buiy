@@ -91,7 +91,10 @@ fn transform_folds_resolved_transform_matrix_into_translation_path() {
     let pos = app.world().get::<ResolvedLayout>(e).unwrap().position;
     let rt = app.world().get::<ResolvedTransform>(e).unwrap().matrix;
     let t = app.world().get::<Transform>(e).unwrap();
-    let expected = Transform::from_matrix(Mat4::from_translation(pos.extend(0.0)) * rt);
+    // Drive the EXTRACTED production seam (no re-implementation): at a root the
+    // accumulated ancestor scroll is zero, so the expected Transform is exactly
+    // `compose_buiy_transform(position, ZERO, Some(matrix))`.
+    let expected = buiy_core::render::bridge::compose_buiy_transform(pos, Vec2::ZERO, Some(rt));
     assert_eq!(t.translation, expected.translation);
     // translation component equals position + (15,25)
     assert!((t.translation.x - (pos.x + 15.0)).abs() < 1e-4);
