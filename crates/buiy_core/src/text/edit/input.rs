@@ -213,11 +213,15 @@ impl TextEditState {
             EditCommand::Undo => self.apply_undo(),
             EditCommand::Redo => self.apply_redo(),
 
-            // ── Clipboard (§ 7) — plain text only (decision 4) ───────────
+            // ── Clipboard (§ 7) — text + html flavors ────────────────────
             EditCommand::Copy => {
                 // copy_selection() is None when there is no selection; a bare
                 // caret Copy is a no-op (web parity).
                 if let Some(text) = self.editor.copy_selection() {
+                    // Set BOTH flavors: the raw text (the § 7 path) and an
+                    // escaped-html flavor (a plain-text editor has no rich runs,
+                    // so its html representation is just the escaped text).
+                    ctx.clipboard.set_html(escape_html(&text));
                     ctx.clipboard.set_text(text);
                 }
                 EditOutcome::default()
@@ -229,6 +233,7 @@ impl TextEditState {
                 let Some(text) = self.editor.copy_selection() else {
                     return EditOutcome::default(); // nothing selected
                 };
+                ctx.clipboard.set_html(escape_html(&text));
                 ctx.clipboard.set_text(text);
                 // Delete the selection as one DISCRETE undoable unit (a cut is
                 // a deliberate single action — never coalesced with neighbors).
@@ -369,6 +374,27 @@ impl TextEditState {
     pub(crate) fn redo_top_group(&self) -> Option<GroupKind> {
         self.undo.redo.last().map(|u| u.group)
     }
+}
+
+/// Escape a plain-text string into an HTML-safe fragment for the clipboard's
+/// HTML flavor. A plain-text editor has no rich runs, so its html
+/// representation is simply the text with the five markup-significant
+/// characters escaped (`& < > " '`). Single-pass: each input char maps to its
+/// escape token in one match and emitted tokens are never re-scanned, so there
+/// is no double-escape and ordering is irrelevant.
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 use bevy::input::keyboard::{Key, KeyboardInput};

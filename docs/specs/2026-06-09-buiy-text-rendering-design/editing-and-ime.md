@@ -503,11 +503,17 @@ arboard's platform matrix for no supply-chain win; arboard's transitive deps
 are the same crates. **Also rejected:** deferral — cut/copy/paste is F and
 cheap once the facade exists.
 
-**Phasing.** v1 ships plain text (`Cut`/`Copy` from `copy_selection()`, `Paste`
-through the § 3.3 newline policy). The F row names text + HTML + image MIME:
-HTML/image flavors are the named follow-up slice — arboard's HTML *read-side*
-support is **unverified** and must be confirmed before that slice is promised
-(§ 13).
+**Phasing.** v1 shipped plain text (`Cut`/`Copy` from `copy_selection()`,
+`Paste` through the § 3.3 newline policy). The follow-up slice **LANDED** the
+HTML + image flavors behind the same `ClipboardProvider` facade: `get_html`/
+`set_html` are always available (arboard `Get::html()`/`Set::html()`, verified
+not feature-gated — OQ#3 resolved); the image flavor (`get_image`/`set_image`
+over a Buiy-owned `ClipboardImage`) is behind the `buiy_core` `clipboard-image`
+cargo feature, which turns on arboard's `image-data`. `Cut`/`Copy` now set BOTH
+the plain-text flavor and an escaped-html flavor (a plain-text editor has no
+rich runs, so its html is just the escaped text); **`Paste` is unchanged** — it
+takes the § 3.3 text path and never consults the html getter (the getter is for
+rich-content callers). MemClipboard carries all three slots for headless tests.
 
 ---
 
@@ -707,7 +713,9 @@ unselected-caret path is byte-identical to E5 (no delete, no extra
 (`compose_delete` stash); tested in `text_ime_ops.rs` + `text_ime_system.rs`.
 
 **Deferred within F (named, next slice, not dropped):** multi-range selection
-*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7).
+*behavior* (§ 4.2).
+**Landed within F:** HTML + image clipboard flavors (§ 7) — image behind the
+`clipboard-image` cargo feature.
 **Out (E-tier):** rich-text edit surface, document virtualization.
 
 ---
@@ -749,8 +757,11 @@ unselected-caret path is byte-identical to E5 (no delete, no extra
    `Send + Sync`; `Motion` has 22 variants. The `docs/prior-art/cosmic-text/`
    folder should receive a correction note (outside this spec folder's write
    scope), and sibling files citing those claims must re-verify.
-3. **arboard HTML read-side** is unverified (§ 7) — confirm before scheduling
-   the HTML-clipboard slice.
+3. **arboard HTML read-side** — **RESOLVED.** arboard 3.6.1 `Get::html()` is on
+   the cross-platform `Get` builder and is **not** feature-gated; `Set::html()`
+   likewise. Image (`get_image`/`set_image`, `ImageData`) is gated behind
+   arboard's `image-data` feature, which the `buiy_core` `clipboard-image`
+   feature turns on. HTML + image flavors landed on the facade (§ 7).
 4. **Shared-accessor type for the editor-owned Buffer** (§ 2.2a): the concrete
    QueryData shape is pinned by [measure-and-layout.md](measure-and-layout.md);
    if that file lands a Buffer-as-separate-component model incompatible with

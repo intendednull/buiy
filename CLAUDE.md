@@ -93,6 +93,10 @@ Other useful one-offs:
 - `BUIY_ACCEPT_SHAPING=1 cargo test -p buiy_core --test text_shaping_snapshots`
   — regenerate the `.snap` shaping snapshots (curated: review the diff before
   committing).
+- `cargo test -p buiy_core --features clipboard-image` — exercise the clipboard
+  image flavor (`ClipboardImage`, `get_image`/`set_image`). The default
+  workspace gate runs with this feature **OFF** (the image module compiles out),
+  so this gated lane must be run separately to keep the image path from rotting.
 
 ## Code Conventions
 
