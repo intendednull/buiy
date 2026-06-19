@@ -3940,7 +3940,13 @@ pub(super) fn forms_stacking_context(
 /// tier 1 regardless of its `z_index`.
 ///
 /// Driven by the `stacking_context` sub-pass (6f).
-pub(super) fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind) -> (u8, i32) {
+///
+/// `pub` (re-exported as `buiy_core::layout::paint_key`) so the
+/// `buiy_verify` Tier-3 metamorphic invariant keys generated scenes with
+/// the SAME key production does — not a private copy that could silently
+/// diverge (testing-audit #6/#13). It is the sort key inside the shared
+/// [`painters_z_for_context`] assembly both production and the invariant run.
+pub fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind) -> (u8, i32) {
     let positioned = !matches!(position_kind, PositionKind::Static);
     let z = match stacking.map(|s| s.z_index) {
         Some(ZIndex::Layer(n)) if positioned => Some(n),
@@ -3961,6 +3967,83 @@ pub(super) fn paint_key(stacking: Option<&Stacking>, position_kind: PositionKind
             }
         }
     }
+}
+
+/// The 6f per-context paint-order step (spec § 2.1): STABLY sort a context's
+/// painters — already in document order — by the [`paint_key`] tier so equal
+/// keys keep document order. This IS the ordering operation: a non-stable sort,
+/// a reversed direction, or any other re-ordering changes the painted result.
+///
+/// The internal sort step of [`painters_z_for_context`]; kept as a named helper
+/// so the stability requirement (spec § 2.1) is documented in one place.
+///
+/// Driven by the `stacking_context` sub-pass (6f).
+fn order_painters_by_paint_key<T>(
+    mut painters_in_doc_order: Vec<T>,
+    key_of: impl Fn(&T) -> (u8, i32),
+) -> Vec<T> {
+    // `sort_by_cached_key` is STABLE — equal-tier painters keep the input's
+    // document order (spec § 2.1) — and caches the key so each element is
+    // classified once.
+    painters_in_doc_order.sort_by_cached_key(key_of);
+    painters_in_doc_order
+}
+
+/// Assemble one stacking context's `painters_z` (layout sub-pass 6f, spec § 2.1
+/// and § 4.1) — the SINGLE implementation of the per-context assembly, shared by
+/// production (`stacking_context`'s `painters_of`, over `Entity`) and the
+/// `buiy_verify` Tier-3 metamorphic invariant (`realize`, over flat-node
+/// indices). There is no parallel copy: a regression to this code (a reversed
+/// sort, descending past a nested context, dropping the exclusion) reds BOTH the
+/// `buiy_core` stacking unit tests AND the Tier-3 invariant, which a private
+/// re-implementation in the harness would miss (testing-audit #6).
+///
+/// Walk `sc_root`'s subtree in document order, collecting the context's DIRECT
+/// painters, then STABLY sort them by the four-tier [`paint_key`]:
+/// - `children_of(node)` gives a node's direct children in document order (`[]`
+///   if none); they are visited in that order.
+/// - `is_excluded(node)` skips a node ENTIRELY — neither added as a painter nor
+///   descended into. Production excludes `Display::None` and top-layer members
+///   (they escape to the root context, attached separately in spec § 4.1).
+/// - `forms_context(node)` marks a node that owns its OWN context: it is added
+///   as one ATOMIC painter (a nested context root) but NOT descended into — its
+///   subtree lives in its own `painters_z`.
+/// - `paint_key_of(node)` is the production [`paint_key`]; the stable sort keeps
+///   document order for equal keys (spec § 2.1).
+///
+/// `sc_root` itself is never added (the caller owns it as the context root); the
+/// walk starts from its children. The returned `Vec` is the context's in-flow
+/// `painters_z`; the caller appends the escaped top-layer tail (spec § 4.1).
+///
+/// Driven by the `stacking_context` sub-pass (6f).
+pub fn painters_z_for_context<T: Copy>(
+    sc_root: T,
+    children_of: impl Fn(T) -> Vec<T>,
+    forms_context: impl Fn(T) -> bool,
+    is_excluded: impl Fn(T) -> bool,
+    paint_key_of: impl Fn(T) -> (u8, i32),
+) -> Vec<T> {
+    // Walk the subtree in document order: seed with `sc_root`'s children pushed
+    // in REVERSE so the LIFO stack pops them in document order; for each popped
+    // node, skip the excluded (no add, no descend), add it as a painter, then
+    // descend into its children ONLY if it does not itself form a context.
+    let mut painters: Vec<T> = Vec::new();
+    let mut stack: Vec<T> = children_of(sc_root);
+    stack.reverse();
+    while let Some(node) = stack.pop() {
+        if is_excluded(node) {
+            continue;
+        }
+        painters.push(node);
+        if !forms_context(node) {
+            let mut kids = children_of(node);
+            kids.reverse();
+            stack.extend(kids);
+        }
+    }
+    // The 6f stable tier sort — the Vec is already in document order, so
+    // equal-key painters keep it (spec § 2.1).
+    order_painters_by_paint_key(painters, |&n| paint_key_of(n))
 }
 
 /// Phase 8 — sub-pass 6e of `BuiyLayoutStep::PostTaffyOverrides`.
@@ -4135,33 +4218,27 @@ pub(super) fn stacking_context(
     // which case C is an atomic entry (added) but we do NOT descend into
     // C (it owns its own painters_z). Non-forming children are added and
     // descended through. Skip Display::None and (in T9) top-layer entities.
+    // A thin call to the SHARED 6f assembly `painters_z_for_context`: the same
+    // function `buiy_verify`'s Tier-3 invariant calls, with ECS-backed closures.
+    // There is no production-only assembly to diverge — the shared fn's output IS
+    // `painters_z` (testing-audit #6). `children_of` returns direct children in
+    // document order; `is_excluded` drops `Display::None` and top-layer members
+    // (top-layer escapes its parent context — attached to the root context in
+    // step 5, spec § 4.1).
+    let children_of = |e: Entity| -> Vec<Entity> {
+        children_q
+            .get(e)
+            .map(|kids| kids.iter().collect())
+            .unwrap_or_default()
+    };
     let painters_of = |sc_root: Entity| -> Vec<Entity> {
-        let mut painters: Vec<Entity> = Vec::new();
-        let mut stack: Vec<Entity> = Vec::new();
-        if let Ok(kids) = children_q.get(sc_root) {
-            // push in reverse so we pop in document order
-            stack.extend(kids.iter().rev());
-        }
-        while let Some(node) = stack.pop() {
-            if display_none(node) {
-                continue;
-            }
-            // Top-layer entities escape their parent context — they are
-            // attached to the root context in step 5 (spec § 4.1).
-            if top_layer_of(node) != TopLayer::None {
-                continue;
-            }
-            painters.push(node);
-            if !forming.contains(&node)
-                && let Ok(kids) = children_q.get(node)
-            {
-                stack.extend(kids.iter().rev());
-            }
-        }
-        // Stable sort by paint tier; the Vec is already in document order,
-        // so equal-tier entries keep document order (spec § 2.1).
-        painters.sort_by_cached_key(|&e| paint_key(stacking_q.get(e).ok(), pos_kind(e)));
-        painters
+        painters_z_for_context(
+            sc_root,
+            children_of,
+            |e| forming.contains(&e),
+            |e| display_none(e) || top_layer_of(e) != TopLayer::None,
+            |e| paint_key(stacking_q.get(e).ok(), pos_kind(e)),
+        )
     };
 
     // --- 4. compute the escaped top-layer paint order (spec § 4.2) ---

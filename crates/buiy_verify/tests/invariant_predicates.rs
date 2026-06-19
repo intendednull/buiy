@@ -11,8 +11,8 @@
 use buiy_core::render::instance::pack_extracted;
 use buiy_verify::invariant::{
     SceneParams, all_finite, all_finite_packed, arb_scene, arb_transform,
-    contexts_do_not_interleave, paint_order_is_total, realize, realize_full, top_layer_dominates,
-    transform_roundtrips,
+    contexts_do_not_interleave, paint_order_is_total, paint_order_respects_paint_key, realize,
+    realize_full, top_layer_dominates, transform_roundtrips,
 };
 use proptest::prelude::*;
 
@@ -71,6 +71,21 @@ proptest! {
         prop_assert!(
             contexts_do_not_interleave(&r).is_ok(),
             "{}", contexts_do_not_interleave(&r).unwrap_err()
+        );
+    }
+
+    /// #6 — within every context, painters come out non-decreasing in the
+    /// PRODUCTION `paint_key` (the observable 6f tier sort). `realize` builds each
+    /// context by CALLING the shared production assembly `painters_z_for_context`,
+    /// so a regression in that production code (reversing the sort, descending
+    /// past a nested context) reds this property; the other five predicates are
+    /// all order-insensitive within a context and miss it (testing-audit #6).
+    #[test]
+    fn prop_paint_order_respects_paint_key(scene in arb_scene(SceneParams::default())) {
+        let r = realize_full(&scene);
+        prop_assert!(
+            paint_order_respects_paint_key(&r).is_ok(),
+            "{}", paint_order_respects_paint_key(&r).unwrap_err()
         );
     }
 }

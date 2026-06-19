@@ -17,7 +17,7 @@ use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_core::render::instance::PackedInstance;
 use buiy_verify::invariant::{
     EPS, Realized, all_finite, all_finite_packed, contexts_do_not_interleave, mat4_is_identity,
-    mat4_is_pure_scale, paint_order_is_total, top_layer_dominates,
+    mat4_is_pure_scale, paint_order_is_total, paint_order_respects_paint_key, top_layer_dominates,
 };
 
 // --- fixture builders -------------------------------------------------------
@@ -73,6 +73,11 @@ fn realized(
         context_of: cx,
         context_members: members,
         top_layer_of: tl,
+        // The top-layer / interleave fixtures do not exercise the paint-key
+        // order predicate, so leave its inputs empty (an empty map is vacuously
+        // ordered). The dedicated meta-test below builds these directly.
+        painters_of_ctx: HashMap::new(),
+        paint_key_of: HashMap::new(),
         name_of: name,
     }
 }
@@ -204,6 +209,76 @@ fn top_layer_accepts_well_ordered_tail() {
     assert!(
         top_layer_dominates(&r).is_ok(),
         "the canonical dominant order passes"
+    );
+}
+
+// --- #6 paint_order_respects_paint_key --------------------------------------
+//
+// These two tests check the PREDICATE in isolation: given a hand-built order +
+// keys, does it reject descending and accept ascending? They do NOT prove the
+// fault-injection property — that protection comes from `realize` calling the
+// shared production assembly `painters_z_for_context` (so a 6f-sort regression
+// reds the proptest invariant in `invariant_predicates.rs`), not from these
+// fixtures. They exist only to pin the predicate's own logic.
+
+/// Build a single-context `Realized` from one context root + its DIRECT painters
+/// (in the order given) and an explicit `entity → paint_key` map, so the
+/// paint-key-order predicate can be fed a precise order.
+fn realized_one_context(
+    ctx: Entity,
+    painters: &[Entity],
+    paint_keys: &[(Entity, (u8, i32))],
+) -> Realized {
+    let mut painters_of_ctx = HashMap::new();
+    painters_of_ctx.insert(ctx, painters.to_vec());
+    let paint_key_of: HashMap<Entity, (u8, i32)> = paint_keys.iter().copied().collect();
+    let name: HashMap<Entity, String> =
+        painters.iter().map(|&en| (en, format!("{en:?}"))).collect();
+    Realized {
+        nodes: nodes(vec![]),
+        context_of: HashMap::new(),
+        context_members: HashMap::new(),
+        top_layer_of: HashMap::new(),
+        painters_of_ctx,
+        paint_key_of,
+        name_of: name,
+    }
+}
+
+#[test]
+fn paint_key_order_rejects_a_descending_context() {
+    // A context whose painters come out [tier 3, tier 1, tier 0] — the shape a
+    // REVERSED production 6f sort would yield. Pins that the predicate REJECTS a
+    // descending order; the invariant catches a real reversal because `realize`
+    // runs the shared production assembly, not because of this unit fixture (#6).
+    let (a, b, c) = (e(1), e(2), e(3));
+    let r = realized_one_context(e(99), &[a, b, c], &[(a, (3, 5)), (b, (1, 0)), (c, (0, -1))]);
+    assert!(
+        paint_order_respects_paint_key(&r).is_err(),
+        "a context painted in DESCENDING paint_key order must be rejected — \
+         this is the reversed-6f-sort fault the invariant must catch"
+    );
+}
+
+#[test]
+fn paint_key_order_accepts_ascending_context() {
+    // The canonical 6f order: negative-z (0) < in-flow (1) < auto-positioned
+    // (2) < positive-z (3,n) ascending. Equal keys (document order) also pass.
+    let (a, b, c, d, e2) = (e(1), e(2), e(3), e(4), e(5));
+    let r = realized_one_context(
+        e(99),
+        &[a, b, c, d, e2],
+        &[
+            (a, (0, -1)),
+            (b, (1, 0)),
+            (c, (2, 0)),
+            (d, (3, 1)),
+            (e2, (3, 2)),
+        ],
+    );
+    assert!(
+        paint_order_respects_paint_key(&r).is_ok(),
+        "the canonical ascending 6f order passes"
     );
 }
 
