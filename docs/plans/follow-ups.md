@@ -951,23 +951,72 @@ pass via a `Glyph@Rgba16Float` pipeline specialization (mirroring the
 
 ## Render — degraded effect groups vanish instead of drawing flat
 
+**Status: Root-degraded LANDED; nested-degraded follow-up filed** (R2).
+
 **Originated:** text campaign T8 implementation reading (the T8 plan's D9).
 
-**Symptom:** a `plan_allocation == false` group gets no pooled target,
-`BuiyNode::run` step 1 `continue`s, and its members are excluded from
+**As-was symptom:** a `plan_allocation == false` group got no pooled target,
+`BuiyNode::run` step 1 `continue`d, and its members were excluded from
 `flat_ranges` / `glyph_flat_ranges` — so under RT-pool budget pressure a
-degraded group's quads AND glyphs paint nowhere, despite the "drawn flat
-instead" comments (node.rs step 1; compositor.rs `PreparedEffectTargets`).
-Latent under the 64 MiB budget (no fixture degrades today). T8 mirrored the
-quad semantics for glyphs (a degraded group's glyph range is likewise
-skipped) rather than silently widening scope.
+degraded group's quads AND glyphs painted nowhere, despite the "drawn flat
+instead" comments. Latent under the 64 MiB budget (no fixture degraded). T8
+had mirrored the quad semantics for glyphs (a degraded group's glyph range
+was likewise skipped) rather than silently widening scope.
 
-**Implementation sketch:** either re-route a degraded group's ranges into the
-flat draw at prepare (forward compositing, accepting the double-dim
-approximation v1 rejected for targets) or document skip-as-degradation;
-decide with `buiy-verification-design`'s budget calibration.
+**Resolution (R2):** the route-flat-vs-skip fork is RESOLVED in favor of
+**forward-compositing**, per `effect-compositor.md § 2.3` (skip contradicted
+the spec). A ROOT degraded group (`parent == None`) now folds `group.opacity`
+into each member instance's alpha IN PLACE (quad alpha at
+`ALPHA_FLOAT_OFFSET` = 7 on the `[f32;17]` record; glyph alpha at the parallel
+`GLYPH_ALPHA_FLOAT_OFFSET` = 11 = `GlyphAlphaInstance.color[3]`) and merges
+its instance ranges into `flat_ranges`/`glyph_flat_ranges` so the flat WINDOW
+draw paints it — it dims exactly once and paints flat, never vanishes
+(`compositor::fold_root_degraded_into_flat`, called from
+`prepare_effect_groups`). Per-tier idempotency: the fold runs iff the
+corresponding BUFFER was repacked this frame (quad on `quad_dirty`, glyph on
+`glyph_dirty` — the buffer-repack signals, which DIFFER from the wider
+glyph-partition signal), so a retained buffer never re-compounds. Gated on
+`allocate.iter().any(|a| !a)` to preserve the gate-#14 zero-upload steady
+state. The budget is overridable via the new `RtPoolBudget` resource so a test
+forces degradation deterministically.
 
-**Spec touchpoint:** `effect-compositor.md § 2.3`.
+**Out of scope (nested):** a NESTED degraded child (`parent == Some`) is NOT
+handled by this slice — see the next section. The fold debug-asserts on it and
+leaves it untouched in release (no worse than the prior vanish).
+
+**Spec touchpoint:** `effect-compositor.md § 2.3` (as-landed note added).
+
+## Render — nested degraded effect group must forward-composite into the parent target (not the window)
+
+**Originated:** R2 (degraded-group forward-composite), MAJOR-1 scope decision.
+
+**Problem:** `plan_allocation` (`compositor.rs`) ranks purely by (extent,
+reason) and CAN degrade a NESTED child (`extracted[i].parent == Some`) while
+its parent keeps a target. R2's fix routes a degraded group's instance ranges
+into `flat_ranges`, which the node draws in the WINDOW pass (`buiy_pass`,
+`node.rs`). That equals "the parent target" the spec § 2.3 mandates ONLY when
+the degraded group is a ROOT group. For a nested degraded child, window-level
+flat-merge would paint it in the wrong space/clip, and the parent's step-2a
+composite (which already skips when either end lacks a target) would then
+sample a parent target the child never reached — double-wrong. So R2 scoped to
+root-degraded.
+
+**Fix (node-side):** route a degraded nested child's `group_ranges[i]` /
+`glyph_group_ranges[i]` into the PARENT group's step-1 target draw (the
+parent's `target_view_columns`, into the parent's `Rgba16Float` target), with
+`group.opacity` folded per-instance, BEFORE the parent composites — instead of
+the window flat draw. This is a different draw path from the root case (parent
+off-screen target vs. window flat pass), which is why it was split out.
+
+**Current containment:** `compositor::fold_root_degraded_into_flat`
+`debug_assert!(false, …)`s on a nested degraded group (loud in dev/tests) and
+in release leaves it untouched (it vanishes — no worse than today). The GPU
+test `nested_degraded_group_does_not_corrupt_parent`
+(`tests/render_compositor_gpu.rs`) guards that the slice's flat-merge does NOT
+mis-place a nested child at window level.
+
+**Spec touchpoint:** `effect-compositor.md § 2.3` ("directly into its parent
+target" wording).
 
 ## Text — production ASCII pre-warm (rejected as unmeasured)
 

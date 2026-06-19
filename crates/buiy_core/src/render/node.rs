@@ -137,8 +137,14 @@ impl ViewNode for BuiyNode {
                 .and_then(|a| a.coverage_bind_group());
             for group in &prepared.groups {
                 let Some(target) = targets.targets.get(group.index).and_then(|t| t.as_ref()) else {
-                    // Degraded group (no target): members are SKIPPED, not drawn
-                    // flat — see the follow-ups entry T8 files.
+                    // Degraded group (no target): skip the off-screen pass here. A
+                    // ROOT degraded group is NOT lost — `prepare_effect_groups`
+                    // folded its `opacity` into its members' alpha and merged its
+                    // ranges into the flat draw, so the flat WINDOW pass below
+                    // paints it (effect-compositor.md § 2.3 forward-composite). A
+                    // NESTED degraded group is still skipped (its correct
+                    // forward-composite into the parent target is a node-side
+                    // follow-up; the prepare fold debug-asserts on it).
                     continue;
                 };
                 let placement = &targets.placements[group.index];
