@@ -1,0 +1,56 @@
+# cargo-nextest configuration (testing-audit campaign, plan T5.2 / DG-2).
+#
+# nextest is the CI test runner for both lanes (see `.github/workflows/ci.yml`).
+# The 162→7 test-binary collapse (T5.1, audit #9) plus nextest's per-test
+# process scheduling is what drops the cold full-run wall-clock from the ~63-min
+# `cargo test` baseline. Doctests are NOT run by nextest — CI keeps a separate
+# `cargo test --doc --workspace --locked` step (the 4 runnable doctests, T4.1).
+
+# Default profile: the headless gate (CI `test` job, runners with NO GPU adapter).
+# Inherits nextest's defaults; we only widen the run timeout because the bevy
+# integration tests are heavier than nextest's 60s slow-test default would like
+# to flag, and the headless gate has no flakiness to retry (a headless failure
+# is deterministic and must surface immediately, so retries = 0).
+[profile.default]
+# Mark a test "slow" (informational warning, not a failure) only after 120s;
+# terminate a genuinely hung test after 10 minutes so a deadlock can't pin a CI
+# job to its job-level timeout.
+slow-timeout = { period = "120s", terminate-after = 5 }
+
+# ----------------------------------------------------------------------------
+# GPU profile: the additive `--ignored` lane (CI `gpu` job, real wgpu adapter /
+# pinned lavapipe). Invoked as:
+#   cargo nextest run --profile gpu -p buiy_core -p buiy_verify -p buiy \
+#     --locked --run-ignored=only
+#
+# Two GPU-specific needs, both encoded here rather than as ad-hoc CLI flags so
+# the policy is durable and the next dev inherits it:
+#
+#  1. SERIALIZE one adapter context at a time. The render-GPU tests each spin up
+#     a wgpu adapter; running them concurrently contends for the single physical
+#     adapter (and on lavapipe, the software rasterizer's memory). The
+#     `gpu-serial` test-group below pins every test that runs under this profile
+#     to a single thread. Because the gpu lane is ALWAYS invoked with
+#     `--run-ignored=only`, every test it executes is a `#[ignore]` GPU test, so
+#     the `filter = 'all()'` override correctly captures exactly the GPU set.
+#
+#  2. FLAKY-RETRY (DG-2). A real adapter / software rasterizer can transiently
+#     fail (adapter-lost, OOM under lavapipe, a one-off timing race in the
+#     extract→prepare→draw spine). Retry up to twice before declaring a failure
+#     so a transient GPU hiccup doesn't red a whole CI run; a genuinely broken
+#     test still fails on every attempt. Headless retries stay at 0 (see above).
+[profile.gpu]
+retries = 2
+# GPU work is heavier and serialized; give a slow test longer before the
+# informational "slow" warning and a longer hang-kill ceiling.
+slow-timeout = { period = "300s", terminate-after = 4 }
+
+[[profile.gpu.overrides]]
+filter = 'all()'
+test-group = 'gpu-serial'
+
+[test-groups]
+# One adapter context at a time across the whole gpu run (all binaries:
+# buiy_core's group binaries, buiy_verify's verify_gpu, and buiy's facade
+# render-finish test). max-threads = 1 ⇒ strict serialization.
+gpu-serial = { max-threads = 1 }
