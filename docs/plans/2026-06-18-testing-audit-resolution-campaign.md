@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (fresh subagent per task + two-stage review) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Mark each box as it lands and commit per task.
 
 **Date:** 2026-06-18
-**Status:** active
+**Status:** landed _(all 6 phases complete 2026-06-19; both lanes green via cargo-nextest — headless 1257/77 + 4 doctests = 1338, GPU 76/0 on the RX; cold run ~63 min → ~1.7 min)_
 **Spec:** [`docs/reports/2026-06-18-testing-infrastructure-coverage-audit.md`](../reports/2026-06-18-testing-infrastructure-coverage-audit.md) — the audit IS the spec for this campaign; it carries the full evidence (file:line), severity, and per-finding recommendation. **Every task below cites a finding number `#N`; read that finding in the report before implementing.**
 
 **Goal:** Resolve all 43 findings from the 2026-06-18 testing-infrastructure & coverage audit — close the coverage gaps, fix the harness/CI/determinism defects, and stand up the five wholly-absent testing dimensions — leaving both gates green and the report marked resolved.
