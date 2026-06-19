@@ -1,7 +1,7 @@
 # Buiy follow-ups drain — campaign plan
 
 **Date:** 2026-06-18
-**Status:** active
+**Status:** landed (all 13 actionable slices merged: layout #69, text #74, render #75 [re-applied on Bevy 0.19-rc after the BSN migration]; superseded/deferred/blocked items re-classified in `follow-ups.md`)
 **Spec:** realizes the named deferrals in `docs/plans/follow-ups.md` against their originating specs (layout, render-pipeline, text-editing).
 
 **Goal:** Drain every *actionable* open follow-up in `docs/plans/follow-ups.md`, update the spec + follow-ups entry as each lands, and explicitly re-classify the ones that are blocked, superseded, speculative, or deliberately deferred — so the backlog reflects reality.
