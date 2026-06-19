@@ -1,3 +1,5 @@
+mod support;
+
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
@@ -8,10 +10,10 @@ use buiy_verify::snapshot::assert_layout_snapshot;
 
 #[test]
 fn layout_resolves_a_simple_flex_row() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(LayoutPlugin);
+    // Migrated to the shared 2-plugin headless layout stack (#35): this test
+    // reads only `ResolvedLayout` via the snapshot, never `GlobalTransform`, so
+    // the bare (no-TransformPlugin) builder is the right one.
+    let mut app = support::bare_layout_app();
 
     // A 200x100 flex-row root with two 50x50 children. `Name`-tagging is what
     // makes the Tier-1 layout snapshot diff-stable (entity-by-Name, never raw

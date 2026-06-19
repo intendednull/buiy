@@ -1,10 +1,20 @@
-//! Shared test support for Buiy render **GPU** integration tests.
+//! Shared test support for the Buiy `buiy_core` integration tests. This module
+//! hosts BOTH halves of the test substrate:
+//!
+//! * The **headless (no-adapter) App builders** — [`bare_layout_app`],
+//!   [`headless_layout_app`], [`headless_text_app`], and the shared [`settle`]
+//!   condition-poll. These take NO wgpu adapter and create NO `RenderApp`; they
+//!   are the canonical layout/text plugin stacks that the headless test files
+//!   share instead of re-inlining (audit #35).
+//! * The **GPU render-integration harness** — [`gpu_test_app`] & friends, the
+//!   adapter-backed siblings of the headless builders (documented in the GPU
+//!   cascade sub-section below).
+//!
+//! ## The GPU harness: why each plugin is here (the "Message not initialized" cascade)
 //!
 //! [`gpu_test_app`] builds the minimal *complete* plugin set that drives a full
 //! Buiy render frame headless on a real wgpu adapter (this host: AMD Radeon RX
 //! 6700 XT, RADV/Vulkan — no X server / xvfb needed for render-to-texture).
-//!
-//! ## Why each plugin is here (the "Message not initialized" cascade)
 //!
 //! `RenderPlugin::build` pulls in `bevy_render::camera::camera_system`, which
 //! reads `MessageReader<WindowResized>`; the minimal probe set never added the
@@ -35,6 +45,236 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use buiy_core::{CorePlugin, render::BuiyRenderPlugin};
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Headless (no-adapter) App builders — the shared layout/text plugin stacks.
+//
+// Audit finding #35: ~40 copy-pasted plugin stacks had silently DRIFTED across
+// the headless test files — `fn app()` ×21, `fn text_app()` ×10, and a 2-vs-3
+// `fn settle()` split ×8. The three builders below are the canonical headless
+// stacks; new tests use these instead of re-inlining a stack (which is how the
+// drift accumulated). They take NO wgpu adapter and create NO `RenderApp` — the
+// GPU builders above (`gpu_test_app` & friends) are the adapter-backed siblings.
+//
+// The three stacks form a ladder, each a superset of the one above:
+//   bare_layout_app     = MinimalPlugins + CorePlugin + LayoutPlugin
+//   headless_layout_app = …            + TransformPlugin   (the Transform bridge)
+//   headless_text_app   = …            + ThemePlugin + BuiyTextPlugin (the text stack)
+// They are kept as three explicit builders (not one parameterized one) so each
+// call site reads as a named intent, and the plugin list each adds is obvious.
+
+/// The **2-plugin** headless layout stack: `MinimalPlugins + CorePlugin +
+/// LayoutPlugin`, with **no** `TransformPlugin`. The self-documenting *weaker*
+/// variant: layout resolves so `ResolvedLayout` is populated, but
+/// `GlobalTransform` is **never** finalized (nothing runs Bevy's propagation
+/// chain).
+///
+/// **Pick by the verification need, not by which component appears:** use
+/// [`headless_layout_app`] when a test needs `GlobalTransform` *finalized* via
+/// `TransformPlugin` propagation; use this builder when the test reads only
+/// `ResolvedLayout`, OR when it *deliberately* exercises the no-`TransformPlugin`
+/// path (e.g. asserting the bridge writes `Transform` in `Update` even with no
+/// propagation plugin present — there the absence of `TransformPlugin` is the
+/// thing under test, so `headless_layout_app` would defeat the test).
+pub fn bare_layout_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(CorePlugin)
+        .add_plugins(buiy_core::layout::LayoutPlugin);
+    app
+}
+
+/// The **3-plugin** transform-bridge stack: [`bare_layout_app`]'s stack PLUS
+/// `bevy::transform::TransformPlugin`. This is the stack to use whenever a test
+/// reads `Transform` or `GlobalTransform`: `TransformPlugin` is what owns and
+/// runs the propagation systems (`mark_dirty_trees → propagate_parent_transforms
+/// → sync_simple_transforms`) that `CorePlugin` chains into `Update` to finalize
+/// `GlobalTransform` from the bridge-written `Transform` (clip-and-transform.md
+/// § B.2.1). Without it `GlobalTransform` stays at its identity default.
+pub fn headless_layout_app() -> App {
+    let mut app = bare_layout_app();
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app
+}
+
+/// The headless **text** stack: `MinimalPlugins + ThemePlugin + CorePlugin +
+/// LayoutPlugin + BuiyTextPlugin::default()` — the T2/T3 text pipeline (TextSync
+/// → measure → TextCommit), no render half / no adapter. Includes
+/// `buiy_core::theme::ThemePlugin` so the `Res<Theme>` / `Res<UserPreferences>`
+/// that extract-time color-token resolution reads exist (this is the plugin
+/// `text_decoration.rs::text_app` silently added but most other text tests
+/// omitted — folding it in here is what removes that drift). No
+/// `TransformPlugin`: text tests read `TextBuffer`/`ResolvedLayout`, not
+/// `GlobalTransform`.
+pub fn headless_text_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(buiy_core::theme::ThemePlugin)
+        .add_plugins(CorePlugin)
+        .add_plugins(buiy_core::layout::LayoutPlugin)
+        .add_plugins(buiy_core::text::BuiyTextPlugin::default());
+    app
+}
+
+/// Advance `app.update()` until the layout-and-text pipeline **converges** — two
+/// consecutive frames produce an identical *settle snapshot*, where a snapshot is
+/// the per-entity resolved geometry (every `ResolvedLayout`'s `(position, size)`
+/// plus its `GlobalTransform` translation when present) PLUS the text-shaping
+/// quiescence signal (`TextSyncAppliedCount`, `TextCommitReshapeCount`,
+/// `FontsGeneration`).
+///
+/// **Why both signals, not geometry alone** (audit #35, the 2-vs-3-frame split).
+/// A geometry-only poll is BLIND to text-shaping state: a reshape that re-lays a
+/// buffer's glyphs without moving its box (the FOUT / `FontsGeneration` echo) is
+/// invisible to it, so it returns one frame early and the caller reads stale
+/// shaped state. The fix is to widen the convergence signal to observe shaping
+/// directly via the three resources `BuiyTextPlugin` owns:
+///
+/// * `TextSyncAppliedCount` (sync.rs) — per-frame count of buffers `TextSync`
+///   re-applied the lazy setters to; **reset to 0** at the top of every
+///   invocation, so an idle frame reads 0.
+/// * `TextCommitReshapeCount` (commit.rs) — per-frame count of buffers
+///   `TextCommit` actually reshaped; likewise **reset to 0** each invocation.
+/// * `FontsGeneration` (font_system.rs) — the **cumulative** font-set generation,
+///   bumped once per font-set change (the system-scan swap / runtime FOUT). This
+///   is the resource the legacy 3-update text settles existed to flush.
+///
+/// Each is read via [`World::get_resource`], so an app WITHOUT `BuiyTextPlugin`
+/// (e.g. [`bare_layout_app`] / [`headless_layout_app`]) yields `None` for all
+/// three — `None` is treated as a quiescent sentinel, so pure-layout apps still
+/// converge on geometry alone.
+///
+/// **Why "two consecutive identical snapshots" + "no shaping on the final frame"
+/// rather than "all counters == 0".** Snapshot equality is the robust core: a
+/// `FontsGeneration` bump differs from the prior frame and forces another
+/// iteration; the per-frame counters reset to 0 on an idle frame, so the
+/// active→idle transition (nonzero → 0) is always an inequality that forces the
+/// confirming frame. We additionally require both per-frame counts to be 0 on the
+/// converging frame to close the one false-convergence hole this leaves: two
+/// back-to-back frames that re-apply the SAME nonzero count with identical
+/// geometry would otherwise compare equal even though shaping is still running.
+/// Requiring 0 on the final frame makes "converged" mean *genuinely quiescent*,
+/// not merely *unchanged-this-pair*. (Mirrors the bounded-poll shape of
+/// [`wait_for_text_ready`] / [`readback_rgba`] — condition-based, not
+/// frame-count-based.)
+///
+/// **What the legacy 2-vs-3 split actually was.** A pure layout box settles in
+/// ~2 frames (spawn frame + the steady frame). *Display* text populates its
+/// asserted content — glyphs and decoration spans — **synchronously in the spawn
+/// frame** (`TextSync` builds and fully populates the buffer the same frame),
+/// which is why a geometry-only poll *happened* to read correct content on the
+/// migrated decoration tests. But the shaping pipeline is not yet quiescent then:
+/// the spawn-frame `Added<TextBuffer>` idempotent re-apply echo (`sync.rs`) keeps
+/// the per-frame counts nonzero for a second frame, so `shaping_idle` is what
+/// actually decides convergence on *every* display-text settle (it reaches ~4
+/// updates, not 2). A runtime font load adds a `FontsGeneration` / FOUT reshape
+/// echo on top — a reshape that re-lays shaped glyphs while moving NO box
+/// geometry. The widened signal observes both echoes (the nonzero per-frame
+/// counts and the generation bump), so it iterates the needed extra frames on its
+/// own — correct whether the entity is pure-layout, display-text, or mid-FOUT,
+/// without the caller knowing which.
+///
+/// Bounded at [`SETTLE_MAX_FRAMES`]; panics past it (a pipeline that never reaches
+/// a fixed point is a real bug, not something to silently tolerate).
+pub fn settle(app: &mut App) {
+    use buiy_core::text::{FontsGeneration, TextCommitReshapeCount, TextSyncAppliedCount};
+
+    /// The text-shaping quiescence half of the snapshot. `None` for each field
+    /// an app lacks `BuiyTextPlugin` (so a pure-layout app's text signal is a
+    /// constant `(None, None, None)` — always "stable"). The two per-frame
+    /// counts reset to 0 each invocation; `FontsGeneration` is cumulative.
+    #[derive(PartialEq)]
+    struct ShapingSignal {
+        sync_applied: Option<usize>,
+        commit_reshaped: Option<usize>,
+        fonts_generation: Option<u64>,
+    }
+
+    fn shaping(app: &App) -> ShapingSignal {
+        let world = app.world();
+        ShapingSignal {
+            sync_applied: world.get_resource::<TextSyncAppliedCount>().map(|c| c.0),
+            commit_reshaped: world.get_resource::<TextCommitReshapeCount>().map(|c| c.0),
+            fonts_generation: world.get_resource::<FontsGeneration>().map(|g| g.0),
+        }
+    }
+
+    /// True when no shaping work happened on the frame just run: both per-frame
+    /// counts are 0 (or absent). A converged frame must be quiescent by this
+    /// measure, not merely equal to its predecessor — see the doc rationale.
+    fn shaping_idle(signal: &ShapingSignal) -> bool {
+        signal.sync_applied.unwrap_or(0) == 0 && signal.commit_reshaped.unwrap_or(0) == 0
+    }
+
+    /// One entity's resolved geometry: `(position, size)` plus its
+    /// `GlobalTransform` translation when present. (`ResolvedLayout` derives no
+    /// `PartialEq`, but its two `Vec2` fields do, so the tuple is comparable
+    /// without touching the production type.)
+    type EntityGeometry = (Entity, Vec2, Vec2, Option<Vec3>);
+
+    /// The full settle snapshot: per-entity geometry (sorted by `Entity` so two
+    /// snapshots are comparable) plus the text-shaping quiescence signal.
+    #[derive(PartialEq)]
+    struct SettleSnapshot {
+        geometry: Vec<EntityGeometry>,
+        shaping: ShapingSignal,
+    }
+
+    fn snapshot(app: &mut App) -> SettleSnapshot {
+        let mut q = app
+            .world_mut()
+            .query::<(Entity, &buiy_core::ResolvedLayout, Option<&GlobalTransform>)>();
+        let mut geometry: Vec<EntityGeometry> = q
+            .iter(app.world())
+            .map(|(e, layout, gt)| {
+                (
+                    e,
+                    layout.position,
+                    layout.size,
+                    gt.map(|gt| gt.translation()),
+                )
+            })
+            .collect();
+        geometry.sort_by_key(|(e, ..)| *e);
+        SettleSnapshot {
+            geometry,
+            shaping: shaping(app),
+        }
+    }
+
+    app.update();
+    let mut prev = snapshot(app);
+    // Runs up to SETTLE_MAX_FRAMES iterations AFTER the initial update, so up to
+    // SETTLE_MAX_FRAMES + 1 total updates run before the panic fires — the
+    // advertised bound below matches that actual update count.
+    for _ in 0..SETTLE_MAX_FRAMES {
+        app.update();
+        let next = snapshot(app);
+        // Converged: identical to the previous frame AND no shaping ran on this
+        // frame (a stable-but-still-reshaping pair is not yet quiescent).
+        if next == prev && shaping_idle(&next.shaping) {
+            return;
+        }
+        prev = next;
+    }
+    panic!(
+        "layout/text pipeline never reached a quiescent fixed point within \
+         {} updates (geometry + text-shaping signal still moving — a genuine \
+         non-convergence / oscillation bug)",
+        SETTLE_MAX_FRAMES + 1
+    );
+}
+
+/// The [`settle`] poll bound (iterations after the initial update; the panic
+/// reports `SETTLE_MAX_FRAMES + 1` total updates). The deepest *observed*
+/// spawn-settle chain here is short: instrumenting `settle` against
+/// `text_font_display`'s asset-path tests showed convergence at **4 total
+/// updates** — the spawn/Added<TextBuffer> echo and the FOUT/`FontsGeneration`
+/// reshape both take an active frame plus the quiescence-confirming frame. Eight
+/// iterations is a generous margin over that, chosen so the panic only ever
+/// fires on genuine non-convergence (an oscillation), never on a legitimately
+/// deep but finite chain.
+pub const SETTLE_MAX_FRAMES: usize = 8;
 
 /// Build the canonical headless-GPU Buiy app. The returned [`App`] is **not yet
 /// finished** — the caller must `finish()` it (or use [`finish_and_run`]) before

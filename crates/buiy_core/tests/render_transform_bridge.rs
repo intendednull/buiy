@@ -2,24 +2,20 @@
 //! All tests are HEADLESS: MinimalPlugins + TransformPlugin + CorePlugin +
 //! LayoutPlugin, no wgpu adapter, no RenderApp.
 
+mod support;
+
 use bevy::prelude::*;
 use buiy_core::{
-    CorePlugin, Node, ResolvedLayout,
-    layout::{LayoutPlugin, Length, Sizing, Style},
+    Node, ResolvedLayout,
+    layout::{Length, Sizing, Style},
     render::bridge::ScrollDirty,
 };
 
-/// HEADLESS harness for the bridge: TransformPlugin populates the three
-/// propagation systems CorePlugin chains in Update (§ B.2.1), so reading
-/// GlobalTransform after `update()` is meaningful.
-fn app() -> App {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::transform::TransformPlugin);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(LayoutPlugin);
-    app
-}
+// HEADLESS harness for the bridge: the shared 3-plugin transform-bridge stack
+// ([`support::headless_layout_app`]) — TransformPlugin populates the three
+// propagation systems CorePlugin chains in Update (§ B.2.1), so reading
+// GlobalTransform after `update()` is meaningful.
+use support::headless_layout_app as app;
 
 #[test]
 fn scroll_dirty_is_empty_in_steady_state() {
@@ -247,11 +243,12 @@ fn propagation_runs_in_update_without_transform_plugin_postupdate() {
     // sync_simple_transforms. Without that chain, sync_simple_transforms never
     // runs and a root entity's GlobalTransform stays at its identity default,
     // so this test fails until Task 3 schedules the chain.
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    // Deliberately NO TransformPlugin — no PostUpdate propagation to lean on.
-    app.add_plugins(CorePlugin);
-    app.add_plugins(LayoutPlugin);
+    //
+    // `support::bare_layout_app()` IS exactly this no-TransformPlugin stack
+    // (MinimalPlugins + CorePlugin + LayoutPlugin), so the builder is
+    // self-documenting here — its whole reason to exist is the deliberate
+    // omission this test relies on.
+    let mut app = support::bare_layout_app();
 
     let e = app
         .world_mut()

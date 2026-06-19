@@ -49,12 +49,24 @@ fn block_descriptors() -> FontFaceDescriptors {
     }
 }
 
-/// MinimalPlugins + AssetPlugin + text (the text_registry.rs asset-path
-/// shape): Loading driven via `reserve_handle`, completion via
-/// `Assets::insert`.
+/// The asset-backed sibling of [`support::headless_text_app`] (the
+/// text_registry.rs asset-path shape): `MinimalPlugins + ThemePlugin +
+/// AssetPlugin + CorePlugin + LayoutPlugin + BuiyTextPlugin`. Loading is driven
+/// via `reserve_handle`, completion via `Assets::insert`.
+///
+/// It does NOT call `support::headless_text_app()` because of a hard plugin
+/// ordering: `BuiyTextPlugin::build` calls `init_asset::<BuiyFont>()` only when
+/// an `AssetServer` already exists (text/mod.rs § T5 — the headless text
+/// fixtures carry no `AssetPlugin`), so `AssetPlugin` MUST be added BEFORE
+/// `BuiyTextPlugin`. `headless_text_app()` adds `BuiyTextPlugin` with no
+/// `AssetPlugin`, so layering `AssetPlugin` on top of it afterward would leave
+/// `Assets<BuiyFont>` uninitialized and `reserve_handle()` would panic. The
+/// plugin SET is otherwise the shared text stack (ThemePlugin included, matching
+/// the shared builder); only the asset prelude differs.
 fn asset_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(buiy_core::theme::ThemePlugin);
     app.add_plugins(AssetPlugin::default());
     app.add_plugins(CorePlugin);
     app.add_plugins(LayoutPlugin);
@@ -63,11 +75,14 @@ fn asset_app() -> App {
     app
 }
 
-fn settle(app: &mut App) {
-    for _ in 0..3 {
-        app.update();
-    }
-}
+// The shared condition-polled `support::settle` (#35): converges the
+// layout-and-text pipeline by polling geometry + text-shaping quiescence
+// (`TextSyncAppliedCount`/`TextCommitReshapeCount`/`FontsGeneration`). This file
+// is the genuine 3-update font-reshape case — a load completion bumps
+// `FontsGeneration`, which re-lays shaped glyphs WITHOUT moving box geometry, so
+// the widened signal (not a geometry-only poll) is what makes this converge on
+// the right frame.
+use support::settle;
 
 fn generation(app: &App) -> u64 {
     app.world().resource::<FontsGeneration>().0

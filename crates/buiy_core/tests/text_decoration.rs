@@ -13,23 +13,15 @@ use buiy_core::text::{
 };
 use cosmic_text::{DecorationMetrics, GlyphDecorationData, TextDecoration, UnderlineStyle};
 
-/// Minimal headless app: the T2/T3 text pipeline (TextSync + measure +
-/// TextCommit need LayoutPlugin's step sets), no render half.
-fn text_app() -> App {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-        .add_plugins(buiy_core::theme::ThemePlugin)
-        .add_plugins(buiy_core::CorePlugin)
-        .add_plugins(buiy_core::layout::LayoutPlugin)
-        .add_plugins(buiy_core::text::BuiyTextPlugin::default());
-    app
-}
-
-fn settle(app: &mut App) {
-    for _ in 0..3 {
-        app.update();
-    }
-}
+// Minimal headless app: the T2/T3 text pipeline (TextSync + measure +
+// TextCommit need LayoutPlugin's step sets), no render half. The shared
+// `support::headless_text_app` builder (#35) — including the `ThemePlugin`
+// this file's local `text_app` used to add by hand.
+use support::headless_text_app as text_app;
+// The shared condition-polled `support::settle` (#35): converges the
+// layout-and-text pipeline (geometry + shaping quiescence) rather than
+// hard-coding a magic frame count.
+use support::settle;
 
 // --- the lowering: line bits reach cosmic, spans come back -----------------
 
