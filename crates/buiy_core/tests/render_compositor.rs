@@ -368,3 +368,376 @@ fn churn_never_exceeds_rt_pool_budget() {
     );
     assert!(plan.iter().any(|&a| !a), "some groups degraded under churn");
 }
+
+// ---------------------------------------------------------------------------
+// R2 — degraded effect groups forward-composite flat (effect-compositor.md § 2.3)
+// ---------------------------------------------------------------------------
+
+use buiy_core::render::atlas::{GLYPH_ALPHA_FLOAT_OFFSET, GlyphAlphaInstance};
+use buiy_core::render::compositor::{DegradedGroup, fold_root_degraded_into_flat};
+use buiy_core::render::instance::ALPHA_FLOAT_OFFSET;
+use std::ops::Range;
+
+/// A `[f32;17]` quad record with a known alpha at `ALPHA_FLOAT_OFFSET` and a
+/// sentinel in the neighbouring slots so an off-by-one write is caught.
+fn quad_with_alpha(alpha: f32) -> [f32; 17] {
+    let mut r = [0.0f32; 17];
+    // Fill with a recognizable ramp so a stray write to the wrong index shows.
+    for (i, v) in r.iter_mut().enumerate() {
+        *v = i as f32;
+    }
+    r[ALPHA_FLOAT_OFFSET] = alpha;
+    r
+}
+
+fn glyph_with_alpha(alpha: f32) -> GlyphAlphaInstance {
+    GlyphAlphaInstance {
+        rect: [1.0, 2.0, 3.0, 4.0],
+        uv: [5.0, 6.0, 7.0, 8.0],
+        color: [0.1, 0.2, 0.3, alpha],
+        clip: [9.0, 10.0, 11.0, 12.0],
+        page: 0,
+    }
+}
+
+#[test]
+fn degraded_fold_multiplies_quad_alpha_and_merges_flat_range() {
+    // Two ROOT groups: A degraded (opacity 0.5), B keeps its target.
+    // Quad layout: A's members [0,2), B's members [2,4), a non-group run [4,6).
+    let mut quad: Vec<[f32; 17]> = (0..6).map(|i| quad_with_alpha(0.8 + i as f32)).collect();
+    let mut glyph: Vec<GlyphAlphaInstance> = Vec::new();
+    // The flat ranges as prepare's partition would hand them: only the non-group
+    // The non-group tail [4,6) is the only flat run before the fold (group
+    // members A,B excluded). `iter::once` sidesteps the `single_range_in_vec_init`
+    // lint, which fires on both `vec![4..6]` and `[4..6]` array initializers.
+    let mut quad_flat: Vec<Range<u32>> = std::iter::once(4..6).collect();
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+
+    let original: Vec<[f32; 17]> = quad.clone();
+
+    let groups = [
+        DegradedGroup {
+            quad_range: 0..2,
+            glyph_range: 0..0,
+            opacity: 0.5,
+            parent: None,
+        },
+        DegradedGroup {
+            quad_range: 2..4,
+            glyph_range: 0..0,
+            opacity: 0.7,
+            parent: None,
+        },
+    ];
+    let allocate = [false, true]; // A degraded, B allocated.
+
+    fold_root_degraded_into_flat(
+        &allocate,
+        &groups,
+        true, // fold_quad
+        true, // merge_quad
+        true, // fold_glyph
+        true, // merge_glyph
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+
+    // (a) every instance in A's range dimmed by 0.5, read at ALPHA_FLOAT_OFFSET.
+    for i in 0..2 {
+        let want = original[i][ALPHA_FLOAT_OFFSET] * 0.5;
+        assert!(
+            (quad[i][ALPHA_FLOAT_OFFSET] - want).abs() < 1e-6,
+            "A instance {i} alpha folded by 0.5"
+        );
+        // Neighbouring slots untouched (no off-by-one).
+        assert_eq!(
+            quad[i][ALPHA_FLOAT_OFFSET - 1],
+            original[i][ALPHA_FLOAT_OFFSET - 1]
+        );
+        assert_eq!(
+            quad[i][ALPHA_FLOAT_OFFSET + 1],
+            original[i][ALPHA_FLOAT_OFFSET + 1]
+        );
+    }
+    // (b) B's range (allocated, keeps a target) is unchanged.
+    for i in 2..4 {
+        assert_eq!(
+            quad[i], original[i],
+            "B instance {i} unchanged (not degraded)"
+        );
+    }
+    // (c) A's range is merged into flat ranges; B's stays excluded.
+    assert!(
+        quad_flat.contains(&(0..2)),
+        "A's degraded range merged into flat: {quad_flat:?}"
+    );
+    assert!(
+        !quad_flat.iter().any(|r| r.start == 2),
+        "B's range stays excluded from flat: {quad_flat:?}"
+    );
+    // (d) coalescing + order: ranges sorted, no overlaps.
+    for w in quad_flat.windows(2) {
+        assert!(
+            w[0].end <= w[1].start,
+            "flat ranges sorted & disjoint: {quad_flat:?}"
+        );
+    }
+}
+
+#[test]
+fn degraded_fold_coalesces_adjacent_flat_runs() {
+    // A degraded group [2,4) sits exactly between two existing flat runs
+    // [0,2) and [4,6): merging must coalesce all three into [0,6).
+    let mut quad: Vec<[f32; 17]> = (0..6).map(|_| quad_with_alpha(1.0)).collect();
+    let mut glyph: Vec<GlyphAlphaInstance> = Vec::new();
+    let mut quad_flat: Vec<Range<u32>> = vec![0..2, 4..6];
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+
+    let groups = [DegradedGroup {
+        quad_range: 2..4,
+        glyph_range: 0..0,
+        opacity: 0.25,
+        parent: None,
+    }];
+    fold_root_degraded_into_flat(
+        &[false],
+        &groups,
+        true,
+        true,
+        true,
+        true,
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+    assert_eq!(
+        quad_flat,
+        vec![0..6],
+        "adjacent runs coalesce: {quad_flat:?}"
+    );
+}
+
+#[test]
+fn degraded_fold_multiplies_glyph_alpha_at_offset_11() {
+    // The glyph tier folds color[3] (raw float index 11), NOT offset 7.
+    let mut quad: Vec<[f32; 17]> = Vec::new();
+    let mut glyph: Vec<GlyphAlphaInstance> = (0..3)
+        .map(|i| glyph_with_alpha(0.4 + i as f32 * 0.1))
+        .collect();
+    let mut quad_flat: Vec<Range<u32>> = vec![];
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+    let original = glyph.clone();
+
+    let groups = [DegradedGroup {
+        quad_range: 0..0,
+        glyph_range: 0..3,
+        opacity: 0.5,
+        parent: None,
+    }];
+    fold_root_degraded_into_flat(
+        &[false],
+        &groups,
+        true,
+        true,
+        true,
+        true,
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+
+    for i in 0..3 {
+        // color[3] dimmed.
+        assert!(
+            (glyph[i].color[3] - original[i].color[3] * 0.5).abs() < 1e-6,
+            "glyph {i} alpha folded at color[3]"
+        );
+        // Raw-view parity: the named const points at color[3] (= float idx 11).
+        assert_eq!(GLYPH_ALPHA_FLOAT_OFFSET, 11);
+        let raw: &[f32; 17] = bytemuck::cast_ref::<GlyphAlphaInstance, [f32; 17]>(&glyph[i]);
+        assert!(
+            (raw[GLYPH_ALPHA_FLOAT_OFFSET] - glyph[i].color[3]).abs() < 1e-6,
+            "raw float index 11 == color[3]"
+        );
+        // uv/clip/rect untouched — proves we did NOT write offset 7 (= uv[3]).
+        assert_eq!(glyph[i].uv, original[i].uv, "uv untouched");
+        assert_eq!(glyph[i].clip, original[i].clip, "clip untouched");
+        assert_eq!(glyph[i].rect, original[i].rect, "rect untouched");
+        assert_eq!(
+            glyph[i].color[0], original[i].color[0],
+            "color.rgb untouched"
+        );
+    }
+    assert!(glyph_flat.contains(&(0..3)), "glyph range merged into flat");
+}
+
+#[test]
+fn degraded_fold_reads_source_alpha_not_accumulated() {
+    // The fn computes source*opacity over the value it READS once — it does not
+    // accumulate. (The once-per-pack contract is enforced by the system gate;
+    // here we pin that ONE call yields exactly source*opacity.)
+    let mut quad: Vec<[f32; 17]> = vec![quad_with_alpha(0.8)];
+    let mut glyph: Vec<GlyphAlphaInstance> = Vec::new();
+    let mut quad_flat: Vec<Range<u32>> = vec![];
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+    let groups = [DegradedGroup {
+        quad_range: 0..1,
+        glyph_range: 0..0,
+        opacity: 0.5,
+        parent: None,
+    }];
+    fold_root_degraded_into_flat(
+        &[false],
+        &groups,
+        true,
+        true,
+        true,
+        true,
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+    assert!(
+        (quad[0][ALPHA_FLOAT_OFFSET] - 0.4).abs() < 1e-6,
+        "0.8 * 0.5 == 0.4"
+    );
+}
+
+#[test]
+fn degraded_fold_per_tier_gate_skips_ungated_tier() {
+    // All glyph gates OFF (fold_glyph=false, merge_glyph=false): the quad
+    // buffer/ranges fold + merge; the glyph buffer AND glyph ranges are left
+    // wholly untouched. This pins the case where NEITHER the glyph buffer nor
+    // the glyph partition was rebuilt this frame.
+    let mut quad: Vec<[f32; 17]> = vec![quad_with_alpha(0.8)];
+    let mut glyph: Vec<GlyphAlphaInstance> = vec![glyph_with_alpha(0.8)];
+    let mut quad_flat: Vec<Range<u32>> = vec![];
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+    let groups = [DegradedGroup {
+        quad_range: 0..1,
+        glyph_range: 0..1,
+        opacity: 0.5,
+        parent: None,
+    }];
+    fold_root_degraded_into_flat(
+        &[false],
+        &groups,
+        true,  // fold_quad
+        true,  // merge_quad
+        false, // fold_glyph — skip
+        false, // merge_glyph — skip
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+    assert!(
+        (quad[0][ALPHA_FLOAT_OFFSET] - 0.4).abs() < 1e-6,
+        "quad folded"
+    );
+    assert_eq!(quad_flat, vec![0..1], "quad range merged");
+    assert!(
+        (glyph[0].color[3] - 0.8).abs() < 1e-6,
+        "glyph NOT folded (gate off)"
+    );
+    assert!(glyph_flat.is_empty(), "glyph range NOT merged (gate off)");
+}
+
+#[test]
+fn degraded_glyph_range_remerges_on_quad_dirty_only_frame() {
+    // MAJOR-2 (the vanish fix). On a quad-dirty-only frame with a live degraded
+    // glyph group, the glyph PARTITION is rebuilt (prepare re-EXCLUDES the
+    // degraded glyph range from `glyph_flat`) while the glyph BUFFER is RETAINED
+    // (already carries last frame's fold). The two glyph gates therefore SPLIT:
+    //   fold_glyph  = glyph_dirty               = false (buffer retained)
+    //   merge_glyph = quad_dirty || glyph_dirty = true  (partition rebuilt)
+    // The range MUST be re-merged (else the degraded glyphs vanish that frame),
+    // and the already-folded retained alpha MUST NOT be re-folded (else it
+    // compounds toward black). This is exactly the frame the #[ignore] GPU test
+    // `degraded_glyph_fold_idempotent_under_quad_dirty_only_frame` exercises
+    // end-to-end; this pins the caller's gate choice headlessly.
+    //
+    // Model the retained buffer: its glyph already carries last frame's fold
+    // (0.8 * 0.5 == 0.4). `glyph_flat` starts EMPTY — prepare's fresh partition
+    // rebuild excluded the degraded range this frame.
+    let mut quad: Vec<[f32; 17]> = vec![quad_with_alpha(0.8)];
+    let mut glyph: Vec<GlyphAlphaInstance> = vec![glyph_with_alpha(0.4)];
+    let mut quad_flat: Vec<Range<u32>> = vec![];
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+    let groups = [DegradedGroup {
+        quad_range: 0..1,
+        glyph_range: 0..1,
+        opacity: 0.5,
+        parent: None,
+    }];
+    fold_root_degraded_into_flat(
+        &[false],
+        &groups,
+        true,  // fold_quad   (quad buffer repacked this frame)
+        true,  // merge_quad  (quad partition rebuilt)
+        false, // fold_glyph  — glyph buffer RETAINED, do NOT re-fold
+        true,  // merge_glyph — glyph partition rebuilt, re-add the range
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+    // The range is re-merged so the flat draw paints the degraded glyphs.
+    assert_eq!(
+        glyph_flat,
+        vec![0..1],
+        "degraded glyph range re-merged on a quad-dirty-only frame (not vanished)"
+    );
+    // The retained, already-folded alpha is NOT re-folded (stays 0.4, not 0.2).
+    assert!(
+        (glyph[0].color[3] - 0.4).abs() < 1e-6,
+        "retained glyph alpha left untouched (no double-fold to 0.2)"
+    );
+}
+
+#[test]
+fn degraded_fold_skips_nested_group_in_release_path() {
+    // A degraded NESTED group (parent == Some): the slice scopes to root-degraded.
+    // In release, the nested group's ranges are NOT merged and its alpha is left
+    // untouched (no worse than today's vanish — tracked by a follow-up). Under
+    // debug the fn debug_asserts; this test must run release-only to assert the
+    // containment behavior.
+    if cfg!(debug_assertions) {
+        // Debug builds debug_assert!(false) on a nested degraded group — that is
+        // the loud-in-dev guard; the release containment is what we assert.
+        return;
+    }
+    let mut quad: Vec<[f32; 17]> = vec![quad_with_alpha(0.8)];
+    let mut glyph: Vec<GlyphAlphaInstance> = Vec::new();
+    let mut quad_flat: Vec<Range<u32>> = vec![];
+    let mut glyph_flat: Vec<Range<u32>> = vec![];
+    let original = quad.clone();
+    let groups = [DegradedGroup {
+        quad_range: 0..1,
+        glyph_range: 0..0,
+        opacity: 0.5,
+        parent: Some(7), // nested under group 7
+    }];
+    fold_root_degraded_into_flat(
+        &[false],
+        &groups,
+        true,
+        true,
+        true,
+        true,
+        &mut quad,
+        &mut glyph,
+        &mut quad_flat,
+        &mut glyph_flat,
+    );
+    assert_eq!(
+        quad[0], original[0],
+        "nested degraded alpha untouched in release"
+    );
+    assert!(quad_flat.is_empty(), "nested degraded range NOT merged");
+}
