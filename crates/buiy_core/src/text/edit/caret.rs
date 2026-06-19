@@ -6,9 +6,14 @@
 //! Disabled editor's selection OUT into `TextSelection` + the T7 paint seats
 //! (`CaretVisual`, `SelectionVisual`), resets the blink phase on a caret/
 //! selection transition, and emits `CaretMoved` / `SelectionChanged` on
-//! transition only. E3 paints the SINGLE primary caret; the BiDi split caret is
-//! a named deferral (cosmic 0.19 exposes no dual-caret API — see the plan's
-//! Architecture + the follow-up filed in Task 7).
+//! transition only. The PRIMARY caret is `cursor_position` from the run that
+//! owns the cursor. The SECONDARY indicator (the BiDi split caret, §§ 4.1, 5)
+//! now lands as `secondary_caret_rect_for`: at a direction boundary it is the
+//! BEFORE glyph's (`end == index`) logical-end visual edge — the position
+//! cosmic 0.19's single affinity-blind `cursor_glyph` cannot surface (it
+//! resolves `index == glyph.start` BEFORE `index == glyph.end`, buffer.rs:
+//! 151-174, so its one `cursor_position` only ever reports the start-glyph
+//! edge). Non-boundary carets have no secondary (`None`).
 //!
 //! It reads the editor through `TextEditState`'s facade accessors
 //! (`mirror_selection` / `with_buffer`) and names only the pure-data cosmic
@@ -39,14 +44,22 @@ pub struct SelectionChanged(pub Entity, pub TextSelection);
 /// `caret_stamp_rect`). A thin vertical bar; 1.0 logical is the convention.
 const CARET_W: f32 = 1.0;
 
+/// The secondary indicator's height as a fraction of the line box (§ 4.1: the
+/// split caret's SECONDARY mark is a shorter indicator, not a second full-height
+/// bar — it tells the user which direction the next typed char flows without
+/// reading as a second insertion point). A v1 visual choice; tests assert only
+/// that it is `<=` the primary height, so a later tweak doesn't churn them.
+const SECONDARY_CARET_H_FRAC: f32 = 0.5;
+
 /// The caret rect for `caret` in CONTENT-BOX-LOCAL coords (logical px), from the
 /// run that owns the cursor: `cursor_position` gives x, `line_top`/`line_height`
 /// give y/height (§ 4.1). Returns `None` if no run owns the cursor (degenerate /
 /// not-yet-shaped buffer).
 ///
-/// `pub(crate)` so `ime.rs`'s `write_ime_window` reuses it for the caret rect
-/// the IME popup anchors to (`Window.ime_position`, editing-and-ime § 6.3).
-pub(crate) fn caret_rect_for(buffer: &cosmic_text::Buffer, caret: &Cursor) -> Option<Rect> {
+/// `pub` so `ime.rs`'s `write_ime_window` reuses it for the caret rect the IME
+/// popup anchors to (`Window.ime_position`, editing-and-ime § 6.3), and so the
+/// E3 caret-geometry tests can pin it against a shaped buffer directly.
+pub fn caret_rect_for(buffer: &cosmic_text::Buffer, caret: &Cursor) -> Option<Rect> {
     for run in buffer.layout_runs() {
         if let Some(x) = run.cursor_position(caret) {
             return Some(Rect::new(
@@ -56,6 +69,78 @@ pub(crate) fn caret_rect_for(buffer: &cosmic_text::Buffer, caret: &Cursor) -> Op
                 run.line_top + run.line_height,
             ));
         }
+    }
+    None
+}
+
+/// The SECONDARY split-caret rect (§§ 4.1, 5) in CONTENT-BOX-LOCAL coords
+/// (logical px), or `None` when `caret` does not sit on a bidirectional
+/// DIRECTION BOUNDARY.
+///
+/// At a direction boundary two glyphs abut the caret's byte index: a BEFORE
+/// glyph (`end == caret.index`) and an AFTER glyph (`start == caret.index`).
+/// cosmic 0.19's `cursor_glyph` (buffer.rs:151-174) resolves the AFTER glyph
+/// first (`index == glyph.start` before `index == glyph.end`), so the PRIMARY
+/// caret (`caret_rect_for`) already lands at the AFTER glyph's edge. The
+/// SECONDARY is the OTHER abutting glyph — the BEFORE glyph — at its
+/// LOGICAL-END visual edge, per cosmic's own direction convention (buffer.rs:
+/// 120-142, mirrored by `cursor_from_glyph_right` buffer.rs:191-197): an LTR
+/// glyph's logical end is its right edge (`x + w`), an RTL glyph's is its left
+/// edge (`x`). This is exactly the position cosmic's single affinity-blind
+/// `cursor_position` cannot surface — hence a dedicated walk here.
+///
+/// Returns `None` unless BOTH glyphs exist within ONE `line_i`-matching run AND
+/// they have OPPOSITE directions (`before.level.is_rtl() != after.level.is_rtl()`).
+/// A run extremity (only one abutting glyph) or a same-direction join is a normal
+/// caret with no second insertion point.
+///
+/// A logical line that SOFT-WRAPS emits MULTIPLE `LayoutRun`s sharing the same
+/// `line_i` (cosmic 0.19 `LayoutRunIter`: one run per wrapped `layout_line`, all
+/// with that line's `line_i`; each run's `glyphs` is the line-relative sub-slice
+/// for its wrap segment). The caret's index may live on a CONTINUATION segment,
+/// whose glyphs are in a LATER run — so a `line_i`-matching run that holds
+/// NEITHER an abutting before NOR after glyph at the index is the WRONG wrap
+/// segment, not a verdict. Mirror `caret_rect_for`'s all-runs scan: CONTINUE
+/// past such a run; only conclude `None` after exhausting every run. (The
+/// primary path gets this for free — `run.cursor_position` returns `None` for a
+/// non-owning run and the loop continues; this walk must do the same explicitly.)
+///
+/// `pub` so `write_caret_and_selection` populates `CaretVisual.secondary` from
+/// it (a second solid-stamp instance, CPU geometry only — no new GPU), and so
+/// the E3 caret-geometry tests can pin it against a shaped buffer directly.
+pub fn secondary_caret_rect_for(buffer: &cosmic_text::Buffer, caret: &Cursor) -> Option<Rect> {
+    for run in buffer.layout_runs() {
+        if run.line_i != caret.line {
+            continue;
+        }
+        // The two abutting glyphs at the caret's byte index. A cluster that
+        // STRADDLES the index (`start < index < end`) is not a boundary — the
+        // caret is mid-cluster, a single insertion point.
+        let before = run.glyphs.iter().find(|g| g.end == caret.index);
+        let after = run.glyphs.iter().find(|g| g.start == caret.index);
+        let (Some(before), Some(after)) = (before, after) else {
+            // Neither/only-one abutting glyph: this is the WRONG wrap segment of
+            // a soft-wrapped logical line (the owning run is later), or a genuine
+            // run extremity. Either way, keep scanning — a LATER `line_i`-
+            // matching run may own both glyphs. Only after exhausting every run
+            // is `None` the verdict.
+            continue;
+        };
+        if before.level.is_rtl() == after.level.is_rtl() {
+            return None; // same direction → no split (this run owns the index)
+        }
+        // The BEFORE glyph's logical-end visual edge (cosmic's convention).
+        let sec_x = if before.level.is_rtl() {
+            before.x
+        } else {
+            before.x + before.w
+        };
+        return Some(Rect::new(
+            sec_x,
+            run.line_top,
+            sec_x + CARET_W,
+            run.line_top + run.line_height * SECONDARY_CARET_H_FRAC,
+        ));
     }
     None
 }
@@ -117,8 +202,14 @@ pub fn write_caret_and_selection(
         let Some(new_rect) = state.with_buffer(|buffer| caret_rect_for(buffer, &caret)) else {
             continue;
         };
+        // The SECONDARY split-caret indicator (§§ 4.1, 5): `Some` only when the
+        // caret sits on a bidirectional direction boundary, else `None`.
+        let secondary = state.with_buffer(|buffer| secondary_caret_rect_for(buffer, &caret));
 
-        let caret_changed = prev_caret.map(|c| c.rect) != Some(new_rect);
+        // Compare the PAIR: a boundary crossing that changes only the secondary
+        // (same primary x) must still re-emit, else a stale secondary paints.
+        let caret_changed =
+            prev_caret.map(|c| (c.rect, c.secondary)) != Some((new_rect, secondary));
         if caret_changed {
             // Preserve the current visibility (the blink writer owns it); a NEW
             // caret defaults visible.
@@ -126,6 +217,7 @@ pub fn write_caret_and_selection(
             commands.entity(entity).insert(CaretVisual {
                 visible,
                 rect: new_rect,
+                secondary,
             });
         }
 

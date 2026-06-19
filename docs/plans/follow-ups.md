@@ -1083,34 +1083,70 @@ design's numbers, never this backlog's.
 
 ## Text editing — BiDi split caret (E3 deferral)
 
-**Status:** deferred from E3 ([2026-06-13-buiy-text-editing-e3-caret-selection.md](2026-06-13-buiy-text-editing-e3-caret-selection.md)).
+**Status: LANDED** (follow-up slice after E3–E6; `followups-drain` worktree).
+Superseded the E3 deferral. Was: deferred from E3
+([2026-06-13-buiy-text-editing-e3-caret-selection.md](2026-06-13-buiy-text-editing-e3-caret-selection.md)).
 
 **What it is:** when the caret sits on a bidirectional direction boundary, the
 spec (editing-and-ime.md §§ 4.1, 5) calls for **two** caret marks — a primary
 full-height bar at one run's edge plus a secondary indicator at the other — so
 the user can tell which direction the next typed character will flow.
 
-**Why deferred:** cosmic-text 0.19 exposes no API for the dual position.
-`LayoutRun::cursor_position` → `cursor_glyph` (vendored `buffer.rs:148-179`)
-compares **only** `(cursor.line, cursor.index)` and never reads
-`cursor.affinity`, and a single unwrapped line is **one** `LayoutRun` — so
-repeated `cursor_position` calls cannot surface the second position, and there
-is no second run to scan. cosmic's own `Editor::draw` paints a single caret
-(`find_map` first run). E3 therefore paints the **single primary caret** (zero
-correctness risk — the caret is always present and correct; only the
-mixed-direction *secondary indicator* is missing), exactly as the multi-range
-selection *behavior* is a named deferral.
+**As landed.** The secondary indicator rides
+`CaretVisual.secondary: Option<Rect>` (a FIELD, not a standalone component — the
+extract producer's query/`Changed`/`RemovedComponents` params are at Bevy's
+15-tuple cap, so the field reuses the primary's damage trigger and clear).
+`secondary_caret_rect_for(buffer, caret)` (caret.rs) returns `Some` only at a
+direction boundary — where a BEFORE glyph (`end == index`) and an AFTER glyph
+(`start == index`) abut with OPPOSITE `level.is_rtl()`. The secondary x is the
+**BEFORE glyph's logical-end visual edge**: LTR → `x + w`, RTL → `x` (cosmic's
+own convention, `buffer.rs:120-142` / `cursor_from_glyph_right`). It is
+top-anchored at `SECONDARY_CARET_H_FRAC` (0.5) of the line box — a shorter mark
+than the full-height primary. The paint is a SECOND solid-stamp instance in
+extract.rs (CPU geometry only, reusing the primary's atlas entry/color/clip/page
+— no new GPU, no new atlas insert). The writer compares the `(rect, secondary)`
+pair so a boundary crossing that changes only the secondary still re-emits.
 
-**Correct approach (the work):** compute the secondary x from glyph-level
-geometry at the boundary byte index — the LTR glyph's trailing edge vs the RTL
-glyph's leading edge, using the affinity pair, à la `cursor_from_glyph_left` /
-`cursor_from_glyph_right` (vendored `buffer.rs:181-197`, which DO encode
-affinity). Paint as a secondary `CaretVisual`-style rect + a second solid stamp
-(CPU geometry only — no new GPU, the E3 paint path already stamps the primary).
+**Why a field, not a new component.** The §6.3-style primary `CaretVisual` is
+already the seat; the cap on the extract producer's tuples (extract.rs § 6.1)
+makes a 16th seat impossible without a risky refactor of the hottest text
+system. Recorded in the §5 spec update so a future "cleanup" to a standalone
+component is not silently attempted.
 
-**Owner:** the text-editing campaign, as a focused follow-up slice after E3–E6.
+**The cosmic gotcha (why E3 couldn't surface it).** `cursor_glyph`
+(`buffer.rs:151-174`) is affinity-blind AND order-defined — it resolves
+`index == glyph.start` BEFORE `index == glyph.end`, so its single
+`cursor_position` only ever reports the AFTER (start-glyph) edge, which the
+PRIMARY already paints. The SECONDARY is the OTHER abutting glyph's logical-end
+edge — a glyph-level position cosmic's one cursor call cannot reach (the second
+position is glyph-level, not run-level).
 
-**Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 (as-landed deferral notes).
+**Soft-wrap (multiple runs per logical line).** A logical line that wraps emits
+SEVERAL `LayoutRun`s sharing one `line_i` (cosmic 0.19 `LayoutRunIter`: one run
+per wrapped `layout_line`; glyph byte indices are line-relative across the
+segments). So `secondary_caret_rect_for` mirrors `caret_rect_for`'s all-runs
+scan: a `line_i`-matching run that holds neither abutting glyph at the index is
+the WRONG wrap segment (or a run extremity) — it CONTINUES rather than concluding
+`None`, and the rect uses the OWNING run's `line_top`. Only single-line editors
+force `Wrap::None` (sync.rs:521); multi-line wrapping editors and display text
+produce multi-run logical lines, so a boundary on a continuation segment must
+still surface the secondary.
+
+**Tests.** Headless `text_caret_geometry.rs`: `secondary_caret_rect_for` returns
+`None` for a pure-LTR caret and `Some` at a data-derived mixed-BiDi boundary
+(asserting the EXACT before-glyph edge x — equality with the primary allowed,
+never `primary.x != secondary.x`); a narrow soft-wrapped mixed line surfaces the
+secondary on a NON-FIRST run of the logical line (asserting the owning
+continuation run's `line_top`); the end-to-end editor caret carries no
+secondary on ASCII; `CaretVisual::default().secondary == None`. GPU `#[ignore]`
+`text_caret_selection_e3_gpu.rs`: the existing single-band primary golden is
+unchanged; an additive boundary golden drives the caret to the data-derived
+boundary via logical-order `Motion::Next` and asserts TWO red bands with the
+secondary shorter in row-extent.
+
+**Owner:** the text-editing campaign (delivered).
+
+**Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 + abstract (as-landed notes).
 
 ## Text editing — multi-range selection *behavior* (E-campaign deferral)
 

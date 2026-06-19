@@ -753,7 +753,10 @@ pub fn extract_buiy_glyphs(
         // T7 § 6.1 — seat 6: the caret paints last, over glyphs and
         // line-through, as a solid-stamp instance (pre-phase decision 2).
         // Painted under Block too (chrome, not ink — decision 9: browsers
-        // keep the caret in a focused field whose font is loading).
+        // keep the caret in a focused field whose font is loading). At a
+        // bidirectional direction boundary an OPTIONAL second (secondary-
+        // indicator) stamp follows the primary (§§ 4.1, 5) — same
+        // entry/color/clip/page, CPU geometry only, no new atlas insert.
         if let Some(cv) = caret_visual
             && cv.visible
         {
@@ -779,6 +782,20 @@ pub fn extract_buiy_glyphs(
                     clip,
                     page: entry.page as u32,
                 });
+                // §§ 4.1, 5: the SECONDARY split-caret indicator — a second
+                // solid stamp at the boundary's before-glyph logical-end edge,
+                // present only at a bidi direction boundary. Reuse the SAME
+                // entry/color/clip/page; the stamp key is already queued below
+                // (do NOT push it twice).
+                if let Some(sec) = cv.secondary {
+                    new_glyphs.push(GlyphAlphaInstance {
+                        rect: caret_stamp_rect(origin, sec, scale_factor),
+                        uv: stamp_uv(&entry),
+                        color: linear_color(color),
+                        clip,
+                        page: entry.page as u32,
+                    });
+                }
                 // § 6.3: the stamp key joins the un-gated touch pass — a
                 // retained caret idling past eviction_grace must not lose
                 // its cell.
