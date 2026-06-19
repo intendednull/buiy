@@ -42,7 +42,7 @@ Or<(
     Changed<GridParams>, Changed<GridItem>, Changed<WritingMode>,
     Changed<WritingModeResolved>, Changed<Children>, Changed<ChildOf>,
     Changed<ResolvedLayout>,
-    // Nested inner Or to stay under Bevy 0.18's 15-element outer-tuple cap.
+    // Nested inner Or to stay under Bevy's 15-element outer-tuple cap.
     Or<(
         Changed<Container>, Changed<ContainerQuery>,
         Changed<ContainerQueryActive>, Changed<ContainerQueryInactive>,

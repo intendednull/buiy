@@ -37,7 +37,7 @@ deviates from the draft of this file — both reconciled here against
    drift by the known-answer unit tests below — exactly the protection a version
    pin would give. **Net new metric dep: `image-compare = "=0.5.0"` (MSSIM) only;
    no `pixelmatch` dependency is added.**
-2. **`Diff` carries a `saturated: bool` field** (`metric.rs:31-37`). The
+2. **`Diff` carries a `saturated: bool` field** (`Diff` in `metric.rs`). The
    dimension-mismatch sentinel sets it `true`; `Diff::passes` returns `false` for
    any saturated `Diff` against *every* budget (including a maximal
    `(255, u32::MAX)`). This makes the loud-red fail direction unconditional —
