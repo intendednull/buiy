@@ -20,21 +20,31 @@
 //! single line of "what the catalog should be"; everything else is the real
 //! button bundle.
 //!
-//! **Why the light-theme display-list snapshot shows `#ff00ffff` (magenta).**
+//! **Why the snapshot tiers skip the *light* cells (no magenta baseline).**
 //! Buiy's forced-colors model is a *wholesale theme swap*: the light theme holds
 //! only brand tokens, the forced theme only the 16 system-color tokens — no
 //! single token resolves in BOTH (theme.rs). A system-color token therefore
-//! misses under the light theme and renders the magenta sentinel; under the
-//! forced theme it resolves (e.g. `ButtonText` → white). The committed
-//! `*.light.*` display-list baselines record that magenta faithfully — it is the
-//! expected artifact of system-color tokens being forced-colors-only, NOT a
-//! harness bug. Reconciling the two-theme split (so one widget resolves cleanly
-//! in both) is the same `buiy-widget-catalog-design` / theme-tokens concern.
+//! misses under the light theme and would render the magenta missing-token
+//! sentinel (`#ff00ffff`); under the forced theme it resolves (e.g.
+//! `ButtonText` → white). This fixture is thus **system-color-only**, so it
+//! declares `paints_cell = |cell| cell.theme == ThemeAxis::ForcedColors`: the
+//! CPU snapshot tiers (layout / display-list) **skip its light cells** instead
+//! of baselining the sentinel as if it were the expected color. Baselining a
+//! known-wrong magenta pixel would cement it and hide a real regression to/from
+//! magenta at that cell (audit 2026-06-18). The forced-colors cells — where the
+//! tokens DO resolve — keep full snapshot coverage. Reconciling the two-theme
+//! split (so the default widget resolves cleanly in both) remains a
+//! `buiy-widget-catalog-design` / theme-tokens concern.
 
 use bevy::prelude::*;
 use buiy_core::render::color::{ColorToken, SystemColorKeyword};
 use buiy_core::render::components::{Background, Border, BorderSide, LineStyle};
 use buiy_widgets::Button;
+
+// This file is `#[path]`-included as a module *inside* the `buiy_verify` crate
+// (src/coverage/mod.rs), so coverage types are reached via `crate::`, not the
+// external `buiy_verify::` path.
+use crate::coverage::ThemeAxis;
 
 crate::fixture! {
     name = "button",
@@ -66,6 +76,12 @@ crate::fixture! {
                 },
             ));
     },
+    // System-color-only paint (above): its `SystemColor` tokens resolve ONLY
+    // under the forced-colors theme swap and would render the magenta sentinel
+    // under the brand-token light theme. So the snapshot tiers skip the light
+    // cells rather than baseline the sentinel; the forced-colors cells (where the
+    // tokens resolve) keep full coverage.
+    paints_cell = |cell| cell.theme == ThemeAxis::ForcedColors,
 }
 
 /// A solid border side painted with a system-color token.

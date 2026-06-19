@@ -344,12 +344,35 @@ deviations:
   Making the default widget forced-colors-safe is a `buiy-widget-catalog-design`
   concern, not this campaign. The catalog fixture therefore inserts
   forced-colors-safe **system-color** paint (the catalog's target), and the
-  producer reads those live components. Consequence recorded faithfully: because
-  the swap is wholesale, no token resolves in *both* light and forced themes, so
-  the system-color button renders the magenta sentinel under the *light* theme —
-  captured in the committed `*.light.*` display-list baselines (48
-  CPU-deterministic `.snap`s: 24 layout + 24 display-list). Documented as
-  expected, not a harness bug.
+  producer reads those live components. Because the swap is wholesale, those
+  system-color tokens resolve only under the *forced* theme and miss (→ magenta
+  sentinel) under the *light* theme — the button fixture is **system-color-only**.
+
+  **Superseded (audit 2026-06-18 → T3.6): the CPU snapshot tiers no longer
+  baseline that magenta, and DPR is collapsed at the CPU tiers.** The original
+  build committed the sentinel in 12 `*.light.*` display-list baselines and drove
+  *both* DPR values at every CPU tier (48 button CPU `.snap`s). Two cleanups
+  landed:
+    1. **DPR axis collapsed at the CPU snapshot tiers.** `ResolvedLayout` and the
+       display list are logical-px (DPR lives only in the GPU view uniform), so a
+       CPU dump is byte-identical at every DPR — `dpr1` and `dpr2` baselines were
+       exact duplicates. The snapshot tiers now drive `Matrix::cpu_snapshots()`
+       (a single DPR, `Dpr::X1`); the real invariant the duplicates encoded —
+       *DPR does not affect CPU output* — is asserted once by the
+       `cpu_snapshots_are_dpr_invariant` property test
+       (`tests/coverage_dpr_invariance.rs`). The **GPU golden tier keeps
+       `ci_default()`** (both DPRs — DPR genuinely changes the rasterized output).
+    2. **Light cells skipped, sentinel never baselined.** A system-color-only
+       fixture declares `paints_cell` (e.g.
+       `|cell| cell.theme == ThemeAxis::ForcedColors`); the snapshot enrollment
+       (`enroll_snapshots`) skips the cells it cannot paint, so no `.snap`
+       baselines `#ff00ffff`. The `no_snapshot_cell_paints_the_sentinel` guard is
+       the teeth (fails if any enrolled cell ever paints the sentinel). The
+       forced-colors cells — where the tokens resolve — keep full coverage.
+  Net: the button CPU corpus drops 48 → 12 `.snap`s (forced theme × 3 viewports ×
+  2 fc × 1 dpr × {layout, display-list}); −24 from the DPR collapse, −12 from the
+  light-cell skip. The CPU **invariant** tier still runs `ci_default()` (it
+  baselines no `.snap` and its finiteness/extent predicates are cheap per DPR).
 - **The forced-colors `BoxShadow` *visual* reftest stays BLOCKED.**
   `boxshadow_visual_reftest_is_blocked` is an `#[ignore]`'d, assertion-free
   placeholder documenting the dependency on the unlanded `BoxShadow` extract/draw

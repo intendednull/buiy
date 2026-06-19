@@ -129,6 +129,32 @@ impl Matrix {
     pub fn cells_per_fixture(&self) -> usize {
         self.themes.len() * self.viewports.len() * self.forced_colors.len() * self.dprs.len()
     }
+
+    /// The CPU **snapshot** view of [`ci_default`](Self::ci_default): the same
+    /// matrix with the **DPR axis collapsed to a single value** (`Dpr::X1`).
+    ///
+    /// DPR is inert at the CPU tiers. `ResolvedLayout` and the display list are
+    /// in **logical** px (DPR lives only in the GPU render-view uniform —
+    /// `render/extract.rs` `ExtractedNodes.scale_factor`), so the layout /
+    /// display-list dump a CPU snapshot tier baselines is byte-identical at every
+    /// DPR. Driving both `Dpr::X1` and `Dpr::X2` at the snapshot tiers only
+    /// doubled the `.snap` count with identical content (audit 2026-06-18,
+    /// "Investigated & dismissed"). The real invariant the duplicate baselines
+    /// were implicitly encoding — *DPR does not affect CPU output* — is asserted
+    /// directly and once by the `cpu_snapshots_are_dpr_invariant` property test;
+    /// this collapse removes the redundant baselines.
+    ///
+    /// The **GPU golden tier keeps [`ci_default`](Self::ci_default)** (both DPR
+    /// values) — DPR genuinely changes the rasterized output there. So does the
+    /// CPU **invariant** tier, whose finiteness/extent predicates are cheap to
+    /// run per DPR and guard a degenerate box at an extreme DPR (it baselines no
+    /// `.snap`, so it has no orphan-snapshot cost).
+    pub fn cpu_snapshots() -> Self {
+        Self {
+            dprs: vec![Dpr::X1],
+            ..Self::ci_default()
+        }
+    }
 }
 
 /// One enrolled combination — half of a
@@ -156,6 +182,22 @@ mod tests {
     #[test]
     fn cells_per_fixture_under_ceiling() {
         assert!(Matrix::ci_default().cells_per_fixture() <= CELL_CEILING_PER_FIXTURE);
+    }
+
+    #[test]
+    fn cpu_snapshots_collapses_dpr_to_one() {
+        // The CPU snapshot view drops the DPR axis to a single value, halving the
+        // per-fixture cell count (24 → 12). Every other axis is unchanged, so the
+        // sole survivor is `Dpr::X1`.
+        let cpu = Matrix::cpu_snapshots();
+        assert_eq!(cpu.dprs, vec![Dpr::X1], "DPR axis collapsed to X1");
+        assert_eq!(cpu.themes, Matrix::ci_default().themes);
+        assert_eq!(cpu.viewports, Matrix::ci_default().viewports);
+        assert_eq!(cpu.forced_colors, Matrix::ci_default().forced_colors);
+        assert_eq!(cpu.cells_per_fixture(), 12);
+        assert_eq!(cpu.cells().count(), 12);
+        // No cell carries a DPR other than X1.
+        assert!(cpu.cells().all(|c| c.dpr == Dpr::X1));
     }
 
     #[test]

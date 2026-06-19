@@ -252,6 +252,7 @@ mod tests {
             name: "button",
             state: "resting",
             spawn: |_| {},
+            paints_cell: None,
         }
     }
 

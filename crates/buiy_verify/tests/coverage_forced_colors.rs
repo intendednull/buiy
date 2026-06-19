@@ -79,6 +79,7 @@ static BROKEN_FIXTURE: Fixture = Fixture {
     name: "brand-badge",
     state: "resting",
     spawn: spawn_broken_brand_widget,
+    paints_cell: None,
 };
 
 #[test]
@@ -127,6 +128,7 @@ static SAFE_FIXTURE: Fixture = Fixture {
     name: "safe-badge",
     state: "resting",
     spawn: spawn_safe_system_widget,
+    paints_cell: None,
 };
 
 #[test]

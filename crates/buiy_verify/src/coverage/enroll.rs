@@ -118,3 +118,31 @@ pub fn enroll_fixtures(
         }
     }
 }
+
+/// Drive a CPU **snapshot** tier body across the corpus, honoring each fixture's
+/// [`paints_cell`](super::fixture::Fixture::paints_cell) skip: a cell the
+/// fixture cannot paint without the missing-token sentinel is **not** enrolled
+/// (the snapshot tiers must never baseline `#ff00ffff` as the expected color —
+/// audit 2026-06-18). The matrix is the caller's choice — the snapshot tiers
+/// pass [`Matrix::cpu_snapshots`] (single DPR), so this is also where the DPR
+/// collapse takes effect.
+///
+/// Distinct from [`enroll_all`] (which enrolls EVERY cell, for the invariant /
+/// golden tiers that paint pixels or assert structure rather than baselining a
+/// token-resolved color). Returns the number of cells actually enrolled, so a
+/// driver can assert non-vacuity without re-deriving the skip.
+pub fn enroll_snapshots(matrix: &Matrix, body: impl Fn(App, CoverageKey)) -> usize {
+    let mut enrolled = 0usize;
+    for fx in sorted_catalog() {
+        for cell in matrix.cells() {
+            if !fx.snapshots_cell(&cell) {
+                continue;
+            }
+            let key = CoverageKey::for_cell(fx, &cell, Backend::Cpu);
+            let app = build_app(fx, &cell);
+            body(app, key);
+            enrolled += 1;
+        }
+    }
+    enrolled
+}

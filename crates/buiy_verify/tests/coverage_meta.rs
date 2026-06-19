@@ -194,6 +194,7 @@ static SYNTHETIC_FIXTURE: Fixture = Fixture {
     name: "synthetic",
     state: "resting",
     spawn: spawn_synthetic_widget,
+    paints_cell: None,
 };
 
 /// The decisive coverage property: adding **one** fixture grows the enrolled
