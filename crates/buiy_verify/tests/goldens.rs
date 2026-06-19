@@ -22,7 +22,11 @@
 //!   double-asserts byte-identity across two fresh captures AND equality to the
 //!   stored positive (the box-font collapse holds).
 //! * `golden_sdf_corner` — the committed residue golden for the irreducible SDF
-//!   corner AA rim.
+//!   corner AA rim. Its committed-baseline EXACT comparison is **adapter-gated**
+//!   (`support::on_pinned_lavapipe`): it runs only on the pinned lavapipe (the
+//!   rasterizer the corpus is blessed against) and skips-as-pending on any other
+//!   adapter (this host's RX diverges — cross-rasterizer pixels are
+//!   non-comparable). The non-vacuous paint check runs on every adapter.
 //!
 //! The drop-shadow-kernel residue golden is a deferred follow-up: the
 //! `BoxShadow` extract/draw path is not yet landed (`extract_buiy_nodes` has no
@@ -43,6 +47,7 @@ use buiy_verify::golden::{
     Backend, BlessMode, GoldenKey, GoldenOutcome, assert_golden, assert_golden_in, check_golden_in,
 };
 use buiy_verify::metric::{CompareOpts, FuzzBudget, compare};
+use buiy_verify::support::on_pinned_lavapipe;
 use image::{Rgba, RgbaImage};
 use std::borrow::Cow;
 
@@ -291,10 +296,31 @@ fn golden_sdf_corner() {
     // The SDF corner AA residue: a rounded fill whose analytic rim pixels are
     // exactly what Tier-5 owns (beyond the CPU coverage oracle).
     let img = DeterministicApp::new(48, 40).capture(rounded_rect);
+    // The rasterizer-internal, adapter-AGNOSTIC leg: the fixture actually
+    // painted (a non-blank frame). This runs on EVERY adapter — it is the part
+    // of the test that is sound off lavapipe (a blank-capture regression fails
+    // here regardless of host).
     assert!(
         img.pixels().any(|p| p.0 != [0, 0, 0, 255]),
         "the rounded rect painted (non-vacuous)"
     );
+
+    // The committed-baseline EXACT comparison is keyed against the PINNED
+    // lavapipe corpus (commit b869eba: this host's RX 6700 XT diverges by
+    // max_channel_delta=35 — cross-rasterizer pixels are non-comparable). Gate
+    // it on the selected adapter actually being lavapipe; OTHERWISE skip-as-
+    // pending (mirror matrix_goldens), so the documented local `--ignored` lane
+    // on real hardware no longer hard-fails (audit #7; determinism.md § "the
+    // local lane does not compare against the stored lavapipe baseline").
+    if !on_pinned_lavapipe() {
+        eprintln!(
+            "golden_sdf_corner: selected adapter is not the pinned lavapipe — \
+             SKIPPING the committed-baseline EXACT comparison (cross-rasterizer \
+             pixels are non-comparable; the stored corpus is blessed against \
+             lavapipe only). The non-vacuous paint check above still ran."
+        );
+        return;
+    }
     assert_golden(
         &key("rect-rounded", "default", "dark", "sm", Dpr::X1),
         &img,

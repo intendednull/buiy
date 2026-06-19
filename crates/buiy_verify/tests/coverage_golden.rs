@@ -20,6 +20,7 @@ use buiy_verify::coverage::{Backend as CovBackend, CoverageKey, Matrix, sorted_c
 use buiy_verify::determinism::DeterministicApp;
 use buiy_verify::golden::{Backend, GoldenKey, assert_golden, committed_positives};
 use buiy_verify::metric::FuzzBudget;
+use buiy_verify::support::on_pinned_lavapipe;
 
 /// Map a coverage cell's [`CoverageKey`] to the GPU [`GoldenKey`]: same trace
 /// identity, with the rasterizer set to the pinned CI lane (`Lavapipe`). The
@@ -84,26 +85,48 @@ fn golden_key_is_injective_over_the_matrix() {
 fn matrix_goldens() {
     // Tier-5 goldens are the *minimal rasterization residue*, not every coverage
     // cell — the corpus is blessed on demand (this file's header; goldens.md §
-    // Storage). So this driver is **bless-on-demand**: a cell with NO committed
-    // baseline is *pending* (skipped), while a cell that HAS been blessed must
-    // still match its golden on a fresh capture (fail-closed via `assert_golden`).
-    // Result: the GPU lane is green over the current 2-class residue corpus, yet
-    // any blessed cell that drifts fails loudly. `BUIY_BLESS=1` captures + blesses
-    // every cell (the `assert_golden` env path), so re-blessing still spans the
-    // full matrix.
+    // Storage). So this driver is **bless-on-demand**: a cell is *compared* only
+    // when (a) it has a committed baseline AND (b) we are on the pinned lavapipe
+    // (the rasterizer the corpus is blessed against); otherwise it skips-as-
+    // pending. A compared cell that drifts fails loudly (`assert_golden`).
+    //
+    // Non-vacuity contract (audit #14): a GREEN run must not silently mean "zero
+    // pixels compared." The old `asserted + pending > 0` assert passed on
+    // `pending` alone — green while comparing nothing. The reconciled rule
+    // (below) makes **green-on-lavapipe-with-a-blessed-cell ⟹ ≥1 real
+    // comparison**, while staying honestly green in the two legitimate
+    // zero-compare cases: (i) no matrix cell blessed yet (the current
+    // aspirational state — 5/6 residue classes have no golden), and (ii) off
+    // lavapipe (this host's RX — every blessed cell adapter-skips because its
+    // pixels are non-comparable).
+    //
+    // `BUIY_BLESS=1` captures + blesses every cell (the `assert_golden` env
+    // path), so re-blessing still spans the full matrix.
     let blessing = std::env::var_os("BUIY_BLESS").is_some();
+    let on_lavapipe = on_pinned_lavapipe();
     let matrix = Matrix::ci_default();
     let mut asserted = 0usize;
     let mut pending = 0usize;
+    // Does the committed corpus bless ANY matrix cell? Computed independently of
+    // the adapter gate so the global guard can tell "blessed corpus exists but
+    // nothing compared" (a real vacuity bug on lavapipe) apart from "no cell
+    // blessed yet" (the aspirational state, honestly green).
+    let mut any_cell_blessed = false;
 
     for fx in sorted_catalog() {
         for cell in matrix.cells() {
             let cov = CoverageKey::for_cell(fx, &cell, CovBackend::Cpu);
             let key = golden_key(&cov);
 
-            // Skip un-blessed cells (no GPU capture) unless we're actively
-            // blessing. A drifting *blessed* cell still fails below.
-            if !blessing && committed_positives(&key) == 0 {
+            let cell_blessed = committed_positives(&key) > 0;
+            any_cell_blessed |= cell_blessed;
+
+            // Skip a cell that has no committed baseline (nothing to compare to)
+            // OR that we cannot legitimately compare on this adapter (off
+            // lavapipe ⇒ cross-rasterizer pixels, audit #7). Under BUIY_BLESS we
+            // capture + bless every cell regardless, on whatever adapter the
+            // operator chose to bless against.
+            if !blessing && (!cell_blessed || !on_lavapipe) {
                 pending += 1;
                 continue;
             }
@@ -126,26 +149,45 @@ fn matrix_goldens() {
     }
 
     // HONEST status line: `asserted` is the number of cells actually COMPARED
-    // against a committed PNG; `pending` cells compared NOTHING (no baseline
-    // blessed yet). A green run with `asserted == 0` means the GPU golden tier
-    // verified zero images — green here is "no blessed cell drifted", NOT "the
-    // matrix is covered". The loud-flag below makes that explicit.
+    // against a committed PNG; `pending` cells compared NOTHING (no baseline, or
+    // skipped off lavapipe). A green run with `asserted == 0` is only legitimate
+    // when there is genuinely nothing to compare here (no blessed cell, or this
+    // adapter is not the canonical rasterizer) — the guard below enforces that.
     if asserted == 0 {
         eprintln!(
-            "matrix_goldens: 0 cells COMPARED — all {pending} are pending bless-on-demand \
-             (no committed golden). This run verified nothing at the GPU tier; bless a \
-             residue cell to gain real coverage."
+            "matrix_goldens: 0 cells COMPARED ({pending} pending). \
+             on_lavapipe={on_lavapipe}, any_cell_blessed={any_cell_blessed}. \
+             This run verified nothing at the GPU tier — legitimate ONLY because \
+             no matrix cell is blessed yet (aspirational) or this adapter is not \
+             the pinned lavapipe (off-canonical, cross-rasterizer). Bless a \
+             residue cell AND run on lavapipe to gain real coverage."
         );
     } else {
         eprintln!(
             "matrix_goldens: {asserted} cells compared against the committed corpus, \
-             {pending} pending bless-on-demand"
+             {pending} pending (on_lavapipe={on_lavapipe})"
         );
     }
-    // NB: this guard ONLY catches a silently-empty catalog/matrix — it does NOT
-    // assert non-vacuity (an all-pending run passes on `pending` alone, by the
-    // bless-on-demand design). The eprintln above is what surfaces a zero-compare
-    // run; do not mistake this assert for a coverage check.
+
+    // NON-VACUITY GUARD (audit #14): on the canonical rasterizer, if the corpus
+    // blesses ANY matrix cell, a green run MUST have compared at least one — else
+    // green would mean "verified zero pixels" while a real baseline sits unused.
+    // We do not fire when off lavapipe (every blessed cell adapter-skips — green
+    // is honest) nor when no cell is blessed (the aspirational state — green is
+    // honest). Bless path exempt: BUIY_BLESS writes rather than compares.
+    if !blessing && on_lavapipe && any_cell_blessed {
+        assert!(
+            asserted > 0,
+            "non-vacuity violated: on the pinned lavapipe with ≥1 blessed matrix \
+             cell, the run compared ZERO cells — a green pass here would verify no \
+             pixels against an existing baseline. (golden_key mapping or the \
+             skip-as-pending gate is dropping every blessed cell.)"
+        );
+    }
+
+    // Baseline sanity: the catalog × matrix must actually yield cells (catches a
+    // silently-empty catalog/Matrix::ci_default()). This is NOT the non-vacuity
+    // check — that is the lavapipe-gated guard above.
     assert!(
         asserted + pending > 0,
         "coverage matrix produced zero cells — catalog or Matrix::ci_default() is empty"
