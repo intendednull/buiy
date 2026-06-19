@@ -1187,9 +1187,36 @@ facade makes adding flavors local (no API churn).
 
 **Spec touchpoint:** editing-and-ime.md §§ 7, 13 (named deferral); OQ#3.
 
-## Text editing — compose-over-selection (E5 deferral)
+## Text editing — compose-over-selection (E5 deferral) — LANDED
 
-**Status:** deferred from the `buiy-text-editing` campaign (E5 IME;
+**Status:** **Landed.** When a composition starts over a non-collapsed
+selection, the selection is now deleted first (replace-selection convention) and
+the preedit is spliced at the now-collapsed caret. The selection-delete is
+captured as a reversible cosmic `Change`, **stashed** on the new
+`TextEditState::compose_delete` field (not pushed onto the undo stack — invariant
+(a) still holds for the splice), and at `Ime::Commit` it is **folded into the
+same `GroupKind::Composition` undo unit** as the commit-insert
+(`caret_before`/`selection_before` captured pre-delete): one undo restores BOTH
+the deleted text and the committed text, one redo replays both. A **cancel**
+(empty `Preedit` / `Ime::Disabled` / `Escape`) reverse-applies the stash,
+re-inserting the deleted text and restoring the selection. `TextChanged` fires on
+the delete (a genuine value change — the one documented exception to "never
+preedit") and again on the cancel-restore. The plain-text unselected-caret path
+is byte-identical to E5. *Approach rejected:* recording the delete as its own
+Composition unit and coalescing the commit into it — `Composition` never
+coalesces (§ 6.2c) and the intervening preedit splice breaks caret-adjacency, so
+it would yield two units. **Implementing files:** `crates/buiy_core/src/text/edit/ime.rs`,
+`crates/buiy_core/src/text/edit/state.rs` (`ComposeDelete` + `compose_delete`
+field), with the keyboard Escape value-change routed through
+`crates/buiy_core/src/text/edit/input.rs`. **Tests:**
+`crates/buiy_core/tests/text_ime_ops.rs` (splice-deletes-and-stashes,
+commit-is-one-unit + one-undo-restores-both + redo, cancel-restores-via-remove) and
+`crates/buiy_core/tests/text_ime_system.rs` (delete-fires-TextChanged,
+cancel/Disabled-restores + re-fires-TextChanged, commit-one-unit). Spec
+editing-and-ime.md §§ 6.1 / 6.2 / 13 updated (deferral reversed). No new GPU, no
+new event surface. The original deferral context is preserved below.
+
+**Originally deferred** from the `buiy-text-editing` campaign (E5 IME;
 [E5 plan](2026-06-13-buiy-text-editing-e5-ime.md)).
 
 **What it is:** when text is selected and the user starts an IME composition,
