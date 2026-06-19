@@ -1,12 +1,17 @@
-//! Gate #14's text component — the typing-latency MECHANISM fixture
-//! (text verification.md § 4; campaign T8): a keystroke (a `Text` edit)
-//! reaches a freshly-published `ExtractedGlyphs` in ONE frame
-//! (TextSync → measure → TextCommit → extract, all within one `frame()`),
-//! and the steady tail after it re-publishes and re-measures NOTHING — the
-//! structural protection the per-frame budget relies on. Wall-clock budget
-//! NUMBERS stay with `buiy-verification-design`; this file pins the
-//! frame-count mechanism only, headless on the adapterless extract harness
-//! (the `GlyphChangeLog` mirrors the prepare glyph gate exactly).
+//! Gate #14's text component — the typing **frame-count** MECHANISM fixture
+//! (text verification.md § 4; campaign T8).
+//!
+//! NAMING CAVEAT (audit #40): "latency" in the filename means FRAME COUNT, NOT
+//! wall-clock time. This file pins the SCHEDULE MECHANISM — a keystroke (a `Text`
+//! edit) reaches a freshly-published `ExtractedGlyphs` in ONE frame (TextSync →
+//! measure → TextCommit → extract, all within one `frame()`), and the steady tail
+//! after it re-publishes and re-measures NOTHING — the structural protection the
+//! per-frame budget relies on. It asserts frame COUNTS, never milliseconds. The
+//! wall-clock cost of that shape→layout→extract path is the criterion bench
+//! `crates/buiy_core/benches/pipeline.rs` (`cargo bench -p buiy_core --bench
+//! pipeline`); the per-frame *budget* numbers stay with
+//! `buiy-verification-design`. Headless on the adapterless extract harness (the
+//! `GlyphChangeLog` mirrors the prepare glyph gate exactly).
 //!
 //! The instrument resources are PER-FRAME counters (overwritten / reset
 //! each frame, the `SyncStylesIterCount` precedent), so the edit frame is
@@ -87,7 +92,8 @@ fn one_frame_from_text_edit_to_glyph_publish() {
     assert_eq!(
         h.changed_frames(),
         publishes0 + 1,
-        "one frame from the Text edit to the ExtractedGlyphs publish"
+        "one FRAME from the Text edit to the ExtractedGlyphs publish (a frame \
+         count, not a wall-clock latency — see the module-doc naming caveat)"
     );
     // …and the published set really is the new content.
     assert_eq!(

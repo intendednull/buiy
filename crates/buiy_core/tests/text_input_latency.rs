@@ -1,11 +1,22 @@
-//! E2 — the EDITOR-INPUT latency gate (OQ#1, editing-and-ime § 12 /
-//! readiness report). A keystroke applied in `BuiySet::Input` (the editor
-//! path) reaches a freshly-published `ExtractedGlyphs` in exactly ONE more
-//! frame (N → N+1), because Input runs two sets AFTER Layout, so the edit's
-//! reshape is picked up by NEXT frame's TextSync → measure → TextCommit →
-//! extract. This is DISTINCT from T8's `text_typing_latency` fixture, which
-//! mutates `Text` BEFORE Layout (the sync-side path) — that fixture must not
-//! be cited as editor-path proof (readiness § gate caveat).
+//! E2 — the EDITOR-INPUT **frame-count convergence** gate (OQ#1,
+//! editing-and-ime § 12 / readiness report).
+//!
+//! NAMING CAVEAT (audit #40): "latency" here means FRAME COUNT, **not**
+//! wall-clock time. This test pins the SCHEDULE INVARIANT — *how many*
+//! `app.update()` frames separate an editor keystroke from the frame its glyph
+//! publishes — and asserts nothing about milliseconds, allocations, or
+//! throughput. Wall-clock performance of the shape→layout→extract hot path is
+//! the criterion bench `crates/buiy_core/benches/pipeline.rs` (`cargo bench -p
+//! buiy_core --bench pipeline`); cite THAT for perf, this file for the
+//! N → N+1 frame contract.
+//!
+//! The contract: a keystroke applied in `BuiySet::Input` (the editor path)
+//! reaches a freshly-published `ExtractedGlyphs` in exactly ONE more frame
+//! (N → N+1), because Input runs two sets AFTER Layout, so the edit's reshape is
+//! picked up by NEXT frame's TextSync → measure → TextCommit → extract. This is
+//! DISTINCT from T8's `text_typing_latency` fixture, which mutates `Text` BEFORE
+//! Layout (the sync-side path) — that fixture must not be cited as editor-path
+//! proof (readiness § gate caveat).
 //!
 //! Headless on the adapterless extract harness; the edit is driven through
 //! the real `apply_keyboard_edits` system (a synthetic `KeyboardInput` +
@@ -132,8 +143,9 @@ fn one_frame_from_input_edit_to_glyph_publish() {
     assert_eq!(
         h.changed_frames(),
         publishes0 + 1,
-        "frame N+1 publishes the edit (one-frame editor-input latency — OQ#1; \
-         proves the M1 dirty-mark entered the measure path)"
+        "frame N+1 publishes the edit (one-FRAME editor-input convergence — \
+         OQ#1, a frame count not a wall-clock latency; proves the M1 dirty-mark \
+         entered the measure path)"
     );
     assert_eq!(
         h.glyph_count(),

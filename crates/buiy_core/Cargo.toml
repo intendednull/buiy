@@ -70,6 +70,10 @@ default_font = []
 [dev-dependencies]
 naga = "27"
 proptest = { workspace = true }
+# Performance bench harness (audit #40, DG-3): drives the `pipeline.rs` bench
+# below. Dev-only + informational (see the workspace-dep comment); `harness =
+# false` on the `[[bench]]` target hands `main` to criterion instead of libtest.
+criterion = { workspace = true }
 # Dev-only dependency edge for the #[ignore] GPU re-capture tests, which
 # migrate off the deprecated `render::golden::perceptual_diff` (L1) onto
 # `buiy_verify::metric::compare` (metric.md § Migration). This forms a
@@ -78,3 +82,11 @@ proptest = { workspace = true }
 # production `cargo build -p buiy_core` is unaffected, and it adds no
 # `cargo deny` surface. Confined to #[cfg(test)].
 buiy_verify = { path = "../buiy_verify" }
+
+# Shape→layout→extract performance bench (audit #40, DG-3). INFORMATIONAL: run
+# via `cargo bench -p buiy_core --bench pipeline`; NOT a CI pass/fail gate (a
+# regression in the timing NUMBER must never fail the build). `harness = false`
+# hands `fn main` to criterion (the dev-dep above) instead of libtest.
+[[bench]]
+name = "pipeline"
+harness = false

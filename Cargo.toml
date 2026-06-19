@@ -89,6 +89,16 @@ toml = "0.8"
 # base64-inline the actual/baseline/diff PNGs so the report is offline-first —
 # openable straight from CI artifacts, no external assets, no SaaS. MIT/Apache-2.0.
 base64 = "0.22"
+# Performance bench harness (audit #40, DG-3): the ecosystem-standard
+# statistical micro-benchmark runner for the shape→layout→extract pipeline
+# bench (`crates/buiy_core/benches/`). DEV-ONLY (a `[[bench]]` dependency, never
+# in the production graph); INFORMATIONAL (run via `cargo bench`, NOT a CI
+# pass/fail gate — a slower NUMBER must never fail the build). Default features
+# OFF: the default `rayon`/`plotters` html-report machinery is unused here (we
+# want a fast-compiling, low-dep harness for a non-gating signal), so only the
+# `cargo_bench_support` feature is kept (the `cargo bench` integration). MIT/
+# Apache-2.0; `cargo deny check` gates the add.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 # --- Build profiles --------------------------------------------------------
 # Disable debuginfo for the dev + test profiles. The bulk of CI target-dir disk
