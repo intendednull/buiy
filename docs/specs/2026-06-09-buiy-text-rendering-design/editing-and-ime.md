@@ -393,6 +393,13 @@ editor's (display) Buffer** at the caret as a metadata-marked `Attrs` span;
 each subsequent `Preedit` replaces the span; `Preedit` with empty value, or
 `Ime::Disabled`, or focus loss removes it. **F**
 
+**Addendum (landed as a follow-up after E5/E6):** the display-splice now
+**replaces an active selection** — when a composition starts over a
+non-collapsed selection, the selection is deleted first and the preedit is
+spliced at the now-collapsed caret (the platform/web replace-selection
+convention). See § 6.2 "Compose-over-selection" for the undo/`TextChanged`
+contract.
+
 **Rationale.** Web parity requires preedit to **reflow** the line: composing
 CJK mid-paragraph shifts following text and can re-wrap, and the preedit-cursor
 F row is only correct when the preedit participates in real shaping.
@@ -416,6 +423,35 @@ inserts the committed text inside a single `start_change`/`finish_change` pair
 span. The preedit underline styles the marked span (§ 5); the in-preedit cursor
 from `Preedit.cursor` (byte range into the preedit string) renders as a caret
 inside the span. **F**
+
+**Compose-over-selection (landed as a follow-up after E5/E6).** When a
+composition *starts* over a **non-collapsed selection**, the selection is
+deleted first (platform/web replace-selection convention, § 6.1). The
+selection-delete is folded into the SAME `GroupKind::Composition` unit as the
+eventual commit: `caret_before`/`selection_before` are captured **pre-delete**,
+the stashed delete `Change` is prepended to the commit-insert items, and the
+combined `Change` is recorded as ONE unit — so a single Undo restores BOTH the
+deleted text and the committed text (and the redo replays both). The stash lives
+on a dedicated `TextEditState::compose_delete` field (NOT on `PreeditSpan`, which
+derives `Eq` — `cosmic_text::Change` is not `Eq`). It is captured by running
+`delete_selection()` inside a throwaway `start_change`/`finish_change` pair at the
+FIRST splice of a composition, so invariant (a) still holds for the splice itself
+(the delete `Change` is stashed, never pushed onto the undo stack until commit).
+
+This is the **one exception** to invariant (b)'s "value reads exclude preedit /
+§ 11 never preedit": the pre-splice selection-delete IS a genuine logical value
+change (it removed user text), so it emits `TextChanged`. A **cancel** (empty
+`Preedit` / `Ime::Disabled` / `Escape`) over a stashed compose-delete
+**reverse-applies** the stash (re-inserts the deleted text, restores the
+selection) and clears it — so cancel returns the value to its pre-composition
+state and fires `TextChanged` again (the symmetric value transition). The
+unselected-caret path carries no stash and is **byte-identical** to E5: no
+delete, no extra `TextChanged`. *Approach rejected:* recording the delete
+immediately as its own Composition unit and coalescing the commit into it —
+`GroupKind::Composition` never coalesces (§ 6.2c, `undo.rs`), and the intervening
+preedit splices break caret-adjacency anyway, so it would yield two undo units or
+require weakening the never-coalesce rule. Stashing on the live composition and
+folding at commit keeps the one-unit guarantee with no rule change.
 
 ### § 6.3 Popup positioning through Bevy 0.18
 
@@ -657,11 +693,21 @@ primary's all-runs scan over the multiple `LayoutRun`s a wrapped logical line
 emits (continue past a non-owning wrap run; only conclude `None` after the last),
 rather than inspecting just the first `line_i`-matching run.
 
+**Landed as a follow-up after E5/E6:** **compose-over-selection** (§§ 6.1, 6.2).
+As built: when a composition starts over a non-collapsed selection the selection
+is deleted first (replace-selection convention, § 6.1), and the
+selection-delete is folded into the SAME `GroupKind::Composition` undo unit as
+the commit (`caret_before`/`selection_before` captured pre-delete) — one undo
+restores BOTH the deleted text and the committed text, one redo replays both.
+`TextChanged` fires on the delete (a genuine value change — the documented one
+exception to "never preedit") and again on a cancel-restore (empty `Preedit` /
+`Ime::Disabled` / `Escape` reverse-applies the stashed delete). The plain-text
+unselected-caret path is byte-identical to E5 (no delete, no extra
+`TextChanged`). Implemented in `text/edit/ime.rs` + `state.rs`
+(`compose_delete` stash); tested in `text_ime_ops.rs` + `text_ime_system.rs`.
+
 **Deferred within F (named, next slice, not dropped):** multi-range selection
-*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7);
-**compose-over-selection** (§§ 6.1, 6.2 — E5 splices the preedit at the caret
-and does not replace an active selection first;
-[follow-ups.md § Text editing — compose-over-selection](../../plans/follow-ups.md)).
+*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7).
 **Out (E-tier):** rich-text edit surface, document virtualization.
 
 ---

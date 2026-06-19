@@ -83,6 +83,188 @@ fn drain_count<M: bevy::ecs::message::Message>(app: &mut App) -> usize {
         .count()
 }
 
+/// A focused editor whose buffer is SEEDED with `text` through the real
+/// TextSync seam (spawn with `Text(text)`, settle the N→N+1 latency), then with
+/// `[from, to)` (byte indices on line 0) SELECTED via the editor's own motion
+/// path. The selection is established AFTER TextSync settles, so the
+/// `Added<TextBuffer>` lazy re-apply (sync.rs:188) cannot clobber it. This is
+/// the only way to drive a real non-collapsed selection into the system tests.
+fn app_with_selection(text: &str, from: usize, to: usize) -> (App, Entity) {
+    use buiy_core::text::SharedFontSystem;
+    use buiy_core::text::edit::EditCommand;
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(buiy_core::CorePlugin);
+    app.add_plugins(buiy_core::layout::LayoutPlugin);
+    app.add_plugins(buiy_core::text::BuiyTextPlugin::default());
+    app.add_plugins(buiy_core::focus::FocusPlugin);
+    app.add_message::<KeyboardInput>();
+    app.add_message::<Ime>();
+    app.insert_resource(ButtonInput::<KeyCode>::default());
+    app.insert_resource(Clipboard(Box::new(MemClipboard::default())));
+    let editor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(300.0).height_px(60.0),
+            Text(text.to_string()),
+            TextEditState::new(Metrics::new(16.0, 19.2)),
+        ))
+        .id();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(editor);
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
+    // Settle TextSync into the editor buffer (N→N+1): the authored `Text`
+    // routes into the editor-owned buffer on the second update.
+    app.update();
+    app.update();
+
+    // Now select [from, to) via the editor's BiDi-correct motion path.
+    let fonts = app.world().resource::<SharedFontSystem>().clone();
+    {
+        let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        let mut fs = fonts.lock();
+        state.apply(
+            &mut fs,
+            EditCommand::Motion(cosmic_text::Motion::Home, false),
+            false,
+            false,
+        );
+        for _ in 0..from {
+            state.apply(
+                &mut fs,
+                EditCommand::Motion(cosmic_text::Motion::Right, false),
+                false,
+                false,
+            );
+        }
+        for _ in from..to {
+            state.apply(
+                &mut fs,
+                EditCommand::Motion(cosmic_text::Motion::Right, true),
+                false,
+                false,
+            );
+        }
+        assert!(
+            !state.mirror_selection().is_collapsed(),
+            "selection established before composition"
+        );
+    }
+    (app, editor)
+}
+
+/// Compose-over-selection at the system level: the first non-empty Preedit
+/// over an active selection DELETES the selection — a genuine value change, so
+/// `TextChanged` fires (contrast the unselected preedit, which fires 0). The
+/// preedit is excluded from the value, so the value reads as the post-delete
+/// remainder.
+#[test]
+fn compose_over_selection_delete_fires_textchanged() {
+    use buiy_core::text::edit::TextChanged;
+    let (mut app, editor) = app_with_selection("abc", 1, 3); // select "bc"
+
+    send_preedit(&mut app, "ni", None);
+    app.update();
+
+    assert_eq!(
+        count::<TextChanged>(&app),
+        1,
+        "the compose-over-selection delete is a genuine value change"
+    );
+    assert_eq!(
+        value(&app, editor),
+        "a",
+        "selection deleted, preedit excluded"
+    );
+    assert!(
+        app.world()
+            .get::<TextEditState>(editor)
+            .unwrap()
+            .has_preedit()
+    );
+}
+
+/// Compose-over-selection cancel (empty Preedit): the stashed delete is
+/// reverse-applied so the value returns to the original "abc", and a SECOND
+/// `TextChanged` fires (the symmetric value transition).
+#[test]
+fn compose_over_selection_cancel_restores_selection() {
+    use buiy_core::text::edit::TextChanged;
+    let (mut app, editor) = app_with_selection("abc", 1, 3);
+
+    send_preedit(&mut app, "ni", None);
+    app.update();
+    assert_eq!(value(&app, editor), "a");
+    // Drain the first TextChanged so the next frame's count is clean.
+    let _ = drain_count::<TextChanged>(&mut app);
+
+    send_preedit(&mut app, "", None); // cancel
+    app.update();
+    assert_eq!(
+        value(&app, editor),
+        "abc",
+        "cancel reverse-applies the compose-delete"
+    );
+    assert!(
+        !app.world()
+            .get::<TextEditState>(editor)
+            .unwrap()
+            .has_preedit()
+    );
+    assert_eq!(
+        drain_count::<TextChanged>(&mut app),
+        1,
+        "the restore is a genuine value change"
+    );
+}
+
+/// Compose-over-selection cancel via `Ime::Disabled`: same restore + TextChanged.
+#[test]
+fn compose_over_selection_disabled_restores_selection() {
+    use buiy_core::text::edit::TextChanged;
+    let (mut app, editor) = app_with_selection("abc", 1, 3);
+
+    send_preedit(&mut app, "ni", None);
+    app.update();
+    let _ = drain_count::<TextChanged>(&mut app);
+
+    app.world_mut().write_message(Ime::Disabled {
+        window: Entity::PLACEHOLDER,
+    });
+    app.update();
+    assert_eq!(
+        value(&app, editor),
+        "abc",
+        "Disabled cancel restores the value"
+    );
+    assert_eq!(
+        drain_count::<TextChanged>(&mut app),
+        1,
+        "the restore fires TextChanged"
+    );
+}
+
+/// Compose-over-selection commit through the system: ONE undo unit; one Undo
+/// (driven via the keyboard Ctrl+Z path) restores both the deleted selection
+/// and the committed text.
+#[test]
+fn compose_over_selection_commit_one_unit_system() {
+    let (mut app, editor) = app_with_selection("abc", 1, 3);
+    let undo_before = undo_depth(&app, editor);
+
+    send_preedit(&mut app, "ni", None);
+    app.update();
+    send_commit(&mut app, "你");
+    app.update();
+
+    assert_eq!(value(&app, editor), "a你");
+    assert_eq!(
+        undo_depth(&app, editor),
+        undo_before + 1,
+        "delete + commit = ONE unit"
+    );
+}
+
 /// Invariant (a) + (b) at the system level: during composition the undo stack
 /// is unchanged and the logical value excludes the preedit.
 #[test]

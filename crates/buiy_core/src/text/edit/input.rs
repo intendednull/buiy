@@ -186,12 +186,20 @@ impl TextEditState {
                 // never in `value()`), so flag `reshaped` for the M1 re-measure
                 // without emitting `TextChanged`.
                 let cleared = self.has_preedit();
-                if cleared {
-                    self.remove_preedit(font_system);
-                }
+                // `remove_preedit` reverse-applies any compose-over-selection
+                // delete (re-inserting the deleted text): that IS a logical
+                // value change, so route it to `value_changed` → `TextChanged`.
+                // The plain-preedit cancel restores nothing (returns false) and
+                // only `reshaped` fires (buffer changed, value did not).
+                let restored = if cleared {
+                    self.remove_preedit(font_system)
+                } else {
+                    false
+                };
                 self.editor.action(font_system, Action::Escape);
                 EditOutcome {
                     reshaped: cleared,
+                    value_changed: restored,
                     ..Default::default()
                 }
             }
@@ -336,7 +344,11 @@ impl TextEditState {
     /// Restore the caret + the editor's selection after an undo/redo. The
     /// editor's `Selection` is the authoritative one E3 mirrors OUT next pass;
     /// we set both the cursor and (for a non-collapsed range) the anchor.
-    fn restore_cursor(&mut self, caret: Cursor, selection: super::selection::TextSelection) {
+    pub(crate) fn restore_cursor(
+        &mut self,
+        caret: Cursor,
+        selection: super::selection::TextSelection,
+    ) {
         self.editor.set_cursor(caret);
         if selection.is_collapsed() {
             self.editor.set_selection(Selection::None);
