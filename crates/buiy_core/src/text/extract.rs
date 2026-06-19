@@ -832,12 +832,51 @@ pub fn extract_buiy_glyphs(
     }
 }
 
+/// What a rasterized glyph image's `(content, width, height)` triple resolves
+/// to — the PURE decision behind [`resolve_glyph`]. The zero-area guard wins
+/// over every content kind: a glyph with no covered texels emits nothing
+/// regardless of what swash would have produced, so [`classify_glyph_content`]
+/// checks dimensions before the content match. Side effects (the color-emoji
+/// warn-once, the atlas bake) live in `resolve_glyph`; this stays a total,
+/// allocation-free function so the branch table is unit-testable headless.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolveAction {
+    /// `SwashContent::Mask` with nonzero area: bake the coverage bitmap into
+    /// the atlas and cache the bearing (§ 2 — the only emitting arm).
+    Bake,
+    /// `SwashContent::Color` with nonzero area: skip + warn-once (§ 9 — the
+    /// C-tier IconInstance/ColorRgba8 seam, named not built).
+    SkipColorEmoji,
+    /// `SwashContent::SubpixelMask` with nonzero area: skip (the producer
+    /// never requests subpixel-RGB — glyph-pipeline § 5.1).
+    SkipSubpixel,
+    /// Zero placement width or height, ANY content: zero-coverage
+    /// (whitespace) emits no instance, inserts nothing (§ 2).
+    SkipZeroArea,
+}
+
+/// The pure content→action decision: the zero-area guard first (it dominates
+/// every content kind), then the `SwashContent` match. Total and side-effect
+/// free — `resolve_glyph` owns the warn-once and the atlas bake.
+fn classify_glyph_content(content: SwashContent, width: u32, height: u32) -> ResolveAction {
+    if width == 0 || height == 0 {
+        return ResolveAction::SkipZeroArea;
+    }
+    match content {
+        SwashContent::Mask => ResolveAction::Bake,
+        SwashContent::Color => ResolveAction::SkipColorEmoji,
+        SwashContent::SubpixelMask => ResolveAction::SkipSubpixel,
+    }
+}
+
 /// Residency + bearing for one glyph key. A hit with a cached bearing is
 /// lock-free; otherwise rasterize via `SwashCache::get_image_uncached`
 /// (lock site #3 — one cache, not two: the atlas is the only bitmap cache,
 /// § 3.2) and insert. `None` = emit nothing, insert nothing: zero-coverage
 /// (whitespace) or `SwashContent::Color` (§ 9: skip + warn-once — the
-/// C-tier IconInstance/ColorRgba8 seam, named not built).
+/// C-tier IconInstance/ColorRgba8 seam, named not built). The branch table is
+/// factored into the pure [`classify_glyph_content`]; only the side effects
+/// (warn-once, atlas bake) stay here.
 fn resolve_glyph<'a>(
     atlas: &mut BuiyAtlas,
     meta: &mut GlyphMetaCache,
@@ -856,11 +895,8 @@ fn resolve_glyph<'a>(
         image.content != SwashContent::SubpixelMask,
         "the producer never requests subpixel-RGB (glyph-pipeline § 5.1)"
     );
-    if image.placement.width == 0 || image.placement.height == 0 {
-        return None; // § 2: zero-coverage glyphs emit no instance, insert nothing
-    }
-    match image.content {
-        SwashContent::Mask => {
+    match classify_glyph_content(image.content, image.placement.width, image.placement.height) {
+        ResolveAction::Bake => {
             let bearing = GlyphBearing {
                 left: image.placement.left,
                 top: image.placement.top,
@@ -877,11 +913,13 @@ fn resolve_glyph<'a>(
             meta.0.insert(key.clone(), bearing);
             Some((entry, bearing))
         }
-        SwashContent::Color => {
+        ResolveAction::SkipColorEmoji => {
             warn_once_color_emoji_skipped();
             None
         }
-        SwashContent::SubpixelMask => None,
+        // § 2: zero-coverage glyphs and the never-requested subpixel-RGB path
+        // emit no instance, insert nothing.
+        ResolveAction::SkipSubpixel | ResolveAction::SkipZeroArea => None,
     }
 }
 
@@ -1001,5 +1039,75 @@ fn warn_once_page_overflow() {
              binds page 0 only — those glyphs will sample wrong texels. Time \
              to build the multi-page bind (glyph-pipeline § 11.1; warned once)"
         );
+    }
+}
+
+#[cfg(test)]
+mod classify_glyph_content_tests {
+    //! T2.11 (#26): the `SwashContent` → `ResolveAction` decision behind
+    //! `resolve_glyph`, unit-tested headless. The only emoji fixture is
+    //! monochrome (`Mask`), so the `Color`/`SubpixelMask`/zero-area arms have
+    //! no end-to-end coverage; a `Mask`↔`Color` swap in the table would
+    //! silently drop or mis-bake glyphs at runtime. These pin every arm,
+    //! including the zero-area guard's precedence over every content kind.
+
+    use super::{ResolveAction, classify_glyph_content};
+    use cosmic_text::SwashContent;
+
+    #[test]
+    fn mask_with_nonzero_area_bakes() {
+        // The only emitting arm: a covered monochrome glyph is baked. A
+        // Mask↔Color swap in the helper turns this into SkipColorEmoji and
+        // fails here (every visible glyph would vanish).
+        assert_eq!(
+            classify_glyph_content(SwashContent::Mask, 4, 6),
+            ResolveAction::Bake
+        );
+    }
+
+    #[test]
+    fn color_with_nonzero_area_skips_as_color_emoji() {
+        // The § 9 skip+warn arm. A Mask↔Color swap turns this into Bake and
+        // fails here (color emoji would be mis-baked as coverage).
+        assert_eq!(
+            classify_glyph_content(SwashContent::Color, 8, 8),
+            ResolveAction::SkipColorEmoji
+        );
+    }
+
+    #[test]
+    fn subpixel_mask_with_nonzero_area_skips_as_subpixel() {
+        assert_eq!(
+            classify_glyph_content(SwashContent::SubpixelMask, 8, 8),
+            ResolveAction::SkipSubpixel
+        );
+    }
+
+    #[test]
+    fn zero_area_skips_regardless_of_content() {
+        // The guard dominates every content kind: zero width OR zero height,
+        // for Mask / Color / SubpixelMask alike, resolves to SkipZeroArea —
+        // never Bake, never the content-specific skip.
+        for content in [
+            SwashContent::Mask,
+            SwashContent::Color,
+            SwashContent::SubpixelMask,
+        ] {
+            assert_eq!(
+                classify_glyph_content(content, 0, 6),
+                ResolveAction::SkipZeroArea,
+                "zero width must skip for {content:?}"
+            );
+            assert_eq!(
+                classify_glyph_content(content, 4, 0),
+                ResolveAction::SkipZeroArea,
+                "zero height must skip for {content:?}"
+            );
+            assert_eq!(
+                classify_glyph_content(content, 0, 0),
+                ResolveAction::SkipZeroArea,
+                "zero width and height must skip for {content:?}"
+            );
+        }
     }
 }
