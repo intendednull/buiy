@@ -61,6 +61,48 @@ fn anchor_basic_positions_below_anchor() {
 }
 
 #[test]
+fn anchor_entity_ref_positions_below_target_without_a_name() {
+    // audit #37, T2.5: all other anchor fixtures use `AnchorRef::Name`. This
+    // is the `AnchorRef::Entity(e)` path — the anchored entity references its
+    // target DIRECTLY by Entity, with NO `anchor_name` on the target and no
+    // registry lookup. Same expected geometry as the Name case proves the
+    // Entity ref resolves through the same resolution math.
+    let mut app = app();
+
+    // Target: a plain 100x50 Node with NO AnchorName (Entity ref only).
+    let target = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(100.0).height_px(50.0)))
+        .id();
+
+    // Anchored: 80x20, placed 10px below the target, referenced by Entity.
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(80.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Entity(target)),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(10.0)),
+                    conditions: vec![TryCondition::FitsInViewport],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+
+    app.update();
+    app.update();
+
+    // target at Taffy (0,0) size 100x50 → anchored at y = 0 + 50 + 10 = 60.
+    let anchored_rl = app.world().get::<ResolvedLayout>(anchored).unwrap();
+    assert_eq!(anchored_rl.position.y, 60.0);
+    // Resolved cleanly via the Entity ref — not broken.
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_none());
+}
+
+#[test]
 fn write_resolved_layout_prefers_anchor_override_over_taffy_position() {
     use buiy_core::layout::PostTaffyPositionOverrides;
     let mut app = app();

@@ -25,9 +25,9 @@ use super::translate::{ContainerSnapshot, StyleView, style_to_taffy};
 use super::tree::LayoutTree;
 use super::types::{
     AnchorErrorKind, AnchorName, AnchorRef, BreakAfter, BreakBefore, ColumnCount, ColumnFill,
-    ContainFlags, ContainerType, ContentVisibility, GridAreas, Inset, Isolation, LayoutWarnOnceKey,
-    Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix, TryCondition,
-    WritingModeKind, ZIndex,
+    ContainFlags, ContainerType, ContentVisibility, GridAreas, GridAutoFlow, Inset, Isolation,
+    LayoutWarnOnceKey, Length, PositionKind, QueryCondition, Sizing, TopLayer, TransformMatrix,
+    TryCondition, WritingModeKind, ZIndex,
 };
 use crate::components::{Node, ResolvedLayout, ResolvedTransform};
 use crate::render::components::{Filter, MixBlendMode, Opacity};
@@ -2228,6 +2228,47 @@ pub(super) fn sync_styles(
                  Declare an explicit width/height.",
                 entity,
             );
+        }
+
+        // subgrid / masonry fallback warns (audit #24). The FALLBACK itself
+        // (Subgrid → Auto, Masonry → Row) is pure in `style_to_taffy`; the
+        // WARN is recorded HERE — where the session-scoped warn resource lives
+        // — exactly like `SizeContainmentZeroed` above and the table/multicol
+        // sub-passes. Only meaningful for grid containers, so gate on
+        // `Display::Grid | InlineGrid` to avoid warning on a plain block box
+        // that happens to carry inert `GridParams` defaults. `item` is the
+        // `NodeQueryItem` tuple: `.1` = `&Display`, `.9` = `&GridParams`.
+        let display = item.1;
+        let grid_params = item.9;
+        if matches!(display, Display::Grid | Display::InlineGrid) {
+            let uses_subgrid = super::translate::tracks_use_subgrid(&grid_params.template_columns)
+                || super::translate::tracks_use_subgrid(&grid_params.template_rows)
+                || super::translate::tracks_use_subgrid(&grid_params.auto_columns)
+                || super::translate::tracks_use_subgrid(&grid_params.auto_rows);
+            if uses_subgrid
+                && warned
+                    .set
+                    .insert(LayoutWarnOnceKey::GridSubgridUnsupported(entity))
+            {
+                bevy::log::warn!(
+                    "Entity {:?} uses TrackSize::Subgrid, which Taffy 0.10 cannot express; \
+                     the track falls back to Auto (flex-and-grid.md § 2.2). This warn fires \
+                     once per (entity, session).",
+                    entity,
+                );
+            }
+            if matches!(grid_params.auto_flow, GridAutoFlow::Masonry)
+                && warned
+                    .set
+                    .insert(LayoutWarnOnceKey::GridMasonryUnsupported(entity))
+            {
+                bevy::log::warn!(
+                    "Entity {:?} uses GridAutoFlow::Masonry, which is CSS-WG flux with no \
+                     Taffy 0.10 support; auto-flow falls back to Row (flex-and-grid.md § 2.4). \
+                     This warn fires once per (entity, session).",
+                    entity,
+                );
+            }
         }
 
         // content-visibility sentinel (spec § 5.2): the per-entity
@@ -5080,6 +5121,297 @@ mod tests {
         let bi = order.iter().position(|&e| e == b).unwrap();
         assert!(bi < ai); // b is the target — comes first
         assert!(dropped.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 6 — anchor PURE-SEAM unit tests (audit #37, T2.5).
+    //
+    // `try_anchored_position` and `try_conditions_pass` are the pure core of
+    // sub-pass 6d, but every existing anchor test drove them only end-to-end
+    // through `app.update()` via `AnchorRef::Name`. These exercise the pure
+    // functions directly (the position math from first principles + each
+    // `TryCondition` branch in isolation), and the `try_conditions_pass`
+    // `FitsInContainer(AnchorRef::Entity(_))` arm — the Entity-ref path that no
+    // integration test reached.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn try_anchored_position_below_places_under_anchor() {
+        // anchor 100x50 at (50,50); anchored 80x20 placed 10px BELOW →
+        // y = anchor.y + anchor.h + 10 = 50 + 50 + 10 = 110; x = anchor.x = 50.
+        let p = try_anchored_position(
+            Vec2::new(50.0, 50.0),
+            Vec2::new(100.0, 50.0),
+            Vec2::new(80.0, 20.0),
+            &Inset::below(Length::Px(10.0)),
+            Vec2::new(1000.0, 1000.0),
+        );
+        assert_eq!(p, Vec2::new(50.0, 110.0));
+    }
+
+    #[test]
+    fn try_anchored_position_above_subtracts_anchored_height() {
+        // anchored placed ABOVE → anchored.bottom = anchor.top - dist, so
+        // anchored.top = anchor.y - dist - anchored.h = 50 - 10 - 20 = 20.
+        let p = try_anchored_position(
+            Vec2::new(50.0, 50.0),
+            Vec2::new(100.0, 50.0),
+            Vec2::new(80.0, 20.0),
+            &Inset::above(Length::Px(10.0)),
+            Vec2::new(1000.0, 1000.0),
+        );
+        assert_eq!(p, Vec2::new(50.0, 20.0));
+    }
+
+    #[test]
+    fn try_anchored_position_right_and_left_of() {
+        let anchor_pos = Vec2::new(50.0, 50.0);
+        let anchor_size = Vec2::new(100.0, 50.0);
+        let anchored_size = Vec2::new(80.0, 20.0);
+        let vp = Vec2::new(1000.0, 1000.0);
+        // `Inset::right_of` places anchored to the RIGHT (sets `left`):
+        // x = anchor.x + anchor.w + dist = 50 + 100 + 10 = 160.
+        let right = try_anchored_position(
+            anchor_pos,
+            anchor_size,
+            anchored_size,
+            &Inset::right_of(Length::Px(10.0)),
+            vp,
+        );
+        assert_eq!(
+            right.x, 160.0,
+            "right_of inset places anchored to the RIGHT"
+        );
+        // `Inset::left_of` places anchored to the LEFT (sets `right`):
+        // anchored.right = anchor.left - dist → x = anchor.x - dist -
+        // anchored.w = 50 - 10 - 80 = -40.
+        let left = try_anchored_position(
+            anchor_pos,
+            anchor_size,
+            anchored_size,
+            &Inset::left_of(Length::Px(10.0)),
+            vp,
+        );
+        assert_eq!(left.x, -40.0, "left_of inset places anchored to the LEFT");
+    }
+
+    #[test]
+    fn try_anchored_position_zero_inset_aligns_top_left() {
+        // top==bottom==0 → anchored.top = anchor.top; left==right==0 →
+        // anchored.left = anchor.left (the aligned default).
+        let p = try_anchored_position(
+            Vec2::new(50.0, 60.0),
+            Vec2::new(100.0, 50.0),
+            Vec2::new(80.0, 20.0),
+            &Inset::default(),
+            Vec2::new(1000.0, 1000.0),
+        );
+        assert_eq!(p, Vec2::new(50.0, 60.0));
+    }
+
+    #[test]
+    fn try_anchored_position_vertical_precedence_bottom_over_top() {
+        // BOTH `top` and `bottom` are non-zero (conflicting requests). The
+        // documented precedence is `bottom > 0` WINS over `top > 0`, so the
+        // anchored box is placed ABOVE the anchor (using the `bottom` branch):
+        //   y = anchor.y - bottom - anchored.h = 50 - 5 - 20 = 25.
+        // (Had `top` won, y would be anchor.y + anchor.h + top = 50+50+8 = 108.)
+        // No `Inset` builder sets two sides, so build the struct directly.
+        let inset = Inset {
+            top: Sizing::Length(Length::Px(8.0)),
+            bottom: Sizing::Length(Length::Px(5.0)),
+            ..Default::default()
+        };
+        let p = try_anchored_position(
+            Vec2::new(50.0, 50.0),
+            Vec2::new(100.0, 50.0),
+            Vec2::new(80.0, 20.0),
+            &inset,
+            Vec2::new(1000.0, 1000.0),
+        );
+        assert_eq!(
+            p.y, 25.0,
+            "bottom inset wins over a conflicting top inset (places ABOVE)"
+        );
+    }
+
+    #[test]
+    fn try_anchored_position_horizontal_precedence_right_over_left() {
+        // BOTH `left` and `right` are non-zero (conflicting requests). The
+        // documented precedence is `right > 0` WINS over `left > 0`, so the
+        // anchored box is placed to the LEFT of the anchor (using the `right`
+        // branch):
+        //   x = anchor.x - right - anchored.w = 50 - 5 - 80 = -35.
+        // (Had `left` won, x would be anchor.x + anchor.w + left = 50+100+8 = 158.)
+        let inset = Inset {
+            left: Sizing::Length(Length::Px(8.0)),
+            right: Sizing::Length(Length::Px(5.0)),
+            ..Default::default()
+        };
+        let p = try_anchored_position(
+            Vec2::new(50.0, 50.0),
+            Vec2::new(100.0, 50.0),
+            Vec2::new(80.0, 20.0),
+            &inset,
+            Vec2::new(1000.0, 1000.0),
+        );
+        assert_eq!(
+            p.x, -35.0,
+            "right inset wins over a conflicting left inset (places to the LEFT)"
+        );
+    }
+
+    /// Build a `Query<&Display>` over `world` via a `SystemState` and run
+    /// `body` with the live query, so the pure `try_conditions_pass` branches
+    /// can be exercised directly (the `tree` / `reg` args those branches need
+    /// are captured by `body` from the caller's scope).
+    fn with_display_query<R>(world: &mut World, body: impl FnOnce(&Query<&Display>) -> R) -> R {
+        let mut state: bevy::ecs::system::SystemState<Query<&Display>> =
+            bevy::ecs::system::SystemState::new(world);
+        let query = state.get(world);
+        body(&query)
+    }
+
+    #[test]
+    fn try_conditions_fits_in_viewport_branch() {
+        let mut world = World::new();
+        let tree = LayoutTree::default();
+        let reg = AnchorNameRegistry::default();
+        let vp = Vec2::new(200.0, 200.0);
+        with_display_query(&mut world, |dq| {
+            // Inside the viewport → passes.
+            assert!(try_conditions_pass(
+                &[TryCondition::FitsInViewport],
+                (Vec2::new(10.0, 10.0), Vec2::new(50.0, 50.0)),
+                (Vec2::ZERO, Vec2::ZERO),
+                vp,
+                &tree,
+                &reg,
+                dq,
+            ));
+            // Overflows the bottom edge (y + h = 210 > 200) → fails.
+            assert!(!try_conditions_pass(
+                &[TryCondition::FitsInViewport],
+                (Vec2::new(10.0, 180.0), Vec2::new(50.0, 30.0)),
+                (Vec2::ZERO, Vec2::ZERO),
+                vp,
+                &tree,
+                &reg,
+                dq,
+            ));
+            // Negative origin → fails.
+            assert!(!try_conditions_pass(
+                &[TryCondition::FitsInViewport],
+                (Vec2::new(-5.0, 10.0), Vec2::new(50.0, 50.0)),
+                (Vec2::ZERO, Vec2::ZERO),
+                vp,
+                &tree,
+                &reg,
+                dq,
+            ));
+        });
+    }
+
+    #[test]
+    fn try_conditions_anchor_visible_branch() {
+        let mut world = World::new();
+        let tree = LayoutTree::default();
+        let reg = AnchorNameRegistry::default();
+        let vp = Vec2::new(200.0, 200.0);
+        with_display_query(&mut world, |dq| {
+            // Anchor rect intersects the viewport → passes.
+            assert!(try_conditions_pass(
+                &[TryCondition::AnchorVisible],
+                (Vec2::ZERO, Vec2::ZERO),
+                (Vec2::new(10.0, 10.0), Vec2::new(20.0, 20.0)),
+                vp,
+                &tree,
+                &reg,
+                dq,
+            ));
+            // Anchor fully left of the viewport (x + w = 0) → no intersection.
+            assert!(!try_conditions_pass(
+                &[TryCondition::AnchorVisible],
+                (Vec2::ZERO, Vec2::ZERO),
+                (Vec2::new(-50.0, 10.0), Vec2::new(50.0, 20.0)),
+                vp,
+                &tree,
+                &reg,
+                dq,
+            ));
+        });
+    }
+
+    #[test]
+    fn try_conditions_fits_in_container_via_entity_ref() {
+        // The `AnchorRef::Entity(e)` path of `FitsInContainer` — resolve the
+        // container DIRECTLY by entity (no name registry), read its Taffy box,
+        // and check containment. This is the Entity-ref arm no integration
+        // test reached.
+        let mut world = World::new();
+        let container = world.spawn(Display::Block).id();
+
+        // Real LayoutTree with the container at (0,0) size 100x100.
+        let mut tree = LayoutTree::default();
+        let node = tree
+            .tree
+            .new_leaf(taffy::Style {
+                size: taffy::Size {
+                    width: taffy::Dimension::length(100.0),
+                    height: taffy::Dimension::length(100.0),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        tree.tree
+            .compute_layout(node, taffy::Size::max_content())
+            .unwrap();
+        tree.by_entity.insert(container, node);
+
+        let reg = AnchorNameRegistry::default();
+        let vp = Vec2::new(500.0, 500.0);
+        with_display_query(&mut world, |dq| {
+            // Anchored 20x20 at (10,10) fits inside the 100x100 container.
+            assert!(
+                try_conditions_pass(
+                    &[TryCondition::FitsInContainer(AnchorRef::Entity(container))],
+                    (Vec2::new(10.0, 10.0), Vec2::new(20.0, 20.0)),
+                    (Vec2::ZERO, Vec2::ZERO),
+                    vp,
+                    &tree,
+                    &reg,
+                    dq,
+                ),
+                "anchored box inside the entity-referenced container passes"
+            );
+            // Anchored box overflows the container (x + w = 110 > 100) → fails.
+            assert!(
+                !try_conditions_pass(
+                    &[TryCondition::FitsInContainer(AnchorRef::Entity(container))],
+                    (Vec2::new(90.0, 10.0), Vec2::new(20.0, 20.0)),
+                    (Vec2::ZERO, Vec2::ZERO),
+                    vp,
+                    &tree,
+                    &reg,
+                    dq,
+                ),
+                "anchored box overflowing the entity-referenced container fails"
+            );
+            // An UNKNOWN entity (not in the tree) → fails (no resolvable box).
+            let missing = bevy::prelude::Entity::from_raw_u32(9999).unwrap();
+            assert!(
+                !try_conditions_pass(
+                    &[TryCondition::FitsInContainer(AnchorRef::Entity(missing))],
+                    (Vec2::new(10.0, 10.0), Vec2::new(20.0, 20.0)),
+                    (Vec2::ZERO, Vec2::ZERO),
+                    vp,
+                    &tree,
+                    &reg,
+                    dq,
+                ),
+                "an entity ref with no Taffy box fails the condition"
+            );
+        });
     }
 
     // -----------------------------------------------------------------

@@ -1068,6 +1068,26 @@ pub enum LayoutWarnOnceKey {
     /// CSS allows one — extras fall back to normal stacking (spec § 4.2).
     /// Session-wide (no `Entity`): the condition is a property of the set.
     MultipleFullscreenTopLayer,
+
+    /// A grid container's `template_columns` / `template_rows` contains
+    /// `TrackSize::Subgrid`. Taffy 0.10 has no subgrid support, so the track
+    /// falls back to `Auto`. Warns once per (entity, session).
+    ///
+    /// Mirrors the table/multicol warn-routing (`TableSubfeatureUnsupported`,
+    /// `MulticolFragmentationDeferred`): the substitution itself is pure
+    /// (`track_to_sizing` in `translate.rs`); only the WARN is recorded here so
+    /// it is observable in `LayoutWarnedOnceSession` and testable (audit #24).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.2.
+    GridSubgridUnsupported(Entity),
+
+    /// A grid container's `auto_flow` is `GridAutoFlow::Masonry`. CSS Masonry
+    /// is in CSS-WG flux and Taffy 0.10 has no support, so it falls back to
+    /// `Row`. Warns once per (entity, session). Same routing rationale as
+    /// `GridSubgridUnsupported` (audit #24).
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 2.4.
+    GridMasonryUnsupported(Entity),
 }
 
 // ============================================================
