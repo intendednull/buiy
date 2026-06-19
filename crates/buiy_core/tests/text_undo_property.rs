@@ -10,10 +10,14 @@ use cosmic_text::{Metrics, Motion};
 use proptest::prelude::*;
 use std::time::Duration;
 
-/// One scripted edit. We restrict to the mutating + motion verbs the property
-/// is about (insert/backspace/delete/enter/left/right) — clipboard/undo are
-/// not part of the "undo-all is identity" invariant (Undo inside the script
-/// would be testing the test).
+/// One scripted edit. We restrict to the mutating + motion + selection verbs
+/// the property is about (insert/backspace/delete/enter/left/right + the
+/// EXTENDING motions and SelectAll) — clipboard/undo are not part of the
+/// "undo-all is identity" invariant (Undo inside the script would be testing
+/// the test). The extending motions (`Motion(_, true)`) and `SelectAll` make
+/// the generator produce LIVE SELECTIONS, so a subsequent mutation captures a
+/// non-collapsed `selection_before` and undo replays `restore_cursor`'s
+/// non-collapsed branch (`input.rs:343-347`) — previously never exercised (#19).
 #[derive(Debug, Clone)]
 enum ScriptOp {
     Type(char),
@@ -22,6 +26,12 @@ enum ScriptOp {
     Enter,
     Left,
     Right,
+    /// Shift+Left — extend the selection one grapheme left (anchor held).
+    ExtendLeft,
+    /// Shift+Right — extend the selection one grapheme right.
+    ExtendRight,
+    /// Ctrl/Cmd-A — select the whole buffer.
+    SelectAll,
 }
 
 fn op_strategy() -> impl Strategy<Value = ScriptOp> {
@@ -33,6 +43,9 @@ fn op_strategy() -> impl Strategy<Value = ScriptOp> {
         1 => Just(ScriptOp::Enter),
         1 => Just(ScriptOp::Left),
         1 => Just(ScriptOp::Right),
+        1 => Just(ScriptOp::ExtendLeft),
+        1 => Just(ScriptOp::ExtendRight),
+        1 => Just(ScriptOp::SelectAll),
     ]
 }
 
@@ -58,6 +71,11 @@ fn apply_op(
         ScriptOp::Enter => EditCommand::Enter,
         ScriptOp::Left => EditCommand::Motion(Motion::Left, false),
         ScriptOp::Right => EditCommand::Motion(Motion::Right, false),
+        // `extend = true` mirrors the Shift+arrow lowering (input.rs:154-164):
+        // hold the anchor, move the active end — a live selection.
+        ScriptOp::ExtendLeft => EditCommand::Motion(Motion::Left, true),
+        ScriptOp::ExtendRight => EditCommand::Motion(Motion::Right, true),
+        ScriptOp::SelectAll => EditCommand::SelectAll,
     };
     state.apply_tracked(fs, cmd, &mut ctx);
 }
@@ -134,5 +152,72 @@ proptest! {
             t += 50;
         }
         prop_assert_eq!(state.value(), final_value, "redo-all returns to the final value");
+    }
+
+    /// A live SELECTION round-trips through undo/redo (exercises
+    /// `restore_cursor`'s non-collapsed branch, `input.rs:343-347` — #19).
+    ///
+    /// Type a non-empty string, SelectAll to make a non-collapsed selection,
+    /// then replace it with a typed char (the mutation captures the full
+    /// selection as `selection_before`). Undo must restore BOTH the value AND
+    /// the non-collapsed selection (anchor + active), not just a collapsed
+    /// caret; redo must restore the collapsed post-replace caret. A regression
+    /// that dropped the anchor (set only the cursor) would collapse the
+    /// restored selection and fail the anchor assertion.
+    #[test]
+    fn a_selection_round_trips_through_undo_and_redo(
+        seed in prop::collection::vec(prop::char::range('a', 'z'), 1..12)
+    ) {
+        let fonts = SharedFontSystem::new();
+        let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+        let mut fs = fonts.lock();
+        let mut clip = MemClipboard::default();
+
+        let text: String = seed.into_iter().collect();
+        let mut ctx0 = EditContext { single_line: false, read_only: false, now: Duration::from_millis(0), clipboard: &mut clip };
+        state.apply_tracked(&mut fs, EditCommand::Insert(text.clone()), &mut ctx0);
+
+        // SelectAll → a non-collapsed selection spanning the whole buffer.
+        let mut ctx1 = EditContext { single_line: false, read_only: false, now: Duration::from_millis(100), clipboard: &mut clip };
+        state.apply_tracked(&mut fs, EditCommand::SelectAll, &mut ctx1);
+        let selected = state.mirror_selection();
+        prop_assert!(!selected.is_collapsed(), "SelectAll made a live selection");
+        let anchor = selected.primary.anchor;
+        let active = selected.primary.active;
+
+        // Replace the whole selection by typing — captures `selection_before`.
+        let mut ctx2 = EditContext { single_line: false, read_only: false, now: Duration::from_millis(200), clipboard: &mut clip };
+        state.apply_tracked(&mut fs, EditCommand::Insert("Z".into()), &mut ctx2);
+        prop_assert_eq!(state.value(), "Z", "the selection was replaced");
+        let after_caret = state.caret();
+
+        // Undo the replacement: value AND the non-collapsed selection restored.
+        let mut ctx3 = EditContext { single_line: false, read_only: false, now: Duration::from_millis(100_000), clipboard: &mut clip };
+        state.apply_tracked(&mut fs, EditCommand::Undo, &mut ctx3);
+        prop_assert_eq!(state.value(), text.clone(), "undo restored the text");
+        let restored = state.mirror_selection();
+        prop_assert!(!restored.is_collapsed(), "the non-collapsed selection came back (not a bare caret)");
+        prop_assert_eq!(
+            (restored.primary.anchor.line, restored.primary.anchor.index),
+            (anchor.line, anchor.index),
+            "anchor restored (the non-collapsed restore_cursor branch set it)"
+        );
+        prop_assert_eq!(
+            (restored.primary.active.line, restored.primary.active.index),
+            (active.line, active.index),
+            "active end restored"
+        );
+
+        // Redo the replacement: back to "Z" with the collapsed post-replace caret.
+        let mut ctx4 = EditContext { single_line: false, read_only: false, now: Duration::from_millis(100_100), clipboard: &mut clip };
+        state.apply_tracked(&mut fs, EditCommand::Redo, &mut ctx4);
+        prop_assert_eq!(state.value(), "Z", "redo reapplied the replacement");
+        let redo_caret = state.caret();
+        prop_assert_eq!(
+            (redo_caret.line, redo_caret.index),
+            (after_caret.line, after_caret.index),
+            "redo restored the collapsed post-replace caret"
+        );
+        prop_assert!(state.mirror_selection().is_collapsed(), "post-redo caret is collapsed");
     }
 }

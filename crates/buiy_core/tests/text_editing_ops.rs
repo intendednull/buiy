@@ -8,8 +8,9 @@ use buiy_core::text::SharedFontSystem;
 use buiy_core::text::edit::{EditCommand, TextEditState};
 use cosmic_text::{Metrics, Motion};
 
-/// Inserting characters grows the logical value; backspace shrinks it
-/// grapheme-correctly (inherited from `Action::Backspace`).
+/// Inserting characters grows the logical value; backspace shrinks it by one
+/// grapheme cluster (the `backspace_grapheme` lowering — NOT cosmic's
+/// code-point-only `Action::Backspace`; see the ZWJ/combining tests below).
 #[test]
 fn insert_and_backspace_change_the_value() {
     let fonts = SharedFontSystem::new();
@@ -24,6 +25,111 @@ fn insert_and_backspace_change_the_value() {
     let out = state.apply(&mut fs, EditCommand::Backspace, false, false);
     assert!(out.value_changed);
     assert_eq!(state.value(), "h");
+}
+
+/// Load the committed emoji fixture font (`NotoEmoji-emoji.ttf`) into a fresh
+/// `FontSystem` so an emoji-ZWJ sequence shapes against real glyphs — mirroring
+/// production. The grapheme-cluster boundary logic is font-INDEPENDENT (it reads
+/// the raw buffer text via `unicode-segmentation`), but registering the face
+/// keeps the test exercising the same shaped-buffer path the engine always does.
+fn emoji_font_system() -> SharedFontSystem {
+    let fonts = SharedFontSystem::new();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fonts/NotoEmoji-emoji.ttf");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!("emoji fixture font missing ({e}); run tools/fonts/subset_fixture_fonts.sh")
+    });
+    fonts.lock().db_mut().load_font_data(bytes);
+    fonts
+}
+
+/// Grapheme-correct Backspace over an emoji-ZWJ FAMILY sequence
+/// (`👨‍👩‍👧‍👦` = man · ZWJ · woman · ZWJ · girl · ZWJ · boy — 7 scalars, 25 bytes,
+/// ONE grapheme cluster). One Backspace must remove the WHOLE cluster, not the
+/// trailing scalar. A naive code-point delete (cosmic-text 0.19's raw
+/// `Action::Backspace`) would leave `👨‍👩‍👧‍` ending in a dangling ZWJ — this
+/// test fails loudly on that regression (editing-and-ime § 3.1, normative).
+#[test]
+fn backspace_removes_a_whole_emoji_zwj_cluster_in_one_step() {
+    let fonts = emoji_font_system();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+    state.apply(&mut fs, EditCommand::Insert(family.into()), false, false);
+    assert_eq!(state.value(), family, "the family emoji is in the buffer");
+    assert_eq!(state.value().len(), 25, "7-scalar ZWJ sequence, 25 bytes");
+
+    let out = state.apply(&mut fs, EditCommand::Backspace, false, false);
+    assert!(out.value_changed, "the cluster was deleted");
+    assert_eq!(
+        state.value(),
+        "",
+        "ONE Backspace removed the entire grapheme cluster, not one code point"
+    );
+}
+
+/// Grapheme-correct Backspace over a base+combining-mark sequence
+/// (`e\u{0301}` = 'e' + COMBINING ACUTE ACCENT — 2 scalars, 3 bytes, ONE
+/// grapheme cluster). One Backspace removes the whole `é`, not just the
+/// combining mark (which would leave a bare `e`).
+#[test]
+fn backspace_removes_a_whole_combining_mark_cluster_in_one_step() {
+    let fonts = SharedFontSystem::new(); // base+mark needs no special font
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    let combining = "e\u{0301}";
+    state.apply(&mut fs, EditCommand::Insert(combining.into()), false, false);
+    assert_eq!(
+        state.value(),
+        combining,
+        "e + combining acute is in the buffer"
+    );
+    assert_eq!(
+        state.value().len(),
+        3,
+        "'e' (1) + combining acute (2) = 3 bytes"
+    );
+
+    let out = state.apply(&mut fs, EditCommand::Backspace, false, false);
+    assert!(out.value_changed, "the cluster was deleted");
+    assert_eq!(
+        state.value(),
+        "",
+        "ONE Backspace removed the whole base+mark cluster, not just the mark"
+    );
+}
+
+/// The grapheme path must NOT over-delete: with TWO clusters in the buffer, one
+/// Backspace removes exactly the LAST cluster and leaves the first intact.
+/// Guards the boundary computation (it must find the cluster start preceding the
+/// caret, not the start of the line).
+#[test]
+fn backspace_removes_only_the_last_cluster_when_two_are_present() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    // 'a' (single-scalar cluster) followed by a base+combining cluster.
+    state.apply(
+        &mut fs,
+        EditCommand::Insert("ae\u{0301}".into()),
+        false,
+        false,
+    );
+    assert_eq!(state.value(), "ae\u{0301}");
+
+    state.apply(&mut fs, EditCommand::Backspace, false, false);
+    assert_eq!(
+        state.value(),
+        "a",
+        "only the trailing é cluster went; the leading 'a' survives"
+    );
+
+    // A second Backspace removes the remaining single-scalar cluster.
+    state.apply(&mut fs, EditCommand::Backspace, false, false);
+    assert_eq!(state.value(), "", "the 'a' is gone too");
 }
 
 /// A non-extending motion does NOT change the value and reports

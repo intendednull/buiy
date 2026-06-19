@@ -37,6 +37,15 @@ sys-locale = "0.3"
 # Version-synced to cosmic-text 0.19's pin (0.5.8); an upstream bump to 0.6
 # surfaces here as a loud type-mismatch compile error, by design.
 unicode-script = "0.5"
+# Grapheme-cluster boundaries for grapheme-correct Backspace (editing-and-ime
+# § 3.1, normative): cosmic-text 0.19's `Action::Backspace` deletes a single
+# CODE POINT (`char_indices().next_back()`, editor.rs:584), NOT a grapheme
+# cluster — so an emoji-ZWJ family or a base+combining-mark loses only its last
+# scalar. `Action::Delete` IS grapheme-correct (it uses `grapheme_indices`), so
+# Buiy mirrors that for the backward direction here. Version-synced to
+# cosmic-text 0.19's own pin (1.12) — cargo unifies to the one copy already in
+# the graph; no new crate enters the tree.
+unicode-segmentation = "1.12"
 # The canonical `render::golden::Dpr` derives `serde::{Serialize, Deserialize}`
 # so the verification golden bless ledger (`buiy_verify`) can persist it
 # directly. `serde` is a workspace dep already; buiy_core names it directly

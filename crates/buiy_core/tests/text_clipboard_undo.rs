@@ -55,9 +55,15 @@ fn unit(change: Change, group: GroupKind, before: usize, after: usize) -> UndoUn
 #[test]
 fn record_pushes_a_nonempty_unit_and_clears_redo() {
     let mut stack = UndoStack::default();
-    // Seed a redo entry to prove a new record clears it (§ 8).
-    stack.push_redo_for_test(unit(insert_change(0, "x"), GroupKind::Discrete, 0, 1));
+    // Seed a redo entry through the REAL path: record a unit, then pop_undo
+    // moves it onto the redo stack (production redo entries arrive ONLY this
+    // way). Proves a subsequent record clears it (§ 8).
+    stack.record(unit(insert_change(0, "x"), GroupKind::Discrete, 0, 1));
+    stack
+        .pop_undo()
+        .expect("the recorded unit to pop onto redo");
     assert_eq!(stack.redo_len(), 1);
+    assert_eq!(stack.undo_len(), 0, "pop_undo emptied the undo side");
 
     stack.record(unit(insert_change(0, "a"), GroupKind::Discrete, 0, 1));
     assert_eq!(stack.undo_len(), 1);
@@ -103,7 +109,7 @@ fn depth_bound_drops_the_oldest_unit() {
     }
     assert_eq!(stack.undo_len(), 3, "bounded to the 3 most recent units");
     // The oldest survivor is the 3rd recorded (caret_before index 2).
-    let oldest = stack.undo.first().expect("non-empty");
+    let oldest = stack.oldest_recorded().expect("non-empty");
     assert_eq!(oldest.caret_before, Cursor::new(0, 2));
 }
 
@@ -138,7 +144,7 @@ fn adjacent_typing_within_the_window_coalesces_into_one_unit() {
         ms(100),
     );
     assert_eq!(stack.undo_len(), 1, "adjacent in-window typing is ONE unit");
-    let merged = &stack.undo[0];
+    let merged = stack.last_recorded().expect("the coalesced unit");
     assert_eq!(merged.change.items.len(), 2, "both items kept for replay");
     assert_eq!(merged.caret_before, Cursor::new(0, 0), "before = first");
     assert_eq!(merged.caret_after, Cursor::new(0, 2), "after = last");

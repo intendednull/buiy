@@ -9,7 +9,9 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use buiy_core::layout::Style;
 use buiy_core::text::Text;
-use buiy_core::text::edit::{Clipboard, EditUndone, GroupKind, MemClipboard, TextEditState};
+use buiy_core::text::edit::{
+    Clipboard, EditRedone, EditUndone, GroupKind, MemClipboard, TextEditState,
+};
 use buiy_core::{FocusedEntity, Node};
 use cosmic_text::Metrics;
 use std::time::Duration;
@@ -147,4 +149,125 @@ fn undo_emits_edit_undone_with_the_group_kind() {
         GroupKind::TypingRun,
         "the undone unit was a typing run"
     );
+}
+
+/// The platform command modifier (Ctrl on Linux/Windows, Cmd/Super on macOS) —
+/// the one the undo/redo letter-commands key on, mirroring
+/// `command_modifier_held` in `input.rs`. A test that hardcoded Ctrl would
+/// resolve nothing on macOS (where the chord is Cmd-Shift-Z).
+fn command_mod_key() -> KeyCode {
+    if cfg!(target_os = "macos") {
+        KeyCode::SuperLeft
+    } else {
+        KeyCode::ControlLeft
+    }
+}
+
+/// Send a single Ctrl/Cmd-(+Shift)-letter chord for the next `app.update()`:
+/// press the command modifier (and Shift if asked), enqueue the logical letter,
+/// then release the held keys after the frame. The physical `key_code` is
+/// irrelevant to letter-command resolution (that keys on `logical_key` + the
+/// `ButtonInput<KeyCode>` modifier state, exactly as the OS delivers it).
+fn press_letter_chord(app: &mut App, letter: char, shift: bool) {
+    let cmd = command_mod_key();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(cmd);
+    if shift {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
+    }
+    let window = Entity::PLACEHOLDER;
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::KeyA, // physical code is irrelevant to letter commands
+        logical_key: Key::Character(letter.to_string().into()),
+        state: ButtonState::Pressed,
+        text: Some(letter.to_string().into()),
+        repeat: false,
+        window,
+    });
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(cmd);
+    if shift {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::ShiftLeft);
+    }
+}
+
+/// Drain every `EditRedone` queued this frame (the system's reader semantics).
+fn drain_redone(app: &App) -> Vec<EditRedone> {
+    let messages = app.world().resource::<Messages<EditRedone>>();
+    let mut reader = messages.get_cursor();
+    reader.read(messages).copied().collect()
+}
+
+/// Redo through the keyboard system via the Ctrl/Cmd-Shift-Z chord
+/// (`input.rs:434` `'z' if shift => Redo`): type → undo → redo-chord restores
+/// the value AND emits exactly ONE `EditRedone` carrying the typed run's group
+/// (the `input.rs:586` emit). A regression in the chord mapping or the emit
+/// fails this — mirrors `undo_emits_edit_undone_with_the_group_kind`.
+#[test]
+fn ctrl_shift_z_redoes_and_emits_exactly_one_edit_redone() {
+    let (mut app, editor) = app_with_focused_editor();
+    type_char(&mut app, 'x');
+    app.update();
+
+    // Undo first, so there is a redoable unit on the redo stack.
+    press_letter_chord(&mut app, 'z', /* shift: */ false);
+    assert_eq!(
+        app.world().get::<TextEditState>(editor).unwrap().value(),
+        "",
+        "Ctrl/Cmd-Z undid the typed char (precondition for redo)"
+    );
+
+    // Now Ctrl/Cmd-Shift-Z redoes.
+    press_letter_chord(&mut app, 'z', /* shift: */ true);
+    assert_eq!(
+        app.world().get::<TextEditState>(editor).unwrap().value(),
+        "x",
+        "Ctrl/Cmd-Shift-Z redid the typed char"
+    );
+
+    let got = drain_redone(&app);
+    assert_eq!(got.len(), 1, "exactly one EditRedone");
+    assert_eq!(got[0].0, editor);
+    assert_eq!(
+        got[0].1,
+        GroupKind::TypingRun,
+        "the redone unit was a typing run"
+    );
+}
+
+/// Redo through the keyboard system via the Ctrl-Y chord on non-macOS
+/// (`input.rs:436` `'y' if !macos => Redo`). On macOS Ctrl/Cmd-Y is NOT a redo,
+/// so this case is cfg-gated to the platforms where the mapping is live; a
+/// regression in the `'y'` arm fails this on Linux/Windows.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_y_redoes_on_non_macos() {
+    let (mut app, editor) = app_with_focused_editor();
+    type_char(&mut app, 'q');
+    app.update();
+
+    press_letter_chord(&mut app, 'z', /* shift: */ false); // undo
+    assert_eq!(
+        app.world().get::<TextEditState>(editor).unwrap().value(),
+        "",
+        "Ctrl-Z undid (precondition)"
+    );
+
+    press_letter_chord(&mut app, 'y', /* shift: */ false); // Ctrl-Y redo
+    assert_eq!(
+        app.world().get::<TextEditState>(editor).unwrap().value(),
+        "q",
+        "Ctrl-Y redid the typed char on non-macOS"
+    );
+
+    let got = drain_redone(&app);
+    assert_eq!(got.len(), 1, "exactly one EditRedone for the Ctrl-Y redo");
+    assert_eq!(got[0].1, GroupKind::TypingRun);
 }

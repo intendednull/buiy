@@ -1409,6 +1409,7 @@ dependencies = [
  "taffy",
  "tracing",
  "unicode-script",
+ "unicode-segmentation",
 ]
 
 [[package]]
