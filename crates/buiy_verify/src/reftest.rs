@@ -473,6 +473,11 @@ pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) 
 ///
 /// A non-`(0,0)` fuzz floor on a `mismatch` fails to COMPILE (a `const`
 /// assertion), not at runtime — reftests.md § Verification #2.
+///
+/// Compile-checked without a doctest: the `reftest!` invocations in the
+/// `verify_gpu` test binary (`tests/verify_gpu/reftest_*.rs`) must expand and
+/// compile for `cargo test --workspace` to build, so a malformed macro arm is
+/// caught by the headless gate.
 #[macro_export]
 macro_rules! reftest {
     // mismatch with explicit fuzz → compile-time reject of a non-zero floor.
@@ -521,17 +526,6 @@ macro_rules! reftest {
         }
     };
 }
-
-/// Compile-check probe for the [`reftest!`] macro (it has no runnable form — it
-/// expands to `#[test]` items that reference per-case scene fns defined
-/// elsewhere). This `no_run` doctest exercises the macro's no-fuzz `match`
-/// expansion against stub scene fns, so a malformed macro arm is caught at
-/// `cargo test --doc` time. (The macro's own doc shows the full grammar as
-/// `text`, since those `$test`/`$reference` args are placeholders.) `doc(hidden)`
-/// — this exists only to host the doctest, not as public API. Placed before the
-/// test module so the `#[cfg(test)] mod tests` stays last (`items_after_test_module`).
-#[doc(hidden)]
-pub fn probe() {}
 
 #[cfg(test)]
 mod tests {

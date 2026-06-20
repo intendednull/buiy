@@ -836,8 +836,11 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   instead of fail-closing the lane* — has shipped: `coverage_golden.rs:104-114`
   skips any cell whose `committed_positives(&key) == 0` (counting it as
   `pending`) unless `BUIY_BLESS` is set, so the `--ignored` GPU lane is now
-  **green**, not RED, while the corpus is still being built. The test asserts
-  only non-vacuity (`asserted + pending > 0`, `coverage_golden.rs:149`) and
+  **green**, not RED, while the corpus is still being built. The test's real
+  non-vacuity guard (audit #14): on the pinned lavapipe, if the corpus blesses
+  ANY matrix cell, a green run must have compared ≥1 (`assert!(asserted > 0)`,
+  `coverage_golden.rs:178-185`); the separate `asserted + pending > 0`
+  (`coverage_golden.rs:191`) is only a catalog-non-empty sanity check. It
   prints an HONEST status line distinguishing cells *compared* from cells
   *pending*; a *blessed* cell still fails closed on drift (the "no golden
   committed for `<slug>`" message is `golden/check.rs:282`, reached only on the

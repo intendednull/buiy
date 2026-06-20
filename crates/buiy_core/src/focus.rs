@@ -82,7 +82,7 @@ fn advance_focus(
     focused.0 = compute_next_focus(&entries, focused.0, forward);
 }
 
-pub(crate) fn compute_next_focus(
+fn compute_next_focus(
     focusables: &[(Entity, Focusable)],
     current: Option<Entity>,
     forward: bool,
