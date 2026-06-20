@@ -4,9 +4,9 @@
 
 ## 0. What this is and how to use it
 
-This branch is a **throwaway exploratory prototype**: it built the classic
+The prototype was a **throwaway exploratory effort**: it built the classic
 TodoMVC app on the current Buiy stack and, in doing so, surfaced and patched
-several real library bugs/gaps. **We will not merge it.** Instead, a *fresh*
+several real library bugs/gaps. **It will not be merged.** Instead, a *fresh*
 session will read this report and **plan the production implementation** — doing
 each piece the *right* way, informed by everything we learned here.
 
@@ -24,8 +24,10 @@ not for merge**; that branch is the reference implementation, but you do not nee
 it — the root causes, fixes, and instructions are all written out below.
 
 **Read order for the planner:** §1 (what we proved) → §2 (the split: real vs
-throwaway) → §3–§4 (the load-bearing library work) → §5–§8 (gaps/edges/verification)
-→ §10 (the ordered production work breakdown) → §11 (pitfalls).
+throwaway) → §3–§4 (the load-bearing library work) → §5–§8 (gaps / styling /
+verification / latent edges) → §10 (the ordered production work breakdown) → §11
+(pitfalls). §9 (prototype app architecture) is supporting context and §12 is the
+codebase file-map appendix — consult them as needed.
 
 **Scope of the exploratory work** (so you know how much was touched): roughly
 3,000 lines across ~30 files, spanning the picking, text (commit/extract/sync),
@@ -61,10 +63,10 @@ distill; the app itself is scaffolding (§9).
 | Bucket | Files | Production disposition |
 |---|---|---|
 | **Real `buiy_core` bug fixes** (load-bearing) | `picking/{backend,mod}.rs`, `text/{commit,extract}.rs` | **Must land in production**, properly reviewed + tested. The prototype's fixes are correct but minimal; production should redo with full review + the missing test tier. |
-| **Library features** (catalog inputs) | `a11y/{mod,translate}.rs`, `buiy_widgets/{checkbox,button,lib}.rs` | **Design properly** in `buiy-widget-catalog-design`. The prototype *validated the approach* (esp. `A11yToggled` as the state primitive); production designs the real API. |
+| **Library features** (catalog inputs) | `a11y/{mod,translate}.rs`, `buiy_widgets/{checkbox,button,lib}.rs` | **Design the real widget-catalog API** as a production spec. The prototype *validated the approach* (esp. `A11yToggled` as the state primitive); production designs the real API. |
 | **Verification hardening** | `buiy_verify/{a11y,text_shape,lib}.rs`, new regression tests | **Keep**; the `text_shape` predicate + regression tests are reusable. Add the missing real-input tier. |
 | **The prototype app** | `examples/todomvc/**` | **Throwaway.** Informs the design (architecture, the restyle, the systems) but is not the production artifact. |
-| **Docs** | this report | This report is the standalone deliverable. (The prototype branch also carried deeper gap-design findings and a debugging post-mortem; their substance is folded into this report.) |
+| **Docs** | this report | This report is the standalone deliverable — every gap-design and debugging finding from the exploration is folded in here. |
 
 Everything under `examples/todomvc/` is scaffolding to exercise the library. The
 *library* changes are what production cares about.
@@ -85,11 +87,14 @@ ever fired.
 **Root cause.** `crates/buiy_core/src/picking/backend.rs::emit_picks` and
 `picking/mod.rs::{hit_test,point_in_aabb}` AABB-tested the cursor against
 `ResolvedLayout.position`. **That field is Taffy's PARENT-RELATIVE location, not
-the absolute screen position** (confirmed: `write_resolved_layout`,
-`layout/systems.rs:2734`, writes `layout.location` with no parent accumulation —
-a `world_position` helper at `systems.rs:373` exists but is unused). The render
-does **not** use it: it uses the absolute, bridge-composed `GlobalTransform`
-(`render/mod.rs:434`, "pillar 5"). So render and picking diverged — picking only
+the absolute screen position** (confirmed: `write_resolved_layout` in
+`layout/systems.rs` writes Taffy's raw `layout.location` with no parent
+accumulation. A `world_position` helper in the same file walks ancestors to
+resolve a node's position **relative to a given ancestor** — used by the
+sticky/scroll override path, not absolute-from-root — so it is *not* a drop-in for
+the general case). The render does **not** use it: it uses the absolute, bridge-composed
+`GlobalTransform` (the `GlobalTransform.translation().truncate()` read in
+`render/mod.rs`, tagged "pillar 5"). So render and picking diverged — picking only
 matched nodes whose ancestors sit at the origin (the full-window `page` → the
 `card`). Every nested widget was unreachable. **It was always broken for nested
 widgets**; the prototype's *centered card* offset the whole subtree and exposed
@@ -108,19 +113,24 @@ hit_test_uses_absolute_global_transform_not_relative_resolved_layout`.
 - **Fix the misleading doc.** `ResolvedLayout.position`'s doc comment
   (`components.rs`) says "window-relative" (i.e. absolute). It is **parent-relative**.
   Either fix the comment OR decide `ResolvedLayout.position` *should* be absolute
-  and make `write_resolved_layout` accumulate (via `world_position`) — a bigger
-  change with blast radius (snapshots, sticky/scroll). The cleaner call (what the
+  and make `write_resolved_layout` accumulate parent offsets (as the sticky path's
+  `world_position` already does for its narrower case) — a bigger change with blast
+  radius (snapshots, sticky/scroll). The cleaner call (what the
   prototype took) is "picking/overlays use `GlobalTransform`; `ResolvedLayout` is
   layout-local," and fix the comment to say so.
 - **Audit every other `ResolvedLayout.position` consumer** for the same trap.
-  Confirmed/suspected consumers needing absolute coords: **click-to-place-caret**
-  (`text::edit::pointer::pointer_to_cursor` — clicking *in* the text input to
-  position the caret; not yet verified, likely also off for nested inputs),
-  scroll/sticky math, and any future overlay/tooltip/drag system.
+  Consumers needing absolute coords: scroll/sticky math and any future
+  overlay/tooltip/drag system. (**Click-to-place-caret**,
+  `text::edit::pointer::pointer_selection`/`pointer_to_cursor`, was the prime
+  suspect but is **already correct** — it derives the caret from
+  `GlobalTransform.translation() + ComputedTextLayout.content_offset`, the same
+  absolute source the picking fix adopts. Use it as the reference pattern, not a
+  suspect.)
 - **The `Entity::PLACEHOLDER` camera** in `emit_picks` (`backend.rs:65`) is a
   Phase-0 TODO; bevy_picking's interaction layer expects a real camera. Buiy's
-  own `update_hovered` reads `PointerHits` directly so it works, but wiring a real
-  camera ref is on the `buiy-input-events-design` list — do it for production.
+  own `update_hovered` reads `PointerHits` directly so it works, but a real camera
+  ref should be wired into `emit_picks` for production (a known input-events design
+  item).
 
 **Verification (production must add):** a picking test with a **nested + offset**
 tree (not the shallow scene the old test used) — the prototype added exactly this.
@@ -130,8 +140,8 @@ Plus the real-input smoke tier (§7).
 
 **Symptom.** Every `DefaultPlugins` app (incl. `hello_button`) **panicked
 deterministically ~9 s after the window opened**, at
-`crates/buiy_core/src/text/extract.rs:712`:
-`assert_eq!(runs, computed.lines.len(), "TextBuffer dirty-unshaped at extract")`.
+`crates/buiy_core/src/text/extract.rs` (a `debug_assert_eq!`):
+`debug_assert_eq!(runs, computed.lines.len(), "TextBuffer dirty-unshaped at extract (mutated after TextCommit?)")`.
 
 **Root cause.** `text/commit.rs::text_commit` has a steady-state guard that skips
 reshaping when size/align/offset are unchanged. When the **async system-font
@@ -167,8 +177,8 @@ name the offending entity. Verified: binary runs 35 s+ with no panic.
 ## 4. Library features added — catalog inputs (`buiy_core` a11y + `buiy_widgets`)
 
 These are **features**, not bugs. The prototype implemented them minimally-but-
-really to *validate the design*; production should design the real catalog API in
-`buiy-widget-catalog-design`.
+really to *validate the design*; production should design the real catalog API as
+a dedicated widget-catalog spec.
 
 ### 4.1 a11y `A11yToggled` state seam + `A11yRole::Checkbox` (`a11y/{mod,translate}.rs`)
 
@@ -221,8 +231,9 @@ mouse-DOWN→UP press-drag-cancel semantics (flagged minor; APG catalog work).
 
 ### 4.4 Pre-existing infrastructure relied on (NOT our work, but load-bearing)
 
-`text_input.rs::focus_on_click` (click-to-focus for `TextInput`) and
-`text::edit::pointer::pointer_selection` (focus-on-click for editors) already
+`buiy_widgets/src/text_input.rs::focus_on_click` (click-to-focus for `TextInput`)
+and `buiy_core`'s `text::edit::pointer::pointer_selection` (focus-on-click for
+editors) already
 existed; they read `Hovered`, so **they only worked once §3.1 (picking) was
 fixed**. Production note: the whole focus/typing chain was gated behind the
 picking bug — fixing picking is what made text entry work.
@@ -231,7 +242,7 @@ picking bug — fixing picking is what made text entry work.
 
 ## 5. Widget-catalog gaps (must address for ANY real UI)
 
-### 5.1 Button (and the catalog) renders NO visible label — **Gap 3**
+### 5.1 Button (and the catalog) renders NO visible label
 
 `Button::new(label)` carries an `A11yLabel` (screen-reader name) but **no visible
 `Text`**. Every button paints its box and no label glyph — `hello_button`'s "Save"
@@ -273,7 +284,7 @@ message/command surface and the widgets so `use buiy::*` suffices.
 
 ---
 
-## 6. Styling reality (Gap 4) — what the live render path actually paints
+## 6. Styling reality — what the live render path actually paints
 
 We mapped Buiy's styling surface against what the **live** draw path
 (`render/mod.rs::extract_buiy_draws` + `draw_for_node`) actually consumes. **The
@@ -284,7 +295,7 @@ gap between component types that exist and pixels that render is wide:**
 | Background fill | `Background` | **yes** |
 | Rounded corners | `Border.radius` | **yes** (uniform — `top_left.x`, px) |
 | Visible border (color/width/sides) | `Border` sides | **no** |
-| Drop / inset shadow | `BoxShadow` (+ `shadow.wgsl`) | **no** — `extract.rs:348` "FAN … reserved" |
+| Drop / inset shadow | `BoxShadow` (+ `shadow.wgsl`) | **no** — `render/extract.rs` "FAN … reserved" |
 | Outline | `Outline` | **no** |
 | Gradient | — | **no** |
 | Group opacity | `Opacity` | not via the simple draw path |
@@ -296,7 +307,8 @@ So today's achievable look is **flat**: background fills, uniform rounded corner
 rich text, flexbox. The prototype's restyle (centered white card, muted-red title,
 teal checkboxes, labelled buttons) works within that. **Two more concrete findings:**
 - **Custom colors must be theme tokens.** `ColorToken` has **no literal-color
-  variant** (only `Transparent` + `Token(name)`). Every custom color is added to
+  variant** (its variants are `Transparent`, `Token(name)`, `CurrentColor`, and
+  `SystemColor(keyword)` — none carries a literal RGBA). Every custom color is added to
   the `Theme` resource (`theme.rs`, public `colors: HashMap<String,Color>`) and
   referenced by name; insert a custom `Theme` *after* `BuiyPlugin` to win. A
   `ColorToken::Literal(Color)` would save app authors the theme dance.
@@ -365,15 +377,21 @@ full rebuild.)
    `set_text` clobber above.)
 2. **`ResolvedLayout.position` doc says "window-relative"** but is parent-relative
    (§3.1). Fix the comment (or the field).
-3. **Click-to-place-caret** (`pointer_to_cursor`) is another `Hovered`+position
-   consumer; the focus path is fixed, but the *caret-index math* may still use
-   relative coords for nested inputs — **verify**.
+3. **Click-to-place-caret** (`pointer_to_cursor` / `pointer_selection`) was a
+   suspected second relative-coords consumer, but on inspection it is **already
+   correct**: the caret index derives from `GlobalTransform.translation() +
+   ComputedTextLayout.content_offset` (the absolute source), with no
+   `ResolvedLayout.position` use. No fix needed — it is the reference pattern for
+   the §3.1 audit, listed here only to record that it was checked.
 4. **Edit-in-place (the 10th TodoMVC behavior) is DEFERRED.** Double-click → edit →
    Enter/blur commit, Esc cancel. The editor substrate supports it (double-click
    selection, `EditSubmitted`, focus-blur lifecycle, `value()`, Escape), but the
-   *trigger* — double-click detection on a non-text widget — is a flagged gap
-   (`ClickTracker` is private to `text::edit`). Production: expose a general
-   double-click/gesture signal, then edit-in-place falls out.
+   *trigger* — double-click detection on a non-text widget — has no general seam.
+   The multi-click classifier itself already exists and is **public**
+   (`text::edit::ClickTracker`/`PointerGesture`, `pub use`-re-exported), but it
+   only fires inside the editor's pointer pipeline (the `pointer_selection` system
+   early-returns on non-editor hits). Production: lift it into a general,
+   widget-agnostic multi-click/gesture signal, then edit-in-place falls out.
 5. **`apply_filter` owns the display kind** (writes `Display::None`/`flex_row`).
    Works only because every row is `flex_row`; a row with any other display would
    be silently rewritten. A real filter must not own the display kind (cache the
@@ -422,11 +440,12 @@ have. Rough order = dependency order.
 **A. Library bug fixes (land first — everything else depends on a working app).**
 1. **Picking → absolute coords** (§3.1). Adopt the `GlobalTransform` fix; fix the
    `ResolvedLayout.position` doc; **audit all `ResolvedLayout.position` consumers**
-   for the relative-as-absolute trap (caret math, sticky/scroll, future overlays);
-   wire a real camera ref into `emit_picks`. Add the nested-tree picking test.
+   for the relative-as-absolute trap (sticky/scroll, future overlays — caret math
+   is already absolute, §3.1); wire a real camera ref into `emit_picks`. Add the
+   nested-tree picking test.
 2. **Text commit → reshape unshaped buffers** (§3.2). Adopt the `shape_stale` fix.
    Add the DefaultPlugins-font-load smoke test that actually isolates it.
-3. **TextSync editor-clobber** (§8.1). Make `TextSync` not overwrite an editor's
+3. **TextSync editor-clobber** (§8 item 1). Make `TextSync` not overwrite an editor's
    owned content. This is required for *reliable* text entry.
 
 **B. Verification — the missing tier (highest leverage).**
@@ -434,7 +453,7 @@ have. Rough order = dependency order.
    (§7). Keep the `text_shape` predicate + the regression tests. This tier is what
    would have caught all three bugs and prevents regressions.
 
-**C. Widget catalog (`buiy-widget-catalog-design`).**
+**C. Widget catalog.**
 5. **Button renders its label** (§5.1) — content-sized, centered, foreground token;
    resolve the child-vs-co-located hit-test question (and/or give picking a
    pointer-events story). Re-bless `hello_button`'s golden.
@@ -456,8 +475,9 @@ have. Rough order = dependency order.
     behavior, box-sizing (§9).
 
 **F. The deferred behavior.**
-12. Expose a double-click/gesture signal; implement edit-in-place (§8.4).
-13. Make filter visibility not own the display kind (§8.5).
+12. Lift the existing `ClickTracker`/`PointerGesture` classifier into a general,
+    widget-agnostic gesture signal; implement edit-in-place (§8 item 4).
+13. Make filter visibility not own the display kind (§8 item 5).
 
 ---
 
@@ -503,18 +523,24 @@ documents; everything you need to *understand* the work is already inline above.
   `crates/buiy_core/src/render/mod.rs` (`draw_for_node`, `GlobalTransform.translation`).
 - **The relative-position writer (the trap's origin):**
   `crates/buiy_core/src/layout/systems.rs` — `write_resolved_layout` (writes
-  Taffy's parent-relative `layout.location`) and the unused `world_position` helper.
+  Taffy's parent-relative `layout.location`) and the `world_position` helper (used
+  by the sticky/scroll override path; resolves relative-to-an-ancestor, not
+  absolute-from-root, so not a drop-in for absolute coords).
 - **Text commit (the §3.2 crash fix):** `crates/buiy_core/src/text/commit.rs`
   (`text_commit` reshape guard); the tripwire it feeds:
   `crates/buiy_core/src/text/extract.rs`.
-- **The TextSync editor-clobber seam (§8.1, NOT yet fixed):**
+- **The TextSync editor-clobber seam (§8 item 1, NOT yet fixed):**
   `crates/buiy_core/src/text/sync.rs` (`apply_authored_to_buffer`, the editor-first
   `with_buffer_mut`).
 - **a11y state seam (§4.1):** `crates/buiy_core/src/a11y/mod.rs` (`A11yToggled`,
   `A11yRole::Checkbox`, `A11yNodeView.toggled`, `build_tree`) and
   `crates/buiy_core/src/a11y/translate.rs` (`set_toggled` / `Role::CheckBox`).
 - **Widgets (§4.2–§4.3, §5.1–§5.2):** `crates/buiy_widgets/src/checkbox.rs`,
-  `crates/buiy_widgets/src/button.rs`, `crates/buiy_widgets/src/lib.rs`.
+  `crates/buiy_widgets/src/button.rs`, `crates/buiy_widgets/src/lib.rs`,
+  `crates/buiy_widgets/src/text_input.rs` (`focus_on_click`, §4.4).
+- **Click-to-focus / click-to-place-caret (the already-correct absolute consumer,
+  §3.1 / §8 item 3):** `crates/buiy_core/src/text/edit/pointer.rs`
+  (`pointer_selection`, `pointer_to_cursor`, `ClickTracker`).
 - **Verification (§7):** `crates/buiy_verify/src/text_shape.rs` (the predicate),
   `crates/buiy_verify/src/a11y.rs` (the `toggled` serialization).
 - **Theme / styling (§6):** `crates/buiy_core/src/theme.rs` (`Theme.colors`,
