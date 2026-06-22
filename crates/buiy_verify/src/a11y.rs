@@ -39,6 +39,13 @@ fn role_to_str(r: A11yRole) -> &'static str {
         A11yRole::Dialog => "Dialog",
         A11yRole::AlertDialog => "AlertDialog",
         A11yRole::Tooltip => "Tooltip",
+        A11yRole::Checkbox => "Checkbox",
+        A11yRole::Switch => "Switch",
+        A11yRole::Slider => "Slider",
+        A11yRole::TextInput => "TextInput",
+        A11yRole::MultilineTextInput => "MultilineTextInput",
+        A11yRole::Region => "Region",
+        A11yRole::Group => "Group",
         _ => "Unknown",
     }
 }
@@ -103,6 +110,13 @@ mod tests {
         A11yRole::Dialog,
         A11yRole::AlertDialog,
         A11yRole::Tooltip,
+        A11yRole::Checkbox,
+        A11yRole::Switch,
+        A11yRole::Slider,
+        A11yRole::TextInput,
+        A11yRole::MultilineTextInput,
+        A11yRole::Region,
+        A11yRole::Group,
     ];
 
     #[test]

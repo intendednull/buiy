@@ -65,6 +65,13 @@ fn role_to_accesskit(role: A11yRole) -> Role {
         A11yRole::Dialog => Role::Dialog,
         A11yRole::AlertDialog => Role::AlertDialog,
         A11yRole::Tooltip => Role::Tooltip,
+        A11yRole::Checkbox => Role::CheckBox,
+        A11yRole::Switch => Role::Switch,
+        A11yRole::Slider => Role::Slider,
+        A11yRole::TextInput => Role::TextInput,
+        A11yRole::MultilineTextInput => Role::MultilineTextInput,
+        A11yRole::Region => Role::Region,
+        A11yRole::Group => Role::Group,
     }
 }
 
