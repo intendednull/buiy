@@ -2,8 +2,8 @@
 //! stable JSON suitable for golden-file comparison.
 //! See: docs/specs/2026-05-07-buiy-foundation/verification.md (CI gate #3).
 
-use buiy_core::a11y::{A11yNodeView, A11yRole};
 use buiy_core::a11y::translate::node_id_for;
+use buiy_core::a11y::{A11yNodeView, A11yRole};
 use serde::Serialize;
 
 // LINT: Field order here is the snapshot wire format. Do not reorder

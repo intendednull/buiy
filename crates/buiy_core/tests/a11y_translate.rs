@@ -107,7 +107,7 @@ fn entity_for_node_id_inverts_node_id_for() {
 
 #[test]
 fn entity_for_node_id_maps_root_to_none() {
-    use buiy_core::a11y::translate::{entity_for_node_id, ROOT_NODE_ID};
+    use buiy_core::a11y::translate::{ROOT_NODE_ID, entity_for_node_id};
     assert_eq!(entity_for_node_id(ROOT_NODE_ID), None);
 }
 
