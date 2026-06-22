@@ -1558,3 +1558,24 @@ not the signal — only the CI-Mesa result is.
 **Owner:** the CI maintainer at the 0.19 toolchain bump.
 
 **Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 7.
+
+## Testing-audit × 0.19 merge — cosmetic test residue (post-reconciliation)
+
+Two zero-impact cosmetic items the reconciliation review surfaced when the
+testing-audit branch merged with main's Bevy 0.19 + affine-paint work. Neither
+affects correctness or either gate (headless 1324/84 green, GPU 83/0); both are
+follow-up cleanups.
+
+- **`render_smoke.rs` stale test name** —
+  `clip_aabb_pipeline_registers_with_stride_52` (and two "stride-52" comments)
+  predate main's affine layout, which lifted the per-instance stride to **68**
+  (`primitive.rs array_stride: 68`, `instance.rs PACKED_INSTANCE_STRIDE_BYTES=68`).
+  Inherited verbatim from main's affine commit (cf554b9) — the test body asserts
+  no stride (`let _ = pipeline.id;`), so nothing passes wrongly. Rename to
+  `..._with_stride_68` + fix the comments.
+- **insta `source:` headers stale after the Phase-5 consolidation** — the
+  relocated snapshots under `crates/buiy_core/tests/render/snapshots/`
+  (`pack_instance_logical_px` + siblings) still carry pre-move `source:` paths
+  (e.g. `tests/render_instance.rs`). insta matches by snapshot name + module path
+  (not the header), and the bodies are correct (they took main's affine-blessed
+  form), so the suite is green. Regenerate to refresh the headers.

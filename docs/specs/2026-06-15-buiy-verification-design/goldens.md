@@ -26,7 +26,7 @@
 > - **The corpus is started, not full — 5/6 residue classes are aspirational:**
 >   only two cells are blessed — `rect-rounded` (the **SDF corner AA** residue
 >   class) and `text-ahem` (the Ahem layout class, not a residue class) — at
->   `dark/sm/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger under
+>   `dark/sm/fc0/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger under
 >   `crates/buiy_verify/tests/goldens/`. The other **five residue classes
 >   enumerated above** — drop-shadow Gaussian kernel, glyph fidelity, color-emoji
 >   atlas, the effect compositor, blend/gamma, and the forced-colors *visual*
