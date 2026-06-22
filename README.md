@@ -124,8 +124,8 @@ cargo run -p hello_text     # a themed title above a wrapped body paragraph
 
 ### Requirements
 
-- **Rust:** stable, edition 2024. The MSRV (1.85) is enforced by `rust-version` in the workspace manifest; `rust-toolchain.toml` pins the floating `stable` channel and the `rustfmt`/`clippy` components.
-- **Bevy:** 0.18.
+- **Rust:** stable, edition 2024. The MSRV (1.95, the floor bevy 0.19 requires) is declared by `rust-version` in the workspace manifest and enforced by a dedicated CI `msrv` job; `rust-toolchain.toml` pins the floating `stable` channel and the `rustfmt`/`clippy` components.
+- **Bevy:** 0.19.
 - **Linux system deps** (Bevy needs these to open a window):
 
   ```sh
