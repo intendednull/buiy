@@ -9,7 +9,7 @@ Read first: [semantic-tree.md](semantic-tree.md) (the `A11yState*`/`A11yRelation
 
 Prior-art: [../../prior-art/wai-aria-apg/](../../prior-art/wai-aria-apg/) — [patterns-catalog.md](../../prior-art/wai-aria-apg/patterns-catalog.md), [keyboard-contracts.md](../../prior-art/wai-aria-apg/keyboard-contracts.md), [roles-states-properties.md](../../prior-art/wai-aria-apg/roles-states-properties.md), [name-computation.md](../../prior-art/wai-aria-apg/name-computation.md), [focus-management.md](../../prior-art/wai-aria-apg/focus-management.md), [live-regions.md](../../prior-art/wai-aria-apg/live-regions.md); the megacomponent anti-pattern [../../prior-art/bevy-a11y/component-model-incident.md](../../prior-art/bevy-a11y/component-model-incident.md); the AccessKit agent-control / no-key-bindings lessons in [../../prior-art/accesskit/capabilities.md](../../prior-art/accesskit/capabilities.md) and [../../prior-art/accesskit/lessons.md](../../prior-art/accesskit/lessons.md).
 
-Version target: **accesskit 0.24 / Bevy 0.19-rc.3**, after the BSN/0.19 bump. Forward-looking; verify against `Cargo.lock`. Main is on 0.21/0.18.
+Version base: **accesskit 0.24 / Bevy 0.19-rc.3** — the current base (the BSN/0.19 bump landed, PR #70). Verify resolved 0.24 signatures via `cargo tree`/`cargo doc`.
 
 ---
 

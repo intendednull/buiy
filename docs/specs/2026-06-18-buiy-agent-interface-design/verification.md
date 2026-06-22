@@ -36,7 +36,7 @@ Because the new tier and #3/#4/#6/#7/#12 are all headless, the **entire design i
 
 ## `accesskit_consumer` dependency {#accesskit_consumer-dependency}
 
-The gates read an `accesskit_consumer::Tree`, **not currently a declared dependency**. Phase 1 adds it to `crates/buiy_core/Cargo.toml`, **pinned to the version matching the `accesskit` 0.24 bump** (verify against `Cargo.lock`, not docs.rs — the registry has 0.36/0.37). A normal (non-dev) dependency because `inprocess.rs` ships in the library. Run `cargo deny check` before the bump lands; confirm no skew against `accesskit` 0.24 / `bevy_winit` 0.19-rc.3. The whole 0.24 vocabulary (setters, the 22-variant `Action` enum, `accesskit_consumer`) rides the in-flight Bevy 0.19-rc.3/wgpu 29 bump. Main is on 0.21/0.18; all claims forward-looking.
+The gates read an `accesskit_consumer::Tree`, **not currently a declared dependency**. Phase 1 adds it to `crates/buiy_core/Cargo.toml`, **pinned to the version matching the resolved `accesskit` 0.24** (verify via `cargo tree`/`cargo doc`, not docs.rs — the registry has 0.36/0.37; `Cargo.lock` is gitignored here). A normal (non-dev) dependency because `inprocess.rs` ships in the library. Run `cargo deny check` when adding the dependency; confirm no skew against `accesskit` 0.24 / `bevy_winit` 0.19-rc.3. The 0.24 vocabulary (setters, the 22-variant `Action` enum, `accesskit_consumer`) is the current base — the Bevy 0.19-rc.3/wgpu 29 bump landed (PR #70) and this branch sits on it.
 
 ---
 
@@ -126,7 +126,7 @@ cargo fmt --all -- --check && \
   xvfb-run -a cargo test --workspace
 ```
 
-(`xvfb-run -a` is harmless but not required.) Add `cargo deny check` when `accesskit_consumer` / `accesskit` 0.24 lands. The GPU `--ignored` lane (`cargo test -p buiy_core -j 2 -- --ignored --test-threads=1`) is additive and only re-confirms residue. A gate is verified when its fixture **runs and passes**, read through `accesskit_consumer` — never "should work" (`superpowers:verification-before-completion`).
+(`xvfb-run -a` is harmless but not required.) Run `cargo deny check` when adding `accesskit_consumer`. The GPU `--ignored` lane (`cargo test -p buiy_core -j 2 -- --ignored --test-threads=1`) is additive and only re-confirms residue. A gate is verified when its fixture **runs and passes**, read through `accesskit_consumer` — never "should work" (`superpowers:verification-before-completion`).
 
 ---
 

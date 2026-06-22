@@ -29,25 +29,25 @@ the same nodes.
 
 ---
 
-## Dependency gate — sequenced after the BSN / 0.19 bump (LOCKED #7)
+## Base — accesskit 0.24 / Bevy 0.19-rc.3 (the bump landed) (LOCKED #7)
 
-The spec targets **accesskit 0.24 / Bevy 0.19-rc.3**. `main` is currently on
-**accesskit 0.21 / Bevy 0.18**; the 0.19 bump is the in-flight BSN campaign
-(branch `worktree-bsn-support`), awaiting the rc go-ahead.
+The spec targets **accesskit 0.24 / Bevy 0.19-rc.3**, and that is now the
+**current base**: the BSN/0.19 bump LANDED (PR #70, `main` @ `3b3b0ba` —
+Bevy 0.19.0-rc.3, accesskit 0.24, accesskit_winit 0.32, plus the new `buiy_bsn`
+crate). This branch is rebased onto that base, so there is **no remaining
+version gate** — every phase simply targets the current 0.24 surface.
 
-**Rule:** the 0.24-dependent phases (P1a onward — the derive fold against 0.24
-node setters, the Action vocabulary) land **after** the BSN/0.19 bump merges.
-At implementation time, **verify every 0.24 setter/Action signature against
-`Cargo.lock`, not docs.rs** (the spec's standing instruction).
+**Rule:** at implementation time, **verify every 0.24 setter/Action signature
+against the resolved deps (`cargo tree` / `cargo doc`), not docs.rs** (`Cargo.lock`
+is gitignored here, so it regenerates from the `Cargo.toml` pins on build).
 
-**Exception — Phase 0 is version-stable.** P0's three changes
-(`entity_for_node_id`, the snapshot off-by-one fix, the `A11yRole` additions)
-carry **no 0.24-signature risk**: the new fn is pure, the serializer fix is
-pure, and the new `Role` variants (`CheckBox`/`Switch`/`Slider`/`TextInput`/
-`MultilineTextInput`/`Region`/`Group`) exist in both 0.21 and 0.24. P0 can land
-on `main` **before** the bump if the coordinator chooses, de-risking the
-campaign early; it does not block on the rc. (Coordinator's call — see the P0
-plan's opening note.)
+**Phase 0 is version-stable.** P0's three changes (`entity_for_node_id`, the
+snapshot off-by-one fix, the `A11yRole` additions) carry **no 0.24-specific API
+risk**: the new fn is pure, the serializer fix is pure, and the new `Role`
+variants (`CheckBox`/`Switch`/`Slider`/`TextInput`/`MultilineTextInput`/`Region`/
+`Group`) exist across the 0.18→0.19 lines alike. P0 runs on the current
+0.19-rc.3/0.24 base; it happens to be version-stable, so it carries no migration
+risk. (See the P0 plan's opening note.)
 
 ---
 
@@ -57,9 +57,9 @@ Each phase produces working, testable software on its own and ends at a
 **fresh-agent review gate** (the project's default research→spec→plan→execute
 discipline: review after each wave, verify don't just read). Each phase's
 detailed plan is written just-in-time once its predecessor lands and the 0.24
-surface is confirmed against `Cargo.lock`.
+surface is confirmed against the resolved deps (`cargo tree`/`cargo doc`).
 
-| Phase | Goal | Detailed plan | 0.24-gated? |
+| Phase | Goal | Detailed plan | Touches 0.24 API? |
 |---|---|---|---|
 | **P0** | Addressing + serializer fix + role additions (no behavior change) | `2026-06-18-buiy-agent-interface-p0-addressing.md` | No (version-stable) |
 | **P1a** | Decomposed component surface (outbound): states + relations + derive fold + ACCNAME | _(written after P0 lands)_ | Yes |
@@ -139,11 +139,11 @@ surface is confirmed against `Cargo.lock`.
 ## Per-phase plans (just-in-time)
 
 Per the project's campaign convention (layout/text/render campaigns) and the
-spec's own instruction to **verify 0.24 signatures against `Cargo.lock` at
-implementation time**, the detailed bite-sized TDD plan for each 0.24-gated
-phase (P1a onward) is written **after its predecessor lands and the 0.24 surface
-is confirmed** — not up front against speculative docs.rs signatures. P0's plan
-is written now (it is version-stable).
+spec's own instruction to **verify 0.24 signatures against the resolved deps
+(`cargo tree`/`cargo doc`) at implementation time**, the detailed bite-sized TDD
+plan for each 0.24-touching phase (P1a onward) is written **after its predecessor
+lands and the 0.24 surface is confirmed** — not up front against speculative
+docs.rs signatures. P0's plan is written now (it is version-stable).
 
 To write the next phase's plan: re-invoke `superpowers:writing-plans` against the
 relevant spec section(s) with the predecessor's landed code as ground truth.

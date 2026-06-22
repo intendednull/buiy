@@ -11,16 +11,16 @@ Prior-art grounding: [../../prior-art/accesskit/capabilities.md](../../prior-art
 
 ---
 
-## Dependency gate: accesskit 0.24 / Bevy 0.19-rc.3 (rides the BSN bump)
+## Base: accesskit 0.24 / Bevy 0.19-rc.3 (the bump landed)
 
-This entire spec targets **accesskit 0.24** and **Bevy 0.19-rc.3** (wgpu 29, accesskit_winit matching). Main is on **accesskit 0.21 / Bevy 0.18** (`Cargo.toml:71` pins `accesskit = "0.21"`; translate.rs carries the 0.21 `set_label` doc note). The 0.24 vocabulary — `set_toggled`, `set_expanded(bool)`, `set_selected(bool)`, `set_live_atomic` (NOT `set_atomic`, which doesn't exist in 0.24 — [semantic-tree.md](./semantic-tree.md)), the closed 22-variant `Action` enum, `CustomAction(i32)`, the `Role::TextInput`/`Role::MultilineTextInput` split — **rides the in-flight BSN/Bevy 0.19-rc.3 bump campaign** (separate work, needs user go-ahead).
+This entire spec targets **accesskit 0.24** and **Bevy 0.19-rc.3** (wgpu 29, accesskit_winit 0.32), and that is now the **current base**: the BSN/0.19 bump LANDED (PR #70, main @ `3b3b0ba`), bringing the `buiy_bsn` crate with it. This branch is rebased onto that base, so the 0.24 vocabulary — `set_toggled`, `set_expanded(bool)`, `set_selected(bool)`, `set_live_atomic` (NOT `set_atomic`, which doesn't exist in 0.24 — [semantic-tree.md](./semantic-tree.md)), the closed 22-variant `Action` enum, `CustomAction(i32)`, the `Role::TextInput`/`Role::MultilineTextInput` split — is the working surface, not a future target.
 
-**This spec is sequenced AFTER that bump lands.** Two hard rules:
+**There is no remaining version gate.** Two standing rules:
 
-1. **Verify every 0.24 setter signature against `Cargo.lock`, not docs.rs.** The review caught one stale assumption (`set_atomic` → `set_live_atomic`, accesskit-0.24.1 lib.rs:1806); treat the whole fold the same way.
-2. **If the bump slips, write the derive fold against 0.21 shapes and migrate.** The fold is the single emission point ([semantic-tree.md](./semantic-tree.md)); writing it 0.21-first is mechanical to migrate (per-component `if let Some(x) = view.field { node.set_x(x) }`), but several setters differ and the role split is 0.24-only. Keep the fold isolated so the migration is one file.
+1. **Verify every 0.24 setter signature against the resolved deps (`cargo tree`/`cargo doc`), not docs.rs** (`Cargo.lock` is gitignored here, so it regenerates from the `Cargo.toml` pins on build). The review caught one stale assumption (`set_atomic` → `set_live_atomic`, accesskit-0.24.1 lib.rs:1806); treat the whole fold the same way.
+2. **Keep the derive fold isolated** as the single emission point ([semantic-tree.md](./semantic-tree.md)) — one file, one place every setter signature is confirmed.
 
-`accesskit_consumer` ([inprocess-api.md](./inprocess-api.md), [verification.md](./verification.md)) is **not currently a declared dependency**. Add it to `crates/buiy_core/Cargo.toml` (0.36/0.37 in the registry, version matching the bump) and run `cargo deny check` at Phase 1a/1c. Version-skew is a hard check.
+`accesskit_consumer` ([inprocess-api.md](./inprocess-api.md), [verification.md](./verification.md)) is **not currently a declared dependency**. Add it to `crates/buiy_core/Cargo.toml` (0.36/0.37 in the registry, version matching the resolved accesskit 0.24) and run `cargo deny check` at Phase 1a/1c. Version-skew is a hard check.
 
 ---
 
@@ -30,7 +30,7 @@ Review gates between phases: a fresh-context review (logic, spec-alignment, qual
 
 ### Phase 0 — addressing + serializer fix (no behavior change)
 
-Unblocks everything (LOCKED #4). The only phase that can land *before* the 0.24 bump for the first two deliverables; the role additions referencing 0.24-only roles are gated on the bump.
+Unblocks everything (LOCKED #4). Version-stable groundwork that runs on the current 0.24 base and carries no 0.24-specific API risk (the new fn and serializer fix are pure; the new `Role` variants exist across the 0.18→0.19 accesskit lines alike).
 
 - Add `entity_for_node_id(NodeId) -> Option<Entity>` next to `node_id_for` in `a11y/translate.rs`: `(id.0 != 0).then(|| Entity::from_bits(id.0 - 1))`. Reused by the router and the serializer fix.
 - Fix `buiy_verify::a11y::snapshot_tree` (`a11y.rs`, the `entity: n.entity.to_bits()` map at line 47) to emit `node_id_for(n.entity).0`. **Re-bless affected residue goldens in the same change** (the `ref` values shift +1).
@@ -126,5 +126,5 @@ Most land in or alongside Phase 2.
 2. **One-frame inbound latency (winit path).** `poll_receivers` writes in the previous frame's PostUpdate; the router reads at Input start. In-process tests must tick deterministically; the direct `dispatch_action_request` fn sidesteps this for tests, but the latency must be documented so winit-path agents don't mistake it for a bug.
 3. **Same-frame despawn races + loud `ActionError`.** A request can race a same-frame despawn under the winit latency; the liveness guard yields a soft "stale ref." The typed `ActionError` (`NotFound`/`Unsupported`/`NotActionable`/`BadData`) must propagate **loudly** through the in-process API and (later) MCP, or the agent silently no-ops.
 4. **NodeId not human-stable until test-ids.** Phase-1 agents address by `entity.to_bits()+1` — session-stable, not human-stable. Acceptable for tests, awkward for hand-written scripts until follow-up #1.
-5. **0.24 / BSN-bump coupling.** The 0.24 setter/Action vocabulary rides the in-flight Bevy 0.19-rc.3 bump (separate campaign, user go-ahead). If it slips, the `translate.rs` derive fold must be written against 0.21 and migrated. Verify against `Cargo.lock`, not docs.rs (the `set_live_atomic` correction is the canonical example). Keep the fold isolated so the migration is one file.
+5. **0.24 / BSN-bump coupling — retired.** The Bevy 0.19-rc.3 / accesskit 0.24 bump has landed (PR #70, main @ `3b3b0ba`); this branch sits on that base, so this risk is retired. Verify resolved accesskit-0.24 signatures via `cargo tree`/`cargo doc` at implementation time, not docs.rs (the `set_live_atomic` correction is the canonical example). Keep the `translate.rs` derive fold isolated so every signature is confirmed in one file.
 6. **Supersede-don't-contradict docs hygiene.** Folding the `buiy-accessibility-design` roadmap slot into this spec (LOCKED #5) means this spec must **supersede** that slot, not leave a parallel unfilled entry. `docs/README.md`'s index and any cross-references must be updated in the same change (per `organizing-buiy-docs`), or readers see two parallel a11y entries. Because the slot was only ever a forward reference (foundation `accessibility.md` + code comments), never a catalog entry, the index change is a fresh **add** that claims the a11y territory. The a11y module keeps a clean `buiy_core/src/a11y/` boundary so the future `buiy_a11y` crate lift stays mechanical.

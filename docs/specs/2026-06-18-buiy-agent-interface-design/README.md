@@ -36,7 +36,7 @@ This spec **owns the accessibility substrate** — decomposed `A11yStates`/`A11y
 4. Addressing = AccessKit `NodeId` (`entity.to_bits()+1`) is the canonical ref. FIX the off-by-one: `buiy_verify::a11y::snapshot_tree` emits raw `to_bits()` today. Author test-ids are a NAMED Phase-2 follow-up.
 5. ACCESSIBILITY LEADS. Owns decomposed `A11yStates`/`A11yRelations` + real nesting + per-widget APG contracts; folds in and supersedes the `buiy-accessibility-design` slot. No megacomponents (#17644).
 6. Inbound seam = the EXISTING `bevy_winit` `MessageReader<ActionRequestWrapper>`; NO competing `ActionHandler`. Headless via `dispatch_action_request(&mut World, &ActionRequest)`.
-7. Version target = accesskit 0.24 / Bevy 0.19-rc.3, sequenced AFTER the BSN/0.19 bump. Verify 0.24 signatures against `Cargo.lock`, not docs.rs. Main is on accesskit 0.21 / Bevy 0.18.
+7. Base = accesskit 0.24 / Bevy 0.19-rc.3 — the BSN/0.19 bump LANDED (PR #70, main @ `3b3b0ba`); this is the current base, no version gate remains. Verify 0.24 signatures against the resolved deps (`cargo tree` / `cargo doc`), not docs.rs.
 
 ## Rejected alternatives {#rejected-alternatives}
 
@@ -54,7 +54,7 @@ Linked by the children as `#rejected-alternatives` and `#rejected`.
 
 ## Risks {#risks}
 
-Full register in [phasing.md](./phasing.md#risks); load-bearing summary: (1) wide `build_tree` query tuple (~22 components) vs query-arity limits; (2) one-frame winit inbound latency, sidestepped by the headless seam; (3) same-frame despawn races — typed `ActionError` must propagate loudly; (4) NodeId is session-stable, not human-stable until test-ids; (5) 0.24/BSN-bump coupling — keep the derive fold isolated, verify against `Cargo.lock`; (6) supersede-don't-contradict — update `docs/README.md` so readers don't see two parallel a11y entries. The slot was a forward reference only (never a catalog entry), so the index change is a fresh **add** that claims the a11y territory.
+Full register in [phasing.md](./phasing.md#risks); load-bearing summary: (1) wide `build_tree` query tuple (~22 components) vs query-arity limits; (2) one-frame winit inbound latency, sidestepped by the headless seam; (3) same-frame despawn races — typed `ActionError` must propagate loudly; (4) NodeId is session-stable, not human-stable until test-ids; (5) the 0.24/BSN bump has landed (PR #70) — this coupling risk is retired; keep the derive fold isolated and verify resolved 0.24 signatures via `cargo tree`/`cargo doc`; (6) supersede-don't-contradict — update `docs/README.md` so readers don't see two parallel a11y entries. The slot was a forward reference only (never a catalog entry), so the index change is a fresh **add** that claims the a11y territory.
 
 ## Prior-art consulted
 

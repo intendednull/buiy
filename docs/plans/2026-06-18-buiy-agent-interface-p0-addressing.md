@@ -28,18 +28,16 @@ becomes the canonical `NodeId`).
 
 ## Why Phase 0 is version-stable (read first)
 
-Per the campaign's dependency gate, the spec targets **accesskit 0.24 / Bevy
-0.19-rc.3** and is sequenced after the BSN/0.19 bump. **Phase 0 is the
-exception:** all three changes work identically on the current
-**accesskit 0.21 / Bevy 0.18** `main` and on the post-bump 0.24 surface —
+The BSN/0.19 bump has landed (PR #70, `main` @ `3b3b0ba`), so the current base is
+already **accesskit 0.24 / Bevy 0.19-rc.3**. Phase 0 runs on that base. Its three
+changes carry **no 0.24-specific API risk** — they happen to be version-stable:
 `entity_for_node_id` is pure Rust, the serializer fix is pure, and the seven new
 `Role` variants (`CheckBox`/`Switch`/`Slider`/`TextInput`/`MultilineTextInput`/
-`Region`/`Group`) exist in both accesskit lines. So Phase 0 can land **before or
-after** the bump — coordinator's call. The only API to confirm against the
-pinned versions at implementation time: the exact spelling of each `accesskit::Role`
-variant (e.g. `Role::CheckBox`, capital B) and whether `Entity::from_bits`
-returns `Entity` (0.18) or needs `Entity::try_from_bits(..).ok()` — both concrete
-forms are given inline below.
+`Region`/`Group`) exist across the 0.18→0.19 accesskit lines alike. The only API
+to confirm against the resolved deps at implementation time: the exact spelling
+of each `accesskit::Role` variant (e.g. `Role::CheckBox`, capital B) and that
+`Entity::from_bits` returns `Entity` directly — both concrete forms are given
+inline below.
 
 **Repo commit policy:** end every commit message with the repo's required
 trailer (`Co-Authored-By: …`, per the project convention). Run the full check
@@ -101,11 +99,12 @@ pub fn entity_for_node_id(id: NodeId) -> Option<Entity> {
 }
 ```
 
-API note (verified against `bevy_ecs-0.18.1/src/entity/mod.rs:576`):
-`Entity::from_bits(bits: u64) -> Entity` returns `Entity` directly on Bevy 0.18,
-so the form above is correct as written. If the pinned Bevy ever makes it
-fallible, drop the `Some(...)` wrapper and return `Entity::try_from_bits(id.0 - 1)`
-directly (`try_from_bits` returns `Option<Entity>` — mod.rs:590).
+API note (verified against `bevy_ecs-0.19.0-rc.3/src/entity/mod.rs:578`):
+`Entity::from_bits(bits: u64) -> Self` returns `Entity` directly on the current
+base (identical to 0.18.1), so the form above is correct as written. If a future
+Bevy ever makes it fallible, drop the `Some(...)` wrapper and return
+`Entity::try_from_bits(id.0 - 1)` directly (`try_from_bits(u64) -> Option<Self>`
+— mod.rs:592).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -294,10 +293,10 @@ In `crates/buiy_core/src/a11y/translate.rs`, extend `role_to_accesskit` (lines
     }
 ```
 
-API note (verify against the pinned accesskit): the variant is `Role::CheckBox`
-(capital `B`). Confirm each of the seven `accesskit::Role` variant spellings
-against `Cargo.lock`'s pinned accesskit at implementation time; all seven exist
-in both 0.21 and 0.24.
+API note: verified `Role::CheckBox` present in accesskit-0.24.1 (capital `B`;
+lowercase `Checkbox` absent). Confirm each of the seven `accesskit::Role` variant
+spellings against the resolved accesskit (`cargo tree`/`cargo doc`) at
+implementation time; all seven exist across the 0.18→0.19 accesskit lines.
 
 - [ ] **Step 6: Run to verify the next failure (`role_to_str` returns "Unknown")**
 
@@ -357,6 +356,6 @@ Expected: all green. (On macOS/Windows drop `xvfb-run -a`.)
   NodeId), and the seven new roles are inert until widgets emit them in Phase 1d.
 
 **Next:** write the Phase 1a detailed plan (decomposed component surface) by
-re-invoking `superpowers:writing-plans` against `semantic-tree.md` §1–§6 — after
-the BSN/0.19 bump lands and the accesskit 0.24 setter signatures are confirmed
-against `Cargo.lock`.
+re-invoking `superpowers:writing-plans` against `semantic-tree.md` §1–§6 — on the
+current accesskit 0.24 / Bevy 0.19-rc.3 base, confirming the setter signatures
+against the resolved deps (`cargo tree`/`cargo doc`).

@@ -7,7 +7,7 @@ The **decomposed semantic-tree substrate**: per-concept state/relation component
 
 Prior-art: [../../prior-art/bevy-a11y/component-model-incident.md](../../prior-art/bevy-a11y/component-model-incident.md) (the megacomponent anti-pattern #17644 we *invert*), [../../prior-art/accesskit/tree-model.md](../../prior-art/accesskit/tree-model.md) (NodeId/TreeUpdate/single-root + the one-canonical-retained-tree model), [../../prior-art/accesskit/capabilities.md](../../prior-art/accesskit/capabilities.md) (the bool-property model), [../../prior-art/accesskit/lessons.md](../../prior-art/accesskit/lessons.md) (decomposed-component lessons), [../../prior-art/wai-aria-apg/roles-states-properties.md](../../prior-art/wai-aria-apg/roles-states-properties.md), [../../prior-art/wai-aria-apg/name-computation.md](../../prior-art/wai-aria-apg/name-computation.md), [../../prior-art/wai-aria-apg/live-regions.md](../../prior-art/wai-aria-apg/live-regions.md). See [README.md](README.md) for the index and the transport research-debt note.
 
-> **Version target.** All setters/Actions target **accesskit 0.24 / Bevy 0.19-rc.3**, sequenced after the BSN/0.19 bump. Main is on 0.21/0.18; every 0.24 signature is forward-looking. **Verify against `Cargo.lock`, not docs.rs.**
+> **Version base.** All setters/Actions target **accesskit 0.24 / Bevy 0.19-rc.3**, the current base (the BSN/0.19 bump landed — PR #70, main @ `3b3b0ba`). **Verify each 0.24 signature against the resolved deps (`cargo tree`/`cargo doc`), not docs.rs.**
 
 ---
 

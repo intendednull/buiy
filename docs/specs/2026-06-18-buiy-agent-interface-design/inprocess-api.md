@@ -132,7 +132,7 @@ Blocks on a **semantic** condition (node appears, state settles, name changes) a
 
 ## 6. Dependency: `accesskit_consumer`
 
-The snapshot path feeds its `TreeUpdate` into an `accesskit_consumer::Tree`, which is **not currently a declared dependency** (root `Cargo.toml` lists only `accesskit`/`accesskit_winit`). Add it to `crates/buiy_core/Cargo.toml`, version **0.36/0.37** — pinned to the release matching the `accesskit` 0.24 bump (verify the compatible pair against `Cargo.lock`, not docs.rs). The whole 0.24 vocabulary rides the in-flight Bevy 0.19-rc.3 bump and is sequenced after it ([phasing.md](./phasing.md)). Main is on 0.21/0.18. Run `cargo deny check` before the bump lands. The dependency is `buiy_core`'s; `buiy_verify`/`buiy_mcp` consume it transitively.
+The snapshot path feeds its `TreeUpdate` into an `accesskit_consumer::Tree`, which is **not currently a declared dependency** (root `Cargo.toml` lists only `accesskit`/`accesskit_winit`). Add it to `crates/buiy_core/Cargo.toml`, version **0.36/0.37** — pinned to the release matching the resolved `accesskit` 0.24 (verify the compatible pair via `cargo tree`/`cargo doc`, not docs.rs; `Cargo.lock` is gitignored here). The 0.24 vocabulary is the current base — the Bevy 0.19-rc.3 bump landed (PR #70, main @ `3b3b0ba`) and this branch is rebased onto it ([phasing.md](./phasing.md)). Run `cargo deny check` when adding the dependency. The dependency is `buiy_core`'s; `buiy_verify`/`buiy_mcp` consume it transitively.
 
 ---
 

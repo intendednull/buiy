@@ -7,7 +7,7 @@ The **one inbound channel** by which screen readers, in-process agents, and Buiy
 
 See also [widget-contracts.md](./widget-contracts.md) (the advertise-and-honor surface) and [inprocess-api.md](./inprocess-api.md) (the headless caller). [README.md](./README.md#rejected-alternatives) records the rejected competing-`ActionHandler` alternative and the risk register.
 
-> **Version note.** Every type/`Action`/`ActionData` here is **accesskit 0.24** (rides the Bevy 0.19-rc.3/wgpu-29 bump; main is 0.21/0.18). Forward-looking. Verify against `Cargo.lock`, not docs.rs.
+> **Version note.** Every type/`Action`/`ActionData` here is **accesskit 0.24** — the current base (the Bevy 0.19-rc.3/wgpu-29 bump landed, PR #70). Verify against the resolved deps (`cargo tree`/`cargo doc`), not docs.rs.
 
 ---
 
