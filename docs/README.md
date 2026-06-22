@@ -56,6 +56,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Phase 0 foundations](plans/2026-05-07-buiy-phase-0-foundations.md) — workspace, BuiyPlugin, system sets, minimal render/layout/a11y/focus/picking/theme, verification harness skeleton, hello-world Button. `[landed]`
 - [Phase 0 closeout](plans/2026-05-08-buiy-phase-0-closeout.md) — render-pipeline draws, AccessKit per-window adapter, `bevy_picking` backend; closes the three substantive deferrals from the Phase 0 self-review. `[landed]`
 - [Buiy verification harness](plans/2026-06-15-buiy-verification-impl.md) — Phases 0–4 realizing `buiy-verification-design`: metric+reftests → snapshots+invariants → goldens+determinism → coverage-by-construction + forced-colors live wiring + docs flip. Harness landed; residue goldens renderer-blocked (follow-ups.md). `[landed]`
+- [CI security & code-quality hardening](plans/2026-06-21-ci-hardening.md) — from a multi-agent CI audit: commit `Cargo.lock` + `--locked`, SHA-pin every action, verify the Mesa tarball checksum, `permissions`/`concurrency`/`timeout-minutes`, optional-feature compile coverage, an MSRV job, `SECURITY.md`/`CODEOWNERS` + branch protection. Dependabot deliberately declined. `[active]`
 
 ### Layout
 
