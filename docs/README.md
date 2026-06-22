@@ -61,7 +61,6 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [CI security & code-quality hardening](plans/2026-06-21-ci-hardening.md) — from a multi-agent CI audit: commit `Cargo.lock` + `--locked`, SHA-pin every action, verify the Mesa tarball checksum, `permissions`/`concurrency`/`timeout-minutes`, optional-feature compile coverage, an MSRV job, `SECURITY.md`/`CODEOWNERS` + branch protection. Dependabot deliberately declined. `[active]`
 - [Buiy agent-interface campaign](plans/2026-06-18-buiy-agent-interface-campaign.md) — coordination/sequencing plan for the agent-interface spec: phases P0→P1a-d→P2, each at a fresh-agent review gate; names the BSN/0.19 (accesskit 0.24) dependency gate and the just-in-time per-phase-plan convention. `[active]`
 - [Buiy agent-interface P0 — addressing](plans/2026-06-18-buiy-agent-interface-p0-addressing.md) — bite-sized TDD for the version-stable groundwork: `entity_for_node_id` (NodeId→Entity inverse), the snapshot off-by-one fix to the canonical ref, and the 7 new `A11yRole` variants + both stringifiers. No live-tree behavior change. `[active]`
-- [CI security & code-quality hardening](plans/2026-06-21-ci-hardening.md) — from a multi-agent CI audit: commit `Cargo.lock` + `--locked`, SHA-pin every action, verify the Mesa tarball checksum, `permissions`/`concurrency`/`timeout-minutes`, optional-feature compile coverage, an MSRV job, `SECURITY.md`/`CODEOWNERS` + branch protection. Dependabot deliberately declined. `[active]`
 
 ### Layout
 
