@@ -7,25 +7,35 @@
 //! a minimal, printable counterexample and the predicates stay world-agnostic.
 //! `realize` does the heavy lifting: it assigns each node a synthetic `Entity`,
 //! decides stacking-context formation, builds each forming node's `painters_z`
-//! exactly as layout sub-pass 6f does (document order, stop-at-nested-context,
-//! stable z-tier sort, top-layer escape), then runs the *production*
+//! by CALLING the production assembly, then runs the *production*
 //! [`context_tree_paint_order`] over a tree whose tails were split with
 //! [`partition_top_layer`](buiy_core::render::top_layer::partition_top_layer)
 //! and ranked with the promoted [`top_layer_paint_rank`], so the realized order
 //! cannot diverge from the engine **over the generated domain**.
 //!
-//! SCOPE (honest bound): the generator's `paint_key` keys on `(Stacking,
-//! z_index)`, not the production `(Stacking, PositionKind)` four-tier key — a
-//! `SceneNode` carries no `PositionKind`, so the tier-2 *(positioned, auto-z)*
-//! paint tier is unrepresentable and never exercised. On the generated domain
-//! `positioned ⟺ z_index.is_some()`, so the two keys agree there; a fixture
-//! that needs the positioned-auto-z tier is a generator-coverage gap, tracked
-//! in `docs/plans/follow-ups.md`.
+//! The per-context paint assembly is NOT mirrored here — `realize` calls the
+//! SHARED production fn
+//! [`painters_z_for_context`](buiy_core::layout::painters_z_for_context), the
+//! same one production's `painters_of` calls (subtree walk in document order,
+//! stop-at-nested-context, escape-exclusion, four-tier stable
+//! [`paint_key`] sort). There is no parallel 6f implementation to drift, so a
+//! regression in that production code reds this invariant directly — the
+//! protection comes from sharing the assembly, NOT from a hand-built predicate
+//! (testing-audit #6). Because `paint_key` keys on `(Stacking, PositionKind)`, a
+//! `SceneNode` carries a generated [`PositionKind`] axis so all four paint tiers
+//! — including tier 2 *(positioned, auto-z)* — are reachable (testing-audit
+//! #13). `z_index` and `position_kind` vary independently (the old `positioned ⟺
+//! z_index.is_some()` domain constraint is gone), so the generator exercises the
+//! same `(Stacking, PositionKind)` space production classifies — e.g. a static
+//! node with an explicit `z_index` (z ignored, stays in-flow) and a positioned
+//! node with auto z (tier 2).
 
 use bevy::prelude::*;
 use proptest::prelude::*;
 
-use buiy_core::layout::{TopLayer, top_layer_paint_rank};
+use buiy_core::layout::{
+    PositionKind, Stacking, TopLayer, ZIndex, paint_key, top_layer_paint_rank,
+};
 use buiy_core::render::components::ClipRect;
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodes, context_tree_paint_order};
 
@@ -44,8 +54,17 @@ pub struct SceneNode {
     pub name: String,
     /// Child subtrees, in document order.
     pub children: Vec<SceneNode>,
-    /// Positioned `z-index`; drives stacking-context formation + the paint
-    /// tier. `None` == auto/static (in-flow document order).
+    /// CSS `position`. Combined with `z_index` this decides the paint tier
+    /// production's [`paint_key`] assigns: a non-`Static` node with an explicit
+    /// `z_index` is "positioned" (tiers 0/3) and forms a stacking context; a
+    /// non-`Static` node with auto `z_index` is tier 2; a `Static` node ignores
+    /// its `z_index` and stays in-flow (tier 1). Varies INDEPENDENTLY of
+    /// `z_index` so the generator covers the full `(Stacking, PositionKind)`
+    /// space (testing-audit #13).
+    pub position_kind: PositionKind,
+    /// Explicit `z-index`. On a positioned node it drives stacking-context
+    /// formation + the paint tier; on a `Static` node it is IGNORED (CSS quirk).
+    /// `None` == auto (in-flow / auto-positioned document order).
     pub z_index: Option<i32>,
     /// `Isolation::Isolate` — forces a stacking context even with no z/transform.
     pub isolation: bool,
@@ -167,13 +186,19 @@ pub fn arb_transform() -> impl Strategy<Value = GenTransform> {
 
 /// Strategy for one node's leaf attributes (everything but `children`/`name`).
 /// `z_index` is drawn from the interesting `{-1, 0, 1, 2}` partition
-/// (negative/zero/positive), gated by `p_stacking`; `top_layer` from all five
-/// variants skewed to `None`, gated by `p_top_layer`.
+/// (negative/zero/positive), gated by `p_stacking`; `position_kind` from all
+/// five variants skewed to `Static` (the common in-flow case); `top_layer` from
+/// all five variants skewed to `None`, gated by `p_top_layer`. `z_index` and
+/// `position_kind` vary INDEPENDENTLY so every `(Stacking, PositionKind)` cell
+/// production's [`paint_key`] classifies is reachable — including tier 2
+/// *(positioned, auto-z)* and the CSS quirk *(static, explicit-z)* (testing-audit
+/// #13).
 fn arb_leaf(p: SceneParams) -> impl Strategy<Value = SceneNode> {
     let z_strategy = prop::option::weighted(
         p.p_stacking,
         prop_oneof![Just(-1i32), Just(0), Just(1), Just(2)],
     );
+    let position_kind = arb_position_kind(p.p_stacking);
     let isolation = prop::bool::weighted(p.p_stacking);
     let top_layer = arb_top_layer(p.p_top_layer);
     let size = (0.0f32..512.0, 0.0f32..512.0);
@@ -181,16 +206,18 @@ fn arb_leaf(p: SceneParams) -> impl Strategy<Value = SceneNode> {
 
     (
         z_strategy,
+        position_kind,
         isolation,
         top_layer,
         arb_transform(),
         size,
         background,
     )
-        .prop_map(|(z, iso, tl, transform, size, bg)| SceneNode {
+        .prop_map(|(z, pos_kind, iso, tl, transform, size, bg)| SceneNode {
             // Placeholder name; `realize`/`arb_scene` rename pre-order.
             name: String::new(),
             children: Vec::new(),
+            position_kind: pos_kind,
             z_index: z,
             isolation: iso,
             top_layer: tl,
@@ -198,6 +225,24 @@ fn arb_leaf(p: SceneParams) -> impl Strategy<Value = SceneNode> {
             size: (size.0, size.1),
             background: bg.map(|(r, g, b, a)| [r, g, b, a]),
         })
+}
+
+/// Strategy for [`PositionKind`], all five variants reachable but heavily skewed
+/// to `Static` (the common in-flow case) so most generated nodes stay in tier 1
+/// and the tree shrinks toward an all-static scene. `p_positioned` (= the
+/// stacking probability) gates how often a node is positioned; when it is, the
+/// four non-static kinds are equiprobable. A positioned node combined with auto
+/// `z_index` is the tier-2 paint class the old generator could not reach
+/// (testing-audit #13).
+fn arb_position_kind(p_positioned: f64) -> impl Strategy<Value = PositionKind> {
+    let positioned = prop_oneof![
+        Just(PositionKind::Relative),
+        Just(PositionKind::Absolute),
+        Just(PositionKind::Fixed),
+        Just(PositionKind::Sticky),
+    ];
+    prop::option::weighted(p_positioned, positioned)
+        .prop_map(|opt| opt.unwrap_or(PositionKind::Static))
 }
 
 /// Strategy for `TopLayer`, all five variants reachable but heavily skewed to
@@ -285,6 +330,19 @@ pub struct Realized {
     /// top-layer field (a render-only signal), so the dominance predicate
     /// recovers membership from here.
     pub top_layer_of: std::collections::HashMap<Entity, TopLayer>,
+    /// `context-root entity → its DIRECT painters` (the `painters_z` list the
+    /// SHARED production assembly returned, EXCLUDING the escaped top-layer tail).
+    /// A nested context root appears here as a single atomic entry. The
+    /// `paint_order_respects_paint_key` predicate reads this to assert each
+    /// context's painters are non-decreasing in [`Self::paint_key_of`]; that
+    /// predicate *observes* the shared assembly's output — the regression
+    /// protection itself comes from `realize` calling the production fn, not from
+    /// the predicate (testing-audit #6).
+    pub painters_of_ctx: std::collections::HashMap<Entity, Vec<Entity>>,
+    /// `entity → its production paint key `(tier, z)``, computed by the real
+    /// [`paint_key`]. The oracle `paint_order_respects_paint_key` checks the
+    /// shared assembly's output against.
+    pub paint_key_of: std::collections::HashMap<Entity, (u8, i32)>,
     /// `entity → node name`, for diagnostics.
     pub name_of: std::collections::HashMap<Entity, String>,
 }
@@ -371,19 +429,27 @@ pub fn realize_full(scene: &Scene) -> Realized {
         idx
     };
 
-    // Build each forming context's `painters_z` (sub-pass 6f mirror):
-    //   descendants in document order, STOP descending at a nested context
-    //   (it appears as an atomic entry), EXCLUDE top-layer members (they
-    //   escape), then a STABLE sort by the (tier, z) paint key.
+    // Build each forming context's in-flow `painters_z` by calling the SHARED
+    // production assembly `buiy_core::layout::painters_z_for_context` — the SAME
+    // function production's `painters_of` calls, over flat-node indices instead
+    // of `Entity`. There is NO parallel copy in the harness: the subtree walk
+    // (document order, STOP at a nested context, EXCLUDE escaping top-layer
+    // members) and the four-tier `paint_key` stable sort are production's, so a
+    // regression to that code (a reversed sort, descending past a nested context)
+    // reds THIS invariant — which a hand-rolled mirror would miss (testing-audit
+    // #6). Closures: direct children in document order; `forms` membership; the
+    // top-layer exclusion (the scene domain has no `Display::None`); the
+    // production paint key over `(Stacking, PositionKind)`.
     let mut painters_z: std::collections::HashMap<usize, Vec<usize>> =
         std::collections::HashMap::new();
     for &ctx in &forms {
-        let mut painters = Vec::new();
-        collect_painters(ctx, &children_of, &forms, &by_idx, &mut painters);
-        // Stable sort by the document-tier paint key (negative-z first, then
-        // in-flow, then auto-positioned, then positive-z ascending). The Vec is
-        // already in document order so equal-key entries keep it (spec § 2.1).
-        painters.sort_by_key(|&i| paint_key(by_idx[&i]));
+        let painters = buiy_core::layout::painters_z_for_context(
+            ctx,
+            |i| children_of.get(&i).cloned().unwrap_or_default(),
+            |i| forms.contains(&i),
+            |i| by_idx[&i].top_layer != TopLayer::None,
+            |i| node_paint_key(by_idx[&i]),
+        );
         painters_z.insert(ctx, painters);
     }
 
@@ -527,6 +593,29 @@ pub fn realize_full(scene: &Scene) -> Realized {
         })
         .collect();
 
+    // Each forming context's DIRECT painters in the order the SHARED production
+    // assembly returned (excluding the escaped top-layer tail — that tail is
+    // ordered by `top_layer_paint_rank`, not `paint_key`, and is checked by
+    // `top_layer_dominates`). `paint_key_of` gives every painted entity its
+    // production paint key. Together they let `paint_order_respects_paint_key`
+    // observe the shared assembly's output. NB: the regression protection is the
+    // shared call above, not this predicate; a reversed production 6f sort reds
+    // the invariant because `realize` ran the reversed code, not because the
+    // predicate re-derives anything.
+    let painters_of_ctx: std::collections::HashMap<Entity, Vec<Entity>> = painters_z
+        .iter()
+        .map(|(&ctx, painters)| {
+            (
+                entity_of[&ctx],
+                painters.iter().map(|i| entity_of[i]).collect(),
+            )
+        })
+        .collect();
+    let paint_key_of: std::collections::HashMap<Entity, (u8, i32)> = order
+        .iter()
+        .map(|&e| (e, node_paint_key(by_idx[&idx_of_entity[&e]])))
+        .collect();
+
     Realized {
         nodes: ExtractedNodes {
             nodes,
@@ -535,6 +624,8 @@ pub fn realize_full(scene: &Scene) -> Realized {
         context_of,
         context_members,
         top_layer_of,
+        painters_of_ctx,
+        paint_key_of,
         name_of,
     }
 }
@@ -545,6 +636,7 @@ struct FlatNode {
     parent: Option<usize>,
     is_root: bool,
     name: String,
+    position_kind: PositionKind,
     z_index: Option<i32>,
     isolation: bool,
     top_layer: TopLayer,
@@ -554,16 +646,47 @@ struct FlatNode {
 }
 
 impl FlatNode {
-    /// The stacking-context formation triggers we model (invariants.md): root,
-    /// `Isolation::Isolate`, positioned `z-index`, non-identity transform, and
-    /// — so it hosts its own escaped subtree — any top-layer member (a top-layer
-    /// node always escapes as a context root, paint-order § 4.1).
+    /// `true` iff the node is positioned (non-`Static`). The paint tier + the
+    /// z-index stacking-context trigger both apply only to positioned nodes; a
+    /// `Static` node's `z_index` is ignored (CSS quirk, mirroring production's
+    /// `paint_key` / `forms_stacking_context`).
+    fn positioned(&self) -> bool {
+        !matches!(self.position_kind, PositionKind::Static)
+    }
+
+    /// The stacking-context formation triggers we model — the generator-side
+    /// mirror of production's `forms_stacking_context` over the triggers this
+    /// scene domain can express: root, `Isolation::Isolate`, POSITIONED with an
+    /// explicit `z-index` (trigger 1 — a static node's z is ignored), non-identity
+    /// transform, and — so it hosts its own escaped subtree — any top-layer
+    /// member (a top-layer node always escapes as a context root, paint-order
+    /// § 4.1). Render-side formers (opacity/filter/blend) + containment are not
+    /// modeled by the scene generator.
     fn forms_context(&self) -> bool {
         self.is_root
             || self.isolation
-            || self.z_index.is_some()
+            || (self.positioned() && self.z_index.is_some())
             || !self.transform.is_identity()
             || self.top_layer != TopLayer::None
+    }
+
+    /// The production [`Stacking`] this node maps to — fed straight into the
+    /// production [`paint_key`] so the invariant keys identically. `z_index:
+    /// None` → `ZIndex::Auto`; the `top_layer`/`isolation` fields are carried for
+    /// fidelity though `paint_key` ignores them.
+    fn stacking(&self) -> Stacking {
+        Stacking {
+            z_index: match self.z_index {
+                Some(z) => ZIndex::Layer(z),
+                None => ZIndex::Auto,
+            },
+            isolation: if self.isolation {
+                buiy_core::layout::Isolation::Isolate
+            } else {
+                buiy_core::layout::Isolation::Auto
+            },
+            top_layer: self.top_layer,
+        }
     }
 }
 
@@ -575,6 +698,7 @@ fn flatten(node: &SceneNode, parent: Option<usize>, is_root: bool, out: &mut Vec
         parent,
         is_root,
         name: node.name.clone(),
+        position_kind: node.position_kind,
         z_index: node.z_index,
         isolation: node.isolation,
         top_layer: node.top_layer,
@@ -600,46 +724,14 @@ fn subtree_size(node: &SceneNode) -> usize {
     1 + node.children.iter().map(subtree_size).sum::<usize>()
 }
 
-/// Collect a context's in-flow painters (sub-pass 6f mirror) by descending
-/// from `cur`: walk descendants in document order, STOP at a nested forming
-/// context (which appears as an atomic entry), EXCLUDE top-layer members (they
-/// escape elsewhere).
-fn collect_painters(
-    cur: usize,
-    children_of: &std::collections::HashMap<usize, Vec<usize>>,
-    forms: &std::collections::HashSet<usize>,
-    by_idx: &std::collections::HashMap<usize, &FlatNode>,
-    out: &mut Vec<usize>,
-) {
-    let Some(kids) = children_of.get(&cur) else {
-        return;
-    };
-    for &child in kids {
-        if by_idx[&child].top_layer != TopLayer::None {
-            // Top-layer member escapes — not in any in-flow painters list.
-            continue;
-        }
-        out.push(child);
-        // Descend only if the child does NOT itself form a context (a nested
-        // context root appears as a single atomic entry; its descendants live
-        // in its own painters_z).
-        if !forms.contains(&child) {
-            collect_painters(child, children_of, forms, by_idx, out);
-        }
-    }
-}
-
-/// The (tier, z) paint key — the generator-side mirror of `buiy_core`'s
-/// `paint_key` (which is `pub(super)`): negative-z first (tier 0), in-flow
-/// non-positioned (tier 1), auto-positioned (tier 2), positive-z ascending
-/// (tier 3). A node is "positioned" here iff it has an explicit `z_index`.
-fn paint_key(n: &FlatNode) -> (u8, i32) {
-    match n.z_index {
-        Some(z) if z < 0 => (0, z),
-        None => (1, 0),
-        Some(0) => (3, 0),
-        Some(z) => (3, z),
-    }
+/// The (tier, z) paint key for a flat node, computed by the PRODUCTION
+/// [`paint_key`] over the node's `(Stacking, PositionKind)` — never a private
+/// copy. Covers all four tiers: negative-z (0), in-flow non-positioned (1),
+/// positioned-auto-z (2), positive-z ascending (3); a static node's z is ignored
+/// (tier 1). Threading production here is what makes a 6f-sort reversal red the
+/// metamorphic invariant (testing-audit #6 / #13).
+fn node_paint_key(n: &FlatNode) -> (u8, i32) {
+    paint_key(Some(&n.stacking()), n.position_kind)
 }
 
 /// Build the `ExtractedNode` for one realized node. Position is a deterministic
@@ -682,6 +774,7 @@ mod tests {
         SceneNode {
             name: name.to_string(),
             children,
+            position_kind: PositionKind::Static,
             z_index: None,
             isolation: false,
             top_layer: TopLayer::None,

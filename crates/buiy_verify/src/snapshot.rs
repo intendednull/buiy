@@ -342,6 +342,15 @@ fn entity_label(name: Option<&Name>, e: Entity) -> String {
 /// color is already theme-resolved, so the magenta `MISSING_TOKEN_FALLBACK`
 /// sentinel surfaces here as `#ff00ffff` — a literal that flags an unresolved
 /// token (snapshots.md § Tier 2).
+/// Public `#rrggbbaa` rendering of a resolved `Color`, identical to what
+/// [`display_list_dump`] writes per node. Exposed so a guard test can compute
+/// the exact hex of the missing-token sentinel (`MISSING_TOKEN_FALLBACK`) the
+/// dump would emit and assert no enrolled cell baselines it — observing the same
+/// rendering the tier records, not a hand-spelled string that could drift.
+pub fn color_hex_for_test(color: Color) -> String {
+    color_hex(color)
+}
+
 fn color_hex(color: Color) -> String {
     let s = Srgba::from(color);
     let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -529,7 +538,12 @@ fn advance_virtual_to(app: &mut App, t: std::time::Duration) {
 /// ordered by `Name` then rendered box (position, size) for determinism — never
 /// by `Entity` index (spawn-order dependent; same fix as the Tier-1 layout
 /// sort). Pure-CPU: the same single record builder the RenderApp's extract uses.
-fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
+///
+/// Public because it is the canonical CPU display-list extraction the Tier-2
+/// snapshot baselines — a property test that asserts an attribute of that dump
+/// (DPR-invariance, or "never the magenta sentinel") must observe the SAME
+/// artifact the tier records, not a parallel re-implementation.
+pub fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
     use buiy_core::render::components::Background;
     use buiy_core::render::extract::extracted_node_for;
     use buiy_core::theme::Theme;

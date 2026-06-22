@@ -16,6 +16,8 @@
 
 use bevy::app::App;
 
+use super::matrix::Cell;
+
 /// One catalog row: a widget × state scene factory, authored once.
 ///
 /// `spawn` MUST spawn a `Camera2d` (so a capture-capable app has a view) and
@@ -34,6 +36,35 @@ pub struct Fixture {
     pub state: &'static str,
     /// Spawns the scene into a deterministic app.
     pub spawn: fn(&mut App),
+    /// Whether this fixture can paint a cell **without** the missing-token
+    /// magenta sentinel — i.e. whether all the color tokens it spawns resolve
+    /// under that cell's theme.
+    ///
+    /// `None` (the macro default) means *every* cell: the common case, a fixture
+    /// whose tokens resolve in every theme. A fixture whose paint is theme-
+    /// restricted (e.g. a **system-color-only** widget, whose `SystemColor`
+    /// tokens resolve only under the wholesale forced-colors theme swap and miss
+    /// — rendering `#ff00ffff` — under the brand-token light theme) sets this so
+    /// the **snapshot tiers skip the cells it cannot paint**, rather than
+    /// baselining the sentinel as if it were the expected color (audit
+    /// 2026-06-18: a snapshot that bakes in the sentinel cements a known-wrong
+    /// pixel and hides a real regression to/from magenta).
+    ///
+    /// Only the CPU **snapshot** tiers (layout / display-list) honor this — they
+    /// are the tiers that would otherwise baseline the sentinel. The invariant
+    /// and golden tiers run every cell (they assert structure / capture pixels,
+    /// not a token-resolved color baseline). A skipped cell still has real
+    /// coverage everywhere the fixture *does* resolve (forced-colors here).
+    pub paints_cell: Option<fn(&Cell) -> bool>,
+}
+
+impl Fixture {
+    /// Whether the CPU snapshot tiers should enroll `cell` for this fixture:
+    /// `true` unless the fixture's [`paints_cell`](Self::paints_cell) predicate
+    /// rejects it (an unpaintable cell that would baseline the magenta sentinel).
+    pub fn snapshots_cell(&self, cell: &Cell) -> bool {
+        self.paints_cell.is_none_or(|p| p(cell))
+    }
 }
 
 impl std::fmt::Debug for Fixture {
@@ -69,11 +100,25 @@ pub fn sorted_catalog() -> Vec<&'static Fixture> {
 /// the root). Emitting an `inventory::submit!` is what makes the fixture
 /// enroll across every tier with no central-list edit.
 ///
-/// ```ignore
+/// The optional `paints_cell = |cell| …` arm declares which cells the fixture
+/// can paint **without** the missing-token sentinel (see
+/// [`Fixture::paints_cell`]); omit it for the common case (resolves in every
+/// theme). The CPU snapshot tiers skip the cells it rejects.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy_verify::coverage::matrix::ThemeAxis;
+/// use buiy_verify::fixture;
+///
 /// fixture! {
 ///     name  = "button",
 ///     state = "resting",
-///     spawn = |app| { /* spawn Camera2d + Name-tagged button */ },
+///     spawn = |app: &mut App| {
+///         // A real fixture spawns a `Camera2d` and a `Name`-tagged root here.
+///         app.world_mut().spawn((Camera2d, Name::new("button")));
+///     },
+///     // system-color-only: skip the brand-token light theme.
+///     paints_cell = |cell| cell.theme == ThemeAxis::ForcedColors,
 /// }
 /// ```
 #[macro_export]
@@ -84,6 +129,24 @@ macro_rules! fixture {
                 name: $name,
                 state: $state,
                 spawn: $spawn,
+                paints_cell: ::core::option::Option::None,
+            }
+        }
+    };
+    (
+        name = $name:expr,
+        state = $state:expr,
+        spawn = $spawn:expr,
+        paints_cell = $paints:expr $(,)?
+    ) => {
+        ::inventory::submit! {
+            $crate::coverage::fixture::Fixture {
+                name: $name,
+                state: $state,
+                spawn: $spawn,
+                // The struct field type (`Option<fn(&Cell) -> bool>`) drives the
+                // closure-to-fn-pointer coercion at this `Some(...)` position.
+                paints_cell: ::core::option::Option::Some($paints),
             }
         }
     };

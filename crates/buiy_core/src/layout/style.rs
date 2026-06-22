@@ -30,7 +30,9 @@ use bevy::math::Quat;
 ///
 /// Two authoring forms over the same fields:
 ///
-/// ```ignore
+/// ```
+/// use buiy_core::layout::{Display, Style};
+///
 /// // Struct-literal form.
 /// let s = Style { display: Display::flex_row(), ..Default::default() };
 ///

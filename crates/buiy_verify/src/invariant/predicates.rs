@@ -271,6 +271,66 @@ pub fn top_layer_dominates(r: &Realized) -> Result<(), Violation> {
 }
 
 // ---------------------------------------------------------------------------
+// #6 — within-context paint order follows the production paint key.
+// ---------------------------------------------------------------------------
+
+/// Within every stacking context, the DIRECT painters appear in non-decreasing
+/// production [`paint_key`](buiy_core::layout::paint_key) order — the observable
+/// result of layout sub-pass 6f's stable tier sort (negative-z behind in-flow
+/// behind auto-positioned behind positive-z ascending; equal keys keep document
+/// order).
+///
+/// This predicate OBSERVES the order [`realize`](super::scene::realize)
+/// produced; the regression protection itself comes from `realize` calling the
+/// SHARED production assembly
+/// [`painters_z_for_context`](buiy_core::layout::painters_z_for_context), not
+/// from this check. A 6f-ASSEMBLY regression — a reversed sort, a broken
+/// stop-at-context walk, or any reordering inside the shared
+/// `painters_z_for_context` — reds the invariant because `realize` ran the
+/// regressed PRODUCTION code and the resulting order no longer matches the key;
+/// this predicate then reports it. A change to `paint_key`'s DEFINITION (the
+/// tiering itself) is NOT caught here: the produced order and this predicate's
+/// key oracle both derive from the same `paint_key`, so they move together by
+/// design — that class is guarded by `buiy_core`'s own `paint_key` unit tests.
+/// The other 5 predicates (no-dup, dominance, no-interleave, finiteness) are all
+/// order-INSENSITIVE within a context, so none of them surfaces a 6f reordering;
+/// this predicate is the one that turns a wrong shared-assembly output into a
+/// failure (testing-audit #6).
+///
+/// Reads `paint_key`s from [`Realized::paint_key_of`](super::scene::Realized) —
+/// the real `buiy_core::layout::paint_key`, never a re-implementation.
+pub fn paint_order_respects_paint_key(r: &Realized) -> Result<(), Violation> {
+    let name = |e: Entity| {
+        r.name_of
+            .get(&e)
+            .cloned()
+            .unwrap_or_else(|| format!("{e:?}"))
+    };
+    for (&ctx, painters) in &r.painters_of_ctx {
+        let mut prev: Option<((u8, i32), Entity)> = None;
+        for &p in painters {
+            let key = r.paint_key_of.get(&p).copied().unwrap_or((u8::MAX, 0));
+            if let Some((pk, pe)) = prev
+                && key < pk
+            {
+                return Err(Violation::new(
+                    "paint_order_respects_paint_key",
+                    format!(
+                        "in context {}, painter {} (paint_key {key:?}) paints after {} \
+                         (paint_key {pk:?}) — the 6f tier sort is not non-decreasing",
+                        name(ctx),
+                        name(p),
+                        name(pe),
+                    ),
+                ));
+            }
+            prev = Some((key, p));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // #4 — finiteness / non-negativity.
 // ---------------------------------------------------------------------------
 

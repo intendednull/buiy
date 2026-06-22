@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly cadence (audit #15 + #30): re-exercise the EXACT(0,0) Mesa-brittle
+  # goldens and the proptest invariants on a schedule so a silent Mesa/toolchain
+  # drift is caught within a week rather than only on the next unrelated PR.
+  # Monday 06:00 UTC. The heavy llvm-cov job is gated to push/schedule (its
+  # `if:`), so PRs are not slowed by this trigger. The concurrency rule below
+  # only cancels pull_request runs, so a scheduled run is never pre-empted by
+  # (nor pre-empts) a push-to-main — its whole purpose is to run independently.
+  schedule:
+    - cron: "0 6 * * 1"
 
 # Least privilege, made explicit rather than relying on the (currently
 # read-only) repo-level default — so flipping the repo "Workflow permissions"
@@ -134,25 +143,66 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # The CI test runner is cargo-nextest (audit #9 / plan T5.2, DG-2): it runs
+      # the consolidated 7-binary suite (T5.1) with per-test process isolation +
+      # built-in flaky-retry. Combined with the 162→7 binary collapse this removes
+      # the per-binary bevy-relink fan-out behind the ~63-min `cargo test` baseline
+      # (#9). cargo-insta drives nextest for the headless run so the SAME pass also
+      # rejects unreferenced/stale committed .snap orphans (#17, plan T5.2b). Both
+      # are prebuilt, checksum-verified binaries via the SHA-pinned install-action;
+      # versions are pinned so the runner schema stays reproducible (bump
+      # deliberately). insta is pinned to the exact crate version the workspace
+      # depends on so the runner and the library agree on the .snap format.
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        with:
+          tool: cargo-nextest@0.9.133,cargo-insta@1.48.0
       - name: Install Linux deps for Bevy
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev xvfb at-spi2-core
-      - name: cargo test (headless via xvfb on Linux)
+      # debuginfo for the dev/test profiles is disabled in root Cargo.toml
+      # ([profile.dev]/[profile.test] debug = 0, audit #10); the 162→7 binary
+      # collapse (#9, T5.1) removed the link-OOM fan-out, so no per-job
+      # CARGO_PROFILE_* env or `-j 2` cap is needed here.
+      #
+      # Lock-freshness guard for the insta step: cargo-insta does NOT forward
+      # `--locked` to the build it drives, so this cheap `cargo tree --locked`
+      # resolves the graph against the committed Cargo.lock (no network, no build)
+      # and fails if the lock is stale/absent before the insta run builds it.
+      - name: Assert Cargo.lock is current (--locked guard for the insta step)
         if: matrix.os == 'ubuntu-latest'
-        # debuginfo is the largest disk consumer for the bevy test binaries —
-        # disabling it for the test profiles shrinks the target dir enough to
-        # fit the runner alongside the disk-cleanup step above. -j 2 also caps
-        # peak concurrent link temp files. (Root cause was disk exhaustion,
-        # surfacing as ld SIGBUS — see the Free-disk step.)
-        env:
-          CARGO_PROFILE_DEV_DEBUG: "0"
-          CARGO_PROFILE_TEST_DEBUG: "0"
-        run: xvfb-run -a cargo test --workspace --locked -j 2
-      - name: cargo test (macOS / Windows)
+        run: cargo tree --locked --workspace --depth 0 > /dev/null
+      # Linux: cargo-insta drives nextest, so this single step (a) runs the whole
+      # consolidated headless suite under xvfb and (b) fails on any
+      # unreferenced/stale committed .snap (`--unreferenced=reject`, the real #17
+      # fix). A snapshot MISMATCH also fails here via insta's CI default.
+      # `--disable-nextest-doctest` leaves doctests to the dedicated step below.
+      - name: cargo insta test + nextest (headless via xvfb on Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: xvfb-run -a cargo insta test --workspace --test-runner nextest --unreferenced=reject --disable-nextest-doctest
+      # macOS / Windows: plain nextest (snapshots are platform-independent text, so
+      # the unreferenced gate runs once on Linux). A mismatch still fails here.
+      - name: cargo nextest run (macOS / Windows)
         if: matrix.os != 'ubuntu-latest'
-        run: cargo test --workspace --locked
+        run: cargo nextest run --workspace --locked
+      # nextest never runs doctests (separate libtest harness), so the runnable
+      # doctests (plan T4.1) get their own fast step on every OS.
+      - name: cargo test --doc (doctests, all OSes)
+        run: cargo test --doc --workspace --locked
+      # Snapshot hygiene (audit #17): a force-committed *.snap.new (pending) is
+      # gitignored, so only `git add -f` lands one; --unreferenced won't flag a
+      # pending snap (not an orphan), so this git-ls-files check guards it.
+      - name: Snapshot hygiene (no committed pending snapshots)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          pending="$(git ls-files '*.snap.new')"
+          if [ -n "${pending}" ]; then
+            echo "::error::pending insta snapshots are committed — run cargo insta review; never commit *.snap.new:"
+            echo "${pending}"
+            exit 1
+          fi
 
   # ----------------------------------------------------------------------------
   # MSRV gate: the workspace declares `rust-version` (Cargo.toml
@@ -247,10 +297,45 @@ jobs:
           echo "${ADAPTERS}"
           echo "${ADAPTERS}" | grep -iq 'llvmpipe' \
             || { echo "::error::pinned lavapipe (llvmpipe) adapter not selected — VK_DRIVER_FILES/WGPU_ADAPTER_NAME wiring did not take effect"; exit 1; }
-      # The GPU lane: serialize one adapter context at a time (--test-threads=1).
-      # No --ignored on the headless job above; this is the only leg that
-      # instantiates an adapter.
-      - name: cargo test (GPU #[ignore] lane on pinned lavapipe)
+      # cargo-nextest runs the GPU lane via the `gpu` profile (.config/nextest.toml:
+      # the gpu-serial test-group caps it to one adapter context at a time, with
+      # flaky-retry). No --ignored on the headless job above; this is the only leg
+      # that instantiates an adapter. Includes the buiy facade GPU test (T0.2).
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        with:
+          tool: cargo-nextest@0.9.133
+      - name: cargo nextest run (GPU #[ignore] lane on pinned lavapipe)
+        run: cargo nextest run --profile gpu -p buiy_core -p buiy_verify -p buiy --locked --run-ignored=only
+
+  # ----------------------------------------------------------------------------
+  # Coverage (informational, audit #41 / DG-4): produces an lcov artifact; no
+  # pass/fail gate yet. Gated to push/schedule (not PRs) so it never slows PR
+  # turnaround. cargo-llvm-cov drives the headless suite under xvfb.
+  llvm-cov:
+    name: Coverage (informational)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master @ 2026-06-20
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        with:
+          tool: cargo-llvm-cov
+      - name: Install Linux deps for Bevy
         run: |
-          cargo test -p buiy_core --locked -j 2 -- --ignored --test-threads=1
-          cargo test -p buiy_verify --locked -j 2 -- --ignored --test-threads=1
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev xvfb at-spi2-core
+      - name: cargo llvm-cov (headless, informational)
+        run: xvfb-run -a cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Upload coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov.info
+          path: lcov.info

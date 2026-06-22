@@ -1111,21 +1111,30 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   and color-emoji atlas output are not yet exercised end-to-end by a capturable
   fixture; the corpus is started with `rect-rounded`/`text-ahem` and these classes
   are added when the renderer paths land.
-- **`coverage_golden::matrix_goldens` skips un-blessed cells — LANDED, lane
-  green.** The Tier-5 enrollment driver (`coverage_golden.rs`) iterates
-  `Matrix::ci_default()` over the `button` fixture and `assert_golden`s each cell;
-  cells with **no committed positive** are now skipped (treated as `ignored`, not
-  `fail` — `coverage_golden.rs:106-109`) rather than fail-closing, so the
-  `--ignored` GPU lane is green until cells are deliberately blessed. (This is the
-  landed resolution; the original entry listed it as an open campaign-owner option
-  (i).) **Residual note — blessing `button` cells is non-trivial:** the coverage
-  report flagged that the default `Button` under Buiy's *wholesale* forced-colors
-  swap paints the magenta missing-token sentinel
+- **`coverage_golden::matrix_goldens` — skip-as-pending LANDED; remaining work is
+  blessing the real residue cells.** The Tier-5 enrollment driver
+  (`coverage_golden.rs`) iterates `Matrix::ci_default()` over the catalog and
+  `assert_golden`s each cell. Resolution option (i) — *skip un-blessed cells
+  instead of fail-closing the lane* — has shipped: `coverage_golden.rs:104-114`
+  skips any cell whose `committed_positives(&key) == 0` (counting it as
+  `pending`) unless `BUIY_BLESS` is set, so the `--ignored` GPU lane is now
+  **green**, not RED, while the corpus is still being built. The test's real
+  non-vacuity guard (audit #14): on the pinned lavapipe, if the corpus blesses
+  ANY matrix cell, a green run must have compared ≥1 (`assert!(asserted > 0)`,
+  `coverage_golden.rs:178-185`); the separate `asserted + pending > 0`
+  (`coverage_golden.rs:191`) is only a catalog-non-empty sanity check. It
+  prints an HONEST status line distinguishing cells *compared* from cells
+  *pending*; a *blessed* cell still fails closed on drift (the "no golden
+  committed for `<slug>`" message is `golden/check.rs:282`, reached only on the
+  bless/assert path — never for skipped cells). Only `rect-rounded` + `text-ahem`
+  are blessed so far. **Still deferred — blessing the residue cells (e.g.
+  `button`):** non-trivial because the default `Button` under Buiy's *wholesale*
+  forced-colors swap paints the magenta missing-token sentinel
   (`color-and-forced-colors.md § 3.1`), so blessing those cells verbatim would
-  cement a known-wrong pixel as a golden; bless only the forced-colors-*safe*
+  cement a known-wrong pixel as a golden. Bless only the forced-colors-*safe*
   cells once the default widget is forced-colors-safe
-  (`buiy-widget-catalog-design`). The headless gate (the every-PR CI gate, which
-  never runs `--ignored`) stays fully green and unaffected.
+  (`buiy-widget-catalog-design`). The headless every-PR gate never runs
+  `--ignored` and is unaffected throughout.
 - **Forced-colors `BoxShadow` *visual* reftest** — blocked on the unlanded
   `BoxShadow` extract/draw path (see the R11 entry above); kept as an `#[ignore]`'d
   assertion-free placeholder, not a green test.
@@ -1138,6 +1147,19 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   § Stale-positive guard) is a design hook, machinery deferred. (Follow-ups-drain
   reviewed and left deferred — re-open when the golden corpus grows enough that
   stale positives are plausible; nothing to prune at the current few cells.)
+- **Shaping-corpus breadth (pure-Hebrew / VS16 / Thai / Khmer fixtures)** —
+  named in audit #38 (T4.6), deliberately DEFERRED rather than landed in the
+  testing-audit campaign. The shaping corpus is a curated, byte-reproducible
+  artifact: every fixture font is a `pyftsubset` subset of a SHA256-pinned
+  upstream produced ONLY by `tools/fonts/subset_fixture_fonts.sh`, which hard-pins
+  `fontTools==4.56.0`. Adding new script arms is a font-acquisition task (new
+  pinned OFL upstreams + digests + provenance) run through that pipeline, not a
+  low/info test cleanup — and the dev box has fontTools 4.63.0, so any subset
+  produced here would diverge byte-wise and break the corpus's reproducibility
+  guarantee. Existing fixtures already cover the shaper behaviors (Hebrew RTL via
+  `mixed_bidi`; Arabic joining; Devanagari reordering; CJK; emoji-ZWJ ligation).
+  Land the new arms when a fontTools-4.56.0 environment + the pinned upstreams are
+  available; verify via `BUIY_ACCEPT_SHAPING=1` + a reviewed `.snap` diff.
 - **Object-store golden migration** — in-git PNGs until the named trigger
   (>50 MB total or >500 positives); the `GoldenKey`/`BlessLedger` schema is fixed
   now so the migration is mechanical (`goldens.md` § Storage staging).
@@ -1536,3 +1558,47 @@ not the signal — only the CI-Mesa result is.
 **Owner:** the CI maintainer at the 0.19 toolchain bump.
 
 **Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 7.
+
+## Testing-audit × 0.19 merge — cosmetic test residue (post-reconciliation)
+
+Two zero-impact cosmetic items the reconciliation review surfaced when the
+testing-audit branch merged with main's Bevy 0.19 + affine-paint work. Neither
+affects correctness or either gate (headless 1324/84 green, GPU 83/0); both are
+follow-up cleanups.
+
+- **`render_smoke.rs` stale test name** —
+  `clip_aabb_pipeline_registers_with_stride_52` (and two "stride-52" comments)
+  predate main's affine layout, which lifted the per-instance stride to **68**
+  (`primitive.rs array_stride: 68`, `instance.rs PACKED_INSTANCE_STRIDE_BYTES=68`).
+  Inherited verbatim from main's affine commit (cf554b9) — the test body asserts
+  no stride (`let _ = pipeline.id;`), so nothing passes wrongly. Rename to
+  `..._with_stride_68` + fix the comments.
+- **insta `source:` headers stale after the Phase-5 consolidation** — the
+  relocated snapshots under `crates/buiy_core/tests/render/snapshots/`
+  (`pack_instance_logical_px` + siblings) still carry pre-move `source:` paths
+  (e.g. `tests/render_instance.rs`). insta matches by snapshot name + module path
+  (not the header), and the bodies are correct (they took main's affine-blessed
+  form), so the suite is green. Regenerate to refresh the headers.
+
+## 0.19 lavapipe pixel-residue recalibration (LANDED) — re-verify at the next toolchain bump
+
+The wgpu27→29 (Bevy 0.18→0.19) bump shifted one lavapipe pixel-residue fact the
+GPU lane pins: the floored 2-physical-px **underline** band
+(`text_decoration_gpu::underline_quad_band_residue_on_pinned_lavapipe`, was
+`..._has_the_antialiased_quad_signature`). Under wgpu27 the pinned lavapipe read
+it at AA alpha 0.84375 (≈237, no full-coverage row); wgpu29 pixel-aligns the 2px
+band so both rows read FULL coverage (255) — confirmed against the pinned Mesa
+24.3.4 lavapipe (the same artifact CI uses). The assertion was recalibrated to the
+solid 2-row residue. **NOT a regression** — the band rasterizes correctly (2px,
+solid red, deterministic; the band-count + re-capture-determinism legs are
+unchanged). The other lavapipe-pinned residues did NOT drift: `golden_sdf_corner`
+and the blessed coverage cells (rect-rounded, text-ahem) still pass EXACT on
+wgpu29 lavapipe (the full 83-test GPU lane is green on the pinned rasterizer).
+
+**Forward-looking:** lavapipe pixel residues are rasterizer+toolchain-pinned
+(determinism.md). At the NEXT wgpu/Mesa bump, re-run the full `--profile gpu` lane
+on the pinned lavapipe and recalibrate/re-bless whatever shifts. A dev host can
+reproduce the canonical rasterizer USER-SPACE (no sudo): download the
+`install-mesa`-pinned Mesa tarball + a matching `libLLVM`/`libxml2`/`icu` (e.g.
+from the Arch archive) onto `LD_LIBRARY_PATH`, write an ICD JSON pointing at
+`libvulkan_lvp.so`, and set `VK_DRIVER_FILES` + `WGPU_ADAPTER_NAME=llvmpipe`.

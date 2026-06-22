@@ -34,7 +34,8 @@ pub use scene::{
 pub mod predicates;
 pub use predicates::{
     EPS, Violation, all_finite, all_finite_packed, contexts_do_not_interleave, mat4_is_identity,
-    mat4_is_pure_scale, paint_order_is_total, top_layer_dominates, transform_roundtrips,
+    mat4_is_pure_scale, paint_order_is_total, paint_order_respects_paint_key, top_layer_dominates,
+    transform_roundtrips,
 };
 
 pub mod bidi;

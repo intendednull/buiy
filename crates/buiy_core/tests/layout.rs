@@ -1,120 +1,62 @@
-use bevy::prelude::*;
-use buiy_core::{
-    CorePlugin,
-    components::{Node, ResolvedLayout},
-    layout::{LayoutPlugin, LayoutTree, Style},
-};
-use buiy_verify::snapshot::assert_layout_snapshot;
+//! Layout integration tests — the **layout** subsystem group binary (testing
+//! audit #9, T5.1). Consolidates the per-file `layout*.rs` integration tests
+//! (flex/grid/table/multicol/anchor/sticky/overflow/transforms/topology/…)
+//! into ONE binary so `tests/support/mod.rs` and the bevy link are compiled
+//! once for this group instead of once per file. Each former `tests/<file>.rs`
+//! now lives at `tests/layout/<file>.rs`, included via an explicit `#[path]`
+//! below (this file is a test-binary crate root, so a bare `mod foo;` would
+//! resolve to `tests/foo.rs`, not `tests/layout/foo.rs`). The shared support
+//! harness is owned here at the binary root; the submodules reach it via
+//! `crate::support`.
 
-#[test]
-fn layout_resolves_a_simple_flex_row() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(LayoutPlugin);
+#[path = "support/mod.rs"]
+mod support;
 
-    // A 200x100 flex-row root with two 50x50 children. `Name`-tagging is what
-    // makes the Tier-1 layout snapshot diff-stable (entity-by-Name, never raw
-    // Entity bits). The trailing per-field `(size.x - 50.0).abs() < 0.5` pair
-    // is now one holistic `assert_layout_snapshot` — the .snap pins EVERY box's
-    // position+size (root + both children), strictly more than the old child-
-    // only width/height tolerance asserts (snapshots.md § Tier 1).
-    let parent = app
-        .world_mut()
-        .spawn((
-            Node,
-            Name::new("root"),
-            Style::default().flex_row().width_px(200.0).height_px(100.0),
-        ))
-        .id();
-
-    let child0 = app
-        .world_mut()
-        .spawn((
-            Node,
-            Name::new("row.item[0]"),
-            Style::default().width_px(50.0).height_px(50.0),
-        ))
-        .id();
-    let child1 = app
-        .world_mut()
-        .spawn((
-            Node,
-            Name::new("row.item[1]"),
-            Style::default().width_px(50.0).height_px(50.0),
-        ))
-        .id();
-
-    app.world_mut()
-        .entity_mut(parent)
-        .add_children(&[child0, child1]);
-
-    assert_layout_snapshot(&mut app, "flex_row_basic");
-}
-
-#[test]
-fn layout_tree_garbage_collects_despawned_entities() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(LayoutPlugin);
-
-    let entity = app
-        .world_mut()
-        .spawn((Node, Style::default().width_px(100.0).height_px(100.0)))
-        .id();
-
-    app.update();
-    assert_eq!(
-        app.world().non_send::<LayoutTree>().len(),
-        1,
-        "spawned entity registered in LayoutTree after first update",
-    );
-
-    app.world_mut().entity_mut(entity).despawn();
-    app.update();
-
-    assert!(
-        app.world().non_send::<LayoutTree>().is_empty(),
-        "despawned entity dropped from LayoutTree by gc system",
-    );
-}
-
-#[test]
-fn layout_tree_garbage_collects_within_a_single_tick() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(LayoutPlugin);
-
-    let first = app
-        .world_mut()
-        .spawn((Node, Style::default().width_px(100.0).height_px(100.0)))
-        .id();
-
-    app.update();
-    assert_eq!(
-        app.world().non_send::<LayoutTree>().len(),
-        1,
-        "first entity registered after first update",
-    );
-
-    app.world_mut().entity_mut(first).despawn();
-    let second = app
-        .world_mut()
-        .spawn((Node, Style::default().width_px(50.0).height_px(50.0)))
-        .id();
-
-    app.update();
-
-    let tree = app.world().non_send::<LayoutTree>();
-    assert_eq!(
-        tree.len(),
-        1,
-        "exactly one entity remains after same-tick despawn+respawn",
-    );
-    assert!(
-        app.world().get::<ResolvedLayout>(second).is_some(),
-        "the surviving entity is the new one (proves it was synced after gc)",
-    );
-}
+#[path = "layout/layout.rs"]
+mod layout;
+#[path = "layout/layout_anchor_positioning.rs"]
+mod layout_anchor_positioning;
+#[path = "layout/layout_box_sizing.rs"]
+mod layout_box_sizing;
+#[path = "layout/layout_container_queries.rs"]
+mod layout_container_queries;
+#[path = "layout/layout_containment.rs"]
+mod layout_containment;
+#[path = "layout/layout_content_visibility.rs"]
+mod layout_content_visibility;
+#[path = "layout/layout_degenerate_sizes.rs"]
+mod layout_degenerate_sizes;
+#[path = "layout/layout_fixed.rs"]
+mod layout_fixed;
+#[path = "layout/layout_flex_distribution.rs"]
+mod layout_flex_distribution;
+#[path = "layout/layout_grid.rs"]
+mod layout_grid;
+#[path = "layout/layout_grid_stubs.rs"]
+mod layout_grid_stubs;
+#[path = "layout/layout_multicol.rs"]
+mod layout_multicol;
+#[path = "layout/layout_overflow.rs"]
+mod layout_overflow;
+#[path = "layout/layout_pipeline_order.rs"]
+mod layout_pipeline_order;
+#[path = "layout/layout_post_taffy_overrides_clear.rs"]
+mod layout_post_taffy_overrides_clear;
+#[path = "layout/layout_scroll_offset_no_invalidate.rs"]
+mod layout_scroll_offset_no_invalidate;
+#[path = "layout/layout_stacking.rs"]
+mod layout_stacking;
+#[path = "layout/layout_sticky.rs"]
+mod layout_sticky;
+#[path = "layout/layout_style_equivalence.rs"]
+mod layout_style_equivalence;
+#[path = "layout/layout_table.rs"]
+mod layout_table;
+#[path = "layout/layout_table_multicol_stubs.rs"]
+mod layout_table_multicol_stubs;
+#[path = "layout/layout_topology.rs"]
+mod layout_topology;
+#[path = "layout/layout_transforms.rs"]
+mod layout_transforms;
+#[path = "layout/layout_writing_modes.rs"]
+mod layout_writing_modes;

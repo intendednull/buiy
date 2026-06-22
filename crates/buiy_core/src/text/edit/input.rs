@@ -120,7 +120,7 @@ impl TextEditState {
                     return EditOutcome::default();
                 }
                 self.tracked_edit(font_system, GroupKind::DeleteRun, ctx.now, |ed, fs| {
-                    ed.action(fs, Action::Backspace);
+                    backspace_grapheme(ed, fs);
                 })
             }
             EditCommand::Delete => {
@@ -367,13 +367,78 @@ impl TextEditState {
     /// The `GroupKind` of the unit Undo would pop next (the top of the undo
     /// stack), for the `EditUndone` Message payload.
     pub(crate) fn undo_top_group(&self) -> Option<GroupKind> {
-        self.undo.undo.last().map(|u| u.group)
+        self.undo.last_recorded().map(|u| u.group)
     }
 
     /// The `GroupKind` Redo would pop next (top of the redo stack).
     pub(crate) fn redo_top_group(&self) -> Option<GroupKind> {
-        self.undo.redo.last().map(|u| u.group)
+        self.undo.next_redo().map(|u| u.group)
     }
+}
+
+/// Grapheme-cluster-correct backward delete (editing-and-ime § 3.1, normative).
+///
+/// cosmic-text 0.19's `Action::Backspace` deletes a single CODE POINT — it
+/// steps the cursor back by `char_indices().next_back()` (editor.rs:584), so an
+/// emoji-ZWJ family (`👨‍👩‍👧‍👦`, 7 scalars) or a base+combining-mark (`e\u{0301}`)
+/// loses only its trailing scalar, leaving a broken partial cluster. The
+/// forward `Action::Delete` IS grapheme-correct (it uses `grapheme_indices`,
+/// editor.rs:617), so we mirror that for the backward direction: collapse the
+/// caret onto the *previous grapheme boundary* of the current line, then let
+/// `Action::Backspace` delete the now-selected whole cluster in one step.
+///
+/// A selection (Backspace deletes it), the start-of-line caret (`index == 0`,
+/// the line-join case), and a single-scalar grapheme all fall through to the
+/// plain `Action::Backspace`, whose behavior is already correct for those —
+/// the grapheme path only ever *widens* the deletion to a cluster boundary,
+/// never narrows it.
+fn backspace_grapheme(ed: &mut cosmic_text::Editor<'static>, fs: &mut FontSystem) {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    // A live selection is deleted wholesale by Action::Backspace — leave it.
+    if ed.selection() != Selection::None {
+        ed.action(fs, Action::Backspace);
+        return;
+    }
+
+    let cursor = ed.cursor();
+    if cursor.index == 0 {
+        // Start of line: the line-join case — Action::Backspace handles it.
+        ed.action(fs, Action::Backspace);
+        return;
+    }
+
+    // The byte offset of the grapheme boundary immediately preceding the caret
+    // (the start of the cluster the caret sits at the end of). `0` if the caret
+    // is somehow not on a boundary (defensive — cosmic keeps it on one).
+    let prev_boundary = ed.with_buffer(|buffer| {
+        let text = buffer.lines[cursor.line].text();
+        text[..cursor.index]
+            .grapheme_indices(true)
+            .next_back()
+            .map_or(0, |(i, _)| i)
+    });
+
+    // A one-scalar cluster (e.g. ASCII) needs no widening — Action::Backspace
+    // already deletes exactly to `prev_boundary`. Only select-then-delete when
+    // the cluster spans more than the trailing scalar, so the empty-change /
+    // coalescing semantics of the plain path are preserved for the common case.
+    let single_scalar = ed.with_buffer(|buffer| {
+        let text = buffer.lines[cursor.line].text();
+        text[prev_boundary..cursor.index].chars().count() <= 1
+    });
+    if single_scalar {
+        ed.action(fs, Action::Backspace);
+        return;
+    }
+
+    // Select [prev_boundary, cursor) and let Action::Backspace delete the whole
+    // cluster as one range (its `delete_selection()` branch — editor.rs:576).
+    ed.set_selection(Selection::Normal(cosmic_text::Cursor::new(
+        cursor.line,
+        prev_boundary,
+    )));
+    ed.action(fs, Action::Backspace);
 }
 
 /// Escape a plain-text string into an HTML-safe fragment for the clipboard's

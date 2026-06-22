@@ -372,7 +372,6 @@ fn settle_to_quiescence(app: &mut bevy::app::App) {
 fn quiescence_unmet(app: &bevy::app::App) -> Option<&'static str> {
     use bevy::asset::AssetServer;
     use bevy::render::RenderApp;
-    use bevy::render::render_resource::CachedPipelineState;
 
     // Condition 1 (main world): every declared capture asset loaded with deps.
     let asset_server = app.world().resource::<AssetServer>();
@@ -407,19 +406,58 @@ fn quiescence_unmet(app: &bevy::app::App) -> Option<&'static str> {
     }
 
     // Condition 4: no Buiy pipeline is still Queued/Creating (shaders compiled).
-    if let Some(cache) = world.get_resource::<bevy::render::render_resource::PipelineCache>() {
-        let compiling = cache.pipelines().any(|p| {
-            matches!(
-                p.state,
-                CachedPipelineState::Queued | CachedPipelineState::Creating(_)
-            )
-        }) || cache.waiting_pipelines().next().is_some();
-        if compiling {
-            return Some("pipeline cache has a Queued/Creating pipeline");
-        }
+    if let Some(cache) = world.get_resource::<bevy::render::render_resource::PipelineCache>()
+        && !no_pipeline_compiling(cache)
+    {
+        return Some("pipeline cache has a Queued/Creating pipeline");
     }
 
     None
+}
+
+/// Quiescence condition 4 as a pure predicate: **no** cached pipeline is still
+/// `Queued`/`Creating` and **no** pipeline is waiting on a shader dependency, so
+/// every shader the scene needs has finished compiling. `capture_to_image`'s
+/// readback must not run before this holds, else a half-compiled-pipeline frame
+/// (missing draws) would be captured.
+///
+/// A thin adapter over the unit-testable [`pipelines_compiled`] core: a real
+/// `PipelineCache` needs a live `RenderDevice`/`RenderAdapter` (GPU-only), and
+/// the non-`Queued` `CachedPipelineState` variants (`Creating`/`Ok`/`Err`) wrap
+/// GPU resources (a `Task`/`Pipeline`/error) that cannot be synthesized
+/// headlessly — so the *logic* is factored into a pure core driven by booleans,
+/// which a headless test exercises directly.
+fn no_pipeline_compiling(cache: &bevy::render::render_resource::PipelineCache) -> bool {
+    pipelines_compiled(
+        cache.pipelines().map(|p| state_is_compiling(&p.state)),
+        cache.waiting_pipelines().next().is_some(),
+    )
+}
+
+/// Does this cached-pipeline state mean a shader is *still compiling*? `Queued`
+/// (awaiting a build slot) and `Creating` (build in flight) are not yet drawable;
+/// `Ok`/`Err` are terminal. Split out as the single classification point so
+/// [`no_pipeline_compiling`] reads as intent and the (un)compiling rule lives in
+/// one place. A headless unit test pins the `Queued` arm (the only freely
+/// constructable variant); the `Creating(_)` arm wraps a GPU `Task` and so is
+/// only exercised via the `#[ignore]` GPU lane, not the headless gate.
+fn state_is_compiling(state: &bevy::render::render_resource::CachedPipelineState) -> bool {
+    use bevy::render::render_resource::CachedPipelineState;
+    matches!(
+        state,
+        CachedPipelineState::Queued | CachedPipelineState::Creating(_)
+    )
+}
+
+/// The pure core of condition 4, expressed over booleans so it is unit-testable
+/// without a GPU: given, per cached pipeline, whether it is *still compiling*
+/// (`states`), plus whether any pipeline is *waiting* on a shader dependency
+/// (`has_waiting`), all shaders are compiled iff none are compiling and none are
+/// waiting. Returns `true` when the cache is quiescent. Vacuously `true` for an
+/// empty cache (no pipelines, nothing waiting) — the cold-start case before any
+/// draw queues a pipeline.
+fn pipelines_compiled(mut states: impl Iterator<Item = bool>, has_waiting: bool) -> bool {
+    !has_waiting && !states.any(|compiling| compiling)
 }
 
 /// Resource cell the `ReadbackComplete` observer writes the captured bytes
@@ -630,6 +668,63 @@ mod tests {
             quiescence_unmet(&app),
             Some("pending asset not loaded-with-dependencies"),
             "an unloaded required asset must block quiescence (condition 1)"
+        );
+    }
+
+    /// Headless teeth for quiescence condition 4 (pipeline-compile gate). A real
+    /// `PipelineCache` needs a live GPU device and its compiling states wrap GPU
+    /// resources, so the logic is factored into the pure [`pipelines_compiled`]
+    /// core driven by booleans — exercised here with no adapter, the way the
+    /// audit (#12) asks. Covers: cold/empty cache, all-compiled, a single
+    /// straggler `Queued`/`Creating`, and the waiting-on-dependency leg.
+    #[test]
+    fn pipelines_compiled_pure_logic() {
+        // Empty cache (cold start, before any draw queues a pipeline): vacuously
+        // compiled — nothing in flight.
+        assert!(
+            pipelines_compiled(std::iter::empty(), false),
+            "an empty cache with nothing waiting is quiescent"
+        );
+
+        // Every pipeline terminal (Ok/Err ⇒ not compiling) and none waiting:
+        // condition 4 holds.
+        assert!(
+            pipelines_compiled([false, false, false].into_iter(), false),
+            "all-compiled, none waiting ⇒ quiescent"
+        );
+
+        // A single straggler still Queued/Creating blocks quiescence even if the
+        // rest are done.
+        assert!(
+            !pipelines_compiled([false, true, false].into_iter(), false),
+            "one still-compiling pipeline blocks quiescence"
+        );
+
+        // The waiting-on-shader-dependency leg blocks even when no pipeline
+        // reports itself compiling (the `waiting_pipelines()` half of cond 4).
+        assert!(
+            !pipelines_compiled([false, false].into_iter(), true),
+            "a pipeline waiting on a shader dependency blocks quiescence"
+        );
+
+        // Both signals at once still blocks.
+        assert!(
+            !pipelines_compiled([true].into_iter(), true),
+            "compiling AND waiting ⇒ blocked"
+        );
+    }
+
+    /// The per-state classifier headlessly, for the one compiling variant that is
+    /// freely constructable (`Queued`). `Creating`/`Ok`/`Err` wrap GPU resources
+    /// (a `Task`/`Pipeline`/error) that cannot be built without an adapter, so
+    /// they are covered by the boolean core above; `Queued` pins the classifier's
+    /// "still compiling" arm against the real enum.
+    #[test]
+    fn queued_state_classifies_as_compiling() {
+        use bevy::render::render_resource::CachedPipelineState;
+        assert!(
+            state_is_compiling(&CachedPipelineState::Queued),
+            "Queued is still compiling (not yet drawable)"
         );
     }
 }

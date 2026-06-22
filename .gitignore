@@ -10,3 +10,8 @@ target/
 # Cargo.lock IS committed — this workspace ships binaries (the examples/*), so a
 # pinned lockfile is required for reproducible builds and a stable cargo-deny
 # audit surface (Cargo Book FAQ). CI builds with --locked against it.
+
+# Pending (unaccepted) insta snapshots — never committed; `cargo insta review`
+# either accepts them into the committed `.snap` or discards them. A CI guard
+# fails if any are present (see ci.yml snapshot-hygiene step).
+*.snap.new

@@ -460,7 +460,12 @@ pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) 
 /// the unit/integration tier under the existing `cargo test -- --ignored` GPU
 /// lane, no new CI infra, no manifest file (the type system IS the manifest).
 ///
-/// ```ignore
+/// `text`, not a doctest: the `$test` / `$reference` arguments
+/// (`flex_test`, `literal_offsets_ref`, …) are placeholder identifiers for
+/// per-case scene `fn(&mut App)`s the caller defines elsewhere, so this only
+/// illustrates call-site *syntax* — it is not self-contained compilable Rust.
+///
+/// ```text
 /// reftest!(match,    flex_justify_end, flex_test, literal_offsets_ref);
 /// reftest!(mismatch, cv_hidden_hides,  cv_visible, cv_hidden);
 /// reftest!(match,    transform_xy,     xfm_test,   literal_ref, fuzz = (1, 8));
@@ -468,6 +473,11 @@ pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) 
 ///
 /// A non-`(0,0)` fuzz floor on a `mismatch` fails to COMPILE (a `const`
 /// assertion), not at runtime — reftests.md § Verification #2.
+///
+/// Compile-checked without a doctest: the `reftest!` invocations in the
+/// `verify_gpu` test binary (`tests/verify_gpu/reftest_*.rs`) must expand and
+/// compile for `cargo test --workspace` to build, so a malformed macro arm is
+/// caught by the headless gate.
 #[macro_export]
 macro_rules! reftest {
     // mismatch with explicit fuzz → compile-time reject of a non-zero floor.

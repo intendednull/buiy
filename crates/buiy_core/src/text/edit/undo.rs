@@ -63,8 +63,8 @@ pub struct UndoUnit {
 /// irrelevant; correctness over micro-optimization).
 #[derive(Debug)]
 pub struct UndoStack {
-    pub undo: Vec<UndoUnit>,
-    pub redo: Vec<UndoUnit>,
+    pub(crate) undo: Vec<UndoUnit>,
+    pub(crate) redo: Vec<UndoUnit>,
     depth: usize,
     /// When the open coalescing run was last extended (virtual time). Only
     /// meaningful while `has_open_group()`. The grouping window compares the
@@ -94,6 +94,29 @@ impl UndoStack {
 
     pub fn redo_len(&self) -> usize {
         self.redo.len()
+    }
+
+    /// Peek the unit Undo would pop next — the top of the undo stack (the most
+    /// recently recorded, or the open coalescing run while it stays open).
+    /// `None` when there is nothing to undo. The narrow read seam the system
+    /// uses for the `EditUndone` group payload and tests use to inspect the
+    /// recorded unit, instead of indexing the (now `pub(crate)`) `undo` Vec.
+    pub fn last_recorded(&self) -> Option<&UndoUnit> {
+        self.undo.last()
+    }
+
+    /// Peek the unit Redo would pop next — the top of the redo stack. `None`
+    /// when there is nothing to redo. Mirror of `last_recorded` for the redo
+    /// side (the `EditRedone` group payload).
+    pub fn next_redo(&self) -> Option<&UndoUnit> {
+        self.redo.last()
+    }
+
+    /// Peek the OLDEST surviving undo unit — the bottom of the undo stack (the
+    /// first to be dropped once `depth` is exceeded). Used by the depth-bound
+    /// test to assert which unit survived eviction.
+    pub fn oldest_recorded(&self) -> Option<&UndoUnit> {
+        self.undo.first()
     }
 
     /// `true` while a coalescing run is open (the last unit is a TypingRun or
@@ -193,13 +216,6 @@ impl UndoStack {
         while self.undo.len() > self.depth {
             self.undo.remove(0);
         }
-    }
-
-    /// Test-only seam: seed a redo entry (so `record_clears_redo` can prove the
-    /// clear). Not used in production — production redo entries only ever
-    /// arrive via `pop_undo`.
-    pub fn push_redo_for_test(&mut self, unit: UndoUnit) {
-        self.redo.push(unit);
     }
 }
 

@@ -93,3 +93,35 @@ toml = "0.8"
 # base64-inline the actual/baseline/diff PNGs so the report is offline-first —
 # openable straight from CI artifacts, no external assets, no SaaS. MIT/Apache-2.0.
 base64 = "0.22"
+# Performance bench harness (audit #40, DG-3): the ecosystem-standard
+# statistical micro-benchmark runner for the shape→layout→extract pipeline
+# bench (`crates/buiy_core/benches/`). DEV-ONLY (a `[[bench]]` dependency, never
+# in the production graph); INFORMATIONAL (run via `cargo bench`, NOT a CI
+# pass/fail gate — a slower NUMBER must never fail the build). Default features
+# OFF: the default `rayon`/`plotters` html-report machinery is unused here (we
+# want a fast-compiling, low-dep harness for a non-gating signal), so only the
+# `cargo_bench_support` feature is kept (the `cargo bench` integration). MIT/
+# Apache-2.0; `cargo deny check` gates the add.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+# --- Build profiles --------------------------------------------------------
+# Disable debuginfo for the dev + test profiles. The bulk of CI target-dir disk
+# is the bevy DEPENDENCY artifacts, which under `cargo test` build with the dev
+# profile; their debuginfo is what crossed the runner's ~14 GB free-disk ceiling
+# and surfaced as `ld ... signal 7 [Bus error]` / "No space left on device"
+# mid-link (audit finding #10). Setting this here (rather than via per-job
+# CARGO_PROFILE_* env / per-job `-C debuginfo=0` RUSTFLAGS) keeps every CI lane
+# consistent AND lets all lanes share one Swatinem/rust-cache key (RUSTFLAGS is
+# part of that key, so divergent `-C debuginfo=0` previously fragmented the GPU
+# lane's cache). These two settings exactly replace the removed
+# CARGO_PROFILE_DEV_DEBUG=0 / CARGO_PROFILE_TEST_DEBUG=0.
+#
+# Tradeoff: this also disables debuginfo for LOCAL dev builds, so local
+# backtraces lose line info. `debug = 0` is the proven disk fix; if local DX
+# matters more, `debug = "line-tables-only"` keeps backtrace line numbers at a
+# larger target dir — flagged for the coordinator, not silently chosen here.
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

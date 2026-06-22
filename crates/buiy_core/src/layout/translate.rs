@@ -640,10 +640,25 @@ fn sizing_to_dim(s: Sizing) -> taffy::Dimension {
     }
 }
 
+/// Sanitize a raw `f32` length/percentage value at the Buiy→Taffy boundary.
+///
+/// A non-finite value (`NaN` / `±∞`) is never a valid CSS length, percentage,
+/// inset, margin, gap, or track size — it cannot be authored meaningfully and,
+/// if passed through, Taffy preserves a definite `∞` as the resolved box size,
+/// leaking `inf` straight into `ResolvedLayout` (audit #32). Map any non-finite
+/// input to `0.0` so the downstream Taffy `Dimension` / `LengthPercentage[Auto]`
+/// is always finite. Finite values (including negatives, which are valid for
+/// margins/insets and harmless-because-Taffy-clamps for sizes) pass through
+/// unchanged — this guard ONLY removes the non-representable inputs, preserving
+/// behavior for every legitimate value.
+fn finite(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
 fn length_to_dim(l: Length) -> taffy::Dimension {
     match l {
-        Length::Px(v) => taffy::Dimension::length(v),
-        Length::Percent(p) => taffy::Dimension::percent(p / 100.0),
+        Length::Px(v) => taffy::Dimension::length(finite(v)),
+        Length::Percent(p) => taffy::Dimension::percent(finite(p) / 100.0),
         Length::Fr(_) => {
             warn_once_fr_outside_grid();
             taffy::Dimension::auto()
@@ -665,8 +680,8 @@ fn length_to_dim(l: Length) -> taffy::Dimension {
 
 fn length_to_lp(l: Length) -> taffy::LengthPercentage {
     match l {
-        Length::Px(v) => taffy::LengthPercentage::length(v),
-        Length::Percent(p) => taffy::LengthPercentage::percent(p / 100.0),
+        Length::Px(v) => taffy::LengthPercentage::length(finite(v)),
+        Length::Percent(p) => taffy::LengthPercentage::percent(finite(p) / 100.0),
         // taffy::LengthPercentage has no Auto variant — fall back to 0
         // (CSS-equivalent for Fr-in-non-grid: undefined, ill-formed).
         Length::Fr(_) => {
@@ -690,8 +705,8 @@ fn length_to_lp(l: Length) -> taffy::LengthPercentage {
 
 fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
     match l {
-        Length::Px(v) => taffy::LengthPercentageAuto::length(v),
-        Length::Percent(p) => taffy::LengthPercentageAuto::percent(p / 100.0),
+        Length::Px(v) => taffy::LengthPercentageAuto::length(finite(v)),
+        Length::Percent(p) => taffy::LengthPercentageAuto::percent(finite(p) / 100.0),
         Length::Fr(_) => {
             warn_once_fr_outside_grid();
             taffy::LengthPercentageAuto::auto()
@@ -760,12 +775,12 @@ fn map_grid_auto_flow(f: GridAutoFlow) -> taffy::GridAutoFlow {
         RowDense => taffy::GridAutoFlow::RowDense,
         ColumnDense => taffy::GridAutoFlow::ColumnDense,
         // Masonry is reserved (CSS-WG flux) — Taffy 0.10 has no
-        // GridAutoFlow::Masonry, so we degrade to Row and emit one warn!
-        // per session naming the limitation.
-        Masonry => {
-            warn_once_masonry();
-            taffy::GridAutoFlow::Row
-        }
+        // GridAutoFlow::Masonry, so we degrade to Row. The warn is recorded
+        // by `sync_styles` via `LayoutWarnOnceKey::GridMasonryUnsupported`
+        // (mirroring the table/multicol routing), NOT here — this function is
+        // pure and shared with `cq_flip_rerun`, which holds no warn resource
+        // (audit #24). The FALLBACK behavior (Masonry → Row) is unchanged.
+        Masonry => taffy::GridAutoFlow::Row,
     }
 }
 
@@ -819,9 +834,9 @@ fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
         TrackSize::MinContent => min_content(),
         TrackSize::MaxContent => max_content(),
         TrackSize::FitContent(l) => fit_content(length_to_lp(*l)),
-        TrackSize::Length(Length::Fr(v)) => fr(*v),
-        TrackSize::Length(Length::Px(v)) => length(*v),
-        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::Length(Length::Fr(v)) => fr(finite(*v)),
+        TrackSize::Length(Length::Px(v)) => length(finite(*v)),
+        TrackSize::Length(Length::Percent(p)) => percent(finite(*p) / 100.0),
         // Cq* should have been pre-normalized by `normalize_cq_track` at
         // the `style_to_taffy` boundary; reaching this arm means a caller
         // skipped normalization. Resolve to 0 as a defensive fallback.
@@ -850,10 +865,13 @@ fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
             warn_once_invalid_track_nesting();
             auto()
         }
-        TrackSize::Subgrid => {
-            warn_once_subgrid();
-            auto()
-        }
+        // Subgrid → Auto fallback (Taffy 0.10 has no subgrid). The warn is
+        // recorded by `sync_styles` via
+        // `LayoutWarnOnceKey::GridSubgridUnsupported` (mirroring table/multicol
+        // routing), NOT here — this function is pure and shared with
+        // `cq_flip_rerun`, which holds no warn resource (audit #24). The
+        // FALLBACK behavior (Subgrid → Auto) is unchanged.
+        TrackSize::Subgrid => auto(),
     }
 }
 
@@ -862,8 +880,8 @@ fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
         TrackSize::Auto => auto(),
         TrackSize::MinContent => min_content(),
         TrackSize::MaxContent => max_content(),
-        TrackSize::Length(Length::Px(v)) => length(*v),
-        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::Length(Length::Px(v)) => length(finite(*v)),
+        TrackSize::Length(Length::Percent(p)) => percent(finite(*p) / 100.0),
         // Cq* should have been pre-normalized at the `style_to_taffy`
         // boundary; reaching this arm means a caller skipped
         // normalization. Resolve to 0 as a defensive fallback.
@@ -900,9 +918,9 @@ fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
         // MaxTrackSizingFunction has TaffyFitContent impl (Taffy 0.10
         // grid.rs:700) — fit_content() from prelude resolves to it.
         TrackSize::FitContent(l) => fit_content(length_to_lp(*l)),
-        TrackSize::Length(Length::Fr(v)) => fr(*v),
-        TrackSize::Length(Length::Px(v)) => length(*v),
-        TrackSize::Length(Length::Percent(p)) => percent(p / 100.0),
+        TrackSize::Length(Length::Fr(v)) => fr(finite(*v)),
+        TrackSize::Length(Length::Px(v)) => length(finite(*v)),
+        TrackSize::Length(Length::Percent(p)) => percent(finite(*p) / 100.0),
         // Cq* should have been pre-normalized at the `style_to_taffy`
         // boundary; reaching this arm means a caller skipped
         // normalization. Resolve to 0 as a defensive fallback.
@@ -1008,14 +1026,17 @@ fn grid_line_to_taffy(
     }
 }
 
-// Warn-once gates for invalid track nesting + unresolved named areas +
-// Subgrid + Masonry. The Fr-outside-grid gate `WARNED_FR_OUTSIDE_GRID` is
-// declared at the top of the file and is shared with the length_to_*
-// helpers.
+// Warn-once gates for invalid track nesting + unresolved named areas. The
+// Fr-outside-grid gate `WARNED_FR_OUTSIDE_GRID` is declared at the top of the
+// file and is shared with the length_to_* helpers.
+//
+// Subgrid + Masonry warns are NOT here: they route through the testable
+// session-scoped `LayoutWarnedOnceSession` (via
+// `LayoutWarnOnceKey::GridSubgridUnsupported` / `GridMasonryUnsupported`,
+// recorded in `sync_styles`), mirroring the table/multicol precedent — the
+// process-global `AtomicBool` is not test-observable (audit #24).
 static WARNED_INVALID_TRACK_NESTING: AtomicBool = AtomicBool::new(false);
 static WARNED_UNRESOLVED_AREA: AtomicBool = AtomicBool::new(false);
-static WARNED_SUBGRID: AtomicBool = AtomicBool::new(false);
-static WARNED_MASONRY: AtomicBool = AtomicBool::new(false);
 
 fn warn_once_invalid_track_nesting() {
     if !WARNED_INVALID_TRACK_NESTING.swap(true, Ordering::Relaxed) {
@@ -1037,22 +1058,24 @@ fn warn_once_unresolved_area(name: &str) {
     }
 }
 
-fn warn_once_subgrid() {
-    if !WARNED_SUBGRID.swap(true, Ordering::Relaxed) {
-        warn!(
-            "buiy: TrackSize::Subgrid is reserved — Taffy 0.10 has no subgrid \
-             support; falling back to Auto (warned once)"
-        );
-    }
-}
-
-fn warn_once_masonry() {
-    if !WARNED_MASONRY.swap(true, Ordering::Relaxed) {
-        warn!(
-            "buiy: GridAutoFlow::Masonry is reserved — CSS-WG flux + no Taffy \
-             support; falling back to Row (warned once)"
-        );
-    }
+/// True when any track in `tracks` is `TrackSize::Subgrid`, recursing into
+/// `Repeat` (whose inner tracks reach `track_to_sizing`'s Subgrid arm too).
+/// `sync_styles` calls this over `template_columns` + `template_rows` +
+/// `auto_columns` + `auto_rows` to record the
+/// `LayoutWarnOnceKey::GridSubgridUnsupported` warn — keeping the warn site
+/// in lock-step with the pure `Subgrid → Auto` fallback in `track_to_sizing`
+/// without that pure path needing the warn resource (audit #24).
+///
+/// `MinMax` is intentionally NOT recursed: a `Subgrid` nested inside a
+/// `MinMax` slot routes through `track_to_min`/`track_to_max`, which warn via
+/// the separate `WARNED_INVALID_TRACK_NESTING` gate (invalid nesting), not the
+/// subgrid fallback — so it must not be counted here.
+pub(super) fn tracks_use_subgrid(tracks: &[TrackSize]) -> bool {
+    tracks.iter().any(|t| match t {
+        TrackSize::Subgrid => true,
+        TrackSize::Repeat(_, inner) => tracks_use_subgrid(inner),
+        _ => false,
+    })
 }
 
 static WARNED_SIDEWAYS_FALLBACK: AtomicBool = AtomicBool::new(false);
@@ -1723,5 +1746,236 @@ mod tests {
         let s = style_to_taffy(view);
         assert_eq!(s.size.width, taffy::Dimension::length(120.0));
         assert_eq!(s.size.height, taffy::Dimension::length(40.0));
+    }
+
+    // --- Grid track-size INNER Min/Max assertions (audit #22, T2.2) --------
+    //
+    // The pre-existing grid translate units only pin the OUTER
+    // `Single` / `Repeat` shape (e.g. `translate_grid_template_columns_to_taffy`
+    // asserts `matches!(.., Single(_))`). They never look INSIDE the track, so
+    // a regression in `track_to_min` / `track_to_max` / `track_to_sizing`
+    // (e.g. min↔max swapped, fit-content losing its limit, percent not /100)
+    // ships green. These assert the inner `MinTrackSizingFunction` /
+    // `MaxTrackSizingFunction` of the resolved Taffy track directly.
+    //
+    // `GridTemplateComponent::Single` wraps a `TrackSizingFunction = MinMax<Min,
+    // Max>` (taffy geometry.rs), so `.min` / `.max` are the two inner functions.
+
+    /// Build a one-column grid `StyleView` whose single template column is
+    /// `track`, returning the resolved Taffy `grid_template_columns[0]`.
+    fn single_grid_column(track: TrackSize) -> taffy::GridTemplateComponent<String> {
+        let display = Display::Grid;
+        let bm = BoxModel::default();
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams {
+            template_columns: vec![track],
+            ..Default::default()
+        };
+        let writing_mode_resolved = WritingModeResolved::default();
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            containment: &Containment::default(),
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
+        });
+        assert_eq!(taffy.grid_template_columns.len(), 1);
+        taffy.grid_template_columns.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn translate_minmax_100px_1fr_inner_min_and_max() {
+        // CSS `minmax(100px, 1fr)` → inner min = length(100), max = fr(1).
+        let track = TrackSize::MinMax(vec![
+            TrackSize::Length(Length::Px(100.0)),
+            TrackSize::Length(Length::Fr(1.0)),
+        ]);
+        let taffy::GridTemplateComponent::Single(tsf) = single_grid_column(track) else {
+            panic!("minmax should map to a Single track, not a Repeat");
+        };
+        assert_eq!(
+            tsf.min,
+            MinTrackSizingFunction::length(100.0),
+            "minmax min slot = length(100px)"
+        );
+        assert_eq!(
+            tsf.max,
+            MaxTrackSizingFunction::fr(1.0),
+            "minmax max slot = fr(1)"
+        );
+    }
+
+    #[test]
+    fn translate_minmax_mincontent_maxcontent_inner() {
+        // `minmax(min-content, max-content)` → distinct intrinsic functions on
+        // each slot (would tie if min/max were swapped or collapsed).
+        let track = TrackSize::MinMax(vec![TrackSize::MinContent, TrackSize::MaxContent]);
+        let taffy::GridTemplateComponent::Single(tsf) = single_grid_column(track) else {
+            panic!("minmax should map to a Single track");
+        };
+        assert_eq!(tsf.min, MinTrackSizingFunction::min_content());
+        assert_eq!(tsf.max, MaxTrackSizingFunction::max_content());
+    }
+
+    #[test]
+    fn translate_fit_content_inner_max_keeps_limit() {
+        // `fit-content(120px)` → a single track whose MAX is the fit-content
+        // function carrying the 120px limit, and whose MIN is auto (taffy's
+        // `fit_content()` helper returns a MinMax(auto, fit_content(limit))).
+        let track = TrackSize::FitContent(Length::Px(120.0));
+        let taffy::GridTemplateComponent::Single(tsf) = single_grid_column(track) else {
+            panic!("fit-content should map to a Single track");
+        };
+        assert_eq!(
+            tsf.max,
+            MaxTrackSizingFunction::fit_content_px(120.0),
+            "fit-content max slot keeps the 120px limit"
+        );
+        assert_eq!(
+            tsf.min,
+            MinTrackSizingFunction::auto(),
+            "fit-content min slot is auto"
+        );
+    }
+
+    #[test]
+    fn translate_percent_track_divides_by_100_inner() {
+        // A bare `Length::Percent(50)` track maps via `track_to_sizing`'s
+        // `percent(p / 100.0)` → taffy's `percent()` builds a MinMax with the
+        // SAME percent on both slots. Pins the /100 normalization inside the
+        // track helper (CSS 50% == taffy 0.5) on both min AND max.
+        let track = TrackSize::Length(Length::Percent(50.0));
+        let taffy::GridTemplateComponent::Single(tsf) = single_grid_column(track) else {
+            panic!("percent length should map to a Single track");
+        };
+        assert_eq!(tsf.min, MinTrackSizingFunction::percent(0.5));
+        assert_eq!(tsf.max, MaxTrackSizingFunction::percent(0.5));
+    }
+
+    #[test]
+    fn finite_guard_maps_non_finite_to_zero_keeps_finite() {
+        // Unit test of the audit #32 root-cause guard: NaN / ±∞ → 0; every
+        // finite value (incl. negatives) passes through unchanged.
+        assert_eq!(finite(0.0), 0.0);
+        assert_eq!(finite(100.0), 100.0);
+        assert_eq!(finite(-50.0), -50.0, "negatives are valid (margins/insets)");
+        assert_eq!(finite(f32::NAN), 0.0);
+        assert_eq!(finite(f32::INFINITY), 0.0);
+        assert_eq!(finite(f32::NEG_INFINITY), 0.0);
+    }
+
+    #[test]
+    fn translate_infinite_px_size_resolves_finite() {
+        // A `Length::Px(∞)` width must NOT reach Taffy as a definite ∞ length
+        // (which Taffy preserves as the resolved size → inf leak, audit #32).
+        // The guard maps it to `length(0)`.
+        let display = Display::default();
+        let bm = BoxModel {
+            width: Sizing::Length(Length::Px(f32::INFINITY)),
+            height: Sizing::Length(Length::Px(f32::NAN)),
+            ..Default::default()
+        };
+        let position = Position::default();
+        let flex = FlexParams::default();
+        let overflow = Overflow::default();
+        let scroll = Scroll::default();
+        let grid_params = GridParams::default();
+        let writing_mode_resolved = WritingModeResolved::default();
+        let taffy = style_to_taffy(StyleView {
+            display: &display,
+            box_model: &bm,
+            containment: &Containment::default(),
+            position: &position,
+            flex_params: &flex,
+            flex_item: None,
+            overflow: &overflow,
+            scroll: &scroll,
+            grid_params: &grid_params,
+            grid_item: None,
+            parent_areas: None,
+            writing_mode_resolved: &writing_mode_resolved,
+            nearest_container: None,
+            viewport_size: bevy::math::Vec2::ZERO,
+            content_visibility_intrinsic: None,
+        });
+        assert_eq!(
+            taffy.size.width,
+            taffy::Dimension::length(0.0),
+            "infinite Px width sanitized to 0"
+        );
+        assert_eq!(
+            taffy.size.height,
+            taffy::Dimension::length(0.0),
+            "NaN Px height sanitized to 0"
+        );
+    }
+
+    #[test]
+    fn translate_repeat_auto_fit_inner_track_and_count() {
+        // `repeat(auto-fit, [100px])` → a Repeat with AutoFit count and the
+        // inner 100px track. AutoFit differs from AutoFill (it collapses empty
+        // tracks); pin the count discriminant + the inner track so a
+        // map_repeat_count regression (AutoFit↔AutoFill swap) reddens.
+        let track = TrackSize::Repeat(
+            RepeatCount::AutoFit,
+            vec![TrackSize::Length(Length::Px(100.0))],
+        );
+        let taffy::GridTemplateComponent::Repeat(rep) = single_grid_column(track) else {
+            panic!("repeat should map to a Repeat component");
+        };
+        assert!(
+            matches!(rep.count, taffy::RepetitionCount::AutoFit),
+            "auto-fit count discriminant preserved (not AutoFill)"
+        );
+        assert_eq!(rep.tracks.len(), 1, "one inner track");
+        assert_eq!(
+            rep.tracks[0].max,
+            MaxTrackSizingFunction::length(100.0),
+            "inner repeated track is 100px"
+        );
+    }
+
+    #[test]
+    fn map_grid_auto_flow_masonry_falls_back_to_row() {
+        // audit #24/#37: the integration `masonry_auto_flow_warns_…` fixture
+        // asserts side-by-side geometry that is IDENTICAL under Row and Column
+        // (it only pins masonry-vs-not, via the warn). This unit pins the Row
+        // CHOICE itself at the tier that observes it: `Masonry → Row`. It FAILS
+        // if the fallback is changed to Column (the proven-vacuous mutation).
+        assert_eq!(
+            map_grid_auto_flow(GridAutoFlow::Masonry),
+            taffy::GridAutoFlow::Row,
+            "reserved Masonry degrades to Row (not Column)"
+        );
+        // Pin the non-fallback arms too, so a wholesale arm reshuffle reddens.
+        assert_eq!(
+            map_grid_auto_flow(GridAutoFlow::Row),
+            taffy::GridAutoFlow::Row
+        );
+        assert_eq!(
+            map_grid_auto_flow(GridAutoFlow::Column),
+            taffy::GridAutoFlow::Column
+        );
+        assert_eq!(
+            map_grid_auto_flow(GridAutoFlow::RowDense),
+            taffy::GridAutoFlow::RowDense
+        );
+        assert_eq!(
+            map_grid_auto_flow(GridAutoFlow::ColumnDense),
+            taffy::GridAutoFlow::ColumnDense
+        );
     }
 }

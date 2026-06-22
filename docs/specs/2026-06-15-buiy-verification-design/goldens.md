@@ -23,21 +23,44 @@
 >   `assert_golden_in` take an explicit corpus root + report dir + mode (no env,
 >   no process CWD) so the pure-CPU self-tests run hermetically against a temp
 >   corpus.
-> - **The corpus is started, not full:** two blessed cells exist —
->   `rect-rounded` (SDF residue) and `text-ahem` (Ahem layout class) — at
->   `dark/sm/fc0/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger
->   under `crates/buiy_verify/tests/goldens/`. The full residue matrix (shadow
->   kernel, color-emoji) is renderer-blocked and deferred (see § Sources /
->   follow-ups).
-> - **Honest GPU-lane state:** because the corpus is started, the coverage
->   enrollment driver `coverage_golden::matrix_goldens` (which `assert_golden`s
->   the *whole* `Matrix::ci_default()` over the `button` fixture) **fail-closes**
->   on the un-blessed `button` cells — the documented "bless-on-demand" contract,
->   not a regression. The every-PR **headless** gate is unaffected (it never runs
->   `--ignored`); the `--ignored` GPU lane is green except this one driver until
->   the `button` corpus is blessed. Tracked in `follow-ups.md` (blessing it is
->   gated on the default widget being forced-colors-safe — otherwise the wholesale
->   swap would bless the magenta sentinel as a golden).
+> - **The corpus is started, not full — 5/6 residue classes are aspirational:**
+>   only two cells are blessed — `rect-rounded` (the **SDF corner AA** residue
+>   class) and `text-ahem` (the Ahem layout class, not a residue class) — at
+>   `dark/sm/fc0/lavapipe/dpr1`, each one positive `.png` + its `.toml` ledger under
+>   `crates/buiy_verify/tests/goldens/`. The other **five residue classes
+>   enumerated above** — drop-shadow Gaussian kernel, glyph fidelity, color-emoji
+>   atlas, the effect compositor, blend/gamma, and the forced-colors *visual*
+>   residual — have **no committed golden yet** and are renderer-blocked
+>   (e.g. the `BoxShadow` extract/draw path is not landed; color-emoji waits on a
+>   pinned bundled emoji font). They are aspirational: the harness is ready (a
+>   fixture + one `assert_golden`), only the renderer leg / pinned asset is
+>   missing (see § Sources / follow-ups).
+> - **Adapter-gated committed comparison (audit #7).** Stored goldens are blessed
+>   against the **pinned lavapipe** (Mesa llvmpipe); on any other adapter the
+>   rim/AA pixels differ (this host's RX 6700 XT diverges by
+>   `max_channel_delta=35`), so a committed-baseline EXACT comparison is **gated**
+>   on `support::on_pinned_lavapipe()` (env `WGPU_ADAPTER_NAME=llvmpipe`, else a
+>   real `RenderAdapterInfo` probe). On lavapipe it compares EXACT; off it the
+>   cell **skips-as-pending** (never a cross-rasterizer hard-fail). This is how
+>   `determinism.md`'s "the local lane does not compare against the stored
+>   lavapipe baseline" is enforced in code — `golden_sdf_corner` and every
+>   `matrix_goldens` cell consult the same probe.
+> - **Non-vacuity contract (audit #14) — green-on-lavapipe-with-goldens ⟹ ≥1
+>   cell compared.** `coverage_golden::matrix_goldens` iterates the whole
+>   `Matrix::ci_default()` over the catalog (today: the single `button` fixture =
+>   24 cells), **skip-as-pending** for any cell that is un-blessed *or* captured
+>   off lavapipe. A green run no longer passes on `pending` alone: a guard
+>   **fails** the test when `on_lavapipe && any_matrix_cell_blessed &&
+>   asserted == 0`. So on the canonical rasterizer, if any matrix cell is blessed,
+>   green *implies* at least one real comparison happened. The guard stays silent
+>   (lane honestly green) in the two legitimate zero-compare cases: no matrix cell
+>   blessed yet (the current aspirational state — the catalog's only fixture,
+>   `button`, has no golden), or off lavapipe (every blessed cell adapter-skips).
+>   The eprintln status line reports `asserted`/`pending`/`on_lavapipe`/
+>   `any_cell_blessed` so a reader sees exactly why a run was vacuous. The every-PR
+>   **headless** gate is unaffected (it never runs `--ignored`). Blessing the
+>   `button` corpus is still gated on the default widget being forced-colors-safe
+>   (else the wholesale swap would bless the magenta sentinel as a golden).
 
 Tier 5 is the stored-baseline regression tier for the irreducible rasterization
 residue — what Tiers 1–4 provably cannot reach: SDF corner AA (beyond the CPU

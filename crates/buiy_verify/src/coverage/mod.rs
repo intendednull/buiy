@@ -35,7 +35,7 @@ pub mod matrix;
 #[path = "../../fixtures/button/resting.rs"]
 mod fixture_button_resting;
 
-pub use enroll::{build_app, enroll_all, enroll_fixtures};
+pub use enroll::{build_app, enroll_all, enroll_fixtures, enroll_snapshots};
 pub use fixture::{Fixture, catalog, sorted_catalog};
 pub use forced_colors::{live_catalog_paint, paint_for_fixtures};
 pub use key::{Backend, CoverageKey, ParsedStem};

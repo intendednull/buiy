@@ -21,7 +21,8 @@ pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
     AnchorNameRegistry, ContentVisibilityMargin, LayoutAnchorWarnedThisFrame,
     LayoutTaffyComputeCount, LayoutWarnedOnceSession, PostTaffyPositionOverrides,
-    SyncStylesIterCount, TopLayerActivation, compose_transform, top_layer_paint_rank,
+    SyncStylesIterCount, TopLayerActivation, compose_transform, paint_key, painters_z_for_context,
+    top_layer_paint_rank,
 };
 pub use tree::LayoutTree;
 pub use types::{
