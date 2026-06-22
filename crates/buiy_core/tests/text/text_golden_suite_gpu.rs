@@ -316,6 +316,7 @@ fn capture_input_state(filled: bool) -> Vec<u8> {
             CaretVisual {
                 visible: true,
                 rect: Rect::new(100.0, 0.0, 101.0, 24.0),
+                secondary: None,
             },
         ));
     } else {

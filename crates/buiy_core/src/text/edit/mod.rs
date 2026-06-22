@@ -27,7 +27,12 @@ mod undo;
 pub use access::{
     TextBufferAccess, TextBufferAccessItem, TextBufferAccessReadOnly, TextBufferAccessReadOnlyItem,
 };
-pub use caret::{CaretMoved, SelectionChanged, write_caret_and_selection};
+pub use caret::{
+    CaretMoved, SelectionChanged, caret_rect_for, secondary_caret_rect_for,
+    write_caret_and_selection,
+};
+#[cfg(feature = "clipboard-image")]
+pub use clipboard::ClipboardImage;
 pub use clipboard::{ArboardClipboard, Clipboard, ClipboardProvider, MemClipboard};
 pub use command::EditCommand;
 pub use ime::{

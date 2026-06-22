@@ -107,8 +107,21 @@ pub fn paint_order_is_total(nodes: &ExtractedNodes) -> Result<(), Violation> {
 pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
     // (a) translate(d) · translate(-d) ≈ I.
     let d = Vec3::from_array(t.translate);
-    let fwd = compose_transform(&UiTransform::default(), Some(&translate_of(d)), None, None);
-    let back = compose_transform(&UiTransform::default(), Some(&translate_of(-d)), None, None);
+    // Px translates are box-independent → ZERO box is fine.
+    let fwd = compose_transform(
+        &UiTransform::default(),
+        Some(&translate_of(d)),
+        None,
+        None,
+        Vec2::ZERO,
+    );
+    let back = compose_transform(
+        &UiTransform::default(),
+        Some(&translate_of(-d)),
+        None,
+        None,
+        Vec2::ZERO,
+    );
     mat4_is_identity("transform_roundtrips/translate", fwd * back)?;
 
     // (b) rotate(2π) ≈ I. A full turn about the generated axis.
@@ -124,6 +137,7 @@ pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
         None,
         Some(&Rotate(full_turn)),
         None,
+        Vec2::ZERO,
     );
     mat4_is_identity("transform_roundtrips/rotate2pi", rot)?;
 
@@ -134,6 +148,7 @@ pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation> {
         None,
         None,
         Some(&Scale(k[0], k[1], k[2])),
+        Vec2::ZERO,
     );
     mat4_is_pure_scale("transform_roundtrips/scale", s, k)?;
     Ok(())
@@ -352,7 +367,7 @@ pub fn all_finite(nodes: &ExtractedNodes) -> Result<(), Violation> {
 /// clip" and are checked separately.
 pub fn all_finite_packed(packed: &[PackedInstance]) -> Result<(), Violation> {
     for (i, p) in packed.iter().enumerate() {
-        let finite_fields: [(&str, f32); 9] = [
+        let finite_fields: [(&str, f32); 13] = [
             ("rect_pos.x", p.rect_pos[0]),
             ("rect_pos.y", p.rect_pos[1]),
             ("rect_size.x", p.rect_size[0]),
@@ -362,6 +377,12 @@ pub fn all_finite_packed(packed: &[PackedInstance]) -> Result<(), Violation> {
             ("color.b", p.color[2]),
             ("color.a", p.color[3]),
             ("radius", p.radius),
+            // The 2D affine basis (R1) — always finite for a valid
+            // GlobalTransform; a NaN/inf here is a real packing bug.
+            ("affine.m00", p.affine[0]),
+            ("affine.m10", p.affine[1]),
+            ("affine.m01", p.affine[2]),
+            ("affine.m11", p.affine[3]),
         ];
         for (field, v) in finite_fields {
             if !v.is_finite() {

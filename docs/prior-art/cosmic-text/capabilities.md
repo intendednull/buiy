@@ -155,4 +155,4 @@ The one row that should sting most is **vertical writing modes** — the layout 
 - swash — https://github.com/dfrg/swash, https://crates.io/crates/swash
 - unicode-bidi — https://github.com/servo/unicode-bidi
 - unicode-linebreak — https://crates.io/crates/unicode-linebreak
-- Buiy text spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/text.md`
+- Buiy text spec — `docs/specs/2026-05-07-buiy-foundation/text.md`

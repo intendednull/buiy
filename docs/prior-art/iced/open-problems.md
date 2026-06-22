@@ -16,7 +16,7 @@ This file is the forward-looking complement to [`critiques.md`](critiques.md). C
 3. The single-Model architecture has no built-in observer for "the visible widget tree changed."
 4. Héctor has not personally championed the feature; the COSMIC team has built bespoke AccessKit wiring in `libcosmic` rather than upstream.
 
-**Implications for Buiy:** Buiy's AccessKit-first commitment (foundation [accessibility.md](../../specs/2026-05-07-buiy-foundation/accessibility.md)) intentionally rejects iced's path. Buiy's decomposed-component model gives each widget a stable `Entity` identity; the AccessKit adapter consumes those entities directly. The Buiy foundation [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid row "Megacomponents that are BSN-hostile" applies in spirit here too — iced's `Theme` + `Widget` pair is the equivalent of a megacomponent for a11y purposes.
+**Implications for Buiy:** Buiy's AccessKit-first commitment (foundation [accessibility.md](../../specs/2026-05-07-buiy-foundation/accessibility.md)) intentionally rejects iced's path. Buiy's decomposed-component model gives each widget a stable `Entity` identity; the AccessKit adapter consumes those entities directly. The Buiy foundation [`docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid row "Megacomponents that are BSN-hostile" applies in spirit here too — iced's `Theme` + `Widget` pair is the equivalent of a megacomponent for a11y purposes.
 
 ## Mobile target maturity
 
@@ -51,7 +51,7 @@ This file is the forward-looking complement to [`critiques.md`](critiques.md). C
 2. Adding Grid support directly to iced's layout would duplicate Taffy's work.
 3. There is no public roadmap commitment to Grid layout.
 
-**Implications for Buiy:** Buiy commits to Taffy directly (foundation [architecture.md § 2.2](../../specs/2026-05-07-buiy-foundation/architecture.md)) and inherits Grid, block layout, float, named-line grid, etc. for free. This is a Validates row in [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — bevy_ui's 3.5 years on Taffy confirms the choice.
+**Implications for Buiy:** Buiy commits to Taffy directly (foundation [architecture.md § 2.2](../../specs/2026-05-07-buiy-foundation/architecture.md)) and inherits Grid, block layout, float, named-line grid, etc. for free. This is a Validates row in [`docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — bevy_ui's 3.5 years on Taffy confirms the choice.
 
 ## Animation / transition primitives
 
@@ -117,7 +117,7 @@ Considerations:
 - COSMIC is also cosmic-text-based (System76 is the cosmic-text steward).
 - Bevy migrated `bevy_text` from cosmic-text → Parley + swash (issue [#21765](https://github.com/bevyengine/bevy/issues/21765)). Iced is not following.
 
-**Implications for Buiy:** Buiy commits to cosmic-text (foundation [text.md](../../specs/2026-05-07-buiy-foundation/text.md), informed by [`/home/user/buiy/docs/prior-art/cosmic-text/lessons.md`](../cosmic-text/lessons.md)). Buiy and iced share this substrate even as bevy_ui moves away. The cosmic-text constituency is shrinking from bevy_ui's exit but staying stable from iced + COSMIC. See [`history.md`](history.md) § "0.10 — text-engine switch."
+**Implications for Buiy:** Buiy commits to cosmic-text (foundation [text.md](../../specs/2026-05-07-buiy-foundation/text.md), informed by [`docs/prior-art/cosmic-text/lessons.md`](../cosmic-text/lessons.md)). Buiy and iced share this substrate even as bevy_ui moves away. The cosmic-text constituency is shrinking from bevy_ui's exit but staying stable from iced + COSMIC. See [`history.md`](history.md) § "0.10 — text-engine switch."
 
 ## Theme tokenization
 
@@ -141,5 +141,5 @@ Considerations:
 - cryoglyph (iced's glyphon fork) — https://github.com/iced-rs/cryoglyph
 - cosmic-text — https://github.com/pop-os/cosmic-text
 - Linebender Parley — https://github.com/linebender/parley
-- Buiy foundation accessibility — /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md
-- Buiy foundation verification — /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/verification.md
+- Buiy foundation accessibility — docs/specs/2026-05-07-buiy-foundation/accessibility.md
+- Buiy foundation verification — docs/specs/2026-05-07-buiy-foundation/verification.md

@@ -134,7 +134,7 @@ The gap is structural, not incidental. The cluster of weaknesses ([`critiques.md
 
 The path of least resistance is (3): the production-UI niche gets served by retained-mode UIs (bevy_ui, bevy_feathers, bevy_lunex, Buiy), while immediate-mode bevy_egui continues to dominate the dev-tool niche. This is the implicit ecosystem trajectory; no public decision has been published but the editor-roadmap signaling (see [`ecosystem.md`](ecosystem.md) § "Bevy editor experiments") points this way.
 
-For Buiy: the production-game-UI gap is exactly the slot Buiy targets. The Buiy spec's "Game and app, both" goal ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/README.md`](../../specs/2026-05-07-buiy-foundation/README.md) goal 6) and the parallel-stack web-platform-parity stance are the design response to this gap.
+For Buiy: the production-game-UI gap is exactly the slot Buiy targets. The Buiy spec's "Game and app, both" goal ([`../../specs/2026-05-07-buiy-foundation/README.md`](../../specs/2026-05-07-buiy-foundation/README.md) goal 6) and the parallel-stack web-platform-parity stance are the design response to this gap.
 
 ## Sources
 
@@ -151,4 +151,4 @@ For Buiy: the production-game-UI gap is exactly the slot Buiy targets. The Buiy 
 - `bevy_egui_kbgp` (gamepad nav for egui) — `https://crates.io/crates/bevy_egui_kbgp`.
 - Sibling files: [`distribution.md`](distribution.md), [`history.md`](history.md), [`governance.md`](governance.md), [`ecosystem.md`](ecosystem.md), [`critiques.md`](critiques.md), [`comparisons.md`](comparisons.md).
 - [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md) "No flagship game = no UX battle-testing."
-- Buiy foundation spec — [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/`](../../specs/2026-05-07-buiy-foundation/).
+- Buiy foundation spec — [`../../specs/2026-05-07-buiy-foundation/`](../../specs/2026-05-07-buiy-foundation/).

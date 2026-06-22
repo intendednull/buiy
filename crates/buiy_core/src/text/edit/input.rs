@@ -186,12 +186,20 @@ impl TextEditState {
                 // never in `value()`), so flag `reshaped` for the M1 re-measure
                 // without emitting `TextChanged`.
                 let cleared = self.has_preedit();
-                if cleared {
-                    self.remove_preedit(font_system);
-                }
+                // `remove_preedit` reverse-applies any compose-over-selection
+                // delete (re-inserting the deleted text): that IS a logical
+                // value change, so route it to `value_changed` → `TextChanged`.
+                // The plain-preedit cancel restores nothing (returns false) and
+                // only `reshaped` fires (buffer changed, value did not).
+                let restored = if cleared {
+                    self.remove_preedit(font_system)
+                } else {
+                    false
+                };
                 self.editor.action(font_system, Action::Escape);
                 EditOutcome {
                     reshaped: cleared,
+                    value_changed: restored,
                     ..Default::default()
                 }
             }
@@ -205,11 +213,15 @@ impl TextEditState {
             EditCommand::Undo => self.apply_undo(),
             EditCommand::Redo => self.apply_redo(),
 
-            // ── Clipboard (§ 7) — plain text only (decision 4) ───────────
+            // ── Clipboard (§ 7) — text + html flavors ────────────────────
             EditCommand::Copy => {
                 // copy_selection() is None when there is no selection; a bare
                 // caret Copy is a no-op (web parity).
                 if let Some(text) = self.editor.copy_selection() {
+                    // Set BOTH flavors: the raw text (the § 7 path) and an
+                    // escaped-html flavor (a plain-text editor has no rich runs,
+                    // so its html representation is just the escaped text).
+                    ctx.clipboard.set_html(escape_html(&text));
                     ctx.clipboard.set_text(text);
                 }
                 EditOutcome::default()
@@ -221,6 +233,7 @@ impl TextEditState {
                 let Some(text) = self.editor.copy_selection() else {
                     return EditOutcome::default(); // nothing selected
                 };
+                ctx.clipboard.set_html(escape_html(&text));
                 ctx.clipboard.set_text(text);
                 // Delete the selection as one DISCRETE undoable unit (a cut is
                 // a deliberate single action — never coalesced with neighbors).
@@ -336,7 +349,11 @@ impl TextEditState {
     /// Restore the caret + the editor's selection after an undo/redo. The
     /// editor's `Selection` is the authoritative one E3 mirrors OUT next pass;
     /// we set both the cursor and (for a non-collapsed range) the anchor.
-    fn restore_cursor(&mut self, caret: Cursor, selection: super::selection::TextSelection) {
+    pub(crate) fn restore_cursor(
+        &mut self,
+        caret: Cursor,
+        selection: super::selection::TextSelection,
+    ) {
         self.editor.set_cursor(caret);
         if selection.is_collapsed() {
             self.editor.set_selection(Selection::None);
@@ -422,6 +439,27 @@ fn backspace_grapheme(ed: &mut cosmic_text::Editor<'static>, fs: &mut FontSystem
         prev_boundary,
     )));
     ed.action(fs, Action::Backspace);
+}
+
+/// Escape a plain-text string into an HTML-safe fragment for the clipboard's
+/// HTML flavor. A plain-text editor has no rich runs, so its html
+/// representation is simply the text with the five markup-significant
+/// characters escaped (`& < > " '`). Single-pass: each input char maps to its
+/// escape token in one match and emitted tokens are never re-scanned, so there
+/// is no double-escape and ordering is irrelevant.
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 use bevy::input::keyboard::{Key, KeyboardInput};

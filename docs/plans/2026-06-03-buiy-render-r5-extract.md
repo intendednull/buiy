@@ -1,5 +1,8 @@
 # Per-view Extract Rework Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **Depends on:** R1 (component-model — owns `render/components.rs` + `render/color.rs` and all shared render types). Execution order across the render-pipeline series: R1 → R2 → R3 → R4 → **R5** → R6 → R7 → R8 → (R9, R10) → R11. R6 consumes this phase's `ExtractedNodes`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

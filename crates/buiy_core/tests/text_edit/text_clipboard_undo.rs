@@ -22,6 +22,32 @@ fn mem_clipboard_is_usable_as_a_trait_object() {
     let mut boxed: Box<dyn ClipboardProvider> = Box::new(MemClipboard::default());
     boxed.set_text("via dyn".to_string());
     assert_eq!(boxed.get_text(), Some("via dyn".to_string()));
+    // The html flavor is reachable through the trait object too (T3.1).
+    boxed.set_html("<i>via dyn</i>".to_string());
+    assert_eq!(boxed.get_html(), Some("<i>via dyn</i>".to_string()));
+}
+
+#[test]
+fn mem_clipboard_round_trips_html() {
+    let mut c = MemClipboard::default();
+    assert_eq!(c.get_html(), None, "empty clipboard reads None html");
+    c.set_html("<b>x</b>".to_string());
+    assert_eq!(c.get_html(), Some("<b>x</b>".to_string()));
+    c.set_html("<b>y</b>".to_string());
+    assert_eq!(c.get_html(), Some("<b>y</b>".to_string()), "set overwrites");
+
+    // The html and text slots are INDEPENDENT: writing one never touches the
+    // other (a plain-text editor must be able to keep distinct flavors).
+    let mut c = MemClipboard::default();
+    c.set_text("plain".to_string());
+    assert_eq!(c.get_html(), None, "setting text does not invent html");
+    c.set_html("<b>rich</b>".to_string());
+    assert_eq!(
+        c.get_text(),
+        Some("plain".to_string()),
+        "setting html leaves text untouched"
+    );
+    assert_eq!(c.get_html(), Some("<b>rich</b>".to_string()));
 }
 
 use buiy_core::text::edit::{GroupKind, UndoStack, UndoUnit};
@@ -238,4 +264,48 @@ fn discrete_and_composition_never_coalesce() {
         ms(25),
     );
     assert_eq!(stack.undo_len(), 4, "each composition is its own unit");
+}
+
+// ── Image flavor (behind the `clipboard-image` cargo feature) ────────────
+// Run with: cargo test -p buiy_core --features clipboard-image
+// The default `cargo test --workspace` gate compiles this module out.
+#[cfg(feature = "clipboard-image")]
+mod image_flavor {
+    use buiy_core::text::edit::{ClipboardImage, ClipboardProvider, MemClipboard};
+
+    /// A 2x2 RGBA image (16 bytes) — enough to prove the round-trip carries
+    /// width/height/bytes intact.
+    fn sample() -> ClipboardImage {
+        ClipboardImage {
+            width: 2,
+            height: 2,
+            bytes: (0..16u8).collect(),
+        }
+    }
+
+    #[test]
+    fn mem_clipboard_round_trips_image() {
+        let mut c = MemClipboard::default();
+        assert_eq!(c.get_image(), None, "empty clipboard reads None image");
+
+        c.set_image(sample());
+        assert_eq!(c.get_image(), Some(sample()), "image round-trips");
+
+        let other = ClipboardImage {
+            width: 1,
+            height: 1,
+            bytes: vec![9, 9, 9, 9],
+        };
+        c.set_image(other.clone());
+        assert_eq!(c.get_image(), Some(other), "set overwrites");
+    }
+
+    #[test]
+    fn image_and_text_slots_are_independent() {
+        let mut c = MemClipboard::default();
+        c.set_text("plain".to_string());
+        c.set_image(sample());
+        assert_eq!(c.get_text(), Some("plain".to_string()));
+        assert_eq!(c.get_image(), Some(sample()));
+    }
 }

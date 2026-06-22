@@ -67,7 +67,7 @@ Missing:
 - Sequential-focus-navigation-starting-point.
 - Spatial / gamepad navigation.
 
-The Buiy foundation focus model (`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3, `buiy-focus-model-design` sub-spec) commits to all of these.
+The Buiy foundation focus model (`docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.3, `buiy-focus-model-design` sub-spec) commits to all of these.
 
 ### No theme / token system
 

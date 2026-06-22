@@ -139,4 +139,4 @@ Out of scope by design. AccessKit models the tree, not the rendered pixels. Buiy
 - https://docs.rs/accesskit/latest/accesskit/enum.Action.html
 - https://docs.rs/accesskit/latest/accesskit/struct.Node.html
 - https://www.w3.org/TR/accname-1.2/
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md
+- docs/specs/2026-05-07-buiy-foundation/accessibility.md

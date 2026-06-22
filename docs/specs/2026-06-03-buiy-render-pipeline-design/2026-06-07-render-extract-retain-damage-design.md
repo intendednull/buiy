@@ -1,9 +1,11 @@
 # Render extract/prepare damage retention — design note
 
 **Date:** 2026-06-07
-**Status:** proposed (GPU-verify campaign Phase 4, item 1)
+**Status:** landed (GPU-verify campaign Phase 4, item 1)
 **Supersedes nothing; implements** architecture.md § 3.1 (the `Changed<T>`-gated
-per-frame instance set) which was specified-but-never-built.
+per-frame instance set), which the campaign built after it was found
+specified-but-never-built. The bug below is the pre-fix state; "The fix" is the
+shipped design.
 
 ## The bug (found by the Phase-4 spine GPU test)
 
@@ -15,7 +17,8 @@ persistent buffers from the prior frame are re-bound and re-drawn"* (§ 3.1 ¶
 its cached instance record rather than being re-resolved... a partial re-extract
 patches only changed entities."*
 
-That retention was **never implemented**. The current code:
+That retention was **not implemented at the time** — the campaign built it (see
+"The fix"). The pre-fix code was:
 
 - `extract_buiy_nodes` (extract.rs:258-298) gates the `nodes` query with
   `Or<(Changed<…>)>`, builds `by_entity` from **only the changed entities**, walks

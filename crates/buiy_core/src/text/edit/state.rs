@@ -15,12 +15,32 @@
 use std::time::Duration;
 
 use bevy::prelude::*;
-use cosmic_text::{Buffer, Editor, Metrics};
+use cosmic_text::{Buffer, Change, Cursor, Editor, Metrics};
 
 use super::ime::PreeditSpan;
 use super::selection::TextSelection;
 use super::undo::UndoStack;
 use crate::text::IntrinsicWidths;
+
+/// The pending compose-over-selection delete (editing-and-ime § 6.2,
+/// "Compose-over-selection"). When a composition STARTS over a non-collapsed
+/// selection, the selection is deleted first and the reversible `Change` is
+/// STASHED here (not pushed onto the undo stack — invariant a holds for the
+/// splice). It is consumed at `Ime::Commit` (folded into the ONE Composition
+/// undo unit) or reverse-applied on cancel (re-inserting the deleted text).
+///
+/// It lives on `TextEditState`, NOT on `PreeditSpan`: `PreeditSpan` derives
+/// `Eq` (tests compare spans), and `cosmic_text::Change` is not `Eq`.
+#[derive(Clone, Debug)]
+pub(crate) struct ComposeDelete {
+    /// The reversible delete `Change` (delete-of-the-selection items).
+    pub change: Change,
+    /// The caret BEFORE the delete (the true pre-composition caret — recorded
+    /// as the combined unit's `caret_before` so undo restores it).
+    pub caret_before: Cursor,
+    /// The selection BEFORE the delete (restored on undo / cancel).
+    pub selection_before: TextSelection,
+}
 
 /// The per-entity caret-blink phase origin (editing-and-ime §§ 5, 10). The T7
 /// `write_caret_blink` writer was deliberately GLOBAL + stateless — a square
@@ -97,6 +117,12 @@ pub struct TextEditState {
     /// read by `value()` (byte-range exclusion, invariant b) and the geometry
     /// writer (`PreeditVisual`).
     pub(crate) preedit: Option<PreeditSpan>,
+    /// The pending compose-over-selection delete (§ 6.2). `Some` only while a
+    /// composition that STARTED over a non-collapsed selection is live; the
+    /// stashed delete is folded into the commit's Composition unit or
+    /// reverse-applied on cancel. Written only by the `ime.rs` splice/commit/
+    /// remove methods.
+    pub(crate) compose_delete: Option<ComposeDelete>,
 }
 
 impl TextEditState {
@@ -132,6 +158,7 @@ impl TextEditState {
             blink: CaretBlink::default(),
             undo: UndoStack::default(),
             preedit: None,
+            compose_delete: None,
         }
     }
 

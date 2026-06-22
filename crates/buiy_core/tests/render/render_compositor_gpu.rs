@@ -5,13 +5,16 @@
 
 use bevy::prelude::*;
 
-/// Count the nodes in the Core2d sub-graph of a freshly-built app, optionally
-/// installing `BuiyRenderPlugin`. Both variants install the identical
-/// prerequisite plugin stack, so the Core2d node-count *delta* between them is
-/// exactly what `BuiyRenderPlugin::build` contributes to that sub-graph.
-fn core2d_node_count(with_buiy: bool) -> usize {
-    use bevy::core_pipeline::core_2d::graph::Core2d;
-    use bevy::render::render_graph::RenderGraph;
+/// Count the systems in the `Core2d` SCHEDULE of a freshly-built app, optionally
+/// installing `BuiyRenderPlugin`. Bevy 0.19 removed the `RenderGraph`
+/// `Node`/`ViewNode` API — render passes are now systems added to the `Core2d`
+/// schedule — so the membership signal moved from "nodes in the Core2d sub-graph"
+/// to "systems in the Core2d schedule". Both variants install the identical
+/// prerequisite plugin stack, so the system-count *delta* between them is exactly
+/// what `BuiyRenderPlugin::build` contributes to that schedule. `graph().systems`
+/// is populated at `add_systems` time, so this needs no executor init.
+fn core2d_schedule_system_count(with_buiy: bool) -> usize {
+    use bevy::core_pipeline::Core2d;
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -26,56 +29,35 @@ fn core2d_node_count(with_buiy: bool) -> usize {
         app.add_plugins(buiy_core::render::BuiyRenderPlugin);
     }
 
-    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
-    let graph = render_app
+    app.get_sub_app(bevy::render::RenderApp)
+        .expect("RenderApp")
         .world()
-        .get_resource::<RenderGraph>()
-        .expect("RenderGraph");
-    let sub = graph.get_sub_graph(Core2d).expect("Core2d sub-graph");
-    sub.iter_nodes().count()
+        .resource::<bevy::ecs::schedule::Schedules>()
+        .get(Core2d)
+        .expect("Core2d schedule present in the RenderApp")
+        .graph()
+        .systems
+        .len()
 }
 
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by e2e harness"]
-fn compositor_register_adds_no_extra_graph_node() {
-    use bevy::core_pipeline::core_2d::graph::Core2d;
-    use bevy::render::render_graph::RenderGraph;
-
-    // The compositor runs INSIDE BuiyRenderLabel (effect-compositor.md § 3): it
-    // must NOT register a second competing node. `BuiyRenderPlugin::build` wires
-    // exactly one Core2d node — `BuiyRenderLabel` (node::register) — and
-    // `compositor::register` must add NONE. So installing the plugin grows the
-    // Core2d node set by exactly ONE; a compositor that wrongly registered a
-    // second node would make this delta two and fail here.
-    let control = core2d_node_count(false);
-    let with_buiy = core2d_node_count(true);
+fn compositor_register_adds_no_extra_core2d_pass() {
+    // The compositor runs INSIDE the single Buiy pass (`buiy_pass`,
+    // effect-compositor.md § 3): it must NOT register a second competing pass
+    // system. `BuiyRenderPlugin::build` wires exactly one Core2d-schedule system
+    // — `buiy_pass` (node::register) — and `compositor::register` must add NONE
+    // to the `Core2d` schedule (its `prepare_effect_groups` goes to the `Render`
+    // schedule, asserted separately). So installing the plugin grows the Core2d
+    // system set by exactly ONE; a compositor that wrongly registered a second
+    // Core2d pass would make this delta two and fail here.
+    let control = core2d_schedule_system_count(false);
+    let with_buiy = core2d_schedule_system_count(true);
     assert_eq!(
         with_buiy - control,
         1,
-        "BuiyRenderPlugin must add exactly one Core2d node (BuiyRenderLabel); \
+        "BuiyRenderPlugin must add exactly one Core2d-schedule system (buiy_pass); \
          the compositor must add none (control={control}, with_buiy={with_buiy})"
-    );
-
-    // Precondition (NOT the guard above): the single added node is in fact the
-    // Buiy node, registered under `BuiyRenderLabel`.
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    // See `core2d_node_count`: `CorePipelinePlugin` needs `Assets<Image>` (ImagePlugin).
-    app.add_plugins(bevy::image::ImagePlugin::default());
-    app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
-    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
-    let graph = render_app
-        .world()
-        .get_resource::<RenderGraph>()
-        .expect("RenderGraph");
-    let sub = graph.get_sub_graph(Core2d).expect("Core2d sub-graph");
-    assert!(
-        sub.get_node_state(buiy_core::render::node::BuiyRenderLabel)
-            .is_ok(),
-        "BuiyRenderLabel present"
     );
 }
 
@@ -155,29 +137,22 @@ fn prepare_effect_groups_runs_in_prepare_set() {
 
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by e2e harness"]
-fn buiy_node_runs_with_prepared_effect_groups_query() {
+fn buiy_pass_runs_with_prepared_effect_groups_query() {
     // Compile + construction smoke: BuiyRenderPlugin builds with the extended
-    // BuiyNode ViewQuery (Option<&PreparedEffectGroups>) and the node is in
-    // Core2d. The composite correctness is proven by the golden (separate
-    // gate #2 fixture) — this only pins that the node wiring compiles & loads.
-    use bevy::core_pipeline::core_2d::graph::Core2d;
-    use bevy::render::render_graph::RenderGraph;
-
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.add_plugins(bevy::render::RenderPlugin::default());
-    // See `core2d_node_count`: `CorePipelinePlugin` needs `Assets<Image>` (ImagePlugin).
-    app.add_plugins(bevy::image::ImagePlugin::default());
-    app.add_plugins(bevy::core_pipeline::CorePipelinePlugin);
-    app.add_plugins(buiy_core::render::BuiyRenderPlugin);
-
-    let render_app = app.get_sub_app(bevy::render::RenderApp).expect("RenderApp");
-    let graph = render_app.world().get_resource::<RenderGraph>().unwrap();
-    let sub = graph.get_sub_graph(Core2d).expect("Core2d");
-    assert!(
-        sub.get_node_state(buiy_core::render::node::BuiyRenderLabel)
-            .is_ok()
+    // `buiy_pass` ViewQuery (Option<&PreparedEffectGroups>) and the pass system
+    // is in the Core2d schedule. The composite correctness is proven by the
+    // golden (separate gate #2 fixture) — this only pins that the pass wiring
+    // compiles & loads. (Bevy 0.19: passes are Core2d-schedule systems, not
+    // RenderGraph nodes; membership is the +1 system delta, the same idiom as
+    // `compositor_register_adds_no_extra_core2d_pass`.)
+    let control = core2d_schedule_system_count(false);
+    let with_buiy = core2d_schedule_system_count(true);
+    assert_eq!(
+        with_buiy - control,
+        1,
+        "BuiyRenderPlugin must add its single Core2d pass system (buiy_pass) \
+         with the extended effect-groups ViewQuery (control={control}, \
+         with_buiy={with_buiy})"
     );
 }
 

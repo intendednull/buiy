@@ -38,6 +38,7 @@ fn node(entity: Entity, size: Vec2) -> ExtractedNode {
             max: size,
         }),
         group: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
     }
 }
 
@@ -306,6 +307,7 @@ fn packed(rect_size: [f32; 2]) -> PackedInstance {
         radius: 0.0,
         clip_min: [f32::NEG_INFINITY, f32::NEG_INFINITY],
         clip_max: [f32::INFINITY, f32::INFINITY],
+        affine: [1.0, 0.0, 0.0, 1.0],
     }
 }
 

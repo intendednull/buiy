@@ -140,4 +140,4 @@ GPUI's atlas + batched-instance model is GPU-memory-intensive. On integrated gra
 - NVIDIA PRIME PR #23438: https://github.com/zed-industries/zed/pull/23438
 - HN: deprioritization announcement: https://news.ycombinator.com/item?id=47003569
 - HN: gpui-ce founder reflection: https://news.ycombinator.com/item?id=47005761
-- Cross-link: Buiy foundation: [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/`](../../specs/2026-05-07-buiy-foundation/)
+- Cross-link: Buiy foundation: [`docs/specs/2026-05-07-buiy-foundation/`](../../specs/2026-05-07-buiy-foundation/)

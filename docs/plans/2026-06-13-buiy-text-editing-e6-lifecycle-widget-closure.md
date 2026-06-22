@@ -1,10 +1,11 @@
 # Buiy text-editing E6 — Focus/lifecycle + placeholder + auto-scroll + widget + closure
 
 **Date:** 2026-06-15
+**Status:** landed
 **Phase:** E6 (the FINAL phase of the E1–E6 text-editing campaign)
 **Branch:** `text-editing-e6` (off `main`, which now includes E1 + E2 + E3 + E4 + E5)
 **Campaign plan:** [2026-06-13-buiy-text-editing-campaign.md](2026-06-13-buiy-text-editing-campaign.md) § "E6 — Focus/lifecycle + placeholder + auto-scroll + widget + closure"
-**Spec realized:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 9 (auto-scroll via `ScrollOffset`), 10 (focus & lifecycle + placeholder), 11 (the full Message taxonomy + `EditSubmitted`), 2.3 (crate split — the `TextInput` widget is `buiy_widgets`), 13 (the v1 slice checklist — E6 ticks the LAST items).
+**Spec:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 9 (auto-scroll via `ScrollOffset`), 10 (focus & lifecycle + placeholder), 11 (the full Message taxonomy + `EditSubmitted`), 2.3 (crate split — the `TextInput` widget is `buiy_widgets`), 13 (the v1 slice checklist — E6 ticks the LAST items).
 **Readiness:** [2026-06-13-text-editing-design-readiness.md](../reports/2026-06-13-text-editing-design-readiness.md)
 
 ---
@@ -151,7 +152,7 @@ buffer is recorded and committed (by `TextCommit`) before extract.
 ## How to work this plan
 
 Each task is **failing test → run-it-fail → minimal impl → run-it-pass → commit**.
-Run from the repo root `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline`.
+Run from the repo root.
 The headless gate command (no GPU, what CI runs):
 
 ```sh

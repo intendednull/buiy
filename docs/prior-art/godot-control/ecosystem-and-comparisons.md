@@ -75,7 +75,7 @@ Net: Slate is the strongest "game engine UI for AAA shipping" precedent but the 
 
 ## Comparison to Bevy UI
 
-See [`/home/user/buiy/docs/prior-art/bevy-ui/`](../bevy-ui/) for the full deep-dive. Sketch of the differences from Godot Control:
+See [`docs/prior-art/bevy-ui/`](../bevy-ui/) for the full deep-dive. Sketch of the differences from Godot Control:
 
 - Bevy UI is **ECS-shaped** (Node + Style + ComputedNode + decomposed visual components); Godot is **scene-tree-shaped** (Control with bundled visual properties).
 - Bevy uses **Taffy** for layout (CSS Flex + Grid + Block); Godot does its own anchor + per-Container-class layout.

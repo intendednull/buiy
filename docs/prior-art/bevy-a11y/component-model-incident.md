@@ -2,7 +2,7 @@
 **Status:** active
 **Subject:** The bevy_a11y BSN-unfriendliness incident — issue #17644, PR #24308, and why Buiy still replaces bevy_a11y after the partial fix
 
-This file is the canonical case study for Buiy's "no megacomponents" rule ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.4 "BSN-friendly components"). The incident has three acts: the original megacomponent design (2023-03), the BSN community recognising it as hostile (2025-02), and the partial fix (2026-05). Buiy still replaces bevy_a11y for its windows after the fix because the upstream decomposition trajectory is fundamentally different from Buiy's needed shape.
+This file is the canonical case study for Buiy's "no megacomponents" rule ([`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.4 "BSN-friendly components"). The incident has three acts: the original megacomponent design (2023-03), the BSN community recognising it as hostile (2025-02), and the partial fix (2026-05). Buiy still replaces bevy_a11y for its windows after the fix because the upstream decomposition trajectory is fundamentally different from Buiy's needed shape.
 
 ## Act 1: the original megacomponent (Bevy 0.10, March 2023)
 
@@ -37,7 +37,7 @@ On 2025-02-02, viridia opened issue [#17644](https://github.com/bevyengine/bevy/
 
 The combination is the BSN-hostility complaint. Components with private fields, inconsistent setters, and bundled-everything-into-one are exactly the shape BSN cannot author or patch by composition.
 
-cart's BSN philosophy ([discussion #14437](https://github.com/bevyengine/bevy/discussions/14437)) explicitly calls for "ordinary properties which can be merged and patched" — `AccessibilityNode` is the prototypical violation in the Bevy codebase, which is why it's the named target. See [`/home/user/buiy/docs/prior-art/bevy-ui/component-model.md`](../bevy-ui/component-model.md) for the parallel decomposition story on bevy_ui's own components (`BackgroundColor`, `BorderColor`, `Outline`, `BoxShadow` all separate; `BorderRadius` reverted from separate-component to field-on-`Node` in 0.18, the non-monotonic decomposition pitfall).
+cart's BSN philosophy ([discussion #14437](https://github.com/bevyengine/bevy/discussions/14437)) explicitly calls for "ordinary properties which can be merged and patched" — `AccessibilityNode` is the prototypical violation in the Bevy codebase, which is why it's the named target. See [`../bevy-ui/component-model.md`](../bevy-ui/component-model.md) for the parallel decomposition story on bevy_ui's own components (`BackgroundColor`, `BorderColor`, `Outline`, `BoxShadow` all separate; `BorderRadius` reverted from separate-component to field-on-`Node` in 0.18, the non-monotonic decomposition pitfall).
 
 ## Act 3: the partial fix (PR #24308, merged 2026-05-21, milestone 0.19)
 
@@ -86,7 +86,7 @@ What the fix gives:
 What the fix does not give:
 - Role, value, description, bounds, transform, all state flags (checked, disabled, expanded, selected, busy, hidden, invalid, …), all relations (labelled_by, described_by, controls, owns, flow_to, …), live-region politeness, sort direction, autocomplete, popup-target — every other field still lives inside `AccessibilityNode` as method-call-mutated state.
 - A BSN template that wants to "make this widget disabled" still cannot do so by composition; it still has to either reach into `AccessibilityNode` via a system or rely on per-widget systems in `bevy_ui/src/accessibility.rs` to set the field.
-- The non-monotonic-decomposition risk (see [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid row) — if more `Accessible<Field>` components get split out over time, each is a breaking change for downstream consumers and another opportunity for reversal.
+- The non-monotonic-decomposition risk (see [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid row) — if more `Accessible<Field>` components get split out over time, each is a breaking change for downstream consumers and another opportunity for reversal.
 
 The trajectory is "decompose lazily, one field per release as someone hits the pain." Three years from now, bevy_a11y may have `AccessibleLabel`, `AccessibleRole`, `AccessibleDescription`, `AccessibleStates`, … — or it may have stopped at `AccessibleLabel` because the per-widget systems in `bevy_ui` handle the rest "well enough." Either trajectory is incompatible with Buiy's day-one decomposition.
 
@@ -103,7 +103,7 @@ Buiy's foundation spec ([`accessibility.md`](../../specs/2026-05-07-buiy-foundat
 - `A11yRole` — `accesskit::Role` selector, foundation-tier.
 - `A11yLabel` — accessible name input (per ACCNAME 1.2 source priority).
 - `A11yDescription` — accessible description input.
-- `A11yStates` — tri-state flags for checked / expanded / selected / busy / invalid / disabled / hidden, encoded with the `Toggled` / `Option<bool>` / `Invalid` enums per AccessKit's tri-state model (see [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) Avoid rows).
+- `A11yStates` — tri-state flags for checked / expanded / selected / busy / invalid / disabled / hidden, encoded with the `Toggled` / `Option<bool>` / `Invalid` enums per AccessKit's tri-state model (see [`../accesskit/lessons.md`](../accesskit/lessons.md) Avoid rows).
 - `A11yRelations` — `labelled_by`, `described_by`, `controls`, `owns`, `flow_to`, `active_descendant`, `error_message`, `details`, `popup_for`, etc.
 - Live-region politeness as a separate component on the announcer entity, not on every node.
 
@@ -117,22 +117,22 @@ The AccessKit producer-protocol shape is the actual integration target. AccessKi
 - A bridge system reflects Buiy components into bevy_a11y's `AccessibilityNode` (or, per the partial-decomposition trajectory, into `AccessibleLabel` + future siblings + remaining `AccessibilityNode` fields).
 - bevy_winit's `update_accessibility_nodes` reads `AccessibilityNode`s and builds the `TreeUpdate`.
 
-Three indirection hops, two component vocabularies, and a per-frame translation tax. None of this earns anything over Buiy talking to `accesskit_winit` directly. See [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — "AccessKit-first, talk-to-accesskit_winit-directly."
+Three indirection hops, two component vocabularies, and a per-frame translation tax. None of this earns anything over Buiy talking to `accesskit_winit` directly. See [`../accesskit/lessons.md`](../accesskit/lessons.md) — "AccessKit-first, talk-to-accesskit_winit-directly."
 
 ### 3. The adapter slot is structurally single-occupant
 
-`accesskit_winit::Adapter` accepts exactly one tree per window. Two producers cannot push to the same adapter — there's no merge protocol. So even if Buiy *wanted* to layer over bevy_a11y on a shared window, AccessKit's structural shape forbids it. Per-window coexistence (one stack per window, no shared windows) is the only design AccessKit's shape allows. See [`coexistence.md`](coexistence.md) for the long form and [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md` § 3.18](../../specs/2026-05-07-buiy-foundation/cross-cutting.md) for the committed Buiy rule.
+`accesskit_winit::Adapter` accepts exactly one tree per window. Two producers cannot push to the same adapter — there's no merge protocol. So even if Buiy *wanted* to layer over bevy_a11y on a shared window, AccessKit's structural shape forbids it. Per-window coexistence (one stack per window, no shared windows) is the only design AccessKit's shape allows. See [`coexistence.md`](coexistence.md) for the long form and [`../../specs/2026-05-07-buiy-foundation/cross-cutting.md` § 3.18](../../specs/2026-05-07-buiy-foundation/cross-cutting.md) for the committed Buiy rule.
 
 ## The Buiy "no megacomponents" rule, restated
 
-From [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.4: every Buiy component is **small, public-fielded, observable, decomposed**. The #17644 / #24308 incident is the case study cited every time this rule comes up. Concretely it means:
+From [`../../specs/2026-05-07-buiy-foundation/architecture.md`](../../specs/2026-05-07-buiy-foundation/architecture.md) § 2.4: every Buiy component is **small, public-fielded, observable, decomposed**. The #17644 / #24308 incident is the case study cited every time this rule comes up. Concretely it means:
 
 - **Small.** A component owns one concept (a label, a role, a set of related state flags). Not "all of accessibility."
 - **Public-fielded.** Fields are `pub`, not method-gated. BSN, reflection, and direct ECS access all see the same thing.
 - **Observable.** Per-component change-detection is meaningful — touching one property doesn't dirty unrelated properties.
 - **Decomposed.** Independent properties live in independent components. Required-components and on-insert/on-remove hooks compose them when needed.
 
-The constraint applies regardless of BSN's status (see [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — top of file, on BSN-not-yet-landed). #17644 demonstrates the cost of retrofitting; #24308 demonstrates the friction of retrofitting partially under release-cycle pressure. Buiy pays the small-decomposed-component tax in advance.
+The constraint applies regardless of BSN's status (see [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md) — top of file, on BSN-not-yet-landed). #17644 demonstrates the cost of retrofitting; #24308 demonstrates the friction of retrofitting partially under release-cycle pressure. Buiy pays the small-decomposed-component tax in advance.
 
 ## Cross-references
 
@@ -141,9 +141,9 @@ The constraint applies regardless of BSN's status (see [`/home/user/buiy/docs/pr
 - [`coexistence.md`](coexistence.md) — why "layer over" is structurally impossible
 - [`focus-model.md`](focus-model.md) — focus mostly lives in `bevy_input_focus`, not `bevy_a11y`
 - Sibling [`critiques.md`](critiques.md) — Agent B's longer pushback synthesis
-- [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — the AccessKit-side lessons that say "decomposed is the only shape that maps cleanly onto AccessKit's setter-rich Node API"
-- [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — Avoid row "Megacomponents that are BSN-hostile"
-- [`/home/user/buiy/docs/prior-art/bevy-ui/component-model.md`](../bevy-ui/component-model.md) — bevy_ui's own decomposition history (BackgroundColor, BorderColor, BorderRadius reversal)
+- [`../accesskit/lessons.md`](../accesskit/lessons.md) — the AccessKit-side lessons that say "decomposed is the only shape that maps cleanly onto AccessKit's setter-rich Node API"
+- [`../bevy-ui/lessons.md`](../bevy-ui/lessons.md) — Avoid row "Megacomponents that are BSN-hostile"
+- [`../bevy-ui/component-model.md`](../bevy-ui/component-model.md) — bevy_ui's own decomposition history (BackgroundColor, BorderColor, BorderRadius reversal)
 
 ## Sources
 

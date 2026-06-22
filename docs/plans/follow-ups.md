@@ -1,4 +1,4 @@
-# Layout follow-ups
+# Cross-phase follow-ups
 
 **Date:** 2026-05-21
 **Status:** active
@@ -91,10 +91,28 @@ frame N+1 applies B's" — currently the assertion would never fire
 because B never updates.
 
 
-## Anchor positioning — `anchor-size()` term
+## Anchor positioning — `anchor-size()` term — LANDED
 
 **Originated:** Phase 6 (anchor positioning), spec § 3.4 line 231
 ("tier-C feature deferred to v1.x").
+
+**Status:** **Landed.** `anchor-size()` ships as
+`Length::AnchorSize(AxisDimension)` (no `AnchorRef` payload — the
+over-specified sketch below is superseded; the per-try anchor box is
+already known at the resolution site `try_anchored_position`, so only the
+axis selector is needed). The `to_px` closure resolves
+`AnchorSize(Width) → anchor_size.x` / `AnchorSize(Height) → anchor_size.y`
+against the per-try box; every non-anchor `Length` match site degrades it
+to `0`/`auto` alongside the existing `Cq*` defensive arms. Sticky has no
+anchor box, so `resolve_sticky_inset` resolves it to `0.0` and warns once
+via the new session-scoped `LayoutWarnOnceKey::StickyAnchorSizeUnsupported`.
+The previously-unreachable `AnchorErrorKind::AnchorSizeUsed` variant +
+warn arm were **deleted** (not repurposed): anchor-size now resolves to a
+real value, so an error/warn kind is semantically wrong; the variant had
+no Reflect/serialization consumer worth preserving (it never fired).
+Spec § 3.4 + README § 5 deferral reversed. Covered by
+`try_anchored_position_resolves_anchor_size_{height,width...}` (unit) and
+`anchor_size_inset_resolves_to_anchor_height` (integration).
 
 **Symptom:** authors using `anchor-size()` in a `PositionTry::inset` term
 get a `0.0` resolution and a per-frame warn via
@@ -120,6 +138,13 @@ known at try-evaluation time) but the term type is missing from
 ## Anchor positioning — `position_try_max_depth` resource cap
 
 **Originated:** Phase 6 + README § 5 open question.
+
+**Status:** **Deferred (not built)** — reviewed by the follow-ups-drain campaign
+(`2026-06-18-followups-drain.md`) and deliberately left deferred: both spec § 3.5
+and README § 5 gate this on "if profiling surfaces a hot path", and no profiling
+evidence exists, so the cap would be a speculative unused knob. **Re-open
+trigger:** a *measured* deeply-nested-fallback hot path against a perf budget.
+The implementation sketch below stands when that trigger fires.
 
 **Symptom:** an anchor with a deeply-nested `position_try` chain (e.g.,
 20+ fallbacks) is evaluated linearly. No cap is enforced. If profiling
@@ -147,7 +172,16 @@ to query, or a global `LayoutTree` with window-tagged entries.
 **Implementation sketch:** depends on `buiy-window-and-surface-design`
 (currently incomplete). Out of Phase 6 scope.
 
-## Anchor positioning — anchor target IS sticky/table/multicol (Phase 7 interaction)
+## Anchor positioning — anchor target IS sticky/table/multicol (Phase 7 interaction) — LANDED
+
+**Status:** **Landed** in Phase 7 (Task 9, the D1 fix), confirmed by the
+follow-ups-drain campaign. `anchor_resolution` (6d) reads the anchor target's
+position from `PostTaffyPositionOverrides.by_entity` (written by sticky 6a /
+table 6b / multicol 6c) first, falling back to Taffy only when absent — exactly
+**Option 1** below (the shared per-entity correction buffer all four sub-passes
+contribute to). Tested end-to-end in
+`tests/layout_sticky.rs::anchor_target_is_sticky_anchored_tracks_displaced_position`.
+The original analysis follows.
 
 **Originated:** Phase 6 (architectural quirk surfaced during plan
 review).
@@ -174,7 +208,7 @@ after 6d). The corrections are invisible to 6d.
 Option 1 preserves spec order and is the more flexible long-term
 shape.
 
-## Anchor positioning — `AnchorRef::Entity` integration test gap
+## Anchor positioning — `AnchorRef::Entity` integration test gap — LANDED
 
 **Originated:** Phase 6 (final whole-branch review).
 
@@ -189,17 +223,58 @@ its `Entity` handle, and uses `AnchorRef::Entity(e)` as the anchor
 reference (no name registry involved). Assert the anchored entity's
 position tracks the target.
 
-## Anchor positioning — extract `anchor_resolution` into sub-helpers
+**Status:** **Landed.** Two end-to-end tests added to
+`crates/buiy_core/tests/layout_anchor_positioning.rs` —
+`anchor_entity_ref_positions_relative_to_target` (positive: a direct
+`AnchorRef::Entity` to a plain-Node target with no registry entry
+resolves to the target box edge + inset; override `y == 60`, no
+`LayoutAnchorBroken`) and `anchor_entity_ref_display_none_target_is_missing`
+(negative: `AnchorRef::Entity` at a `Display::None` target → the D9 guard
+in `resolve_target` fires via the Entity arm → zero override +
+`LayoutAnchorBroken` + `TargetMissing` warn). Test-only; no production
+change — the `AnchorRef::Entity(t) => Some(*t)` arm and the `Display::None`
+guard already existed inside `build_anchor_edge_map`'s `resolve_target`
+closure. Fills declared coverage of spec §4 'Test surface'; no
+target-state change.
+
+## Anchor positioning — extract `anchor_resolution` into sub-helpers — LANDED
 
 **Originated:** Phase 6 (final whole-branch review).
 
-**Symptom:** `anchor_resolution` spans ~252 lines (`systems.rs` lines
-497-749) following 7 numbered algorithm steps. Pure refactor candidate
-when Phase 7 extends the sub-pass set.
+**Symptom:** `anchor_resolution` (`crates/buiy_core/src/layout/systems.rs`,
+~265 lines) followed 7 numbered algorithm steps inline. Pure refactor
+candidate to keep later anchor edits rebasing onto clean helpers.
 
-**Implementation sketch:** split into `build_anchor_edge_map`,
-`apply_anchor_broken_markers`, `emit_anchor_warns`. No behavior change;
-makes future extension cleaner.
+**Status:** **Landed.** Behavior-preserving extraction — zero observable
+change; the existing anchor + pipeline-order suites stayed green throughout.
+`anchor_resolution` is now a thin driver delegating to three private free
+helpers, co-located directly below it (matching the existing
+`kahn_anchor_sort` / `try_anchored_position` / `try_conditions_pass`
+neighbors):
+
+- `build_anchor_edge_map` (steps 2 + 3) — owns the `resolve_target` and
+  `entity_epochs_fn` closures (capturing `&AnchorNameRegistry` /
+  `&Query<&Display>` by shared ref), the per-entity edge insert +
+  `TargetMissing` warn, the `kahn_anchor_sort` call, and the
+  cycle-endpoint `InCycle` warn / `dropped_targets` loop. Returns
+  `(edges, order, dropped, dropped_targets, new_warns)`; `dropped` is a
+  `HashSet<Entity>` mirroring `kahn_anchor_sort`'s return so the driver's
+  set-membership consumption (`dropped.contains`, the seeding loops) is
+  unchanged.
+- `apply_anchor_broken_markers` (step 6) — idempotent `LayoutAnchorBroken`
+  insert/remove across the anchored set, the `dropped_targets` plain-Node
+  set, and the non-anchored cleanup set (loop order + the
+  `anchored_query.get(t).is_err()` cleanup guard kept verbatim).
+- `emit_anchor_warns` (step 7) — the `warned.set.insert` dedupe gate + the
+  exhaustive per-`AnchorErrorKind` `warn!` match.
+
+The step-5 topological walk was **intentionally left inline** in the driver
+(out of the named sketch): it is the most entangled body — it closes over
+`tree` + `overrides` + `reg` + `display_query` + `viewport` +
+`anchored_query` and mutates `overrides` / `broken_set` / `new_warns` — so
+extracting it was out of this slice's scope.
+
+**Spec touchpoint:** none — pure internal refactor, no target-state change.
 
 ## Layout — `Position::Fixed` implementation — LANDED
 
@@ -265,21 +340,45 @@ metrics deferred).
 
 **Spec touchpoint:** `flex-and-grid.md § 3` (multi-column).
 
-## Layout — sticky `Length::Cq*` inset resolution
+## Layout — sticky `Length::Cq*` inset resolution — LANDED
 
 **Originated:** Phase 7 (D3 deferral).
 
+**Status:** **Landed.** Sticky `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax`
+insets now resolve via the shared `translate.rs::resolve_cq_unit_px`
+against the sticky entity's own nearest container-query ancestor
+(`Container { container_type != Normal }`, found by walking `ChildOf`
+from the sticky entity — distinct from anchor's per-try "anchor target
+box" frame). The CQ-ancestor size is read CURRENT-frame from Taffy
+(`tree.by_entity` + `tree.tree.layout`), NOT from last-frame
+`&ResolvedLayout`: `sticky_offset` runs in `PostTaffyOverrides` (after
+`TaffyCompute`, before `WriteResolvedLayout`), so a container's
+`ResolvedLayout` is stale there but its Taffy size is fresh — this keeps
+sticky `Cq*` same-frame-consistent with the self/parent/scroll sizes
+`sticky_offset` already reads from Taffy, and collapses the tests to a
+single `app.update()`. Cqi/Cqb resolve on the writing-mode inline/block
+axes (per-entity `WritingModeResolved`); the no-CQ-ancestor case rides
+`resolve_cq_unit_px`'s existing viewport fallback, identical to every
+other Cq* site. The `StickyCqDeferred` warn variant was **retired**
+(delegating to `resolve_cq_unit_px` makes it dead; keeping it would
+double-warn). Covered by `sticky_cqw_inset_resolves_against_nearest_cq_ancestor`,
+`sticky_cqi_inset_resolves_on_inline_axis_under_vertical_writing_mode`,
+`sticky_cqb_inset_resolves_on_block_axis_under_vertical_writing_mode`,
+and `sticky_cqw_resolves_against_inner_cq_ancestor_not_scroll_container`
+in `tests/layout_sticky.rs`.
+
 **Symptom:** Sticky entity with `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax`
-inset emits `LayoutWarnOnceKey::StickyCqDeferred(Entity)` and resolves to
+inset emitted `LayoutWarnOnceKey::StickyCqDeferred(Entity)` and resolved to
 0.0.
 
-**Implementation sketch:** port Phase 6's `length_inset_to_px` cq-context
-resolver. Sticky's reference frame is the sticky entity's own nearest CQ
-ancestor (distinct from anchor's "anchor target box" frame). Multi-axis
-fixture needed (Cqi/Cqb resolve against writing-mode inline/block axes).
+**Implementation sketch (as landed):** reuse `resolve_cq_unit_px` (the
+same resolver sizing/tracks/edges use) instead of porting Phase 6's
+anchor-box-shaped `length_inset_to_px`. Sticky's reference frame is the
+sticky entity's own nearest CQ ancestor. Multi-axis fixtures pin the
+Cqi/Cqb writing-mode axis swap.
 
 **Spec touchpoint:** `display-and-positioning.md § 2.3`,
-`container-queries-and-writing-modes.md § 1`.
+`container-queries-and-writing-modes.md § 1.4`.
 
 ## Layout — sticky em/rem/Vh/Vw/Vmin/Vmax inset support
 
@@ -296,41 +395,97 @@ these `Length` variants, extend `resolve_sticky_inset` with new arms
 **Spec touchpoint:** Phase 10 — viewport units; future font-rendering
 spec — em/rem.
 
-## Layout — sticky both-top-and-bottom dual clamp
+## Layout — sticky both-top-and-bottom dual clamp — LANDED
 
 **Originated:** Phase 7 (D4 — v1 "top wins" deviation).
 
+**Status:** **Landed.** `compute_sticky_displacement` now honors the
+bottom inset: when both `inset_top` and `inset_bottom` (or both
+`inset_left`/`inset_right`) are set, both clamps apply simultaneously per
+CSS § 6.3. Each axis applies the top line `U = visible_top + top_px`
+(`.max(U)`), then the bottom line `L = (visible_bottom − bottom_px) −
+size` (`.min(L)`); when the band is shorter than the box (`U > L`) it
+re-applies `.max(U)` so the top edge takes precedence. The band clamp
+stays an explicit `.max(parent_lo).min(parent_hi)` (NOT `f32::clamp`,
+which panics when `lo > hi`). Each axis reduces to the prior single-edge
+formula when only one inset is set (the single-edge regression tests stay
+green). The v1 "top wins" tests were flipped: the integration regression
+test `sticky_both_top_and_bottom_inset_top_wins` →
+`sticky_both_top_and_bottom_bottom_honored_near_scroll_end` and the pure
+unit test `sticky_both_top_and_bottom_active_top_wins` →
+`sticky_both_top_and_bottom_dual_clamp_bottom_honored` (both now assert
+the bottom inset wins near the scroll end). New fixtures: the
+`sticky_both_top_and_bottom_conflict_top_precedence` unit test locks the
+`U > L` top-precedence re-max branch (verified anti-vacuous: deleting the
+branch breaks it), and `sticky_both_insets_clamp_at_both_extremes`
+(integration) proves both edges clamp at their respective scroll
+extremes.
+
 **Symptom:** Sticky element with both `inset_top` and `inset_bottom` set
-ignores the bottom inset (top wins). CSS spec § 6.3 implies dual-clamp
+ignored the bottom inset (top wins). CSS spec § 6.3 implies dual-clamp
 behavior where the element sticks to whichever edge the scroll position
 is closer to.
 
-**Implementation sketch:** implement dual-clamp in
-`compute_sticky_displacement` — likely requires storing both upper and
-lower sticky thresholds and computing midpoint logic. The v2 test
-`sticky_both_top_and_bottom_inset_top_wins` (in `tests/layout_sticky.rs`)
-is the regression test for the v1 "top wins" behavior — flipping it
-documents the algorithm upgrade.
+**Implementation sketch (as landed):** replace each axis's
+`if-top else-if-bottom` chain (which left the bottom branch unreachable
+when both were set) with a single dual-clamp expression applying both
+thresholds, plus the `U > L` top-precedence re-max for the degenerate
+band-shorter-than-box case. The 10-arg signature is unchanged.
 
-**Spec touchpoint:** CSS spec § 6.3 (positioned layout).
+**Spec touchpoint:** `display-and-positioning.md § 2.3`; CSS spec § 6.3
+(positioned layout).
 
-## Layout — sticky inside sticky
+## Layout — sticky inside sticky — LANDED
 
 **Originated:** Phase 7 (documented v1 limitation).
+
+**Status:** **Landed.** A sticky element nested inside a
+sticky-displaced ancestor now tracks the ancestor's DISPLACED position,
+same-frame. Two coordinated changes inside sub-pass 6a (`sticky_offset`):
+(1) the qualifying sticky entities are DEPTH-SORTED by `ChildOf`-chain
+depth ascending (`child_of_depth`) so a shallower (outer) sticky resolves
+and inserts its `PostTaffyPositionOverrides` entry BEFORE a deeper (inner)
+sticky reads it — same-frame eventual consistency via depth ordering, NOT
+two-frame; (2) `world_position` takes an `&HashMap<Entity, Vec2>` override
+map and, per ancestor-walk segment, uses the just-written override
+(`natural_rel + displacement` = that entity's displaced rel-to-parent
+location) when present, else the Taffy `.location`. The per-call `memo`
+is CLEARED at the top of each sticky-entity iteration (its only purpose is
+reuse between the `e` and `parent` walks of the SAME entity; sharing it
+across the depth-ordered loop would return values cached before an outer
+override existed). The override map is passed as `&overrides.by_entity`
+(shared borrow); the current entity's own `.insert` happens at the END of
+its loop body after both reads, so no borrow conflict and no per-frame
+clone. A's displacement reaches B's final render position through the
+normal parent→child `ResolvedLayout`/`Transform` composition (applied via
+A's own override), NOT by baking it into B's stored value — so it is not
+double-counted. Siblings at equal depth in unrelated subtrees have no
+ordering dependency, so an unstable sort by depth alone suffices (no full
+toposort). Covered by `sticky_inside_sticky_inner_tracks_displaced_outer`
+(inner tracks displaced outer → no over-displacement) and
+`sticky_inside_sticky_override_value_is_not_double_counted` (pins the
+exact inner override value to prove the outer displacement is not
+re-added) in `tests/layout_sticky.rs`; the single-level
+`sticky_pins_to_top_during_scroll` and nested-scroll
+`sticky_in_nested_scroll_containers_uses_innermost` tests stay green
+(no regression — single-level depth-sort is trivial, no ancestor override
+means `world_position` falls back to Taffy `.location` exactly as before).
 
 **Symptom:** When entity A is sticky-displaced and entity B is a sticky
 child of A, B's `world_position` walks Taffy positions (un-displaced);
 B's threshold computation uses A's *natural* position, not displaced.
 Rare authoring case.
 
-**Implementation sketch:** consult `PostTaffyPositionOverrides`
-(just-written by 6a) when walking the ancestor chain in
-`world_position`, so inner sticky sees displaced outer. Requires careful
-ordering (inner sticky must run after outer; topological pre-pass or
-two-frame eventual-consistency are both options).
+**Implementation sketch (as landed):** depth-sort the sticky set in
+`sticky_offset` (outer resolves first), and consult the just-written
+`PostTaffyPositionOverrides` per segment when walking the ancestor chain
+in `world_position`, clearing the `world_position` memo between sticky
+entities. L4 (the widened `resolve_sticky_inset` Cq/viewport/wmr params,
+the `sticky_offset` container_q/wmr_q/primary_window plumbing, the
+current-frame `container_index`) and L5 (the dual-clamp form of
+`compute_sticky_displacement`) are untouched.
 
-**Spec touchpoint:** `display-and-positioning.md § 2.3` (does not
-explicitly address nested-sticky).
+**Spec touchpoint:** `display-and-positioning.md § 2.3`.
 
 ## Layout — `clear_warned_once_on_exit` lifecycle wire-up
 
@@ -430,34 +585,78 @@ nodes are kept alive. Hidden never warns (fully implemented). Mirrored in
 
 **Spec touchpoint:** `transforms-and-containment.md § 5.2`.
 
-## Layout / render — `will-change` layer promotion + SC trigger
+## Layout / render — `will-change` layer promotion + SC trigger — SC TRIGGER LANDED; layer promotion DEFERRED
 
 **Originated:** Phase 8 (D7 — tier-E, stored-only).
 
-**Symptom:** `WillChange` is stored on `Containment` but no layer
-promotion or stacking-context trigger behavior is produced.
+**Status — SC trigger (landed):** the stacking-context half is **landed**.
+`forms_stacking_context` (layout/systems.rs) now reads `Containment.will_change`
+and forms a `StackingContext` when the list names an SC-forming property. The
+SC-forming subset is encoded once in `WillChangeProperty::forms_stacking_context`
+(Transform / Opacity / Filter; `ZIndex` / `ScrollPosition` excluded — `will-change:
+z-index` does not form an SC, matching CSS). Unit tests sit beside the other
+trigger tests (layout/systems.rs); end-to-end coverage in tests/layout_stacking.rs.
+See the "Phase 9 `will-change` stacking-context former" entry below.
 
-**Implementation sketch:** honor `WillChange::Properties` as a render
-layer-promotion hint and a stacking-context trigger when the list mentions
-an SC-forming property (`WillChangeProperty::Transform` etc.) — coordinates
-with Phase 9 stacking.
+**Status — layer promotion (deferred):** the **render layer-promotion hint**
+remains deferred. There is no composition-layer / `RenderLayers` concept in
+render/ to hang a promotion hint on, so this half is not yet actionable — it
+stays open until such a mechanism exists.
 
-**Spec touchpoint:** `transforms-and-containment.md § 5.3`.
+**Spec touchpoint:** `transforms-and-containment.md § 5.3`;
+`stacking-and-top-layer.md § 2` trigger 5, § 7.
 
-## Render — `UiTransform` paint + `Containment` PAINT clip rect + perspective / backface
+## Render — `UiTransform` paint + `Containment` PAINT clip rect + perspective / backface — TRANSFORM-PAINT + PAINT-CLIP LANDED (R1); perspective / backface / transform-origin / skew DEFERRED
 
 **Originated:** Phase 8 (spec § 4 — render-side concerns stored only).
 
-**Symptom:** `perspective`, `TransformStyle::Preserve3d`, and
-`BackfaceVisibility::Hidden` are stored on `UiTransform` and the
-`LAYOUT` / `PAINT` / `STYLE` contain flags are stored on `Containment`,
-but render does not yet consume them.
+**Status:** transform-paint (rotation + (non-)uniform scale) LANDED (R1); the
+PAINT clip rect was ALREADY done; perspective / `Preserve3d` /
+`BackfaceVisibility` remain C-tier deferred. Do NOT close — the residuals below
+keep this entry open.
 
-**Implementation sketch:** render consumes `ResolvedTransform` + the
-containment flags — applies the composed matrix, the PAINT clip rect, and
-honors perspective / backface / `transform-style`.
+**LANDED (R1, as landed):** the 2D affine paint. Extract consumes the
+`GlobalTransform` 2D linear part (`global_transform.affine().matrix3` xy columns
+— NOT a re-read of `ResolvedTransform`; pillar-5 contract, the bridge already
+folded `ResolvedTransform.matrix` into `Transform`) and carries it as
+`ExtractedNode.affine`. `PackedInstance` grew by APPENDING the 2x2 basis
+(`[m00,m10,m01,m11]`) AFTER the existing 13 floats so every prior offset stays
+byte-stable; the named `COLOR_FLOAT_OFFSET = 4` / `ALPHA_FLOAT_OFFSET = 7`
+consts were added for R2's degraded-group re-tint. The quad + shadow vertex
+stages apply the affine to each box-local corner (`mat2x2 * local`) before the
+logical→clip view map, interpolating `frag_logical` for the clip-AABB discard
+(stride 52 B → 68 B, vertex attrs `@location(8)/(9)`). Identity basis
+`[1,0,0,1]` is byte-identical to the pre-R1 axis-aligned path. GPU rotate/scale
+reftest: `tests/render_transform_paint_gpu.rs` (`#[ignore]`).
 
-**Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1.
+**ALREADY done (pre-R1):** the `Containment` PAINT clip rect — the per-primitive
+clip AABB via `clip::clip_for_primitive` + `write_clip_rects` (clip.rs ~196),
+packed onto every instance (the R8b fragment discard).
+
+**Residual (still C-tier deferred):** `perspective`, `TransformStyle::Preserve3d`,
+and `BackfaceVisibility::Hidden` are stored on `UiTransform` but render does not
+consume them (render/mod.rs ~388). The 2D affine path does not carry a
+projective channel.
+
+**Residual A (newly surfaced — layout side):** `transform-origin` is NOT honored
+by layout sub-pass 6e (`compose_transform` ignores `ui.origin`), so the composed
+matrix rotates/scales about the box-local TOP-LEFT, not the 50%/50% center.
+Render transports the affine EXACTLY as `GlobalTransform` encodes it so render ==
+picking by construction; it must NOT independently re-apply an origin (a
+double-apply would diverge from picking). Honoring `transform-origin` is a
+layout-side follow-up (a 6e change + a picking re-verify).
+
+**Residual B (newly surfaced — bridge fidelity):** skew (`TransformMatrix::Skew`)
+and general `TransformMatrix::Matrix` paint are BOUNDED by the bridge's lossy
+TRS-only `Transform::from_matrix` decompose (bridge.rs; proven lossy by
+`from_matrix_drops_projective_perspective_row_keeps_affine`). A Bevy `Transform`
+is TRS-only and cannot represent a general shear, so the extracted 2D linear part
+is FAITHFUL for rotation + non-uniform scale but skew/general-matrix do NOT paint
+faithfully yet. Faithful skew needs the bridge to stop round-tripping through TRS
+(or render to read a non-TRS source).
+
+**Spec touchpoint:** `transforms-and-containment.md § 4`, § 5.1;
+`clip-and-transform.md § B.5`.
 
 ## Render — R11 forced-colors cross-phase seams (CatalogPaint + BoxShadow draw-skip)
 
@@ -534,7 +733,19 @@ goldens (group-opacity correctness, RSS return-to-baseline) run under an adapter
 
 **Spec touchpoint:** `effect-compositor.md § 1.1 / § 2 / § 3`; architecture.md § 1.4 / § 4.
 
-## Render — node-draw model: per-entity clip + composite passes (R8 Task 8 / R9 blocker)
+## Render — node-draw model: per-entity clip + composite passes (R8 Task 8 / R9 blocker) — LANDED
+
+**Status:** **Landed** as R8b
+([2026-06-07-buiy-render-r8b-node-draw.md](2026-06-07-buiy-render-r8b-node-draw.md)),
+ratified as Option C of the design note
+(`docs/specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md`).
+The recommended **hybrid** shipped: per-instance clip-AABB fragment-discard
+(`clip_for_primitive` → `PackedInstance` `clip_min`/`clip_max`, threaded into R6's
+instance layout + WGSL) plus the multi-pass composite node (`BuiyNode::run` —
+normal pass → `partition_top_layer`-driven top-layer composite pass), which the R9
+effect-compositor passes then build on (see the **effect-compositor GPU
+orchestration** LANDED entry above). So this is no longer a blocker before R8 Task
+8 / R9: both consumed the ratified model. The original deferral text follows.
 
 **Originated:** R8 (paint/clip/toplayer). R8 landed the pure consumer helpers
 (`scissor_rect`, `clip_for_primitive`, `partition_top_layer`) but **not** the GPU
@@ -598,7 +809,7 @@ the composed `ResolvedTransform` (trigger 3). It implements the spec § 2 SC
 trigger union (positioned + z-index, isolation, transform, paint/strict
 containment, root), the § 2.1 five-tier z-index paint-order sort, and the
 § 4 top-layer escape. The render-side trigger-5 formers have since landed
-(next entry); the will-change SC trigger remains deferred (separate
+(next entry); the will-change SC trigger has since landed too (separate
 follow-up below).
 
 **Spec touchpoint:** `transforms-and-containment.md § 3`, § 6;
@@ -618,33 +829,33 @@ forms a `StackingContext`. The clause delegates to
 `render::effect::forms_render_stacking_context`, which derives from the
 canonical effect-group former predicate (`effect_reason_for`) — ONE source
 of truth for the shared terms, so the SC trigger and the group former can
-never drift apart. `will-change` stays deferred (separate follow-up below);
-`BackdropFilter` deliberately forms an `EffectGroup` but never an SC
+never drift apart. The `will-change` SC trigger has since landed (separate
+follow-up below); `BackdropFilter` deliberately forms an `EffectGroup` but never an SC
 (render component-model.md § 8). Unit tests sit beside the other trigger
 tests (layout/systems.rs); end-to-end coverage in tests/layout_stacking.rs.
 
 **Spec touchpoint:** `stacking-and-top-layer.md § 2` trigger 5, § 7.
 
-## Layout — Phase 9 `will-change` stacking-context former
+## Layout — Phase 9 `will-change` stacking-context former — LANDED
 
 **Originated:** Phase 9 (D1) — coordinates with the Phase-8 "will-change
 layer promotion + SC trigger" follow-up (above).
 
-**Symptom:** a `WillChange` value naming an SC-forming property (e.g.
-`WillChangeProperty::Transform`, `Opacity`) should form a stacking context,
-but sub-pass 6f does not treat `will-change` as a trigger. `WillChange` is
-Phase-8 tier-E, stored-only with no behavior.
+**Status:** **Landed.** `forms_stacking_context` (layout/systems.rs) gained a
+trigger-5b clause: when `Containment.will_change` is `WillChange::Properties`
+and names an SC-forming property, the entity forms a `StackingContext`. The
+SC-forming subset is encoded once as `WillChangeProperty::forms_stacking_context`
+(types.rs) = Transform / Opacity / Filter; `ZIndex` and `ScrollPosition` are
+excluded (CSS: `will-change: z-index` does not create an SC — z-index needs
+positioning). No signature change was needed: the 6f `forms` closure already
+passed `containment_q.get(e).ok()`, so the unit-level predicate and the
+end-to-end 6f path lit up together. Unit tests sit beside the other trigger
+tests (layout/systems.rs) and the subset helper (types.rs); end-to-end
+coverage (positive + layout-only negative) in tests/layout_stacking.rs.
 
-**Cause:** Phase 8 stores `WillChange` on `Containment` but ships no behavior
-(D7); Phase 9 deliberately did not wire it as an SC trigger to keep the
-deferral consistent. The two concerns (render layer promotion + SC trigger)
-are the same underlying feature and should land together.
-
-**Implementation sketch:** when honoring `WillChange`, extend
-`forms_stacking_context` to return `true` when the `Containment.will_change`
-list names an SC-forming property, in the same change that adds the render
-layer-promotion hint. Cross-links the existing Phase-8 "will-change layer
-promotion + SC trigger" follow-up.
+Only the SC-trigger half landed. The `will-change` **render layer-promotion
+hint** stays deferred (see the combined Phase-8 entry above) — there is no
+composition-layer / `RenderLayers` concept in render/ to honor it.
 
 **Spec touchpoint:** `transforms-and-containment.md § 5.3`;
 `stacking-and-top-layer.md § 2` trigger 5, § 7.
@@ -673,18 +884,38 @@ window's root context instead of `roots.first()`.
 
 **Spec touchpoint:** `stacking-and-top-layer.md § 4.4`, § 7.
 
-## Layout — non-px translate units in `compose_transform`
+## Layout — non-px translate units in `compose_transform` — PERCENT LANDED (Cq* residual)
 
 **Originated:** Phase 8 (CHANGELOG deferral note).
 
 **Symptom:** `compose_transform` resolves only `Length::Px` for translate;
 percent / `Cq*` translate contributes `0.0`.
 
-**Implementation sketch:** resolve percent / `Cq*` translate against the
-entity's own resolved box (currently `0.0`); coordinate with the animation
-phase.
+**Status — PERCENT landed (2026-06-18).** As landed: `compose_transform` and
+`transform_matrix_to_mat4` now take the entity's own current-frame border box
+and resolve a `Percent` translate term against it per CSS Transforms —
+`translateX(p%)` = `p%` of border-box **width**, `translateY(p%)` = `p%` of
+**height** (each axis against its own dimension), `translateZ` percent (invalid
+in CSS) → `0`. Sub-pass 6e (`transform_composition`) reads the box straight from
+the **current-frame** Taffy tree (`tree.tree.layout(node).size`, mirroring
+`anchor_resolution` (6d)) — *not* `ResolvedLayout`, which is still last-frame at
+6e time. The `Length::Px` translate path is byte-for-byte unchanged (regression
+guarded by `translate_transform_composes_to_resolved_transform`). Tests:
+`translate_percent_x_resolves_against_own_width`,
+`translate_percent_y_resolves_against_own_height`,
+`translate_mixed_percent_and_px`, `cq_translate_is_residual_zero`
+(`crates/buiy_core/tests/layout_transforms.rs`); the `Style::translate(Length,
+Length)` builder was added to express percent translate.
 
-**Spec touchpoint:** `transforms-and-containment.md § 1`, § 1.1.
+**RESIDUAL — `Cq*` translate still deferred.** `Cq*` translate
+(`cqw/cqh/cqi/cqb/cqmin/cqmax`) needs the entity's nearest CQ-ancestor container
+frame (the sticky-L4 / `resolve_cq_unit_px` machinery), which sub-pass 6e does
+not gather. It resolves to `0.0` and fires a one-shot warn
+(`warn_once_cq_translate_residual`). Resolving it requires threading the nearest
+CQ-ancestor `ContainerSnapshot` into 6e — held out for scope discipline.
+
+**Spec touchpoint:** `transforms-and-containment.md § 1` ("Translate length
+units"), § 1.1.
 
 ## Render — effect-compositor depends on the opacity stacking-context trigger (contiguity) — LANDED
 
@@ -748,23 +979,74 @@ pass via a `Glyph@Rgba16Float` pipeline specialization (mirroring the
 
 ## Render — degraded effect groups vanish instead of drawing flat
 
+**Status: Root-degraded LANDED; nested-degraded follow-up filed** (R2).
+
 **Originated:** text campaign T8 implementation reading (the T8 plan's D9).
 
-**Symptom:** a `plan_allocation == false` group gets no pooled target,
-`BuiyNode::run` step 1 `continue`s, and its members are excluded from
+**As-was symptom:** a `plan_allocation == false` group got no pooled target,
+`BuiyNode::run` step 1 `continue`d, and its members were excluded from
 `flat_ranges` / `glyph_flat_ranges` — so under RT-pool budget pressure a
-degraded group's quads AND glyphs paint nowhere, despite the "drawn flat
-instead" comments (node.rs step 1; compositor.rs `PreparedEffectTargets`).
-Latent under the 64 MiB budget (no fixture degrades today). T8 mirrored the
-quad semantics for glyphs (a degraded group's glyph range is likewise
-skipped) rather than silently widening scope.
+degraded group's quads AND glyphs painted nowhere, despite the "drawn flat
+instead" comments. Latent under the 64 MiB budget (no fixture degraded). T8
+had mirrored the quad semantics for glyphs (a degraded group's glyph range
+was likewise skipped) rather than silently widening scope.
 
-**Implementation sketch:** either re-route a degraded group's ranges into the
-flat draw at prepare (forward compositing, accepting the double-dim
-approximation v1 rejected for targets) or document skip-as-degradation;
-decide with `buiy-verification-design`'s budget calibration.
+**Resolution (R2):** the route-flat-vs-skip fork is RESOLVED in favor of
+**forward-compositing**, per `effect-compositor.md § 2.3` (skip contradicted
+the spec). A ROOT degraded group (`parent == None`) now folds `group.opacity`
+into each member instance's alpha IN PLACE (quad alpha at
+`ALPHA_FLOAT_OFFSET` = 7 on the `[f32;17]` record; glyph alpha at the parallel
+`GLYPH_ALPHA_FLOAT_OFFSET` = 11 = `GlyphAlphaInstance.color[3]`) and merges
+its instance ranges into `flat_ranges`/`glyph_flat_ranges` so the flat WINDOW
+draw paints it — it dims exactly once and paints flat, never vanishes
+(`compositor::fold_root_degraded_into_flat`, called from
+`prepare_effect_groups`). Per-tier idempotency: the fold runs iff the
+corresponding BUFFER was repacked this frame (quad on `quad_dirty`, glyph on
+`glyph_dirty` — the buffer-repack signals, which DIFFER from the wider
+glyph-partition signal), so a retained buffer never re-compounds. Gated on
+`allocate.iter().any(|a| !a)` to preserve the gate-#14 zero-upload steady
+state. The budget is overridable via the new `RtPoolBudget` resource so a test
+forces degradation deterministically. (R1's named `ALPHA_FLOAT_OFFSET = 7`
+const + append-after-13 `PackedInstance` layout supplied the byte-stable quad
+offset this fold depends on.)
 
-**Spec touchpoint:** `effect-compositor.md § 2.3`.
+**Out of scope (nested):** a NESTED degraded child (`parent == Some`) is NOT
+handled by this slice — see the next section. The fold debug-asserts on it and
+leaves it untouched in release (no worse than the prior vanish).
+
+**Spec touchpoint:** `effect-compositor.md § 2.3` (as-landed note added).
+
+## Render — nested degraded effect group must forward-composite into the parent target (not the window)
+
+**Originated:** R2 (degraded-group forward-composite), MAJOR-1 scope decision.
+
+**Problem:** `plan_allocation` (`compositor.rs`) ranks purely by (extent,
+reason) and CAN degrade a NESTED child (`extracted[i].parent == Some`) while
+its parent keeps a target. R2's fix routes a degraded group's instance ranges
+into `flat_ranges`, which the node draws in the WINDOW pass (`buiy_pass`,
+`node.rs`). That equals "the parent target" the spec § 2.3 mandates ONLY when
+the degraded group is a ROOT group. For a nested degraded child, window-level
+flat-merge would paint it in the wrong space/clip, and the parent's step-2a
+composite (which already skips when either end lacks a target) would then
+sample a parent target the child never reached — double-wrong. So R2 scoped to
+root-degraded.
+
+**Fix (node-side):** route a degraded nested child's `group_ranges[i]` /
+`glyph_group_ranges[i]` into the PARENT group's step-1 target draw (the
+parent's `target_view_columns`, into the parent's `Rgba16Float` target), with
+`group.opacity` folded per-instance, BEFORE the parent composites — instead of
+the window flat draw. This is a different draw path from the root case (parent
+off-screen target vs. window flat pass), which is why it was split out.
+
+**Current containment:** `compositor::fold_root_degraded_into_flat`
+`debug_assert!(false, …)`s on a nested degraded group (loud in dev/tests) and
+in release leaves it untouched (it vanishes — no worse than today). The GPU
+test `nested_degraded_group_does_not_corrupt_parent`
+(`tests/render_degraded_group_gpu.rs`) guards that the slice's flat-merge does
+NOT mis-place a nested child at window level.
+
+**Spec touchpoint:** `effect-compositor.md § 2.3` ("directly into its parent
+target" wording).
 
 ## Text — production ASCII pre-warm (rejected as unmeasured)
 
@@ -858,9 +1140,13 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   assertion-free placeholder, not a green test.
 - **Multi-reference reftest aggregation** — the `RefCase::multi` OR/AND
   aggregation (`reftests.md` § Reference independence #3) is specified but not
-  built; single-reference reftests cover the current pairings.
+  built; single-reference reftests cover the current pairings. (Follow-ups-drain
+  reviewed and left deferred — re-open when a real logical-vs-physical, ≥2-reference
+  pairing appears; building it now is tested-but-unused machinery.)
 - **`golden-prune` bin** — the advisory stale-positive pruner (`goldens.md`
-  § Stale-positive guard) is a design hook, machinery deferred.
+  § Stale-positive guard) is a design hook, machinery deferred. (Follow-ups-drain
+  reviewed and left deferred — re-open when the golden corpus grows enough that
+  stale positives are plausible; nothing to prune at the current few cells.)
 - **Shaping-corpus breadth (pure-Hebrew / VS16 / Thai / Khmer fixtures)** —
   named in audit #38 (T4.6), deliberately DEFERRED rather than landed in the
   testing-audit campaign. The shaping corpus is a curated, byte-reproducible
@@ -927,34 +1213,70 @@ design's numbers, never this backlog's.
 
 ## Text editing — BiDi split caret (E3 deferral)
 
-**Status:** deferred from E3 ([2026-06-13-buiy-text-editing-e3-caret-selection.md](2026-06-13-buiy-text-editing-e3-caret-selection.md)).
+**Status: LANDED** (follow-up slice after E3–E6; `followups-drain` worktree).
+Superseded the E3 deferral. Was: deferred from E3
+([2026-06-13-buiy-text-editing-e3-caret-selection.md](2026-06-13-buiy-text-editing-e3-caret-selection.md)).
 
 **What it is:** when the caret sits on a bidirectional direction boundary, the
 spec (editing-and-ime.md §§ 4.1, 5) calls for **two** caret marks — a primary
 full-height bar at one run's edge plus a secondary indicator at the other — so
 the user can tell which direction the next typed character will flow.
 
-**Why deferred:** cosmic-text 0.19 exposes no API for the dual position.
-`LayoutRun::cursor_position` → `cursor_glyph` (vendored `buffer.rs:148-179`)
-compares **only** `(cursor.line, cursor.index)` and never reads
-`cursor.affinity`, and a single unwrapped line is **one** `LayoutRun` — so
-repeated `cursor_position` calls cannot surface the second position, and there
-is no second run to scan. cosmic's own `Editor::draw` paints a single caret
-(`find_map` first run). E3 therefore paints the **single primary caret** (zero
-correctness risk — the caret is always present and correct; only the
-mixed-direction *secondary indicator* is missing), exactly as the multi-range
-selection *behavior* is a named deferral.
+**As landed.** The secondary indicator rides
+`CaretVisual.secondary: Option<Rect>` (a FIELD, not a standalone component — the
+extract producer's query/`Changed`/`RemovedComponents` params are at Bevy's
+15-tuple cap, so the field reuses the primary's damage trigger and clear).
+`secondary_caret_rect_for(buffer, caret)` (caret.rs) returns `Some` only at a
+direction boundary — where a BEFORE glyph (`end == index`) and an AFTER glyph
+(`start == index`) abut with OPPOSITE `level.is_rtl()`. The secondary x is the
+**BEFORE glyph's logical-end visual edge**: LTR → `x + w`, RTL → `x` (cosmic's
+own convention, `buffer.rs:120-142` / `cursor_from_glyph_right`). It is
+top-anchored at `SECONDARY_CARET_H_FRAC` (0.5) of the line box — a shorter mark
+than the full-height primary. The paint is a SECOND solid-stamp instance in
+extract.rs (CPU geometry only, reusing the primary's atlas entry/color/clip/page
+— no new GPU, no new atlas insert). The writer compares the `(rect, secondary)`
+pair so a boundary crossing that changes only the secondary still re-emits.
 
-**Correct approach (the work):** compute the secondary x from glyph-level
-geometry at the boundary byte index — the LTR glyph's trailing edge vs the RTL
-glyph's leading edge, using the affinity pair, à la `cursor_from_glyph_left` /
-`cursor_from_glyph_right` (vendored `buffer.rs:181-197`, which DO encode
-affinity). Paint as a secondary `CaretVisual`-style rect + a second solid stamp
-(CPU geometry only — no new GPU, the E3 paint path already stamps the primary).
+**Why a field, not a new component.** The §6.3-style primary `CaretVisual` is
+already the seat; the cap on the extract producer's tuples (extract.rs § 6.1)
+makes a 16th seat impossible without a risky refactor of the hottest text
+system. Recorded in the §5 spec update so a future "cleanup" to a standalone
+component is not silently attempted.
 
-**Owner:** the text-editing campaign, as a focused follow-up slice after E3–E6.
+**The cosmic gotcha (why E3 couldn't surface it).** `cursor_glyph`
+(`buffer.rs:151-174`) is affinity-blind AND order-defined — it resolves
+`index == glyph.start` BEFORE `index == glyph.end`, so its single
+`cursor_position` only ever reports the AFTER (start-glyph) edge, which the
+PRIMARY already paints. The SECONDARY is the OTHER abutting glyph's logical-end
+edge — a glyph-level position cosmic's one cursor call cannot reach (the second
+position is glyph-level, not run-level).
 
-**Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 (as-landed deferral notes).
+**Soft-wrap (multiple runs per logical line).** A logical line that wraps emits
+SEVERAL `LayoutRun`s sharing one `line_i` (cosmic 0.19 `LayoutRunIter`: one run
+per wrapped `layout_line`; glyph byte indices are line-relative across the
+segments). So `secondary_caret_rect_for` mirrors `caret_rect_for`'s all-runs
+scan: a `line_i`-matching run that holds neither abutting glyph at the index is
+the WRONG wrap segment (or a run extremity) — it CONTINUES rather than concluding
+`None`, and the rect uses the OWNING run's `line_top`. Only single-line editors
+force `Wrap::None` (sync.rs:521); multi-line wrapping editors and display text
+produce multi-run logical lines, so a boundary on a continuation segment must
+still surface the secondary.
+
+**Tests.** Headless `text_caret_geometry.rs`: `secondary_caret_rect_for` returns
+`None` for a pure-LTR caret and `Some` at a data-derived mixed-BiDi boundary
+(asserting the EXACT before-glyph edge x — equality with the primary allowed,
+never `primary.x != secondary.x`); a narrow soft-wrapped mixed line surfaces the
+secondary on a NON-FIRST run of the logical line (asserting the owning
+continuation run's `line_top`); the end-to-end editor caret carries no
+secondary on ASCII; `CaretVisual::default().secondary == None`. GPU `#[ignore]`
+`text_caret_selection_e3_gpu.rs`: the existing single-band primary golden is
+unchanged; an additive boundary golden drives the caret to the data-derived
+boundary via logical-order `Motion::Next` and asserts TWO red bands with the
+secondary shorter in row-extent.
+
+**Owner:** the text-editing campaign (delivered).
+
+**Spec touchpoint:** editing-and-ime.md §§ 4.1, 5, 13 + abstract (as-landed notes).
 
 ## Text editing — multi-range selection *behavior* (E-campaign deferral)
 
@@ -977,27 +1299,85 @@ reshape needed).
 
 **Spec touchpoint:** editing-and-ime.md §§ 4.2, 13 (named deferral).
 
-## Text editing — HTML + image clipboard flavors (E-campaign deferral)
+## Text editing — HTML + image clipboard flavors (E-campaign deferral) — LANDED
 
-**Status:** deferred from the `buiy-text-editing` campaign (E4 shipped plain
+**Status:** **Landed.** The `ClipboardProvider` facade gained `get_html`/
+`set_html` (always available) and `get_image`/`set_image` over a Buiy-owned
+`ClipboardImage { width, height, bytes }` (behind the new `buiy_core`
+`clipboard-image` cargo feature, which forwards to arboard's `image-data`).
+Both impls carry the new flavors: `MemClipboard` stores an html slot and (gated)
+an image slot — the headless-testable path; `ArboardClipboard` delegates to
+arboard `Get::html()`/`Set::html()` and (gated) `get_image`/`set_image`,
+converting at the borrowed-`ImageData<'a>` boundary. `Cut`/`Copy` now set BOTH
+the plain-text flavor and an escaped-html flavor (`escape_html` escapes
+`& < > " '`; a plain-text editor has no rich runs, so its html is just the
+escaped text). **`Paste` is unchanged** — it takes the § 3.3 newline-strip text
+path and never consults the html getter (the getter is for rich-content
+callers); a regression test (`paste_prefers_text_and_ignores_html`) pins this.
+OQ#3 **resolved**: arboard 3.6.1 `Get::html()`/`Set::html()` are on the
+cross-platform builder and not feature-gated (verified against the locked
+source); only image needs `image-data`. **Implementing files:**
+`crates/buiy_core/src/text/edit/clipboard.rs` (trait + `ClipboardImage` + both
+impls), `crates/buiy_core/src/text/edit/input.rs` (Copy/Cut dual-set +
+`escape_html`), `crates/buiy_core/src/text/edit/mod.rs` (gated re-export),
+`crates/buiy_core/Cargo.toml` (`clipboard-image = ["arboard/image-data"]`).
+**Tests:** `crates/buiy_core/tests/text_clipboard_undo.rs` (MemClipboard html
+round-trip + independent slots + trait-object; `#[cfg(feature="clipboard-image")]`
+image round-trip + independent slots) and
+`crates/buiy_core/tests/text_undo_ops.rs` (copy/cut dual-set the escaped-html
+flavor; paste-prefers-text-and-ignores-html). **CI note:** the default
+`cargo test --workspace` / `clippy --workspace --all-targets` gate runs with
+`clipboard-image` **OFF** (the image module compiles out); the gated lane is
+`cargo test -p buiy_core --features clipboard-image` (and a matching clippy run)
+— add it to CI so the image path cannot rot silently. No new GPU, no new event
+surface; arboard real-OS clipboard is not headless-testable, so only MemClipboard
+is asserted (matching the E4 decision). The original deferral context is
+preserved below.
+
+**Originally deferred** from the `buiy-text-editing` campaign (E4 shipped plain
 text).
 
-**What it is:** the F row names text + HTML + image MIME for cut/copy/paste; E4
-ships **plain text only** (`Cut`/`Copy` via `copy_selection`, `Paste` through the
-§ 3.3 newline policy) behind the `ClipboardProvider` facade. HTML + image flavors
-are the named next slice.
+**What it was:** the F row names text + HTML + image MIME for cut/copy/paste; E4
+shipped **plain text only** (`Cut`/`Copy` via `copy_selection`, `Paste` through
+the § 3.3 newline policy) behind the `ClipboardProvider` facade. HTML + image
+flavors were the named next slice.
 
-**Why deferred:** arboard's HTML *read-side* support is unverified
-(editing-and-ime OQ#3) and must be confirmed before the slice is promised; the
-facade makes adding flavors local (no API churn).
-
-**Owner:** a focused follow-up slice; gated on confirming arboard HTML read.
+**Why it was deferred:** arboard's HTML *read-side* support was unverified
+(editing-and-ime OQ#3) and had to be confirmed before the slice was promised; the
+facade made adding flavors local (no API churn).
 
 **Spec touchpoint:** editing-and-ime.md §§ 7, 13 (named deferral); OQ#3.
 
-## Text editing — compose-over-selection (E5 deferral)
+## Text editing — compose-over-selection (E5 deferral) — LANDED
 
-**Status:** deferred from the `buiy-text-editing` campaign (E5 IME;
+**Status:** **Landed.** When a composition starts over a non-collapsed
+selection, the selection is now deleted first (replace-selection convention) and
+the preedit is spliced at the now-collapsed caret. The selection-delete is
+captured as a reversible cosmic `Change`, **stashed** on the new
+`TextEditState::compose_delete` field (not pushed onto the undo stack — invariant
+(a) still holds for the splice), and at `Ime::Commit` it is **folded into the
+same `GroupKind::Composition` undo unit** as the commit-insert
+(`caret_before`/`selection_before` captured pre-delete): one undo restores BOTH
+the deleted text and the committed text, one redo replays both. A **cancel**
+(empty `Preedit` / `Ime::Disabled` / `Escape`) reverse-applies the stash,
+re-inserting the deleted text and restoring the selection. `TextChanged` fires on
+the delete (a genuine value change — the one documented exception to "never
+preedit") and again on the cancel-restore. The plain-text unselected-caret path
+is byte-identical to E5. *Approach rejected:* recording the delete as its own
+Composition unit and coalescing the commit into it — `Composition` never
+coalesces (§ 6.2c) and the intervening preedit splice breaks caret-adjacency, so
+it would yield two units. **Implementing files:** `crates/buiy_core/src/text/edit/ime.rs`,
+`crates/buiy_core/src/text/edit/state.rs` (`ComposeDelete` + `compose_delete`
+field), with the keyboard Escape value-change routed through
+`crates/buiy_core/src/text/edit/input.rs`. **Tests:**
+`crates/buiy_core/tests/text_ime_ops.rs` (splice-deletes-and-stashes,
+commit-is-one-unit + one-undo-restores-both + redo, cancel-restores-via-remove) and
+`crates/buiy_core/tests/text_ime_system.rs` (delete-fires-TextChanged,
+cancel/Disabled-restores + re-fires-TextChanged, commit-one-unit). Spec
+editing-and-ime.md §§ 6.1 / 6.2 / 13 updated (deferral reversed). No new GPU, no
+new event surface. The original deferral context is preserved below.
+
+**Originally deferred** from the `buiy-text-editing` campaign (E5 IME;
 [E5 plan](2026-06-13-buiy-text-editing-e5-ime.md)).
 
 **What it is:** when text is selected and the user starts an IME composition,
@@ -1017,3 +1397,164 @@ preedit span — a focused behavioral slice, no new GPU and no new event surface
 **Owner:** a focused follow-up slice after E1–E6.
 
 **Spec touchpoint:** editing-and-ime.md §§ 6.1, 6.2, 13.
+
+## BSN / Bevy 0.19 — rc.3 → 0.19.0 stable bump (closes the rc-pin exception)
+
+**Originated:** the Bevy 0.19-rc + BSN migration
+([plan](2026-06-18-bevy-0.19-bsn-migration.md);
+[spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 2).
+
+**Status:** deferred — gated on the upstream 0.19.0 **stable** release.
+
+**What it is:** Buiy pins `bevy 0.19.0-rc.3` (with `bevy_scene`) to reach
+`bsn!` authoring — a deliberate, scoped exception to the foundation's
+"rolling latest-stable Bevy" policy (architecture.md § 2.9). When Bevy
+0.19.0 stable releases, Buiy bumps to it and the exception **closes**.
+
+**Why deferred:** the BSN baseline (PR #23413) ships only in the 0.19
+line, and 0.19 has no stable tag yet. The rc is API-frozen enough that
+the rc.3→stable delta is expected to be small (a likely-mechanical
+version bump + a re-resolve + `cargo deny check`), but it must be done
+when stable lands. Watch for any BSN / render-graph API churn between
+rc.3 and stable.
+
+**Implementation sketch:** bump the `bevy` pin in the workspace
+`Cargo.toml` to `0.19.0`, regenerate the on-disk lock, verify single
+resolved versions (`cargo tree -i`), re-run `cargo deny check`, then run
+both gates (headless + the GPU `--ignored` lane). Remove the rc-exception
+note from foundation architecture.md § 2.9 and the
+`2026-06-18-buiy-bsn-integration-design.md` § 2 callout once closed.
+
+**Owner:** a focused version-bump slice when 0.19.0 stable releases.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 2, § 7;
+foundation `architecture.md` § 2.9.
+
+## BSN — `.bsn` asset-file loader + component hot-reload (await upstream loader)
+
+**Originated:** the BSN integration design
+([spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 4.4, § 7).
+
+**Status:** deferred — blocked on the upstream `.bsn` asset-file loader.
+
+**What it is:** Buiy targets **inline `bsn!`** (and function / `SceneList`
+scenes) only. The `.bsn` **asset-file** form
+(`asset_server.load("x.bsn")`) and component hot-reload via it are not in
+scope for the initial BSN work.
+
+**Why deferred:** the `.bsn` asset-file loader was explicitly deferred out
+of Bevy's BSN baseline (PR #23413) to a future upstream PR — it has no
+runtime backing in `0.19.0-rc.3`. Component hot-reload depends on that
+loader, so it defers with it. The reflection registry that the loader (and
+the editor/inspector) will consume is already maintained by Buiy's
+per-crate `register_type` plugins (spec § 4.3) — no reflect work is
+blocked, only the consumer.
+
+**Implementation sketch:** when the upstream `.bsn` loader lands, wire it
+through Buiy's asset pipeline (`buiy-asset-pipeline-design`), add a `.bsn`
+asset-load + hot-reload path, and verify the registered Buiy components
+resolve from a `.bsn` file. Until then, inline `bsn!` is the authoring
+surface.
+
+**Owner:** `buiy-asset-pipeline-design` (the still-unwritten asset-pipeline
+sub-spec), gated on the upstream loader.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.4, § 7;
+foundation README § 5 ("hot-reload of components"); bevy-ui prior-art
+`open-problems.md` § "Hot-reload of components".
+
+## BSN — widget scene-fn coverage as the widget catalog grows
+
+**Originated:** the BSN integration design
+([spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 4.1c) + Phase 4
+([plan](2026-06-18-bevy-0.19-bsn-migration.md) T4.3/T4.4).
+
+**Status:** incremental — extend per widget as the catalog grows.
+
+**What it is:** Buiy ships parameterized **widget scene-fns** in
+`buiy_widgets` (`button(label) -> impl Scene`, `text_input_single_line`,
+`text_input_multi_line`) that spell a widget's styling as explicit `bsn!`
+field-patches so `bsn! { button("Save") BoxModel { … } }` merges
+field-wise and keeps the widget's other canonical defaults (the § 4.1c
+require-suppression remedy). Today's catalog is `Button` + `TextInput`.
+
+**Why incremental:** every new widget added to `buiy_widgets` needs its own
+`#[require]` contract **and** a matching scene-fn (reusing the same private
+require-initializer fns as the one source of truth, so `bsn!{ widget() }`
+stays byte-equal to `spawn(Widget)`). This is mechanical per-widget work
+that lands with each widget, not a one-shot task.
+
+**Implementation sketch:** when a widget is added under
+`buiy-widget-catalog-design`, add its `#[require(...)]` markers and a
+`buiy_widgets` scene-fn re-exported through `buiy::prelude`, and extend the
+round-trip test's styled-widget cases (§ 5) to cover it.
+
+**Owner:** `buiy-widget-catalog-design`, per widget.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.1a,
+§ 4.1c, § 5.
+
+## BSN — round-trip test full-`BoxModel`-equality robustness (optional nicety)
+
+**Originated:** the BSN integration Phase 4 round-trip test
+([plan](2026-06-18-bevy-0.19-bsn-migration.md) T4.5;
+[spec](../specs/2026-06-18-buiy-bsn-integration-design.md) § 5).
+
+**Status:** optional hardening — not blocking; current assertions are
+correct.
+
+**What it is:** the round-trip authorability test asserts patched field
+values on the resulting entity components. A nicety would assert the
+**full** `BoxModel` (every field) equals the expected materialized value
+after a scene-fn merge — not only the patched fields — to pin the § 4.1c
+field-wise-merge behavior end-to-end (patched field changed, all others
+retain the widget's canonical defaults) against any future drift in the
+require-initializers or scene-fn bodies.
+
+**Why deferred:** the current per-field assertions already cover the
+load-bearing cases (the patch applied; the suppression gotcha; the scene-fn
+merge keeps padding). A full-struct equality assertion is stricter
+regression insurance, not a correctness gap.
+
+**Implementation sketch:** in the styled-widget round-trip case, construct
+the expected `BoxModel` explicitly (widget defaults with the one patched
+field overridden) and assert struct equality, rather than spot-checking
+individual fields.
+
+**Owner:** a focused test-hardening slice (low priority).
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.1c, § 5.
+
+## Verify — `rect-rounded` lavapipe golden re-bless on CI Mesa after the wgpu29/naga29 bump
+
+**Originated:** the Bevy 0.19-rc migration final gate
+([plan](2026-06-18-bevy-0.19-bsn-migration.md) Phase 3 / T3.2).
+
+**Status:** CI action item — NOT a regression; do not bless on a dev host.
+
+**What it is:** the zero-tolerance `buiy_verify` golden
+`rect-rounded/default/dark__sm__fc0__lavapipe__dpr1` (`tests/goldens.rs ::
+golden_sdf_corner`) diverges by `max_channel_delta=35` (0 differing pixels,
+`mssim=0.9995`) when run on a dev host. The baseline was blessed on **CI
+pinned lavapipe Mesa 24.3.4**; dev hosts run a different Mesa (e.g. 26.0.2),
+and the render path also crossed **naga 27 → 29** — both produce sub-pixel
+AA deltas at the curved SDF corner on the lavapipe *software* rasterizer.
+This is the ONLY golden that diverges; the Button reftest, all `buiy_core`
+self-validating GPU goldens (the project's actual dev GPU lane), and the
+other `buiy_verify` goldens all pass. It is a structural no-op (mssim
+0.9995), not a paint regression.
+
+**Why not blessed here:** re-blessing on a dev host would commit non-CI-Mesa
+output and break the CI gate. The CI-pinned baseline is the authority.
+
+**Action:** on the next CI run on the pinned lavapipe (Mesa 24.3.4), if
+`golden_sdf_corner` diverges from the wgpu29/naga29 toolchain (vs. the
+pre-bump baseline), review the triage diff (`target/buiy-goldens/report.html`)
+to confirm it is corner-AA-only, then re-bless with
+`BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored
+--test-threads=1` and commit. The dev-host divergence above is expected and
+not the signal — only the CI-Mesa result is.
+
+**Owner:** the CI maintainer at the 0.19 toolchain bump.
+
+**Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 7.

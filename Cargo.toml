@@ -19,9 +19,11 @@ buiy_verify = { path = "crates/buiy_verify" }
 resolver = "2"
 members = [
     "crates/buiy",
+    "crates/buiy_bsn",
     "crates/buiy_core",
     "crates/buiy_widgets",
     "crates/buiy_verify",
+    "examples/hello_bsn",
     "examples/hello_button",
     "examples/hello_text",
     "examples/capture",
@@ -49,7 +51,7 @@ rust-version = "1.89"
 # accesskit + accesskit_winit (per-window adapter), bevy_picking feature
 # on bevy. Still deferred: image-compare (visual harness upgrade is v0.x
 # verification work), thiserror (no error-typing pressure yet).
-bevy = { version = "0.18", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "bevy_picking", "x11", "wayland"] }
+bevy = { version = "0.19.0-rc.3", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "bevy_picking", "bevy_scene", "x11", "wayland"] }
 taffy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -73,11 +75,12 @@ arboard = { version = "3.6", default-features = false }
 tracing = "0.1"
 # Phase 0 closeout deps (closeout plan 2026-05-08).
 bytemuck = { version = "1", features = ["derive"] }
-accesskit = "0.21"
-accesskit_winit = "0.29"
+accesskit = "0.24"
+accesskit_winit = "0.32"
 # guillotiere is only a *transitive* dep of bevy_image (not re-exported);
-# pin it directly to the version bevy_image 0.18.1 resolves so a bevy patch
-# bump cannot drop the atlas allocator. Spec atlas-and-text-seam.md § 2.1.
+# pin it directly to the version bevy_image 0.19.0-rc.3 resolves (0.6.2, which
+# satisfies bevy_image's "0.6.0" req) so a bevy patch bump cannot drop the atlas
+# allocator. Spec atlas-and-text-seam.md § 2.1.
 guillotiere = "=0.6.2"
 smallvec = "1"
 # Tier-5 golden bless ledger (goldens.md § "The bless ledger"): `<slug>.toml`

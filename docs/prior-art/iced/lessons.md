@@ -70,7 +70,7 @@ When designing a Buiy feature:
 ## Sources
 
 - All sibling files in this folder.
-- Buiy foundation spec — `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/`
+- Buiy foundation spec — `docs/specs/2026-05-07-buiy-foundation/`
 - Iced repository — https://github.com/iced-rs/iced
 - Iced 0.14.0 release notes — https://github.com/iced-rs/iced/releases/tag/0.14.0
 - Iced book — https://book.iced.rs/

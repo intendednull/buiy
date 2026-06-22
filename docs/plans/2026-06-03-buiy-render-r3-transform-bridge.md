@@ -1,5 +1,8 @@
 # Transform / GlobalTransform Bridge Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Depends on:** R1 (`render/components.rs` + `render/color.rs` and every shared render type — `Background`, `Border`, `ResolvedTransform` consumers, `ColorToken`). **Execution order:** R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → (R9, R10) → R11. R3 imports `Background`/`Border`/`ColorToken` and `resolve_token` from R1's `render::components` / `render::color` / `render::mod`; it MUST NOT define or re-export any of them. R3 introduces NO new `BuiySet` variant (spec [architecture.md § 5.1/§ 5.2](../specs/2026-06-03-buiy-render-pipeline-design/architecture.md) forbids a new top-level render set); `write_buiy_transform` + the three `bevy_transform` propagation systems are pinned directly `.after(BuiySet::Animate).before(BuiySet::Picking)` inside the existing chain.

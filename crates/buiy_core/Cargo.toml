@@ -66,9 +66,16 @@ default = ["default_font"]
 # Family::SansSerif etc. resolve identically on every host. Disable to ship
 # zero font bytes — the app must then register fonts before any text renders.
 default_font = []
+# The clipboard image flavor (editing-and-ime § 7). OFF by default: it turns on
+# arboard's `image-data` feature, which drags in the image-clipboard deps
+# (objc2-core-graphics on macOS, gdi on Windows; the `image` crate is already
+# in-tree). The text + HTML flavors need none of this, so the text-only build
+# stays lean. Exercised with `cargo test -p buiy_core --features clipboard-image`
+# — the default `cargo test --workspace` gate runs with this OFF.
+clipboard-image = ["arboard/image-data"]
 
 [dev-dependencies]
-naga = "27"
+naga = "29"
 proptest = { workspace = true }
 # Performance bench harness (audit #40, DG-3): drives the `pipeline.rs` bench
 # below. Dev-only + informational (see the workspace-dep comment); `harness =

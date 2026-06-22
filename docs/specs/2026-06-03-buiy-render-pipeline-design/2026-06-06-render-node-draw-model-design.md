@@ -1,9 +1,10 @@
 # Render node-draw model — per-entity clip + composite passes (design)
 
-**Status:** DECIDED 2026-06-07 — **Option C (hybrid)**. Per-instance fragment-discard
-clip + the reserved multi-pass node (top-layer composite, then R9 effect-group
-passes). R8 Task 8 + R9 implement against it. Surfaced 2026-06-06 when R8's plan
-could not express the consumer draw coherently on R6's single-buffer draw model.
+**Status:** landed — decided 2026-06-07 as **Option C (hybrid)**, shipped via R8b
+(+ R9). Per-instance fragment-discard clip + the reserved multi-pass node (top-layer
+composite, then R9 effect-group passes). R8 Task 8 + R9 implemented against it.
+Surfaced 2026-06-06 when R8's plan could not express the consumer draw coherently on
+R6's single-buffer draw model.
 **Owners:** render-pipeline.
 **Related:** [architecture.md § 1.3 / § 2](architecture.md) (pillar 2: typed-primitive batched node + one top-layer composite pass), [clip-and-transform.md § A](clip-and-transform.md) (`ClipRect`/`AncestorClip` consumption), [paint-order-and-top-layer.md § 3 / § 4](paint-order-and-top-layer.md) (top-layer composite), [effect-compositor.md](effect-compositor.md) (R9), R6 (`render/prepare.rs`, `render/node.rs`), R8 (`scissor_rect`, `clip_for_primitive`, `partition_top_layer`).
 

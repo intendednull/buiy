@@ -1,11 +1,11 @@
 # Buiy Text-Editing E3 — Caret + Selection Model + Painting
 
 **Date:** 2026-06-13
+**Status:** landed
 **Phase:** E3 of the text-editing campaign (E1–E6)
 **Campaign:** [2026-06-13-buiy-text-editing-campaign.md](2026-06-13-buiy-text-editing-campaign.md) § "E3 — Caret + selection model + painting"
 **Spec:** [specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 4.1, 4.2, 4.3, 5, 11
 **Branch:** `text-editing-e3` (off `main`, which now includes E1 + E2)
-**Repo root:** `/mnt/storage/projects/buiy/.claude/worktrees/render-pipeline`
 
 ---
 

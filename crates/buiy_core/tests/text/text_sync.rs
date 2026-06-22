@@ -431,7 +431,7 @@ fn text_leaf_measures_its_content_through_the_node_context() {
         .expect("text leaf has a layout");
     assert!(layout.size.y > 0.0, "the measure closure is live (Task 4)");
 
-    let tree = app.world().non_send_resource::<LayoutTree>();
+    let tree = app.world().non_send::<LayoutTree>();
     let node = *tree.by_entity().get(&entity).unwrap();
     assert_eq!(
         tree.tree_ref().get_node_context(node),
@@ -456,7 +456,7 @@ fn removing_text_clears_the_node_context() {
     app.world_mut().entity_mut(entity).remove::<Text>();
     app.update();
 
-    let tree = app.world().non_send_resource::<LayoutTree>();
+    let tree = app.world().non_send::<LayoutTree>();
     let node = *tree.by_entity().get(&entity).unwrap();
     assert_eq!(
         tree.tree_ref().get_node_context(node),
@@ -478,7 +478,7 @@ fn adding_text_to_an_existing_node_registers_the_context() {
         .insert(Text(String::from("late text")));
     app.update();
 
-    let tree = app.world().non_send_resource::<LayoutTree>();
+    let tree = app.world().non_send::<LayoutTree>();
     let node = *tree.by_entity().get(&entity).unwrap();
     assert_eq!(tree.tree_ref().get_node_context(node), Some(&entity));
 }

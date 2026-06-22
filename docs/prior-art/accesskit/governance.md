@@ -108,5 +108,5 @@ The contributor concentration is uncomfortable: per AUTHORS + observed commit vo
 - https://pneumasolutions.com/about/
 - https://nvaccess.org/about-nv-access/
 - https://www.w3.org/TR/accname-1.2/
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md
-- /home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md
+- docs/specs/2026-05-07-buiy-foundation/architecture.md
+- docs/specs/2026-05-07-buiy-foundation/accessibility.md

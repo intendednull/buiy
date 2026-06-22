@@ -1,10 +1,11 @@
 # Buiy text-editing E4 — clipboard + undo/redo with composition-aware grouping
 
 **Date:** 2026-06-13
+**Status:** landed
 **Phase:** E4 (of the E1–E6 text-editing campaign)
 **Branch:** `text-editing-e4` (off `main`, which now includes E1 + E2 + E3)
 **Campaign plan:** [2026-06-13-buiy-text-editing-campaign.md](2026-06-13-buiy-text-editing-campaign.md) § "E4 — Clipboard + undo/redo with composition-aware grouping"
-**Spec realized:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 7 (clipboard), 8 (undo/redo), 11 (`EditUndone`/`EditRedone` Messages)
+**Spec:** [editing-and-ime.md](../specs/2026-06-09-buiy-text-rendering-design/editing-and-ime.md) §§ 7 (clipboard), 8 (undo/redo), 11 (`EditUndone`/`EditRedone` Messages)
 **Readiness:** [2026-06-13-text-editing-design-readiness.md](../reports/2026-06-13-text-editing-design-readiness.md)
 
 ---

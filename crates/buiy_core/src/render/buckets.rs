@@ -84,13 +84,13 @@ impl Ord for PrimitiveBatchKey {
 /// [`PackedInstance`].
 #[derive(Default)]
 pub struct InstanceBuckets {
-    batches: BTreeMap<PrimitiveBatchKey, Vec<[f32; 13]>>,
+    batches: BTreeMap<PrimitiveBatchKey, Vec<[f32; 17]>>,
 }
 
 impl InstanceBuckets {
-    /// Push one packed instance (as raw `[f32; 13]` =
-    /// pos2+size2+color4+radius1+clip_min2+clip_max2) into its batch.
-    pub fn push(&mut self, key: PrimitiveBatchKey, instance: [f32; 13]) {
+    /// Push one packed instance (as raw `[f32; 17]` =
+    /// pos2+size2+color4+radius1+clip_min2+clip_max2+affine4) into its batch.
+    pub fn push(&mut self, key: PrimitiveBatchKey, instance: [f32; 17]) {
         self.batches.entry(key).or_default().push(instance);
     }
 
@@ -110,20 +110,30 @@ impl InstanceBuckets {
     }
 
     /// Iterate batches in draw order (`(layer, primitive paint order)`).
-    pub fn batches(&self) -> impl Iterator<Item = (&PrimitiveBatchKey, &Vec<[f32; 13]>)> {
+    pub fn batches(&self) -> impl Iterator<Item = (&PrimitiveBatchKey, &Vec<[f32; 17]>)> {
         self.batches.iter()
     }
 }
 
-/// Flatten a [`PackedInstance`] into the raw `[f32; 13]` the bucket store holds.
+/// Flatten a [`PackedInstance`] into the raw `[f32; 17]` the bucket store holds.
 /// Keeps the bucket store decoupled from the concrete instance struct while
 /// the stride is asserted equal in tests.
-pub fn packed_to_raw(p: &PackedInstance) -> [f32; 13] {
+///
+/// LAYOUT INVARIANT (R1 / R2 dependency): indices `0..13` are byte-identical to
+/// the pre-R1 layout — color is at [`COLOR_FLOAT_OFFSET`]`..+4` and alpha at
+/// [`ALPHA_FLOAT_OFFSET`] (R2's degraded-group re-tint reads alpha there). The
+/// 2D affine basis appends at `[13..17]` (`[m00, m10, m01, m11]`); identity
+/// `[1, 0, 0, 1]` paints axis-aligned.
+///
+/// [`COLOR_FLOAT_OFFSET`]: crate::render::instance::COLOR_FLOAT_OFFSET
+/// [`ALPHA_FLOAT_OFFSET`]: crate::render::instance::ALPHA_FLOAT_OFFSET
+pub fn packed_to_raw(p: &PackedInstance) -> [f32; 17] {
     [
         p.rect_pos[0],
         p.rect_pos[1],
         p.rect_size[0],
         p.rect_size[1],
+        // color@COLOR_FLOAT_OFFSET (4..8); alpha@ALPHA_FLOAT_OFFSET (7).
         p.color[0],
         p.color[1],
         p.color[2],
@@ -133,6 +143,11 @@ pub fn packed_to_raw(p: &PackedInstance) -> [f32; 13] {
         p.clip_min[1],
         p.clip_max[0],
         p.clip_max[1],
+        // The 2D affine basis APPENDED after index 13 (offsets 0..13 unchanged).
+        p.affine[0],
+        p.affine[1],
+        p.affine[2],
+        p.affine[3],
     ]
 }
 
@@ -197,7 +212,7 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
 pub struct PackedPartition {
     /// The full flat quad blob (every instance, in paint order) — identical to
     /// `pack_view`'s single `(Quad, 0)` batch flattened.
-    pub instances: Vec<[f32; 13]>,
+    pub instances: Vec<[f32; 17]>,
     /// `group_ranges[g]` = the `[start, end)` instance range of group `g`'s
     /// members (empty range if the group has no opaque member).
     pub group_ranges: Vec<std::ops::Range<u32>>,
@@ -276,7 +291,7 @@ pub fn pack_view_partitioned(
 /// per-group contiguous ranges (with the contiguity tripwire) and the
 /// complement flat runs.
 struct Partitioner {
-    instances: Vec<[f32; 13]>,
+    instances: Vec<[f32; 17]>,
     ranges: RangePartitioner,
 }
 
@@ -290,7 +305,7 @@ impl Partitioner {
 
     /// Append one instance under group `g` (already bounds-filtered by the
     /// caller), extending or starting the group/flat run it belongs to.
-    fn push(&mut self, instance: [f32; 13], g: Option<usize>) {
+    fn push(&mut self, instance: [f32; 17], g: Option<usize>) {
         self.instances.push(instance);
         self.ranges.push(g);
     }

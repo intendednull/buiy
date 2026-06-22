@@ -17,7 +17,7 @@ use bevy::render::render_resource::{
     CachedRenderPipelineId, Extent3d, PipelineCache, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages,
 };
-use bevy::render::renderer::RenderDevice;
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::{CachedTexture, TextureCache};
 use bevy::render::view::{Msaa, ViewTarget};
 
@@ -178,6 +178,21 @@ pub fn post_order_indices(parents: &[Option<usize>]) -> Vec<usize> {
 /// with, the glyph atlas pool.
 pub const RT_POOL_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The live aggregate RT-pool budget (bytes) `prepare_effect_groups` feeds to
+/// [`plan_allocation`], as a resource so it is overridable (defaults to
+/// [`RT_POOL_BUDGET_BYTES`]). Production never changes it; a test inserts a small
+/// budget to FORCE degradation deterministically (the root-cause-correct way to
+/// exercise the forward-composite path without an unwieldy 64 MiB-breaching
+/// fixture). No production behavior change — the default IS the const.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct RtPoolBudget(pub u64);
+
+impl Default for RtPoolBudget {
+    fn default() -> Self {
+        Self(RT_POOL_BUDGET_BYTES)
+    }
+}
+
 /// Bytes one pooled target of `extent` consumes. Group targets are pinned
 /// `Rgba16Float` (effect-compositor.md § 2.2) = 8 bytes/texel.
 pub fn target_bytes(extent: UVec2) -> u64 {
@@ -231,6 +246,174 @@ pub fn plan_allocation(groups: &[(UVec2, EffectReason)], budget: u64) -> Vec<boo
         next_to_drop += 1;
     }
     allocate
+}
+
+/// One degraded effect group's forward-composite inputs (effect-compositor.md
+/// § 2.3): the already-packed quad + glyph instance ranges its members occupy
+/// (extract index == `group_ranges`/`glyph_group_ranges` index), the `Opacity`
+/// to fold per-instance, and its parent link (`None` == ROOT group). Consumed by
+/// [`fold_root_degraded_into_flat`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct DegradedGroup {
+    /// The group's quad-instance range (`BuiyInstanceBuffers::group_ranges[i]`).
+    pub quad_range: Range<u32>,
+    /// The group's glyph-instance range (`glyph_group_ranges[i]`).
+    pub glyph_range: Range<u32>,
+    /// Group opacity to fold into each member instance's alpha.
+    pub opacity: f32,
+    /// Parent group index, or `None` for a ROOT group. Only ROOT groups are
+    /// forward-composited by this slice (§ 2.3 scope); a nested degraded group
+    /// is a documented follow-up (debug-asserted, release-skipped).
+    pub parent: Option<usize>,
+}
+
+/// Coalesce a sorted-or-unsorted list of half-open `[start, end)` ranges into the
+/// minimal set of disjoint runs (adjacent + overlapping runs join). Keeps the
+/// node's flat-draw loop a clean complement with no fragmented draw calls.
+fn merge_ranges(ranges: &mut Vec<Range<u32>>) {
+    ranges.retain(|r| r.start < r.end); // drop empties
+    ranges.sort_by_key(|r| r.start);
+    let mut merged: Vec<Range<u32>> = Vec::with_capacity(ranges.len());
+    for r in ranges.drain(..) {
+        match merged.last_mut() {
+            // Adjacent OR overlapping → extend the last run.
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => merged.push(r),
+        }
+    }
+    *ranges = merged;
+}
+
+/// Forward-composite the ROOT degraded effect groups FLAT (effect-compositor.md
+/// § 2.3): for every group `i` with `allocate[i] == false` and `parent == None`,
+/// fold its `opacity` into the ALPHA slot of every member instance IN PLACE
+/// (quad alpha at [`ALPHA_FLOAT_OFFSET`](crate::render::instance::ALPHA_FLOAT_OFFSET),
+/// glyph alpha at `color[3]` =
+/// [`GLYPH_ALPHA_FLOAT_OFFSET`](crate::render::atlas::GLYPH_ALPHA_FLOAT_OFFSET)) and merge its instance ranges into the flat
+/// ranges so the node's flat WINDOW draw paints them — the group dims exactly
+/// once and paints flat, instead of vanishing.
+///
+/// **Two DIFFERENT gates per tier — alpha-fold vs range-merge (§ 2.3).** The
+/// alpha-fold and the range-merge answer to DIFFERENT invariants, so each tier
+/// passes two flags:
+///
+/// - `fold_*` (the BUFFER-repack signal): the alpha-fold runs IFF that tier's
+///   instance buffer was repacked from SOURCE this frame. A freshly repacked
+///   buffer carries SOURCE alpha (fold it once); a RETAINED buffer already holds
+///   last frame's fold (folding it again compounds to black). So the caller
+///   gates `fold_quad`/`fold_glyph` on the buffer-repack signals
+///   (`quad_dirty`/`glyph_dirty`), NOT a wider signal.
+///
+/// - `merge_*` (the PARTITION-rebuild signal): the range-merge into `*_flat` runs
+///   IFF the flat/group partition for that tier was REBUILT this frame, because the
+///   rebuild OVERWRITES `*_flat` wholesale and re-EXCLUDES the degraded group's
+///   range. The merge must re-add it every rebuild or the degraded group vanishes
+///   that frame. The quad partition rebuilds under `quad_dirty` (= the quad fold
+///   gate, so quad is symmetric), but the GLYPH partition rebuilds under the UNION
+///   `quad_dirty || glyph_dirty` (prepare.rs `partition_glyph_ranges`) — wider than
+///   the glyph buffer-repack gate. So on a quad-dirty-only frame with a live
+///   degraded glyph group, the glyph partition is rebuilt (range re-excluded) while
+///   the glyph buffer is RETAINED: `merge_glyph` must be true (re-add the range)
+///   while `fold_glyph` is false (the retained buffer already carries the fold).
+///   Conflating the two would drop the glyph range-merge on that frame and the
+///   degraded glyphs would vanish.
+///
+/// The merge operates on the (possibly retained, already-folded) buffer's range —
+/// correct, because the retained buffer still carries last frame's fold; only the
+/// PARTITION needs re-stitching, not the alpha.
+///
+/// **Scope: ROOT degraded groups only.** `plan_allocation` can degrade a NESTED
+/// child while its parent keeps a target; routing a nested child's ranges into
+/// the WINDOW flat draw paints it in the wrong space/clip and leaves the parent's
+/// composite sampling a target the child never reached. Forward-compositing a
+/// nested child correctly is a node-side change (route into the PARENT's step-1
+/// target pass) tracked as a follow-up. Here a nested degraded group
+/// `debug_assert!(false, …)`s (loud in dev/tests) and in release is left
+/// untouched + un-merged — no worse than today's vanish.
+#[allow(clippy::too_many_arguments)]
+pub fn fold_root_degraded_into_flat(
+    allocate: &[bool],
+    groups: &[DegradedGroup],
+    fold_quad: bool,
+    merge_quad: bool,
+    fold_glyph: bool,
+    merge_glyph: bool,
+    quad_raw: &mut [[f32; 17]],
+    glyph_raw: &mut [crate::render::atlas::GlyphAlphaInstance],
+    quad_flat: &mut Vec<Range<u32>>,
+    glyph_flat: &mut Vec<Range<u32>>,
+) {
+    use crate::render::instance::ALPHA_FLOAT_OFFSET;
+
+    let mut quad_merged = false;
+    let mut glyph_merged = false;
+
+    for (i, group) in groups.iter().enumerate() {
+        // Only degraded groups participate.
+        if allocate.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        // MAJOR-1: nested degraded groups are out of this slice's charter.
+        if group.parent.is_some() {
+            debug_assert!(
+                false,
+                "nested degraded effect-group forward-composite into the parent \
+                 target is not yet implemented (follow-up); group {i} parent {:?} \
+                 — root-degraded only this slice (effect-compositor.md § 2.3)",
+                group.parent
+            );
+            continue; // release: leave the nested child untouched (vanishes — tracked).
+        }
+
+        let opacity = group.opacity;
+
+        // Quad tier. The alpha-fold gates on the quad BUFFER-repack signal
+        // (`fold_quad`); the range-merge on the quad PARTITION-rebuild signal
+        // (`merge_quad`). They coincide today (both `quad_dirty`), but stay
+        // distinct so the quad tier reads symmetrically with the glyph tier
+        // below — where they genuinely differ.
+        if fold_quad {
+            for idx in group.quad_range.clone() {
+                if let Some(inst) = quad_raw.get_mut(idx as usize) {
+                    inst[ALPHA_FLOAT_OFFSET] *= opacity;
+                }
+            }
+        }
+        if merge_quad && group.quad_range.start < group.quad_range.end {
+            quad_flat.push(group.quad_range.clone());
+            quad_merged = true;
+        }
+
+        // Glyph tier. The alpha-fold gates on the glyph BUFFER-repack signal
+        // (`fold_glyph` = glyph_dirty); the range-merge on the glyph
+        // PARTITION-rebuild signal (`merge_glyph` = quad_dirty || glyph_dirty).
+        // On a quad-dirty-only frame the partition is rebuilt (the degraded
+        // glyph range re-excluded) while the glyph buffer is RETAINED, so
+        // `merge_glyph` re-adds the range while `fold_glyph` leaves the
+        // already-folded retained alpha alone — the MAJOR-2 vanish fix.
+        if fold_glyph {
+            for idx in group.glyph_range.clone() {
+                if let Some(inst) = glyph_raw.get_mut(idx as usize) {
+                    // The glyph alpha is the typed `color[3]` (= GLYPH_ALPHA_FLOAT_OFFSET
+                    // in the raw view) — NOT the quad ALPHA_FLOAT_OFFSET (7), which
+                    // would corrupt `uv[3]`.
+                    inst.color[3] *= opacity;
+                }
+            }
+        }
+        if merge_glyph && group.glyph_range.start < group.glyph_range.end {
+            glyph_flat.push(group.glyph_range.clone());
+            glyph_merged = true;
+        }
+    }
+
+    // Coalesce once per tier so the node's flat loop stays a clean complement.
+    if quad_merged {
+        merge_ranges(quad_flat);
+    }
+    if glyph_merged {
+        merge_ranges(glyph_flat);
+    }
 }
 
 /// The pinned off-screen group-target descriptor (effect-compositor.md § 2.2):
@@ -323,8 +506,15 @@ pub struct PreparedEffectGroups {
 #[derive(Component, Default, Clone)]
 pub struct PreparedEffectTargets {
     /// Per-group off-screen `Rgba16Float` targets (extract order). `None` == the
-    /// group degraded under budget (`plan_allocation` == false) and has no target
-    /// — the node skips it (v1: degraded groups draw flat, no per-child approx).
+    /// group degraded under budget (`plan_allocation` == false) and has no target.
+    /// The node's step-1 group pass `continue`s on a `None` target — but a ROOT
+    /// degraded group is NOT lost: `prepare_effect_groups` folded its `opacity`
+    /// into its member instances' alpha in place and merged its ranges into
+    /// `flat_ranges`/`glyph_flat_ranges`, so the FLAT window draw paints it
+    /// (effect-compositor.md § 2.3 forward-composite). A NESTED degraded group
+    /// (parent == Some) is the one case still skipped here (its correct
+    /// forward-composite is into the PARENT target, a node-side follow-up;
+    /// `fold_root_degraded_into_flat` debug-asserts on it).
     pub targets: Vec<Option<CachedTexture>>,
     /// Per-group placement: the logical→target view-uniform columns (to render
     /// the group's subtree INTO its target), the composite quad's logical bounds,
@@ -403,10 +593,22 @@ pub struct RtPoolStats {
 pub(crate) fn prepare_effect_groups(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
     mut texture_cache: ResMut<TextureCache>,
     extracted: Res<ExtractedEffectGroups>,
-    buffers: Res<BuiyInstanceBuffers>,
+    // MAJOR-3: the glyph + text-quad carriers `prepare_buiy_instances` packs from,
+    // so this system can reconstruct the SAME per-tier buffer-repack signals it
+    // saw this frame (Bevy change-detection is per-system; reconstructing the
+    // `is_changed()` gates here is valid). `ExtractedNodesView` (`nodes` below)
+    // and `extracted` (= `ExtractedEffectGroups`, the `groups` term) cover the
+    // rest of the quad-dirty signal.
+    glyphs: Res<crate::render::prepare::ExtractedGlyphs>,
+    text_quads: Res<crate::render::extract::ExtractedTextQuads>,
+    // ResMut so the degraded-group fold can re-tint the already-packed buffers
+    // in place + re-upload the touched ones (effect-compositor.md § 2.3).
+    mut buffers: ResMut<BuiyInstanceBuffers>,
     mut stats: ResMut<RtPoolStats>,
+    budget: Res<RtPoolBudget>,
     pipeline_cache: Res<PipelineCache>,
     composite_pipeline: Res<CompositePipeline>,
     mut group_pipelines: ResMut<BuiySpecializedPipelines>,
@@ -421,6 +623,18 @@ pub(crate) fn prepare_effect_groups(
     views: Query<(Entity, &ViewTarget, &Msaa)>,
     nodes: Res<crate::render::extract::ExtractedNodesView>,
 ) {
+    // MAJOR-2: reconstruct the SAME per-tier BUFFER-repack signals
+    // `prepare_buiy_instances` used this frame (prepare.rs § damage gate). The
+    // degraded-group fold re-tints a buffer IFF that buffer was repacked from
+    // SOURCE this frame; a retained buffer already carries last frame's fold and
+    // must NOT be re-folded (it would compound to black). These mirror
+    // `prepare.rs` `quad_dirty`/`glyph_dirty` exactly — quad on
+    // nodes|groups|text_quads, glyph on glyphs alone (the buffer-repack signal,
+    // which DIFFERS from the wider glyph-partition signal). Computed before the
+    // `extracted.0` shadow below so the `is_changed()` reads the `Res` wrappers.
+    let quad_dirty = nodes.is_changed() || extracted.is_changed() || text_quads.is_changed();
+    let glyph_dirty = glyphs.is_changed();
+
     let extracted = &extracted.0;
 
     // No live groups: clear the carriers off every view so a frame that drops
@@ -520,7 +734,7 @@ pub(crate) fn prepare_effect_groups(
             (extent, g.reason)
         })
         .collect();
-    let allocate = plan_allocation(&alloc_inputs, RT_POOL_BUDGET_BYTES);
+    let allocate = plan_allocation(&alloc_inputs, budget.0);
 
     // Build the post-order composite sequence over the parent links.
     let parents: Vec<Option<usize>> = extracted.iter().map(|g| g.parent).collect();
@@ -627,6 +841,66 @@ pub(crate) fn prepare_effect_groups(
         live_targets,
     };
 
+    // Degraded-group forward composite (effect-compositor.md § 2.3). A ROOT group
+    // that did NOT get a pooled target (`allocate[i] == false`) under budget
+    // pressure must paint FLAT with its `opacity` folded per-instance, not vanish.
+    // Gate on ANY degradation so the no-degradation steady state stays a zero
+    // fold + zero re-upload (gate-#14 budget). Re-uploads only the touched buffer,
+    // and only when that buffer was repacked from SOURCE this frame (the per-tier
+    // idempotency discipline — a retained buffer already holds the fold).
+    if allocate.iter().any(|a| !a) {
+        let degraded: Vec<DegradedGroup> = extracted
+            .iter()
+            .enumerate()
+            .map(|(i, g)| DegradedGroup {
+                quad_range: buffers.group_ranges.get(i).cloned().unwrap_or(0..0),
+                glyph_range: buffers.glyph_group_ranges.get(i).cloned().unwrap_or(0..0),
+                opacity: g.opacity,
+                parent: g.parent,
+            })
+            .collect();
+
+        // Borrow-split: `values_mut()` on each RawBufferVec + the flat-range vecs.
+        // `BuiyInstanceBuffers` exposes the raw quad/glyph stores and the flat
+        // ranges as distinct fields, so split them through a single `&mut buffers`.
+        // Per-tier gates (MAJOR-2). The ALPHA-fold gates on the BUFFER-repack
+        // signal so a retained (already-folded) buffer is left untouched. The
+        // RANGE-merge gates on the PARTITION-rebuild signal, because
+        // `prepare_buiy_instances` rebuilds (and re-excludes the degraded range
+        // from) each flat partition under that signal — the merge must re-add the
+        // range every rebuild. Quad: both are `quad_dirty` (the quad partition
+        // rebuilds under the quad gate). GLYPH: the fold is `glyph_dirty` (buffer
+        // repack) but the MERGE is `quad_dirty || glyph_dirty` (the glyph
+        // partition's union rebuild gate, prepare.rs `partition_glyph_ranges`) —
+        // so a quad-dirty-only frame re-merges the retained degraded glyph range
+        // instead of letting it vanish.
+        let merge_glyph = quad_dirty || glyph_dirty;
+        let buffers = &mut *buffers;
+        fold_root_degraded_into_flat(
+            &allocate,
+            &degraded,
+            quad_dirty,
+            quad_dirty,
+            glyph_dirty,
+            merge_glyph,
+            buffers.quad.values_mut(),
+            buffers.glyph.values_mut(),
+            &mut buffers.flat_ranges,
+            &mut buffers.glyph_flat_ranges,
+        );
+
+        // Re-upload only the buffer(s) whose CPU bytes the fold touched. The fold
+        // runs per tier iff that tier was repacked this frame, so the re-upload
+        // mirrors the same per-tier gate (a retained buffer was neither folded nor
+        // needs re-upload).
+        if quad_dirty {
+            buffers.quad.write_buffer(&render_device, &render_queue);
+        }
+        if glyph_dirty {
+            buffers.glyph.write_buffer(&render_device, &render_queue);
+        }
+    }
+
     let prepared = PreparedEffectGroups {
         groups,
         composite_order,
@@ -650,11 +924,11 @@ pub(crate) fn prepare_effect_groups(
 }
 
 /// Register compositor pipelines/resources in the render app. Per
-/// effect-compositor.md § 3 this adds **no** render-graph node and **no**
-/// edge — the `BuiyRenderLabel` node group and its edges are owned by
-/// architecture.md § 1.3; the compositor's passes run *inside*
-/// [`BuiyNode::run`](super::node). It registers the per-`EffectGroup`
-/// [`prepare_effect_groups`] system, the [`RtPoolStats`] observable, and (via
+/// effect-compositor.md § 3 this adds **no** render-pass system of its own —
+/// the Core2d Buiy pass (`node::register`) owns the schedule slot
+/// (architecture.md § 1.3); the compositor's passes run *inside*
+/// [`buiy_pass`](super::node::buiy_pass). It registers the per-`EffectGroup`
+/// `prepare_effect_groups` system, the [`RtPoolStats`] observable, and (via
 /// [`super::composite::register`]) the composite-pipeline specialization cache.
 /// The device-owning composite resources (`CompositePipeline`) init in
 /// `finish` (`composite::register_gpu`).
@@ -667,14 +941,17 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // the textured-quad composite pipeline) — device-free to init here; the
     // concrete pipeline ids materialize lazily through the `PipelineCache`.
     render_app.init_resource::<RtPoolStats>();
+    // The overridable RT-pool budget (defaults to `RT_POOL_BUDGET_BYTES`); a test
+    // inserts a small value to force the degradation path deterministically.
+    render_app.init_resource::<RtPoolBudget>();
     super::composite::register(render_app);
     // The per-`EffectGroup` prepare pass (effect-compositor.md § 1.1) attaches
     // in `RenderSystems::Prepare`. It runs AFTER `prepare_buiy_instances` so the
     // per-group instance ranges (`BuiyInstanceBuffers::group_ranges`) are written
     // before this reads them. The view `scale_factor` / `ViewTarget` exist in
-    // `Prepare` (after `ManageViews`). This adds a *system*, NOT a render-graph
-    // node: the `BuiyRenderLabel` node group + edges remain owned by
-    // `node::register`; the composite passes run inside `BuiyNode::run`.
+    // `Prepare` (after `ManageViews`). This adds a *prepare* system; the Core2d
+    // render-pass slot remains owned by `node::register` (`buiy_pass`), where
+    // the composite passes run inline.
     render_app.add_systems(
         Render,
         prepare_effect_groups

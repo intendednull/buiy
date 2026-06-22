@@ -4,7 +4,7 @@
 
 # UXML/USS ↔ HTML/CSS audit
 
-This file audits, feature-by-feature, what Unity's UXML/USS pair covers from the web platform and where it deviates. Buiy's foundation §5 leaves "CSS-flavored stylesheet — never, or future layer?" as an open question; this audit is the comparative evidence for that decision. Pair with [`/home/user/buiy/docs/prior-art/bevy-flair/`](../bevy-flair/) (the Bevy precedent for CSS-on-ECS).
+This file audits, feature-by-feature, what Unity's UXML/USS pair covers from the web platform and where it deviates. Buiy's foundation §5 leaves "CSS-flavored stylesheet — never, or future layer?" as an open question; this audit is the comparative evidence for that decision. Pair with [`docs/prior-art/bevy-flair/`](../bevy-flair/) (the Bevy precedent for CSS-on-ECS).
 
 ## UXML vs HTML — markup mapping
 

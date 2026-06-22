@@ -50,7 +50,7 @@ An entity forms a *stacking context* — a sub-tree painted as one unit, ordered
 2. `Stacking::isolation = Isolate`.
 3. `Transform` is non-identity. (Detailed in [transforms-and-containment.md § 3](transforms-and-containment.md#3-stacking-context-formation).)
 4. `Containment::contain` includes `Paint` or `Strict`. (Detailed in [transforms-and-containment.md § 5](transforms-and-containment.md#5-containment).)
-5. Render-side properties form one too: `opacity < 1.0`, `filter != none`, `mix_blend_mode != normal`, `will_change` mentions an SC-forming property (will-change portion: tier-E, deferred — see [transforms-and-containment.md § 5.3](transforms-and-containment.md#53-will-change)). These live on render-side components but are *checked* during this spec's stacking-context detection so layout can hand a correct list to render. *Status:* the `opacity` / `filter` / `mix_blend_mode` formers are **realized** in 6f (§ 7) via one predicate shared with the render effect-group former (`render::effect`); `backdrop-filter` is deliberately NOT an SC former — it forms only an `EffectGroup` (render component-model.md § 8).
+5. Render-side properties form one too: `opacity < 1.0`, `filter != none`, `mix_blend_mode != normal`, `will_change` mentions an SC-forming property (see [transforms-and-containment.md § 5.3](transforms-and-containment.md#53-will-change)). These live on render-side components but are *checked* during this spec's stacking-context detection so layout can hand a correct list to render. *Status:* the `opacity` / `filter` / `mix_blend_mode` formers are **realized** in 6f (§ 7) via one predicate shared with the render effect-group former (`render::effect`); the `will_change` SC former is **realized** too — `forms_stacking_context` reads `Containment.will_change` and forms an SC when it names an SC-forming property (the `WillChangeProperty::forms_stacking_context` subset = Transform/Opacity/Filter; `ZIndex`/`ScrollPosition` excluded, matching CSS). `backdrop-filter` is deliberately NOT an SC former — it forms only an `EffectGroup` (render component-model.md § 8).
 6. The root entity always forms one.
 
 The rule set is deliberately union — any single trigger is sufficient. The CSS spec is the source of truth; the foundation visuals.md § 3.2 enumeration anchors the trigger list.
@@ -183,6 +183,14 @@ each is tracked in [`../../plans/follow-ups.md`](../../plans/follow-ups.md).
   `effect_reason_for`) so the SC trigger and the `EffectGroup` former share
   one source of truth — the effect-compositor's group-contiguity invariant
   (`render/buckets.rs`) holds by construction.
+- **Trigger 5 — `will-change` SC former** (landed post-Phase-9 follow-up):
+  `forms_stacking_context` reads `Containment.will_change` and forms an SC when
+  it names an SC-forming property. The SC-forming subset is named once in
+  `WillChangeProperty::forms_stacking_context` (Transform/Opacity/Filter);
+  `ZIndex`/`ScrollPosition` are excluded (CSS: `will-change: z-index` does not
+  form an SC — z-index needs positioning). The `will-change` **layer-promotion
+  hint** stays deferred (no composition-layer concept exists in render/ yet) —
+  see transforms-and-containment.md § 5.3.
 - `StackingContext.painters_z` paint-order sort (§ 2.1, all five tiers; floats
   always empty).
 - `z_index` sibling ordering within a context (§ 3).
@@ -192,9 +200,10 @@ each is tracked in [`../../plans/follow-ups.md`](../../plans/follow-ups.md).
 
 **Deferred (target stands; not in Phase 9):**
 
-- **Trigger 5 — `will-change` SC former.** `WillChange` is stored by Phase 8
-  (tier-E, no behavior); its SC-forming behavior is deferred with the rest of
-  `will-change` layer promotion.
+- **`will-change` layer-promotion hint.** The SC-trigger half of trigger 5's
+  `will-change` former is now realized (see above); the *layer-promotion* hint
+  (`will-change` as a compositing/render-layer optimization) stays deferred —
+  there is no composition-layer / `RenderLayers` concept in render/ to honor it.
 - **§ 4.4 per-window scope.** `buiy_core` has a single global `LayoutTree` and
   uses the primary window only (no per-window layout segregation). Phase 9
   ships one global top layer; per-window top layers depend on

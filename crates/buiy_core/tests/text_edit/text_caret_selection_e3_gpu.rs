@@ -224,3 +224,155 @@ fn e3_editor_driven_caret_paints_a_bar_right_of_the_ink() {
     let diff = perceptual_diff(&frame, &frame_b);
     assert!(diff < 1e-4, "two fresh captures diverged: {diff}");
 }
+
+/// Drive the FOCUSED editor's caret to the mixed-corpus DIRECTION BOUNDARY (the
+/// LTR↔RTL join) so the E3 writer stamps BOTH the primary caret and the
+/// secondary split-caret indicator (§§ 4.1, 5). The boundary byte index is
+/// DATA-DERIVED from the shaped buffer (not hand-counted), then reached with
+/// LOGICAL-order `Motion::Next` steps (NOT the §Scope-flagged visual-order
+/// `Right`): `Motion::Next` advances in logical order, so looping until
+/// `state.caret().index` equals the derived boundary is fully deterministic.
+fn capture_boundary() -> Vec<u8> {
+    let _cfg = GoldenConfig::deterministic();
+    let mut app = crate::support::gpu_render_app(W, H);
+    app.add_plugins(buiy_core::focus::FocusPlugin);
+    app.world_mut()
+        .insert_resource(ButtonInput::<KeyCode>::default());
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
+    crate::support::finish_and_run(&mut app, 0);
+    crate::support::register_fixture_font(
+        &mut app,
+        "Noto Sans Hebrew",
+        "NotoSansHebrew-hebrew.ttf",
+    );
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
+        theme.colors.insert(CARET_COLOR_TOKEN.into(), caret_red());
+    }
+    let editor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("hello עולם world")),
+            FontFamily(FontStack(vec![
+                FamilyEntry::Named(String::from("Fira Sans")),
+                FamilyEntry::Named(String::from("Noto Sans Hebrew")),
+            ])),
+            FontSize(20.0),
+            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            CaretColor(ColorToken::Token(Cow::Borrowed(CARET_COLOR_TOKEN))),
+            TextEditState::new(Metrics::new(20.0, 24.0)),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(W as f32)
+                .height_px(H as f32),
+        ))
+        .add_child(editor);
+    app.update();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(editor);
+
+    {
+        let fonts = app.world().resource::<SharedFontSystem>().clone();
+        let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        // DATA-DERIVE the first LTR↔RTL boundary byte index from the editor's
+        // own shaped buffer (the same convention the headless geometry unit
+        // pins).
+        let boundary = state
+            .with_buffer(|b| {
+                b.layout_runs().next().and_then(|run| {
+                    run.glyphs.iter().find_map(|before| {
+                        run.glyphs.iter().find_map(|after| {
+                            (after.start == before.end
+                                && after.level.is_rtl() != before.level.is_rtl())
+                            .then_some(before.end)
+                        })
+                    })
+                })
+            })
+            .expect("the mixed corpus has a direction boundary");
+
+        let mut fs = fonts.lock();
+        state.apply(
+            &mut fs,
+            EditCommand::Motion(Motion::Home, false),
+            false,
+            false,
+        );
+        // Walk LOGICAL-order Next until the caret lands on the boundary index.
+        // Bounded to avoid a runaway if the buffer changes shape.
+        for _ in 0..64 {
+            if state.caret().index == boundary {
+                break;
+            }
+            state.apply(
+                &mut fs,
+                EditCommand::Motion(Motion::Next, false),
+                false,
+                false,
+            );
+        }
+        drop(fs);
+        assert_eq!(
+            state.caret().index,
+            boundary,
+            "logical Next walk reached the derived boundary index"
+        );
+    }
+    app.update(); // E3 writer mirrors the caret into CaretVisual (+ secondary)
+
+    let target = crate::support::render_to_image(&mut app, W, H);
+    crate::support::spawn_capture_camera(&mut app, target.clone());
+    crate::support::wait_for_text_ready(&mut app, 60);
+    crate::support::readback_rgba(&mut app, target)
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; E3 split-caret secondary indicator golden (editing-and-ime §§ 4.1, 5)"]
+fn e3_split_caret_paints_primary_plus_secondary_at_a_bidi_boundary() {
+    let frame = capture_boundary();
+
+    // At the direction boundary the writer stamps TWO red caret bands: the
+    // primary full-height bar plus the shorter secondary indicator. They may
+    // share a column or sit apart depending on the reordered run geometry, so
+    // assert the COUNT of bands, not their separation.
+    let caret_bands = bands(&cols_where(&frame, W, H, is_strong_red));
+    assert_eq!(
+        caret_bands.len(),
+        2,
+        "two E3 split-caret column bands at the bidi boundary: {caret_bands:?}"
+    );
+
+    // The secondary indicator is SHORTER in row-extent than the full-height
+    // primary: measure each band's vertical red span and assert one is strictly
+    // taller (the primary) than the other (the secondary).
+    let row_span = |band: &Range<u32>| -> u32 {
+        let rows: Vec<u32> = (0..H)
+            .filter(|&y| {
+                (band.start..band.end).any(|x| is_strong_red(crate::support::px(&frame, W, x, y)))
+            })
+            .collect();
+        match (rows.first(), rows.last()) {
+            (Some(&lo), Some(&hi)) => hi - lo + 1,
+            _ => 0,
+        }
+    };
+    let mut spans: Vec<u32> = caret_bands.iter().map(row_span).collect();
+    spans.sort_unstable();
+    assert!(
+        spans[0] < spans[1],
+        "the secondary indicator is shorter than the full-height primary caret: {spans:?}"
+    );
+
+    // Re-capture determinism: an independent fresh capture matches.
+    let frame_b = capture_boundary();
+    let diff = perceptual_diff(&frame, &frame_b);
+    assert!(diff < 1e-4, "two fresh boundary captures diverged: {diff}");
+}

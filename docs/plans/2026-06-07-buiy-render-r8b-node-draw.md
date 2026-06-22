@@ -1,7 +1,7 @@
 # R8b: Hybrid Node-Draw Model Implementation Plan
 
 **Date:** 2026-06-07
-**Status:** active
+**Status:** landed
 **Spec:** [specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md](../specs/2026-06-03-buiy-render-pipeline-design/2026-06-06-render-node-draw-model-design.md) (DECIDED: Option C hybrid)
 **Supersedes:** [plans/2026-06-03-buiy-render-r8-paint-clip-toplayer.md](2026-06-03-buiy-render-r8-paint-clip-toplayer.md) Task 8 only. Tasks 1–7 of that plan (`scissor_rect`, `clip_for_primitive` in `render/clip.rs`; `partition_top_layer` in `render/top_layer.rs`) are landed and consumed here without re-implementation.
 

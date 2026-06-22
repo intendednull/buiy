@@ -5,9 +5,9 @@
 use bevy::prelude::*;
 use buiy_core::components::{Node, ResolvedLayout};
 use buiy_core::layout::{
-    Anchor, AnchorErrorKind, AnchorName, AnchorNameRegistry, AnchorRef, Display, Inset,
-    LayoutAnchorBroken, LayoutAnchorWarnedThisFrame, LayoutPlugin, Length, PositionTry, Style,
-    SyncStylesIterCount, TryCondition,
+    Anchor, AnchorErrorKind, AnchorName, AnchorNameRegistry, AnchorRef, AxisDimension, Display,
+    Inset, LayoutAnchorBroken, LayoutAnchorWarnedThisFrame, LayoutPlugin, Length, PositionTry,
+    Sizing, Style, SyncStylesIterCount, TryCondition,
 };
 
 fn app() -> App {
@@ -157,6 +157,62 @@ fn write_resolved_layout_prefers_anchor_override_over_taffy_position() {
     assert!(overrides.by_entity.contains_key(&anchored_e));
     assert!(!overrides.by_entity.contains_key(&plain));
     assert!(!overrides.by_entity.contains_key(&anchor_e)); // anchor target, not anchored
+}
+
+#[test]
+fn anchor_size_inset_resolves_to_anchor_height() {
+    use buiy_core::layout::PostTaffyPositionOverrides;
+    let mut app = app();
+
+    // Anchor: 80x40 at the default Taffy origin (0,0).
+    let _anchor = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(80.0).height_px(40.0),
+            Anchor {
+                anchor_name: Some(AnchorName::Named("a".into())),
+                ..default()
+            },
+        ))
+        .id();
+
+    // Anchored: 10x10, placed BELOW the anchor by `anchor-size(height)`.
+    // The `top` inset resolves to the anchor's own height (40), so the
+    // anchored entity lands at anchor.y(0) + anchor.height(40) +
+    // resolved_top(40) = 80 — explicitly NOT 0.0 (the old deferred path).
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(10.0).height_px(10.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Name("a".into())),
+                position_try: vec![PositionTry {
+                    inset: Inset {
+                        top: Sizing::Length(Length::AnchorSize(AxisDimension::Height)),
+                        ..default()
+                    },
+                    conditions: vec![], // no conditions = always passes
+                }],
+                ..default()
+            },
+        ))
+        .id();
+
+    app.update();
+    app.update();
+
+    let anchored_rl = app.world().get::<ResolvedLayout>(anchored).unwrap();
+    assert_eq!(
+        anchored_rl.position.y, 80.0,
+        "anchor-size(height) must resolve to the anchor's real height (40), not 0.0"
+    );
+
+    // Confirm the override channel carried the anchor-size-derived position.
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    assert!(overrides.by_entity.contains_key(&anchored));
+    assert_eq!(overrides.by_entity.get(&anchored).unwrap().y, 80.0);
 }
 
 #[test]
@@ -534,4 +590,133 @@ fn anchor_target_with_display_none_is_treated_as_missing() {
     // Display::None target → anchored is broken (spec § 3.2 step 1,
     // D9 explicit query in anchor_resolution).
     assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_some());
+}
+
+// ---------------------------------------------------------------------
+// `AnchorRef::Entity` direct-reference coverage. Every test above uses
+// `AnchorRef::Name`; these two exercise the `AnchorRef::Entity(t)` arm
+// of `resolve_target` (systems.rs) end-to-end — both the positive
+// (target present in the Taffy tree) and negative (Display::None guard)
+// paths — with NO name registry involvement on either target.
+// ---------------------------------------------------------------------
+
+#[test]
+fn anchor_entity_ref_positions_relative_to_target() {
+    use buiy_core::layout::PostTaffyPositionOverrides;
+    let mut app = app();
+
+    // Target: a plain 100x50 Node at the default Taffy origin (0,0).
+    // NO Anchor, NO anchor_name, NO registry entry — addressed purely
+    // by its Entity handle.
+    let target = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(100.0).height_px(50.0)))
+        .id();
+
+    // Anchored: 80x20, placed 10px below the target via a direct
+    // `AnchorRef::Entity`. `conditions: vec![]` always passes (no
+    // PrimaryWindow is spawned, so this avoids any viewport ambiguity).
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(80.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Entity(target)),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(10.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+
+    // Frame 1 sizes the boxes via Taffy; frame 2 runs the anchor pass.
+    app.update();
+    app.update();
+
+    // Override carries the resolved position: target.y(0) +
+    // target.h(50) + inset(10) = 60.
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    assert!(overrides.by_entity.contains_key(&anchored));
+    assert_eq!(overrides.by_entity.get(&anchored).unwrap().y, 60.0);
+    // The target itself is not anchored — no override entry.
+    assert!(!overrides.by_entity.contains_key(&target));
+
+    // ResolvedLayout reflects the override.
+    assert_eq!(
+        app.world()
+            .get::<ResolvedLayout>(anchored)
+            .unwrap()
+            .position
+            .y,
+        60.0
+    );
+
+    // Direct ref resolved cleanly — not broken.
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_none());
+}
+
+#[test]
+fn anchor_entity_ref_display_none_target_is_missing() {
+    use buiy_core::layout::PostTaffyPositionOverrides;
+    let mut app = app();
+
+    // Target: a Display::None Node, NO anchor_name — addressed purely
+    // by Entity. The Display::None guard in `resolve_target` (D9) must
+    // fire via the Entity arm exactly as it does via the Name arm.
+    let hidden = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(50.0)
+                .height_px(50.0)
+                .display(Display::None),
+        ))
+        .id();
+
+    let anchored = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(20.0).height_px(20.0),
+            Anchor {
+                position_anchor: Some(AnchorRef::Entity(hidden)),
+                position_try: vec![PositionTry {
+                    inset: Inset::below(Length::Px(0.0)),
+                    conditions: vec![],
+                }],
+                ..default()
+            },
+        ))
+        .id();
+
+    app.update();
+    app.update();
+
+    // Display::None → resolve_target returns None → TargetMissing:
+    // zero override + broken marker + per-frame warn.
+    assert!(app.world().get::<LayoutAnchorBroken>(anchored).is_some());
+
+    let overrides = app.world().resource::<PostTaffyPositionOverrides>();
+    assert_eq!(
+        overrides.by_entity.get(&anchored).copied(),
+        Some(Vec2::ZERO)
+    );
+    assert_eq!(
+        app.world()
+            .get::<ResolvedLayout>(anchored)
+            .unwrap()
+            .position,
+        Vec2::ZERO
+    );
+
+    let warned = app.world().resource::<LayoutAnchorWarnedThisFrame>();
+    assert!(
+        warned
+            .set
+            .contains(&(anchored, AnchorErrorKind::TargetMissing))
+    );
 }

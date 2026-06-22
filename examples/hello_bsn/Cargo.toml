@@ -1,0 +1,17 @@
+[package]
+name = "hello_bsn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_winit", "x11", "wayland"] }
+buiy = { path = "../../crates/buiy" }
+
+[dev-dependencies]
+# The headless layout-snapshot gate (Tier 1 of the buiy_verify pyramid) drives
+# the same `bsn!` tree the example authors and snapshots the resolved layout.
+buiy_verify = { path = "../../crates/buiy_verify" }

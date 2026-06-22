@@ -74,7 +74,13 @@ does **not** require a display:
 
 ```sh
 cargo test -p buiy_core -j 2 -- --ignored --test-threads=1
+cargo test -p buiy_verify -j 2 -- --ignored --test-threads=1
 ```
+
+The GPU lane has **two legs**, both of which CI runs: `buiy_core` (the render
+GPU path above) and `buiy_verify` (the visual-bug verification suite — goldens,
+reftests, the perceptual metric). Run both before pushing, or you skip the
+`buiy_verify` GPU tests and can land a regression that fails CI's GPU lane.
 
 `--test-threads=1` serializes the GPU work (one adapter context at a time). This
 lane is **additive** — it must pass on a GPU host, and the headless gate above
@@ -94,15 +100,21 @@ Other useful one-offs:
 - `cargo test -p buiy_core` — fast loop on the core crate.
 - `cargo run -p hello_button` — visual smoke test of the Phase 0 widget.
 - `cargo run -p hello_text` — visual smoke test of the text stack.
+- `cargo run -p hello_bsn` — visual smoke test of the `bsn!` authoring path.
 - `cargo run -p capture` — regenerate the README screenshots headlessly (offscreen render-to-texture + GPU readback; needs a real wgpu adapter).
 - `BUIY_ACCEPT_SHAPING=1 cargo test -p buiy_core --test text_shaping_snapshots`
   — regenerate the `.snap` shaping snapshots (curated: review the diff before
   committing).
+- `cargo test -p buiy_core --features clipboard-image` — exercise the clipboard
+  image flavor (`ClipboardImage`, `get_image`/`set_image`). The default
+  workspace gate runs with this feature **OFF** (the image module compiles out),
+  so this gated lane must be run separately to keep the image path from rotting.
 
 ## Code Conventions
 
 - **Docs entry point:** `docs/README.md` is the master index of specs, plans, reports, and prior-art folders, grouped by area. Read it before adding any new doc or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
 - **Prior-art workflow:** the `researching-prior-art` skill drives the 7-stage parallel-agent creation of a `docs/prior-art/<system>/` folder; the `using-prior-art` skill is the consumer-side flow that surfaces relevant folders during spec/plan/review work.
 - **Visual-bug verification (`buiy_verify`):** before adding/changing any visual, layout, paint-order, color, or render test — or adding a widget fixture, writing a reftest, or blessing a golden — use the `using-buiy-verification` skill (the task-oriented how-to: pick a tier, add a fixture, run the gates, gotchas). It mirrors the design spec `docs/specs/2026-06-15-buiy-verification-design/` and the crate root doc `crates/buiy_verify/src/lib.rs`. Rule of thumb: add a test at the **lowest tier that can observe the bug** (layout snapshot → display-list snapshot → invariant → reftest → golden); goldens are the last resort for the rasterization residue only. The GPU `--ignored` lane (Tiers 4–5) is additive and must pass on a GPU host; the headless gate must stay green without an adapter.
+- **BSN authoring (`buiy_bsn`):** the thin `buiy_bsn` crate re-exports Bevy 0.19's `bsn!` / `bsn_list!` + spawn ext traits (no new syntax); it is reached via `buiy::bsn` and folded into `buiy::prelude`, so `use buiy::prelude::*;` brings `bsn!` into scope. Author the **decomposed components directly** (`bsn! { BoxModel { … } Background(…) }`) — `Style` is a `Bundle` builder, not a Component, so it is not `bsn!`-authorable. Widgets carry `#[require(...)]` contracts; **style them via the parameterized scene-fns in `buiy_widgets`** (`button("…")`, `text_input_*`, re-exported through `buiy::prelude`), never a single-field patch of a `#[require]`'d component (that drops the widget's other defaults — the § 4.1c suppression gotcha). Pin: `docs/specs/2026-06-18-buiy-bsn-integration-design.md`.
 
 _TODO: add language- and project-specific conventions (naming, error handling, testing, serialization, etc.) as they are established._

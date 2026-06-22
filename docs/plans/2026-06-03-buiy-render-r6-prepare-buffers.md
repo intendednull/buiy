@@ -1,5 +1,8 @@
 # Prepare phase: persistent buffers + view uniform + instance packing Implementation Plan
 
+**Date:** 2026-06-03
+**Status:** landed
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Depends on:** R5 (and R1). Execution order: R1 → R2 → R3 → R4 → R5 → **R6** → R7 → R8 → (R9, R10) → R11. R6 **consumes** R5's per-view `ExtractedNodes` component (owned by R5, `render/extract.rs`) and R1's shared render types (`render/components.rs`); it does **not** redefine them. R6 **owns** the CPU instance bucketing (`render/buckets.rs`) and the shared `BuiyPrimitiveKind` enum that R7 imports.

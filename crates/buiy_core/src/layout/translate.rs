@@ -671,7 +671,10 @@ fn length_to_dim(l: Length) -> taffy::Dimension {
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => taffy::Dimension::length(0.0),
+        | Length::Cqmax(_)
+        // anchor-size() is meaningful only inside anchor inset resolution;
+        // in Taffy dimension translation there is no anchor box → 0.
+        | Length::AnchorSize(_) => taffy::Dimension::length(0.0),
     }
 }
 
@@ -693,7 +696,10 @@ fn length_to_lp(l: Length) -> taffy::LengthPercentage {
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => taffy::LengthPercentage::length(0.0),
+        | Length::Cqmax(_)
+        // anchor-size() is meaningful only inside anchor inset resolution;
+        // in Taffy dimension translation there is no anchor box → 0.
+        | Length::AnchorSize(_) => taffy::LengthPercentage::length(0.0),
     }
 }
 
@@ -713,7 +719,10 @@ fn length_to_lpa(l: Length) -> taffy::LengthPercentageAuto {
         | Length::Cqi(_)
         | Length::Cqb(_)
         | Length::Cqmin(_)
-        | Length::Cqmax(_) => taffy::LengthPercentageAuto::length(0.0),
+        | Length::Cqmax(_)
+        // anchor-size() is meaningful only inside anchor inset resolution;
+        // in Taffy dimension translation there is no anchor box → 0.
+        | Length::AnchorSize(_) => taffy::LengthPercentageAuto::length(0.0),
     }
 }
 
@@ -837,7 +846,9 @@ fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
             | Length::Cqi(_)
             | Length::Cqb(_)
             | Length::Cqmin(_)
-            | Length::Cqmax(_),
+            | Length::Cqmax(_)
+            // anchor-size() has no anchor box in a track template → 0.
+            | Length::AnchorSize(_),
         ) => length(0.0),
         // `MinMax` carries a Vec<TrackSize>; spec/Phase3 invariant is
         // exactly 2 elements [min, max]. Other arities warn-once and
@@ -880,7 +891,9 @@ fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
             | Length::Cqi(_)
             | Length::Cqb(_)
             | Length::Cqmin(_)
-            | Length::Cqmax(_),
+            | Length::Cqmax(_)
+            // anchor-size() has no anchor box in a track template → 0.
+            | Length::AnchorSize(_),
         ) => length(0.0),
         // CSS forbids these in MinMax's min slot:
         // - Fr (fr-in-min is grammar-invalid)
@@ -917,7 +930,9 @@ fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
             | Length::Cqi(_)
             | Length::Cqb(_)
             | Length::Cqmin(_)
-            | Length::Cqmax(_),
+            | Length::Cqmax(_)
+            // anchor-size() has no anchor box in a track template → 0.
+            | Length::AnchorSize(_),
         ) => length(0.0),
         TrackSize::MinMax(_) | TrackSize::Repeat(_, _) | TrackSize::Subgrid => {
             warn_once_invalid_track_nesting();

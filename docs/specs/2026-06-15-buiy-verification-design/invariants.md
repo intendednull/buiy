@@ -5,12 +5,12 @@
 **Spec:** specs/2026-06-15-buiy-verification-design/README.md
 
 > **As-landed reconciliation.** All three contract deviations below were resolved
-> exactly as flagged: (#1) the code cites `compose_transform` at `systems.rs:3775`;
+> exactly as flagged: (#1) `compose_transform` is a `pub fn` in `layout/systems.rs`;
 > (#2) `all_finite_packed` asserts `rect_size[1] ≥ 0` directly because the y-flip
 > lives in the per-view uniform; (#3) `tier_rank` was promoted to the public
 > `buiy_core::layout::top_layer_paint_rank(TopLayer) -> u8`
-> (`systems.rs:3816`) — the single source of truth consumed by both the layout
-> sort and `top_layer_dominates`. The BiDi caret round-trip (#6) consumes
+> (in `layout/systems.rs`) — the single source of truth consumed by both the
+> layout sort and `top_layer_dominates`. The BiDi caret round-trip (#6) consumes
 > `cosmic_text::Cursor` (cosmic-text's own type — `use cosmic_text::{Buffer,
 > Cursor}` in `invariant/bidi.rs`), not a Buiy struct, so the invariant tests
 > Buiy's *integration* of the shaper, not a re-implementation. The module is the
@@ -35,10 +35,11 @@ harness itself is verified.
 Flagged for the synthesizer to reconcile — the shared contract cited stale
 `origin/main` facts; the canonical code says otherwise:
 
-1. **`compose_transform` is at `layout/systems.rs:3775`, not `:3691`.** The
-   contract and task both cite `:3691`; verified line is `:3775` (signature
+1. **`compose_transform` is a `pub fn` in `layout/systems.rs`** (the contract's
+   `:3691` line is stale). Signature
    `(&UiTransform, Option<&Translate>, Option<&Rotate>, Option<&Scale>) -> Mat4`,
-   compose `T·R·S·M`). Plan author: cite `:3775`.
+   compose `T·R·S·M`. Cite the symbol, not a line number (the citation rot fixed in
+   the docs audit).
 2. **`PackedInstance.rect_size[1]` is POSITIVE on `main`, not negative.** The
    y-flip moved out of the instance into the per-view uniform
    (`render/instance.rs:35`–`:47`: "height is POSITIVE — the y-flip lives in the
@@ -47,16 +48,17 @@ Flagged for the synthesizer to reconcile — the shared contract cited stale
    `rect_size[1] ≥ 0` directly on `PackedInstance` — no un-flip needed. We keep
    the `DrawData`/`ExtractedNode.size ≥ 0` assertion as the primary
    non-negativity check and add the packed check as a stricter sibling.
-3. **`tier_rank` is a private closure, and the `TopLayer` enum's `derive`d order
-   is NOT the paint order.** `tier_rank` lives inside a layout system as a local
-   `fn` (`systems.rs:4113`: `Fullscreen→0, Tooltip→1, Popover→2, Modal→3,
-   None→u8::MAX`), while `enum TopLayer` declares `None, Modal, Popover, Tooltip,
-   Fullscreen` (`layout/types.rs:1265`) — so `#[derive(Ord)]` would give the
-   WRONG dominance. `top_layer_dominates` must compare via the documented tier
-   rank, not enum discriminant. This spec requires promoting `tier_rank` to a
+3. **`tier_rank` was a private closure, and the `TopLayer` enum's `derive`d order
+   is NOT the paint order.** `tier_rank` lived inside a layout system as a local
+   `fn` (`Fullscreen→0, Tooltip→1, Popover→2, Modal→3, None→u8::MAX`), while
+   `enum TopLayer` declares `None, Modal, Popover, Tooltip, Fullscreen`
+   (`layout/types.rs`) — so `#[derive(Ord)]` would give the WRONG dominance.
+   `top_layer_dominates` must compare via the documented tier rank, not enum
+   discriminant. This spec required promoting `tier_rank` to a
    `pub fn buiy_core::layout::top_layer_paint_rank(TopLayer) -> u8` (single
-   source of truth, consumed by both the layout sort and this invariant);
-   flag the small `buiy_core` surface add.
+   source of truth, consumed by both the layout sort and this invariant); the
+   small `buiy_core` surface add landed (`top_layer_paint_rank` in
+   `layout/systems.rs`).
 
 ## Module shape
 
@@ -152,7 +154,7 @@ reproduces it. `Violation` is a `thiserror`-free plain struct
 /// `ExtractedNodes.nodes` (render/extract.rs:139 "Never re-sorted by render").
 pub fn paint_order_is_total(nodes: &ExtractedNodes) -> Result<(), Violation>;
 
-/// #2 — transform round-trips on `compose_transform` (systems.rs:3775).
+/// #2 — transform round-trips on `compose_transform` (layout/systems.rs).
 /// Asserts three metamorphic relations on the COMPOSED Mat4, within `EPS`:
 ///   • translate(d) · translate(-d) ≈ identity
 ///   • rotate(2π)                    ≈ identity
@@ -165,7 +167,7 @@ pub fn transform_roundtrips(t: &GenTransform) -> Result<(), Violation>;
 /// #3 — top-layer dominance. Every `top_layer != None` node paints AFTER every
 /// normal-stacking node, and the escaped tail is ordered by paint rank
 /// Fullscreen < Tooltip < Popover < Modal — compared via the promoted
-/// `buiy_core::layout::top_layer_paint_rank` (systems.rs:4113 tier_rank), never
+/// `buiy_core::layout::top_layer_paint_rank` (layout/systems.rs), never
 /// the enum discriminant (see deviation #3).
 pub fn top_layer_dominates(nodes: &ExtractedNodes) -> Result<(), Violation>;
 
@@ -284,8 +286,9 @@ regression in `render_instance.rs` — the predicate must reject the known bug.
 
 - Report: `docs/reports/2026-06-14-visual-bug-detection-strategy.md` §3 Tier 3
   (lines 118–133), cross-cutting §"Animation/temporal determinism".
-- Code: `compose_transform` (`crates/buiy_core/src/layout/systems.rs:3775`),
-  `transform_matrix_to_mat4` (`:3716`), `tier_rank` (`:4113`); `ExtractedNode`
+- Code: `compose_transform` (`crates/buiy_core/src/layout/systems.rs`),
+  `transform_matrix_to_mat4`, `top_layer_paint_rank` (promoted from the private
+  `tier_rank`, same file); `ExtractedNode`
   (`render/extract.rs:65`), `ExtractedNodes` (`:139`), `assemble_context_tree`
   (`:206`), `partition_top_layer` (`render/top_layer.rs:17`); `PackedInstance`
   (`render/instance.rs:40`), `packed_to_raw` (`render/buckets.rs:121`);

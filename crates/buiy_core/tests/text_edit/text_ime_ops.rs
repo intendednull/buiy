@@ -114,6 +114,189 @@ fn cosmic_motion_left() -> EditCommand {
     EditCommand::Motion(cosmic_text::Motion::Left, false)
 }
 
+/// Compose-over-selection: when a composition STARTS over a non-collapsed
+/// selection, the first splice DELETES the selection first (replace-selection
+/// convention) and splices the preedit at the now-collapsed caret. The stashed
+/// delete is NOT yet on the undo stack — invariant (a) still holds for the
+/// splice itself.
+#[test]
+fn compose_over_selection_splice_deletes_and_stashes() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    // "abc", then select "bc" (SelectAll selects all; shrink by moving the
+    // anchor — simplest is: caret to index 1, then extend Right ×2).
+    state.apply(&mut fs, EditCommand::Insert("abc".into()), false, false);
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Home, false),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, false),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, true),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, true),
+        false,
+        false,
+    );
+    assert!(
+        !state.mirror_selection().is_collapsed(),
+        "bc is selected before composition starts"
+    );
+    let undo_before = state.undo_depth();
+
+    // Start a composition over the selection.
+    state.splice_preedit(&mut fs, "X", Some((0, 1)));
+
+    // The selection is gone, the preedit sits at the collapsed caret.
+    assert_eq!(state.buffer_text_for_test(), "aX");
+    // Logical value excludes the preedit AND the selection is already deleted.
+    assert_eq!(state.value(), "a");
+    assert!(state.has_preedit());
+    // The stashed delete has NOT reached the undo stack yet (invariant a holds
+    // for the splice; the delete is folded in only at commit).
+    assert_eq!(
+        state.undo_depth(),
+        undo_before,
+        "the stashed compose-delete is not yet an undo unit"
+    );
+}
+
+/// Compose-over-selection: commit folds the stashed delete + the commit-insert
+/// into ONE `GroupKind::Composition` unit. A single Undo restores BOTH the
+/// deleted selection text and the committed text; redo replays both.
+#[test]
+fn compose_over_selection_commit_is_one_unit_and_one_undo_restores_both() {
+    use buiy_core::text::edit::GroupKind;
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    // "abc", select "bc".
+    state.apply(&mut fs, EditCommand::Insert("abc".into()), false, false);
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Home, false),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, false),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, true),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, true),
+        false,
+        false,
+    );
+    let undo_before = state.undo_depth();
+
+    state.splice_preedit(&mut fs, "ni", None);
+    state.commit_preedit(&mut fs, "你", Duration::ZERO);
+
+    assert_eq!(state.value(), "a你", "selection replaced by the commit");
+    assert!(!state.has_preedit());
+    assert_eq!(
+        state.undo_depth(),
+        undo_before + 1,
+        "delete + commit fold into ONE unit"
+    );
+    assert_eq!(
+        state.undo_top_group_for_test(),
+        Some(GroupKind::Composition)
+    );
+
+    // ONE undo restores BOTH the deleted "bc" and the committed "你".
+    state.apply(&mut fs, EditCommand::Undo, false, false);
+    assert_eq!(
+        state.value(),
+        "abc",
+        "one undo reverses both the delete and the commit"
+    );
+    assert!(
+        !state.mirror_selection().is_collapsed(),
+        "the bc selection is restored on undo"
+    );
+
+    // Redo replays both.
+    state.apply(&mut fs, EditCommand::Redo, false, false);
+    assert_eq!(state.value(), "a你", "redo replays delete + commit");
+}
+
+/// Compose-over-selection cancel (Escape / empty preedit at the unit level):
+/// reverse-applies the stashed delete so the value returns to the original and
+/// the selection is restored. The unselected path (no stash) is a no-op.
+#[test]
+fn compose_over_selection_cancel_restores_via_remove() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+
+    state.apply(&mut fs, EditCommand::Insert("abc".into()), false, false);
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Home, false),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, false),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, true),
+        false,
+        false,
+    );
+    state.apply(
+        &mut fs,
+        EditCommand::Motion(cosmic_text::Motion::Right, true),
+        false,
+        false,
+    );
+
+    state.splice_preedit(&mut fs, "ni", None);
+    assert_eq!(state.value(), "a", "selection deleted at compose start");
+
+    // Cancel via remove_preedit: the deleted "bc" comes back, selection restored.
+    state.remove_preedit(&mut fs);
+    assert_eq!(
+        state.value(),
+        "abc",
+        "cancel reverse-applies the compose-delete"
+    );
+    assert!(!state.has_preedit());
+    assert!(
+        !state.mirror_selection().is_collapsed(),
+        "the bc selection is restored on cancel"
+    );
+}
+
 use std::time::Duration;
 
 /// Invariant (c): a full composition (one or more Preedit splices then a

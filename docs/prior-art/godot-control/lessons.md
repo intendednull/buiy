@@ -52,7 +52,7 @@ Pitfalls drawn from Godot's experience, with Buiy's mitigation.
 | **No virtualization in ItemList / Tree.** Render all items eagerly; large lists (10,000+ rows) stutter; user-built virtualization is necessary. | [`critiques-and-open-problems.md`](critiques-and-open-problems.md) § "Performance at scale" | Virtualization is a first-class widget concern in [`buiy-widget-catalog-design`](../../specs/2026-05-07-buiy-foundation/media-and-widgets.md). Borrow from [GPUI's `UniformList` / `List`](../gpui/lessons.md) for the implementation shape. |
 | **Three-way scripting fragmentation (GDScript / C# / GDExtension).** Each has different ergonomics; library / addon authors choose one and lose two. | [`distribution-and-governance.md`](distribution-and-governance.md), [`critiques-and-open-problems.md`](critiques-and-open-problems.md) § "Three-way scripting fragmentation" | Buiy is Rust-only. Fragmentation removed. Plugins consume Buiy via Bevy's plugin trait + crates.io; no parallel script-language story. |
 | **GDExtension ABI churn.** Rust plugins (via `gdext`) recompile per Godot minor. C++ source API drifts within 4.x. | [`distribution-and-governance.md`](distribution-and-governance.md) | Bevy minor releases are migration events for Buiy already (foundation §2.9); same model. Rust crates.io stable API per Bevy minor, no parallel ABI. |
-| **Lightweight RFC process.** Design state across `godot-proposals` + Discord + recorded GodotCon talks. Lossy. | [`distribution-and-governance.md`](distribution-and-governance.md) § "Contributor base" | `docs/specs/` + `docs/plans/` + `docs/reports/` + `docs/prior-art/` discipline. Per CLAUDE.md ([`/home/user/buiy/CLAUDE.md`](../../../CLAUDE.md)). |
+| **Lightweight RFC process.** Design state across `godot-proposals` + Discord + recorded GodotCon talks. Lossy. | [`distribution-and-governance.md`](distribution-and-governance.md) § "Contributor base" | `docs/specs/` + `docs/plans/` + `docs/reports/` + `docs/prior-art/` discipline. Per CLAUDE.md ([`CLAUDE.md`](../../../CLAUDE.md)). |
 
 ## Borrow
 
@@ -92,10 +92,10 @@ When designing a Buiy feature:
 
 ## Cross-corpus reading
 
-- [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — the sister "game-engine UI" lessons file Buiy is parallel to. Read alongside this file when designing render pipeline, component decomposition, layout integration, or focus model.
-- [`/home/user/buiy/docs/prior-art/accesskit/`](../accesskit/) — the a11y bridge both Bevy and Godot adopt. Two-engine validation of the substrate.
-- [`/home/user/buiy/docs/prior-art/taffy/`](../taffy/) — the layout engine Buiy commits to. Read alongside [`layout-anchors-margins.md`](layout-anchors-margins.md) for the contrast.
-- [`/home/user/buiy/docs/prior-art/cosmic-text/`](../cosmic-text/) — the text shaper Buiy commits to. Read alongside [`text-and-input.md`](text-and-input.md).
+- [`docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) — the sister "game-engine UI" lessons file Buiy is parallel to. Read alongside this file when designing render pipeline, component decomposition, layout integration, or focus model.
+- [`docs/prior-art/accesskit/`](../accesskit/) — the a11y bridge both Bevy and Godot adopt. Two-engine validation of the substrate.
+- [`docs/prior-art/taffy/`](../taffy/) — the layout engine Buiy commits to. Read alongside [`layout-anchors-margins.md`](layout-anchors-margins.md) for the contrast.
+- [`docs/prior-art/cosmic-text/`](../cosmic-text/) — the text shaper Buiy commits to. Read alongside [`text-and-input.md`](text-and-input.md).
 
 ## Sources
 

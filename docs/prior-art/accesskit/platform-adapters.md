@@ -144,5 +144,5 @@ All constructors **panic if the window is already visible** — this is the Acce
 - macOS adapter issue #520 (ListBox selected state): https://github.com/AccessKit/accesskit/issues/520
 - `accesskit_winit` 0.33.0 docs and release notes: https://docs.rs/accesskit_winit/0.33.0/accesskit_winit/
 - NLnet NGI0 Commons Fund acknowledgement (iOS adapter and AT-SPI funding): https://nlnet.nl/project/
-- Buiy spec — platform-staged v1 commitment: `/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` §2.9
+- Buiy spec — platform-staged v1 commitment: `docs/specs/2026-05-07-buiy-foundation/architecture.md` §2.9
 - Sibling: [architecture.md](architecture.md), [tree-model.md](tree-model.md), [api.md](api.md)

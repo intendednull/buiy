@@ -6,7 +6,7 @@
 
 This file does direct side-by-sides. Each row identifies how the other toolkit / engine wires accessibility, the key design difference vs `bevy_a11y`, and (where relevant) what Buiy borrows or rejects from that comparison. The honest finding: `bevy_a11y` is on the AccessKit-producer side of the divide with several Rust peers, and its main differentiator within that group is **the megacomponent surface** — the design choice that issue [#17644](https://github.com/bevyengine/bevy/issues/17644) named as the BSN-incompatibility.
 
-For the AccessKit-side comparison-matrix detail, see [`prior-art/accesskit/ecosystem.md`](../accesskit/ecosystem.md) and [`prior-art/accesskit/comparisons.md`](../accesskit/comparisons.md). This file adds the producer-side ergonomics layer.
+For the AccessKit-side comparison-matrix detail, see [`prior-art/accesskit/ecosystem.md`](../accesskit/ecosystem.md). This file adds the producer-side ergonomics layer.
 
 ## vs Buiy's planned a11y model
 
@@ -121,6 +121,6 @@ Godot 4.5 (2025-09) added AccessKit-based screen-reader support via PR [#76829](
 - Unity Accessibility module: https://docs.unity3d.com/Manual/com.unity.modules.accessibility.html, https://unity.com/blog/engine-platform/mobile-screen-reader-support-in-unity, Unity 6.3 native desktop screen reader: https://discussions.unity.com/t/native-desktop-screen-reader-support-now-available-in-unity-6-3/1681788.
 - Unreal Slate Screen Reader: https://dev.epicgames.com/documentation/en-us/unreal-engine/supporting-screen-readers-in-unreal-engine.
 - Godot AccessKit PR #76829: https://github.com/godotengine/godot/pull/76829, Godot 4.5 release: https://godotengine.org/releases/4.5/.
-- AccessKit folder ecosystem + comparisons: [`prior-art/accesskit/ecosystem.md`](../accesskit/ecosystem.md), [`prior-art/accesskit/comparisons.md`](../accesskit/comparisons.md).
+- AccessKit folder ecosystem + comparisons: [`prior-art/accesskit/ecosystem.md`](../accesskit/ecosystem.md).
 - Buiy foundation: [`accessibility.md`](../../specs/2026-05-07-buiy-foundation/accessibility.md), [`architecture.md § 2.6`](../../specs/2026-05-07-buiy-foundation/architecture.md), [`cross-cutting.md § 3.18`](../../specs/2026-05-07-buiy-foundation/cross-cutting.md).
 - Sibling files: [`distribution.md`](distribution.md), [`history.md`](history.md), [`component-model-incident.md`](component-model-incident.md), [`api.md`](api.md), [`coexistence.md`](coexistence.md), [`focus-model.md`](focus-model.md), [`ecosystem.md`](ecosystem.md), [`critiques.md`](critiques.md), [`open-problems.md`](open-problems.md).

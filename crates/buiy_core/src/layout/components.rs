@@ -55,7 +55,7 @@ pub struct BoxModel {
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 1.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub enum Display {
     #[default]
     Block,
@@ -128,7 +128,7 @@ pub struct FlexParams {
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/flex-and-grid.md § 1.2.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub struct FlexItem {
     pub grow: f32,
     pub shrink: f32,
@@ -600,7 +600,7 @@ pub struct Anchor {
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.2 step 4.
 #[derive(Component, Reflect, Default, Clone, Debug)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub struct LayoutAnchorBroken;
 
 #[cfg(test)]

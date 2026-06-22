@@ -1,8 +1,13 @@
 # Atlas glyph/coverage GPU pipeline — design note
 
 **Date:** 2026-06-08
-**Status:** implemented (GPU-verify campaign Phase 4, item 4) — all 4 `atlas_gpu.rs`
-tests are real + green on the RX 6700 XT; the headless lane stays green.
+**Status:** landed (GPU-verify campaign Phase 4, item 4) — the GPU atlas path is
+real + green on the RX 6700 XT; the headless lane stays green. The glyph/retint GPU
+coverage that drove this note now lives in the text crate (`text_gpu.rs`, e.g.
+`hello_text_first_frame_is_deterministic_and_tinted` /
+`retint_real_text_leaves_atlas_byte_identical`), which T8 took over when it landed
+the glyph producer; `atlas_gpu.rs` retains the gate-#15 page-pool test
+(`gate15_atlas_entries_return_to_baseline_after_idle`).
 **Implements** atlas-and-text-seam.md §2/§4/§7 — the GPU half of the atlas, which
 R10 left entirely CPU-side (allocator + LRU + pooling proven adapter-free in
 `atlas_alloc.rs`; `AtlasPage.texture` is always `None`, no upload, no sampling
@@ -10,7 +15,7 @@ pipeline, no glyph draw).
 
 ## Scope
 
-Build the coverage-glyph GPU path so the 4 `atlas_gpu.rs` `#[ignore]` stubs become
+Build the coverage-glyph GPU path so the `#[ignore]` GPU stubs become
 real on a wgpu adapter: page `Image` + blit + dirty/upload, a CoverageR8 sampling
 pipeline + shader, an atlas bind group, a glyph instance buffer + pack + node draw
 branch. The text crate (`buiy-text-rendering-design`, unbuilt) owns *producing*
@@ -75,15 +80,16 @@ handle + dirty set), `atlas/mod.rs` (prepare system: upload dirty pages + build 
 `specialize`), `prepare.rs` (`glyph: RawBufferVec<GlyphAlphaInstance>` + pack + upload),
 `buckets.rs` ((Glyph, layer) routing so the node draws glyphs in paint order
 shadow<quad<glyph<path), `node.rs` (glyph draw branch after the quad draw: set
-coverage pipeline, bind `@group(1)`, VBO1 = glyph buffer, draw). Tests: `atlas_gpu.rs`
-(4 stubs real, using `support::gpu_render_app` + `render_to_image`/`readback_rgba`,
-the test as glyph producer).
+coverage pipeline, bind `@group(1)`, VBO1 = glyph buffer, draw). Tests: the GPU
+glyph/retint coverage (using `support::gpu_render_app` + `render_to_image`/`readback_rgba`,
+the test as glyph producer) landed in the text crate (`text_gpu.rs`) when T8 took the
+glyph producer; `atlas_gpu.rs` keeps the device-agnostic page-pool gate-#15 test.
 
 ## Verification
 
-Each `atlas_gpu.rs` test green on the RX 6700 XT via `--ignored`; the headless gate
-(no `--ignored`) stays green (the new pipeline/shader compile + the device-free
-allocator tests unchanged). No new runtime deps. The non-sampling quad/shadow
+The GPU glyph/retint tests (now in `text_gpu.rs`) green on the RX 6700 XT via
+`--ignored`; the headless gate (no `--ignored`) stays green (the new pipeline/shader
+compile + the device-free allocator tests unchanged). No new runtime deps. The non-sampling quad/shadow
 pipelines and their `@group(0)` descriptor stay byte-identical (additive `@group(1)`).
 
 ## Implementation notes (as landed)

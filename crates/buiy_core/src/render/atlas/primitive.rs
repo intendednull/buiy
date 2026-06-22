@@ -10,6 +10,30 @@ use bytemuck::{Pod, Zeroable};
 /// `coverage.wgsl`'s instance `@location`s read. `[f32;4]×4 + u32 = 68`.
 pub const GLYPH_ALPHA_INSTANCE_STRIDE_BYTES: usize = 68;
 
+/// Float index of the per-glyph straight-alpha (`color[3]`) when a
+/// [`GlyphAlphaInstance`] is viewed as a flat `[f32]` raw record. The fields
+/// pack `rect[4] ++ uv[4] ++ color[4] ++ clip[4] ++ page` (contiguous `#[repr(C)]`,
+/// no pad before `page`), so `color` is the **3rd** `[f32;4]` block and its
+/// alpha lands at float index `8 + 3 = 11`. This is the GLYPH mirror of the
+/// quad-tier `ALPHA_FLOAT_OFFSET` (= 7, a DIFFERENT offset on the `[f32;17]`
+/// quad record): R2's degraded-group forward-composite re-tints glyph alpha,
+/// and using the quad offset 7 on a glyph record would corrupt `uv[3]` (a
+/// silent wrong-pixel bug). NAMED + compile-asserted so the offset is never a
+/// literal `11` at the use site (R1's discipline). The fold itself writes the
+/// typed `color[3]` field; this const documents the raw-view parity for the
+/// spec and any byte-level reader.
+///
+/// [`ALPHA_FLOAT_OFFSET`]: crate::render::instance::ALPHA_FLOAT_OFFSET
+pub const GLYPH_ALPHA_FLOAT_OFFSET: usize = 11;
+
+// Tie `GLYPH_ALPHA_FLOAT_OFFSET` to the layout: `color` is the 3rd `[f32;4]`
+// block (`rect`, `uv`, `color`), so its alpha (`color[3]`) is at float index
+// `8 + 3`. A field reorder that moved `color` would fail this.
+const _: () = assert!(
+    GLYPH_ALPHA_FLOAT_OFFSET == 8 + 3,
+    "GLYPH_ALPHA_FLOAT_OFFSET must index color[3] = the 3rd vec4 block's alpha"
+);
+
 /// One instance per visible glyph (or any single-channel coverage quad, e.g.
 /// a generated mask stamp). The **alpha-as-color** primitive: the atlas
 /// stores `R8` coverage and color is applied per-instance, so one resident

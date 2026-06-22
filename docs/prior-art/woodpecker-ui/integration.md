@@ -69,7 +69,7 @@ woodpecker_ui does not consume `bevy_ui`, `bevy_text`, or `bevy_ui_widgets`. It 
 
 **Same-window coexistence with `bevy_ui` is technically possible but unverified.** Both stacks register `bevy_picking` backends; `bevy_picking` supports multiple backends with priority ordering, so input *should* route correctly. No example or test in the woodpecker_ui repo exercises this configuration. Render-pass ordering is not coordinated; layered behaviour would depend on vello-scene Z relative to `bevy_ui`'s render pass.
 
-This is the same coexistence question Buiy's foundation defers via `buiy-coexistence-design` (`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/README.md` § 4) — woodpecker_ui has no production data point on the answer.
+This is the same coexistence question Buiy's foundation defers via `buiy-coexistence-design` (`docs/specs/2026-05-07-buiy-foundation/README.md` § 4) — woodpecker_ui has no production data point on the answer.
 
 **Multi-window coexistence** (separate windows, one running woodpecker_ui, one running `bevy_ui`) should work cleanly because `bevy_picking`, `bevy_a11y`, and AccessKit are all keyed by winit `WindowId`. Again, no example verifies it.
 

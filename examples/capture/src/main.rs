@@ -211,6 +211,12 @@ fn render_scene(width: u32, height: u32, clear: Color, out: &str, build: impl Fn
         .add_plugins(buiy_core::text::BuiyTextPlugin::default())
         .add_plugins(BuiyRenderPlugin);
     app.init_asset::<Mesh>();
+    // Bevy 0.19: `CameraPlugin`'s `update_skinned_mesh_bounds` reads
+    // `Res<Assets<SkinnedMeshInverseBindposes>>` (the second asset `MeshPlugin`
+    // inits alongside `Mesh`) as a non-`Option` param, which now PANICS if absent
+    // (0.18 silently skipped). Real apps get it via `DefaultPlugins` → `MeshPlugin`;
+    // this hand-rolled capture stack must init it like `Mesh`.
+    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
 
     // Offscreen `Rgba8UnormSrgb` target: `COPY_SRC` for the readback copy,
     // `RenderAssetUsages::all()` so the `GpuImage` exists in the render world.

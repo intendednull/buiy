@@ -42,7 +42,7 @@ GPUI provides the **clearest production-scale data point** on the cost of deferr
 
 ## What an AccessKit retrofit would require
 
-Reverse-engineering from Buiy's own AccessKit-first design (foundation §2.6, [`/home/user/buiy/docs/prior-art/accesskit/integration.md`](../accesskit/integration.md)), retrofitting AccessKit into GPUI would need:
+Reverse-engineering from Buiy's own AccessKit-first design (foundation §2.6, [`docs/prior-art/accesskit/integration.md`](../accesskit/integration.md)), retrofitting AccessKit into GPUI would need:
 
 1. **Per-window adapter ownership.** Each `Window` needs to own an `accesskit_winit::Adapter` (or platform-specific equivalent, since GPUI doesn't use winit — it would need its own `accesskit_macos::Adapter`, `accesskit_windows::Adapter`, `accesskit_unix::Adapter` wiring).
 2. **Element-level semantic data.** Every `Element` would need to provide role, name, value, state. The cleanest path is decomposed accessibility components attached via the `Styled` trait — same shape as `.bg(color)` but `.aria_role(Role::Button).aria_label("Save")`.
@@ -81,5 +81,5 @@ The right answer for Buiy is the answer foundation §2.6 already commits to: own
 - VoiceOver tracking #8146: https://github.com/zed-industries/zed/discussions/8146
 - HN: Zed deprioritizing GPUI community work: https://news.ycombinator.com/item?id=47003569
 - Zed on Windows (accessibility-gap admission context): https://zed.dev/windows
-- Cross-link: AccessKit lessons file (names GPUI as verified-false AccessKit adopter): [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md)
+- Cross-link: AccessKit lessons file (names GPUI as verified-false AccessKit adopter): [`docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md)
 - Cross-link: bevy_a11y BSN issue #17644 (the megacomponent problem Buiy is structured to avoid): https://github.com/bevyengine/bevy/issues/17644

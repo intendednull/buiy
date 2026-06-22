@@ -50,6 +50,25 @@ pub enum Length {
     Cqmin(f32),
     /// `cqmax` — percentage of `max(cqi, cqb)`.
     Cqmax(f32),
+    /// CSS `anchor-size(<axis>)` — resolves to the anchor target's
+    /// *resolved* size on the named axis. Meaningful only inside a
+    /// `PositionTry::inset` term (where the per-try anchor box is known
+    /// at resolution time); in every non-anchor context it resolves to
+    /// `0`/`auto`, exactly like `Cq*` outside its query. Carries only the
+    /// axis selector — the anchor box itself is supplied by the
+    /// resolution site, so no `AnchorRef` payload is needed.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+    AnchorSize(AxisDimension),
+}
+
+/// Which axis of the anchor box an `anchor-size()` term reads.
+///
+/// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxisDimension {
+    Width,
+    Height,
 }
 
 impl Length {
@@ -958,9 +977,6 @@ pub enum AnchorErrorKind {
     /// per (name, frame)" only in that the per-entity gate also avoids
     /// repeat warns if the same entity re-inserts within the same frame.
     DuplicateName,
-    /// `anchor-size()` used in a `PositionTry::inset` term. Tier-C
-    /// deferred to v1.x; the term resolves to zero with a warn.
-    AnchorSizeUsed,
 }
 
 /// Phase 7 — session-scoped warn-once dedup key. Variants cover the
@@ -1035,14 +1051,13 @@ pub enum LayoutWarnOnceKey {
     /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
     StickyFrUnsupported(Entity),
 
-    /// Sticky entity uses a `Length::Cq*` inset (container query
-    /// unit). Full cq-context resolution for sticky is deferred to
-    /// a Phase 7.x follow-up (port from Phase 6 `length_inset_to_px`).
-    /// v1 resolves to 0.0. One warn per (entity, session).
+    /// Sticky entity uses a `Length::AnchorSize` inset. `anchor-size()`
+    /// reads the anchor target's box, but a sticky element has no anchor
+    /// box — the term is meaningless here, so the inset resolves to 0.0.
+    /// One warn per (entity, session), mirroring `StickyFrUnsupported`.
     ///
-    /// Spec: plan decision D3 in
-    /// docs/plans/2026-05-22-buiy-layout-sticky-table-multicol.md.
-    StickyCqDeferred(Entity),
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/display-and-positioning.md § 3.4.
+    StickyAnchorSizeUnsupported(Entity),
 
     /// `Containment.contain` includes `SIZE` / `INLINE_SIZE` and the
     /// corresponding axis sizing is `Sizing::Auto`. Per spec § 5.1 the
@@ -1247,6 +1262,25 @@ pub enum WillChangeProperty {
     ScrollPosition,
 }
 
+impl WillChangeProperty {
+    /// The SC-forming subset of `will-change` properties.
+    ///
+    /// CSS rule: a property named in `will-change` forms a stacking
+    /// context iff that property *would* form one at a non-initial value.
+    /// So `Transform` (trigger 3), `Opacity` (`< 1`), and `Filter`
+    /// (`!= none`) qualify. `ZIndex` does NOT — `z-index` only forms an
+    /// SC on a positioned element, so `will-change: z-index` alone never
+    /// creates one. `ScrollPosition` is not SC-forming either. Extend the
+    /// match here (the single source of truth) when new SC-forming
+    /// variants are added.
+    ///
+    /// Spec: docs/specs/2026-05-08-buiy-layout-design/stacking-and-top-layer.md § 2 (trigger 5);
+    /// transforms-and-containment.md § 5.3.
+    pub(crate) fn forms_stacking_context(self) -> bool {
+        matches!(self, Self::Transform | Self::Opacity | Self::Filter)
+    }
+}
+
 // ============================================================
 // Phase 9 — stacking value types (stacking-and-top-layer.md § 1)
 // ============================================================
@@ -1369,6 +1403,19 @@ mod tests {
     fn content_visibility_and_will_change_defaults() {
         assert_eq!(ContentVisibility::default(), ContentVisibility::Visible);
         assert_eq!(WillChange::default(), WillChange::Auto);
+    }
+
+    #[test]
+    fn will_change_property_sc_forming_subset() {
+        // SC-forming: the properties that would form a stacking context at
+        // a non-initial value (transform / opacity<1 / filter!=none).
+        assert!(WillChangeProperty::Transform.forms_stacking_context());
+        assert!(WillChangeProperty::Opacity.forms_stacking_context());
+        assert!(WillChangeProperty::Filter.forms_stacking_context());
+        // Not SC-forming: z-index needs positioning to form an SC, and
+        // scroll-position never forms one.
+        assert!(!WillChangeProperty::ZIndex.forms_stacking_context());
+        assert!(!WillChangeProperty::ScrollPosition.forms_stacking_context());
     }
 
     #[test]

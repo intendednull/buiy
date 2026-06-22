@@ -210,3 +210,76 @@ fn paste_with_an_empty_clipboard_is_a_no_op() {
     assert!(!out.value_changed);
     assert_eq!(state.undo_depth(), 0, "nothing to paste, nothing recorded");
 }
+
+// ── HTML flavor (the follow-up slice) ────────────────────────────────────
+// Copy/Cut now set BOTH the plain-text flavor (unchanged § 7 path) AND an
+// HTML flavor (the escaped plain text — a plain-text editor has no rich runs).
+// Paste still PREFERS the § 3.3 text path and never consults the HTML getter.
+
+#[test]
+fn copy_also_sets_an_escaped_html_flavor() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+    let mut clip = MemClipboard::default();
+
+    // Characters that MUST be escaped in html: & < > " '
+    state.apply_tracked(
+        &mut fs,
+        EditCommand::Insert("a<b>&\"'".into()),
+        &mut ctx(0, &mut clip),
+    );
+    select_all(&mut state, &mut fs, &mut clip);
+    state.apply_tracked(&mut fs, EditCommand::Copy, &mut ctx(10, &mut clip));
+
+    // The plain-text flavor is the raw selection (§ 7 path, unchanged).
+    assert_eq!(clip.get_text(), Some("a<b>&\"'".to_string()));
+    // The html flavor is the escaped form.
+    assert_eq!(
+        clip.get_html(),
+        Some("a&lt;b&gt;&amp;&quot;&#39;".to_string()),
+        "copy sets an escaped-html flavor alongside the text"
+    );
+}
+
+#[test]
+fn cut_sets_both_text_and_html_flavors() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+    let mut clip = MemClipboard::default();
+
+    state.apply_tracked(
+        &mut fs,
+        EditCommand::Insert("x<y".into()),
+        &mut ctx(0, &mut clip),
+    );
+    select_all(&mut state, &mut fs, &mut clip);
+    let out = state.apply_tracked(&mut fs, EditCommand::Cut, &mut ctx(10, &mut clip));
+
+    assert!(out.value_changed, "cut removes the selection");
+    assert_eq!(clip.get_text(), Some("x<y".to_string()));
+    assert_eq!(clip.get_html(), Some("x&lt;y".to_string()));
+    assert_eq!(state.value(), "", "selection deleted");
+    assert_eq!(state.undo_depth(), 2, "the insert run + the cut");
+}
+
+#[test]
+fn paste_prefers_text_and_ignores_html() {
+    let fonts = SharedFontSystem::new();
+    let mut state = TextEditState::new(Metrics::new(16.0, 19.2));
+    let mut fs = fonts.lock();
+    let mut clip = MemClipboard::default();
+    // Seed DISTINCT text and html flavors: Paste must take the text one.
+    clip.set_text("abc".to_string());
+    clip.set_html("<b>zzz</b>".to_string());
+
+    let out = state.apply_tracked(&mut fs, EditCommand::Paste, &mut ctx(0, &mut clip));
+    assert!(out.value_changed);
+    assert_eq!(
+        state.value(),
+        "abc",
+        "paste takes the § 3.3 text path, never the html flavor"
+    );
+    assert_eq!(state.undo_depth(), 1, "paste is one undoable unit");
+}

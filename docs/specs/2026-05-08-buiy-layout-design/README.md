@@ -4,6 +4,8 @@
 **Status:** active
 **Parent:** [`2026-05-07-buiy-foundation`](../2026-05-07-buiy-foundation/README.md) — sub-spec graduated from [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout) and the foundation roadmap row [`buiy-layout-design`](../2026-05-07-buiy-foundation/README.md#4-sub-spec-roadmap).
 
+> **`active`, not `landed`:** Phases 1–14 have all landed, but a handful of real target features in this spec remain genuinely unbuilt — units/`calc()` (the `buiy-layout-units-calc` follow-up: `Em`/`Rem`/viewport units + `Calc`), `Display::Contents`, table `colspan`/`rowspan`, masonry, subgrid, per-window top layer, and multicol content *fragmentation* (the Phase-13 packer ships positions only). The status stays `active` until those close.
+
 ## Purpose
 
 Define the target shape of Buiy's layout subsystem: types, components, system pipeline, and invariants that realize the layout feature inventory in [foundation/visuals.md § 3.2](../2026-05-07-buiy-foundation/visuals.md#32-layout).
@@ -52,9 +54,9 @@ Reading order: architecture first (it sets the invariants every other file relie
 
 Each pillar is detailed in [architecture.md](architecture.md); this section is the index.
 
-1. **Single-pipeline, fixed order.** `RemovedNodesGc → WritingModeInherit → SyncStyles → CqActivate → TaffyCompute → CqFlipCheck → CqFlipReRun → PostTaffyOverrides → WriteResolvedLayout`, gated behind `BuiySet::Layout`. Step 6 `PostTaffyOverrides` chains four sub-passes in order: 6a sticky offset, 6b table layout, 6c multicol pack, 6d anchor resolution.
+1. **Single-pipeline, fixed order.** `RemovedNodesGc → WritingModeInherit → SyncStyles → CqActivate → TaffyCompute → CqFlipCheck → CqFlipReRun → PostTaffyOverrides → WriteResolvedLayout → CqDescendantInvalidate → CqDescendantReRun`, gated behind `BuiySet::Layout`. Step 6 `PostTaffyOverrides` chains six sub-passes in order: 6a sticky offset, 6b table layout, 6c multicol pack, 6d anchor resolution, 6e transform compose (Phase 8), 6f stacking-context detection (Phase 9). Steps 8–9 (`CqDescendant*`) extend the same-frame container-query settle (Phase 14).
 2. **Hybrid component API.** Public ergonomic `Style` (struct-literal *and* fluent methods over the same builder); on insert, expands to a Bundle of decomposed components. Decomposed components are canonical for ECS storage, BSN, reflection, and serialization.
-3. **`LayoutTree` is the bridge.** A `NonSendResource` holding `TaffyTree<()>` + `HashMap<Entity, TaffyNodeId>`. Lifetime: app-long. GC: `RemovedComponents<Node>` reader.
+3. **`LayoutTree` is the bridge.** A `NonSendResource` holding `TaffyTree<Entity>` (text leaves register their entity as the Taffy node context for the measure closure) + `HashMap<Entity, TaffyNodeId>`. Lifetime: app-long. GC: `RemovedComponents<Node>` reader.
 4. **Container queries: same-frame re-layout, capped 2×.** Activate against this frame's Taffy output; if any query flipped, run Taffy a second time. No fixed-point iteration.
 5. **Anchor positioning: post-Taffy overlay.** Anchored elements are laid out by Taffy first (using their author-declared dimensions), then a Buiy pass overrides their `ResolvedLayout.position` based on the anchor's resolved rect.
 6. **Topological invariant.** Parents resolve before children. Document order = AccessKit tree order = default tab order. Any violation is a bug, not a tunable.
@@ -81,7 +83,7 @@ This spec is a leaf — it does not spawn further sub-specs. Per-feature depth l
 
 ## 4.1 Migration
 
-This spec is target-state. The Phase 0 → target migration (the decomposed-component set, hybrid `Style` builder, 8→9-step pipeline (`WritingModeInherit` is the 9th, added in Phase 4), anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer per-window, `LogicalBoxModel` insert-helper) lives in a series of follow-up plans, the first of which is [Phase 1 — Foundation](../../plans/2026-05-08-buiy-layout-foundation.md). The plans sequence the work into reviewable PRs; nothing in this spec depends on the plans landing.
+This spec is target-state. The Phase 0 → target migration (the decomposed-component set, hybrid `Style` builder, the multi-step pipeline (grown from Phase 0's bare compute pass to the eleven layout sets of [architecture.md § 3](architecture.md#3-system-pipeline) — `WritingModeInherit` added in Phase 4, the transform/stacking sub-passes 6e/6f in Phases 8/9, the `CqDescendant*` steps 8/9 in Phase 14), anchor positioning, container queries, sticky/table/multicol sub-passes, stacking-context detection, top-layer (single-window landed Phase 9; per-window still a follow-up), `LogicalBoxModel` insert-helper) lives in a series of follow-up plans, the first of which is [Phase 1 — Foundation](../../plans/2026-05-08-buiy-layout-foundation.md). The plans sequence the work into reviewable PRs; nothing in this spec depends on the plans landing.
 
 ## 5. Open questions
 
@@ -93,6 +95,8 @@ This spec is target-state. The Phase 0 → target migration (the decomposed-comp
 - **Stacking-context performance.** The set of triggers is large (positioned + non-`auto` z-index, opacity < 1, transform, filter, will-change, isolation, mix-blend-mode). Whether to detect lazily (during paint) or eagerly (during layout) is open. [stacking-and-top-layer.md](stacking-and-top-layer.md) discusses.
 - **`writing-mode: sideways-*` Taffy support.** Taffy 0.10 has logical properties but doesn't fully model sideways modes. Whether to ship a Buiy-side rotation pass or wait on Taffy is open. [container-queries-and-writing-modes.md](container-queries-and-writing-modes.md) details.
 - **Top-layer ordering across windows.** When a Buiy app has multiple windows each with its own modal, modal stacking is per-window. Cross-window top-layer (a modal that visually escapes its window) is out of scope; tracked in `buiy-window-and-surface-design`.
+- **`anchor-size()` in `PositionTry::inset` — RESOLVED.** Previously deferred to v1.x with no API surface; now ships as `Length::AnchorSize(AxisDimension)`, resolved against the per-try anchor box at anchor-resolution time (no Taffy re-layout). See [display-and-positioning.md § 3.4](display-and-positioning.md#34-performance-and-ordering).
+- **Sticky `Length::Cq*` inset — RESOLVED.** Previously deferred (`StickyCqDeferred` warn-once, resolved to 0); now resolves via the shared `resolve_cq_unit_px` against the sticky entity's own nearest container-query ancestor (size read current-frame from Taffy), `Cqi`/`Cqb` on the writing-mode inline/block axes, viewport fallback when there is no CQ ancestor. See [display-and-positioning.md § 2.3](display-and-positioning.md#23-sticky-positioning).
 
 ## References
 

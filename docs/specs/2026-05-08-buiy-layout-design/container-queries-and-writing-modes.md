@@ -98,6 +98,8 @@ If no queried ancestor exists, container units fall back to viewport units (`cqw
 
 `cqi` / `cqb` against a container with `ContainerType::InlineSize` resolve only on the inline axis; querying the block axis falls back to the same warn-and-degrade path. (See [README § 5 — open questions](README.md#5-open-questions) for nested-container subtleties.)
 
+**Consumers.** The shared `resolve_cq_unit_px` resolver is used by sizing, grid tracks, edge translation, *and* sticky positioning insets — a sticky `Length::Cq*` inset resolves against the sticky entity's own nearest queried ancestor (size read current-frame from Taffy). See [display-and-positioning.md § 2.3](display-and-positioning.md).
+
 ### 1.5 Test surface
 
 - **Activation flip** — fixture with one `@container (min-width: 600px)` rule; resize container from 500 → 700 in two frames; assert this frame's `ResolvedLayout` reflects the activated rule.
@@ -148,7 +150,7 @@ Changing `WritingMode` on a parent invalidates `WritingModeResolved` on every de
 The bridge between logical and physical edges/axes happens at *author-construct time* in the `Logical*` builders, **not** during step 1 (consistent with § 2.4). Specifically:
 
 1. Physical `BoxModel` and `Position::Inset` are passed to Taffy unchanged. Step 1 (`style_to_taffy`) only forwards the already-physical fields to Taffy and wires `WritingModeResolved.direction` → `taffy::Style.direction`; it performs no logical→physical edge translation.
-2. The logical builders (`LogicalInset::to_inset` — `style.rs:538`; `LogicalEdges::to_edges` — `types.rs:733`; `LogicalBoxModel::to_box_model` — `style.rs:487`; see [box-model.md § 4.1](box-model.md#41-api-shape)) translate at author-construct time into physical fields, using the author-supplied `WritingMode` value.
+2. The logical builders (`LogicalInset::to_inset` in `style.rs`; `LogicalEdges::to_edges` in `types.rs`; `LogicalBoxModel::to_box_model` in `style.rs`; see [box-model.md § 4.1](box-model.md#41-api-shape)) translate at author-construct time into physical fields, using the author-supplied `WritingMode` value.
 
 Mapping:
 

@@ -71,7 +71,7 @@ There is **no formal RFC process**. Major architectural decisions are discussed 
 
 The 14-month gap between 0.13 and 0.14 is partly explained by the absence of an RFC discipline: there is no public "we will ship X next" milestone tracker tied to dates. The Whimsical roadmap is the closest analog and is informal.
 
-**Lesson for Buiy:** the lightweight-process choice has cost iced legibility — feature requests sit unresolved for years (issue #552 since 2020), and outsiders cannot predict what lands when. Buiy's commitment to `docs/specs/` + `docs/plans/` (foundation [README § Code Conventions](../../specs/2026-05-07-buiy-foundation/README.md)) is informed by exactly this gap. See [`/home/user/buiy/docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid row "Lightweight RFC process" for the matched pattern in Bevy.
+**Lesson for Buiy:** the lightweight-process choice has cost iced legibility — feature requests sit unresolved for years (issue #552 since 2020), and outsiders cannot predict what lands when. Buiy's commitment to `docs/specs/` + `docs/plans/` (foundation [README § Code Conventions](../../specs/2026-05-07-buiy-foundation/README.md)) is informed by exactly this gap. See [`docs/prior-art/bevy-ui/lessons.md`](../bevy-ui/lessons.md) Avoid row "Lightweight RFC process" for the matched pattern in Bevy.
 
 ## Sources
 

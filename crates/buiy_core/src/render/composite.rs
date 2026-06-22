@@ -114,7 +114,8 @@ impl SpecializedRenderPipeline for CompositePipeline {
         RenderPipelineDescriptor {
             label: Some("buiy_composite_pipeline".into()),
             layout: vec![uniform_layout_descriptor(), source_layout_descriptor()],
-            push_constant_ranges: vec![],
+            // wgpu 28: push constants → "immediates". Buiy uses none.
+            immediate_size: 0,
             vertex: VertexState {
                 shader: composite_shader_handle(),
                 shader_defs: vec![],
@@ -201,7 +202,8 @@ impl FromWorld for CompositePipeline {
             address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
             mag_filter: bevy::render::render_resource::FilterMode::Nearest,
             min_filter: bevy::render::render_resource::FilterMode::Nearest,
-            mipmap_filter: bevy::render::render_resource::FilterMode::Nearest,
+            // wgpu 28+: `mipmap_filter` is `MipmapFilterMode` (mag/min stay `FilterMode`).
+            mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 

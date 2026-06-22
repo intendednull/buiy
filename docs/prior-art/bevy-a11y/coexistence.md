@@ -4,12 +4,12 @@
 
 ## The structural constraint
 
-AccessKit allows **exactly one tree per `accesskit_winit::Adapter` per window**. The adapter slot is single-occupant by design — there is no upstream merge protocol where two producers push subtrees that get glued together. See [`/home/user/buiy/docs/prior-art/accesskit/platform-adapters.md`](../accesskit/platform-adapters.md) for the long form on the AccessKit side; the relevant constraint for this file is: **two producers cannot share an adapter**.
+AccessKit allows **exactly one tree per `accesskit_winit::Adapter` per window**. The adapter slot is single-occupant by design — there is no upstream merge protocol where two producers push subtrees that get glued together. See [`../accesskit/platform-adapters.md`](../accesskit/platform-adapters.md) for the long form on the AccessKit side; the relevant constraint for this file is: **two producers cannot share an adapter**.
 
 Two consequences:
 
 1. On any given window, exactly one stack (bevy_a11y or Buiy) owns the adapter.
-2. There is no "Buiy and bevy_a11y coexist on the same window with some coordinator" mode in v1. Buiy's spec ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md` § 3.18](../../specs/2026-05-07-buiy-foundation/cross-cutting.md)) commits to per-window-only coexistence; a coordinator is a deferred follow-up sub-spec (`buiy-coexistence-design`) if demand arises.
+2. There is no "Buiy and bevy_a11y coexist on the same window with some coordinator" mode in v1. Buiy's spec ([`../../specs/2026-05-07-buiy-foundation/cross-cutting.md` § 3.18](../../specs/2026-05-07-buiy-foundation/cross-cutting.md)) commits to per-window-only coexistence; a coordinator is a deferred follow-up sub-spec (`buiy-coexistence-design`) if demand arises.
 
 ## The supported model
 
@@ -95,7 +95,7 @@ The window's winit handle is preserved. The adapter is recreated. The AT may bri
 
 ## Open question
 
-[`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/README.md` § 5](../../specs/2026-05-07-buiy-foundation/README.md) names two related open questions:
+[`../../specs/2026-05-07-buiy-foundation/README.md` § 5](../../specs/2026-05-07-buiy-foundation/README.md) names two related open questions:
 
 - **AccessKit-adapter ownership when both stacks coexist same-window.** Currently the spec rules this out. If demand arises, `buiy-coexistence-design` defines the coordinator.
 - **Coexistence policy with `bevy_feathers` / `bevy_ui_widgets`.** Coexistence at the app level is committed; whether Buiy ships migration adapters from bevy_ui widgets is open. This applies symmetrically to bevy_a11y — Buiy ships no migration adapter from `AccessibilityNode` to Buiy's decomposed components.
@@ -107,10 +107,10 @@ Both remain open. The committed rule is per-window single-stack. Coordinator-mer
 - [`architecture.md`](architecture.md) — bevy_a11y's per-window adapter mechanics (via `bevy_winit`)
 - [`component-model-incident.md`](component-model-incident.md) — why Buiy replaces rather than layers
 - [`api.md`](api.md) — `disable::<AccessibilityPlugin>()` and `ManageAccessibilityUpdates` API surface
-- [`/home/user/buiy/docs/prior-art/accesskit/platform-adapters.md`](../accesskit/platform-adapters.md) — the single-occupant adapter constraint
-- [`/home/user/buiy/docs/prior-art/accesskit/lessons.md`](../accesskit/lessons.md) — "Per-window adapter ownership keyed by winit WindowId"
-- [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/architecture.md` § 2.6](../../specs/2026-05-07-buiy-foundation/architecture.md) — Buiy's committed rule
-- [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/cross-cutting.md` § 3.18](../../specs/2026-05-07-buiy-foundation/cross-cutting.md) — coexistence rules including the per-window-keyed state list
+- [`../accesskit/platform-adapters.md`](../accesskit/platform-adapters.md) — the single-occupant adapter constraint
+- [`../accesskit/lessons.md`](../accesskit/lessons.md) — "Per-window adapter ownership keyed by winit WindowId"
+- [`../../specs/2026-05-07-buiy-foundation/architecture.md` § 2.6](../../specs/2026-05-07-buiy-foundation/architecture.md) — Buiy's committed rule
+- [`../../specs/2026-05-07-buiy-foundation/cross-cutting.md` § 3.18](../../specs/2026-05-07-buiy-foundation/cross-cutting.md) — coexistence rules including the per-window-keyed state list
 
 ## Sources
 

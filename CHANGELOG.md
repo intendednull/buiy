@@ -582,12 +582,27 @@ tagged release.
   (viewport units) or a font-rendering phase adds them, the sticky
   inset resolver gains new arms (currently closed-match — compiler
   forces the addition).
-- **Both-top-and-bottom-inset sticky — "top wins" (v1 deviation).** Per
-  D4. CSS spec § 6.3 implies a dual-clamp ("sticks to whichever edge
-  the scroll position is currently closer to"); Phase 7's simpler "top
-  wins" matches WebKit/Blink in the common case. Documented test
-  `sticky_both_top_and_bottom_inset_top_wins` is the regression test;
-  flipping it documents the algorithm upgrade. Tracked in follow-ups.
+- **Both-top-and-bottom-inset sticky — dual-clamp (CSS § 6.3).**
+  Superseded the Phase 7 D4 "top wins" deviation.
+  `compute_sticky_displacement` now applies both the top line
+  `U = visible_top + top_px`
+  and the bottom line `L = (visible_bottom - bottom_px) - size`
+  simultaneously per axis: the box pins to `U` when scroll pushes its
+  natural position above it, pins to `L` when scroll pushes it below,
+  and sits at natural flow in between — honoring the bottom inset that
+  the v1 single-edge `if-top else-if-bottom` chain left unreachable. In
+  the degenerate case where the band is shorter than the box (`U > L`)
+  the top edge takes precedence (`.max(U)` re-applied after the bottom
+  `.min(L)`). Each axis still reduces to the single-edge formula when
+  only one inset is set. The v1 regression test
+  `sticky_both_top_and_bottom_inset_top_wins` was flipped to
+  `sticky_both_top_and_bottom_bottom_honored_near_scroll_end`
+  (integration) and the pure unit test to
+  `sticky_both_top_and_bottom_dual_clamp_bottom_honored`; the new
+  `sticky_both_top_and_bottom_conflict_top_precedence` unit fixture
+  locks the `U > L` top-precedence branch and
+  `sticky_both_insets_clamp_at_both_extremes` proves both edges clamp at
+  their respective scroll extremes.
 - **Sticky inside sticky — inner uses outer's natural (un-displaced)
   position.** `world_position` walks Taffy positions; an inner sticky
   inside an outer sticky resolves its threshold against the outer's

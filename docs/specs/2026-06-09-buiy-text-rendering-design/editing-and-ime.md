@@ -51,9 +51,10 @@ required by anything in this file (§ 5).
 > the placeholder, the § 11 Message taxonomy, and the
 > `buiy_widgets::TextInput` bundle. Per-section **"As landed (E_n)"** notes
 > below record the mechanical errata folded at closure. The **named deferrals**
-> (multi-range selection *behavior*, HTML/image clipboard, the BiDi split caret,
+> (multi-range selection *behavior*, HTML/image clipboard,
 > compose-over-selection) are filed in
-> [follow-ups.md](../../plans/follow-ups.md) (§ 13).
+> [follow-ups.md](../../plans/follow-ups.md) (§ 13). The **BiDi split caret**
+> secondary indicator landed as a post-E3 follow-up (§§ 4.1, 5).
 >
 > *(Superseded 2026-06-13 by the as-landed paragraph above — the
 > proposal-time record, kept for history.)* **Status: design-only (deferred
@@ -273,13 +274,20 @@ When the caret sits on a direction boundary, **both** positions are emitted
 (BiDi split caret: primary full-height + secondary indicator), resolved from
 the two candidate runs the affinity pair names. **F**
 
-> **As landed (E3): the split caret is deferred to a follow-up.** E3 paints the
-> single primary caret. cosmic-text 0.19 surfaces no dual-caret position —
-> `LayoutRun::cursor_position`/`cursor_glyph` ignore `cursor.affinity` and a
-> line is one `LayoutRun`, so the "two candidate runs" the draft assumed do not
-> exist; the secondary mark needs glyph-edge geometry (a separate slice). See
-> [follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md).
-> Zero correctness risk — the caret is always present and correct.
+> **As landed: the secondary indicator now lands (follow-up after E3).** E3
+> shipped only the primary caret; a post-E3 slice added the secondary
+> (`secondary_caret_rect_for`, caret.rs). The honest residual the draft's
+> "two candidate runs" framing got wrong: cosmic 0.19's `cursor_glyph`
+> (buffer.rs:151-174) is affinity-blind AND order-defined — it resolves
+> `index == glyph.start` BEFORE `index == glyph.end`, so its single
+> `cursor_position` only ever surfaces the AFTER (start-glyph) edge, which the
+> primary already paints. Buiy computes the SECONDARY directly as the BEFORE
+> glyph's (`end == index`) LOGICAL-END visual edge — LTR → `x + w`, RTL → `x`
+> (cosmic's own convention, buffer.rs:120-142 / `cursor_from_glyph_right`). It
+> rides `CaretVisual.secondary: Option<Rect>` and paints as a second solid
+> stamp (CPU geometry only — no new GPU). A line is one `LayoutRun`, so there
+> are no "two candidate runs"; the second position is glyph-level, not run-level.
+> See [follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md).
 
 ### § 4.2 Decision: a multi-range-shaped Buiy selection type
 
@@ -340,7 +348,16 @@ seats).** All editor visuals are existing-primitive emissions:
   does not exist — buckets.rs:9–11, 146–153), so a quad always paints under
   glyphs, and a "next layer" would misuse the `painters_z` stacking index for
   a within-node ordering concern. Split caret (§ 4.1) = a **secondary
-  `CaretVisual` rect + a second stamp** (CPU geometry only — still no GPU work).
+  `CaretVisual` rect + a second stamp** (CPU geometry only — still no GPU work);
+  *as landed (follow-up after E3): the secondary indicator NOW lands as a
+  `secondary: Option<Rect>` FIELD on `CaretVisual` (not a standalone component)
+  + a second solid-stamp instance reusing the primary's entry/color/clip/page;
+  the secondary sits at the boundary's BEFORE-glyph logical-end visual edge.
+  Why a field, not a component: the extract producer's component
+  query/`Changed` trigger/`RemovedComponents` params are all at Bevy's 15-tuple
+  cap (extract.rs § 6.1), so a 16th seat is impossible without refactoring the
+  hottest text system — the field rides `Changed<CaretVisual>` damage and
+  `RemovedComponents<CaretVisual>` clear for free.*
 - **Caret blink** is a `CaretVisual { visible, rect }` state edge written by
   render-prep ([decoration-and-paint.md § 6.3](decoration-and-paint.md)); the
   edge rebuilds `ExtractedGlyphs` through the **independent glyph damage
@@ -376,6 +393,13 @@ editor's (display) Buffer** at the caret as a metadata-marked `Attrs` span;
 each subsequent `Preedit` replaces the span; `Preedit` with empty value, or
 `Ime::Disabled`, or focus loss removes it. **F**
 
+**Addendum (landed as a follow-up after E5/E6):** the display-splice now
+**replaces an active selection** — when a composition starts over a
+non-collapsed selection, the selection is deleted first and the preedit is
+spliced at the now-collapsed caret (the platform/web replace-selection
+convention). See § 6.2 "Compose-over-selection" for the undo/`TextChanged`
+contract.
+
 **Rationale.** Web parity requires preedit to **reflow** the line: composing
 CJK mid-paragraph shifts following text and can re-wrap, and the preedit-cursor
 F row is only correct when the preedit participates in real shaping.
@@ -399,6 +423,35 @@ inserts the committed text inside a single `start_change`/`finish_change` pair
 span. The preedit underline styles the marked span (§ 5); the in-preedit cursor
 from `Preedit.cursor` (byte range into the preedit string) renders as a caret
 inside the span. **F**
+
+**Compose-over-selection (landed as a follow-up after E5/E6).** When a
+composition *starts* over a **non-collapsed selection**, the selection is
+deleted first (platform/web replace-selection convention, § 6.1). The
+selection-delete is folded into the SAME `GroupKind::Composition` unit as the
+eventual commit: `caret_before`/`selection_before` are captured **pre-delete**,
+the stashed delete `Change` is prepended to the commit-insert items, and the
+combined `Change` is recorded as ONE unit — so a single Undo restores BOTH the
+deleted text and the committed text (and the redo replays both). The stash lives
+on a dedicated `TextEditState::compose_delete` field (NOT on `PreeditSpan`, which
+derives `Eq` — `cosmic_text::Change` is not `Eq`). It is captured by running
+`delete_selection()` inside a throwaway `start_change`/`finish_change` pair at the
+FIRST splice of a composition, so invariant (a) still holds for the splice itself
+(the delete `Change` is stashed, never pushed onto the undo stack until commit).
+
+This is the **one exception** to invariant (b)'s "value reads exclude preedit /
+§ 11 never preedit": the pre-splice selection-delete IS a genuine logical value
+change (it removed user text), so it emits `TextChanged`. A **cancel** (empty
+`Preedit` / `Ime::Disabled` / `Escape`) over a stashed compose-delete
+**reverse-applies** the stash (re-inserts the deleted text, restores the
+selection) and clears it — so cancel returns the value to its pre-composition
+state and fires `TextChanged` again (the symmetric value transition). The
+unselected-caret path carries no stash and is **byte-identical** to E5: no
+delete, no extra `TextChanged`. *Approach rejected:* recording the delete
+immediately as its own Composition unit and coalescing the commit into it —
+`GroupKind::Composition` never coalesces (§ 6.2c, `undo.rs`), and the intervening
+preedit splices break caret-adjacency anyway, so it would yield two undo units or
+require weakening the never-coalesce rule. Stashing on the live composition and
+folding at commit keeps the one-unit guarantee with no rule change.
 
 ### § 6.3 Popup positioning through Bevy 0.18
 
@@ -450,11 +503,17 @@ arboard's platform matrix for no supply-chain win; arboard's transitive deps
 are the same crates. **Also rejected:** deferral — cut/copy/paste is F and
 cheap once the facade exists.
 
-**Phasing.** v1 ships plain text (`Cut`/`Copy` from `copy_selection()`, `Paste`
-through the § 3.3 newline policy). The F row names text + HTML + image MIME:
-HTML/image flavors are the named follow-up slice — arboard's HTML *read-side*
-support is **unverified** and must be confirmed before that slice is promised
-(§ 13).
+**Phasing.** v1 shipped plain text (`Cut`/`Copy` from `copy_selection()`,
+`Paste` through the § 3.3 newline policy). The follow-up slice **LANDED** the
+HTML + image flavors behind the same `ClipboardProvider` facade: `get_html`/
+`set_html` are always available (arboard `Get::html()`/`Set::html()`, verified
+not feature-gated — OQ#3 resolved); the image flavor (`get_image`/`set_image`
+over a Buiy-owned `ClipboardImage`) is behind the `buiy_core` `clipboard-image`
+cargo feature, which turns on arboard's `image-data`. `Cut`/`Copy` now set BOTH
+the plain-text flavor and an escaped-html flavor (a plain-text editor has no
+rich runs, so its html is just the escaped text); **`Paste` is unchanged** — it
+takes the § 3.3 text path and never consults the html getter (the getter is for
+rich-content callers). MemClipboard carries all three slots for headless tests.
 
 ---
 
@@ -624,21 +683,39 @@ headless — synthetic `KeyboardInput` / `Ime` Messages need no winit window:
 single-range selection behavior on the multi-range type; caret + selection +
 preedit painting via the decoration-and-paint seats (selection + preedit
 underline = quads via `ExtractedTextQuads`; caret = glyph-tier stamp; BiDi
-multi-rects; split caret = two stamps); full IME
+multi-rects); full IME
 lifecycle (§ 6); grapheme-correct delete (inherited); plain-text
 cut/copy/paste; `UndoStack` with composition grouping + typing coalescing;
 `ReadOnly`/`Disabled`/`Placeholder`/`SingleLine`; caret blink with
 reduced-motion; auto-scroll via `ScrollOffset`; the § 11 taxonomy; the
 `TextInput` bundle.
 
+**Landed as a follow-up after E3:** the **BiDi split caret** secondary indicator
+(§§ 4.1, 5) — `secondary_caret_rect_for` (the before-glyph logical-end edge) on
+`CaretVisual.secondary: Option<Rect>` + a second solid stamp. No residual:
+the secondary now paints at every LTR↔RTL direction boundary, INCLUDING one on a
+soft-wrapped continuation segment — `secondary_caret_rect_for` mirrors the
+primary's all-runs scan over the multiple `LayoutRun`s a wrapped logical line
+emits (continue past a non-owning wrap run; only conclude `None` after the last),
+rather than inspecting just the first `line_i`-matching run.
+
+**Landed as a follow-up after E5/E6:** **compose-over-selection** (§§ 6.1, 6.2).
+As built: when a composition starts over a non-collapsed selection the selection
+is deleted first (replace-selection convention, § 6.1), and the
+selection-delete is folded into the SAME `GroupKind::Composition` undo unit as
+the commit (`caret_before`/`selection_before` captured pre-delete) — one undo
+restores BOTH the deleted text and the committed text, one redo replays both.
+`TextChanged` fires on the delete (a genuine value change — the documented one
+exception to "never preedit") and again on a cancel-restore (empty `Preedit` /
+`Ime::Disabled` / `Escape` reverse-applies the stashed delete). The plain-text
+unselected-caret path is byte-identical to E5 (no delete, no extra
+`TextChanged`). Implemented in `text/edit/ime.rs` + `state.rs`
+(`compose_delete` stash); tested in `text_ime_ops.rs` + `text_ime_system.rs`.
+
 **Deferred within F (named, next slice, not dropped):** multi-range selection
-*behavior* (§ 4.2); HTML + image clipboard flavors (§ 7); the **BiDi split
-caret** secondary indicator (§§ 4.1, 5 — cosmic 0.19 has no dual-caret API;
-needs glyph-edge geometry; E3 ships the single primary caret —
-[follow-ups.md § Text editing — BiDi split caret](../../plans/follow-ups.md));
-**compose-over-selection** (§§ 6.1, 6.2 — E5 splices the preedit at the caret
-and does not replace an active selection first;
-[follow-ups.md § Text editing — compose-over-selection](../../plans/follow-ups.md)).
+*behavior* (§ 4.2).
+**Landed within F:** HTML + image clipboard flavors (§ 7) — image behind the
+`clipboard-image` cargo feature.
 **Out (E-tier):** rich-text edit surface, document virtualization.
 
 ---
@@ -647,8 +724,8 @@ and does not replace an active selection first;
 
 1. **Frame-ordering for edit→layout — RESOLVED (accepted one-frame latency).**
    `BuiySet` chains Layout → Style → Input → … → Render
-   (`crates/buiy_core/src/lib.rs:64-95`), and `TextSync` / `TextCommit` live
-   *inside* Layout (`pipeline.rs:80-101`). Editor input lands in `BuiySet::Input`,
+   (`BuiySet` in `crates/buiy_core/src/lib.rs`), and `TextSync` / `TextCommit`
+   live *inside* Layout (`pipeline.rs`). Editor input lands in `BuiySet::Input`,
    two sets **after** Layout, so a keystroke mutates the Buffer after this frame's
    layout already ran; the change is picked up by **next-frame** `TextSync` and
    flows TextSync → measure → TextCommit → `extract_buiy_glyphs`, publishing one
@@ -680,8 +757,11 @@ and does not replace an active selection first;
    `Send + Sync`; `Motion` has 22 variants. The `docs/prior-art/cosmic-text/`
    folder should receive a correction note (outside this spec folder's write
    scope), and sibling files citing those claims must re-verify.
-3. **arboard HTML read-side** is unverified (§ 7) — confirm before scheduling
-   the HTML-clipboard slice.
+3. **arboard HTML read-side** — **RESOLVED.** arboard 3.6.1 `Get::html()` is on
+   the cross-platform `Get` builder and is **not** feature-gated; `Set::html()`
+   likewise. Image (`get_image`/`set_image`, `ImageData`) is gated behind
+   arboard's `image-data` feature, which the `buiy_core` `clipboard-image`
+   feature turns on. HTML + image flavors landed on the facade (§ 7).
 4. **Shared-accessor type for the editor-owned Buffer** (§ 2.2a): the concrete
    QueryData shape is pinned by [measure-and-layout.md](measure-and-layout.md);
    if that file lands a Buffer-as-separate-component model incompatible with

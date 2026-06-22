@@ -99,7 +99,7 @@ No published WCAG 2.2 conformance audit exists for bevy_egui (or for egui upstre
 - **WCAG 4.1.2 Name, Role, Value** — partial via AccessKit; depends on the role mapping completeness.
 - **WCAG 4.1.3 Status Messages** — live-region semantics are awkward in immediate-mode (see § "Accessibility").
 
-Buiy commits to WCAG 2.2 AA per-widget mapping in [`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/accessibility.md`](../../specs/2026-05-07-buiy-foundation/); bevy_egui has no comparable artifact.
+Buiy commits to WCAG 2.2 AA per-widget mapping in [`../../specs/2026-05-07-buiy-foundation/`](../../specs/2026-05-07-buiy-foundation/); bevy_egui has no comparable artifact.
 
 ## Animation / transition primitives are weak
 
@@ -131,7 +131,7 @@ For dev tools and debug overlays this simplicity is a feature — egui-the-parad
 
 Aggregating the above: bevy_egui's strengths (immediate-mode ergonomics, fast iteration, low API surface) cluster on the **developer-facing UI** axis. Its weaknesses (styling rigidity, a11y rough edges, layout simplicity, animation gaps, performance at scale, no flagship game using it) cluster on the **player-facing production UI** axis. The community has internalized this: bevy_egui dominates as a dev-tool substrate (bevy-inspector-egui, editor experiments, debug overlays) and remains rare as a shipped-game-UI substrate.
 
-For Buiy this informs scope: Buiy's "Game and app, both" goal ([`/home/user/buiy/docs/specs/2026-05-07-buiy-foundation/README.md`](../../specs/2026-05-07-buiy-foundation/README.md) goal 6) explicitly targets the production-UI axis that bevy_egui struggles with. See [`comparisons.md`](comparisons.md) § "vs Buiy" and [`open-problems.md`](open-problems.md) § "The production game UI gap."
+For Buiy this informs scope: Buiy's "Game and app, both" goal ([`../../specs/2026-05-07-buiy-foundation/README.md`](../../specs/2026-05-07-buiy-foundation/README.md) goal 6) explicitly targets the production-UI axis that bevy_egui struggles with. See [`comparisons.md`](comparisons.md) § "vs Buiy" and [`open-problems.md`](open-problems.md) § "The production game UI gap."
 
 ## Sources
 

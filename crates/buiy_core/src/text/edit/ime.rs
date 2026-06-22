@@ -22,7 +22,7 @@ use cosmic_text::{Action, Attrs, AttrsList, BufferLine, Cursor, Edit, FontSystem
 
 use super::caret::caret_rect_for;
 use super::input::TextChanged;
-use super::state::{Disabled, ReadOnly, TextEditState};
+use super::state::{ComposeDelete, Disabled, ReadOnly, TextEditState};
 use super::undo::{GroupKind, UndoUnit};
 use crate::FocusedEntity;
 use crate::layout::LayoutTree;
@@ -101,16 +101,36 @@ impl TextEditState {
     /// the last. Records the new `PreeditSpan` (with the in-preedit
     /// `cursor`). Reshape is deferred (the line's caches reset; the caller
     /// dirty-marks for next-frame measure).
+    ///
+    /// **Compose-over-selection (§ 6.2).** On the FIRST splice of a composition
+    /// (`self.preedit.is_none()`), if a non-collapsed selection is active it is
+    /// DELETED first (replace-selection convention) and the reversible delete is
+    /// STASHED on `self.compose_delete` — folded into the commit's Composition
+    /// unit, or reverse-applied on cancel. Returns `true` iff that delete ran,
+    /// so the caller can flag the logical value change (the one exception to "no
+    /// `TextChanged` on preedit" — the delete removed user text). The
+    /// unselected-caret path takes no branch and returns `false` (byte-identical
+    /// to the plain-text IME path). The boolean is consumed at the system seam
+    /// (`apply_ime`); direct unit-test callers may ignore it.
     pub fn splice_preedit(
         &mut self,
         font_system: &mut FontSystem,
         value: &str,
         cursor: Option<(usize, usize)>,
-    ) {
+    ) -> bool {
         let _ = font_system; // splice needs no FontSystem (reshape is deferred)
+        // First splice over a non-collapsed selection: delete it (and stash the
+        // reversible delete) before splicing at the now-collapsed caret. Guarded
+        // on `preedit.is_none()` so replace-splices never re-enter (by
+        // construction a live composition has no selection).
+        let deleted_selection = if self.preedit.is_none() && !value.is_empty() {
+            self.take_compose_delete_if_selected()
+        } else {
+            false
+        };
         self.remove_preedit_inner();
         if value.is_empty() {
-            return; // an empty preedit is a removal, not a splice
+            return false; // an empty preedit is a removal, not a splice
         }
         let caret = self.editor.cursor();
         let line = caret.line;
@@ -127,14 +147,70 @@ impl TextEditState {
             len,
             cursor,
         });
+        deleted_selection
+    }
+
+    /// If a non-collapsed selection is active, delete it and STASH the
+    /// reversible delete on `self.compose_delete` (capturing the pre-delete
+    /// caret + selection). Returns `true` iff a delete ran. Captures the delete
+    /// as a real cosmic `Change` (a throwaway `start_change`/`finish_change`
+    /// pair drives `delete_selection`'s recording) but does NOT touch the undo
+    /// stack — the stash is folded into the commit's Composition unit (Task 3)
+    /// or reverse-applied on cancel (Task 5). No-op when nothing is selected.
+    fn take_compose_delete_if_selected(&mut self) -> bool {
+        if self.mirror_selection().is_collapsed() {
+            return false;
+        }
+        let caret_before = self.editor.cursor();
+        let selection_before = self.mirror_selection();
+        self.editor.start_change();
+        let deleted = self.editor.delete_selection();
+        let change = self.editor.finish_change().unwrap_or_default();
+        if !deleted || change.items.is_empty() {
+            // Defensive: a selection that produced no delete leaves no stash.
+            return false;
+        }
+        self.compose_delete = Some(ComposeDelete {
+            change,
+            caret_before,
+            selection_before,
+        });
+        true
     }
 
     /// Remove the live preedit span (invariant d) — DIRECT surgery, NO
     /// `Change`. Restores the editor cursor to the span start. No-op if
     /// nothing is composing.
-    pub fn remove_preedit(&mut self, font_system: &mut FontSystem) {
+    ///
+    /// **Compose-over-selection cancel (§ 6.2).** If a pending
+    /// `compose_delete` stash exists, this is a CANCEL of a composition that
+    /// replaced a selection: reverse-apply the stash (re-insert the deleted
+    /// text, restore the pre-delete selection) so the value returns to its
+    /// pre-composition state, then clear the stash. Returns `true` iff that
+    /// reverse-apply ran (a genuine value change → the caller fires
+    /// `TextChanged`). The unselected-caret path carries no stash and returns
+    /// `false` (byte-identical to E5). The boolean is consumed at the system
+    /// seam / keyboard Escape; direct unit-test callers may ignore it.
+    pub fn remove_preedit(&mut self, font_system: &mut FontSystem) -> bool {
         let _ = font_system;
         self.remove_preedit_inner();
+        self.restore_compose_delete()
+    }
+
+    /// Reverse-apply a pending compose-over-selection delete (cancel path): the
+    /// stashed delete `Change` reversed re-inserts the deleted text; the
+    /// pre-delete caret + selection are restored. Clears the stash. Returns
+    /// `true` iff a stash was present (the value changed back). Shared by the
+    /// `remove_preedit` cancel and the keyboard Escape cancel (input.rs).
+    pub(crate) fn restore_compose_delete(&mut self) -> bool {
+        let Some(stash) = self.compose_delete.take() else {
+            return false;
+        };
+        let mut reversed = stash.change;
+        reversed.reverse();
+        self.editor.apply_change(&reversed);
+        self.restore_cursor(stash.caret_before, stash.selection_before);
+        true
     }
 
     /// Internal: delete the recorded span's bytes from its line via direct
@@ -246,18 +322,46 @@ impl TextEditState {
     /// coalescing run first so the commit is never folded into prior typing.
     pub fn commit_preedit(&mut self, font_system: &mut FontSystem, value: &str, now: Duration) {
         self.remove_preedit_inner();
+        // A pending compose-over-selection delete (§ 6.2) is FOLDED into this
+        // commit's Composition unit (NOT reverse-applied — the selection stays
+        // deleted, replaced by the committed text). Take it now; its pre-delete
+        // caret/selection become the unit's `_before` so one undo reverses both.
+        let stash = self.compose_delete.take();
         if value.is_empty() {
+            // Commit of an empty string over a deleted selection: the delete
+            // still stands as its own one-step undo (the selection IS gone).
+            // Record it as the Composition unit so a single undo restores it.
+            if let Some(stash) = stash {
+                self.record_compose_delete_only(stash, now);
+            }
             return;
         }
         self.undo.seal();
-        let caret_before = self.editor.cursor();
-        let selection_before = self.mirror_selection();
+        // `_before` is the PRE-DELETE state when a selection was replaced, else
+        // the live caret (the plain-commit path — byte-identical to E5).
+        let caret_before = stash
+            .as_ref()
+            .map(|s| s.caret_before)
+            .unwrap_or_else(|| self.editor.cursor());
+        let selection_before = stash
+            .as_ref()
+            .map(|s| s.selection_before.clone())
+            .unwrap_or_else(|| self.mirror_selection());
 
         self.editor.start_change();
         for ch in value.chars() {
             self.editor.action(font_system, Action::Insert(ch));
         }
-        let change = self.editor.finish_change().unwrap_or_default();
+        let mut change = self.editor.finish_change().unwrap_or_default();
+
+        // Fold the stashed delete items BEFORE the commit-insert items, so the
+        // combined `Change` replays forward as delete-then-insert and its
+        // `reverse()` replays un-insert-then-un-delete (one undo restores both).
+        if let Some(stash) = stash {
+            let mut items = stash.change.items;
+            items.append(&mut change.items);
+            change.items = items;
+        }
 
         let caret_after = self.editor.cursor();
         let selection_after = self.mirror_selection();
@@ -267,6 +371,27 @@ impl TextEditState {
                 caret_before,
                 caret_after,
                 selection_before,
+                selection_after,
+                group: GroupKind::Composition,
+            },
+            now,
+        );
+    }
+
+    /// Record a stashed compose-over-selection delete as a standalone
+    /// `Composition` undo unit (the empty-commit-over-selection corner: the
+    /// committed string is empty but the selection IS gone, so the delete must
+    /// remain one undoable step). `_after` is the post-delete state.
+    fn record_compose_delete_only(&mut self, stash: ComposeDelete, now: Duration) {
+        self.undo.seal();
+        let caret_after = self.editor.cursor();
+        let selection_after = self.mirror_selection();
+        self.undo.record_grouped(
+            UndoUnit {
+                change: stash.change,
+                caret_before: stash.caret_before,
+                caret_after,
+                selection_before: stash.selection_before,
                 selection_after,
                 group: GroupKind::Composition,
             },
@@ -349,13 +474,18 @@ pub fn apply_ime(
                 if value.is_empty() {
                     // Cancel: remove the span (invariant d). End if one was active.
                     if state.has_preedit() {
-                        state.remove_preedit(&mut font_system);
+                        // A compose-over-selection cancel reverse-applies the
+                        // stashed delete (value returns to original → TextChanged).
+                        value_changed |= state.remove_preedit(&mut font_system);
                         end.write(CompositionEnd(entity, String::new()));
                         span_changed = true;
                     }
                 } else {
                     let was_composing = state.has_preedit();
-                    state.splice_preedit(&mut font_system, &value, cursor);
+                    // The first splice over a selection deletes it (a genuine
+                    // value change → TextChanged); the unselected path returns
+                    // false (no TextChanged on a plain preedit — § 11).
+                    value_changed |= state.splice_preedit(&mut font_system, &value, cursor);
                     if was_composing {
                         update.write(CompositionUpdate(entity, value));
                     } else {
@@ -372,7 +502,9 @@ pub fn apply_ime(
             }
             Ime::Disabled { .. } => {
                 if state.has_preedit() {
-                    state.remove_preedit(&mut font_system);
+                    // Disabled mid-composition is a cancel: reverse-apply any
+                    // compose-over-selection delete (value returns → TextChanged).
+                    value_changed |= state.remove_preedit(&mut font_system);
                     end.write(CompositionEnd(entity, String::new()));
                     span_changed = true;
                 }
