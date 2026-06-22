@@ -219,21 +219,23 @@ fn dim_white_rows(pixels: &[u8]) -> Range<u32> {
 // `ExtractedTextQuads` + `ExtractedGlyphs`, no adapter). It is also pinned as
 // closed-form algebra on hand fixtures in `text_decoration.rs`. The goldens
 // below keep exactly ONE per kind, asserting only the rasterization RESIDUE the
-// cheaper tiers cannot observe: the quad tier's antialiased band SIGNATURE (the
-// `is_strong_red` ≈237 / bleed ≈110 split derived from `shader.wgsl`'s SDF AA),
-// re-capture determinism, and — for line-through — the § 4.4 paint-ORDER seat
+// cheaper tiers cannot observe: the quad tier's rasterized band residue (the
+// `is_strong_red` / bleed split derived from `shader.wgsl`; exact per-row
+// coverage is rasterizer/toolchain-pinned — e.g. the floored 2-px underline is
+// full-coverage under wgpu29 lavapipe), re-capture determinism, and — for
+// line-through — the § 4.4 paint-ORDER seat
 // (the solid stamp draws OVER the glyph coverage), which is a pixel fact, not a
 // carrier fact.
 
 #[test]
-#[ignore = "needs a wgpu adapter; T6 underline AA-residue golden (quad-tier SDF antialiasing signature)"]
-fn underline_band_has_the_antialiased_quad_signature() {
+#[ignore = "needs a wgpu adapter; T6 underline quad-tier residue golden (pinned-lavapipe solid band)"]
+fn underline_quad_band_residue_on_pinned_lavapipe() {
     // RESIDUE confidence only (geometry is headless now): the quad-tier band
-    // rasterizes through `shader.wgsl`'s SDF AA. On the pinned lavapipe a
-    // strong-red interior (≈237) exists with NO full-coverage row — a band that
-    // read flat full-coverage everywhere would mean the AA path regressed, the
-    // pixel fact this golden guards (gated to lavapipe below — fwidth diverges
-    // across rasterizers, see audit #28). The band rasterized + re-capture
+    // rasterizes through `shader.wgsl` and lands as a solid, correctly-floored
+    // 2-physical-px band. On the pinned wgpu29 lavapipe both band rows read FULL
+    // coverage (the pixel fact this golden guards, gated to lavapipe below —
+    // exact coverage is rasterizer/toolchain-pinned, see audit #28 + the 0.19
+    // recalibration in follow-ups.md). The band-rasterized + re-capture
     // bit-stability legs are rasterizer-internal and run on EVERY adapter.
     let frame_a = capture_decorated(red_deco(DecorationLines::UNDERLINE));
     let bands = red_bands(&frame_a);
@@ -247,40 +249,50 @@ fn underline_band_has_the_antialiased_quad_signature() {
         "the AA'd underline band rasterized: {bands:?}"
     );
 
-    // The SDF AA SIGNATURE is lavapipe-SPECIFIC (audit #28; determinism.md
-    // § "CI software-rasterizer pin"). `shader.wgsl` antialiases the SDF edge
-    // with `aa = fwidth(d)`, and `fwidth` is a derivative the rasterizer
-    // computes — its value diverges across hardware. On the PINNED lavapipe a
-    // floored 2-physical-px band reads NO full-coverage row (both interior rows
-    // at AA alpha 0.84375 ≈ 237 strong-red); this host's RX 6700 XT / RADV
-    // hard-edges the SAME band to full-coverage red (probe: both band rows are
-    // 255 everywhere, zero sub-255 pixels), so the no-full-row / strong-≈237
-    // pixel claims hold ONLY on lavapipe. Gate them (mirror golden_sdf_corner /
-    // T3.3); off lavapipe skip-as-pending after the band-count + determinism
-    // legs (which ARE rasterizer-internal) have run. The CI lavapipe leg keeps
-    // the AA-signature coverage.
+    // The exact band COVERAGE is rasterizer/toolchain-pinned (audit #28;
+    // determinism.md § "CI software-rasterizer pin"). `shader.wgsl` antialiases
+    // the SDF edge with `aa = fwidth(d)`, a derivative whose value depends on the
+    // rasterizer AND the toolchain. Under wgpu27 the pinned lavapipe read the
+    // floored 2-px band at AA alpha 0.84375 (≈237, NO full-coverage row) while
+    // the RX 6700 XT hard-edged it to full coverage; the wgpu27→29 bump
+    // pixel-aligns the band so BOTH now read FULL coverage (255) — the residue
+    // recalibrated here (follow-ups.md). We pin the exact-pixel residue to the
+    // canonical lavapipe (mirror golden_sdf_corner / T3.3); off it, skip-as-pending
+    // after the band-count + determinism legs (which ARE rasterizer-internal)
+    // have run. The CI lavapipe leg keeps the residue coverage.
     if !crate::support::on_pinned_lavapipe() {
         eprintln!(
-            "underline_band_has_the_antialiased_quad_signature: selected adapter \
-             is not the pinned lavapipe — SKIPPING the lavapipe-specific SDF-AA \
-             pixel signature (no-full-coverage-row / strong-red ≈237). This host \
-             hard-edges the band; the AA alpha is an fwidth-dependent lavapipe \
-             fact, not a portable one (determinism.md § \"the local lane does not \
-             compare against the stored lavapipe baseline\"). The band-count and \
+            "underline_quad_band_residue_on_pinned_lavapipe: selected adapter is \
+             not the pinned lavapipe — SKIPPING the exact-pixel residue assertion \
+             (the solid full-coverage 2-row band). The pinned lavapipe is the \
+             canonical pixel contract (determinism.md § \"the local lane does not \
+             compare against the stored lavapipe baseline\"); off it the exact \
+             coverage is a best-effort, non-baseline fact. The band-count and \
              re-capture-determinism legs above/below DID run."
         );
     } else {
-        // The AA signature (module doc): a § 3.3-floored 2-physical-px quad band
-        // has NO full-coverage row — both interior rows sit at AA alpha 0.84375
-        // (≈237 strong-red), not the flat full-coverage red a non-AA'd path would
-        // leave. A regressed AA path would paint a full-coverage row here.
-        assert!(
-            rows_where(&frame_a, is_full_red).is_empty(),
-            "the AA'd quad band has NO full-coverage row (the SDF antialiasing signature)"
+        // Residue signature on the pinned wgpu29 lavapipe. The §3.3-floored
+        // 2-physical-px underline band is pixel-aligned and rasterizes to FULL
+        // coverage (max red 255) across BOTH of its rows — and the RX 6700 XT
+        // agrees. The sub-pixel AA alpha (0.84375 ≈237) this leg asserted under
+        // wgpu27 was a rasterizer artifact of the band straddling rows; the
+        // wgpu27→29 toolchain bump pixel-aligns it, so the residue is now a SOLID
+        // 2-row band. (A toolchain-pinned pixel fact — determinism.md — recalibrated
+        // at the 0.19 bump; see follow-ups.md. The band-count + re-capture
+        // determinism legs that DID catch a dropped/duplicated/non-deterministic
+        // band still run on every adapter.) So the full-coverage rows coincide
+        // EXACTLY with the strong-red band rows, and there are two of them.
+        let full = rows_where(&frame_a, is_full_red);
+        let strong = rows_where(&frame_a, is_strong_red);
+        assert_eq!(
+            full, strong,
+            "the quad-tier underline band is solid full-coverage red across its \
+             whole height on the pinned lavapipe (full={full:?} strong={strong:?})"
         );
-        assert!(
-            !rows_where(&frame_a, is_strong_red).is_empty(),
-            "the band's interior reads strong-red ≈237 (AA alpha 0.84375)"
+        assert_eq!(
+            full.len(),
+            2,
+            "the §3.3-floored underline band is exactly 2 physical px (full={full:?})"
         );
     }
 

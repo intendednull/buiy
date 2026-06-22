@@ -1,0 +1,38 @@
+# Reclaim ~25 GB of preinstalled-but-unused SDKs/toolchains from the GitHub-hosted
+# ubuntu runner before the rust-cache restore and the heavy bevy compiles/links.
+#
+# Why this exists as a shared action: the bevy workspace's debug target dir plus
+# the growing set of test binaries crossed the ~14 GB free-disk ceiling, and a
+# full disk surfaces as `ld ... signal 7 [Bus error] core dumped` / "No space
+# left on device" mid-link — not a code failure. Both the `test` and `gpu` jobs
+# need the same reclamation; this composite is the single source of truth so the
+# two callers can't drift (they previously did).
+#
+# Must run BEFORE the rust-cache restore so the cache lands on the freed volume,
+# and before any compile. Linux-only (apt/runner paths); callers gate it with
+# `if: runner.os == 'Linux'` / `matrix.os == 'ubuntu-latest'`.
+
+name: free-disk-space
+description: >-
+  Remove preinstalled SDKs/toolchains the Rust CI never uses, to fit the bevy
+  workspace's target dir + large test-binary links on the hosted runner.
+
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: |
+        # `|| true`: reclamation is best-effort — a path that a future runner
+        # image drops must not fail the job (rm -rf already no-ops on missing
+        # paths; the guard also covers the docker prune).
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /usr/local/share/boost \
+          /usr/lib/jvm \
+          /opt/hostedtoolcache/CodeQL \
+          "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+        sudo docker image prune --all --force > /dev/null 2>&1 || true
+        df -h /

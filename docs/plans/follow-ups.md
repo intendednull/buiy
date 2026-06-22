@@ -1579,3 +1579,26 @@ follow-up cleanups.
   (e.g. `tests/render_instance.rs`). insta matches by snapshot name + module path
   (not the header), and the bodies are correct (they took main's affine-blessed
   form), so the suite is green. Regenerate to refresh the headers.
+
+## 0.19 lavapipe pixel-residue recalibration (LANDED) — re-verify at the next toolchain bump
+
+The wgpu27→29 (Bevy 0.18→0.19) bump shifted one lavapipe pixel-residue fact the
+GPU lane pins: the floored 2-physical-px **underline** band
+(`text_decoration_gpu::underline_quad_band_residue_on_pinned_lavapipe`, was
+`..._has_the_antialiased_quad_signature`). Under wgpu27 the pinned lavapipe read
+it at AA alpha 0.84375 (≈237, no full-coverage row); wgpu29 pixel-aligns the 2px
+band so both rows read FULL coverage (255) — confirmed against the pinned Mesa
+24.3.4 lavapipe (the same artifact CI uses). The assertion was recalibrated to the
+solid 2-row residue. **NOT a regression** — the band rasterizes correctly (2px,
+solid red, deterministic; the band-count + re-capture-determinism legs are
+unchanged). The other lavapipe-pinned residues did NOT drift: `golden_sdf_corner`
+and the blessed coverage cells (rect-rounded, text-ahem) still pass EXACT on
+wgpu29 lavapipe (the full 83-test GPU lane is green on the pinned rasterizer).
+
+**Forward-looking:** lavapipe pixel residues are rasterizer+toolchain-pinned
+(determinism.md). At the NEXT wgpu/Mesa bump, re-run the full `--profile gpu` lane
+on the pinned lavapipe and recalibrate/re-bless whatever shifts. A dev host can
+reproduce the canonical rasterizer USER-SPACE (no sudo): download the
+`install-mesa`-pinned Mesa tarball + a matching `libLLVM`/`libxml2`/`icu` (e.g.
+from the Arch archive) onto `LD_LIBRARY_PATH`, write an ICD JSON pointing at
+`libvulkan_lvp.so`, and set `VK_DRIVER_FILES` + `WGPU_ADAPTER_NAME=llvmpipe`.

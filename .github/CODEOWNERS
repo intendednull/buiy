@@ -1,0 +1,20 @@
+# Code owners for Buiy. Review routing for GitHub's "Require review from Code
+# Owners" branch-protection rule — enabled in tandem with the ruleset on `main`
+# (see docs/plans/2026-06-21-ci-hardening.md). Until then this file is advisory.
+#
+# Single maintainer today; the explicit supply-chain / CI entries below exist so
+# that those high-blast-radius files always surface to an owner even after more
+# contributors join.
+
+# Default owner for everything in the repo.
+*                       @intendednull
+
+# CI, build, and supply-chain configuration — changes here can alter what runs
+# in every job or what dependencies/licenses are admitted.
+/.github/               @intendednull
+/deny.toml              @intendednull
+/Cargo.toml             @intendednull
+/Cargo.lock             @intendednull
+/rust-toolchain.toml    @intendednull
+/clippy.toml            @intendednull
+/rustfmt.toml           @intendednull

@@ -45,63 +45,40 @@ inputs:
       release that actually hosts `mesa-<version>-linux-x86_64.tar.xz`.
     required: false
     default: "build20"
-  mesa-sha256:
+  sha256:
     description: >-
-      Expected SHA-256 of the downloaded lavapipe tarball, verified before
-      extraction. This is the SUPPLY-CHAIN durability guard (audit finding #30):
-      GitHub release assets are NOT guaranteed immutable — a maintainer (or a
-      compromised account) can delete and re-upload an asset under the same
-      published tag, and a tag ref can be force-moved. Pinning the exact digest
-      is the durable guard: a compromised/replaced asset, a CDN MITM, or a
-      truncated download is caught here instead of producing wrong goldens.
-      Default is the digest of
-      `mesa-24.3.4-linux-x86_64.tar.xz` under `build20`. When bumping
-      `mesa-version`/`ci-build-tag`, repin via:
-        curl -fsSL <tarball-url> | sha256sum
-      and update this default in the SAME PR that regenerates affected goldens.
+      Expected SHA-256 of `mesa-<mesa-version>-linux-x86_64.tar.xz`, verified
+      before extraction. A pinned VERSION is not a pinned ARTIFACT — GitHub
+      release assets are mutable, so a compromised gfx-rs account could swap the
+      .so we load as VK_DRIVER_FILES behind the same tag. Bump this digest in the
+      SAME PR that bumps mesa-version/ci-build-tag (re-download the asset and
+      record `sha256sum mesa-<ver>-linux-x86_64.tar.xz`).
     required: false
+    # mesa-24.3.4-linux-x86_64.tar.xz @ gfx-rs/ci-build build20.
     default: "8e6b565703f856c8aaf654cee18ade38fcb8c032b2d7dd609a9df6411e5aed0d"
 
 runs:
   using: composite
   steps:
     # 1. Fetch the prebuilt, version-pinned lavapipe tarball from gfx-rs/ci-build
-    #    (the same artifact wgpu's CI consumes — no self-build). The tarball
-    #    carries libvulkan_lvp.so + the loader libs under ./lib.
-    - name: Download pinned Mesa lavapipe
+    #    (the same artifact wgpu's CI consumes — no self-build), VERIFY its
+    #    SHA-256 against the pinned digest, then extract. The tarball carries
+    #    libvulkan_lvp.so + the loader libs under ./lib; we load that .so as the
+    #    Vulkan ICD, so the checksum gate is what makes "pinned version" into
+    #    "pinned artifact" against release-asset tampering.
+    - name: Download and verify pinned Mesa lavapipe
       shell: bash
       run: |
         set -euo pipefail
         MESA_VERSION="${{ inputs.mesa-version }}"
         CI_BUILD_TAG="${{ inputs.ci-build-tag }}"
+        EXPECTED_SHA256="${{ inputs.sha256 }}"
         echo "Installing pinned Mesa lavapipe ${MESA_VERSION} (ci-build ${CI_BUILD_TAG})"
         curl -fsSL \
           "https://github.com/gfx-rs/ci-build/releases/download/${CI_BUILD_TAG}/mesa-${MESA_VERSION}-linux-x86_64.tar.xz" \
           -o "${RUNNER_TEMP}/mesa.tar.xz"
-
-    # 1b. Integrity-check the downloaded tarball against the pinned SHA-256
-    #     BEFORE extracting it (audit finding #30 — supply-chain durability).
-    #     GitHub release assets are NOT guaranteed immutable (an asset can be
-    #     replaced under a published tag), so this digest is the durable pin: a
-    #     replaced asset, MITM, or truncated download fails here instead of
-    #     silently producing wrong goldens. If `mesa-sha256` is empty (e.g. a
-    #     deliberate no-pin bump), the check is skipped with a warning.
-    - name: Verify Mesa tarball integrity
-      shell: bash
-      run: |
-        set -euo pipefail
-        EXPECTED="${{ inputs.mesa-sha256 }}"
-        if [ -z "${EXPECTED}" ]; then
-          echo "::warning::mesa-sha256 is empty — skipping integrity check. Repin via: curl -fsSL <tarball-url> | sha256sum"
-          exit 0
-        fi
-        echo "${EXPECTED}  ${RUNNER_TEMP}/mesa.tar.xz" | sha256sum -c -
-
-    # 1c. Extract the verified tarball.
-    - name: Extract pinned Mesa lavapipe
-      shell: bash
-      run: |
-        set -euo pipefail
+        echo "${EXPECTED_SHA256}  ${RUNNER_TEMP}/mesa.tar.xz" | sha256sum -c - \
+          || { echo "::error::Mesa tarball SHA-256 mismatch — refusing to extract. Expected ${EXPECTED_SHA256}; got $(sha256sum "${RUNNER_TEMP}/mesa.tar.xz" | cut -d' ' -f1). If the bump is intentional, update the install-mesa 'sha256' input in the same PR."; exit 1; }
         mkdir -p "${RUNNER_TEMP}/mesa"
         tar -xf "${RUNNER_TEMP}/mesa.tar.xz" -C "${RUNNER_TEMP}/mesa"
 

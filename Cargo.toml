@@ -34,12 +34,13 @@ version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/intendednull/buiy"
-# Real, CI-verified MSRV (the `msrv` job in ci.yml pins this toolchain and runs
-# `cargo check --workspace --locked`). 1.85 was the previously-declared-but-
-# unenforced floor; the true floor of the resolved (locked) dependency graph is
-# 1.89 (audit finding #16, DG-1). Cargo's convention here is major.minor; the
-# CI job pins the exact patch `1.89.0`. Bump deliberately when a dep raises it.
-rust-version = "1.89"
+# Real floor, CI-verified by the `msrv` job. bevy 0.19 / bevy_ecs declare
+# rust-version 1.95, which dominates the dep graph (the next-highest are
+# bevy_math/bevy_input_focus 1.94, cosmic-text/smol_str 1.89, image 1.88). The
+# prior `1.85` was stale — it predated the bevy 0.18→0.19 bump and was never
+# enforced. Bump deliberately when the `msrv` CI job goes red on a dep raising
+# the floor.
+rust-version = "1.95"
 
 [workspace.dependencies]
 # Phase 0 keeps the workspace dep set minimal: only crates that have a
