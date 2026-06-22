@@ -97,3 +97,23 @@ fn focusable_view_has_focus_action() {
     let node = to_accesskit_node(&non_focusable);
     assert!(!node.supports_action(accesskit::Action::Focus));
 }
+
+#[test]
+fn entity_for_node_id_inverts_node_id_for() {
+    use buiy_core::a11y::translate::{entity_for_node_id, node_id_for};
+    let e = Entity::from_raw_u32(42).unwrap();
+    assert_eq!(entity_for_node_id(node_id_for(e)), Some(e));
+}
+
+#[test]
+fn entity_for_node_id_maps_root_to_none() {
+    use buiy_core::a11y::translate::{entity_for_node_id, ROOT_NODE_ID};
+    assert_eq!(entity_for_node_id(ROOT_NODE_ID), None);
+}
+
+#[test]
+fn entity_for_node_id_rejects_foreign_id() {
+    use buiy_core::a11y::translate::entity_for_node_id;
+    // NodeId(1) -> id.0 - 1 == 0, which is not a valid Entity::to_bits encoding.
+    assert_eq!(entity_for_node_id(accesskit::NodeId(1)), None);
+}

@@ -20,6 +20,19 @@ pub fn node_id_for(entity: Entity) -> NodeId {
     NodeId(entity.to_bits().saturating_add(1))
 }
 
+/// Inverse of [`node_id_for`]: recover the [`Entity`] an inbound [`NodeId`]
+/// addresses. Total and panic-free — built to resolve ids that arrive from
+/// outside (AccessKit action callbacks, agents), which may not be valid:
+/// `NodeId(0)` / [`ROOT_NODE_ID`] (the synthetic root) and any id whose
+/// `id.0 - 1` is not a valid [`Entity::to_bits`] encoding both map to `None`.
+/// A well-formed id produced by [`node_id_for`] (`entity.to_bits() + 1`) round-trips.
+pub fn entity_for_node_id(id: NodeId) -> Option<Entity> {
+    if id == ROOT_NODE_ID {
+        return None;
+    }
+    Entity::try_from_bits(id.0 - 1)
+}
+
 /// Translate one [`A11yNodeView`] into an [`accesskit::Node`].
 ///
 /// Note: `Node::set_label` takes `impl Into<Box<str>>` in accesskit 0.21;
