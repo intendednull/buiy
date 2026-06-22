@@ -36,6 +36,15 @@ pub enum A11yRole {
     Dialog,
     AlertDialog,
     Tooltip,
+    // Widget-catalog prerequisite roles (inert until the widget-catalog phase —
+    // no widget emits these yet). See foundation spec accessibility.md § 3.11.
+    Checkbox,
+    Switch,
+    Slider,
+    TextInput,
+    MultilineTextInput,
+    Region,
+    Group,
     // Phase 0 stops here; full taxonomy is in the foundation spec accessibility.md.
 }
 
