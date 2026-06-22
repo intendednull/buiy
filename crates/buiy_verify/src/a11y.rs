@@ -3,12 +3,15 @@
 //! See: docs/specs/2026-05-07-buiy-foundation/verification.md (CI gate #3).
 
 use buiy_core::a11y::{A11yNodeView, A11yRole};
+use buiy_core::a11y::translate::node_id_for;
 use serde::Serialize;
 
 // LINT: Field order here is the snapshot wire format. Do not reorder
 // without coordinating golden-file regeneration in every consumer.
 #[derive(Serialize)]
 struct WireNode<'a> {
+    // Canonical AccessKit NodeId (= entity.to_bits()+1), set in snapshot_tree;
+    // NOT raw entity bits. (A future phase renames this field to `ref`.)
     entity: u64,
     role: &'a str,
     name: &'a str,
@@ -44,7 +47,10 @@ pub fn snapshot_tree(nodes: &[A11yNodeView]) -> String {
     let wire: Vec<WireNode> = nodes
         .iter()
         .map(|n| WireNode {
-            entity: n.entity.to_bits(),
+            // Canonical AccessKit ref: node_id_for(entity) = to_bits() + 1.
+            // This is the id an inbound ActionRequest's `target` carries, so the
+            // snapshot's `entity` field round-trips with `entity_for_node_id`.
+            entity: node_id_for(n.entity).0,
             role: role_to_str(n.role),
             name: &n.name,
             description: &n.description,

@@ -51,3 +51,21 @@ fn diff_returns_some_for_different_snapshots() {
     let text = result.unwrap();
     assert!(text.contains("LEFT") && text.contains("RIGHT"));
 }
+
+#[test]
+fn snapshot_entity_field_is_the_canonical_node_id() {
+    let e = entity(1);
+    let nodes = vec![A11yNodeView {
+        entity: e,
+        role: A11yRole::Button,
+        name: "Save".into(),
+        description: "".into(),
+        focusable: true,
+    }];
+    let json = snapshot_tree(&nodes);
+    let expected = buiy_core::a11y::translate::node_id_for(e).0;
+    assert!(
+        json.contains(&format!("\"entity\":{expected}")),
+        "snapshot must emit the canonical NodeId ref (to_bits()+1), got: {json}",
+    );
+}
