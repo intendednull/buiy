@@ -7,4 +7,6 @@
 .superpowers/
 
 target/
-Cargo.lock
+# Cargo.lock IS committed — this workspace ships binaries (the examples/*), so a
+# pinned lockfile is required for reproducible builds and a stable cargo-deny
+# audit surface (Cargo Book FAQ). CI builds with --locked against it.
