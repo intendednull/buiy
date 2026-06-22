@@ -1,0 +1,51 @@
+**Date:** 2026-06-18
+**Status:** active
+**Subject:** Lessons for Buiy from game-engine remote/devtools protocols + React DevTools — what they validate, what to borrow, what to avoid
+
+# Lessons for Buiy
+
+The decision file for this folder. Evidence lives in the siblings — [godot.md](godot.md), [unity.md](unity.md), [unreal.md](unreal.md), [react-devtools.md](react-devtools.md), the survey in [README.md](README.md), and the unsolved tensions in [open-problems.md](open-problems.md). Terms are defined in [glossary.md](glossary.md). The framing is explicit: Buiy already authors an AccessKit semantic tree (role + name + state + actions) but it is **output-only**; the thesis is that this same tree is the right LLM-agent perception+control surface, made bidirectional by consuming AccessKit `ActionRequest`s back through the existing `bevy_winit` inbound path. The a11y model itself is documented in the sibling folder [../accesskit/](../accesskit/); the engine-native transport precedent (BRP) and the inbound winit path are cited inline below to their canonical sources (this corpus has no `bevy-remote-protocol` or `llm-agent-interface` folder).
+
+## Validates
+
+- **"Same substrate, different client."** Every system here attaches a human inspector to the *same live tree* the runtime already maintains — not a parallel debug model. Godot's "Remote" tab is the running game's node tree in the editor Inspector ([godot.md](godot.md)); Unity's UI Toolkit Debugger is a devtools-style view of the live `VisualElement` tree ([unity.md](unity.md)). The Bevy analog is exact: BRP exposes the running ECS and `bevy-inspector-egui` is one client over it. This validates Buiy's thesis — a Buiy agent interface and a future human inspector are the *same* AccessKit tree with two clients, not two trees.
+
+- **In-process server, inspector as a client.** Godot frames the running game as the debug **server** and the editor as the **client** over a socket ([godot.md](godot.md)); Unreal embeds a web server *inside* the engine process and treats every HTTP/WebSocket consumer as a client ([unreal.md](unreal.md)). The right shape for Buiy is the same: the live Buiy app hosts the inspect+control endpoint in-process, and the LLM agent (and later a human inspector) are clients — not a separate sidecar that snapshots state.
+
+- **Driving state is the norm, not the exception.** Three of four systems mutate the live tree: Godot edits Remote-tree properties into the running game, Unreal reads+writes+**invokes**, React overrides props/state/hooks/context ([react-devtools.md](react-devtools.md)). Buiy wanting a *bidirectional* AccessKit surface (consuming `ActionRequest`s) is the mainstream design, not a novelty; observe-only (Unity UI Toolkit Debugger, mutation limited to ephemeral inline styles) is the weaker point in the field.
+
+## Borrow
+
+- **A transport-agnostic protocol layer (React's Bridge/Wall).** React defines inspect+control *once* — Backend → Agent → **Bridge** (message abstraction) → **Wall** (`listen`/`send` raw transport) → Frontend — and runs the identical protocol over `window.postMessage` in-browser and a WebSocket relay for React Native / standalone ([react-devtools.md](react-devtools.md)). BRP is built the same way (transport-/serialization-agnostic). Buiy should define the AccessKit inspect+control protocol once and run it over an **in-process channel** (the embedded agent path) *and* a **socket** (out-of-process inspector / MCP), not bake either transport into the contract. (Supporting the socket path is also what reopens the auth question — see avoid, and [open-problems.md](open-problems.md) gap 6.)
+
+- **Compact incremental tree + lazy per-node detail.** React emits a minimal "operations" patch per commit (display name, type, key only) and fetches full per-node detail (props/state/hooks/context) **lazily on selection**, sent dehydrated with `Unserializable` markers preserving type/name ([react-devtools.md](react-devtools.md)). Don't serialize the whole AccessKit tree eagerly: stream the role+name+state skeleton, fetch heavy node detail only when the agent focuses a node. This also bounds token cost for an LLM client.
+
+- **Function INVOCATION, not just field-set (Unreal).** Unreal's Remote Control is the strongest driver precisely because it can **call any function** exposed to Blueprint/Python, not only read/write properties ([unreal.md](unreal.md)). This is the analog of AccessKit *actions* (the `actions` half of role+name+state+actions). Buiy should treat invoking an exposed action (`Default`/`Click`/`Increment`/… via `ActionRequest`) as first-class alongside value-set, not bolt actions on later.
+
+- **An explicit exposure allowlist as the security boundary (Unreal Preset).** Unreal's **Remote Control Preset** is a curated panel: only properties and functions a developer explicitly *exposes* become reachable over the API ([unreal.md](unreal.md)). That allowlist is the security model — the surface is opt-in per element, not "everything is remotely writable." Buiy's AccessKit tree is already a *curated semantic projection* (only role-bearing nodes with declared actions), which is a natural allowlist; lean on it as the exposure boundary rather than exposing raw ECS components.
+
+- **Protocol versioning + handshake check (React).** React stamps an explicit version on the backend↔frontend protocol and rejects mismatches at the handshake ("Unsupported backend version" / "Unsupported Bridge operation") ([react-devtools.md](react-devtools.md)). Buiy's agent protocol should version itself and fail the handshake loudly, so an older agent/inspector against a newer Buiy app errors clearly instead of silently misreading the tree.
+
+## Avoid
+
+- **Editor/GUI-coupled framing.** Godot and Unity bind the live-tree view to the *editor GUI* — a dock tab, a Window menu item ([godot.md](godot.md), [unity.md](unity.md)) — so the protocol is an implementation detail of the editor rather than a first-class, independently-consumable contract. Unreal and React are healthier: the protocol stands alone and the GUI is just one client. Buiy should make the inspect+control protocol the primary artifact; a human inspector GUI is one client of many (the LLM agent is another), never the thing the protocol is shaped around.
+
+- **Default-off / flag-gated disablement as the "security" answer.** Unreal disables the web server in packaged/`-game` builds and requires `-RCWebControlEnable -RCWebInterfaceEnable` to turn it on ([unreal.md](unreal.md)); Unity requires a Development build for PlayerConnection ([unity.md](unity.md)). Off-by-default is a blunt substitute for a real boundary. Decide Buiy's security *deliberately* — the exposure allowlist (above) for the in-process channel **plus authentication on any non-in-process (socket/MCP) transport** — rather than shipping the surface disabled and calling that safe. Note the precedents give Buiy no auth story to copy for the socket case (none of the four authenticate the peer; all four lean on network isolation), so that part has to be designed, not borrowed — flagged as gap 6 in [open-problems.md](open-problems.md).
+
+- **Polling where change-detection can push.** React re-requests the selected element's detail on a ~1/sec interval (verify against current `react-devtools-shared` if load-bearing) ([react-devtools.md](react-devtools.md)). That is a workaround for a renderer without first-class change signals. Bevy *has* change detection — Buiy can push AccessKit tree deltas when components actually change instead of polling, the same way Unreal's WebSocket pushes property changes and the way BRP's `+watch` methods stream component changes rather than making clients re-poll.
+
+- **Minting a fifth bespoke wire format.** This survey already spans four incompatible protocols — Godot's socket framing, Unity's GUID/`byte[]` `PlayerConnection` bus ([unity.md](unity.md)), Unreal's HTTP+WebSocket JSON, React's Bridge operations. Buiy should **not** invent a fifth. Its tree is already AccessKit's schema (role+name+state+actions); align the wire with **AccessKit** for the semantics and with **MCP / BRP** for the transport+tooling envelope, so screen readers, human inspectors, and LLM agents share one substrate instead of yet another bespoke one. (AccessKit model → [../accesskit/](../accesskit/); BRP transport precedent → https://docs.rs/bevy/latest/bevy/remote/index.html.)
+
+## Sources
+
+- React DevTools architecture (Backend/Agent/Bridge/Wall, operations patches, lazy `inspectElement`/`inspectedElement`, dehydration, versioned handshake): https://github.com/facebook/react/blob/main/packages/react-devtools/OVERVIEW.md
+- React DevTools "Unsupported backend version" handshake: https://gist.github.com/bvaughn/4bc90775530873fdf8e7ade4a039e579
+- Bevy Remote Protocol (transport-/serialization-agnostic JSON-RPC; ECS server, clients; `+watch`): https://docs.rs/bevy/latest/bevy/remote/index.html ; https://bevy.org/news/bevy-0-15/
+- bevy-inspector-egui (in-process inspector client over the same world): https://github.com/jakobhellermann/bevy-inspector-egui
+- bevy_winit inbound AccessKit ActionRequest path (`WinitActionRequestHandlers`): https://docs.rs/bevy/latest/bevy/winit/accessibility/index.html ; AccessKit integration PR #6874: https://github.com/bevyengine/bevy/pull/6874
+- Godot debugging / Remote scene tree (editor=server, game=client over TCP; live property edits): https://docs.godotengine.org/en/stable/tutorials/scripting/debug/overview_of_debugging_tools.html
+- Unity UI Toolkit Debugger (live VisualElement tree view; ephemeral inline-style edits only): https://docs.unity3d.com/6000.2/Documentation/Manual/UIE-ui-debugger.html
+- Unity PlayerConnection (GUID + byte[] messaging bus): https://docs.unity3d.com/ScriptReference/Networking.PlayerConnection.PlayerConnection.html
+- Unreal Remote Control (HTTP+WebSocket; read/write/invoke; enable flags; no built-in auth): https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-control-for-unreal-engine
+- Unreal Remote Control Presets (explicit expose-property/expose-function allowlist): https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-control-presets-and-web-application-for-unreal-engine
+- Testing Library getByRole (role+name addressing): https://testing-library.com/docs/queries/byrole/

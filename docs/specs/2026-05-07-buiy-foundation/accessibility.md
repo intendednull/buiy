@@ -8,6 +8,8 @@ A small number of WCAG-tied items in this section carry **dual tiers** of the fo
 
 ## 3.11 Accessibility (ARIA + WCAG 2.2)
 
+> **Realized design:** the decomposed `A11yStates`/`A11yRelations` component model (no megacomponents, per the bevy_a11y #17644 anti-pattern), real AccessKit tree nesting + relations, ACCNAME 1.2, and the per-widget WAI-ARIA APG action contracts that this inventory calls for are designed in [`../2026-06-18-buiy-agent-interface-design/`](../2026-06-18-buiy-agent-interface-design/README.md) (esp. [semantic-tree.md](../2026-06-18-buiy-agent-interface-design/semantic-tree.md) and [widget-contracts.md](../2026-06-18-buiy-agent-interface-design/widget-contracts.md)). That spec also makes the tree **bidirectional** — consuming AccessKit `ActionRequest`s through the existing `bevy_winit` channel — so the same semantic tree serves screen readers, Buiy's headless test driver, and (opt-in) LLM agents. It folds in what would have been a separate `buiy-accessibility-design`; there is no parallel a11y spec.
+
 **ARIA roles taxonomy** — full enumeration, mapped to AccessKit `Role`.
 
 - **Landmarks (8):** banner, complementary, contentinfo, form, main, navigation, region, search. **F**
