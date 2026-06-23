@@ -49,6 +49,8 @@ mod invariant_mutations;
 mod invariant_predicates;
 #[path = "verify_headless/metric.rs"]
 mod metric;
+#[path = "verify_headless/pointer_events_c3b.rs"]
+mod pointer_events_c3b;
 #[path = "verify_headless/pointer_offset_regression.rs"]
 mod pointer_offset_regression;
 #[path = "verify_headless/pointer_press_smoke.rs"]

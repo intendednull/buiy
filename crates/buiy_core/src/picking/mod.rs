@@ -10,19 +10,37 @@ use bevy::picking::Pickable;
 use bevy::picking::backend::PointerHits;
 use bevy::prelude::*;
 
+pub mod activation;
 pub mod backend;
 pub mod depth;
+pub mod gesture;
 
+pub use activation::pointer_click_emits_on_press;
 pub use backend::BuiyPickingBackendPlugin;
 /// Re-exported at the `picking` module root so consumers reach it as
 /// `buiy_core::picking::global_paint_order` (the SC-3 surface the agent-interface
 /// campaign's `inprocess.rs` consumes), alongside `picking::hit_test`.
 pub use depth::global_paint_order;
+pub use gesture::{MultiClick, derive_multi_click};
 
-/// Phase 0 picking exposes a simple AABB hit-test fn for tests + a
-/// `Hovered` resource updated by consuming `PointerHits` from the Buiy
-/// `bevy_picking` backend. The full `bevy_picking::backend::PickingBackend`
-/// registration lives in v0.x.
+/// Buiy picking exposes a simple AABB hit-test fn for tests + a `Hovered`
+/// resource updated by consuming `PointerHits` from the Buiy `bevy_picking`
+/// backend.
+///
+/// C3b wires the full `Pointer<E>` event layer on top: it adds bevy_picking's
+/// [`bevy::picking::InteractionPlugin`] (the hover diff that turns Buiy's
+/// `PointerHits` into the `Pointer<Over/Out/Move/Press/Release/Click/Drag*/
+/// Scroll>` taxonomy + bubbling + observers) and registers the C3 pointer
+/// producers as observers: the `Pointer<Click>` → [`OnPress`](crate::interaction::OnPress)
+/// activation producer and the widget-agnostic [`MultiClick`] gesture derived
+/// from the editor's `ClickTracker`. The legacy `Hovered` resource +
+/// `update_hovered` are kept ALONGSIDE the event layer (their consumers migrate
+/// off in C3c, behind a shim), so this layer is purely additive.
+///
+/// The real winit-cursor reader ([`bevy::picking::input::PointerInputPlugin`])
+/// is added by the meta-crate `BuiyPlugin` (a windowed app), NOT here: the
+/// headless test harness injects `PointerInput` directly, and adding
+/// `PointerInputPlugin` would spawn a duplicate `PointerId::Mouse` pointer.
 pub struct PickingPlugin;
 
 #[derive(Resource, Reflect, Default, Clone, Debug)]
@@ -31,9 +49,31 @@ pub struct Hovered(pub Option<Entity>);
 
 impl Plugin for PickingPlugin {
     fn build(&self, app: &mut App) {
+        // bevy_picking's hover stage (C3b §2.1): the `generate_hovermap` /
+        // `pointer_events` chain that turns the `PointerHits` Buiy's backend
+        // emits into the high-level `Pointer<Over/Out/Move/Press/Release/Click/
+        // Drag*/Scroll>` taxonomy with capture→target→bubble + observers. It
+        // reads `PointerInput` messages directly (registered by the core
+        // `bevy::picking::PickingPlugin`), so it works under direct synthetic
+        // injection without `PointerInputPlugin` (the winit reader). Guarded so a
+        // `DefaultPlugins` app (which already adds it via `DefaultPickingPlugins`)
+        // does not double-add.
+        if !app.is_plugin_added::<bevy::picking::InteractionPlugin>() {
+            app.add_plugins(bevy::picking::InteractionPlugin);
+        }
+
         app.register_type::<Hovered>()
             .init_resource::<Hovered>()
             .add_systems(Update, update_hovered.in_set(crate::BuiySet::Picking));
+
+        // C3 pointer producers (observers fire when the hover stage triggers the
+        // matching `Pointer<E>`):
+        //  - `Pointer<Click>` → `OnPress` for an `A11yRole::Button` root (§2.5).
+        //  - `Pointer<Click>` → `MultiClick` when the `ClickTracker` heuristic
+        //    classifies the run as double/triple (§2.11).
+        app.add_observer(activation::pointer_click_emits_on_press);
+        app.add_observer(gesture::derive_multi_click);
+
         // Register every component the free `hit_test` and the backend query so
         // `QueryState::try_new` over the optional terms (`ClipRect`/`Pickable`)
         // and the paint-order term (`StackingContext`) succeeds even on a world

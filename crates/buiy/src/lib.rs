@@ -26,7 +26,7 @@ pub use buiy_core::{
         Translate, TryCondition, UiTransform, UnicodeBidi, WillChange, WillChangeProperty,
         WritingMode, WritingModeKind, WritingModeResolved, ZIndex,
     },
-    picking::{BuiyPickingBackendPlugin, Hovered},
+    picking::{BuiyPickingBackendPlugin, Hovered, MultiClick},
     render::color::ColorToken,
     render::components::{
         Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius, TextColor,
@@ -54,6 +54,28 @@ pub use buiy_widgets::{Button, OnPress, TextInput, WidgetsPlugin};
 // NOT re-exported through `buiy_bsn`, which stays widget-agnostic per spec
 // § 4.2 — it must not take a `buiy_widgets` dependency.)
 pub use buiy_widgets::scene::{button, text_input_multi_line, text_input_single_line};
+
+// bevy_picking surface (input-event-model.md § 2.9): re-export every
+// bevy_picking type Buiy users touch through `buiy` (and the prelude below)
+// so a pre-1.0 upstream rename touches this one file. `Pickable` is the
+// widget-internal pick-through convention (`Pickable::IGNORE` on decorative
+// children); the `Pointer<E>` family is the C3 event taxonomy widgets observe;
+// `PointerButton` is carried by `MultiClick`. Buiy's own `Hovered` resource
+// still exists (C3c migrates its consumers off), so bevy's hover *components*
+// (`Hovered`/`DirectlyHovered`) are intentionally NOT re-exported under those
+// names yet — that name collision is resolved when Buiy's resource is deleted.
+pub use bevy::picking::Pickable;
+pub use bevy::picking::events::{
+    Cancel, Click, Drag, DragDrop, DragEnd, DragEnter, DragLeave, DragOver, DragStart, Move, Out,
+    Over, Pointer, Press, Release,
+};
+pub use bevy::picking::pointer::PointerButton;
+// The wheel event `bevy::picking::events::Scroll` is NOT flattened here: the
+// name collides with the layout `Scroll` overflow component, which owns the
+// flat prelude name. The wheel entry (§2.6) is the `Pointer<E>` event reached as
+// `buiy::events::Scroll` (the picking events module, re-exported below); a
+// `ScrollArea` (C5) observes `Pointer<buiy::events::Scroll>`.
+pub use bevy::picking::events;
 
 // BSN authoring (docs/specs/2026-06-18-buiy-bsn-integration-design.md § 4.2).
 // `buiy::bsn` is the named path to the authoring crate; the BSN prelude
@@ -157,6 +179,18 @@ impl Plugin for BuiyPlugin {
         // dependency only when the app hasn't (the headless MinimalPlugins tests).
         if !app.is_plugin_added::<bevy::picking::PickingPlugin>() {
             app.add_plugins(bevy::picking::PickingPlugin);
+        }
+        // C3b §2.1: the winit-cursor reader that gathers raw pointer input
+        // (cursor move / button / wheel) into `PointerInput` and updates
+        // `PointerLocation`/`PointerPress`. Buiy's `PickingPlugin` adds the hover
+        // stage (`InteractionPlugin`) that turns the resulting `PointerHits` into
+        // the `Pointer<E>` taxonomy; this plugin feeds it the real input. Guarded
+        // like the core plugin above — `DefaultPlugins` includes it via
+        // `DefaultPickingPlugins`, `MinimalPlugins` does not. (The headless test
+        // harness injects `PointerInput` directly and does NOT add this — adding
+        // it would spawn a duplicate `PointerId::Mouse`.)
+        if !app.is_plugin_added::<bevy::picking::input::PointerInputPlugin>() {
+            app.add_plugins(bevy::picking::input::PointerInputPlugin);
         }
         app.add_plugins((
             CorePlugin,

@@ -76,11 +76,30 @@ fn backend_app() -> App {
     app
 }
 
-fn spawn_pointer(app: &mut App, position: Vec2) {
-    let window_entity = Entity::PLACEHOLDER;
-    let target = WindowRef::Entity(window_entity)
-        .normalize(Some(window_entity))
-        .unwrap();
+/// Spawn a window + a `Camera2d` targeting it, returning the window entity.
+/// C3b's `emit_picks` resolves the pointer's target window → this camera (the
+/// real-camera fix, §3.1); without a matching camera the backend emits no hits.
+/// These hand-spawned fixtures must therefore stand up a window + camera.
+fn spawn_window_and_camera(app: &mut App) -> Entity {
+    use bevy::camera::{Camera2d, RenderTarget};
+    use bevy::window::{PrimaryWindow, Window, WindowResolution};
+    let window = app
+        .world_mut()
+        .spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..Default::default()
+            },
+            PrimaryWindow,
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Camera2d, RenderTarget::Window(WindowRef::Entity(window))));
+    window
+}
+
+fn spawn_pointer_in(app: &mut App, window: Entity, position: Vec2) {
+    let target = WindowRef::Entity(window).normalize(Some(window)).unwrap();
     app.world_mut().spawn((
         PointerId::Mouse,
         PointerLocation::new(Location {
@@ -123,6 +142,7 @@ fn pointer_over_offset_buiy_node_emits_hit() {
 #[test]
 fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
     let mut app = backend_app();
+    let window = spawn_window_and_camera(&mut app);
 
     // Small node below; large panel painted ON TOP of it.
     let small = spawn_node(&mut app, Vec2::new(80.0, 80.0), Vec2::new(40.0, 40.0));
@@ -140,7 +160,7 @@ fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
     spawn_paint_order(&mut app, &[small, large]);
 
     // Cursor at (90,90): inside BOTH AABBs.
-    spawn_pointer(&mut app, Vec2::new(90.0, 90.0));
+    spawn_pointer_in(&mut app, window, Vec2::new(90.0, 90.0));
 
     app.update();
 
@@ -176,6 +196,32 @@ fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
         hit.picks[0].1.depth < hit.picks[1].1.depth,
         "HitData depths must ascend top-to-bottom by paint order"
     );
+
+    // C3b camera ref + order (§3.1 / gate #7): every HitData carries the REAL
+    // camera entity (not Entity::PLACEHOLDER), and the PointerHits order is
+    // `camera.order + 0.5` (camera.order defaults to 0).
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::camera::Camera2d>>()
+        .single(app.world())
+        .expect("the one Camera2d");
+    let world = app.world_mut();
+    let messages = world.resource::<Messages<PointerHits>>();
+    let mut cursor = messages.get_cursor();
+    let hit = cursor
+        .read(messages)
+        .find(|h| h.picks.len() == 2)
+        .expect("a PointerHits with both overlapping nodes should be emitted");
+    assert_ne!(
+        hit.picks[0].1.camera,
+        Entity::PLACEHOLDER,
+        "HitData.camera must be the real camera, not the placeholder"
+    );
+    assert_eq!(
+        hit.picks[0].1.camera, camera,
+        "HitData.camera resolves to the window's Camera2d"
+    );
+    assert_eq!(hit.order, 0.5, "PointerHits order == camera.order + 0.5");
 }
 
 /// Audit #21 (T2.19), C3a-updated: the `Hovered` consumer chain end-to-end.
@@ -190,6 +236,7 @@ fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
 #[test]
 fn hovered_resource_tracks_top_painted_node_after_backend_emit() {
     let mut app = backend_app();
+    let window = spawn_window_and_camera(&mut app);
 
     // Nothing hovered before any pointer is processed.
     assert_eq!(
@@ -204,7 +251,7 @@ fn hovered_resource_tracks_top_painted_node_after_backend_emit() {
     // occluder, so it is the sole survivor and the tracked hover.
     spawn_paint_order(&mut app, &[small, large]);
 
-    spawn_pointer(&mut app, Vec2::new(90.0, 90.0));
+    spawn_pointer_in(&mut app, window, Vec2::new(90.0, 90.0));
 
     app.update();
 

@@ -39,7 +39,9 @@ pub use layout::{
     TransformMatrix, TransformOrigin, TransformStyle, Translate, TryCondition, UiTransform,
     UnicodeBidi, WillChange, WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
 };
-pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
+pub use picking::{
+    BuiyPickingBackendPlugin, Hovered, MultiClick, PickingPlugin, global_paint_order, hit_test,
+};
 pub use render::color::{ColorToken, SystemColorKeyword};
 pub use render::components::{
     AncestorClip, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius, ClipRect,

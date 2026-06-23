@@ -9,21 +9,34 @@
 //! occludes everything painted below it; a point outside a node's computed
 //! `ClipRect` is not a hit.
 //!
-//! Still C3a scope: camera resolution, `order = camera_order + 0.5`, and no-hit
-//! emission remain the Phase-0 closeout behavior (`Entity::PLACEHOLDER` camera,
-//! `order = 0.0`, no emission when nothing is hit) — those are later C3
-//! sub-slices, not this one. `Hovered`/`update_hovered` are unchanged: this
-//! backend still feeds them via `PointerHits`.
+//! Camera + emission (C3b): the per-pointer `PointerHits` now carries the
+//! **real** camera entity (resolved by matching the pointer's target window to
+//! the `Camera` whose `RenderTarget` normalizes to that window, § 3.1) and the
+//! bevy_ui-convention `order = camera_order + 0.5` (§ 2.2 behavior 5), so
+//! bevy_picking composites Buiy's hits correctly against any other backend. A
+//! `PointerHits` is written **every** frame a pointer targets a Buiy window,
+//! even with an empty pick list (§ 2.2 behavior 3) — so `InteractionPlugin`'s
+//! hover diff fires `Pointer<Out>` and clears `DirectlyHovered` when the cursor
+//! leaves all Buiy nodes (the Phase-0 "hover never clears" limitation is gone).
+//!
+//! One-frame stale read (§ 3.3, accepted + documented): `emit_picks` is in
+//! `PreUpdate` while the transform bridge writes `GlobalTransform` and layout
+//! writes `painters_z` in `Update`, so a frame's hit-test reads last frame's
+//! absolute positions / stacking. This is the same lag the editor's pointer
+//! selection already documents; a stacking or transform change takes effect for
+//! picking one frame later, exactly as it already does for hover.
 
 use crate::components::{ResolvedLayout, StackingContext};
 use crate::picking::depth::{PickCandidate, global_paint_order, paint_index_lookup, resolve_picks};
 use crate::picking::point_in_node;
 use crate::render::components::ClipRect;
+use bevy::camera::{Camera, NormalizedRenderTarget, RenderTarget};
 use bevy::picking::Pickable;
 use bevy::picking::PickingSystems;
 use bevy::picking::backend::{HitData, PointerHits};
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 /// Buiy's `bevy_picking` backend plugin. Registers `emit_picks` in
 /// [`PickingSystems::Backend`] so bevy_picking can composite Buiy's
@@ -39,6 +52,11 @@ impl Plugin for BuiyPickingBackendPlugin {
 #[allow(clippy::type_complexity)]
 fn emit_picks(
     pointers: Query<(&PointerId, &PointerLocation)>,
+    // Cameras whose `RenderTarget` resolves to a window, so a pointer's target
+    // window can be matched to its camera (§ 3.1). `RenderTarget` is a separate
+    // `#[require]`d component on the camera entity (not a `Camera` field).
+    cameras: Query<(Entity, &Camera, &RenderTarget)>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
     nodes: Query<(
         Entity,
         &ResolvedLayout,
@@ -55,9 +73,20 @@ fn emit_picks(
     let paint_order = global_paint_order(&contexts);
     let z_of = paint_index_lookup(&paint_order);
     let paint_len = paint_order.len();
+    let primary = primary_window.iter().next();
 
     for (pointer, location) in pointers.iter() {
         let Some(loc) = location.location() else {
+            continue;
+        };
+        // § 3.1 window filter + camera resolution: a pointer targeting a window
+        // with no matching Buiy camera (a non-Buiy window, or an `Image`/
+        // `TextureView` target — the deferred render-to-texture case) resolves
+        // to no camera and is skipped, so it never produces a Buiy hit.
+        let NormalizedRenderTarget::Window(_) = loc.target else {
+            continue;
+        };
+        let Some((camera, camera_order)) = camera_for_target(&cameras, primary, &loc.target) else {
             continue;
         };
         let cursor = loc.position;
@@ -80,32 +109,41 @@ fn emit_picks(
         // The shared stacking + Pickable rule: topmost-painted first, IGNORE
         // dropped, truncated at the first occluder.
         let resolved = resolve_picks(candidates);
-        if resolved.is_empty() {
-            // C3a keeps the Phase-0 no-hit behavior (no emission when nothing is
-            // hit); no-hit emission is a later C3 sub-slice.
-            continue;
-        }
         // HitData.depth = reverse of the paint index, so bevy_picking's
-        // ascending-depth hover sort puts the topmost-painted node nearest.
+        // ascending-depth hover sort puts the topmost-painted node nearest. The
+        // real camera entity rides every HitData so any back-projection /
+        // provenance consumer reads a live camera, not a placeholder.
         let picks: Vec<(Entity, HitData)> = resolved
             .iter()
             .map(|(e, paint_index)| {
                 let depth = (paint_len.saturating_sub(1).saturating_sub(*paint_index)) as f32;
-                (
-                    *e,
-                    HitData::new(
-                        // Camera entity unknown to Buiy in C3a (still Phase-0
-                        // closeout); the real-camera resolution + order =
-                        // camera_order + 0.5 is a later C3 sub-slice.
-                        Entity::PLACEHOLDER,
-                        depth,
-                        None,
-                        None,
-                    ),
-                )
+                (*e, HitData::new(camera, depth, None, None))
             })
             .collect();
 
-        output.write(PointerHits::new(*pointer, picks, 0.0));
+        // ALWAYS emit (§ 2.2 behavior 3): an empty pick list clears hover via
+        // `InteractionPlugin`'s Out diff. `order = camera_order + 0.5` is the
+        // bevy_ui convention third-party backends composite against (§ 2.2
+        // behavior 5).
+        output.write(PointerHits::new(*pointer, picks, camera_order as f32 + 0.5));
     }
+}
+
+/// Resolve the camera for a pointer's normalized target window: the camera whose
+/// `RenderTarget` normalizes to the SAME `NormalizedRenderTarget`. Returns the
+/// camera entity + its `Camera::order` (for `order = camera_order + 0.5`).
+///
+/// Multi-window falls out for free — each pointer resolves to its own window's
+/// camera; a pointer over a non-Buiy window resolves to `None` and is filtered
+/// (§ 3.1). `RenderTarget::normalize` handles `WindowRef::Primary` vs
+/// `WindowRef::Entity` uniformly, so a `Window(Primary)` camera matches a
+/// pointer normalized to the primary-window entity.
+fn camera_for_target(
+    cameras: &Query<(Entity, &Camera, &RenderTarget)>,
+    primary: Option<Entity>,
+    target: &NormalizedRenderTarget,
+) -> Option<(Entity, isize)> {
+    cameras.iter().find_map(|(e, cam, rt)| {
+        (cam.is_active && rt.normalize(primary).as_ref() == Some(target)).then_some((e, cam.order))
+    })
 }
