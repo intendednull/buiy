@@ -226,21 +226,22 @@ fn plugins_only_populate_their_own_set() {
     //
     // P1c-b INTENTIONALLY adds the inbound action router to `BuiySet::Input` from
     // `A11yPlugin` (action-router.md §7): the router (`route_action_requests`) +
-    // its keyboard sibling (`keyboard_activation`, the per-role APG keymap) are
-    // Input-stage PRODUCERS — they synthesize focus/activation in `Input` so an inbound
-    // request reflects outbound in the SAME frame's `A11yUpdate`. So A11yPlugin
-    // now legitimately contributes to BOTH `A11yUpdate` (the outbound
-    // `build_tree`) and `Input` (the inbound router). The earlier "A11yPlugin
-    // adds nothing to Input" invariant is superseded by the P1c-b router. Pin the
-    // exact count so an accidental mis-tag (e.g. dropping `.in_set(Input)`, or a
-    // future system landing in the wrong set) still reddens.
+    // its keyboard siblings (`keyboard_activation`, the per-role APG activation
+    // keymap; and `slider_keyboard`, the slice-2 APG slider value keymap) are
+    // Input-stage PRODUCERS — they synthesize focus/activation/value changes in
+    // `Input` so an inbound request reflects outbound in the SAME frame's
+    // `A11yUpdate`. So A11yPlugin now legitimately contributes to BOTH `A11yUpdate`
+    // (the outbound `build_tree`) and `Input` (the inbound router + keymaps). The
+    // earlier "A11yPlugin adds nothing to Input" invariant is superseded by the
+    // P1c-b router. Pin the exact count so an accidental mis-tag (e.g. dropping
+    // `.in_set(Input)`, or a future system landing in the wrong set) still reddens.
     let a11y_into_input = set_membership_delta(BuiySet::Input, |app| {
         app.add_plugins(buiy_core::a11y::A11yPlugin);
     });
     assert_eq!(
-        a11y_into_input, 2,
+        a11y_into_input, 3,
         "A11yPlugin adds exactly the P1c-b inbound router systems \
-         (route_action_requests + keyboard_activation) to BuiySet::Input"
+         (route_action_requests + keyboard_activation + slider_keyboard) to BuiySet::Input"
     );
     let focus_into_a11y = set_membership_delta(BuiySet::A11yUpdate, |app| {
         app.init_resource::<ButtonInput<KeyCode>>();

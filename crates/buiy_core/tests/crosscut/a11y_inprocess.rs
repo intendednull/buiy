@@ -397,6 +397,131 @@ fn switch_advertises_role_actions_and_binary_toggled() {
     );
 }
 
+#[test]
+fn slider_advertises_role_value_verbs_and_numeric_value() {
+    // GATE #3 (slice-2): a Slider advertises role=Slider + {Increment, Decrement,
+    // SetValue, Focus, Blur} + its A11yValue (now/min/max), read back through the
+    // in-process driver snapshot.
+    let mut app = setup();
+    let sl = app
+        .world_mut()
+        .spawn((
+            A11yRole::Slider,
+            A11yLabel("Volume".into()),
+            A11yValue {
+                now: 30.0,
+                min: 0.0,
+                max: 100.0,
+                step: Some(5.0),
+                jump: None,
+                text: None,
+            },
+            Focusable::default(),
+        ))
+        .id();
+    app.update();
+
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    let node = tree.node(node_id_for(sl)).expect("slider in tree");
+    assert_eq!(node.role, A11yRole::Slider, "role is Slider");
+    for action in [
+        accesskit::Action::Increment,
+        accesskit::Action::Decrement,
+        accesskit::Action::SetValue,
+        accesskit::Action::Focus,
+        accesskit::Action::Blur,
+    ] {
+        assert!(
+            node.actions.contains(&action),
+            "Slider advertises {action:?}"
+        );
+    }
+    // It does NOT advertise Click (it is value-changing, not activatable).
+    assert!(
+        !node.actions.contains(&accesskit::Action::Click),
+        "Slider does not advertise Click"
+    );
+    // The current numeric value round-trips through the consumer.
+    assert_eq!(
+        node.state.numeric_value,
+        Some(30.0),
+        "the slider's A11yValue.now round-trips through the consumer"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Inspection-driver acceptance (Wave-3 slice-2): get_by_role(Slider) then driver
+// increment raises `now` by step, observed in the SemanticTree after a frame
+// settles the `A11yTreeBuilder` (the documented perform-then-update contract: the
+// slider contract mutates `A11yValue` synchronously on the live component, and the
+// next `app.update()` refreshes the builder the snapshot reads through). perform
+// (SetValue, out-of-range) clamps the same way.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn driver_increment_on_slider_raises_now_by_step() {
+    let mut app = setup();
+    let sl = app
+        .world_mut()
+        .spawn((
+            A11yRole::Slider,
+            A11yLabel("Volume".into()),
+            A11yValue {
+                now: 30.0,
+                min: 0.0,
+                max: 100.0,
+                step: Some(5.0),
+                jump: None,
+                text: None,
+            },
+            Focusable::default(),
+        ))
+        .id();
+    app.update();
+
+    // 1) Resolve by role+name (the strict-locator addressing the driver advertises).
+    let target = get_by_role(app.world_mut(), A11yRole::Slider, Some("Volume"), None).unwrap();
+    assert_eq!(target, node_id_for(sl));
+
+    // 2) Driver increment: the slider contract mutates A11yValue synchronously on
+    //    the live component (assert that directly), and a settled frame surfaces it
+    //    in the SemanticTree the snapshot reads through the builder.
+    increment(app.world_mut(), target).expect("increment honored");
+    assert_eq!(
+        app.world().get::<A11yValue>(sl).unwrap().now,
+        35.0,
+        "the slider contract raised the live A11yValue.now 30 → 35 synchronously"
+    );
+    app.update();
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    assert_eq!(
+        tree.node(target).unwrap().state.numeric_value,
+        Some(35.0),
+        "driver increment raised now 30 → 35 (by step) in the settled SemanticTree"
+    );
+
+    // 3) perform(SetValue, out-of-range) clamps to max.
+    perform(
+        app.world_mut(),
+        accesskit::Action::SetValue,
+        target,
+        Some(accesskit::ActionData::NumericValue(999.0)),
+    )
+    .expect("SetValue honored");
+    assert_eq!(
+        app.world().get::<A11yValue>(sl).unwrap().now,
+        100.0,
+        "perform(SetValue, out-of-range) clamps the live value to max"
+    );
+    app.update();
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    assert_eq!(
+        tree.node(target).unwrap().state.numeric_value,
+        Some(100.0),
+        "the clamped value (max) surfaces in the settled SemanticTree"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Inspection-driver acceptance (Wave-3 slice-1): get_by_role then driver click,
 // then a real driven frame, flips A11yToggled in the returned SemanticTree. The

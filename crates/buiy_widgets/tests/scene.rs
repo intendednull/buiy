@@ -26,7 +26,7 @@ use buiy_core::render::components::Background;
 use buiy_core::text::edit::{Placeholder, SingleLine, TextEditState};
 use buiy_widgets::WidgetsPlugin;
 use buiy_widgets::scene::{
-    button, checkbox, switch, text_input_multi_line, text_input_single_line,
+    button, checkbox, slider, switch, text_input_multi_line, text_input_single_line,
 };
 use std::borrow::Cow;
 
@@ -304,5 +304,71 @@ fn switch_scene_fn_builds_contract_children_and_pick_through() {
         world.get::<Translate>(thumb).map(|t| t.0),
         Some(buiy_core::layout::Length::Px(0.0)),
         "thumb starts at the off position (x = 0)"
+    );
+}
+
+/// `slider(label, now, min, max, step)` spawns the full a11y contract (role +
+/// valued range + horizontal orientation) plus the track + thumb + label children
+/// (pick-through), with the live `A11yValue` authored.
+#[test]
+fn slider_scene_fn_builds_contract_children_and_pick_through() {
+    use bevy::ecs::hierarchy::Children;
+    use bevy::picking::Pickable;
+    use buiy_core::a11y::{A11yOrientation, A11yValue, Orientation};
+    use buiy_widgets::slider::{SliderThumb, SliderTrack};
+
+    let mut app = scene_test_app();
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! { slider("Volume", 50.0, 0.0, 100.0, 1.0) })
+        .expect("spawn_scene")
+        .id();
+    app.update();
+
+    let world = app.world();
+    assert_eq!(
+        world.get::<A11yRole>(id).copied(),
+        Some(A11yRole::Slider),
+        "scene-fn root is a Slider"
+    );
+    let value = world.get::<A11yValue>(id).expect("A11yValue present");
+    assert_eq!((value.now, value.min, value.max), (50.0, 0.0, 100.0));
+    assert_eq!(value.step, Some(1.0));
+    assert_eq!(
+        world.get::<A11yOrientation>(id).map(|o| o.0),
+        Some(Orientation::Horizontal),
+        "the scene-fn authors a horizontal slider"
+    );
+    assert_eq!(world.get::<A11yLabel>(id).expect("A11yLabel").0, "Volume");
+
+    let children: Vec<Entity> = world
+        .get::<Children>(id)
+        .expect("children")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(children.len(), 3, "track + thumb + label children");
+    for &c in &children {
+        assert_eq!(
+            world.get::<Pickable>(c).copied(),
+            Some(Pickable::IGNORE),
+            "decorative child is Pickable::IGNORE"
+        );
+    }
+    assert_eq!(
+        children
+            .iter()
+            .filter(|&&c| world.get::<SliderTrack>(c).is_some())
+            .count(),
+        1,
+        "one SliderTrack child"
+    );
+    assert_eq!(
+        children
+            .iter()
+            .filter(|&&c| world.get::<SliderThumb>(c).is_some())
+            .count(),
+        1,
+        "one SliderThumb child"
     );
 }

@@ -799,8 +799,16 @@ fn contract_registry_keys_button_on_click() {
     assert_eq!(cb.actions, &[Action::Click], "Checkbox advertises Click");
     let sw = contract_for(A11yRole::Switch).expect("Switch has a contract");
     assert_eq!(sw.actions, &[Action::Click], "Switch advertises Click");
+    // Slice-2 wired Slider: it advertises the VALUE verbs (the first non-Click
+    // contract) beyond the implicit Focus/Blur.
+    let slider = contract_for(A11yRole::Slider).expect("Slider has a contract");
+    assert_eq!(
+        slider.actions,
+        &[Action::Increment, Action::Decrement, Action::SetValue],
+        "Slider advertises {{Increment, Decrement, SetValue}}",
+    );
     // The remaining widget roles are wired in later P1d slices (no contract yet).
-    assert!(contract_for(A11yRole::Slider).is_none());
+    assert!(contract_for(A11yRole::TextInput).is_none());
 }
 
 #[test]

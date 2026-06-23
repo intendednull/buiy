@@ -30,7 +30,7 @@
 use bevy::ecs::hierarchy::Children;
 use bevy::picking::Pickable;
 use bevy::scene::{Scene, bsn, template_value};
-use buiy_core::a11y::A11yLabel;
+use buiy_core::a11y::{A11yLabel, A11yOrientation, A11yValue, Orientation};
 use buiy_core::components::Node;
 use buiy_core::layout::Translate;
 use buiy_core::render::components::{Background, Border, CssVisibility, TextColor};
@@ -41,6 +41,11 @@ use crate::button::{Button, button_background, button_border, button_box_model};
 use crate::checkbox::{
     CHECK_GLYPH, CHECKBOX_MARK_FONT_SIZE, Checkbox, CheckboxMark, checkbox_background,
     checkbox_border, checkbox_box_model,
+};
+use crate::slider::{
+    SLIDER_LABEL_FONT_SIZE, Slider, SliderThumb, SliderTrack, slider_background, slider_border,
+    slider_box_model, slider_thumb_background, slider_thumb_border, slider_thumb_box_model,
+    slider_track_background, slider_track_box_model,
 };
 use crate::switch::{
     SWITCH_LABEL_FONT_SIZE, Switch, SwitchThumb, switch_background, switch_border,
@@ -224,6 +229,86 @@ pub fn switch(label: impl Into<String>) -> impl Scene {
             (
                 Text({ label })
                 FontSize({ SWITCH_LABEL_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+        ]
+    }
+}
+
+/// A labelled slider over `[min, max]` (starting at `now`, stepping by `step`) as
+/// a composable BSN scene (Wave-3 slice-2). Mergeable: the `Slider` marker
+/// triggers the full `#[require]` contract (role, valued range, orientation,
+/// focus, a11y, and the track box), the field-patches layer the canonical rail
+/// style, and the `A11yValue`/`A11yOrientation` whole-value patches author the
+/// live range and horizontal orientation. The `Children [ … ]` subtree authors
+/// the **track** rail, the sliding **thumb**, and the visible **label** `Text`,
+/// each `Pickable::IGNORE` (pick-through). The thumb starts at x = 0, and
+/// `update_slider_visual` positions it from `A11yValue` on the first state change.
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { slider("Volume", 50.0, 0.0, 100.0, 1.0) });
+/// ```
+pub fn slider(label: impl Into<String>, now: f64, min: f64, max: f64, step: f64) -> impl Scene {
+    let bm = slider_box_model();
+    let bg = slider_background();
+    let border = slider_border();
+    let track_bm = slider_track_box_model();
+    let track_bg = slider_track_background();
+    let thumb_bm = slider_thumb_box_model();
+    let thumb_bg = slider_thumb_background();
+    let thumb_border = slider_thumb_border();
+    let label = label.into();
+    bsn! {
+        Slider
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        A11yLabel({ label.clone() })
+        // The valued range + orientation are inserted as whole values: `A11yValue`
+        // carries `Option` fields the bsn field-patch path does not author, and
+        // `A11yOrientation` wraps a fieldless foreign enum.
+        template_value(A11yValue {
+            now,
+            min,
+            max,
+            step: Some(step),
+            jump: None,
+            text: None,
+        })
+        template_value(A11yOrientation(Orientation::Horizontal))
+        Children [
+            (
+                SliderTrack
+                Node
+                BoxModel {
+                    width: { track_bm.width },
+                    height: { track_bm.height },
+                }
+                Background { color: { track_bg.color } }
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                SliderThumb
+                Node
+                BoxModel {
+                    width: { thumb_bm.width },
+                    height: { thumb_bm.height },
+                }
+                Background { color: { thumb_bg.color } }
+                Border { radius: { thumb_border.radius } }
+                // The thumb starts at the min end (x = 0); inserted as a whole
+                // value because `Translate` is a tuple struct.
+                template_value(Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)))
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                Text({ label })
+                FontSize({ SLIDER_LABEL_FONT_SIZE })
                 template_value(TextColor::default())
                 template_value(Pickable::IGNORE)
             ),

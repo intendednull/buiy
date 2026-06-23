@@ -7,7 +7,7 @@
 //! accessibility.md § 3.11 (decomposed components per #17644).
 
 use crate::{BuiySet, focus::Focusable};
-use accesskit::{HasPopup, NodeId, Orientation};
+use accesskit::{HasPopup, NodeId};
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -22,7 +22,9 @@ pub mod states;
 pub mod translate;
 
 pub use accname::{AccNameInputs, compute_accessible_name};
-pub use action::{dispatch_action_request, keyboard_activation, route_action_requests};
+pub use action::{
+    dispatch_action_request, keyboard_activation, route_action_requests, slider_keyboard,
+};
 pub use adapter::AccessKitAdapterPlugin;
 pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
 pub use inprocess::{
@@ -34,10 +36,11 @@ pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
     A11yPlaceholder, A11yReadOnly, A11ySelected, A11yTextValue, A11yToggled, A11yValue,
 };
-// Re-export the foreign `accesskit::Toggled` tri-state enum so downstream crates
-// (e.g. `buiy_widgets`) can match on `A11yToggled.0` / drive the toggle visuals
-// without taking a direct `accesskit` dependency. `A11yToggled` wraps it.
-pub use accesskit::Toggled;
+// Re-export the foreign `accesskit::Toggled` tri-state enum + `Orientation` so
+// downstream crates (e.g. `buiy_widgets`) can match on `A11yToggled.0` /
+// `A11yOrientation.0` and author the slider orientation without taking a direct
+// `accesskit` dependency. `A11yToggled`/`A11yOrientation` wrap these.
+pub use accesskit::{Orientation, Toggled};
 use translate::node_id_for;
 pub use translate::{build_tree_update, resolve_live, to_accesskit_node};
 
@@ -297,9 +300,19 @@ impl Plugin for A11yPlugin {
                 .in_set(BuiySet::Input)
                 .before(crate::focus::handle_tab)
                 .before(crate::text::edit::apply_keyboard_edits)
-                .before(keyboard_activation),
+                .before(keyboard_activation)
+                .before(slider_keyboard),
         );
         app.add_systems(Update, keyboard_activation.in_set(BuiySet::Input));
+        // The APG slider keyboard control (slice-2): arrows / Home / End /
+        // PageUp / PageDown on a focused `Slider` dispatch value verbs
+        // (`Increment`/`Decrement`/`SetValue`) through the same router seam an AT
+        // drives — NOT the `OnPress` activation sink. An exclusive `&mut World`
+        // system (it lowers a value mutation through `dispatch_action_request`),
+        // sibling to `keyboard_activation` in `BuiySet::Input`. It gates on a
+        // focused Slider before touching the keyboard buffer, so it leaves a
+        // non-slider focus's keys for `keyboard_activation`.
+        app.add_systems(Update, slider_keyboard.in_set(BuiySet::Input));
     }
 }
 

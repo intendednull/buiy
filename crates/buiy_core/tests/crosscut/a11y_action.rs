@@ -8,7 +8,7 @@
 //! drives the production `keyboard_activation` system (the per-role APG keymap)
 //! through the real schedule.
 
-use accesskit::{Action, ActionRequest, TreeId};
+use accesskit::{Action, ActionData, ActionRequest, TreeId};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -16,7 +16,7 @@ use buiy_core::a11y::translate::node_id_for;
 use buiy_core::{
     CorePlugin,
     a11y::{
-        A11yDisabled, A11yPlugin, A11yRole, ActionError, NotActionableReason,
+        A11yDisabled, A11yPlugin, A11yRole, A11yValue, ActionError, NotActionableReason,
         dispatch_action_request,
     },
     focus::{FocusPlugin, FocusVisible, FocusedEntity},
@@ -456,5 +456,269 @@ fn dispatch_increment_on_checkbox_is_unsupported() {
             action: Action::Increment,
         }),
         "a Checkbox advertises only {{Click, Focus, Blur}} — Increment is Unsupported"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GATE #3 / #7 — the SLIDER value contract + APG slider keyboard (slice-2,
+// widget-contracts.md §5). The Slider's verbs change its VALUE (mutate the live
+// `A11yValue`), NOT activation (`OnPress`); arrows/Home/End/PageUp/PageDown on a
+// focused Slider dispatch those value verbs through the SAME router seam an AT
+// drives. These pin both the headless dispatch (Increment/Decrement/SetValue +
+// clamping) and the keyboard keymap, and prove the activation keymap stays inert
+// for a Slider.
+// ---------------------------------------------------------------------------
+
+/// Spawn a focusable Slider over `[min, max]` at `now` stepping by `step`, and
+/// focus it. Returns the entity. The bare `A11yRole::Slider` + `A11yValue` +
+/// `Focusable` is the contract surface the router/keymap read (the full widget
+/// bundle lives in `buiy_widgets`; here we pin the core a11y behavior directly).
+fn focused_slider(app: &mut App, now: f64, min: f64, max: f64, step: f64) -> Entity {
+    let sl = app
+        .world_mut()
+        .spawn((
+            A11yRole::Slider,
+            A11yValue {
+                now,
+                min,
+                max,
+                step: Some(step),
+                jump: None,
+                text: None,
+            },
+            buiy_core::focus::Focusable::default(),
+        ))
+        .id();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(sl);
+    sl
+}
+
+fn now_of(app: &App, sl: Entity) -> f64 {
+    app.world().get::<A11yValue>(sl).unwrap().now
+}
+
+// --- The headless dispatch seam: value verbs mutate A11yValue (gate #3). ---
+
+#[test]
+fn dispatch_increment_on_slider_steps_and_clamps_at_max() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 9.0, 0.0, 10.0, 1.0);
+
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(sl), Action::Increment),
+    )
+    .unwrap();
+    assert_eq!(now_of(&app, sl), 10.0, "Increment steps now 9 → 10");
+
+    // At-max Increment is a clamped no-op (saturated success, not an error).
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(sl), Action::Increment),
+    )
+    .unwrap();
+    assert_eq!(
+        now_of(&app, sl),
+        10.0,
+        "Increment at max clamps (no-op success)"
+    );
+}
+
+#[test]
+fn dispatch_decrement_on_slider_steps_and_clamps_at_min() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 1.0, 0.0, 10.0, 1.0);
+
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(sl), Action::Decrement),
+    )
+    .unwrap();
+    assert_eq!(now_of(&app, sl), 0.0, "Decrement steps now 1 → 0");
+
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(sl), Action::Decrement),
+    )
+    .unwrap();
+    assert_eq!(
+        now_of(&app, sl),
+        0.0,
+        "Decrement at min clamps (no-op success)"
+    );
+}
+
+#[test]
+fn dispatch_set_value_on_slider_clamps_out_of_range() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 5.0, 0.0, 10.0, 1.0);
+
+    let req = ActionRequest {
+        action: Action::SetValue,
+        target_tree: TreeId::ROOT,
+        target_node: node_id_for(sl),
+        data: Some(ActionData::NumericValue(7.5)),
+    };
+    dispatch_action_request(app.world_mut(), &req).unwrap();
+    assert_eq!(now_of(&app, sl), 7.5, "SetValue sets an in-range value");
+
+    // Out-of-range SetValue saturates at the bound (clamps, never errors).
+    let req = ActionRequest {
+        action: Action::SetValue,
+        target_tree: TreeId::ROOT,
+        target_node: node_id_for(sl),
+        data: Some(ActionData::NumericValue(999.0)),
+    };
+    dispatch_action_request(app.world_mut(), &req).unwrap();
+    assert_eq!(
+        now_of(&app, sl),
+        10.0,
+        "SetValue out-of-range clamps to max"
+    );
+}
+
+#[test]
+fn dispatch_set_value_on_slider_without_numeric_data_is_bad_data() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 5.0, 0.0, 10.0, 1.0);
+
+    // SetValue with no payload (the wrong/missing variant) is BadData, not a panic.
+    let req = request(node_id_for(sl), Action::SetValue);
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &req),
+        Err(ActionError::BadData {
+            target: node_id_for(sl),
+            action: Action::SetValue,
+        }),
+        "SetValue without a NumericValue payload is BadData"
+    );
+    assert_eq!(now_of(&app, sl), 5.0, "the value is unchanged on BadData");
+}
+
+#[test]
+fn dispatch_click_on_slider_is_unsupported() {
+    // A Slider advertises value verbs only — Click is NOT in its contract.
+    let mut app = setup();
+    let sl = app.world_mut().spawn(A11yRole::Slider).id();
+    app.update();
+
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &request(node_id_for(sl), Action::Click)),
+        Err(ActionError::Unsupported {
+            target: node_id_for(sl),
+            action: Action::Click,
+        }),
+        "a Slider does not advertise Click — Unsupported"
+    );
+}
+
+// --- The APG slider keyboard: arrows/Home/End/PageUp/PageDown → value (gate #7). ---
+
+#[test]
+fn arrow_up_right_increment_a_focused_slider() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 4.0, 0.0, 10.0, 1.0);
+
+    key_down(&mut app, KeyCode::ArrowUp);
+    assert_eq!(now_of(&app, sl), 5.0, "ArrowUp increments by step");
+    key_down(&mut app, KeyCode::ArrowRight);
+    assert_eq!(now_of(&app, sl), 6.0, "ArrowRight increments by step");
+}
+
+#[test]
+fn arrow_down_left_decrement_a_focused_slider() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 6.0, 0.0, 10.0, 1.0);
+
+    key_down(&mut app, KeyCode::ArrowDown);
+    assert_eq!(now_of(&app, sl), 5.0, "ArrowDown decrements by step");
+    key_down(&mut app, KeyCode::ArrowLeft);
+    assert_eq!(now_of(&app, sl), 4.0, "ArrowLeft decrements by step");
+}
+
+#[test]
+fn arrow_keys_clamp_a_focused_slider_at_bounds() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 10.0, 0.0, 10.0, 1.0);
+    key_down(&mut app, KeyCode::ArrowUp);
+    assert_eq!(now_of(&app, sl), 10.0, "ArrowUp at max clamps");
+
+    app.world_mut().get_mut::<A11yValue>(sl).unwrap().now = 0.0;
+    app.update();
+    key_down(&mut app, KeyCode::ArrowDown);
+    assert_eq!(now_of(&app, sl), 0.0, "ArrowDown at min clamps");
+}
+
+#[test]
+fn home_end_jump_a_focused_slider_to_min_and_max() {
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 5.0, 0.0, 10.0, 1.0);
+
+    key_down(&mut app, KeyCode::End);
+    assert_eq!(now_of(&app, sl), 10.0, "End jumps to max");
+    key_down(&mut app, KeyCode::Home);
+    assert_eq!(now_of(&app, sl), 0.0, "Home jumps to min");
+}
+
+#[test]
+fn page_up_down_use_the_jump_step() {
+    let mut app = setup();
+    // A slider with an explicit page `jump` of 10 (step 1).
+    let sl = app
+        .world_mut()
+        .spawn((
+            A11yRole::Slider,
+            A11yValue {
+                now: 50.0,
+                min: 0.0,
+                max: 100.0,
+                step: Some(1.0),
+                jump: Some(10.0),
+                text: None,
+            },
+            buiy_core::focus::Focusable::default(),
+        ))
+        .id();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(sl);
+
+    key_down(&mut app, KeyCode::PageUp);
+    assert_eq!(now_of(&app, sl), 60.0, "PageUp adds the jump (10)");
+    key_down(&mut app, KeyCode::PageDown);
+    assert_eq!(now_of(&app, sl), 50.0, "PageDown subtracts the jump (10)");
+}
+
+#[test]
+fn arrow_on_focused_slider_writes_no_on_press() {
+    // A Slider's keys change its VALUE, NOT activation — no `OnPress` is written
+    // (the activation keymap is inert for Slider).
+    let mut app = setup();
+    let _sl = focused_slider(&mut app, 5.0, 0.0, 10.0, 1.0);
+
+    key_down(&mut app, KeyCode::ArrowUp);
+    assert!(
+        drain_on_press(&mut app).is_empty(),
+        "a slider arrow key writes no OnPress (value action, not activation)"
+    );
+}
+
+#[test]
+fn space_enter_on_focused_slider_do_nothing() {
+    // The activation keys (Space/Enter) are inert for a Slider — it is not in the
+    // activation keymap, so neither the value nor `OnPress` changes.
+    let mut app = setup();
+    let sl = focused_slider(&mut app, 5.0, 0.0, 10.0, 1.0);
+
+    key_down(&mut app, KeyCode::Space);
+    key_down(&mut app, KeyCode::Enter);
+    assert!(
+        drain_on_press(&mut app).is_empty(),
+        "Space/Enter on a Slider write no OnPress"
+    );
+    assert_eq!(
+        now_of(&app, sl),
+        5.0,
+        "Space/Enter leave the slider value unchanged"
     );
 }

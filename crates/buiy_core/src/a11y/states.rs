@@ -149,6 +149,73 @@ pub struct A11yValue {
     pub text: Option<String>,
 }
 
+impl A11yValue {
+    /// The per-arrow-key step (the APG slider `Increment`/`Decrement` delta). A
+    /// slider with no explicit `step` advances by `1.0` — the AccessKit default
+    /// for a stepless ranged control, and the APG fallback.
+    fn effective_step(&self) -> f64 {
+        self.step.unwrap_or(1.0)
+    }
+
+    /// The PageUp/PageDown "large step": the `jump` when authored, else
+    /// `effective_step` (a slider with no `jump` pages by one step — APG: the
+    /// page step falls back to the regular step).
+    fn effective_jump(&self) -> f64 {
+        self.jump.unwrap_or_else(|| self.effective_step())
+    }
+
+    /// Clamp `now` into `[min, max]`. Defensive: if an author inverts the bounds
+    /// (`min > max`), the lower bound wins (`now == min`), never a NaN/inverted
+    /// range. Idempotent — the single funnel every mutator routes through.
+    fn clamp_now(&mut self) {
+        if self.now < self.min {
+            self.now = self.min;
+        }
+        if self.now > self.max {
+            self.now = self.max;
+        }
+    }
+
+    /// Advance the value one **step** up (the APG `Increment` verb — Right/Up
+    /// arrow or `Action::Increment`): `now = (now + step).min(max)`. At-`max` is a
+    /// clamped no-op (a saturated success, not an error — action-router.md §3).
+    /// The single mutation `honor(Increment)` and the slider keymap both route
+    /// through, so every modality (keyboard / AT) advances identically.
+    pub fn increment(&mut self) {
+        self.now += self.effective_step();
+        self.clamp_now();
+    }
+
+    /// Advance the value one **step** down (the APG `Decrement` verb — Left/Down
+    /// arrow or `Action::Decrement`): `now = (now − step).max(min)`. At-`min` is a
+    /// clamped no-op.
+    pub fn decrement(&mut self) {
+        self.now -= self.effective_step();
+        self.clamp_now();
+    }
+
+    /// Advance one **page** up (APG PageUp): `now += jump` (the large step),
+    /// clamped to `max`. `jump` falls back to `step` when unauthored.
+    pub fn page_increment(&mut self) {
+        self.now += self.effective_jump();
+        self.clamp_now();
+    }
+
+    /// Advance one **page** down (APG PageDown): `now −= jump`, clamped to `min`.
+    pub fn page_decrement(&mut self) {
+        self.now -= self.effective_jump();
+        self.clamp_now();
+    }
+
+    /// Set the value absolutely (the APG `SetValue` verb carrying a
+    /// `NumericValue`, or Home/End → `min`/`max`), clamped into `[min, max]`. An
+    /// out-of-range request saturates at the bound rather than erroring.
+    pub fn set_now(&mut self, value: f64) {
+        self.now = value;
+        self.clamp_now();
+    }
+}
+
 /// Single-line text value (a text input's current contents) → `set_value`. The
 /// *role* disambiguates this from [`A11yValue`]'s numeric `text`: a `TextInput`
 /// carries `A11yTextValue`, a `Slider` carries `A11yValue`. `set_value` takes

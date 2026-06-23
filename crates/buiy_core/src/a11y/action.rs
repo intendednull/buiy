@@ -22,12 +22,12 @@
 //! is lowered through the role's [`A11yContract::honor`](super::A11yContract).
 
 use crate::a11y::contract::{ActionError, NotActionableReason};
-use crate::a11y::states::{A11yDisabled, A11yReadOnly};
-use crate::a11y::translate::entity_for_node_id;
+use crate::a11y::states::{A11yDisabled, A11yReadOnly, A11yValue};
+use crate::a11y::translate::{entity_for_node_id, node_id_for};
 use crate::a11y::{A11yRole, contract_for};
 use crate::focus::{FocusVisible, FocusedEntity};
 use crate::interaction::OnPress;
-use accesskit::{Action, ActionRequest};
+use accesskit::{Action, ActionData, ActionRequest, TreeId};
 use bevy::a11y::ActionRequest as ActionRequestWrapper;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -291,6 +291,159 @@ pub fn keyboard_activation(
         }
         if keys.contains(&ev.key_code) {
             writer.write(OnPress(focused_entity));
+        }
+    }
+}
+
+/// The APG **slider** keyboard intent for one key (widget-contracts.md §5
+/// "Slider"): the value-changing verb a key requests on a focused slider. This
+/// is the value-changing counterpart of [`activation_keys`] — a slider's keys do
+/// **not** activate (no `OnPress`); they change the value via the same router
+/// `honor` path an AT `Increment`/`Decrement`/`SetValue` lowers into. `None` ⇒
+/// the key has no slider meaning.
+///
+/// The APG slider contract (both axes accepted per APG — orientation may *prefer*
+/// one axis, but accepting both is conformant and simplest):
+///
+/// - `ArrowRight` / `ArrowUp` → [`Action::Increment`] (one step up).
+/// - `ArrowLeft` / `ArrowDown` → [`Action::Decrement`] (one step down).
+/// - `Home` → [`Action::SetValue`] to the slider's `min`.
+/// - `End` → [`Action::SetValue`] to the slider's `max`.
+/// - `PageUp` → one large-step up; `PageDown` → one large-step down.
+///
+/// `Home`/`End` and the `PageUp`/`PageDown` page steps need the live `min`/`max`
+/// (`Home`/`End`) and `jump` (the page step) — those are read from the focused
+/// slider's [`A11yValue`] at the call site, so this fn returns a small intent enum
+/// the caller resolves against the live value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SliderKey {
+    /// `Increment`/`Decrement` — one regular step (the sign is the verb).
+    Increment,
+    Decrement,
+    /// One large "page" step (PageUp/PageDown) — resolved to `now ± jump`.
+    PageUp,
+    PageDown,
+    /// Jump to `min` (Home) / `max` (End) via `SetValue`.
+    Home,
+    End,
+}
+
+/// Map a key to its [`SliderKey`] intent, or `None` for a key with no slider
+/// meaning (which leaves the slider inert, the keyboard event untouched).
+fn slider_key(key: KeyCode) -> Option<SliderKey> {
+    match key {
+        KeyCode::ArrowRight | KeyCode::ArrowUp => Some(SliderKey::Increment),
+        KeyCode::ArrowLeft | KeyCode::ArrowDown => Some(SliderKey::Decrement),
+        KeyCode::PageUp => Some(SliderKey::PageUp),
+        KeyCode::PageDown => Some(SliderKey::PageDown),
+        KeyCode::Home => Some(SliderKey::Home),
+        KeyCode::End => Some(SliderKey::End),
+        _ => None,
+    }
+}
+
+/// Lower a [`SliderKey`] intent to the concrete router `(action, data)` for a
+/// slider whose live value is `value`. `Home`/`End` and the page steps resolve
+/// against the live bounds/jump here, then dispatch as the SAME
+/// `Increment`/`Decrement`/`SetValue` verbs an AT lowers into the slider
+/// contract's `honor` — one route, both modalities. `Increment`/`Decrement` carry
+/// no data (the contract steps by the slider's own `step`); `PageUp`/`PageDown`
+/// and `Home`/`End` resolve to an absolute `SetValue(NumericValue)` so the page
+/// step / bound jump applies even when the contract's per-arrow step differs.
+fn slider_action(intent: SliderKey, value: &A11yValue) -> (Action, Option<ActionData>) {
+    match intent {
+        SliderKey::Increment => (Action::Increment, None),
+        SliderKey::Decrement => (Action::Decrement, None),
+        // Page + bound jumps resolve against the LIVE value here and dispatch as
+        // an absolute `SetValue` (the contract clamps it into `[min, max]`).
+        SliderKey::PageUp => {
+            let mut next = value.clone();
+            next.page_increment();
+            (Action::SetValue, Some(ActionData::NumericValue(next.now)))
+        }
+        SliderKey::PageDown => {
+            let mut next = value.clone();
+            next.page_decrement();
+            (Action::SetValue, Some(ActionData::NumericValue(next.now)))
+        }
+        SliderKey::Home => (Action::SetValue, Some(ActionData::NumericValue(value.min))),
+        SliderKey::End => (Action::SetValue, Some(ActionData::NumericValue(value.max))),
+    }
+}
+
+/// APG **slider** keyboard control (widget-contracts.md §5): on a KeyDown of an
+/// arrow / Home / End / PageUp / PageDown while a `Slider` is focused, change the
+/// slider's value by dispatching the matching `Increment`/`Decrement`/`SetValue`
+/// verb through [`dispatch_action_request`] — the SAME inbound seam an AT drives,
+/// so the keyboard and the agent converge on the slider contract's `honor`
+/// (which mutates the live [`A11yValue`]). A slider's keys are **value** actions,
+/// NOT activation: this path never writes `OnPress` (the activation keymap
+/// `activation_keys` returns `None` for `Slider`, so [`keyboard_activation`]
+/// is correctly inert for it).
+///
+/// An **exclusive** system (`&mut World`) because the dispatch seam takes
+/// `&mut World` to lower a value mutation — the same shape as
+/// [`route_action_requests`]. The focused-Slider gate is checked **first**, so a
+/// non-slider focus touches no keyboard messages (it leaves them for
+/// [`keyboard_activation`]'s reader); only once a Slider is confirmed focused are
+/// the pending `KeyboardInput` events read out. Draining there is harmless to
+/// `keyboard_activation` — a `Slider` is not in `activation_keys`, so that
+/// sibling never activates it regardless of whether it sees the events.
+///
+/// Under a partial/headless harness with no `Messages<KeyboardInput>` or no
+/// `FocusedEntity` resource (no `InputPlugin`/`FocusPlugin`), the system is inert
+/// (it has no focus / reads nothing), matching [`keyboard_activation`]'s graceful
+/// degradation. A disabled slider is gated inside `dispatch_action_request` (the
+/// §3 live filter drops the actionable verb), so it is not re-checked here.
+pub fn slider_keyboard(world: &mut World) {
+    // The focused-Slider gate runs FIRST — before any message access — so a
+    // non-slider focus leaves the keyboard message buffer untouched for
+    // `keyboard_activation`'s reader. No focus resource / nothing focused ⇒ inert.
+    let Some(focused) = world.get_resource::<FocusedEntity>().and_then(|f| f.0) else {
+        return;
+    };
+    if world.get::<A11yRole>(focused).copied() != Some(A11yRole::Slider) {
+        return;
+    }
+
+    // A Slider is focused: read out its KeyDown key codes. (`keyboard_activation`
+    // is inert for `Slider`, so consuming the events here is safe.) Copy them out
+    // so the message borrow ends before the `&mut World` dispatch.
+    let keys_down: Vec<KeyCode> = {
+        let Some(mut messages) =
+            world.get_resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+        else {
+            return; // No keyboard infra (no `Messages<KeyboardInput>`) — inert.
+        };
+        messages
+            .drain()
+            .filter(|ev| ev.state == ButtonState::Pressed)
+            .map(|ev| ev.key_code)
+            .collect()
+    };
+
+    for key in keys_down {
+        let Some(intent) = slider_key(key) else {
+            continue;
+        };
+        // Resolve the intent against the LIVE value (bounds/jump), then dispatch
+        // the value verb through the shared router seam. `clone()` the small
+        // value to drop the borrow before the `&mut World` dispatch.
+        let Some(value) = world.get::<A11yValue>(focused).cloned() else {
+            continue;
+        };
+        let (action, data) = slider_action(intent, &value);
+        let req = ActionRequest {
+            action,
+            target_tree: TreeId::ROOT,
+            target_node: node_id_for(focused),
+            data,
+        };
+        if let Err(err) = dispatch_action_request(world, &req) {
+            // A soft, typed failure (e.g. a disabled slider dropped at the §3
+            // filter) — surface for diagnostics, never panic (mirrors
+            // `route_action_requests`).
+            warn!("slider keyboard action not honored: {err:?}");
         }
     }
 }

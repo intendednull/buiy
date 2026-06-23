@@ -7,7 +7,9 @@
 //! This module is the **contract surface** (co-drive P1c-a): the trait, the
 //! `ContractEntry`/`contract_for` static registry, the `ActionError` taxonomy,
 //! and the per-widget contracts. P1c-a wired [`Button`]; Wave-3 slice-1 (P1d)
-//! adds [`Checkbox`] + [`Switch`] alongside their bundles; the remaining widget
+//! added [`Checkbox`] + [`Switch`]; slice-2 adds [`Slider`] (the first
+//! value-changing contract — its verbs mutate `A11yValue` directly, not the
+//! `OnPress` activation sink) alongside their bundles; the remaining widget
 //! contracts land with their bundles in later P1d slices. The
 //! outbound [`to_accesskit_node`](super::translate::to_accesskit_node) fold now
 //! derives its advertised verbs from `Focusable` (`{Focus, Blur}`) PLUS
@@ -16,6 +18,7 @@
 //! (`route_action_requests`, P1c-b) is the caller.
 
 use crate::a11y::A11yRole;
+use crate::a11y::states::A11yValue;
 use crate::interaction::OnPress;
 use accesskit::{Action, ActionData, NodeId};
 use bevy::ecs::world::World;
@@ -137,14 +140,15 @@ impl ContractEntry {
 ///
 /// A role with no interactive contract (a `Generic`/`Text`/`Region` container)
 /// returns `None` — it advertises only the implicit `{Focus, Blur}` when
-/// focusable, and nothing else. [`Button`] (P1c-a), [`Checkbox`], and [`Switch`]
-/// (Wave-3 slice-1) are wired; the remaining role contracts land with their
-/// bundles in later P1d slices (co-drive §3 demand-pull).
+/// focusable, and nothing else. [`Button`] (P1c-a), [`Checkbox`], [`Switch`]
+/// (Wave-3 slice-1), and [`Slider`] (slice-2) are wired; the remaining role
+/// contracts land with their bundles in later P1d slices (co-drive §3 demand-pull).
 pub fn contract_for(role: A11yRole) -> Option<ContractEntry> {
     match role {
         A11yRole::Button => Some(ContractEntry::of::<Button>()),
         A11yRole::Checkbox => Some(ContractEntry::of::<Checkbox>()),
         A11yRole::Switch => Some(ContractEntry::of::<Switch>()),
+        A11yRole::Slider => Some(ContractEntry::of::<Slider>()),
         _ => None,
     }
 }
@@ -307,6 +311,87 @@ impl A11yContract for Switch {
                 target: super::translate::node_id_for(entity),
                 action,
             }),
+        }
+    }
+}
+
+/// The Slider contract (widget-contracts.md §5 "Slider"). Role `Slider`
+/// (→ accesskit `Role::Slider`); verbs `{Increment, Decrement, SetValue, Focus,
+/// Blur}` (`{Focus, Blur}` implicit via `Focusable`, so
+/// [`actions`](A11yContract::actions) lists `{Increment, Decrement, SetValue}`).
+/// State is the valued range [`A11yValue`] (`now`/`min`/`max`, optional
+/// `step`/`jump`/`text`) plus [`A11yOrientation`](super::A11yOrientation).
+///
+/// **Unlike the toggle widgets, a Slider does NOT lower through `OnPress`** — its
+/// verbs change the *value*, so `honor` mutates the live `A11yValue` **directly**
+/// (the component the outbound fold re-emits via `set_numeric_value`, so the
+/// AT/agent observes the new value the same frame). The keyboard layer mirrors
+/// this: the slider keymap dispatches `Increment`/`Decrement`/`SetValue` through
+/// the router into THIS `honor`, never the `OnPress` activation sink.
+///
+/// - `Increment` → [`A11yValue::increment`] (`now = (now + step).min(max)`).
+/// - `Decrement` → [`A11yValue::decrement`] (`now = (now − step).max(min)`).
+/// - `SetValue` carrying [`ActionData::NumericValue`] → [`A11yValue::set_now`]
+///   (clamped into `[min, max]`); a missing/wrong-variant payload is
+///   [`ActionError::BadData`].
+///
+/// At-bounds is a **saturated no-op** (the clamp inside `A11yValue`), a success,
+/// not an error — the router's live-filter §3 contract. A slider with no
+/// `A11yValue` component (a contract error) reports [`ActionError::BadData`]
+/// rather than panicking.
+///
+/// A zero-sized marker, not a Bevy `Component`: keyed by role in [`contract_for`].
+pub struct Slider;
+
+/// Slider's role-static advertised verbs beyond the implicit `{Focus, Blur}`.
+static SLIDER_ACTIONS: &[Action] = &[Action::Increment, Action::Decrement, Action::SetValue];
+
+impl A11yContract for Slider {
+    fn role() -> A11yRole {
+        A11yRole::Slider
+    }
+
+    fn actions() -> &'static [Action] {
+        SLIDER_ACTIONS
+    }
+
+    fn honor(
+        world: &mut World,
+        entity: Entity,
+        action: Action,
+        data: Option<&ActionData>,
+    ) -> Result<(), ActionError> {
+        let target = super::translate::node_id_for(entity);
+        // The value mutation funnels through the live `A11yValue` component, which
+        // the outbound fold re-emits — so the AT/agent observes the new `now` the
+        // same frame. A slider with no `A11yValue` is a contract error (the bundle
+        // `#[require]`s it), reported as `BadData`, never a panic.
+        let Some(mut value) = world.get_mut::<A11yValue>(entity) else {
+            return Err(ActionError::BadData { target, action });
+        };
+        match action {
+            Action::Increment => {
+                value.increment();
+                Ok(())
+            }
+            Action::Decrement => {
+                value.decrement();
+                Ok(())
+            }
+            // `SetValue` carries the absolute target as a `NumericValue(f64)`; a
+            // missing/wrong-variant payload is `BadData`. The set clamps into
+            // `[min, max]` (an out-of-range request saturates, never errors).
+            Action::SetValue => match data {
+                Some(ActionData::NumericValue(v)) => {
+                    value.set_now(*v);
+                    Ok(())
+                }
+                _ => Err(ActionError::BadData { target, action }),
+            },
+            // Any other verb is not in Slider's advertised set; the router rejects
+            // it at the §3 filter before `honor`, so reaching here is dead code,
+            // reported (not panicked) as `Unsupported`.
+            _ => Err(ActionError::Unsupported { target, action }),
         }
     }
 }

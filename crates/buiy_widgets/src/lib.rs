@@ -1,7 +1,7 @@
 //! Buiy widgets. Phase 0 shipped a single `Button`; Wave-3 slice-1 adds the
-//! Checkbox + Switch toggle widgets (the P1d a11y bundle + the C4 visual layer,
-//! bundle-then-pixels in one pass). Full APG widget catalog lives in
-//! `buiy-widget-catalog-design`.
+//! Checkbox + Switch toggle widgets, slice-2 adds the Slider value widget (the
+//! P1d a11y bundle + the C4 visual layer, bundle-then-pixels in one pass). Full
+//! APG widget catalog lives in `buiy-widget-catalog-design`.
 
 use bevy::prelude::*;
 use buiy_core::{
@@ -12,17 +12,21 @@ use buiy_core::{
 pub mod button;
 pub mod checkbox;
 pub mod scene;
+pub mod slider;
 pub mod switch;
 pub mod text_input;
 pub use button::Button;
 pub use checkbox::Checkbox;
+pub use slider::Slider;
 pub use switch::Switch;
 // `OnPress` relocated to `buiy_core` (co-drive SC-1) so the in-core P1c action
 // router and C3 pointer layer can write the same activation sink. Re-exported
 // here for source-compat: `buiy_widgets::OnPress` and the `buiy` prelude keep
 // resolving unchanged.
 pub use buiy_core::interaction::OnPress;
-pub use scene::{button, checkbox as checkbox_scene, switch as switch_scene};
+pub use scene::{
+    button, checkbox as checkbox_scene, slider as slider_scene, switch as switch_scene,
+};
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
 
@@ -86,6 +90,9 @@ impl Plugin for WidgetsPlugin {
             .register_type::<checkbox::CheckboxMark>()
             .register_type::<Switch>()
             .register_type::<switch::SwitchThumb>()
+            .register_type::<Slider>()
+            .register_type::<slider::SliderTrack>()
+            .register_type::<slider::SliderThumb>()
             .register_type::<text_input::TextInput>();
 
         // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual
@@ -114,5 +121,12 @@ impl Plugin for WidgetsPlugin {
             )
                 .after(advance_toggle_on_press),
         );
+        // The slider C4 visual (slice-2) reads `Changed<A11yValue>` to reposition
+        // the thumb. A slider's value is mutated by the slider contract's `honor`
+        // (driven by the APG `slider_keyboard` system / an inbound AT verb, both in
+        // `buiy_core`'s `BuiySet::Input`), NOT through the `OnPress` toggle sink —
+        // so this visual does not chain after `advance_toggle_on_press`; it runs in
+        // `Update` and settles on the `Changed<A11yValue>` gate.
+        app.add_systems(Update, slider::update_slider_visual);
     }
 }
