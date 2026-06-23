@@ -3,15 +3,17 @@
 //! (toggle button via aria-pressed, keyboard contract, full APG behavior)
 //! lives in `buiy-widget-catalog-design`.
 //!
-//! Bevy 0.18 split buffered events into `Message`. `OnPress` is therefore a
-//! `Message` (not an `Event` — `Event` is now reserved for observer-style
-//! triggers in 0.18). The click handler uses `MessageWriter::write`.
+//! The activation sink `OnPress` is the shared `buiy_core::interaction::OnPress`
+//! (co-drive SC-1) — relocated to core so the P1c action router and the C3
+//! pointer layer can write it too. The click handler uses
+//! `MessageWriter::write`.
 
 use bevy::prelude::*;
 use buiy_core::{
     a11y::{A11yLabel, A11yRole},
     components::Node,
     focus::Focusable,
+    interaction::OnPress,
     layout::{BoxModel, Style},
     picking::Hovered,
     render::color::ColorToken,
@@ -50,9 +52,6 @@ use std::borrow::Cow;
     A11yLabel,
 )]
 pub struct Button;
-
-#[derive(Message, Debug, Clone, Copy)]
-pub struct OnPress(pub Entity);
 
 // The three initializer fns below are `pub(crate)` so the `scene` module's
 // `button()` scene-fn can spell the SAME canonical values as `bsn!`
