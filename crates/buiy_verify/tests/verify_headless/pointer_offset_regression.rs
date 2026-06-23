@@ -12,10 +12,10 @@ use buiy_core::Node;
 use buiy_core::layout::Style;
 use buiy_verify::pointer::PointerHarness;
 
-// Committed #[ignore] (NOT a hand-revert): until C1 lands this is the
-// documented RED gate. C1's PR DELETES this attribute (un-ignores) and the
-// test goes GREEN — that transition IS C1's coordinate-fix verification.
-#[ignore = "RED until C1 lands: picking reads ResolvedLayout.position (parent-local) as absolute; C1 routes it through GlobalTransform and un-ignores this test"]
+// C1 LANDED (2026-06-22): picking now reads the absolute position via the
+// non-optional GlobalTransform, so the synthetic pointer over the offset
+// widget's global center hits the target. The committed RED #[ignore] (above)
+// → this un-ignore is C1's coordinate-fix verification.
 #[test]
 fn synthetic_pointer_hits_offset_widget_at_its_global_position() {
     let mut h = PointerHarness::new();

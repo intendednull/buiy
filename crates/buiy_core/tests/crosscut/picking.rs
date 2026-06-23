@@ -1,18 +1,106 @@
+//! C1: the free `hit_test` fn reads absolute position via GlobalTransform.
+//!
+//! The offset integration assertion (`hit_test_returns_entity_under_offset_widget`)
+//! is re-homed onto the C7-owned PointerHarness (crates/buiy_verify/src/pointer.rs),
+//! which drives the real layout → bridge → GlobalTransform chain with the root
+//! placed at an explicit window offset — so it OBSERVES Bug 1, unlike the prior
+//! hand-written single-node ResolvedLayout test. The harness is C7-owned (do not
+//! recreate it here); the offset RED proof is
+//! crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs.
+//!
+//! The remaining tests pin behaviors ORTHOGONAL to Bug 1 (the smallest-area
+//! tiebreak — audit #4 — and the inclusive AABB edge contract — audit #38).
+//! They hand-spawn ResolvedLayout + a matching GlobalTransform (the absolute
+//! basis C1 now reads) so the geometry under test is unchanged while the entity
+//! is visible to the new `&GlobalTransform` query. A bare ResolvedLayout (no
+//! GlobalTransform) would be dropped by the C1 query (the no-fallback contract,
+//! D2), which is itself pinned by `node_without_global_transform_is_not_picked`.
+
 use bevy::prelude::*;
 use buiy_core::{
-    CorePlugin,
-    components::{Node, ResolvedLayout},
+    CorePlugin, Node, ResolvedLayout,
+    layout::Style,
     picking::{PickingPlugin, hit_test},
 };
+use buiy_verify::pointer::PointerHarness;
 
-#[test]
-fn hit_test_returns_entity_under_point() {
+/// Spawn a Node carrying a hand-written `ResolvedLayout` AND a `GlobalTransform`
+/// whose translation matches `position` (the absolute basis C1 reads). This is
+/// the minimal bridge-free fixture for the Bug-1-orthogonal geometry tests
+/// (smallest-area, edge semantics) — the entity is visible to the C1
+/// `(ResolvedLayout, GlobalTransform)` query without standing up the full
+/// layout → bridge chain.
+fn spawn_node(app: &mut App, position: Vec2, size: Vec2) -> Entity {
+    app.world_mut()
+        .spawn((
+            Node,
+            ResolvedLayout { position, size },
+            GlobalTransform::from_translation(position.extend(0.0)),
+        ))
+        .id()
+}
+
+fn picking_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(CorePlugin);
     app.add_plugins(PickingPlugin);
+    app
+}
 
-    let entity = app
+#[test]
+fn hit_test_returns_entity_under_offset_widget() {
+    // The harness places the root at window offset (70,90); the target is the
+    // offset root's content, so its ResolvedLayout.position is parent-local but
+    // its GlobalTransform.translation is the accumulated absolute. A pre-C1
+    // hit_test (reading ResolvedLayout.position) would look at the origin box
+    // and MISS the absolute box; the fixed one HITS it.
+    let mut h = PointerHarness::new();
+    let target = h.spawn_offset_tree(
+        Vec2::new(70.0, 90.0),
+        (Node, Style::default().width_px(100.0).height_px(50.0)),
+    );
+
+    // Sanity: the target is genuinely offset (parent-local position != absolute).
+    let rl = h
+        .world_mut()
+        .get::<ResolvedLayout>(target)
+        .cloned()
+        .unwrap();
+    let gt = h
+        .world_mut()
+        .get::<GlobalTransform>(target)
+        .unwrap()
+        .translation()
+        .truncate();
+    assert_ne!(
+        gt, rl.position,
+        "absolute != parent-local (the offset is real)"
+    );
+
+    // hit_test lands at the ABSOLUTE box (the target's global center), not the
+    // origin box where the buggy code looked.
+    let center = h.global_center(target);
+    assert_eq!(
+        hit_test(h.world_mut(), center),
+        Some(target),
+        "a point at the target's GLOBAL center hits it"
+    );
+    assert_eq!(
+        hit_test(h.world_mut(), Vec2::new(10.0, 10.0)),
+        None,
+        "a point in the ORIGIN box (where pre-C1 code looked) misses"
+    );
+}
+
+/// A node carrying ResolvedLayout but NO GlobalTransform (hand-spawned,
+/// detached, never bridged) must be ABSENT from hit_test — not silently placed
+/// at ResolvedLayout.position (D2: no `unwrap_or` fallback). Guards against a
+/// future change quietly re-adding the position fallback foot-gun.
+#[test]
+fn node_without_global_transform_is_not_picked() {
+    let mut app = picking_app();
+    let bare = app
         .world_mut()
         .spawn((
             Node,
@@ -22,51 +110,36 @@ fn hit_test_returns_entity_under_point() {
             },
         ))
         .id();
-
-    let world = app.world();
-    let hit = hit_test(world, Vec2::new(50.0, 30.0));
-    assert_eq!(hit, Some(entity));
-    let miss = hit_test(world, Vec2::new(500.0, 500.0));
-    assert_eq!(miss, None);
+    // Node's #[require] graph does not pull in Transform/GlobalTransform, so a
+    // hand-spawned, detached Node has neither; strip GlobalTransform anyway as
+    // belt-and-suspenders against a require-graph change, and pin its absence
+    // immediately before the hit_test call.
+    app.world_mut().entity_mut(bare).remove::<GlobalTransform>();
+    assert!(
+        app.world().get::<GlobalTransform>(bare).is_none(),
+        "the bare node has no GlobalTransform before hit_test"
+    );
+    // A point inside the hand-set ResolvedLayout box must NOT hit — the node has
+    // no GlobalTransform, so it is dropped from the query.
+    assert_eq!(hit_test(app.world(), Vec2::new(50.0, 30.0)), None);
 }
 
 /// Audit #4 (T2.16): top-most / z-resolution. Two overlapping nodes — a small
 /// one sitting *atop* a large one — both contain the probe point. `hit_test`
-/// resolves "top-most" by smallest area (`picking/mod.rs:42-44`), so it must
-/// return the SMALLER node. A flipped comparator (`area < a` -> `>`) returns
-/// the large node and reddens this; with one node per test (the pre-#4 state)
-/// this behavior is unobservable.
+/// resolves "top-most" by smallest area, so it must return the SMALLER node. A
+/// flipped comparator (`area < a` -> `>`) returns the large node and reddens
+/// this. (Each node carries a GlobalTransform matching its position so it is
+/// visible to the C1 absolute-basis query; the geometry is unchanged.)
 #[test]
 fn hit_test_returns_smaller_area_node_when_overlapping() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(PickingPlugin);
+    let mut app = picking_app();
 
     // Large background panel: 200x200 at origin (area 40000).
-    let large = app
-        .world_mut()
-        .spawn((
-            Node,
-            ResolvedLayout {
-                position: Vec2::new(0.0, 0.0),
-                size: Vec2::new(200.0, 200.0),
-            },
-        ))
-        .id();
+    let large = spawn_node(&mut app, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0));
     // Small node on top: 40x40 at (80,80) (area 1600), fully inside `large`.
     // Spawned AFTER `large` so a "last/first-wins" bug (rather than the real
     // area comparator) would be caught regardless of iteration order.
-    let small = app
-        .world_mut()
-        .spawn((
-            Node,
-            ResolvedLayout {
-                position: Vec2::new(80.0, 80.0),
-                size: Vec2::new(40.0, 40.0),
-            },
-        ))
-        .id();
+    let small = spawn_node(&mut app, Vec2::new(80.0, 80.0), Vec2::new(40.0, 40.0));
 
     let world = app.world();
 
@@ -88,32 +161,19 @@ fn hit_test_returns_smaller_area_node_when_overlapping() {
     );
 }
 
-/// Audit #38 (T4.6): AABB edge semantics. `point_in_aabb` (`picking/mod.rs:51`)
-/// is **fully inclusive** on all four edges — `point >= min && point <= max`,
-/// closed interval `[min, max]` on both axes — so a point lying exactly ON an
-/// edge or corner is a HIT, and a point one ulp OUTSIDE is a MISS. This pins
-/// that intended boundary contract (it was previously unexercised: every prior
-/// hit-test used a point strictly interior or far outside). A regression that
-/// flipped an edge comparator to strict (`>`/`<`) would drop the on-edge hit and
-/// redden this; one that widened the box would let the just-outside probe hit.
+/// Audit #38 (T4.6): AABB edge semantics. `point_in_aabb` is **fully inclusive**
+/// on all four edges — `point >= min && point <= max`, closed interval `[min,
+/// max]` on both axes — so a point lying exactly ON an edge or corner is a HIT,
+/// and a point one ulp OUTSIDE is a MISS. A regression that flipped an edge
+/// comparator to strict (`>`/`<`) would drop the on-edge hit and redden this;
+/// one that widened the box would let the just-outside probe hit. (The node
+/// carries a GlobalTransform matching its position, the basis C1 reads.)
 #[test]
 fn hit_test_aabb_edges_are_inclusive_and_just_outside_is_a_miss() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(CorePlugin);
-    app.add_plugins(PickingPlugin);
+    let mut app = picking_app();
 
     // Box spanning [10,10] .. [110,60] (min inclusive, max inclusive).
-    let entity = app
-        .world_mut()
-        .spawn((
-            Node,
-            ResolvedLayout {
-                position: Vec2::new(10.0, 10.0),
-                size: Vec2::new(100.0, 50.0),
-            },
-        ))
-        .id();
+    let entity = spawn_node(&mut app, Vec2::new(10.0, 10.0), Vec2::new(100.0, 50.0));
     let world = app.world();
 
     // Exactly on each of the four edges: a hit (the box owns its boundary).

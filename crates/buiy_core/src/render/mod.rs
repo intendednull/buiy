@@ -113,12 +113,15 @@ impl Plugin for BuiyRenderPlugin {
                     .in_set(crate::BuiySet::Style),
             );
 
-        // Main-world render-prep: clip computation runs between Animate and
-        // Picking (architecture.md § 5.2) so picking + extract see settled
-        // ClipRects. Runs on CI/headless — no RenderApp required.
+        // Main-world render-prep: clip computation reads GlobalTransform (C1),
+        // so it MUST run AFTER the bridge's propagation chain (sync_simple_transforms
+        // is its last system, lib.rs) — and before Picking, so picking + extract
+        // see settled ClipRects (architecture.md § 5.2). Runs on CI/headless —
+        // no RenderApp required.
         app.add_systems(
             Update,
             clip::write_clip_rects
+                .after(bevy::transform::systems::sync_simple_transforms)
                 .after(crate::BuiySet::Animate)
                 .before(crate::BuiySet::Picking),
         );

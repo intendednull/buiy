@@ -62,7 +62,14 @@ pub struct Node;
 #[derive(Component, Reflect, Default, Clone, Debug)]
 #[reflect(Component)]
 pub struct ResolvedLayout {
-    /// Top-left position in logical pixels (window-relative).
+    /// Top-left position in logical pixels, **parent-relative** (Taffy's
+    /// per-node `location`; only `PostTaffyPositionOverrides` substitutes it —
+    /// sticky/table/multicol/anchor — never a general accumulation). This is NOT
+    /// an absolute coordinate: the transform bridge (`render/bridge.rs`) is the
+    /// sole accumulator (`position − ancestor_scroll` → `Transform` →
+    /// `GlobalTransform`). Absolute consumers (picking, clip, render extract,
+    /// overlays) MUST read `GlobalTransform.translation().truncate()`, never this
+    /// field. See docs/specs/2026-06-22-buiy-widget-catalog-design/coordinate-space-correctness.md.
     pub position: Vec2,
     /// Size in logical pixels.
     pub size: Vec2,

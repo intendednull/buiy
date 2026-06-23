@@ -218,6 +218,7 @@ type ClipNodeData<'w> = (
     Option<&'w Overflow>,
     Option<&'w Containment>,
     Option<&'w Display>,
+    Option<&'w GlobalTransform>,
 );
 
 /// Render-prep — computes each entity's [`ClipRect`] (own box ∩ ancestor
@@ -265,7 +266,7 @@ fn walk(
 ) {
     // A non-Node entity in the Children tree is not a Buiy node — skip it and
     // its subtree (clip applies to the Buiy node tree).
-    let Ok((rl, box_model, overflow, containment, display)) = nodes.get(entity) else {
+    let Ok((rl, box_model, overflow, containment, display, gt)) = nodes.get(entity) else {
         return;
     };
 
@@ -279,11 +280,13 @@ fn walk(
         return;
     }
 
-    // Without a resolved box this node cannot be clipped; clear its own stale
-    // clip but keep walking descendants with the unchanged ancestor clip.
-    let child_ancestor = match rl {
-        Some(rl) => {
-            let own = Aabb::from_box(rl.position, rl.size);
+    // Without a resolved box (or without a GlobalTransform — never bridged) this
+    // node cannot be clipped; clear its own stale clip but keep walking
+    // descendants with the unchanged ancestor clip.
+    let child_ancestor = match (rl, gt) {
+        (Some(rl), Some(gt)) => {
+            let abs = gt.translation().truncate(); // C1: absolute basis, not rl.position
+            let own = Aabb::from_box(abs, rl.size);
             let clip = ancestor.map(|a| a.intersect(own));
             reconcile(entity, clip, ancestor, commands, existing);
             // The clip box THIS node imposes on its descendants, folded into
@@ -291,7 +294,10 @@ fn walk(
             let contribution = clip_contribution(own, box_model, overflow, containment);
             intersect_opt(ancestor, contribution)
         }
-        None => {
+        // No resolved box OR no GlobalTransform (never bridged): cannot be
+        // clipped or contribute a clip — clear any stale own clip, keep walking
+        // descendants with the unchanged ancestor (D2: no fallback to rl.position).
+        _ => {
             reconcile(entity, None, None, commands, existing);
             ancestor
         }

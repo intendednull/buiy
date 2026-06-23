@@ -26,7 +26,7 @@ impl Plugin for BuiyPickingBackendPlugin {
 
 fn emit_picks(
     pointers: Query<(&PointerId, &PointerLocation)>,
-    nodes: Query<(Entity, &ResolvedLayout)>,
+    nodes: Query<(Entity, &ResolvedLayout, &GlobalTransform)>,
     mut output: MessageWriter<PointerHits>,
 ) {
     for (pointer, location) in pointers.iter() {
@@ -37,9 +37,11 @@ fn emit_picks(
 
         // Collect every Buiy node under the cursor, with its area as the
         // tie-break for "top-most".
+        // C1: absolute basis = GlobalTransform; C3 owns depth/camera/no-hit.
         let mut hits: Vec<(Entity, f32)> = Vec::new();
-        for (entity, layout) in nodes.iter() {
-            if point_in_aabb(cursor, layout) {
+        for (entity, layout, gt) in nodes.iter() {
+            let abs_pos = gt.translation().truncate();
+            if point_in_aabb(cursor, abs_pos, layout.size) {
                 let area = layout.size.x * layout.size.y;
                 hits.push((entity, area));
             }
