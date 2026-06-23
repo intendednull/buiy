@@ -1,0 +1,14 @@
+---
+source: examples/buiy_gallery/tests/overlay_menu_layout.rs
+expression: overlay_menu_screen
+---
+# buiy-layout-dump v1
+InfoPopover pos=176,52 size=160,80
+OverlayCard pos=0,0 size=468,96
+  EditMenuButton pos=24,24 size=136,48
+    EditMenu pos=8,8 size=168,92
+      MenuCopy pos=4,32 size=152,28
+      MenuCut pos=4,4 size=152,28
+      MenuPaste pos=4,60 size=152,28
+  InfoTip pos=176,24 size=24,24
+    entity#92 pos=0,0 size=160,28

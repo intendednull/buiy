@@ -1,5 +1,6 @@
 //! `buiy_gallery` — the widget-catalog campaign's runnable exemplar app and the
-//! `buiy_verify` screen-fixture source. **C8-a delivers S1 (TodoMVC).**
+//! `buiy_verify` screen-fixture source. **C8-a delivers S1 (TodoMVC); C8-b adds
+//! S2 (scroll / long-list) + S3 (overlay / menu).**
 //!
 //! S1 composes the landed P1d widget bundles (single-line [`TextInput`], the
 //! tri-state [`Checkbox`], [`Button`]) + the A11yLive `Status` live region into
@@ -8,6 +9,21 @@
 //! completed, filter All/Active/Completed, and a "N items left" count that lives
 //! in an `A11yRole::Status` aria-live region. Double-clicking a row's label edits
 //! it in place (C3b `MultiClick`).
+//!
+//! **S2 ([`screen_scroll_list`]) — the scale game.** A [`ScrollArea`] (C5-a)
+//! holding [`SCROLL_LIST_ROWS`] (~1000) rows — the 1000× TodoMVC scale-game that
+//! settles C5's virtualization ceiling (off-screen rows ride the landed
+//! `ContentVisibility::Auto` skip). The container owns keyboard scroll
+//! (PageDown/End) and the SC-4 `A11yScroll` source the a11y fold projects, so a
+//! wheel (via the C7 `PointerHarness`) or a key advances the clamped
+//! `ScrollOffset` and the driver snapshot's scroll fields track it.
+//!
+//! **S3 ([`screen_overlay_menu`]) — overlays.** A [`MenuButton`] opening a
+//! [`Menu`] of [`MenuItem`]s (roving / activedescendant), a [`TooltipTrigger`]
+//! (show/hide its tip), and a standalone anchored [`Popover`] (light-dismiss). The
+//! menu item activation flows through the shared `OnPress` sink into an observable
+//! effect ([`MenuActivations`]), so the driver can drive open → arrow-nav →
+//! Enter-activate → Esc/outside-close and observe each step through the a11y tree.
 //!
 //! **Pure composition (C8 contract).** The crate defines no widget bundle, no
 //! a11y-state component, and no primitive. [`screen_todomvc`] authors the static
@@ -34,7 +50,7 @@
 
 use bevy::prelude::{
     App, Camera2d, ChildOf, Children, Commands, Component, Entity, Has, IntoScheduleConfigs,
-    MessageReader, On, Plugin, Query, Res, ResMut, Resource, Update, With, World,
+    MessageReader, Name, On, Plugin, Query, Res, ResMut, Resource, Update, With, World, children,
 };
 use buiy::prelude::*;
 use buiy_core::BuiySet;
@@ -673,4 +689,279 @@ fn is_descendant(world: &World, e: Entity, ancestor: Entity) -> bool {
         }
     }
     false
+}
+
+// ###########################################################################
+// S2 — scroll / long-list (the scale-game). A `ScrollArea` over ~1000 rows.
+// ###########################################################################
+
+/// The long-list row count — the 1000× TodoMVC scale-game (C8 §3.2). One entity
+/// per row (the retained-mode model); the off-screen rows ride the landed
+/// `ContentVisibility::Auto` skip, so the 1000-row build costs 1000 entities but
+/// only the on-screen window costs paint + shaping.
+pub const SCROLL_LIST_ROWS: usize = 1000;
+
+/// The S2 viewport height (logical px). Small relative to the content so the
+/// list overflows and is scrollable from the first frame.
+const SCROLL_VIEWPORT_H: f32 = 300.0;
+
+/// One long-list row's fixed height (logical px). `content = ROWS × ROW_H` is the
+/// scroll extent the clamp reads.
+const SCROLL_ROW_H: f32 = 28.0;
+
+/// Tag on the S2 `#ScrollList` container (the `ScrollArea`) — where the rows are
+/// appended and the scroll/keyboard handlers target.
+#[derive(Component, Clone, Default)]
+pub struct ScrollList;
+
+/// One long-list row (a labelled `Text` line). A bare app-state marker; the
+/// visible pixels are the row's `Text` child.
+#[derive(Component, Clone, Default)]
+pub struct ScrollRow;
+
+/// The S2 screen as a composable [`Scene`]: a `#ScrollCard` flex-column card
+/// holding a heading and the `#ScrollList` [`ScrollArea`] viewport. The rows are
+/// appended imperatively (they are dynamic — 1000 of them — so they are seeded by
+/// [`fill_scroll_list`], not authored statically), the way S1 seeds its todo rows.
+///
+/// `n` is the row count the binary/fixture seeds (the default is
+/// [`SCROLL_LIST_ROWS`]); it is threaded so a test can shrink it. Every entity is
+/// `#Name`-tagged so layout/a11y dumps are content-keyed.
+pub fn screen_scroll_list(n: usize) -> impl Scene {
+    let _ = n; // rows are seeded imperatively (see `fill_scroll_list`).
+    bsn! {
+        #ScrollCard
+        Node
+        template_value(Display::flex_column())
+        FlexParams {
+            direction: FlexAxis::Column,
+            gap: { FlexGap { row: Length::px(12.0), column: Length::px(12.0) } },
+        }
+        BoxModel {
+            width: { Sizing::Length(Length::Px(360.0)) },
+            padding: { Edges::all(16.0) },
+        }
+        Background { color: { ColorToken::Token("color.surface.primary".into()) } }
+        Border { radius: { Corners::all(Radius::circular(6.0)) } }
+        Children [
+            (#ScrollHeading Text({ format!("{SCROLL_LIST_ROWS} items") }) FontSize({ 18.0 })),
+            (
+                // The scroll viewport: the `ScrollArea` marker triggers the full
+                // C5-a `#[require]` contract (a scrollable `Overflow`,
+                // `ScrollOffset`, `ScrollExtent`, `Focusable`, `A11yRole::Group`,
+                // and the SC-4 `A11yScroll` source). Sized to a short viewport so
+                // the 1000-row content overflows + scrolls. The `ScrollList`
+                // marker is the app-logic handle the seeding queries.
+                #ScrollList
+                ScrollList
+                scroll_area("Items")
+                BoxModel {
+                    width: { Sizing::Length(Length::Px(328.0)) },
+                    height: { Sizing::Length(Length::Px(SCROLL_VIEWPORT_H)) },
+                }
+                FlexParams {
+                    direction: FlexAxis::Column,
+                    gap: { FlexGap { row: Length::px(2.0), column: Length::px(2.0) } },
+                }
+            ),
+        ]
+    }
+}
+
+/// One long-list row scene: a fixed-height `Text` line. Pinned `min_height` so the
+/// flex column cannot shrink the row back (the same "keep it tall so the container
+/// overflows" discipline the C5-a scroll tests use).
+fn scroll_row(label: &str) -> impl Scene {
+    let label = label.to_string();
+    bsn! {
+        #ScrollRow
+        ScrollRow
+        Node
+        BoxModel {
+            width: { Sizing::Length(Length::Px(300.0)) },
+            height: { Sizing::Length(Length::Px(SCROLL_ROW_H)) },
+            min_height: { Sizing::Length(Length::Px(SCROLL_ROW_H)) },
+        }
+        Children [
+            (#ScrollRowText Text({ label }) FontSize({ 14.0 })),
+        ]
+    }
+}
+
+/// Seed `n` rows into the `#ScrollList` (the binary + fixture both call this; rows
+/// are dynamic, like S1's todo rows). Returns the row count actually appended.
+pub fn fill_scroll_list(world: &mut World, n: usize) -> usize {
+    let Some(list) = find_single::<ScrollList>(world) else {
+        return 0;
+    };
+    let mut rows = Vec::with_capacity(n);
+    for i in 0..n {
+        let row = world
+            .spawn_scene(scroll_row(&format!("Item {}", i + 1)))
+            .expect("spawn scroll row scene")
+            .id();
+        rows.push(row);
+    }
+    world.entity_mut(list).add_children(&rows);
+    n
+}
+
+/// Startup system for the S2 binary: a camera, the screen, then the rows.
+pub fn setup_scroll_list(mut commands: Commands) {
+    commands.spawn(Camera2d);
+    commands.spawn_scene(screen_scroll_list(SCROLL_LIST_ROWS));
+    commands.queue(|world: &mut World| {
+        fill_scroll_list(world, SCROLL_LIST_ROWS);
+    });
+}
+
+// ###########################################################################
+// S3 — overlay / menu. A MenuButton→Menu, a TooltipTrigger, and a Popover.
+// ###########################################################################
+
+/// Tag on each S3 menu item — carries the item's index so an activation records a
+/// content-keyed effect ([`MenuActivations`]) the driver can observe.
+#[derive(Component, Clone, Copy, Default)]
+pub struct MenuAction(pub usize);
+
+/// The observable effect of a menu-item activation (the S3 grounding loop): the
+/// labels of the items whose shared `OnPress` sink fired, in order. The driver
+/// asserts an Enter on the active item appends to this — proving activation
+/// reaches an app-level effect, not just the a11y state.
+#[derive(Resource, Default)]
+pub struct MenuActivations(pub Vec<String>);
+
+/// The labels of the S3 menu's items (Cut / Copy / Paste — the canonical menu).
+pub const MENU_ITEM_LABELS: &[&str] = &["Cut", "Copy", "Paste"];
+
+/// The S3 screen as a composable [`Scene`]: a `#OverlayCard` flex-row of the three
+/// overlay triggers — a [`MenuButton`] ("Edit") controlling a [`Menu`] of
+/// [`MenuItem`]s, a [`TooltipTrigger`] ("?"), and a standalone anchored
+/// [`Popover`]. The `Popover`'s anchor (and the menu↔button + tooltip
+/// `described_by` edges) are wired by the `WidgetsPlugin` wiring systems once the
+/// children exist; the popover here is authored open-on-demand (it starts hidden
+/// and is shown by the driver/binary). Every entity is `#Name`-tagged.
+///
+/// The menu items carry a [`MenuAction`] index so [`OverlayMenuPlugin`] records an
+/// observable effect on activation. `popover_anchor` is the entity the standalone
+/// popover anchors to (the tooltip trigger, so it has a real on-screen anchor);
+/// it is passed in because a `Popover` references an `Entity` the scene cannot
+/// name until it is spawned — the binary/fixture spawns the trigger first.
+pub fn screen_overlay_menu() -> impl Scene {
+    bsn! {
+        #OverlayCard
+        Node
+        template_value(Display::flex_row())
+        FlexParams {
+            direction: FlexAxis::Row,
+            gap: { FlexGap { row: Length::px(16.0), column: Length::px(16.0) } },
+        }
+        BoxModel {
+            width: { Sizing::Length(Length::Px(420.0)) },
+            padding: { Edges::all(24.0) },
+        }
+        Background { color: { ColorToken::Token("color.surface.primary".into()) } }
+        Border { radius: { Corners::all(Radius::circular(6.0)) } }
+        Children [
+            // The MenuButton + its controlled Menu (Cut/Copy/Paste). The
+            // `menu_button` scene-fn triggers the full trigger contract
+            // (A11yHasPopup(Menu) + A11yExpanded + the Button keymap); the menu +
+            // items are authored as the button's children, and `wire_menu_button`
+            // wires the controls/anchor edges. Each item carries a `MenuAction`.
+            (
+                #EditMenuButton
+                menu_button("Edit")
+                Children [
+                    (Text("Edit") FontSize({ 16.0 }) template_value(bevy::picking::Pickable::IGNORE)),
+                    (
+                        #EditMenu
+                        menu()
+                        Children [
+                            (#MenuCut menu_item("Cut") template_value(MenuAction(0))),
+                            (#MenuCopy menu_item("Copy") template_value(MenuAction(1))),
+                            (#MenuPaste menu_item("Paste") template_value(MenuAction(2))),
+                        ]
+                    ),
+                ]
+            ),
+            // The tooltip trigger ("?", tip "More info here"). The `tooltip_trigger`
+            // scene-fn triggers the A11yTooltipHost capability + the controlled
+            // Tooltip node (starts hidden); the router's ShowTooltip/HideTooltip
+            // honor flips its visibility, and `position_tooltip` places it.
+            (#InfoTip tooltip_trigger("?", "More info here")),
+        ]
+    }
+}
+
+/// Spawn the S3 scene into `world` + a standalone anchored [`Popover`] anchored to
+/// the tooltip trigger (the popover references an `Entity`, so it is spawned after
+/// the scene). Returns the standalone popover entity. Shared by the binary
+/// ([`setup_overlay_menu`]) and the fixtures so both render the same tree.
+pub fn spawn_overlay_menu(world: &mut World) -> Entity {
+    world
+        .spawn_scene(screen_overlay_menu())
+        .expect("spawn the overlay-menu screen");
+    // The standalone anchored popover (light-dismiss): a small panel anchored to
+    // the tooltip trigger. It starts hidden; the driver/binary opens it. Authored
+    // imperatively because `Popover.anchor` names the trigger's entity.
+    let anchor = find_single::<buiy_widgets::tooltip::TooltipTrigger>(world);
+    world
+        .spawn((
+            buiy_widgets::Popover {
+                anchor,
+                ..Default::default()
+            },
+            Name::new("InfoPopover"),
+            buiy_core::render::components::CssVisibility::Hidden,
+            buiy_core::layout::Style::default()
+                .width_px(160.0)
+                .height_px(80.0),
+            children![(
+                Name::new("InfoPopoverText"),
+                Text("Anchored panel".to_string()),
+                FontSize(14.0),
+                bevy::picking::Pickable::IGNORE,
+            )],
+        ))
+        .id()
+}
+
+/// Startup system for the S3 binary: a camera, then the overlay screen + popover.
+pub fn setup_overlay_menu(mut commands: Commands) {
+    commands.spawn(Camera2d);
+    commands.queue(|world: &mut World| {
+        spawn_overlay_menu(world);
+    });
+}
+
+/// The S3 app logic: record an observable effect when a menu item is activated.
+/// A menu item's activation rides the shared [`OnPress`] sink (written by the
+/// menu's Enter/Space keyboard nav, or a future per-item pointer handler); this
+/// system reads it `.after(BuiySet::Input)` (the C8 §2.5(1) ordering) and appends
+/// the activated item's label to [`MenuActivations`] — the grounding-loop effect
+/// the driver asserts.
+pub struct OverlayMenuPlugin;
+
+impl Plugin for OverlayMenuPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<MenuActivations>()
+            .add_systems(Update, record_menu_activation.after(BuiySet::Input));
+    }
+}
+
+/// Append each activated menu item's label to [`MenuActivations`]. Reads the
+/// shared `OnPress` sink (the same sink the menu keyboard nav writes for the
+/// active item) and resolves the pressed entity's [`MenuAction`] → its label.
+pub fn record_menu_activation(
+    mut reader: MessageReader<OnPress>,
+    items: Query<&MenuAction>,
+    mut log: ResMut<MenuActivations>,
+) {
+    for OnPress(e) in reader.read() {
+        if let Ok(action) = items.get(*e)
+            && let Some(label) = MENU_ITEM_LABELS.get(action.0)
+        {
+            log.0.push((*label).to_string());
+        }
+    }
 }

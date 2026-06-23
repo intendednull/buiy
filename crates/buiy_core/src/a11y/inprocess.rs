@@ -75,6 +75,29 @@ pub struct NodeState {
     pub live: accesskit::Live,
     /// Whether this node currently holds focus (read from the consumer's focus).
     pub focused: bool,
+    /// SC-4 scroll geometry, read back through the consumer's f64 scroll
+    /// getters. `None` ⇒ not a scroll container (no scroll setter fired);
+    /// `Some` ⇒ the live offset + per-axis maxima a scroll region reports, so an
+    /// AT (and the inspection driver) observes the scroll position + extent the
+    /// wheel/keyboard handlers leave (the C5/SC-4 source folded into the tree).
+    pub scroll: Option<ScrollState>,
+}
+
+/// The consumer-side view of a scroll container's SC-4 scroll geometry — the
+/// `Some` payload of [`NodeState::scroll`]. Each axis carries the current offset
+/// and the maximum scrollable offset (`content_extent − viewport_extent`, clamped
+/// ≥ 0); the min is always `0.0` so it is not re-carried. Read back through the
+/// `accesskit_consumer` scroll getters, so it reflects exactly what the AT sees.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct ScrollState {
+    /// Current horizontal scroll offset (logical px) — `scroll_x()`.
+    pub x: f64,
+    /// Current vertical scroll offset (logical px) — `scroll_y()`.
+    pub y: f64,
+    /// Maximum horizontal offset (`content − viewport`, ≥ 0) — `scroll_x_max()`.
+    pub x_max: f64,
+    /// Maximum vertical offset (`content − viewport`, ≥ 0) — `scroll_y_max()`.
+    pub y_max: f64,
 }
 
 impl Default for NodeState {
@@ -94,6 +117,7 @@ impl Default for NodeState {
             // policy — the present-only convention applied to the live region.
             live: accesskit::Live::Off,
             focused: false,
+            scroll: None,
         }
     }
 }
@@ -239,6 +263,16 @@ fn project_node(node: &ConsumerNode, view: &crate::a11y::A11yNodeView) -> Semant
         has_popup: node.has_popup(),
         live: node.live(),
         focused: node.is_focused(),
+        // SC-4 scroll: a scroll container fires `set_scroll_x`/`set_scroll_y`, so
+        // `scroll_y()` is `Some` exactly for a scroll region. Read the live offset
+        // + per-axis maxima back through the consumer (the same getters a real AT
+        // calls); a non-scroll node reports `None` on every getter ⇒ `None` here.
+        scroll: node.scroll_y().or(node.scroll_x()).map(|_| ScrollState {
+            x: node.scroll_x().unwrap_or(0.0),
+            y: node.scroll_y().unwrap_or(0.0),
+            x_max: node.scroll_x_max().unwrap_or(0.0),
+            y_max: node.scroll_y_max().unwrap_or(0.0),
+        }),
     };
 
     SemanticNode {
