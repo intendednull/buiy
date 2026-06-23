@@ -7,7 +7,6 @@ use crate::picking::depth::{PickCandidate, paint_index_lookup, resolve_picks};
 use crate::render::components::ClipRect;
 use bevy::ecs::query::QueryState;
 use bevy::picking::Pickable;
-use bevy::picking::backend::PointerHits;
 use bevy::prelude::*;
 
 pub mod activation;
@@ -23,29 +22,33 @@ pub use backend::BuiyPickingBackendPlugin;
 pub use depth::global_paint_order;
 pub use gesture::{MultiClick, derive_multi_click};
 
-/// Buiy picking exposes a simple AABB hit-test fn for tests + a `Hovered`
-/// resource updated by consuming `PointerHits` from the Buiy `bevy_picking`
-/// backend.
+/// Buiy picking exposes a stacking-aware AABB hit-test fn ([`hit_test`]) for
+/// tests + library consumers, the Buiy `bevy_picking` backend
+/// ([`BuiyPickingBackendPlugin`]), and the full `Pointer<E>` event layer.
 ///
-/// C3b wires the full `Pointer<E>` event layer on top: it adds bevy_picking's
+/// C3b wired the `Pointer<E>` event layer: this plugin adds bevy_picking's
 /// [`bevy::picking::InteractionPlugin`] (the hover diff that turns Buiy's
 /// `PointerHits` into the `Pointer<Over/Out/Move/Press/Release/Click/Drag*/
 /// Scroll>` taxonomy + bubbling + observers) and registers the C3 pointer
 /// producers as observers: the `Pointer<Click>` → [`OnPress`](crate::interaction::OnPress)
 /// activation producer and the widget-agnostic [`MultiClick`] gesture derived
-/// from the editor's `ClickTracker`. The legacy `Hovered` resource +
-/// `update_hovered` are kept ALONGSIDE the event layer (their consumers migrate
-/// off in C3c, behind a shim), so this layer is purely additive.
+/// from the editor's `ClickTracker`.
+///
+/// C3c retired the legacy `Hovered` resource + `update_hovered` system entirely
+/// (input-event-model.md § 2.10): every consumer (the Button activation, the
+/// editor's mouse selection, the `TextInput` focus-on-click) now sources its
+/// hover/press state from the `Pointer<E>` layer directly — the picked target is
+/// the event's entity, so no parent-relative "currently hovered" resource is
+/// needed. The migration deleted cleanly: no shim was required because no
+/// consumer needs a standalone hovered-entity signal the `Pointer<E>` layer does
+/// not already carry. (bevy_picking's own `DirectlyHovered`/`Hovered` components
+/// remain available for any future "is this entity hovered" query.)
 ///
 /// The real winit-cursor reader ([`bevy::picking::input::PointerInputPlugin`])
 /// is added by the meta-crate `BuiyPlugin` (a windowed app), NOT here: the
 /// headless test harness injects `PointerInput` directly, and adding
 /// `PointerInputPlugin` would spawn a duplicate `PointerId::Mouse` pointer.
 pub struct PickingPlugin;
-
-#[derive(Resource, Reflect, Default, Clone, Debug)]
-#[reflect(Resource)]
-pub struct Hovered(pub Option<Entity>);
 
 impl Plugin for PickingPlugin {
     fn build(&self, app: &mut App) {
@@ -61,10 +64,6 @@ impl Plugin for PickingPlugin {
         if !app.is_plugin_added::<bevy::picking::InteractionPlugin>() {
             app.add_plugins(bevy::picking::InteractionPlugin);
         }
-
-        app.register_type::<Hovered>()
-            .init_resource::<Hovered>()
-            .add_systems(Update, update_hovered.in_set(crate::BuiySet::Picking));
 
         // C3 pointer producers (observers fire when the hover stage triggers the
         // matching `Pointer<E>`):
@@ -179,31 +178,6 @@ pub(crate) fn point_in_node(
 pub(crate) fn point_in_aabb(point: Vec2, abs_pos: Vec2, size: Vec2) -> bool {
     let max = abs_pos + size;
     point.x >= abs_pos.x && point.x <= max.x && point.y >= abs_pos.y && point.y <= max.y
-}
-
-fn update_hovered(mut hovered: ResMut<Hovered>, mut events: MessageReader<PointerHits>) {
-    // The top-most hit is at index 0 of `picks` (sorted ascending by depth in
-    // `BuiyPickingBackendPlugin::emit_picks`). Multiple pointers: we honor the
-    // most-recently-emitted hit and fall through to clearing if no events
-    // arrive this frame.
-    let mut latest: Option<Entity> = None;
-    let mut saw_event = false;
-    for ev in events.read() {
-        saw_event = true;
-        if let Some((entity, _)) = ev.picks.first() {
-            latest = Some(*entity);
-        } else {
-            latest = None;
-        }
-    }
-    if saw_event {
-        hovered.0 = latest;
-    }
-    // Phase 0 closeout limitation: `emit_picks` skips emission when no Buiy
-    // node is under the cursor (see `backend::emit_picks`). When the cursor
-    // leaves all Buiy nodes (or the window), no event arrives and `Hovered`
-    // retains its last value. v0.x `buiy-input-events-design` widens the
-    // backend to emit "no hit" events so `Hovered` can clear correctly.
 }
 
 #[cfg(test)]

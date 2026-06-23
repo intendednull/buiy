@@ -40,7 +40,7 @@ pub use layout::{
     UnicodeBidi, WillChange, WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
 };
 pub use picking::{
-    BuiyPickingBackendPlugin, Hovered, MultiClick, PickingPlugin, global_paint_order, hit_test,
+    BuiyPickingBackendPlugin, MultiClick, PickingPlugin, global_paint_order, hit_test,
 };
 pub use render::color::{ColorToken, SystemColorKeyword};
 pub use render::components::{

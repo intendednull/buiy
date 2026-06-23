@@ -7,13 +7,21 @@
 //! single-node ResolvedLayout cannot — spec §1). The harness is C7-owned; do not
 //! recreate the injection machinery here.
 //!
-//! The remaining tests pin behaviors ORTHOGONAL to Bug 1 (the depth rule — now
-//! paint-order, audit #4 updated by C3a — and the Hovered consumer chain — audit
-//! #21). They hand-spawn ResolvedLayout + a matching GlobalTransform (the absolute
-//! basis C1 reads) plus a root StackingContext to fix the paint order, so the
-//! geometry is unchanged while the node is visible to the new `&GlobalTransform`
-//! query. NOTE: do NOT trust the hand-spawned fixtures as the coordinate-
-//! correctness gate — that is the harness offset test.
+//! The remaining test pins a behavior ORTHOGONAL to Bug 1 (the depth rule — now
+//! paint-order, audit #4 updated by C3a). It hand-spawns ResolvedLayout + a
+//! matching GlobalTransform (the absolute basis C1 reads) plus a root
+//! StackingContext to fix the paint order, so the geometry is unchanged while the
+//! node is visible to the new `&GlobalTransform` query. NOTE: do NOT trust the
+//! hand-spawned fixtures as the coordinate-correctness gate — that is the harness
+//! offset test.
+//!
+//! C3c retired the legacy `Hovered` resource (input-event-model.md § 2.10), so
+//! the `Hovered`-consumer-chain test (audit #21) is removed: the topmost-painted
+//! resolution it asserted is now pinned directly on the backend's `PointerHits`
+//! output by `overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths`
+//! (`picks[0]` is the top-painted node), and the live hover signal is
+//! bevy_picking's own `Pointer<Over>`/`DirectlyHovered`, exercised on the C7
+//! PointerHarness (`pointer_events_c3b.rs`).
 //!
 //! API deviations from plan (Bevy 0.19 vs plan's 0.18 assumptions):
 //! - `PointerHits` is a `Message`, not an `Event`; accessed via
@@ -33,15 +41,15 @@ use bevy::window::WindowRef;
 use buiy_core::{
     CorePlugin, Node, ResolvedLayout, StackingContext,
     layout::Style,
-    picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin},
+    picking::{BuiyPickingBackendPlugin, PickingPlugin},
 };
 use buiy_verify::pointer::PointerHarness;
 
 /// Spawn a Node carrying a hand-written `ResolvedLayout` AND a `GlobalTransform`
 /// whose translation matches `position` (the absolute basis C1 reads). The
-/// bridge-free fixture for the Bug-1-orthogonal backend tests (depth ranking,
-/// Hovered) — the node is visible to the C1 `(ResolvedLayout, GlobalTransform)`
-/// query without the full layout → bridge chain.
+/// bridge-free fixture for the Bug-1-orthogonal backend test (depth ranking) —
+/// the node is visible to the C1 `(ResolvedLayout, GlobalTransform)` query
+/// without the full layout → bridge chain.
 fn spawn_node(app: &mut App, position: Vec2, size: Vec2) -> Entity {
     app.world_mut()
         .spawn((
@@ -222,42 +230,4 @@ fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
         "HitData.camera resolves to the window's Camera2d"
     );
     assert_eq!(hit.order, 0.5, "PointerHits order == camera.order + 0.5");
-}
-
-/// Audit #21 (T2.19), C3a-updated: the `Hovered` consumer chain end-to-end.
-/// `emit_picks` (PreUpdate) writes `PointerHits`; `update_hovered` (Update,
-/// `BuiySet::Picking`, the only writer of `Hovered`) reads `picks.first()` (the
-/// topmost) and stores it. After one `app.update()` the `Hovered` resource must
-/// equal the entity under the cursor. With two overlapping nodes this pins the
-/// top-most rule, now **paint-order** not smallest-area: the LARGE node is painted
-/// on top, so `Hovered` must be the larger one (`picks[0]`), the inverse of the
-/// pre-C3a area rule. (`update_hovered` is unchanged by C3a — only the depth rule
-/// feeding it changed.)
-#[test]
-fn hovered_resource_tracks_top_painted_node_after_backend_emit() {
-    let mut app = backend_app();
-    let window = spawn_window_and_camera(&mut app);
-
-    // Nothing hovered before any pointer is processed.
-    assert_eq!(
-        app.world().resource::<Hovered>().0,
-        None,
-        "Hovered starts empty"
-    );
-
-    let small = spawn_node(&mut app, Vec2::new(80.0, 80.0), Vec2::new(40.0, 40.0));
-    let large = spawn_node(&mut app, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0));
-    // Paint order: small bottom, large TOP. `large` is the default-pickable
-    // occluder, so it is the sole survivor and the tracked hover.
-    spawn_paint_order(&mut app, &[small, large]);
-
-    spawn_pointer_in(&mut app, window, Vec2::new(90.0, 90.0));
-
-    app.update();
-
-    assert_eq!(
-        app.world().resource::<Hovered>().0,
-        Some(large),
-        "Hovered must track the top-PAINTED node under the cursor, not {small:?}"
-    );
 }

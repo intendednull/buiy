@@ -23,12 +23,14 @@ impl Plugin for WidgetsPlugin {
         // (`InteractionPlugin`, co-drive SC-1), not here — the shared
         // activation sink lives in `buiy_core` so in-core producers can write
         // it. `WidgetsPlugin` is always composed after `CorePlugin`.
+        //
+        // C3c retired the Phase-0 `Hovered`-polling input systems
+        // (input-event-model.md § 2.8): Button activation now lowers through
+        // `buiy_core`'s C3b `Pointer<Click>` → `OnPress` producer (registered by
+        // `PickingPlugin`), so the widget crate carries no button activation
+        // system. `TextInput` focus-on-click is now a `Pointer<Press>` observer.
         app.register_type::<Button>()
             .register_type::<text_input::TextInput>()
-            .add_systems(
-                Update,
-                (button::emit_on_press_on_click, text_input::focus_on_click)
-                    .in_set(buiy_core::BuiySet::Input),
-            );
+            .add_observer(text_input::focus_on_click);
     }
 }

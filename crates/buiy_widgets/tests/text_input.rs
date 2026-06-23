@@ -107,31 +107,82 @@ fn multi_line_text_input_has_no_single_line_marker() {
     assert!(app.world().get::<TextEditState>(entity).is_some());
 }
 
+/// Clicking a text input focuses it — C3c migrated the `focus_on_click` widget
+/// policy off the legacy `Hovered` resource onto the bevy_picking `Pointer<E>`
+/// layer. The driving mechanism changed (a synthetic `PointerInput` press over
+/// the input's absolute box, through the real picking pipeline →
+/// `Pointer<Press>` → the `focus_on_click` observer), but the asserted intent is
+/// identical: a primary press on the input sets `FocusedEntity` to it.
+///
+/// The full Buiy backend is added explicitly so a `Pointer<Press>` fires; the
+/// input is given a `ResolvedLayout` + `GlobalTransform` (the absolute basis
+/// `emit_picks` reads) and the app stands up a window + `Camera2d`.
 #[test]
 fn clicking_a_text_input_focuses_it() {
+    use bevy::camera::{Camera2d, NormalizedRenderTarget, RenderTarget};
+    use bevy::picking::pointer::{
+        Location, PointerAction, PointerButton, PointerId, PointerLocation,
+    };
+    use bevy::window::{PrimaryWindow, Window, WindowRef, WindowResolution};
     use buiy_core::FocusedEntity;
+    use buiy_core::ResolvedLayout;
     use buiy_core::focus::FocusPlugin;
-    use buiy_core::picking::Hovered;
+    use buiy_core::picking::{BuiyPickingBackendPlugin, PickingPlugin};
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::picking::PickingPlugin);
     app.add_plugins(buiy_core::CorePlugin);
+    app.add_plugins(PickingPlugin);
+    app.add_plugins(BuiyPickingBackendPlugin);
     app.add_plugins(FocusPlugin);
     app.add_plugins(WidgetsPlugin);
     // `FocusPlugin::handle_tab` reads `Res<ButtonInput<KeyCode>>` (the resource a
     // real app gets from `InputPlugin`, absent under MinimalPlugins) — seed it so
-    // the focus systems validate. `MouseButton` drives `focus_on_click`.
+    // the focus systems validate.
     app.init_resource::<ButtonInput<KeyCode>>();
-    app.init_resource::<ButtonInput<MouseButton>>();
+
+    // A synthetic primary window + a Camera2d targeting it (the §3.1 camera
+    // resolution the backend needs).
+    let window = app
+        .world_mut()
+        .spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..Default::default()
+            },
+            PrimaryWindow,
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Camera2d, RenderTarget::Window(WindowRef::Entity(window))));
 
     let entity = app.world_mut().spawn(TextInput::single_line("")).id();
-    app.update();
+    // The input's absolute box (0,0)..(200,32) — give it the absolute basis
+    // `emit_picks` reads without the full layout→bridge chain.
+    app.world_mut().entity_mut(entity).insert((
+        ResolvedLayout {
+            position: Vec2::ZERO,
+            size: Vec2::new(200.0, 32.0),
+        },
+        GlobalTransform::IDENTITY,
+    ));
 
-    // Hover + mouse-down on the input.
-    app.world_mut().insert_resource(Hovered(Some(entity)));
+    // Aim the synthetic pointer at the input's center and press.
+    let target = WindowRef::Entity(window).normalize(Some(window)).unwrap();
+    let location = Location {
+        target: NormalizedRenderTarget::Window(target),
+        position: Vec2::new(100.0, 16.0),
+    };
     app.world_mut()
-        .resource_mut::<ButtonInput<MouseButton>>()
-        .press(MouseButton::Left);
+        .spawn((PointerId::Mouse, PointerLocation::new(location.clone())));
+    app.update(); // backend emits a hit; the hover stage registers Over.
+    app.world_mut()
+        .write_message(bevy::picking::pointer::PointerInput {
+            pointer_id: PointerId::Mouse,
+            location,
+            action: PointerAction::Press(PointerButton::Primary),
+        });
     app.update();
 
     assert_eq!(

@@ -26,7 +26,7 @@ pub use buiy_core::{
         Translate, TryCondition, UiTransform, UnicodeBidi, WillChange, WillChangeProperty,
         WritingMode, WritingModeKind, WritingModeResolved, ZIndex,
     },
-    picking::{BuiyPickingBackendPlugin, Hovered, MultiClick},
+    picking::{BuiyPickingBackendPlugin, MultiClick},
     render::color::ColorToken,
     render::components::{
         Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius, TextColor,
@@ -60,10 +60,12 @@ pub use buiy_widgets::scene::{button, text_input_multi_line, text_input_single_l
 // so a pre-1.0 upstream rename touches this one file. `Pickable` is the
 // widget-internal pick-through convention (`Pickable::IGNORE` on decorative
 // children); the `Pointer<E>` family is the C3 event taxonomy widgets observe;
-// `PointerButton` is carried by `MultiClick`. Buiy's own `Hovered` resource
-// still exists (C3c migrates its consumers off), so bevy's hover *components*
-// (`Hovered`/`DirectlyHovered`) are intentionally NOT re-exported under those
-// names yet — that name collision is resolved when Buiy's resource is deleted.
+// `PointerButton` is carried by `MultiClick`. C3c deleted Buiy's own `Hovered`
+// resource, so the name collision the staged migration guarded against is gone;
+// bevy's hover *components* (`Hovered`/`DirectlyHovered`) are now reachable as
+// the canonical hover surface via `bevy::picking` for any "is this hovered"
+// query (re-exporting them under the Buiy prelude is a clean additive follow-up,
+// not part of the C3c consumer migration).
 pub use bevy::picking::Pickable;
 pub use bevy::picking::events::{
     Cancel, Click, Drag, DragDrop, DragEnd, DragEnter, DragLeave, DragOver, DragStart, Move, Out,
@@ -189,7 +191,15 @@ impl Plugin for BuiyPlugin {
         // `DefaultPickingPlugins`, `MinimalPlugins` does not. (The headless test
         // harness injects `PointerInput` directly and does NOT add this — adding
         // it would spawn a duplicate `PointerId::Mouse`.)
-        if !app.is_plugin_added::<bevy::picking::input::PointerInputPlugin>() {
+        // Gate on `WindowPlugin`: the winit reader's systems read
+        // `MessageReader<WindowEvent>` (registered by `WindowPlugin`), so adding it
+        // to a headless `MinimalPlugins` app (no `WindowPlugin`) panics with
+        // "Message not initialized" on the first frame. Real windowed apps have it
+        // via `DefaultPlugins`; the test harness injects `PointerInput` directly
+        // and needs neither this plugin nor a window.
+        if app.is_plugin_added::<bevy::window::WindowPlugin>()
+            && !app.is_plugin_added::<bevy::picking::input::PointerInputPlugin>()
+        {
             app.add_plugins(bevy::picking::input::PointerInputPlugin);
         }
         app.add_plugins((

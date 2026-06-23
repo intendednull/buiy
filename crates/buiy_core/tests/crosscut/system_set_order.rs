@@ -166,18 +166,41 @@ fn focus_plugin_populates_input_set() {
 }
 
 #[test]
-fn picking_plugin_populates_picking_set() {
-    // `PickingPlugin::build` adds `update_hovered.in_set(BuiySet::Picking)`
-    // (`picking/mod.rs:28`).
-    let delta = set_membership_delta(BuiySet::Picking, |app| {
-        // `update_hovered` reads `MessageReader<PointerHits>`; bevy's
-        // PickingPlugin provides the `Messages<PointerHits>` resource it needs.
-        app.add_plugins(bevy::picking::PickingPlugin);
-        app.add_plugins(buiy_core::picking::PickingPlugin);
-    });
+fn picking_plugin_registers_pointer_producers_as_observers() {
+    // C3c retired `update_hovered` (the lone `BuiySet::Picking` system), so
+    // `PickingPlugin` no longer populates that set — it now registers its C3
+    // pointer producers as OBSERVERS on the `Pointer<E>` stream
+    // (`pointer_click_emits_on_press` → `OnPress`, `derive_multi_click` →
+    // `MultiClick`; `picking/mod.rs`). Observers are entities carrying the
+    // `Observer` component, so count them with the plugin vs without it: the
+    // delta is `PickingPlugin`'s contribution (plus whatever bevy_picking's
+    // `InteractionPlugin` brings, which is also part of what `PickingPlugin`
+    // composes). This replaces the old in-set membership check with the faithful
+    // successor — the producers moved from a scheduled system to observers.
+    //
+    // `BuiySet::Picking` itself survives as the pure ordering anchor upstream
+    // writers target via `.before(BuiySet::Picking)` (the transform bridge, clip
+    // rects, visibility, the text caret); its inter-set placement is pinned by
+    // `buiy_sets_run_in_documented_order` above.
+    let count_observers = |with_plugin: bool| -> usize {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(CorePlugin);
+        if with_plugin {
+            // bevy's `PickingPlugin` provides the `Messages<PointerHits>` +
+            // `PickingSystems` Buiy's `PickingPlugin` builds on.
+            app.add_plugins(bevy::picking::PickingPlugin);
+            app.add_plugins(buiy_core::picking::PickingPlugin);
+        }
+        app.update();
+        let mut q = app.world_mut().query::<&bevy::ecs::observer::Observer>();
+        q.iter(app.world()).count()
+    };
+    let delta = count_observers(true) - count_observers(false);
     assert!(
-        delta >= 1,
-        "PickingPlugin must place update_hovered in BuiySet::Picking (delta was {delta})"
+        delta >= 2,
+        "PickingPlugin must register its C3 pointer producers as observers \
+         (pointer_click_emits_on_press + derive_multi_click); observed delta was {delta}"
     );
 }
 

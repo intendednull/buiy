@@ -13,9 +13,7 @@ use buiy_core::{
     a11y::{A11yLabel, A11yRole},
     components::Node,
     focus::Focusable,
-    interaction::OnPress,
     layout::{BoxModel, Style},
-    picking::Hovered,
     render::color::ColorToken,
     render::components::{Background, Border, Corners, Radius},
 };
@@ -104,37 +102,16 @@ impl Button {
     }
 }
 
-// TODO(buiy-widget-catalog-design): Phase 0 fires OnPress on mouse-down
-// (`just_pressed`). WAI-ARIA APG and the web platform fire on mouse-up
-// after press-on-target so users can drag-cancel. Switch to press-down
-// → set "armed" state → release-on-target = OnPress, release-off-target
-// = cancel, in the widget catalog spec.
-//
-// TODO(buiy-widget-catalog-design): Phase 0 ships only mouse activation.
-// APG button contract requires Enter and Space (key down) to also fire
-// OnPress when the button is focused. Wire keyboard activation alongside
-// the full APG keyboard contract in the widget catalog spec.
-pub(crate) fn emit_on_press_on_click(
-    // Both `Hovered` (from `PickingPlugin`) and `ButtonInput<MouseButton>`
-    // (from bevy_input's `InputPlugin`) are owned by sibling plugins that
-    // are not pulled in by every test setup — `MinimalPlugins + CorePlugin`
-    // includes neither. Treat their absence as "nothing to do this frame"
-    // so the system is robust under partial harnesses.
-    hovered: Option<Res<Hovered>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
-    buttons: Query<(), With<Button>>,
-    mut writer: MessageWriter<OnPress>,
-) {
-    let (Some(hovered), Some(mouse)) = (hovered, mouse) else {
-        return;
-    };
-    if !mouse.just_pressed(MouseButton::Left) {
-        return;
-    }
-    let Some(entity) = hovered.0 else {
-        return;
-    };
-    if buttons.get(entity).is_ok() {
-        writer.write(OnPress(entity));
-    }
-}
+// Pointer activation: C3c retired the Phase-0 `emit_on_press_on_click` poll
+// (which fired `OnPress` on mouse-down by reading the legacy `Hovered` resource
+// + `just_pressed`). Activation now lowers through C3b's pointer producer
+// `buiy_core::picking::pointer_click_emits_on_press`, a `Pointer<Click>` observer
+// that writes `OnPress` for any `A11yRole::Button` root (the `Button` marker
+// carries that role via its `#[require]` contract). bevy_picking's
+// `Pointer<Click>` fires only when press + release share a target, so the
+// press-on-target → release-on-target = activate / release-off-target = cancel
+// (drag-cancel) semantics — input-event-model.md § 2.5 / gate #8 — fall out for
+// free, and the same `OnPress` sink is fed by the agent-interface campaign's
+// keyboard (Enter/Space) and AT (`Action::Click`) producers (Phase 1c, the
+// shared SC-1 convergence). The Button widget needs no activation system of its
+// own.

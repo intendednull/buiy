@@ -7,6 +7,8 @@
 //! seam (the facade boundary the campaign guards). Mirrors `Button::new`
 //! (`button.rs`).
 
+use bevy::picking::events::{Pointer, Press};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use buiy_core::FocusedEntity;
 use buiy_core::{
@@ -14,7 +16,6 @@ use buiy_core::{
     components::Node,
     focus::Focusable,
     layout::{BoxModel, Overflow, Style},
-    picking::Hovered,
     render::color::ColorToken,
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::edit::{Placeholder, SingleLine, TextEditState},
@@ -127,23 +128,24 @@ impl TextInput {
 }
 
 /// Widget-side focus-on-click (editing-and-ime § 2.3 / Borrow #7 — focus is
-/// WIDGET policy, never core auto-focus). On a left mouse-down over a hovered
-/// `TextInput`, set `FocusedEntity`. Mirrors `emit_on_press_on_click`
-/// (`button.rs`): `Option` params so a partial harness no-ops.
+/// WIDGET policy, never core auto-focus). C3c migrated the source off the legacy
+/// `Hovered` resource onto the bevy_picking `Pointer<E>` layer
+/// (input-event-model.md § 2.8): this `Pointer<Press>` observer fires for the
+/// picked target directly, so a primary press on a `TextInput` sets
+/// `FocusedEntity` to it. `focused` is `Option<ResMut<FocusedEntity>>` —
+/// `FocusedEntity` is init by `FocusPlugin`, so a partial harness without it
+/// no-ops (the codebase convention). Registered as an observer by
+/// `WidgetsPlugin`.
 pub fn focus_on_click(
-    hovered: Option<Res<Hovered>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    press: On<Pointer<Press>>,
     inputs: Query<(), With<TextInput>>,
     focused: Option<ResMut<FocusedEntity>>,
 ) {
-    let (Some(hovered), Some(mouse), Some(mut focused)) = (hovered, mouse, focused) else {
-        return;
-    };
-    if !mouse.just_pressed(MouseButton::Left) {
+    if press.event.button != PointerButton::Primary {
         return;
     }
-    let Some(entity) = hovered.0 else { return };
-    if inputs.get(entity).is_ok() {
-        focused.0 = Some(entity);
+    let Some(mut focused) = focused else { return };
+    if inputs.get(press.entity).is_ok() {
+        focused.0 = Some(press.entity);
     }
 }

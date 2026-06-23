@@ -56,8 +56,8 @@ pub use edit::{
     EditCommand, EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
     MemClipboard, Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange,
     SingleLine, TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
-    apply_keyboard_edits, pointer_selection, pointer_to_cursor, write_caret_and_selection,
-    write_ime_window,
+    apply_keyboard_edits, editor_pointer_drag, editor_pointer_press, pointer_to_cursor,
+    write_caret_and_selection, write_ime_window,
 };
 pub use extract::{
     GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
@@ -294,15 +294,15 @@ impl Plugin for BuiyTextPlugin {
             crate::text::edit::apply_ime.in_set(crate::BuiySet::Input),
         );
 
-        // E3 (editing-and-ime § 4): the focus-gated mouse-selection system —
-        // window→buffer-local mapping → cosmic Click/DoubleClick/TripleClick/
-        // Drag, setting FocusedEntity on press. BuiySet::Input, alongside
-        // apply_keyboard_edits; inert headless (Option params no-op without
-        // mouse/picking infra).
-        app.add_systems(
-            Update,
-            crate::text::edit::pointer_selection.in_set(crate::BuiySet::Input),
-        );
+        // E3 (editing-and-ime § 4): the focus-gated mouse-selection observers —
+        // window→buffer-local mapping → cosmic Click/DoubleClick/TripleClick on
+        // `Pointer<Press>`, Drag-extend on `Pointer<Drag>`, setting FocusedEntity
+        // on press. C3c migrated these off the legacy `Hovered` resource onto the
+        // bevy_picking `Pointer<E>` layer (input-event-model.md § 2.8): they
+        // observe the picked target directly. Inert headless (no observer fires
+        // without the picking pipeline the meta-crate wires).
+        app.add_observer(crate::text::edit::editor_pointer_press);
+        app.add_observer(crate::text::edit::editor_pointer_drag);
 
         // The poll/swap system is registered UNCONDITIONALLY: it is inert
         // without a PendingSystemFontScan resource (zero steady-state cost),
