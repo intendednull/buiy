@@ -53,6 +53,25 @@ pub struct A11ySelected(pub bool);
 #[reflect(Component)]
 pub struct A11yDisabled;
 
+/// Read-only marker — the **decomposed a11y read-only state** the inbound action
+/// router's live filter consults (action-router.md §3): a *mutating* verb
+/// (`SetValue`/`Increment`/`Decrement`/`ReplaceSelectedText`/`SetTextSelection`)
+/// against an entity carrying this marker is rejected as
+/// [`NotActionableReason::ReadOnly`](super::NotActionableReason::ReadOnly), while
+/// non-mutating verbs (`Focus`/`Blur`, selecting/copying) stay allowed
+/// (Compose's read-only-`TextField`-rejects-`SetText`).
+///
+/// A presence marker, parallel to [`A11yDisabled`]. It is the a11y-tier
+/// counterpart of the editor-local `text::edit::ReadOnly`; the router checks
+/// *this* one so the gate is role-agnostic and lives in the a11y surface. No
+/// pre-P1d widget advertises a mutating verb, so the filter is forward-looking
+/// until P1d lands the value/text widgets that carry it. It does **not** drive an
+/// outbound `set_read_only` fold arm in P1c (no widget emits it yet); the
+/// inbound live filter is its first consumer.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct A11yReadOnly;
+
 /// Modal marker → `set_modal()` (a no-argument flag). A dialog/overlay carries
 /// it so an AT announces the rest of the page as inert.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]

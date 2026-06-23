@@ -134,7 +134,14 @@ fn nearest_focusable(
     }
 }
 
-fn handle_tab(
+/// `pub(crate)` so the P1c action router (`a11y::action`) can name it in its
+/// intra-`BuiySet::Input` `.before(handle_tab)` ordering constraint
+/// (action-router.md §7): the router must drain inbound requests *before* the
+/// keyboard focus/edit handlers so a synthesized focus/activation is consumed
+/// the same frame. Referencing it across plugins is sound — both systems live in
+/// `Update`; a `.before` on a system that isn't scheduled (a harness without
+/// `FocusPlugin`) is silently ignored.
+pub(crate) fn handle_tab(
     keys: Res<ButtonInput<KeyCode>>,
     focusables: Query<(Entity, &Focusable)>,
     mut focused: ResMut<FocusedEntity>,

@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 pub mod accname;
+pub mod action;
 pub mod adapter;
 pub mod contract;
 pub mod relations;
@@ -20,12 +21,13 @@ pub mod states;
 pub mod translate;
 
 pub use accname::{AccNameInputs, compute_accessible_name};
+pub use action::{button_keyboard_activation, dispatch_action_request, route_action_requests};
 pub use adapter::AccessKitAdapterPlugin;
 pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
 pub use relations::A11yRelations;
 pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
-    A11yPlaceholder, A11ySelected, A11yTextValue, A11yToggled, A11yValue,
+    A11yPlaceholder, A11yReadOnly, A11ySelected, A11yTextValue, A11yToggled, A11yValue,
 };
 use translate::node_id_for;
 pub use translate::{build_tree_update, resolve_live, to_accesskit_node};
@@ -250,6 +252,7 @@ impl Plugin for A11yPlugin {
             .register_type::<A11yExpanded>()
             .register_type::<A11ySelected>()
             .register_type::<A11yDisabled>()
+            .register_type::<A11yReadOnly>()
             .register_type::<A11yModal>()
             .register_type::<A11yHidden>()
             .register_type::<A11yValue>()
@@ -261,6 +264,32 @@ impl Plugin for A11yPlugin {
             .register_type::<A11yRelations>()
             .init_resource::<A11yTreeBuilder>()
             .add_systems(Update, build_tree.in_set(BuiySet::A11yUpdate));
+
+        // P1c-b inbound action router + Button keyboard activation, both in
+        // `BuiySet::Input` (action-router.md §7). `route_action_requests` MUST
+        // run FIRST-in-Input — before every keyboard/pointer honor system — so a
+        // synthesized `OnPress`/focus is consumed the SAME frame and reflected
+        // outbound in the (later) `BuiySet::A11yUpdate`. Bevy does NOT order
+        // within a set without an explicit constraint, so the router carries
+        // explicit `.before(...)` against the CURRENT Input handlers:
+        //   - `handle_tab` (focus.rs) — keyboard focus;
+        //   - `apply_keyboard_edits` (text) — keyboard editing;
+        //   - `button_keyboard_activation` (below) — keyboard Button activation.
+        // (The C3 pointer producer `pointer_click_emits_on_press` and
+        // `focus_on_click` are observers, not Input-set systems, so they are not
+        // — and cannot be — named here; `emit_on_press_on_click` was deleted in
+        // C3c.) A `.before` on a system a given harness doesn't schedule (e.g.
+        // no `BuiyTextPlugin`) is silently ignored, so the constraint is safe
+        // regardless of which sibling plugins are present.
+        app.add_systems(
+            Update,
+            route_action_requests
+                .in_set(BuiySet::Input)
+                .before(crate::focus::handle_tab)
+                .before(crate::text::edit::apply_keyboard_edits)
+                .before(button_keyboard_activation),
+        );
+        app.add_systems(Update, button_keyboard_activation.in_set(BuiySet::Input));
     }
 }
 
