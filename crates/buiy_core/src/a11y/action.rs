@@ -22,7 +22,7 @@
 //! is lowered through the role's [`A11yContract::honor`](super::A11yContract).
 
 use crate::a11y::contract::{ActionError, NotActionableReason};
-use crate::a11y::states::{A11yDisabled, A11yReadOnly, A11yValue};
+use crate::a11y::states::{A11yDisabled, A11yExpanded, A11yReadOnly, A11yValue};
 use crate::a11y::translate::{entity_for_node_id, node_id_for};
 use crate::a11y::{A11yRole, contract_for};
 use crate::focus::{FocusVisible, FocusedEntity};
@@ -50,6 +50,19 @@ fn mutates_value_or_text(action: Action) -> bool {
     )
 }
 
+/// Whether `action` is an **expand/collapse** verb — the state-keyed capability a
+/// node advertises by carrying [`A11yExpanded`] (widget-contracts.md §5
+/// "Disclosure-trigger"), honored **generically** here rather than through a role
+/// contract. Expandability is modelled as a reusable state-driven capability
+/// layered on the role contract (a Disclosure-trigger is `Role::Button`, so its
+/// `Click` rides the Button contract; `{Expand, Collapse}` ride `A11yExpanded`),
+/// so any future expandable (a tree item, an accordion section) reuses the same
+/// route with no new role. These are **actionable** verbs (unlike `Focus`/`Blur`):
+/// the disabled live filter drops them.
+fn is_expand_verb(action: Action) -> bool {
+    matches!(action, Action::Expand | Action::Collapse)
+}
+
 /// Resolve, guard, and lower one inbound [`ActionRequest`] — the **headless
 /// dispatch seam** (action-router.md §5). Returns a typed [`ActionError`] on any
 /// failure, **never panics** (a stale ref, an unadvertised verb, a disabled /
@@ -62,18 +75,21 @@ fn mutates_value_or_text(action: Action) -> bool {
 ///    back to an [`Entity`]; a `None` (the synthetic root, or a stale id whose
 ///    entity despawned) is [`ActionError::NotFound`].
 /// 2. **Capability.** Re-read the target's role + its [`contract_for`] advertised
-///    set. A verb the role never advertises is [`ActionError::Unsupported`].
+///    set. A verb the role never advertises is [`ActionError::Unsupported`] —
+///    *unless* it is an `Expand`/`Collapse` and the node carries [`A11yExpanded`]
+///    (the state-keyed capability layered on the role, widget-contracts.md §5).
 ///    `Focus`/`Blur` are always permitted on any live node (they ride
 ///    `Focusable` outbound and are honored generically here), so they bypass the
 ///    contract check.
 /// 3. **Live state.** An [`A11yDisabled`] instance drops every actionable verb
-///    ([`NotActionableReason::Disabled`]) — `Focus`/`Blur` stay allowed so the
-///    node remains addressable. A mutating verb (`SetValue`/`Increment`/… —
-///    `mutates_value_or_text`) on an [`A11yReadOnly`] instance is
-///    [`NotActionableReason::ReadOnly`].
+///    ([`NotActionableReason::Disabled`]) — including `Expand`/`Collapse`;
+///    `Focus`/`Blur` stay allowed so the node remains addressable. A mutating verb
+///    (`SetValue`/`Increment`/… — `mutates_value_or_text`) on an [`A11yReadOnly`]
+///    instance is [`NotActionableReason::ReadOnly`].
 /// 4. **Dispatch.** `Focus`/`Blur` set/clear [`FocusedEntity`] generically;
-///    every other verb is lowered through the role's
-///    [`A11yContract::honor`](super::A11yContract).
+///    `Expand`/`Collapse` set/clear [`A11yExpanded`] generically (the absolute
+///    set-verb, idempotent at the target state); every other verb is lowered
+///    through the role's [`A11yContract::honor`](super::A11yContract).
 pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result<(), ActionError> {
     let target = req.target_node;
     let action = req.action;
@@ -92,16 +108,28 @@ pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result
     // a role contract and are NOT dropped by the actionable-verb gates.
     let is_focus_verb = matches!(action, Action::Focus | Action::Blur);
 
+    // Expand/Collapse are the **state-keyed** capability (widget-contracts.md §5):
+    // advertised + honored for any node carrying `A11yExpanded`, layered on the
+    // role contract rather than belonging to it. They are honored generically
+    // below (set/clear the bool), but — unlike Focus/Blur — they are *actionable*,
+    // so the disabled live filter drops them.
+    let expandable = world.get::<A11yExpanded>(entity).is_some();
+
     // The live role drives the capability re-check AND the honor dispatch. Read
     // it once; a node with no `A11yRole` defaults to `Generic` (no contract).
     let role = world.get::<A11yRole>(entity).copied().unwrap_or_default();
 
-    // 2. Capability — the verb must be advertised by the role's contract (the
-    //    same `actions()` list the outbound fold advertises), except the
-    //    always-allowed Focus/Blur.
+    // 2. Capability — the verb must be advertised, by EITHER the role's contract
+    //    (the same `actions()` list the outbound fold advertises) OR — for an
+    //    Expand/Collapse — the node's `A11yExpanded` state-keyed capability. Focus/
+    //    Blur are always allowed. An Expand/Collapse on a non-`A11yExpanded` node
+    //    is Unsupported (it advertised no such capability), exactly as the fold
+    //    would not have emitted the `add_action`.
     if !is_focus_verb {
-        let advertised = contract_for(role).is_some_and(|entry| entry.actions.contains(&action));
-        if !advertised {
+        let advertised_by_role =
+            contract_for(role).is_some_and(|entry| entry.actions.contains(&action));
+        let advertised_by_state = is_expand_verb(action) && expandable;
+        if !advertised_by_role && !advertised_by_state {
             return Err(ActionError::Unsupported { target, action });
         }
     }
@@ -150,6 +178,28 @@ pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result
                 && focused.0 == Some(entity)
             {
                 focused.0 = None;
+            }
+            Ok(())
+        }
+        // Expand/Collapse are honored GENERICALLY (state-keyed, widget-contracts.md
+        // §5): set/clear the node's `A11yExpanded` bool directly, exactly as a
+        // pointer/keyboard activation does through the `OnPress` consumer. The
+        // capability gate above already guaranteed the node carries `A11yExpanded`
+        // (an Expand on a non-expandable node returned `Unsupported`), but stay
+        // total — a missing component here is `Unsupported`, never a panic. Setting
+        // an already-expanded node expanded (or collapsing an already-collapsed
+        // one) is an **idempotent no-op success**: the AT/agent set-verb is
+        // absolute, not a toggle.
+        Action::Expand | Action::Collapse => {
+            let want = action == Action::Expand;
+            let Some(mut expanded) = world.get_mut::<A11yExpanded>(entity) else {
+                return Err(ActionError::Unsupported { target, action });
+            };
+            // Avoid a spurious `Changed<A11yExpanded>` tick when already at `want`
+            // (idempotency): only write through `DerefMut` on a real transition, so
+            // the C4 caret/panel visual repaints exactly once per actual change.
+            if expanded.0 != want {
+                expanded.0 = want;
             }
             Ok(())
         }

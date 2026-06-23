@@ -42,6 +42,11 @@ use crate::checkbox::{
     CHECK_GLYPH, CHECKBOX_MARK_FONT_SIZE, Checkbox, CheckboxMark, checkbox_background,
     checkbox_border, checkbox_box_model,
 };
+use crate::disclosure::{
+    CARET_GLYPH, DISCLOSURE_FONT_SIZE, Disclosure, DisclosureCaret, DisclosurePanel,
+    caret_rotation_collapsed, disclosure_background, disclosure_border, disclosure_box_model,
+    disclosure_panel_background, disclosure_panel_box_model,
+};
 use crate::slider::{
     SLIDER_LABEL_FONT_SIZE, Slider, SliderThumb, SliderTrack, slider_background, slider_border,
     slider_box_model, slider_thumb_background, slider_thumb_border, slider_thumb_box_model,
@@ -311,6 +316,75 @@ pub fn slider(label: impl Into<String>, now: f64, min: f64, max: f64, step: f64)
                 FontSize({ SLIDER_LABEL_FONT_SIZE })
                 template_value(TextColor::default())
                 template_value(Pickable::IGNORE)
+            ),
+        ]
+    }
+}
+
+/// A labelled disclosure as a composable BSN scene (Wave-3 slice-3). Mergeable: the
+/// `Disclosure` marker triggers the full `#[require]` contract (role `Button` + the
+/// `A11yExpanded` state + focus + a11y + the trigger box), and the field-patches
+/// layer the canonical row style. The `Children [ … ]` subtree authors the
+/// decorative **caret** glyph + the visible **label** `Text` (both
+/// `Pickable::IGNORE` — pick-through) and the controlled **panel**
+/// (`A11yRole::Region`). The caret starts collapsed (`Rotate` identity ⇒ pointing
+/// right) and the panel starts `CssVisibility::Hidden` (the default `A11yExpanded`
+/// is `false`); `update_disclosure_visual` rotates the caret + reveals the panel on
+/// the first state flip.
+///
+/// The trigger's `A11yRelations.controls = [panel]` is wired by
+/// `wire_disclosure_controls` once the children exist (the panel entity is unknown
+/// at authoring time, so neither the bundle nor the scene can spell it).
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { disclosure("Details") });
+/// ```
+pub fn disclosure(label: impl Into<String>) -> impl Scene {
+    let bm = disclosure_box_model();
+    let bg = disclosure_background();
+    let border = disclosure_border();
+    let panel_bm = disclosure_panel_box_model();
+    let panel_bg = disclosure_panel_background();
+    let label = label.into();
+    bsn! {
+        Disclosure
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        A11yLabel({ label.clone() })
+        Children [
+            (
+                DisclosureCaret
+                Text({ CARET_GLYPH.to_string() })
+                FontSize({ DISCLOSURE_FONT_SIZE })
+                template_value(TextColor::default())
+                // The caret starts collapsed (Rotate identity ⇒ pointing right);
+                // inserted as a whole value because `Rotate` is a tuple struct
+                // wrapping a foreign `Quat`. `update_disclosure_visual` rotates it.
+                template_value(caret_rotation_collapsed())
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                Text({ label })
+                FontSize({ DISCLOSURE_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                DisclosurePanel
+                Node
+                BoxModel {
+                    width: { panel_bm.width },
+                    height: { panel_bm.height },
+                }
+                Background { color: { panel_bg.color } }
+                // The panel starts hidden (default expanded is `false`);
+                // `update_disclosure_visual` reveals it on the first flip.
+                template_value(CssVisibility::Hidden)
             ),
         ]
     }

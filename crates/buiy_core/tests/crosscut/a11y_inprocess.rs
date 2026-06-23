@@ -590,6 +590,185 @@ fn driver_click_then_update_flips_checkbox_toggled() {
 }
 
 // ---------------------------------------------------------------------------
+// GATE #3 / #7 / driver — Disclosure-trigger (Wave-3 slice-3). The trigger is
+// `A11yRole::Button` + the state-keyed `A11yExpanded` capability: it advertises
+// role=Button + {Click, Expand, Collapse, Focus, Blur}, with controls=[panel] and
+// the panel a `Role::Region`. The driver exercises the absolute AT set-verbs
+// (Expand → expanded true, Collapse → false, idempotent) and the Click→OnPress→
+// toggle convergence, all over the in-process consumer (the C7 a11y tier).
+//
+// The bare contract surface (role=Button + A11yExpanded + Focusable + the
+// controls relation + a Region panel) is spawned directly; the full widget bundle
+// + the OnPress→expanded consumer + the C4 visual live in `buiy_widgets`. The
+// toggle consumer is modelled inline here (buiy_core has no widget dep) to prove
+// the core convergence path end-to-end.
+// ---------------------------------------------------------------------------
+
+/// Spawn a disclosure-trigger + its controlled Region panel, returning
+/// `(trigger, panel)`. The trigger is `Role::Button` (so its `Click` rides the
+/// Button contract) PLUS `A11yExpanded` (the state-keyed Expand/Collapse capability)
+/// and `controls = [panel]`.
+fn disclosure(app: &mut App, name: &str) -> (Entity, Entity) {
+    let panel = app
+        .world_mut()
+        .spawn((A11yRole::Region, A11yLabel(format!("{name} panel"))))
+        .id();
+    let trigger = app
+        .world_mut()
+        .spawn((
+            A11yRole::Button,
+            A11yLabel(name.into()),
+            A11yExpanded(false),
+            Focusable::default(),
+            buiy_core::a11y::A11yRelations {
+                controls: vec![panel],
+                ..Default::default()
+            },
+        ))
+        .id();
+    app.update();
+    (trigger, panel)
+}
+
+#[test]
+fn disclosure_advertises_button_with_expand_collapse_and_controls() {
+    // GATE #3: the trigger node advertises role=Button + {Click, Expand, Collapse,
+    // Focus, Blur} + A11yExpanded; controls=[panel]; the panel node is Role::Region.
+    let mut app = setup();
+    let (trigger, panel) = disclosure(&mut app, "Details");
+
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    let node = tree.node(node_id_for(trigger)).expect("trigger in tree");
+    assert_eq!(node.role, A11yRole::Button, "the trigger role is Button");
+    for action in [
+        accesskit::Action::Click,
+        accesskit::Action::Expand,
+        accesskit::Action::Collapse,
+        accesskit::Action::Focus,
+        accesskit::Action::Blur,
+    ] {
+        assert!(
+            node.actions.contains(&action),
+            "the disclosure trigger advertises {action:?}"
+        );
+    }
+    assert_eq!(
+        node.state.expanded,
+        Some(false),
+        "the trigger carries A11yExpanded (collapsed), read back through the consumer"
+    );
+    assert_eq!(
+        node.controls,
+        vec![node_id_for(panel)],
+        "the trigger controls the panel"
+    );
+    // The panel is a Region.
+    let panel_node = tree.node(node_id_for(panel)).expect("panel in tree");
+    assert_eq!(
+        panel_node.role,
+        A11yRole::Region,
+        "the controlled panel is a Region"
+    );
+}
+
+#[test]
+fn driver_expand_collapse_on_disclosure_sets_expanded_and_is_idempotent() {
+    // GATE #7 / driver: get_by_role(Button, name) → perform(Expand) sets expanded
+    // true; Collapse sets false; an Expand on an already-expanded disclosure is
+    // idempotent (stays true, success). The router's generic Expand/Collapse honor
+    // mutates the live `A11yExpanded` synchronously (like the slider's `A11yValue`);
+    // the documented perform-then-update contract surfaces it in the SemanticTree
+    // after a frame settles the `A11yTreeBuilder` the snapshot reads through.
+    let mut app = setup();
+    let (trigger, _panel) = disclosure(&mut app, "Details");
+
+    let target = get_by_role(app.world_mut(), A11yRole::Button, Some("Details"), None).unwrap();
+    assert_eq!(target, node_id_for(trigger));
+
+    // Expand → expanded true (live component mutated synchronously; settled in the
+    // tree after a tick).
+    perform(app.world_mut(), accesskit::Action::Expand, target, None)
+        .expect("Expand honored on an A11yExpanded node");
+    assert!(
+        app.world().get::<A11yExpanded>(trigger).unwrap().0,
+        "perform(Expand) sets the live A11yExpanded true synchronously"
+    );
+    app.update();
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    assert_eq!(
+        tree.node(target).unwrap().state.expanded,
+        Some(true),
+        "the expanded state surfaces in the settled SemanticTree"
+    );
+
+    // Expand again is idempotent (absolute set-verb): stays true, still a success.
+    perform(app.world_mut(), accesskit::Action::Expand, target, None)
+        .expect("an idempotent Expand on an already-expanded disclosure succeeds");
+    assert!(
+        app.world().get::<A11yExpanded>(trigger).unwrap().0,
+        "Expand on an already-expanded disclosure is an idempotent no-op (still true)"
+    );
+
+    // Collapse → expanded false.
+    perform(app.world_mut(), accesskit::Action::Collapse, target, None).expect("Collapse honored");
+    assert!(
+        !app.world().get::<A11yExpanded>(trigger).unwrap().0,
+        "perform(Collapse) sets A11yExpanded false synchronously"
+    );
+    app.update();
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    assert_eq!(
+        tree.node(target).unwrap().state.expanded,
+        Some(false),
+        "the collapsed state surfaces in the settled SemanticTree"
+    );
+}
+
+#[test]
+fn driver_click_then_update_toggles_disclosure_expanded() {
+    // The Click→OnPress→toggle convergence (the pointer/keyboard/AT-Click path):
+    // an AT `Click` on the trigger lowers into OnPress (the Button contract), and
+    // the OnPress consumer flips A11yExpanded. Modelled inline (buiy_core has no
+    // widget dep) — the production consumer is `advance_expanded_on_press`.
+    let mut app = setup();
+
+    fn toggle_expanded_on_press(
+        mut reader: MessageReader<OnPress>,
+        mut q: Query<&mut A11yExpanded>,
+    ) {
+        for OnPress(e) in reader.read() {
+            if let Ok(mut x) = q.get_mut(*e) {
+                x.0 = !x.0;
+            }
+        }
+    }
+    app.add_systems(Update, toggle_expanded_on_press);
+
+    let (trigger, _panel) = disclosure(&mut app, "Details");
+    let target = node_id_for(trigger);
+
+    // Click writes OnPress synchronously; the consumer runs on the next tick.
+    click(app.world_mut(), target).expect("Click honored on the Button trigger");
+    app.update();
+    let post = snapshot(app.world_mut(), TreeView::default());
+    assert_eq!(
+        post.node(target).unwrap().state.expanded,
+        Some(true),
+        "AT Click → OnPress → consumer flipped the disclosure collapsed→expanded"
+    );
+
+    // A second Click toggles back.
+    click(app.world_mut(), target).expect("Click honored");
+    app.update();
+    let post = snapshot(app.world_mut(), TreeView::default());
+    assert_eq!(
+        post.node(target).unwrap().state.expanded,
+        Some(false),
+        "a second AT Click toggles the disclosure expanded→collapsed"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // wait_for — block on a semantic condition (no sleeps)
 // ---------------------------------------------------------------------------
 

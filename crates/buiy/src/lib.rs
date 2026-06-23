@@ -45,20 +45,24 @@ pub use buiy_core::{
 // `EditCommand`, so the type belongs in the prelude next to the widget surface;
 // `TextChanged` pairs with it (the message the Bug-3 fix keeps honest). Audit § 4.
 pub use buiy_core::text::edit::{EditCommand, TextChanged};
-pub use buiy_widgets::{Button, Checkbox, OnPress, Slider, Switch, TextInput, WidgetsPlugin};
+pub use buiy_widgets::{
+    Button, Checkbox, Disclosure, OnPress, Slider, Switch, TextInput, WidgetsPlugin,
+};
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `checkbox(label)`, `switch(label)`, `slider(label, now, min, max, step)`,
-// `text_input_single_line(placeholder)`, `text_input_multi_line(placeholder)`.
+// `disclosure(label)`, `text_input_single_line(placeholder)`,
+// `text_input_multi_line(placeholder)`.
 // They live in `buiy_widgets` (so they reuse the `#[require]` initializer fns —
 // one source of truth) and surface here, where the widget + BSN surfaces
 // converge, so `use buiy::prelude::*;` brings them in next to `bsn!`. (They are
 // NOT re-exported through `buiy_bsn`, which stays widget-agnostic per spec § 4.2
 // — it must not take a `buiy_widgets` dependency.) The Wave-3 widget scene-fns
-// are aliased (`checkbox_scene` / `switch_scene` / `slider_scene`) inside
-// `buiy_widgets` to avoid colliding with the `Checkbox` / `Switch` / `Slider`
-// markers; the prelude renames them back to `checkbox` / `switch` / `slider`.
+// are aliased (`checkbox_scene` / `switch_scene` / `slider_scene` /
+// `disclosure_scene`) inside `buiy_widgets` to avoid colliding with the `Checkbox`
+// / `Switch` / `Slider` / `Disclosure` markers; the prelude renames them back to
+// `checkbox` / `switch` / `slider` / `disclosure`.
 pub use buiy_widgets::scene::{
-    button, checkbox, slider, switch, text_input_multi_line, text_input_single_line,
+    button, checkbox, disclosure, slider, switch, text_input_multi_line, text_input_single_line,
 };
 
 // bevy_picking surface (input-event-model.md § 2.9): re-export every

@@ -26,7 +26,7 @@ use buiy_core::render::components::Background;
 use buiy_core::text::edit::{Placeholder, SingleLine, TextEditState};
 use buiy_widgets::WidgetsPlugin;
 use buiy_widgets::scene::{
-    button, checkbox, slider, switch, text_input_multi_line, text_input_single_line,
+    button, checkbox, disclosure, slider, switch, text_input_multi_line, text_input_single_line,
 };
 use std::borrow::Cow;
 
@@ -370,5 +370,77 @@ fn slider_scene_fn_builds_contract_children_and_pick_through() {
             .count(),
         1,
         "one SliderThumb child"
+    );
+}
+
+/// The `disclosure(label)` scene-fn builds the full trigger contract (role `Button`
+/// with the state-keyed `A11yExpanded`) and its caret + label + panel children: the
+/// decorative caret/label are `Pickable::IGNORE` (pick-through), the panel is a real
+/// `A11yRole::Region`, and the `A11yRelations.controls` edge is wired to the panel.
+#[test]
+fn disclosure_scene_fn_builds_contract_children_and_wires_controls() {
+    use bevy::ecs::hierarchy::Children;
+    use bevy::picking::Pickable;
+    use buiy_core::a11y::{A11yExpanded, A11yRelations};
+    use buiy_widgets::disclosure::{DisclosureCaret, DisclosurePanel};
+
+    let mut app = scene_test_app();
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! { disclosure("Details") })
+        .expect("spawn_scene")
+        .id();
+    app.update();
+
+    let world = app.world();
+    assert_eq!(
+        world.get::<A11yRole>(id).copied(),
+        Some(A11yRole::Button),
+        "scene-fn root is a Button trigger (expandability is state-keyed)"
+    );
+    assert_eq!(
+        world.get::<A11yExpanded>(id).map(|e| e.0),
+        Some(false),
+        "the trigger carries A11yExpanded (collapsed by default)"
+    );
+    assert_eq!(world.get::<A11yLabel>(id).expect("A11yLabel").0, "Details");
+
+    let children: Vec<Entity> = world
+        .get::<Children>(id)
+        .expect("children")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(children.len(), 3, "caret + label + panel children");
+
+    let caret = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<DisclosureCaret>(c).is_some())
+        .expect("one DisclosureCaret child");
+    let panel = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<DisclosurePanel>(c).is_some())
+        .expect("one DisclosurePanel child");
+
+    // The decorative caret is pick-through; the panel (a real Region) is not.
+    assert_eq!(
+        world.get::<Pickable>(caret).copied(),
+        Some(Pickable::IGNORE),
+        "the decorative caret is Pickable::IGNORE"
+    );
+    assert_eq!(
+        world.get::<A11yRole>(panel).copied(),
+        Some(A11yRole::Region),
+        "the controlled panel is an A11yRole::Region"
+    );
+
+    // The `controls` edge was wired (the scene path relies on
+    // `wire_disclosure_controls`, which ran in the `app.update()` above).
+    assert_eq!(
+        world.get::<A11yRelations>(id).map(|r| r.controls.clone()),
+        Some(vec![panel]),
+        "the scene-fn trigger's A11yRelations.controls references the panel"
     );
 }

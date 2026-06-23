@@ -16,8 +16,8 @@ use buiy_core::a11y::translate::node_id_for;
 use buiy_core::{
     CorePlugin,
     a11y::{
-        A11yDisabled, A11yPlugin, A11yRole, A11yValue, ActionError, NotActionableReason,
-        dispatch_action_request,
+        A11yDisabled, A11yExpanded, A11yPlugin, A11yRole, A11yValue, ActionError,
+        NotActionableReason, dispatch_action_request,
     },
     focus::{FocusPlugin, FocusVisible, FocusedEntity},
     interaction::OnPress,
@@ -700,6 +700,131 @@ fn arrow_on_focused_slider_writes_no_on_press() {
     assert!(
         drain_on_press(&mut app).is_empty(),
         "a slider arrow key writes no OnPress (value action, not activation)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GATE #3 / #7 — the DISCLOSURE state-keyed Expand/Collapse capability (slice-3,
+// widget-contracts.md §5). A disclosure-trigger is `A11yRole::Button` (so its
+// `Click` rides the Button contract → OnPress) PLUS `A11yExpanded`, which advertises
+// + honors `{Expand, Collapse}` GENERICALLY (the router sets the bool — not the role
+// contract). These pin: Expand sets expanded true, Collapse false, both idempotent;
+// a disabled disclosure drops them; an Expand on a non-A11yExpanded node is
+// Unsupported (the capability is state-keyed, not role-keyed); and Click still
+// lowers into OnPress on the Button trigger.
+// ---------------------------------------------------------------------------
+
+/// Spawn a disclosure-trigger: `Role::Button` + `A11yExpanded(collapsed)` +
+/// `Focusable`. The state-keyed capability is what makes Expand/Collapse honored.
+fn disclosure_trigger(app: &mut App, expanded: bool) -> Entity {
+    let e = app
+        .world_mut()
+        .spawn((
+            A11yRole::Button,
+            A11yExpanded(expanded),
+            buiy_core::focus::Focusable::default(),
+        ))
+        .id();
+    app.update();
+    e
+}
+
+fn expanded_of(app: &App, e: Entity) -> bool {
+    app.world().get::<A11yExpanded>(e).unwrap().0
+}
+
+#[test]
+fn dispatch_expand_on_disclosure_sets_expanded_true() {
+    let mut app = setup();
+    let d = disclosure_trigger(&mut app, false);
+
+    dispatch_action_request(app.world_mut(), &request(node_id_for(d), Action::Expand)).unwrap();
+    assert!(
+        expanded_of(&app, d),
+        "Expand sets A11yExpanded true (generic honor over the state-keyed capability)"
+    );
+
+    // Idempotent: an Expand on an already-expanded disclosure is a no-op success.
+    dispatch_action_request(app.world_mut(), &request(node_id_for(d), Action::Expand)).unwrap();
+    assert!(
+        expanded_of(&app, d),
+        "Expand on an expanded disclosure stays true (idempotent)"
+    );
+}
+
+#[test]
+fn dispatch_collapse_on_disclosure_sets_expanded_false() {
+    let mut app = setup();
+    let d = disclosure_trigger(&mut app, true);
+
+    dispatch_action_request(app.world_mut(), &request(node_id_for(d), Action::Collapse)).unwrap();
+    assert!(!expanded_of(&app, d), "Collapse sets A11yExpanded false");
+
+    // Idempotent the other way.
+    dispatch_action_request(app.world_mut(), &request(node_id_for(d), Action::Collapse)).unwrap();
+    assert!(
+        !expanded_of(&app, d),
+        "Collapse on a collapsed disclosure stays false (idempotent)"
+    );
+}
+
+#[test]
+fn dispatch_expand_on_disabled_disclosure_is_not_actionable() {
+    // Expand/Collapse are ACTIONABLE verbs (unlike Focus/Blur), so the disabled
+    // live filter drops them.
+    let mut app = setup();
+    let d = app
+        .world_mut()
+        .spawn((A11yRole::Button, A11yExpanded(false), A11yDisabled))
+        .id();
+    app.update();
+
+    let res = dispatch_action_request(app.world_mut(), &request(node_id_for(d), Action::Expand));
+    assert_eq!(
+        res,
+        Err(ActionError::NotActionable {
+            target: node_id_for(d),
+            action: Action::Expand,
+            reason: NotActionableReason::Disabled,
+        }),
+        "A11yDisabled drops the actionable Expand verb"
+    );
+    assert!(!expanded_of(&app, d), "a disabled disclosure never expands");
+}
+
+#[test]
+fn dispatch_expand_on_non_expandable_is_unsupported() {
+    // A plain Button (no A11yExpanded) does NOT advertise Expand — the capability
+    // is state-keyed, so without the state it is Unsupported.
+    let mut app = setup();
+    let btn = app
+        .world_mut()
+        .spawn((A11yRole::Button, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &request(node_id_for(btn), Action::Expand)),
+        Err(ActionError::Unsupported {
+            target: node_id_for(btn),
+            action: Action::Expand,
+        }),
+        "Expand on a node without A11yExpanded is Unsupported (state-keyed capability)"
+    );
+}
+
+#[test]
+fn dispatch_click_on_disclosure_fires_on_press() {
+    // The trigger is a Button, so its Click still lowers into the shared OnPress
+    // sink (the toggle path the OnPress consumer flips A11yExpanded on).
+    let mut app = setup();
+    let d = disclosure_trigger(&mut app, false);
+
+    dispatch_action_request(app.world_mut(), &request(node_id_for(d), Action::Click)).unwrap();
+    assert_eq!(
+        drain_on_press(&mut app),
+        vec![d],
+        "the disclosure trigger's Click rides the Button contract → OnPress"
     );
 }
 

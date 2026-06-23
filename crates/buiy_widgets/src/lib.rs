@@ -6,17 +6,19 @@
 use bevy::prelude::*;
 use buiy_core::{
     BuiySet,
-    a11y::{A11yRole, A11yToggled},
+    a11y::{A11yExpanded, A11yRole, A11yToggled},
 };
 
 pub mod button;
 pub mod checkbox;
+pub mod disclosure;
 pub mod scene;
 pub mod slider;
 pub mod switch;
 pub mod text_input;
 pub use button::Button;
 pub use checkbox::Checkbox;
+pub use disclosure::Disclosure;
 pub use slider::Slider;
 pub use switch::Switch;
 // `OnPress` relocated to `buiy_core` (co-drive SC-1) so the in-core P1c action
@@ -25,7 +27,8 @@ pub use switch::Switch;
 // resolving unchanged.
 pub use buiy_core::interaction::OnPress;
 pub use scene::{
-    button, checkbox as checkbox_scene, slider as slider_scene, switch as switch_scene,
+    button, checkbox as checkbox_scene, disclosure as disclosure_scene, slider as slider_scene,
+    switch as switch_scene,
 };
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
@@ -68,6 +71,37 @@ pub fn advance_toggle_on_press(
     }
 }
 
+/// The single `OnPress` consumer that **toggles** an expandable widget's
+/// `A11yExpanded` (the Disclosure analog of [`advance_toggle_on_press`], Wave-3
+/// slice-3). A Disclosure-trigger is `A11yRole::Button` (so its `Click` rides the
+/// Button contract → `OnPress`), and it is *expandable* (it carries
+/// [`A11yExpanded`]). Pointer click, keyboard activation (Enter/Space via the
+/// Button keymap), and an inbound AT `Action::Click` all converge on the one
+/// `OnPress` sink — this consumer flips `A11yExpanded` once per activation, so
+/// every modality toggles the disclosure identically.
+///
+/// The explicit AT **set-verbs** `Expand`/`Collapse` take a *different* route: the
+/// router honors them generically (action.rs), writing the absolute target state.
+/// Together they give the disclosure three converging toggle modalities
+/// (pointer/keyboard/AT-`Click`) plus the two absolute AT set-verbs, all over the
+/// single `A11yExpanded` source of truth the C4 visual reads.
+///
+/// Querying `&mut A11yExpanded` (not gated on role) keeps this reusable: any future
+/// expandable that activates through `OnPress` toggles by carrying `A11yExpanded`.
+/// An entity without it (a Button/Checkbox/Slider) is simply not matched here, so
+/// its `OnPress` is inert for this consumer (it flows through
+/// `advance_toggle_on_press` or the button callback instead).
+pub fn advance_expanded_on_press(
+    mut reader: MessageReader<OnPress>,
+    mut expandables: Query<&mut A11yExpanded>,
+) {
+    for OnPress(entity) in reader.read() {
+        if let Ok(mut expanded) = expandables.get_mut(*entity) {
+            expanded.0 = !expanded.0;
+        }
+    }
+}
+
 pub struct WidgetsPlugin;
 
 impl Plugin for WidgetsPlugin {
@@ -93,6 +127,9 @@ impl Plugin for WidgetsPlugin {
             .register_type::<Slider>()
             .register_type::<slider::SliderTrack>()
             .register_type::<slider::SliderThumb>()
+            .register_type::<Disclosure>()
+            .register_type::<disclosure::DisclosureCaret>()
+            .register_type::<disclosure::DisclosurePanel>()
             .register_type::<text_input::TextInput>();
 
         // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual
@@ -113,6 +150,12 @@ impl Plugin for WidgetsPlugin {
         // observed by the visual the same frame, then settle on the `Changed`
         // gate.
         app.add_systems(Update, advance_toggle_on_press.in_set(BuiySet::Input));
+        // The Disclosure analog of the toggle consumer (slice-3): pointer/keyboard/
+        // AT-`Click` all converge on `OnPress`; this flips `A11yExpanded`. Runs in
+        // the same activation stage (`BuiySet::Input`) as the toggle consumer and
+        // the producers, so a same-frame activation flips expanded the same frame
+        // and the later `BuiySet::A11yUpdate` fold sees it.
+        app.add_systems(Update, advance_expanded_on_press.in_set(BuiySet::Input));
         app.add_systems(
             Update,
             (
@@ -121,6 +164,23 @@ impl Plugin for WidgetsPlugin {
             )
                 .after(advance_toggle_on_press),
         );
+        // The Disclosure C4 visual (slice-3) reads `Changed<A11yExpanded>` to rotate
+        // the caret + show/hide the panel. `A11yExpanded` is flipped by the
+        // `advance_expanded_on_press` consumer (pointer/keyboard/AT-`Click`) and by
+        // the router's generic `Expand`/`Collapse` honor (the absolute AT set-verbs),
+        // both in `BuiySet::Input`; this visual runs `.after` the consumer so a
+        // same-frame toggle is observed the same frame, then settles on the
+        // `Changed<A11yExpanded>` gate.
+        app.add_systems(
+            Update,
+            disclosure::update_disclosure_visual.after(advance_expanded_on_press),
+        );
+        // Wire each disclosure trigger's `A11yRelations.controls = [panel]` once its
+        // `children!` exist (the `controls` edge references the panel entity, which
+        // does not exist at root-spawn time, so it can't ride the `#[require]` /
+        // `Disclosure::new` bundle). Idempotent over the scene-fn path (which
+        // authors `controls` directly).
+        app.add_systems(Update, disclosure::wire_disclosure_controls);
         // The slider C4 visual (slice-2) reads `Changed<A11yValue>` to reposition
         // the thumb. A slider's value is mutated by the slider contract's `honor`
         // (driven by the APG `slider_keyboard` system / an inbound AT verb, both in

@@ -181,6 +181,19 @@ pub fn to_accesskit_node(view: &A11yNodeView) -> Node {
             node.add_action(action);
         }
     }
+    // 3. A **state-keyed** capability layered on the role contract (widget-contracts.md
+    //    §5 "Disclosure-trigger"): any node carrying `A11yExpanded` also advertises
+    //    `{Expand, Collapse}` — *in addition to* its role's contract verbs. A
+    //    Disclosure-trigger is `Role::Button` (so the Button contract still supplies
+    //    `Click`), but it is *expandable*, which is modelled as this reusable
+    //    state-driven capability rather than a new role. The inbound router honors
+    //    these two verbs generically for any `A11yExpanded` entity (action.rs), so
+    //    advertise and honor stay in lockstep. Keyed on `view.expanded.is_some()`
+    //    (the projection of the `A11yExpanded` component's presence).
+    if view.expanded.is_some() {
+        node.add_action(accesskit::Action::Expand);
+        node.add_action(accesskit::Action::Collapse);
+    }
     node
 }
 
