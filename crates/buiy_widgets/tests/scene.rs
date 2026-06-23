@@ -15,6 +15,7 @@
 use bevy::MinimalPlugins;
 use bevy::app::App;
 use bevy::asset::AssetPlugin;
+use bevy::ecs::entity::Entity;
 use bevy::scene::{ScenePlugin, WorldSceneExt, bsn};
 use buiy_core::a11y::{A11yLabel, A11yRole};
 use buiy_core::components::Node;
@@ -24,7 +25,9 @@ use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::text::edit::{Placeholder, SingleLine, TextEditState};
 use buiy_widgets::WidgetsPlugin;
-use buiy_widgets::scene::{button, text_input_multi_line, text_input_single_line};
+use buiy_widgets::scene::{
+    button, checkbox, switch, text_input_multi_line, text_input_single_line,
+};
 use std::borrow::Cow;
 
 /// The BSN spawn machinery + the widget plugins (so required-components are
@@ -169,4 +172,137 @@ fn text_input_multi_line_scene_fn_has_no_single_line() {
         "multi-line ⇒ no SingleLine"
     );
     assert_eq!(world.get::<Placeholder>(id).expect("Placeholder").0, "Body");
+}
+
+/// `checkbox(label)` spawns the full a11y contract on the root plus the C4
+/// child subtree — the check/dash mark + the visible label — both
+/// `Pickable::IGNORE` (pick-through). The AT name stays `A11yLabel` on the root;
+/// the label pixels live in a child `Text`.
+#[test]
+fn checkbox_scene_fn_builds_contract_children_and_pick_through() {
+    use bevy::ecs::hierarchy::Children;
+    use bevy::picking::Pickable;
+    use buiy_core::a11y::{A11yToggled, Toggled};
+    use buiy_core::render::components::CssVisibility;
+    use buiy_core::text::Text;
+    use buiy_widgets::checkbox::CheckboxMark;
+
+    let mut app = scene_test_app();
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! { checkbox("Done") })
+        .expect("spawn_scene")
+        .id();
+    app.update();
+
+    let world = app.world();
+    // The a11y contract on the root.
+    assert_eq!(
+        world.get::<A11yRole>(id).copied(),
+        Some(A11yRole::Checkbox),
+        "scene-fn root is a Checkbox"
+    );
+    assert_eq!(
+        world.get::<A11yToggled>(id).map(|t| t.0),
+        Some(Toggled::False),
+        "tri-state toggle present, default False"
+    );
+    assert_eq!(
+        world.get::<A11yLabel>(id).expect("A11yLabel").0,
+        "Done",
+        "the AT name stays on the root"
+    );
+
+    // The C4 child subtree: mark + label, both pick-through.
+    let children: Vec<Entity> = world
+        .get::<Children>(id)
+        .expect("children")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(children.len(), 2, "mark + label children");
+    for &c in &children {
+        assert_eq!(
+            world.get::<Pickable>(c).copied(),
+            Some(Pickable::IGNORE),
+            "decorative child is Pickable::IGNORE"
+        );
+    }
+    let mark = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<CheckboxMark>(c).is_some())
+        .expect("a CheckboxMark child");
+    assert_eq!(
+        world.get::<CssVisibility>(mark).copied(),
+        Some(CssVisibility::Hidden),
+        "mark starts hidden (default toggle False)"
+    );
+    let label = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<CheckboxMark>(c).is_none())
+        .expect("a label child");
+    assert_eq!(
+        world.get::<Text>(label).map(|t| t.0.clone()),
+        Some("Done".to_string()),
+        "the label child carries the visible pixels"
+    );
+}
+
+/// `switch(label)` spawns the full a11y contract plus the thumb + label children
+/// (pick-through), the thumb at the off position (`Translate` x = 0).
+#[test]
+fn switch_scene_fn_builds_contract_children_and_pick_through() {
+    use bevy::ecs::hierarchy::Children;
+    use bevy::picking::Pickable;
+    use buiy_core::a11y::{A11yToggled, Toggled};
+    use buiy_core::layout::Translate;
+    use buiy_widgets::switch::SwitchThumb;
+
+    let mut app = scene_test_app();
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! { switch("Wi-Fi") })
+        .expect("spawn_scene")
+        .id();
+    app.update();
+
+    let world = app.world();
+    assert_eq!(
+        world.get::<A11yRole>(id).copied(),
+        Some(A11yRole::Switch),
+        "scene-fn root is a Switch"
+    );
+    assert_eq!(
+        world.get::<A11yToggled>(id).map(|t| t.0),
+        Some(Toggled::False),
+        "binary toggle present, default False"
+    );
+    assert_eq!(world.get::<A11yLabel>(id).expect("A11yLabel").0, "Wi-Fi");
+
+    let children: Vec<Entity> = world
+        .get::<Children>(id)
+        .expect("children")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(children.len(), 2, "thumb + label children");
+    for &c in &children {
+        assert_eq!(
+            world.get::<Pickable>(c).copied(),
+            Some(Pickable::IGNORE),
+            "decorative child is Pickable::IGNORE"
+        );
+    }
+    let thumb = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<SwitchThumb>(c).is_some())
+        .expect("a SwitchThumb child");
+    assert_eq!(
+        world.get::<Translate>(thumb).map(|t| t.0),
+        Some(buiy_core::layout::Length::Px(0.0)),
+        "thumb starts at the off position (x = 0)"
+    );
 }

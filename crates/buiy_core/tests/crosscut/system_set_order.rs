@@ -226,8 +226,8 @@ fn plugins_only_populate_their_own_set() {
     //
     // P1c-b INTENTIONALLY adds the inbound action router to `BuiySet::Input` from
     // `A11yPlugin` (action-router.md §7): the router (`route_action_requests`) +
-    // its Button keyboard sibling (`button_keyboard_activation`) are Input-stage
-    // PRODUCERS — they synthesize focus/activation in `Input` so an inbound
+    // its keyboard sibling (`keyboard_activation`, the per-role APG keymap) are
+    // Input-stage PRODUCERS — they synthesize focus/activation in `Input` so an inbound
     // request reflects outbound in the SAME frame's `A11yUpdate`. So A11yPlugin
     // now legitimately contributes to BOTH `A11yUpdate` (the outbound
     // `build_tree`) and `Input` (the inbound router). The earlier "A11yPlugin
@@ -240,7 +240,7 @@ fn plugins_only_populate_their_own_set() {
     assert_eq!(
         a11y_into_input, 2,
         "A11yPlugin adds exactly the P1c-b inbound router systems \
-         (route_action_requests + button_keyboard_activation) to BuiySet::Input"
+         (route_action_requests + keyboard_activation) to BuiySet::Input"
     );
     let focus_into_a11y = set_membership_delta(BuiySet::A11yUpdate, |app| {
         app.init_resource::<ButtonInput<KeyCode>>();

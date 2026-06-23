@@ -6,8 +6,9 @@
 //!
 //! This module is the **contract surface** (co-drive P1c-a): the trait, the
 //! `ContractEntry`/`contract_for` static registry, the `ActionError` taxonomy,
-//! and the Phase-1 contracts that exist pre-P1d (only [`Button`] today; the
-//! other widget contracts land with their bundles in P1d / Wave 3). The
+//! and the per-widget contracts. P1c-a wired [`Button`]; Wave-3 slice-1 (P1d)
+//! adds [`Checkbox`] + [`Switch`] alongside their bundles; the remaining widget
+//! contracts land with their bundles in later P1d slices. The
 //! outbound [`to_accesskit_node`](super::translate::to_accesskit_node) fold now
 //! derives its advertised verbs from `Focusable` (`{Focus, Blur}`) PLUS
 //! [`contract_for`]`(role).actions`, replacing the old focusable-`Focus`
@@ -136,13 +137,29 @@ impl ContractEntry {
 ///
 /// A role with no interactive contract (a `Generic`/`Text`/`Region` container)
 /// returns `None` — it advertises only the implicit `{Focus, Blur}` when
-/// focusable, and nothing else. Only [`Button`] is wired in P1c-a (the only
-/// widget that exists pre-P1d); the remaining role contracts land with their
-/// bundles in P1d (co-drive §3 demand-pull).
+/// focusable, and nothing else. [`Button`] (P1c-a), [`Checkbox`], and [`Switch`]
+/// (Wave-3 slice-1) are wired; the remaining role contracts land with their
+/// bundles in later P1d slices (co-drive §3 demand-pull).
 pub fn contract_for(role: A11yRole) -> Option<ContractEntry> {
     match role {
         A11yRole::Button => Some(ContractEntry::of::<Button>()),
+        A11yRole::Checkbox => Some(ContractEntry::of::<Checkbox>()),
+        A11yRole::Switch => Some(ContractEntry::of::<Switch>()),
         _ => None,
+    }
+}
+
+/// Write the shared [`OnPress`] activation sink (SC-1) for `entity`, if the sink
+/// resource is present. Every `honor(Click)` lowers through this ONE message —
+/// the same sink the pointer producer and the keyboard handlers write — so an
+/// AT-driven `Click` converges with pointer/keyboard activation on the single
+/// `OnPress` consumer (Button fires its callback; a Checkbox/Switch advances its
+/// `A11yToggled`). Sink-resource discipline (action-router.md §6): under a
+/// partial harness without [`InteractionPlugin`](crate::interaction::InteractionPlugin)
+/// the resource is absent and this no-ops gracefully rather than panicking.
+fn emit_on_press(world: &mut World, entity: Entity) {
+    if let Some(mut messages) = world.get_resource_mut::<bevy::ecs::message::Messages<OnPress>>() {
+        messages.write(OnPress(entity));
     }
 }
 
@@ -177,17 +194,10 @@ impl A11yContract for Button {
     ) -> Result<(), ActionError> {
         match action {
             // `Click` activates the button by writing the shared `OnPress`
-            // sink (SC-1) — the same message the pointer path emits, which
-            // widget logic (`emit_on_press_on_click`'s consumer) drains.
+            // sink (SC-1) — the same message the pointer/keyboard paths emit,
+            // which widget logic drains.
             Action::Click => {
-                // Sink-resource discipline (action-router.md §6): the message
-                // collection is owned by `InteractionPlugin`; under a partial
-                // harness without it, no-op gracefully rather than panic.
-                if let Some(mut messages) =
-                    world.get_resource_mut::<bevy::ecs::message::Messages<OnPress>>()
-                {
-                    messages.write(OnPress(entity));
-                }
+                emit_on_press(world, entity);
                 Ok(())
             }
             // Focus/Blur are honored generically by the router (set/clear
@@ -195,6 +205,104 @@ impl A11yContract for Button {
             // `honor`. Any other verb is not in Button's advertised set, so the
             // router rejects it at the §3 filter before `honor`; reaching here
             // is dead code, reported (not panicked) as `Unsupported`.
+            _ => Err(ActionError::Unsupported {
+                target: super::translate::node_id_for(entity),
+                action,
+            }),
+        }
+    }
+}
+
+/// The Checkbox contract (widget-contracts.md §5 "Checkbox"). Role `Checkbox`
+/// (→ accesskit `Role::CheckBox`); verbs `{Click, Focus, Blur}` (the
+/// `{Focus, Blur}` are implicit via `Focusable`, so [`actions`](A11yContract::actions)
+/// lists only `Click`). State is the **tri-state** [`A11yToggled`](super::A11yToggled) — `Mixed`
+/// (indeterminate) is a first-class checkbox value, never collapsed to a bool.
+///
+/// `honor(Click)` writes the shared [`OnPress`] sink (SC-1), exactly like
+/// [`Button`]; the single `OnPress` consumer advances the checkbox's
+/// `A11yToggled` (`False → True → False`, `Mixed → False`) via
+/// [`A11yToggled::advance_checkbox`](super::A11yToggled::advance_checkbox). The
+/// **APG keyboard asymmetry** — a checkbox toggles on **Space only**, NOT Enter
+/// — is the keyboard layer's job (`keyboard_activation`, action-router.md), not
+/// `honor`'s: every activation modality (pointer/Space/AT-`Click`) converges on
+/// the one `OnPress` sink, so the advance happens once per activation regardless
+/// of source.
+///
+/// A zero-sized marker, not a Bevy `Component`: keyed by role in [`contract_for`].
+pub struct Checkbox;
+
+/// Checkbox's role-static advertised verbs beyond the implicit `{Focus, Blur}`.
+static CHECKBOX_ACTIONS: &[Action] = &[Action::Click];
+
+impl A11yContract for Checkbox {
+    fn role() -> A11yRole {
+        A11yRole::Checkbox
+    }
+
+    fn actions() -> &'static [Action] {
+        CHECKBOX_ACTIONS
+    }
+
+    fn honor(
+        world: &mut World,
+        entity: Entity,
+        action: Action,
+        _data: Option<&ActionData>,
+    ) -> Result<(), ActionError> {
+        match action {
+            // Converge on the shared `OnPress` sink (SC-1); the single consumer
+            // advances `A11yToggled` for the checkbox role. AT-`Click` therefore
+            // toggles identically to a pointer click or a Space press.
+            Action::Click => {
+                emit_on_press(world, entity);
+                Ok(())
+            }
+            _ => Err(ActionError::Unsupported {
+                target: super::translate::node_id_for(entity),
+                action,
+            }),
+        }
+    }
+}
+
+/// The Switch contract (widget-contracts.md §5 "Switch"). Role `Switch`
+/// (→ accesskit `Role::Switch`); verbs `{Click, Focus, Blur}` (`{Focus, Blur}`
+/// implicit via `Focusable`). State is a **binary** [`A11yToggled`](super::A11yToggled) — a switch
+/// has no `Mixed`.
+///
+/// `honor(Click)` writes the shared [`OnPress`] sink (SC-1); the single consumer
+/// flips the switch's `A11yToggled` (`False ↔ True`) via
+/// [`A11yToggled::toggle_switch`](super::A11yToggled::toggle_switch). Unlike the
+/// checkbox, a switch toggles on **both Space and Enter** (the keyboard layer);
+/// `honor` is modality-agnostic — it only feeds the one sink.
+///
+/// A zero-sized marker, not a Bevy `Component`: keyed by role in [`contract_for`].
+pub struct Switch;
+
+/// Switch's role-static advertised verbs beyond the implicit `{Focus, Blur}`.
+static SWITCH_ACTIONS: &[Action] = &[Action::Click];
+
+impl A11yContract for Switch {
+    fn role() -> A11yRole {
+        A11yRole::Switch
+    }
+
+    fn actions() -> &'static [Action] {
+        SWITCH_ACTIONS
+    }
+
+    fn honor(
+        world: &mut World,
+        entity: Entity,
+        action: Action,
+        _data: Option<&ActionData>,
+    ) -> Result<(), ActionError> {
+        match action {
+            Action::Click => {
+                emit_on_press(world, entity);
+                Ok(())
+            }
             _ => Err(ActionError::Unsupported {
                 target: super::translate::node_id_for(entity),
                 action,

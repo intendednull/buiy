@@ -793,8 +793,13 @@ fn contract_registry_keys_button_on_click() {
         contract_for(A11yRole::Generic).is_none(),
         "Generic has no interactive contract",
     );
-    // The other widget roles are wired in P1d (no contract yet pre-P1d).
-    assert!(contract_for(A11yRole::Checkbox).is_none());
+    // Wave-3 slice-1 wired Checkbox + Switch: each advertises {Click} beyond the
+    // implicit Focus/Blur (the tri-state checkbox + binary switch contracts).
+    let cb = contract_for(A11yRole::Checkbox).expect("Checkbox has a contract");
+    assert_eq!(cb.actions, &[Action::Click], "Checkbox advertises Click");
+    let sw = contract_for(A11yRole::Switch).expect("Switch has a contract");
+    assert_eq!(sw.actions, &[Action::Click], "Switch advertises Click");
+    // The remaining widget roles are wired in later P1d slices (no contract yet).
     assert!(contract_for(A11yRole::Slider).is_none());
 }
 

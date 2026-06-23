@@ -16,11 +16,12 @@
 //! `Pointer<Press/Release>` observers, layered on top, not a second activation
 //! channel).
 //!
-//! **Widget root:** activation lowers only for entities carrying the button
-//! activation role ([`A11yRole::Button`]), so a click on a text input or a plain
-//! node does not spuriously activate. The role lives in `buiy_core`, so this
-//! producer stays widget-crate-agnostic (C4 widgets carry the role via their
-//! `#[require]` contract). Only the primary button activates.
+//! **Widget root:** activation lowers only for entities carrying an
+//! **activatable** role ([`is_activatable_role`] — Button/Checkbox/Switch), so a
+//! click on a text input or a plain node does not spuriously activate. The role
+//! lives in `buiy_core`, so this producer stays widget-crate-agnostic (C4
+//! widgets carry the role via their `#[require]` contract). Only the primary
+//! button activates.
 
 use crate::a11y::A11yRole;
 use crate::interaction::OnPress;
@@ -28,13 +29,28 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
+/// Whether a primary-click on a node of `role` lowers to the shared [`OnPress`]
+/// activation sink. The activatable roles are exactly those with a keyboard
+/// activation contract (`A11yRole::Button`/`Checkbox`/`Switch`): a click on a
+/// text input or a plain `Generic`/`Text` node must not activate. This is the
+/// pointer-side mirror of the keyboard's `activation_keys` keymap — both gate on
+/// the same set of activatable roles, so pointer/keyboard/AT converge on the one
+/// `OnPress` consumer that advances the widget's state (a Button fires its
+/// callback; a Checkbox/Switch advances its `A11yToggled`).
+pub fn is_activatable_role(role: A11yRole) -> bool {
+    matches!(
+        role,
+        A11yRole::Button | A11yRole::Checkbox | A11yRole::Switch
+    )
+}
+
 /// Observes the committed `Pointer<Click>` stream and writes [`OnPress`] for an
-/// activatable widget root (`A11yRole::Button`) on a primary-button click.
+/// activatable widget root ([`is_activatable_role`]) on a primary-button click.
 /// Registered as an observer by [`crate::picking::PickingPlugin`].
 ///
 /// This is the pointer producer into the shared `OnPress` sink (co-drive SC-1):
 /// the SAME message the action router's `Action::Click` honor and the keyboard
-/// Enter/Space handlers emit, so all three modalities converge on one sink.
+/// activation handlers emit, so all three modalities converge on one sink.
 pub fn pointer_click_emits_on_press(
     click: On<Pointer<Click>>,
     roles: Query<&A11yRole>,
@@ -44,9 +60,9 @@ pub fn pointer_click_emits_on_press(
         return;
     }
     let target = click.entity;
-    // Only entities carrying the button activation role lower to `OnPress` —
-    // a click on a text input / plain node must not activate.
-    if roles.get(target) == Ok(&A11yRole::Button) {
+    // Only entities carrying an activatable role lower to `OnPress` — a click on
+    // a text input / plain node must not activate.
+    if roles.get(target).copied().is_ok_and(is_activatable_role) {
         writer.write(OnPress(target));
     }
 }

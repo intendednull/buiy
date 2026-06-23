@@ -35,6 +35,36 @@ impl Default for A11yToggled {
     }
 }
 
+impl A11yToggled {
+    /// Advance a **checkbox**'s tri-state toggle one activation step (the APG
+    /// checkbox contract, widget-contracts.md §5): `False → True → False`, and a
+    /// `Mixed` (indeterminate) checkbox resolves to `False` on the next
+    /// activation (APG: "activating a mixed checkbox sets it unchecked"). This is
+    /// the SAME mutation the Space key, a pointer click, and an inbound
+    /// `Action::Click` all converge on (the one `OnPress` consumer), so every
+    /// modality advances the checkbox identically.
+    pub fn advance_checkbox(&mut self) {
+        self.0 = match self.0 {
+            Toggled::False => Toggled::True,
+            // `True` *and* `Mixed` both go to `False` (APG: a mixed checkbox
+            // becomes unchecked on activation; `Mixed` is never collapsed to a
+            // boolean *at rest*, only resolved here on an explicit toggle).
+            Toggled::True | Toggled::Mixed => Toggled::False,
+        };
+    }
+
+    /// Toggle a **switch**'s binary state (`False ↔ True`). A switch has no
+    /// `Mixed`; a switch authored with `Mixed` (a contract error) is treated as
+    /// `True` and flips to `False`. The single `OnPress` consumer applies this on
+    /// pointer/keyboard/AT activation alike.
+    pub fn toggle_switch(&mut self) {
+        self.0 = match self.0 {
+            Toggled::False => Toggled::True,
+            Toggled::True | Toggled::Mixed => Toggled::False,
+        };
+    }
+}
+
 /// Expanded/collapsed disclosure state → `set_expanded(bool)`; absence ⇒
 /// `clear_expanded` (the fold omits the arm).
 #[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]

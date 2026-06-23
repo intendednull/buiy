@@ -27,16 +27,29 @@
 //! (`Node`, the Style decomposition, `Focusable`, `A11yRole`, the editor
 //! mechanism) rides the markers' `#[require]`.
 
-use bevy::scene::{Scene, bsn};
+use bevy::ecs::hierarchy::Children;
+use bevy::picking::Pickable;
+use bevy::scene::{Scene, bsn, template_value};
 use buiy_core::a11y::A11yLabel;
-use buiy_core::render::components::{Background, Border};
+use buiy_core::components::Node;
+use buiy_core::layout::Translate;
+use buiy_core::render::components::{Background, Border, CssVisibility, TextColor};
 use buiy_core::text::edit::Placeholder;
+use buiy_core::text::{FontSize, Text};
 
 use crate::button::{Button, button_background, button_border, button_box_model};
+use crate::checkbox::{
+    CHECK_GLYPH, CHECKBOX_MARK_FONT_SIZE, Checkbox, CheckboxMark, checkbox_background,
+    checkbox_border, checkbox_box_model,
+};
+use crate::switch::{
+    SWITCH_LABEL_FONT_SIZE, Switch, SwitchThumb, switch_background, switch_border,
+    switch_box_model, switch_thumb_background, switch_thumb_border, switch_thumb_box_model,
+};
 use crate::text_input::{
     TextInput, text_input_background, text_input_border, text_input_box_model, text_input_overflow,
 };
-use buiy_core::layout::{BoxModel, Overflow};
+use buiy_core::layout::{BoxModel, Length, Overflow};
 use buiy_core::text::edit::SingleLine;
 
 /// A labelled button as a composable BSN scene. Mergeable: patch any spelled
@@ -111,4 +124,109 @@ pub fn text_input_single_line(placeholder: impl Into<String>) -> impl Scene {
 /// them — `#[require]` is the shared source there.
 pub fn text_input_multi_line(placeholder: impl Into<String>) -> impl Scene {
     text_input_base(placeholder)
+}
+
+/// A labelled checkbox as a composable BSN scene (Wave-3 slice-1). Mergeable: the
+/// `Checkbox` marker triggers the full `#[require]` contract (role + tri-state
+/// `A11yToggled` + focus + a11y + box), and the spelled field-patches layer the
+/// canonical box style on top. The `Children [ … ]` subtree authors the check/
+/// dash **mark** glyph and the visible **label** `Text`, both `Pickable::IGNORE`
+/// so a hit resolves to the widget root the router addresses (pick-through,
+/// co-drive SC-3). The mark starts `CssVisibility::Hidden` (the default toggle is
+/// `False`); `update_checkbox_visual` reveals it on the first state flip.
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { checkbox("Done") });
+/// ```
+pub fn checkbox(label: impl Into<String>) -> impl Scene {
+    let bm = checkbox_box_model();
+    let bg = checkbox_background();
+    let border = checkbox_border();
+    let label = label.into();
+    bsn! {
+        Checkbox
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        A11yLabel({ label.clone() })
+        Children [
+            (
+                CheckboxMark
+                Text({ CHECK_GLYPH.to_string() })
+                FontSize({ CHECKBOX_MARK_FONT_SIZE })
+                template_value(TextColor::default())
+                // The mark starts hidden (default toggle is `False`);
+                // `update_checkbox_visual` reveals it on the first flip.
+                // `CssVisibility` / `Pickable` are inserted as whole values
+                // (`template_value`) — bsn's field-patch path does not author a
+                // fieldless enum variant / an associated `const`.
+                template_value(CssVisibility::Hidden)
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                Text({ label })
+                FontSize({ CHECKBOX_MARK_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+        ]
+    }
+}
+
+/// A labelled switch as a composable BSN scene (Wave-3 slice-1). Mergeable: the
+/// `Switch` marker triggers the full `#[require]` contract (role + binary
+/// `A11yToggled` + focus + a11y + track), and the field-patches layer the
+/// canonical pill style. The `Children [ … ]` subtree authors the sliding **thumb**
+/// and the visible **label** `Text`, both `Pickable::IGNORE` (pick-through). The
+/// thumb starts at the off position (`Translate` x = 0, the default toggle is
+/// `False`); `update_switch_visual` slides it on the first state flip.
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { switch("Wi-Fi") });
+/// ```
+pub fn switch(label: impl Into<String>) -> impl Scene {
+    let bm = switch_box_model();
+    let bg = switch_background();
+    let border = switch_border();
+    let thumb_bm = switch_thumb_box_model();
+    let thumb_bg = switch_thumb_background();
+    let thumb_border = switch_thumb_border();
+    let label = label.into();
+    bsn! {
+        Switch
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        A11yLabel({ label.clone() })
+        Children [
+            (
+                SwitchThumb
+                Node
+                BoxModel {
+                    width: { thumb_bm.width },
+                    height: { thumb_bm.height },
+                }
+                Background { color: { thumb_bg.color } }
+                Border { radius: { thumb_border.radius } }
+                // The thumb starts at the off position (x = 0); inserted as a
+                // whole value because `Translate` is a tuple struct.
+                template_value(Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)))
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                Text({ label })
+                FontSize({ SWITCH_LABEL_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+        ]
+    }
 }

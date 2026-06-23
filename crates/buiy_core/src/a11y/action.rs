@@ -204,17 +204,48 @@ pub fn route_action_requests(world: &mut World) {
     }
 }
 
-/// Keyboard activation for a focused [`A11yRole::Button`] (co-drive SC-1, WAI-
-/// ARIA APG): on a **KeyDown** of **Enter** *or* **Space** while a Button is
-/// focused, write the shared [`OnPress`] sink — the SAME message the pointer
-/// path ([`crate::picking::pointer_click_emits_on_press`]) and the inbound
-/// router's `Action::Click` honor emit, so all three modalities converge on one
-/// activation route.
+/// The APG keyboard-activation keymap (co-drive SC-1, WAI-ARIA APG): the set of
+/// keys that **activate** the focused widget of `role`, lowering to the shared
+/// [`OnPress`] sink. `None` ⇒ the role has no keyboard-activation contract (it is
+/// not an activatable widget — a plain `Generic`/`Text` node).
 ///
-/// Per the APG, a **button** activates on *both* Enter and Space. (A checkbox's
-/// Space-only / Enter-submits-the-form asymmetry is a P1d concern — only Button
-/// exists pre-P1d, so this handler keys strictly on [`A11yRole::Button`].) A key
-/// while a *non*-Button is focused, or while nothing is focused, writes nothing.
+/// This is the **single source of the keyboard asymmetry** the gate-#7 fixture
+/// asserts, role-keyed rather than per-widget special-cased so a new activatable
+/// widget adds exactly one arm here:
+///
+/// - **Button** — `Enter` AND `Space` (APG button).
+/// - **Checkbox** — `Space` ONLY. **Enter does NOTHING** — the canonical APG
+///   asymmetry (a checkbox does not toggle on Enter; in a form Enter submits, it
+///   does not check the box). Load-bearing vs Button.
+/// - **Switch** — `Space` AND `Enter` (APG switch — like a button, both keys
+///   toggle).
+///
+/// Every activating key writes the SAME `OnPress` message the pointer producer
+/// ([`crate::picking::pointer_click_emits_on_press`]) and the inbound router's
+/// `Action::Click` honor emit, so all three modalities converge on one route and
+/// the single `OnPress` consumer advances the widget's state once per activation.
+fn activation_keys(role: A11yRole) -> Option<&'static [KeyCode]> {
+    match role {
+        // APG button: both Enter and Space.
+        A11yRole::Button => Some(&[KeyCode::Enter, KeyCode::Space]),
+        // APG checkbox: Space ONLY (Enter is inert — the canonical asymmetry).
+        A11yRole::Checkbox => Some(&[KeyCode::Space]),
+        // APG switch: Space and Enter both toggle.
+        A11yRole::Switch => Some(&[KeyCode::Enter, KeyCode::Space]),
+        _ => None,
+    }
+}
+
+/// Keyboard activation for the focused widget (co-drive SC-1, WAI-ARIA APG): on a
+/// **KeyDown** of one of the role's `activation_keys`, write the shared
+/// [`OnPress`] sink — the SAME message the pointer path
+/// ([`crate::picking::pointer_click_emits_on_press`]) and the inbound router's
+/// `Action::Click` honor emit, so all three modalities converge on one route.
+///
+/// The per-role keymap encodes the **APG asymmetry** the gate-#7 fixture asserts:
+/// a Button activates on Enter *or* Space; a **Checkbox toggles on Space only**
+/// (Enter does nothing — the canonical asymmetry); a Switch toggles on *both*.
+/// A key while a non-activatable role (or nothing) is focused writes nothing.
 ///
 /// `FocusedEntity` is owned by `FocusPlugin`; under a harness without it the
 /// `Option<Res<FocusedEntity>>` param leaves the system inert (no focus ⇒ no
@@ -222,11 +253,10 @@ pub fn route_action_requests(world: &mut World) {
 /// `apply_keyboard_edits` precedent, input.rs): a `MinimalPlugins`/`A11yPlugin`
 /// harness with no `InputPlugin` and no manual `add_message::<KeyboardInput>()`
 /// has no `Messages<KeyboardInput>` resource, so the param must be optional or
-/// the system fails param validation. A disabled button (`text::edit::Disabled`
-/// is the editor's; the a11y router gates `A11yDisabled` inbound) is out of this
-/// path's scope — the keyboard path mirrors the pointer producer, which likewise
-/// keys only on the activation role.
-pub fn button_keyboard_activation(
+/// the system fails param validation. A disabled widget (the a11y router gates
+/// `A11yDisabled` inbound) is out of this path's scope — the keyboard path
+/// mirrors the pointer producer, which likewise keys only on the activation role.
+pub fn keyboard_activation(
     events: Option<MessageReader<KeyboardInput>>,
     focused: Option<Res<FocusedEntity>>,
     roles: Query<&A11yRole>,
@@ -242,19 +272,24 @@ pub fn button_keyboard_activation(
         events.clear();
         return;
     };
-    // Only a focused Button activates on keyboard (the pointer producer's
-    // role gate, mirrored).
-    if roles.get(focused_entity) != Ok(&A11yRole::Button) {
+    // The focused widget's role decides WHICH keys activate it (the APG keymap).
+    // A non-activatable role yields `None` ⇒ inert (drain so events don't pile up).
+    let Some(role) = roles.get(focused_entity).ok().copied() else {
         events.clear();
         return;
-    }
-    // A button activates on a key-DOWN of Enter OR Space (APG). Releases and
-    // every other key are ignored.
+    };
+    let Some(keys) = activation_keys(role) else {
+        events.clear();
+        return;
+    };
+    // Activate on a key-DOWN of one of the role's activation keys. Releases and
+    // every other key are ignored — so a checkbox's Enter (not in its key set)
+    // is correctly inert.
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if matches!(ev.key_code, KeyCode::Enter | KeyCode::Space) {
+        if keys.contains(&ev.key_code) {
             writer.write(OnPress(focused_entity));
         }
     }

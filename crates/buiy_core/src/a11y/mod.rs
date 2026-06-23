@@ -7,7 +7,7 @@
 //! accessibility.md § 3.11 (decomposed components per #17644).
 
 use crate::{BuiySet, focus::Focusable};
-use accesskit::{HasPopup, NodeId, Orientation, Toggled};
+use accesskit::{HasPopup, NodeId, Orientation};
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -22,7 +22,7 @@ pub mod states;
 pub mod translate;
 
 pub use accname::{AccNameInputs, compute_accessible_name};
-pub use action::{button_keyboard_activation, dispatch_action_request, route_action_requests};
+pub use action::{dispatch_action_request, keyboard_activation, route_action_requests};
 pub use adapter::AccessKitAdapterPlugin;
 pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
 pub use inprocess::{
@@ -34,6 +34,10 @@ pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
     A11yPlaceholder, A11yReadOnly, A11ySelected, A11yTextValue, A11yToggled, A11yValue,
 };
+// Re-export the foreign `accesskit::Toggled` tri-state enum so downstream crates
+// (e.g. `buiy_widgets`) can match on `A11yToggled.0` / drive the toggle visuals
+// without taking a direct `accesskit` dependency. `A11yToggled` wraps it.
+pub use accesskit::Toggled;
 use translate::node_id_for;
 pub use translate::{build_tree_update, resolve_live, to_accesskit_node};
 
@@ -279,7 +283,8 @@ impl Plugin for A11yPlugin {
         // explicit `.before(...)` against the CURRENT Input handlers:
         //   - `handle_tab` (focus.rs) — keyboard focus;
         //   - `apply_keyboard_edits` (text) — keyboard editing;
-        //   - `button_keyboard_activation` (below) — keyboard Button activation.
+        //   - `keyboard_activation` (below) — the per-role APG keyboard keymap
+        //     (Button Enter+Space, Checkbox Space-only, Switch Space+Enter).
         // (The C3 pointer producer `pointer_click_emits_on_press` and
         // `focus_on_click` are observers, not Input-set systems, so they are not
         // — and cannot be — named here; `emit_on_press_on_click` was deleted in
@@ -292,9 +297,9 @@ impl Plugin for A11yPlugin {
                 .in_set(BuiySet::Input)
                 .before(crate::focus::handle_tab)
                 .before(crate::text::edit::apply_keyboard_edits)
-                .before(button_keyboard_activation),
+                .before(keyboard_activation),
         );
-        app.add_systems(Update, button_keyboard_activation.in_set(BuiySet::Input));
+        app.add_systems(Update, keyboard_activation.in_set(BuiySet::Input));
     }
 }
 

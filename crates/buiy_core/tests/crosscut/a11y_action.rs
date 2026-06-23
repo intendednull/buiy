@@ -5,8 +5,8 @@
 //! an `accesskit::ActionRequest` minted in-test resolves to a live entity, runs
 //! the liveness + capability + live-state filter (action-router.md §3), and
 //! lowers into a real Buiy sink (`OnPress` / `FocusedEntity`). The keyboard path
-//! drives the production `button_keyboard_activation` system through the real
-//! schedule.
+//! drives the production `keyboard_activation` system (the per-role APG keymap)
+//! through the real schedule.
 
 use accesskit::{Action, ActionRequest, TreeId};
 use bevy::input::ButtonState;
@@ -190,7 +190,7 @@ fn dispatch_blur_clears_focused_entity_only_when_focused() {
 
 // ---------------------------------------------------------------------------
 // Button keyboard activation (Enter + Space → OnPress), through the real
-// schedule (the production `button_keyboard_activation` system).
+// schedule (the production `keyboard_activation` system).
 // ---------------------------------------------------------------------------
 
 /// Send one KeyDown of `key` and run the schedule.
@@ -305,5 +305,156 @@ fn enter_with_nothing_focused_does_not_fire_on_press() {
     assert!(
         drain_on_press(&mut app).is_empty(),
         "no focus ⇒ no keyboard activation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GATE #7 — the APG keyboard ASYMMETRY (Wave-3 slice-1, widget-contracts.md §5).
+// The keyboard producer (`keyboard_activation`) writes `OnPress` on the role's
+// APG activation keys. A **Checkbox toggles on Space ONLY** (Enter does NOTHING
+// — the canonical asymmetry vs Button); a **Switch toggles on BOTH** Space and
+// Enter. These tests assert the `OnPress`-emission half of gate #7 at the
+// keyboard layer (the `A11yToggled` flip the OnPress drives is asserted in the
+// buiy_widgets end-to-end tests, where the toggle consumer lives).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn space_on_focused_checkbox_fires_on_press() {
+    let mut app = setup();
+    let cb = app
+        .world_mut()
+        .spawn((A11yRole::Checkbox, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(cb);
+
+    key_down(&mut app, KeyCode::Space);
+    assert_eq!(
+        drain_on_press(&mut app),
+        vec![cb],
+        "Space on a focused Checkbox fires OnPress (APG checkbox)"
+    );
+}
+
+#[test]
+fn enter_on_focused_checkbox_does_nothing() {
+    // THE canonical asymmetry: a checkbox does NOT toggle on Enter (Button does).
+    let mut app = setup();
+    let cb = app
+        .world_mut()
+        .spawn((A11yRole::Checkbox, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(cb);
+
+    key_down(&mut app, KeyCode::Enter);
+    assert!(
+        drain_on_press(&mut app).is_empty(),
+        "Enter on a focused Checkbox does NOTHING — the canonical APG asymmetry \
+         (Space-only; Enter must not toggle a checkbox)"
+    );
+}
+
+#[test]
+fn space_on_focused_switch_fires_on_press() {
+    let mut app = setup();
+    let sw = app
+        .world_mut()
+        .spawn((A11yRole::Switch, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(sw);
+
+    key_down(&mut app, KeyCode::Space);
+    assert_eq!(
+        drain_on_press(&mut app),
+        vec![sw],
+        "Space on a focused Switch fires OnPress (APG switch)"
+    );
+}
+
+#[test]
+fn enter_on_focused_switch_fires_on_press() {
+    // A switch — unlike a checkbox — toggles on Enter too (Space AND Enter).
+    let mut app = setup();
+    let sw = app
+        .world_mut()
+        .spawn((A11yRole::Switch, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(sw);
+
+    key_down(&mut app, KeyCode::Enter);
+    assert_eq!(
+        drain_on_press(&mut app),
+        vec![sw],
+        "Enter on a focused Switch fires OnPress (APG switch: Space AND Enter)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The contract dispatch half (gate #6/#7): an inbound `Action::Click` on a
+// Checkbox/Switch lowers into the shared `OnPress` sink (the same convergence as
+// Button), and an unadvertised verb is rejected.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_click_on_checkbox_fires_on_press() {
+    let mut app = setup();
+    let cb = app
+        .world_mut()
+        .spawn((A11yRole::Checkbox, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+
+    let req = request(node_id_for(cb), Action::Click);
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &req),
+        Ok(()),
+        "Click on a live Checkbox is honored"
+    );
+    assert_eq!(
+        drain_on_press(&mut app),
+        vec![cb],
+        "Checkbox honor(Click) writes the shared OnPress sink"
+    );
+}
+
+#[test]
+fn dispatch_click_on_switch_fires_on_press() {
+    let mut app = setup();
+    let sw = app
+        .world_mut()
+        .spawn((A11yRole::Switch, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+
+    let req = request(node_id_for(sw), Action::Click);
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &req),
+        Ok(()),
+        "Click on a live Switch is honored"
+    );
+    assert_eq!(
+        drain_on_press(&mut app),
+        vec![sw],
+        "Switch honor(Click) writes the shared OnPress sink"
+    );
+}
+
+#[test]
+fn dispatch_increment_on_checkbox_is_unsupported() {
+    let mut app = setup();
+    let cb = app.world_mut().spawn(A11yRole::Checkbox).id();
+    app.update();
+
+    let req = request(node_id_for(cb), Action::Increment);
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &req),
+        Err(ActionError::Unsupported {
+            target: node_id_for(cb),
+            action: Action::Increment,
+        }),
+        "a Checkbox advertises only {{Click, Focus, Blur}} — Increment is Unsupported"
     );
 }
