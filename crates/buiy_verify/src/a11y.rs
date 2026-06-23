@@ -49,6 +49,9 @@ fn role_to_str(r: A11yRole) -> &'static str {
         A11yRole::MultilineTextInput => "MultilineTextInput",
         A11yRole::Region => "Region",
         A11yRole::Group => "Group",
+        A11yRole::Status => "Status",
+        A11yRole::Alert => "Alert",
+        A11yRole::Log => "Log",
         _ => "Unknown",
     }
 }
@@ -233,6 +236,9 @@ mod tests {
         A11yRole::MultilineTextInput,
         A11yRole::Region,
         A11yRole::Group,
+        A11yRole::Status,
+        A11yRole::Alert,
+        A11yRole::Log,
     ];
 
     #[test]

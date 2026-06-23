@@ -159,6 +159,89 @@ fn hidden_is_carried_but_not_flagged_in_p1a() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// P1a second-batch — PRODUCER-tier fixtures.
+//
+// `A11yPlaceholder` is asserted here because the consumer `placeholder()` getter
+// is FILTERED (it only surfaces on a node that is_text_input() && is empty), so
+// the producer `Node::placeholder()` is the clean, unambiguous observation.
+// `resolve_live` is a pure function asserted directly as a truth table.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn placeholder_view_sets_placeholder() {
+    let view = A11yNodeView {
+        role: A11yRole::TextInput,
+        placeholder: Some("Search…".into()),
+        ..Default::default()
+    };
+    assert_eq!(to_accesskit_node(&view).placeholder(), Some("Search…"));
+
+    // Absence ⇒ no fold arm ⇒ unset.
+    let none = A11yNodeView {
+        role: A11yRole::TextInput,
+        ..Default::default()
+    };
+    assert_eq!(to_accesskit_node(&none).placeholder(), None);
+}
+
+#[test]
+fn resolve_live_role_implied_truth_table() {
+    use accesskit::Live;
+    use buiy_core::a11y::resolve_live;
+
+    // No explicit A11yLive ⇒ role implies the policy.
+    assert_eq!(
+        resolve_live(A11yRole::Alert, None),
+        (Some(Live::Assertive), true),
+        "Alert ⇒ Assertive + atomic",
+    );
+    assert_eq!(
+        resolve_live(A11yRole::Status, None),
+        (Some(Live::Polite), true),
+        "Status ⇒ Polite + atomic",
+    );
+    assert_eq!(
+        resolve_live(A11yRole::Log, None),
+        (Some(Live::Polite), false),
+        "Log ⇒ Polite, non-atomic",
+    );
+    // Any other role ⇒ no live region.
+    assert_eq!(
+        resolve_live(A11yRole::Button, None),
+        (None, false),
+        "non-live roles imply no live region",
+    );
+}
+
+#[test]
+fn resolve_live_explicit_overrides_role() {
+    use accesskit::Live;
+    use buiy_core::a11y::{A11yLive, resolve_live};
+
+    // An explicit component wins over the role-implied default, even when the
+    // role would imply something different (Alert would imply Assertive+atomic).
+    let explicit = A11yLive {
+        politeness: Live::Polite,
+        atomic: false,
+    };
+    assert_eq!(
+        resolve_live(A11yRole::Alert, Some(explicit)),
+        (Some(Live::Polite), false),
+        "explicit A11yLive overrides the Alert role default",
+    );
+
+    // Explicit on a non-live role still applies (the role implies nothing).
+    let explicit = A11yLive {
+        politeness: Live::Assertive,
+        atomic: true,
+    };
+    assert_eq!(
+        resolve_live(A11yRole::Button, Some(explicit)),
+        (Some(Live::Assertive), true),
+    );
+}
+
 #[test]
 fn entity_for_node_id_inverts_node_id_for() {
     use buiy_core::a11y::translate::{entity_for_node_id, node_id_for};

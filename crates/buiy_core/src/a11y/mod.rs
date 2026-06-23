@@ -7,7 +7,7 @@
 //! accessibility.md § 3.11 (decomposed components per #17644).
 
 use crate::{BuiySet, focus::Focusable};
-use accesskit::Toggled;
+use accesskit::{HasPopup, Orientation, Toggled};
 use bevy::prelude::*;
 
 pub mod adapter;
@@ -15,8 +15,11 @@ pub mod states;
 pub mod translate;
 
 pub use adapter::AccessKitAdapterPlugin;
-pub use states::{A11yDisabled, A11yExpanded, A11yHidden, A11yModal, A11ySelected, A11yToggled};
-pub use translate::{build_tree_update, to_accesskit_node};
+pub use states::{
+    A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
+    A11yPlaceholder, A11ySelected, A11yTextValue, A11yToggled, A11yValue,
+};
+pub use translate::{build_tree_update, resolve_live, to_accesskit_node};
 
 /// Decomposed AccessKit role component.
 ///
@@ -48,6 +51,13 @@ pub enum A11yRole {
     MultilineTextInput,
     Region,
     Group,
+    // Live-region roles (P1a batch 2). These imply a live-region policy in
+    // `translate::resolve_live` — `Alert` ⇒ Assertive+atomic, `Status` ⇒
+    // Polite+atomic, `Log` ⇒ Polite — so an alert/status/log surfaces the right
+    // announcement even with no explicit `A11yLive` (semantic-tree.md §5).
+    Status,
+    Alert,
+    Log,
     // Phase 0 stops here; full taxonomy is in the foundation spec accessibility.md.
 }
 
@@ -96,6 +106,20 @@ pub struct A11yNodeView {
     /// **Carried only in P1a** — no fold arm; P1b consumes it to prune the
     /// node + subtree (semantic-tree.md §7.4).
     pub hidden: bool,
+    // Decomposed state projections (P1a, second batch):
+    /// Valued range, projected from [`A11yValue`]. `None` ⇒ not a valued range.
+    pub value: Option<A11yValue>,
+    /// Single-line text value, projected from [`A11yTextValue`]. `None` ⇒ none.
+    pub text_value: Option<String>,
+    /// Placeholder text, projected from [`A11yPlaceholder`]. `None` ⇒ none.
+    pub placeholder: Option<String>,
+    /// Control orientation, projected from [`A11yOrientation`]. `None` ⇒ unset.
+    pub orientation: Option<Orientation>,
+    /// Popup kind, projected from [`A11yHasPopup`]. `None` ⇒ no popup.
+    pub has_popup: Option<HasPopup>,
+    /// Explicit live-region policy, projected from [`A11yLive`]. `None` ⇒ no
+    /// explicit policy; [`resolve_live`] may still derive one from the role.
+    pub live: Option<A11yLive>,
 }
 
 impl Default for A11yNodeView {
@@ -114,6 +138,12 @@ impl Default for A11yNodeView {
             disabled: false,
             modal: false,
             hidden: false,
+            value: None,
+            text_value: None,
+            placeholder: None,
+            orientation: None,
+            has_popup: None,
+            live: None,
         }
     }
 }
@@ -143,6 +173,12 @@ impl Plugin for A11yPlugin {
             .register_type::<A11yDisabled>()
             .register_type::<A11yModal>()
             .register_type::<A11yHidden>()
+            .register_type::<A11yValue>()
+            .register_type::<A11yTextValue>()
+            .register_type::<A11yPlaceholder>()
+            .register_type::<A11yOrientation>()
+            .register_type::<A11yHasPopup>()
+            .register_type::<A11yLive>()
             .init_resource::<A11yTreeBuilder>()
             .add_systems(Update, build_tree.in_set(BuiySet::A11yUpdate));
     }
@@ -163,6 +199,18 @@ pub(crate) fn build_tree(
         Option<&A11yDisabled>,
         Option<&A11yModal>,
         Option<&A11yHidden>,
+        // Second batch nested in a sub-tuple to keep the top-level query-data
+        // arity under Bevy's 15-element ceiling (phasing.md §Risks #1 — the wide
+        // query). A nested tuple counts as one element; a `#[derive(QueryData)]`
+        // struct is the further mitigation if this grows again.
+        (
+            Option<&A11yValue>,
+            Option<&A11yTextValue>,
+            Option<&A11yPlaceholder>,
+            Option<&A11yOrientation>,
+            Option<&A11yHasPopup>,
+            Option<&A11yLive>,
+        ),
     )>,
 ) {
     builder.nodes.clear();
@@ -178,6 +226,7 @@ pub(crate) fn build_tree(
         disabled,
         modal,
         hidden,
+        (value, text_value, placeholder, orientation, has_popup, live),
     ) in q.iter()
     {
         // Skip entities that have no a11y content at all. A decomposed state
@@ -187,7 +236,13 @@ pub(crate) fn build_tree(
             || selected.is_some()
             || disabled.is_some()
             || modal.is_some()
-            || hidden.is_some();
+            || hidden.is_some()
+            || value.is_some()
+            || text_value.is_some()
+            || placeholder.is_some()
+            || orientation.is_some()
+            || has_popup.is_some()
+            || live.is_some();
         if role.is_none() && label.is_none() && desc.is_none() && focusable.is_none() && !has_state
         {
             continue;
@@ -207,6 +262,15 @@ pub(crate) fn build_tree(
             disabled: disabled.is_some(),
             modal: modal.is_some(),
             hidden: hidden.is_some(),
+            // Second batch. The valued-range and live components clone whole
+            // (multi-field); the text/placeholder newtypes project their inner
+            // `String`; the two enum-property markers unwrap their accesskit enum.
+            value: value.cloned(),
+            text_value: text_value.map(|t| t.0.clone()),
+            placeholder: placeholder.map(|p| p.0.clone()),
+            orientation: orientation.map(|o| o.0),
+            has_popup: has_popup.map(|h| h.0),
+            live: live.copied(),
         });
     }
 }

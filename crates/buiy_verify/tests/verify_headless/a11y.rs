@@ -201,6 +201,179 @@ fn consumer_reads_modal_marker() {
     assert!(node.is_modal());
 }
 
+// ---------------------------------------------------------------------------
+// P1a second-batch decomposed-state fixtures (gate-#3 consumer tier).
+//
+// value / text_value / orientation / has_popup / live are all surfaced by
+// accesskit_consumer 0.36 getters, so they assert at the consumer tier here.
+// `placeholder` is consumer-filtered (it only surfaces on an empty text-input
+// node), and the `resolve_live` role→policy mapping is a pure function — both
+// are asserted at the PRODUCER tier in crosscut/a11y_translate.rs.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn consumer_reads_slider_numeric_value() {
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Slider,
+        name: "Volume".into(),
+        value: Some(buiy_core::a11y::A11yValue {
+            now: 0.5,
+            min: 0.0,
+            max: 1.0,
+            step: Some(0.1),
+            jump: Some(0.25),
+            text: None,
+        }),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("slider node present");
+    assert_eq!(node.numeric_value(), Some(0.5));
+    assert_eq!(node.min_numeric_value(), Some(0.0));
+    assert_eq!(node.max_numeric_value(), Some(1.0));
+    assert_eq!(node.numeric_value_step(), Some(0.1));
+    assert_eq!(node.numeric_value_jump(), Some(0.25));
+}
+
+#[test]
+fn consumer_reads_value_text_when_present() {
+    // `A11yValue.text` is the human-readable rendering → set_value.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Slider,
+        name: "Zoom".into(),
+        value: Some(buiy_core::a11y::A11yValue {
+            now: 0.5,
+            min: 0.0,
+            max: 1.0,
+            step: None,
+            jump: None,
+            text: Some("50%".into()),
+        }),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("slider node present");
+    assert_eq!(node.numeric_value(), Some(0.5));
+    assert_eq!(node.value().as_deref(), Some("50%"));
+}
+
+#[test]
+fn consumer_reads_text_value() {
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::TextInput,
+        name: "Name".into(),
+        text_value: Some("hello".into()),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("text input node present");
+    assert_eq!(node.value().as_deref(), Some("hello"));
+}
+
+#[test]
+fn consumer_reads_orientation() {
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Slider,
+        name: "Pan".into(),
+        orientation: Some(accesskit::Orientation::Horizontal),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("oriented node present");
+    assert_eq!(node.orientation(), Some(accesskit::Orientation::Horizontal));
+}
+
+#[test]
+fn consumer_reads_has_popup() {
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Button,
+        name: "Menu".into(),
+        has_popup: Some(accesskit::HasPopup::Menu),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("popup-button node present");
+    assert_eq!(node.has_popup(), Some(accesskit::HasPopup::Menu));
+}
+
+#[test]
+fn consumer_reads_explicit_live_region() {
+    // An explicit A11yLive overrides any role-implied policy.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Region,
+        name: "Updates".into(),
+        live: Some(buiy_core::a11y::A11yLive {
+            politeness: accesskit::Live::Assertive,
+            atomic: true,
+        }),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("live region node present");
+    assert_eq!(node.live(), accesskit::Live::Assertive);
+    assert!(node.is_live_atomic());
+}
+
+#[test]
+fn consumer_reads_role_implied_status_live_region() {
+    // A `Status` role with NO explicit A11yLive must still announce Polite+atomic
+    // (resolve_live role-implied path; semantic-tree.md §5). Without it, gate #4
+    // is wrong for a status node carrying no author A11yLive.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Status,
+        name: "Saved".into(),
+        live: None,
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("status node present");
+    assert_eq!(node.live(), accesskit::Live::Polite);
+    assert!(
+        node.is_live_atomic(),
+        "Status role implies atomic announcements"
+    );
+}
+
+#[test]
+fn consumer_reads_role_implied_alert_live_region() {
+    // `Alert` ⇒ Assertive + atomic with no explicit A11yLive.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Alert,
+        name: "Error".into(),
+        live: None,
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("alert node present");
+    assert_eq!(node.live(), accesskit::Live::Assertive);
+    assert!(node.is_live_atomic());
+}
+
+#[test]
+fn consumer_non_live_role_has_no_live_region() {
+    // A plain Button implies no live region: resolve_live returns (None, _) so the
+    // fold emits no set_live, and the consumer falls back to Live::Off.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Button,
+        name: "Save".into(),
+        live: None,
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("button node present");
+    assert_eq!(node.live(), accesskit::Live::Off);
+    assert!(!node.is_live_atomic());
+}
+
 #[test]
 fn snapshot_entity_field_is_the_canonical_node_id() {
     let e = entity(1);

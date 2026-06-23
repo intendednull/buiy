@@ -2,8 +2,8 @@
 //! AccessKit data model. Keeping this module winit-free means we can
 //! unit-test it without provisioning a real window.
 
-use crate::a11y::{A11yNodeView, A11yRole};
-use accesskit::{Node, NodeId, Role, Tree, TreeUpdate};
+use crate::a11y::{A11yLive, A11yNodeView, A11yRole};
+use accesskit::{Live, Node, NodeId, Role, Tree, TreeUpdate};
 use bevy::prelude::Entity;
 
 /// Stable AccessKit root node id. Every adapter pushes the same root so the
@@ -68,6 +68,55 @@ pub fn to_accesskit_node(view: &A11yNodeView) -> Node {
     if view.modal {
         node.set_modal();
     }
+    // Decomposed state fold (P1a, second batch). Setter signatures verified
+    // against the resolved accesskit 0.24.1 (committed Cargo.lock):
+    // `set_numeric_value`/`…_min`/`…_max`/`…_step`/`…_jump` take `f64`
+    // (`f64_property_methods!`); `set_value`/`set_placeholder` take
+    // `impl Into<Box<str>>` (`string_property_methods!`);
+    // `set_orientation`/`set_has_popup`/`set_live` take the accesskit enum
+    // (`unique_enum_property_methods!`); and `set_live_atomic()` is a
+    // **no-argument** marker (`flag_methods!`, lib.rs:1806 — **not** `set_atomic`,
+    // which does not exist in 0.24). This is the single emission point (§0.2).
+    if let Some(v) = &view.value {
+        node.set_numeric_value(v.now);
+        node.set_min_numeric_value(v.min);
+        node.set_max_numeric_value(v.max);
+        if let Some(s) = v.step {
+            node.set_numeric_value_step(s);
+        }
+        if let Some(j) = v.jump {
+            node.set_numeric_value_jump(j);
+        }
+        if let Some(t) = &v.text {
+            node.set_value(t.clone());
+        }
+    }
+    // `A11yTextValue` after `A11yValue.text` (spec §5 fold order): both call
+    // `set_value`, so the last writer wins. A node carrying both is a role-split
+    // contract error a widget never authors; the ordering pins deterministic
+    // behavior regardless.
+    if let Some(s) = &view.text_value {
+        node.set_value(s.clone());
+    }
+    if let Some(p) = &view.placeholder {
+        node.set_placeholder(p.clone());
+    }
+    if let Some(o) = view.orientation {
+        node.set_orientation(o);
+    }
+    if let Some(h) = view.has_popup {
+        node.set_has_popup(h);
+    }
+    // Live region: role-implied policy first (resolve_live), overridden by an
+    // explicit `A11yLive`. `set_live_atomic()` takes NO argument — the bool gates
+    // *whether* to call it.
+    let (politeness, atomic) = resolve_live(view.role, view.live);
+    if let Some(p) = politeness {
+        node.set_live(p);
+        if atomic {
+            node.set_live_atomic();
+        }
+    }
     // NOTE: `A11yHidden` (`view.hidden`) has **no fold arm** in P1a. The final
     // design (semantic-tree.md §7.4) prunes hidden entities + subtrees from
     // `build_tree` rather than flagging the node; that prune needs the ECS-tree
@@ -100,6 +149,32 @@ fn role_to_accesskit(role: A11yRole) -> Role {
         A11yRole::MultilineTextInput => Role::MultilineTextInput,
         A11yRole::Region => Role::Region,
         A11yRole::Group => Role::Group,
+        A11yRole::Status => Role::Status,
+        A11yRole::Alert => Role::Alert,
+        A11yRole::Log => Role::Log,
+    }
+}
+
+/// Resolve a node's live-region policy (semantic-tree.md §5).
+///
+/// An *explicit* [`A11yLive`] always wins. With none, the policy is **implied by
+/// the role**: `Alert` ⇒ Assertive + atomic, `Status` ⇒ Polite + atomic, `Log` ⇒
+/// Polite (non-atomic). Any other role implies no live region (`(None, false)`),
+/// so the fold emits no `set_live`. Returning `(None, _)` means "no live region";
+/// the bool is the atomic flag (only meaningful when politeness is `Some`).
+///
+/// This is the **single** place the role→policy mapping lives, so an alert that
+/// carries `A11yRole::Alert` but no author `A11yLive` still announces correctly
+/// (the gate-#4 must-fix; prior-art/wai-aria-apg/live-regions.md).
+pub fn resolve_live(role: A11yRole, explicit: Option<A11yLive>) -> (Option<Live>, bool) {
+    if let Some(l) = explicit {
+        return (Some(l.politeness), l.atomic);
+    }
+    match role {
+        A11yRole::Alert => (Some(Live::Assertive), true),
+        A11yRole::Status => (Some(Live::Polite), true),
+        A11yRole::Log => (Some(Live::Polite), false),
+        _ => (None, false),
     }
 }
 
