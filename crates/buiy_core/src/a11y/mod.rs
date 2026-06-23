@@ -11,11 +11,13 @@ use accesskit::{HasPopup, NodeId, Orientation, Toggled};
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
+pub mod accname;
 pub mod adapter;
 pub mod relations;
 pub mod states;
 pub mod translate;
 
+pub use accname::{AccNameInputs, compute_accessible_name};
 pub use adapter::AccessKitAdapterPlugin;
 pub use relations::A11yRelations;
 pub use states::{
@@ -324,10 +326,24 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             ),
             None => (Vec::new(), Vec::new(), Vec::new(), None),
         };
+        // Accessible name (ACCNAME 1.2, semantic-tree.md §6): derived every build,
+        // never stored. P1a realizes the purely-local arms `label > value >
+        // placeholder`; the `labelledby` (highest) and `contents` arms need the
+        // P1b tree walk, so their inputs are `None` here. With `labelledby`
+        // deferred, the top active arm is `label`, so a node carrying an
+        // `A11yLabel` resolves exactly as before (no name-from-label regression);
+        // a node *without* one now falls back to value → placeholder.
+        let name = compute_accessible_name(AccNameInputs {
+            labelledby_name: None, // P1b — needs the nesting tree walk.
+            label: n.label,
+            value: n.text_value,
+            placeholder: n.placeholder,
+            contents_name: None, // P1b — needs the subtree walk.
+        });
         builder.nodes.push(A11yNodeView {
             entity: n.entity,
             role: n.role.copied().unwrap_or_default(),
-            name: n.label.map(|l| l.0.clone()).unwrap_or_default(),
+            name,
             description: n.description.map(|d| d.0.clone()).unwrap_or_default(),
             focusable: n.focusable.is_some(),
             // Project each component to its view field (one-to-one with the

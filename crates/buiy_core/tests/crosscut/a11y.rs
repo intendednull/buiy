@@ -2,8 +2,9 @@ use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
     a11y::{
-        A11yDescription, A11yDisabled, A11yExpanded, A11yHidden, A11yLabel, A11yModal, A11yPlugin,
-        A11yRelations, A11yRole, A11ySelected, A11yToggled, A11yTreeBuilder,
+        A11yDescription, A11yDisabled, A11yExpanded, A11yHidden, A11yLabel, A11yModal,
+        A11yPlaceholder, A11yPlugin, A11yRelations, A11yRole, A11ySelected, A11yTextValue,
+        A11yToggled, A11yTreeBuilder,
     },
     components::Node,
     focus::Focusable,
@@ -100,6 +101,61 @@ fn description_component_surfaces_in_tree() {
         node.description, "Saves the current document",
         "A11yDescription text must surface as the node's description"
     );
+}
+
+/// P1a (Task 15, ACCNAME): `build_tree` derives `A11yNodeView.name` via
+/// `compute_accessible_name`, not a raw `A11yLabel` read. The local precedence is
+/// `label > value > placeholder`: a node carrying an `A11yLabel` resolves to its
+/// text (the no-name-from-label-regression guarantee), while a node *without* one
+/// falls back to its `A11yTextValue` then `A11yPlaceholder`. A regression that
+/// re-introduced the raw `label.map(...)` read would drop both fallbacks and
+/// redden the value/placeholder cases.
+#[test]
+fn build_tree_derives_accessible_name_with_local_precedence() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    // Label present ⇒ label wins (preserves the prior name-from-label behavior).
+    let labeled = app
+        .world_mut()
+        .spawn((
+            A11yRole::TextInput,
+            A11yLabel("Email".to_string()),
+            A11yTextValue("typed@example.com".to_string()),
+            A11yPlaceholder("you@example.com".to_string()),
+        ))
+        .id();
+    // No label, has value ⇒ value wins.
+    let valued = app
+        .world_mut()
+        .spawn((
+            A11yRole::TextInput,
+            A11yTextValue("hello".to_string()),
+            A11yPlaceholder("Search…".to_string()),
+        ))
+        .id();
+    // No label, no value, has placeholder ⇒ placeholder is the name.
+    let prompted = app
+        .world_mut()
+        .spawn((A11yRole::TextInput, A11yPlaceholder("Search…".to_string())))
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let snapshot = builder.snapshot();
+    let name_of = |e: Entity| {
+        snapshot
+            .iter()
+            .find(|n| n.entity == e)
+            .map(|n| n.name.as_str())
+            .expect("entity must surface in the tree")
+    };
+    assert_eq!(name_of(labeled), "Email", "label wins (no regression)");
+    assert_eq!(name_of(valued), "hello", "no label ⇒ value fallback");
+    assert_eq!(name_of(prompted), "Search…", "no label/value ⇒ placeholder");
 }
 
 /// P1a: `build_tree` projects each decomposed state component from the real ECS

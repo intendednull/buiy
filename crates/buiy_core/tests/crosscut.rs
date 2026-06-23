@@ -14,6 +14,8 @@ mod support;
 
 #[path = "crosscut/a11y.rs"]
 mod a11y;
+#[path = "crosscut/a11y_accname.rs"]
+mod a11y_accname;
 #[path = "crosscut/a11y_translate.rs"]
 mod a11y_translate;
 #[path = "crosscut/atlas_alloc.rs"]
