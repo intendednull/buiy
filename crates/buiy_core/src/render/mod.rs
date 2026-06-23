@@ -228,6 +228,17 @@ impl Plugin for BuiyRenderPlugin {
                 "composite.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
+            // The border/outline BAND shader (octet ..06, styling-f-tier.md
+            // § 2.3 — C6-a feeds the OUTLINE channel). Loaded into the MAIN world
+            // like its siblings; the band pipeline (primitive.rs
+            // `BuiyBandPipeline::specialize`) resolves this handle through the
+            // PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::band_shader_handle(),
+                "band.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
         }
 
         // ExtractedDraws is render-world only — the main world does not read it.

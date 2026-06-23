@@ -164,6 +164,15 @@ pub const CARET_COLOR_TOKEN: &str = "color.caret";
 /// `::placeholder` foreground token name (§ 7).
 pub const PLACEHOLDER_COLOR_TOKEN: &str = "color.text.placeholder";
 
+/// The focus-ring color token name (styling-f-tier.md § 2.6 — C6-a). The
+/// framework focus-ring `Outline` (`focus::lower_focus_ring`) carries this token;
+/// it resolves to the default theme's `color.focus.ring` (a high-contrast
+/// accent) and, under the forced-colors swap, to the system `Highlight` value
+/// the swap maps `color.focus.ring` to (`theme.rs`). A plain `Token` (not a
+/// `SystemColor`) so it does NOT trip the `Highlight`-prefers-when-present
+/// resolvers (`resolve_selection_bg`).
+pub const FOCUS_RING_TOKEN: &str = "color.focus.ring";
+
 /// `::selection` background (§ 5.1): prefer the CSS `Highlight` system key
 /// when the active theme carries it (the forced-colors case — the
 /// wholesale swap leaves no named tokens), else the named token. The

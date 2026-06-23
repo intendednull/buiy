@@ -763,6 +763,7 @@ fn extracted_node(entity: Entity, n: &FlatNode) -> ExtractedNode {
         group: None,
         // The synthetic scene carries no UiTransform; paint axis-aligned.
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
     }
 }
 

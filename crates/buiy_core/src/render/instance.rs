@@ -21,7 +21,7 @@
 //! [`BuiyViewUniform`]: crate::render::view_uniform::BuiyViewUniform
 
 use crate::render::DrawData;
-use crate::render::extract::{ExtractedNode, TextQuad};
+use crate::render::extract::{ExtractedNode, ExtractedOutline, TextQuad};
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 
@@ -168,4 +168,108 @@ pub fn pack_text_quad(quad: &TextQuad) -> PackedInstance {
 pub fn packed_raw_stride_agrees() -> bool {
     std::mem::size_of::<PackedInstance>() == std::mem::size_of::<[f32; 17]>()
         && PACKED_INSTANCE_STRIDE_BYTES == std::mem::size_of::<[f32; 17]>()
+}
+
+/// Stride of [`BorderBandInstance`] in bytes (the band/outline quad-variant
+/// record). MUST match the per-instance `array_stride` the band pipeline
+/// declares in `BuiyBandPipeline::band_vertex_buffers` and the
+/// `@location`-bound fields of `band.wgsl`.
+///
+/// 48 f32 = 192 B: `rect_pos`(2) + `rect_size`(2) + 4 per-side colors (16) +
+/// `width`(4) + `outer_radius`(8) + `inner_radius`(8) + `clip_min`(2) +
+/// `clip_max`(2) + `affine`(4). Computed from the struct so the two can never
+/// disagree (asserted by [`border_band_stride_agrees`]).
+pub const BORDER_BAND_INSTANCE_STRIDE_BYTES: usize = std::mem::size_of::<BorderBandInstance>();
+
+/// The border / outline quad-variant instance — a record DISTINCT from
+/// [`PackedInstance`] (NOT a stride bump): its own [`bevy::render::render_resource::RawBufferVec`],
+/// its own `VertexBufferLayout`, its own shader (`band.wgsl`, octet `..06`),
+/// painted through a dedicated band pipeline. The no-border/outline quad path
+/// is UNTOUCHED — `PackedInstance` stays byte-identical `[f32;17]`, so R1/R2
+/// byte-stability (umbrella § 6.7) holds.
+///
+/// The band fragment is the outer-minus-inner rounded-rect SDF (the
+/// `render_border_sdf.rs` oracle made GPU): a fragment is painted iff
+/// `inside(outer_rounded_rect) AND NOT inside(inner_rounded_rect)`. For an
+/// **outline** all four `color_*` are equal (a uniform stroke); per-side
+/// colors exist so C6-b's border feeds the SAME record with no further layout
+/// change (styling-f-tier.md § 2.3 / § 3.1).
+///
+/// Spec: docs/specs/2026-06-22-buiy-widget-catalog-design/styling-f-tier.md § 2.3 / § 2.4.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct BorderBandInstance {
+    /// Outer-box top-left, logical px (for an outline this is the border box
+    /// grown outward by `width + offset`).
+    pub rect_pos: [f32; 2],
+    /// Outer-box size, logical px (positive).
+    pub rect_size: [f32; 2],
+    /// Per-side resolved linear color (top / right / bottom / left). For an
+    /// outline all four are the resolved ring color.
+    pub color_top: [f32; 4],
+    pub color_right: [f32; 4],
+    pub color_bottom: [f32; 4],
+    pub color_left: [f32; 4],
+    /// Band thickness per side, `[top, right, bottom, left]` logical px. For an
+    /// outline all four are the ring `width`.
+    pub width: [f32; 4],
+    /// Per-corner OUTER elliptical radius `(rx, ry) × 4` (TL, TR, BR, BL).
+    pub outer_radius: [f32; 8],
+    /// Per-corner INNER elliptical radius (outer shrunk by the adjacent width —
+    /// the oracle's load-bearing shrink, `render_border_sdf.rs:66-101`).
+    pub inner_radius: [f32; 8],
+    /// Clip AABB min in logical px. For an OUTLINE this is the entity's
+    /// **`AncestorClip`** (never its own `ClipRect`) so a focus ring survives an
+    /// `overflow:hidden` ancestor (WCAG 2.4.7 / 2.4.11, styling-f-tier.md § 2.4).
+    /// `[-INFINITY; 2]` = the full-view sentinel (unclipped / top-layer).
+    pub clip_min: [f32; 2],
+    /// Clip AABB max in logical px. `[+INFINITY; 2]` = the full-view sentinel.
+    pub clip_max: [f32; 2],
+    /// The 2D affine basis `[m00, m10, m01, m11]` (the column vectors of
+    /// `GlobalTransform`'s 2D linear part) — the band rides the same transform
+    /// path as the fill so a rotated/scaled element's ring stays aligned.
+    pub affine: [f32; 4],
+}
+
+/// Pack one [`ExtractedOutline`] into a [`BorderBandInstance`]. The outline is
+/// a uniform ring: the outer box is the border box grown by `width + offset`,
+/// the inner edge is `width` thick, and the clip is the OUTLINE clip (the
+/// entity's `AncestorClip`, resolved at extract — never its own box).
+/// Color is already CPU-linearized by the extract producer.
+pub fn pack_outline(outline: &ExtractedOutline) -> BorderBandInstance {
+    let c = outline.color;
+    let (clip_min, clip_max) = match outline.clip {
+        Some(clip) => ([clip.min.x, clip.min.y], [clip.max.x, clip.max.y]),
+        None => (CLIP_SENTINEL_MIN, CLIP_SENTINEL_MAX),
+    };
+    let w = outline.width;
+    BorderBandInstance {
+        rect_pos: [outline.outer_pos.x, outline.outer_pos.y],
+        rect_size: [outline.outer_size.x, outline.outer_size.y],
+        color_top: c,
+        color_right: c,
+        color_bottom: c,
+        color_left: c,
+        width: [w, w, w, w],
+        outer_radius: outline.outer_radius,
+        inner_radius: outline.inner_radius,
+        clip_min,
+        clip_max,
+        affine: [
+            outline.affine[0][0],
+            outline.affine[0][1],
+            outline.affine[1][0],
+            outline.affine[1][1],
+        ],
+    }
+}
+
+/// `true` iff [`BORDER_BAND_INSTANCE_STRIDE_BYTES`] equals the actual
+/// [`BorderBandInstance`] size and is the value the band pipeline declares
+/// (28 f32 = 112 B). The parallel of [`packed_raw_stride_agrees`] for the
+/// distinct band record (styling-f-tier.md § 4 — C6 adds this).
+pub fn border_band_stride_agrees() -> bool {
+    // 2 + 2 + 4*4 + 4 + 8 + 8 + 2 + 2 + 4 = 48 f32 = 192 B.
+    BORDER_BAND_INSTANCE_STRIDE_BYTES == std::mem::size_of::<BorderBandInstance>()
+        && BORDER_BAND_INSTANCE_STRIDE_BYTES == 48 * std::mem::size_of::<f32>()
 }

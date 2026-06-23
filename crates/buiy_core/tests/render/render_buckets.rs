@@ -141,6 +141,7 @@ fn node(entity: u32, position: Vec2, size: Vec2, color: Color) -> ExtractedNode 
         clip: None,
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
     }
 }
 
@@ -251,6 +252,7 @@ fn grouped(entity: u32, color: Color, group: Option<usize>) -> ExtractedNode {
         clip: None,
         group,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
     }
 }
 

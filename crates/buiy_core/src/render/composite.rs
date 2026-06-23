@@ -183,6 +183,10 @@ pub struct BuiySpecializedPipelines {
     pub primitives: SpecializedRenderPipelines<BuiyPrimitives>,
     /// Per-`(parent_format, samples)` composite specializations.
     pub composite: SpecializedRenderPipelines<CompositePipeline>,
+    /// Border/outline BAND (`BuiyBandPipeline`) specializations, per
+    /// `(format, samples)` (styling-f-tier.md § 2.3 / § 3.4 — C6-a). A distinct
+    /// pipeline keyed by record, NOT a new `BuiyPrimitiveKind`.
+    pub band: SpecializedRenderPipelines<crate::render::primitive::BuiyBandPipeline>,
 }
 
 impl FromWorld for CompositePipeline {

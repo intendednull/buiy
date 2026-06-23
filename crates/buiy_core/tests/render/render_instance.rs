@@ -104,6 +104,7 @@ fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
         clip,
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
     }
 }
 
@@ -195,6 +196,24 @@ fn pack_extracted_uses_full_view_sentinel_when_clip_absent() {
 fn packed_raw_stride_agrees_with_seventeen_floats() {
     // The raw bucket layout is [f32;17] and byte-equal to PackedInstance's stride.
     assert!(buiy_core::render::instance::packed_raw_stride_agrees());
+}
+
+#[test]
+fn border_band_stride_agrees_and_quad_stride_is_unchanged() {
+    // C6-a (styling-f-tier.md § 4): the DISTINCT band/outline record agrees with
+    // its declared stride (48 f32 = 192 B), AND the frozen 68 B quad stride
+    // (`PackedInstance`) stays byte-stable — the whole point of the two-record
+    // design (umbrella § 6.7): the outline channel adds a parallel record, it
+    // never bumps the quad stride that R2's degraded-group re-tint indexes.
+    use buiy_core::render::instance::{
+        BORDER_BAND_INSTANCE_STRIDE_BYTES, BorderBandInstance, border_band_stride_agrees,
+    };
+    assert!(border_band_stride_agrees());
+    assert_eq!(BORDER_BAND_INSTANCE_STRIDE_BYTES, 192);
+    assert_eq!(std::mem::size_of::<BorderBandInstance>(), 192);
+    // The quad stride is untouched — the byte-stability guard, restated next to
+    // the new record so a future stride drift on EITHER side reddens here.
+    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 68);
 }
 
 #[test]

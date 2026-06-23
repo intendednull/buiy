@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use crate::components::{Node, ResolvedLayout};
 use crate::render::components::{
     AncestorClip, Background, ClipRect, ComputedPaintSkip, EffectGroup, EffectReason, Opacity,
+    Outline,
 };
 
 /// One extracted effect group's CPU record (effect-compositor.md § 1.1). Emitted
@@ -104,6 +105,45 @@ pub struct ExtractedNode {
     /// into contiguous per-group ranges off this tag (off-screen targets), so a
     /// group member is drawn once into its target, never flat.
     pub group: Option<usize>,
+    /// Resolved `Outline` (the focus ring / selection outline), painted OUTSIDE
+    /// the border box through the distinct band-pipeline record
+    /// [`BorderBandInstance`](crate::render::instance::BorderBandInstance).
+    /// `None` == no outline (the byte-stable fast path). The outline is clipped
+    /// by the entity's `AncestorClip`, NOT its own box, so a focus ring survives
+    /// an `overflow:hidden` ancestor (styling-f-tier.md § 2.4 — C6-a).
+    pub outline: Option<ExtractedOutline>,
+}
+
+/// One resolved `Outline` (styling-f-tier.md § 2.4), built at extract time from
+/// the author/framework `Outline` component + the entity's border box +
+/// `AncestorClip`. A flat `Copy` record (no token, no `Length`) — every term is
+/// pre-resolved to logical px / linear color so the packer
+/// ([`pack_outline`](crate::render::instance::pack_outline)) and the band shader
+/// are pure consumers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedOutline {
+    /// Outer-box top-left, logical px = border-box origin shifted out by
+    /// `width + offset` on the top/left.
+    pub outer_pos: Vec2,
+    /// Outer-box size, logical px = border-box size grown by `2*(width+offset)`.
+    pub outer_size: Vec2,
+    /// Pre-linearized ring color (uniform — the outline is a single stroke).
+    pub color: [f32; 4],
+    /// Ring thickness, logical px (`>= 2px` for the focus ring — WCAG 2.4.11).
+    pub width: f32,
+    /// Per-corner OUTER elliptical radius `(rx, ry) × 4` (TL, TR, BR, BL): the
+    /// border radius grown by `(width + offset)` (CSS-faithful outline
+    /// rounding). `[0; 8]` == square.
+    pub outer_radius: [f32; 8],
+    /// Per-corner INNER radius — the outer edge shrunk inward by `width` so the
+    /// ring is `width` thick.
+    pub inner_radius: [f32; 8],
+    /// The OUTLINE clip = the entity's `AncestorClip` (never its own
+    /// `ClipRect`); `None` = the full-view sentinel (no ancestor clips it, or a
+    /// top-layer member). styling-f-tier.md § 2.4.
+    pub clip: Option<ClipRect>,
+    /// The 2D affine basis (same source as [`ExtractedNode::affine`]).
+    pub affine: [[f32; 2]; 2],
 }
 
 /// Build one [`ExtractedNode`] from the layout box + composed transform + the
@@ -144,7 +184,74 @@ pub fn extracted_node_for(
         clip: clip.copied(),
         group: None,
         affine,
+        // The outline rides a distinct record + clip (`AncestorClip`, not the
+        // own box), so it is resolved separately by `extract_buiy_nodes` via
+        // `resolve_outline` and assigned post-build — `extracted_node_for`
+        // (also called by the Tier-2 snapshot harness) stays outline-free.
+        outline: None,
     }
+}
+
+/// Resolve one entity's [`ExtractedOutline`] from its `Outline` component, the
+/// border box (`position`/`size`, the painted origin + `ResolvedLayout.size`),
+/// the entity's `AncestorClip`-derived outline clip, the resolved 2D affine
+/// basis, and the active theme. Returns `None` when the outline paints nothing
+/// (no style / zero width / a fully-transparent color), so a node with a
+/// defaulted `Outline` rides the byte-stable no-band path.
+///
+/// Geometry (styling-f-tier.md § 2.4): the outer box is the border box grown by
+/// `width + offset` on every side; `outer_radius` is the border radius grown by
+/// `(width + offset)`; `inner_radius` is the outer radius shrunk by `width`
+/// (clamped `>= 0`) so the ring is exactly `width` thick. The clip is the
+/// caller-resolved outline clip (the entity's `AncestorClip`, NEVER its own
+/// box), so a focus ring survives an `overflow:hidden` ancestor. Pure: no ECS /
+/// GPU access beyond the borrowed inputs, so it is unit-testable headless.
+pub fn resolve_outline(
+    outline: &Outline,
+    position: Vec2,
+    size: Vec2,
+    outline_clip: Option<ClipRect>,
+    affine: [[f32; 2]; 2],
+    theme: &Theme,
+) -> Option<ExtractedOutline> {
+    use crate::render::clip::px_or_zero;
+    use crate::render::components::LineStyle;
+
+    // No stroke: `style: None` or a non-positive width paints nothing.
+    let width = px_or_zero(outline.width);
+    if outline.style == LineStyle::None || width <= 0.0 {
+        return None;
+    }
+    let color = crate::render::color::resolve_token(&outline.color, theme);
+    if color == Color::NONE {
+        return None; // fully transparent ⇒ no band.
+    }
+    let lin = LinearRgba::from(color);
+
+    let offset = px_or_zero(outline.offset);
+    // The ring sits `width + offset` outside the border box on every side.
+    let out = width + offset;
+    let outer_pos = position - Vec2::splat(out);
+    let outer_size = size + Vec2::splat(2.0 * out);
+
+    // No author `Border.radius` is fed in C6-a, so the focus ring is a square
+    // ring (the common case for buttons/inputs). Outline rounding off a real
+    // `Border.radius` lands when C6-b feeds the border channel; until then the
+    // outer/inner radii are square (`0`), which is the correct CSS rendering of
+    // an outline on a square box.
+    let outer_radius = [0.0f32; 8];
+    let inner_radius = [0.0f32; 8];
+
+    Some(ExtractedOutline {
+        outer_pos,
+        outer_size,
+        color: [lin.red, lin.green, lin.blue, lin.alpha],
+        width,
+        outer_radius,
+        inner_radius,
+        clip: outline_clip,
+        affine,
+    })
 }
 
 /// Per-view CPU instance set — the `Changed`-gated per-frame product of
@@ -316,6 +423,25 @@ pub fn effective_clip(
     }
 }
 
+/// The OUTLINE clip for one entity (the focus-ring / selection-outline band).
+/// Like [`effective_clip`] this forces the full-view sentinel for a top-layer
+/// member, but otherwise takes the `Outline` path of `clip_for_primitive`
+/// (`is_outline = true`): the entity's **`AncestorClip`** WITHOUT the own-box
+/// step, so a ring drawn outside the border box is cropped by ancestor clips
+/// (e.g. a scroll container) yet NOT erased by the element's own
+/// `overflow:hidden` box (styling-f-tier.md § 2.4 / clip-and-transform.md § A.2).
+pub fn effective_outline_clip(
+    stacking: Option<&Stacking>,
+    ancestor_clip: Option<&AncestorClip>,
+) -> Option<ClipRect> {
+    let is_top_layer = stacking.is_some_and(|s| s.top_layer != TopLayer::None);
+    if is_top_layer {
+        None
+    } else {
+        clip_for_primitive(true, None, ancestor_clip)
+    }
+}
+
 /// Per-frame, `Changed`-gated extract (architecture.md § 1.2/§ 3/§ 4). Reads
 /// the main world's layout + render-owned components through `Extract`, walks
 /// the primary view's stacking order, and writes the per-view `ExtractedNodes`.
@@ -367,14 +493,19 @@ pub fn extract_buiy_nodes(
                 // Effect-compositor fan (effect-compositor.md § 1.1): the
                 // `EffectGroup` marker (which entities form an off-screen group +
                 // their `reason`) and `Opacity` (the alpha applied at composite).
-                // FAN: add Option<&BoxShadow>/&Outline/&Border and the reserved
-                // effect components here as their tier lands (architecture § 1.2
-                // illustrative subset).
+                // FAN: add Option<&BoxShadow>/&Border and the reserved effect
+                // components here as their tier lands (architecture § 1.2
+                // illustrative subset). C6-a adds Option<&Outline> below (the
+                // focus-ring / selection-outline band channel).
                 // NOTE: Containment is NOT in the fan — content-visibility:hidden
                 // paints the entity's own box and prunes descendants layout-side
                 // (paint-order § 5.2), so it is not a render skip input.
                 Option<&EffectGroup>,
                 Option<&Opacity>,
+                // C6-a: the outline paint (focus ring / selection outline). It
+                // rides a DISTINCT band record + the entity's `AncestorClip`
+                // (resolved below), not its own box (styling-f-tier.md § 2.4).
+                Option<&Outline>,
             ),
             With<Node>,
         >,
@@ -414,6 +545,12 @@ pub fn extract_buiy_nodes(
                     // go stale. Kept in lockstep with the `nodes` fan above.
                     Changed<EffectGroup>,
                     Changed<Opacity>,
+                    // C6-a: an outline insert/remove/edit (the focus ring is a
+                    // framework-owned `Outline` the ring lowering toggles) must
+                    // re-extract so the band appears/vanishes. Kept in lockstep
+                    // with the `nodes` fan above. The `AncestorClip` the outline
+                    // clips against already rides `Changed<AncestorClip>` above.
+                    Changed<Outline>,
                     // FAN: extend the Or-set in lockstep with the `nodes` tuple
                     // (architecture § 3.1 trigger union).
                 )>,
@@ -514,6 +651,7 @@ pub fn extract_buiy_nodes(
         stacking,
         effect_group,
         opacity,
+        outline,
     ) in nodes.iter()
     {
         // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
@@ -534,10 +672,22 @@ pub fn extract_buiy_nodes(
         // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
         // clips to its own box ∩ ancestor clips. See [`effective_clip`].
         let clip = effective_clip(stacking, clip_rect, ancestor_clip);
-        by_entity.insert(
-            entity,
-            extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme),
-        );
+        let mut node = extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme);
+        // C6-a: resolve the outline (focus ring / selection outline) against the
+        // entity's `AncestorClip` (NOT its own box, `effective_outline_clip`) so
+        // it survives an `overflow:hidden` ancestor (styling-f-tier.md § 2.4).
+        if let Some(outline) = outline {
+            let outline_clip = effective_outline_clip(stacking, ancestor_clip);
+            node.outline = resolve_outline(
+                outline,
+                node.position,
+                node.size,
+                outline_clip,
+                node.affine,
+                theme,
+            );
+        }
+        by_entity.insert(entity, node);
     }
 
     // Resolve each painted node's NEAREST `EffectGroup` ancestor (the group it

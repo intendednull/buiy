@@ -27,9 +27,13 @@
 //!   scope; full key-binding abstraction lives in `buiy-input-events-design`.
 
 use crate::BuiySet;
+use crate::Length;
+use crate::render::color::ColorToken;
+use crate::render::components::{LineStyle, Outline};
 use bevy::picking::events::{Pointer, Press};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
+use std::borrow::Cow;
 
 /// Marks an entity as part of the focus tree.
 #[derive(Component, Reflect, Default, Clone, Debug)]
@@ -51,6 +55,96 @@ pub struct FocusedEntity(pub Option<Entity>);
 #[reflect(Resource)]
 pub struct FocusVisible(pub bool);
 
+/// Marks an [`Outline`] this crate's focus-ring lowering ([`lower_focus_ring`])
+/// owns, so the lowering only ever inserts/removes the FRAMEWORK ring and never
+/// touches an author's own `Outline`. A paint-only marker, framework-written
+/// (never author-set) — hence the leaner derives (no `Reflect`/`Default`,
+/// matching the computed render-prep markers). styling-f-tier.md § 2.6.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct FocusRingMarker;
+
+/// Focus-ring width in logical px. ≥ 2px satisfies WCAG 2.4.11 (the focus
+/// indicator must be at least a 2px-thick perimeter), styling-f-tier.md § 2.6.
+const FOCUS_RING_WIDTH_PX: f32 = 2.0;
+/// Focus-ring offset (gap between the border box and the ring) in logical px.
+const FOCUS_RING_OFFSET_PX: f32 = 2.0;
+
+/// The framework focus-ring [`Outline`]: a `Solid`, ≥ 2px, offset-2px stroke in
+/// the `color.focus.ring` token (WCAG 2.4.11). The token resolves at extract
+/// against the active theme — the default light theme's `color.focus.ring` (a
+/// high-contrast accent, ≥ 3:1 vs the white canvas) and, under forced-colors,
+/// the wholesale swap's `color.focus.ring` mapped to the system `Highlight`
+/// value (theme.rs) — so the ring is forced-colors-safe AND re-tints on a
+/// theme/forced-colors change with no relowering. A `Token` (not a
+/// `SystemColor`) deliberately, so it does not disturb the
+/// `Highlight`-prefers-when-present resolvers (`resolve_selection_bg`).
+fn focus_ring_outline() -> Outline {
+    Outline {
+        color: ColorToken::Token(Cow::Borrowed(crate::render::color::FOCUS_RING_TOKEN)),
+        style: LineStyle::Solid,
+        width: Length::px(FOCUS_RING_WIDTH_PX),
+        offset: Length::px(FOCUS_RING_OFFSET_PX),
+    }
+}
+
+/// Lower the SC-2 keyboard-focus-visible signal into a framework-owned
+/// [`Outline`] focus ring (styling-f-tier.md § 2.6 / § 3.6 — C6-a). Reads the
+/// settled `FocusedEntity` + `FocusVisible` resource pair (the signal C3/C5
+/// own); it writes NO focus-tree state, only the paint-only ring. The ring is
+/// shown on the entity iff `Some(e) == FocusedEntity.0 && FocusVisible.0`
+/// (keyboard focus), and removed everywhere else — so a pointer-focused entity
+/// (`FocusVisible(false)` from C3d's `focus_on_click`) gets NO ring, the correct
+/// `:focus-visible` behavior. The ring `Outline` is gated by [`FocusRingMarker`]
+/// so the lowering never disturbs an author's own `Outline`.
+///
+/// Scheduled `.after(BuiySet::Input)` (NOT `BuiySet::Style`, which the foundation
+/// runs *before* `Input` — the focus signal is produced by `handle_tab` /
+/// `focus_on_click` in `Input`, so lowering in `Style` would read last frame's
+/// signal and lag the ring by a frame). The inserted/removed `Outline` is applied
+/// at the next command sync, which is before the render-world ExtractSchedule, so
+/// extract sees the settled ring the same frame.
+pub fn lower_focus_ring(
+    focused: Res<FocusedEntity>,
+    visible: Res<FocusVisible>,
+    rings: Query<Entity, With<FocusRingMarker>>,
+    // Distinguishes an AUTHOR `Outline` (no marker) from no outline at all, so
+    // the lowering never clobbers an author's own outline on focus.
+    outlines: Query<(Has<Outline>, Has<FocusRingMarker>)>,
+    mut commands: Commands,
+) {
+    // The single entity that should carry the keyboard-focus ring this frame.
+    let target = if visible.0 { focused.0 } else { None };
+
+    // Remove the ring from any entity we own one on that is no longer the
+    // visibly-focused target (focus moved, focus lost, or focus-visible decayed
+    // to pointer). Removing both the `Outline` and the marker keeps the two in
+    // lockstep — a stale marker without an `Outline` (or vice versa) can never
+    // accumulate.
+    for entity in rings.iter() {
+        if Some(entity) != target {
+            commands
+                .entity(entity)
+                .remove::<Outline>()
+                .remove::<FocusRingMarker>();
+        }
+    }
+
+    // Insert the ring on the visibly-focused entity, UNLESS it already carries an
+    // author `Outline` (no marker) — the framework never clobbers an author's own
+    // outline (styling-f-tier.md § 2.6: the lowering only owns rings it marks). A
+    // re-insert on the already-ringed target is skipped (it already has the
+    // marker), so a steady keyboard focus issues no per-frame structural op.
+    if let Some(entity) = target
+        && let Ok((has_outline, has_ring)) = outlines.get(entity)
+        && !has_ring
+        && !has_outline
+    {
+        commands
+            .entity(entity)
+            .insert((focus_ring_outline(), FocusRingMarker));
+    }
+}
+
 pub struct FocusPlugin;
 
 impl Plugin for FocusPlugin {
@@ -61,6 +155,19 @@ impl Plugin for FocusPlugin {
             .init_resource::<FocusedEntity>()
             .init_resource::<FocusVisible>()
             .add_systems(Update, handle_tab.in_set(BuiySet::Input))
+            // C6-a (styling-f-tier.md § 2.6): lower the keyboard-focus-visible
+            // signal into the framework focus-ring `Outline`. Runs AFTER
+            // `BuiySet::Input` (where `handle_tab` / `focus_on_click` produce the
+            // signal) and BEFORE `BuiySet::Render`, so the inserted/removed ring
+            // `Outline` is settled when extract runs. NOT in `BuiySet::Style`
+            // (which precedes `Input`): lowering there would read last frame's
+            // signal and lag the ring by a frame.
+            .add_systems(
+                Update,
+                lower_focus_ring
+                    .after(BuiySet::Input)
+                    .before(BuiySet::Render),
+            )
             // C3d (input-event-model.md § 2.7): the single, widget-agnostic
             // focus-on-click observer. Owns `FocusedEntity` for ALL pointer
             // focus — the editor's `editor_pointer_press` and the `TextInput`

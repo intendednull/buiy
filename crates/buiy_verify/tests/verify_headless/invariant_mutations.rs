@@ -39,6 +39,7 @@ fn node(entity: Entity, size: Vec2) -> ExtractedNode {
         }),
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
     }
 }
 

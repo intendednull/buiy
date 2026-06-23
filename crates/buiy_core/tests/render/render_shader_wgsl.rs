@@ -18,6 +18,7 @@ const QUAD_WGSL: &str = include_str!("../../src/render/shader.wgsl");
 const SHADOW_WGSL: &str = include_str!("../../src/render/shadow.wgsl");
 const COVERAGE_WGSL: &str = include_str!("../../src/render/coverage.wgsl");
 const COMPOSITE_WGSL: &str = include_str!("../../src/render/composite.wgsl");
+const BAND_WGSL: &str = include_str!("../../src/render/band.wgsl");
 
 #[test]
 fn quad_shader_parses_and_has_entry_points() {
@@ -137,6 +138,45 @@ fn composite_shader_parses_and_has_entry_points() {
             && COMPOSITE_WGSL.contains("@group(1) @binding(0) var src_tex")
             && COMPOSITE_WGSL.contains("@group(1) @binding(1) var src_samp"),
         "composite shader binds the params uniform (@group(0)) + the source target+sampler (@group(1))"
+    );
+}
+
+#[test]
+fn band_shader_parses_and_has_entry_points() {
+    // The border/outline band shader (band.wgsl, octet ..06 — C6-a feeds the
+    // OUTLINE channel). Device compilation rides the `#[ignore]` GPU lane, so
+    // naga is the merge-gate guard against a syntax/binding/attribute regression.
+    let m = parse_wgsl("band", BAND_WGSL);
+    assert!(has_entry_point(&m, "vertex"), "band shader has `vertex`");
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "band shader has `fragment`"
+    );
+    // It shares the quad family's view uniform at @group(0) @binding(0) (no
+    // @group(1) — the band samples no texture).
+    assert!(
+        BAND_WGSL.contains("@group(0) @binding(0) var<uniform> view"),
+        "band shader shares the quad view uniform at @group(0) @binding(0)"
+    );
+    assert!(
+        !BAND_WGSL.contains("@group(1)"),
+        "the band pipeline binds no @group(1) (it samples no texture)"
+    );
+    // The outer-minus-inner SDF band + the AncestorClip discard are the two
+    // load-bearing pieces (styling-f-tier.md § 2.3 / § 2.4).
+    assert!(
+        BAND_WGSL.contains("sdf_rounded_rect") && BAND_WGSL.contains("inside_inner"),
+        "band fragment is inside(outer) AND NOT inside(inner)"
+    );
+    assert!(
+        BAND_WGSL.contains("clip_min") && BAND_WGSL.contains("clip_max"),
+        "band shader discards outside the (outline/ancestor) clip AABB"
+    );
+    // The per-side color inputs ride @location(4)..(7) and the affine the last
+    // two locations — matching the BorderBandInstance vertex layout.
+    assert!(
+        BAND_WGSL.contains("affine_col0") && BAND_WGSL.contains("affine_col1"),
+        "band shader declares the affine basis columns"
     );
 }
 

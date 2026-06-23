@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use buiy_core::components::ResolvedLayout;
 #[cfg(doc)]
 use buiy_core::render::buckets::InstanceBuckets;
-use buiy_core::render::buckets::pack_view;
+use buiy_core::render::buckets::{pack_outline_bands, pack_view};
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_core::render::instance::PackedInstance;
 
@@ -378,6 +378,39 @@ fn clip_str(node: &ExtractedNode) -> String {
     }
 }
 
+/// Render one node's outline (the C6-a focus-ring / selection band): `none` when
+/// the node carries no outline, else its resolved geometry + color + clip — the
+/// outline clip is the entity's `AncestorClip`, so the dump makes the
+/// survives-overflow:hidden property visible (`oclip=…` ≠ the own-box `clip=…`).
+fn outline_str(node: &ExtractedNode) -> String {
+    match &node.outline {
+        None => "none".to_string(),
+        Some(o) => {
+            let col = color_hex(Color::LinearRgba(LinearRgba::new(
+                o.color[0], o.color[1], o.color[2], o.color[3],
+            )));
+            let oclip = match o.clip {
+                None => "none".to_string(),
+                Some(c) => format!(
+                    "{},{}..{},{}",
+                    round(c.min.x),
+                    round(c.min.y),
+                    round(c.max.x),
+                    round(c.max.y),
+                ),
+            };
+            format!(
+                "pos={},{} size={},{} w={} color={col} oclip={oclip}",
+                round(o.outer_pos.x),
+                round(o.outer_pos.y),
+                round(o.outer_size.x),
+                round(o.outer_size.y),
+                round(o.width),
+            )
+        }
+    }
+}
+
 /// Snapshot the CPU display-list handoff holistically (nodes in paint order +
 /// packed buckets in draw order), keyed by `name`, beside the calling test.
 /// See [`display_list_dump`].
@@ -431,6 +464,29 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
             key.layer,
             batch.len(),
         );
+    }
+
+    // C6-a: the OUTLINE band channel (focus ring / selection outline). Emitted
+    // as ADDITIVE sections that appear ONLY when at least one node carries an
+    // outline — a fixture with no outlines dumps byte-identically to the pre-C6
+    // format, so no existing `.snap` re-blesses. The band count is the count of
+    // `pack_outline_bands` (one band instance per outlined node), and it draws
+    // AFTER the quad bucket (the ring sits on top of the fill).
+    let bands = pack_outline_bands(&nodes.nodes);
+    if !bands.is_empty() {
+        out.push_str("[outlines painters_z]\n");
+        for (i, node) in nodes.nodes.iter().enumerate() {
+            if node.outline.is_some() {
+                let _ = writeln!(
+                    out,
+                    "{i} {name} outline {o}",
+                    name = names.label(node.entity),
+                    o = outline_str(node),
+                );
+            }
+        }
+        out.push_str("[band draw-order]\n");
+        let _ = writeln!(out, "(Band,layer=0) x{}", bands.len());
     }
     out
 }

@@ -32,10 +32,13 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::render::atlas::GlyphAlphaInstance;
-use crate::render::buckets::{pack_view, pack_view_partitioned, partition_glyph_ranges};
+use crate::render::buckets::{
+    pack_outline_bands, pack_view, pack_view_partitioned, partition_glyph_ranges,
+};
 use crate::render::extract::{
     ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads,
 };
+use crate::render::instance::BorderBandInstance;
 use crate::render::view_uniform::BuiyViewUniform;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
@@ -96,6 +99,13 @@ pub struct BuiyInstanceBuffers {
     /// `ShaderType`, so it rides the raw, CPU-readable vertex path. Grows in
     /// place; the node draws it after the quad draw (paint order glyph > quad).
     pub glyph: RawBufferVec<GlyphAlphaInstance>,
+    /// Border/outline BAND instances (styling-f-tier.md § 2.3 — C6-a feeds the
+    /// OUTLINE channel). A `RawBufferVec<BorderBandInstance>` for the same reason
+    /// as `quad`/`glyph`: `BorderBandInstance` is a raw `#[repr(C)]` vertex POD
+    /// (the band pipeline-descriptor layout), `NoUninit` but not a `ShaderType`,
+    /// so it rides the raw, CPU-readable vertex path. Grows in place; the node
+    /// draws it AFTER the quad/glyph draw so the outline sits on top.
+    pub band: RawBufferVec<BorderBandInstance>,
     /// The per-view logical->clip + scale_factor uniform (`col0 ++ col1 ++
     /// [scale_factor, 0, 0, 0]`, [`BuiyViewUniform::as_std140_array`]).
     ///
@@ -113,6 +123,9 @@ pub struct BuiyInstanceBuffers {
     pub quad_count: u32,
     /// Glyph instance count written this frame (the glyph instanced draw range).
     pub glyph_count: u32,
+    /// Border/outline band instance count written this frame (C6-a). Rides the
+    /// quad gate (the band is packed from the same node walk).
+    pub band_count: u32,
     /// Per-effect-group contiguous quad-instance ranges (`group_ranges[g]` =
     /// group `g`'s members), recomputed each quad-buffer upload from
     /// `ExtractedNode.group` (effect-compositor.md § 1.1 / decided fork 3). The
@@ -147,9 +160,11 @@ impl Default for BuiyInstanceBuffers {
         Self {
             quad: RawBufferVec::new(BufferUsages::VERTEX),
             glyph: RawBufferVec::new(BufferUsages::VERTEX),
+            band: RawBufferVec::new(BufferUsages::VERTEX),
             view_uniform: UniformBuffer::default(),
             quad_count: 0,
             glyph_count: 0,
+            band_count: 0,
             group_ranges: Vec::new(),
             flat_ranges: Vec::new(),
             glyph_group_ranges: Vec::new(),
@@ -258,6 +273,19 @@ pub fn prepare_buiy_instances(
         // path stays byte-for-byte the pre-compositor draw.
         buffers.group_ranges = partition.group_ranges;
         buffers.flat_ranges = partition.flat_ranges;
+
+        // Border/outline band buffer (C6-a). Packed from the SAME node walk, so
+        // it rides the quad gate; a node with no outline contributes nothing, so
+        // an outline-free frame uploads an empty band buffer (band_count = 0) and
+        // the node skips the band draw. The band draws flat (after quad/glyph)
+        // and is NOT effect-group-partitioned in v1 (styling-f-tier.md § 2.3).
+        let bands = pack_outline_bands(&nodes.0.nodes);
+        buffers.band.clear();
+        for band in &bands {
+            buffers.band.push(*band);
+        }
+        buffers.band_count = bands.len() as u32;
+        buffers.band.write_buffer(&render_device, &render_queue);
 
         // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
         // Regroup the flat 12 floats into the three `vec4` columns the WGSL

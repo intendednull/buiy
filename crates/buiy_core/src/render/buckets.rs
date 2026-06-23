@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, HashMap, hash_map::Entry};
 use std::ops::Range;
 
 use crate::render::extract::{ExtractedNode, TextQuad};
-use crate::render::instance::{PackedInstance, pack_extracted, pack_text_quad};
+use crate::render::instance::{
+    BorderBandInstance, PackedInstance, pack_extracted, pack_outline, pack_text_quad,
+};
 use bevy::prelude::{Color, Entity};
 use bytemuck::Pod;
 
@@ -186,6 +188,25 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
         buckets.push(quad0, packed_to_raw(&pack_extracted(node)));
     }
     buckets
+}
+
+/// Pack a view's node list into the flat border/outline BAND instance blob, in
+/// paint order (styling-f-tier.md § 2.3 / § 2.4 — C6-a feeds the OUTLINE
+/// channel). One [`BorderBandInstance`] per node carrying an outline; nodes with
+/// no outline contribute nothing (the byte-stable no-band path). The band draws
+/// AFTER the quad/glyph window draw, so the outline sits on top of the fill, and
+/// uses the entity's `AncestorClip` (resolved at extract), so a focus ring
+/// survives an `overflow:hidden` ancestor.
+///
+/// v1 (C6-a): the band rides the FLAT window draw only — it is not partitioned
+/// into effect-group off-screen targets (a focus ring on a grouped element is a
+/// follow-up; the common case is a top-level focusable). Border feeds this same
+/// blob when C6-b lands.
+pub fn pack_outline_bands(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
+    nodes
+        .iter()
+        .filter_map(|n| n.outline.as_ref().map(pack_outline))
+        .collect()
 }
 
 /// The instance-range partition of a packed view (effect-compositor.md § 1.1 /

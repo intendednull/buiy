@@ -50,6 +50,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 clip: None,
                 group: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                outline: None,
             },
             ExtractedNode {
                 entity: Entity::from_raw_u32(2).unwrap(),
@@ -59,6 +60,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 clip: None,
                 group: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                outline: None,
             },
         ],
     };
@@ -105,6 +107,7 @@ fn pack_extracted_nodes_carries_non_identity_affine() {
             clip: None,
             group: None,
             affine: [[0.0, 1.0], [-1.0, 0.0]], // 90deg rotation basis
+            outline: None,
         }],
     };
     let (instances, _) = pack_extracted_nodes(&nodes);
@@ -136,6 +139,7 @@ fn extracted_nodes_pack_view_routes_records_to_quad_layer_0() {
         clip: None,
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
     });
     let buckets = pack_view(&view.nodes);
     let quad0 = PrimitiveBatchKey {

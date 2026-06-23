@@ -167,6 +167,7 @@ fn assemble_preserves_clip_per_entity() {
             clip: (x == e(2)).then_some(clip2),
             group: None,
             affine: [[1.0, 0.0], [0.0, 1.0]],
+            outline: None,
         })
     });
     let clips: Vec<Option<ClipRect>> = nodes.nodes.iter().map(|n| n.clip).collect();
@@ -397,6 +398,7 @@ fn assemble_emits_in_painters_z_order() {
             clip: None,
             group: None,
             affine: [[1.0, 0.0], [0.0, 1.0]],
+            outline: None,
         })
     });
     let got: Vec<Entity> = nodes.nodes.iter().map(|n| n.entity).collect();
@@ -425,6 +427,7 @@ fn assemble_drops_skipped_entities() {
                 clip: None,
                 group: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                outline: None,
             })
         }
     });
@@ -461,6 +464,7 @@ fn hit_test_order_is_paint_order_reversed() {
             clip: None,
             group: None,
             affine: [[1.0, 0.0], [0.0, 1.0]],
+            outline: None,
         })
     });
     // Paint order is painters_z forward.
@@ -522,6 +526,7 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
                 clip: None,
                 group: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                outline: None,
             })
         },
         &mut out,
@@ -571,6 +576,7 @@ fn tree_assembly_skips_dropped_entities_across_the_boundary() {
                     clip: None,
                     group: None,
                     affine: [[1.0, 0.0], [0.0, 1.0]],
+                    outline: None,
                 })
             }
         },

@@ -96,6 +96,7 @@ fn top_layer_tail_is_tier_ordered_fullscreen_to_modal() {
                 clip: None,
                 group: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                outline: None,
             })
             .collect(),
         ..Default::default()
@@ -151,6 +152,7 @@ fn modal_is_first_hit_candidate_over_popover() {
                 clip: None,
                 group: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                outline: None,
             })
         },
         &mut assembled,
