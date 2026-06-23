@@ -1623,3 +1623,44 @@ variant), the predicate's teeth are gated by the two dedicated full-stack unit t
 in `crates/buiy_verify/tests/verify_headless/content_presence.rs` (the whitespace
 zero-glyph RED + the "Hi!" GREEN) and the `bless_guard_refuses_zero_glyph_text_bearing`
 unit test. Pick this up when C8's text-bearing gallery fixtures land.
+
+## Widget-catalog × agent-interface co-drive — post-landing follow-ups (2026-06-23)
+
+The co-drive campaign (Waves 0–5: P1a/P1b a11y substrate, P1c inspection driver,
+C1/C2 correctness, C3 Pointer<E>, C4 widget visuals, C5 containers, C6 F-tier
+styling, C8 gallery) landed on the integration branch (`worktree-todomvc-reimpl-research2`,
+not yet PR'd). Demand-pulled deferrals are tracked in the coordination plan's ledger
+(`docs/plans/2026-06-22-widget-catalog-agent-interface-codrive.md` §3.2). Net-new
+follow-ups surfaced during implementation:
+
+- **Idle-CPU / per-frame scan at scale (corroborates the prototype audit's ~50%
+  idle-CPU concern).** C8-b's 1000-row S2 screen burns ~22 ms/idle-frame (debug)
+  with zero input/state change — an all-entities-per-frame scan in the
+  `CorePlugin + LayoutPlugin + Text` path — plus ~6 ms from `A11yPlugin::build_tree`
+  rebuilding the whole tree each frame. Candidates: layout/reshape change-detection
+  gating, and the agent-interface follow-up "lazy `TreeUpdate` diffing gated on
+  `AccessibilityRequested`" (its phasing.md follow-up #4). Not a correctness issue;
+  pick up as a perf pass.
+- **Gallery authoring guide + matrix enrollment.** `examples/buiy_gallery` has the 5
+  screens + per-screen layout snapshots + the inspection-driver acceptance, but the
+  spec's `Matrix::gallery_screen()` reduced-matrix enrollment + an `AUTHORING.md`
+  (how to add a screen) are not yet written. The coverage `enroll::build_app` still
+  lacks a text-capable stack (the deferred auto-check above) — C8 added text fixtures
+  (S1) but via full `A11yPlugin` apps, not the coverage matrix.
+- **Pre-existing text-caret GPU golden diverges on non-lavapipe adapters (NOT a
+  campaign regression).** `text_caret_selection_e3_gpu` fails on the RX 6700 XT at
+  `white_cols.last().expect("the glyph ink painted")` — the lavapipe-calibrated
+  `is_white_ink` predicate matches no pixels under a different rasterizer. The
+  campaign touched neither this test nor the glyph-rasterization path; CI's
+  pinned-lavapipe GPU lane (the calibration target) is green. Same class as the
+  testing-audit's "cross-rasterizer golden contradiction" — fold these goldens into
+  the perceptual-metric / adapter-tolerant tier rather than exact `is_white_ink`.
+- **Doc-status flip on merge.** The widget-catalog child specs (C1–C8) are still
+  `[draft]`; flip to `[landed]` when the campaign PRs to `main` (they describe the
+  now-built target state).
+- **Deferred-by-ledger (not regressions), for completeness:** `EditCommand::SetSelection`
+  + `SetTextSelection`/`ReplaceSelectedText`; the actionability gates
+  (`act_when_actionable`/`HitTargetable`/`Stable`) — the stacking-aware `hit_test`
+  they'd consume IS built (C1+C3), so un-deferring reads a real hit_test, no AABB
+  shim; `MultilineTextInput`/`AlertDialog`/multi-thumb-slider/Accordion variants;
+  `owns` re-parent + `TreeView::Merged` + the #12 proptest fuzz corpus; P2/`buiy_mcp`.
