@@ -647,13 +647,28 @@ fn single_line_editor_buffer_does_not_wrap() {
         let mut e = app.world_mut().spawn((
             Node,
             Style::default(),
-            Text(String::from(long)),
+            Text(String::new()), // inert display carrier (editor owns its content)
             buiy_core::text::edit::TextEditState::new(cosmic_text::Metrics::new(16.0, 19.2)),
         ));
         if single_line {
             e.insert(SingleLine);
         }
         let id = e.id();
+        // Seed the editor's OWNED content via the explicit verb (C2 § 2.3): the
+        // display `Text`→editor seam is gone (C2 § 2.1), so the long content
+        // reaches the editor through `Insert`. A SingleLine editor must still
+        // lay it on ONE visual line (Wrap::None) — the property under test.
+        {
+            let fonts = app.world().resource::<SharedFontSystem>().clone();
+            let mut fs = fonts.lock();
+            let mut state = app.world_mut().get_mut::<TextEditState>(id).unwrap();
+            state.apply(
+                &mut fs,
+                EditCommand::Insert(long.into()),
+                single_line,
+                false,
+            );
+        }
         // A narrow sized parent forces wrapping for the multi-line case.
         app.world_mut()
             .spawn((

@@ -37,16 +37,29 @@ use cosmic_text::Metrics;
 /// one typed char appends exactly one new instance (the T8 fixture shape,
 /// but EDITABLE and focused).
 fn spawn_focused_editor(h: &mut TextExtractHarness) -> Entity {
+    use buiy_core::text::SharedFontSystem;
+    use buiy_core::text::edit::EditCommand;
+
     let editor = h
         .app
         .world_mut()
         .spawn((
             Node,
             Style::default(),
-            Text(String::from("Hi")),
+            Text(String::new()), // inert display carrier (editor owns its content)
             TextEditState::new(Metrics::new(16.0, 19.2)),
         ))
         .id();
+    // Seed the editor's OWNED content via the explicit verb (C2 § 2.3): the
+    // display `Text`→editor seam is gone (C2 § 2.1). Unlike the old `set_text`
+    // seam (which left the caret at 0), `Insert` leaves the caret AFTER the
+    // inserted text, so a subsequently-typed char APPENDS.
+    {
+        let fonts = h.app.world().resource::<SharedFontSystem>().clone();
+        let mut fs = fonts.lock();
+        let mut state = h.app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        state.apply(&mut fs, EditCommand::Insert("Hi".into()), false, false);
+    }
     h.app
         .world_mut()
         .spawn((
@@ -105,20 +118,17 @@ fn one_frame_from_input_edit_to_glyph_publish() {
     // ran in Input) — this is the M1 proof half: the buffer changed, the
     // node was dirty-marked, but the glyphs have NOT flowed yet.
     //
-    // The '!' inserts at the editor's caret, which is at buffer index 0: a
-    // freshly-seeded editor (Text("Hi") lowered via the sync `set_text` path)
-    // leaves the cosmic cursor at (0,0) — `set_text` seeds the buffer but does
-    // NOT move the editor caret, and caret-on-focus-gain (move to end) is an
-    // E6 lifecycle behavior, not E2's. So the typed char prepends ⇒ "!Hi".
-    // (The plan's `"Hi!"` presumed a caret-at-end this substrate does not yet
-    // establish; the latency gate — Task 8's subject — is insert-position-
-    // independent: one inserted char publishes exactly one new glyph wherever
-    // it lands.)
+    // The '!' inserts at the editor's caret, which sits AFTER the seed: the
+    // editor is seeded via `EditCommand::Insert("Hi")` (the editor owns its
+    // content, C2 § 2.1/§2.3), and `Insert` leaves the caret after the inserted
+    // text. So the typed char APPENDS ⇒ "Hi!". (The latency gate — Task 8's
+    // subject — is insert-position-independent: one inserted char publishes
+    // exactly one new glyph wherever it lands.)
     assert_eq!(
         h.app.world().get::<TextEditState>(editor).unwrap().value(),
-        "!Hi",
+        "Hi!",
         "the edit applied to the editor buffer on frame N (in BuiySet::Input); \
-         caret sits at index 0 post-seed (caret-on-focus-gain is E6)"
+         caret sits after the Insert-seeded content (post-seed)"
     );
     assert_eq!(
         h.changed_frames(),

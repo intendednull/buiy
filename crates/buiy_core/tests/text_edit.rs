@@ -56,6 +56,8 @@ mod text_preedit_paint;
 mod text_selection_caret_gpu;
 #[path = "text_edit/text_selection_model.rs"]
 mod text_selection_model;
+#[path = "text_edit/text_set_value.rs"]
+mod text_set_value;
 #[path = "text_edit/text_undo_ops.rs"]
 mod text_undo_ops;
 #[path = "text_edit/text_undo_property.rs"]

@@ -1046,13 +1046,17 @@ fn vanished_window_clears_once_then_retains() {
 // --- E1 Task 4: the editor entity emits glyphs through the same producer ---
 
 /// E1 flagship invariant, glyph half (E1 plan § Task 4.3): an editor entity
-/// (`Text` + `TextEditState`) contributes glyph instances IDENTICALLY to the
-/// equivalent display-only entity, because `extract_buiy_glyphs` reads the
-/// authoritative buffer through the read-only `TextBufferAccess`. The seam is
-/// transparent at the glyph tier too — same producer, same emission, same
-/// per-entity run length.
+/// (`TextEditState`, content seeded via `EditCommand::Insert`) contributes glyph
+/// instances IDENTICALLY to the equivalent display-only entity, because
+/// `extract_buiy_glyphs` reads the authoritative buffer through the read-only
+/// `TextBufferAccess`. The seam is transparent at the glyph tier too — same
+/// producer, same emission, same per-entity run length. The editor owns its
+/// content (the display `Text`→editor seam is gone, C2 § 2.1).
 #[test]
 fn editor_entity_emits_the_same_glyph_run_as_a_display_entity() {
+    use buiy_core::text::SharedFontSystem;
+    use buiy_core::text::edit::EditCommand;
+
     let mut h = TextExtractHarness::new();
     let display = h
         .app
@@ -1070,11 +1074,20 @@ fn editor_entity_emits_the_same_glyph_run_as_a_display_entity() {
         .spawn((
             Node,
             Style::default(),
-            Text(String::from("Hi!")),
+            Text(String::new()), // inert display carrier (editor owns its content)
             FontSize(16.0),
             TextEditState::new(Metrics::new(16.0, 19.2)),
         ))
         .id();
+    // Seed the editor's OWNED content via the explicit verb (C2 § 2.3): the
+    // display `Text`→editor seam is gone (C2 § 2.1), so equivalent content
+    // reaches the editor through `Insert`.
+    {
+        let fonts = h.app.world().resource::<SharedFontSystem>().clone();
+        let mut fs = fonts.lock();
+        let mut state = h.app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        state.apply(&mut fs, EditCommand::Insert("Hi!".into()), false, false);
+    }
     h.app
         .world_mut()
         .spawn((

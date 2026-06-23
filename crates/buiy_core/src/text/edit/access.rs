@@ -63,6 +63,14 @@ impl TextBufferAccessItem<'_, '_> {
         }
     }
 
+    /// `true` when an editor owns this entity's authoritative buffer (the
+    /// content-vs-style split point, C2 § 2.1: editors own their content, so
+    /// `TextSync` re-applies STYLE but never `set_text`s; display entities own
+    /// neither and take the unchanged content+style path).
+    pub fn has_edit(&self) -> bool {
+        self.edit.is_some()
+    }
+
     /// Mutate the authoritative buffer. Bypasses change detection on
     /// whichever side is authoritative (measure § 7).
     pub fn with_buffer_mut<T>(&mut self, f: impl FnOnce(&mut Buffer) -> T) -> T {
@@ -120,5 +128,11 @@ impl TextBufferAccessReadOnlyItem<'_, '_> {
             Some(state) => state.editor.with_buffer(f),
             None => f(&self.display.buffer),
         }
+    }
+
+    /// `true` when an editor owns this entity's authoritative buffer (read-only
+    /// companion of [`TextBufferAccessItem::has_edit`]).
+    pub fn has_edit(&self) -> bool {
+        self.edit.is_some()
     }
 }

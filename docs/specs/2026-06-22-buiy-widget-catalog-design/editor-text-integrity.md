@@ -1,6 +1,27 @@
 # Editor Text-Integrity (Bugs 2 + 3) — child C2 of the widget-catalog campaign
 
-`2026-06-22` · `[draft]` · Wave 1 · realizes foundation `text.md` (the editor measure/commit seam) · depends on C0; co-delivers Tier-B with C7
+`2026-06-22` · `[landed]` · Wave 1 · realizes foundation `text.md` (the editor measure/commit seam) · depends on C0; co-delivers Tier-B with C7
+
+> **Landed** (2026-06-22, on the widget-catalog integration branch): Bugs 2 + 3
+> fixed as one change — `TextSync` routes editor entities to a style-only
+> re-lower (`apply_authored_style_to_editor_buffer`, **never `set_text`**) and
+> `text_commit` gained the `shape_stale` reshape guard. The editor seed/set uses
+> the existing `Insert` / `SelectAll` + `Insert` (no new `EditCommand::SetValue`
+> — the surface is agent-interface-owned). C7's Tier-B survival suite
+> (content / style / preedit) un-ignored and GREEN; the directed
+> `shape_stale_reshapes_a_committed_but_unshaped_buffer` is the non-vacuous proof
+> of the guard. The design rationale below is preserved as authored.
+>
+> **Migration note (recorded as part of landing):** suppressing the display-
+> `Text`→editor content seam (§2.1) required migrating the pre-existing editor
+> tests that relied on TextSync seeding the editor buffer FROM the display
+> `Text` (`editor_entity_lays_out_identically_to_display_entity`,
+> `single_line_editor_buffer_does_not_wrap`, the IME `compose_over_selection_*`
+> helper, `editor_entity_emits_the_same_glyph_run_as_a_display_entity`,
+> `single_line_caret_past_right_edge_pans_x_only`,
+> `one_frame_from_input_edit_to_glyph_publish`) to seed via the explicit
+> `EditCommand::Insert`. The plan's §5 blast-radius list did not enumerate these;
+> the seam they exercised is the one Bug 3 intentionally removes.
 
 > Scope (umbrella §4 C2 / decision §2.6): the `FontsGeneration` bump must not
 > clobber an editor-owned buffer's typed content (content survival), must not

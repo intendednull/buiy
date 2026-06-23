@@ -140,3 +140,46 @@ fn clicking_a_text_input_focuses_it() {
         "click focuses the input (widget policy)"
     );
 }
+
+/// C2 § 5 step 5 — removing the `Text`→editor content seam (the Bug-3 fix)
+/// introduces NO seed regression for the empty case: a bare `TextInput`
+/// (`Text("")` + `TextEditState::for_font_size`, no explicit seed verb) is `""`
+/// at construction AND stays `""` after a `FontsGeneration` bump (the style-only
+/// TextSync path never re-`set_text`s the empty editor buffer). `BuiyTextPlugin`
+/// is added explicitly so the bump's TextSync sweep actually runs over the
+/// widget's editor buffer (WidgetsPlugin alone does not register TextSync — the
+/// bump would otherwise be inert and the test vacuous).
+#[test]
+fn bare_text_input_value_stays_empty_across_a_fonts_generation_bump() {
+    use buiy_core::text::FontsGeneration;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(buiy_core::CorePlugin);
+    app.add_plugins(buiy_core::text::BuiyTextPlugin::default());
+    app.add_plugins(WidgetsPlugin);
+
+    let entity = app
+        .world_mut()
+        .spawn(TextInput::single_line("Search…"))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world().get::<TextEditState>(entity).unwrap().value(),
+        "",
+        "precondition: a bare TextInput seeds \"\" (no explicit seed verb needed for the empty case)"
+    );
+
+    // Bump FontsGeneration (the runtime add_font / system-font-scan trigger) and
+    // run a frame. With the § 2.1 style-only path, the empty editor buffer is
+    // never set_text'd to anything else — it stays "".
+    app.world_mut().resource_mut::<FontsGeneration>().0 += 1;
+    app.update();
+
+    assert_eq!(
+        app.world().get::<TextEditState>(entity).unwrap().value(),
+        "",
+        "a bare TextInput's value stays \"\" after a bump — the Text->editor seam \
+         removal (Bug-3 fix) introduces NO seed regression for the empty case (§ 5 step 5)"
+    );
+}

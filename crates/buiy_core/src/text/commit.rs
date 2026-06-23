@@ -97,9 +97,23 @@ pub fn text_commit(
 
         let offset_stale =
             existing_layout.is_none_or(|current| current.content_offset != content_offset);
-        // § 4.2's steady-state short-circuit (+ the T4 offset term).
         let size_stale = access.with_buffer(|buffer| buffer.size() != target);
-        if !align_changed && !offset_stale && !size_stale {
+        // The reshape guard (Bug 2, § 2.2): extract asserts
+        // `layout_runs().count() == computed.lines.len()` (extract.rs:712). A
+        // buffer unshaped AFTER its last commit (a FontsGeneration sweep's
+        // set_metrics/attr-reset → DirtyFlags::RELAYOUT; a future Display::None
+        // escape) leaves layout_runs() short of the committed line count and
+        // reaches extract unshaped (debug_assert panic / silent-no-paint in
+        // release). Re-detect with the SAME comparison extract makes, so the two
+        // cannot diverge. Gated on `existing_layout.is_some` — inert on a
+        // never-committed buffer (zero added work to the first-commit path),
+        // only an O(lines) walk on already-committed entities (the same walk
+        // computed_outputs already runs on a reshape below).
+        let shape_stale = existing_layout.is_some_and(|computed| {
+            access.with_buffer(|buffer| buffer.layout_runs().count() != computed.lines.len())
+        });
+        // § 4.2's steady-state short-circuit (+ the T4 offset term + the shape guard).
+        if !align_changed && !offset_stale && !size_stale && !shape_stale {
             continue;
         }
 

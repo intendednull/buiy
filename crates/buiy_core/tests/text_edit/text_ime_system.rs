@@ -83,12 +83,13 @@ fn drain_count<M: bevy::ecs::message::Message>(app: &mut App) -> usize {
         .count()
 }
 
-/// A focused editor whose buffer is SEEDED with `text` through the real
-/// TextSync seam (spawn with `Text(text)`, settle the N→N+1 latency), then with
-/// `[from, to)` (byte indices on line 0) SELECTED via the editor's own motion
-/// path. The selection is established AFTER TextSync settles, so the
-/// `Added<TextBuffer>` lazy re-apply (sync.rs:188) cannot clobber it. This is
-/// the only way to drive a real non-collapsed selection into the system tests.
+/// A focused editor whose buffer is SEEDED with `text` via the editor's OWN
+/// content verb (`EditCommand::Insert` — the editor owns its content; the
+/// display `Text`→editor seam is gone, C2 § 2.1), then with `[from, to)` (byte
+/// indices on line 0) SELECTED via the editor's own motion path. The selection
+/// is established AFTER the seed + settle, so the lazy re-apply cannot clobber
+/// it. This is the only way to drive a real non-collapsed selection into the
+/// system tests.
 fn app_with_selection(text: &str, from: usize, to: usize) -> (App, Entity) {
     use buiy_core::text::SharedFontSystem;
     use buiy_core::text::edit::EditCommand;
@@ -107,14 +108,21 @@ fn app_with_selection(text: &str, from: usize, to: usize) -> (App, Entity) {
         .spawn((
             Node,
             Style::default().width_px(300.0).height_px(60.0),
-            Text(text.to_string()),
+            Text(String::new()), // inert display carrier (editor owns its content)
             TextEditState::new(Metrics::new(16.0, 19.2)),
         ))
         .id();
+    // Seed the editor's OWNED content via the explicit verb (C2 § 2.3).
+    {
+        let fonts = app.world().resource::<SharedFontSystem>().clone();
+        let mut fs = fonts.lock();
+        let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        state.apply(&mut fs, EditCommand::Insert(text.into()), false, false);
+    }
     app.world_mut().resource_mut::<FocusedEntity>().0 = Some(editor);
     app.world_mut().resource_mut::<Time<Virtual>>().pause();
-    // Settle TextSync into the editor buffer (N→N+1): the authored `Text`
-    // routes into the editor-owned buffer on the second update.
+    // Settle (N→N+1): TextSync re-applies style only (the editor owns its
+    // content), measure + commit shape the seeded buffer.
     app.update();
     app.update();
 

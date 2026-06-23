@@ -39,6 +39,12 @@ pub use buiy_core::{
     },
     theme::{Theme, UserPreferences, default_light_theme},
 };
+// The editor's seed/set channel is the existing `EditCommand` verbs (`Insert`,
+// `SelectAll` + `Insert` — no `SetValue` variant; the `EditCommand` surface is
+// agent-interface-owned). Apps and the controlled `TextField` drive them through
+// `EditCommand`, so the type belongs in the prelude next to the widget surface;
+// `TextChanged` pairs with it (the message the Bug-3 fix keeps honest). Audit § 4.
+pub use buiy_core::text::edit::{EditCommand, TextChanged};
 pub use buiy_widgets::{Button, OnPress, TextInput, WidgetsPlugin};
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `text_input_single_line(placeholder)`, `text_input_multi_line(placeholder)`.

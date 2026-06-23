@@ -66,7 +66,6 @@ fn spawn_seeded_editor(h: &mut TextExtractHarness, content: &str) -> Entity {
         .id()
 }
 
-#[ignore = "RED until C2 lands: the FontsGeneration sweep clobbers the editor-owned buffer to \"\"; C2's TextSync fix preserves it and un-ignores this test"]
 #[test]
 fn editor_content_survives_a_fonts_generation_bump() {
     let mut h = TextExtractHarness::new();
@@ -155,7 +154,6 @@ fn empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump() {
 /// Preedit-survival (C2 §2.6 / spec §2.2): a live IME preedit survives the
 /// bump (a mid-composition set_text destroys composition). Committed #[ignore]
 /// RED until C2 lands; C2's PR deletes the attribute as it goes GREEN.
-#[ignore = "RED until C2 lands: the FontsGeneration sweep destroys a mid-composition preedit; C2's preedit-aware TextSync fix preserves it and un-ignores this test"]
 #[test]
 fn preedit_survives_a_fonts_generation_bump() {
     let mut h = TextExtractHarness::new();
@@ -193,7 +191,6 @@ fn preedit_survives_a_fonts_generation_bump() {
 /// metrics, not reset the editor to defaults. RED until C2's style-preserving
 /// TextSync fix lands; #[ignore]d like the survival test. The editor is seeded
 /// at a NON-default font size so a clobber-to-default is observable.
-#[ignore = "RED until C2 lands: the FontsGeneration sweep resets the editor's owned metrics; C2 preserves them and un-ignores"]
 #[test]
 fn editor_style_stays_live_after_a_bump() {
     let mut h = TextExtractHarness::new();
