@@ -22,7 +22,10 @@ pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
 pub use components::{Node, ResolvedLayout, ResolvedTransform, StackingContext};
-pub use focus::{FocusPlugin, FocusRingMarker, FocusVisible, Focusable, FocusedEntity};
+pub use focus::{
+    FocusPlugin, FocusReturn, FocusRingMarker, FocusScope, FocusScopeMode, FocusVisible, Focusable,
+    FocusedEntity,
+};
 pub use interaction::{InteractionPlugin, OnPress};
 pub use layout::{
     AlignContent, AlignItems, Anchor, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,

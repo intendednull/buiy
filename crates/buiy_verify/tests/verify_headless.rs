@@ -35,6 +35,8 @@ mod coverage_layout;
 mod coverage_meta;
 #[path = "verify_headless/determinism_ahem.rs"]
 mod determinism_ahem;
+#[path = "verify_headless/dialog_modal_c5d.rs"]
+mod dialog_modal_c5d;
 #[path = "verify_headless/golden_keys.rs"]
 mod golden_keys;
 #[path = "verify_headless/golden_persistence.rs"]

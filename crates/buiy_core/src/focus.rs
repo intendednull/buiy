@@ -28,8 +28,10 @@
 
 use crate::BuiySet;
 use crate::Length;
+use crate::a11y::A11yHidden;
+use crate::layout::{Stacking, TopLayer, TopLayerActivation};
 use crate::render::color::ColorToken;
-use crate::render::components::{LineStyle, Outline};
+use crate::render::components::{CssVisibility, LineStyle, Outline};
 use bevy::picking::events::{Pointer, Press};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
@@ -42,6 +44,66 @@ pub struct Focusable {
     /// Phase 0: 0 = Auto (in document order); negative = Skip; positive = explicit.
     pub tab_order: i32,
 }
+
+/// How a [`FocusScope`] confines Tab traversal (scroll-overlay-modal.md §C.1).
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FocusScopeMode {
+    /// A non-modal focus-cycling region (e.g. a toolbar). Tab wraps *inside* the
+    /// scope while focus is within it, but focus can still leave by other means
+    /// (it is not the innermost-modal trap). Reserved for non-modal regions.
+    Contain,
+    /// A modal trap: while this scope is the innermost open
+    /// [`TopLayer::Modal`](crate::layout::TopLayer) scope, Tab / Shift+Tab cycle
+    /// **only** among its focusable descendants (wrapping at the ends) — focus
+    /// cannot escape to a background element. Escape always closes/escapes (no
+    /// keyboard trap, WCAG 2.1.2 — the close path is the overlay state machine,
+    /// not the traversal).
+    #[default]
+    Trap,
+}
+
+/// A focus-traversal boundary (scroll-overlay-modal.md §C.1). When this scope is
+/// the **innermost open modal** (a [`TopLayer::Modal`] entity carrying
+/// [`FocusScopeMode::Trap`], keyed off the [`TopLayerActivation`] deque), Tab /
+/// Shift+Tab cycle only among the scope's focusable descendants. Outside any
+/// active trap, traversal is the flat-global set — today's non-modal behavior,
+/// preserved exactly.
+///
+/// The trap scope is **derived**, not registered: `handle_tab` reads the back of
+/// `TopLayerActivation.order` (the most-recently-activated top-layer entity) for
+/// the innermost open `TopLayer::Modal` carrying a `FocusScope::Trap` — the
+/// single-source-of-truth choice (§3.4: couple to the built activation deque, not
+/// a free-floating registry).
+#[derive(Component, Reflect, Clone, Copy, Debug, Default)]
+#[reflect(Component, Default)]
+pub struct FocusScope {
+    pub mode: FocusScopeMode,
+}
+
+impl FocusScope {
+    /// A modal trap scope (the Dialog/Menu container `#[require]`).
+    pub fn trap() -> Self {
+        Self {
+            mode: FocusScopeMode::Trap,
+        }
+    }
+
+    /// A non-modal focus-cycling region.
+    pub fn contain() -> Self {
+        Self {
+            mode: FocusScopeMode::Contain,
+        }
+    }
+}
+
+/// Focus-restoration target captured when an overlay opens (scroll-overlay-modal.md
+/// §C.4): the entity that held focus *before* the overlay took it. On close, focus
+/// is restored to this entity (WCAG 2.4.3 focus order). Stored on the overlay so
+/// nested overlays restore in LIFO order. `None` = nothing was focused at open
+/// time (close clears focus).
+#[derive(Component, Reflect, Clone, Copy, Debug, Default)]
+#[reflect(Component, Default)]
+pub struct FocusReturn(pub Option<Entity>);
 
 /// Currently focused entity (None = nothing focused).
 #[derive(Resource, Reflect, Default, Clone, Debug)]
@@ -152,6 +214,8 @@ impl Plugin for FocusPlugin {
         app.register_type::<Focusable>()
             .register_type::<FocusedEntity>()
             .register_type::<FocusVisible>()
+            .register_type::<FocusScope>()
+            .register_type::<FocusReturn>()
             .init_resource::<FocusedEntity>()
             .init_resource::<FocusVisible>()
             .add_systems(Update, handle_tab.in_set(BuiySet::Input))
@@ -241,6 +305,27 @@ fn nearest_focusable(
     }
 }
 
+/// The per-entity trap-scope query data: a candidate scope's `FocusScope` (mode),
+/// its `Stacking` (top-layer membership), and its `CssVisibility` (open state — a
+/// closed modal does not trap). Aliased to keep [`TrapInputs`] readable.
+type ScopeData = (
+    &'static FocusScope,
+    &'static Stacking,
+    Option<&'static CssVisibility>,
+);
+
+/// The active-modal-trap derivation inputs for [`handle_tab`] (scroll-overlay-modal.md
+/// §C.1), aliased so the system signature stays under clippy's `type_complexity`
+/// bar. The `TopLayerActivation` deque + the per-entity scope query jointly
+/// resolve the innermost open `TopLayer::Modal` trap scope; the
+/// `ChildOf`/`A11yHidden` queries scope + filter the candidate set.
+type TrapInputs<'w, 's> = (
+    Option<Res<'w, TopLayerActivation>>,
+    Query<'w, 's, ScopeData>,
+    Query<'w, 's, &'static ChildOf>,
+    Query<'w, 's, (), With<A11yHidden>>,
+);
+
 /// `pub(crate)` so the P1c action router (`a11y::action`) can name it in its
 /// intra-`BuiySet::Input` `.before(handle_tab)` ordering constraint
 /// (action-router.md §7): the router must drain inbound requests *before* the
@@ -251,6 +336,7 @@ fn nearest_focusable(
 pub(crate) fn handle_tab(
     keys: Res<ButtonInput<KeyCode>>,
     focusables: Query<(Entity, &Focusable)>,
+    trap: TrapInputs,
     mut focused: ResMut<FocusedEntity>,
     mut visible: ResMut<FocusVisible>,
 ) {
@@ -259,18 +345,97 @@ pub(crate) fn handle_tab(
         return;
     }
     let forward = !keys.pressed(KeyCode::ShiftLeft) && !keys.pressed(KeyCode::ShiftRight);
-    advance_focus(&focusables, &mut focused, forward);
+    let (activation, scopes, parents, hidden) = trap;
+
+    // The innermost open modal trap scope, derived from the activation deque
+    // (the back is the most-recently-activated top-layer entity). When present,
+    // Tab traversal is confined to its focusable descendants; when absent, the
+    // flat-global set is used (today's non-modal behavior, preserved).
+    let active_scope = active_trap_scope(activation.as_deref(), &scopes);
+
+    // Build the candidate set: every `Focusable` that is NOT inert (`A11yHidden`
+    // self/ancestor) and — when a trap is active — is a descendant of the scope.
+    // Inert filtering applies in BOTH the modal and non-modal cases (an
+    // `A11yHidden` background element is never a Tab stop).
+    let entries: Vec<(Entity, Focusable)> = focusables
+        .iter()
+        .filter(|(e, _)| !is_inert(*e, &parents, &hidden))
+        .filter(|(e, _)| match active_scope {
+            Some(scope) => is_descendant_of(*e, scope, &parents),
+            None => true,
+        })
+        .map(|(e, f)| (e, f.clone()))
+        .collect();
+
+    focused.0 = compute_next_focus(&entries, focused.0, forward);
     visible.0 = true;
 }
 
-fn advance_focus(
-    focusables: &Query<(Entity, &Focusable)>,
-    focused: &mut FocusedEntity,
-    forward: bool,
-) {
-    let entries: Vec<(Entity, Focusable)> =
-        focusables.iter().map(|(e, f)| (e, f.clone())).collect();
-    focused.0 = compute_next_focus(&entries, focused.0, forward);
+/// The innermost OPEN modal trap scope (scroll-overlay-modal.md §C.1): the
+/// back-most entry of `TopLayerActivation.order` (most-recently-activated) that is
+/// a visible [`TopLayer::Modal`](crate::layout::TopLayer) carrying a
+/// [`FocusScopeMode::Trap`] `FocusScope`. A modal is in the activation deque even
+/// while `CssVisibility::Hidden` (it keeps its layout box), so the **open** filter
+/// (`CssVisibility != Hidden/Collapse`) is what gates the trap on/off — a closed
+/// dialog must not trap focus. `None` when no open modal trap is up — the
+/// flat-global non-modal case.
+fn active_trap_scope(
+    activation: Option<&TopLayerActivation>,
+    scopes: &Query<ScopeData>,
+) -> Option<Entity> {
+    let activation = activation?;
+    activation.order.iter().rev().copied().find(|&e| {
+        scopes.get(e).is_ok_and(|(scope, stacking, vis)| {
+            scope.mode == FocusScopeMode::Trap
+                && stacking.top_layer == TopLayer::Modal
+                && scope_is_open(vis)
+        })
+    })
+}
+
+/// Whether a scope's [`CssVisibility`] counts as **open** (the same predicate the
+/// widget overlay layer uses): `Visible` (or absent — the default) = open,
+/// `Hidden`/`Collapse` = closed. A closed modal does not trap.
+fn scope_is_open(vis: Option<&CssVisibility>) -> bool {
+    !matches!(
+        vis,
+        Some(CssVisibility::Hidden) | Some(CssVisibility::Collapse)
+    )
+}
+
+/// Whether `e` is `ancestor` or any of its `ChildOf` ancestors is `ancestor`
+/// (the modal-subtree descendant test). The scope entity itself counts as inside
+/// its own scope.
+fn is_descendant_of(e: Entity, ancestor: Entity, parents: &Query<&ChildOf>) -> bool {
+    let mut cur = e;
+    loop {
+        if cur == ancestor {
+            return true;
+        }
+        match parents.get(cur) {
+            Ok(p) => cur = p.parent(),
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Whether `e` is inert — carries [`A11yHidden`] on itself or any `ChildOf`
+/// ancestor (the inert-background focus-exclusion predicate, §C.2). The modal
+/// lifecycle marks the rest-of-tree `A11yHidden` on open, so a background element
+/// is never a Tab stop while a modal is up. This is the focus-traversal half of
+/// the "one marker, three walks" inert model (the a11y prune is owned by
+/// `build_tree`, semantic-tree.md §7.4).
+fn is_inert(e: Entity, parents: &Query<&ChildOf>, hidden: &Query<(), With<A11yHidden>>) -> bool {
+    let mut cur = e;
+    loop {
+        if hidden.contains(cur) {
+            return true;
+        }
+        match parents.get(cur) {
+            Ok(p) => cur = p.parent(),
+            Err(_) => return false,
+        }
+    }
 }
 
 fn compute_next_focus(
@@ -373,5 +538,29 @@ mod tests {
         // Wrap back to the first positive.
         let wrapped = compute_next_focus(&entries, third, true);
         assert_eq!(wrapped, Some(pos1), "traversal wraps to the first positive");
+    }
+
+    /// C5-d (scroll-overlay-modal.md §C.1): when a modal trap is active, `handle_tab`
+    /// feeds `compute_next_focus` a candidate set ALREADY filtered to the scope's
+    /// (non-inert) focusable descendants; the pure traversal then wraps within that
+    /// set. This proves the wrap-within-scope invariant at the unit tier — given a
+    /// two-element scoped set, forward cycles `a -> b -> a` and never escapes to a
+    /// (here absent) background candidate. The descendant/inert filtering that
+    /// produces this set is exercised end-to-end in `dialog_modal_c5d`.
+    #[test]
+    fn scoped_candidate_set_wraps_within_the_trap() {
+        // The two focusable descendants of an (already-filtered) modal scope.
+        let a = e(10);
+        let b = e(11);
+        let scoped = vec![(a, f(0)), (b, f(0))];
+
+        // From the first, forward cycles a -> b -> a (wrap inside the scope).
+        let one = compute_next_focus(&scoped, Some(a), true);
+        assert_eq!(one, Some(b), "Tab moves to the next scoped focusable");
+        let two = compute_next_focus(&scoped, one, true);
+        assert_eq!(two, Some(a), "Tab wraps within the scoped set (the trap)");
+        // Backward reverses: a -> b (wrap the other way).
+        let back = compute_next_focus(&scoped, Some(a), false);
+        assert_eq!(back, Some(b), "Shift+Tab reverses within the scoped set");
     }
 }

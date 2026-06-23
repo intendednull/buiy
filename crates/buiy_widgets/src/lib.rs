@@ -147,6 +147,8 @@ impl Plugin for WidgetsPlugin {
             .register_type::<Dialog>()
             .register_type::<dialog::DialogTitle>()
             .register_type::<dialog::DialogBody>()
+            .register_type::<dialog::DialogClose>()
+            .register_type::<dialog::PendingFocus>()
             .register_type::<TooltipTrigger>()
             .register_type::<tooltip::TooltipNode>()
             .register_type::<scroll_area::ScrollArea>()
@@ -210,8 +212,52 @@ impl Plugin for WidgetsPlugin {
         // = [body]` once its `children!` exist (the labelling edges reference the
         // title/body child entities, unknown at root-spawn time — the disclosure
         // `controls` precedent). Idempotent over the scene-fn path (which authors
-        // the edges directly). No open/close/focus-trap — that is C5 (Wave 4).
+        // the edges directly).
         app.add_systems(Update, dialog::wire_dialog_relations);
+
+        // C5-d (scroll-overlay-modal.md §C.5) — the Dialog open/close/focus-trap/
+        // Esc/restore + inert-background overlay state machine.
+        //
+        // `open_dialog_on_invoker_press` reads the shared `OnPress` sink (the
+        // invoker's Click → OnPress via the Button contract) and shows the
+        // controlled dialog + queues the deferred focus-into. Runs in
+        // `BuiySet::Input` so a same-frame activation opens the same frame.
+        //
+        // `close_dialog_on_escape` (Escape — WCAG 2.1.2, always escapes) and
+        // `close_dialog_on_button` (a `DialogClose` button) hide the top-most /
+        // enclosing dialog. Both in `BuiySet::Input`.
+        //
+        // `apply_dialog_modal_state` reacts to `Changed<CssVisibility>` on a Dialog
+        // to mark/clear the inert background (`A11yHidden` on the rest-of-tree) and
+        // capture/restore `FocusReturn`. Ordered `.after` the open/close systems so
+        // the same-frame visibility flip is reacted to the same frame.
+        //
+        // `resolve_pending_focus` drains the deferred focus-into the frame after the
+        // dialog's children spawn (§B.3a). `.after(apply_dialog_modal_state)` so the
+        // inert background is already in place when it picks the first focusable.
+        app.add_systems(
+            Update,
+            (
+                dialog::open_dialog_on_invoker_press,
+                dialog::close_dialog_on_escape,
+                dialog::close_dialog_on_button,
+            )
+                .in_set(BuiySet::Input),
+        );
+        app.add_systems(
+            Update,
+            dialog::apply_dialog_modal_state
+                .in_set(BuiySet::Input)
+                .after(dialog::open_dialog_on_invoker_press)
+                .after(dialog::close_dialog_on_escape)
+                .after(dialog::close_dialog_on_button),
+        );
+        app.add_systems(
+            Update,
+            dialog::resolve_pending_focus
+                .in_set(BuiySet::Input)
+                .after(dialog::apply_dialog_modal_state),
+        );
         // Wire each tooltip trigger's `A11yRelations.described_by = [tooltip]` once
         // its `children!` exist (the edge references the tooltip child entity,
         // unknown at root-spawn time). This edge is also the source of truth the

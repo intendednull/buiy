@@ -13,11 +13,11 @@
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use buiy_core::{
-    CorePlugin,
+    CorePlugin, FocusReturn, FocusScope, FocusScopeMode,
     a11y::{A11yLabel, A11yModal, A11yRelations, A11yRole},
     components::Node,
-    layout::BoxModel,
-    render::components::{Background, Border},
+    layout::{BoxModel, Stacking, TopLayer},
+    render::components::{Background, Border, CssVisibility},
     text::Text,
 };
 use buiy_widgets::WidgetsPlugin;
@@ -64,6 +64,35 @@ fn bare_dialog_marker_materializes_the_full_required_contract() {
     assert!(
         world.get::<A11yModal>(d).is_some(),
         "the dialog carries A11yModal (the modal flag)"
+    );
+}
+
+#[test]
+fn bare_dialog_marker_materializes_the_c5d_container_layer() {
+    // C5-d: the Dialog #[require] now also carries the modal container/trap layer.
+    let mut app = app();
+    let d = app.world_mut().spawn(Dialog).id();
+    app.update();
+
+    let world = app.world();
+    assert_eq!(
+        world.get::<Stacking>(d).map(|s| s.top_layer),
+        Some(TopLayer::Modal),
+        "the dialog is a TopLayer::Modal (joins TopLayerActivation, paints above)"
+    );
+    assert_eq!(
+        world.get::<FocusScope>(d).map(|s| s.mode),
+        Some(FocusScopeMode::Trap),
+        "the dialog carries a FocusScope::trap (the §C.1 modal trap)"
+    );
+    assert!(
+        world.get::<FocusReturn>(d).is_some(),
+        "the dialog carries FocusReturn (the §C.4 restoration target)"
+    );
+    assert_eq!(
+        world.get::<CssVisibility>(d).copied(),
+        Some(CssVisibility::Hidden),
+        "the dialog starts CLOSED (CssVisibility::Hidden) — the invoker opens it"
     );
 }
 
