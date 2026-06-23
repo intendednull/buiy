@@ -16,6 +16,7 @@ pub mod accname;
 pub mod action;
 pub mod adapter;
 pub mod contract;
+pub mod inprocess;
 pub mod relations;
 pub mod states;
 pub mod translate;
@@ -24,6 +25,10 @@ pub use accname::{AccNameInputs, compute_accessible_name};
 pub use action::{button_keyboard_activation, dispatch_action_request, route_action_requests};
 pub use adapter::AccessKitAdapterPlugin;
 pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
+pub use inprocess::{
+    NodeState, SemanticNode, SemanticTree, StateQuery, click, expand, focus, get_by_role,
+    increment, perform, set_value, snapshot, wait_for,
+};
 pub use relations::A11yRelations;
 pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,

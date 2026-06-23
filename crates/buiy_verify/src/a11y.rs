@@ -6,7 +6,7 @@ use accesskit::{NodeId, TreeId};
 use accesskit_consumer::Tree as ConsumerTree;
 use bevy::prelude::App;
 use buiy_core::a11y::translate::node_id_for;
-use buiy_core::a11y::{A11yNodeView, A11yRole, A11yTreeBuilder, build_tree_update};
+use buiy_core::a11y::{A11yNodeView, A11yRole, build_tree_update};
 use serde::Serialize;
 
 // LINT: Field order here is the snapshot wire format. Do not reorder
@@ -112,20 +112,13 @@ pub fn diff_snapshots(left: &str, right: &str) -> Option<String> {
 
 /// Which projection of the canonical tree a snapshot reads.
 ///
-/// `Unmerged` (the default) is the canonical structural tree — what an AT reads
-/// before it self-merges, and the only projection P1a/C7 snapshot. `Merged`
-/// (read-time collapse of `A11yMergeChildren` subtrees) is reserved for a later
-/// phase; it is accepted here so the [`semantic_tree`] signature is stable, but
-/// in this slice both behave identically (no merge components exist yet).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TreeView {
-    /// Canonical structural tree (the default; most diffable).
-    #[default]
-    Unmerged,
-    /// Read-time projection collapsing `A11yMergeChildren` subtrees. Not yet
-    /// distinct from `Unmerged` — reserved for the P1b nesting phase.
-    Merged,
-}
+/// Re-exported from the P1c in-process driver
+/// ([`buiy_core::a11y::inprocess::TreeView`]) so there is **one** `TreeView`
+/// vocabulary across the consumer string helper here and the structured driver —
+/// they are the same projection selector, not two. `Unmerged` (the default) is
+/// the canonical structural tree; `Merged` is reserved for a later phase
+/// (identical to `Unmerged` until merge components exist).
+pub use buiy_core::a11y::inprocess::TreeView;
 
 /// Build the production [`accesskit::TreeUpdate`] for `views` via
 /// `buiy_core`'s isolated translate fold and wrap it in an in-process
@@ -168,45 +161,32 @@ pub fn node_for(tree: &ConsumerTree, id: NodeId) -> Option<accesskit_consumer::N
     tree.state().node_by_tree_local_id(id, TreeId::ROOT)
 }
 
-/// Snapshot a running [`App`]'s AccessKit tree through the in-process consumer,
-/// as an insta-friendly stable string (one line per node: `role  name`).
+/// Snapshot a running [`App`]'s AccessKit tree as an insta-friendly stable
+/// string (one line per node: `role  name`).
 ///
-/// Runs the **production** translate path: it reads the `A11yTreeBuilder`
-/// resource the `build_tree` system populates each frame, feeds the views
-/// through [`consume`], and serializes each node *from the consumer view* — the
-/// same nodes a real AT reads. The caller is expected to have driven at least
-/// one `app.update()` so the builder reflects the current world; this fn does
-/// not tick the schedule (so the caller controls when the frame settles).
+/// Projects from the P1c in-process driver's structured
+/// [`SemanticTree`](buiy_core::a11y::inprocess::SemanticTree) — i.e. it calls
+/// [`buiy_core::a11y::inprocess::snapshot`], the **same** consumer-tier observe
+/// the structured driver and (later) the MCP companion use, then renders one
+/// `role  name` line per node. There is therefore **one** tree-derivation path:
+/// both this string helper and the structured driver read the canonical
+/// `A11yTreeBuilder` views through the same `build_tree_update` → consumer fold
+/// (inprocess-api.md §§2,4 — no forked second path).
 ///
-/// State is intentionally minimal in this slice: P0 carries only role + name +
-/// focusable, so the line is `role  name`. As the P1a decomposed state
-/// components land, this serializer grows a present-only `state` projection
-/// (toggled/selected/value/…) read through the consumer getters — the line
-/// format is additive, so existing snapshots only gain fields.
+/// The caller is expected to have driven at least one `app.update()` so the
+/// builder reflects the current world; this fn does not tick the schedule (so the
+/// caller controls when the frame settles).
+///
+/// The line is `role  name`. As snapshot consumers want richer assertions they
+/// read the structured `SemanticTree` directly (present-only state, actions,
+/// relations); this string view stays the additive, diff-friendly default.
 pub fn semantic_tree(app: &mut App, view: TreeView) -> String {
-    // `Merged` is accepted but not yet distinct (no merge components exist).
-    let _ = view;
-    let views: Vec<A11yNodeView> = app
-        .world()
-        .resource::<A11yTreeBuilder>()
-        .snapshot()
-        .to_vec();
-    let tree = consume(&views, None);
-
-    let mut lines: Vec<String> = Vec::with_capacity(views.len());
-    for v in &views {
-        // Read role + name back THROUGH the consumer, not off the view — this is
-        // what makes it a consumer-tier assertion (role-implied defaults and
-        // relation resolution would surface here too once they exist).
-        let (role, name) = match node_for(&tree, node_id_for(v.entity)) {
-            Some(node) => (role_to_str(v.role), node.label().unwrap_or_default()),
-            // A view with no consumer node is a producer/consumer divergence;
-            // surface it in the snapshot rather than silently dropping the row.
-            None => ("<missing-in-consumer>", String::new()),
-        };
-        lines.push(format!("{role}  {name}"));
-    }
-    lines.join("\n")
+    let tree = buiy_core::a11y::inprocess::snapshot(app.world_mut(), view);
+    tree.nodes
+        .iter()
+        .map(|n| format!("{}  {}", role_to_str(n.role), n.name))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

@@ -1590,6 +1590,7 @@ name = "buiy_core"
 version = "0.0.1"
 dependencies = [
  "accesskit",
+ "accesskit_consumer 0.36.0",
  "accesskit_winit",
  "arboard",
  "bevy",

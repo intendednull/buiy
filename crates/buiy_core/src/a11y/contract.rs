@@ -37,6 +37,11 @@ pub enum NotActionableReason {
     /// instance (`A11yReadOnly`). Selecting/copying is still allowed; mutation
     /// is forbidden (action-router.md §3).
     ReadOnly,
+    /// A frame-loop wait exhausted its budget before the awaited semantic
+    /// condition held (`inprocess::wait_for`, inprocess-api.md §5.2). Not a
+    /// per-instance live-filter drop — a timeout of the in-process driver's
+    /// condition poll, surfaced through the shared [`ActionError`] taxonomy.
+    Timeout,
 }
 
 /// The typed outcome of an inbound action dispatch (action-router.md §3).
