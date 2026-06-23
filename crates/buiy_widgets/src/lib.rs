@@ -188,5 +188,21 @@ impl Plugin for WidgetsPlugin {
         // so this visual does not chain after `advance_toggle_on_press`; it runs in
         // `Update` and settles on the `Changed<A11yValue>` gate.
         app.add_systems(Update, slider::update_slider_visual);
+
+        // P1d TextInput a11y sync: mirror the editor's live value into
+        // `A11yTextValue` and the `Placeholder` into `A11yPlaceholder` on each
+        // `TextInput` root, so the outbound a11y fold (`build_tree`, in
+        // `BuiySet::A11yUpdate`) sees the live text. It runs in `BuiySet::Animate`,
+        // which the `CorePlugin` set-chain orders strictly BEFORE `A11yUpdate`
+        // (`… → Animate → Picking → A11yUpdate → …`), so a value mutated this frame
+        // (keyboard edit, or an inbound AT `SetValue` honored in `BuiySet::Input`)
+        // is synced into `A11yTextValue` and folded into the a11y tree in the SAME
+        // frame. (`build_tree` is `pub(crate)` to `buiy_core`, so cross-crate
+        // `.before(build_tree)` is not expressible; the set-chain provides the
+        // ordering instead.)
+        app.add_systems(
+            Update,
+            text_input::sync_text_input_a11y.in_set(BuiySet::Animate),
+        );
     }
 }

@@ -807,8 +807,25 @@ fn contract_registry_keys_button_on_click() {
         &[Action::Increment, Action::Decrement, Action::SetValue],
         "Slider advertises {{Increment, Decrement, SetValue}}",
     );
-    // The remaining widget roles are wired in later P1d slices (no contract yet).
-    assert!(contract_for(A11yRole::TextInput).is_none());
+    // Slice-4 wired the text inputs (the role split shares one contract surface):
+    // both `TextInput` and `MultilineTextInput` advertise {SetValue} beyond the
+    // implicit Focus/Blur (the selection verbs are deferred, co-drive §3.2).
+    let text_input = contract_for(A11yRole::TextInput).expect("TextInput has a contract");
+    assert_eq!(
+        text_input.actions,
+        &[Action::SetValue],
+        "TextInput advertises {{SetValue}}",
+    );
+    let multiline =
+        contract_for(A11yRole::MultilineTextInput).expect("MultilineTextInput has a contract");
+    assert_eq!(
+        multiline.actions,
+        &[Action::SetValue],
+        "MultilineTextInput advertises {{SetValue}}",
+    );
+    // The remaining widget roles (Dialog, Tooltip) are wired in later P1d slices
+    // (no contract yet).
+    assert!(contract_for(A11yRole::Dialog).is_none());
 }
 
 #[test]

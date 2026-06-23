@@ -16,7 +16,7 @@
 
 use bevy::prelude::*;
 use buiy_core::{
-    a11y::{A11yLabel, A11yRole},
+    a11y::{A11yLabel, A11yPlaceholder, A11yRole, A11yTextValue},
     components::Node,
     focus::Focusable,
     layout::{BoxModel, Overflow, Style},
@@ -69,12 +69,23 @@ pub(crate) const TEXT_INPUT_FONT_SIZE: f32 = 16.0;
     TextEditState = TextEditState::for_font_size(TEXT_INPUT_FONT_SIZE),
     Placeholder,
     Focusable,
-    // The Phase-0 A11yRole taxonomy stops at `Text` (no `TextInput`/
-    // `TextField` variant yet). Use `Text`; the full role taxonomy is
-    // buiy-accessibility-design's, and a `TextInput` role is a clean additive
-    // follow-up there.
-    A11yRole = A11yRole::Text,
+    // The role split IS the multiline distinction (widget-contracts.md §5):
+    // `TextInput` → `Role::TextInput` (single-line) vs `MultilineTextInput` →
+    // `Role::MultilineTextInput`. The BARE marker carries NO `SingleLine`, so it
+    // is multi-line — hence the `#[require]` default is `MultilineTextInput`;
+    // `single_line()` / the `text_input_single_line` scene-fn layer the
+    // single-line role (`A11yRole::TextInput`) on top alongside the `SingleLine`
+    // policy marker. (Retires the old `A11yRole::Text` stopgap — the role
+    // taxonomy now has the two text-input variants.)
+    A11yRole = A11yRole::MultilineTextInput,
     A11yLabel,
+    // Synced state: `A11yTextValue` mirrors the editor's live value (the
+    // `sync_text_input_a11y` system) and `A11yPlaceholder` mirrors the
+    // `Placeholder` string — so the a11y tree + the inbound driver observe the
+    // text (widget-contracts.md §5). Both default empty here; the sync system
+    // fills them each frame the source changes.
+    A11yTextValue,
+    A11yPlaceholder,
 )]
 pub struct TextInput;
 
@@ -118,16 +129,64 @@ impl TextInput {
     /// A single-line text input with a placeholder (Enter ⇒ Submit, `Wrap::None`
     /// — the `SingleLine` policy). Returns `impl Bundle` (the `Button::new`
     /// precedent). The `#[require]` contract supplies the editor/style/a11y
-    /// companions; this layers the placeholder string and the `SingleLine`
-    /// policy marker on top.
+    /// companions; this layers the placeholder string, the `SingleLine` policy
+    /// marker, AND the single-line **role** override (`A11yRole::TextInput`) on
+    /// top — the role split IS the multiline distinction (widget-contracts.md
+    /// §5), so single-line carries the single-line role rather than the bare
+    /// marker's default `MultilineTextInput`.
     pub fn single_line(placeholder: impl Into<String>) -> impl Bundle {
-        (TextInput, Placeholder(placeholder.into()), SingleLine)
+        (
+            TextInput,
+            Placeholder(placeholder.into()),
+            SingleLine,
+            A11yRole::TextInput,
+        )
     }
 
     /// A multi-line text input with a placeholder (Enter inserts a newline).
-    /// The bare `TextInput` contract is already multi-line (no `SingleLine`),
-    /// so this only layers the placeholder string.
+    /// The bare `TextInput` contract is already multi-line — no `SingleLine`,
+    /// and the `#[require]` default role is `A11yRole::MultilineTextInput` — so
+    /// this only layers the placeholder string.
     pub fn multi_line(placeholder: impl Into<String>) -> impl Bundle {
         (TextInput, Placeholder(placeholder.into()))
+    }
+}
+
+/// Sync the agent-interface text state onto each `TextInput` root (P1d,
+/// widget-contracts.md §5): mirror the editor's live value into [`A11yTextValue`]
+/// and the [`Placeholder`] string into [`A11yPlaceholder`], so the a11y tree (and
+/// the inbound in-process driver) observe the live text + prompt.
+///
+/// `A11yTextValue` is the single-line text value the outbound fold projects into
+/// the view (`build_tree` → `text_value` → `set_value`); the editor-owned buffer
+/// (`TextEditState::value()`) is authoritative, so this is the one-directional
+/// projection from editor → a11y. It runs every frame the source changed and
+/// **writes through only on a real difference** (the `*v != value` guard) so it
+/// does not spuriously tick `Changed<A11yTextValue>` (which the outbound fold
+/// keys off) when the text is unchanged — including the empty steady state.
+///
+/// `Changed<TextEditState>` would be the obvious gate, but the editor mutates its
+/// buffer behind a `&` accessor in some paths (it is machinery state, not always
+/// `DerefMut`-ticked on a value change), so the value is re-read each frame and
+/// the difference guard provides the change-suppression instead.
+pub fn sync_text_input_a11y(
+    mut inputs: Query<
+        (
+            &TextEditState,
+            &Placeholder,
+            &mut A11yTextValue,
+            &mut A11yPlaceholder,
+        ),
+        With<TextInput>,
+    >,
+) {
+    for (editor, placeholder, mut text_value, mut a11y_placeholder) in &mut inputs {
+        let value = editor.value();
+        if text_value.0 != value {
+            text_value.0 = value;
+        }
+        if a11y_placeholder.0 != placeholder.0 {
+            a11y_placeholder.0 = placeholder.0.clone();
+        }
     }
 }

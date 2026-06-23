@@ -847,3 +847,215 @@ fn space_enter_on_focused_slider_do_nothing() {
         "Space/Enter leave the slider value unchanged"
     );
 }
+
+// ---------------------------------------------------------------------------
+// GATE #3 — the TEXT-INPUT value contract (slice-4, widget-contracts.md §5). The
+// role split (`TextInput` single-line vs `MultilineTextInput`) shares ONE contract
+// surface: `{SetValue}` lowered through the EXISTING `SelectAll`+`Insert` editor
+// channel (NO new `EditCommand`). These pin the headless dispatch directly at the
+// `buiy_core` layer: `SetValue` replaces the whole editor value (both roles),
+// missing/wrong payload is `BadData`, an un-advertised verb is `Unsupported`, and
+// a read-only field drops the mutating verb. The editor mechanism needs the
+// `SharedFontSystem`, so these use a `BuiyTextPlugin` harness.
+// ---------------------------------------------------------------------------
+
+use buiy_core::a11y::A11yReadOnly;
+use buiy_core::a11y::contract::{A11yContract, MultilineTextInputContract, TextInputContract};
+use buiy_core::text::edit::{SingleLine, TextEditState};
+
+/// A headless app with the a11y + focus surface PLUS `BuiyTextPlugin` (the
+/// `SharedFontSystem` the text `honor` locks to apply an edit). The text honor
+/// lowers synchronously into `TextEditState`, so no schedule tick is needed to
+/// observe the editor value — but the a11y `A11yTextValue` sync lives in
+/// `buiy_widgets`, so these core tests assert the EDITOR value (the source of
+/// truth); the `A11yTextValue` reflection is asserted at the widget layer.
+fn text_setup() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(buiy_core::text::BuiyTextPlugin::default());
+    app.add_plugins(A11yPlugin);
+    app.add_plugins(FocusPlugin);
+    app.init_resource::<ButtonInput<KeyCode>>();
+    app.add_message::<KeyboardInput>();
+    app
+}
+
+/// Spawn a single-line text input contract surface: `Role::TextInput` +
+/// `TextEditState` + `SingleLine` + `Focusable` (the bundle lives in
+/// `buiy_widgets`; here we pin the core contract behavior directly).
+fn single_line_input(app: &mut App) -> Entity {
+    let e = app
+        .world_mut()
+        .spawn((
+            A11yRole::TextInput,
+            TextEditState::for_font_size(16.0),
+            SingleLine,
+            buiy_core::focus::Focusable::default(),
+        ))
+        .id();
+    app.update();
+    e
+}
+
+fn editor_value(app: &App, e: Entity) -> String {
+    app.world().get::<TextEditState>(e).unwrap().value()
+}
+
+/// A `SetValue` carrying a string, addressed at `node`.
+fn set_value_request(node: accesskit::NodeId, text: &str) -> ActionRequest {
+    ActionRequest {
+        action: Action::SetValue,
+        target_tree: TreeId::ROOT,
+        target_node: node,
+        data: Some(ActionData::Value(text.into())),
+    }
+}
+
+#[test]
+fn text_input_contract_advertises_only_set_value() {
+    // Both text roles advertise `{SetValue}` beyond the implicit `{Focus, Blur}`;
+    // the selection verbs are deferred (co-drive §3.2), so they are NOT advertised.
+    assert_eq!(TextInputContract::actions(), &[Action::SetValue]);
+    assert_eq!(MultilineTextInputContract::actions(), &[Action::SetValue]);
+    assert_eq!(TextInputContract::role(), A11yRole::TextInput);
+    assert_eq!(
+        MultilineTextInputContract::role(),
+        A11yRole::MultilineTextInput
+    );
+}
+
+#[test]
+fn dispatch_set_value_on_text_input_replaces_the_editor_value() {
+    let mut app = text_setup();
+    let e = single_line_input(&mut app);
+
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "hello")).unwrap();
+    assert_eq!(
+        editor_value(&app, e),
+        "hello",
+        "SetValue lowers through SelectAll+Insert → editor value becomes the text"
+    );
+
+    // A second SetValue REPLACES (SelectAll selects the prior content first).
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "world")).unwrap();
+    assert_eq!(
+        editor_value(&app, e),
+        "world",
+        "a second SetValue replaces the whole value (SelectAll first, not append)"
+    );
+
+    // An empty target value is a clean clear.
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "")).unwrap();
+    assert_eq!(editor_value(&app, e), "", "SetValue(\"\") clears the field");
+}
+
+#[test]
+fn dispatch_set_value_on_multiline_keeps_newlines_single_line_strips() {
+    let mut app = text_setup();
+    // Single-line: the SingleLine policy strips the embedded newline.
+    let single = single_line_input(&mut app);
+    dispatch_action_request(
+        app.world_mut(),
+        &set_value_request(node_id_for(single), "a\nb"),
+    )
+    .unwrap();
+    assert_eq!(
+        editor_value(&app, single),
+        "ab",
+        "a single-line TextInput strips the embedded newline (SingleLine policy)"
+    );
+
+    // Multi-line (NO SingleLine marker, Role::MultilineTextInput): newline kept.
+    let multi = app
+        .world_mut()
+        .spawn((
+            A11yRole::MultilineTextInput,
+            TextEditState::for_font_size(16.0),
+            buiy_core::focus::Focusable::default(),
+        ))
+        .id();
+    app.update();
+    dispatch_action_request(
+        app.world_mut(),
+        &set_value_request(node_id_for(multi), "a\nb"),
+    )
+    .unwrap();
+    assert_eq!(
+        editor_value(&app, multi),
+        "a\nb",
+        "a MultilineTextInput keeps the embedded newline (no SingleLine policy)"
+    );
+}
+
+#[test]
+fn dispatch_set_value_on_text_input_without_value_data_is_bad_data() {
+    let mut app = text_setup();
+    let e = single_line_input(&mut app);
+
+    // SetValue with no payload (or the wrong variant) is BadData, not a panic.
+    let req = request(node_id_for(e), Action::SetValue);
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &req),
+        Err(ActionError::BadData {
+            target: node_id_for(e),
+            action: Action::SetValue,
+        }),
+        "SetValue without a Value payload is BadData"
+    );
+    assert_eq!(
+        editor_value(&app, e),
+        "",
+        "the editor value is unchanged on BadData"
+    );
+}
+
+#[test]
+fn dispatch_click_on_text_input_is_unsupported() {
+    // A text input advertises `{SetValue}` only — Click is NOT in its contract.
+    let mut app = text_setup();
+    let e = single_line_input(&mut app);
+
+    assert_eq!(
+        dispatch_action_request(app.world_mut(), &request(node_id_for(e), Action::Click)),
+        Err(ActionError::Unsupported {
+            target: node_id_for(e),
+            action: Action::Click,
+        }),
+        "a TextInput does not advertise Click — Unsupported"
+    );
+}
+
+#[test]
+fn dispatch_set_value_on_read_only_text_input_is_not_actionable() {
+    // `A11yReadOnly` drops the mutating SetValue verb at the §3 live filter, before
+    // `honor` is reached — the editor value never changes.
+    let mut app = text_setup();
+    let e = app
+        .world_mut()
+        .spawn((
+            A11yRole::TextInput,
+            TextEditState::for_font_size(16.0),
+            SingleLine,
+            A11yReadOnly,
+            buiy_core::focus::Focusable::default(),
+        ))
+        .id();
+    app.update();
+
+    let res = dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "nope"));
+    assert_eq!(
+        res,
+        Err(ActionError::NotActionable {
+            target: node_id_for(e),
+            action: Action::SetValue,
+            reason: NotActionableReason::ReadOnly,
+        }),
+        "A11yReadOnly drops the mutating SetValue verb (live filter, before honor)"
+    );
+    assert_eq!(
+        editor_value(&app, e),
+        "",
+        "a read-only field is never mutated"
+    );
+}

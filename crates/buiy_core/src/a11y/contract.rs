@@ -9,8 +9,11 @@
 //! and the per-widget contracts. P1c-a wired [`Button`]; Wave-3 slice-1 (P1d)
 //! added [`Checkbox`] + [`Switch`]; slice-2 adds [`Slider`] (the first
 //! value-changing contract — its verbs mutate `A11yValue` directly, not the
-//! `OnPress` activation sink) alongside their bundles; the remaining widget
-//! contracts land with their bundles in later P1d slices. The
+//! `OnPress` activation sink); slice-4 adds the text-input contracts
+//! ([`TextInputContract`] + [`MultilineTextInputContract`] — the role split is an
+//! addressing distinction over one shared `{SetValue}` lowering through the
+//! existing editor `SelectAll`+`Insert` channel) alongside their bundles; the
+//! remaining widget contracts land with their bundles in later P1d slices. The
 //! outbound [`to_accesskit_node`](super::translate::to_accesskit_node) fold now
 //! derives its advertised verbs from `Focusable` (`{Focus, Blur}`) PLUS
 //! [`contract_for`]`(role).actions`, replacing the old focusable-`Focus`
@@ -20,6 +23,8 @@
 use crate::a11y::A11yRole;
 use crate::a11y::states::A11yValue;
 use crate::interaction::OnPress;
+use crate::text::SharedFontSystem;
+use crate::text::edit::{EditCommand, SingleLine, TextEditState};
 use accesskit::{Action, ActionData, NodeId};
 use bevy::ecs::world::World;
 use bevy::prelude::Entity;
@@ -141,14 +146,24 @@ impl ContractEntry {
 /// A role with no interactive contract (a `Generic`/`Text`/`Region` container)
 /// returns `None` — it advertises only the implicit `{Focus, Blur}` when
 /// focusable, and nothing else. [`Button`] (P1c-a), [`Checkbox`], [`Switch`]
-/// (Wave-3 slice-1), and [`Slider`] (slice-2) are wired; the remaining role
-/// contracts land with their bundles in later P1d slices (co-drive §3 demand-pull).
+/// (Wave-3 slice-1), [`Slider`] (slice-2), and the text inputs
+/// ([`TextInputContract`]/[`MultilineTextInputContract`], slice-4) are wired; the
+/// remaining role contracts land with their bundles in later P1d slices (co-drive
+/// §3 demand-pull).
 pub fn contract_for(role: A11yRole) -> Option<ContractEntry> {
     match role {
         A11yRole::Button => Some(ContractEntry::of::<Button>()),
         A11yRole::Checkbox => Some(ContractEntry::of::<Checkbox>()),
         A11yRole::Switch => Some(ContractEntry::of::<Switch>()),
         A11yRole::Slider => Some(ContractEntry::of::<Slider>()),
+        // The role split IS the multiline distinction: the single-line and
+        // multi-line text inputs share ONE contract surface (same advertised
+        // `{SetValue}`, same `SelectAll`+`Insert` lowering) but two roles, so
+        // the AT/agent addressing vocabulary distinguishes them. The `honor`
+        // reads the live `SingleLine` policy marker, so the single shared `honor`
+        // applies the correct newline policy regardless of which role keyed it.
+        A11yRole::TextInput => Some(ContractEntry::of::<TextInputContract>()),
+        A11yRole::MultilineTextInput => Some(ContractEntry::of::<MultilineTextInputContract>()),
         _ => None,
     }
 }
@@ -392,6 +407,173 @@ impl A11yContract for Slider {
             // it at the §3 filter before `honor`, so reaching here is dead code,
             // reported (not panicked) as `Unsupported`.
             _ => Err(ActionError::Unsupported { target, action }),
+        }
+    }
+}
+
+/// The advertised verbs shared by BOTH text-input roles, beyond the implicit
+/// `{Focus, Blur}`: `{SetValue}`. The selection verbs (`SetTextSelection`,
+/// `ReplaceSelectedText`) are **deferred** (co-drive §3.2 — no gallery editor
+/// needs programmatic selection; the `EditCommand::SetSelection` slice they would
+/// need is itself deferred), so they are neither advertised here nor honored.
+static TEXT_INPUT_ACTIONS: &[Action] = &[Action::SetValue];
+
+/// Lower a text `SetValue` into the editor through the **existing** `SelectAll` +
+/// `Insert` channel (co-drive §3.1 / widget-contracts.md §5) — **no new
+/// `EditCommand`**. Shared by both text-input contracts (the role split is only an
+/// addressing distinction; the lowering is identical, and the `SingleLine` policy
+/// is read live so the single-line newline strip applies to a single-line input
+/// regardless of which role keyed the dispatch).
+///
+/// `SetValue` carries the replacement text as [`ActionData::Value`]; a
+/// missing/wrong-variant payload is [`ActionError::BadData`]. The lowering:
+///
+/// 1. `EditCommand::SelectAll` — select the whole buffer.
+/// 2. `EditCommand::Insert(text)` — replace the selection with `text` (a
+///    single-line input strips embedded newlines, the `SingleLine` policy). When
+///    `text` is **empty** an `Insert("")` is a no-op (cosmic's per-char insert
+///    deletes the selection on the FIRST char, so an empty string never reaches
+///    that delete), so the empty case lowers to `EditCommand::Delete` instead —
+///    which deletes the whole selection (a clean clear). Both are existing verbs;
+///    no new `EditCommand`.
+///
+/// All verbs go through `TextEditState::apply` (the facade boundary — `apply`
+/// itself never names a cosmic type from outside `text::edit`), which records the
+/// edit on the undo stack exactly as a keyboard edit would.
+///
+/// **Sink-resource discipline** (action-router.md §6): the lowering needs the
+/// [`SharedFontSystem`] resource to apply an edit; under a partial harness without
+/// `BuiyTextPlugin` it is absent, and an entity with no [`TextEditState`] is a
+/// contract error — both are reported as [`ActionError::BadData`], never a panic.
+/// The read-only live filter (`A11yReadOnly`) already dropped the verb in the
+/// router before `honor` is reached, so this lowering is not re-guarded here.
+fn honor_text_set_value(
+    world: &mut World,
+    entity: Entity,
+    action: Action,
+    data: Option<&ActionData>,
+) -> Result<(), ActionError> {
+    let target = super::translate::node_id_for(entity);
+    // The payload must be a `Value(Box<str>)` — anything else (or none) is BadData.
+    let Some(ActionData::Value(text)) = data else {
+        return Err(ActionError::BadData { target, action });
+    };
+    let text = text.to_string();
+
+    // The editor needs the FontSystem to apply an edit. Clone the cheap `Arc`
+    // handle (and drop the resource borrow) so the subsequent `&mut TextEditState`
+    // borrow does not alias the resource. Absent resource ⇒ no text infra ⇒
+    // BadData (graceful, never a panic — the partial-harness discipline).
+    let Some(fonts) = world.get_resource::<SharedFontSystem>().cloned() else {
+        return Err(ActionError::BadData { target, action });
+    };
+    // The single-line policy marker drives the newline strip inside `Insert`.
+    let single_line = world.get::<SingleLine>(entity).is_some();
+    // The editor mechanism. An entity routed here with no `TextEditState` is a
+    // contract error (the widget `#[require]`s it) — BadData, not a panic.
+    let Some(mut state) = world.get_mut::<TextEditState>(entity) else {
+        return Err(ActionError::BadData { target, action });
+    };
+
+    let mut font_system = fonts.lock();
+    // SelectAll (non-mutating; seals the open undo run) selects the whole buffer.
+    // `read_only = false`: the router's §3 live filter already dropped `SetValue`
+    // on an `A11yReadOnly` instance, so by the time `honor` runs the field is
+    // writable.
+    state.apply(&mut font_system, EditCommand::SelectAll, single_line, false);
+    // Replace the selection: a non-empty Insert deletes-then-inserts (cosmic's
+    // per-char `insert_string` deletes the selection on the first char); an empty
+    // target lowers to `Delete` (which deletes the whole selection) since an
+    // `Insert("")` never reaches that delete — both are existing verbs.
+    let replace = if text.is_empty() {
+        EditCommand::Delete
+    } else {
+        EditCommand::Insert(text)
+    };
+    state.apply(&mut font_system, replace, single_line, false);
+    Ok(())
+}
+
+/// The single-line **TextInput** contract (widget-contracts.md §5 "TextInput").
+/// Role `TextInput` (→ accesskit `Role::TextInput`); verbs `{SetValue, Focus,
+/// Blur}` (`{Focus, Blur}` implicit via `Focusable`, so
+/// [`actions`](A11yContract::actions) lists only `SetValue`). State is the live
+/// [`A11yTextValue`](super::A11yTextValue) (synced from the editor's
+/// `TextEditState`) + [`A11yPlaceholder`](super::A11yPlaceholder).
+///
+/// **Unlike the toggle widgets, it does NOT lower through `OnPress`** — `SetValue`
+/// changes the *text*, so `honor` lowers into the editor through the existing
+/// `SelectAll` + `Insert` channel (`honor_text_set_value`); the next frame's
+/// `sync_text_input_a11y` reflects the new value into `A11yTextValue`, which the
+/// outbound fold re-emits. The selection verbs (`SetTextSelection`,
+/// `ReplaceSelectedText`) are deferred (co-drive §3.2).
+///
+/// A zero-sized marker, not a Bevy `Component`: keyed by role in [`contract_for`].
+pub struct TextInputContract;
+
+impl A11yContract for TextInputContract {
+    fn role() -> A11yRole {
+        A11yRole::TextInput
+    }
+
+    fn actions() -> &'static [Action] {
+        TEXT_INPUT_ACTIONS
+    }
+
+    fn honor(
+        world: &mut World,
+        entity: Entity,
+        action: Action,
+        data: Option<&ActionData>,
+    ) -> Result<(), ActionError> {
+        match action {
+            Action::SetValue => honor_text_set_value(world, entity, action, data),
+            // Any other verb is not advertised; the router rejects it at the §3
+            // filter before `honor`, so reaching here is dead code, reported (not
+            // panicked) as `Unsupported`.
+            _ => Err(ActionError::Unsupported {
+                target: super::translate::node_id_for(entity),
+                action,
+            }),
+        }
+    }
+}
+
+/// The **MultilineTextInput** contract (widget-contracts.md §5 "TextInput", the
+/// multi-line half of the role split). Role `MultilineTextInput` (→ accesskit
+/// `Role::MultilineTextInput`); verbs `{SetValue, Focus, Blur}`. Identical
+/// behavior to [`TextInputContract`] — the role split is only an addressing
+/// distinction (so an AT/agent can tell a single-line field from a multi-line
+/// one); the lowering is the SAME shared `honor_text_set_value` (a multi-line
+/// input carries no `SingleLine` marker, so its `SetValue` keeps embedded
+/// newlines). No multiline-specific editor behavior is built here (co-drive
+/// ledger: the multiline-specific behavior is deferred; only the correct role
+/// assignment completes the split).
+///
+/// A zero-sized marker, not a Bevy `Component`: keyed by role in [`contract_for`].
+pub struct MultilineTextInputContract;
+
+impl A11yContract for MultilineTextInputContract {
+    fn role() -> A11yRole {
+        A11yRole::MultilineTextInput
+    }
+
+    fn actions() -> &'static [Action] {
+        TEXT_INPUT_ACTIONS
+    }
+
+    fn honor(
+        world: &mut World,
+        entity: Entity,
+        action: Action,
+        data: Option<&ActionData>,
+    ) -> Result<(), ActionError> {
+        match action {
+            Action::SetValue => honor_text_set_value(world, entity, action, data),
+            _ => Err(ActionError::Unsupported {
+                target: super::translate::node_id_for(entity),
+                action,
+            }),
         }
     }
 }

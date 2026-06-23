@@ -30,7 +30,7 @@
 use bevy::ecs::hierarchy::Children;
 use bevy::picking::Pickable;
 use bevy::scene::{Scene, bsn, template_value};
-use buiy_core::a11y::{A11yLabel, A11yOrientation, A11yValue, Orientation};
+use buiy_core::a11y::{A11yLabel, A11yOrientation, A11yRole, A11yValue, Orientation};
 use buiy_core::components::Node;
 use buiy_core::layout::Translate;
 use buiy_core::render::components::{Background, Border, CssVisibility, TextColor};
@@ -118,10 +118,18 @@ fn text_input_base(placeholder: impl Into<String>) -> impl Scene {
 
 /// A single-line text input as a composable BSN scene (Enter ⇒ Submit, the
 /// `SingleLine` policy). Mirrors `TextInput::single_line`. Mergeable.
+///
+/// Layers the single-line **role** override (`A11yRole::TextInput`) on top of the
+/// shared base — the bare marker / `text_input_multi_line` path defaults to
+/// `A11yRole::MultilineTextInput` (the role split IS the multiline distinction,
+/// widget-contracts.md §5). `A11yRole` is a fieldless enum variant, which the bsn
+/// field-patch path does not author, so it is inserted as a whole value
+/// (`template_value`).
 pub fn text_input_single_line(placeholder: impl Into<String>) -> impl Scene {
     bsn! {
         { text_input_base(placeholder) }
         SingleLine
+        template_value(A11yRole::TextInput)
     }
 }
 
