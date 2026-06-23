@@ -26,7 +26,8 @@ use buiy_core::render::components::Background;
 use buiy_core::text::edit::{Placeholder, SingleLine, TextEditState};
 use buiy_widgets::WidgetsPlugin;
 use buiy_widgets::scene::{
-    button, checkbox, disclosure, slider, switch, text_input_multi_line, text_input_single_line,
+    button, checkbox, dialog, disclosure, slider, switch, text_input_multi_line,
+    text_input_single_line, tooltip_trigger,
 };
 use std::borrow::Cow;
 
@@ -442,5 +443,159 @@ fn disclosure_scene_fn_builds_contract_children_and_wires_controls() {
         world.get::<A11yRelations>(id).map(|r| r.controls.clone()),
         Some(vec![panel]),
         "the scene-fn trigger's A11yRelations.controls references the panel"
+    );
+}
+
+/// The `dialog(title, body)` scene-fn builds the full container contract (role
+/// `Dialog` + `A11yModal`) and its title + body children: the title a `Heading`,
+/// the body a `Text`, both `Pickable::IGNORE` (pick-through), and the
+/// `A11yRelations.labelled_by`/`described_by` edges wired to them.
+#[test]
+fn dialog_scene_fn_builds_contract_children_and_wires_labelling() {
+    use bevy::ecs::hierarchy::Children;
+    use bevy::picking::Pickable;
+    use buiy_core::a11y::{A11yModal, A11yRelations};
+    use buiy_widgets::dialog::{DialogBody, DialogTitle};
+
+    let mut app = scene_test_app();
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! { dialog("Delete?", "This cannot be undone.") })
+        .expect("spawn_scene")
+        .id();
+    app.update();
+
+    let world = app.world();
+    assert_eq!(
+        world.get::<A11yRole>(id).copied(),
+        Some(A11yRole::Dialog),
+        "scene-fn root is a Dialog"
+    );
+    assert!(
+        world.get::<A11yModal>(id).is_some(),
+        "the dialog carries A11yModal"
+    );
+
+    let children: Vec<Entity> = world
+        .get::<Children>(id)
+        .expect("children")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(children.len(), 2, "title + body children");
+
+    let title = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<DialogTitle>(c).is_some())
+        .expect("one DialogTitle child");
+    let body = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<DialogBody>(c).is_some())
+        .expect("one DialogBody child");
+
+    // The decorative title/body are pick-through.
+    assert_eq!(
+        world.get::<Pickable>(title).copied(),
+        Some(Pickable::IGNORE),
+        "the decorative title is Pickable::IGNORE"
+    );
+    assert_eq!(
+        world.get::<Pickable>(body).copied(),
+        Some(Pickable::IGNORE),
+        "the decorative body is Pickable::IGNORE"
+    );
+    assert_eq!(
+        world.get::<A11yRole>(title).copied(),
+        Some(A11yRole::Heading),
+        "the title is an A11yRole::Heading"
+    );
+
+    // The labelling edges were wired (the scene path relies on
+    // `wire_dialog_relations`, which ran in the `app.update()` above).
+    let relations = world.get::<A11yRelations>(id).expect("A11yRelations");
+    assert_eq!(
+        relations.labelled_by,
+        vec![title],
+        "the scene-fn dialog's labelled_by references the title"
+    );
+    assert_eq!(
+        relations.described_by,
+        vec![body],
+        "the scene-fn dialog's described_by references the body"
+    );
+}
+
+/// The `tooltip_trigger(label, tip)` scene-fn builds the full trigger contract
+/// (neutral role `Generic` + the state-keyed `A11yTooltipHost`) and its tooltip
+/// child: a real `A11yRole::Tooltip` node, `Pickable::IGNORE` (pick-through),
+/// starting `CssVisibility::Hidden`, with `A11yRelations.described_by` wired to it.
+#[test]
+fn tooltip_trigger_scene_fn_builds_contract_child_and_wires_described_by() {
+    use bevy::ecs::hierarchy::Children;
+    use bevy::picking::Pickable;
+    use buiy_core::a11y::{A11yRelations, A11yTooltipHost};
+    use buiy_core::render::components::CssVisibility;
+    use buiy_widgets::tooltip::TooltipNode;
+
+    let mut app = scene_test_app();
+    let id = app
+        .world_mut()
+        .spawn_scene(bsn! { tooltip_trigger("Help", "More info here") })
+        .expect("spawn_scene")
+        .id();
+    app.update();
+
+    let world = app.world();
+    assert_eq!(
+        world.get::<A11yRole>(id).copied(),
+        Some(A11yRole::Generic),
+        "scene-fn root is a neutral Generic trigger (tooltip verbs ride the marker)"
+    );
+    assert!(
+        world.get::<A11yTooltipHost>(id).is_some(),
+        "the trigger carries A11yTooltipHost (the state-keyed capability)"
+    );
+    assert_eq!(world.get::<A11yLabel>(id).expect("A11yLabel").0, "Help");
+
+    let children: Vec<Entity> = world
+        .get::<Children>(id)
+        .expect("children")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(children.len(), 1, "one tooltip child");
+
+    let tooltip = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<TooltipNode>(c).is_some())
+        .expect("one TooltipNode child");
+
+    assert_eq!(
+        world.get::<A11yRole>(tooltip).copied(),
+        Some(A11yRole::Tooltip),
+        "the tooltip child is an A11yRole::Tooltip"
+    );
+    assert_eq!(
+        world.get::<CssVisibility>(tooltip).copied(),
+        Some(CssVisibility::Hidden),
+        "the tooltip starts hidden"
+    );
+    assert_eq!(
+        world.get::<Pickable>(tooltip).copied(),
+        Some(Pickable::IGNORE),
+        "the decorative tooltip is Pickable::IGNORE"
+    );
+
+    // The described_by edge was wired (the scene path relies on
+    // `wire_tooltip_described_by`, which ran in the `app.update()` above).
+    assert_eq!(
+        world
+            .get::<A11yRelations>(id)
+            .map(|r| r.described_by.clone()),
+        Some(vec![tooltip]),
+        "the scene-fn trigger's described_by references the tooltip"
     );
 }

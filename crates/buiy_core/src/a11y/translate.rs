@@ -194,6 +194,21 @@ pub fn to_accesskit_node(view: &A11yNodeView) -> Node {
         node.add_action(accesskit::Action::Expand);
         node.add_action(accesskit::Action::Collapse);
     }
+    // 4. A second **state-keyed** capability (widget-contracts.md §5
+    //    "Tooltip-trigger"): any node carrying `A11yTooltipHost` advertises
+    //    `{ShowTooltip, HideTooltip}` — in addition to its role's contract verbs.
+    //    A tooltip trigger keeps its existing role (a Button, an icon, an input);
+    //    hosting a tooltip is modelled as this reusable state-driven capability,
+    //    not a new role. The inbound router honors these two verbs generically for
+    //    any `A11yTooltipHost` entity (action.rs — it shows/hides the trigger's
+    //    `described_by` tooltip node), so advertise and honor stay in lockstep.
+    //    Keyed on `view.tooltip_host` (the projection of the marker's presence).
+    //    Unlike the expanded/value/etc. arms there is NO node-property setter here
+    //    (AccessKit has no "is a tooltip host" property) — only the advertisement.
+    if view.tooltip_host {
+        node.add_action(accesskit::Action::ShowTooltip);
+        node.add_action(accesskit::Action::HideTooltip);
+    }
     node
 }
 

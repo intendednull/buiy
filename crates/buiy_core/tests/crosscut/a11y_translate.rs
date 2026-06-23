@@ -270,6 +270,46 @@ fn expand_collapse_are_state_keyed_not_role_keyed() {
     assert_advertises_exactly(&node, &[Expand, Collapse, Focus, Blur]);
 }
 
+#[test]
+fn tooltip_trigger_advertises_show_hide_tooltip_focus_blur() {
+    use accesskit::Action::{Blur, Focus, HideTooltip, ShowTooltip};
+    // GATE #3 (slice-5): a tooltip trigger is a focusable node carrying
+    // `A11yTooltipHost` (the view's `tooltip_host` projection) and a NEUTRAL role
+    // (Generic, no role contract). It advertises the Focusable `{Focus, Blur}` AND
+    // — keyed on the `A11yTooltipHost` state, not the role — `{ShowTooltip,
+    // HideTooltip}`, and NO `Click` (the neutral role contributes no activation).
+    let view = A11yNodeView {
+        entity: Entity::from_raw_u32(7).unwrap(),
+        role: A11yRole::Generic,
+        name: "Help".into(),
+        focusable: true,
+        tooltip_host: true,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert_advertises_exactly(&node, &[ShowTooltip, HideTooltip, Focus, Blur]);
+}
+
+#[test]
+fn show_hide_tooltip_are_state_keyed_not_role_keyed() {
+    use accesskit::Action::{Click, HideTooltip, ShowTooltip};
+    // The ShowTooltip/HideTooltip advertisement is keyed on `A11yTooltipHost` (the
+    // view's `tooltip_host`), NOT a role — so a Button that ALSO hosts a tooltip
+    // advertises BOTH its Click contract AND the tooltip verbs (the capability
+    // layers on the role, like Expand/Collapse). A non-focusable Button is used to
+    // isolate the role-contract + state-keyed contributions from the Focusable ones.
+    let view = A11yNodeView {
+        entity: Entity::from_raw_u32(8).unwrap(),
+        role: A11yRole::Button,
+        name: "Iconbtn".into(),
+        focusable: false,
+        tooltip_host: true,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert_advertises_exactly(&node, &[Click, ShowTooltip, HideTooltip]);
+}
+
 // ---------------------------------------------------------------------------
 // P1a first-batch decomposed-state — PRODUCER-tier fixtures.
 //

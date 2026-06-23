@@ -1059,3 +1059,162 @@ fn dispatch_set_value_on_read_only_text_input_is_not_actionable() {
         "a read-only field is never mutated"
     );
 }
+
+// ---------------------------------------------------------------------------
+// GATE #3 / driver — the TOOLTIP-TRIGGER state-keyed Show/HideTooltip capability
+// (slice-5, widget-contracts.md §5 "Tooltip-trigger"). A tooltip trigger carries
+// `A11yTooltipHost` (the state-keyed capability — NOT a role) + a `described_by`
+// edge to its `A11yRole::Tooltip` node. The router honors ShowTooltip/HideTooltip
+// GENERICALLY: it flips the described tooltip node's `CssVisibility`. These pin:
+// ShowTooltip shows (Visible) / HideTooltip hides (Hidden) the tooltip, both
+// idempotent; a disabled trigger drops them; a ShowTooltip on a non-host node is
+// Unsupported (state-keyed, not role-keyed).
+// ---------------------------------------------------------------------------
+
+use buiy_core::a11y::{A11yRelations, A11yTooltipHost};
+use buiy_core::render::components::CssVisibility;
+
+/// Spawn a tooltip-trigger + its (hidden) Tooltip node, returning
+/// `(trigger, tooltip)`. The trigger carries the state-keyed `A11yTooltipHost` +
+/// `described_by = [tooltip]`; the tooltip starts `CssVisibility::Hidden`.
+fn tooltip_trigger(app: &mut App) -> (Entity, Entity) {
+    let tooltip = app
+        .world_mut()
+        .spawn((A11yRole::Tooltip, CssVisibility::Hidden))
+        .id();
+    let trigger = app
+        .world_mut()
+        .spawn((
+            A11yRole::Generic,
+            A11yTooltipHost,
+            buiy_core::focus::Focusable::default(),
+            A11yRelations {
+                described_by: vec![tooltip],
+                ..Default::default()
+            },
+        ))
+        .id();
+    app.update();
+    (trigger, tooltip)
+}
+
+fn visibility_of(app: &App, e: Entity) -> CssVisibility {
+    app.world().get::<CssVisibility>(e).copied().unwrap()
+}
+
+#[test]
+fn dispatch_show_tooltip_shows_the_described_tooltip() {
+    let mut app = setup();
+    let (trigger, tooltip) = tooltip_trigger(&mut app);
+    assert_eq!(visibility_of(&app, tooltip), CssVisibility::Hidden);
+
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(trigger), Action::ShowTooltip),
+    )
+    .unwrap();
+    assert_eq!(
+        visibility_of(&app, tooltip),
+        CssVisibility::Visible,
+        "ShowTooltip flips the described tooltip node Hidden → Visible (generic honor)"
+    );
+
+    // Idempotent: ShowTooltip on an already-shown tooltip stays Visible (success).
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(trigger), Action::ShowTooltip),
+    )
+    .unwrap();
+    assert_eq!(
+        visibility_of(&app, tooltip),
+        CssVisibility::Visible,
+        "ShowTooltip on an already-visible tooltip is an idempotent no-op"
+    );
+}
+
+#[test]
+fn dispatch_hide_tooltip_hides_the_described_tooltip() {
+    let mut app = setup();
+    let (trigger, tooltip) = tooltip_trigger(&mut app);
+    // Start it visible, then hide.
+    app.world_mut().get_mut::<CssVisibility>(tooltip).unwrap();
+    *app.world_mut().get_mut::<CssVisibility>(tooltip).unwrap() = CssVisibility::Visible;
+
+    dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(trigger), Action::HideTooltip),
+    )
+    .unwrap();
+    assert_eq!(
+        visibility_of(&app, tooltip),
+        CssVisibility::Hidden,
+        "HideTooltip flips the described tooltip node Visible → Hidden"
+    );
+}
+
+#[test]
+fn dispatch_show_tooltip_on_disabled_trigger_is_not_actionable() {
+    // Show/HideTooltip are ACTIONABLE verbs (unlike Focus/Blur), so the disabled
+    // live filter drops them.
+    let mut app = setup();
+    let tooltip = app
+        .world_mut()
+        .spawn((A11yRole::Tooltip, CssVisibility::Hidden))
+        .id();
+    let trigger = app
+        .world_mut()
+        .spawn((
+            A11yRole::Generic,
+            A11yTooltipHost,
+            A11yDisabled,
+            A11yRelations {
+                described_by: vec![tooltip],
+                ..Default::default()
+            },
+        ))
+        .id();
+    app.update();
+
+    let res = dispatch_action_request(
+        app.world_mut(),
+        &request(node_id_for(trigger), Action::ShowTooltip),
+    );
+    assert_eq!(
+        res,
+        Err(ActionError::NotActionable {
+            target: node_id_for(trigger),
+            action: Action::ShowTooltip,
+            reason: NotActionableReason::Disabled,
+        }),
+        "A11yDisabled drops the actionable ShowTooltip verb"
+    );
+    assert_eq!(
+        visibility_of(&app, tooltip),
+        CssVisibility::Hidden,
+        "a disabled trigger never shows its tooltip"
+    );
+}
+
+#[test]
+fn dispatch_show_tooltip_on_non_host_is_unsupported() {
+    // A plain Button (no A11yTooltipHost) does NOT advertise ShowTooltip — the
+    // capability is state-keyed, so without the marker it is Unsupported.
+    let mut app = setup();
+    let btn = app
+        .world_mut()
+        .spawn((A11yRole::Button, buiy_core::focus::Focusable::default()))
+        .id();
+    app.update();
+
+    assert_eq!(
+        dispatch_action_request(
+            app.world_mut(),
+            &request(node_id_for(btn), Action::ShowTooltip)
+        ),
+        Err(ActionError::Unsupported {
+            target: node_id_for(btn),
+            action: Action::ShowTooltip,
+        }),
+        "ShowTooltip on a node without A11yTooltipHost is Unsupported (state-keyed capability)"
+    );
+}

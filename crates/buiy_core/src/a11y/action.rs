@@ -22,11 +22,13 @@
 //! is lowered through the role's [`A11yContract::honor`](super::A11yContract).
 
 use crate::a11y::contract::{ActionError, NotActionableReason};
-use crate::a11y::states::{A11yDisabled, A11yExpanded, A11yReadOnly, A11yValue};
+use crate::a11y::relations::A11yRelations;
+use crate::a11y::states::{A11yDisabled, A11yExpanded, A11yReadOnly, A11yTooltipHost, A11yValue};
 use crate::a11y::translate::{entity_for_node_id, node_id_for};
 use crate::a11y::{A11yRole, contract_for};
 use crate::focus::{FocusVisible, FocusedEntity};
 use crate::interaction::OnPress;
+use crate::render::components::CssVisibility;
 use accesskit::{Action, ActionData, ActionRequest, TreeId};
 use bevy::a11y::ActionRequest as ActionRequestWrapper;
 use bevy::input::ButtonState;
@@ -63,6 +65,57 @@ fn is_expand_verb(action: Action) -> bool {
     matches!(action, Action::Expand | Action::Collapse)
 }
 
+/// Whether `action` is a **show/hide tooltip** verb — the state-keyed capability a
+/// node advertises by carrying [`A11yTooltipHost`] (widget-contracts.md §5
+/// "Tooltip-trigger"), honored **generically** here rather than through a role
+/// contract. A tooltip trigger keeps its existing role (a button/icon/input that
+/// happens to host a tooltip), so `{ShowTooltip, HideTooltip}` ride the marker —
+/// not the role — exactly like `{Expand, Collapse}` ride [`A11yExpanded`]. These
+/// are **actionable** verbs (unlike `Focus`/`Blur`): the disabled live filter
+/// drops them. They are **non-mutating** of value/text, so the read-only filter
+/// leaves them (showing/hiding a tooltip is not a value edit).
+fn is_tooltip_verb(action: Action) -> bool {
+    matches!(action, Action::ShowTooltip | Action::HideTooltip)
+}
+
+/// Show/hide the tooltip node(s) a trigger `described_by`-references, by writing
+/// each tooltip's [`CssVisibility`] to `want` (the generic `ShowTooltip`/
+/// `HideTooltip` honor, widget-contracts.md §5 "Tooltip-trigger").
+///
+/// The trigger's [`A11yRelations::described_by`] edge is the source of truth for
+/// "which node is this trigger's tooltip" — the same edge the outbound fold
+/// publishes as `aria-describedby`, so the AT/agent reads the relationship and
+/// drives the show/hide over it. A trigger with no `described_by` edge (a
+/// malformed tooltip-trigger) is a graceful no-op (nothing to show), never a
+/// panic. The write is gated on a real `CssVisibility` transition so a repaint
+/// (the `Changed<CssVisibility>` render-prep path) fires at most once per change.
+///
+/// **Sink-resource discipline** (action-router.md §6): a referenced node that has
+/// despawned, or carries no `CssVisibility`, is skipped — the honor still
+/// succeeds (the absolute set-verb is a no-op on an absent target). The minimal
+/// `CssVisibility` show/hide is this slice's scope; the placement/positioning +
+/// hover/focus auto-show timing geometry is C5 (Wave 4).
+fn set_described_tooltips_visibility(world: &mut World, trigger: Entity, want: CssVisibility) {
+    // Copy the `described_by` targets out so the `&A11yRelations` borrow ends
+    // before we mutate the tooltip nodes' `CssVisibility`.
+    let Some(targets) = world
+        .get::<A11yRelations>(trigger)
+        .map(|r| r.described_by.clone())
+    else {
+        return; // No relations component ⇒ no tooltip edge ⇒ nothing to show/hide.
+    };
+    for tooltip in targets {
+        if let Some(mut vis) = world.get_mut::<CssVisibility>(tooltip) {
+            // Only write through `DerefMut` on a real transition (idempotency): an
+            // absolute set-verb to the current state is a no-op, so no spurious
+            // `Changed<CssVisibility>` tick / repaint.
+            if *vis != want {
+                *vis = want;
+            }
+        }
+    }
+}
+
 /// Resolve, guard, and lower one inbound [`ActionRequest`] — the **headless
 /// dispatch seam** (action-router.md §5). Returns a typed [`ActionError`] on any
 /// failure, **never panics** (a stale ref, an unadvertised verb, a disabled /
@@ -76,20 +129,25 @@ fn is_expand_verb(action: Action) -> bool {
 ///    entity despawned) is [`ActionError::NotFound`].
 /// 2. **Capability.** Re-read the target's role + its [`contract_for`] advertised
 ///    set. A verb the role never advertises is [`ActionError::Unsupported`] —
-///    *unless* it is an `Expand`/`Collapse` and the node carries [`A11yExpanded`]
-///    (the state-keyed capability layered on the role, widget-contracts.md §5).
-///    `Focus`/`Blur` are always permitted on any live node (they ride
+///    *unless* it is an `Expand`/`Collapse` and the node carries [`A11yExpanded`],
+///    or a `ShowTooltip`/`HideTooltip` and the node carries [`A11yTooltipHost`]
+///    (the two state-keyed capabilities layered on the role, widget-contracts.md
+///    §5). `Focus`/`Blur` are always permitted on any live node (they ride
 ///    `Focusable` outbound and are honored generically here), so they bypass the
 ///    contract check.
 /// 3. **Live state.** An [`A11yDisabled`] instance drops every actionable verb
-///    ([`NotActionableReason::Disabled`]) — including `Expand`/`Collapse`;
-///    `Focus`/`Blur` stay allowed so the node remains addressable. A mutating verb
-///    (`SetValue`/`Increment`/… — `mutates_value_or_text`) on an [`A11yReadOnly`]
-///    instance is [`NotActionableReason::ReadOnly`].
+///    ([`NotActionableReason::Disabled`]) — including `Expand`/`Collapse` and
+///    `ShowTooltip`/`HideTooltip`; `Focus`/`Blur` stay allowed so the node remains
+///    addressable. A mutating verb (`SetValue`/`Increment`/… —
+///    `mutates_value_or_text`) on an [`A11yReadOnly`] instance is
+///    [`NotActionableReason::ReadOnly`] (the tooltip verbs are non-mutating, so
+///    the read-only filter leaves them).
 /// 4. **Dispatch.** `Focus`/`Blur` set/clear [`FocusedEntity`] generically;
 ///    `Expand`/`Collapse` set/clear [`A11yExpanded`] generically (the absolute
-///    set-verb, idempotent at the target state); every other verb is lowered
-///    through the role's [`A11yContract::honor`](super::A11yContract).
+///    set-verb, idempotent at the target state); `ShowTooltip`/`HideTooltip`
+///    show/hide the trigger's [`described_by`](A11yRelations) tooltip node's
+///    [`CssVisibility`] generically; every other verb is lowered through the
+///    role's [`A11yContract::honor`](super::A11yContract).
 pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result<(), ActionError> {
     let target = req.target_node;
     let action = req.action;
@@ -115,6 +173,13 @@ pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result
     // so the disabled live filter drops them.
     let expandable = world.get::<A11yExpanded>(entity).is_some();
 
+    // ShowTooltip/HideTooltip are the second state-keyed capability
+    // (widget-contracts.md §5 "Tooltip-trigger"): advertised + honored for any node
+    // carrying `A11yTooltipHost`, layered on the role rather than belonging to it.
+    // Honored generically below (show/hide the `described_by` tooltip node), and —
+    // like Expand/Collapse — actionable (the disabled filter drops them).
+    let tooltip_host = world.get::<A11yTooltipHost>(entity).is_some();
+
     // The live role drives the capability re-check AND the honor dispatch. Read
     // it once; a node with no `A11yRole` defaults to `Generic` (no contract).
     let role = world.get::<A11yRole>(entity).copied().unwrap_or_default();
@@ -128,7 +193,8 @@ pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result
     if !is_focus_verb {
         let advertised_by_role =
             contract_for(role).is_some_and(|entry| entry.actions.contains(&action));
-        let advertised_by_state = is_expand_verb(action) && expandable;
+        let advertised_by_state =
+            (is_expand_verb(action) && expandable) || (is_tooltip_verb(action) && tooltip_host);
         if !advertised_by_role && !advertised_by_state {
             return Err(ActionError::Unsupported { target, action });
         }
@@ -201,6 +267,29 @@ pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result
             if expanded.0 != want {
                 expanded.0 = want;
             }
+            Ok(())
+        }
+        // ShowTooltip/HideTooltip are honored GENERICALLY (state-keyed,
+        // widget-contracts.md §5 "Tooltip-trigger"): show/hide the trigger's
+        // `described_by` tooltip node by writing its `CssVisibility`
+        // (`Visible`/`Hidden`). The capability gate above already guaranteed the
+        // node carries `A11yTooltipHost`, but stay total — a missing marker here is
+        // `Unsupported`, never a panic. The minimal show/hide IS the slice's scope;
+        // the placement/positioning + hover/focus auto-show timing geometry is C5
+        // (Wave 4). Setting an already-visible tooltip visible (or hiding an
+        // already-hidden one) is an **idempotent no-op success** (the set-verb is
+        // absolute, not a toggle), and the `Changed<CssVisibility>` write is gated
+        // on a real transition so a repaint fires at most once per actual change.
+        Action::ShowTooltip | Action::HideTooltip => {
+            if world.get::<A11yTooltipHost>(entity).is_none() {
+                return Err(ActionError::Unsupported { target, action });
+            }
+            let want = if action == Action::ShowTooltip {
+                CssVisibility::Visible
+            } else {
+                CssVisibility::Hidden
+            };
+            set_described_tooltips_visibility(world, entity, want);
             Ok(())
         }
         // Every other advertised verb lowers through the role's contract.

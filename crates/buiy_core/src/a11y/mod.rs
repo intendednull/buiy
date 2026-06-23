@@ -29,12 +29,13 @@ pub use adapter::AccessKitAdapterPlugin;
 pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
 pub use inprocess::{
     NodeState, SemanticNode, SemanticTree, StateQuery, click, expand, focus, get_by_role,
-    increment, perform, set_value, snapshot, wait_for,
+    hide_tooltip, increment, perform, set_value, show_tooltip, snapshot, wait_for,
 };
 pub use relations::A11yRelations;
 pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
-    A11yPlaceholder, A11yReadOnly, A11ySelected, A11yTextValue, A11yToggled, A11yValue,
+    A11yPlaceholder, A11yReadOnly, A11ySelected, A11yTextValue, A11yToggled, A11yTooltipHost,
+    A11yValue,
 };
 // Re-export the foreign `accesskit::Toggled` tri-state enum + `Orientation` so
 // downstream crates (e.g. `buiy_widgets`) can match on `A11yToggled.0` /
@@ -155,6 +156,11 @@ pub struct A11yNodeView {
     pub disabled: bool,
     /// Modal flag, projected from the [`A11yModal`] marker's presence.
     pub modal: bool,
+    /// Tooltip-host flag, projected from the [`A11yTooltipHost`] marker's
+    /// presence. **No node-property fold arm** (AccessKit has no such property);
+    /// it gates only the `{ShowTooltip, HideTooltip}` action advertisement in the
+    /// outbound fold (the state-keyed capability, widget-contracts.md §5).
+    pub tooltip_host: bool,
     /// Hidden flag, projected from the [`A11yHidden`] marker's presence. P1b's
     /// `build_tree` consumes it to **prune** the entity + its whole subtree, so a
     /// view carrying `hidden: true` is never emitted (it exists on the type only
@@ -223,6 +229,7 @@ impl Default for A11yNodeView {
             selected: None,
             disabled: false,
             modal: false,
+            tooltip_host: false,
             hidden: false,
             value: None,
             text_value: None,
@@ -266,6 +273,7 @@ impl Plugin for A11yPlugin {
             .register_type::<A11yDisabled>()
             .register_type::<A11yReadOnly>()
             .register_type::<A11yModal>()
+            .register_type::<A11yTooltipHost>()
             .register_type::<A11yHidden>()
             .register_type::<A11yValue>()
             .register_type::<A11yTextValue>()
@@ -344,6 +352,7 @@ pub(crate) struct A11yNodeQuery {
     selected: Option<&'static A11ySelected>,
     disabled: Option<&'static A11yDisabled>,
     modal: Option<&'static A11yModal>,
+    tooltip_host: Option<&'static A11yTooltipHost>,
     hidden: Option<&'static A11yHidden>,
     value: Option<&'static A11yValue>,
     text_value: Option<&'static A11yTextValue>,
@@ -451,6 +460,7 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             || n.selected.is_some()
             || n.disabled.is_some()
             || n.modal.is_some()
+            || n.tooltip_host.is_some()
             || n.hidden.is_some()
             || n.value.is_some()
             || n.text_value.is_some()
@@ -511,6 +521,7 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             selected: n.selected.map(|s| s.0),
             disabled: n.disabled.is_some(),
             modal: n.modal.is_some(),
+            tooltip_host: n.tooltip_host.is_some(),
             hidden: n.hidden.is_some(),
             // The valued-range and live components clone whole (multi-field); the
             // text/placeholder newtypes project their inner `String`; the two

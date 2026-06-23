@@ -42,6 +42,10 @@ use crate::checkbox::{
     CHECK_GLYPH, CHECKBOX_MARK_FONT_SIZE, Checkbox, CheckboxMark, checkbox_background,
     checkbox_border, checkbox_box_model,
 };
+use crate::dialog::{
+    DIALOG_BODY_FONT_SIZE, DIALOG_TITLE_FONT_SIZE, Dialog, DialogBody, DialogTitle,
+    dialog_background, dialog_border, dialog_box_model,
+};
 use crate::disclosure::{
     CARET_GLYPH, DISCLOSURE_FONT_SIZE, Disclosure, DisclosureCaret, DisclosurePanel,
     caret_rotation_collapsed, disclosure_background, disclosure_border, disclosure_box_model,
@@ -58,6 +62,10 @@ use crate::switch::{
 };
 use crate::text_input::{
     TextInput, text_input_background, text_input_border, text_input_box_model, text_input_overflow,
+};
+use crate::tooltip::{
+    TOOLTIP_FONT_SIZE, TooltipNode, TooltipTrigger, tooltip_background, tooltip_box_model,
+    tooltip_trigger_background, tooltip_trigger_border, tooltip_trigger_box_model,
 };
 use buiy_core::layout::{BoxModel, Length, Overflow};
 use buiy_core::text::edit::SingleLine;
@@ -393,6 +401,119 @@ pub fn disclosure(label: impl Into<String>) -> impl Scene {
                 // The panel starts hidden (default expanded is `false`);
                 // `update_disclosure_visual` reveals it on the first flip.
                 template_value(CssVisibility::Hidden)
+            ),
+        ]
+    }
+}
+
+/// A titled + described dialog as a composable BSN scene (Wave-3 slice-5).
+/// Mergeable: the `Dialog` marker triggers the full `#[require]` contract (role
+/// `Dialog` + `A11yModal` + the panel box), and the field-patches layer the
+/// canonical panel style. The `Children [ … ]` subtree authors the **title**
+/// (`A11yRole::Heading`, the label source) and the **body** (`A11yRole::Text`, the
+/// description source), both `Pickable::IGNORE` (pick-through — decorative text).
+///
+/// The dialog's `A11yRelations.labelled_by = [title]` / `described_by = [body]`
+/// are wired by `wire_dialog_relations` once the children exist (the title/body
+/// entities are unknown at authoring time, so neither the bundle nor the scene
+/// can spell them).
+///
+/// **No open/close/focus-trap** — the live show/hide + trap is C5 (Wave 4); this
+/// is the static a11y shape only.
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { dialog("Delete?", "This cannot be undone.") });
+/// ```
+pub fn dialog(title: impl Into<String>, body: impl Into<String>) -> impl Scene {
+    let bm = dialog_box_model();
+    let bg = dialog_background();
+    let border = dialog_border();
+    let title = title.into();
+    let body = body.into();
+    bsn! {
+        Dialog
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        Children [
+            (
+                DialogTitle
+                Text({ title.clone() })
+                FontSize({ DIALOG_TITLE_FONT_SIZE })
+                A11yLabel({ title })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+            (
+                DialogBody
+                Text({ body.clone() })
+                FontSize({ DIALOG_BODY_FONT_SIZE })
+                A11yLabel({ body })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+        ]
+    }
+}
+
+/// A labelled tooltip trigger + its tooltip as a composable BSN scene (Wave-3
+/// slice-5). Mergeable: the `TooltipTrigger` marker triggers the full `#[require]`
+/// contract (the `A11yTooltipHost` capability + a neutral `A11yRole::Generic` +
+/// focus + a11y + the trigger box), and the field-patches layer the canonical
+/// trigger style. The `Children [ … ]` subtree authors the controlled **tooltip**
+/// node (`A11yRole::Tooltip`, `Pickable::IGNORE`), which starts
+/// `CssVisibility::Hidden`; the router's generic `ShowTooltip`/`HideTooltip` honor
+/// flips its `CssVisibility`.
+///
+/// The trigger's `A11yRelations.described_by = [tooltip]` is wired by
+/// `wire_tooltip_described_by` once the children exist (the tooltip entity is
+/// unknown at authoring time). The trigger advertises `{ShowTooltip, HideTooltip,
+/// Focus, Blur}` — NO `Click` (the neutral role contributes no activation verb).
+///
+/// **No placement / auto-show timing** — that is C5 (Wave 4); this is the static
+/// a11y shape + the minimal `CssVisibility` show/hide only.
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { tooltip_trigger("?", "More info here") });
+/// ```
+pub fn tooltip_trigger(label: impl Into<String>, tip: impl Into<String>) -> impl Scene {
+    let bm = tooltip_trigger_box_model();
+    let bg = tooltip_trigger_background();
+    let border = tooltip_trigger_border();
+    let tip_bm = tooltip_box_model();
+    let tip_bg = tooltip_background();
+    let label = label.into();
+    let tip = tip.into();
+    bsn! {
+        TooltipTrigger
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        A11yLabel({ label })
+        Children [
+            (
+                TooltipNode
+                Text({ tip.clone() })
+                FontSize({ TOOLTIP_FONT_SIZE })
+                A11yLabel({ tip })
+                BoxModel {
+                    width: { tip_bm.width },
+                    height: { tip_bm.height },
+                }
+                Background { color: { tip_bg.color } }
+                template_value(TextColor::default())
+                // The tooltip starts hidden; the router's ShowTooltip/HideTooltip
+                // honor flips this `CssVisibility`.
+                template_value(CssVisibility::Hidden)
+                template_value(Pickable::IGNORE)
             ),
         ]
     }

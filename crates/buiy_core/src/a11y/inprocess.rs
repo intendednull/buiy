@@ -377,6 +377,21 @@ pub fn expand(world: &mut World, target: NodeId) -> Result<SemanticTree, ActionE
     perform(world, Action::Expand, target, None)
 }
 
+/// Show `target`'s tooltip (`Action::ShowTooltip`, no data) — sugar over
+/// [`perform`]. The router lowers this generically over the trigger's
+/// `described_by` tooltip node (it shows the tooltip's
+/// [`CssVisibility`](crate::render::components::CssVisibility)). Surfaces
+/// [`ActionError::Unsupported`] on a node without `A11yTooltipHost`.
+pub fn show_tooltip(world: &mut World, target: NodeId) -> Result<SemanticTree, ActionError> {
+    perform(world, Action::ShowTooltip, target, None)
+}
+
+/// Hide `target`'s tooltip (`Action::HideTooltip`, no data) — sugar over
+/// [`perform`]. The generic counterpart of [`show_tooltip`].
+pub fn hide_tooltip(world: &mut World, target: NodeId) -> Result<SemanticTree, ActionError> {
+    perform(world, Action::HideTooltip, target, None)
+}
+
 /// Set `target`'s text value (`Action::SetValue` carrying the string) — sugar
 /// over [`perform`]. The router lowers this through the **existing**
 /// `SelectAll` + `Insert` editor channel (co-drive §3.1 / §6 text set-channel

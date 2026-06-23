@@ -108,6 +108,26 @@ pub struct A11yReadOnly;
 #[reflect(Component)]
 pub struct A11yModal;
 
+/// **Tooltip-host marker** — the state-keyed capability that makes a node a
+/// *tooltip trigger* (widget-contracts.md §5 "Tooltip-trigger"). Its presence —
+/// **not** a dedicated role — is what advertises `{ShowTooltip, HideTooltip}`
+/// (the outbound fold) and what the inbound router honors generically (it shows/
+/// hides the trigger's `A11yRelations.described_by` tooltip node). This mirrors
+/// the [`A11yExpanded`]-keyed `{Expand, Collapse}` disclosure capability: keying
+/// the verbs on a tiny marker rather than a bespoke role keeps `contract_for`
+/// role-keyed and the capability reusable by any element that hosts a tooltip
+/// (a button, an icon, an input — whatever role it already carries).
+///
+/// Unlike [`A11yExpanded`] this carries **no AccessKit setter** — there is no
+/// "is a tooltip host" node property in AccessKit; the trigger's relationship to
+/// its tooltip is the `described_by` edge, and the *tooltip* node is the
+/// `Tooltip`-role node. So this marker contributes only the `{ShowTooltip,
+/// HideTooltip}` advertisement + the generic honor, never a node-property fold
+/// arm. Its presence projects to [`A11yNodeView::tooltip_host`](super::A11yNodeView).
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct A11yTooltipHost;
+
 /// Hidden marker — **carried only** in Phase 1a.
 ///
 /// In the final design (semantic-tree.md §7.4) `A11yHidden` is **not** a node

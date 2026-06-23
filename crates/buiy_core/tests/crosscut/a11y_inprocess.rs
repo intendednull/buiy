@@ -828,3 +828,245 @@ fn wait_for_times_out_when_condition_never_holds() {
         "a never-true condition exhausts the frame budget and times out"
     );
 }
+
+// ---------------------------------------------------------------------------
+// GATE #3 — Dialog SHAPE (slice-5, widget-contracts.md §5 "Dialog"). A dialog is
+// `A11yRole::Dialog` + `A11yModal` (modal flag) + `labelled_by = [title]` /
+// `described_by = [body]`; the INVOKER is a Button advertising {Click} +
+// `controls = [dialog]`. Read back through the in-process consumer (the C7 tier —
+// `is_modal()` + the resolved relation refs). No open/close/focus-trap is built
+// (C5, Wave 4) — only the static a11y shape + relations.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dialog_shape_role_modal_labelling_and_invoker_controls() {
+    use buiy_core::a11y::{A11yModal, A11yRelations};
+
+    let mut app = setup();
+    // The dialog's labelling targets (title labels it, body describes it).
+    let title = app
+        .world_mut()
+        .spawn((A11yRole::Heading, A11yLabel("Delete?".into())))
+        .id();
+    let body = app
+        .world_mut()
+        .spawn((A11yRole::Text, A11yLabel("This cannot be undone.".into())))
+        .id();
+    let dialog = app
+        .world_mut()
+        .spawn((
+            A11yRole::Dialog,
+            A11yModal,
+            A11yRelations {
+                labelled_by: vec![title],
+                described_by: vec![body],
+                ..Default::default()
+            },
+        ))
+        .id();
+    // The invoker: a Button that controls the dialog (advertises {Click}).
+    let invoker = app
+        .world_mut()
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Delete".into()),
+            Focusable::default(),
+            A11yRelations {
+                controls: vec![dialog],
+                ..Default::default()
+            },
+        ))
+        .id();
+    app.update();
+
+    let tree = snapshot(app.world_mut(), TreeView::default());
+
+    // The dialog node: role=Dialog, modal, labelled_by=[title], described_by=[body].
+    let dialog_node = tree.node(node_id_for(dialog)).expect("dialog in tree");
+    assert_eq!(
+        dialog_node.role,
+        A11yRole::Dialog,
+        "the container role is Dialog"
+    );
+    assert!(
+        dialog_node.state.modal,
+        "the dialog carries A11yModal (modal flag, read back through the consumer)"
+    );
+    assert_eq!(
+        dialog_node.labelled_by,
+        vec![node_id_for(title)],
+        "the dialog is labelled_by its title"
+    );
+    assert_eq!(
+        dialog_node.described_by,
+        vec![node_id_for(body)],
+        "the dialog is described_by its body"
+    );
+
+    // The invoker: role=Button, advertises {Click}, controls=[dialog].
+    let invoker_node = tree.node(node_id_for(invoker)).expect("invoker in tree");
+    assert_eq!(
+        invoker_node.role,
+        A11yRole::Button,
+        "the invoker is a Button"
+    );
+    assert!(
+        invoker_node.actions.contains(&accesskit::Action::Click),
+        "the invoker advertises Click (the Button contract)"
+    );
+    assert_eq!(
+        invoker_node.controls,
+        vec![node_id_for(dialog)],
+        "the invoker controls the dialog"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GATE #3 / driver — Tooltip-trigger (slice-5, widget-contracts.md §5). A tooltip
+// trigger carries `A11yTooltipHost` (state-keyed) + `described_by = [tooltip]`; it
+// advertises {ShowTooltip, HideTooltip, Focus, Blur} (NO Click — neutral role).
+// The driver exercises get_by_role → perform(ShowTooltip) shows the tooltip
+// (CssVisibility::Visible, observed on the live component), HideTooltip hides it;
+// the tooltip node is Role::Tooltip; and ShowTooltip on a non-trigger is
+// Unsupported (a typed Err, never a panic).
+// ---------------------------------------------------------------------------
+
+/// Spawn a tooltip-trigger + its (hidden) Tooltip node, returning
+/// `(trigger, tooltip)`. The trigger carries `A11yTooltipHost` + `described_by`.
+fn tooltip_trigger(app: &mut App, name: &str) -> (Entity, Entity) {
+    use buiy_core::a11y::{A11yRelations, A11yTooltipHost};
+    use buiy_core::render::components::CssVisibility;
+
+    let tooltip = app
+        .world_mut()
+        .spawn((
+            A11yRole::Tooltip,
+            A11yLabel(format!("{name} tip")),
+            CssVisibility::Hidden,
+        ))
+        .id();
+    let trigger = app
+        .world_mut()
+        .spawn((
+            A11yRole::Generic,
+            A11yLabel(name.into()),
+            A11yTooltipHost,
+            Focusable::default(),
+            A11yRelations {
+                described_by: vec![tooltip],
+                ..Default::default()
+            },
+        ))
+        .id();
+    app.update();
+    (trigger, tooltip)
+}
+
+#[test]
+fn tooltip_trigger_advertises_show_hide_tooltip_and_describes_tooltip() {
+    // GATE #3: the trigger advertises {ShowTooltip, HideTooltip, Focus, Blur} (NO
+    // Click) + described_by=[tooltip]; the tooltip node is Role::Tooltip.
+    let mut app = setup();
+    let (trigger, tooltip) = tooltip_trigger(&mut app, "Help");
+
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    let node = tree.node(node_id_for(trigger)).expect("trigger in tree");
+    for action in [
+        accesskit::Action::ShowTooltip,
+        accesskit::Action::HideTooltip,
+        accesskit::Action::Focus,
+        accesskit::Action::Blur,
+    ] {
+        assert!(
+            node.actions.contains(&action),
+            "the tooltip trigger advertises {action:?}"
+        );
+    }
+    assert!(
+        !node.actions.contains(&accesskit::Action::Click),
+        "the tooltip trigger does NOT advertise Click (neutral role, no activation)"
+    );
+    assert_eq!(
+        node.described_by,
+        vec![node_id_for(tooltip)],
+        "the trigger is described_by its tooltip"
+    );
+    let tip = tree.node(node_id_for(tooltip)).expect("tooltip in tree");
+    assert_eq!(tip.role, A11yRole::Tooltip, "the tooltip node is a Tooltip");
+}
+
+#[test]
+fn driver_show_then_hide_tooltip_flips_visibility() {
+    use buiy_core::render::components::CssVisibility;
+
+    let mut app = setup();
+    let (trigger, tooltip) = tooltip_trigger(&mut app, "Help");
+    assert_eq!(
+        app.world().get::<CssVisibility>(tooltip).copied(),
+        Some(CssVisibility::Hidden),
+        "the tooltip starts hidden"
+    );
+
+    // Resolve the trigger by role+name, then perform(ShowTooltip).
+    let target = get_by_role(app.world_mut(), A11yRole::Generic, Some("Help"), None).unwrap();
+    assert_eq!(target, node_id_for(trigger));
+
+    perform(
+        app.world_mut(),
+        accesskit::Action::ShowTooltip,
+        target,
+        None,
+    )
+    .expect("ShowTooltip honored on an A11yTooltipHost node");
+    assert_eq!(
+        app.world().get::<CssVisibility>(tooltip).copied(),
+        Some(CssVisibility::Visible),
+        "perform(ShowTooltip) sets the described tooltip Visible (the visibility marker)"
+    );
+
+    // HideTooltip flips it back.
+    perform(
+        app.world_mut(),
+        accesskit::Action::HideTooltip,
+        target,
+        None,
+    )
+    .expect("HideTooltip honored");
+    assert_eq!(
+        app.world().get::<CssVisibility>(tooltip).copied(),
+        Some(CssVisibility::Hidden),
+        "perform(HideTooltip) sets the described tooltip Hidden"
+    );
+}
+
+#[test]
+fn show_tooltip_on_non_trigger_is_unsupported_result() {
+    // ShowTooltip on a node without A11yTooltipHost surfaces a typed Err (never a
+    // panic) — the capability is state-keyed.
+    let mut app = setup();
+    let btn = app
+        .world_mut()
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Plain".into()),
+            Focusable::default(),
+        ))
+        .id();
+    app.update();
+    let target = node_id_for(btn);
+
+    let res = perform(
+        app.world_mut(),
+        accesskit::Action::ShowTooltip,
+        target,
+        None,
+    );
+    assert_eq!(
+        res,
+        Err(ActionError::Unsupported {
+            target,
+            action: accesskit::Action::ShowTooltip,
+        }),
+        "ShowTooltip on a non-tooltip-trigger is Unsupported (state-keyed capability)"
+    );
+}

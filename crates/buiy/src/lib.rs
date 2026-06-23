@@ -46,23 +46,26 @@ pub use buiy_core::{
 // `TextChanged` pairs with it (the message the Bug-3 fix keeps honest). Audit § 4.
 pub use buiy_core::text::edit::{EditCommand, TextChanged};
 pub use buiy_widgets::{
-    Button, Checkbox, Disclosure, OnPress, Slider, Switch, TextInput, WidgetsPlugin,
+    Button, Checkbox, Dialog, Disclosure, OnPress, Slider, Switch, TextInput, TooltipTrigger,
+    WidgetsPlugin, dialog_invoker,
 };
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `checkbox(label)`, `switch(label)`, `slider(label, now, min, max, step)`,
-// `disclosure(label)`, `text_input_single_line(placeholder)`,
-// `text_input_multi_line(placeholder)`.
+// `disclosure(label)`, `dialog(title, body)`, `tooltip_trigger(label, tip)`,
+// `text_input_single_line(placeholder)`, `text_input_multi_line(placeholder)`.
 // They live in `buiy_widgets` (so they reuse the `#[require]` initializer fns —
 // one source of truth) and surface here, where the widget + BSN surfaces
 // converge, so `use buiy::prelude::*;` brings them in next to `bsn!`. (They are
 // NOT re-exported through `buiy_bsn`, which stays widget-agnostic per spec § 4.2
 // — it must not take a `buiy_widgets` dependency.) The Wave-3 widget scene-fns
 // are aliased (`checkbox_scene` / `switch_scene` / `slider_scene` /
-// `disclosure_scene`) inside `buiy_widgets` to avoid colliding with the `Checkbox`
-// / `Switch` / `Slider` / `Disclosure` markers; the prelude renames them back to
-// `checkbox` / `switch` / `slider` / `disclosure`.
+// `disclosure_scene` / `dialog_scene`) inside `buiy_widgets` to avoid colliding
+// with the `Checkbox` / `Switch` / `Slider` / `Disclosure` / `Dialog` markers; the
+// prelude renames them back to `checkbox` / `switch` / `slider` / `disclosure` /
+// `dialog`. (`tooltip_trigger` does not collide — the marker is `TooltipTrigger`.)
 pub use buiy_widgets::scene::{
-    button, checkbox, disclosure, slider, switch, text_input_multi_line, text_input_single_line,
+    button, checkbox, dialog, disclosure, slider, switch, text_input_multi_line,
+    text_input_single_line, tooltip_trigger,
 };
 
 // bevy_picking surface (input-event-model.md § 2.9): re-export every

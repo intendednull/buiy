@@ -11,24 +11,29 @@ use buiy_core::{
 
 pub mod button;
 pub mod checkbox;
+pub mod dialog;
 pub mod disclosure;
 pub mod scene;
 pub mod slider;
 pub mod switch;
 pub mod text_input;
+pub mod tooltip;
 pub use button::Button;
 pub use checkbox::Checkbox;
+pub use dialog::Dialog;
 pub use disclosure::Disclosure;
 pub use slider::Slider;
 pub use switch::Switch;
+pub use tooltip::TooltipTrigger;
 // `OnPress` relocated to `buiy_core` (co-drive SC-1) so the in-core P1c action
 // router and C3 pointer layer can write the same activation sink. Re-exported
 // here for source-compat: `buiy_widgets::OnPress` and the `buiy` prelude keep
 // resolving unchanged.
 pub use buiy_core::interaction::OnPress;
+pub use dialog::dialog_invoker;
 pub use scene::{
-    button, checkbox as checkbox_scene, disclosure as disclosure_scene, slider as slider_scene,
-    switch as switch_scene,
+    button, checkbox as checkbox_scene, dialog as dialog_scene, disclosure as disclosure_scene,
+    slider as slider_scene, switch as switch_scene, tooltip_trigger,
 };
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
@@ -130,6 +135,11 @@ impl Plugin for WidgetsPlugin {
             .register_type::<Disclosure>()
             .register_type::<disclosure::DisclosureCaret>()
             .register_type::<disclosure::DisclosurePanel>()
+            .register_type::<Dialog>()
+            .register_type::<dialog::DialogTitle>()
+            .register_type::<dialog::DialogBody>()
+            .register_type::<TooltipTrigger>()
+            .register_type::<tooltip::TooltipNode>()
             .register_type::<text_input::TextInput>();
 
         // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual
@@ -181,6 +191,18 @@ impl Plugin for WidgetsPlugin {
         // `Disclosure::new` bundle). Idempotent over the scene-fn path (which
         // authors `controls` directly).
         app.add_systems(Update, disclosure::wire_disclosure_controls);
+        // Wire each dialog's `A11yRelations.labelled_by = [title]` / `described_by
+        // = [body]` once its `children!` exist (the labelling edges reference the
+        // title/body child entities, unknown at root-spawn time — the disclosure
+        // `controls` precedent). Idempotent over the scene-fn path (which authors
+        // the edges directly). No open/close/focus-trap — that is C5 (Wave 4).
+        app.add_systems(Update, dialog::wire_dialog_relations);
+        // Wire each tooltip trigger's `A11yRelations.described_by = [tooltip]` once
+        // its `children!` exist (the edge references the tooltip child entity,
+        // unknown at root-spawn time). This edge is also the source of truth the
+        // router's generic `ShowTooltip`/`HideTooltip` honor reads to find which
+        // node to show/hide. Idempotent over the scene-fn path.
+        app.add_systems(Update, tooltip::wire_tooltip_described_by);
         // The slider C4 visual (slice-2) reads `Changed<A11yValue>` to reposition
         // the thumb. A slider's value is mutated by the slider contract's `honor`
         // (driven by the APG `slider_keyboard` system / an inbound AT verb, both in
