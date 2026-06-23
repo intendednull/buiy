@@ -242,6 +242,104 @@ fn resolve_live_explicit_overrides_role() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// P1a relations + SC-4 scroll — PRODUCER-tier fixtures.
+//
+// `described_by` is asserted here because accesskit_consumer 0.36 exposes NO
+// `described_by()` getter (only `labelled_by`/`controls`/`active_descendant`
+// surface on the consumer — those are asserted at the consumer tier in
+// verify_headless/a11y.rs). The producer `accesskit::Node::describedby()` reads
+// it back directly. The four carried-but-unwired relation fields
+// (`owns`/`flow_to`/`details`/`error_message`) have NO fold arm, so there is
+// nothing to assert for them (co-drive §3.2).
+//
+// SC-4 scroll is asserted here: the producer `Node` exposes the f64 scroll
+// getters (`scroll_x()`/`scroll_y()`/… → `Option<f64>`) directly, which is the
+// cleanest observation of the six scroll setters firing with the right values.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn described_by_view_sets_described_by() {
+    use buiy_core::a11y::translate::node_id_for;
+    // The view carries relations already resolved to NodeId (build_tree's job).
+    let target = node_id_for(Entity::from_raw_u32(2).unwrap());
+    let view = A11yNodeView {
+        role: A11yRole::TextInput,
+        described_by: vec![target],
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    // accesskit 0.24's `node_id_vec_property_methods!` getter returns `&[NodeId]`.
+    assert_eq!(node.described_by(), &[target]);
+
+    // Empty ⇒ no fold arm ⇒ the property stays unset (empty slice).
+    let none = A11yNodeView {
+        role: A11yRole::TextInput,
+        ..Default::default()
+    };
+    assert!(to_accesskit_node(&none).described_by().is_empty());
+}
+
+#[test]
+fn unwired_relation_fields_have_no_fold_arm() {
+    // The four carried-but-unwired relation fields never reach the view (they
+    // have no `A11yNodeView` projection), so the only thing to pin is that the
+    // wired arms don't accidentally emit when the relation is absent — and that
+    // a node with no relations emits none of the relation setters.
+    let view = A11yNodeView {
+        role: A11yRole::Button,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert!(node.labelled_by().is_empty());
+    assert!(node.described_by().is_empty());
+    assert!(node.controls().is_empty());
+    assert_eq!(node.active_descendant(), None);
+    // owns / flow_to / details / error_message are never set in P1a.
+    assert!(node.owns().is_empty());
+    assert_eq!(node.error_message(), None);
+}
+
+#[test]
+fn scroll_view_sets_the_six_scroll_setters() {
+    use buiy_core::a11y::A11yScrollView;
+    // offset (0, 40), content (100, 300), viewport (100, 100):
+    //   x: max = (100 - 100).max(0) = 0   (no horizontal overflow)
+    //   y: max = (300 - 100).max(0) = 200
+    let view = A11yNodeView {
+        role: A11yRole::Region,
+        scroll: Some(A11yScrollView {
+            offset: Vec2::new(0.0, 40.0),
+            content_extent: Vec2::new(100.0, 300.0),
+            viewport_extent: Vec2::new(100.0, 100.0),
+            scrollable: true,
+        }),
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    // The producer `Node` exposes the f64 scroll getters directly.
+    assert_eq!(node.scroll_x(), Some(0.0));
+    assert_eq!(node.scroll_x_min(), Some(0.0));
+    assert_eq!(node.scroll_x_max(), Some(0.0));
+    assert_eq!(node.scroll_y(), Some(40.0));
+    assert_eq!(node.scroll_y_min(), Some(0.0));
+    assert_eq!(node.scroll_y_max(), Some(200.0));
+}
+
+#[test]
+fn no_scroll_view_fires_no_scroll_setter() {
+    // `scroll: None` (every non-scroll node) ⇒ not a scroll container ⇒ no
+    // scroll setter fires.
+    let view = A11yNodeView {
+        role: A11yRole::Button,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert_eq!(node.scroll_x(), None);
+    assert_eq!(node.scroll_y(), None);
+    assert_eq!(node.scroll_y_max(), None);
+}
+
 #[test]
 fn entity_for_node_id_inverts_node_id_for() {
     use buiy_core::a11y::translate::{entity_for_node_id, node_id_for};

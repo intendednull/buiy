@@ -3,7 +3,7 @@ use buiy_core::{
     CorePlugin,
     a11y::{
         A11yDescription, A11yDisabled, A11yExpanded, A11yHidden, A11yLabel, A11yModal, A11yPlugin,
-        A11yRole, A11ySelected, A11yToggled, A11yTreeBuilder,
+        A11yRelations, A11yRole, A11ySelected, A11yToggled, A11yTreeBuilder,
     },
     components::Node,
     focus::Focusable,
@@ -148,6 +148,90 @@ fn build_tree_projects_decomposed_state_components() {
     assert!(
         node.hidden,
         "A11yHidden marker presence ⇒ hidden flag (carried for P1b)"
+    );
+}
+
+/// P1a (Task 13): `build_tree` resolves the four WIRED `A11yRelations` refs from
+/// `Entity` to `NodeId` at build time, so the view stays winit-free and `Entity`
+/// never leaks past the seam (semantic-tree.md §3). Spawn an owner referencing a
+/// target entity and assert the built view carries the target's `node_id_for`,
+/// not the raw entity. A regression that forgets the resolution (or resolves the
+/// wrong field) reddens this.
+#[test]
+fn build_tree_resolves_wired_relations_to_node_ids() {
+    use buiy_core::a11y::translate::node_id_for;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    let target = app
+        .world_mut()
+        .spawn((A11yRole::Region, A11yLabel("Panel".to_string())))
+        .id();
+    let owner = app
+        .world_mut()
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Toggle".to_string()),
+            A11yRelations {
+                labelled_by: vec![target],
+                described_by: vec![target],
+                controls: vec![target],
+                active_descendant: Some(target),
+                // Carried-but-unwired: present on the component but never resolved.
+                owns: vec![target],
+                ..Default::default()
+            },
+        ))
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let node = builder
+        .snapshot()
+        .iter()
+        .find(|n| n.entity == owner)
+        .expect("the relation owner must surface in the tree");
+
+    let target_id = node_id_for(target);
+    assert_eq!(node.labelled_by, vec![target_id], "labelled_by resolved");
+    assert_eq!(node.described_by, vec![target_id], "described_by resolved");
+    assert_eq!(node.controls, vec![target_id], "controls resolved");
+    assert_eq!(
+        node.active_descendant,
+        Some(target_id),
+        "active_descendant resolved",
+    );
+}
+
+/// P1a (Task 13): an entity carrying ONLY `A11yRelations` (no role/label/state)
+/// is a11y content on its own — it points at other nodes — so it must surface,
+/// not be skipped by the empty-content branch.
+#[test]
+fn entity_with_only_relations_surfaces() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    let target = app.world_mut().spawn(A11yRole::Region).id();
+    let owner = app
+        .world_mut()
+        .spawn(A11yRelations {
+            controls: vec![target],
+            ..Default::default()
+        })
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    assert!(
+        builder.snapshot().iter().any(|n| n.entity == owner),
+        "an entity carrying only A11yRelations must not be skipped"
     );
 }
 

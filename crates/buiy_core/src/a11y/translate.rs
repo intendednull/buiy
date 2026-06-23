@@ -117,6 +117,43 @@ pub fn to_accesskit_node(view: &A11yNodeView) -> Node {
             node.set_live_atomic();
         }
     }
+    // Relation fold (P1a, the four WIRED `A11yRelations` fields). The view
+    // carries them already resolved to `NodeId` (`build_tree` → `node_id_for`),
+    // so no `Entity` reaches this seam. Setter signatures verified against the
+    // resolved accesskit 0.24.1 (committed Cargo.lock):
+    // `set_labelled_by`/`set_described_by`/`set_controls` take
+    // `impl Into<Vec<NodeId>>` (`node_id_vec_property_methods!`, lib.rs:1880);
+    // `set_active_descendant` takes a single `NodeId`
+    // (`node_id_property_methods!`, lib.rs:1898). The four carried-but-unwired
+    // relation fields (`owns`/`flow_to`/`details`/`error_message`) have NO arm
+    // here — deliberately deferred (co-drive §3.2). **Empty ⇒ the setter is not
+    // called.**
+    if !view.labelled_by.is_empty() {
+        node.set_labelled_by(view.labelled_by.clone());
+    }
+    if !view.described_by.is_empty() {
+        node.set_described_by(view.described_by.clone());
+    }
+    if !view.controls.is_empty() {
+        node.set_controls(view.controls.clone());
+    }
+    if let Some(id) = view.active_descendant {
+        node.set_active_descendant(id);
+    }
+    // SC-4 scroll fold (P1a, the schema + single emission point; C5 populates
+    // the source in Wave 4). The six scroll setters all take `f64`
+    // (`f64_property_methods!`, lib.rs:1971): `offset` → `set_scroll_x`/
+    // `set_scroll_y`; the min is always `0.0`; the max is the overflow
+    // `content_extent − viewport_extent` clamped to ≥ 0 (a non-scrollable axis
+    // reports a `0.0` range). `None` ⇒ not a scroll container ⇒ no setter fires.
+    if let Some(s) = &view.scroll {
+        node.set_scroll_x(s.offset.x as f64);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max((s.content_extent.x - s.viewport_extent.x).max(0.0) as f64);
+        node.set_scroll_y(s.offset.y as f64);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max((s.content_extent.y - s.viewport_extent.y).max(0.0) as f64);
+    }
     // NOTE: `A11yHidden` (`view.hidden`) has **no fold arm** in P1a. The final
     // design (semantic-tree.md §7.4) prunes hidden entities + subtrees from
     // `build_tree` rather than flagging the node; that prune needs the ECS-tree

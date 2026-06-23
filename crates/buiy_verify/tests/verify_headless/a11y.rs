@@ -374,6 +374,112 @@ fn consumer_non_live_role_has_no_live_region() {
     assert!(!node.is_live_atomic());
 }
 
+// ---------------------------------------------------------------------------
+// P1a relations — gate-#3 consumer-tier fixtures.
+//
+// accesskit_consumer 0.36 surfaces `labelled_by()`, `controls()` (both yield an
+// iterator of `Node`) and `active_descendant() -> Option<Node>`, so these three
+// WIRED relations are asserted at the consumer tier here. `described_by` has NO
+// consumer getter, so it is asserted at the producer tier in
+// crosscut/a11y_translate.rs. The relation view fields carry NodeIds already
+// resolved by `build_tree`; the fixtures build them directly with `node_id_for`,
+// and an integration test (crosscut/a11y.rs) exercises the Entity → NodeId
+// resolution end-to-end.
+//
+// To match a relation target the consumer resolves a producer `NodeId` to its
+// internal consumer `NodeId` via `node_for(...).id()`, then compares ids (the
+// consumer `Node` is not `PartialEq`, but its `id()` is).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn consumer_resolves_labelled_by_relation() {
+    // A (entity 1) is labelled by B (entity 2). Both must exist in the tree so
+    // the consumer can resolve the relation target.
+    let a = entity(1);
+    let b = entity(2);
+    let views = vec![
+        A11yNodeView {
+            entity: a,
+            role: A11yRole::TextInput,
+            name: "Field".into(),
+            labelled_by: vec![node_id_for(b)],
+            ..Default::default()
+        },
+        A11yNodeView {
+            entity: b,
+            role: A11yRole::Text,
+            name: "Email address".into(),
+            ..Default::default()
+        },
+    ];
+    let tree = consume(&views, None);
+    let node_a = node_for(&tree, node_id_for(a)).expect("labelled node present");
+    let node_b = node_for(&tree, node_id_for(b)).expect("label node present");
+    // The explicit non-empty list short-circuits the consumer's role-based
+    // descendant-label fallback, so labelled_by() yields exactly B.
+    let labels: Vec<_> = node_a.labelled_by().map(|n| n.id()).collect();
+    assert_eq!(labels, vec![node_b.id()], "labelled_by must resolve to B");
+}
+
+#[test]
+fn consumer_resolves_controls_relation() {
+    // A (entity 1) controls B (entity 2). The consumer `controls()` resolves
+    // each controlled id to its node (and panics if absent), so B must exist.
+    let a = entity(1);
+    let b = entity(2);
+    let views = vec![
+        A11yNodeView {
+            entity: a,
+            role: A11yRole::Button,
+            name: "Toggle panel".into(),
+            controls: vec![node_id_for(b)],
+            ..Default::default()
+        },
+        A11yNodeView {
+            entity: b,
+            role: A11yRole::Region,
+            name: "Panel".into(),
+            ..Default::default()
+        },
+    ];
+    let tree = consume(&views, None);
+    let node_a = node_for(&tree, node_id_for(a)).expect("controlling node present");
+    let node_b = node_for(&tree, node_id_for(b)).expect("controlled node present");
+    let controlled: Vec<_> = node_a.controls().map(|n| n.id()).collect();
+    assert_eq!(controlled, vec![node_b.id()], "controls must resolve to B");
+}
+
+#[test]
+fn consumer_resolves_active_descendant_relation() {
+    // A composite (entity 1) has active descendant B (entity 2).
+    let a = entity(1);
+    let b = entity(2);
+    let views = vec![
+        A11yNodeView {
+            entity: a,
+            role: A11yRole::Group,
+            name: "Listbox".into(),
+            active_descendant: Some(node_id_for(b)),
+            ..Default::default()
+        },
+        A11yNodeView {
+            entity: b,
+            role: A11yRole::Button,
+            name: "Option 2".into(),
+            selected: Some(true),
+            ..Default::default()
+        },
+    ];
+    let tree = consume(&views, None);
+    let node_a = node_for(&tree, node_id_for(a)).expect("composite node present");
+    let node_b = node_for(&tree, node_id_for(b)).expect("active descendant present");
+    assert_eq!(
+        node_a.active_descendant().map(|n| n.id()),
+        Some(node_b.id()),
+        "active_descendant must resolve to B",
+    );
+}
+
 #[test]
 fn snapshot_entity_field_is_the_canonical_node_id() {
     let e = entity(1);
