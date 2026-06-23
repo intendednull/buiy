@@ -87,7 +87,16 @@ impl PointerHarness {
             .add_plugins(buiy_core::CorePlugin)
             .add_plugins(buiy_core::layout::LayoutPlugin)
             .add_plugins(PickingPlugin)
-            .add_plugins(BuiyPickingBackendPlugin);
+            .add_plugins(BuiyPickingBackendPlugin)
+            // C3d: focus is part of the production interaction stack the harness
+            // models — `FocusPlugin` registers the shared
+            // `focus::focus_on_click` observer (focus-on-click + the
+            // `:focus-visible` decay) and the `FocusedEntity`/`FocusVisible`
+            // resources the C3 focus tests assert on. `handle_tab` reads
+            // `Res<ButtonInput<KeyCode>>` (an `InputPlugin` resource, absent
+            // under `MinimalPlugins`), so seed it below before any update.
+            .add_plugins(buiy_core::focus::FocusPlugin);
+        app.init_resource::<ButtonInput<bevy::input::keyboard::KeyCode>>();
         app.init_resource::<CapturedEvents>();
         app.init_resource::<CapturedScroll>();
         Self::record_observers(&mut app);
@@ -337,9 +346,58 @@ impl PointerHarness {
         self.app.world_mut()
     }
 
+    /// The currently focused entity (`FocusedEntity.0`) — the focus-on-click
+    /// (C3d) flip a press over a `Focusable` produces.
+    pub fn focused(&self) -> Option<Entity> {
+        self.app
+            .world()
+            .resource::<buiy_core::focus::FocusedEntity>()
+            .0
+    }
+
+    /// The `:focus-visible` decay signal (`FocusVisible.0`, C3d / § 2.7):
+    /// `true` after keyboard (Tab) focus, `false` after pointer focus.
+    pub fn focus_visible(&self) -> bool {
+        self.app
+            .world()
+            .resource::<buiy_core::focus::FocusVisible>()
+            .0
+    }
+
+    /// Press `key`, run one update so `FocusPlugin::handle_tab` (in
+    /// `BuiySet::Input`) sees it, then release+clear it. Drives the keyboard
+    /// focus path (Tab) the C3d decay test needs without an `InputPlugin`
+    /// PreUpdate clear wiping the press first.
+    pub fn press_key(&mut self, key: bevy::input::keyboard::KeyCode) {
+        {
+            let mut keys = self
+                .app
+                .world_mut()
+                .resource_mut::<ButtonInput<bevy::input::keyboard::KeyCode>>();
+            keys.release_all();
+            keys.clear();
+            keys.press(key);
+        }
+        self.app.update();
+        let mut keys = self
+            .app
+            .world_mut()
+            .resource_mut::<ButtonInput<bevy::input::keyboard::KeyCode>>();
+        keys.release_all();
+        keys.clear();
+    }
+
     /// Read the capture log (observer-capture / bubbling tests).
     pub fn captured(&self) -> &CapturedEvents {
         self.app.world().resource::<CapturedEvents>()
+    }
+
+    /// Run one full `App` update (layout → bridge → propagation → picking).
+    /// For tests that mutate the scene via [`world_mut`](Self::world_mut) (e.g.
+    /// add a child) and need the production chain to settle a new
+    /// `GlobalTransform` before pressing.
+    pub fn update(&mut self) {
+        self.app.update();
     }
 
     /// The `(unit, y)` of the most recent `Pointer<Scroll>` recorded for

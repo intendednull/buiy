@@ -51,6 +51,8 @@ mod invariant_predicates;
 mod metric;
 #[path = "verify_headless/pointer_events_c3b.rs"]
 mod pointer_events_c3b;
+#[path = "verify_headless/pointer_focus_c3d.rs"]
+mod pointer_focus_c3d;
 #[path = "verify_headless/pointer_offset_regression.rs"]
 mod pointer_offset_regression;
 #[path = "verify_headless/pointer_press_smoke.rs"]

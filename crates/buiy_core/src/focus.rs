@@ -13,15 +13,22 @@
 //!   `tab_order = 0`, the resolved order depends on entity-index allocation,
 //!   not insertion order. Insertion-order stability is owned by
 //!   `buiy-focus-model-design`.
-//! - **`FocusVisible` is set to `true` on Tab and never reset to `false`.**
-//!   Pointer-driven focus paths (which clear `FocusVisible`) live in
-//!   `buiy-focus-model-design`; Phase 0 is keyboard-only so the always-true
-//!   state is correct for Phase 0 consumers.
+//! - **`FocusVisible` decay (`:focus-visible`).** Keyboard focus IS
+//!   focus-visible: `handle_tab` sets `FocusVisible(true)`. Pointer focus is
+//!   NOT: the shared [`focus_on_click`] observer (C3d, input-event-model.md
+//!   § 2.7 / co-drive SC-2) sets `FocusVisible(false)` when a primary
+//!   `Pointer<Press>` focuses a `Focusable`. C6 reads `entity ==
+//!   FocusedEntity.0 && FocusVisible.0` to gate the focus ring. (The richer
+//!   focus tree — roving tabindex, scopes, restoration — is still
+//!   `buiy-focus-model-design`'s; C3d ships only the resource-level decay
+//!   signal, not the ring shape or a `FocusVisible` representation change.)
 //! - **Shift detection covers `ShiftLeft`/`ShiftRight` only.** Sticky-keys /
 //!   accessibility-shell remappings of Shift to other key codes are out of
 //!   scope; full key-binding abstraction lives in `buiy-input-events-design`.
 
 use crate::BuiySet;
+use bevy::picking::events::{Pointer, Press};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
 /// Marks an entity as part of the focus tree.
@@ -53,7 +60,77 @@ impl Plugin for FocusPlugin {
             .register_type::<FocusVisible>()
             .init_resource::<FocusedEntity>()
             .init_resource::<FocusVisible>()
-            .add_systems(Update, handle_tab.in_set(BuiySet::Input));
+            .add_systems(Update, handle_tab.in_set(BuiySet::Input))
+            // C3d (input-event-model.md § 2.7): the single, widget-agnostic
+            // focus-on-click observer. Owns `FocusedEntity` for ALL pointer
+            // focus — the editor's `editor_pointer_press` and the `TextInput`
+            // widget no longer set it themselves; they keep only their
+            // non-focus logic (cursor placement / nothing). Lives here in
+            // `FocusPlugin` so it covers every `Focusable`, not just editors.
+            .add_observer(focus_on_click);
+    }
+}
+
+/// The single, widget-agnostic focus-on-click observer (input-event-model.md
+/// § 2.7 / co-drive SC-2). On a primary [`Pointer<Press>`] it walks from the
+/// picked target up the [`ChildOf`] chain to the nearest [`Focusable`] and, if
+/// one is found, sets `FocusedEntity` to it AND `FocusVisible(false)` — pointer
+/// focus is NOT keyboard-`:focus-visible` (the decay half § 2.7 / C6 needs;
+/// `handle_tab` sets the `true` half).
+///
+/// This consolidates focus-on-click that C3c had split across two per-widget
+/// observers (the editor's `editor_pointer_press` and the `TextInput`
+/// `focus_on_click`). Both were `Focusable`, so both now focus through this one
+/// path; the editor keeps its click-to-place-cursor and the `TextInput` widget
+/// no longer needs a focus observer at all.
+///
+/// **Nearest-`Focusable`-ancestor target:** the picked entity is often a
+/// decorative leaf inside a focusable widget root (the picked target need not be
+/// the `Focusable` itself). Walking up `ChildOf` focuses the widget, not its
+/// inner glyph/child. A press that resolves to no `Focusable` ancestor (a plain
+/// node) leaves focus untouched — clicking empty chrome does not steal focus.
+/// (Spec § 2.7 notes C3 "ships the leaf version"; the ancestor walk is the
+/// robust generalization — for a bare `Focusable` it reduces to the leaf, and it
+/// pre-satisfies the C5 "nearest focusable ancestor" refinement without a
+/// per-entity focus component.)
+///
+/// `FocusedEntity`/`FocusVisible` are init by this same `FocusPlugin`, so the
+/// resources are always present when this observer is registered — no
+/// `Option<Res…>` guard is needed (unlike the editor/widget observers, which ran
+/// in harnesses that add `BuiyTextPlugin`/`WidgetsPlugin` without `FocusPlugin`).
+/// Observers fire only when the picking pipeline is present, so a headless
+/// harness without it is inert by construction.
+pub fn focus_on_click(
+    press: On<Pointer<Press>>,
+    focusables: Query<(), With<Focusable>>,
+    parents: Query<&ChildOf>,
+    mut focused: ResMut<FocusedEntity>,
+    mut visible: ResMut<FocusVisible>,
+) {
+    if press.event.button != PointerButton::Primary {
+        return;
+    }
+    let Some(target) = nearest_focusable(press.entity, &focusables, &parents) else {
+        return; // pressed a non-focusable subtree — leave focus untouched
+    };
+    focused.0 = Some(target);
+    // Pointer focus is NOT focus-visible (the `:focus-visible` decay, § 2.7).
+    visible.0 = false;
+}
+
+/// Walk from `entity` up the [`ChildOf`] chain, returning the first entity that
+/// is itself `Focusable` (including `entity`), or `None` if no ancestor is.
+fn nearest_focusable(
+    entity: Entity,
+    focusables: &Query<(), With<Focusable>>,
+    parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let mut current = entity;
+    loop {
+        if focusables.contains(current) {
+            return Some(current);
+        }
+        current = parents.get(current).ok()?.parent();
     }
 }
 

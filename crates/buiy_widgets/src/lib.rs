@@ -13,7 +13,7 @@ pub use button::Button;
 // resolving unchanged.
 pub use buiy_core::interaction::OnPress;
 pub use scene::{button, text_input_multi_line, text_input_single_line};
-pub use text_input::{TextInput, focus_on_click};
+pub use text_input::TextInput;
 
 pub struct WidgetsPlugin;
 
@@ -27,10 +27,12 @@ impl Plugin for WidgetsPlugin {
         // C3c retired the Phase-0 `Hovered`-polling input systems
         // (input-event-model.md § 2.8): Button activation now lowers through
         // `buiy_core`'s C3b `Pointer<Click>` → `OnPress` producer (registered by
-        // `PickingPlugin`), so the widget crate carries no button activation
-        // system. `TextInput` focus-on-click is now a `Pointer<Press>` observer.
+        // `PickingPlugin`). C3d (§ 2.7) then consolidated focus-on-click into
+        // `buiy_core`'s single `focus::focus_on_click` observer (registered by
+        // `FocusPlugin`) over every `Focusable`, so the widget crate carries no
+        // focus observer either — `TextInput` `#[require]`s `Focusable` and is
+        // focused through that shared path.
         app.register_type::<Button>()
-            .register_type::<text_input::TextInput>()
-            .add_observer(text_input::focus_on_click);
+            .register_type::<text_input::TextInput>();
     }
 }

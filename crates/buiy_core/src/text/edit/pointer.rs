@@ -2,10 +2,15 @@
 //! (`pointer_to_cursor`), the click-count state machine (`ClickTracker` /
 //! `PointerGesture`), and the gesture→`Action` application on `TextEditState`.
 //! The windowed wiring (the `Pointer<Press>` / `Pointer<Drag>` observers that
-//! source the gesture and set `FocusedEntity`) is
-//! [`editor_pointer_press`]/[`editor_pointer_drag`], registered as observers by
-//! `BuiyTextPlugin`. This file NAMES `Action`/`Edit` (the lowering) ⇒ inside the
-//! facade.
+//! source the gesture) is [`editor_pointer_press`]/[`editor_pointer_drag`],
+//! registered as observers by `BuiyTextPlugin`. This file NAMES `Action`/`Edit`
+//! (the lowering) ⇒ inside the facade.
+//!
+//! Focus-on-click is NOT here: C3d (input-event-model.md § 2.7) consolidated it
+//! into one widget-agnostic `focus.rs::focus_on_click` observer over every
+//! `Focusable`. The editor entity is `Focusable`, so clicking it still focuses
+//! it — via that shared path, not this file. `editor_pointer_press` now owns
+//! only the click-to-place-cursor gesture.
 
 use std::time::Duration;
 
@@ -16,7 +21,6 @@ use bevy::prelude::*;
 use cosmic_text::{Action, Buffer, Cursor, Edit, FontSystem};
 
 use super::state::{Disabled, TextEditState};
-use crate::FocusedEntity;
 use crate::text::{ComputedTextLayout, SharedFontSystem};
 
 /// The classified pointer gesture (one mouse-down).
@@ -119,15 +123,15 @@ impl TextEditState {
 /// directly (capture→target→bubble), so the hit target is `press.entity` (no
 /// `Hovered` read) and the window-space cursor is `press.pointer_location.position`.
 ///
-/// On a primary press over an editable, non-`Disabled` entity it sets
-/// `FocusedEntity` (focus-on-click — CORE mechanism, since the caret is core;
-/// widget focus POLICY is E6 / the C3d relocation) and applies a classified
-/// Click/Double/Triple via the editor's own `ClickTracker` (the multi-click
-/// window+radius bevy_picking does not provide — § 2.8 keeps the classifier).
-/// `focused` is `Option<ResMut<FocusedEntity>>` — `FocusedEntity` is init by
-/// `FocusPlugin`, not `BuiyTextPlugin`, so a text-only harness has none and the
-/// observer still applies the gesture, just without moving focus (the codebase
-/// convention across the editor systems).
+/// On a primary press over an editable, non-`Disabled` entity it applies a
+/// classified Click/Double/Triple via the editor's own `ClickTracker` (the
+/// multi-click window+radius bevy_picking does not provide — § 2.8 keeps the
+/// classifier). It no longer touches `FocusedEntity`: C3d
+/// (input-event-model.md § 2.7) moved focus-on-click into the single shared
+/// `focus.rs::focus_on_click` observer, which focuses the editor entity (it is
+/// `Focusable`) and clears `FocusVisible`. This observer keeps only the
+/// click-to-place-cursor / selection gesture; focus and caret placement now flow
+/// through independent observers on the same `Pointer<Press>`.
 ///
 /// Note: `origin` folds `GlobalTransform + content_offset` only — it does NOT
 /// fold `ScrollOffset`, correct for E3 (auto-scroll-into-view is E6; until then
@@ -143,7 +147,6 @@ pub fn editor_pointer_press(
     press: On<Pointer<Press>>,
     time: Res<Time>,
     fonts: Res<SharedFontSystem>,
-    mut focused: Option<ResMut<FocusedEntity>>,
     mut tracker: Local<ClickTracker>,
     mut editors: Query<
         (&mut TextEditState, &GlobalTransform, &ComputedTextLayout),
@@ -158,12 +161,9 @@ pub fn editor_pointer_press(
     // editable check below drops it, exactly as the old hovered-hit check did.
     let hit = press.entity;
     let Ok((mut state, gt, layout)) = editors.get_mut(hit) else {
-        return; // pressed a non-editor — leave focus to other handlers
+        return; // pressed a non-editor — nothing to place a caret in
     };
     let pointer_pos = press.pointer_location.position;
-    if let Some(focused) = focused.as_mut() {
-        focused.0 = Some(hit);
-    }
     let gesture = tracker.classify(pointer_pos, time.elapsed());
     let origin = gt.translation().truncate() + layout.content_offset;
     let mut fs = fonts.lock();

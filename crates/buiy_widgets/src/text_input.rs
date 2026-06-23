@@ -1,16 +1,20 @@
 //! `TextInput` widget (editing-and-ime § 2.3). Composes the `buiy_core` editor
 //! mechanism (`TextEditState` + markers + the display `Text` carrier) with
 //! widget policy: catalog sizes/tokens, focusable + a11y, submit-on-Enter (the
-//! `SingleLine` marker drives `EditCommand::Submit`), and focus-on-click.
+//! `SingleLine` marker drives `EditCommand::Submit`).
+//!
+//! Focus-on-click is NOT a widget-specific observer here: C3d
+//! (input-event-model.md § 2.7) consolidated focus-on-click into one
+//! widget-agnostic `buiy_core::focus::focus_on_click` observer over every
+//! `Focusable`. The `TextInput` `#[require]`s `Focusable`, so a primary press
+//! focuses it through that shared path — the widget carries no focus observer of
+//! its own.
 //!
 //! `buiy_widgets` names NO cosmic type — `TextEditState::for_font_size` is the
 //! seam (the facade boundary the campaign guards). Mirrors `Button::new`
 //! (`button.rs`).
 
-use bevy::picking::events::{Pointer, Press};
-use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use buiy_core::FocusedEntity;
 use buiy_core::{
     a11y::{A11yLabel, A11yRole},
     components::Node,
@@ -29,8 +33,9 @@ use std::borrow::Cow;
 /// font size as the `#[require]` initializer.
 pub(crate) const TEXT_INPUT_FONT_SIZE: f32 = 16.0;
 
-/// Marker for a text-input widget (the `Button` precedent). Carried so
-/// `focus_on_click` and a11y can identify the widget.
+/// Marker for a text-input widget (the `Button` precedent). Carried so a11y
+/// can identify the widget; focus-on-click is the shared
+/// `buiy_core::focus::focus_on_click` over the `#[require]`'d `Focusable`.
 ///
 /// The `#[require(...)]` contract makes the bare marker
 /// (`world.spawn(TextInput)` / `bsn! { TextInput }`) materialize the editor
@@ -124,28 +129,5 @@ impl TextInput {
     /// so this only layers the placeholder string.
     pub fn multi_line(placeholder: impl Into<String>) -> impl Bundle {
         (TextInput, Placeholder(placeholder.into()))
-    }
-}
-
-/// Widget-side focus-on-click (editing-and-ime § 2.3 / Borrow #7 — focus is
-/// WIDGET policy, never core auto-focus). C3c migrated the source off the legacy
-/// `Hovered` resource onto the bevy_picking `Pointer<E>` layer
-/// (input-event-model.md § 2.8): this `Pointer<Press>` observer fires for the
-/// picked target directly, so a primary press on a `TextInput` sets
-/// `FocusedEntity` to it. `focused` is `Option<ResMut<FocusedEntity>>` —
-/// `FocusedEntity` is init by `FocusPlugin`, so a partial harness without it
-/// no-ops (the codebase convention). Registered as an observer by
-/// `WidgetsPlugin`.
-pub fn focus_on_click(
-    press: On<Pointer<Press>>,
-    inputs: Query<(), With<TextInput>>,
-    focused: Option<ResMut<FocusedEntity>>,
-) {
-    if press.event.button != PointerButton::Primary {
-        return;
-    }
-    let Some(mut focused) = focused else { return };
-    if inputs.get(press.entity).is_ok() {
-        focused.0 = Some(press.entity);
     }
 }
