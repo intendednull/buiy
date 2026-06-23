@@ -1,6 +1,7 @@
 //! `buiy_gallery` — the widget-catalog campaign's runnable exemplar app and the
 //! `buiy_verify` screen-fixture source. **C8-a delivers S1 (TodoMVC); C8-b adds
-//! S2 (scroll / long-list) + S3 (overlay / menu).**
+//! S2 (scroll / long-list) + S3 (overlay / menu); C8-c adds S4 (modal + focus-
+//! trap) + S5 (F-tier look showcase).**
 //!
 //! S1 composes the landed P1d widget bundles (single-line [`TextInput`], the
 //! tri-state [`Checkbox`], [`Button`]) + the A11yLive `Status` live region into
@@ -24,6 +25,26 @@
 //! menu item activation flows through the shared `OnPress` sink into an observable
 //! effect ([`MenuActivations`]), so the driver can drive open → arrow-nav →
 //! Enter-activate → Esc/outside-close and observe each step through the a11y tree.
+//!
+//! **S4 ([`spawn_modal`]) — modal + focus-trap.** A trigger Button (the invoker)
+//! that `controls` a C5-d `Dialog` (title + body + a focusable `Switch` + a
+//! `DialogClose` button) and a focusable background button OUTSIDE the dialog.
+//! Activating the invoker opens the dialog (the `A11yModal` is in the snapshot +
+//! focus moves inside), Tab traps + wraps inside the modal (never the background),
+//! Escape closes + restores focus to the invoker, and the background is pruned from
+//! the a11y tree (`A11yHidden`) while open + restored on close. The whole lifecycle
+//! is the C5-d `WidgetsPlugin` overlay state machine; S4 is **pure composition**
+//! (no app systems). The dialog is spawned imperatively (the invoker references the
+//! dialog entity, which a scene cannot name), like S3's standalone popover.
+//!
+//! **S5 ([`screen_showcase`]) — the F-tier look.** A styled `#ShowcaseCard` with
+//! the C6 channels (a multi-term `BoxShadow` elevation, a per-side `Border` band, a
+//! rounded radius) holding a [`Switch`], a [`Slider`], and a [`Disclosure`], each
+//! focusable so a keyboard focus shows the C6-a focus-ring `Outline`. The driver
+//! drives each widget (Switch toggles, Slider increments, Disclosure expands) and
+//! the display-list acceptance asserts the card emits shadow + border bands + a
+//! keyboard-focused widget emits the focus-ring Outline (`scroll_overlay_c8b.rs`'s
+//! successor `modal_showcase_c8c.rs`).
 //!
 //! **Pure composition (C8 contract).** The crate defines no widget bundle, no
 //! a11y-state component, and no primitive. [`screen_todomvc`] authors the static
@@ -964,4 +985,266 @@ pub fn record_menu_activation(
             log.0.push((*label).to_string());
         }
     }
+}
+
+// ###########################################################################
+// S4 — modal + focus-trap. A trigger Button invokes a C5-d Dialog.
+// ###########################################################################
+
+/// The S4 dialog **title** + **body** text (the label/description sources).
+pub const MODAL_TITLE: &str = "Delete file?";
+/// The S4 dialog body.
+pub const MODAL_BODY: &str = "This action cannot be undone.";
+/// The S4 background button's accessible name (a focusable OUTSIDE the dialog —
+/// the driver proves the modal prune drops it + the trap never reaches it).
+pub const MODAL_BG_BUTTON: &str = "Background action";
+/// The S4 invoker button's accessible name.
+pub const MODAL_INVOKER: &str = "Open dialog";
+
+/// Tag on the S4 invoker button (the trigger the driver activates to open the
+/// dialog). A bare app-state marker; the dialog-open wiring is the C5-d
+/// `WidgetsPlugin` lifecycle, keyed on the invoker's `A11yRelations.controls`.
+#[derive(Component, Clone, Default)]
+pub struct ModalInvoker;
+
+/// Tag on the S4 dialog (so the binary/fixture/driver can find it among roots).
+#[derive(Component, Clone, Default)]
+pub struct ModalDialog;
+
+/// Spawn the S4 modal screen into `world`: a background button (a focusable root
+/// OUTSIDE the dialog — proves the inert prune + trap exclusion), a closed C5-d
+/// [`Dialog`] holding a title + body + two focusable controls (a [`Switch`] and a
+/// [`DialogClose`](buiy_widgets::dialog::DialogClose) "Close" button), and the
+/// **invoker** that `controls` it, all
+/// under a window-sized root. Returns `(invoker, dialog, background)`.
+///
+/// The dialog is spawned imperatively (not in a `screen_*` scene-fn) because the
+/// invoker references the dialog **entity**, which a scene cannot name until it is
+/// spawned — the same constraint S3's standalone popover hits (`spawn_overlay_menu`).
+/// `WidgetsPlugin` owns the whole open/close/focus-trap/Esc/restore + inert-
+/// background lifecycle (C5-d `dialog.rs`); S4 is **pure composition** — it adds
+/// no app systems.
+pub fn spawn_modal(world: &mut World) -> (Entity, Entity, Entity) {
+    use buiy_widgets::dialog::{Dialog, DialogBody, DialogClose, DialogTitle, dialog_invoker};
+
+    // A background focusable root, OUTSIDE the dialog: proves the modal prunes the
+    // rest-of-tree from the a11y tree + the trap never reaches it.
+    let bg = world
+        .spawn((
+            buiy_widgets::Button,
+            A11yLabel(MODAL_BG_BUTTON.to_string()),
+            Name::new("ModalBackgroundButton"),
+        ))
+        .id();
+
+    // The closed dialog: a titled + described modal panel holding two focusable
+    // controls (a Switch the driver can toggle inside the trap, and a DialogClose
+    // button). The Dialog `#[require]` carries the modal a11y + TopLayer::Modal +
+    // FocusScope::trap + FocusReturn + CssVisibility::Hidden (closed at rest).
+    let dialog = world
+        .spawn((
+            Dialog,
+            ModalDialog,
+            Name::new("ModalDialog"),
+            children![
+                (
+                    DialogTitle,
+                    Text(MODAL_TITLE.to_string()),
+                    FontSize(18.0),
+                    A11yLabel(MODAL_TITLE.to_string()),
+                    Name::new("ModalTitle"),
+                    bevy::picking::Pickable::IGNORE,
+                ),
+                (
+                    DialogBody,
+                    Text(MODAL_BODY.to_string()),
+                    FontSize(14.0),
+                    A11yLabel(MODAL_BODY.to_string()),
+                    Name::new("ModalBody"),
+                    bevy::picking::Pickable::IGNORE,
+                ),
+                // A focusable control INSIDE the trap (the driver toggles it to
+                // prove a control inside the modal still functions while trapped).
+                (Switch::new("Confirm"), Name::new("ModalSwitch")),
+                // The close button — its Click → OnPress rides the C5-d
+                // `close_dialog_on_button` path (closes + restores focus).
+                (
+                    buiy_widgets::Button,
+                    DialogClose,
+                    A11yLabel("Close".to_string()),
+                    Name::new("ModalClose"),
+                ),
+            ],
+        ))
+        .id();
+
+    // The invoker: a Button whose `A11yRelations.controls = [dialog]`. Its
+    // activation rides the C5-d `open_dialog_on_invoker_press` consumer.
+    let invoker = world
+        .spawn((
+            dialog_invoker(MODAL_INVOKER, dialog),
+            ModalInvoker,
+            Name::new("ModalInvoker"),
+        ))
+        .id();
+
+    // A window-sized root so layout/picking has a context to walk; the invoker +
+    // background are its children (the dialog is its own top-layer root).
+    let root = world
+        .spawn((
+            Node,
+            buiy_core::layout::Style::default()
+                .width_px(800.0)
+                .height_px(600.0),
+            Name::new("ModalRoot"),
+        ))
+        .id();
+    world.entity_mut(root).add_children(&[invoker, bg]);
+    (invoker, dialog, bg)
+}
+
+/// Startup system for the S4 binary: a camera, then the modal screen.
+pub fn setup_modal(mut commands: Commands) {
+    commands.spawn(Camera2d);
+    commands.queue(|world: &mut World| {
+        spawn_modal(world);
+    });
+}
+
+// ###########################################################################
+// S5 — F-tier look showcase. Switch + Slider + Disclosure on a styled card.
+// ###########################################################################
+
+/// The S5 slider's accessible name (the driver addresses it by role+name).
+pub const SHOWCASE_SLIDER: &str = "Volume";
+/// The S5 switch's accessible name.
+pub const SHOWCASE_SWITCH: &str = "Wi-Fi";
+/// The S5 disclosure's accessible name.
+pub const SHOWCASE_DISCLOSURE: &str = "Advanced";
+
+/// The S5 slider's initial value / range / step (the driver increments it by
+/// `step` and observes `now` advance through the a11y tree).
+pub const SHOWCASE_SLIDER_NOW: f64 = 50.0;
+/// The S5 slider's minimum.
+pub const SHOWCASE_SLIDER_MIN: f64 = 0.0;
+/// The S5 slider's maximum.
+pub const SHOWCASE_SLIDER_MAX: f64 = 100.0;
+/// The S5 slider's step.
+pub const SHOWCASE_SLIDER_STEP: f64 = 5.0;
+
+/// Tag on the S5 styled card — the F-tier "elevation" element. It carries the
+/// C6 channels the display-list acceptance asserts: a multi-term
+/// [`BoxShadow`](buiy_core::render::components::BoxShadow), a
+/// per-side [`Border`] band (styled sides + a `BoxModel.border` width), and a
+/// rounded `Border.radius`. The widgets sit inside it.
+#[derive(Component, Clone, Default)]
+pub struct ShowcaseCard;
+
+/// The F-tier card's shadow: a two-term
+/// [`BoxShadow`](buiy_core::render::components::BoxShadow) (a soft ambient + a tighter
+/// key shadow) — the "elevation" cue. Authored as the single source so the
+/// screen-fn and the acceptance test agree on the term count. Both terms are
+/// outset (v1 ships outset only) and resolve against real theme tokens.
+pub fn showcase_card_shadow() -> buiy_core::render::components::BoxShadow {
+    use buiy_core::render::components::{BoxShadow, Shadow};
+    BoxShadow(vec![
+        // The ambient, wider/softer term.
+        Shadow {
+            color: ColorToken::Token("color.shadow.card".into()),
+            offset_x: Length::px(0.0),
+            offset_y: Length::px(2.0),
+            blur: Length::px(8.0),
+            spread: Length::px(0.0),
+            inset: false,
+        },
+        // The key, tighter term.
+        Shadow {
+            color: ColorToken::Token("color.shadow.card".into()),
+            offset_x: Length::px(0.0),
+            offset_y: Length::px(1.0),
+            blur: Length::px(3.0),
+            spread: Length::px(0.0),
+            inset: false,
+        },
+    ])
+}
+
+/// The F-tier card's per-side border PAINT: four styled (solid, real-token) sides.
+/// The band only extracts when the layout-owned `BoxModel.border` width is > 0 too
+/// (authored on the card's `BoxModel.border` in [`screen_showcase`]); this supplies
+/// the per-side colors. The single source the screen-fn + acceptance test share.
+pub fn showcase_card_border() -> Border {
+    let side = || BorderSide {
+        color: ColorToken::Token("color.accent".into()),
+        style: buiy_core::render::components::LineStyle::Solid,
+    };
+    Border {
+        top: side(),
+        right: side(),
+        bottom: side(),
+        left: side(),
+        radius: Corners::all(Radius::circular(8.0)),
+    }
+}
+
+/// The S5 F-tier showcase as a composable [`Scene`]: a `#ShowcaseCard` flex-column
+/// card with the C6 F-tier channels — a multi-term
+/// [`BoxShadow`](buiy_core::render::components::BoxShadow) (elevation), a
+/// per-side [`Border`] band (a 2px `BoxModel.border` width + styled sides), and a
+/// rounded radius — holding a [`Switch`], a [`Slider`], and a [`Disclosure`], each
+/// styled by its scene-fn and **focusable** (so a keyboard focus shows the C6-a
+/// focus-ring `Outline`).
+///
+/// The widgets ride their scene-fns (`switch`/`slider`/`disclosure`), which trigger
+/// the full P1d `#[require]` contracts + the canonical pixel styling; S5 makes them
+/// **look like** F-tier widgets by sitting them on the elevated, bordered card. The
+/// card is the "styled element" whose shadow + border bands the display-list
+/// acceptance asserts; the widgets are the focus-ring + function targets.
+pub fn screen_showcase() -> impl Scene {
+    let shadow = showcase_card_shadow();
+    let border = showcase_card_border();
+    bsn! {
+        #ShowcaseCard
+        ShowcaseCard
+        Node
+        template_value(Display::flex_column())
+        FlexParams {
+            direction: FlexAxis::Column,
+            gap: { FlexGap { row: Length::px(16.0), column: Length::px(16.0) } },
+        }
+        BoxModel {
+            width: { Sizing::Length(Length::Px(280.0)) },
+            padding: { Edges::all(20.0) },
+            // The layout-owned border WIDTH: the band extracts only when this is
+            // > 0 (the per-side PAINT is the `Border` below).
+            border: { Edges::all(2.0) },
+        }
+        Background { color: { ColorToken::Token("color.surface.primary".into()) } }
+        // The F-tier channels (C6): the elevation shadow + the per-side border band
+        // (styled sides + the rounded radius). Inserted as whole values — `BoxShadow`
+        // wraps a `Vec` and `Border` carries `BorderSide`/`Corners` the bsn
+        // field-patch path does not author.
+        template_value(shadow)
+        template_value(border)
+        Children [
+            (#ShowcaseSwitch switch(SHOWCASE_SWITCH)),
+            (
+                #ShowcaseSlider
+                slider(
+                    SHOWCASE_SLIDER,
+                    SHOWCASE_SLIDER_NOW,
+                    SHOWCASE_SLIDER_MIN,
+                    SHOWCASE_SLIDER_MAX,
+                    SHOWCASE_SLIDER_STEP
+                )
+            ),
+            (#ShowcaseDisclosure disclosure(SHOWCASE_DISCLOSURE)),
+        ]
+    }
+}
+
+/// Startup system for the S5 binary: a camera, then the showcase screen.
+pub fn setup_showcase(mut commands: Commands) {
+    commands.spawn(Camera2d);
+    commands.spawn_scene(screen_showcase());
 }

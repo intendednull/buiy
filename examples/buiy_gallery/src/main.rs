@@ -12,16 +12,24 @@
 //!   scroll the clamped offset.
 //! - `overlay` (**S3**) — overlays: an "Edit" `MenuButton` → `Menu` (Cut/Copy/
 //!   Paste, arrow-nav + Enter), a "?" tooltip trigger, and an anchored popover.
+//! - `modal` (**S4**) — modal + focus-trap: a trigger Button invokes a `Dialog`
+//!   (title + body + a Switch + a Close button); Tab traps inside, Escape closes
+//!   + restores focus, the background is pruned while open.
+//! - `showcase` (**S5**) — the F-tier look: a `Switch` + `Slider` + `Disclosure`
+//!   on a card with a `BoxShadow` elevation + per-side `Border` + the focus ring.
 //!
-//! Each screen is `pub fn screen_*` in `buiy_gallery`, so the same tree the binary
+//! Each screen is `pub fn screen_*` (or `spawn_*` where it needs imperative
+//! entity-referencing wiring) in `buiy_gallery`, so the same tree the binary
 //! renders is the tree the `buiy_verify` fixtures + the headless inspection-driver
 //! acceptance tests (`crates/buiy_verify/tests/verify_headless/todomvc_c8a.rs`,
-//! `scroll_overlay_c8b.rs`) drive — the "example IS the fixture" discipline.
+//! `scroll_overlay_c8b.rs`, `modal_showcase_c8c.rs`) drive — the "example IS the
+//! fixture" discipline.
 
 use bevy::prelude::*;
 use buiy::BuiyPlugin;
 use buiy_gallery::{
-    OverlayMenuPlugin, TodoMvcPlugin, setup, setup_overlay_menu, setup_scroll_list,
+    OverlayMenuPlugin, TodoMvcPlugin, setup, setup_modal, setup_overlay_menu, setup_scroll_list,
+    setup_showcase,
 };
 
 fn main() {
@@ -35,6 +43,15 @@ fn main() {
         Ok("overlay") => {
             app.add_plugins(OverlayMenuPlugin)
                 .add_systems(Startup, setup_overlay_menu);
+        }
+        // S4 (modal) + S5 (showcase) are pure composition over the C5-d Dialog
+        // lifecycle + the C6 styling — both fully owned by `WidgetsPlugin` (inside
+        // `BuiyPlugin`), so they need no gallery app plugin.
+        Ok("modal") => {
+            app.add_systems(Startup, setup_modal);
+        }
+        Ok("showcase") => {
+            app.add_systems(Startup, setup_showcase);
         }
         // `todomvc` (S1) is the default screen.
         _ => {

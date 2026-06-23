@@ -53,6 +53,8 @@ mod invariant_predicates;
 mod menu_dismiss_c5c;
 #[path = "verify_headless/metric.rs"]
 mod metric;
+#[path = "verify_headless/modal_showcase_c8c.rs"]
+mod modal_showcase_c8c;
 #[path = "verify_headless/overlay_dismiss_c5b.rs"]
 mod overlay_dismiss_c5b;
 #[path = "verify_headless/pointer_events_c3b.rs"]
