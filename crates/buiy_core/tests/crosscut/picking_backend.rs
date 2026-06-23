@@ -7,12 +7,13 @@
 //! single-node ResolvedLayout cannot — spec §1). The harness is C7-owned; do not
 //! recreate the injection machinery here.
 //!
-//! The remaining tests pin behaviors ORTHOGONAL to Bug 1 (the smallest-area
-//! depth ranking — audit #4 — and the Hovered consumer chain — audit #21).
-//! They hand-spawn ResolvedLayout + a matching GlobalTransform (the absolute
-//! basis C1 reads) so the geometry is unchanged while the node is visible to the
-//! new `&GlobalTransform` query. NOTE: do NOT trust the hand-spawned fixtures as
-//! the coordinate-correctness gate — that is the harness offset test.
+//! The remaining tests pin behaviors ORTHOGONAL to Bug 1 (the depth rule — now
+//! paint-order, audit #4 updated by C3a — and the Hovered consumer chain — audit
+//! #21). They hand-spawn ResolvedLayout + a matching GlobalTransform (the absolute
+//! basis C1 reads) plus a root StackingContext to fix the paint order, so the
+//! geometry is unchanged while the node is visible to the new `&GlobalTransform`
+//! query. NOTE: do NOT trust the hand-spawned fixtures as the coordinate-
+//! correctness gate — that is the harness offset test.
 //!
 //! API deviations from plan (Bevy 0.19 vs plan's 0.18 assumptions):
 //! - `PointerHits` is a `Message`, not an `Event`; accessed via
@@ -30,7 +31,7 @@ use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
 use bevy::window::WindowRef;
 use buiy_core::{
-    CorePlugin, Node, ResolvedLayout,
+    CorePlugin, Node, ResolvedLayout, StackingContext,
     layout::Style,
     picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin},
 };
@@ -49,6 +50,18 @@ fn spawn_node(app: &mut App, position: Vec2, size: Vec2) -> Entity {
             GlobalTransform::from_translation(position.extend(0.0)),
         ))
         .id()
+}
+
+/// Hand-build a root `StackingContext` whose `painters_z` lists `entities` in
+/// forward paint order (`entities[0]` = bottom-most, `entities.last()` = topmost)
+/// — the convention `global_paint_order` consumes. The root carries no
+/// `ResolvedLayout`, so it is never a pick candidate; it only gives the listed
+/// entities a deterministic stacking order (C3a depth = paint-order, replacing the
+/// Phase-0 smallest-area rank).
+fn spawn_paint_order(app: &mut App, entities: &[Entity]) {
+    app.world_mut().spawn(StackingContext {
+        painters_z: entities.to_vec(),
+    });
 }
 
 fn backend_app() -> App {
@@ -98,20 +111,33 @@ fn pointer_over_offset_buiy_node_emits_hit() {
     );
 }
 
-/// Audit #4 (T2.16): the backend's top-most / z-resolution. Two overlapping
-/// nodes both contain the cursor; `emit_picks` sorts by area ascending and
-/// assigns `HitData.depth` = area-rank. So `picks[0]` must be the SMALLER node
-/// and the depths must ascend (0.0, 1.0). A flipped sort or a dropped
-/// rank-as-depth assignment reddens this. (Each node carries a GlobalTransform
-/// matching its position so it is visible to the C1 absolute-basis query.)
+/// Audit #4 (T2.16), C3a-updated: the backend's top-most / z-resolution is now
+/// **paint-order**, not smallest-area. `emit_picks` sorts the geometric hits
+/// top-most-painted-first and assigns `HitData.depth = paint_len - 1 -
+/// paint_index`, so the topmost-painted node lands at the smallest depth (what
+/// bevy_picking's ascending-depth hover sort wants). Intent preserved (overlapping
+/// hits resolve to the topmost node, ascending depths); the discriminator is the
+/// shared `global_paint_order`, not area. Here the LARGE node is painted ABOVE the
+/// small one — the inverse of the old fixture — so the area rule (which would put
+/// the SMALL node first) cannot pass this: it is a direct paint-order proof.
 #[test]
-fn overlapping_nodes_emit_picks_smallest_first_with_ascending_depths() {
+fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
     let mut app = backend_app();
 
-    // Large panel (area 40000) spawned first; small node on top (area 1600)
-    // spawned second so a naive iteration-order bug can't accidentally pass.
-    let large = spawn_node(&mut app, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0));
+    // Small node below; large panel painted ON TOP of it.
     let small = spawn_node(&mut app, Vec2::new(80.0, 80.0), Vec2::new(40.0, 40.0));
+    let large = spawn_node(&mut app, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0));
+    // Paint order: small bottom, large TOP. The default Pickable on `large`
+    // (unmarked node) blocks lower — but here we want both reported, so make
+    // `large` a non-blocking pass-through surface so `small` survives the
+    // truncation and the two-pick ordering/depth contract is observable.
+    app.world_mut()
+        .entity_mut(large)
+        .insert(bevy::picking::Pickable {
+            should_block_lower: false,
+            is_hoverable: true,
+        });
+    spawn_paint_order(&mut app, &[small, large]);
 
     // Cursor at (90,90): inside BOTH AABBs.
     spawn_pointer(&mut app, Vec2::new(90.0, 90.0));
@@ -126,33 +152,43 @@ fn overlapping_nodes_emit_picks_smallest_first_with_ascending_depths() {
         .find(|h| h.picks.len() == 2)
         .expect("a PointerHits with both overlapping nodes should be emitted");
 
-    // picks[0] is the top-most (smallest area).
+    // picks[0] is the top-most PAINTED node (large), not the smaller one.
     assert_eq!(
-        hit.picks[0].0, small,
-        "picks[0] must be the smaller-area (top-most) node"
+        hit.picks[0].0, large,
+        "picks[0] must be the top-PAINTED node, not the smaller one"
     );
     assert_eq!(
-        hit.picks[1].0, large,
-        "picks[1] must be the larger-area node beneath"
+        hit.picks[1].0, small,
+        "picks[1] must be the node painted beneath"
     );
-    // Depths are the area rank: ascending 0.0, 1.0.
-    assert_eq!(hit.picks[0].1.depth, 0.0, "top-most node has depth rank 0");
-    assert_eq!(hit.picks[1].1.depth, 1.0, "node beneath has depth rank 1");
+    // Depths ascend (topmost-painted is nearest). The paint order is
+    // [root, small, large] (paint_len 3): large at index 2 → depth 0, small at
+    // index 1 → depth 1.
+    assert_eq!(
+        hit.picks[0].1.depth, 0.0,
+        "top-painted node has the nearest depth"
+    );
+    assert_eq!(
+        hit.picks[1].1.depth, 1.0,
+        "node beneath has a farther depth"
+    );
     assert!(
         hit.picks[0].1.depth < hit.picks[1].1.depth,
-        "HitData depths must ascend by area rank"
+        "HitData depths must ascend top-to-bottom by paint order"
     );
 }
 
-/// Audit #21 (T2.19): the `Hovered` consumer chain end-to-end. `emit_picks`
-/// (PreUpdate) writes `PointerHits`; `update_hovered` (Update, `BuiySet::Picking`,
-/// the only writer of `Hovered`) reads `picks.first()` and stores it. After one
-/// `app.update()` the `Hovered` resource must equal the entity under the cursor.
-/// With two overlapping nodes this simultaneously pins the top-most rule:
-/// `Hovered` must be the SMALLER node (`picks[0]`), not the one beneath. (Each
-/// node carries a GlobalTransform matching its position, the basis C1 reads.)
+/// Audit #21 (T2.19), C3a-updated: the `Hovered` consumer chain end-to-end.
+/// `emit_picks` (PreUpdate) writes `PointerHits`; `update_hovered` (Update,
+/// `BuiySet::Picking`, the only writer of `Hovered`) reads `picks.first()` (the
+/// topmost) and stores it. After one `app.update()` the `Hovered` resource must
+/// equal the entity under the cursor. With two overlapping nodes this pins the
+/// top-most rule, now **paint-order** not smallest-area: the LARGE node is painted
+/// on top, so `Hovered` must be the larger one (`picks[0]`), the inverse of the
+/// pre-C3a area rule. (`update_hovered` is unchanged by C3a — only the depth rule
+/// feeding it changed.)
 #[test]
-fn hovered_resource_tracks_top_most_node_after_backend_emit() {
+fn hovered_resource_tracks_top_painted_node_after_backend_emit() {
     let mut app = backend_app();
 
     // Nothing hovered before any pointer is processed.
@@ -162,8 +198,11 @@ fn hovered_resource_tracks_top_most_node_after_backend_emit() {
         "Hovered starts empty"
     );
 
-    let large = spawn_node(&mut app, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0));
     let small = spawn_node(&mut app, Vec2::new(80.0, 80.0), Vec2::new(40.0, 40.0));
+    let large = spawn_node(&mut app, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0));
+    // Paint order: small bottom, large TOP. `large` is the default-pickable
+    // occluder, so it is the sole survivor and the tracked hover.
+    spawn_paint_order(&mut app, &[small, large]);
 
     spawn_pointer(&mut app, Vec2::new(90.0, 90.0));
 
@@ -171,7 +210,7 @@ fn hovered_resource_tracks_top_most_node_after_backend_emit() {
 
     assert_eq!(
         app.world().resource::<Hovered>().0,
-        Some(small),
-        "Hovered must track the top-most (smaller-area) node under the cursor, not {large:?}"
+        Some(large),
+        "Hovered must track the top-PAINTED node under the cursor, not {small:?}"
     );
 }
