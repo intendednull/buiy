@@ -14,6 +14,7 @@ pub mod checkbox;
 pub mod dialog;
 pub mod disclosure;
 pub mod dismiss;
+pub mod menu;
 pub mod popover;
 pub mod scene;
 pub mod scroll_area;
@@ -26,6 +27,7 @@ pub use checkbox::Checkbox;
 pub use dialog::Dialog;
 pub use disclosure::Disclosure;
 pub use dismiss::LightDismiss;
+pub use menu::{Menu, MenuButton, MenuItem};
 pub use popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide};
 pub use scroll_area::ScrollArea;
 pub use slider::Slider;
@@ -39,8 +41,8 @@ pub use buiy_core::interaction::OnPress;
 pub use dialog::dialog_invoker;
 pub use scene::{
     button, checkbox as checkbox_scene, dialog as dialog_scene, disclosure as disclosure_scene,
-    popover as popover_scene, scroll_area, slider as slider_scene, switch as switch_scene,
-    tooltip_trigger,
+    menu as menu_scene, menu_button as menu_button_scene, menu_item, popover as popover_scene,
+    scroll_area, slider as slider_scene, switch as switch_scene, tooltip_trigger,
 };
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
@@ -150,6 +152,9 @@ impl Plugin for WidgetsPlugin {
             .register_type::<scroll_area::ScrollArea>()
             .register_type::<popover::Popover>()
             .register_type::<dismiss::LightDismiss>()
+            .register_type::<menu::Menu>()
+            .register_type::<menu::MenuButton>()
+            .register_type::<menu::MenuItem>()
             .register_type::<text_input::TextInput>();
 
         // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual
@@ -258,5 +263,60 @@ impl Plugin for WidgetsPlugin {
         // observer (not a system) so it rides the C3 `Pointer<E>` capture→bubble
         // layer with the picking-resolved target.
         app.add_observer(dismiss::light_dismiss_on_press);
+
+        // C5-c (scroll-overlay-modal.md §B.3) — Menu / MenuButton / MenuItem.
+        //
+        // Wire each MenuButton↔Menu pair's two-way edges (`controls = [menu]` on
+        // the button, `Popover.anchor = button` on the menu) once the button's
+        // `children!` exist — the menu child entity is unknown at root-spawn time
+        // (the disclosure `wire_disclosure_controls` precedent).
+        app.add_systems(Update, menu::wire_menu_button);
+        // Attach the click-containment observers to each new Menu so a press/click
+        // inside the menu does not bubble up the `ChildOf` chain to the controlling
+        // button (which would toggle the menu closed + steal focus). Gated on
+        // `Added<Menu>`.
+        app.add_systems(Update, menu::guard_menu_clicks);
+        //
+        // The MenuButton reuses the Disclosure state-keyed `A11yExpanded` open/
+        // close pattern: `advance_expanded_on_press` (registered above) flips the
+        // button's `A11yExpanded` on every `OnPress` (pointer / keyboard Enter+Space
+        // via the Button keymap / AT-`Click`), and `sync_menu_open` reacts to
+        // `Changed<A11yExpanded>` to show/hide the controlled menu, set/clear its
+        // `active_descendant`, and move/restore focus. It runs `.after` the
+        // expanded consumer so a same-frame activation opens the menu the same frame.
+        app.add_systems(
+            Update,
+            menu::sync_menu_open
+                .in_set(BuiySet::Input)
+                .after(advance_expanded_on_press),
+        );
+        // Reconcile the button's `A11yExpanded` from the menu's ACTUAL visibility
+        // after the dismiss handlers (`escape_dismiss` / `light_dismiss_on_press`)
+        // may have hidden it directly — keeps `aria-expanded` in lock-step with a
+        // light-dismiss so re-open works (§B.5). Runs `.after(escape_dismiss)` so a
+        // same-frame Escape dismiss is reconciled the same frame; idempotent, so it
+        // does not ping-pong with `sync_menu_open`.
+        app.add_systems(
+            Update,
+            menu::sync_menu_dismissed
+                .in_set(BuiySet::Input)
+                .after(dismiss::escape_dismiss)
+                .after(menu::sync_menu_open),
+        );
+        // Roving / `aria-activedescendant` keyboard nav for the focused open menu
+        // (§B.3): Arrow/Home/End move the menu's `active_descendant`, Enter/Space
+        // activate the active item (write the shared `OnPress` sink) + close, Escape
+        // closes. An exclusive `&mut World` system (it writes the button's
+        // `A11yExpanded` to close + the `OnPress` message), in `BuiySet::Input`
+        // alongside the other keyboard handlers. Ordered `.before(sync_menu_open)`
+        // so a same-frame Enter/Escape close (which flips the button's
+        // `A11yExpanded`) is applied (hide + active-descendant clear + focus
+        // restore) the same frame.
+        app.add_systems(
+            Update,
+            menu::menu_keyboard_nav
+                .in_set(BuiySet::Input)
+                .before(menu::sync_menu_open),
+        );
     }
 }

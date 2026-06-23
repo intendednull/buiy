@@ -7,7 +7,7 @@
 //! accessibility.md § 3.11 (decomposed components per #17644).
 
 use crate::{BuiySet, focus::Focusable};
-use accesskit::{HasPopup, NodeId};
+use accesskit::NodeId;
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -37,11 +37,12 @@ pub use states::{
     A11yPlaceholder, A11yReadOnly, A11yScroll, A11ySelected, A11yTextValue, A11yToggled,
     A11yTooltipHost, A11yValue,
 };
-// Re-export the foreign `accesskit::Toggled` tri-state enum + `Orientation` so
-// downstream crates (e.g. `buiy_widgets`) can match on `A11yToggled.0` /
-// `A11yOrientation.0` and author the slider orientation without taking a direct
-// `accesskit` dependency. `A11yToggled`/`A11yOrientation` wrap these.
-pub use accesskit::{Orientation, Toggled};
+// Re-export the foreign `accesskit::Toggled` tri-state enum + `Orientation` +
+// `HasPopup` so downstream crates (e.g. `buiy_widgets`) can match on
+// `A11yToggled.0` / `A11yOrientation.0` and author the slider orientation / the
+// menu-button has-popup without taking a direct `accesskit` dependency.
+// `A11yToggled`/`A11yOrientation`/`A11yHasPopup` wrap these.
+pub use accesskit::{HasPopup, Orientation, Toggled};
 use translate::node_id_for;
 pub use translate::{build_tree_update, resolve_live, to_accesskit_node};
 
@@ -75,6 +76,14 @@ pub enum A11yRole {
     MultilineTextInput,
     Region,
     Group,
+    // Menu roles (C5-c, scroll-overlay-modal.md §B.3). A `MenuButton` opens a
+    // `Menu` (a popup the button `A11yHasPopup`-advertises + `controls`); the
+    // `Menu` is the roving composite container whose `A11yRelations.active_descendant`
+    // tracks the active `MenuItem`. These are the canonical APG `menu`/`menuitem`
+    // roles (semantic-tree.md / widget-contracts.md); the menu keyboard nav +
+    // active-descendant roving is C5-c's container behavior.
+    Menu,
+    MenuItem,
     // Live-region roles (P1a batch 2). These imply a live-region policy in
     // `translate::resolve_live` — `Alert` ⇒ Assertive+atomic, `Status` ⇒
     // Polite+atomic, `Log` ⇒ Polite — so an alert/status/log surfaces the right

@@ -50,9 +50,9 @@ pub use buiy_core::{
 // `TextChanged` pairs with it (the message the Bug-3 fix keeps honest). Audit § 4.
 pub use buiy_core::text::edit::{EditCommand, TextChanged};
 pub use buiy_widgets::{
-    Button, Checkbox, Dialog, Disclosure, LightDismiss, OnPress, Popover, PopoverAlign,
-    PopoverPlacement, PopoverSide, ScrollArea, Slider, Switch, TextInput, TooltipTrigger,
-    WidgetsPlugin, dialog_invoker,
+    Button, Checkbox, Dialog, Disclosure, LightDismiss, Menu, MenuButton, MenuItem, OnPress,
+    Popover, PopoverAlign, PopoverPlacement, PopoverSide, ScrollArea, Slider, Switch, TextInput,
+    TooltipTrigger, WidgetsPlugin, dialog_invoker,
 };
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `checkbox(label)`, `switch(label)`, `slider(label, now, min, max, step)`,
@@ -69,8 +69,8 @@ pub use buiy_widgets::{
 // prelude renames them back to `checkbox` / `switch` / `slider` / `disclosure` /
 // `dialog`. (`tooltip_trigger` does not collide — the marker is `TooltipTrigger`.)
 pub use buiy_widgets::scene::{
-    button, checkbox, dialog, disclosure, popover, scroll_area, slider, switch,
-    text_input_multi_line, text_input_single_line, tooltip_trigger,
+    button, checkbox, dialog, disclosure, menu, menu_button, menu_item, popover, scroll_area,
+    slider, switch, text_input_multi_line, text_input_single_line, tooltip_trigger,
 };
 
 // bevy_picking surface (input-event-model.md § 2.9): re-export every

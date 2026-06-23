@@ -230,6 +230,8 @@ fn role_to_accesskit(role: A11yRole) -> Role {
         A11yRole::MultilineTextInput => Role::MultilineTextInput,
         A11yRole::Region => Role::Region,
         A11yRole::Group => Role::Group,
+        A11yRole::Menu => Role::Menu,
+        A11yRole::MenuItem => Role::MenuItem,
         A11yRole::Status => Role::Status,
         A11yRole::Alert => Role::Alert,
         A11yRole::Log => Role::Log,

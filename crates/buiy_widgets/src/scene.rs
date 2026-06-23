@@ -52,6 +52,11 @@ use crate::disclosure::{
     caret_rotation_collapsed, disclosure_background, disclosure_border, disclosure_box_model,
     disclosure_panel_background, disclosure_panel_box_model,
 };
+use crate::menu::{
+    MENU_FONT_SIZE, Menu, MenuButton, MenuItem, menu_background, menu_border, menu_box_model,
+    menu_button_background, menu_button_border, menu_button_box_model, menu_haspopup,
+    menu_item_background, menu_item_box_model,
+};
 use crate::popover::Popover;
 use crate::scroll_area::{ScrollArea, scroll_area_overflow};
 use crate::slider::{
@@ -572,6 +577,111 @@ pub fn tooltip_trigger(label: impl Into<String>, tip: impl Into<String>) -> impl
                 // The tooltip starts hidden; the router's ShowTooltip/HideTooltip
                 // honor flips this `CssVisibility`.
                 template_value(CssVisibility::Hidden)
+                template_value(Pickable::IGNORE)
+            ),
+        ]
+    }
+}
+
+/// A labelled menu button as a composable BSN scene (C5-c). Mergeable: the
+/// `MenuButton` marker triggers the full `#[require]` contract (role `Button` + the
+/// APG Enter/Space keymap + `A11yHasPopup(Menu)` + `A11yExpanded` + `A11yLabel` +
+/// the trigger box), and the field-patches layer the canonical box style. Author
+/// the controlled menu (a [`menu`] scene) + the visible label as the button's
+/// `Children [ … ]`; [`wire_menu_button`](crate::menu::wire_menu_button) wires the
+/// button↔menu `controls`/`anchor` edges once the children exist.
+///
+/// `A11yHasPopup` wraps a fieldless foreign enum the bsn field-patch path does not
+/// author, so it is inserted as a whole value (`template_value`).
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! {
+///     menu_button("Edit")
+///     Children [
+///         ( Text("Edit") template_value(Pickable::IGNORE) )
+///         menu() // the controlled menu (author its menu_item children on it)
+///     ]
+/// });
+/// ```
+pub fn menu_button(label: impl Into<String>) -> impl Scene {
+    let bm = menu_button_box_model();
+    let bg = menu_button_background();
+    let border = menu_button_border();
+    let label = label.into();
+    bsn! {
+        MenuButton
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+            padding: { bm.padding },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        A11yLabel({ label })
+        template_value(menu_haspopup())
+    }
+}
+
+/// A menu (roving popover container) as a composable BSN scene (C5-c). Mergeable:
+/// the `Menu` marker triggers the full `#[require]` contract (role `Menu` + the
+/// `Popover` positioning substrate + the top-layer `Stacking` + container
+/// `Focusable` + `A11yRelations`), and the field-patches layer the canonical panel
+/// box style. Author the menu's [`menu_item`] entries as its `Children [ … ]`; the
+/// menu starts **closed** (`CssVisibility::Hidden`).
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! {
+///     menu()
+///     Children [ menu_item("Cut") menu_item("Copy") menu_item("Paste") ]
+/// });
+/// ```
+pub fn menu() -> impl Scene {
+    let bm = menu_box_model();
+    let bg = menu_background();
+    let border = menu_border();
+    bsn! {
+        Menu
+        BoxModel {
+            width: { bm.width },
+            padding: { bm.padding },
+        }
+        Background { color: { bg.color } }
+        Border { radius: { border.radius } }
+        // Starts closed; the menu button opens it via `A11yExpanded` →
+        // `sync_menu_open`. Inserted as a whole value (a fieldless enum variant).
+        template_value(CssVisibility::Hidden)
+    }
+}
+
+/// A labelled menu item as a composable BSN scene (C5-c). Mergeable: the `MenuItem`
+/// marker triggers the full `#[require]` contract (role `MenuItem` + the item box +
+/// `A11yLabel`), and the field-patches layer the canonical row style. The
+/// `Children [ … ]` subtree authors the visible label `Text` (`Pickable::IGNORE` —
+/// pick-through). The accessible name stays on the item root.
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! { menu_item("Cut") });
+/// ```
+pub fn menu_item(label: impl Into<String>) -> impl Scene {
+    let bm = menu_item_box_model();
+    let bg = menu_item_background();
+    let label = label.into();
+    bsn! {
+        MenuItem
+        BoxModel {
+            width: { bm.width },
+            height: { bm.height },
+        }
+        Background { color: { bg.color } }
+        A11yLabel({ label.clone() })
+        Children [
+            (
+                Text({ label })
+                FontSize({ MENU_FONT_SIZE })
+                template_value(TextColor::default())
                 template_value(Pickable::IGNORE)
             ),
         ]

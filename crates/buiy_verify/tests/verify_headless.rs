@@ -47,6 +47,8 @@ mod invariant_bidi;
 mod invariant_mutations;
 #[path = "verify_headless/invariant_predicates.rs"]
 mod invariant_predicates;
+#[path = "verify_headless/menu_dismiss_c5c.rs"]
+mod menu_dismiss_c5c;
 #[path = "verify_headless/metric.rs"]
 mod metric;
 #[path = "verify_headless/overlay_dismiss_c5b.rs"]
