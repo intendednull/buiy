@@ -34,8 +34,8 @@ pub use inprocess::{
 pub use relations::A11yRelations;
 pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
-    A11yPlaceholder, A11yReadOnly, A11ySelected, A11yTextValue, A11yToggled, A11yTooltipHost,
-    A11yValue,
+    A11yPlaceholder, A11yReadOnly, A11yScroll, A11ySelected, A11yTextValue, A11yToggled,
+    A11yTooltipHost, A11yValue,
 };
 // Re-export the foreign `accesskit::Toggled` tri-state enum + `Orientation` so
 // downstream crates (e.g. `buiy_widgets`) can match on `A11yToggled.0` /
@@ -281,6 +281,7 @@ impl Plugin for A11yPlugin {
             .register_type::<A11yOrientation>()
             .register_type::<A11yHasPopup>()
             .register_type::<A11yLive>()
+            .register_type::<A11yScroll>()
             .register_type::<A11yRelations>()
             .init_resource::<A11yTreeBuilder>()
             .add_systems(Update, build_tree.in_set(BuiySet::A11yUpdate));
@@ -370,9 +371,11 @@ pub(crate) struct A11yNodeQuery {
     // that carries no a11y content (and the whole `A11yHidden` subtree is pruned).
     child_of: Option<&'static ChildOf>,
     children: Option<&'static Children>,
-    // SC-4 scroll source: there is **no** scroll component to read in P1a, so no
-    // field here yet — `build_tree` writes `scroll: None`. C5 (Wave 4) adds its
-    // scroll component as a field here and projects it into the view's `scroll`.
+    // SC-4 scroll source (C5, Wave 4): the scroll container's [`A11yScroll`],
+    // populated by `crate::scroll::update_a11y_scroll` from `ScrollOffset` +
+    // `ScrollExtent`. `build_tree` projects it into the view's `scroll` field
+    // (the P1a-landed `Option<A11yScrollView>` + six-setter fold).
+    scroll: Option<&'static A11yScroll>,
 }
 
 /// One a11y-bearing entity's read, captured in the `build_tree` scan: the
@@ -468,6 +471,7 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             || n.orientation.is_some()
             || n.has_popup.is_some()
             || n.live.is_some()
+            || n.scroll.is_some()
             || n.relations.is_some();
         if n.role.is_none()
             && n.label.is_none()
@@ -537,9 +541,9 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             described_by,
             controls,
             active_descendant,
-            // SC-4: no scroll component exists in P1a, so the view carries `None`
-            // everywhere. C5 (Wave 4) reads its scroll component into this field.
-            scroll: None,
+            // SC-4 (C5, Wave 4): project the `A11yScroll` source into the view's
+            // scroll field. `None` ⇒ not a scroll container (no setter fires).
+            scroll: n.scroll.map(|s| s.view()),
             // Nesting filled at emit time.
             parent: None,
             children: Vec::new(),

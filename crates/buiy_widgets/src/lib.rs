@@ -14,6 +14,7 @@ pub mod checkbox;
 pub mod dialog;
 pub mod disclosure;
 pub mod scene;
+pub mod scroll_area;
 pub mod slider;
 pub mod switch;
 pub mod text_input;
@@ -22,6 +23,7 @@ pub use button::Button;
 pub use checkbox::Checkbox;
 pub use dialog::Dialog;
 pub use disclosure::Disclosure;
+pub use scroll_area::ScrollArea;
 pub use slider::Slider;
 pub use switch::Switch;
 pub use tooltip::TooltipTrigger;
@@ -33,7 +35,7 @@ pub use buiy_core::interaction::OnPress;
 pub use dialog::dialog_invoker;
 pub use scene::{
     button, checkbox as checkbox_scene, dialog as dialog_scene, disclosure as disclosure_scene,
-    slider as slider_scene, switch as switch_scene, tooltip_trigger,
+    scroll_area, slider as slider_scene, switch as switch_scene, tooltip_trigger,
 };
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
@@ -140,6 +142,7 @@ impl Plugin for WidgetsPlugin {
             .register_type::<dialog::DialogBody>()
             .register_type::<TooltipTrigger>()
             .register_type::<tooltip::TooltipNode>()
+            .register_type::<scroll_area::ScrollArea>()
             .register_type::<text_input::TextInput>();
 
         // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual

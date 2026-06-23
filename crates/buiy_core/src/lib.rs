@@ -16,6 +16,7 @@ pub mod interaction;
 pub mod layout;
 pub mod picking;
 pub mod render;
+pub mod scroll;
 pub mod text;
 pub mod theme;
 
@@ -54,6 +55,7 @@ pub use render::forced_colors_analyzer::{
 };
 #[allow(deprecated)]
 pub use render::golden::{GoldenConfig, perceptual_diff};
+pub use scroll::{ScrollExtent, ScrollInputPlugin};
 pub use text::{
     BuiyTextPlugin, ComputedTextLayout, FontFamily, FontSize, FontWeight, FontsGeneration,
     LineHeight, ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer,

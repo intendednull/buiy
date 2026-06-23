@@ -879,3 +879,134 @@ fn button_honor_unadvertised_verb_is_unsupported_not_panic() {
         }),
     );
 }
+
+/// SC-4 (C5, Wave 4): `build_tree` projects a scroll container's `A11yScroll`
+/// source into `A11yNodeView.scroll`, populated by the real scroll pipeline
+/// (`update_scroll_extent` → `update_a11y_scroll`) from `ScrollOffset` +
+/// `ScrollExtent`. A scrolled container's projected view carries the offset +
+/// the content/viewport extents + the scrollable flag, so the AT/driver/snapshot
+/// sees the live scroll geometry. A regression that forgets to populate the
+/// source (or to project it) reddens this.
+#[test]
+fn build_tree_projects_scroll_geometry_from_pipeline() {
+    use buiy_core::ScrollInputPlugin;
+    use buiy_core::components::Node;
+    use buiy_core::layout::{LayoutPlugin, Length, OverflowMode, ScrollOffset, Sizing, Style};
+    use buiy_core::scroll::ScrollExtent;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(LayoutPlugin);
+    app.add_plugins(A11yPlugin);
+    // `ScrollInputPlugin::keyboard_scroll` reads `FocusedEntity` (FocusPlugin)
+    // and `ButtonInput<KeyCode>` (InputPlugin, absent under MinimalPlugins) — the
+    // production stack always has both; seed them so the system param validates.
+    app.add_plugins(buiy_core::focus::FocusPlugin);
+    app.init_resource::<ButtonInput<KeyCode>>();
+    app.add_plugins(ScrollInputPlugin);
+    // The layout solver reads the primary window's viewport.
+    app.world_mut().spawn((
+        bevy::window::Window {
+            resolution: bevy::window::WindowResolution::new(800, 600),
+            ..Default::default()
+        },
+        bevy::window::PrimaryWindow,
+    ));
+
+    // A 200px-tall vertical scroll container with a 600px-tall child (overflows).
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(180.0)
+                .height_px(600.0)
+                .min_height(Sizing::Length(Length::Px(600.0))),
+        ))
+        .id();
+    let container = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(200.0)
+                .height_px(200.0)
+                .overflow_y(OverflowMode::Scroll),
+            ScrollOffset::default(),
+            ScrollExtent::default(),
+            // The SC-4 a11y scroll source — `ScrollArea`'s `#[require]` carries
+            // this; spelled here since the test spawns a raw container (no widget
+            // crate). `update_a11y_scroll` keeps it in lock-step with the offset +
+            // extent.
+            buiy_core::a11y::A11yScroll::default(),
+            A11yRole::Group,
+            A11yLabel("Items".to_string()),
+        ))
+        .add_child(child)
+        .id();
+
+    // Settle so layout resolves + the extent cache populates.
+    for _ in 0..4 {
+        app.update();
+    }
+    // Simulate a scroll by writing the offset directly (the wheel/keyboard path
+    // is gated in buiy_verify); the a11y source must mirror it.
+    app.world_mut()
+        .get_mut::<ScrollOffset>(container)
+        .unwrap()
+        .y = 120.0;
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let node = builder
+        .snapshot()
+        .iter()
+        .find(|n| n.entity == container)
+        .expect("the scroll container must surface in the tree");
+    let scroll = node
+        .scroll
+        .expect("a scroll container projects A11yNodeView.scroll (Some)");
+    assert_eq!(scroll.offset.y, 120.0, "the scroll offset is mirrored");
+    assert_eq!(
+        scroll.viewport_extent,
+        bevy::math::Vec2::new(200.0, 200.0),
+        "viewport extent = the container box",
+    );
+    assert_eq!(
+        scroll.content_extent,
+        bevy::math::Vec2::new(200.0, 600.0),
+        "content extent = the union of child boxes",
+    );
+    assert!(scroll.scrollable, "content exceeds viewport ⇒ scrollable");
+}
+
+/// SC-4: a non-scroll element carries NO `A11yScroll` source, so its
+/// `A11yNodeView.scroll` projects `None` (no scroll setter fires). The negative
+/// half of the scroll projection — a plain node is not a scroll container.
+#[test]
+fn build_tree_non_scroll_element_has_no_scroll() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    let e = app
+        .world_mut()
+        .spawn((A11yRole::Button, A11yLabel("Save".to_string())))
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let node = builder
+        .snapshot()
+        .iter()
+        .find(|n| n.entity == e)
+        .expect("the button surfaces in the tree");
+    assert!(
+        node.scroll.is_none(),
+        "a non-scroll element has no scroll geometry (None ⇒ no setter)",
+    );
+}

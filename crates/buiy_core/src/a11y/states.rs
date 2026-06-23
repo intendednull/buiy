@@ -317,3 +317,47 @@ impl Default for A11yLive {
         }
     }
 }
+
+/// Scroll geometry **source** component for a scroll container (SC-4 — the C5
+/// half of the single coordinated wire-format change; co-drive §5). The
+/// AccessKit *view-projection* of this is [`A11yScrollView`](super::A11yScrollView)
+/// on [`A11yNodeView`](super::A11yNodeView); P1a landed the view field + the six
+/// scroll-setter fold arm (default `None` everywhere), and **C5 (Wave 4)
+/// populates this source** so `build_tree` projects it into `view.scroll`.
+///
+/// This is the one a11y source component C5 adds; it is **not** authored by hand
+/// — [`crate::scroll::update_a11y_scroll`] keeps it in lock-step with the
+/// container's [`ScrollOffset`](crate::layout::ScrollOffset) +
+/// [`ScrollExtent`](crate::scroll::ScrollExtent), so the AT sees the live scroll
+/// position + extent + scrollable flag exactly as the wheel/keyboard handlers
+/// leave them. The fold derives the per-axis scroll max from the extents
+/// (`content_extent − viewport_extent`, clamped ≥ 0); `scrollable` is the
+/// informational "exceeds viewport on either axis" flag.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Default)]
+#[reflect(Component, Default, Debug, PartialEq)]
+pub struct A11yScroll {
+    /// Current scroll offset (logical px) → `set_scroll_x`/`set_scroll_y`.
+    pub offset: Vec2,
+    /// Total scrollable content size (logical px). The scroll max is
+    /// `content_extent − viewport_extent`.
+    pub content_extent: Vec2,
+    /// Visible viewport size (logical px).
+    pub viewport_extent: Vec2,
+    /// `true` iff `content_extent` exceeds `viewport_extent` on either axis.
+    pub scrollable: bool,
+}
+
+impl A11yScroll {
+    /// Project this source into the AccessKit [`A11yScrollView`](super::A11yScrollView)
+    /// the fold consumes — a trivial one-to-one carry (the two types share their
+    /// field set; the source lives in the ECS, the view is the build-time
+    /// projection on [`A11yNodeView`](super::A11yNodeView)).
+    pub fn view(&self) -> super::A11yScrollView {
+        super::A11yScrollView {
+            offset: self.offset,
+            content_extent: self.content_extent,
+            viewport_extent: self.viewport_extent,
+            scrollable: self.scrollable,
+        }
+    }
+}

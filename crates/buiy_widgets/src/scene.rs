@@ -51,6 +51,7 @@ use crate::disclosure::{
     caret_rotation_collapsed, disclosure_background, disclosure_border, disclosure_box_model,
     disclosure_panel_background, disclosure_panel_box_model,
 };
+use crate::scroll_area::{ScrollArea, scroll_area_overflow};
 use crate::slider::{
     SLIDER_LABEL_FONT_SIZE, Slider, SliderThumb, SliderTrack, slider_background, slider_border,
     slider_box_model, slider_thumb_background, slider_thumb_border, slider_thumb_box_model,
@@ -97,6 +98,36 @@ pub fn button(label: impl Into<String>) -> impl Scene {
         }
         Background { color: { bg.color } }
         Border { radius: { border.radius } }
+        A11yLabel({ label })
+    }
+}
+
+/// A scroll container as a composable BSN scene (C5-a). Mergeable: the
+/// `ScrollArea` marker triggers the full `#[require]` contract (a scrollable
+/// `Overflow`, `ScrollOffset`, `ScrollExtent`, `Focusable`, `A11yRole::Group`,
+/// and the SC-4 `A11yScroll` source), and the spelled field-patches layer the
+/// accessible name and the default overflow on top. Author the scrollable
+/// content as the area's `Children [ … ]` when composing.
+///
+/// The `label` is the scroll region's accessible name (`A11yRole::Group` + name);
+/// patch a `BoxModel { width/height }` on top to give the viewport a size (a
+/// scroll container with no fixed size scrolls only when its content exceeds the
+/// resolved viewport).
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// world.spawn_scene(bsn! {
+///     scroll_area("Items")
+///     BoxModel { height: { Sizing::Length(Length::Px(200.0)) } }
+///     Children [ /* rows … */ ]
+/// });
+/// ```
+pub fn scroll_area(label: impl Into<String>) -> impl Scene {
+    let overflow = scroll_area_overflow();
+    let label = label.into();
+    bsn! {
+        ScrollArea
+        Overflow { x: { overflow.x }, y: { overflow.y } }
         A11yLabel({ label })
     }
 }

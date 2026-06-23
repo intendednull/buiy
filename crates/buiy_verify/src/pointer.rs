@@ -95,7 +95,12 @@ impl PointerHarness {
             // resources the C3 focus tests assert on. `handle_tab` reads
             // `Res<ButtonInput<KeyCode>>` (an `InputPlugin` resource, absent
             // under `MinimalPlugins`), so seed it below before any update.
-            .add_plugins(buiy_core::focus::FocusPlugin);
+            .add_plugins(buiy_core::focus::FocusPlugin)
+            // C5-a: the scroll input pipeline — the `Pointer<Scroll>` →
+            // `ScrollOffset` observer, keyboard scroll, the `ScrollExtent` cache.
+            // Part of the production interaction stack the harness models, so a
+            // synthetic wheel/keyboard scroll drives the real clamp path.
+            .add_plugins(buiy_core::scroll::ScrollInputPlugin);
         app.init_resource::<ButtonInput<bevy::input::keyboard::KeyCode>>();
         app.init_resource::<CapturedEvents>();
         app.init_resource::<CapturedScroll>();
@@ -344,6 +349,12 @@ impl PointerHarness {
     /// FocusedEntity once C3/C4 land) and direct scene mutation.
     pub fn world_mut(&mut self) -> &mut World {
         self.app.world_mut()
+    }
+
+    /// Read-only world access for assertions (component reads on the
+    /// post-settle world without taking `&mut`).
+    pub fn world(&self) -> &World {
+        self.app.world()
     }
 
     /// The currently focused entity (`FocusedEntity.0`) — the focus-on-click

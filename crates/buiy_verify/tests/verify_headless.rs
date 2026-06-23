@@ -61,6 +61,8 @@ mod pointer_press_smoke;
 mod reftest_independence;
 #[path = "verify_headless/scene_generator_smoke.rs"]
 mod scene_generator_smoke;
+#[path = "verify_headless/scroll_c5a.rs"]
+mod scroll_c5a;
 #[path = "verify_headless/sdf_oracle.rs"]
 mod sdf_oracle;
 #[path = "verify_headless/smoke.rs"]

@@ -6,7 +6,10 @@ use bevy::prelude::*;
 
 pub use buiy_core::{
     BuiySet, CorePlugin,
-    a11y::{A11yDescription, A11yLabel, A11yRole, A11yTreeBuilder, AccessKitAdapterPlugin},
+    a11y::{
+        A11yDescription, A11yLabel, A11yRole, A11yScroll, A11yScrollView, A11yTreeBuilder,
+        AccessKitAdapterPlugin,
+    },
     components::{Node, ResolvedLayout, ResolvedTransform, StackingContext},
     focus::{FocusVisible, Focusable, FocusedEntity},
     layout::{
@@ -31,6 +34,7 @@ pub use buiy_core::{
     render::components::{
         Background, Border, BorderSide, Corners, CssVisibility, Opacity, Radius, TextColor,
     },
+    scroll::{ScrollExtent, ScrollInputPlugin},
     text::{
         BuiyTextPlugin, ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize,
         FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, LineHeight,
@@ -46,8 +50,8 @@ pub use buiy_core::{
 // `TextChanged` pairs with it (the message the Bug-3 fix keeps honest). Audit § 4.
 pub use buiy_core::text::edit::{EditCommand, TextChanged};
 pub use buiy_widgets::{
-    Button, Checkbox, Dialog, Disclosure, OnPress, Slider, Switch, TextInput, TooltipTrigger,
-    WidgetsPlugin, dialog_invoker,
+    Button, Checkbox, Dialog, Disclosure, OnPress, ScrollArea, Slider, Switch, TextInput,
+    TooltipTrigger, WidgetsPlugin, dialog_invoker,
 };
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `checkbox(label)`, `switch(label)`, `slider(label, now, min, max, step)`,
@@ -64,7 +68,7 @@ pub use buiy_widgets::{
 // prelude renames them back to `checkbox` / `switch` / `slider` / `disclosure` /
 // `dialog`. (`tooltip_trigger` does not collide — the marker is `TooltipTrigger`.)
 pub use buiy_widgets::scene::{
-    button, checkbox, dialog, disclosure, slider, switch, text_input_multi_line,
+    button, checkbox, dialog, disclosure, scroll_area, slider, switch, text_input_multi_line,
     text_input_single_line, tooltip_trigger,
 };
 
@@ -224,6 +228,10 @@ impl Plugin for BuiyPlugin {
             buiy_core::layout::LayoutPlugin,
             buiy_core::picking::PickingPlugin,
             buiy_core::picking::BuiyPickingBackendPlugin,
+            // C5-a (scroll-overlay-modal.md §A): the scroll input pipeline —
+            // `Pointer<Scroll>` → clamped `ScrollOffset`, keyboard scroll, the
+            // `ScrollExtent` cache, and the SC-4 `A11yScroll` source sync.
+            buiy_core::scroll::ScrollInputPlugin,
             // Text engine foundation (buiy-text-rendering-design T1): the
             // shared FontSystem + the FontsGeneration reshape trigger.
             // System-font scan stays opt-in/off in the composed default.
