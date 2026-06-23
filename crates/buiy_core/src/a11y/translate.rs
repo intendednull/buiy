@@ -45,6 +45,34 @@ pub fn to_accesskit_node(view: &A11yNodeView) -> Node {
     if !view.description.is_empty() {
         node.set_description(view.description.clone());
     }
+    // Decomposed state fold (P1a, first batch). One ordered arm per component;
+    // **absence ⇒ the setter is not called** (semantic-tree.md §§2,5). Every
+    // setter signature below is verified against the resolved accesskit 0.24.1
+    // (committed Cargo.lock): `set_toggled` takes the `Toggled` enum
+    // (`unique_enum_property_methods!`), `set_expanded`/`set_selected` take
+    // `bool` (`bool_property_methods!`), and `set_disabled`/`set_modal` take
+    // **no argument** (`flag_methods!` markers). This is the single emission
+    // point for these setters (standing rule §0.2).
+    if let Some(t) = view.toggled {
+        node.set_toggled(t);
+    }
+    if let Some(b) = view.expanded {
+        node.set_expanded(b);
+    }
+    if let Some(b) = view.selected {
+        node.set_selected(b);
+    }
+    if view.disabled {
+        node.set_disabled();
+    }
+    if view.modal {
+        node.set_modal();
+    }
+    // NOTE: `A11yHidden` (`view.hidden`) has **no fold arm** in P1a. The final
+    // design (semantic-tree.md §7.4) prunes hidden entities + subtrees from
+    // `build_tree` rather than flagging the node; that prune needs the ECS-tree
+    // nesting that lands in P1b. The flag is carried on the view so P1b only has
+    // to add the prune.
     // Phase 0 closeout: focusable widgets get the AccessKit "focusable"
     // semantic. Full keyboard-action contract is widget-specific
     // (`buiy-widget-catalog-design`).

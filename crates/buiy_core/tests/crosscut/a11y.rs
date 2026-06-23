@@ -1,7 +1,10 @@
 use bevy::prelude::*;
 use buiy_core::{
     CorePlugin,
-    a11y::{A11yDescription, A11yLabel, A11yPlugin, A11yRole, A11yTreeBuilder},
+    a11y::{
+        A11yDescription, A11yDisabled, A11yExpanded, A11yHidden, A11yLabel, A11yModal, A11yPlugin,
+        A11yRole, A11ySelected, A11yToggled, A11yTreeBuilder,
+    },
     components::Node,
     focus::Focusable,
 };
@@ -96,6 +99,76 @@ fn description_component_surfaces_in_tree() {
     assert_eq!(
         node.description, "Saves the current document",
         "A11yDescription text must surface as the node's description"
+    );
+}
+
+/// P1a: `build_tree` projects each decomposed state component from the real ECS
+/// world into the corresponding `A11yNodeView` field. A regression in the query
+/// widening or the per-component projection (e.g. forgetting to read a marker, or
+/// projecting the wrong inner value) reddens this. Markers project to a presence
+/// `bool`; wrappers unwrap to their inner accesskit value.
+#[test]
+fn build_tree_projects_decomposed_state_components() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    let e = app
+        .world_mut()
+        .spawn((
+            A11yRole::Checkbox,
+            A11yLabel("Bold".to_string()),
+            A11yToggled(accesskit::Toggled::Mixed),
+            A11yExpanded(true),
+            A11ySelected(true),
+            A11yDisabled,
+            A11yModal,
+            A11yHidden,
+        ))
+        .id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    let node = builder
+        .snapshot()
+        .iter()
+        .find(|n| n.entity == e)
+        .expect("the stateful entity must surface in the tree");
+
+    assert_eq!(node.toggled, Some(accesskit::Toggled::Mixed));
+    assert_eq!(node.expanded, Some(true));
+    assert_eq!(node.selected, Some(true));
+    assert!(
+        node.disabled,
+        "A11yDisabled marker presence ⇒ disabled flag"
+    );
+    assert!(node.modal, "A11yModal marker presence ⇒ modal flag");
+    assert!(
+        node.hidden,
+        "A11yHidden marker presence ⇒ hidden flag (carried for P1b)"
+    );
+}
+
+/// P1a: a decomposed state component is a11y content on its own — an entity
+/// carrying ONLY a state component (no role/label/description/focusable) must
+/// still surface as a node, otherwise the state would be silently dropped.
+#[test]
+fn entity_with_only_a_state_component_surfaces() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+
+    let e = app.world_mut().spawn(A11ySelected(true)).id();
+
+    app.update();
+
+    let builder = app.world().resource::<A11yTreeBuilder>();
+    assert!(
+        builder.snapshot().iter().any(|n| n.entity == e),
+        "an entity carrying only a state component must not be skipped"
     );
 }
 

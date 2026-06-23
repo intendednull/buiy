@@ -129,7 +129,7 @@ pub enum TreeView {
 /// [`accesskit_consumer::Tree`] — the gate-#3 read tier.
 ///
 /// `focused` is the AccessKit `NodeId` of the focused node (use
-/// [`node_id_for`](buiy_core::a11y::translate::node_id_for)); `None` focuses the
+/// [`node_id_for`]); `None` focuses the
 /// synthetic root. Read a node back with [`node_for`] (or, manually,
 /// `tree.state().node_by_tree_local_id(node_id_for(entity), TreeId::ROOT)`).
 ///
@@ -151,7 +151,7 @@ pub fn consume(views: &[A11yNodeView], focused: Option<NodeId>) -> ConsumerTree 
 }
 
 /// Resolve a producer-side [`accesskit::NodeId`] (from
-/// [`node_id_for`](buiy_core::a11y::translate::node_id_for)) to its
+/// [`node_id_for`]) to its
 /// [`accesskit_consumer::Node`] in `tree`, or `None` if the producer never
 /// emitted it.
 ///

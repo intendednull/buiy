@@ -20,6 +20,7 @@ fn snapshot_tree_serializes_to_stable_json() {
             name: "Save".into(),
             description: "".into(),
             focusable: true,
+            ..Default::default()
         },
         A11yNodeView {
             entity: entity(2),
@@ -27,6 +28,7 @@ fn snapshot_tree_serializes_to_stable_json() {
             name: "Hello".into(),
             description: "".into(),
             focusable: false,
+            ..Default::default()
         },
     ];
     let json = snapshot_tree(&nodes);
@@ -43,6 +45,7 @@ fn diff_returns_none_for_identical_snapshots() {
         name: "Save".into(),
         description: "".into(),
         focusable: true,
+        ..Default::default()
     }];
     let snap = snapshot_tree(&nodes);
     assert!(diff_snapshots(&snap, &snap).is_none());
@@ -72,6 +75,7 @@ fn consumer_reads_back_a_button_label() {
         name: "Save".into(),
         description: String::new(),
         focusable: true,
+        ..Default::default()
     }];
     let tree = consume(&views, None);
     let node =
@@ -105,6 +109,98 @@ fn semantic_tree_round_trips_role_and_name_through_a_running_app() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// P1a first-batch decomposed-state fixtures (gate-#3 consumer tier).
+//
+// Each builds an `A11yNodeView` carrying one projected state and asserts the
+// setter's observable output through the in-process `accesskit_consumer::Tree`
+// — the same way an AT reads it. `A11yExpanded` is asserted at the PRODUCER tier
+// (in crosscut/a11y_translate.rs) because accesskit_consumer 0.36 exposes no
+// public `is_expanded()` getter (semantic-tree.md §0 gap). `A11yHidden` is
+// carried-only in P1a (no setter), also covered producer-side.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn consumer_reads_toggled_tri_state() {
+    // `Toggled::Mixed` must survive the round-trip uncollapsed.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Checkbox,
+        name: "Bold".into(),
+        toggled: Some(accesskit::Toggled::Mixed),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("checkbox node present");
+    assert_eq!(node.toggled(), Some(accesskit::Toggled::Mixed));
+
+    // And a plain `True` case.
+    let views = vec![A11yNodeView {
+        entity: entity(2),
+        role: A11yRole::Switch,
+        name: "Wifi".into(),
+        toggled: Some(accesskit::Toggled::True),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(2))).expect("switch node present");
+    assert_eq!(node.toggled(), Some(accesskit::Toggled::True));
+}
+
+#[test]
+fn consumer_reads_selected() {
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Button,
+        name: "Tab One".into(),
+        selected: Some(true),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("selected node present");
+    assert_eq!(node.is_selected(), Some(true));
+}
+
+#[test]
+fn consumer_reads_disabled_marker() {
+    // Disabled marker present ⇒ the flag is set.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Button,
+        name: "Save".into(),
+        disabled: true,
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("disabled node present");
+    assert!(node.is_disabled());
+
+    // Absent ⇒ not disabled (the fold omits the marker).
+    let views = vec![A11yNodeView {
+        entity: entity(2),
+        role: A11yRole::Button,
+        name: "Cancel".into(),
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(2))).expect("enabled node present");
+    assert!(!node.is_disabled());
+}
+
+#[test]
+fn consumer_reads_modal_marker() {
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Dialog,
+        name: "Confirm".into(),
+        modal: true,
+        ..Default::default()
+    }];
+    let tree = consume(&views, None);
+    let node = node_for(&tree, node_id_for(entity(1))).expect("modal dialog node present");
+    assert!(node.is_modal());
+}
+
 #[test]
 fn snapshot_entity_field_is_the_canonical_node_id() {
     let e = entity(1);
@@ -114,6 +210,7 @@ fn snapshot_entity_field_is_the_canonical_node_id() {
         name: "Save".into(),
         description: "".into(),
         focusable: true,
+        ..Default::default()
     }];
     let json = snapshot_tree(&nodes);
     let expected = buiy_core::a11y::translate::node_id_for(e).0;
