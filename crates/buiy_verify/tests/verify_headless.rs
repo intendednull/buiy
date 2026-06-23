@@ -49,6 +49,8 @@ mod invariant_mutations;
 mod invariant_predicates;
 #[path = "verify_headless/metric.rs"]
 mod metric;
+#[path = "verify_headless/overlay_dismiss_c5b.rs"]
+mod overlay_dismiss_c5b;
 #[path = "verify_headless/pointer_events_c3b.rs"]
 mod pointer_events_c3b;
 #[path = "verify_headless/pointer_focus_c3d.rs"]

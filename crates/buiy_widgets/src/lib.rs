@@ -13,6 +13,8 @@ pub mod button;
 pub mod checkbox;
 pub mod dialog;
 pub mod disclosure;
+pub mod dismiss;
+pub mod popover;
 pub mod scene;
 pub mod scroll_area;
 pub mod slider;
@@ -23,6 +25,8 @@ pub use button::Button;
 pub use checkbox::Checkbox;
 pub use dialog::Dialog;
 pub use disclosure::Disclosure;
+pub use dismiss::LightDismiss;
+pub use popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide};
 pub use scroll_area::ScrollArea;
 pub use slider::Slider;
 pub use switch::Switch;
@@ -35,7 +39,8 @@ pub use buiy_core::interaction::OnPress;
 pub use dialog::dialog_invoker;
 pub use scene::{
     button, checkbox as checkbox_scene, dialog as dialog_scene, disclosure as disclosure_scene,
-    scroll_area, slider as slider_scene, switch as switch_scene, tooltip_trigger,
+    popover as popover_scene, scroll_area, slider as slider_scene, switch as switch_scene,
+    tooltip_trigger,
 };
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
@@ -143,6 +148,8 @@ impl Plugin for WidgetsPlugin {
             .register_type::<TooltipTrigger>()
             .register_type::<tooltip::TooltipNode>()
             .register_type::<scroll_area::ScrollArea>()
+            .register_type::<popover::Popover>()
+            .register_type::<dismiss::LightDismiss>()
             .register_type::<text_input::TextInput>();
 
         // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual
@@ -229,5 +236,27 @@ impl Plugin for WidgetsPlugin {
             Update,
             text_input::sync_text_input_a11y.in_set(BuiySet::Animate),
         );
+
+        // C5-b (scroll-overlay-modal.md §B) — overlay positioning + light-dismiss.
+        //
+        // `position_popover` lowers each `Popover` onto its required `Anchor`
+        // (the placement candidates → an `Anchor.position_try` flip chain). It
+        // runs `.before(BuiySet::Layout)` and mutates the `Anchor` IN PLACE, so
+        // the same-frame `anchor_resolution` (inside `BuiySet::Layout`) positions
+        // the popover with no command-sync frame lag.
+        app.add_systems(Update, popover::position_popover.before(BuiySet::Layout));
+        // Wire each tooltip node's placement (anchor to its trigger parent +
+        // top-layer `Tooltip` stacking + `LightDismiss`) once it gains its parent
+        // link (§B.4 — the placement the P1d tooltip slice deferred to C5). The
+        // `Anchor` it inserts is consumed by the same-frame `anchor_resolution`.
+        app.add_systems(Update, tooltip::position_tooltip);
+        // Escape closes the top-most open light-dismiss overlay (§B.5, keyboard
+        // channel). Runs in `BuiySet::Input` alongside the other keyboard handlers.
+        app.add_systems(Update, dismiss::escape_dismiss.in_set(BuiySet::Input));
+        // The pointer light-dismiss observer (§B.5, pointer channel): a primary
+        // `Pointer<Press>` outside the top-most open overlay closes it. An
+        // observer (not a system) so it rides the C3 `Pointer<E>` capture→bubble
+        // layer with the picking-resolved target.
+        app.add_observer(dismiss::light_dismiss_on_press);
     }
 }

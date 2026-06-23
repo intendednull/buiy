@@ -27,6 +27,7 @@
 //! (`Node`, the Style decomposition, `Focusable`, `A11yRole`, the editor
 //! mechanism) rides the markers' `#[require]`.
 
+use bevy::ecs::entity::Entity;
 use bevy::ecs::hierarchy::Children;
 use bevy::picking::Pickable;
 use bevy::scene::{Scene, bsn, template_value};
@@ -51,6 +52,7 @@ use crate::disclosure::{
     caret_rotation_collapsed, disclosure_background, disclosure_border, disclosure_box_model,
     disclosure_panel_background, disclosure_panel_box_model,
 };
+use crate::popover::Popover;
 use crate::scroll_area::{ScrollArea, scroll_area_overflow};
 use crate::slider::{
     SLIDER_LABEL_FONT_SIZE, Slider, SliderThumb, SliderTrack, slider_background, slider_border,
@@ -129,6 +131,32 @@ pub fn scroll_area(label: impl Into<String>) -> impl Scene {
         ScrollArea
         Overflow { x: { overflow.x }, y: { overflow.y } }
         A11yLabel({ label })
+    }
+}
+
+/// An anchored top-layer popover as a composable BSN scene (C5-b). The `Popover`
+/// marker triggers the full `#[require]` contract (a top-layer `Stacking`, the
+/// `Anchor` the positioning lowers into, and the `auto` `LightDismiss` policy);
+/// the whole-value `Popover` patch carries the `anchor` target + the default
+/// below-then-above flip chain. Author the visible content as the popover's
+/// `Children [ … ]`.
+///
+/// `Popover` carries an `Option<Entity>` + a `Vec<PopoverPlacement>` (which the
+/// bsn field-patch path does not author), so it is inserted as a whole value
+/// (`template_value`).
+///
+/// ```ignore
+/// use buiy::prelude::*;
+/// let trigger = /* the anchor/trigger entity */;
+/// world.spawn_scene(bsn! {
+///     popover(trigger)
+///     Children [ /* panel content … */ ]
+/// });
+/// ```
+pub fn popover(anchor: Entity) -> impl Scene {
+    bsn! {
+        Popover
+        template_value(Popover::anchored_to(anchor))
     }
 }
 

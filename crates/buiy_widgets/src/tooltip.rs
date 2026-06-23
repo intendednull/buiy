@@ -28,13 +28,15 @@
 //! dismiss timing**. This slice builds only the bundle + the a11y shape + the
 //! `described_by` relation + the minimal `CssVisibility` show/hide honor.
 
+use crate::dismiss::LightDismiss;
+use crate::popover::{PopoverPlacement, PopoverSide};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use buiy_core::{
     a11y::{A11yLabel, A11yRelations, A11yRole, A11yTooltipHost},
     components::Node,
     focus::Focusable,
-    layout::{BoxModel, Style},
+    layout::{Anchor, AnchorRef, BoxModel, PositionTry, Stacking, Style, TopLayer, TryCondition},
     render::color::ColorToken,
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
     text::{FontSize, Text},
@@ -212,5 +214,108 @@ pub fn wire_tooltip_described_by(
         let mut next = relations.cloned().unwrap_or_default();
         next.described_by = vec![tooltip];
         commands.entity(trigger).insert(next);
+    }
+}
+
+/// The gap (logical px) between the trigger edge and the tooltip bubble.
+pub(crate) const TOOLTIP_GAP_PX: f32 = 6.0;
+
+/// The tooltip placement chain: below the trigger, else above (the canonical
+/// tooltip flip). `pub(crate)` so the scene-fn can spell the same default and a
+/// test can assert it.
+pub(crate) fn tooltip_placements() -> [PopoverPlacement; 2] {
+    [
+        PopoverPlacement {
+            side: PopoverSide::Bottom,
+            gap: TOOLTIP_GAP_PX,
+            ..Default::default()
+        },
+        PopoverPlacement {
+            side: PopoverSide::Top,
+            gap: TOOLTIP_GAP_PX,
+            ..Default::default()
+        },
+    ]
+}
+
+/// Build the tooltip's `Anchor.position_try` chain — below the trigger, flipping
+/// above when below would overflow the viewport (the last candidate is
+/// unconditional, the least-bad fallback so the tooltip is never stranded at the
+/// origin). Mirrors `popover::position_popover`'s lowering for the fixed
+/// tooltip placements.
+fn tooltip_position_try() -> Vec<PositionTry> {
+    let placements = tooltip_placements();
+    let last = placements.len() - 1;
+    placements
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let conditions = if i == last {
+                Vec::new()
+            } else {
+                vec![TryCondition::FitsInViewport]
+            };
+            PositionTry {
+                inset: p.to_inset(),
+                conditions,
+            }
+        })
+        .collect()
+}
+
+/// Position each [`TooltipNode`] relative to its trigger (its parent) and place
+/// it in the **tooltip top layer** (C5-b, §B.4 — the placement/positioning the
+/// P1d slice deferred). On the frame a tooltip node gains its `ChildOf` link to
+/// the trigger, this wires:
+///
+/// - `Anchor { position_anchor: <trigger>, position_try: [below, above] }` — so
+///   the existing `anchor_resolution` (layout sub-pass 6d) positions the tooltip
+///   adjacent to the trigger (and flips above when below would overflow). This
+///   is the SAME layout anchor pipeline the [`Popover`](crate::popover::Popover)
+///   primitive lowers onto — one positioning engine.
+/// - `Stacking { top_layer: TopLayer::Tooltip }` — the tooltip paints above the
+///   page and joins the `TopLayerActivation` deque (so the light-dismiss / Esc
+///   handlers can find it as a top-most open overlay).
+/// - `LightDismiss { trigger }` — Escape (and an outside press) dismisses the
+///   tooltip per WCAG 1.4.13; a press on the trigger does not.
+///
+/// The query data [`position_tooltip`] reads per tooltip node: the node entity,
+/// its `ChildOf` (to find the trigger parent), and its current `Anchor` (for the
+/// idempotency check). Aliased so the system signature stays under clippy's
+/// `type_complexity` bar (the `TriggerDescribedByData` precedent).
+type TooltipPlacementData = (Entity, &'static ChildOf, Option<&'static Anchor>);
+
+/// The change-detection filter for [`position_tooltip`]: a `TooltipNode` that just
+/// gained its `ChildOf` link to the trigger this frame, so the placement wiring
+/// runs once per tooltip. Aliased to keep the system signature simple.
+type NewlyChildedTooltip = (With<TooltipNode>, Added<ChildOf>);
+
+/// Gated on `Added<ChildOf>` for `TooltipNode`s (the tooltip node gains its
+/// parent link when the trigger's `children!` spawn), so it wires once per
+/// tooltip. Idempotent: a tooltip that already carries an author-set
+/// `position_anchor` is left untouched.
+pub fn position_tooltip(
+    mut commands: Commands,
+    tooltips: Query<TooltipPlacementData, NewlyChildedTooltip>,
+) {
+    for (tooltip, parent, anchor) in &tooltips {
+        // Author already anchored this tooltip — leave it.
+        if anchor.is_some_and(|a| a.position_anchor.is_some()) {
+            continue;
+        }
+        let trigger = parent.parent();
+        let mut next = anchor.cloned().unwrap_or_default();
+        next.position_anchor = Some(AnchorRef::Entity(trigger));
+        next.position_try = tooltip_position_try();
+        commands.entity(tooltip).insert((
+            next,
+            Stacking {
+                top_layer: TopLayer::Tooltip,
+                ..Default::default()
+            },
+            LightDismiss {
+                trigger: Some(trigger),
+            },
+        ));
     }
 }

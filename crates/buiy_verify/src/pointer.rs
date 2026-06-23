@@ -100,7 +100,16 @@ impl PointerHarness {
             // `ScrollOffset` observer, keyboard scroll, the `ScrollExtent` cache.
             // Part of the production interaction stack the harness models, so a
             // synthetic wheel/keyboard scroll drives the real clamp path.
-            .add_plugins(buiy_core::scroll::ScrollInputPlugin);
+            .add_plugins(buiy_core::scroll::ScrollInputPlugin)
+            // C5-b: the widget plugin carries the overlay positioning +
+            // light-dismiss interaction the harness now models — the
+            // `light_dismiss_on_press` observer (a primary `Pointer<Press>`
+            // outside the top-most open overlay closes it), the `escape_dismiss`
+            // keyboard handler, and `position_popover`/`position_tooltip`. Adding
+            // it here lets a synthetic press / Escape drive the REAL dismiss path
+            // headless. Its other widget systems are inert with no matching
+            // entities (each is query-gated).
+            .add_plugins(buiy_widgets::WidgetsPlugin);
         app.init_resource::<ButtonInput<bevy::input::keyboard::KeyCode>>();
         app.init_resource::<CapturedEvents>();
         app.init_resource::<CapturedScroll>();
