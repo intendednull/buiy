@@ -1,47 +1,56 @@
 # Coordinate-Space + Picking/Clip Correctness Implementation Plan
 
+> Part of the [co-drive](2026-06-22-widget-catalog-agent-interface-codrive.md); Wave 1 — the authoritative sequencing / scope / shared-contract source (SC-1…SC-4, §4 waves).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Make every absolute-coordinate consumer (picking AABB + the clip producer) read window-absolute position from a **non-optional** `GlobalTransform` instead of the parent-local `ResolvedLayout.position`, fixing Bug 1 (picking, live) and its latent twin in `render/clip.rs`, while preserving the `bridge.rs:138` `position − acc` invariant.
+**Goal:** Make every absolute-coordinate consumer (picking AABB + the clip producer) read window-absolute position from a **non-optional** `GlobalTransform` instead of the parent-local `ResolvedLayout.position`, fixing Bug 1 (picking, live) and its latent twin in `render/clip.rs`, while preserving the `bridge.rs:74` `position − scroll` invariant (the `compose_buiy_transform` helper; was cited as `bridge.rs:138 position − acc` pre-refactor).
 
 **Architecture:** `ResolvedLayout.position` stays parent-local (Taffy's per-node `location`); the transform bridge (`render/bridge.rs`) remains the sole accumulator that folds `position − ancestor_scroll` into `Transform` → `GlobalTransform`. C1 routes `point_in_aabb` / `hit_test` / `emit_picks` and `write_clip_rects`'s `walk` through `GlobalTransform.translation().truncate()`, adds the load-bearing `write_clip_rects.after(sync_simple_transforms)` scheduling edge, and corrects the lying `components.rs:65` doc comment. No `ResolvedLayout` value, no paint, and no `PackedInstance` byte layout change — so **no snapshot/golden re-bless**.
 
+> **Co-drive SC-3 boundary (the absolute basis only — C1 does NOT touch depth or `Pickable`).** Per [co-drive §5 SC-3](2026-06-22-widget-catalog-agent-interface-codrive.md), C1 **sets the absolute basis** that the stacking-aware `hit_test` builds on: it makes both pick paths read the non-optional `GlobalTransform`. It deliberately leaves **the smallest-area tiebreak** (`backend.rs:53` / `mod.rs:42-46`) and **`emit_picks`'s depth/camera/no-hit** untouched, and adds **no `Pickable`-query surface**. **C3** (Wave 2) does the depth-rule replacement (smallest-area → paint-order) *and* the net-new `Pickable::IGNORE`/`should_block_lower` filtering across **BOTH** `hit_test` AND `emit_picks` — the "two paths must agree" trap in SC-3. C1's job is purely the coordinate the AABB is computed in, leaving a clean AABB seam for C3 to rewrite.
+
 **Tech Stack:** Rust, Bevy 0.19.0-rc.3 (`bevy::picking` backend + `PointerHits`/`HitData`, `bevy::transform::systems::sync_simple_transforms`), Taffy layout, `buiy_core` (`picking`, `render/clip`, `render/bridge`, `layout`), `buiy_verify` (C7 `PointerHarness`).
 
-**Wave / dependencies:** Wave 1. Depends on **C0** (umbrella decisions) only. Co-delivered with **C7** — C7 **owns** the shared Wave-1 test infrastructure: `buiy_verify::pointer::PointerHarness` (`crates/buiy_verify/src/pointer.rs`) and the offset-picking RED proof `synthetic_pointer_hits_offset_widget_at_its_global_position` (`crates/buiy_verify/tests/pointer_offset_regression.rs`), landed by C7 as a committed `#[ignore = "RED until C1 …"]`. **C1 does NOT create the harness or that test** — C1's job is to land the coordinate fix and then **un-ignore** C7's offset test (delete its `#[ignore]` attribute) so it goes GREEN. That committed RED→GREEN transition IS C1's coordinate-fix regression proof (umbrella §9.5; the old `picking_backend.rs`/`picking.rs` hand-write `ResolvedLayout` and are structurally blind to Bug 1). C1 strictly **precedes** C3 (input model rewrites `emit_picks` body around the AABB seam C1 leaves), C5 (overlays/scroll are the first offset clippers), and C6 (outline survives `overflow:hidden` via the now-correct `AncestorClip`). C1 also lands its OWN buiy_core RED-first tests the harness does not cover — the nested+offset overflow-clip test (Task 5), the clip-after-bridge ordering test (Task 6), and the no-fallback assertions (Task 7) — each written RED against pre-fix code in the same task, then GREEN after the fix (correct RED-first, not a hand-revert).
+**Wave / dependencies:** Wave 1. Depends on **C0** (umbrella decisions) only. Co-delivered with **C7** — C7 **owns** the shared Wave-1 test infrastructure: `buiy_verify::pointer::PointerHarness` (`crates/buiy_verify/src/pointer.rs`) and the offset-picking RED proof `synthetic_pointer_hits_offset_widget_at_its_global_position` (`crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs`), landed by C7 as a committed `#[ignore = "RED until C1 …"]`. **C1 does NOT create the harness or that test** — C1's job is to land the coordinate fix and then **un-ignore** C7's offset test (delete its `#[ignore]` attribute) so it goes GREEN. That committed RED→GREEN transition IS C1's coordinate-fix regression proof (umbrella §9.5; the old `picking_backend.rs`/`picking.rs` hand-write `ResolvedLayout` and are structurally blind to Bug 1). C1 strictly **precedes** C3 (input model rewrites `emit_picks` body around the AABB seam C1 leaves), C5 (overlays/scroll are the first offset clippers), and C6 (outline survives `overflow:hidden` via the now-correct `AncestorClip`). C1 also lands its OWN buiy_core RED-first tests the harness does not cover — the nested+offset overflow-clip test (Task 5), the clip-after-bridge ordering test (Task 6), and the no-fallback assertions (Task 7) — each written RED against pre-fix code in the same task, then GREEN after the fix (correct RED-first, not a hand-revert).
 
 ---
 
 ## PHASE 0 (Task 0): Rebase + re-confirm anchors
 
-**This plan's code blocks were written against `507855f`. They MUST be re-confirmed against the then-current `origin/main` before any edit.** Implementation is gated on the inspection-tools merge + a fresh rebase (umbrella §8). The prototype diffs are stale-base and are re-derived here, never cherry-picked.
+**This plan's code blocks were written against `507855f`. They MUST be re-confirmed against the CURRENT base before any edit.** The integration branch is now rebased onto `origin/main` @ `e54cf0c` (PR #77 testing-audit + #78 CI-hardening + #79 a11y P0 merged); per the co-drive §8 reread the non-widget app-correctness work (C1/C2/C7) is no longer gated on the agent-interface merge. The prototype diffs are stale-base and are re-derived here, never cherry-picked.
+
+> **MAJOR DRIFT — test-binary consolidation (PR #77).** The per-file integration tests this plan names (`tests/picking.rs`, `tests/picking_backend.rs`, `tests/render_clip_rects.rs`) **no longer exist as standalone binaries.** They are now **modules** under two consolidated group binaries (testing-audit 162→7), each included via an explicit `#[path]` `mod` line in the binary root:
+> - `crates/buiy_core/tests/crosscut/picking.rs` + `crates/buiy_core/tests/crosscut/picking_backend.rs` — run via `cargo test -p buiy_core --test crosscut` (root: `tests/crosscut.rs`).
+> - `crates/buiy_core/tests/render/render_clip_rects.rs` — run via `cargo test -p buiy_core --test render` (root: `tests/render.rs`). A `tests/render/render_clip_schedule_order.rs` already pins the `.after(Animate).before(Picking)` window for `write_clip_rects`; Task 6's new behavioral not-stale test lands in `render_clip_rects.rs`, not there.
+> Consequences for every command/anchor below: (a) **run** a touched test with `--test crosscut` / `--test render` (optionally filtered, e.g. `--test render render_clip_rects::offset_clipper`), never `--test render_clip_rects`; (b) inside a module, shared support is reached via `crate::support`, NOT `mod support;`; (c) adding a NEW module file requires registering its `#[path] mod …;` line in the binary root. `cargo nextest run` is the inner runner (#77).
 
 **Files**
-- Read: `/mnt/storage/projects/buiy/CLAUDE.md` (Build & Test), `crates/buiy_core/src/picking/mod.rs`, `crates/buiy_core/src/picking/backend.rs`, `crates/buiy_core/src/render/clip.rs`, `crates/buiy_core/src/render/mod.rs`, `crates/buiy_core/src/render/bridge.rs`, `crates/buiy_core/src/lib.rs`, `crates/buiy_core/src/components.rs`, `crates/buiy_core/tests/picking.rs`, `crates/buiy_core/tests/picking_backend.rs`, `crates/buiy_core/tests/render_clip_rects.rs`
-- Read (C7-owned, do NOT edit beyond un-ignoring): `crates/buiy_verify/src/pointer.rs` (the `PointerHarness`), `crates/buiy_verify/tests/pointer_offset_regression.rs` (the offset RED proof C1 un-ignores). Confirm both are present on the rebased tree (C7 lands in the same wave, before C1).
+- Read: `/mnt/storage/projects/buiy/CLAUDE.md` (Build & Test), `crates/buiy_core/src/picking/mod.rs`, `crates/buiy_core/src/picking/backend.rs`, `crates/buiy_core/src/render/clip.rs`, `crates/buiy_core/src/render/mod.rs`, `crates/buiy_core/src/render/bridge.rs`, `crates/buiy_core/src/lib.rs`, `crates/buiy_core/src/components.rs`, `crates/buiy_core/tests/crosscut/picking.rs`, `crates/buiy_core/tests/crosscut/picking_backend.rs`, `crates/buiy_core/tests/render/render_clip_rects.rs`
+- Read (C7-owned, do NOT edit beyond un-ignoring): `crates/buiy_verify/src/pointer.rs` (the `PointerHarness` — **absent today**, C7 creates it), `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs` (the offset RED proof C1 un-ignores — under the `verify_headless` group binary). Confirm both are present on the rebased tree (C7 lands in the same wave, before C1).
 
 **Steps**
-- [ ] **Fetch + branch fresh from upstream.** `git fetch --all --prune`, then `git log --oneline -1 origin/main` (confirm it is *not* `507855f`). Create the work branch from the remote ref: `git switch -c c1-coordinate-space origin/main`. Do **not** branch from a stale local `main`/HEAD. (This picks up any merged inspection-tools / #77 testing-audit / #78 CI-hardening.)
-- [ ] **Re-grep every anchor cited below and fix drift.** Run each grep; if a line moved, update the Task that cites it. Anchors to re-confirm:
-  - `grep -n "fn point_in_aabb" crates/buiy_core/src/picking/mod.rs` → expect `point_in_aabb(point: Vec2, layout: &ResolvedLayout)` (was `mod.rs:51`).
-  - `grep -n "fn hit_test" crates/buiy_core/src/picking/mod.rs` → expect `QueryState::<(Entity, &ResolvedLayout)>` body (was `mod.rs:37-49`).
-  - `grep -n "fn emit_picks" crates/buiy_core/src/picking/backend.rs` and `grep -n "nodes: Query" crates/buiy_core/src/picking/backend.rs` → expect `Query<(Entity, &ResolvedLayout)>` (was `backend.rs:29`); `point_in_aabb(cursor, layout)` (was `backend.rs:42`).
-  - `grep -n "Aabb::from_box(rl.position" crates/buiy_core/src/render/clip.rs` → was `clip.rs:286`; `grep -n "type ClipNodeData" crates/buiy_core/src/render/clip.rs` → was `clip.rs:215`.
-  - `grep -n "write_clip_rects" crates/buiy_core/src/render/mod.rs` → the `.after(crate::BuiySet::Animate).before(crate::BuiySet::Picking)` block (was `render/mod.rs:119-124`).
-  - `grep -n "sync_simple_transforms" crates/buiy_core/src/lib.rs` → import at top (was `lib.rs:7-9`); bridge chain `.chain().after(BuiySet::Animate).before(BuiySet::Picking)` (was `lib.rs:108-129`).
-  - `grep -n "window-relative" crates/buiy_core/src/components.rs` → the `ResolvedLayout.position` doc lie (was `components.rs:65`).
-  - `grep -n "resolved.position - acc" crates/buiy_core/src/render/bridge.rs` → the invariant to PRESERVE (was `bridge.rs:138`).
+- [ ] **Confirm the current base.** The integration branch is already rebased onto `origin/main` @ `e54cf0c` (one commit above: `e1ff8c7`, the planning-artifacts commit). `git fetch --all --prune`, then `git log --oneline -1 origin/main` (confirm `e54cf0c`, *not* `507855f`). Work on the integration branch directly (do not cut a stale local branch). The current base already carries #77 testing-audit (test consolidation + nextest), #78 CI-hardening, and #79 a11y P0.
+- [ ] **Re-grep every anchor cited below and fix drift.** Run each grep; if a line moved, update the Task that cites it. Confirmed-current anchors (re-checked on `e54cf0c`):
+  - `grep -n "fn point_in_aabb" crates/buiy_core/src/picking/mod.rs` → `point_in_aabb(point: Vec2, layout: &ResolvedLayout)` at **`mod.rs:51`** (unchanged).
+  - `grep -n "fn hit_test" crates/buiy_core/src/picking/mod.rs` → `hit_test` at **`mod.rs:37`**, body uses `QueryState::<(Entity, &ResolvedLayout)>::try_new(world)?` at **`mod.rs:38`** (was 37-49).
+  - `grep -n "fn emit_picks" crates/buiy_core/src/picking/backend.rs` and `grep -n "nodes: Query" …` → `emit_picks` at **`backend.rs:27`**, `Query<(Entity, &ResolvedLayout)>` at **`backend.rs:29`**; `point_in_aabb(cursor, layout)` at **`backend.rs:42`**; smallest-area sort at **`backend.rs:53`**; `Entity::PLACEHOLDER` at **`backend.rs:65`**; `PointerHits::new(*pointer, picks, 0.0)` at **`backend.rs:74`** (all unchanged).
+  - `grep -n "Aabb::from_box(rl.position" crates/buiy_core/src/render/clip.rs` → **`clip.rs:286`** (unchanged); `grep -n "type ClipNodeData" …` → **`clip.rs:215`** (unchanged); the `let Ok((rl, …)) = nodes.get(entity)` destructure at **`clip.rs:268`**; the `Some(rl) =>` arm at **`clip.rs:285`**.
+  - `grep -n "write_clip_rects" crates/buiy_core/src/render/mod.rs` → the registration block `app.add_systems(Update, clip::write_clip_rects.after(crate::BuiySet::Animate).before(crate::BuiySet::Picking))` at **`render/mod.rs:119-124`** (unchanged).
+  - `grep -n "sync_simple_transforms" crates/buiy_core/src/lib.rs` → import at **`lib.rs:9`**; the bridge propagation `.chain().after(BuiySet::Animate).before(BuiySet::Picking)` block ending with `sync_simple_transforms` at **`lib.rs:124-128`** (was 7-9 / 108-129).
+  - `grep -n "window-relative" crates/buiy_core/src/components.rs` → the `ResolvedLayout.position` doc lie at **`components.rs:65`** (`pub position` at 66) (unchanged).
+  - **DRIFT (bridge.rs refactored since `507855f`):** the old `bridge.rs:138 base = resolved.position − acc` invariant is now the helper `compose_buiy_transform(position, scroll, matrix)`: `let base = Mat4::from_translation((position − scroll).extend(0.0));` at **`bridge.rs:74`** — this is the `position − acc` invariant to PRESERVE. The scroll-fold `child_acc = acc + Vec2::new(off.x, off.y)` is now at **`bridge.rs:184`** (was 161). Anywhere this plan cites `bridge.rs:138`/`bridge.rs:161`, read `bridge.rs:74`/`bridge.rs:184`. Confirm with `grep -n "from_translation((position - scroll)\|child_acc = acc" crates/buiy_core/src/render/bridge.rs`.
 - [ ] **Confirm the C7-owned harness + RED proof are present (do NOT recreate them).** C7 lands first in this wave. Verify:
-  - `grep -n "pub fn spawn_offset_tree\|pub fn top_hit\|pub fn global_center\|pub fn move_to\|pub fn world_mut\|pub fn captured" crates/buiy_verify/src/pointer.rs` → expect the contract API surface: `spawn_offset_tree(offset: Vec2, scene: impl Bundle) -> Entity`, `move_to(pos: Vec2)`, `press/release/click(button: PointerButton)`, `top_hit() -> Option<Entity>`, `global_center(entity) -> Vec2`, `world_mut() -> &mut World`, `captured() -> &CapturedEvents`. **Use exactly this surface in Task 4** — do not invent helpers, do not recreate the harness inline.
-  - `grep -n "#\[ignore" crates/buiy_verify/tests/pointer_offset_regression.rs` → expect `synthetic_pointer_hits_offset_widget_at_its_global_position` carries `#[ignore = "RED until C1 …"]`. **This is the line C1 deletes in Task 4** — note its exact text. If C7's offset-tree shape differs from what Task 4 assumes (offset value, target size), align Task 4's expected numbers to C7's actual fixture.
+  - `grep -n "pub fn spawn_offset_tree\|pub fn top_hit\|pub fn global_center\|pub fn move_to\|pub fn world_mut\|pub fn captured" crates/buiy_verify/src/pointer.rs` → expect the contract API surface: `spawn_offset_tree(offset: Vec2, scene: impl Bundle) -> Entity`, `move_to(pos: Vec2)`, `press/release/click(button: PointerButton)`, `top_hit() -> Option<Entity>`, `global_center(entity) -> Vec2`, `world_mut() -> &mut World`, `captured() -> &CapturedEvents`. **Use exactly this surface in Task 4** — do not invent helpers, do not recreate the harness inline. (`src/pointer.rs` is **absent on the current base** — C7 creates it; `crates/buiy_verify/src/` today has no `pointer` module.)
+  - `grep -n "#\[ignore" crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs` → expect `synthetic_pointer_hits_offset_widget_at_its_global_position` carries `#[ignore = "RED until C1 …"]` (the test lives as a **module** under the `verify_headless` group binary, registered via `#[path]` in `tests/verify_headless.rs`). **This is the line C1 deletes in Task 4** — note its exact text. If C7's offset-tree shape differs from what Task 4 assumes (offset value, target size), align Task 4's expected numbers to C7's actual fixture.
   - If, against the wave ordering, C7 is **not** yet merged when C1 starts, STOP and resolve ordering with the wave coordinator — C1 must not recreate the C7-owned file, harness, or test (contract: C7 is the sole creator). C1's own buiy_core tests (Tasks 5–7) are independent of the harness and can proceed.
-- [ ] **Integrate merged inspection tools.** If the inspection-tools merge added helpers/lints touching picking or clip, note them; they do not change C1's seams but may change adjacent imports.
-- [ ] **Baseline gate green.** Run the headless gate on the two touched crates to confirm a clean base before any edit:
+- [ ] **Note the #77/#78/#79 base.** The current base already carries the consolidated test binaries + nextest (#77), CI-hardening (#78), and a11y P0 (#79). None changes C1's seams, but the test files are now modules under group binaries (see the MAJOR DRIFT box above) — adjust the `--test <binary>` filter accordingly.
+- [ ] **Baseline gate green.** Run the headless gate on the two touched group binaries to confirm a clean base before any edit:
   ```sh
-  cargo test -p buiy_core --test picking --test picking_backend --test render_clip_rects
+  cargo test -p buiy_core --test crosscut --test render
   ```
-  Expected: all existing picking + clip tests PASS. Record the count — Task 5/6 must not regress it.
-- [ ] **Confirm the RED-first seam reproduces.** This is the geometry every later task relies on. Temporarily add this throwaway test to `crates/buiy_core/tests/render_clip_rects.rs`, run it, confirm the printed values, then delete it:
+  (`crosscut` carries `picking` + `picking_backend`; `render` carries `render_clip_rects` + `render_clip_schedule_order`.) Expected: all existing picking + clip tests PASS. Record the count — Task 5/6 must not regress it.
+- [ ] **Confirm the RED-first seam reproduces.** This is the geometry every later task relies on. Temporarily add this throwaway test to `crates/buiy_core/tests/render/render_clip_rects.rs` (reach shared support via `crate::support` if needed), run it via `cargo test -p buiy_core --test render phase0_probe_offset_seam`, confirm the printed values, then delete it:
   ```rust
   #[test]
   fn phase0_probe_offset_seam() {
@@ -111,7 +120,7 @@ Change `point_in_aabb` to take an absolute top-left + size (pure geometry), and 
 
 **Files**
 - Modify: `crates/buiy_core/src/picking/mod.rs` (`point_in_aabb` signature + `hit_test` query/call)
-- Test: `crates/buiy_core/tests/picking.rs` (re-homed in Task 4 — left RED at the end of this task)
+- Test: `crates/buiy_core/tests/crosscut/picking.rs` (re-homed in Task 4 — left RED at the end of this task)
 
 **Steps**
 - [ ] **Write the failing unit test first.** `point_in_aabb` is `pub(crate)`, so test it inside `picking/mod.rs`. Add a `#[cfg(test)]` module at the end of `crates/buiy_core/src/picking/mod.rs` proving the new signature operates on an absolute top-left (this is the unit-level RED for the new geometry):
@@ -173,7 +182,7 @@ Change `point_in_aabb` to take an absolute top-left + size (pure geometry), and 
   Expected: `test result: ok. 1 passed`.
 - [ ] **Confirm `tests/picking.rs` is now RED** (it spawns no `GlobalTransform`; this is expected and fixed in Task 4):
   ```sh
-  cargo test -p buiy_core --test picking 2>&1 | tail -15
+  cargo test -p buiy_core --test crosscut picking:: 2>&1 | tail -15
   ```
   Expected: `hit_test_returns_entity_under_point` FAILS at `assert_eq!(hit, Some(entity))` — the node dropped out of the `&GlobalTransform` query. **Do not fix it here**; Task 4 re-homes it onto the bridge path. (`backend.rs` still references the old call shape — it will not compile yet; that is fixed in Task 3, which is part of the same logical change. Run the `--lib` test, not the full crate, until Task 3 lands.)
 - [ ] **Commit:** `feat(picking): hit_test reads absolute pos via non-optional GlobalTransform (C1)`
@@ -186,7 +195,7 @@ Widen `emit_picks`'s `nodes` query and hit-test in absolute space (spec §2.1, �
 
 **Files**
 - Modify: `crates/buiy_core/src/picking/backend.rs` (`emit_picks` `nodes` query + the `point_in_aabb` call)
-- Test: `crates/buiy_core/tests/picking_backend.rs` (re-homed in Task 4 — left RED at the end of this task)
+- Test: `crates/buiy_core/tests/crosscut/picking_backend.rs` (re-homed in Task 4 — left RED at the end of this task)
 
 **Steps**
 - [ ] **Confirm the RED.** With Task 2 landed, `backend.rs:42` still calls `point_in_aabb(cursor, layout)` (two args) against the new three-arg signature, so the crate test build is broken:
@@ -216,7 +225,7 @@ Widen `emit_picks`'s `nodes` query and hit-test in absolute space (spec §2.1, �
   Expected: compiles (the integration tests `picking.rs` / `picking_backend.rs` will still *fail at runtime* — fixed in Task 4).
 - [ ] **Confirm `tests/picking_backend.rs` is RED at runtime** (no `GlobalTransform` on its hand-spawned node → dropped from the query → no hit emitted):
   ```sh
-  cargo test -p buiy_core --test picking_backend 2>&1 | tail -15
+  cargo test -p buiy_core --test crosscut picking_backend:: 2>&1 | tail -15
   ```
   Expected: `pointer_over_buiy_node_emits_hit` FAILS at the `assert!(any_hit, ...)` — the node had no `GlobalTransform`. **Do not fix here**; Task 4 re-homes it.
 - [ ] **Commit:** `feat(picking): emit_picks hit-tests in absolute space via GlobalTransform (C1)`
@@ -225,7 +234,7 @@ Widen `emit_picks`'s `nodes` query and hit-test in absolute space (spec §2.1, �
 
 ## Task 4: Un-ignore C7's offset RED proof + re-home `picking.rs` / `picking_backend.rs` onto the C7 `PointerHarness`
 
-The load-bearing RED→GREEN proof for C1 is **C7-owned**: C7 committed `synthetic_pointer_hits_offset_widget_at_its_global_position` (in `crates/buiy_verify/tests/pointer_offset_regression.rs`) as `#[ignore = "RED until C1 routes picking through GlobalTransform …"]`, driving the real layout→bridge→`GlobalTransform` chain through the C7 `PointerHarness`. **C1 does not write that test or the harness, and uses no manual hand-revert demonstration** — C1 simply **deletes the `#[ignore]`** and asserts the test is now GREEN. The committed un-ignore IS the RED→GREEN coordinate-fix proof (umbrella §9.5; the contract: C7 is the sole creator of the harness + this test).
+The load-bearing RED→GREEN proof for C1 is **C7-owned**: C7 committed `synthetic_pointer_hits_offset_widget_at_its_global_position` (in `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs`) as `#[ignore = "RED until C1 routes picking through GlobalTransform …"]`, driving the real layout→bridge→`GlobalTransform` chain through the C7 `PointerHarness`. **C1 does not write that test or the harness, and uses no manual hand-revert demonstration** — C1 simply **deletes the `#[ignore]`** and asserts the test is now GREEN. The committed un-ignore IS the RED→GREEN coordinate-fix proof (umbrella §9.5; the contract: C7 is the sole creator of the harness + this test).
 
 Then re-home the two stale unit tests (`tests/picking.rs` + `tests/picking_backend.rs`) — which hand-write `ResolvedLayout` with no `GlobalTransform` and are structurally blind to Bug 1 — onto the **C7-owned `PointerHarness`** so they exercise the real bridge path through the contract API. No inline `laid_out_app`, no recreated harness: the harness exists and is owned by C7. `buiy_verify` is already a `[dev-dependencies]` of `buiy_core` (the existing dev-only `buiy_core → buiy_verify → buiy_core` cycle, `crates/buiy_core/Cargo.toml`), so these tests can `use buiy_verify::pointer::PointerHarness;` with no manifest change.
 
@@ -237,12 +246,14 @@ Then re-home the two stale unit tests (`tests/picking.rs` + `tests/picking_backe
 - `world_mut() -> &mut World` (app/world access for assertions), `captured() -> &CapturedEvents`
 
 **Files**
-- Modify: `crates/buiy_verify/tests/pointer_offset_regression.rs` (delete the `#[ignore]` on `synthetic_pointer_hits_offset_widget_at_its_global_position` — C1's only edit to a C7-owned file)
-- Modify: `crates/buiy_core/tests/picking.rs` (re-home onto `PointerHarness` for the `hit_test` integration assertion)
-- Modify: `crates/buiy_core/tests/picking_backend.rs` (re-home onto `PointerHarness` for the backend `top_hit` assertion)
+- Modify: `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs` (delete the `#[ignore]` on `synthetic_pointer_hits_offset_widget_at_its_global_position` — C1's only edit to a C7-owned file)
+- Modify: `crates/buiy_core/tests/crosscut/picking.rs` (re-home onto `PointerHarness` for the `hit_test` integration assertion)
+- Modify: `crates/buiy_core/tests/crosscut/picking_backend.rs` (re-home onto `PointerHarness` for the backend `top_hit` assertion)
+
+> **Consolidation note:** `crosscut/picking.rs` and `crosscut/picking_backend.rs` are **modules** of the `crosscut` group binary. "Replace the whole file" below means replacing the **module file's contents** only — leave the `#[path = "crosscut/picking.rs"] mod picking;` / `… picking_backend;` registrations in `crates/buiy_core/tests/crosscut.rs` untouched. The replaced modules `use buiy_verify::pointer::PointerHarness;` (external-crate path); no `mod support;` is needed for these (they do not use the local support harness).
 
 **Steps**
-- [ ] **Un-ignore C7's offset RED proof.** Open `crates/buiy_verify/tests/pointer_offset_regression.rs` and DELETE the `#[ignore = "RED until C1 routes picking through GlobalTransform …"]` attribute on `synthetic_pointer_hits_offset_widget_at_its_global_position` (the exact text was captured in Phase 0). Do not touch the test body, the harness, or any other C7 file — un-ignoring is the whole edit.
+- [ ] **Un-ignore C7's offset RED proof.** Open `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs` and DELETE the `#[ignore = "RED until C1 routes picking through GlobalTransform …"]` attribute on `synthetic_pointer_hits_offset_widget_at_its_global_position` (the exact text was captured in Phase 0). Do not touch the test body, the harness, or any other C7 file — un-ignoring is the whole edit.
 - [ ] **Run it — expect GREEN (the C1 coordinate fix is what flips it):**
   ```sh
   cargo test -p buiy_verify --test pointer_offset_regression 2>&1 | tail -8
@@ -301,7 +312,7 @@ Then re-home the two stale unit tests (`tests/picking.rs` + `tests/picking_backe
   > Note on the world accessor: `hit_test(&World, Vec2)` takes `&World`; `world_mut()` yields `&mut World`, which coerces to `&World` at the call site (a shared reborrow). If the harness also exposes a shared `world()` accessor on the rebased tree, prefer it for these read-only calls and note the swap; the contract guarantees `world_mut()`, so this plan targets that.
 - [ ] **Run it — expect GREEN:**
   ```sh
-  cargo test -p buiy_core --test picking 2>&1 | tail -8
+  cargo test -p buiy_core --test crosscut picking:: 2>&1 | tail -8
   ```
   Expected: `test result: ok. 1 passed`. (No revert demonstration here — the C7-owned `pointer_offset_regression` un-ignore above is the RED→GREEN proof; this test is the re-homed integration coverage for the free `hit_test` fn.)
 - [ ] **Re-home `tests/picking_backend.rs` onto the `PointerHarness` (offset backend assertion via `top_hit`).** Replace the file body. The harness owns the synthetic-pointer injection (the sanctioned path); C1 just drives `move_to(center)` + `top_hit()`:
@@ -340,7 +351,7 @@ Then re-home the two stale unit tests (`tests/picking.rs` + `tests/picking_backe
   > The harness's `move_to` runs the update so the backend re-emits `PointerHits`, and `top_hit` reads the top-most pick (the contract API). Reading `Messages<PointerHits>` directly is NOT needed here — `top_hit()` is the harness's purpose-built accessor and is simpler than re-deriving the cursor read. (The one-frame `PreUpdate`/`Update` staleness D4 documents is absorbed inside the harness's bounded settle + `move_to` update.)
 - [ ] **Run it — expect GREEN:**
   ```sh
-  cargo test -p buiy_core --test picking_backend 2>&1 | tail -8
+  cargo test -p buiy_core --test crosscut picking_backend:: 2>&1 | tail -8
   ```
   Expected: `test result: ok. 1 passed`.
 - [ ] **Commit:** `test(picking): un-ignore C7 offset gate + re-home picking tests onto PointerHarness (C1)`
@@ -353,10 +364,10 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
 
 **Files**
 - Modify: `crates/buiy_core/src/render/clip.rs` (`ClipNodeData` adds `Option<&GlobalTransform>`; the `walk` match arm reads absolute pos)
-- Test: `crates/buiy_core/tests/render_clip_rects.rs` (add the offset-clip test)
+- Test: `crates/buiy_core/tests/render/render_clip_rects.rs` (add the offset-clip test)
 
 **Steps**
-- [ ] **Write the failing offset-clip test FIRST.** Append to `crates/buiy_core/tests/render_clip_rects.rs` (the `Style`, `Node`, `AncestorClip`, `ClipRect`, `OverflowMode` imports are already present at the top of the file):
+- [ ] **Write the failing offset-clip test FIRST.** Append to `crates/buiy_core/tests/render/render_clip_rects.rs` (the `Style`, `Node`, `AncestorClip`, `ClipRect`, `OverflowMode` imports are already present at the top of the file):
   ```rust
   #[test]
   fn offset_clipper_clips_in_absolute_space() {
@@ -414,7 +425,7 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
   ```
 - [ ] **Run it — expect RED:**
   ```sh
-  cargo test -p buiy_core --test render_clip_rects offset_clipper_clips_in_absolute_space 2>&1 | tail -15
+  cargo test -p buiy_core --test render render_clip_rects::offset_clipper_clips_in_absolute_space 2>&1 | tail -15
   ```
   Expected (pre-fix): FAIL — `assertion failed: anc.min == (70,90)` with `left: Vec2(0.0, 0.0)` (the clipper's `ResolvedLayout.position` is `(0,0)`, so the old code anchored the clip at the origin). This is the latent Bug-1 instance firing for the first time.
 - [ ] **Add `GlobalTransform` to `ClipNodeData`.** Replace `clip.rs:215-221`:
@@ -459,14 +470,14 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
   ```
 - [ ] **Run the offset test — expect GREEN:**
   ```sh
-  cargo test -p buiy_core --test render_clip_rects offset_clipper_clips_in_absolute_space 2>&1 | tail -8
+  cargo test -p buiy_core --test render render_clip_rects::offset_clipper_clips_in_absolute_space 2>&1 | tail -8
   ```
   Expected: `test result: ok. 1 passed` — `anc` is now `(70,90)..(170,190)`.
 - [ ] **Run the WHOLE clip suite — expect every existing test still GREEN** (all existing clippers sit at the window origin, so `GlobalTransform`-derived == `ResolvedLayout.position` there; spec §5 step 3):
   ```sh
-  cargo test -p buiy_core --test render_clip_rects 2>&1 | tail -8
+  cargo test -p buiy_core --test render render_clip_rects:: 2>&1 | tail -8
   ```
-  Expected: all pass, including `child_of_overflow_hidden_is_clipped_to_parent_padding_box`, `nested_overflow_hidden_intersects_to_tighter_box`, `scroll_container_clips_to_viewport_independent_of_offset`. **If `scroll_container_clips_to_viewport_independent_of_offset` regresses:** that is the §A.4 invariant — the scroll container's OWN `GlobalTransform` is unaffected by its OWN `ScrollOffset` (scroll only shifts descendants via `acc` in `bridge.rs:161`), so its clip box must stay constant; a failure means an ordering bug, addressed in Task 6.
+  Expected: all pass, including `child_of_overflow_hidden_is_clipped_to_parent_padding_box`, `nested_overflow_hidden_intersects_to_tighter_box`, `scroll_container_clips_to_viewport_independent_of_offset`. **If `scroll_container_clips_to_viewport_independent_of_offset` regresses:** that is the §A.4 invariant — the scroll container's OWN `GlobalTransform` is unaffected by its OWN `ScrollOffset` (scroll only shifts descendants via `acc` in `bridge.rs:184`), so its clip box must stay constant; a failure means an ordering bug, addressed in Task 6.
 - [ ] **Commit:** `feat(render): write_clip_rects computes own box in absolute space (C1)`
 
 ---
@@ -477,10 +488,10 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
 
 **Files**
 - Modify: `crates/buiy_core/src/render/mod.rs:119-124` (add the `.after` edge to the `write_clip_rects` registration)
-- Test: `crates/buiy_core/tests/render_clip_rects.rs` (ordering / not-stale test)
+- Test: `crates/buiy_core/tests/render/render_clip_rects.rs` (ordering / not-stale test)
 
 **Steps**
-- [ ] **Write the failing ordering test FIRST.** This asserts clip reflects an ancestor scroll *after* one frame (clip is not one-frame-stale relative to the bridge). A scroll-offset ancestor shifts a deeper clipper's absolute position via the bridge; clip must see the post-bridge value in the same frame. Append to `crates/buiy_core/tests/render_clip_rects.rs`:
+- [ ] **Write the failing ordering test FIRST.** This asserts clip reflects an ancestor scroll *after* one frame (clip is not one-frame-stale relative to the bridge). A scroll-offset ancestor shifts a deeper clipper's absolute position via the bridge; clip must see the post-bridge value in the same frame. Append to `crates/buiy_core/tests/render/render_clip_rects.rs`:
   ```rust
   #[test]
   fn clip_reflects_post_bridge_transform_same_frame() {
@@ -529,7 +540,7 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
       // by 50px in absolute space => clipper absolute top-left = (0,-50).
       {
           let mut off = app.world_mut().get_mut::<ScrollOffset>(scroller).unwrap();
-          off.y = 50.0; // positive scroll offset moves content up (acc add, bridge.rs:161)
+          off.y = 50.0; // positive scroll offset moves content up (acc add, bridge.rs:184)
       }
       app.update();
 
@@ -542,10 +553,10 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
       assert_eq!(after.max, Vec2::new(100.0, 50.0), "clip max shifted by the scroll delta");
   }
   ```
-  > Re-confirm at Phase 0: the sign of the scroll fold is `child_acc = acc + (off.x, off.y)` and `base = position − acc` (`bridge.rs:138,161`), so a positive `off.y` subtracts from the descendant translation (content moves up). If the rebased bridge changes the sign convention, flip the expected `(0,-50)`/`(100,50)` accordingly — re-derive with the Phase-0 probe.
+  > Re-confirm at Phase 0: the sign of the scroll fold is `child_acc = acc + (off.x, off.y)` (`bridge.rs:184`) and `base = position − scroll` (`compose_buiy_transform`, `bridge.rs:74`), so a positive `off.y` subtracts from the descendant translation (content moves up). If the rebased bridge changes the sign convention, flip the expected `(0,-50)`/`(100,50)` accordingly — re-derive with the Phase-0 probe.
 - [ ] **Run it — expect it may already PASS or RACE.** Without the explicit edge, `write_clip_rects` and the bridge chain are unordered within `.after(Animate).before(Picking)`; the result is nondeterministic. Run it a few times:
   ```sh
-  for i in 1 2 3 4 5; do cargo test -p buiy_core --test render_clip_rects clip_reflects_post_bridge_transform_same_frame 2>&1 | grep "test result"; done
+  for i in 1 2 3 4 5; do cargo test -p buiy_core --test render render_clip_rects::clip_reflects_post_bridge_transform_same_frame 2>&1 | grep "test result"; done
   ```
   Expected: at least one FAIL (or flake) demonstrating the missing edge. If it passes deterministically by scheduler luck, the test still becomes the *regression guard* once the edge is added — note that and proceed (the edge is correct and required regardless; D3).
 - [ ] **Add the scheduling edge.** In `crates/buiy_core/src/render/mod.rs`, replace the `write_clip_rects` registration (`render/mod.rs:119-124`):
@@ -563,15 +574,15 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
                   .before(crate::BuiySet::Picking),
           );
   ```
-  (`sync_simple_transforms` is reachable as `bevy::transform::systems::sync_simple_transforms`, the same path `lib.rs:7-9` imports. No re-export needed.)
+  (`sync_simple_transforms` is reachable as `bevy::transform::systems::sync_simple_transforms`, the same path `lib.rs:9` imports. No re-export needed.)
 - [ ] **Run the ordering test — expect deterministic GREEN:**
   ```sh
-  for i in 1 2 3 4 5; do cargo test -p buiy_core --test render_clip_rects clip_reflects_post_bridge_transform_same_frame 2>&1 | grep "test result"; done
+  for i in 1 2 3 4 5; do cargo test -p buiy_core --test render render_clip_rects::clip_reflects_post_bridge_transform_same_frame 2>&1 | grep "test result"; done
   ```
   Expected: all five `ok. 1 passed`.
 - [ ] **Run the whole clip suite again — still GREEN:**
   ```sh
-  cargo test -p buiy_core --test render_clip_rects 2>&1 | tail -8
+  cargo test -p buiy_core --test render render_clip_rects:: 2>&1 | tail -8
   ```
   Expected: all pass.
 - [ ] **Commit:** `fix(render): write_clip_rects runs after the transform propagation chain (C1)`
@@ -583,10 +594,10 @@ Make `write_clip_rects`'s `walk` compute the own box from the absolute position,
 Pin the decision that a node with `ResolvedLayout` but **no** `GlobalTransform` (never bridged) is **dropped** from picking/clip — not silently placed at `ResolvedLayout.position` (spec §6 "No-fallback assertion", D2). This guards against a future change quietly re-adding the `unwrap_or(layout.position)` foot-gun.
 
 **Files**
-- Test: `crates/buiy_core/tests/picking.rs` (add the no-fallback case) and `crates/buiy_core/tests/render_clip_rects.rs` (add the clip no-fallback case)
+- Test: `crates/buiy_core/tests/crosscut/picking.rs` (add the no-fallback case) and `crates/buiy_core/tests/render/render_clip_rects.rs` (add the clip no-fallback case)
 
 **Steps**
-- [ ] **Add the picking no-fallback test.** Append to `crates/buiy_core/tests/picking.rs`. It reuses the C7-owned `PointerHarness` (already imported at the top of the re-homed file) only to obtain a world whose picking query components are registered, then spawns a *detached, hand-written* node so the bridge never produces a `GlobalTransform` for it:
+- [ ] **Add the picking no-fallback test.** Append to `crates/buiy_core/tests/crosscut/picking.rs`. It reuses the C7-owned `PointerHarness` (already imported at the top of the re-homed file) only to obtain a world whose picking query components are registered, then spawns a *detached, hand-written* node so the bridge never produces a `GlobalTransform` for it:
   ```rust
   #[test]
   fn node_without_global_transform_is_not_picked() {
@@ -617,10 +628,10 @@ Pin the decision that a node with `ResolvedLayout` but **no** `GlobalTransform` 
   > Re-confirm at Phase 0: `Node`'s `#[require(...)]` graph (`components.rs:42-57`) does **not** list `Transform`/`GlobalTransform`, so a hand-spawned `Node` has neither until the bridge inserts `Transform`. The explicit `.remove::<GlobalTransform>()` is belt-and-suspenders against a require-graph change; the assertion immediately before the `hit_test` call pins that the node is genuinely un-bridged (the harness's prior settle does not re-bridge a detached node, since layout never runs for it). Both `PointerHarness`, `ResolvedLayout`, and `hit_test` are already imported by the re-homed `picking.rs` (Task 4); `ResolvedLayout` is re-exported from the crate root.
 - [ ] **Run it — expect GREEN** (and prove its teeth by temporarily adding an `unwrap_or` fallback to `hit_test`, confirming it then FAILS, then removing the fallback):
   ```sh
-  cargo test -p buiy_core --test picking node_without_global_transform_is_not_picked 2>&1 | tail -6
+  cargo test -p buiy_core --test crosscut picking::node_without_global_transform_is_not_picked 2>&1 | tail -6
   ```
   Expected: `ok. 1 passed`.
-- [ ] **Add the clip no-fallback test.** Append to `crates/buiy_core/tests/render_clip_rects.rs`:
+- [ ] **Add the clip no-fallback test.** Append to `crates/buiy_core/tests/render/render_clip_rects.rs`:
   ```rust
   #[test]
   fn clipper_without_global_transform_contributes_no_clip() {
@@ -656,7 +667,7 @@ Pin the decision that a node with `ResolvedLayout` but **no** `GlobalTransform` 
   > Note: this test spawns `ResolvedLayout` by hand (it is testing the *absence* of `GlobalTransform`, so it must bypass layout). It does not contradict the "no hand-written ResolvedLayout" guidance — that guidance is about *positive* hit tests being blind to Bug 1; this is a *negative* test of the drop behavior. Re-confirm at Phase 0 that `app.update()` does not re-bridge a detached clipper (layout does not run for nodes outside a laid-out root; if `BuiyRenderPlugin`'s bridge inserts a `Transform` here, assert `GlobalTransform` absence immediately before `update()` and accept the one-frame check).
 - [ ] **Run it — expect GREEN:**
   ```sh
-  cargo test -p buiy_core --test render_clip_rects clipper_without_global_transform_contributes_no_clip 2>&1 | tail -6
+  cargo test -p buiy_core --test render render_clip_rects::clipper_without_global_transform_contributes_no_clip 2>&1 | tail -6
   ```
   Expected: `ok. 1 passed`.
 - [ ] **Commit:** `test(picking,render): pin no-fallback drop for un-bridged nodes (C1 D2)`
@@ -708,8 +719,8 @@ Confirm the §5 "no snapshots touched" claim (C1 changes no `ResolvedLayout` val
 
 - [ ] `point_in_aabb` is `(point, abs_pos, size)`; `hit_test` + `emit_picks` query `&GlobalTransform` non-optionally; `write_clip_rects`'s `walk` reads the absolute own box; `components.rs:65` doc is parent-local.
 - [ ] `write_clip_rects` is scheduled `.after(sync_simple_transforms).before(BuiySet::Picking)`.
-- [ ] `bridge.rs:138` `base = position − acc` is **unchanged** (verified by grep in Task 0 + Task 8).
-- [ ] C7's offset RED proof (`synthetic_pointer_hits_offset_widget_at_its_global_position` in `crates/buiy_verify/tests/pointer_offset_regression.rs`) is **un-ignored** (its `#[ignore]` deleted) and GREEN — the committed RED→GREEN transition is C1's coordinate-fix proof. C1 did **not** create the harness, the test, or any inline `laid_out_app`; the two unit tests `picking.rs` / `picking_backend.rs` are re-homed onto the **C7-owned `PointerHarness`** (`spawn_offset_tree(offset, scene)` / `top_hit` / `global_center` / `world_mut`).
+- [ ] `bridge.rs:74` `base = from_translation(position − scroll)` (the `compose_buiy_transform` invariant, was `bridge.rs:138 position − acc`) is **unchanged** (verified by grep in Task 0 + Task 8).
+- [ ] C7's offset RED proof (`synthetic_pointer_hits_offset_widget_at_its_global_position` in `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs`) is **un-ignored** (its `#[ignore]` deleted) and GREEN — the committed RED→GREEN transition is C1's coordinate-fix proof. C1 did **not** create the harness, the test, or any inline `laid_out_app`; the two unit tests `picking.rs` / `picking_backend.rs` are re-homed onto the **C7-owned `PointerHarness`** (`spawn_offset_tree(offset, scene)` / `top_hit` / `global_center` / `world_mut`).
 - [ ] C1's own buiy_core RED-first tests (harness does NOT cover): the **offset overflow-clip** test, the **not-stale ordering** test, and the two **no-fallback** tests are present and GREEN — each written RED pre-fix then GREEN post-fix within its own task.
 - [ ] **RED-first proven** for: offset picking (C7's un-ignored offset test was committed RED, goes GREEN on C1's fix), offset clip (`offset_clipper_clips_in_absolute_space` RED pre-fix → GREEN), no-fallback (add an `unwrap_or` fallback → RED → remove). No manual hand-revert demonstration is used for anything the harness covers.
 - [ ] **Zero** snapshot/golden re-bless; full workspace gate green.

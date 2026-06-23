@@ -1,5 +1,7 @@
 # Editor Text-Integrity (Bugs 2 + 3) Implementation Plan
 
+> Part of the [co-drive](2026-06-22-widget-catalog-agent-interface-codrive.md); Wave 1 — the authoritative sequencing / scope / shared-contract source. Per co-drive §3, C2 drops `EditCommand::SetValue`/`SetSelection` (the `EditCommand` surface is agent-interface-owned); the editor seed/set uses the existing `SelectAll` + `Insert` (the same lowering the agent-interface router applies for `Action::SetValue`).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** A `FontsGeneration` bump (system-font scan OR runtime `add_font` batch) must never clobber an editor-owned buffer's typed content or live IME preedit, must keep re-applying the editor's style (metrics/wrap/tab-width/attrs), and must never leave a committed buffer unshaped at extract — fixing the data-loss bug (Bug 3) and the silent-no-paint bug (Bug 2) as one coordinated change. The editor's content seed/programmatic-set channel is the **existing** `EditCommand` verbs (`Insert` for the empty-editor seed, `SelectAll` + `Insert` for a programmatic set); **no new `EditCommand::SetValue` is added** — the `EditCommand` surface is owned by the agent-interface campaign (umbrella §2.7), which lowers `Action::SetValue`-text via the same existing `SelectAll` + `Insert` (`action-router.md` §4, `phasing.md` P1c).
@@ -8,7 +10,7 @@
 
 **Tech Stack:** Rust, Bevy 0.19.0-rc.3 ECS, cosmic-text 0.19.0 (`Buffer`/`BufferLine`/`AttrsList`/`Editor`/`Action`), the `text::edit` facade (`TextEditState`/`TextBufferAccess`), the adapterless `TextExtractHarness` test substrate.
 
-**Wave / dependencies:** Wave 1 (umbrella §5). Independent of C1/C3/C6 (no coordinate/picking/styling contract). **C7 OWNS the shared Tier-B infrastructure** — the cross-plan contract makes C7 the SOLE creator of `crates/buiy_core/tests/support/extract_harness.rs::bump_fonts_generation`, the Tier-B file `crates/buiy_core/tests/text_font_reload_survival.rs`, and every harness-based Wave-1 RED test (landed as committed `#[ignore = "RED until C2 lands: …"]`, not hand-reverts). **C2 does NOT create that file, that method, or those tests.** C2's verification task is to UN-IGNORE the C7-owned RED tests (delete the `#[ignore]` attribute) and assert GREEN once the joint fix lands, plus keep the already-green Tier-B arms green. The C7-owned Tier-B tests C2 gates against:
+**Wave / dependencies:** Wave 1 (umbrella §5). Independent of C1/C3/C6 (no coordinate/picking/styling contract). **C7 OWNS the shared Tier-B infrastructure** — the cross-plan contract makes C7 the SOLE creator of `crates/buiy_core/tests/support/extract_harness.rs::bump_fonts_generation`, the Tier-B file `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs`, and every harness-based Wave-1 RED test (landed as committed `#[ignore = "RED until C2 lands: …"]`, not hand-reverts). **C2 does NOT create that file, that method, or those tests.** C2's verification task is to UN-IGNORE the C7-owned RED tests (delete the `#[ignore]` attribute) and assert GREEN once the joint fix lands, plus keep the already-green Tier-B arms green. The C7-owned Tier-B tests C2 gates against:
 
 | C7-owned test (in `text_font_reload_survival.rs`) | C7 state on pre-C2 main | C2's action |
 |---|---|---|
@@ -24,18 +26,21 @@ The RED-first relationship (what each C2 production change un-blocks): the `sync
 
 ## PHASE 0 — Rebase + re-confirm anchors
 
-**Why:** Implementation is GATED on the inspection-tools merge + a fresh rebase (umbrella §8). This worktree was authored against `507855f` (== `origin/main` at authoring time); the code blocks below MUST be re-confirmed against the rebased tree. All `file:line` anchors here are the `507855f` versions; re-grep and fix drift before writing any code.
+**Why:** This worktree was authored against `507855f`; the code blocks below MUST be re-confirmed against the current base. The integration branch is already rebased onto `origin/main` @ `e54cf0c` (PR #77 testing-audit + #78 CI-hardening + #79 a11y P0 merged); per the co-drive §8 reread the non-widget app-correctness work (C1/C2/C7) is no longer gated on the agent-interface merge. All `file:line` anchors here are the `507855f` versions; re-grep and fix drift before writing any code.
 
-- [ ] **Fetch + branch fresh from current origin/main.** Run:
+> **MAJOR DRIFT — test-binary consolidation (PR #77).** The per-file `buiy_core` integration tests this plan names no longer exist as standalone binaries; they are now **modules** under consolidated group binaries (162→7), each registered via an explicit `#[path]` `mod` line in the binary root:
+> - `crates/buiy_core/tests/text/text_commit.rs`, `text/text_sync.rs` — the `text` group binary (`cargo test -p buiy_core --test text`).
+> - `crates/buiy_core/tests/text_edit/text_edit_substrate.rs`, `text_edit/text_clipboard_undo.rs`, and the C7-owned `text_edit/text_font_reload_survival.rs` — the `text_edit` group binary (`cargo test -p buiy_core --test text_edit`).
+> - The NEW `text_set_value.rs` C2 creates also goes under `text_edit/` (it exercises `TextEditState`) and must be registered `#[path = "text_edit/text_set_value.rs"] mod text_set_value;` in `crates/buiy_core/tests/text_edit.rs`. Reach the shared harness via `crate::support` (the binary root owns `mod support;`), not a fresh `mod support;`.
+> - **NOT consolidated** (separate crates, standalone test files remain fine): `crates/buiy_widgets/tests/text_input.rs` (Task 7b) and `crates/buiy/tests/prelude_edit_command.rs` (Task 8) — `buiy_widgets` and `buiy` are not part of the `buiy_core` consolidation.
+> - **Run/filter:** `cargo test -p buiy_core --test text text_commit::shape_stale…` / `--test text_edit text_set_value::` — never `--test text_commit` / `--test text_set_value`. `cargo nextest run` is the inner runner (#77).
+
+- [ ] **Confirm the current base (NOT 507855f).** Run:
   ```sh
   git -C /mnt/storage/projects/buiy fetch --all --prune
-  git -C /mnt/storage/projects/buiy log --oneline -1 origin/main
+  git -C /mnt/storage/projects/buiy log --oneline -1 origin/main   # expect e54cf0c, NOT 507855f
   ```
-  Confirm whether `origin/main` has advanced past `507855f` (the testing-audit #77 / CI-hardening #78 may have merged). Create the work branch from the remote ref, NOT a stale local:
-  ```sh
-  git -C /mnt/storage/projects/buiy branch c2-editor-text-integrity origin/main
-  ```
-  (If you are working inside this worktree, rebase it onto `origin/main` instead: `git rebase origin/main`.)
+  The integration branch is already rebased on `e54cf0c` (one commit above: `e1ff8c7`). Work on it directly (do not cut a stale local branch). Confirm #77 / #78 / #79 are present. **Confirm the consolidated layout** before creating/editing any test: `ls crates/buiy_core/tests/` (expect `text.rs`+`text/`, `text_edit.rs`+`text_edit/`, `support/`) and `ls .config/nextest.toml`.
 
 - [ ] **Integrate the merged inspection tools.** If the inspection-tools branch merged into `origin/main`, it is now in the tree from the step above — no extra action. Verify the text test substrate still builds: `crates/buiy_core/tests/support/extract_harness.rs` (`TextExtractHarness`, `glyph_count()`, `settle()`, `changed_frames()`) and `crates/buiy_core/tests/support/mod.rs` exist.
 
@@ -43,9 +48,9 @@ The RED-first relationship (what each C2 production change un-blocks): the `sync
   ```sh
   cd /mnt/storage/projects/buiy
   grep -n "pub fn bump_fonts_generation" crates/buiy_core/tests/support/extract_harness.rs
-  ls crates/buiy_core/tests/text_font_reload_survival.rs
-  grep -n "fn editor_content_survives_a_fonts_generation_bump\|fn preedit_survives_a_fonts_generation_bump\|fn label_reshapes_and_keeps_glyphs_after_a_bump\|fn empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump\|fn editor_style_stays_live_after_a_bump" crates/buiy_core/tests/text_font_reload_survival.rs
-  grep -cn 'ignore = "RED until C2' crates/buiy_core/tests/text_font_reload_survival.rs   # the RED tests C2 un-ignores
+  ls crates/buiy_core/tests/text_edit/text_font_reload_survival.rs
+  grep -n "fn editor_content_survives_a_fonts_generation_bump\|fn preedit_survives_a_fonts_generation_bump\|fn label_reshapes_and_keeps_glyphs_after_a_bump\|fn empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump\|fn editor_style_stays_live_after_a_bump" crates/buiy_core/tests/text_edit/text_font_reload_survival.rs
+  grep -cn 'ignore = "RED until C2' crates/buiy_core/tests/text_edit/text_font_reload_survival.rs   # the RED tests C2 un-ignores
   ```
   All must be present. If C7 has NOT landed yet, STOP — C2's Task 4–6 un-ignore steps have nothing to un-ignore. (If the build sequencing put C2 first by necessity, escalate to the umbrella coordinator; do NOT recreate C7's file/method/tests — that violates the ownership contract.)
 
@@ -85,8 +90,8 @@ The RED-first relationship (what each C2 production change un-blocks): the `sync
 - [ ] **Run the existing gate green as a baseline.** Establish that the text suite is green before touching it:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_core --test text_sync --test text_commit
-  cargo test -p buiy_core --test text_mouse_selection --test text_edit_submit
+  cargo test -p buiy_core --test text   # carries text_sync + text_commit modules
+  cargo test -p buiy_core --test text_edit   # carries text_mouse_selection + text_edit_submit modules
   ```
   Expect all PASS. Record the count. (Full workspace gate runs at the end of the plan.)
 
@@ -97,12 +102,12 @@ The RED-first relationship (what each C2 production change un-blocks): the `sync
 **Reconciled to the agent-interface campaign (umbrella §2.7).** The original C2 plan added an `EditCommand::SetValue(String)` variant (old Task 1) and implemented its recorded, composition-cancelling apply (old Task 2). That is **superseded**: the agent-interface campaign **owns** the `EditCommand` surface and lowers `Action::SetValue`-text via the **existing** `SelectAll` + `Insert` (`action-router.md` §4; `phasing.md` P1c: "`SetValue`-text lowers fine now via `SelectAll` + `Insert`, both existing") — it adds **no** value-set variant. C2 therefore adds **no production change** to `command.rs`/`input.rs` here; it seeds the empty editor with the existing `Insert(initial)` and does a programmatic set with `SelectAll` + `Insert(new)`. This task is a **verification-only** task: a headless test that pins those existing verbs achieve seed/set, so C4's lifecycle (and the bare-`TextInput` migration, Task 7b) can rely on them.
 
 **Files:**
-- Test: `crates/buiy_core/tests/text_set_value.rs` (Create) — exercises ONLY the existing verbs; no production edit.
+- Test: `crates/buiy_core/tests/text_edit/text_set_value.rs` (Create) — exercises ONLY the existing verbs; no production edit.
 - **No edit to `crates/buiy_core/src/text/edit/command.rs` or `input.rs`** (no new variant, no new arm).
 
 Steps:
 
-- [ ] **Write the seed/set channel test using ONLY existing verbs.** Create `crates/buiy_core/tests/text_set_value.rs`:
+- [ ] **Write the seed/set channel test using ONLY existing verbs.** Create `crates/buiy_core/tests/text_edit/text_set_value.rs`:
   ```rust
   //! C2 — the editor's seed / programmatic-set channel is the EXISTING
   //! `EditCommand` verbs: `Insert` seeds an empty editor; `SelectAll` + `Insert`
@@ -120,7 +125,7 @@ Steps:
 
   fn editor(fonts: &SharedFontSystem, seed: &str) -> TextEditState {
       // for_font_size(16.0) == Metrics::new(16.0, 19.2) (the 1.2 line-height
-      // scale, state.rs:143) — the ONE constructor form used across all plans.
+      // scale, state.rs:170) — the ONE constructor form used across all plans.
       let mut state = TextEditState::for_font_size(16.0);
       let mut fs = fonts.lock();
       // SEED: a fresh editor is empty (one empty line, value()==""); a single
@@ -204,13 +209,13 @@ Steps:
 
 - [ ] **Run & confirm PASS (no RED phase — these exercise existing, already-implemented verbs).**
   ```sh
-  cargo test -p buiy_core --test text_set_value
+  cargo test -p buiy_core --test text_edit text_set_value::
   ```
   Expected: all four tests PASS against the existing `SelectAll`/`Insert` verbs (no production change needed). This pins the seed/set channel C4 and Task 7b rely on. (If `EditOutcome` re-export differs, apply the Phase-0 fallback above.)
 
 - [ ] **Commit.**
   ```sh
-  git add crates/buiy_core/tests/text_set_value.rs
+  git add crates/buiy_core/tests/text_edit/text_set_value.rs
   git commit -m "test(text): pin editor seed/set via existing Insert / SelectAll + Insert (no new verb)
 
 The editor's content seed (Insert into the empty editor) and programmatic set
@@ -231,11 +236,11 @@ The content-vs-style split point: the accessor already binds `edit: Option<&mut 
 
 **Files:**
 - Modify `crates/buiy_core/src/text/edit/access.rs:56` (add method to the `impl TextBufferAccessItem` block)
-- Test: `crates/buiy_core/tests/text_edit_substrate.rs` (add a `has_edit` case) — re-confirm this file exists at Phase 0; if absent, add the test to `text_set_value.rs`.
+- Test: `crates/buiy_core/tests/text_edit/text_edit_substrate.rs` (add a `has_edit` case) — re-confirm this file exists at Phase 0; if absent, add the test to `text_set_value.rs`.
 
 Steps:
 
-- [ ] **Write the failing test.** Append to `crates/buiy_core/tests/text_edit_substrate.rs` (the file that pins the editor-arm accessor; confirm its imports include `TextBufferAccess`, `TextEditState`, `TextBuffer`):
+- [ ] **Write the failing test.** Append to `crates/buiy_core/tests/text_edit/text_edit_substrate.rs` (the file that pins the editor-arm accessor; confirm its imports include `TextBufferAccess`, `TextEditState`, `TextBuffer`):
   ```rust
   #[test]
   fn has_edit_distinguishes_editor_from_display_entities() {
@@ -247,7 +252,7 @@ Steps:
       let mut world = World::new();
       let display = world.spawn(TextBuffer::new(metrics)).id();
       // Editor uses the facade constructor (for_font_size == Metrics::new(16.0,
-      // 19.2), state.rs:143) — the ONE form across all plans.
+      // 19.2), state.rs:170) — the ONE form across all plans.
       let editor = world
           .spawn((TextBuffer::new(metrics), TextEditState::for_font_size(16.0)))
           .id();
@@ -267,7 +272,7 @@ Steps:
 
 - [ ] **Run & confirm FAIL.**
   ```sh
-  cargo test -p buiy_core --test text_edit_substrate has_edit_distinguishes 2>&1 | head -30
+  cargo test -p buiy_core --test text_edit text_edit_substrate::has_edit_distinguishes 2>&1 | head -30
   ```
   Expected: COMPILE ERROR — `no method named `has_edit` found for ... TextBufferAccessReadOnlyItem`. (The read-only companion is what `query::get` yields.) This is the RED signal.
 
@@ -293,13 +298,13 @@ Steps:
 
 - [ ] **Run & confirm PASS.**
   ```sh
-  cargo test -p buiy_core --test text_edit_substrate has_edit_distinguishes
+  cargo test -p buiy_core --test text_edit text_edit_substrate::has_edit_distinguishes
   ```
   Expected: PASS.
 
 - [ ] **Commit.**
   ```sh
-  git add crates/buiy_core/src/text/edit/access.rs crates/buiy_core/tests/text_edit_substrate.rs
+  git add crates/buiy_core/src/text/edit/access.rs crates/buiy_core/tests/text_edit/text_edit_substrate.rs
   git commit -m "feat(text): add TextBufferAccessItem::has_edit() discriminant
 
 The content-vs-style split point for the Bug-3 fix (C2 §2.1): exposes whether
@@ -320,7 +325,7 @@ The core data-loss fix. `sync_one` branches on `has_edit()`: editor entities tak
 **Files:**
 - Modify `crates/buiy_core/src/text/sync.rs:332` (branch `sync_one`)
 - Modify `crates/buiy_core/src/text/sync.rs` (add `apply_authored_style_to_editor_buffer`, `refresh_line_default_attrs`, `style_block_flag` private fns)
-- Modify `crates/buiy_core/tests/text_font_reload_survival.rs` (C7-OWNED — C2 only DELETES the `#[ignore]` attribute from `editor_content_survives_a_fonts_generation_bump` and `editor_style_stays_live_after_a_bump`; C2 does NOT create the file, the harness method, the seed helper, or any test body).
+- Modify `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs` (C7-OWNED — C2 only DELETES the `#[ignore]` attribute from `editor_content_survives_a_fonts_generation_bump` and `editor_style_stays_live_after_a_bump`; C2 does NOT create the file, the harness method, the seed helper, or any test body).
 
 Steps:
 
@@ -328,7 +333,7 @@ Steps:
   ```sh
   cd /mnt/storage/projects/buiy
   # Run the two C7 RED tests via their #[ignore] override — they FAIL pre-fix.
-  cargo test -p buiy_core --test text_font_reload_survival -- --ignored \
+  cargo test -p buiy_core --test text_edit -- --ignored \
     editor_content_survives_a_fonts_generation_bump editor_style_stays_live_after_a_bump 2>&1 | tail -20
   ```
   Expected: `editor_content_survives_a_fonts_generation_bump` FAILS with `value == ""` vs `"Hello"` (the unfixed `sync_one` `set_text("")`s the editor-owned buffer via the editor-first accessor — the Bug-3 reproduction); `editor_style_stays_live_after_a_bump` FAILS on the metrics assert (no style re-applied yet). These are C7's tests using C7's `spawn_seeded_editor`/`bump_fonts_generation`; C2 reads them, does not author them.
@@ -439,22 +444,22 @@ Steps:
   ```
   Re-confirm at Phase 0: `AttrsList`, `Buffer`, `cosmic_text::Wrap` are imported in `sync.rs` (`Attrs, Buffer, Family, Metrics, Weight` at `sync.rs:29` — add `AttrsList` to that `use` line, or spell `cosmic_text::AttrsList`); `resolve_wrap`, `DEFAULT_TAB_WIDTH`, `resolve_spans`, `AuthoredStyle::{attrs,metrics,family,weight,white_space,text_wrap}` all exist (`sync.rs:36,56,517,446,430`). `BufferLine::set_attrs_list` returns `bool` (we discard it). Note: `AuthoredStyle.white_space`/`text_wrap` are private fields of the struct in the same module — accessible here.
 
-- [ ] **Un-ignore C7's content + style survival tests and assert GREEN.** In the C7-OWNED file `crates/buiy_core/tests/text_font_reload_survival.rs`, DELETE the `#[ignore = "RED until C2 …"]` attribute line above `editor_content_survives_a_fonts_generation_bump` and above `editor_style_stays_live_after_a_bump` (the un-ignore is the C2 verification, per the contract — NOT a manual hand-revert). Change nothing else in the file. Then run them in the DEFAULT (non-`--ignored`) lane — they are now collected:
+- [ ] **Un-ignore C7's content + style survival tests and assert GREEN.** In the C7-OWNED file `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs`, DELETE the `#[ignore = "RED until C2 …"]` attribute line above `editor_content_survives_a_fonts_generation_bump` and above `editor_style_stays_live_after_a_bump` (the un-ignore is the C2 verification, per the contract — NOT a manual hand-revert). Change nothing else in the file. Then run them in the DEFAULT (non-`--ignored`) lane — they are now collected:
   ```sh
-  cargo test -p buiy_core --test text_font_reload_survival \
+  cargo test -p buiy_core --test text_edit \
     editor_content_survives_a_fonts_generation_bump editor_style_stays_live_after_a_bump
   ```
   Expected: both PASS. Content survives the bump (the editor branch never `set_text`s); the style-only path re-applies the bumped metrics (C7's style-survival assert sees the updated `metrics_for_test()`). The two already-green C7 arms (`label_reshapes_…`, `empty_editor_emits_…`) stay green — they assert properties the editor branch preserves.
 
 - [ ] **Run the existing TextSync suite to confirm no display-path regression.**
   ```sh
-  cargo test -p buiy_core --test text_sync
+  cargo test -p buiy_core --test text text_sync::
   ```
   Expected: all PASS (the display path `apply_authored_to_buffer` is byte-unchanged; only the editor branch is new — and `text_sync.rs::fonts_generation_bump_sweeps_every_buffer` spawns display-only nodes, so `applied()` count is unchanged).
 
 - [ ] **Commit.**
   ```sh
-  git add crates/buiy_core/src/text/sync.rs crates/buiy_core/tests/text_font_reload_survival.rs
+  git add crates/buiy_core/src/text/sync.rs crates/buiy_core/tests/text_edit/text_font_reload_survival.rs
   git commit -m "fix(text): TextSync applies style-only to editor buffers (Bug 3)
 
 The FontsGeneration sweep no longer clobbers an editor's typed content. sync_one
@@ -479,7 +484,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 The defense-in-depth net: a fourth short-circuit term that re-detects the exact mismatch extract asserts and reshapes at the commit lock site. After Task 4 the sweep no longer clobbers content, but `set_metrics`/`set_attrs_list`/a `reset_shaping()` set the line's shape/layout cache to `unused` (cosmic `buffer_line.rs:203-207`) — so `buffer.layout_runs().count()` drops below `computed.lines.len()` (`LayoutRunIter::next` does `line.shape_opt()?`/`line.layout_opt()?` and terminates at the first unshaped line). The short-circuit (`commit.rs:102`) gates on `align_changed || offset_stale || size_stale` only: an unshape does NOT move the content-box `size`/`offset` or `align`, so all three are false → `continue` → that buffer reaches extract unshaped, painting **zero glyphs** (silent-no-paint in release; `debug_assert` panic in debug — and a `debug_assert` may be compiled out, so `layout_runs().count()`/`glyph_count()` are the load-bearing observables). C2 owns the `commit.rs` production change.
 
-**The isolating proof is a C2-OWNED directed unit test** (`crates/buiy_core/tests/text_commit.rs`), NOT a hand-revert and NOT the C7-owned font-reload file. The audit's CRITICAL gap (§2 Bug 2, Appendix-A.5) is that the end-to-end `FontsGeneration`-bump path **auto-heals** and "isolates nothing": the bump runs the `text_sync_buffers` sweep, which calls `tree.mark_dirty_for_entity(entity)` (`sync.rs:350`) → Taffy re-measures the leaf → the leaf reshapes **regardless of the `shape_stale` guard**. So C7's `label_reshapes_…` (display) is GREEN with OR without the term, and `editor_style_stays_live_…` asserts only `metrics_for_test()` (never `glyph_count()`). The `shape_stale` term could be deleted and every end-to-end test would still pass — a **vacuous green**.
+**The isolating proof is a C2-OWNED directed unit test** (`crates/buiy_core/tests/text/text_commit.rs`), NOT a hand-revert and NOT the C7-owned font-reload file. The audit's CRITICAL gap (§2 Bug 2, Appendix-A.5) is that the end-to-end `FontsGeneration`-bump path **auto-heals** and "isolates nothing": the bump runs the `text_sync_buffers` sweep, which calls `tree.mark_dirty_for_entity(entity)` (`sync.rs:350`) → Taffy re-measures the leaf → the leaf reshapes **regardless of the `shape_stale` guard**. So C7's `label_reshapes_…` (display) is GREEN with OR without the term, and `editor_style_stays_live_…` asserts only `metrics_for_test()` (never `glyph_count()`). The `shape_stale` term could be deleted and every end-to-end test would still pass — a **vacuous green**.
 
 The directed test sidesteps the auto-heal by constructing the committed-but-unshaped state **directly**, with NO `FontsGeneration` bump and NO `Text`/style-carrier mutation: settle a real text node (so it has a `LayoutTree` node, a committed `ComputedTextLayout` with `lines.len() == 1`, and a shaped buffer), then reach into `TextBuffer.buffer` and call `buffer.lines[0].reset_shaping()` (cosmic `buffer_line.rs:203` — `pub`; `buffer.lines` is `pub`, `buffer.rs:336`). That unsets the line's shape+layout cache so `layout_runs().count() == 0`, while `buffer.size()`, the per-line align, and the content-box offset are **all unchanged**. Because the mutation is a direct world `get_mut` (NOT a `FontsGeneration` bump and NOT a `Changed<Text>`/style edit), the `text_sync_buffers` sweep does **not** run (its triggers are `fonts_generation.is_changed()` OR the `Or<(Changed<Text>, …)>` set, `sync.rs:69,251-253`; `Changed<TextBuffer>` is explicitly NOT a trigger, pinned by `text_sync.rs`), so `mark_dirty_for_entity` is never called and **Taffy never re-measures** — the one thing that auto-heals the buffer is removed. On the next `app.update()` the ONLY system that can reshape this buffer is `text_commit`, and the ONLY guard term that can fire is `shape_stale` (size/align/offset are equal). **Without `shape_stale` this is RED** (`text_commit` short-circuits, the buffer stays unshaped, `layout_runs().count() == 0 != 1`); **with it, GREEN** (`layout_runs().count() == 1 == lines.len()`). This is the directed proof the guard's decision is non-vacuous.
 
@@ -487,11 +492,11 @@ The C7-owned end-to-end font-reload tests stay as **additional regression guards
 
 **Files:**
 - Modify `crates/buiy_core/src/text/commit.rs:98-104` (add the `shape_stale` term)
-- Modify `crates/buiy_core/tests/text_commit.rs` (add the C2-OWNED directed `shape_stale` isolation test — this file is in C2's domain, tests `commit.rs`, needs no `PointerHarness`, and is NOT the C7-owned font-reload file)
+- Modify `crates/buiy_core/tests/text/text_commit.rs` (add the C2-OWNED directed `shape_stale` isolation test — this file is in C2's domain, tests `commit.rs`, needs no `PointerHarness`, and is NOT the C7-owned font-reload file)
 
 Steps:
 
-- [ ] **Write the failing directed test FIRST (RED before the guard).** Append to `crates/buiy_core/tests/text_commit.rs`. Every symbol the test uses is ALREADY in the file's head (verified at `text_commit.rs:6-12`): `Text`, `TextBuffer`, `ComputedTextLayout`, `TextCommitReshapeCount` (from `buiy_core::text`), `Style` (from `buiy_core::layout`), `Node` (from `buiy_core`), and the `text_app()`/`settle()` helpers. It uses `buffer.lines[0].reset_shaping()` and `buffer.layout_runs().count()` directly on the `pub` `TextBuffer.buffer: cosmic_text::Buffer` (`buffer.lines` is `pub`, `BufferLine::reset_shaping()` is `pub`) — **no new `use`** is needed (re-confirm the head imports at Phase 0):
+- [ ] **Write the failing directed test FIRST (RED before the guard).** Append to `crates/buiy_core/tests/text/text_commit.rs`. Every symbol the test uses is ALREADY in the file's head (verified at `text_commit.rs:6-12`): `Text`, `TextBuffer`, `ComputedTextLayout`, `TextCommitReshapeCount` (from `buiy_core::text`), `Style` (from `buiy_core::layout`), `Node` (from `buiy_core`), and the `text_app()`/`settle()` helpers. It uses `buffer.lines[0].reset_shaping()` and `buffer.layout_runs().count()` directly on the `pub` `TextBuffer.buffer: cosmic_text::Buffer` (`buffer.lines` is `pub`, `BufferLine::reset_shaping()` is `pub`) — **no new `use`** is needed (re-confirm the head imports at Phase 0):
   ```rust
   /// Bug-2 ISOLATION (C2 §2.2; audit §2 Bug 2, Appendix-A.5). The `shape_stale`
   /// guard's NON-VACUOUS proof: a buffer that was committed (has a
@@ -591,7 +596,7 @@ Steps:
 - [ ] **Run the directed test & capture the expected FAIL (RED, pre-guard) under nextest — the real profile.** With the `shape_stale` term ABSENT (the current `commit.rs:102` guards on `align_changed || offset_stale || size_stale` only):
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo nextest run -p buiy_core --test text_commit shape_stale_reshapes_a_committed_but_unshaped_buffer 2>&1 | tail -25
+  cargo nextest run -p buiy_core --test text text_commit::shape_stale_reshapes_a_committed_but_unshaped_buffer 2>&1 | tail -25
   ```
   Expected RED: the final `assert_eq!(tb.buffer.layout_runs().count(), committed_lines, …)` FAILS with `left: 0, right: 1` — `text_commit` short-circuited (all three existing terms false), so the buffer is still unshaped; `TextCommitReshapeCount == 0`. **This is the captured, profile-independent RED** (it asserts on `layout_runs().count()`, not on the `debug_assert`, which a release-ish nextest profile could compile out). The preconditions PASS (the settle shaped the buffer; the `reset_shaping()` unshaped it to runs=0), so the failure is precisely the missing reshape — proving the test is RED *for the right reason* and is NOT vacuous.
 
@@ -621,25 +626,25 @@ Steps:
 
 - [ ] **Run the directed test & confirm it flips to GREEN (the isolating proof) — under nextest.**
   ```sh
-  cargo nextest run -p buiy_core --test text_commit shape_stale_reshapes_a_committed_but_unshaped_buffer 2>&1 | tail -15
+  cargo nextest run -p buiy_core --test text text_commit::shape_stale_reshapes_a_committed_but_unshaped_buffer 2>&1 | tail -15
   ```
   Expected GREEN: the unshaped-but-committed buffer is reshaped — `layout_runs().count() == 1 == computed.lines.len()` and `TextCommitReshapeCount == 1`. The ONLY change between the captured RED above and this GREEN is the added `shape_stale` term (size/align/offset were equal in both runs), so the flip is *attributable to `shape_stale` alone* — the non-vacuous proof the audit requires. (Sanity check the isolation: temporarily scratch-delete just the `&& !shape_stale` conjunct and re-run — it goes RED again — then restore it. This is a one-off local check, NOT a committed hand-revert.)
 
 - [ ] **Run the existing commit suite to confirm no steady-state regression.**
   ```sh
-  cargo nextest run -p buiy_core --test text_commit
+  cargo nextest run -p buiy_core --test text text_commit::
   ```
   Expected: all PASS, including the new `shape_stale_reshapes_a_committed_but_unshaped_buffer` and especially `steady_state_zero_measure_calls_and_zero_reshapes` (`text_commit.rs:230`) — the `shape_stale` walk runs but `layout_runs().count() == lines.len()` holds in steady state, so no reshape triggers; `TextCommitReshapeCount == 0` on the no-change frame.
 
 - [ ] **Run the C7-owned end-to-end suite as the belt-and-suspenders regression guard.**
   ```sh
-  cargo nextest run -p buiy_core --test text_font_reload_survival
+  cargo nextest run -p buiy_core --test text_edit text_font_reload_survival::
   ```
   Expected: every C7 Tier-B test PASS — `label_reshapes_and_keeps_glyphs_after_a_bump` (display label still N glyphs), `empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump` (stays 0-glyph, no panic — `shape_stale` does not false-positive on the empty synthetic-line case, where the synthetic empty `LayoutLine` keeps `layout_runs().count() == computed.lines.len() == 1`), plus the content/style/preedit survival tests un-ignored across Tasks 4 and 6. These prove the production `FontsGeneration`-bump path keeps painting content after the fix; they are NOT the isolating proof of `shape_stale` (they auto-heal via the TextSync sweep's `mark_dirty_for_entity` → Taffy re-measure, so they are GREEN with or without the term) — the directed `text_commit.rs` test above is that proof.
 
 - [ ] **Commit** (production change + the C2-owned directed isolation test — the C7-owned test file is NOT touched by this task):
   ```sh
-  git add crates/buiy_core/src/text/commit.rs crates/buiy_core/tests/text_commit.rs
+  git add crates/buiy_core/src/text/commit.rs crates/buiy_core/tests/text/text_commit.rs
   git commit -m "fix(text): text_commit shape_stale guard reshapes unshaped buffers (Bug 2)
 
 A fourth steady-state short-circuit term re-detects the exact mismatch extract
@@ -670,26 +675,26 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 The style-only path is preedit-safe by construction (it never `set_text`s, so the spliced preedit bytes + the `PreeditSpan` record survive a bump). C7 owns the test `preedit_survives_a_fonts_generation_bump` (landed `#[ignore]`-RED). This task DELETES that `#[ignore]` and asserts GREEN — the C2-CONTRACT-4 gate. **No production change** (the style-only path from Task 4 already provides preedit safety); **no test authored by C2** (C7 owns the file + the test body).
 
 **Files:**
-- Modify `crates/buiy_core/tests/text_font_reload_survival.rs` (C7-OWNED — C2 only DELETES the `#[ignore = "RED until C2 …"]` attribute above `preedit_survives_a_fonts_generation_bump`).
+- Modify `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs` (C7-OWNED — C2 only DELETES the `#[ignore = "RED until C2 …"]` attribute above `preedit_survives_a_fonts_generation_bump`).
 
 Steps:
 
 - [ ] **Confirm the C7-owned preedit test is RED pre-fix (via the `#[ignore]` override).** Before un-ignoring, capture the RED on a tree where Task 4 is NOT yet applied (or via a scratch revert of Task 4):
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_core --test text_font_reload_survival -- --ignored preedit_survives_a_fonts_generation_bump 2>&1 | tail -20
+  cargo test -p buiy_core --test text_edit -- --ignored preedit_survives_a_fonts_generation_bump 2>&1 | tail -20
   ```
   Expected (pre-fix): FAIL — the pre-fix clobber's `set_text("")` on the editor-owned buffer destroys both the committed text AND the spliced preedit run, so C7's assertion (the preedit `X`/`み` no longer in the buffer) fails. This is the double-corruption-during-composition reproduction. With Task 4 applied, the style-only path never `set_text`s, so it survives.
 
-- [ ] **Un-ignore the preedit-survival test and assert GREEN.** In the C7-OWNED file `crates/buiy_core/tests/text_font_reload_survival.rs`, DELETE the `#[ignore = "RED until C2's preedit-aware TextSync fix lands (C2's PR un-ignores)"]` attribute line above `preedit_survives_a_fonts_generation_bump`. Change nothing else. Then run it in the default lane:
+- [ ] **Un-ignore the preedit-survival test and assert GREEN.** In the C7-OWNED file `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs`, DELETE the `#[ignore = "RED until C2's preedit-aware TextSync fix lands (C2's PR un-ignores)"]` attribute line above `preedit_survives_a_fonts_generation_bump`. Change nothing else. Then run it in the default lane:
   ```sh
-  cargo test -p buiy_core --test text_font_reload_survival preedit_survives_a_fonts_generation_bump
+  cargo test -p buiy_core --test text_edit text_font_reload_survival::preedit_survives_a_fonts_generation_bump
   ```
   Expected: PASS — the style-only path (Task 4) never `set_text`s, so C7's preedit survives the bump (its `with_buffer(|b| … contains('X'))` assertion holds; the `PreeditSpan` record is untouched because the splice bytes stay in the line). This is the C2-CONTRACT-4 verification — the RED→GREEN transition C2 owns.
 
 - [ ] **Commit** (un-ignore only — C7 owns the test body):
   ```sh
-  git add crates/buiy_core/tests/text_font_reload_survival.rs
+  git add crates/buiy_core/tests/text_edit/text_font_reload_survival.rs
   git commit -m "test(text): un-ignore C7 preedit-survival across a FontsGeneration bump (C2-CONTRACT-4)
 
 Deletes the #[ignore] from C7's preedit_survives_a_fonts_generation_bump — the
@@ -708,8 +713,8 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 Lock in §3.4's cost claim (the `shape_stale` walk never triggers a reshape in steady state) and add a programmatic-set undo assertion (via the **existing** `SelectAll` + `Insert`, not a new `SetValue` verb) to the clipboard/undo suite, closing the verification matrix in §5 "Tests/snapshots touched."
 
 **Files:**
-- Modify `crates/buiy_core/tests/text_commit.rs:230` (extend `steady_state_zero_measure_calls_and_zero_reshapes`)
-- Modify `crates/buiy_core/tests/text_clipboard_undo.rs` (add a `SelectAll` + `Insert` programmatic-set undo assertion) — re-confirm the file name at Phase 0 (`grep -l "undo_depth\|EditCommand::Undo" crates/buiy_core/tests/`).
+- Modify `crates/buiy_core/tests/text/text_commit.rs:230` (extend `steady_state_zero_measure_calls_and_zero_reshapes`)
+- Modify `crates/buiy_core/tests/text_edit/text_clipboard_undo.rs` (add a `SelectAll` + `Insert` programmatic-set undo assertion) — re-confirm the file at Phase 0 (`grep -rl "undo_depth\|EditCommand::Undo" crates/buiy_core/tests/text_edit/`; it is a module of the `text_edit` group binary).
 
 Steps:
 
@@ -729,7 +734,7 @@ Steps:
       use buiy_core::text::edit::{EditCommand, TextEditState};
 
       let fonts = SharedFontSystem::new();
-      // for_font_size(16.0) — the ONE constructor form across all plans (state.rs:143).
+      // for_font_size(16.0) — the ONE constructor form across all plans (state.rs:170).
       let mut state = TextEditState::for_font_size(16.0);
       let mut fs = fonts.lock();
       state.apply(&mut fs, EditCommand::Insert("seed".into()), false, false);
@@ -750,14 +755,14 @@ Steps:
 
 - [ ] **Run & confirm PASS.**
   ```sh
-  cargo test -p buiy_core --test text_commit steady_state_zero_measure_calls_and_zero_reshapes
-  cargo test -p buiy_core --test text_clipboard_undo programmatic_set_via_select_all_plus_insert_is_undoable
+  cargo test -p buiy_core --test text text_commit::steady_state_zero_measure_calls_and_zero_reshapes
+  cargo test -p buiy_core --test text_edit text_clipboard_undo::programmatic_set_via_select_all_plus_insert_is_undoable
   ```
   Expected: both PASS. (If the second file is named differently, adjust `--test`.)
 
 - [ ] **Commit.**
   ```sh
-  git add crates/buiy_core/tests/text_commit.rs crates/buiy_core/tests/text_clipboard_undo.rs
+  git add crates/buiy_core/tests/text/text_commit.rs crates/buiy_core/tests/text_edit/text_clipboard_undo.rs
   git commit -m "test(text): pin shape_stale steady-state cost + programmatic-set undo (existing verbs)
 
 Documents that the shape_stale guard walks layout_runs() but never triggers a
@@ -772,12 +777,12 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Task 7b — Bare `TextInput` still seeds `""` (no regression from removing the `Text`→editor seam)
 
-The Bug-3 fix removes content-lowering from `Text` onto the editor buffer (§2.1). The migration note (§5 step 5) asserts "the bare `TextInput` seeds `""`, so no behavior change" — but that is exactly the kind of claim that needs a test, because the fix changes the path that used to (incidentally) make a bare input's editor buffer empty. A bare `TextInput` is `(Text(""), TextEditState::for_font_size(16.0), …)` (`text_input.rs:77,80`): the editor's `for_font_size` → `new()` seeds one empty line, so `value()` is `""` at construction WITHOUT any explicit seed (no `Insert` needed for an empty field). This task pins that the empty seed survives a `FontsGeneration` bump (the same trigger Bugs 2/3 ride) — i.e. the style-only path leaves an empty editor empty, and no explicit seed verb is required for the empty case.
+The Bug-3 fix removes content-lowering from `Text` onto the editor buffer (§2.1). The migration note (§5 step 5) asserts "the bare `TextInput` seeds `""`, so no behavior change" — but that is exactly the kind of claim that needs a test, because the fix changes the path that used to (incidentally) make a bare input's editor buffer empty. A bare `TextInput` is `(Text(""), TextEditState::for_font_size(TEXT_INPUT_FONT_SIZE), …)` (`src/text_input.rs:56,63`; `fn single_line` at `src/text_input.rs:117`): the editor's `for_font_size` → `new()` seeds one empty line, so `value()` is `""` at construction WITHOUT any explicit seed (no `Insert` needed for an empty field). This task pins that the empty seed survives a `FontsGeneration` bump (the same trigger Bugs 2/3 ride) — i.e. the style-only path leaves an empty editor empty, and no explicit seed verb is required for the empty case.
 
 This closes the review's spec-gap: the bare-input "`""` unchanged" claim becomes a verified Wave-1 assertion, not a comment.
 
 **Files:**
-- Modify `crates/buiy_widgets/tests/text_input.rs` (extend the widget suite — `buiy_widgets` is where `TextInput` lives; this is the lowest tier that observes the bare-widget contract). The existing `single_line_text_input_composes_editor_markers_and_focusable` (`text_input.rs:13`) already asserts a FRESH input's `value() == ""`; this task adds the POST-BUMP survival arm.
+- Modify `crates/buiy_widgets/tests/text_input.rs` (extend the widget suite — `buiy_widgets` is where `TextInput` lives; this is the lowest tier that observes the bare-widget contract; `buiy_widgets` is NOT part of the `buiy_core` test consolidation, so this stays a standalone test file). The existing `single_line_text_input_composes_editor_markers_and_focusable` (`tests/text_input.rs:62`) already asserts a FRESH input's `value() == ""`; this task adds the POST-BUMP survival arm.
 
 Steps:
 
@@ -954,7 +959,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Verification matrix (C2 §6 → tasks)
 
-All Tier-B tests are **C7-owned** (file `crates/buiy_core/tests/text_font_reload_survival.rs`, harness method `bump_fonts_generation`). C2's action is the un-ignore (delete `#[ignore]`) + assert GREEN, NOT recreation. C2-owned tests are `text_set_value.rs` (the editor seed/set via the **existing** `Insert` / `SelectAll` + `Insert` — no new `EditCommand` variant; the `EditCommand` surface is agent-interface-owned, umbrella §2.7), `text_edit_substrate.rs` (the `has_edit` arm), `text_commit.rs` extensions (including the directed `shape_stale_reshapes_a_committed_but_unshaped_buffer` isolation test — the non-vacuous proof of the guard), `text_clipboard_undo.rs`, `crates/buiy_widgets/tests/text_input.rs` (the bare-input arm), and `crates/buiy/tests/prelude_edit_command.rs`.
+All Tier-B tests are **C7-owned** (file `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs`, harness method `bump_fonts_generation`). C2's action is the un-ignore (delete `#[ignore]`) + assert GREEN, NOT recreation. C2-owned tests are `text_set_value.rs` (the editor seed/set via the **existing** `Insert` / `SelectAll` + `Insert` — no new `EditCommand` variant; the `EditCommand` surface is agent-interface-owned, umbrella §2.7), `text_edit_substrate.rs` (the `has_edit` arm), `text_commit.rs` extensions (including the directed `shape_stale_reshapes_a_committed_but_unshaped_buffer` isolation test — the non-vacuous proof of the guard), `text_clipboard_undo.rs`, `crates/buiy_widgets/tests/text_input.rs` (the bare-input arm), and `crates/buiy/tests/prelude_edit_command.rs`.
 
 | Contract | Test (owner) | Task | C2 action / RED-proof |
 |---|---|---|---|

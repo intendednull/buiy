@@ -1,5 +1,7 @@
 # Verification real-input tier + content-presence guard (C7) Implementation Plan
 
+> Part of the [co-drive](2026-06-22-widget-catalog-agent-interface-codrive.md); Wave 1 (RED-first, first-in-wave) — the authoritative sequencing / scope / shared-contract source. C7 **extends** the landed test infrastructure (the `.config/nextest.toml` runner + the two consolidated `buiy_verify` binaries `verify_headless` / `verify_gpu` + `support/mod.rs` GPU helpers), never a parallel rig (§7).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Build C7's Wave-1 verification deliverables — a headless synthetic-`PointerHits` `PointerHarness` in `buiy_verify` that drives a real non-origin widget tree through `layout → bridge → GlobalTransform → bevy_picking` and asserts state-flip + observer capture; the Tier-B `FontsGeneration`-bump content-survival test on the adapterless `TextExtractHarness`; and the `content_is_present` invariant + golden bless-guard — each proven RED-before-GREEN so the gate is not vacuous-green.
@@ -9,6 +11,8 @@
 **Tech Stack:** Rust, Bevy 0.19.0-rc.3 (`bevy::picking`, `bevy::transform`, ECS observers), `buiy_core` (picking/backend, text/extract, text/edit, a11y), `buiy_verify` (coverage/enroll, invariant, golden, a11y), `serde`/`serde_json`, `insta` goldens, `cosmic-text`.
 
 **Wave / dependencies:** **Wave 1.** Depends on **C0** (umbrella, landed) and is co-sequenced with **C1** (coordinate fix) and **C2** (text fix). C7 **lands RED-first**: its harness + predicates must exist *before* C1/C3 so they are the regression gate *for* those changes. The single load-bearing RED proof is **Tier A on an offset widget fails on current main (pre-C1)** — picking reads `ResolvedLayout.position` (parent-local) as absolute, so the synthetic pointer over the visually-correct position picks the wrong entity / no entity.
+
+> **Co-drive §4 Wave-1 split (P1a coupling).** Per [co-drive §4 Wave 1](2026-06-22-widget-catalog-agent-interface-codrive.md): C7's **picking-geometry tier (Tier A) is fully P1a-INDEPENDENT** — it is the C1 gate and shares no edited code with the agent-interface a11y substrate, so it proceeds immediately regardless of P1a. C7's **a11y-state assertions LAG P1a** — they read the agent-interface `semantic_tree(app, view)` tier / decomposed state components and are deferred to Wave 2 (Task 4 behavior asserts) until P1a lands. The Tier-B content-survival + content-presence invariant (Tasks 1, 4) are likewise P1a-independent (pure text/render extract). This plan therefore builds only the P1a-independent Wave-1 pieces now; nothing here blocks on the agent-interface merge.
 
 **The a11y `WireNode` tri-state + role extension is NOT in this plan — it is the agent-interface campaign's (umbrella §2.7).** Its P0 fixes the `snapshot_tree` ref off-by-one + extends `A11yRole` and both stringifiers, and its P1a widens `A11yNodeView`/`build_tree`/`to_accesskit_node` and exposes the decomposed state through `buiy_verify::a11y::semantic_tree(app, view)`. This plan **does not touch** `crates/buiy_verify/src/a11y.rs`'s `WireNode`/`role_to_str`/`KNOWN_ROLES`; any a11y assertion C7 needs is read through the agent-interface semantic-tree tier (consumed, not built). This plan builds only the Wave-1 **geometry/render-content** pieces (Tier-A picking-geometry harness skeleton + offset RED proof, Tier-B content-survival, content-presence invariant + bless-guard) and **builds on the incoming test infrastructure** (cargo-nextest + the 162→7 consolidated harnesses, PR #77, re-confirmed at Phase 0).
 
@@ -21,19 +25,25 @@
 
 ## Phase 0 — Rebase + re-confirm anchors (FIRST TASK, mandatory)
 
-Implementation is GATED on the inspection-tools merge + a fresh rebase (umbrella §8). This worktree's code blocks were written against `507855f` and MUST be re-confirmed against the rebased tree.
+This worktree's code blocks were written against `507855f` and MUST be re-confirmed against the current base. The integration branch is already rebased onto `origin/main` @ `e54cf0c` (PR #77 testing-audit + #78 CI-hardening + #79 a11y P0 merged); per the co-drive §8 reread the non-widget app-correctness work (C1/C2/C7) is no longer gated on the agent-interface merge — C7 is RED-first, first-in-wave.
+
+> **MAJOR DRIFT — C7 EXTENDS the landed consolidated test infrastructure (PR #77), it does NOT build a parallel rig (co-drive §7).** The testing audit already landed (162→7): the `.config/nextest.toml` config is **present**; the `buiy_verify` integration tests are now **two consolidated group binaries** — `crates/buiy_verify/tests/verify_headless.rs` (root) + `tests/verify_headless/<module>.rs`, and `crates/buiy_verify/tests/verify_gpu.rs` (root) + `tests/verify_gpu/<module>.rs` (the `#[ignore]`/GPU split); the `buiy_core` GPU helpers live in `crates/buiy_core/tests/support/mod.rs` + `extract_harness.rs`. Consequences for the files this plan **creates**:
+> - The NEW test files are **modules**, not standalone binaries. `pointer_offset_regression.rs`, `pointer_press_smoke.rs`, and `content_presence.rs` go under `crates/buiy_verify/tests/verify_headless/` and **must each be registered** with a `#[path = "verify_headless/<name>.rs"] mod <name>;` line in `tests/verify_headless.rs` (a bare `mod` in a binary root resolves to `tests/<name>.rs`, not the subdir — the `#[path]` is required). Modules reference the lib via `buiy_verify::pointer` / `buiy_verify::invariant` external-crate paths (no `mod support;`).
+> - The bless-guard wiring site (Task 1) is `crates/buiy_verify/tests/verify_gpu/coverage_golden.rs` (a `verify_gpu` module — it carries `#[ignore]` GPU goldens), reached via `--test verify_gpu`.
+> - The C7-OWNED Tier-B file `text_font_reload_survival.rs` is a **`buiy_core` text-edit module**: place it at `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs` (editor-surface tests live in the `text_edit` group binary; `TextEditState`/IME live there) and register `#[path = "text_edit/text_font_reload_survival.rs"] mod text_font_reload_survival;` in `crates/buiy_core/tests/text_edit.rs`. Reach the shared harness via `mod support;` at the binary root (already present) → `crate::support` inside the module — NOT a fresh `mod support;` in the module.
+> - `crates/buiy_verify/src/pointer.rs` (the harness, src) and `crates/buiy_verify/src/invariant/content_presence.rs` are plain library modules — registered in `src/lib.rs` / `src/invariant.rs` as the plan says (no binary-root change). `src/pointer.rs` is **absent today** — C7 creates it.
+> - **Run/filter:** `cargo nextest run -p buiy_verify --test verify_headless` (optionally filtered by module, e.g. `pointer_offset_regression::`); `--test verify_gpu` for the GPU leg; `cargo nextest run -p buiy_core --test text_edit text_font_reload_survival::` for the Tier-B file — never `--test pointer_offset_regression` / `--test text_font_reload_survival`.
 
 ### Files
 - (no source edits) — branch + verification only.
 
 ### Steps
-- [ ] **Fetch + branch fresh from current `origin/main` (NOT 507855f).** Run:
+- [ ] **Confirm the current base (NOT 507855f).** Run:
   ```sh
   git -C /mnt/storage/projects/buiy fetch --all --prune
-  git -C /mnt/storage/projects/buiy log --oneline -1 origin/main
-  git -C /mnt/storage/projects/buiy switch -c c7-verification-real-input origin/main
+  git -C /mnt/storage/projects/buiy log --oneline -1 origin/main   # expect e54cf0c, NOT 507855f
   ```
-  Confirm the merged inspection tools + any merged #77 testing-audit / #78 CI-hardening are present (`git -C /mnt/storage/projects/buiy log --oneline -15`). The testing audit consolidated test binaries onto `cargo-nextest`; expect `cargo nextest run` to be the inner runner.
+  The integration branch is already rebased on `e54cf0c` (one commit above: `e1ff8c7`). Work on it directly. Confirm #77 testing-audit / #78 CI-hardening / #79 a11y P0 are present (`git -C /mnt/storage/projects/buiy log --oneline -15`). The testing audit consolidated test binaries and added `.config/nextest.toml`; `cargo nextest run` is the inner runner. **Confirm the consolidated layout** before creating any test file: `ls crates/buiy_verify/tests/` (expect `verify_headless.rs` + `verify_headless/`, `verify_gpu.rs` + `verify_gpu/`), `ls crates/buiy_core/tests/` (expect `text_edit.rs` + `text_edit/`, `support/`), and `ls .config/nextest.toml`.
 - [ ] **Re-confirm the incoming test-infra + agent-interface substrate surface (build on it, do not fork it — umbrella §2.7/§8, spec §2.0).** C7 *extends* the then-current runner/harness/gate surface and *consumes* the agent-interface a11y tier; confirm both are present at their current API before depending on them:
   ```sh
   cd /mnt/storage/projects/buiy
@@ -79,11 +89,11 @@ The content-presence predicate (spec §2.4) runs the production `extract_buiy_gl
 - Create `crates/buiy_verify/src/invariant/content_presence.rs`
 - Modify `crates/buiy_verify/src/invariant.rs` (re-export the predicate)
 - Modify `crates/buiy_verify/src/golden/check.rs` (bless-guard helper + wiring note)
-- Create `crates/buiy_verify/tests/content_presence.rs` (the predicate's RED-proof + a real text fixture)
+- Create `crates/buiy_verify/tests/verify_headless/content_presence.rs` (the predicate's RED-proof + a real text fixture) — and **register it** with `#[path = "verify_headless/content_presence.rs"] mod content_presence;` in `crates/buiy_verify/tests/verify_headless.rs` (Phase-0 consolidation rule; a bare `mod` in a binary root would resolve to `tests/content_presence.rs`).
 
 ### Steps
 
-- [ ] **Write the failing test first.** The predicate does not exist yet; assert it both passes for a real text fixture and fails for a zero-glyph one. The full-stack `content_test_app` mirrors `TextExtractHarness::with_atlas_config` (`extract_harness.rs:66-100`) so `SharedFontSystem` + the producer's resources exist. The zero-glyph input is **whitespace-only** `Text("   ")`, which is VERIFIED to emit 0 glyphs through the production producer by `crates/buiy_core/tests/text_extract.rs::whitespace_only_entity_emits_no_run` (`assert_eq!(h.glyph_count(), 0)` at text_extract.rs:967) — not the unverified U+200B. `Text("Hi!")` → 3 glyphs is verified by the same file's `emits_one_instance_per_visible_glyph_with_resident_keys` (text_extract.rs:86). Create `crates/buiy_verify/tests/content_presence.rs`:
+- [ ] **Write the failing test first.** The predicate does not exist yet; assert it both passes for a real text fixture and fails for a zero-glyph one. The full-stack `content_test_app` mirrors `TextExtractHarness::with_atlas_config` (`extract_harness.rs:66-100`) so `SharedFontSystem` + the producer's resources exist. The zero-glyph input is **whitespace-only** `Text("   ")`, which is VERIFIED to emit 0 glyphs through the production producer by `crates/buiy_core/tests/text/text_extract.rs::whitespace_only_entity_emits_no_run` (in the `text` group binary) (`assert_eq!(h.glyph_count(), 0)` at text_extract.rs:967) — not the unverified U+200B. `Text("Hi!")` → 3 glyphs is verified by the same file's `emits_one_instance_per_visible_glyph_with_resident_keys` (text_extract.rs:86). Create `crates/buiy_verify/tests/verify_headless/content_presence.rs`:
   ```rust
   //! The content-presence predicate's RED proof (C7 §2.4, §6). A text-bearing
   //! fixture MUST emit > 0 glyph instances on the production extract path; a
@@ -187,7 +197,7 @@ The content-presence predicate (spec §2.4) runs the production `extract_buiy_gl
 - [ ] **Run it & show the expected FAIL.** The predicate is not yet defined:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test content_presence 2>&1 | head -20
+  cargo test -p buiy_verify --test verify_headless content_presence:: 2>&1 | head -20
   ```
   Expected: a **compile error** — `cannot find function `content_is_present` in module `invariant``. (A compile failure IS the RED state for a not-yet-existing symbol.)
 - [ ] **Write the minimal implementation.** Create `crates/buiy_verify/src/invariant/content_presence.rs`. The predicate takes `&mut App` (the caller owns the app), builds the bare extract `World` the producer touches — the exact resources `TextExtractHarness::with_atlas_config` seeds (`extract_harness.rs:88-100`) — swaps the caller's live (already-`update()`d) world into `MainWorld`, runs the `(maintain_atlas, extract_buiy_glyphs)` `ExtractSchedule`, swaps it back, and reads `ExtractedGlyphs::glyphs.len()`. No `unsafe`, no wgpu device. All import paths are the ones `extract_harness.rs:14-23` uses verbatim:
@@ -304,10 +314,10 @@ The content-presence predicate (spec §2.4) runs the production `extract_buiy_gl
 - [ ] **Run & show expected PASS** for the predicate tests:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test content_presence 2>&1 | tail -15
+  cargo test -p buiy_verify --test verify_headless content_presence:: 2>&1 | tail -15
   ```
   Expected: `content_present_passes_for_a_shaping_label` PASS (the "Hi!" label shapes to 3 glyphs) and `content_present_fails_for_a_zero_glyph_text_fixture` PASS (the whitespace `"   "` label emits 0 glyphs, so the predicate returns `Err` with `rule == "content_is_present"`).
-- [ ] **Add the bless-guard (RED-first via a unit test).** In `crates/buiy_verify/src/golden/check.rs`, the spec requires the bless path to refuse a zero-glyph text-bearing cell with **no key-schema change** (§2.4, §6.7). The golden bless path operates on an `RgbaImage`, not a glyph count (`bless(dir, ledger_path, replace, key, actual, budget)` at check.rs:209 takes an `&RgbaImage`; the bless decision is resolved inside `check_golden_in` at check.rs:156, `if let BlessMode::Bless { replace } = mode { return bless(...) }`). So the guard takes an explicit "text-bearing & glyph_count" pair the **driver** computes and calls *before* it hands the capture to `assert_golden`. First write the failing unit test in `check.rs`'s `#[cfg(test)] mod tests` (which already exists at check.rs:454 — append to it):
+- [ ] **Add the bless-guard (RED-first via a unit test).** In `crates/buiy_verify/src/golden/check.rs`, the spec requires the bless path to refuse a zero-glyph text-bearing cell with **no key-schema change** (§2.4, §6.7). The golden bless path operates on an `RgbaImage`, not a glyph count (`bless(dir, ledger_path, replace, key, actual, budget)` at check.rs:209 takes an `&RgbaImage`; the bless decision is resolved inside `check_golden_in` at check.rs:145, `if let BlessMode::Bless { replace } = mode { return bless(...) }`). So the guard takes an explicit "text-bearing & glyph_count" pair the **driver** computes and calls *before* it hands the capture to `assert_golden`. First write the failing unit test in `check.rs`'s `#[cfg(test)] mod tests` (which already exists at check.rs:455 — append to it):
   ```rust
   #[test]
   fn bless_guard_refuses_zero_glyph_text_bearing() {
@@ -337,10 +347,10 @@ The content-presence predicate (spec §2.4) runs the production `extract_buiy_gl
       Ok(())
   }
   ```
-  Wire it at the real bless/assert call site: `crates/buiy_verify/tests/coverage_golden.rs`'s `matrix_goldens` driver calls `assert_golden(&key, &img, &budget_for(&cov))` at **coverage_golden.rs:123**, once per `(fixture, cell)`. That GPU app is built via `DeterministicApp` (coverage_golden.rs:113), which carries the full text+render stack — so the SAME `(text_bearing, glyph_count)` the content-presence extract computes is available there. Insert the guard immediately before the `assert_golden` call:
+  Wire it at the real bless/assert call site: `crates/buiy_verify/tests/verify_gpu/coverage_golden.rs`'s `matrix_goldens` driver calls `assert_golden(&key, &img, &budget_for(&cov))` at **coverage_golden.rs:146**, once per `(fixture, cell)`. That GPU app is built via `DeterministicApp` (coverage_golden.rs:136), which carries the full text+render stack — so the SAME `(text_bearing, glyph_count)` the content-presence extract computes is available there. Insert the guard immediately before the `assert_golden` call:
   ```rust
-  // crates/buiy_verify/tests/coverage_golden.rs, inside the cell loop, just
-  // before `assert_golden(&key, &img, &budget_for(&cov));` (coverage_golden.rs:123):
+  // crates/buiy_verify/tests/verify_gpu/coverage_golden.rs, inside the cell loop, just
+  // before `assert_golden(&key, &img, &budget_for(&cov));` (coverage_golden.rs:146):
   let (text_bearing, glyph_count) = buiy_verify::invariant::glyph_census(&mut app);
   buiy_verify::golden::bless_guard_check(text_bearing, glyph_count)
       .unwrap_or_else(|e| panic!("bless-guard refused cell {}: {e}", key.slug()));
@@ -371,7 +381,7 @@ The content-presence predicate (spec §2.4) runs the production `extract_buiy_gl
   cd /mnt/storage/projects/buiy
   git add crates/buiy_verify/src/invariant.rs crates/buiy_verify/src/invariant/content_presence.rs \
           crates/buiy_verify/src/golden/check.rs crates/buiy_verify/src/golden.rs \
-          crates/buiy_verify/tests/content_presence.rs docs/plans/follow-ups.md
+          crates/buiy_verify/tests/verify_headless/content_presence.rs docs/plans/follow-ups.md
   git commit -m "test(verify): add content_is_present invariant + golden bless-guard (C7 Tier-3)
 
 The production extract path must emit >0 glyph instances for a text-bearing
@@ -396,12 +406,12 @@ The single most important proof in the campaign (umbrella §9.5, spec §6): the 
 ### Files
 - Create `crates/buiy_verify/src/pointer.rs`
 - Modify `crates/buiy_verify/src/lib.rs` (`pub mod pointer;`)
-- Create `crates/buiy_verify/tests/pointer_offset_regression.rs`
-- Modify `crates/buiy_core/tests/picking_backend.rs` (doc note: superseded-for-integration by Tier A)
+- Create `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs` — and **register it** with `#[path = "verify_headless/pointer_offset_regression.rs"] mod pointer_offset_regression;` in `crates/buiy_verify/tests/verify_headless.rs`.
+- Modify `crates/buiy_core/tests/crosscut/picking_backend.rs` (doc note: superseded-for-integration by Tier A — it is a module of the `crosscut` group binary)
 
 ### Steps
 
-- [ ] **Write the failing test first — the offset regression.** This test is designed to be RED on current main (the harness drives the *real* layout→bridge→GlobalTransform chain; the pre-C1 backend mis-reads coordinates). Create `crates/buiy_verify/tests/pointer_offset_regression.rs`:
+- [ ] **Write the failing test first — the offset regression.** This test is designed to be RED on current main (the harness drives the *real* layout→bridge→GlobalTransform chain; the pre-C1 backend mis-reads coordinates). Create `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs`:
   ```rust
   //! The load-bearing RED proof (C7 §6): a synthetic pointer over the
   //! VISUALLY-CORRECT absolute position of an offset widget must hit that
@@ -452,7 +462,7 @@ The single most important proof in the campaign (umbrella §9.5, spec §6): the 
 - [ ] **Run it & show the expected FAIL.** `PointerHarness` does not exist yet:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test pointer_offset_regression 2>&1 | head -15
+  cargo test -p buiy_verify --test verify_headless pointer_offset_regression:: 2>&1 | head -15
   ```
   Expected: compile error — `unresolved import `buiy_verify::pointer``. (After the harness is built, this test stays RED until C1 lands — that is the gate; see the final step.)
 - [ ] **Write the minimal `PointerHarness`.** Create `crates/buiy_verify/src/pointer.rs`. It builds the headless interaction stack, spawns the tree, drives the production transform chain to a steady `GlobalTransform`, and injects a synthetic pointer. **It does NOT add C3's `InteractionPlugin` yet** (C3 is Wave 2) — the skeleton drives `BuiyPickingBackendPlugin` + `PickingPlugin` and reads `PointerHits` directly via the same `Messages<PointerHits>` seam `picking_backend.rs` uses, so the offset RED proof is exercisable now. C3's behavior asserts (Task 4) layer on later.
@@ -649,16 +659,16 @@ The single most important proof in the campaign (umbrella §9.5, spec §6): the 
 - [ ] **Run & show the harness compiles + the RED proof is RED for the RIGHT reason.**
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test pointer_offset_regression 2>&1 | tail -20
+  cargo test -p buiy_verify --test verify_headless pointer_offset_regression:: 2>&1 | tail -20
   ```
   Expected: the test **FAILS** with the assert message (`Some(target)` vs the wrong/`None` hit) — NOT a compile error. This is the load-bearing RED: on pre-C1 main the backend hit-tests against `ResolvedLayout.position` (parent-local) while the pointer aims at `GlobalTransform`-derived absolute center, so the pointer over the visual target misses it. **Capture this output** — it is the proof the harness is not vacuous-green. If it unexpectedly PASSES on pre-C1 main, the offset did not force divergence; confirm with a one-off `dbg!` that `ResolvedLayout.position != GlobalTransform.translation.truncate()` for the target, and increase `offset` (the `Translate` on the root must actually propagate into the child's `GlobalTransform`).
-- [ ] **Annotate `picking_backend.rs` as superseded-for-integration.** Add a doc note at the top of `crates/buiy_core/tests/picking_backend.rs` (keep the test — it is the unit-level backend test):
+- [ ] **Annotate `picking_backend.rs` as superseded-for-integration.** Add a doc note at the top of `crates/buiy_core/tests/crosscut/picking_backend.rs` (keep the test — it is the unit-level backend test):
   ```rust
   //! NOTE (C7): this hand-writes `ResolvedLayout` at an absolute position and is
   //! therefore STRUCTURALLY BLIND to Bug 1 (parent-local vs absolute coordinate
   //! divergence). It is kept as the unit-level backend smoke; the integration
   //! regression coverage is `buiy_verify::pointer::PointerHarness`'s offset-tree
-  //! test (crates/buiy_verify/tests/pointer_offset_regression.rs), which drives
+  //! test (crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs), which drives
   //! the real layout -> bridge -> GlobalTransform chain. Do NOT trust this file
   //! as the coordinate-correctness gate.
   ```
@@ -672,15 +682,15 @@ The single most important proof in the campaign (umbrella §9.5, spec §6): the 
   Apply `#[ignore = "..."]` to `synthetic_pointer_hits_offset_widget_at_its_global_position`. **C1's plan references this exact file/test and, in its own task, DELETES the `#[ignore]` attribute and asserts GREEN — C1 must NOT recreate the harness, the file, or the test, and must NOT use a manual hand-revert demonstration for it.** Document in the commit body that C1's PR removes the `#[ignore]` as it goes GREEN. Run the suite to confirm the `#[ignore]`d test is collected-but-skipped and the workspace gate is green:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test pointer_offset_regression 2>&1 | tail -8
-  cargo test -p buiy_verify --test pointer_offset_regression -- --ignored 2>&1 | tail -8   # shows the RED proof on demand
+  cargo test -p buiy_verify --test verify_headless pointer_offset_regression:: 2>&1 | tail -8
+  cargo test -p buiy_verify --test verify_headless pointer_offset_regression:: -- --ignored 2>&1 | tail -8   # shows the RED proof on demand
   ```
   Expected: default run = 0 run / 1 ignored (green); `--ignored` run = 1 FAILED (the RED proof, captured above).
 - [ ] **Commit.**
   ```sh
   cd /mnt/storage/projects/buiy
   git add crates/buiy_verify/src/lib.rs crates/buiy_verify/src/pointer.rs \
-          crates/buiy_verify/tests/pointer_offset_regression.rs crates/buiy_core/tests/picking_backend.rs
+          crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs crates/buiy_core/tests/crosscut/picking_backend.rs
   git commit -m "test(verify): Tier-A PointerHarness skeleton + offset regression (C7, RED-first for C1)
 
 PointerHarness spawns a real non-origin tree, drives the production
@@ -702,11 +712,11 @@ The spec (§3.2) DECIDES direct `PointerLocation`/`PointerInput` injection (no `
 
 ### Files
 - Modify `crates/buiy_verify/src/pointer.rs` (add `press`/`release`/`click(button: PointerButton)` writing `PointerInput`)
-- Create `crates/buiy_verify/tests/pointer_press_smoke.rs`
+- Create `crates/buiy_verify/tests/verify_headless/pointer_press_smoke.rs` — and **register it** with `#[path = "verify_headless/pointer_press_smoke.rs"] mod pointer_press_smoke;` in `crates/buiy_verify/tests/verify_headless.rs`.
 
 ### Steps
 
-- [ ] **Write the failing test first — a synthetic press reaches the backend.** This exercises the press/release path against the not-yet-C3 backend; on current main it asserts the lower-level `PointerHits`-still-fires-under-press contract (the durable state-flip assert lands in Task 4 once `Checked` exists). Create `crates/buiy_verify/tests/pointer_press_smoke.rs`:
+- [ ] **Write the failing test first — a synthetic press reaches the backend.** This exercises the press/release path against the not-yet-C3 backend; on current main it asserts the lower-level `PointerHits`-still-fires-under-press contract (the durable state-flip assert lands in Task 4 once `Checked` exists). Create `crates/buiy_verify/tests/verify_headless/pointer_press_smoke.rs`:
   ```rust
   //! Smoke: a synthetic press at the pointer's current location does not
   //! disturb the hit stream and is injected through the sanctioned path
@@ -741,7 +751,7 @@ The spec (§3.2) DECIDES direct `PointerLocation`/`PointerInput` injection (no `
 - [ ] **Run it & show the expected FAIL.** `press`/`release` are not defined:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test pointer_press_smoke 2>&1 | head -12
+  cargo test -p buiy_verify --test verify_headless pointer_press_smoke:: 2>&1 | head -12
   ```
   Expected: compile error — `no method named `press` found for struct `PointerHarness``.
 - [ ] **Implement `press`/`release`/`click(button: PointerButton)`.** Add to `crates/buiy_verify/src/pointer.rs`. Each takes an explicit `PointerButton` (the FINAL API) and writes `PointerInput` directly per §3.2. Add the import `use bevy::picking::pointer::{PointerAction, PointerButton, PointerInput};` to the existing import block. (`CapturedEvents` + `captured()` already landed in Task 2; do NOT redefine them.)
@@ -787,13 +797,13 @@ The spec (§3.2) DECIDES direct `PointerLocation`/`PointerInput` injection (no `
 - [ ] **Run & show expected PASS:**
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_verify --test pointer_press_smoke 2>&1 | tail -8
+  cargo test -p buiy_verify --test verify_headless pointer_press_smoke:: 2>&1 | tail -8
   ```
   Expected: `press_release_at_a_hit_keeps_the_entity_hit` PASS.
 - [ ] **Commit.**
   ```sh
   cd /mnt/storage/projects/buiy
-  git add crates/buiy_verify/src/pointer.rs crates/buiy_verify/tests/pointer_press_smoke.rs
+  git add crates/buiy_verify/src/pointer.rs crates/buiy_verify/tests/verify_headless/pointer_press_smoke.rs
   git commit -m "test(verify): PointerHarness press/release/click + CapturedEvents scaffold (C7 §2.1, §3.2)
 
 Direct PointerInput injection (the lessons-sanctioned synthetic path, NOT
@@ -811,17 +821,17 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 The audit found zero coverage for the editor-content clobber (Bug 3) and the shape-guard (Bug 2). Tier B folds a deterministic `FontsGeneration`-bump helper into the existing adapterless `TextExtractHarness` (`extract_harness.rs`) and writes `text_font_reload_survival.rs` (spec §2.2). The content-survival assert is the **RED-first proof for C2**: with C2's `TextSync` editor-clobber fix reverted (i.e. on current main), the bump clobbers the editor buffer to `""` and the test FAILS.
 
-**Ownership (C7 is the SOLE creator):** C7 creates `bump_fonts_generation` (in `extract_harness.rs`) and the file `crates/buiy_core/tests/text_font_reload_survival.rs` (this exact name — NOT `text_editor_integrity.rs`) with **all five** tests at these EXACT names: `editor_content_survives_a_fonts_generation_bump`, `label_reshapes_and_keeps_glyphs_after_a_bump`, `empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump`, `preedit_survives_a_fonts_generation_bump`, `editor_style_stays_live_after_a_bump`. The three RED-on-pre-C2 tests (content-survival, preedit, editor-style) ship as committed `#[ignore = "RED until C2 lands: …"]`. **C2's plan references these C7-owned files/tests and, in its own task, DELETES the `#[ignore]` attribute (un-ignores) + asserts GREEN — C2 must NOT recreate the file, the `bump_fonts_generation` method, or the tests, and must NOT use a manual hand-revert demonstration for them.**
+**Ownership (C7 is the SOLE creator):** C7 creates `bump_fonts_generation` (in `extract_harness.rs`) and the file `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs` (this exact name — NOT `text_editor_integrity.rs`) with **all five** tests at these EXACT names: `editor_content_survives_a_fonts_generation_bump`, `label_reshapes_and_keeps_glyphs_after_a_bump`, `empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump`, `preedit_survives_a_fonts_generation_bump`, `editor_style_stays_live_after_a_bump`. The three RED-on-pre-C2 tests (content-survival, preedit, editor-style) ship as committed `#[ignore = "RED until C2 lands: …"]`. **C2's plan references these C7-owned files/tests and, in its own task, DELETES the `#[ignore]` attribute (un-ignores) + asserts GREEN — C2 must NOT recreate the file, the `bump_fonts_generation` method, or the tests, and must NOT use a manual hand-revert demonstration for them.**
 
 **Nextest, not debug_assert (contract):** the reshape/shape-guard RED must manifest as an observable `glyph_count() == 0` under the actual test profile (`cargo nextest run`), NOT only as a `debug_assert!` panic — `debug_assert` may be compiled out under a release-profile nextest run, so a count assert is the load-bearing signal and the `debug_assert` is at most a secondary one. Every Tier-B test here asserts a concrete `glyph_count()` / `value()` / `metrics_for_test()`, never relying on a `debug_assert` firing.
 
 ### Files
 - Modify `crates/buiy_core/tests/support/extract_harness.rs` (add `bump_fonts_generation`)
-- Create `crates/buiy_core/tests/text_font_reload_survival.rs`
+- Create `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs` — and **register it** with `#[path = "text_edit/text_font_reload_survival.rs"] mod text_font_reload_survival;` in `crates/buiy_core/tests/text_edit.rs`. The Tier-B test seeds editors via `TextEditState`/IME, so it belongs in the `text_edit` group binary (where `text_edit_substrate.rs`, `text_clipboard_undo.rs`, `text_ime_*` live), not the `text` render binary. The module reaches the shared harness via `support::extract_harness::TextExtractHarness` (the `text_edit` binary root already owns `mod support;`) — do NOT add a fresh `mod support;` inside the module; use `mod support;` → `crate::support` per the consolidation convention.
 
 ### Steps
 
-- [ ] **Write the failing test first — editor content survives a font-generation bump.** Create `crates/buiy_core/tests/text_font_reload_survival.rs`:
+- [ ] **Write the failing test first — editor content survives a font-generation bump.** Create `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs`:
   ```rust
   //! Tier B (C7 §2.2) — the FontsGeneration-bump content-survival / reshape /
   //! empty-editor / preedit / editor-style tests, headless on the adapterless
@@ -841,15 +851,19 @@ The audit found zero coverage for the editor-content clobber (Bug 3) and the sha
   //! set_text on the editor buffer), so the content-survival / preedit /
   //! editor-style asserts FAIL until C2's TextSync fix lands. C2's PR un-ignores
   //! them (deletes the #[ignore]) — it must NOT recreate this file or its tests.
-
-  mod support;
+  //!
+  //! This file is a MODULE of the `text_edit` group binary (PR #77 consolidation),
+  //! registered via `#[path] mod text_font_reload_survival;` in `tests/text_edit.rs`.
+  //! It does NOT declare `mod support;` (the binary root owns it); it reaches the
+  //! harness via `crate::support::extract_harness::TextExtractHarness`, the same
+  //! way `tests/text/text_extract.rs` does.
 
   use bevy::prelude::*;
   use buiy_core::Node;
   use buiy_core::layout::Style;
   use buiy_core::text::SharedFontSystem;
   use buiy_core::text::edit::{EditCommand, TextEditState};
-  use support::extract_harness::TextExtractHarness;
+  use crate::support::extract_harness::TextExtractHarness;
 
   /// Spawn an editor entity pre-seeded with typed content via the real edit
   /// path, so the editor-owned buffer holds "Hello" while the display `Text`
@@ -899,7 +913,7 @@ The audit found zero coverage for the editor-content clobber (Bug 3) and the sha
 - [ ] **Run it & show the expected FAIL.** `bump_fonts_generation` does not exist:
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_core --test text_font_reload_survival 2>&1 | head -12
+  cargo test -p buiy_core --test text_edit text_font_reload_survival:: 2>&1 | head -12
   ```
   Expected: compile error — `no method named `bump_fonts_generation``.
 - [ ] **Implement `bump_fonts_generation`.** Add to `crates/buiy_core/tests/support/extract_harness.rs`. `FontsGeneration(pub u64)` is defined at `font_system.rs:96` and re-exported as `buiy_core::text::FontsGeneration` (`text/mod.rs:68`). Bump it exactly as `apply_font_registry` does on a real font-set change: registry.rs:324 takes `mut generation: ResMut<FontsGeneration>` (registry.rs:328) and does `generation.0 += 1` (registry.rs:543, "exactly once per batch"):
@@ -927,7 +941,7 @@ The audit found zero coverage for the editor-content clobber (Bug 3) and the sha
 - [ ] **Run & show expected FAIL for the RIGHT reason (the RED proof for C2).**
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo test -p buiy_core --test text_font_reload_survival 2>&1 | tail -20
+  cargo test -p buiy_core --test text_edit text_font_reload_survival:: 2>&1 | tail -20
   ```
   Expected: `editor_content_survives_a_fonts_generation_bump` **FAILS** with `value == ""` vs `"Hello"` — the Bug-3 clobber on pre-C2 main. **Capture this output** (the C2 gate). If it unexpectedly passes, confirm the seeded editor's owned buffer actually diverges from display `Text` (the clobber only bites when `TextBufferAccess` is editor-first; verify the entity has no `Text` component so the editor buffer is the authoritative one, per C2 §1.1).
 - [ ] **`#[ignore]` the survival test pre-C2 (committed, NOT a hand-revert).** Like the offset RED proof, this ships as a committed `#[ignore]`; C2's PR DELETES the attribute (un-ignores) as it goes GREEN. Apply:
@@ -1059,14 +1073,14 @@ The audit found zero coverage for the editor-content clobber (Bug 3) and the sha
 - [ ] **Run & show expected results** under the actual nextest profile (the RED proofs skipped by default):
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo nextest run -p buiy_core text_font_reload_survival 2>&1 | tail -12
-  cargo nextest run -p buiy_core --run-ignored ignored-only text_font_reload_survival 2>&1 | tail -12
+  cargo nextest run -p buiy_core --test text_edit text_font_reload_survival 2>&1 | tail -12
+  cargo nextest run -p buiy_core --test text_edit --run-ignored ignored-only text_font_reload_survival 2>&1 | tail -12
   ```
   Expected default: `label_reshapes_and_keeps_glyphs_after_a_bump` PASS, `empty_editor_emits_zero_glyphs_and_does_not_crash_on_bump` PASS, the three `#[ignore]`d tests (content-survival, preedit, editor-style) skipped (green). `--run-ignored ignored-only` run: those three FAIL (the C2 RED proofs — captured above), each via a concrete `value()` / buffer-text / `metrics_for_test()` assert, not a `debug_assert`. (Plain `cargo test -- --ignored` works too if nextest's `--run-ignored` flag is unavailable on the pinned version — confirm at Phase 0.)
 - [ ] **Commit.**
   ```sh
   cd /mnt/storage/projects/buiy
-  git add crates/buiy_core/tests/support/extract_harness.rs crates/buiy_core/tests/text_font_reload_survival.rs
+  git add crates/buiy_core/tests/support/extract_harness.rs crates/buiy_core/tests/text_edit/text_font_reload_survival.rs
   git commit -m "test(core): Tier-B FontsGeneration-bump content-survival on the adapterless harness (C7 §2.2, RED-first for C2)
 
 bump_fonts_generation injects the FontsGeneration bump deterministically (the
@@ -1104,13 +1118,13 @@ Confirm the full workspace gate is green with all RED proofs `#[ignore]`d, and r
 - [ ] **Run the RED proofs on demand to re-confirm they are non-vacuous** (they must FAIL on the current pre-C1/pre-C2 tree):
   ```sh
   cd /mnt/storage/projects/buiy
-  cargo nextest run -p buiy_verify --run-ignored ignored-only pointer_offset_regression 2>&1 | tail -6
-  cargo nextest run -p buiy_core --run-ignored ignored-only text_font_reload_survival 2>&1 | tail -8
+  cargo nextest run -p buiy_verify --test verify_headless --run-ignored ignored-only pointer_offset_regression 2>&1 | tail -6
+  cargo nextest run -p buiy_core --test text_edit --run-ignored ignored-only text_font_reload_survival 2>&1 | tail -8
   ```
   Expected: offset-regression FAILS (wrong/no hit); content-survival FAILS (`""` vs `"Hello"`); preedit-survival FAILS; editor-style FAILS (metrics reset). **These captured failures are the deliverable's teeth.**
 - [ ] **Record the un-ignore handoff** in the child spec's §7 dependencies (edit `docs/specs/2026-06-22-buiy-widget-catalog-design/verification-real-input.md` if it does not already say so) and in this plan:
-  - **C1's PR** DELETES the `#[ignore]` from `synthetic_pointer_hits_offset_widget_at_its_global_position` (the C7-owned `crates/buiy_verify/tests/pointer_offset_regression.rs`) and proves it GREEN — that transition is C1's coordinate-fix verification. C1 does NOT recreate the harness/file/test and uses no hand-revert.
-  - **C2's PR** DELETES the `#[ignore]` from `editor_content_survives_a_fonts_generation_bump`, `preedit_survives_a_fonts_generation_bump`, and `editor_style_stays_live_after_a_bump` (the C7-owned `crates/buiy_core/tests/text_font_reload_survival.rs`) and proves them GREEN — that transition is C2's content-integrity verification. C2 does NOT recreate the file / `bump_fonts_generation` / tests and uses no hand-revert.
+  - **C1's PR** DELETES the `#[ignore]` from `synthetic_pointer_hits_offset_widget_at_its_global_position` (the C7-owned `crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs`) and proves it GREEN — that transition is C1's coordinate-fix verification. C1 does NOT recreate the harness/file/test and uses no hand-revert.
+  - **C2's PR** DELETES the `#[ignore]` from `editor_content_survives_a_fonts_generation_bump`, `preedit_survives_a_fonts_generation_bump`, and `editor_style_stays_live_after_a_bump` (the C7-owned `crates/buiy_core/tests/text_edit/text_font_reload_survival.rs`) and proves them GREEN — that transition is C2's content-integrity verification. C2 does NOT recreate the file / `bump_fonts_generation` / tests and uses no hand-revert.
   - **C3 (Wave 2)** fills in Task 4's behavior asserts on `PointerHarness` (focus-on-click, pick-depth/stacking, overlay/modal hit-blocking, `Pickable::IGNORE` hit-through, activation-parity: pointer `Click` vs the agent-interface router's `Action::Click`→`OnPress` — no competing `Activate`, umbrella §2.7) and resolves the §3.2 direct-injection-vs-`PointerInputPlugin` build-step confirm against its real plugin graph; if `InteractionPlugin` needs `PointerInputPlugin`, add it in `PointerHarness::new()`. a11y-state reads in those asserts go through the agent-interface `semantic_tree(app, view)` tier / `A11yToggled` components.
   - **Agent-interface campaign (P0 + P1a)** lands the a11y `WireNode` ref-fix + role + tri-state extension and the `A11yNodeView`/`build_tree`/`to_accesskit_node` widen + the `semantic_tree(app, view)` tier — **NOT this plan, NOT C4+C7** (umbrella §2.7, spec §2.5). This Wave-1 plan deliberately does not touch `a11y.rs`'s `WireNode`/`role_to_str`/`KNOWN_ROLES`; the a11y goldens re-bless once, in that campaign's change, governed by its "every new role/state ships its #3 fixture in the same change" rule. C7's Wave-2 behavior asserts (Task 4) *read* that tier for a11y state; they do not extend it.
 - [ ] **Commit any doc handoff edit** (if the spec §7 needed the explicit un-ignore note):

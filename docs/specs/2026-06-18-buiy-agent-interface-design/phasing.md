@@ -24,6 +24,24 @@ This entire spec targets **accesskit 0.24** and **Bevy 0.19-rc.3** (wgpu 29, acc
 
 ---
 
+## Co-drive with the widget-catalog campaign — demand-pulled scope (2026-06-22)
+
+This campaign is now driven **together with** the [widget-catalog campaign](../2026-06-22-buiy-widget-catalog-design/README.md) as one swarm (owner decision). The authoritative cross-campaign plan — interleaved waves, the shared contracts (SC-1…SC-4), and the demand-pulled scope below — is [`docs/plans/2026-06-22-widget-catalog-agent-interface-codrive.md`](../../plans/2026-06-22-widget-catalog-agent-interface-codrive.md).
+
+**Demand-pulled, not driven to completion.** These inspection tools are built **only as far as the widget-catalog gallery consumes them.** Each phase ships the subset its consumers (the gallery's widgets/containers + the C7 verification tier) actually exercise; everything else is **deferred, not cancelled** — recorded below so it can be picked up later. Each phase's "done" updates this ledger.
+
+**Deferral ledger (P1 subset — BUILD vs DEFER).** Authoritative copy in the coordination plan §3; mirrored here:
+
+- **P1a** — BUILD: 12 state components (`A11yToggled`, `A11yExpanded`, `A11ySelected`, `A11yDisabled`, `A11yValue`, `A11yTextValue`, `A11yPlaceholder`, `A11yModal`, `A11yHidden`, `A11yLive`, `A11yOrientation`, `A11yHasPopup`) + 4 relations (`labelled_by`, `described_by`, `controls`, `active_descendant`) + the `A11yNodeView` scroll wire-fields (SC-4). DEFER: `A11yReadOnly`/`Required`/`Busy`/`Invalid`/`AutoComplete`/`Level`/`PosInSet`/`SetSize` and relations `owns`/`flow_to`/`details`/`error_message` — no gallery consumer (the `A11yRelations` struct still carries the deferred fields; they get no populate-side system / fold-arm test).
+- **P1b** — BUILD: default `ChildOf` nesting + `nearest_a11y_ancestor` collapse + window-root + the `A11yHidden` **prune** + the three named gate-#12 invariants over the gallery fixtures. DEFER: the `owns` re-parent edge, `TreeView::Merged` + `A11yMergeChildren`, the exhaustive #12 proptest generators.
+- **P1c** — BUILD: `Focus`/`Blur`/`Click`/`Increment`/`Decrement`/`SetValue` (lowers via existing `SelectAll`+`Insert` — no new editor work)/`Expand`/`Collapse`/`ShowTooltip`/`HideTooltip`; the minimal driver (`snapshot(Unmerged)` + `perform` + `click`/`set_value`/`focus`/`get_by_role`/`increment`/`expand`/`wait_for` + the `ref`/off-by-one fix). DEFER: **the entire `EditCommand::SetSelection` editor-work slice** + `Action::SetTextSelection`/`ReplaceSelectedText` + `inprocess::set_selection` (the only gallery editor types + SetValue, nothing more); `SetSequentialFocusNavigationStartingPoint`; `CustomAction(i32)` + registry; `Scroll*`; and the actionability **gates** (`act_when_actionable`/`HitTargetable`/`Stable`). Note: the **stacking-aware `hit_test`** that `HitTargetable` (follow-up #3) would consume is *delivered by the widget-catalog C1+C3 regardless* — so if `HitTargetable` is later un-deferred it reads a real hit_test, **never the AABB-only stopgap** this spec otherwise described.
+- **P1d** — BUILD: all 8 bundles, **single-role / single-variant** (TextInput single-line, Checkbox, Button +Enter/Space, Switch, Slider single-thumb, Disclosure single, Dialog plain, Tooltip-trigger). DEFER: `MultilineTextInput` role, `AlertDialog` role, multi-thumb Slider, Accordion (multi-Disclosure subtree).
+- **P2** — entirely deferred (out of co-drive scope) unless the owner explicitly green-lights the MCP transport.
+
+**Base correction (post-#78):** the standing rule above states "`Cargo.lock` is gitignored." That is **no longer true** — PR #78 committed `Cargo.lock` to `main` and CI runs `--locked`. The 0.24 setter-signature discipline stands, but verification now reads the *locked* versions (`cargo tree`/`cargo doc` against the committed lock), not a regenerated one.
+
+---
+
 ## Phase sequence
 
 Review gates between phases: a fresh-context review (logic, spec-alignment, quality) + the relevant gate (#3/#4/#6/#7/#12) green headless before carrying work forward.

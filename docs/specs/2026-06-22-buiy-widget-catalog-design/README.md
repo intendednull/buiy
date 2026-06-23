@@ -2,6 +2,8 @@
 
 `2026-06-22` · `[draft]` · Umbrella/charter spec for the interactive widget-catalog subsystem. Owns the campaign-level decisions, decomposition, sequencing, and doc governance; each facet is detailed in a child spec in this folder.
 
+> **Co-drive update (2026-06-22).** This campaign is now driven **together with** the agent-interface campaign as one swarm (owner decision). The authoritative **[co-drive coordination plan](../../plans/2026-06-22-widget-catalog-agent-interface-codrive.md)** holds the cross-campaign sequencing, the **demand-pulled** tool scope + deferral ledger (the inspection tools are built only as far as this app consumes them), the interleaved 6-wave plan, and the four pinned shared contracts **SC-1…SC-4** (OnPress sink / focus-visible signal / stacking-aware `hit_test` / scroll wire fields) — **read it first.** The §8 implementation gate below is **dissolved** into that plan: the tools are no longer *waited on*, they are *built alongside* this app. This charter's decisions (§2) stand; where this doc and the coordination plan differ on sequencing/scope/contracts, **the coordination plan wins.**
+
 ## 0. What this is
 
 A clean-room **re-implementation**, done right on current `main`, of the work a throwaway TodoMVC prototype explored — scoped up (by explicit decision, §2.1) from "a flat TodoMVC" into the kickoff of an **interactive widget-catalog subsystem**: real pointer/keyboard input, accessible stateful widgets, scroll/overlay/modal containers, F-tier styling, and a widget-gallery exemplar that exercises all of it.
@@ -18,7 +20,7 @@ The prototype itself is **not** the artifact — it lives on the unmerged `workt
 
 The audit confirmed all three prototype-surfaced `buiy_core` bugs are **real and live on `main`**, and that the picking bug is a coordinate-space *class* bug (a second latent instance lives in `render/clip.rs`), that the text-commit guard would *mask* the unfixed editor-content clobber (so they are one fix), and that keyboard focus is **structurally invisible** (a WCAG 2.4.7 failure). It also confirmed the campaign's direction (§2) **realizes the foundation** rather than inventing anything new: the foundation already commits the full `Pointer<E>` event taxonomy, separate aria-state semantics, and the F-tier styling channels; the current code is a Phase-0 stopgap that never matched those chapters.
 
-The work decomposes into **nine child specs (C0–C8)** built in **six waves**, with verification (C7) pulled *early* as the regression gate, and the input rework (C3) as the linchpin everything interactive depends on. **All nine are spec'able now; no code lands until the implementation gate clears (§8).**
+The work decomposes into **nine child specs (C0–C8)** built in **six waves**, with verification (C7) pulled *early* as the regression gate, and the input rework (C3) as the linchpin everything interactive depends on. Under the co-drive (banner above), the **non-widget waves (C1/C2/C7) build in parallel with the tool substrate (P1a/P1b) from day one**, and the widget waves (C4/C5/C8) consume the substrate as it lands — see the coordination plan's wave plan for the interleaved order.
 
 ## 2. Decisions (decided — recorded with rationale + rejected runner-up)
 
@@ -121,9 +123,13 @@ Everything is **spec'able now in parallel** (once C0 anchors the children). **Co
 - **C5 decomposition:** spec C5 as one document with explicit A/B/C slices; **hold open** the option to split into A/B/C sub-children if any slice proves too large to implement as one unit.
 - **Event-vocabulary migration:** recommend keeping `OnPress` as a deprecated alias for one cycle (avoid breaking `hello_button` + existing tests in the same wave); final call in C4.
 
-## 8. Implementation gate
+## 8. Implementation gate — **SUPERSEDED by the co-drive (see banner / [coordination plan](../../plans/2026-06-22-widget-catalog-agent-interface-codrive.md))**
 
-**No code lands until** (a) the **inspection tools / agent-interface substrate (§2.7) merge to the level this campaign depends on** — at minimum its **P1a** (decomposed `A11yStates`), **P1c** (action router + in-process driver), and **P1d** (the APG widget bundles) for the widget-touching waves — **and** (b) the work branches fresh from the then-current `origin/main` per the branch-from-latest rule. This spec was authored on `507855f`; **`main` has since advanced to `a1ab149` (#79 agent-interface Phase 0) and beyond**, so a rebase is mandatory, not optional. At gate time, re-fetch and re-branch; each plan's first task is the rebase + a re-confirm of every file:line anchor against the rebased tree (the prototype diffs are stale-base and are **re-derived, never cherry-picked**).
+The original gate ("no code lands until the agent-interface P1a/P1c/P1d **merge**") assumed a *separate team* owned the inspection tools. **One swarm now owns both campaigns,** so the gate is dissolved: the tools are *built alongside* this app (demand-pulled), not waited on. The reread, now authoritative in the coordination plan:
+
+- **The widget-touching waves (C4/C5/C8) consume** the substrate they need (P1a states, P1c router/driver, P1d bundles) — those are sequenced to land first *within the co-drive*, not waited on as an external merge.
+- **The non-widget app-correctness waves (C1/C2/C7) run in parallel** with the tool substrate (P1a/P1b) from day one — they share no code.
+- **The rebase still applies, and already happened:** this spec set was authored on `507855f`; the integration branch is now rebased onto current `origin/main` (`e54cf0c`, which carries agent-interface P0 #79 + nextest #77 + CI-hardening #78). The diffs are re-derived on this base, **never cherry-picked**. Each plan's first task re-confirms its file:line anchors against the current tree.
 
 **Incoming `main` work is a resource, not a duplication target.** Several streams are landing in parallel and this campaign **builds on them, never re-implements them** — re-confirmed at the rebase:
 - **Testing infrastructure** (actively growing on `main`): the testing-audit consolidation (**cargo-nextest** + the 162→7 test-binary consolidation, PR #77), CI-hardening (#78), **and further test infrastructure being added**. C7's verification tier **extends the project's test runner/harnesses/gates** — it never stands up a parallel test rig. C7's plan re-confirms the then-current harness/runner surface at Phase 0.
