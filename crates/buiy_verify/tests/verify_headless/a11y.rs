@@ -1,6 +1,10 @@
 use bevy::prelude::*;
-use buiy_core::a11y::{A11yNodeView, A11yRole};
-use buiy_verify::a11y::{diff_snapshots, snapshot_tree};
+use buiy_core::a11y::translate::node_id_for;
+use buiy_core::a11y::{A11yLabel, A11yNodeView, A11yPlugin, A11yRole};
+use buiy_core::{CorePlugin, focus::Focusable};
+use buiy_verify::a11y::{
+    TreeView, consume, diff_snapshots, node_for, semantic_tree, snapshot_tree,
+};
 
 // Bevy 0.18 removed `Entity::from_raw`; `from_raw_u32` returns `Option<Entity>`.
 fn entity(index: u32) -> Entity {
@@ -50,6 +54,55 @@ fn diff_returns_some_for_different_snapshots() {
     assert!(result.is_some());
     let text = result.unwrap();
     assert!(text.contains("LEFT") && text.contains("RIGHT"));
+}
+
+// ---------------------------------------------------------------------------
+// gate-#3 in-process `accesskit_consumer` read tier (P1a Phase 0).
+// The lowest verification rung: build the real TreeUpdate via the production
+// fold, hand it to accesskit_consumer, and read the node back the way an AT
+// does. Every later P1a state fixture stands on this rung.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn consumer_reads_back_a_button_label() {
+    // Synthetic-view path: the fold → consumer round-trip in isolation, no App.
+    let views = vec![A11yNodeView {
+        entity: entity(1),
+        role: A11yRole::Button,
+        name: "Save".into(),
+        description: String::new(),
+        focusable: true,
+    }];
+    let tree = consume(&views, None);
+    let node =
+        node_for(&tree, node_id_for(entity(1))).expect("button node present in the consumer tree");
+    // `accesskit_consumer::Node::label()` returns `Option<String>` in 0.36.
+    assert_eq!(node.label().as_deref(), Some("Save"));
+    assert_eq!(node.role(), accesskit::Role::Button);
+}
+
+#[test]
+fn semantic_tree_round_trips_role_and_name_through_a_running_app() {
+    // End-to-end App path: spawn a minimal a11y entity, drive a frame so the
+    // production `build_tree` system fills `A11yTreeBuilder`, then snapshot
+    // THROUGH the consumer tier and assert role + name survived the round-trip.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(CorePlugin)
+        .add_plugins(A11yPlugin);
+    app.world_mut().spawn((
+        Focusable::default(),
+        A11yRole::Button,
+        A11yLabel("Save".to_string()),
+    ));
+
+    app.update();
+
+    let snapshot = semantic_tree(&mut app, TreeView::Unmerged);
+    assert_eq!(
+        snapshot, "Button  Save",
+        "role + name must round-trip producer → consumer; got: {snapshot:?}",
+    );
 }
 
 #[test]

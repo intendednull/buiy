@@ -78,6 +78,17 @@ tracing = "0.1"
 bytemuck = { version = "1", features = ["derive"] }
 accesskit = "0.24"
 accesskit_winit = "0.32"
+# In-process AccessKit consumer — the gate-#3 read tier the agent-interface
+# in-process driver and `buiy_verify` snapshot path drive (inprocess-api.md §6,
+# verification.md "accesskit_consumer dependency"). Version matches the resolved
+# accesskit 0.24.1: the accesskit_winit 0.32.2 → accesskit_unix 0.21.1 →
+# accesskit_atspi_common 0.18.1 stack already pulls accesskit_consumer 0.36.0
+# (`cargo tree -i accesskit_consumer@0.36.0`), so this declares an EXISTING graph
+# node — no new crate enters the tree. (0.35/0.37 are orphan lock entries with no
+# reverse-dep.) Consumed by `buiy_verify` (the consumer-helper home, co-drive §5
+# SC-4 single-home); `buiy_core` reaches it transitively, so the dep is declared
+# in `buiy_verify`, not `buiy_core`, until the production `inprocess.rs` lands.
+accesskit_consumer = "0.36"
 # guillotiere is only a *transitive* dep of bevy_image (not re-exported);
 # pin it directly to the version bevy_image 0.19.0-rc.3 resolves (0.6.2, which
 # satisfies bevy_image's "0.6.0" req) so a bevy patch bump cannot drop the atlas

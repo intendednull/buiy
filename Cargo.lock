@@ -1615,6 +1615,8 @@ dependencies = [
 name = "buiy_verify"
 version = "0.0.1"
 dependencies = [
+ "accesskit",
+ "accesskit_consumer 0.36.0",
  "base64",
  "bevy",
  "buiy_core",
