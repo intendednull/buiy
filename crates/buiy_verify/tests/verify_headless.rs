@@ -81,5 +81,7 @@ mod snapshot_dump;
 mod snapshot_instance_hex;
 #[path = "verify_headless/snapshot_layout.rs"]
 mod snapshot_layout;
+#[path = "verify_headless/todomvc_c8a.rs"]
+mod todomvc_c8a;
 #[path = "verify_headless/visual.rs"]
 mod visual;

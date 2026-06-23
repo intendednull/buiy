@@ -1613,6 +1613,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "buiy_gallery"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_verify",
+ "buiy_widgets",
+]
+
+[[package]]
 name = "buiy_verify"
 version = "0.0.1"
 dependencies = [
@@ -1621,6 +1632,7 @@ dependencies = [
  "base64",
  "bevy",
  "buiy_core",
+ "buiy_gallery",
  "buiy_widgets",
  "bytemuck",
  "cosmic-text",

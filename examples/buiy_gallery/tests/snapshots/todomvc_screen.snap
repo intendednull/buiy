@@ -1,0 +1,24 @@
+---
+source: examples/buiy_gallery/tests/todomvc_layout.rs
+assertion_line: 42
+expression: todomvc_screen
+---
+# buiy-layout-dump v1
+TodoCard pos=0,0 size=456,324
+  AddField pos=24,24 size=216,48
+  Footer pos=24,252 size=408,48
+    ClearButton pos=314,0 size=94,48
+    FilterActive pos=110,0 size=94,48
+    FilterAll pos=8,0 size=94,48
+    FilterCompleted pos=212,0 size=94,48
+    ItemsLeft pos=0,0 size=0,48
+  TodoList pos=24,84 size=408,156
+    TodoRow pos=0,0 size=408,48
+      RowCheckbox pos=0,0 size=18,18
+      RowDestroy pos=26,0 size=136,48
+    TodoRow pos=0,54 size=408,48
+      RowCheckbox pos=0,0 size=18,18
+      RowDestroy pos=26,0 size=136,48
+    TodoRow pos=0,108 size=408,48
+      RowCheckbox pos=0,0 size=18,18
+      RowDestroy pos=26,0 size=136,48
