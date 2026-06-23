@@ -147,7 +147,9 @@ pub enum TreeView {
 /// (which takes the internal pair). The single-tree-per-window model means
 /// `TreeId::ROOT` is always the tree id (`build_tree_update` sets it).
 pub fn consume(views: &[A11yNodeView], focused: Option<NodeId>) -> ConsumerTree {
-    let update = build_tree_update(views, focused);
+    // `root_entity: None` — the headless consumer has no window, so the
+    // synthetic root keys off the stable `ROOT_NODE_ID` (semantic-tree.md §7.2).
+    let update = build_tree_update(views, focused, None);
     // `is_host_focused = true`: in a headless fixture the Buiy "window" is the
     // focused host, so the consumer applies the update's `focus` directly.
     ConsumerTree::new(update, true)

@@ -107,20 +107,19 @@ fn empty_label_falls_through_to_value() {
 }
 
 // ---------------------------------------------------------------------------
-// DEFERRED arms — P1b un-ignores these once the nesting tree walk exists. They
-// pin the precedence ABOVE the local arms (labelledby) and BELOW them
-// (contents); in P1a `build_tree` always passes `None` for both inputs, so the
-// fixtures would have nothing to resolve. P1b populates `labelledby_name` /
-// `contents_name` from the resolved relation targets + the subtree and removes
-// the `#[ignore]`.
+// Formerly-DEFERRED arms — un-ignored in P1b now that `build_tree` supplies the
+// nesting tree walk. They pin the precedence ABOVE the local arms (labelledby)
+// and BELOW them (contents). `build_tree` resolves `labelledby_name` from the
+// `A11yRelations.labelled_by` targets' names and `contents_name` from the node's
+// collapsed a11y children (semantic-tree.md §6); the end-to-end wiring is
+// exercised over real ECS fixtures in `crosscut/a11y.rs`.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "P1b un-ignores — needs the nesting tree walk"]
 fn labelledby_beats_label() {
-    // aria-labelledby (highest precedence) wins over an explicit label. In P1a
-    // `build_tree` never resolves a labelledby name (no tree walk), so this is
-    // only reachable once P1b populates `labelledby_name`.
+    // aria-labelledby (highest precedence) wins over an explicit label. P1b's
+    // `build_tree` populates `labelledby_name` from the resolved labelled_by
+    // targets, so this arm is now live.
     let l = label("Local label");
     let name = compute_accessible_name(AccNameInputs {
         labelledby_name: Some("Referenced name"),
@@ -134,10 +133,10 @@ fn labelledby_beats_label() {
 }
 
 #[test]
-#[ignore = "P1b un-ignores — needs the nesting tree walk"]
 fn contents_used_when_no_local_label_value_or_placeholder() {
-    // The node's own subtree text is the fallback below placeholder. Needs the
-    // P1b child walk to populate `contents_name`.
+    // The node's own subtree text is the fallback below placeholder. P1b's
+    // `build_tree` populates `contents_name` from the node's collapsed a11y
+    // children, so this arm is now live.
     let name = compute_accessible_name(AccNameInputs {
         contents_name: Some("Click me"),
         ..Default::default()

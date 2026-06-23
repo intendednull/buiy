@@ -43,7 +43,7 @@ fn build_tree_update_emits_root_plus_children() {
             ..Default::default()
         },
     ];
-    let update = build_tree_update(&views, None);
+    let update = build_tree_update(&views, None, None);
     // Root + 2 child nodes:
     assert_eq!(update.nodes.len(), 3);
     // Tree pointer is set with a stable root id:
@@ -62,7 +62,7 @@ fn focused_node_id_round_trips() {
     }];
     // Caller passes the entity-derived NodeId for the focused node.
     let focused_id = buiy_core::a11y::translate::node_id_for(Entity::from_raw_u32(42).unwrap());
-    let update = build_tree_update(&views, Some(focused_id));
+    let update = build_tree_update(&views, Some(focused_id), None);
     assert_eq!(update.focus, focused_id);
 }
 

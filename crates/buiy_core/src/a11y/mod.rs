@@ -10,6 +10,7 @@ use crate::{BuiySet, focus::Focusable};
 use accesskit::{HasPopup, NodeId, Orientation, Toggled};
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
+use std::collections::{HashMap, HashSet};
 
 pub mod accname;
 pub mod adapter;
@@ -138,9 +139,11 @@ pub struct A11yNodeView {
     pub disabled: bool,
     /// Modal flag, projected from the [`A11yModal`] marker's presence.
     pub modal: bool,
-    /// Hidden flag, projected from the [`A11yHidden`] marker's presence.
-    /// **Carried only in P1a** — no fold arm; P1b consumes it to prune the
-    /// node + subtree (semantic-tree.md §7.4).
+    /// Hidden flag, projected from the [`A11yHidden`] marker's presence. P1b's
+    /// `build_tree` consumes it to **prune** the entity + its whole subtree, so a
+    /// view carrying `hidden: true` is never emitted (it exists on the type only
+    /// for the producer-tier "carried but not folded" assertion). The fold has no
+    /// arm for it (semantic-tree.md §7.4).
     pub hidden: bool,
     // Decomposed state projections (P1a, second batch):
     /// Valued range, projected from [`A11yValue`]. `None` ⇒ not a valued range.
@@ -173,6 +176,20 @@ pub struct A11yNodeView {
     /// scroll container (no scroll setter fires). **C5 populates this** in Wave 4;
     /// P1a lands the schema + the single fold arm with `None` everywhere.
     pub scroll: Option<A11yScrollView>,
+    // Real ECS-tree nesting (P1b, semantic-tree.md §7). `build_tree` resolves
+    // these from `ChildOf`/`Children` by collapsing presentational wrappers (the
+    // `nearest_a11y_ancestor` walk), so they reference only entities that
+    // themselves emit a node. `Entity` is fine here — these are internal to the
+    // build and resolved to `NodeId` (via `node_id_for`) only inside
+    // `build_tree_update`, alongside the synthetic-root parenting.
+    /// The node's a11y parent — its nearest a11y-bearing, non-pruned ancestor in
+    /// the `ChildOf` hierarchy. `None` ⇒ a top-level node parented to the
+    /// synthetic/window root (semantic-tree.md §7.1–7.2).
+    pub parent: Option<Entity>,
+    /// The node's a11y children in document order — the nearest a11y-bearing,
+    /// non-pruned descendants reached by collapsing presentational wrappers
+    /// (semantic-tree.md §7.1). Each entry itself emits a node.
+    pub children: Vec<Entity>,
 }
 
 impl Default for A11yNodeView {
@@ -202,6 +219,8 @@ impl Default for A11yNodeView {
             controls: Vec::new(),
             active_descendant: None,
             scroll: None,
+            parent: None,
+            children: Vec::new(),
         }
     }
 }
@@ -282,14 +301,94 @@ pub(crate) struct A11yNodeQuery {
     // fields are read — `owns`/`flow_to`/`details`/`error_message` are
     // carried-but-unwired, co-drive §3.2).
     relations: Option<&'static A11yRelations>,
+    // Real ECS-tree nesting source (P1b, semantic-tree.md §7). `build_tree` reads
+    // the layout hierarchy and collapses presentational wrappers via
+    // `nearest_a11y_ancestor`, so a node's a11y parent/children skip every entity
+    // that carries no a11y content (and the whole `A11yHidden` subtree is pruned).
+    child_of: Option<&'static ChildOf>,
+    children: Option<&'static Children>,
     // SC-4 scroll source: there is **no** scroll component to read in P1a, so no
     // field here yet — `build_tree` writes `scroll: None`. C5 (Wave 4) adds its
     // scroll component as a field here and projects it into the view's `scroll`.
 }
 
+/// One a11y-bearing entity's read, captured in the `build_tree` scan: the
+/// projected view (sans the nesting fields, filled at emit time) plus the
+/// `A11yHidden` flag, the `aria-labelledby` targets, and the node's *local* name.
+///
+/// The `labelled_by` targets and the local name are kept so the deferred ACCNAME
+/// arms (semantic-tree.md §6) can resolve other nodes' names without re-querying:
+/// `labelledby` reads a target's local name from this map, `contents`
+/// concatenates the local names of the node's a11y descendants.
+struct NodeMeta {
+    view: A11yNodeView,
+    /// Carries `A11yHidden` (this entity + its whole subtree are pruned, §7.4).
+    hidden: bool,
+    /// `aria-labelledby` targets (raw entities) for the deferred ACCNAME arm.
+    labelled_by_targets: Vec<Entity>,
+    /// The node's name from its *local* sources only (`label > value >
+    /// placeholder`) — i.e. ACCNAME without the `labelledby`/`contents` arms.
+    /// Used as the contribution when *another* node references this one via
+    /// `labelledby`, and as this node's contribution to an ancestor's `contents`.
+    local_name: String,
+}
+
+/// The raw ECS layout hierarchy of **every** entity, a11y-bearing or not. The
+/// nesting walk needs the full `ChildOf`/`Children` graph — not just the a11y
+/// subset — so a presentational wrapper (which carries no a11y component, hence
+/// no [`NodeMeta`]) can still be *traversed through* when collapsing wrappers
+/// (semantic-tree.md §7.1). Keyed by entity; absent entities have no edges.
+#[derive(Default)]
+struct Hierarchy {
+    parent: HashMap<Entity, Entity>,
+    children: HashMap<Entity, Vec<Entity>>,
+}
+
+impl Hierarchy {
+    fn parent_of(&self, e: Entity) -> Option<Entity> {
+        self.parent.get(&e).copied()
+    }
+    fn children_of(&self, e: Entity) -> &[Entity] {
+        self.children.get(&e).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// Build the a11y view list with **real ECS-tree nesting** (semantic-tree.md §7).
+///
+/// The shape of the build:
+/// 1. **Hierarchy scan** — read every entity's `ChildOf`/`Children` into a
+///    [`Hierarchy`] so the collapse can traverse *through* non-a11y wrappers.
+/// 2. **A11y scan** — project every a11y-bearing entity into [`NodeMeta`] (the
+///    view + the `A11yHidden` flag + the local name + the labelledby targets).
+/// 3. **Prune** (§7.4) — an entity with `A11yHidden`, and its whole subtree,
+///    emits no node. The emitted set is `a11y-bearing ∧ not pruned`.
+/// 4. **Collapse + emit** (§7.1) — each node's a11y parent is its
+///    [`nearest_a11y_ancestor`] (wrappers collapse with no hole); its ordered
+///    children are the nearest emitted descendants in document order. The
+///    deferred ACCNAME arms (`labelledby`/`contents`, §6) resolve here over the
+///    now-known tree.
 pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNodeQuery>) {
     builder.nodes.clear();
+
+    // --- 1. Hierarchy scan: every entity's raw layout edges. ----------------
+    // Read from the SAME query (it carries `child_of`/`children` for every
+    // entity, a11y-bearing or not — the `Option<&...>` terms match all
+    // archetypes), so a single pass populates both the hierarchy and the a11y
+    // meta. A wrapper with no a11y content still lands here and is traversable.
+    let mut hierarchy = Hierarchy::default();
+    let mut meta: HashMap<Entity, NodeMeta> = HashMap::default();
+
     for n in q.iter() {
+        if let Some(c) = n.child_of {
+            hierarchy.parent.insert(n.entity, c.parent());
+        }
+        if let Some(c) = n.children {
+            hierarchy
+                .children
+                .insert(n.entity, c.iter().collect::<Vec<_>>());
+        }
+
+        // --- 2. A11y scan (only a11y-bearing entities enter `meta`). --------
         // Skip entities that have no a11y content at all. A decomposed state
         // component is a11y content on its own, so it must keep the node alive.
         // A relation-only entity is likewise a11y content (it points at others).
@@ -326,24 +425,28 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             ),
             None => (Vec::new(), Vec::new(), Vec::new(), None),
         };
-        // Accessible name (ACCNAME 1.2, semantic-tree.md §6): derived every build,
-        // never stored. P1a realizes the purely-local arms `label > value >
-        // placeholder`; the `labelledby` (highest) and `contents` arms need the
-        // P1b tree walk, so their inputs are `None` here. With `labelledby`
-        // deferred, the top active arm is `label`, so a node carrying an
-        // `A11yLabel` resolves exactly as before (no name-from-label regression);
-        // a node *without* one now falls back to value → placeholder.
-        let name = compute_accessible_name(AccNameInputs {
-            labelledby_name: None, // P1b — needs the nesting tree walk.
+        // The node's *local* name (`label > value > placeholder`) — the ACCNAME
+        // arms a node carries directly, with the tree-walk arms (`labelledby`,
+        // `contents`) left `None`. This is the contribution another node uses
+        // when it references this one (semantic-tree.md §6); the node's *own*
+        // final name (which may instead come from labelledby/contents) is
+        // computed at emit time once the tree is known.
+        let local_name = compute_accessible_name(AccNameInputs {
+            labelledby_name: None,
             label: n.label,
             value: n.text_value,
             placeholder: n.placeholder,
-            contents_name: None, // P1b — needs the subtree walk.
+            contents_name: None,
         });
-        builder.nodes.push(A11yNodeView {
+        let labelled_by_targets = n
+            .relations
+            .map(|r| r.labelled_by.clone())
+            .unwrap_or_default();
+        let view = A11yNodeView {
             entity: n.entity,
             role: n.role.copied().unwrap_or_default(),
-            name,
+            // Filled with the final ACCNAME (incl. labelledby/contents) at emit.
+            name: local_name.clone(),
             description: n.description.map(|d| d.0.clone()).unwrap_or_default(),
             focusable: n.focusable.is_some(),
             // Project each component to its view field (one-to-one with the
@@ -372,6 +475,203 @@ pub(crate) fn build_tree(mut builder: ResMut<A11yTreeBuilder>, q: Query<A11yNode
             // SC-4: no scroll component exists in P1a, so the view carries `None`
             // everywhere. C5 (Wave 4) reads its scroll component into this field.
             scroll: None,
-        });
+            // Nesting filled at emit time.
+            parent: None,
+            children: Vec::new(),
+        };
+        meta.insert(
+            n.entity,
+            NodeMeta {
+                view,
+                hidden: n.hidden.is_some(),
+                labelled_by_targets,
+                local_name,
+            },
+        );
     }
+
+    // --- 3. Prune the `A11yHidden` subtrees (§7.4). -------------------------
+    // An entity is pruned if it OR any ancestor carries `A11yHidden`. The walk
+    // climbs `ChildOf` through non-a11y wrappers too (they're in `hierarchy` but
+    // not `meta`, so they carry no marker and the climb continues past them).
+    let pruned: HashSet<Entity> = meta
+        .keys()
+        .copied()
+        .filter(|&e| is_hidden_or_descendant(e, &meta, &hierarchy))
+        .collect();
+
+    // The emitted set: a11y-bearing AND not pruned. Only these become nodes and
+    // only these are valid a11y parents/children.
+    let emits = |e: Entity| meta.contains_key(&e) && !pruned.contains(&e);
+
+    // --- 4. Collapse wrappers → a11y parent + ordered children (§7.1). ------
+    // HashMap iteration is unspecified, so collect + sort for a deterministic
+    // flat emission order. Document order is preserved *within* each node's
+    // `children` (the collapse walk descends `Children` in order), independent
+    // of this flat ordering — which the synthetic/window root re-parents anyway.
+    let mut emitted: Vec<Entity> = meta.keys().copied().filter(|&e| emits(e)).collect();
+    emitted.sort_unstable_by_key(|e| e.to_bits());
+
+    // A pruned a11y node (a11y-bearing but excluded) must stop the child descent
+    // wholesale — its subtree is hidden (§7.4) — whereas a non-a11y wrapper is
+    // traversed *through*. The two are distinguished by `meta` membership: in
+    // `meta` but not emitting ⇒ pruned; absent from `meta` ⇒ wrapper.
+    let is_pruned = |e: Entity| meta.contains_key(&e) && pruned.contains(&e);
+
+    let mut nodes: Vec<A11yNodeView> = Vec::with_capacity(emitted.len());
+    for e in emitted {
+        let m = &meta[&e];
+        let parent = nearest_a11y_ancestor(e, &hierarchy, &emits);
+        let children = collapsed_children(e, &hierarchy, &emits, &is_pruned);
+
+        // Deferred ACCNAME arms (semantic-tree.md §6), now that the tree exists:
+        // - `labelledby` (highest precedence): the space-joined *local* names of
+        //   the `aria-labelledby` targets, in order.
+        // - `contents` (below placeholder): the node's own subtree text — the
+        //   space-joined local names of its collapsed a11y children.
+        //
+        // The final ladder is `labelledby > local > contents`, where `local`
+        // (`label > value > placeholder`) was already resolved into
+        // `m.local_name`. We re-run the canonical ladder feeding the precomputed
+        // local name through the `label` arm (the highest local arm;
+        // `value`/`placeholder` are `None`, so it cannot be overtaken) — keeping
+        // `compute_accessible_name` the single source of precedence truth rather
+        // than re-implementing the `.or_else` chain here.
+        let labelledby_name = resolve_labelledby_name(&m.labelled_by_targets, &meta, &emits);
+        let contents_name = resolve_contents_name(&children, &meta);
+        let local_label = A11yLabel(m.local_name.clone());
+        let name = compute_accessible_name(AccNameInputs {
+            labelledby_name: labelledby_name.as_deref(),
+            label: Some(&local_label),
+            value: None,
+            placeholder: None,
+            contents_name: contents_name.as_deref(),
+        });
+
+        let mut view = m.view.clone();
+        view.name = name;
+        view.parent = parent;
+        view.children = children;
+        nodes.push(view);
+    }
+
+    builder.nodes = nodes;
+}
+
+/// Whether `e` is hidden by `A11yHidden` on itself or any `ChildOf` ancestor
+/// (semantic-tree.md §7.4). The whole subtree under a hidden node is pruned.
+fn is_hidden_or_descendant(
+    e: Entity,
+    meta: &HashMap<Entity, NodeMeta>,
+    hierarchy: &Hierarchy,
+) -> bool {
+    let mut cur = Some(e);
+    while let Some(c) = cur {
+        // Only a11y entities (in `meta`) can carry `A11yHidden`; a non-a11y
+        // wrapper is transparent — climb through it via the full hierarchy.
+        if meta.get(&c).is_some_and(|m| m.hidden) {
+            return true;
+        }
+        cur = hierarchy.parent_of(c);
+    }
+    false
+}
+
+/// The nearest a11y-bearing, non-pruned ancestor of `e` (semantic-tree.md §7.1):
+/// climb `ChildOf` through the full hierarchy, skipping every entity that emits
+/// no node (presentational wrappers and pruned nodes), and return the first one
+/// that does — or `None` for a top-level node (parented to the synthetic/window
+/// root, §7.2).
+fn nearest_a11y_ancestor(
+    e: Entity,
+    hierarchy: &Hierarchy,
+    emits: &impl Fn(Entity) -> bool,
+) -> Option<Entity> {
+    let mut cur = hierarchy.parent_of(e);
+    while let Some(c) = cur {
+        if emits(c) {
+            return Some(c);
+        }
+        cur = hierarchy.parent_of(c);
+    }
+    None
+}
+
+/// The a11y children of `e` in document order (semantic-tree.md §7.1): descend
+/// `Children` through the full hierarchy, collapsing every presentational
+/// wrapper into its nearest emitting descendants (so wrappers leave no hole) and
+/// excluding pruned `A11yHidden` subtrees wholesale.
+fn collapsed_children(
+    e: Entity,
+    hierarchy: &Hierarchy,
+    emits: &impl Fn(Entity) -> bool,
+    is_pruned: &impl Fn(Entity) -> bool,
+) -> Vec<Entity> {
+    let mut out = Vec::new();
+    for &child in hierarchy.children_of(e) {
+        collect_a11y_descendants(child, hierarchy, emits, is_pruned, &mut out);
+    }
+    out
+}
+
+/// Document-order DFS over one raw child subtree, appending the nearest emitting
+/// descendants. Three cases for `e`:
+/// - **emits** ⇒ it is itself the a11y child; push it and do **not** recurse (its
+///   own children belong to *it*).
+/// - **pruned** (`A11yHidden` self/ancestor, §7.4) ⇒ skip it and its whole
+///   subtree — contribute nothing.
+/// - **wrapper** (no a11y content) ⇒ recurse into its `Children` to surface the
+///   emitters underneath, collapsing the wrapper.
+fn collect_a11y_descendants(
+    e: Entity,
+    hierarchy: &Hierarchy,
+    emits: &impl Fn(Entity) -> bool,
+    is_pruned: &impl Fn(Entity) -> bool,
+    out: &mut Vec<Entity>,
+) {
+    if emits(e) {
+        out.push(e);
+        return;
+    }
+    if is_pruned(e) {
+        return;
+    }
+    // Presentational wrapper: collapse it by descending into its children.
+    for &child in hierarchy.children_of(e) {
+        collect_a11y_descendants(child, hierarchy, emits, is_pruned, out);
+    }
+}
+
+/// `aria-labelledby` contribution (semantic-tree.md §6, highest precedence):
+/// the space-joined *local* names of the referenced targets that still emit a
+/// node. A reference to a pruned/absent target contributes nothing. Empty ⇒
+/// `None` (no labelledby contribution; the local arms take over).
+fn resolve_labelledby_name(
+    targets: &[Entity],
+    meta: &HashMap<Entity, NodeMeta>,
+    emits: &impl Fn(Entity) -> bool,
+) -> Option<String> {
+    let joined = targets
+        .iter()
+        .filter(|&&t| emits(t))
+        .filter_map(|t| meta.get(t))
+        .map(|m| m.local_name.as_str())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// `contents` contribution (semantic-tree.md §6, below placeholder): the node's
+/// own subtree text — the space-joined *local* names of its collapsed a11y
+/// children, in document order. Empty ⇒ `None`.
+fn resolve_contents_name(children: &[Entity], meta: &HashMap<Entity, NodeMeta>) -> Option<String> {
+    let joined = children
+        .iter()
+        .filter_map(|c| meta.get(c))
+        .map(|m| m.local_name.as_str())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
 }

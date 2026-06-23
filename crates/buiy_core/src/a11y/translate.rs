@@ -215,35 +215,68 @@ pub fn resolve_live(role: A11yRole, explicit: Option<A11yLive>) -> (Option<Live>
     }
 }
 
-/// Build a full [`TreeUpdate`] containing a synthetic root plus one node
-/// per [`A11yNodeView`]. Children are listed under the root in iteration
-/// order; nesting is a v0.x topic (`buiy-accessibility-design`).
-pub fn build_tree_update(views: &[A11yNodeView], focused: Option<NodeId>) -> TreeUpdate {
+/// Build a full [`TreeUpdate`] with **real parent→child nesting** over the
+/// `A11yNodeView` list (semantic-tree.md §7).
+///
+/// Each view carries its resolved a11y `parent`/`children` (filled by
+/// `build_tree`'s `nearest_a11y_ancestor` collapse). This fn lays those edges
+/// out as accesskit `push_child` calls in document order and parents every
+/// **top-level** node (`view.parent == None`) under the single synthetic root.
+///
+/// # Root keying (§7.2)
+///
+/// `root_entity` keys the synthetic `Role::Window` root off the **window entity**
+/// when one exists (the live adapter passes `Some(window)`); headless callers
+/// (`MinimalPlugins` tests, the in-process consumer) pass `None`, falling back to
+/// the stable [`ROOT_NODE_ID`]. Either way exactly one `Role::Window` node parents
+/// the top-level widgets, so the AT sees one tree per Buiy window. Multi-window
+/// per-`WindowId` keying is a named Phase-2 follow-up (per-window root ids).
+///
+/// `entity_for_node_id` maps the window-entity root id back to the window entity;
+/// it maps [`ROOT_NODE_ID`] to `None`. Both are non-widget ids the action router
+/// already rejects.
+pub fn build_tree_update(
+    views: &[A11yNodeView],
+    focused: Option<NodeId>,
+    root_entity: Option<Entity>,
+) -> TreeUpdate {
+    // Root id: the window entity's id when present (§7.2), else the synthetic
+    // constant for the headless / no-window path.
+    let root_id = root_entity.map(node_id_for).unwrap_or(ROOT_NODE_ID);
+
     let mut nodes = Vec::with_capacity(views.len() + 1);
 
-    // Children first — we still need to materialize their NodeIds before
-    // we can list them under the root.
-    let mut child_ids = Vec::with_capacity(views.len());
+    // One accesskit node per view, with its resolved a11y children pushed in
+    // document order (the `parent`/`children` edges `build_tree` computed via the
+    // `nearest_a11y_ancestor` wrapper collapse). Top-level nodes are collected to
+    // parent under the synthetic root below.
+    let mut top_level = Vec::new();
     for view in views {
         let id = node_id_for(view.entity);
-        child_ids.push(id);
-        nodes.push((id, to_accesskit_node(view)));
+        let mut node = to_accesskit_node(view);
+        for &child in &view.children {
+            node.push_child(node_id_for(child));
+        }
+        nodes.push((id, node));
+        if view.parent.is_none() {
+            top_level.push(id);
+        }
     }
 
-    // Root.
+    // The single synthetic root parents every top-level (parentless) node.
     let mut root = Node::new(Role::Window);
-    for cid in &child_ids {
-        root.push_child(*cid);
+    for id in &top_level {
+        root.push_child(*id);
     }
-    nodes.insert(0, (ROOT_NODE_ID, root));
+    nodes.insert(0, (root_id, root));
 
     TreeUpdate {
         nodes,
-        tree: Some(Tree::new(ROOT_NODE_ID)),
+        tree: Some(Tree::new(root_id)),
         // Required since accesskit 0.23 (multi-tree). `TreeId::ROOT` (the nil
         // UUID) is the single root tree — exactly Buiy's one-tree-per-window
         // model; subtrees (`buiy-accessibility-design`) would key off this.
         tree_id: accesskit::TreeId::ROOT,
-        focus: focused.unwrap_or(ROOT_NODE_ID),
+        focus: focused.unwrap_or(root_id),
     }
 }

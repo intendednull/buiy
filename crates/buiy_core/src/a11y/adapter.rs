@@ -25,6 +25,7 @@ use crate::a11y::A11yTreeBuilder;
 use crate::a11y::translate::build_tree_update;
 use crate::focus::FocusedEntity;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use bevy::winit::accessibility::ACCESS_KIT_ADAPTERS;
 
 /// Plugin that wires `A11yTreeBuilder` → bevy_winit's per-window
@@ -48,11 +49,20 @@ impl Plugin for AccessKitAdapterPlugin {
     }
 }
 
-fn push_tree_updates(builder: Res<A11yTreeBuilder>, focused: Res<FocusedEntity>) {
+fn push_tree_updates(
+    builder: Res<A11yTreeBuilder>,
+    focused: Res<FocusedEntity>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+) {
     use crate::a11y::translate::node_id_for;
 
     let focused_id = focused.0.map(node_id_for);
     let snapshot = builder.snapshot();
+
+    // Key the synthetic root off the primary window entity (semantic-tree.md
+    // §7.2) when one exists; `None` under `MinimalPlugins` falls back to the
+    // stable `ROOT_NODE_ID`.
+    let root_entity = primary_window.single().ok();
 
     // Always build and push, even when the snapshot is empty. An empty
     // TreeUpdate (root-only) is the correct signal for the AT to clear
@@ -61,7 +71,7 @@ fn push_tree_updates(builder: Res<A11yTreeBuilder>, focused: Res<FocusedEntity>)
     // and emits `ChildRemoved` events when given a root-only TreeUpdate.
     // The `with_borrow_mut` loop is a no-op when no winit windows exist
     // (e.g. tests with `MinimalPlugins`).
-    let update = build_tree_update(snapshot, focused_id);
+    let update = build_tree_update(snapshot, focused_id, root_entity);
 
     ACCESS_KIT_ADAPTERS.with_borrow_mut(|ak_adapters| {
         for (_window_id, adapter) in ak_adapters.iter_mut() {

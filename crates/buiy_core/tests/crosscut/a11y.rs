@@ -163,6 +163,12 @@ fn build_tree_derives_accessible_name_with_local_precedence() {
 /// widening or the per-component projection (e.g. forgetting to read a marker, or
 /// projecting the wrong inner value) reddens this. Markers project to a presence
 /// `bool`; wrappers unwrap to their inner accesskit value.
+///
+/// `A11yHidden` is **not** in this fixture's component set: in P1b it prunes the
+/// entity from the tree entirely (§7.4), which is incompatible with asserting the
+/// entity surfaces. Its projection into `A11yNodeView.hidden` is covered by the
+/// producer-tier `hidden_is_carried_but_not_flagged_in_p1a` (the flag is carried,
+/// not folded) and its prune behavior by `a11y_hidden_prunes_entity_and_subtree`.
 #[test]
 fn build_tree_projects_decomposed_state_components() {
     let mut app = App::new();
@@ -180,7 +186,6 @@ fn build_tree_projects_decomposed_state_components() {
             A11ySelected(true),
             A11yDisabled,
             A11yModal,
-            A11yHidden,
         ))
         .id();
 
@@ -201,10 +206,6 @@ fn build_tree_projects_decomposed_state_components() {
         "A11yDisabled marker presence ⇒ disabled flag"
     );
     assert!(node.modal, "A11yModal marker presence ⇒ modal flag");
-    assert!(
-        node.hidden,
-        "A11yHidden marker presence ⇒ hidden flag (carried for P1b)"
-    );
 }
 
 /// P1a (Task 13): `build_tree` resolves the four WIRED `A11yRelations` refs from
@@ -346,4 +347,420 @@ fn entity_without_a11y_content_is_skipped() {
         !snapshot.iter().any(|n| n.entity == plain),
         "an entity with no a11y content must be skipped from the tree"
     );
+}
+
+// ===========================================================================
+// P1b — real ECS nesting (semantic-tree.md §7).
+//
+// `build_tree` reads `ChildOf`/`Children` and resolves each node's a11y
+// `parent`/`children` by collapsing presentational wrappers
+// (`nearest_a11y_ancestor`) and pruning `A11yHidden` subtrees. These fixtures
+// build real ECS hierarchies and assert the resolved nesting + the now-live
+// `labelledby`/`contents` ACCNAME arms.
+// ===========================================================================
+
+/// Build an a11y app, run a frame, and return the freshly built node list.
+fn build(spawn: impl FnOnce(&mut World)) -> Vec<buiy_core::a11y::A11yNodeView> {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(CorePlugin);
+    app.add_plugins(A11yPlugin);
+    spawn(app.world_mut());
+    app.update();
+    app.world()
+        .resource::<A11yTreeBuilder>()
+        .snapshot()
+        .to_vec()
+}
+
+fn node_of(
+    snapshot: &[buiy_core::a11y::A11yNodeView],
+    e: Entity,
+) -> &buiy_core::a11y::A11yNodeView {
+    snapshot
+        .iter()
+        .find(|n| n.entity == e)
+        .unwrap_or_else(|| panic!("entity {e:?} must surface in the tree"))
+}
+
+/// §7.1: the a11y parent of a node is its **nearest a11y-bearing ancestor** — a
+/// pure-layout wrapper between a container and its child collapses with no hole.
+/// Hierarchy: container(a11y) → wrapper(plain Node, no a11y) → button(a11y). The
+/// button's a11y parent must be the container, and the wrapper must NOT appear.
+#[test]
+fn nearest_a11y_ancestor_collapses_presentational_wrappers() {
+    let mut container = Entity::PLACEHOLDER;
+    let mut wrapper = Entity::PLACEHOLDER;
+    let mut button = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        container = world
+            .spawn((A11yRole::Group, A11yLabel("Toolbar".to_string())))
+            .id();
+        // Pure-layout wrapper: a `Node` with no a11y content at all.
+        wrapper = world.spawn(Node).id();
+        button = world
+            .spawn((A11yRole::Button, A11yLabel("Bold".to_string())))
+            .id();
+        world.entity_mut(wrapper).add_children(&[button]);
+        world.entity_mut(container).add_children(&[wrapper]);
+    });
+
+    // The wrapper carries no a11y content ⇒ no node.
+    assert!(
+        !snapshot.iter().any(|n| n.entity == wrapper),
+        "a presentational wrapper must not emit a node",
+    );
+    // The button's a11y parent is the container, NOT the wrapper (collapsed).
+    let button_node = node_of(&snapshot, button);
+    assert_eq!(
+        button_node.parent,
+        Some(container),
+        "button's a11y parent must collapse past the wrapper to the container",
+    );
+    // The container lists the button as its a11y child in document order.
+    let container_node = node_of(&snapshot, container);
+    assert_eq!(
+        container_node.children,
+        vec![button],
+        "container's a11y children must collapse the wrapper, yielding the button",
+    );
+    // A top-level container has no a11y parent (parents to the synthetic root).
+    assert_eq!(container_node.parent, None, "container is top-level");
+}
+
+/// §7.1: children are emitted in **document order** across a wrapper collapse.
+#[test]
+fn collapsed_children_preserve_document_order() {
+    let mut container = Entity::PLACEHOLDER;
+    let mut first = Entity::PLACEHOLDER;
+    let mut second = Entity::PLACEHOLDER;
+    let mut third = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        container = world.spawn(A11yRole::Group).id();
+        first = world
+            .spawn((A11yRole::Button, A11yLabel("One".to_string())))
+            .id();
+        // A wrapper holding the middle child — its child still slots in order.
+        let wrapper = world.spawn(Node).id();
+        second = world
+            .spawn((A11yRole::Button, A11yLabel("Two".to_string())))
+            .id();
+        third = world
+            .spawn((A11yRole::Button, A11yLabel("Three".to_string())))
+            .id();
+        world.entity_mut(wrapper).add_children(&[second]);
+        world
+            .entity_mut(container)
+            .add_children(&[first, wrapper, third]);
+    });
+
+    let container_node = node_of(&snapshot, container);
+    assert_eq!(
+        container_node.children,
+        vec![first, second, third],
+        "collapsed children must follow document order (first, wrapped-second, third)",
+    );
+}
+
+/// §7.4: an entity with `A11yHidden` — and its **whole subtree** — emits NO node.
+#[test]
+fn a11y_hidden_prunes_entity_and_subtree() {
+    let mut visible = Entity::PLACEHOLDER;
+    let mut hidden_root = Entity::PLACEHOLDER;
+    let mut hidden_child = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        visible = world
+            .spawn((A11yRole::Button, A11yLabel("Visible".to_string())))
+            .id();
+        hidden_root = world
+            .spawn((
+                A11yRole::Group,
+                A11yLabel("Hidden panel".to_string()),
+                A11yHidden,
+            ))
+            .id();
+        // A child of the hidden subtree — pruned even though it is not itself
+        // marked hidden.
+        hidden_child = world
+            .spawn((A11yRole::Button, A11yLabel("Inside".to_string())))
+            .id();
+        world.entity_mut(hidden_root).add_children(&[hidden_child]);
+    });
+
+    assert!(
+        snapshot.iter().any(|n| n.entity == visible),
+        "a non-hidden node must still surface",
+    );
+    assert!(
+        !snapshot.iter().any(|n| n.entity == hidden_root),
+        "an A11yHidden entity must be pruned (no node)",
+    );
+    assert!(
+        !snapshot.iter().any(|n| n.entity == hidden_child),
+        "the whole subtree under an A11yHidden entity must be pruned",
+    );
+}
+
+/// §7.1: a node under a pruned subtree collapses to the nearest *non-pruned* a11y
+/// ancestor — a hidden wrapper does not become a hole that re-parents its
+/// grandchildren. Hierarchy: container → hidden(group) → button. The button is
+/// pruned (it is inside the hidden subtree), so it never re-attaches to container.
+#[test]
+fn hidden_subtree_does_not_reparent_through_the_hole() {
+    let mut container = Entity::PLACEHOLDER;
+    let mut hidden = Entity::PLACEHOLDER;
+    let mut button = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        container = world
+            .spawn((A11yRole::Group, A11yLabel("Box".to_string())))
+            .id();
+        hidden = world.spawn((A11yRole::Group, A11yHidden)).id();
+        button = world
+            .spawn((A11yRole::Button, A11yLabel("Deep".to_string())))
+            .id();
+        world.entity_mut(hidden).add_children(&[button]);
+        world.entity_mut(container).add_children(&[hidden]);
+    });
+
+    assert!(
+        !snapshot.iter().any(|n| n.entity == button),
+        "a node inside a hidden subtree is pruned, not re-parented to the container",
+    );
+    let container_node = node_of(&snapshot, container);
+    assert!(
+        container_node.children.is_empty(),
+        "the container's only child was hidden, so it has no a11y children",
+    );
+}
+
+/// §7.4: the `A11yHidden` prune climbs through a **non-a11y wrapper** ancestor —
+/// a hidden marker on a grandparent prunes a grandchild even when the
+/// intervening entity carries no a11y content. Hierarchy: hidden(group,a11y) →
+/// wrapper(plain Node) → button(a11y); the button must be pruned.
+#[test]
+fn a11y_hidden_propagates_through_non_a11y_wrapper() {
+    let mut button = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        let hidden = world.spawn((A11yRole::Group, A11yHidden)).id();
+        let wrapper = world.spawn(Node).id();
+        button = world
+            .spawn((A11yRole::Button, A11yLabel("Deep".to_string())))
+            .id();
+        world.entity_mut(wrapper).add_children(&[button]);
+        world.entity_mut(hidden).add_children(&[wrapper]);
+    });
+
+    assert!(
+        !snapshot.iter().any(|n| n.entity == button),
+        "the prune must climb through a non-a11y wrapper to the hidden ancestor",
+    );
+}
+
+/// §6: the `labelledby` ACCNAME arm is now live — a node carrying
+/// `A11yRelations.labelled_by` takes its name from the referenced node's name,
+/// overriding its own local label. `build_tree` resolves the target's name.
+#[test]
+fn accname_labelledby_overrides_local_label() {
+    let mut field = Entity::PLACEHOLDER;
+    let mut labeler = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        labeler = world
+            .spawn((A11yRole::Text, A11yLabel("Email address".to_string())))
+            .id();
+        field = world
+            .spawn((
+                A11yRole::TextInput,
+                A11yLabel("Local label".to_string()),
+                A11yRelations {
+                    labelled_by: vec![labeler],
+                    ..Default::default()
+                },
+            ))
+            .id();
+    });
+
+    assert_eq!(
+        node_of(&snapshot, field).name,
+        "Email address",
+        "labelledby must win over the field's own local label",
+    );
+}
+
+/// §6: the `contents` ACCNAME arm is now live — a node with no local label/value/
+/// placeholder takes its name from its subtree text (its collapsed a11y
+/// children's names, joined). A button wrapping a text node names from it.
+#[test]
+fn accname_contents_names_from_subtree_text() {
+    let mut button = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        button = world.spawn(A11yRole::Button).id(); // no local name source
+        let icon_wrapper = world.spawn(Node).id();
+        let text = world
+            .spawn((A11yRole::Text, A11yLabel("Click me".to_string())))
+            .id();
+        // Wrap the text in a presentational node so the collapse is exercised.
+        world.entity_mut(icon_wrapper).add_children(&[text]);
+        world.entity_mut(button).add_children(&[icon_wrapper]);
+    });
+
+    assert_eq!(
+        node_of(&snapshot, button).name,
+        "Click me",
+        "a button with no local name takes its name from its subtree contents",
+    );
+}
+
+/// §6 precedence: a local label still beats `contents` (the subtree text is the
+/// fallback only when no higher arm contributes).
+#[test]
+fn accname_local_label_beats_contents() {
+    let mut button = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        button = world
+            .spawn((A11yRole::Button, A11yLabel("Save".to_string())))
+            .id();
+        let text = world
+            .spawn((A11yRole::Text, A11yLabel("ignored subtree".to_string())))
+            .id();
+        world.entity_mut(button).add_children(&[text]);
+    });
+
+    assert_eq!(
+        node_of(&snapshot, button).name,
+        "Save",
+        "an explicit local label outranks the subtree contents",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The three NAMED gate-#12 invariants (semantic-tree.md §9, co-drive §3.1).
+//
+// Targeted assertions over representative nested fixtures — NOT a proptest fuzz
+// corpus (the exhaustive generators are deferred, co-drive §3.2). Each fixture
+// is a small, hand-built nested tree; the invariant holds by construction over
+// the real `build_tree` output.
+// ---------------------------------------------------------------------------
+
+/// A representative nested fixture: a container with a presentational wrapper, a
+/// label child, and a focusable button — plus a hidden subtree and a focusable
+/// leaf. Returns `(world-spawn closure, the focusable button, the focusable
+/// leaf)` for the invariants to assert over.
+fn representative_fixture(world: &mut World) -> (Entity, Entity) {
+    // Container → wrapper(plain) → { label(Text), button(focusable) }.
+    let container = world
+        .spawn((A11yRole::Group, A11yLabel("Form".to_string())))
+        .id();
+    let wrapper = world.spawn(Node).id();
+    let label = world
+        .spawn((A11yRole::Text, A11yLabel("Name".to_string())))
+        .id();
+    let button = world
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Submit".to_string()),
+            Focusable::default(),
+        ))
+        .id();
+    world.entity_mut(wrapper).add_children(&[label, button]);
+    world.entity_mut(container).add_children(&[wrapper]);
+
+    // A hidden subtree (must contribute no nodes, and its focusable is unreachable).
+    let hidden = world.spawn((A11yRole::Group, A11yHidden)).id();
+    let hidden_focusable = world
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Secret".to_string()),
+            Focusable::default(),
+        ))
+        .id();
+    world.entity_mut(hidden).add_children(&[hidden_focusable]);
+
+    // A top-level focusable leaf.
+    let leaf = world
+        .spawn((
+            A11yRole::Button,
+            A11yLabel("Cancel".to_string()),
+            Focusable::default(),
+        ))
+        .id();
+
+    (button, leaf)
+}
+
+/// Invariant (a) — **no orphans**: every emitted non-root node has a resolvable
+/// parent — either an a11y parent that is itself emitted, or `None` (top-level,
+/// parented to the synthetic root). A node pointing at a parent that does not
+/// emit would be an orphan.
+#[test]
+fn invariant_no_orphans() {
+    let snapshot = build(|world| {
+        representative_fixture(world);
+    });
+    let emitted: std::collections::HashSet<Entity> = snapshot.iter().map(|n| n.entity).collect();
+    for node in &snapshot {
+        if let Some(parent) = node.parent {
+            assert!(
+                emitted.contains(&parent),
+                "node {:?} has a11y parent {:?} which is not itself emitted — orphan",
+                node.entity,
+                parent,
+            );
+        }
+        // Every listed child must also be emitted (no dangling child edge).
+        for &child in &node.children {
+            assert!(
+                emitted.contains(&child),
+                "node {:?} lists child {:?} which is not emitted",
+                node.entity,
+                child,
+            );
+        }
+    }
+}
+
+/// Invariant (b) — **focus-reachable**: every `Focusable` entity NOT under
+/// `A11yHidden` appears in the tree; a hidden focusable does not.
+#[test]
+fn invariant_focus_reachable() {
+    let mut button = Entity::PLACEHOLDER;
+    let mut leaf = Entity::PLACEHOLDER;
+    let snapshot = build(|world| {
+        let (b, l) = representative_fixture(world);
+        button = b;
+        leaf = l;
+    });
+    assert!(
+        snapshot.iter().any(|n| n.entity == button),
+        "a non-hidden focusable (the Submit button) must be reachable in the tree",
+    );
+    assert!(
+        snapshot.iter().any(|n| n.entity == leaf),
+        "a top-level focusable leaf (Cancel) must be reachable in the tree",
+    );
+    // The hidden focusable must NOT appear (pruned) — assert no focusable node is
+    // missing its name, and that exactly the two visible focusables are present.
+    let focusable_count = snapshot.iter().filter(|n| n.focusable).count();
+    assert_eq!(
+        focusable_count, 2,
+        "exactly the two non-hidden focusables surface (the hidden one is pruned)",
+    );
+}
+
+/// Invariant (c) — **every-focusable-named**: every focusable node has a
+/// non-empty accessible name (an unnamed focusable is an APG defect).
+#[test]
+fn invariant_every_focusable_named() {
+    let snapshot = build(|world| {
+        representative_fixture(world);
+    });
+    for node in &snapshot {
+        if node.focusable {
+            assert!(
+                !node.name.is_empty(),
+                "focusable node {:?} ({:?}) has an empty accessible name",
+                node.entity,
+                node.role,
+            );
+        }
+    }
 }

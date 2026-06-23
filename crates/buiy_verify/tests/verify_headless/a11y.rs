@@ -109,6 +109,50 @@ fn semantic_tree_round_trips_role_and_name_through_a_running_app() {
     );
 }
 
+#[test]
+fn consumer_sees_real_parent_child_nesting() {
+    // P1b: `build_tree_update` lays the resolved a11y `parent`/`children` edges as
+    // real accesskit `push_child` relations, so the in-process consumer (the
+    // gate-#3 tier an AT drives) sees the child UNDER its parent — not flat under
+    // the synthetic root. Build a container with one child view directly and
+    // assert the consumer resolves the structural edge.
+    let container = entity(1);
+    let child = entity(2);
+    let views = vec![
+        A11yNodeView {
+            entity: container,
+            role: A11yRole::Group,
+            name: "Toolbar".into(),
+            children: vec![child],
+            ..Default::default()
+        },
+        A11yNodeView {
+            entity: child,
+            role: A11yRole::Button,
+            name: "Bold".into(),
+            parent: Some(container),
+            ..Default::default()
+        },
+    ];
+    let tree = consume(&views, None);
+    let container_node = node_for(&tree, node_id_for(container)).expect("container node present");
+    let child_node = node_for(&tree, node_id_for(child)).expect("child node present");
+
+    // The consumer resolves the container's children to exactly the child node.
+    let kids: Vec<_> = container_node.children().map(|n| n.id()).collect();
+    assert_eq!(
+        kids,
+        vec![child_node.id()],
+        "the consumer must see the child under its real a11y parent (not flat under root)",
+    );
+    // And the child's parent resolves back to the container (not the root).
+    assert_eq!(
+        child_node.parent().map(|n| n.id()),
+        Some(container_node.id()),
+        "the child's parent must be the container",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // P1a first-batch decomposed-state fixtures (gate-#3 consumer tier).
 //
