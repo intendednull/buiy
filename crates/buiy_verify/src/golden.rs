@@ -37,8 +37,8 @@ mod ledger;
 mod report;
 
 pub use check::{
-    BlessMode, GoldenOutcome, assert_golden, assert_golden_in, check_golden, check_golden_in,
-    committed_positives,
+    BlessMode, GoldenOutcome, assert_golden, assert_golden_in, bless_guard_check, check_golden,
+    check_golden_in, committed_positives,
 };
 pub use ledger::{BlessLedger, Positive};
 pub use report::{TriageCard, TriageReport};

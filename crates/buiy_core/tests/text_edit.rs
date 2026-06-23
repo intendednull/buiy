@@ -34,6 +34,8 @@ mod text_editing_ops;
 mod text_effect_group_gpu;
 #[path = "text_edit/text_focus_lifecycle.rs"]
 mod text_focus_lifecycle;
+#[path = "text_edit/text_font_reload_survival.rs"]
+mod text_font_reload_survival;
 #[path = "text_edit/text_ime_ops.rs"]
 mod text_ime_ops;
 #[path = "text_edit/text_ime_preedit_gpu.rs"]

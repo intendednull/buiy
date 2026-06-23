@@ -19,6 +19,8 @@
 
 #[path = "verify_headless/a11y.rs"]
 mod a11y;
+#[path = "verify_headless/content_presence.rs"]
+mod content_presence;
 #[path = "verify_headless/contrast.rs"]
 mod contrast;
 #[path = "verify_headless/coverage_display_list.rs"]
@@ -47,6 +49,10 @@ mod invariant_mutations;
 mod invariant_predicates;
 #[path = "verify_headless/metric.rs"]
 mod metric;
+#[path = "verify_headless/pointer_offset_regression.rs"]
+mod pointer_offset_regression;
+#[path = "verify_headless/pointer_press_smoke.rs"]
+mod pointer_press_smoke;
 #[path = "verify_headless/reftest_independence.rs"]
 mod reftest_independence;
 #[path = "verify_headless/scene_generator_smoke.rs"]

@@ -1,6 +1,14 @@
 //! `bevy_picking` backend integration test. Drives a fake `PointerLocation`
 //! and asserts a `PointerHits` message fires for the entity under the pointer.
 //!
+//! NOTE (C7): this hand-writes `ResolvedLayout` at an absolute position and is
+//! therefore STRUCTURALLY BLIND to Bug 1 (parent-local vs absolute coordinate
+//! divergence). It is kept as the unit-level backend smoke; the integration
+//! regression coverage is `buiy_verify::pointer::PointerHarness`'s offset-tree
+//! test (crates/buiy_verify/tests/verify_headless/pointer_offset_regression.rs),
+//! which drives the real layout -> bridge -> GlobalTransform chain. Do NOT trust
+//! this file as the coordinate-correctness gate.
+//!
 //! API deviations from plan (Bevy 0.18.1 vs plan's 0.18 assumptions):
 //! - `PointerHits` is a `Message`, not an `Event`; accessed via
 //!   `Messages<PointerHits>` + `MessageCursor`, not `Events<PointerHits>`.

@@ -257,6 +257,24 @@ pub fn assert_golden(key: &GoldenKey, actual: &RgbaImage, budget: &FuzzBudget) {
     }
 }
 
+/// The bless-guard (C7 §2.4): a fixture declared text-bearing CANNOT be
+/// blessed when it emitted zero glyph instances — that is the silent-no-paint
+/// hole at the corpus boundary. Returns `Err` with a loud message so the
+/// bless refuses rather than recording a blank baseline. No key-schema change:
+/// the `(text_bearing, glyph_count)` pair is the one the content-presence
+/// extract (`invariant::glyph_census`) already computes, so the invariant and
+/// the bless refusal share a single source of truth.
+pub fn bless_guard_check(text_bearing: bool, glyph_count: usize) -> Result<(), String> {
+    if text_bearing && glyph_count == 0 {
+        return Err(
+            "refusing to bless a text-bearing cell with 0 glyph instances \
+             (silent-no-paint — fix the fixture's text shaping before blessing)"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// [`assert_golden`] against an explicit corpus root + report dir + mode — the
 /// no-env-race variant the harness's own fail-closed test drives.
 pub fn assert_golden_in(
@@ -482,5 +500,18 @@ mod tests {
             dpr: buiy_core::render::golden::Dpr::X1,
         };
         assert_eq!(committed_positives(&key), 0);
+    }
+
+    #[test]
+    fn bless_guard_refuses_zero_glyph_text_bearing() {
+        // A text-bearing cell with glyph_count == 0 must be refused, loudly.
+        let r = bless_guard_check(/* text_bearing */ true, /* glyph_count */ 0);
+        assert!(
+            r.is_err(),
+            "a zero-glyph text-bearing cell must not be blessable"
+        );
+        // A non-text fixture, or a text fixture with glyphs, blesses fine.
+        assert!(bless_guard_check(false, 0).is_ok());
+        assert!(bless_guard_check(true, 3).is_ok());
     }
 }

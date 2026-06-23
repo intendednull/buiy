@@ -1602,3 +1602,24 @@ reproduce the canonical rasterizer USER-SPACE (no sudo): download the
 `install-mesa`-pinned Mesa tarball + a matching `libLLVM`/`libxml2`/`icu` (e.g.
 from the Arch archive) onto `LD_LIBRARY_PATH`, write an ICD JSON pointing at
 `libvulkan_lvp.so`, and set `VK_DRIVER_FILES` + `WGPU_ADAPTER_NAME=llvmpipe`.
+
+## Verify (C7) — catalog-wide `content_is_present` enroll auto-check — DEFERRED (Wave 3+, with C8)
+
+**Originated:** widget-catalog C7 (verification real-input tier + content-presence),
+`docs/plans/2026-06-22-buiy-widget-catalog-c7-verification.md` Task 1. The
+`content_is_present` invariant + golden bless-guard landed (RED-first proof via a
+whitespace-only zero-glyph fixture); the predicate runs the production
+`extract_buiy_glyphs` adapterless and asserts a text-bearing scene emits >0 glyph
+instances.
+
+**Deferred:** a catalog-wide `enroll_all`-driven auto-check that EVERY text-bearing
+fixture cell satisfies `content_is_present`. Blocked on **(a)** a text fixture in
+the catalog (Wave 1's only fixture is the non-text `button`) and **(b)** a
+text-capable enroll stack — `coverage::enroll::build_app` is
+`MinimalPlugins + CorePlugin + LayoutPlugin` only, with NO `BuiyTextPlugin`, so
+`glyph_census` would panic on the missing `SharedFontSystem` on every enrolled cell.
+Until both land (C8 adds a text fixture; the enroll stack gains a text-capable
+variant), the predicate's teeth are gated by the two dedicated full-stack unit tests
+in `crates/buiy_verify/tests/verify_headless/content_presence.rs` (the whitespace
+zero-glyph RED + the "Hi!" GREEN) and the `bless_guard_refuses_zero_glyph_text_bearing`
+unit test. Pick this up when C8's text-bearing gallery fixtures land.
