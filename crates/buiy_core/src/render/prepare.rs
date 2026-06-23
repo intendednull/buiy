@@ -33,7 +33,8 @@ use std::ops::Range;
 
 use crate::render::atlas::GlyphAlphaInstance;
 use crate::render::buckets::{
-    pack_outline_bands, pack_view, pack_view_partitioned, partition_glyph_ranges,
+    pack_band_instances, pack_shadow_instances, pack_view, pack_view_partitioned,
+    partition_glyph_ranges,
 };
 use crate::render::extract::{
     ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads,
@@ -100,12 +101,21 @@ pub struct BuiyInstanceBuffers {
     /// place; the node draws it after the quad draw (paint order glyph > quad).
     pub glyph: RawBufferVec<GlyphAlphaInstance>,
     /// Border/outline BAND instances (styling-f-tier.md § 2.3 — C6-a feeds the
-    /// OUTLINE channel). A `RawBufferVec<BorderBandInstance>` for the same reason
-    /// as `quad`/`glyph`: `BorderBandInstance` is a raw `#[repr(C)]` vertex POD
-    /// (the band pipeline-descriptor layout), `NoUninit` but not a `ShaderType`,
-    /// so it rides the raw, CPU-readable vertex path. Grows in place; the node
-    /// draws it AFTER the quad/glyph draw so the outline sits on top.
+    /// OUTLINE channel, C6-b adds the per-side BORDER). A
+    /// `RawBufferVec<BorderBandInstance>` for the same reason as `quad`/`glyph`:
+    /// `BorderBandInstance` is a raw `#[repr(C)]` vertex POD (the band
+    /// pipeline-descriptor layout), `NoUninit` but not a `ShaderType`, so it
+    /// rides the raw, CPU-readable vertex path. Grows in place; the node draws it
+    /// AFTER the quad/glyph draw so the band sits on top.
     pub band: RawBufferVec<BorderBandInstance>,
+    /// Box-shadow instances (styling-f-tier.md § 2.2 — C6-b). A
+    /// `RawBufferVec<[f32; 17]>` — the shadow reuses the frozen 68 B
+    /// [`PackedInstance`](crate::render::instance::PackedInstance) layout (radius
+    /// slot → blur sigma, zero stride change), so it shares the quad's raw
+    /// `[f32; 17]` vertex POD. Grows in place; the node draws it FIRST (before
+    /// the quad), so a shadow paints BEHIND its caster (shadow < quad in
+    /// `paint_order`).
+    pub shadow: RawBufferVec<[f32; 17]>,
     /// The per-view logical->clip + scale_factor uniform (`col0 ++ col1 ++
     /// [scale_factor, 0, 0, 0]`, [`BuiyViewUniform::as_std140_array`]).
     ///
@@ -123,9 +133,12 @@ pub struct BuiyInstanceBuffers {
     pub quad_count: u32,
     /// Glyph instance count written this frame (the glyph instanced draw range).
     pub glyph_count: u32,
-    /// Border/outline band instance count written this frame (C6-a). Rides the
-    /// quad gate (the band is packed from the same node walk).
+    /// Border/outline band instance count written this frame (C6-a/C6-b). Rides
+    /// the quad gate (the band is packed from the same node walk).
     pub band_count: u32,
+    /// Box-shadow instance count written this frame (C6-b). Rides the quad gate
+    /// (shadows are packed from the same node walk).
+    pub shadow_count: u32,
     /// Per-effect-group contiguous quad-instance ranges (`group_ranges[g]` =
     /// group `g`'s members), recomputed each quad-buffer upload from
     /// `ExtractedNode.group` (effect-compositor.md § 1.1 / decided fork 3). The
@@ -161,10 +174,12 @@ impl Default for BuiyInstanceBuffers {
             quad: RawBufferVec::new(BufferUsages::VERTEX),
             glyph: RawBufferVec::new(BufferUsages::VERTEX),
             band: RawBufferVec::new(BufferUsages::VERTEX),
+            shadow: RawBufferVec::new(BufferUsages::VERTEX),
             view_uniform: UniformBuffer::default(),
             quad_count: 0,
             glyph_count: 0,
             band_count: 0,
+            shadow_count: 0,
             group_ranges: Vec::new(),
             flat_ranges: Vec::new(),
             glyph_group_ranges: Vec::new(),
@@ -274,18 +289,36 @@ pub fn prepare_buiy_instances(
         buffers.group_ranges = partition.group_ranges;
         buffers.flat_ranges = partition.flat_ranges;
 
-        // Border/outline band buffer (C6-a). Packed from the SAME node walk, so
-        // it rides the quad gate; a node with no outline contributes nothing, so
-        // an outline-free frame uploads an empty band buffer (band_count = 0) and
-        // the node skips the band draw. The band draws flat (after quad/glyph)
-        // and is NOT effect-group-partitioned in v1 (styling-f-tier.md § 2.3).
-        let bands = pack_outline_bands(&nodes.0.nodes);
+        // Border/outline band buffer (C6-a outline + C6-b per-side border).
+        // Packed from the SAME node walk, so it rides the quad gate; a node with
+        // no border/outline contributes nothing, so a band-free frame uploads an
+        // empty band buffer (band_count = 0) and the node skips the band draw.
+        // The band draws flat (after quad/glyph) and is NOT effect-group-
+        // partitioned in v1 (styling-f-tier.md § 2.3).
+        let bands = pack_band_instances(&nodes.0.nodes);
         buffers.band.clear();
         for band in &bands {
             buffers.band.push(*band);
         }
         buffers.band_count = bands.len() as u32;
         buffers.band.write_buffer(&render_device, &render_queue);
+
+        // Box-shadow buffer (C6-b). Packed from the SAME node walk (it rides the
+        // quad gate); a node with no shadow — or every shadow suppressed under
+        // forced-colors — contributes nothing, so a shadow-free frame uploads an
+        // empty buffer (shadow_count = 0) and the node skips the shadow draw. The
+        // shadow reuses the 68 B `[f32; 17]` quad layout (radius → blur sigma), so
+        // it shares the `packed_to_raw` flatten. Drawn FIRST in `node.rs` (before
+        // the quad), so a shadow paints BEHIND its caster.
+        let shadows = pack_shadow_instances(&nodes.0.nodes);
+        buffers.shadow.clear();
+        for shadow in &shadows {
+            buffers
+                .shadow
+                .push(crate::render::buckets::packed_to_raw(shadow));
+        }
+        buffers.shadow_count = shadows.len() as u32;
+        buffers.shadow.write_buffer(&render_device, &render_queue);
 
         // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
         // Regroup the flat 12 floats into the three `vec4` columns the WGSL

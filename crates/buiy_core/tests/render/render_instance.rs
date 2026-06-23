@@ -105,6 +105,8 @@ fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: None,
+        border: None,
+        shadows: Vec::new(),
     }
 }
 

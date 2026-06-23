@@ -101,10 +101,15 @@ pub fn buiy_pass(
         return;
     };
     // Nothing to draw this frame (empty extract, or buffers not yet
-    // uploaded). Glyphs draw even with zero quads (a pure-text frame) and an
-    // outline band draws even with zero quads/glyphs (a focus ring on a
-    // transparent focusable — C6-a), so the skip checks ALL THREE counts.
-    if buffers.quad_count == 0 && buffers.glyph_count == 0 && buffers.band_count == 0 {
+    // uploaded). Glyphs draw even with zero quads (a pure-text frame), a band
+    // draws even with zero quads/glyphs (a focus ring on a transparent
+    // focusable — C6-a), and a box-shadow draws even with zero of the rest (a
+    // shadow-only frame — C6-b), so the skip checks ALL FOUR counts.
+    if buffers.quad_count == 0
+        && buffers.glyph_count == 0
+        && buffers.band_count == 0
+        && buffers.shadow_count == 0
+    {
         return;
     }
     // The view uniform is required for any draw (both pipelines bind it at
@@ -300,6 +305,26 @@ pub fn buiy_pass(
     // pipelines, so it is bound once for the whole pass.
     pass.set_bind_group(0, &view_bind_group, &[]);
     pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
+
+    // --- Box-shadow draw (paint order: shadow FIRST, behind the quad) ----
+    // C6-b: the box-shadow primitive, drawn BEFORE the quad so a shadow paints
+    // behind its caster (shadow < quad < glyph < path). It reuses the 68 B quad
+    // instance layout (radius slot → blur sigma) but its OWN pipeline
+    // (`shadow.wgsl`); the shadow buffer is the distinct `shadow` RawBufferVec.
+    // Binds only the shared `@group(0)` view uniform (no atlas `@group(1)`).
+    // v1 draws the whole shadow blob flat (no effect-group partition — § 2.2).
+    // A zero-count or not-yet-uploaded / not-yet-compiled shadow buffer simply
+    // skips this draw without disturbing the quad draw below.
+    if buffers.shadow_count > 0
+        && let Some(shadow_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.shadow)
+        && let Some(shadow_buffer) = buffers.shadow.buffer()
+    {
+        pass.set_render_pipeline(shadow_pipeline);
+        // `@group(0)` (view) stays bound for the whole pass; the static unit-quad
+        // VBO 0 also stays bound. The shadow instance buffer is VBO 1.
+        pass.set_vertex_buffer(1, shadow_buffer.slice(..));
+        pass.draw(0..4, 0..buffers.shadow_count);
+    }
 
     // --- Quad draw (paint order: quad after shadow, before glyph) --------
     // `buffer()` is `None` until the first `write_buffer`; a zero-count or

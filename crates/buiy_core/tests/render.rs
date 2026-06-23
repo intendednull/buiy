@@ -14,6 +14,10 @@ mod support;
 
 #[path = "render/render_border_sdf.rs"]
 mod render_border_sdf;
+#[path = "render/render_border_shadow.rs"]
+mod render_border_shadow;
+#[path = "render/render_border_shadow_gpu.rs"]
+mod render_border_shadow_gpu;
 #[path = "render/render_buckets.rs"]
 mod render_buckets;
 #[path = "render/render_capture_app_gpu.rs"]

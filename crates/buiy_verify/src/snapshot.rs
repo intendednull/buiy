@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use buiy_core::components::ResolvedLayout;
 #[cfg(doc)]
 use buiy_core::render::buckets::InstanceBuckets;
-use buiy_core::render::buckets::{pack_outline_bands, pack_view};
+use buiy_core::render::buckets::{pack_band_instances, pack_shadow_instances, pack_view};
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_core::render::instance::PackedInstance;
 
@@ -411,6 +411,51 @@ fn outline_str(node: &ExtractedNode) -> String {
     }
 }
 
+/// One node's resolved per-side `Border` band, formatted for the display-list
+/// dump (C6-b). Renders the border box, the per-side widths `[t,r,b,l]`, and the
+/// per-side resolved colors so a per-side regression (wrong width / wrong color
+/// on one edge) shows as a line diff.
+fn border_str(node: &ExtractedNode) -> String {
+    match &node.border {
+        None => "none".to_string(),
+        Some(b) => {
+            let col =
+                |c: [f32; 4]| color_hex(Color::LinearRgba(LinearRgba::new(c[0], c[1], c[2], c[3])));
+            format!(
+                "pos={},{} size={},{} w=[{},{},{},{}] top={} right={} bottom={} left={}",
+                round(b.outer_pos.x),
+                round(b.outer_pos.y),
+                round(b.outer_size.x),
+                round(b.outer_size.y),
+                round(b.width[0]),
+                round(b.width[1]),
+                round(b.width[2]),
+                round(b.width[3]),
+                col(b.color_top),
+                col(b.color_right),
+                col(b.color_bottom),
+                col(b.color_left),
+            )
+        }
+    }
+}
+
+/// One shadow term formatted for the display-list dump (C6-b): the
+/// spread/offset-expanded box, the effective blur sigma, and the color.
+fn shadow_str(s: &buiy_core::render::extract::ExtractedShadow) -> String {
+    let col = color_hex(Color::LinearRgba(LinearRgba::new(
+        s.color[0], s.color[1], s.color[2], s.color[3],
+    )));
+    format!(
+        "pos={},{} size={},{} sigma={} color={col}",
+        round(s.rect_pos.x),
+        round(s.rect_pos.y),
+        round(s.rect_size.x),
+        round(s.rect_size.y),
+        round(s.sigma),
+    )
+}
+
 /// Snapshot the CPU display-list handoff holistically (nodes in paint order +
 /// packed buckets in draw order), keyed by `name`, beside the calling test.
 /// See [`display_list_dump`].
@@ -466,16 +511,47 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
         );
     }
 
-    // C6-a: the OUTLINE band channel (focus ring / selection outline). Emitted
-    // as ADDITIVE sections that appear ONLY when at least one node carries an
-    // outline — a fixture with no outlines dumps byte-identically to the pre-C6
-    // format, so no existing `.snap` re-blesses. The band count is the count of
-    // `pack_outline_bands` (one band instance per outlined node), and it draws
-    // AFTER the quad bucket (the ring sits on top of the fill).
-    let bands = pack_outline_bands(&nodes.nodes);
-    if !bands.is_empty() {
-        out.push_str("[outlines painters_z]\n");
+    // C6-b: the box-shadow channel. Emitted as ADDITIVE sections that appear
+    // ONLY when at least one node carries a (non-suppressed) shadow — a fixture
+    // with no shadows dumps byte-identically to the pre-C6-b format, so no
+    // existing `.snap` re-blesses. The shadow draws BEHIND the quad (lowest
+    // paint-order), so it is dumped first among the F-tier channels.
+    let shadows = pack_shadow_instances(&nodes.nodes);
+    if !shadows.is_empty() {
+        out.push_str("[shadows painters_z]\n");
         for (i, node) in nodes.nodes.iter().enumerate() {
+            for s in &node.shadows {
+                let _ = writeln!(
+                    out,
+                    "{i} {name} shadow {s}",
+                    name = names.label(node.entity),
+                    s = shadow_str(s),
+                );
+            }
+        }
+        out.push_str("[shadow draw-order]\n");
+        let _ = writeln!(out, "(Shadow,layer=0) x{}", shadows.len());
+    }
+
+    // C6-a (outline) + C6-b (per-side border): the BAND channel. Emitted as
+    // ADDITIVE sections that appear ONLY when at least one node carries a border
+    // or outline — a fixture with neither dumps byte-identically to the pre-C6
+    // format, so no existing `.snap` re-blesses. The band count is the count of
+    // `pack_band_instances` (one band per node border + one per node outline),
+    // and it draws AFTER the quad bucket (the border/ring sits on top of the
+    // fill within the box).
+    let bands = pack_band_instances(&nodes.nodes);
+    if !bands.is_empty() {
+        out.push_str("[bands painters_z]\n");
+        for (i, node) in nodes.nodes.iter().enumerate() {
+            if node.border.is_some() {
+                let _ = writeln!(
+                    out,
+                    "{i} {name} border {b}",
+                    name = names.label(node.entity),
+                    b = border_str(node),
+                );
+            }
             if node.outline.is_some() {
                 let _ = writeln!(
                     out,

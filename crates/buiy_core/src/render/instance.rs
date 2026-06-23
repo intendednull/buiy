@@ -21,7 +21,9 @@
 //! [`BuiyViewUniform`]: crate::render::view_uniform::BuiyViewUniform
 
 use crate::render::DrawData;
-use crate::render::extract::{ExtractedNode, ExtractedOutline, TextQuad};
+use crate::render::extract::{
+    ExtractedBorder, ExtractedNode, ExtractedOutline, ExtractedShadow, TextQuad,
+};
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 
@@ -162,6 +164,36 @@ pub fn pack_text_quad(quad: &TextQuad) -> PackedInstance {
     }
 }
 
+/// Pack one [`ExtractedShadow`] into a [`PackedInstance`] for the reserved
+/// `(Shadow, layer)` bucket (styling-f-tier.md § 2.2 — C6-b). Reuses the frozen
+/// 68 B quad layout with ZERO stride change: the `radius` slot carries the
+/// effective blur SIGMA (`shadow.wgsl` reinterprets `@location(5)` as the blur),
+/// `rect_pos`/`rect_size` are the spread-and-offset-expanded box (CPU-computed by
+/// `resolve_shadows`), `color` is the CPU-linearized shadow color, and
+/// `clip`/`affine` ride the node's fields. One `PackedInstance` per shadow term.
+pub fn pack_shadow(shadow: &ExtractedShadow) -> PackedInstance {
+    let (clip_min, clip_max) = match shadow.clip {
+        Some(c) => ([c.min.x, c.min.y], [c.max.x, c.max.y]),
+        None => (CLIP_SENTINEL_MIN, CLIP_SENTINEL_MAX),
+    };
+    PackedInstance {
+        rect_pos: [shadow.rect_pos.x, shadow.rect_pos.y],
+        rect_size: [shadow.rect_size.x, shadow.rect_size.y],
+        color: shadow.color,
+        // The radius slot IS the effective blur sigma for the shadow primitive
+        // (`shadow.wgsl:5,31`) — NOT a corner radius.
+        radius: shadow.sigma,
+        clip_min,
+        clip_max,
+        affine: [
+            shadow.affine[0][0],
+            shadow.affine[0][1],
+            shadow.affine[1][0],
+            shadow.affine[1][1],
+        ],
+    }
+}
+
 /// `true` iff the raw `[f32; 17]` bucket layout is byte-equal to
 /// [`PackedInstance`]'s stride (the pipeline-descriptor invariant). Pins the
 /// agreement the instanced draw relies on.
@@ -260,6 +292,39 @@ pub fn pack_outline(outline: &ExtractedOutline) -> BorderBandInstance {
             outline.affine[0][1],
             outline.affine[1][0],
             outline.affine[1][1],
+        ],
+    }
+}
+
+/// Pack one [`ExtractedBorder`] into a [`BorderBandInstance`] (styling-f-tier.md
+/// § 2.3 — C6-b). The border feeds the SAME band record + `band.wgsl` shader the
+/// outline rides, but AT the box edge: the outer box is the border box itself
+/// (NOT grown), the band is `width` thick INWARD (`inner_half = outer_half -
+/// width` in the shader), and the per-side colors + per-corner inner radii come
+/// straight off the extract record (already CPU-linearized + width-shrunk). The
+/// clip is the entity's OWN clip (the band is inside the border box).
+pub fn pack_border(border: &ExtractedBorder) -> BorderBandInstance {
+    let (clip_min, clip_max) = match border.clip {
+        Some(clip) => ([clip.min.x, clip.min.y], [clip.max.x, clip.max.y]),
+        None => (CLIP_SENTINEL_MIN, CLIP_SENTINEL_MAX),
+    };
+    BorderBandInstance {
+        rect_pos: [border.outer_pos.x, border.outer_pos.y],
+        rect_size: [border.outer_size.x, border.outer_size.y],
+        color_top: border.color_top,
+        color_right: border.color_right,
+        color_bottom: border.color_bottom,
+        color_left: border.color_left,
+        width: border.width,
+        outer_radius: border.outer_radius,
+        inner_radius: border.inner_radius,
+        clip_min,
+        clip_max,
+        affine: [
+            border.affine[0][0],
+            border.affine[0][1],
+            border.affine[1][0],
+            border.affine[1][1],
         ],
     }
 }

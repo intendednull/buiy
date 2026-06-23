@@ -162,6 +162,13 @@ pub struct BuiyPipeline {
     /// through the same `BuiyBandPipeline` specializer so the 1x default-format
     /// view's per-view key dedups onto it.
     pub band_id: CachedRenderPipelineId,
+    /// The `Shadow@Rgba8UnormSrgb@1x` baseline id for the box-shadow pipeline
+    /// (styling-f-tier.md § 2.2 — C6-b). Same eager-baseline role as
+    /// `id`/`glyph_id`/`band_id` (the node draws [`BuiyViewPipelines::shadow`]);
+    /// built through the same `BuiyPrimitives` specializer (the `Shadow` kind,
+    /// `shadow.wgsl` + the quad-family vertex layout) so the 1x default-format
+    /// view's per-view key dedups onto it.
+    pub shadow_id: CachedRenderPipelineId,
     /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
     /// at pipeline registration and reused every frame. Phase 0 closeout
     /// scope: vertex emission order matches the `cull_mode: None` setting in
@@ -261,7 +268,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // compiling duplicates. `register` runs at plugin finish, before any
     // `ViewTarget` exists, so the literals stand in for the default view here;
     // a multisampled / HDR view gets its own variant from the prepare pass.
-    let (id, glyph_id, band_id) =
+    let (id, glyph_id, band_id, shadow_id) =
         world.resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
             let pipeline_cache = world.resource::<PipelineCache>();
             let quad = pipelines.primitives.specialize(
@@ -282,8 +289,8 @@ pub(crate) fn register(render_app: &mut SubApp) {
                     samples: 1,
                 },
             );
-            // The band (outline) baseline through the distinct `BuiyBandPipeline`
-            // specializer + cache (styling-f-tier.md § 2.3 — C6-a).
+            // The band (border/outline) baseline through the distinct
+            // `BuiyBandPipeline` specializer + cache (styling-f-tier.md § 2.3).
             let band = pipelines.band.specialize(
                 pipeline_cache,
                 &BuiyBandPipeline,
@@ -292,12 +299,26 @@ pub(crate) fn register(render_app: &mut SubApp) {
                     samples: 1,
                 },
             );
-            (quad, glyph, band)
+            // The box-shadow baseline through the same `BuiyPrimitives`
+            // specializer (the `Shadow` kind — `shadow.wgsl` + the quad-family
+            // vertex layout; styling-f-tier.md § 2.2 — C6-b). Buildable today,
+            // only never specialized before this child.
+            let shadow = pipelines.primitives.specialize(
+                pipeline_cache,
+                &BuiyPrimitives,
+                BuiyPrimitiveKey {
+                    kind: BuiyPrimitiveKind::Shadow,
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            (quad, glyph, band, shadow)
         });
     world.insert_resource(BuiyPipeline {
         id,
         glyph_id,
         band_id,
+        shadow_id,
         vertex_buffer,
         view_layout,
         atlas_layout,
@@ -321,8 +342,11 @@ pub struct BuiyViewPipelines {
     /// `Glyph @ (view format, view samples)` — the window-pass glyph draw.
     pub glyph: CachedRenderPipelineId,
     /// `Band @ (view format, view samples)` — the window-pass border/outline
-    /// band draw (styling-f-tier.md § 2.3 — C6-a feeds the OUTLINE channel).
+    /// band draw (styling-f-tier.md § 2.3 — C6-a outline, C6-b per-side border).
     pub band: CachedRenderPipelineId,
+    /// `Shadow @ (view format, view samples)` — the window-pass box-shadow draw
+    /// (styling-f-tier.md § 2.2 — C6-b). Drawn FIRST (behind the quad).
+    pub shadow: CachedRenderPipelineId,
 }
 
 /// `RenderSystems::Prepare` system: specialize the view-pass quad + glyph
@@ -360,14 +384,22 @@ pub(crate) fn prepare_buiy_view_pipelines(
         };
         let quad = specialize(BuiyPrimitiveKind::Quad);
         let glyph = specialize(BuiyPrimitiveKind::Glyph);
-        // The band (outline) variant rides its own specializer/cache — a
+        // The box-shadow variant rides the SAME `BuiyPrimitives` specializer (the
+        // `Shadow` kind, `shadow.wgsl` + quad-family vertex layout; § 2.2 — C6-b).
+        let shadow = specialize(BuiyPrimitiveKind::Shadow);
+        // The band (border/outline) variant rides its own specializer/cache — a
         // distinct pipeline keyed by record, not a `BuiyPrimitiveKind`.
         let band = pipelines.band.specialize(
             &pipeline_cache,
             &BuiyBandPipeline,
             BuiyBandKey { format, samples },
         );
-        let view_pipelines = BuiyViewPipelines { quad, glyph, band };
+        let view_pipelines = BuiyViewPipelines {
+            quad,
+            glyph,
+            band,
+            shadow,
+        };
         commands.entity(entity).insert(view_pipelines);
     }
 }

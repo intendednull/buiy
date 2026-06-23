@@ -23,7 +23,7 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 
 use buiy_core::components::Node;
 use buiy_core::render::ColorToken;
-use buiy_core::render::buckets::pack_outline_bands;
+use buiy_core::render::buckets::pack_band_instances;
 use buiy_core::render::color::FOCUS_RING_TOKEN;
 use buiy_core::render::components::{AncestorClip, ClipRect, LineStyle, Outline};
 use buiy_core::render::extract::{
@@ -181,9 +181,10 @@ fn outline_clip_is_ancestor_clip_not_own_box() {
 }
 
 #[test]
-fn pack_outline_bands_emits_one_band_per_outlined_node() {
+fn pack_band_instances_emits_one_band_per_outlined_node() {
     // The packer produces one `BorderBandInstance` per node that carries an
-    // outline; outline-free nodes contribute nothing (the byte-stable path).
+    // outline; outline-free, border-free nodes contribute nothing (the
+    // byte-stable path).
     use buiy_core::render::extract::{ExtractedNode, ExtractedOutline};
 
     let outlined = ExtractedNode {
@@ -204,6 +205,8 @@ fn pack_outline_bands_emits_one_band_per_outlined_node() {
             clip: None,
             affine: [[1.0, 0.0], [0.0, 1.0]],
         }),
+        border: None,
+        shadows: Vec::new(),
     };
     let plain = ExtractedNode {
         entity: Entity::from_raw_u32(2).unwrap(),
@@ -214,9 +217,11 @@ fn pack_outline_bands_emits_one_band_per_outlined_node() {
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: None,
+        border: None,
+        shadows: Vec::new(),
     };
-    assert_eq!(pack_outline_bands(std::slice::from_ref(&plain)).len(), 0);
-    assert_eq!(pack_outline_bands(&[outlined, plain]).len(), 1);
+    assert_eq!(pack_band_instances(std::slice::from_ref(&plain)).len(), 0);
+    assert_eq!(pack_band_instances(&[outlined, plain.clone()]).len(), 1);
 }
 
 // --- Tier 2: end-to-end through the REAL extract system ---------------------
@@ -297,11 +302,11 @@ impl NodeExtractHarness {
             .nodes
             .iter()
             .find(|n| n.entity == entity)
-            .copied()
+            .cloned()
     }
 
     fn band_count(&self) -> usize {
-        pack_outline_bands(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
     }
 }
 

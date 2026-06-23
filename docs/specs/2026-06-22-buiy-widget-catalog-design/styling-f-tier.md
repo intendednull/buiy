@@ -1,6 +1,8 @@
 # Styling F-tier — feed BoxShadow / Border / Outline / focus-ring into the live draw spine — child C6 of the widget-catalog campaign
 
-`2026-06-22` · `[draft]` · Wave 3 · realizes foundation `visuals.md §3.3` (box-shadow / per-side border / border-radius / outline) + `color-and-forced-colors` (forced-colors draw-skip) · depends on C0, C1, C4, C7
+`2026-06-22` · `[active]` · Wave 3 · realizes foundation `visuals.md §3.3` (box-shadow / per-side border / border-radius / outline) + `color-and-forced-colors` (forced-colors draw-skip) · depends on C0, C1, C4, C7
+
+> **Landed.** C6-a (Outline band channel + focus-ring lowering — WCAG 2.4.7) and C6-b (per-side `Border` via the band channel AT the box edge + `BoxShadow` via the `(Shadow, layer)` bucket + the forced-colors shadow-suppression branch) are built and verified: headless extract/display-list tier + the GPU `--ignored` lane (programmatic readback, not pixel goldens — per-side border colors at the edge + the shadow paints offset behind the box). Inset box-shadow + dashed/dotted/double border `LineStyle`s remain the deferred C-tier fast-follows (§ 3.1 / § 7). Completes C6 + Wave 3.
 
 > Scope is decision §2.4 (umbrella): wire `BoxShadow` / per-side `Border` / `Outline` (+ the focus ring) into the live `extract → pack → bucket → specialize → draw` spine, and add the forced-colors draw-time `BoxShadow`-suppression branch. The four F-tier styling channels exist as components, the shadow shader and primitive kind exist, and a CPU border-band oracle exists — but **none of them paint**: the live `ExtractedNode → pack_extracted → (Quad,0) → buiy_pass` path emits only a solid-fill rounded-rect with a hardcoded radius `0`. This child closes that wiring without touching the R1/R2-frozen 68 B quad stride (umbrella §6.7).
 >
