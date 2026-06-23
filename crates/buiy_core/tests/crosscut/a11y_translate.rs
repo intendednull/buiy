@@ -106,6 +106,129 @@ fn focusable_view_has_focus_action() {
 }
 
 // ---------------------------------------------------------------------------
+// P1c-a action advertisement — gate-#3 PRODUCER-tier node-action introspection.
+//
+// The advertised action set on a node is read directly off the producer
+// `accesskit::Node` via `supports_action(action)`, which returns exactly the
+// node-LOCAL action bitmask (lib.rs:1756: `actions & action.mask()`). This is
+// the unambiguous "what this node advertises" observation — the consumer
+// `supports_action` walks a parent filter (a slider parent can contribute
+// `Increment` to a child), which would muddy an exact-set assertion. The
+// existing focus-action test above is on the same producer tier.
+//
+// `add_action` now derives from `Focusable ⇒ {Focus, Blur}` PLUS the role's
+// `contract_for(role).actions()` (Button ⇒ `Click`), replacing the old
+// focusable-`Focus`-only hardcode (widget-contracts.md §§1,5).
+// ---------------------------------------------------------------------------
+
+/// The full accesskit 0.24 `Action` set, used to assert an *exact* advertised
+/// set (the producer exposes no public action iterator, so we probe every
+/// variant: assert each expected one is present and every other absent).
+const ALL_ACTIONS: &[accesskit::Action] = {
+    use accesskit::Action::*;
+    &[
+        Click,
+        Focus,
+        Blur,
+        Collapse,
+        CustomAction,
+        Decrement,
+        Increment,
+        HideTooltip,
+        ShowTooltip,
+        ReplaceSelectedText,
+        ScrollDown,
+        ScrollLeft,
+        ScrollRight,
+        ScrollUp,
+        ScrollIntoView,
+        ScrollToPoint,
+        SetScrollOffset,
+        SetTextSelection,
+        SetSequentialFocusNavigationStartingPoint,
+        SetValue,
+        ShowContextMenu,
+        Expand,
+    ]
+};
+
+/// Assert a node advertises EXACTLY `expected` and no other action.
+fn assert_advertises_exactly(node: &accesskit::Node, expected: &[accesskit::Action]) {
+    for &a in ALL_ACTIONS {
+        let want = expected.contains(&a);
+        assert_eq!(
+            node.supports_action(a),
+            want,
+            "action {a:?}: advertised={}, expected={want}",
+            node.supports_action(a),
+        );
+    }
+}
+
+#[test]
+fn button_node_advertises_click_focus_blur() {
+    use accesskit::Action::{Blur, Click, Focus};
+    // A focusable Button: Focusable ⇒ {Focus, Blur}; the Button contract ⇒ Click.
+    let button = A11yNodeView {
+        entity: Entity::from_raw_u32(1).unwrap(),
+        role: A11yRole::Button,
+        name: "Save".into(),
+        focusable: true,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&button);
+    assert_advertises_exactly(&node, &[Click, Focus, Blur]);
+}
+
+#[test]
+fn bare_focusable_advertises_focus_blur_only() {
+    use accesskit::Action::{Blur, Focus};
+    // A focusable node with NO interactive widget role (Generic) advertises the
+    // implicit {Focus, Blur} and nothing else — no contract contributes verbs.
+    let view = A11yNodeView {
+        entity: Entity::from_raw_u32(2).unwrap(),
+        role: A11yRole::Generic,
+        name: "Focusable thing".into(),
+        focusable: true,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert_advertises_exactly(&node, &[Focus, Blur]);
+}
+
+#[test]
+fn non_focusable_generic_advertises_no_actions() {
+    // A non-focusable Generic node: no Focusable ⇒ no {Focus, Blur}; no
+    // interactive contract ⇒ no role verbs. It advertises NOTHING.
+    let view = A11yNodeView {
+        entity: Entity::from_raw_u32(3).unwrap(),
+        role: A11yRole::Generic,
+        name: "Container".into(),
+        focusable: false,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert_advertises_exactly(&node, &[]);
+}
+
+#[test]
+fn non_focusable_button_still_advertises_click() {
+    use accesskit::Action::Click;
+    // A Button that is somehow not focusable still advertises its contract verb
+    // (Click) but NOT {Focus, Blur} (those ride Focusable). Pins that the two
+    // contributors are independent.
+    let view = A11yNodeView {
+        entity: Entity::from_raw_u32(4).unwrap(),
+        role: A11yRole::Button,
+        name: "Inert".into(),
+        focusable: false,
+        ..Default::default()
+    };
+    let node = to_accesskit_node(&view);
+    assert_advertises_exactly(&node, &[Click]);
+}
+
+// ---------------------------------------------------------------------------
 // P1a first-batch decomposed-state — PRODUCER-tier fixtures.
 //
 // `A11yExpanded` is asserted here (not in the consumer suite) because

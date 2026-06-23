@@ -159,11 +159,27 @@ pub fn to_accesskit_node(view: &A11yNodeView) -> Node {
     // `build_tree` rather than flagging the node; that prune needs the ECS-tree
     // nesting that lands in P1b. The flag is carried on the view so P1b only has
     // to add the prune.
-    // Phase 0 closeout: focusable widgets get the AccessKit "focusable"
-    // semantic. Full keyboard-action contract is widget-specific
-    // (`buiy-widget-catalog-design`).
+    // Action advertisement (P1c-a, widget-contracts.md §§1,5). Two contributors,
+    // ONE outbound source of truth (the lockstep keystone):
+    //
+    // 1. Every `Focusable` node implicitly advertises `{Focus, Blur}` — it is
+    //    addressable (Focus) and clearable (Blur) regardless of role.
+    // 2. The role's `A11yContract` (looked up via `contract_for`) adds the
+    //    role-specific verbs from `actions()` (Button ⇒ `Click`). A role with
+    //    no interactive contract contributes nothing here.
+    //
+    // The same `actions()` list is re-validated inbound by the router (P1c-b)
+    // before `honor` is called — advertise and honor cannot drift. (The old
+    // focusable-`Focus`-only hardcode is gone: Blur was missing, and the
+    // role-specific verbs were absent.)
     if view.focusable {
         node.add_action(accesskit::Action::Focus);
+        node.add_action(accesskit::Action::Blur);
+    }
+    if let Some(entry) = crate::a11y::contract_for(view.role) {
+        for &action in entry.actions {
+            node.add_action(action);
+        }
     }
     node
 }

@@ -764,3 +764,88 @@ fn invariant_every_focusable_named() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// P1c-a — the `A11yContract` registry + Button `honor` lowering.
+//
+// The inbound ROUTER that *calls* `honor` after the liveness + live-capability
+// guard is the next slice (P1c-b). Here we pin the contract surface directly:
+// the registry maps `Button → {Click}`, and the Button `honor(Click)` lowers
+// into the shared `OnPress` sink (SC-1) — the same message the pointer path
+// writes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn contract_registry_keys_button_on_click() {
+    use accesskit::Action;
+    use buiy_core::a11y::contract_for;
+
+    let entry = contract_for(A11yRole::Button).expect("Button has a contract");
+    assert_eq!(
+        entry.actions,
+        &[Action::Click],
+        "Button advertises Click beyond the implicit Focus/Blur",
+    );
+
+    // A non-interactive container role has no contract (it advertises only the
+    // implicit Focus/Blur when focusable, nothing role-specific).
+    assert!(
+        contract_for(A11yRole::Generic).is_none(),
+        "Generic has no interactive contract",
+    );
+    // The other widget roles are wired in P1d (no contract yet pre-P1d).
+    assert!(contract_for(A11yRole::Checkbox).is_none());
+    assert!(contract_for(A11yRole::Slider).is_none());
+}
+
+#[test]
+fn button_honor_click_emits_on_press() {
+    use accesskit::Action;
+    use bevy::ecs::message::Messages;
+    use buiy_core::a11y::A11yContract;
+    use buiy_core::a11y::contract::Button;
+    use buiy_core::interaction::OnPress;
+
+    // `InteractionPlugin` (via `CorePlugin`) registers `Messages<OnPress>`, the
+    // sink the Button contract writes.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins).add_plugins(CorePlugin);
+    let entity = app.world_mut().spawn_empty().id();
+
+    // Call the contract `honor` directly (the router is P1c-b). Click ⇒ OnPress.
+    let result = Button::honor(app.world_mut(), entity, Action::Click, None);
+    assert!(result.is_ok(), "Button honor(Click) succeeds: {result:?}");
+
+    let messages = app.world().resource::<Messages<OnPress>>();
+    let mut cursor = messages.get_cursor();
+    let fired: Vec<_> = cursor.read(messages).map(|m| m.0).collect();
+    assert_eq!(
+        fired,
+        vec![entity],
+        "Button honor(Click) must emit OnPress(entity) into the shared sink (SC-1)",
+    );
+}
+
+#[test]
+fn button_honor_unadvertised_verb_is_unsupported_not_panic() {
+    use accesskit::Action;
+    use buiy_core::a11y::contract::Button;
+    use buiy_core::a11y::translate::node_id_for;
+    use buiy_core::a11y::{A11yContract, ActionError};
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins).add_plugins(CorePlugin);
+    let entity = app.world_mut().spawn_empty().id();
+
+    // A verb the Button contract does not advertise reaches `honor` only as dead
+    // code (the router rejects it at the §3 filter first); honor reports it as a
+    // typed error rather than panicking.
+    let result = Button::honor(app.world_mut(), entity, Action::Increment, None);
+    assert_eq!(
+        result,
+        Err(ActionError::Unsupported {
+            target: node_id_for(entity),
+            action: Action::Increment,
+        }),
+    );
+}

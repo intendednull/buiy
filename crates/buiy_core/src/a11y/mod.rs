@@ -14,12 +14,14 @@ use std::collections::{HashMap, HashSet};
 
 pub mod accname;
 pub mod adapter;
+pub mod contract;
 pub mod relations;
 pub mod states;
 pub mod translate;
 
 pub use accname::{AccNameInputs, compute_accessible_name};
 pub use adapter::AccessKitAdapterPlugin;
+pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
 pub use relations::A11yRelations;
 pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
