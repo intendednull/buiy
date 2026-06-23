@@ -37,6 +37,8 @@ mod coverage_meta;
 mod determinism_ahem;
 #[path = "verify_headless/dialog_modal_c5d.rs"]
 mod dialog_modal_c5d;
+#[path = "verify_headless/gallery_acceptance_c8d.rs"]
+mod gallery_acceptance_c8d;
 #[path = "verify_headless/golden_keys.rs"]
 mod golden_keys;
 #[path = "verify_headless/golden_persistence.rs"]
