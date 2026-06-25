@@ -17,6 +17,7 @@ use crate::theme::Theme;
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
+use crate::animation::AnimatedBackgroundColor;
 use crate::components::{Node, ResolvedLayout};
 use crate::layout::{BoxModel, Stacking};
 use crate::render::components::{
@@ -447,6 +448,39 @@ pub fn linear_axis(angle_deg: f32, size: Vec2) -> ([f32; 2], f32) {
     (axis, line_len)
 }
 
+/// Resolve a node's painted background fill color, compositing a live
+/// [`AnimatedBackgroundColor`] over the static token when one is present.
+///
+/// **Auto-composite (spec § 2 REFINE).** The design's `background .12s/.15s`
+/// transitions (switch/nav/filter tracks) are driven by a
+/// [`BackgroundColorTween`](crate::animation::BackgroundColorTween) that writes a
+/// resolved `Color` into [`AnimatedBackgroundColor`] each frame. That color
+/// CANNOT live in `Background.color` because the parity design locks the token
+/// surface (no `ColorToken::Literal`, spec § 8) — a crossfade is intrinsically a
+/// resolved-`Color` op. So the animated color rides its own component and this
+/// resolver prefers it: present ⇒ paint the interpolated color (auto, for EVERY
+/// node — not an opt-in widget special-case the prototype left unconsumed);
+/// absent ⇒ resolve the `Background` token (no background ⇒ transparent). A live
+/// theme/accent swap still re-resolves the token endpoints through the tween's
+/// own re-spawn, and the `theme.is_changed()` re-extract picks up the rest.
+///
+/// Pure: no ECS / GPU access beyond the borrowed inputs, so it is unit-testable
+/// headless. The `animated_bg` arg is `None` on the Tier-2 snapshot path (which
+/// has no live tweens) and the per-entity component in the production loop.
+pub fn resolve_background_color(
+    background: Option<&Background>,
+    animated_bg: Option<&AnimatedBackgroundColor>,
+    theme: &Theme,
+) -> Color {
+    if let Some(animated) = animated_bg {
+        return animated.0;
+    }
+    match background {
+        Some(bg) => crate::render::color::resolve_token(&bg.color, theme),
+        None => Color::NONE,
+    }
+}
+
 /// Build one [`ExtractedNode`] from the layout box + composed transform + the
 /// (optional) background token + the (optional) per-primitive clip AABB. Pure:
 /// no GPU, no ECS access beyond the borrowed components. `position` is the
@@ -473,10 +507,7 @@ pub fn extracted_node_for(
     // top-left and an identity transform yields the `[[1,0],[0,1]]` fast path.
     let m = global_transform.affine().matrix3;
     let affine = [[m.x_axis.x, m.x_axis.y], [m.y_axis.x, m.y_axis.y]];
-    let color = match background {
-        Some(bg) => crate::render::color::resolve_token(&bg.color, theme),
-        None => Color::NONE,
-    };
+    let color = resolve_background_color(background, None, theme);
     ExtractedNode {
         entity,
         position: translation.truncate(),
@@ -1029,6 +1060,13 @@ pub struct NodePaintQuery {
     /// The solid background fill quad (a node with none rides the byte-stable
     /// solid-only path; `BackgroundLayers` paints ABOVE it, in `gradients`).
     bg: Option<&'static Background>,
+    /// The crossfaded background color a live [`BackgroundColorTween`](crate::animation::BackgroundColorTween)
+    /// writes (the design's `background .12s/.15s` transitions). When present it
+    /// AUTO-COMPOSITES over the `bg` token in `resolve_background_color` — every
+    /// node, not an opt-in widget special-case (spec § 2 REFINE) — so any node a
+    /// tween touches paints the interpolated color for the tween's duration and
+    /// falls back to its token `bg` at rest.
+    animated_bg: Option<&'static AnimatedBackgroundColor>,
     /// The focus-ring / selection outline band (rides a DISTINCT band record +
     /// the entity's `AncestorClip`, not its own box — styling-f-tier.md § 2.4).
     outline: Option<&'static Outline>,
@@ -1113,12 +1151,36 @@ pub fn extract_buiy_nodes(
                     Changed<Stacking>,
                     Changed<ClipRect>,
                     Changed<AncestorClip>,
-                    // Effect-compositor damage (effect-compositor.md § 1.1): a
-                    // group forming/dropping (`EffectGroup`) or an opacity change
-                    // re-extracts so group membership + the composite alpha never
-                    // go stale. Kept in lockstep with the `nodes` fan above.
-                    Changed<EffectGroup>,
-                    Changed<Opacity>,
+                    // Effect-compositor damage (effect-compositor.md § 1.1),
+                    // grouped into a NESTED `Or` sub-union. `Or<T>` is itself a
+                    // `QueryFilter`, so an inner `Or<(..)>` is one element of the
+                    // outer tuple with no change to the flat OR semantics — and it
+                    // keeps the outer tuple under Bevy's 15-arity `QueryFilter`
+                    // ceiling (the FILTER-side mirror of the `NodePaintQuery`
+                    // `QueryData` partition; FAN: this trio tracks the
+                    // `effect_group` / `opacity` / `backdrop_filter` fields of the
+                    // `nodes` projection). A group forming/dropping
+                    // (`EffectGroup`) or an opacity change re-extracts so group
+                    // membership + the composite alpha never go stale.
+                    Or<(
+                        Changed<EffectGroup>,
+                        Changed<Opacity>,
+                        // Parity Wave B4: a backdrop-filter EDIT (a runtime
+                        // blur-radius change on an EXISTING former).
+                        // `Changed<EffectGroup>` only fires when the group FORMS
+                        // or DROPS — the marker stores the reason BITSET, which a
+                        // 6px→12px radius change does not touch — so without this
+                        // term an isolated `BackdropFilter` edit is the one
+                        // NodePaintQuery paint input with no matching gate term,
+                        // and a radius edit would not re-capture `backdrop_blur_px`
+                        // (the value prepare plans the dual-Kawase pyramid from).
+                        // NB: today the main-world render-prep passes re-insert
+                        // their markers every frame, so an effect-group node
+                        // already re-extracts each frame; this term makes the
+                        // radius edge PRINCIPLED (and robust if that re-insertion
+                        // is ever change-gated).
+                        Changed<BackdropFilter>,
+                    )>,
                     // C6-a: an outline insert/remove/edit (the focus ring is a
                     // framework-owned `Outline` the ring lowering toggles) must
                     // re-extract so the band appears/vanishes. Kept in lockstep
@@ -1139,6 +1201,14 @@ pub fn extract_buiy_nodes(
                     // the `theme.is_changed()` re-extract (the stop tokens
                     // re-resolve), not this per-entity term.
                     Changed<BackgroundLayers>,
+                    // Parity § 2 REFINE: a live background-color crossfade. The
+                    // `BackgroundColorTween` system re-inserts `AnimatedBackgroundColor`
+                    // every frame it advances (marking it `Changed`), so this term
+                    // re-extracts the node each frame of the transition — the fill
+                    // paints the interpolated color (resolve_background_color), then
+                    // the tween completes + removes the component and the node falls
+                    // back to its `Background` token on the next change.
+                    Changed<AnimatedBackgroundColor>,
                     // FAN: extend the Or-set in lockstep with the `nodes` tuple
                     // (architecture § 3.1 trigger union).
                 )>,
@@ -1250,6 +1320,7 @@ pub fn extract_buiy_nodes(
             ancestor_clip,
             stacking,
             bg,
+            animated_bg,
             outline,
             border,
             box_model,
@@ -1286,6 +1357,15 @@ pub fn extract_buiy_nodes(
         // clips to its own box ∩ ancestor clips. See [`effective_clip`].
         let clip = effective_clip(stacking, clip_rect, ancestor_clip);
         let mut node = extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme);
+        // Auto-composite a live background-color crossfade over the static token
+        // (spec § 2 REFINE). `extracted_node_for` resolved only the `bg` token (it
+        // is also the Tier-2 snapshot builder, which has no tweens); here in the
+        // production loop a node carrying a `BackgroundColorTween`'s
+        // `AnimatedBackgroundColor` paints the interpolated color instead, for
+        // every node — no widget opt-in.
+        if animated_bg.is_some() {
+            node.color = resolve_background_color(bg, animated_bg, theme);
+        }
         // C6-a: resolve the outline (focus ring / selection outline) against the
         // entity's `AncestorClip` (NOT its own box, `effective_outline_clip`) so
         // it survives an `overflow:hidden` ancestor (styling-f-tier.md § 2.4).

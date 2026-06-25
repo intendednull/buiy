@@ -46,6 +46,8 @@ mod render_effect_groups;
 mod render_extract;
 #[path = "render/render_extract_background.rs"]
 mod render_extract_background;
+#[path = "render/render_extract_composite.rs"]
+mod render_extract_composite;
 #[path = "render/render_focus_ring.rs"]
 mod render_focus_ring;
 #[path = "render/render_focus_ring_gpu.rs"]
