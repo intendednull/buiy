@@ -130,11 +130,39 @@ to "why didn't testing catch this".
   `RUSTDOCFLAGS=-D warnings cargo doc` — all clean.
 - Headless gate: **1656/1656** (`cargo nextest run --workspace --locked`), incl.
   the new coherence + content-render guards.
-- GPU lane (RX 6700 XT): no new failures. The only 2 (`text_caret_selection_e3_gpu`)
-  are the pre-existing lavapipe-calibrated `is_white_ink` failures — proven
-  identical on the pre-change base, green on CI's pinned lavapipe.
+- GPU lane (RX 6700 XT): the 2 `text_caret_selection_e3_gpu` tests fail **on the
+  RX 6700 XT** — but that is RX flakiness (the `is_white_ink`/perceptual checks are
+  calibrated for the pinned lavapipe and the RX result is non-deterministic). I
+  initially **mis-diagnosed** these as a "pre-existing calibration" wash. They were
+  a **real regression** — see *CI cross-platform* below.
 - Live: all 5 gallery screens render their content text; typing into the input no
   longer crashes (verified via synthetic XTEST input + screenshots).
+
+## CI cross-platform — a real lavapipe regression the local gates missed
+Opening PR #80 ran the **pinned-lavapipe GPU lane** on the campaign for the first
+time (the campaign branch had never been CI'd). It FAILED on
+`e3_editor_driven_caret_paints_a_bar_right_of_the_ink`: the editor renders **no
+glyph ink** (`maxwhite=0`), while origin/main passes the same test on the same
+lavapipe. A genuine regression — invisible to both the headless gate (the test is
+`#[ignore]`, GPU-only) and my local RX 6700 XT (flaky for this test).
+
+Root-caused by **reconstructing CI's exact pinned lavapipe locally, sudo-less**
+(gfx-rs Mesa 24.3.4 tarball + Arch's LLVM 18.1.8 + `VK_ICD_FILENAMES`), then
+`git bisect`ing on a **CPU-independent** signal (ink PRESENCE, not the
+calibration-bound exact pixels) to **C2 `008efa6` (editor text-integrity)**. C2's
+anti-clobber `TextSync` stopped `set_text`-ing editor-owned buffers (to stop a
+FontsGeneration sweep clobbering typed content) — which also **killed the initial
+`Text`→buffer SEED**. C2 moved the *headless* editor tests onto the `EditCommand`
+seed channel but missed these two `#[ignore]` GPU goldens. Production is
+unaffected (`TextInput` seeds via `set_value`; gallery editors use placeholders).
+
+**Fix** (`250d39d`): seed both e3 `capture` helpers via `EditCommand::Insert` (the
+production seed path). **CI re-run: fully green** — all 9 jobs (GPU pinned
+lavapipe + Windows/macOS/Ubuntu + MSRV + lint/doc/deny).
+
+**Lesson:** a GPU lane that only runs on CI is unverified until the branch is
+actually pushed to a PR; a long-lived campaign integration branch should be CI'd
+incrementally, not first at merge time.
 
 ## Post-landing adversarial bug-hunt (4 read-only review rounds → converged)
 After the fixes above, a multi-round adversarial bug-hunt ran (each round: a
