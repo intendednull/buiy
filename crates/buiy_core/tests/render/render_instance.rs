@@ -107,6 +107,7 @@ fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 
@@ -215,6 +216,24 @@ fn border_band_stride_agrees_and_quad_stride_is_unchanged() {
     assert_eq!(std::mem::size_of::<BorderBandInstance>(), 192);
     // The quad stride is untouched — the byte-stability guard, restated next to
     // the new record so a future stride drift on EITHER side reddens here.
+    assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 68);
+}
+
+#[test]
+fn gradient_stride_agrees_and_quad_stride_is_unchanged() {
+    // Parity Wave B1: the DISTINCT 2-stop gradient record agrees with its
+    // declared stride (26 f32 = 104 B), AND the frozen 68 B quad stride
+    // (`PackedInstance`) stays byte-stable — the same two-record design as the
+    // band: the gradient adds a parallel record, never bumping the quad stride
+    // that R2's degraded-group re-tint indexes. A 1000-quad scene carries ZERO
+    // gradient bytes.
+    use buiy_core::render::instance::{
+        GRADIENT_INSTANCE_STRIDE_BYTES, GradientInstance, gradient_stride_agrees,
+    };
+    assert!(gradient_stride_agrees());
+    assert_eq!(GRADIENT_INSTANCE_STRIDE_BYTES, 104);
+    assert_eq!(std::mem::size_of::<GradientInstance>(), 104);
+    // The quad stride is untouched — the byte-stability guard.
     assert_eq!(PACKED_INSTANCE_STRIDE_BYTES, 68);
 }
 

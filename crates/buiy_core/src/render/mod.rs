@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
 
 pub mod atlas;
+pub mod blur;
 pub mod bridge;
 pub mod buckets;
 pub mod clip;
@@ -26,6 +27,8 @@ pub mod extract;
 pub mod forced_colors;
 pub mod forced_colors_analyzer;
 pub mod golden;
+pub mod icon_producer;
+pub mod icon_raster;
 pub mod instance;
 pub mod node;
 pub mod pipeline;
@@ -41,7 +44,8 @@ pub use color::{ColorToken, SystemColorKeyword};
 pub use components::{
     AncestorClip, Angle, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius,
     ClipRect, ComputedPaintSkip, Corners, CssVisibility, EffectGroup, EffectReason, Filter,
-    FilterFn, LineStyle, MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow, SkipReason,
+    FilterFn, Icon, LineStyle, MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow,
+    SkipReason,
 };
 pub use visibility::{node_skip_reason, write_paint_skip};
 
@@ -158,6 +162,13 @@ impl Plugin for BuiyRenderPlugin {
         // ComputedPaintSkip and the layout-owned OffscreenAuto are
         // deliberately NOT registered here.
         app.register_type::<components::Background>()
+            // Gradient / layered fills (parity Wave B1) — the sibling
+            // decomposed component + its layer enum and value types.
+            .register_type::<components::BackgroundLayers>()
+            .register_type::<components::BackgroundLayer>()
+            .register_type::<components::LinearGradient>()
+            .register_type::<components::RadialGradient>()
+            .register_type::<components::ColorStop>()
             .register_type::<components::Border>()
             .register_type::<components::BorderSide>()
             .register_type::<components::Corners>()
@@ -176,6 +187,7 @@ impl Plugin for BuiyRenderPlugin {
             .register_type::<components::ClipRadius>()
             .register_type::<color::ColorToken>()
             .register_type::<color::SystemColorKeyword>()
+            .register_type::<components::Icon>()
             .register_type::<components::TextColor>()
             // T7: the caret-color tier-1 override (decoration-and-paint
             // § 6.2). CaretVisual/SelectionVisual are machinery state and
@@ -239,6 +251,26 @@ impl Plugin for BuiyRenderPlugin {
                 "band.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
+            // The background-gradient shader (octet ..07, parity Wave B1).
+            // Loaded into the MAIN world like its siblings; the gradient pipeline
+            // (primitive.rs `BuiyGradientPipeline::specialize`) resolves this
+            // handle through the PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::gradient_shader_handle(),
+                "gradient.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
+            // The backdrop-blur shader (octet ..08, parity Wave B4). Loaded into
+            // the MAIN world like its siblings; the blur pipeline
+            // (blur.rs `BlurPipeline::specialize`) resolves this handle through
+            // the PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                blur::blur_shader_handle(),
+                "blur.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
         }
 
         // ExtractedDraws is render-world only — the main world does not read it.
@@ -278,12 +310,27 @@ impl Plugin for BuiyRenderPlugin {
             // gate works even if the text plugin is absent — the
             // `ExtractedGlyphs` rationale, verbatim.
             .init_resource::<extract::ExtractedTextQuads>()
+            // Vector-icon carriers (parity Wave B3): the icon coverage-instance
+            // list + the touch-key set, filled by `extract_buiy_icons` below.
+            // Icons ride the SAME coverage pipeline as text glyphs (their record
+            // IS a `GlyphAlphaInstance`) but through their OWN carrier/buffer/draw
+            // so the wholesale-rebuilt glyph carrier stays decoupled (§ 3.5).
+            .init_resource::<icon_producer::ExtractedIcons>()
+            .init_resource::<icon_producer::ResidentIconKeys>()
             // Phase-0 draw path (feeds node.rs today); retired by R6/R8 (the
             // node/instance rework) when node.rs reads the per-view
             // ExtractedNodes instead.
             .add_systems(ExtractSchedule, extract_buiy_draws)
             // The per-view extract rework (R5). architecture § 1.2/§ 3/§ 4.
             .add_systems(ExtractSchedule, extract::extract_buiy_nodes)
+            // The vector-icon producer (parity Wave B3): rasterizes + atlas-inserts
+            // each `Icon` and emits a tinted coverage instance. `.after(maintain_atlas)`
+            // so inserts/touches use the just-advanced atlas frame clock (the
+            // `text::extract_buiy_glyphs` precedent).
+            .add_systems(
+                ExtractSchedule,
+                icon_producer::extract_buiy_icons.after(atlas::maintain_atlas),
+            )
             // The prepare phase (R6): per-view persistent buffers + view
             // uniform, packed from R5's ExtractedNodes. ViewTarget exists in
             // RenderSystems::Prepare (architecture § 4), unlike in extract.
@@ -321,6 +368,12 @@ impl Plugin for BuiyRenderPlugin {
         // composite passes run straight-line inside `buiy_pass` (one shared
         // RenderContext encoder). No-op until prepare_effect_groups lands (Task 9).
         compositor::register(render_app);
+        // Backdrop-blur (parity Wave B4): the device-free blur specialization
+        // cache. The device-owning `BlurPipeline` inits in `finish`
+        // (`blur::register_gpu`). Adds no pass system — the blur runs
+        // straight-line inside `buiy_pass` (the same one-encoder discipline as
+        // the effect-group composites).
+        blur::register(render_app);
     }
 
     /// Device-dependent render-world setup. MUST run in `finish`, not `build`:
@@ -344,6 +397,10 @@ impl Plugin for BuiyRenderPlugin {
         // layouts, sampler, unit-quad VBO). `finish` for the same reason — its
         // `FromWorld` needs the `RenderDevice`.
         composite::register_gpu(render_app);
+        // The device-owning blur half (`BlurPipeline`: bind-group layouts, the
+        // linear clamp sampler, the unit-quad VBO). `finish` for the same reason
+        // as the composite half — its `FromWorld` needs the `RenderDevice`.
+        blur::register_gpu(render_app);
     }
 }
 

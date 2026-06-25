@@ -86,6 +86,59 @@ impl Lerp for Color {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OnComplete;
 
+/// How a [`Tween`] behaves when it reaches the end of one `from`→`to` pass.
+///
+/// The design eases most motion ONCE (entrance translateY, the thumb slide), but
+/// the menu's "last action" / "ready" status dots PULSE forever (CSS
+/// `blink 1.6s infinite`, opacity `1`→`.25`→`1`). A one-shot tween cannot express
+/// that, so `Repeat` lets a tween loop (sawtooth restart) or ping-pong (reverse
+/// each pass), a fixed number of cycles or forever (`None` count).
+///
+/// Under reduced motion a repeating tween snaps to its steady "rest" state and
+/// completes immediately (it never oscillates): the `to` end for [`Repeat::Once`]
+/// / [`Repeat::Loop`], the `from` end (bright/on) for [`Repeat::PingPong`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Repeat {
+    /// Run `from`→`to` once, then complete + remove (the default — the entrance /
+    /// thumb-slide / chevron behaviour).
+    #[default]
+    Once,
+    /// On reaching `to`, restart at `from` (a sawtooth). `count` is the number of
+    /// passes remaining; `None` repeats forever. A `Some(0)`/`Some(1)` pass left
+    /// completes like [`Repeat::Once`].
+    Loop { count: Option<u32> },
+    /// On reaching `to`, reverse direction so the value oscillates
+    /// `from`→`to`→`from`→… (the blink/pulse dot). `count` is the number of
+    /// one-way passes remaining; `None` oscillates forever. The "rest" value a
+    /// reduced-motion snap lands on is `from` (the dot's bright/on state).
+    PingPong { count: Option<u32> },
+}
+
+impl Repeat {
+    /// Whether this mode keeps the tween alive past one pass (loop or ping-pong
+    /// with passes still to run). A `count` of 0 or 1 has no further pass.
+    fn repeats(&self) -> bool {
+        match self {
+            Repeat::Once => false,
+            Repeat::Loop { count } | Repeat::PingPong { count } => count.is_none_or(|c| c > 1),
+        }
+    }
+
+    /// Decrement the remaining pass count (saturating at 0); infinite stays
+    /// infinite. Called once per completed pass.
+    fn decremented(self) -> Self {
+        match self {
+            Repeat::Once => Repeat::Once,
+            Repeat::Loop { count } => Repeat::Loop {
+                count: count.map(|c| c.saturating_sub(1)),
+            },
+            Repeat::PingPong { count } => Repeat::PingPong {
+                count: count.map(|c| c.saturating_sub(1)),
+            },
+        }
+    }
+}
+
 /// A generic tween over an animatable value `T: Lerp`.
 ///
 /// Construct via [`Tween::new`]; advance happens in [`BuiySet::Animate`](crate::BuiySet)
@@ -107,11 +160,14 @@ pub struct Tween<T: Lerp> {
     /// When true, the per-target system attaches an [`OnComplete`] marker to the
     /// entity as the tween finishes. Off by default.
     pub mark_on_complete: bool,
+    /// How the tween behaves at the end of one `from`→`to` pass — once (default),
+    /// looping, or ping-pong. See [`Repeat`].
+    pub repeat: Repeat,
 }
 
 impl<T: Lerp> Tween<T> {
     /// A tween from `from` to `to` over `duration` with `easing`. `elapsed`
-    /// starts at zero and `mark_on_complete` is off.
+    /// starts at zero, `mark_on_complete` is off, and it runs once.
     pub fn new(from: T, to: T, duration: Duration, easing: Easing) -> Self {
         Self {
             from,
@@ -120,6 +176,7 @@ impl<T: Lerp> Tween<T> {
             elapsed: Duration::ZERO,
             easing,
             mark_on_complete: false,
+            repeat: Repeat::Once,
         }
     }
 
@@ -132,6 +189,25 @@ impl<T: Lerp> Tween<T> {
     pub fn with_on_complete(mut self) -> Self {
         self.mark_on_complete = true;
         self
+    }
+
+    /// Set the [`Repeat`] mode (looping / ping-pong). Builder form so the blink
+    /// dot reads `Tween::secs(1.0, 0.25, 0.8, …).with_repeat(Repeat::PingPong {
+    /// count: None })`.
+    pub fn with_repeat(mut self, repeat: Repeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    /// The steady "rest" value a reduced-motion snap lands on. For a one-shot or
+    /// looping tween that is the `to` end (its natural completion); for a
+    /// ping-pong (a blink/pulse) it is the `from` end — the dot's bright/on
+    /// state, so reduced motion shows a steady-lit dot, never a frozen dim one.
+    fn rest_value(&self) -> T {
+        match self.repeat {
+            Repeat::PingPong { .. } => self.from.clone(),
+            Repeat::Once | Repeat::Loop { .. } => self.to.clone(),
+        }
     }
 
     /// `true` once `elapsed >= duration` (or the duration is zero).
@@ -220,17 +296,42 @@ enum Tick<T> {
 
 /// Advance one tween by `delta`, honouring reduced motion. Returns the value to
 /// write and whether the tween is finished.
+///
+/// A one-shot tween completes when `elapsed >= duration`. A repeating tween
+/// (loop / ping-pong) instead WRAPS at the pass boundary — it subtracts one
+/// `duration` from `elapsed` (carrying the remainder so the cadence never
+/// drifts), decrements its pass count, and for ping-pong swaps `from`/`to` so
+/// the value reverses. It only completes once no passes remain. Under reduced
+/// motion EVERY tween (one-shot or repeating) snaps to its steady rest value and
+/// completes immediately — a blink/pulse never oscillates (spec § 8 /
+/// values.md § 5.3 jump-to-end).
 fn tick_tween<T: Lerp>(tween: &mut Tween<T>, delta: Duration, reduced_motion: bool) -> Tick<T> {
     if reduced_motion {
-        // Jump-to-end: no interpolation, complete immediately (spec § 8).
-        return Tick::Done(tween.to.clone(), tween.mark_on_complete);
+        // Jump-to-rest: no interpolation, complete immediately (spec § 8). The
+        // rest value is `to` for once/loop, `from` for ping-pong (steady-lit dot).
+        return Tick::Done(tween.rest_value(), tween.mark_on_complete);
     }
     tween.elapsed = tween.elapsed.saturating_add(delta);
-    if tween.is_complete() {
-        Tick::Done(tween.to.clone(), tween.mark_on_complete)
-    } else {
-        Tick::Running(tween.value())
+    if !tween.is_complete() {
+        return Tick::Running(tween.value());
     }
+    // Reached the end of this pass. A non-repeating tween (or one with no passes
+    // left) completes at `to`; a repeating one wraps and keeps running.
+    if !tween.repeat.repeats() {
+        return Tick::Done(tween.to.clone(), tween.mark_on_complete);
+    }
+    // Carry the overshoot past `duration` into the next pass so the cadence is
+    // drift-free (a long frame does not lose time). A zero-duration repeating
+    // tween cannot make progress per pass, so it degrades to a single completion.
+    if tween.duration.is_zero() {
+        return Tick::Done(tween.to.clone(), tween.mark_on_complete);
+    }
+    tween.elapsed = tween.elapsed.saturating_sub(tween.duration);
+    if matches!(tween.repeat, Repeat::PingPong { .. }) {
+        std::mem::swap(&mut tween.from, &mut tween.to);
+    }
+    tween.repeat = tween.repeat.decremented();
+    Tick::Running(tween.value())
 }
 
 /// Read the active reduced-motion preference (defaulting to "not reduced" when

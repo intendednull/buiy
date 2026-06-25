@@ -28,10 +28,10 @@ use bevy::render::render_resource::{
 
 // Owned by R6 (render::buckets) — imported, not redefined.
 use crate::render::buckets::BuiyPrimitiveKind;
-use crate::render::instance::BORDER_BAND_INSTANCE_STRIDE_BYTES;
+use crate::render::instance::{BORDER_BAND_INSTANCE_STRIDE_BYTES, GRADIENT_INSTANCE_STRIDE_BYTES};
 use crate::render::pipeline::{
-    atlas_layout_descriptor, band_shader_handle, coverage_shader_handle, shader_handle,
-    shadow_shader_handle, view_uniform_layout_descriptor,
+    atlas_layout_descriptor, band_shader_handle, coverage_shader_handle, gradient_shader_handle,
+    shader_handle, shadow_shader_handle, view_uniform_layout_descriptor,
 };
 
 /// One `SpecializedRenderPipeline` variant: a primitive built for a specific
@@ -387,6 +387,179 @@ impl SpecializedRenderPipeline for BuiyBandPipeline {
                 shader_defs: vec![],
                 entry_point: Some("vertex".into()),
                 buffers: Self::band_vertex_buffers(),
+            },
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleStrip,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: PolygonMode::Fill,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState {
+                count: key.samples,
+                ..Default::default()
+            },
+            fragment: Some(FragmentState {
+                shader,
+                shader_defs: vec![],
+                entry_point: Some("fragment".into()),
+                targets: vec![Some(ColorTargetState {
+                    format: key.format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            zero_initialize_workgroup_memory: false,
+        }
+    }
+}
+
+/// One `SpecializedRenderPipeline` variant of the background-GRADIENT pipeline
+/// (parity Wave B1): a distinct pipeline keyed by record type (the 2-stop
+/// `GradientInstance`), NOT a new `BuiyPrimitiveKind` — the band/shadow
+/// precedent. Built for a specific target color-attachment format + sample count
+/// exactly like [`BuiyBandKey`]. Painted within the quad paint slot (over the
+/// solid fill, under glyphs/bands), riding its own `gradient.wgsl` shader + the
+/// distinct vertex layout, leaving the 68 B quad stride byte-stable.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BuiyGradientKey {
+    /// The bound attachment's format (view format / `Rgba16Float` group target).
+    pub format: TextureFormat,
+    /// The bound attachment's sample count (the per-view `Msaa` count).
+    pub samples: u32,
+}
+
+/// The background-gradient `SpecializedRenderPipeline`. Its own vertex layout
+/// (the `GradientInstance` record) + shader (`gradient.wgsl`), sharing the quad
+/// family's `@group(0)` view uniform — no `@group(1)`.
+/// `SpecializedRenderPipelines<BuiyGradientPipeline>` dedupes identical
+/// `(format, samples)` keys onto one `CachedRenderPipelineId`.
+#[derive(Default)]
+pub struct BuiyGradientPipeline;
+
+impl BuiyGradientPipeline {
+    /// The two interleaved vertex-buffer layouts for the gradient pipeline: the
+    /// shared static unit quad (stride 16, VBO 0) and the per-instance
+    /// [`GradientInstance`] record (VBO 1, `step_mode: Instance`). The attribute
+    /// offsets/formats MUST match `GradientInstance`'s `#[repr(C)]` field offsets
+    /// byte-for-byte and `gradient.wgsl`'s `@location`s:
+    ///
+    /// | field      | offset | format    | `@location` |
+    /// |------------|--------|-----------|-------------|
+    /// | rect_pos   | 0      | Float32x2 | 2 |
+    /// | rect_size  | 8      | Float32x2 | 3 |
+    /// | color0     | 16     | Float32x4 | 4 |
+    /// | color1     | 32     | Float32x4 | 5 |
+    /// | stops      | 48     | Float32x2 | 6 |
+    /// | axis       | 56     | Float32x2 | 7 |
+    /// | params     | 64     | Float32x2 | 8 |
+    /// | clip_min   | 72     | Float32x2 | 9 |
+    /// | clip_max   | 80     | Float32x2 | 10 |
+    /// | affine_c0  | 88     | Float32x2 | 11 |
+    /// | affine_c1  | 96     | Float32x2 | 12 |
+    ///
+    /// Total instance stride 104 B = [`GRADIENT_INSTANCE_STRIDE_BYTES`].
+    ///
+    /// [`GradientInstance`]: crate::render::instance::GradientInstance
+    /// [`GRADIENT_INSTANCE_STRIDE_BYTES`]: crate::render::instance::GRADIENT_INSTANCE_STRIDE_BYTES
+    fn gradient_vertex_buffers() -> Vec<VertexBufferLayout> {
+        vec![
+            VertexBufferLayout {
+                array_stride: 16,
+                step_mode: VertexStepMode::Vertex,
+                attributes: vec![
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                ],
+            },
+            VertexBufferLayout {
+                array_stride: GRADIENT_INSTANCE_STRIDE_BYTES as u64,
+                step_mode: VertexStepMode::Instance,
+                attributes: vec![
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 2,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 3,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 4,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 32,
+                        shader_location: 5,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 48,
+                        shader_location: 6,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 56,
+                        shader_location: 7,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 64,
+                        shader_location: 8,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 72,
+                        shader_location: 9,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 80,
+                        shader_location: 10,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 88,
+                        shader_location: 11,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 96,
+                        shader_location: 12,
+                    },
+                ],
+            },
+        ]
+    }
+}
+
+impl SpecializedRenderPipeline for BuiyGradientPipeline {
+    type Key = BuiyGradientKey;
+
+    fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        let shader = gradient_shader_handle();
+        RenderPipelineDescriptor {
+            label: Some("buiy_gradient_pipeline".into()),
+            layout: vec![view_uniform_layout_descriptor()],
+            immediate_size: 0,
+            vertex: VertexState {
+                shader: shader.clone(),
+                shader_defs: vec![],
+                entry_point: Some("vertex".into()),
+                buffers: Self::gradient_vertex_buffers(),
             },
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleStrip,

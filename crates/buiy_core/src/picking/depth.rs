@@ -31,10 +31,11 @@ use std::collections::HashMap;
 /// Shared derivation: index within the nearest ancestor `StackingContext`,
 /// composed across nested contexts (a nested SC root appears as one atomic entry
 /// in its parent's list and its descendants live only in its own `painters_z`),
-/// with an ECS-entity-order tiebreak across degenerate multi-roots
-/// (`context_roots` sorts by entity). Top-layer members are already at the tail
-/// of the root context's `painters_z` (layout sub-pass 6f), so they correctly
-/// sort topmost for free.
+/// with a `(cross_root_rank, entity)` order across multi-roots (`context_roots`).
+/// A *parented* top-layer member is already at the tail of its root context's
+/// `painters_z` (layout sub-pass 6f), so it sorts topmost for free; a *parentless*
+/// top-layer root (a dialog authored outside the main tree) sorts last via its
+/// `cross_root_rank` — so paint order and hit-test order agree for both.
 ///
 /// Stays `pub` so the agent-interface campaign's `a11y/inprocess.rs` can consume
 /// it for its `HitTargetable` actionability gate (co-drive SC-3; that campaign's
@@ -47,10 +48,21 @@ pub fn global_paint_order(contexts: &Query<(Entity, &StackingContext)>) -> Vec<E
         .map(|(e, sc)| (e, sc.painters_z.as_slice()))
         .collect();
     let painters_z_of = |e: Entity| -> Option<&[Entity]> { sc_by_entity.get(&e).copied() };
+    // The cross-root rank lookup (layout 6f stamps `cross_root_rank` per context),
+    // so hit-test root order MATCHES render's: a parentless top-layer root (modal /
+    // popover) is the topmost hit candidate, not buried by entity-id order (the
+    // "paint == hit-test" invariant — co-drive SC-3).
+    let rank_by_entity: HashMap<Entity, u8> = contexts
+        .iter()
+        .map(|(e, sc)| (e, sc.cross_root_rank))
+        .collect();
 
-    // Root contexts (entity-sorted by the shared helper), then the recursive
-    // tree walk per root — the SAME order `extract_buiy_nodes` emits for render.
-    let roots = context_roots(&sc_by_entity);
+    // Root contexts (rank-then-entity-sorted by the shared helper), then the
+    // recursive tree walk per root — the SAME order `extract_buiy_nodes` emits for
+    // render.
+    let roots = context_roots(&sc_by_entity, |e| {
+        rank_by_entity.get(&e).copied().unwrap_or(0)
+    });
     let mut order = Vec::new();
     for root in roots {
         context_tree_paint_order(root, &painters_z_of, &mut order);

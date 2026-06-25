@@ -187,6 +187,11 @@ pub struct BuiySpecializedPipelines {
     /// `(format, samples)` (styling-f-tier.md § 2.3 / § 3.4 — C6-a). A distinct
     /// pipeline keyed by record, NOT a new `BuiyPrimitiveKind`.
     pub band: SpecializedRenderPipelines<crate::render::primitive::BuiyBandPipeline>,
+    /// Background-GRADIENT (`BuiyGradientPipeline`) specializations, per
+    /// `(format, samples)` (parity Wave B1). A distinct pipeline keyed by record
+    /// (the 2-stop `GradientInstance`), NOT a new `BuiyPrimitiveKind` — the
+    /// band/shadow precedent.
+    pub gradient: SpecializedRenderPipelines<crate::render::primitive::BuiyGradientPipeline>,
 }
 
 impl FromWorld for CompositePipeline {

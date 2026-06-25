@@ -144,6 +144,7 @@ fn node(entity: u32, position: Vec2, size: Vec2, color: Color) -> ExtractedNode 
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 
@@ -263,6 +264,7 @@ fn grouped(entity: u32, color: Color, group: Option<usize>) -> ExtractedNode {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 

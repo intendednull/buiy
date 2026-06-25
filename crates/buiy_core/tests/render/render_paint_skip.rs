@@ -11,6 +11,7 @@
 //! 2026-06-06-render-subtree-visibility-suppression-design.md.
 
 use bevy::prelude::*;
+use buiy_core::layout::Display;
 use buiy_core::render::components::{ComputedPaintSkip, OffscreenAuto, SkipReason};
 use buiy_core::{
     CorePlugin, CssVisibility, Node,
@@ -261,6 +262,109 @@ fn own_suppression_survives_ancestor_unhide() {
             reason: SkipReason::OffscreenAuto
         }),
         "the child's own suppression must survive the ancestor flip"
+    );
+}
+
+/// REGRESSION (parity prototype — the viewport-header "WARN" artifact): a
+/// `Display::None` applied at RUNTIME to a previously-laid-out subtree must
+/// paint-skip the root AND its descendants. Taffy keeps the descendants' nodes
+/// (collapsed to the origin), so `write_resolved_layout` keeps writing them a
+/// zero `ResolvedLayout`; without this marker the GPU extract (a flat
+/// `&ResolvedLayout` query, not the `painters_z` walk) painted them — stacked
+/// at the layout origin. § 5.1 assumed `Display::None` never reaches extract
+/// (no Taffy node, no `ResolvedLayout`); that holds for born-`None` entities
+/// but NOT the runtime flip. The gallery's screen router flips inactive screens
+/// to `Display::None`, which produced the orange "WARN" scroll-row state cell
+/// (and every other hidden leaf) leaking onto the Todo screen.
+#[test]
+fn runtime_display_none_suppresses_previously_laid_out_subtree() {
+    let mut app = app();
+    // Born displayed: parent + child get Taffy nodes + ResolvedLayout.
+    let parent = app.world_mut().spawn(node_bundle()).id();
+    let child = app.world_mut().spawn(node_bundle()).id();
+    app.world_mut().entity_mut(parent).add_child(child);
+    app.update();
+    assert_eq!(marker(&app, parent), None, "displayed parent unmarked");
+    assert_eq!(marker(&app, child), None, "displayed child unmarked");
+
+    // Flip the parent to Display::None at runtime (the router toggle).
+    *app.world_mut().get_mut::<Display>(parent).unwrap() = Display::None;
+    app.update();
+    assert_eq!(
+        marker(&app, parent),
+        Some(ComputedPaintSkip {
+            reason: SkipReason::DisplayNone
+        }),
+        "the runtime-hidden parent carries the DisplayNone paint-skip"
+    );
+    assert_eq!(
+        marker(&app, child),
+        Some(ComputedPaintSkip {
+            reason: SkipReason::DisplayNone
+        }),
+        "the descendant of a Display::None subtree must be paint-skipped too — \
+         a missing marker here is the header-artifact bug (the collapsed leaf \
+         paints at the layout origin)"
+    );
+}
+
+/// The Display::None show flip removes the marker from the whole subtree — the
+/// router re-activating a screen must make it paint again (the symmetric path
+/// to the CssVisibility hide-then-show test).
+#[test]
+fn display_none_then_restore_removes_markers_from_subtree() {
+    let mut app = app();
+    let parent = app.world_mut().spawn(node_bundle()).id();
+    let child = app.world_mut().spawn(node_bundle()).id();
+    app.world_mut().entity_mut(parent).add_child(child);
+    app.update();
+
+    // Hide via Display::None: both marked.
+    *app.world_mut().get_mut::<Display>(parent).unwrap() = Display::None;
+    app.update();
+    assert!(marker(&app, parent).is_some(), "parent marked after hide");
+    assert!(marker(&app, child).is_some(), "child marked after hide");
+
+    // Restore the authored Display (the router puts back the captured value):
+    // both lose the marker and paint again.
+    *app.world_mut().get_mut::<Display>(parent).unwrap() = Display::flex_column();
+    app.update();
+    assert_eq!(marker(&app, parent), None, "restored parent marker removed");
+    assert_eq!(
+        marker(&app, child),
+        None,
+        "restored child marker removed — a stale marker here would leave the \
+         re-activated screen permanently invisible"
+    );
+}
+
+/// `Display::None` is the strongest suppression: its reason wins for the
+/// marker even when a descendant ALSO carries its own (weaker) skip input.
+#[test]
+fn display_none_reason_wins_over_inherited_css_hidden() {
+    let mut app = app();
+    let parent = app
+        .world_mut()
+        .spawn((node_bundle(), CssVisibility::Hidden))
+        .id();
+    app.update();
+    assert_eq!(
+        marker(&app, parent),
+        Some(ComputedPaintSkip {
+            reason: SkipReason::CssHidden
+        }),
+        "CssVisibility::Hidden alone → CssHidden reason"
+    );
+
+    // Adding Display::None on the SAME entity flips the reason to DisplayNone.
+    *app.world_mut().get_mut::<Display>(parent).unwrap() = Display::None;
+    app.update();
+    assert_eq!(
+        marker(&app, parent),
+        Some(ComputedPaintSkip {
+            reason: SkipReason::DisplayNone
+        }),
+        "Display::None precedence: its reason wins over CssVisibility::Hidden"
     );
 }
 

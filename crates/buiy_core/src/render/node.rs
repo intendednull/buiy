@@ -47,8 +47,9 @@ use bevy::render::{
 
 use super::{
     atlas::AtlasGpu,
+    blur::{BlurParams, BlurPipeline, PreparedBackdropBlurs},
     composite::CompositePipeline,
-    compositor::{PreparedEffectGroups, PreparedEffectTargets},
+    compositor::{EffectReason, PreparedEffectGroups, PreparedEffectTargets},
     pipeline::{BuiyPipeline, BuiyViewPipelines},
     prepare::BuiyInstanceBuffers,
 };
@@ -76,10 +77,12 @@ pub fn buiy_pass(
         Option<&'static BuiyViewPipelines>,
         Option<&'static PreparedEffectGroups>,
         Option<&'static PreparedEffectTargets>,
+        Option<&'static PreparedBackdropBlurs>,
     )>,
     mut render_context: RenderContext,
 ) {
-    let (view_target, view_pipelines, prepared, prepared_targets) = view.into_inner();
+    let (view_target, view_pipelines, prepared, prepared_targets, prepared_blurs) =
+        view.into_inner();
     let pipeline_cache = world.resource::<PipelineCache>();
     let buiy_pipeline = world.resource::<BuiyPipeline>();
     // The view-pass pipelines are the PER-VIEW variants (this view's format
@@ -103,12 +106,16 @@ pub fn buiy_pass(
     // Nothing to draw this frame (empty extract, or buffers not yet
     // uploaded). Glyphs draw even with zero quads (a pure-text frame), a band
     // draws even with zero quads/glyphs (a focus ring on a transparent
-    // focusable — C6-a), and a box-shadow draws even with zero of the rest (a
-    // shadow-only frame — C6-b), so the skip checks ALL FOUR counts.
+    // focusable — C6-a), a box-shadow draws even with zero of the rest (a
+    // shadow-only frame — C6-b), and a vector ICON draws even with zero of the
+    // rest (parity Wave B3 — an icon-only box, e.g. a bare rail glyph), so the
+    // skip checks ALL the primitive counts.
     if buffers.quad_count == 0
         && buffers.glyph_count == 0
+        && buffers.icon_count == 0
         && buffers.band_count == 0
         && buffers.shadow_count == 0
+        && buffers.gradient_count == 0
     {
         return;
     }
@@ -147,6 +154,15 @@ pub fn buiy_pass(
             .get_resource::<AtlasGpu>()
             .and_then(|a| a.coverage_bind_group());
         for group in &prepared.groups {
+            // Parity Wave B4: a pure backdrop-filter group is NOT an off-screen
+            // group — it is an in-place blur of the painted window backdrop
+            // (`run_backdrop_blurs` below), and its OWN fill draws flat over the
+            // blur. Skip it here (and in the step-2a/2b composite loops); its
+            // off-screen target was never acquired (`prepare_backdrop_blurs`
+            // owns its scratch instead).
+            if is_pure_backdrop_filter(group.reason) {
+                continue;
+            }
             let Some(target) = targets.targets.get(group.index).and_then(|t| t.as_ref()) else {
                 // Degraded group (no target): skip the off-screen pass here. A
                 // ROOT degraded group is NOT lost — `prepare_effect_groups`
@@ -239,6 +255,9 @@ pub fn buiy_pass(
         let composite = world.resource::<CompositePipeline>();
         for &gi in &prepared.composite_order {
             let group = &prepared.groups[gi];
+            if is_pure_backdrop_filter(group.reason) {
+                continue; // backdrop-filter: no off-screen target to composite.
+            }
             let Some(parent_idx) = group.parent else {
                 continue; // root group → composited into the window below.
             };
@@ -351,6 +370,26 @@ pub fn buiy_pass(
         }
     }
 
+    // --- Background-gradient draw (paint order: gradient after the quad) --
+    // Parity Wave B1: the background-gradient fill, drawn AFTER the solid quad
+    // so a gradient layer paints OVER the solid `Background.color`, and BEFORE
+    // glyphs/bands so text + borders sit on top. Uses the distinct
+    // `GradientInstance` blob + `gradient.wgsl` pipeline (the 68 B quad stride is
+    // untouched). Binds only the shared `@group(0)` view uniform (no atlas
+    // `@group(1)`). v1 draws the whole gradient blob flat (no effect-group
+    // partition). A zero-count or not-yet-uploaded / not-yet-compiled gradient
+    // buffer simply skips this draw without disturbing the surrounding draws.
+    if buffers.gradient_count > 0
+        && let Some(gradient_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.gradient)
+        && let Some(gradient_buffer) = buffers.gradient.buffer()
+    {
+        pass.set_render_pipeline(gradient_pipeline);
+        // `@group(0)` (view) + the static unit-quad VBO 0 stay bound; the
+        // gradient instance buffer is VBO 1.
+        pass.set_vertex_buffer(1, gradient_buffer.slice(..));
+        pass.draw(0..4, 0..buffers.gradient_count);
+    }
+
     // --- Glyph draw (paint order: glyph after quad) ----------------------
     // The coverage-glyph (alpha-as-color) primitive, drawn AFTER the quad so
     // text paints over fills (shadow < quad < glyph < path). Requires: the
@@ -384,6 +423,29 @@ pub fn buiy_pass(
         }
     }
 
+    // --- Vector-icon draw (parity Wave B3) -------------------------------
+    // Icons ARE coverage stamps (an icon instance is a `GlyphAlphaInstance`), so
+    // they reuse the EXACT glyph pipeline + the EXACT atlas `@group(1)` coverage
+    // bind group + `coverage.wgsl` — NO new GPU code (§ 3.5). A SEPARATE buffer +
+    // draw (not appended to the glyph buffer) keeps the icon producer decoupled
+    // from the wholesale-rebuilt glyph carrier. Drawn right after the glyph draw
+    // (both coverage tier, so an icon paints over fills like text). Same
+    // effect-group flat/group partition as glyphs (`icon_flat_ranges`); any
+    // missing piece skips without disturbing the glyph draw above.
+    if buffers.icon_count > 0
+        && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
+        && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
+        && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
+        && let Some(icon_buffer) = buffers.icon.buffer()
+    {
+        pass.set_render_pipeline(glyph_pipeline);
+        pass.set_bind_group(1, atlas_bind_group, &[]);
+        pass.set_vertex_buffer(1, icon_buffer.slice(..));
+        for r in &buffers.icon_flat_ranges {
+            pass.draw(0..4, r.clone());
+        }
+    }
+
     // --- Border/outline band draw (paint order: outline ON TOP) ----------
     // C6-a: the focus-ring / selection-outline band, drawn AFTER the quad +
     // glyph so the ring sits over the fill and text within the box. Uses the
@@ -409,6 +471,41 @@ pub fn buiy_pass(
     // must not overlap the borrow of `pass`.
     drop(pass);
 
+    // --- Backdrop-blur (parity Wave B4) ----------------------------------
+    // Now that the flat window pass painted the BACKDROP (every non-group
+    // primitive — the dotted bg, scrolled content, etc.), run the in-place
+    // dual-Kawase blur for each backdrop-filter element, then draw the element's
+    // OWN fill over the blurred backdrop. This sits between the flat draw and the
+    // root-group composites so a modal scrim blurs the content behind it. See
+    // `render/blur.rs` for why this is NOT an off-screen effect group.
+    run_backdrop_blurs(
+        world,
+        view_target,
+        prepared_blurs,
+        pipeline_cache,
+        &mut render_context,
+    );
+    if let (Some(prepared), Some(blurs)) = (prepared, prepared_blurs)
+        && !blurs.blurs.is_empty()
+    {
+        // The backdrop-filter elements' OWN fills draw flat over the blurred
+        // backdrop (their ranges live in `group_ranges`/`glyph_group_ranges`,
+        // EXCLUDED from `flat_ranges`, because they are EffectGroup members; the
+        // off-screen loops skip them — `is_pure_backdrop_filter` — so this is
+        // where they paint). A LoadOp::Load window pass preserves the blur.
+        draw_backdrop_filter_fills(
+            world,
+            view_target,
+            prepared,
+            buffers,
+            view_pipelines,
+            buiy_pipeline,
+            pipeline_cache,
+            &view_bind_group,
+            &mut render_context,
+        );
+    }
+
     // Effect-group composite — step 2b (ROOT groups → window): composite each
     // root group's target into the window, in post-order, AFTER the flat draw
     // (the group paints over the in-flow content). The composite samples the
@@ -427,6 +524,9 @@ pub fn buiy_pass(
             let group = &prepared.groups[gi];
             if group.parent.is_some() {
                 continue; // nested → composited into its parent (step 2a).
+            }
+            if is_pure_backdrop_filter(group.reason) {
+                continue; // backdrop-filter: no off-screen target to composite.
             }
             let Some(src) = targets.targets.get(gi).and_then(|t| t.as_ref()) else {
                 continue; // degraded root group (no target).
@@ -478,6 +578,351 @@ pub fn buiy_pass(
     // (render/top_layer.rs) is the landed helper that splits the in-flow and
     // top-layer instance ranges should a top-layer subtree ever need an
     // explicit separate pass.
+}
+
+/// Does this effect group form ONLY for `backdrop-filter` (no opacity /
+/// isolation / filter / blend bit)? Such a group is handled by the in-place
+/// backdrop-blur path (`run_backdrop_blurs`), NOT the off-screen-target
+/// compositor, so the step-1/2a/2b loops skip it. A group that combines
+/// backdrop-filter WITH another former (e.g. a translucent modal that is also a
+/// blur) is a documented follow-up — it takes the off-screen path here (its own
+/// fill renders into a target), so its backdrop is NOT blurred in v1.
+fn is_pure_backdrop_filter(reason: EffectReason) -> bool {
+    reason == EffectReason::BACKDROP_FILTER
+}
+
+/// Execute the in-place dual-Kawase backdrop blur for every prepared
+/// backdrop-filter element (parity Wave B4). For each blur: a DOWN pyramid
+/// (window element-region → scratch[0] → … → scratch[N-1]), an UP pyramid
+/// (scratch[N-1] → … → scratch[0]), then a final UP blit of scratch[0] back over
+/// the element's window region (`LoadOp::Load` preserves the rest of the window).
+/// Each pass is its own `begin_tracked_render_pass` on the shared encoder; the
+/// read (sample) and write (attachment) target DIFFERENT textures every pass, so
+/// there is never a read-write hazard on one texture. A no-op when there are no
+/// blurs, the pipelines have not async-compiled, or the `BlurPipeline` resource
+/// is absent.
+fn run_backdrop_blurs(
+    world: &World,
+    view_target: &ViewTarget,
+    prepared_blurs: Option<&PreparedBackdropBlurs>,
+    pipeline_cache: &PipelineCache,
+    render_context: &mut RenderContext,
+) {
+    let Some(blurs) = prepared_blurs else {
+        return;
+    };
+    if blurs.blurs.is_empty() {
+        return;
+    }
+    let Some(blur_pipeline) = world.get_resource::<BlurPipeline>() else {
+        return;
+    };
+    // All three pipeline variants must have compiled (the established skip-on-
+    // async-compile behavior class — a not-yet-ready frame leaves the backdrop
+    // un-blurred, then resolves once the pipelines land).
+    let (Some(down_id), Some(up_id), Some(blit_id)) =
+        (blurs.down_pipeline, blurs.up_pipeline, blurs.blit_pipeline)
+    else {
+        return;
+    };
+    let (Some(down_pl), Some(up_pl), Some(blit_pl)) = (
+        pipeline_cache.get_render_pipeline(down_id),
+        pipeline_cache.get_render_pipeline(up_id),
+        pipeline_cache.get_render_pipeline(blit_id),
+    ) else {
+        return;
+    };
+
+    for blur in &blurs.blurs {
+        if blur.levels.is_empty() {
+            continue;
+        }
+        let n = blur.levels.len();
+
+        // Helper: run ONE blur pass — bind `@group(0)` params + `@group(1)` source
+        // (texture + the shared linear sampler), draw the unit quad into `dst`,
+        // clearing it (each pyramid level is fully overwritten).
+        // The closure is inlined per pass below (it borrows the encoder mutably).
+
+        // 1/source_size for a pass whose source is scratch level `lvl`.
+        let level_texel = |lvl: usize| -> [f32; 2] {
+            let e = blur.level_extents[lvl]
+                .max(bevy::math::UVec2::ONE)
+                .as_vec2();
+            [1.0 / e.x, 1.0 / e.y]
+        };
+
+        // --- DOWN pyramid: window region → scratch[0]; scratch[i-1] → scratch[i].
+        for i in 0..n {
+            let dst = &blur.levels[i];
+            // Source = the WINDOW main texture for level 0 (read the element
+            // sub-rect), else the previous scratch level (read full).
+            let (src_view, texel, src_rect) = if i == 0 {
+                // The window source's texel pitch is `1/window_physical` (the
+                // sub-rect read does not change the pitch).
+                let w = blur.window_physical.max(bevy::math::UVec2::ONE).as_vec2();
+                (
+                    view_target.main_texture_view(),
+                    [1.0 / w.x, 1.0 / w.y],
+                    [
+                        blur.src_uv_min.x,
+                        blur.src_uv_min.y,
+                        blur.src_uv_max.x,
+                        blur.src_uv_max.y,
+                    ],
+                )
+            } else {
+                (
+                    &blur.levels[i - 1].default_view,
+                    level_texel(i - 1),
+                    [0.0, 0.0, 1.0, 1.0],
+                )
+            };
+            let params = BlurParams {
+                texel_and_offset: [texel[0], texel[1], blur.offset, 0.0],
+                src_rect,
+            };
+            blur_one_pass(
+                render_context,
+                blur_pipeline,
+                down_pl,
+                src_view,
+                &dst.default_view,
+                &params,
+            );
+        }
+
+        // --- UP pyramid: scratch[i+1] → scratch[i] for i = n-2 .. 0.
+        for i in (0..n.saturating_sub(1)).rev() {
+            let texel = level_texel(i + 1);
+            let params = BlurParams {
+                texel_and_offset: [texel[0], texel[1], blur.offset, 0.0],
+                src_rect: [0.0, 0.0, 1.0, 1.0],
+            };
+            blur_one_pass(
+                render_context,
+                blur_pipeline,
+                up_pl,
+                &blur.levels[i + 1].default_view,
+                &blur.levels[i].default_view,
+                &params,
+            );
+        }
+
+        // --- Final blit-back: scratch[0] → the WINDOW element region. A
+        // viewport-scissored UP pass writes the blurred backdrop over `region`
+        // only; `LoadOp::Load` preserves the rest of the window.
+        let texel = level_texel(0);
+        let params = BlurParams {
+            texel_and_offset: [texel[0], texel[1], blur.offset, 0.0],
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+        };
+        blur_blit_to_window(
+            render_context,
+            blur_pipeline,
+            blit_pl,
+            &blur.levels[0].default_view,
+            view_target,
+            blur.region,
+            &params,
+        );
+    }
+}
+
+/// One off-screen blur pass: `@group(0)` params + `@group(1)` (source view +
+/// the shared linear sampler), draw the unit quad into `dst`, clearing it.
+fn blur_one_pass(
+    render_context: &mut RenderContext,
+    blur_pipeline: &BlurPipeline,
+    pipeline: &bevy::render::render_resource::RenderPipeline,
+    src_view: &bevy::render::render_resource::TextureView,
+    dst_view: &bevy::render::render_resource::TextureView,
+    params: &BlurParams,
+) {
+    let (params_bg, source_bg) = blur_bindings(render_context, blur_pipeline, src_view, params);
+    let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+        label: Some("buiy_backdrop_blur_pass"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view: dst_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations {
+                load: LoadOp::Clear(LinearRgba::NONE.into()),
+                store: StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_render_pipeline(pipeline);
+    pass.set_bind_group(0, &params_bg, &[]);
+    pass.set_bind_group(1, &source_bg, &[]);
+    pass.set_vertex_buffer(0, blur_pipeline.vertex_buffer.slice(..));
+    pass.draw(0..4, 0..1);
+}
+
+/// The final blit-back: an UP pass that writes the blurred scratch[0] over the
+/// element's `region` in the WINDOW (`LoadOp::Load` + a viewport scissor so only
+/// the element region is overwritten). The destination is the view's current
+/// color attachment.
+fn blur_blit_to_window(
+    render_context: &mut RenderContext,
+    blur_pipeline: &BlurPipeline,
+    pipeline: &bevy::render::render_resource::RenderPipeline,
+    src_view: &bevy::render::render_resource::TextureView,
+    view_target: &ViewTarget,
+    region: bevy::math::URect,
+    params: &BlurParams,
+) {
+    let (params_bg, source_bg) = blur_bindings(render_context, blur_pipeline, src_view, params);
+    let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+        label: Some("buiy_backdrop_blur_blit_pass"),
+        color_attachments: &[Some(view_target.get_color_attachment())],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    // Scissor to the element region (physical px) so the full-target unit quad
+    // writes ONLY the backdrop region — the rest of the window is untouched
+    // (the quad's NDC covers the whole view, the scissor clips it to `region`).
+    pass.set_scissor_rect(region.min.x, region.min.y, region.width(), region.height());
+    pass.set_render_pipeline(pipeline);
+    pass.set_bind_group(0, &params_bg, &[]);
+    pass.set_bind_group(1, &source_bg, &[]);
+    pass.set_vertex_buffer(0, blur_pipeline.vertex_buffer.slice(..));
+    pass.draw(0..4, 0..1);
+}
+
+/// Build a blur pass's two bind groups: `@group(0)` the `BlurParams` uniform and
+/// `@group(1)` (source view + the shared linear sampler). Created BEFORE the pass
+/// (the open pass borrows the device); the transient uniform buffer's bytes are
+/// owned by the returned `BindGroup`.
+fn blur_bindings(
+    render_context: &mut RenderContext,
+    blur_pipeline: &BlurPipeline,
+    src_view: &bevy::render::render_resource::TextureView,
+    params: &BlurParams,
+) -> (
+    bevy::render::render_resource::BindGroup,
+    bevy::render::render_resource::BindGroup,
+) {
+    let buf = render_context
+        .render_device()
+        .create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("buiy_blur_params_uniform"),
+            contents: bytemuck::bytes_of(params),
+            usage: BufferUsages::UNIFORM,
+        });
+    let params_bg = render_context.render_device().create_bind_group(
+        "buiy_blur_params_bind_group",
+        &blur_pipeline.uniform_layout,
+        &BindGroupEntries::single(buf.as_entire_binding()),
+    );
+    let source_bg = render_context.render_device().create_bind_group(
+        "buiy_blur_source_bind_group",
+        &blur_pipeline.source_layout,
+        &BindGroupEntries::sequential((src_view, &blur_pipeline.sampler)),
+    );
+    (params_bg, source_bg)
+}
+
+/// Draw the backdrop-filter elements' OWN content (the quad members in
+/// `group_ranges` + the glyph/icon members in `glyph_group_ranges`/
+/// `icon_group_ranges`) over the blurred window backdrop (parity Wave B4). These
+/// ranges are EXCLUDED from the flat draw (they are `EffectGroup` members), and
+/// the off-screen loops skip them (`is_pure_backdrop_filter`), so this LoadOp::Load
+/// pass is where the element + its descendants paint — over the blur. The blur
+/// preserves; the draws use the shared view uniform exactly like the flat pass.
+///
+/// QUADS, then GLYPHS, then ICONS (the global shadow < quad < glyph < icon rank,
+/// scoped to the backdrop group's members) — so the header strip's title text
+/// (a descendant of the backdrop-filter element, tagged into the SAME group)
+/// renders over the blurred backdrop. v1 does NOT re-route the gradient/band
+/// tiers (those draw the whole blob flat in the main pass, un-partitioned —
+/// styling-f-tier.md § 2.3 / Wave B1), so a gradient/border on a backdrop-filter
+/// element paints into the backdrop and is blurred; the gallery's two uses (solid
+/// header bg + solid modal scrim) are unaffected. Documented follow-up.
+#[allow(clippy::too_many_arguments)]
+fn draw_backdrop_filter_fills(
+    world: &World,
+    view_target: &ViewTarget,
+    prepared: &PreparedEffectGroups,
+    buffers: &BuiyInstanceBuffers,
+    view_pipelines: &BuiyViewPipelines,
+    buiy_pipeline: &BuiyPipeline,
+    pipeline_cache: &PipelineCache,
+    view_bind_group: &bevy::render::render_resource::BindGroup,
+    render_context: &mut RenderContext,
+) {
+    let quad_pl = pipeline_cache.get_render_pipeline(view_pipelines.quad);
+    let glyph_pl = pipeline_cache.get_render_pipeline(view_pipelines.glyph);
+    let atlas_bg = world
+        .get_resource::<AtlasGpu>()
+        .and_then(|a| a.coverage_bind_group());
+    let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+        label: Some("buiy_backdrop_filter_fill_pass"),
+        color_attachments: &[Some(view_target.get_color_attachment())],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_bind_group(0, view_bind_group, &[]);
+    pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
+
+    // --- QUAD members (the scrim / header bg fill) ---
+    if let (Some(quad_pl), Some(quad_buffer)) = (quad_pl, buffers.quad.buffer()) {
+        pass.set_render_pipeline(quad_pl);
+        pass.set_vertex_buffer(1, quad_buffer.slice(..));
+        for group in &prepared.groups {
+            if !is_pure_backdrop_filter(group.reason) {
+                continue;
+            }
+            if let Some(range) = buffers.group_ranges.get(group.index)
+                && range.start < range.end
+            {
+                pass.draw(0..4, range.clone());
+            }
+        }
+    }
+
+    // --- GLYPH members (the header title text) + ICON members, sharing the
+    // glyph pipeline + the atlas `@group(1)` coverage bind group (icons ARE
+    // coverage stamps — Wave B3). Drawn AFTER the quads so text/icons sit over
+    // the element's own fill.
+    if let (Some(glyph_pl), Some(atlas_bg)) = (glyph_pl, atlas_bg) {
+        pass.set_render_pipeline(glyph_pl);
+        pass.set_bind_group(1, atlas_bg, &[]);
+        if let Some(glyph_buffer) = buffers.glyph.buffer() {
+            pass.set_vertex_buffer(1, glyph_buffer.slice(..));
+            for group in &prepared.groups {
+                if !is_pure_backdrop_filter(group.reason) {
+                    continue;
+                }
+                if let Some(range) = buffers.glyph_group_ranges.get(group.index)
+                    && range.start < range.end
+                {
+                    pass.draw(0..4, range.clone());
+                }
+            }
+        }
+        if let Some(icon_buffer) = buffers.icon.buffer() {
+            pass.set_vertex_buffer(1, icon_buffer.slice(..));
+            for group in &prepared.groups {
+                if !is_pure_backdrop_filter(group.reason) {
+                    continue;
+                }
+                if let Some(range) = buffers.icon_group_ranges.get(group.index)
+                    && range.start < range.end
+                {
+                    pass.draw(0..4, range.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Build the composite pass's two bind groups (effect-compositor.md § 3 step 2)

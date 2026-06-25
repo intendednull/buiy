@@ -53,6 +53,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 outline: None,
                 border: None,
                 shadows: Vec::new(),
+                gradients: Vec::new(),
             },
             ExtractedNode {
                 entity: Entity::from_raw_u32(2).unwrap(),
@@ -65,6 +66,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 outline: None,
                 border: None,
                 shadows: Vec::new(),
+                gradients: Vec::new(),
             },
         ],
     };
@@ -114,6 +116,7 @@ fn pack_extracted_nodes_carries_non_identity_affine() {
             outline: None,
             border: None,
             shadows: Vec::new(),
+            gradients: Vec::new(),
         }],
     };
     let (instances, _) = pack_extracted_nodes(&nodes);
@@ -148,6 +151,7 @@ fn extracted_nodes_pack_view_routes_records_to_quad_layer_0() {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     });
     let buckets = pack_view(&view.nodes);
     let quad0 = PrimitiveBatchKey {
@@ -197,12 +201,13 @@ fn view_uniform_carrier_is_a_valid_std140_uniform() {
 // `prepare_buiy_instances` (render/mod.rs), `prepare_buiy_view_pipelines`
 // (render/pipeline.rs — the per-view format+Msaa pipeline specialization,
 // queued in render/mod.rs), `prepare_effect_groups` (render/compositor.rs
-// `register`), and `prepare_atlas_textures` (atlas/mod.rs `register` — the
-// dirty-page GPU upload + `@group(1)` bind-group build), all four
+// `register`), `prepare_atlas_textures` (atlas/mod.rs `register` — the
+// dirty-page GPU upload + `@group(1)` bind-group build), and
+// `prepare_backdrop_blurs` (render/blur.rs `register` — parity Wave B4), all
 // `.in_set(RenderSystems::Prepare)` and queued in `build`. Bump this in
 // lockstep (with tests/render_compositor_gpu.rs) whenever the plugin's
 // `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 4;
+const BUIY_RENDER_SYSTEM_COUNT: usize = 5;
 
 // Count the systems in a RenderApp's `Render` schedule. Reads the schedule graph
 // directly (`graph().systems`), which is populated at `add_systems` time — no
@@ -258,8 +263,9 @@ fn prepare_system_is_in_render_prepare_set() {
         with_plugin_count - baseline_count,
         BUIY_RENDER_SYSTEM_COUNT,
         "BuiyRenderPlugin must register {BUIY_RENDER_SYSTEM_COUNT} systems in the \
-         Render schedule (prepare_buiy_instances + prepare_effect_groups); got a \
-         delta of {} — a missing add_systems(Render, …) in render/mod.rs",
+         Render schedule (prepare_buiy_instances + prepare_effect_groups + \
+         prepare_backdrop_blurs + …); got a delta of {} — a missing \
+         add_systems(Render, …) in render/mod.rs / render/blur.rs",
         with_plugin_count - baseline_count,
     );
     // The set-membership (RenderSystems::Prepare) is asserted by the ordering

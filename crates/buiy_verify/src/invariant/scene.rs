@@ -766,6 +766,7 @@ fn extracted_node(entity: Entity, n: &FlatNode) -> ExtractedNode {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 

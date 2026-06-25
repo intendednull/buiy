@@ -30,9 +30,9 @@ pub mod tween;
 
 pub use easing::Easing;
 pub use tween::{
-    AnimatedBackgroundColor, BackgroundColorTween, Lerp, OnComplete, OpacityTween, RotateTween,
-    ScaleTween, TranslateTween, Tween, advance_background_color_tweens, advance_opacity_tweens,
-    advance_rotate_tweens, advance_scale_tweens, advance_translate_tweens,
+    AnimatedBackgroundColor, BackgroundColorTween, Lerp, OnComplete, OpacityTween, Repeat,
+    RotateTween, ScaleTween, TranslateTween, Tween, advance_background_color_tweens,
+    advance_opacity_tweens, advance_rotate_tweens, advance_scale_tweens, advance_translate_tweens,
 };
 
 use bevy::prelude::*;
@@ -196,6 +196,119 @@ mod tests {
             "opacity should reach 1, got {end}"
         );
         assert!(app.world().entity(e).get::<OpacityTween>().is_none());
+    }
+
+    /// A ping-pong `OpacityTween` (the menu blink dot — opacity `1`→`.25`→`1`,
+    /// infinite) OSCILLATES: it dims toward `.25` over the first pass, brightens
+    /// back toward `1` over the second, and NEVER completes (the tween stays
+    /// resident for the live pulse). This is the M3 looping-tween behaviour.
+    #[test]
+    fn ping_pong_opacity_tween_oscillates_and_never_completes() {
+        let mut app = test_app(UserPreferences::default());
+        // 1.0 → 0.25 over 100 ms each way, forever (the blink dot at a fast
+        // cadence so the test steps land cleanly inside each pass).
+        let e = app
+            .world_mut()
+            .spawn(OpacityTween(
+                Tween::secs(1.0, 0.25, 0.1, Easing::Linear)
+                    .with_repeat(Repeat::PingPong { count: None }),
+            ))
+            .id();
+
+        let opacity = |app: &App| app.world().entity(e).get::<Opacity>().unwrap().0;
+
+        // 50 ms into the first (dimming) pass: partway between 1.0 and 0.25.
+        step(&mut app, 50);
+        let dimming = opacity(&app);
+        assert!(
+            dimming < 1.0 && dimming > 0.25,
+            "first pass dims toward 0.25, got {dimming}"
+        );
+
+        // Cross the pass boundary (another 60 ms → 110 ms total → 10 ms into the
+        // SECOND, brightening pass). The value reverses direction: it is now
+        // brighter than the dim end, climbing back toward 1.0.
+        step(&mut app, 60);
+        let brightening = opacity(&app);
+        assert!(
+            brightening > 0.25 && brightening < 1.0,
+            "second pass brightens back toward 1.0, got {brightening}"
+        );
+
+        // The tween is STILL resident — an infinite ping-pong never completes.
+        assert!(
+            app.world().entity(e).get::<OpacityTween>().is_some(),
+            "an infinite ping-pong tween must never be removed"
+        );
+
+        // Step many full cycles; it is still live and still in range — proving the
+        // sustained pulse (and that the carried-remainder wrap does not drift off).
+        for _ in 0..50 {
+            step(&mut app, 37);
+        }
+        let v = opacity(&app);
+        assert!(
+            (0.25..=1.0).contains(&v),
+            "opacity stays within [0.25, 1.0] across many cycles, got {v}"
+        );
+        assert!(
+            app.world().entity(e).get::<OpacityTween>().is_some(),
+            "ping-pong tween still resident after many cycles"
+        );
+    }
+
+    /// A finite `Repeat::Loop` runs the requested number of passes then completes
+    /// and is removed (the looping mode is not only-infinite).
+    #[test]
+    fn finite_loop_completes_after_its_passes() {
+        let mut app = test_app(UserPreferences::default());
+        let e = app
+            .world_mut()
+            .spawn(OpacityTween(
+                Tween::secs(0.0, 1.0, 0.05, Easing::Linear)
+                    .with_repeat(Repeat::Loop { count: Some(2) }),
+            ))
+            .id();
+        // First pass (0→1 over 50 ms): still running at 30 ms.
+        step(&mut app, 30);
+        assert!(app.world().entity(e).get::<OpacityTween>().is_some());
+        // Cross into the second (last) pass, then finish it: total ~110 ms covers
+        // both 50 ms passes → completed and removed, end-state Opacity at 1.0.
+        step(&mut app, 40); // 70 ms → 20 ms into pass 2
+        step(&mut app, 40); // 110 ms → past pass 2 end
+        assert!(
+            app.world().entity(e).get::<OpacityTween>().is_none(),
+            "a 2-pass loop must complete after its passes"
+        );
+        assert!((app.world().entity(e).get::<Opacity>().unwrap().0 - 1.0).abs() < 1e-4);
+    }
+
+    /// Reduced motion snaps a ping-pong (blink) tween to its STEADY rest state —
+    /// the `from`/bright end (a steady-lit dot), not a frozen dim frame — and
+    /// completes immediately, so a pulse never oscillates under reduced motion.
+    #[test]
+    fn reduced_motion_snaps_blink_to_steady_bright() {
+        let mut app = test_app(UserPreferences {
+            prefers_reduced_motion: true,
+            ..Default::default()
+        });
+        let e = app
+            .world_mut()
+            .spawn(OpacityTween(
+                Tween::secs(1.0, 0.25, 0.8, Easing::Linear)
+                    .with_repeat(Repeat::PingPong { count: None }),
+            ))
+            .id();
+        step(&mut app, 1);
+        let v = app.world().entity(e).get::<Opacity>().unwrap().0;
+        assert!(
+            (v - 1.0).abs() < 1e-4,
+            "reduced motion snaps the blink to the bright rest state 1.0, got {v}"
+        );
+        assert!(
+            app.world().entity(e).get::<OpacityTween>().is_none(),
+            "reduced-motion blink completes immediately (no pulse)"
+        );
     }
 
     /// `OnComplete` is attached only when requested.

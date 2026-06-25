@@ -69,6 +69,7 @@ fn spawn_node(app: &mut App, position: Vec2, size: Vec2) -> Entity {
 fn spawn_paint_order(app: &mut App, entities: &[Entity]) {
     app.world_mut().spawn(StackingContext {
         painters_z: entities.to_vec(),
+        ..Default::default()
     });
 }
 

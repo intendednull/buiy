@@ -20,6 +20,7 @@ fn node(entity: Entity, x: f32, color: Color, group: Option<usize>) -> Extracted
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 

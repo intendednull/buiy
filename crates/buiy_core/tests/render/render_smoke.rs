@@ -131,12 +131,13 @@ fn render_pass_system_inserted_into_core2d_schedule() {
 
 // Number of systems `BuiyRenderPlugin` adds to `ExtractSchedule`: the Phase-0
 // `extract_buiy_draws`, the per-view `extract_buiy_nodes` (render/mod.rs), the
-// R10 `warmup_atlas` drain, and the atlas `maintain_atlas` per-frame maintenance
-// (both atlas/mod.rs, wired via `atlas::register` in the plugin's RenderApp
-// branch as a `(warmup_atlas, maintain_atlas).chain()`). This is the delta the
-// membership test below asserts; bump it in lockstep whenever the plugin's
-// `ExtractSchedule` registrations change.
-const BUIY_EXTRACT_SYSTEM_COUNT: usize = 4;
+// parity Wave B3 `extract_buiy_icons` (render/mod.rs), the R10 `warmup_atlas`
+// drain, and the atlas `maintain_atlas` per-frame maintenance (both atlas/mod.rs,
+// wired via `atlas::register` in the plugin's RenderApp branch as a
+// `(warmup_atlas, maintain_atlas).chain()`). This is the delta the membership
+// test below asserts; bump it in lockstep whenever the plugin's `ExtractSchedule`
+// registrations change.
+const BUIY_EXTRACT_SYSTEM_COUNT: usize = 5;
 
 // Count the systems in a RenderApp's `ExtractSchedule`. Reads the schedule
 // graph directly (`graph().systems`), which is populated immediately at
@@ -215,9 +216,9 @@ fn extract_buiy_nodes_registered_in_extract_schedule() {
         with_plugin_count - baseline_count,
         BUIY_EXTRACT_SYSTEM_COUNT,
         "BuiyRenderPlugin must register {BUIY_EXTRACT_SYSTEM_COUNT} systems in \
-         ExtractSchedule (extract_buiy_draws + extract_buiy_nodes + warmup_atlas); \
-         got a delta of {} — a missing add_systems(ExtractSchedule, …) in \
-         render/mod.rs or atlas/mod.rs",
+         ExtractSchedule (extract_buiy_draws + extract_buiy_nodes + \
+         extract_buiy_icons + warmup_atlas + maintain_atlas); got a delta of {} — \
+         a missing add_systems(ExtractSchedule, …) in render/mod.rs or atlas/mod.rs",
         with_plugin_count - baseline_count,
     );
 }

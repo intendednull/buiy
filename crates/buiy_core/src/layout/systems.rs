@@ -4165,11 +4165,25 @@ pub fn top_layer_paint_rank(t: TopLayer) -> u8 {
 /// (CSS: a property named in `will-change` forms a stacking context iff
 /// it would at a non-initial value — the subset is
 /// `WillChangeProperty::forms_stacking_context` = Transform/Opacity/Filter;
-/// `ZIndex`/`ScrollPosition` are excluded), (6) root.
+/// `ZIndex`/`ScrollPosition` are excluded), (6) root, (7) top-layer member.
 /// `BackdropFilter` is deliberately NOT a trigger — it forms an
 /// `EffectGroup` but never a stacking context (render component-model.md
 /// § 8). The `will-change` *layer-promotion* hint stays deferred (spec
 /// § 7) — only the SC-trigger half is realized here.
+///
+/// **Trigger 7 — top-layer member** (`Stacking.top_layer != TopLayer::None`).
+/// CSS: every top-layer element generates a stacking context — the top layer
+/// is itself a stacking context, and the element paints as one atomic unit
+/// (stacking-and-top-layer.md § 4 — it "paints on top of the entire window as
+/// one unit"). This is also load-bearing for the render walk: a top-layer node
+/// ESCAPES its parent context and is appended to the root context's `painters_z`
+/// tail (§ 4.1). The render assembler (`context_tree_paint_order`) descends into
+/// a painter's subtree ONLY when that painter owns a `StackingContext`; without
+/// trigger 7 a top-layer node with no other SC trigger is a childless leaf in
+/// the walk, so its descendants' fills / bands / gradients / shadows / glyphs are
+/// never emitted (icons survive only because `icon_producer` iterates entities
+/// directly). Trigger 7 gives the escaped node its own `painters_z` (its in-flow
+/// descendants), so the walk paints the whole top-layer subtree.
 ///
 /// Driven by the `stacking_context` sub-pass (6f).
 #[allow(clippy::too_many_arguments)]
@@ -4185,6 +4199,14 @@ pub(super) fn forms_stacking_context(
 ) -> bool {
     // Trigger 6 — root.
     if is_root {
+        return true;
+    }
+    // Trigger 7 — top-layer member: every top-layer element generates its own
+    // stacking context (CSS). Hoisted above the other `Stacking`-keyed triggers
+    // so a plain `top_layer(Modal)` dialog / `top_layer(Popover)` menu (no
+    // transform / isolation / z-index) still forms one — without this the render
+    // walk drops its whole subtree (see the trigger-7 doc above).
+    if stacking.is_some_and(|s| s.top_layer != TopLayer::None) {
         return true;
     }
     // Trigger 3 — non-identity transform (ResolvedTransform present).
@@ -4480,6 +4502,35 @@ pub(super) fn stacking_context(
             root,
         )
     };
+    // Whether `e` PAINTS AS AN ATOMIC GROUP — gets its own `painters_z` slice and
+    // is one atomic entry in its parent's list. This is BROADER than forming a
+    // real stacking context: it ALSO covers any positioned (`position != static`)
+    // element, even one with `z-index: auto` that forms no real SC.
+    //
+    // Why positioned-non-SC must paint as a group: the per-context `painters_z`
+    // FLATTENS the whole subtree then sorts each entry by `paint_key`. A
+    // positioned ancestor (e.g. a `position: relative` card) sorts into the
+    // POSITIONED tier (`paint_key` tier 2/3) while its NON-positioned in-flow
+    // descendants sort into the EARLIER non-positioned tier (tier 1) — so the
+    // ancestor's own background/border paints AFTER (over) its own children,
+    // hiding them (the M6 modal-card bug: the dialog card + scrim painted over
+    // every descendant fill). CSS paints a positioned `z-index: auto` element as a
+    // pseudo-stacking-context: its background, THEN its descendants, as a unit at
+    // its tree position (CSS 2.1 §E.2 step 6). Giving it its OWN `painters_z`
+    // reproduces that — the card is atomic in its parent's list (sorted once, by
+    // its own position/z) and its descendants live in its own recursive list,
+    // painted on top of its background by construction.
+    //
+    // It does NOT make the positioned element a real stacking context: it is not
+    // added to the effect-group / z-isolation predicate `forms_stacking_context`
+    // (which the effect-compositor shares), so a descendant's explicit `z-index`
+    // still resolves against the nearest REAL stacking context — except that a
+    // descendant z-index can no longer paint OUTSIDE this positioned subtree (it
+    // is captured in the element's own `painters_z`). That escape is a documented
+    // v1 simplification (no gallery case relies on it); the common card/panel case
+    // (positioned container, non-positioned children) is now CSS-correct.
+    let paints_as_group =
+        |e: Entity, root: bool| forms(e, root) || !matches!(pos_kind(e), PositionKind::Static);
 
     // --- 1. top-layer activation rebuild (D3) ---
     // Single global top layer (D2). Recompute the current top-layer
@@ -4523,12 +4574,17 @@ pub(super) fn stacking_context(
     // --- 2. find the root + classify which entities form contexts ---
     // (Single global tree → expect exactly one root in the MinimalPlugins
     // harness; multiple roots are each their own context.)
+    // `forming` is the set of entities that own a `painters_z` slice — every real
+    // stacking context PLUS every positioned (non-static) element (the
+    // `paints_as_group` widening above). Both need their subtree painted as one
+    // atomic unit (parent background behind its own descendants); a positioned
+    // element is not a real SC for z-isolation but still paints as a group.
     let mut forming: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     for (e, parent) in nodes.iter() {
         if display_none(e) {
             continue;
         }
-        if forms(e, is_root(parent)) {
+        if paints_as_group(e, is_root(parent)) {
             forming.insert(e);
         }
     }
@@ -4610,14 +4666,26 @@ pub(super) fn stacking_context(
         if let Some(escaped) = escaped_by_root.get(&e) {
             painters_z.extend(escaped.iter().copied());
         }
-        let new = StackingContext { painters_z };
+        // Cross-ROOT paint rank: when this context is itself a root, it sorts
+        // against other roots by this rank — `0` in-flow (paints first), higher
+        // for a top-layer root so a PARENTLESS top-layer tree (a dialog authored
+        // outside the main content tree, which cannot escape into a parent's tail)
+        // paints LAST, over the whole window (the M6 modal fix). Read by
+        // `render::extract::context_roots` (and the text + picking walks). Ignored
+        // for a nested context (never reaches the root sort) and for a parented
+        // top-layer node (it escaped above, untouched by this rank).
+        let cross_root_rank = crate::render::extract::cross_root_rank(top_layer_of(e));
+        let new = StackingContext {
+            painters_z,
+            cross_root_rank,
+        };
         // Idempotent insert (mirror transform_composition's gate): only
         // write when the value differs from the existing one.
         let differs = existing_sc
             .get(e)
             .ok()
             .flatten()
-            .map(|sc| sc.painters_z != new.painters_z)
+            .map(|sc| *sc != new)
             .unwrap_or(true);
         if differs {
             commands.entity(e).insert(new);
@@ -4965,6 +5033,53 @@ mod tests {
         assert!(!forms_stacking_context(
             Some(&s),
             PositionKind::Absolute,
+            false,
+            None,
+            None,
+            None,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn top_layer_member_forms_context_with_no_other_trigger() {
+        // Trigger 7 (M1/M6 render fix): a plain `top_layer(Modal)` /
+        // `top_layer(Popover)` / `top_layer(Tooltip)` node — NOT positioned,
+        // NOT transformed, NOT isolated, auto z-index — still forms a stacking
+        // context. Without it the render node + glyph walk drops the top-layer
+        // subtree's descendants (only its own box paints). Every non-`None`
+        // tier triggers; `TopLayer::None` does not.
+        for tier in [
+            TopLayer::Modal,
+            TopLayer::Popover,
+            TopLayer::Tooltip,
+            TopLayer::Fullscreen,
+        ] {
+            let s = Stacking {
+                z_index: ZIndex::Auto,
+                isolation: Isolation::Auto,
+                top_layer: tier,
+            };
+            assert!(
+                forms_stacking_context(
+                    Some(&s),
+                    PositionKind::Static,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    false
+                ),
+                "{tier:?} must form a stacking context (trigger 7)"
+            );
+        }
+        // `TopLayer::None` (the default) does NOT form one on its own.
+        let none = stk(ZIndex::Auto, Isolation::Auto);
+        assert!(!forms_stacking_context(
+            Some(&none),
+            PositionKind::Static,
             false,
             None,
             None,

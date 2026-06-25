@@ -11,9 +11,10 @@ use buiy_core::CorePlugin;
 use buiy_core::render::BuiyRenderPlugin;
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{
-    AncestorClip, BackdropFilter, Background, Border, BoxShadow, CaretColor, ClipRadius, ClipRect,
-    ComputedPaintSkip, CssVisibility, EffectGroup, Filter, MixBlendMode, OffscreenAuto, Opacity,
-    Outline, TextColor,
+    AncestorClip, BackdropFilter, Background, BackgroundLayer, BackgroundLayers, Border, BoxShadow,
+    CaretColor, ClipRadius, ClipRect, ColorStop, ComputedPaintSkip, CssVisibility, EffectGroup,
+    Filter, Icon, LinearGradient, MixBlendMode, OffscreenAuto, Opacity, Outline, RadialGradient,
+    TextColor,
 };
 
 #[test]
@@ -29,6 +30,28 @@ fn author_set_render_components_are_registered() {
     assert!(
         reg.get(std::any::TypeId::of::<Background>()).is_some(),
         "Background"
+    );
+    // Parity Wave B1: the gradient / layered-fill component + its value types.
+    assert!(
+        reg.get(std::any::TypeId::of::<BackgroundLayers>())
+            .is_some(),
+        "BackgroundLayers"
+    );
+    assert!(
+        reg.get(std::any::TypeId::of::<BackgroundLayer>()).is_some(),
+        "BackgroundLayer"
+    );
+    assert!(
+        reg.get(std::any::TypeId::of::<LinearGradient>()).is_some(),
+        "LinearGradient"
+    );
+    assert!(
+        reg.get(std::any::TypeId::of::<RadialGradient>()).is_some(),
+        "RadialGradient"
+    );
+    assert!(
+        reg.get(std::any::TypeId::of::<ColorStop>()).is_some(),
+        "ColorStop"
     );
     assert!(
         reg.get(std::any::TypeId::of::<Border>()).is_some(),
@@ -70,6 +93,8 @@ fn author_set_render_components_are_registered() {
         reg.get(std::any::TypeId::of::<ColorToken>()).is_some(),
         "ColorToken"
     );
+    // Parity Wave B3: the vector-icon component.
+    assert!(reg.get(std::any::TypeId::of::<Icon>()).is_some(), "Icon");
     assert!(
         reg.get(std::any::TypeId::of::<TextColor>()).is_some(),
         "TextColor"

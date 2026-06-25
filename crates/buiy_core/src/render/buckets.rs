@@ -15,8 +15,8 @@ use std::ops::Range;
 
 use crate::render::extract::{ExtractedNode, TextQuad};
 use crate::render::instance::{
-    BorderBandInstance, PackedInstance, pack_border, pack_extracted, pack_outline, pack_shadow,
-    pack_text_quad,
+    BorderBandInstance, GradientInstance, PackedInstance, pack_border, pack_extracted,
+    pack_gradient, pack_outline, pack_shadow, pack_text_quad,
 };
 use bevy::prelude::{Color, Entity};
 use bytemuck::Pod;
@@ -241,6 +241,27 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
         }
     }
     shadows
+}
+
+/// Pack a view's node list into the flat background-gradient instance blob, in
+/// paint order (parity Wave B1). One [`GradientInstance`] per
+/// [`ExtractedGradient`](crate::render::extract::ExtractedGradient) across all
+/// nodes, in node-walk order then the producer's back-to-front layer order
+/// within a node. A node with no gradient layers contributes nothing. The
+/// gradient draws AFTER the quad (over the solid fill), BEFORE glyphs/bands, so
+/// the gradient blob is drawn after the quad in `node.rs`.
+///
+/// Its OWN `GradientInstance` layout (the 68 B quad stride is untouched). Like
+/// the band/shadow, v1 rides the FLAT window draw only (no effect-group
+/// partitioning — the common case is a top-level gradient widget).
+pub fn pack_gradient_instances(nodes: &[ExtractedNode]) -> Vec<GradientInstance> {
+    let mut gradients = Vec::new();
+    for n in nodes {
+        for g in &n.gradients {
+            gradients.push(pack_gradient(g));
+        }
+    }
+    gradients
 }
 
 /// The instance-range partition of a packed view (effect-compositor.md § 1.1 /
