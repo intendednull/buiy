@@ -46,15 +46,16 @@ pub use buiy_core::{
 };
 // Foundation primitives promoted to the crate root (→ `buiy::prelude` below).
 // Animation: the `Tween<T>` per-property model + `Easing` curve enum + the
-// per-property tween *components* a `bsn!` author attaches to a node
+// `Repeat` loop control (`Once`/`Loop`/`PingPong` — the blink/pulse status dots
+// the values table marks `infinite` need it) + the per-property tween
+// *components* a `bsn!` author attaches to a node
 // (`TranslateTween`/`RotateTween`/`ScaleTween`/`OpacityTween`/
 // `BackgroundColorTween`) and the `AnimatedBackgroundColor` color marker. These
-// are everyday authoring primitives (widget-catalog parity § 3.3), so they
-// belong next to the other component surface. (`Repeat`/PingPong loop control
-// lands with the render-polish wave that introduces it — promoted there.)
+// are everyday authoring primitives (widget-catalog parity § 3.3 / spec § 2
+// REFINE prelude promotions), so they belong next to the other component surface.
 pub use buiy_core::animation::{
-    AnimatedBackgroundColor, BackgroundColorTween, Easing, OpacityTween, RotateTween, ScaleTween,
-    TranslateTween, Tween,
+    AnimatedBackgroundColor, BackgroundColorTween, Easing, OpacityTween, Repeat, RotateTween,
+    ScaleTween, TranslateTween, Tween,
 };
 // The editor's seed/set channel is the existing `EditCommand` verbs (`Insert`,
 // `SelectAll` + `Insert` — no `SetValue` variant; the `EditCommand` surface is
