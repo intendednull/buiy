@@ -79,12 +79,19 @@ fn swap_installs_the_scanned_db_and_keeps_the_registered_baseline() {
     use cosmic_text::fontdb::{Family, Query, Source};
 
     let mut app = text_app(false);
+    // The embedded-only baseline (parity-prototype A1: Fira Sans + Geist +
+    // Geist Mono). Computed, not hard-coded, so this stays correct as the
+    // embedded set grows.
+    let baseline = registered_fonts_db().faces().count();
     let faces_before = {
         let fonts = app.world().resource::<SharedFontSystem>();
         let guard = fonts.lock();
         guard.db().faces().count()
     };
-    assert_eq!(faces_before, 1, "baseline is exactly the embedded face");
+    assert_eq!(
+        faces_before, baseline,
+        "baseline is exactly the embedded face set"
+    );
 
     // Stand-in scan result: the registered baseline PLUS one extra binary
     // face — distinguishable from anything `registered_fonts_db()` rebuilds.
@@ -102,7 +109,7 @@ fn swap_installs_the_scanned_db_and_keeps_the_registered_baseline() {
     let guard = fonts.lock();
     assert_eq!(
         guard.db().faces().count(),
-        2,
+        baseline + 1,
         "the SCANNED db (baseline + 1 extra face) is live, not a rebuilt baseline"
     );
     let resolved = guard.db().query(&Query {

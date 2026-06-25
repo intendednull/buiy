@@ -40,11 +40,15 @@ fn plugin_inserts_lockable_registered_only_font_system() {
         !guard.locale().is_empty(),
         "locale is pinned at construction"
     );
+    // The embedded-only baseline: Fira Sans default + Geist + Geist Mono
+    // (parity-prototype A1). A system scan would add HUNDREDS — the point of
+    // this assertion is "registered-only", and 3 is the full embedded set.
     #[cfg(feature = "default_font")]
     assert_eq!(
         guard.db().len(),
-        1,
-        "exactly the embedded default font — a system scan would add hundreds"
+        3,
+        "exactly the three embedded faces (Fira Sans + Geist + Geist Mono) \
+         — a system scan would add hundreds"
     );
 }
 

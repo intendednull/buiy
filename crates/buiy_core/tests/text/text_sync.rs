@@ -10,8 +10,9 @@ use buiy_core::layout::{
 };
 use buiy_core::text::{
     BuiyTextPlugin, DecorationLines, FamilyEntry, FontFamily, FontSize, FontStack, FontWeight,
-    FontsGeneration, LineHeight, Text, TextAlign, TextBuffer, TextDecorations,
-    TextSyncAppliedCount, TextWrap, WhiteSpace,
+    FontsGeneration, GEIST_MONO_FAMILY, GEIST_SANS_FAMILY, LetterSpacing, LineHeight,
+    SharedFontSystem, Text, TextAlign, TextBuffer, TextDecorations, TextSyncAppliedCount, TextWrap,
+    WhiteSpace,
 };
 use buiy_core::{BuiySet, CorePlugin, Node};
 use cosmic_text::{Metrics, Wrap};
@@ -158,6 +159,125 @@ fn font_weight_and_family_changes_resync() {
         )])));
     app.update();
     assert_eq!(applied(&app), 1, "Changed<FontFamily> fires the union");
+}
+
+/// The letter-spacing (px) the entity's buffer carries on its first line's
+/// DEFAULT attrs — the surface `text_sync_buffers` lowers `LetterSpacing`
+/// into (`Attrs.letter_spacing` → the per-glyph advance at shaping). `None`
+/// means `normal` (the unset/zero case never builds the opt).
+fn buffer_letter_spacing(app: &App, entity: Entity) -> Option<f32> {
+    app.world()
+        .get::<TextBuffer>(entity)
+        .expect("text entity has a TextBuffer")
+        .buffer
+        .lines
+        .first()
+        .expect("non-empty buffer has a first line")
+        .attrs_list()
+        .defaults()
+        .letter_spacing_opt
+        .map(|spacing| spacing.0)
+}
+
+/// parity-prototype A1: `LetterSpacing` lowers onto the buffer's `Attrs`
+/// (the shaping path) — a `-0.75 px` tracking authored as the design's
+/// `-.025em @ 30px` headline reaches cosmic-text's advance accumulator.
+#[test]
+fn letter_spacing_syncs_to_the_shaping_attrs() {
+    let mut app = text_app();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("todos")),
+            LetterSpacing(-0.75),
+        ))
+        .id();
+    settle(&mut app);
+
+    assert_eq!(
+        buffer_letter_spacing(&app, entity),
+        Some(-0.75),
+        "LetterSpacing(px) lowers to Attrs.letter_spacing on the shaped buffer"
+    );
+}
+
+/// Unset / `normal` carries NO letter_spacing opt — a default run shapes
+/// exactly as before this knob existed (no spurious Attrs inequality, no
+/// reshape churn).
+#[test]
+fn unset_letter_spacing_leaves_no_attrs_override() {
+    let mut app = text_app();
+    let entity = spawn_text(&mut app, "normal tracking");
+    settle(&mut app);
+
+    assert_eq!(
+        buffer_letter_spacing(&app, entity),
+        None,
+        "no LetterSpacing component → Attrs.letter_spacing stays unset (CSS normal)"
+    );
+}
+
+/// A `LetterSpacing` change is a member of the trigger union (it rides
+/// `Attrs`, so the run must reshape) and re-lowers the new value.
+#[test]
+fn letter_spacing_change_resyncs_and_relowers() {
+    let mut app = text_app();
+    let entity = spawn_text(&mut app, "retrack me");
+    settle(&mut app);
+
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(LetterSpacing(1.4));
+    app.update();
+    assert_eq!(applied(&app), 1, "Changed<LetterSpacing> fires the union");
+    assert_eq!(
+        buffer_letter_spacing(&app, entity),
+        Some(1.4),
+        "the new tracking re-lowers onto the buffer"
+    );
+}
+
+/// parity-prototype A1: the embedded Geist (UI sans) + Geist Mono families
+/// resolve in the shared `FontSystem` — both by NAME (the gallery authors
+/// `FontFamily(["Geist" / "Geist Mono"])`) and Geist Mono via the monospace
+/// generic pin (`GenericFamily::Monospace`, now a TRUE monospace).
+#[test]
+fn geist_and_geist_mono_resolve_in_the_font_system() {
+    use cosmic_text::fontdb;
+    let app = text_app();
+    let fonts = app.world().resource::<SharedFontSystem>();
+    let guard = fonts.lock();
+    let db = guard.db();
+
+    let geist = db.query(&fontdb::Query {
+        families: &[fontdb::Family::Name(GEIST_SANS_FAMILY)],
+        weight: fontdb::Weight(450),
+        ..fontdb::Query::default()
+    });
+    assert!(
+        geist.is_some(),
+        "Geist resolves by name at the design's 450 weight (variable wght axis)"
+    );
+
+    let geist_mono_named = db.query(&fontdb::Query {
+        families: &[fontdb::Family::Name(GEIST_MONO_FAMILY)],
+        ..fontdb::Query::default()
+    });
+    assert!(
+        geist_mono_named.is_some(),
+        "Geist Mono resolves by name (Family::Name)"
+    );
+
+    let geist_mono_generic = db.query(&fontdb::Query {
+        families: &[fontdb::Family::Monospace],
+        ..fontdb::Query::default()
+    });
+    assert_eq!(
+        geist_mono_generic, geist_mono_named,
+        "the monospace generic pins to Geist Mono — GenericFamily::Monospace is first-class"
+    );
 }
 
 #[test]

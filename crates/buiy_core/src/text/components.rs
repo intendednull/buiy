@@ -157,6 +157,25 @@ impl Default for TextStyleDefaults {
     }
 }
 
+/// CSS `letter-spacing` in logical px (parity-prototype A1; widget-catalog
+/// values § 4). The design authors letter-spacing in `em`
+/// (`-.025em … .14em`); Buiy pins logical px end-to-end (architecture § 6),
+/// so the gallery converts `em·font-size → px` at authoring time and stores
+/// the result here. Lowered to `cosmic_text::Attrs.letter_spacing(px)` in
+/// [`text_sync_buffers`], where it joins the per-glyph advance at shaping
+/// (cosmic-text `shape.rs`: advance `+= letter_spacing`). Unset / `Default`
+/// = `0.0` (no extra tracking, the CSS `normal` initial).
+///
+/// A POSITIVE value tracks the run out (looser); a NEGATIVE value tightens
+/// it (the design's headings). It rides the same `Attrs` surface as
+/// `FontWeight`, so a change is a reshape trigger ([`text_sync_buffers`]'s
+/// `TextSyncTriggers` union).
+///
+/// [`text_sync_buffers`]: super::sync::text_sync_buffers
+#[derive(Component, Reflect, Default, Clone, Copy, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct LetterSpacing(pub f32);
+
 /// CSS `line-height` (measure § 5.1, F) — feeds `Metrics.line_height`, the
 /// Σ term of measured height. Per-span line-height (`AttrsList`) is the
 /// C-tier rich-text path, named in § 5.1's runner-up, not built.

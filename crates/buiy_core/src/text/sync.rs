@@ -32,8 +32,9 @@ use crate::layout::{LayoutTree, WritingModeResolved};
 
 use super::components::{
     ComputedTextLayout, DecorationLineStyle, DecorationLines, FamilyEntry, FontFamily, FontSize,
-    FontStack, FontWeight, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text, TextAlign, TextBuffer,
-    TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace, resolve_wrap,
+    FontStack, FontWeight, LetterSpacing, LineHeight, ResolvedBaseline, TEXT_SHAPING, Text,
+    TextAlign, TextBuffer, TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace,
+    resolve_wrap,
 };
 use super::direction::prepend_strong_marks;
 use super::edit::{TextBufferAccess, TextBufferAccessItem};
@@ -70,6 +71,10 @@ type TextSyncTriggers = Or<(
     Changed<FontFamily>,
     Changed<FontSize>,
     Changed<FontWeight>,
+    // parity-prototype A1: letter-spacing rides Attrs (like weight/family),
+    // so an edit must reshape — the per-glyph advance changes (cosmic-text
+    // shape.rs advance += letter_spacing).
+    Changed<LetterSpacing>,
     // T3 carriers (measure §§ 5.1–5.3). TextAlign is TRIGGER-ONLY here:
     // its value is applied at TextCommit (§ 5.3 — a finalize concern);
     // union membership is the § 5.1 carrier pin (an align edit must
@@ -102,6 +107,7 @@ type SyncedText = (
     Option<&'static FontFamily>,
     Option<&'static FontSize>,
     Option<&'static FontWeight>,
+    Option<&'static LetterSpacing>,
     Option<&'static LineHeight>,
     Option<&'static WhiteSpace>,
     Option<&'static TextWrap>,
@@ -125,6 +131,7 @@ type SyncedTextItem<'w> = (
     Option<&'w FontFamily>,
     Option<&'w FontSize>,
     Option<&'w FontWeight>,
+    Option<&'w LetterSpacing>,
     Option<&'w LineHeight>,
     Option<&'w WhiteSpace>,
     Option<&'w TextWrap>,
@@ -159,6 +166,7 @@ pub fn text_sync_buffers(
             Option<&FontFamily>,
             Option<&FontSize>,
             Option<&FontWeight>,
+            Option<&LetterSpacing>,
             Option<&LineHeight>,
             Option<&WhiteSpace>,
             Option<&TextWrap>,
@@ -194,6 +202,7 @@ pub fn text_sync_buffers(
         family,
         size,
         weight,
+        letter_spacing,
         line_height,
         white_space,
         text_wrap,
@@ -207,6 +216,7 @@ pub fn text_sync_buffers(
             family,
             size,
             weight,
+            letter_spacing,
             line_height,
             white_space,
             text_wrap,
@@ -303,6 +313,7 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         family,
         size,
         weight,
+        letter_spacing,
         line_height,
         white_space,
         text_wrap,
@@ -316,6 +327,7 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
         family,
         size,
         weight,
+        letter_spacing,
         line_height,
         white_space,
         text_wrap,
@@ -413,6 +425,10 @@ struct AuthoredStyle<'a> {
     family: &'a FontStack,
     size: f32,
     weight: u16,
+    /// parity-prototype A1: extra inter-glyph tracking, logical px. `0.0`
+    /// (the `LetterSpacing` default) = CSS `normal`; lowered to
+    /// `Attrs.letter_spacing` only when non-zero (see [`Self::spaced`]).
+    letter_spacing: f32,
     line_height: LineHeight,
     white_space: WhiteSpace,
     text_wrap: TextWrap,
@@ -430,6 +446,7 @@ impl<'a> AuthoredStyle<'a> {
         family: Option<&'a FontFamily>,
         size: Option<&FontSize>,
         weight: Option<&FontWeight>,
+        letter_spacing: Option<&LetterSpacing>,
         line_height: Option<&LineHeight>,
         white_space: Option<&WhiteSpace>,
         text_wrap: Option<&TextWrap>,
@@ -440,6 +457,10 @@ impl<'a> AuthoredStyle<'a> {
             family: family.map_or(&defaults.family, |component| &component.0),
             size: size.map_or(defaults.size, |component| component.0),
             weight: weight.map_or(defaults.weight, |component| component.0),
+            // Unset = `0.0` (CSS `normal`); no `TextStyleDefaults` entry —
+            // letter-spacing is a per-element parity knob, not an app-wide
+            // default like family/size/weight.
+            letter_spacing: letter_spacing.map_or(0.0, |component| component.0),
             line_height: line_height.copied().unwrap_or_default(),
             white_space: white_space.copied().unwrap_or_default(),
             text_wrap: text_wrap.copied().unwrap_or_default(),
@@ -467,11 +488,29 @@ impl<'a> AuthoredStyle<'a> {
     /// `set_text` path — both deliberately the first-entry shape, matching
     /// the resolver's no-winner rule.
     fn attrs(&self) -> Attrs<'_> {
-        self.decorated(
-            Attrs::new()
-                .family(self.first_family())
-                .weight(Weight(self.weight)),
+        self.spaced(
+            self.decorated(
+                Attrs::new()
+                    .family(self.first_family())
+                    .weight(Weight(self.weight)),
+            ),
         )
+    }
+
+    /// parity-prototype A1: apply `letter-spacing` (logical px) to the
+    /// shared `Attrs` surface — the cosmic-text shaper adds it to each
+    /// glyph's advance (`shape.rs`: advance `+= letter_spacing`). Skipped
+    /// when zero so a `normal` (unset) run carries `letter_spacing_opt: None`
+    /// exactly like before this knob existed (no spurious `Attrs`
+    /// inequality, no reshape churn). Shared by BOTH attrs constructors
+    /// ([`Self::attrs`] and [`span_attrs`]) so every span of a tracked node
+    /// carries the same spacing — the [`Self::decorated`] precedent.
+    fn spaced<'b>(&self, attrs: Attrs<'b>) -> Attrs<'b> {
+        if self.letter_spacing != 0.0 {
+            attrs.letter_spacing(self.letter_spacing)
+        } else {
+            attrs
+        }
     }
 
     /// T6: apply the decoration line bits (decision 1 — bits only, never
@@ -669,5 +708,5 @@ fn span_attrs<'a>(style: &AuthoredStyle<'_>, family: &'a ResolvedFamily) -> Attr
         ResolvedFamily::Named(name) => base.family(Family::Name(name)),
         ResolvedFamily::Generic(generic) => base.family(generic.to_cosmic()),
     };
-    style.decorated(attrs)
+    style.spaced(style.decorated(attrs))
 }
