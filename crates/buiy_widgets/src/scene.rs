@@ -36,13 +36,12 @@ use buiy_core::components::Node;
 use buiy_core::layout::Translate;
 use buiy_core::render::components::{Background, Border, CssVisibility, TextColor};
 use buiy_core::text::edit::Placeholder;
-use buiy_core::text::{FontSize, Text};
+use buiy_core::text::{FontSize, Text, TextAlign};
 
-use crate::button::{Button, button_background, button_border, button_box_model};
-use crate::checkbox::{
-    CHECK_GLYPH, CHECKBOX_MARK_FONT_SIZE, Checkbox, CheckboxMark, checkbox_background,
-    checkbox_border, checkbox_box_model,
+use crate::button::{
+    BUTTON_LABEL_FONT_SIZE, Button, button_background, button_border, button_box_model,
 };
+use crate::checkbox::{CHECKBOX_MARK_FONT_SIZE, Checkbox, CheckboxMark};
 use crate::dialog::{
     DIALOG_BODY_FONT_SIZE, DIALOG_TITLE_FONT_SIZE, Dialog, DialogBody, DialogTitle,
     dialog_background, dialog_border, dialog_box_model,
@@ -60,13 +59,12 @@ use crate::menu::{
 use crate::popover::Popover;
 use crate::scroll_area::{ScrollArea, scroll_area_overflow};
 use crate::slider::{
-    SLIDER_LABEL_FONT_SIZE, Slider, SliderThumb, SliderTrack, slider_background, slider_border,
-    slider_box_model, slider_thumb_background, slider_thumb_border, slider_thumb_box_model,
-    slider_track_background, slider_track_box_model,
+    SLIDER_LABEL_FONT_SIZE, Slider, SliderThumb, SliderTrack, slider_thumb_background,
+    slider_thumb_border, slider_thumb_box_model,
 };
 use crate::switch::{
-    SWITCH_LABEL_FONT_SIZE, Switch, SwitchThumb, switch_background, switch_border,
-    switch_box_model, switch_thumb_background, switch_thumb_border, switch_thumb_box_model,
+    SWITCH_LABEL_FONT_SIZE, Switch, SwitchThumb, SwitchTrack, switch_thumb_background,
+    switch_thumb_border, switch_thumb_box_model,
 };
 use crate::text_input::{
     TextInput, text_input_background, text_input_border, text_input_box_model, text_input_overflow,
@@ -95,7 +93,9 @@ pub fn button(label: impl Into<String>) -> impl Scene {
     let border = button_border();
     let label = label.into();
     // Field-patches (not full-value inserts) so a user's outer patch merges.
-    // `Button` triggers the rest of the `#[require]` contract.
+    // `Button` triggers the rest of the `#[require]` contract (incl. the
+    // flex-center layout); the `Children` add the visible, centered, pick-through
+    // label `Text`.
     bsn! {
         Button
         BoxModel {
@@ -105,7 +105,16 @@ pub fn button(label: impl Into<String>) -> impl Scene {
         }
         Background { color: { bg.color } }
         Border { radius: { border.radius } }
-        A11yLabel({ label })
+        A11yLabel({ label.clone() })
+        Children [
+            (
+                Text({ label })
+                FontSize({ BUTTON_LABEL_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(TextAlign::Center)
+                template_value(Pickable::IGNORE)
+            ),
+        ]
     }
 }
 
@@ -217,44 +226,31 @@ pub fn text_input_multi_line(placeholder: impl Into<String>) -> impl Scene {
 }
 
 /// A labelled checkbox as a composable BSN scene (Wave-3 slice-1). Mergeable: the
-/// `Checkbox` marker triggers the full `#[require]` contract (role + tri-state
-/// `A11yToggled` + focus + a11y + box), and the spelled field-patches layer the
-/// canonical box style on top. The `Children [ … ]` subtree authors the check/
-/// dash **mark** glyph and the visible **label** `Text`, both `Pickable::IGNORE`
-/// so a hit resolves to the widget root the router addresses (pick-through,
-/// co-drive SC-3). The mark starts `CssVisibility::Hidden` (the default toggle is
-/// `False`); `update_checkbox_visual` reveals it on the first state flip.
+/// `Checkbox` marker triggers the full `#[require]` contract — the focusable,
+/// accessible flex-**row** that lays out `[mark-box, label]`. The `Children [ … ]`
+/// subtree authors the `CheckboxMark` (the 18×18 box, its geometry + fill +
+/// border from the mark's own `#[require]`) and the visible **label** `Text`,
+/// both `Pickable::IGNORE` so a hit anywhere on the row resolves to the widget
+/// root the router addresses (pick-through, co-drive SC-3). The mark's glyph
+/// starts empty (default toggle is `False`); `update_checkbox_visual` writes the
+/// check on the first flip.
 ///
 /// ```ignore
 /// use buiy::prelude::*;
 /// world.spawn_scene(bsn! { checkbox("Done") });
 /// ```
 pub fn checkbox(label: impl Into<String>) -> impl Scene {
-    let bm = checkbox_box_model();
-    let bg = checkbox_background();
-    let border = checkbox_border();
     let label = label.into();
     bsn! {
         Checkbox
-        BoxModel {
-            width: { bm.width },
-            height: { bm.height },
-        }
-        Background { color: { bg.color } }
-        Border { radius: { border.radius } }
         A11yLabel({ label.clone() })
         Children [
             (
                 CheckboxMark
-                Text({ CHECK_GLYPH.to_string() })
+                Text({ String::new() })
                 FontSize({ CHECKBOX_MARK_FONT_SIZE })
                 template_value(TextColor::default())
-                // The mark starts hidden (default toggle is `False`);
-                // `update_checkbox_visual` reveals it on the first flip.
-                // `CssVisibility` / `Pickable` are inserted as whole values
-                // (`template_value`) — bsn's field-patch path does not author a
-                // fieldless enum variant / an associated `const`.
-                template_value(CssVisibility::Hidden)
+                template_value(TextAlign::Center)
                 template_value(Pickable::IGNORE)
             ),
             (
@@ -268,48 +264,47 @@ pub fn checkbox(label: impl Into<String>) -> impl Scene {
 }
 
 /// A labelled switch as a composable BSN scene (Wave-3 slice-1). Mergeable: the
-/// `Switch` marker triggers the full `#[require]` contract (role + binary
-/// `A11yToggled` + focus + a11y + track), and the field-patches layer the
-/// canonical pill style. The `Children [ … ]` subtree authors the sliding **thumb**
-/// and the visible **label** `Text`, both `Pickable::IGNORE` (pick-through). The
-/// thumb starts at the off position (`Translate` x = 0, the default toggle is
-/// `False`); `update_switch_visual` slides it on the first state flip.
+/// `Switch` marker triggers the full `#[require]` contract — the focusable,
+/// accessible flex-**row** that lays out `[track-pill, label]`. The `Children [ … ]`
+/// subtree authors the [`SwitchTrack`] pill (its 40×20 geometry + fill + border
+/// from the track's own `#[require]`) carrying the sliding **thumb** as ITS child,
+/// and the visible **label** `Text` BESIDE the pill — both `Pickable::IGNORE` so a
+/// hit anywhere on the row resolves to the widget root (pick-through, co-drive
+/// SC-3). The thumb starts at the off position (`Translate` x = 0, the default
+/// toggle is `False`); `update_switch_visual` slides it on the first state flip.
 ///
 /// ```ignore
 /// use buiy::prelude::*;
 /// world.spawn_scene(bsn! { switch("Wi-Fi") });
 /// ```
 pub fn switch(label: impl Into<String>) -> impl Scene {
-    let bm = switch_box_model();
-    let bg = switch_background();
-    let border = switch_border();
     let thumb_bm = switch_thumb_box_model();
     let thumb_bg = switch_thumb_background();
     let thumb_border = switch_thumb_border();
     let label = label.into();
     bsn! {
         Switch
-        BoxModel {
-            width: { bm.width },
-            height: { bm.height },
-        }
-        Background { color: { bg.color } }
-        Border { radius: { border.radius } }
         A11yLabel({ label.clone() })
         Children [
             (
-                SwitchThumb
-                Node
-                BoxModel {
-                    width: { thumb_bm.width },
-                    height: { thumb_bm.height },
-                }
-                Background { color: { thumb_bg.color } }
-                Border { radius: { thumb_border.radius } }
-                // The thumb starts at the off position (x = 0); inserted as a
-                // whole value because `Translate` is a tuple struct.
-                template_value(Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)))
+                SwitchTrack
                 template_value(Pickable::IGNORE)
+                Children [
+                    (
+                        SwitchThumb
+                        Node
+                        BoxModel {
+                            width: { thumb_bm.width },
+                            height: { thumb_bm.height },
+                        }
+                        Background { color: { thumb_bg.color } }
+                        Border { radius: { thumb_border.radius } }
+                        // The thumb starts at the off position (x = 0); inserted as
+                        // a whole value because `Translate` is a tuple struct.
+                        template_value(Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)))
+                        template_value(Pickable::IGNORE)
+                    ),
+                ]
             ),
             (
                 Text({ label })
@@ -323,36 +318,27 @@ pub fn switch(label: impl Into<String>) -> impl Scene {
 
 /// A labelled slider over `[min, max]` (starting at `now`, stepping by `step`) as
 /// a composable BSN scene (Wave-3 slice-2). Mergeable: the `Slider` marker
-/// triggers the full `#[require]` contract (role, valued range, orientation,
-/// focus, a11y, and the track box), the field-patches layer the canonical rail
-/// style, and the `A11yValue`/`A11yOrientation` whole-value patches author the
-/// live range and horizontal orientation. The `Children [ … ]` subtree authors
-/// the **track** rail, the sliding **thumb**, and the visible **label** `Text`,
-/// each `Pickable::IGNORE` (pick-through). The thumb starts at x = 0, and
-/// `update_slider_visual` positions it from `A11yValue` on the first state change.
+/// triggers the full `#[require]` contract — the focusable, accessible flex-**row**
+/// that lays out `[track, label]` — and the `A11yValue`/`A11yOrientation`
+/// whole-value patches author the live range and horizontal orientation. The
+/// `Children [ … ]` subtree authors the [`SliderTrack`] rail (its geometry + fill
+/// from the track's own `#[require]`) carrying the sliding **thumb** as ITS child,
+/// and the visible **label** `Text` BESIDE the rail — both `Pickable::IGNORE` so a
+/// hit anywhere on the row resolves to the widget root (pick-through, co-drive
+/// SC-3). The thumb starts at x = 0, and `update_slider_visual` positions it from
+/// `A11yValue` on the first state change.
 ///
 /// ```ignore
 /// use buiy::prelude::*;
 /// world.spawn_scene(bsn! { slider("Volume", 50.0, 0.0, 100.0, 1.0) });
 /// ```
 pub fn slider(label: impl Into<String>, now: f64, min: f64, max: f64, step: f64) -> impl Scene {
-    let bm = slider_box_model();
-    let bg = slider_background();
-    let border = slider_border();
-    let track_bm = slider_track_box_model();
-    let track_bg = slider_track_background();
     let thumb_bm = slider_thumb_box_model();
     let thumb_bg = slider_thumb_background();
     let thumb_border = slider_thumb_border();
     let label = label.into();
     bsn! {
         Slider
-        BoxModel {
-            width: { bm.width },
-            height: { bm.height },
-        }
-        Background { color: { bg.color } }
-        Border { radius: { border.radius } }
         A11yLabel({ label.clone() })
         // The valued range + orientation are inserted as whole values: `A11yValue`
         // carries `Option` fields the bsn field-patch path does not author, and
@@ -369,27 +355,23 @@ pub fn slider(label: impl Into<String>, now: f64, min: f64, max: f64, step: f64)
         Children [
             (
                 SliderTrack
-                Node
-                BoxModel {
-                    width: { track_bm.width },
-                    height: { track_bm.height },
-                }
-                Background { color: { track_bg.color } }
                 template_value(Pickable::IGNORE)
-            ),
-            (
-                SliderThumb
-                Node
-                BoxModel {
-                    width: { thumb_bm.width },
-                    height: { thumb_bm.height },
-                }
-                Background { color: { thumb_bg.color } }
-                Border { radius: { thumb_border.radius } }
-                // The thumb starts at the min end (x = 0); inserted as a whole
-                // value because `Translate` is a tuple struct.
-                template_value(Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)))
-                template_value(Pickable::IGNORE)
+                Children [
+                    (
+                        SliderThumb
+                        Node
+                        BoxModel {
+                            width: { thumb_bm.width },
+                            height: { thumb_bm.height },
+                        }
+                        Background { color: { thumb_bg.color } }
+                        Border { radius: { thumb_border.radius } }
+                        // The thumb starts at the min end (x = 0); inserted as a
+                        // whole value because `Translate` is a tuple struct.
+                        template_value(Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)))
+                        template_value(Pickable::IGNORE)
+                    ),
+                ]
             ),
             (
                 Text({ label })
@@ -561,8 +543,20 @@ pub fn tooltip_trigger(label: impl Into<String>, tip: impl Into<String>) -> impl
         }
         Background { color: { bg.color } }
         Border { radius: { border.radius } }
-        A11yLabel({ label })
+        A11yLabel({ label.clone() })
         Children [
+            // The visible trigger glyph (e.g. "?"). The accessible name stays on
+            // the root `A11yLabel`; this pick-through `Text` is the rendered icon.
+            // (Not flex-centered: the hidden `TooltipNode` popup below is an
+            // in-flow sibling that would distort a centered row — TextAlign keeps
+            // the glyph horizontally centred in the box.)
+            (
+                Text({ label })
+                FontSize({ TOOLTIP_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(TextAlign::Center)
+                template_value(Pickable::IGNORE)
+            ),
             (
                 TooltipNode
                 Text({ tip.clone() })
@@ -586,10 +580,11 @@ pub fn tooltip_trigger(label: impl Into<String>, tip: impl Into<String>) -> impl
 /// A labelled menu button as a composable BSN scene (C5-c). Mergeable: the
 /// `MenuButton` marker triggers the full `#[require]` contract (role `Button` + the
 /// APG Enter/Space keymap + `A11yHasPopup(Menu)` + `A11yExpanded` + `A11yLabel` +
-/// the trigger box), and the field-patches layer the canonical box style. Author
-/// the controlled menu (a [`menu`] scene) + the visible label as the button's
-/// `Children [ … ]`; [`wire_menu_button`](crate::menu::wire_menu_button) wires the
-/// button↔menu `controls`/`anchor` edges once the children exist.
+/// the trigger box). The scene-fn supplies its OWN centered, pick-through label
+/// `Text` (like [`button`]), so author ONLY the controlled menu (a [`menu`] scene)
+/// as the button's `Children [ … ]` — adding a second label `Text` would double
+/// it. [`wire_menu_button`](crate::menu::wire_menu_button) wires the button↔menu
+/// `controls`/`anchor` edges once the children exist.
 ///
 /// `A11yHasPopup` wraps a fieldless foreign enum the bsn field-patch path does not
 /// author, so it is inserted as a whole value (`template_value`).
@@ -599,8 +594,7 @@ pub fn tooltip_trigger(label: impl Into<String>, tip: impl Into<String>) -> impl
 /// world.spawn_scene(bsn! {
 ///     menu_button("Edit")
 ///     Children [
-///         ( Text("Edit") template_value(Pickable::IGNORE) )
-///         menu() // the controlled menu (author its menu_item children on it)
+///         menu() // ONLY the controlled menu (author its menu_item children on it)
 ///     ]
 /// });
 /// ```
@@ -609,6 +603,13 @@ pub fn menu_button(label: impl Into<String>) -> impl Scene {
     let bg = menu_button_background();
     let border = menu_button_border();
     let label = label.into();
+    // NOTE: unlike `button()`, the menu-button is NOT flex-centered. The caller
+    // appends the controlled `menu()` (a `Popover`) as a SECOND child, and the
+    // popover — though its final position is anchored via PostTaffyPositionOverrides
+    // — is still an in-flow flex item during Taffy layout. Centering the row would
+    // therefore center `[label, menu]` together and push the label out of the box.
+    // The label lays out at the padded content origin instead (a left-aligned menu
+    // trigger label, conventional for a menubar/dropdown button).
     bsn! {
         MenuButton
         BoxModel {
@@ -618,8 +619,16 @@ pub fn menu_button(label: impl Into<String>) -> impl Scene {
         }
         Background { color: { bg.color } }
         Border { radius: { border.radius } }
-        A11yLabel({ label })
+        A11yLabel({ label.clone() })
         template_value(menu_haspopup())
+        Children [
+            (
+                Text({ label })
+                FontSize({ MENU_FONT_SIZE })
+                template_value(TextColor::default())
+                template_value(Pickable::IGNORE)
+            ),
+        ]
     }
 }
 

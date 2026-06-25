@@ -3,11 +3,16 @@ source: examples/buiy_gallery/tests/showcase_layout.rs
 expression: showcase_screen
 ---
 # buiy-layout-dump v1
-ShowcaseCard pos=0,0 size=324,136
-  ShowcaseDisclosure pos=22,90 size=160,24
-    entity#92 pos=0,0 size=160,48
-  ShowcaseSlider pos=22,58 size=160,16
-    entity#86 pos=0,0 size=160,4
-    entity#87 pos=0,4 size=16,16
-  ShowcaseSwitch pos=22,22 size=40,20
-    entity#83 pos=0,0 size=16,16
+ShowcaseCard pos=0,0 size=324,140
+  ShowcaseDisclosure pos=22,94 size=160,24
+    entity#91 pos=0,2 size=11,20
+    entity#92 pos=17,2 size=71,20
+    entity#93 pos=0,24 size=160,48
+  ShowcaseSlider pos=22,58 size=280,20
+    entity#87 pos=0,8 size=160,4
+      entity#88 pos=0,-6 size=16,16
+    entity#89 pos=168,0 size=55,20
+  ShowcaseSwitch pos=22,22 size=280,20
+    entity#83 pos=0,0 size=40,20
+      entity#84 pos=0,2 size=16,16
+    entity#85 pos=48,0 size=38,20

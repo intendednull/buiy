@@ -150,6 +150,119 @@ pub fn text_commit(
     }
 }
 
+/// Post-`Input` editor reshape — the coherence repair for the one-frame edit
+/// path. Editor edits (`apply_keyboard_edits`, `apply_ime`, undo/redo, the
+/// preedit splice) run in `BuiySet::Input`, AFTER `TextCommit` (the last Layout
+/// step), and lazily UN-shape the editor-owned buffer without reshaping it
+/// (`apply_change` sets redraw; `EditOutcome::reshaped == false`). That leaves
+/// the buffer unshaped at frame end, so the render extract — which reads EVERY
+/// text entity on any damage frame (extract.rs § 6.2 dirty-gate) — could read a
+/// transiently unshaped editor and trip the `layout_runs().count() ==
+/// ComputedTextLayout.lines.len()` invariant (extract.rs / the
+/// `debug_assert_shape_coherence` mirror), crashing the live app the moment a
+/// keystroke coincided with ANY other damage (the empty↔non-empty
+/// `PlaceholderActive` toggle on the first char, a sibling row, a theme tick).
+/// The pre-existing extract dirty-gate "mitigation" is all-or-nothing — it
+/// cannot protect a single transiently-unshaped entity, and skipping the paint
+/// would blank-flicker the editor on every keystroke (a damage frame rebuilds
+/// the whole glyph buffer).
+///
+/// This runs `.after(BuiySet::Input).before(write_caret_and_selection)`: it
+/// reshapes any editor whose buffer an edit unshaped — at the SAME content box
+/// the last `TextCommit` set (an edit changes content, not the laid-out box; the
+/// box re-measures next frame, the already-accepted one-frame LAYOUT latency) —
+/// and rewrites `ComputedTextLayout`/`ResolvedBaseline` to match, so the buffer
+/// is coherent before extract AND the caret writer (next) reads the fresh shape
+/// (caret + glyphs now come current the SAME frame). Lock-free guard: the cheap
+/// `layout_runs().count() != lines.len()` probe — identical to the extract
+/// invariant — so a steady (non-editing) frame takes no font lock and does no
+/// work.
+#[allow(clippy::type_complexity)]
+pub fn reshape_edited_editors(
+    mut commands: Commands,
+    fonts: Option<Res<SharedFontSystem>>,
+    mut editors: Query<
+        (
+            Entity,
+            TextBufferAccess,
+            &ComputedTextLayout,
+            Option<&ResolvedBaseline>,
+        ),
+        With<super::edit::TextEditState>,
+    >,
+) {
+    let Some(fonts) = fonts else {
+        // No font engine (a standalone editor-less harness): nothing to reshape.
+        return;
+    };
+    let mut font_system: Option<MutexGuard<'_, FontSystem>> = None;
+    for (entity, mut access, computed, existing_baseline) in editors.iter_mut() {
+        // The extract invariant, checked lock-free: a buffer an edit unshaped
+        // has fewer laid-out runs than its committed line count.
+        let shape_stale =
+            access.with_buffer(|buffer| buffer.layout_runs().count() != computed.lines.len());
+        if !shape_stale {
+            continue;
+        }
+        let content_offset = computed.content_offset;
+        // Lock once per editing frame (the TextCommit lazy-lock idiom).
+        let font_system = font_system.get_or_insert_with(|| fonts.lock());
+        let (new_computed, baseline) = access.with_buffer_mut(|buffer| {
+            // Reshape at the box the last commit already set — the edit changed
+            // content, not geometry, so set_size would be a no-op.
+            buffer.shape_until_scroll(font_system, false);
+            computed_outputs(buffer, content_offset)
+        });
+        if *computed != new_computed {
+            commands.entity(entity).insert(new_computed);
+        }
+        match (baseline, existing_baseline) {
+            (Some(new), current) if current != Some(&new) => {
+                commands.entity(entity).insert(new);
+            }
+            (None, Some(_)) => {
+                commands.entity(entity).remove::<ResolvedBaseline>();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Debug-only main-world mirror of the extract coherence assert
+/// (extract.rs:712). Runs in `Last` — after every main-world mutator (the whole
+/// `Update` set chain Layout→…→Render), at the exact state `extract_buiy_glyphs`
+/// reads in the render world. For every committed text entity it asserts the
+/// SAME invariant extract does: `layout_runs().count() == ComputedTextLayout
+/// .lines.len()`. A buffer that any post-`TextCommit` system left unshaped
+/// (mutated after the last layout step, so it never re-committed this frame)
+/// trips here with rich context — in EVERY headless test that pumps frames,
+/// closing the gap that let a live-only extract panic ship: the headless gate
+/// runs no render world, so the extract assert never fired in CI. Compiled out
+/// of release (`#[cfg(debug_assertions)]` at the registration site); a no-op on
+/// the steady frame (one O(lines) walk per committed text entity, no lock).
+#[cfg(debug_assertions)]
+pub fn debug_assert_shape_coherence(
+    texts: Query<(
+        Entity,
+        super::edit::TextBufferAccessReadOnly,
+        &ComputedTextLayout,
+        Option<&super::components::Text>,
+    )>,
+) {
+    for (entity, access, computed, text) in texts.iter() {
+        let runs = access.with_buffer(|buffer| buffer.layout_runs().count());
+        debug_assert_eq!(
+            runs,
+            computed.lines.len(),
+            "TextBuffer dirty-unshaped at frame end (mutated after TextCommit, never \
+             re-committed): entity={entity:?} editor={} text={:?} — extract_buiy_glyphs \
+             would assert-fire (extract.rs) on this same state",
+            access.has_edit(),
+            text.map(|t| t.0.as_str()),
+        );
+    }
+}
+
 /// Fold the settled runs into the § 6 output pair.
 ///
 /// Baseline presence keys on GLYPHS, not runs (decision 15's "no laid-out

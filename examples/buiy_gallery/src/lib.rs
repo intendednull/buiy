@@ -206,7 +206,7 @@ pub fn screen_todomvc(seeds: &[(&str, bool)]) -> impl Scene {
             gap: { FlexGap { row: Length::px(12.0), column: Length::px(12.0) } },
         }
         BoxModel {
-            width: { Sizing::Length(Length::Px(408.0)) },
+            width: { Sizing::Length(Length::Px(560.0)) },
             padding: { Edges::all(24.0) },
         }
         Background { color: { ColorToken::Token("color.surface.primary".into()) } }
@@ -589,8 +589,12 @@ pub fn restyle_completed(
             let completed = toggled.0 == Toggled::True;
             for &cb_child in cb_children.iter() {
                 if let Ok(mut color) = labels.get_mut(cb_child) {
+                    // Completed rows mute to the secondary (gray) text token; the
+                    // primary token is the active-row default. (`color.text
+                    // .disabled` is not in the default theme — it would resolve to
+                    // the magenta missing-token sentinel.)
                     color.0 = if completed {
-                        ColorToken::Token("color.text.disabled".into())
+                        ColorToken::Token("color.text.secondary".into())
                     } else {
                         ColorToken::Token("color.text.primary".into())
                     };
@@ -891,9 +895,14 @@ pub fn screen_overlay_menu() -> impl Scene {
             // wires the controls/anchor edges. Each item carries a `MenuAction`.
             (
                 #EditMenuButton
+                // `menu_button("Edit")` now supplies its OWN centered, pick-
+                // through label `Text` (like `button(…)`), so the button's
+                // `Children` carry ONLY the controlled menu — authoring a second
+                // `Text("Edit")` here would double the label (overlapping, out of
+                // box). The sibling `menu_item(…)` entries already omit a manual
+                // label for the same reason.
                 menu_button("Edit")
                 Children [
-                    (Text("Edit") FontSize({ 16.0 }) template_value(bevy::picking::Pickable::IGNORE)),
                     (
                         #EditMenu
                         menu()
@@ -1031,8 +1040,7 @@ pub fn spawn_modal(world: &mut World) -> (Entity, Entity, Entity) {
     // rest-of-tree from the a11y tree + the trap never reaches it.
     let bg = world
         .spawn((
-            buiy_widgets::Button,
-            A11yLabel(MODAL_BG_BUTTON.to_string()),
+            buiy_widgets::Button::new(MODAL_BG_BUTTON),
             Name::new("ModalBackgroundButton"),
         ))
         .id();
@@ -1069,9 +1077,8 @@ pub fn spawn_modal(world: &mut World) -> (Entity, Entity, Entity) {
                 // The close button — its Click → OnPress rides the C5-d
                 // `close_dialog_on_button` path (closes + restores focus).
                 (
-                    buiy_widgets::Button,
+                    buiy_widgets::Button::new("Close"),
                     DialogClose,
-                    A11yLabel("Close".to_string()),
                     Name::new("ModalClose"),
                 ),
             ],

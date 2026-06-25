@@ -41,10 +41,12 @@ fn bare_button_marker_materializes_the_full_required_contract() {
     assert!(world.get::<FlexParams>(entity).is_some(), "FlexParams");
     assert!(world.get::<Overflow>(entity).is_some(), "Overflow");
     let box_model = world.get::<BoxModel>(entity).expect("BoxModel");
-    // The canonical button box (120x32, 8px padding) — shared with
-    // `Button::new()` via the `button_box_model()` initializer.
+    // The canonical button box — **content-width** (Auto) × 32, 8px padding —
+    // shared with `Button::new()` via the `button_box_model()` initializer. A
+    // fixed width oversized short labels and overflowed dense footers; a button
+    // now sizes to its label (an author patches `BoxModel { width }` for fixed).
     use buiy_core::layout::{Edges, Length, Sizing};
-    assert_eq!(box_model.width, Sizing::Length(Length::Px(120.0)));
+    assert_eq!(box_model.width, Sizing::Auto, "content-width");
     assert_eq!(box_model.height, Sizing::Length(Length::Px(32.0)));
     assert_eq!(box_model.padding, Edges::all(8.0));
     // Paint + interaction + a11y companions.

@@ -16,8 +16,8 @@ use buiy_core::{
     components::Node,
     focus::Focusable,
     interaction::OnPress,
-    layout::BoxModel,
-    render::components::{Background, Border, CssVisibility},
+    layout::Display,
+    render::components::{Background, Border},
     text::Text,
 };
 use buiy_widgets::checkbox::{CHECK_GLYPH, Checkbox, CheckboxMark, DASH_GLYPH};
@@ -44,15 +44,22 @@ fn press(app: &mut App, entity: Entity) {
 
 #[test]
 fn bare_checkbox_marker_materializes_the_full_required_contract() {
+    // Post-rendering-fix contract: the bare `Checkbox` is the focusable,
+    // accessible flex-ROW substrate; the visible 18×18 box + fill + border now
+    // live on the `CheckboxMark` child (so the label can sit BESIDE the box
+    // instead of wrapping inside it). The box paint companions therefore moved
+    // OFF the root.
     let mut app = app();
     let cb = app.world_mut().spawn(Checkbox).id();
     app.update();
 
     let world = app.world();
     assert!(world.get::<Node>(cb).is_some(), "Node");
-    assert!(world.get::<BoxModel>(cb).is_some(), "BoxModel");
-    assert!(world.get::<Background>(cb).is_some(), "Background");
-    assert!(world.get::<Border>(cb).is_some(), "Border");
+    assert_eq!(
+        world.get::<Display>(cb).copied(),
+        Some(Display::flex_row()),
+        "the root lays its [mark, label] out in a row"
+    );
     assert!(world.get::<Focusable>(cb).is_some(), "Focusable");
     assert_eq!(
         world.get::<A11yRole>(cb).copied(),
@@ -66,6 +73,12 @@ fn bare_checkbox_marker_materializes_the_full_required_contract() {
         "A11yToggled present, defaulting to False (unchecked)"
     );
     assert!(world.get::<A11yLabel>(cb).is_some(), "A11yLabel");
+    // The box paint companions are NOT on the row root (they are the mark's).
+    assert!(
+        world.get::<Background>(cb).is_none(),
+        "the box fill moved to the CheckboxMark child"
+    );
+    assert!(world.get::<Border>(cb).is_none(), "the box border too");
 }
 
 #[test]
@@ -118,11 +131,21 @@ fn checkbox_new_spawns_label_and_mark_children_pick_through() {
         Some("Done".to_string()),
         "the label child carries the visible pixels"
     );
-    // The mark starts hidden (default toggle is False).
+    // The mark IS the visible 18×18 box (fill + border on the mark, not the
+    // root) and its glyph starts EMPTY (default toggle False — the box renders,
+    // the check appears on the flip).
+    assert!(
+        world.get::<Background>(mark).is_some(),
+        "the mark carries the box fill"
+    );
+    assert!(
+        world.get::<Border>(mark).is_some(),
+        "the mark carries the box border"
+    );
     assert_eq!(
-        world.get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Hidden),
-        "the mark starts hidden (unchecked)"
+        world.get::<Text>(mark).map(|t| t.0.clone()),
+        Some(String::new()),
+        "the mark glyph starts empty (unchecked)"
     );
 }
 
@@ -146,48 +169,38 @@ fn toggling_a11y_toggled_drives_the_mark_visual() {
             .unwrap()
     };
 
-    // False ⇒ hidden.
+    // False ⇒ empty glyph (the box stays, the check clears).
     assert_eq!(
-        app.world().get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Hidden),
-        "False ⇒ mark hidden"
+        app.world().get::<Text>(mark).map(|t| t.0.clone()),
+        Some(String::new()),
+        "False ⇒ empty glyph"
     );
 
     // Flip to True ⇒ the check glyph is shown.
     app.world_mut().get_mut::<A11yToggled>(cb).unwrap().0 = Toggled::True;
     app.update();
     assert_eq!(
-        app.world().get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Visible),
-        "True ⇒ mark visible"
-    );
-    assert_eq!(
         app.world().get::<Text>(mark).map(|t| t.0.clone()),
         Some(CHECK_GLYPH.to_string()),
         "True ⇒ the check glyph"
     );
 
-    // Flip to Mixed ⇒ the dash glyph, still visible.
+    // Flip to Mixed ⇒ the dash glyph.
     app.world_mut().get_mut::<A11yToggled>(cb).unwrap().0 = Toggled::Mixed;
     app.update();
-    assert_eq!(
-        app.world().get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Visible),
-        "Mixed ⇒ mark visible"
-    );
     assert_eq!(
         app.world().get::<Text>(mark).map(|t| t.0.clone()),
         Some(DASH_GLYPH.to_string()),
         "Mixed ⇒ the dash glyph"
     );
 
-    // Back to False ⇒ hidden again.
+    // Back to False ⇒ empty again.
     app.world_mut().get_mut::<A11yToggled>(cb).unwrap().0 = Toggled::False;
     app.update();
     assert_eq!(
-        app.world().get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Hidden),
-        "False ⇒ mark hidden again"
+        app.world().get::<Text>(mark).map(|t| t.0.clone()),
+        Some(String::new()),
+        "False ⇒ empty glyph again"
     );
 }
 
@@ -220,9 +233,9 @@ fn on_press_advances_checkbox_tristate_and_repaints() {
         "first OnPress advances False→True"
     );
     assert_eq!(
-        app.world().get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Visible),
-        "the mark repainted to visible off the Changed gate"
+        app.world().get::<Text>(mark).map(|t| t.0.clone()),
+        Some(CHECK_GLYPH.to_string()),
+        "the mark repainted the check glyph off the Changed gate"
     );
 
     // Press 2: True → False.
@@ -233,9 +246,9 @@ fn on_press_advances_checkbox_tristate_and_repaints() {
         "second OnPress advances True→False"
     );
     assert_eq!(
-        app.world().get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Hidden),
-        "the mark repainted back to hidden"
+        app.world().get::<Text>(mark).map(|t| t.0.clone()),
+        Some(String::new()),
+        "the mark repainted back to empty"
     );
 }
 

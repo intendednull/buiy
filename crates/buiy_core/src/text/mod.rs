@@ -188,6 +188,37 @@ impl Plugin for BuiyTextPlugin {
             ),
         );
 
+        // Reshape any editor buffer a POST-`TextCommit` mutator left unshaped,
+        // BEFORE the caret writer reads it and BEFORE the render extract —
+        // restoring the shape-coherence invariant the deferred one-frame edit
+        // path broke (commit::reshape_edited_editors). Ordering:
+        //   - .after(BuiySet::Input)  — the in-Input edit systems
+        //     (apply_keyboard_edits / apply_ime) un-shape the buffer here.
+        //   - .after(focus_lifecycle) — focus_lifecycle is a SECOND post-Input
+        //     editor-buffer mutator: on focus loss with a live IME composition it
+        //     `remove_preedit`s, which un-shapes the buffer. WITHOUT this edge the
+        //     scheduler is free to run the reshape BEFORE it, leaving the buffer
+        //     unshaped at extract (the crash this whole system prevents). Any
+        //     FUTURE post-Input editor-buffer mutator MUST also be ordered before
+        //     this system.
+        //   - .before(write_caret_and_selection) — so the caret reads this frame's
+        //     fresh shape (caret + glyphs come current together).
+        app.add_systems(
+            Update,
+            commit::reshape_edited_editors
+                .after(crate::BuiySet::Input)
+                .after(crate::text::edit::focus_lifecycle)
+                .before(crate::text::edit::write_caret_and_selection),
+        );
+
+        // Debug-only main-world coherence invariant (the extract assert's
+        // headless-reachable mirror). In `Last` — after the whole Update set
+        // chain — so it observes the exact buffer/ComputedTextLayout state the
+        // render-world extract reads, catching any post-TextCommit mutator that
+        // leaves a buffer unshaped. Compiled out of release builds.
+        #[cfg(debug_assertions)]
+        app.add_systems(bevy::app::Last, commit::debug_assert_shape_coherence);
+
         // T7 (decoration-and-paint § 6.3): the caret-blink render-prep
         // writer — the same Animate→Picking window as write_clip_rects /
         // write_paint_skip, so extract reads a settled CaretVisual.

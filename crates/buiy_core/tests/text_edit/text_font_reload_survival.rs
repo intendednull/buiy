@@ -21,12 +21,37 @@
 //! way `tests/text/text_extract.rs` does.
 
 use bevy::prelude::*;
+use bevy::tasks::AsyncComputeTaskPool;
 use buiy_core::Node;
 use buiy_core::layout::Style;
-use buiy_core::text::edit::{EditCommand, TextEditState};
-use buiy_core::text::{SharedFontSystem, Text};
+use buiy_core::text::edit::TextBufferAccessReadOnly;
+use buiy_core::text::edit::{EditCommand, Placeholder, TextEditState};
+use buiy_core::text::{
+    ComputedTextLayout, FontSize, FontsGeneration, PendingSystemFontScan, SharedFontSystem, Text,
+    registered_fonts_db,
+};
 
 use crate::support::extract_harness::TextExtractHarness;
+
+/// Shape-coherence probe — the SAME comparison `extract_buiy_glyphs` makes at
+/// extract.rs:712 (`layout_runs().count() == ComputedTextLayout.lines.len()`),
+/// run against the live main world. Returns the entities (with their counts)
+/// whose committed layout disagrees with their buffer's shaped run count — i.e.
+/// buffers that reached frame end UNSHAPED relative to their commit. Empty ⇒
+/// coherent. Covers both buffer arms via `TextBufferAccessReadOnly` (editor-
+/// owned when present, else the display buffer).
+fn dirty_at_frame_end(app: &mut App) -> Vec<(Entity, usize, usize)> {
+    let mut q = app
+        .world_mut()
+        .query::<(Entity, TextBufferAccessReadOnly, &ComputedTextLayout)>();
+    let world = app.world();
+    q.iter(world)
+        .filter_map(|(e, access, computed)| {
+            let runs = access.with_buffer(|b| b.layout_runs().count());
+            (runs != computed.lines.len()).then_some((e, runs, computed.lines.len()))
+        })
+        .collect()
+}
 
 /// Spawn an editor entity in the PRODUCTION shape: `TextEditState` (the
 /// editor-owned buffer) PLUS the display `Text("")` carrier every real
@@ -229,4 +254,106 @@ fn editor_style_stays_live_after_a_bump() {
         "the editor's owned font size must survive the bump; on pre-C2 main the \
          sweep resets it (the C2 editor-style-stays-live gate)"
     );
+}
+
+/// **The gap the live gallery panic exposed.** The bump-survival tests above
+/// drive `bump_fonts_generation()` (a bare counter increment, NO db swap) and
+/// then `settle()` (3 frames) BEFORE asserting — so any one-frame
+/// dirty-at-extract window heals before they look, and they assert glyph/content
+/// survival, never the per-frame `runs == computed.lines.len()` coherence
+/// `extract_buiy_glyphs` asserts (extract.rs:712). The LIVE app instead hits the
+/// real async system-font-scan SWAP (a fresh `fontdb`), and that path was never
+/// exercised headlessly. This test reproduces the real path: a representative
+/// TodoMVC-shaped tree (display label, wrapped multi-line label, an empty text
+/// input = editor + active placeholder), then the injected scan SWAP — driving
+/// `frame()` (Update + extract) across the bump so the bump frame's extract runs
+/// the real coherence assert, AND probing `dirty_at_frame_end` each frame so a
+/// transient dirty is caught even in a release build (no debug_assert).
+#[test]
+fn font_db_swap_keeps_every_buffer_shape_coherent_at_extract() {
+    let mut h = TextExtractHarness::new();
+    let root = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(400.0),
+        ))
+        .id();
+    let title = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("todos")),
+            FontSize(28.0),
+        ))
+        .id();
+    let wrapped = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from(
+                "the quick brown fox jumps over the lazy dog again and again",
+            )),
+            FontSize(16.0),
+        ))
+        .id();
+    let input = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().height_px(40.0),
+            Text(String::new()),
+            FontSize(16.0),
+            TextEditState::for_font_size(16.0),
+            Placeholder(String::from("What needs to be done?")),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .entity_mut(root)
+        .add_children(&[title, wrapped, input]);
+    h.settle();
+    assert!(
+        dirty_at_frame_end(&mut h.app).is_empty(),
+        "coherent after the initial settle (sanity)"
+    );
+
+    // Inject the REAL scan swap (a fresh db) — the path the live app hits when
+    // the async system-font scan completes. Drive Update+extract until the
+    // generation bumps, then a few frames past it, probing coherence each frame.
+    let task = AsyncComputeTaskPool::get().spawn(async move { registered_fonts_db() });
+    h.app
+        .world_mut()
+        .insert_resource(PendingSystemFontScan(Some(task)));
+    let start = h.app.world().resource::<FontsGeneration>().0;
+
+    let mut bumped = false;
+    let mut frames_after_bump = 0;
+    for _ in 0..400 {
+        h.frame(); // Update (apply_system_font_scan → TextSync sweep → TextCommit) + extract
+        let dirty = dirty_at_frame_end(&mut h.app);
+        assert!(
+            dirty.is_empty(),
+            "buffer dirty-unshaped at frame end after the font-db swap \
+             (entity, runs, computed.lines): {dirty:?} — extract would assert-fire here",
+        );
+        if h.app.world().resource::<FontsGeneration>().0 > start {
+            bumped = true;
+            frames_after_bump += 1;
+            if frames_after_bump >= 3 {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(bumped, "the injected scan must bump FontsGeneration");
 }

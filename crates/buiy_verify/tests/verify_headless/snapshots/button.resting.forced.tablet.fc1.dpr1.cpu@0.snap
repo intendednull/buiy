@@ -1,9 +1,10 @@
 ---
-source: crates/buiy_verify/tests/coverage_display_list.rs
+source: crates/buiy_verify/tests/verify_headless/coverage_display_list.rs
 expression: button.resting.forced.tablet.fc1.dpr1.cpu@0
 ---
 # buiy-display-list-dump v1
 [nodes painters_z]
-0 button rect pos=0,0 size=136,48 color=#ffffffff clip=none group=none
+0 button rect pos=0,0 size=16,48 color=#ffffffff clip=none group=none
+1 entity#36 rect pos=8,24 size=0,0 color=#00000000 clip=none group=none
 [buckets draw-order]
 (Quad,layer=0) x1

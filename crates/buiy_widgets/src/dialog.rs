@@ -285,9 +285,10 @@ pub fn wire_dialog_relations(
 /// `OnPress`; this slice adds **no** open behavior (clicking does not open the
 /// dialog yet — that wiring is C5's overlay state machine).
 pub fn dialog_invoker(label: impl Into<String>, dialog: Entity) -> impl Bundle {
+    // `Button::new` carries the full visible button (incl. the centered label
+    // `Text` child); layer the invoker's `controls` relation on top.
     (
-        crate::Button,
-        A11yLabel(label.into()),
+        crate::Button::new(label),
         A11yRelations {
             controls: vec![dialog],
             ..Default::default()

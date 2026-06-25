@@ -24,6 +24,8 @@ mod text_caret_selection;
 mod text_caret_selection_e3_gpu;
 #[path = "text_edit/text_clipboard_undo.rs"]
 mod text_clipboard_undo;
+#[path = "text_edit/text_coherence_property.rs"]
+mod text_coherence_property;
 #[path = "text_edit/text_edit_submit.rs"]
 mod text_edit_submit;
 #[path = "text_edit/text_edit_substrate.rs"]

@@ -8,16 +8,21 @@
 //! pointer layer can write it too. The click handler uses
 //! `MessageWriter::write`.
 
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 use buiy_core::{
     a11y::{A11yLabel, A11yRole},
     components::Node,
     focus::Focusable,
-    layout::{BoxModel, Style},
+    layout::{AlignItems, BoxModel, Display, FlexAxis, FlexParams, JustifyContent, Style},
     render::color::ColorToken,
-    render::components::{Background, Border, Corners, Radius},
+    render::components::{Background, Border, Corners, Radius, TextColor},
+    text::{FontSize, Text, TextAlign},
 };
 use std::borrow::Cow;
+
+/// The catalog font size for a button label (logical px).
+pub(crate) const BUTTON_LABEL_FONT_SIZE: f32 = 16.0;
 
 /// Button widget marker. The `#[require(...)]` contract is the single source
 /// of the Phase-0 button shape — required-components are "the architectural
@@ -45,31 +50,42 @@ use std::borrow::Cow;
     BoxModel = button_box_model(),
     Background = button_background(),
     Border = button_border(),
+    Display = Display::flex_row(),
+    FlexParams = button_center_flex(),
     Focusable,
     A11yRole = A11yRole::Button,
     A11yLabel,
 )]
 pub struct Button;
 
+/// The button's content flex: center the label `Text` child in the box on both
+/// axes (the canonical centered-label button).
+pub(crate) fn button_center_flex() -> FlexParams {
+    FlexParams {
+        direction: FlexAxis::Row,
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        ..Default::default()
+    }
+}
+
 // The three initializer fns below are `pub(crate)` so the `scene` module's
 // `button()` scene-fn can spell the SAME canonical values as `bsn!`
 // field-patches — one source of truth shared between the `#[require]`
 // initializers here and the mergeable scene-fn there.
 
-/// The canonical button box: 120×32 logical px, 8px padding. The hit target
-/// already meets WCAG 2.5.8 (≥24×24).
+/// The canonical button box: **content-width** (sizes to the label) × 32 logical
+/// px tall, with 8px padding so the label has breathing room and the hit target
+/// meets WCAG 2.5.8 (≥24×24). A content-width button is the natural shape — a
+/// fixed width made "All" and "×" the same oversized box and overflowed dense
+/// footers; an author who wants a fixed width patches `BoxModel { width }` on top.
 // TODO(buiy-widget-catalog-design): replace hardcoded sizes with size
-// tokens (space.button.width, space.2).
+// tokens (space.2).
 pub(crate) fn button_box_model() -> BoxModel {
     // Build through the `Style` fluent builder (the canonical authoring path
     // for the box), then extract the one decomposed component the require
-    // needs. Keeps the numbers expressed once, the way an author would write
-    // them.
-    Style::default()
-        .width_px(120.0)
-        .height_px(32.0)
-        .padding(8.0)
-        .box_model
+    // needs. No width ⇒ auto (content-sized).
+    Style::default().height_px(32.0).padding(8.0).box_model
 }
 
 /// The default button surface fill (the `color.surface.secondary` token).
@@ -92,13 +108,24 @@ impl Button {
     /// (not `Self`) so callers get the full Phase 0 button contract.
     ///
     /// The `Button` marker's `#[require(...)]` materializes the node, style,
-    /// paint, focus, and a11y companions; this constructor only layers the
-    /// a11y label on top. The bare-marker path (`spawn(Button)` /
-    /// `bsn! { Button }`) and this path therefore produce the same entity,
-    /// differing only in the label string.
+    /// paint, focus, and a11y companions; this constructor layers the a11y label
+    /// (the accessible name) PLUS a centered, pick-through **label `Text`** child
+    /// — the visible button text. The bare marker (`spawn(Button)`) is a
+    /// label-less box (an icon button's canvas); `new`/`button()` give it text.
     #[allow(clippy::new_ret_no_self)]
     pub fn new(label: impl Into<String>) -> impl Bundle {
-        (Button, A11yLabel(label.into()))
+        let label = label.into();
+        (
+            Button,
+            A11yLabel(label.clone()),
+            children![(
+                Text(label),
+                FontSize(BUTTON_LABEL_FONT_SIZE),
+                TextColor::default(),
+                TextAlign::Center,
+                Pickable::IGNORE,
+            )],
+        )
     }
 }
 

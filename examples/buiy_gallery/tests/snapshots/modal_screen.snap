@@ -5,10 +5,15 @@ expression: modal_screen
 # buiy-layout-dump v1
 ModalDialog pos=0,0 size=320,180
   ModalBody pos=0,22 size=320,17
-  ModalClose pos=0,59 size=136,48
-  ModalSwitch pos=0,39 size=40,20
-    entity#90 pos=0,0 size=16,16
+  ModalClose pos=0,59 size=320,48
+    entity#95 pos=140,14 size=40,20
+  ModalSwitch pos=0,39 size=320,20
+    entity#91 pos=0,0 size=40,20
+      entity#92 pos=0,2 size=16,16
+    entity#93 pos=48,0 size=57,20
   ModalTitle pos=0,0 size=320,22
 ModalRoot pos=0,0 size=800,600
-  ModalBackgroundButton pos=0,48 size=136,48
-  ModalInvoker pos=0,0 size=136,48
+  ModalBackgroundButton pos=0,48 size=800,48
+    entity#86 pos=332,14 size=136,20
+  ModalInvoker pos=0,0 size=800,48
+    entity#97 pos=356,14 size=88,20

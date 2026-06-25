@@ -3,11 +3,18 @@ source: examples/buiy_gallery/tests/scroll_list_layout.rs
 expression: scroll_list_screen
 ---
 # buiy-layout-dump v1
-ScrollCard pos=0,0 size=392,332
-  ScrollList pos=16,16 size=328,300
+ScrollCard pos=0,0 size=392,366
+  ScrollHeading pos=16,16 size=360,22
+  ScrollList pos=16,50 size=328,300
     ScrollRow pos=0,0 size=300,28
+      ScrollRowText pos=0,0 size=300,17
     ScrollRow pos=0,28 size=300,28
+      ScrollRowText pos=0,0 size=300,17
     ScrollRow pos=0,56 size=300,28
+      ScrollRowText pos=0,0 size=300,17
     ScrollRow pos=0,84 size=300,28
+      ScrollRowText pos=0,0 size=300,17
     ScrollRow pos=0,112 size=300,28
+      ScrollRowText pos=0,0 size=300,17
     ScrollRow pos=0,140 size=300,28
+      ScrollRowText pos=0,0 size=300,17

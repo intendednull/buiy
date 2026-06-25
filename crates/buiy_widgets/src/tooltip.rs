@@ -39,7 +39,7 @@ use buiy_core::{
     layout::{Anchor, AnchorRef, BoxModel, PositionTry, Stacking, Style, TopLayer, TryCondition},
     render::color::ColorToken,
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
-    text::{FontSize, Text},
+    text::{FontSize, Text, TextAlign},
 };
 use std::borrow::Cow;
 
@@ -153,21 +153,33 @@ impl TooltipTrigger {
         let tip = tip.into();
         (
             TooltipTrigger,
-            A11yLabel(label),
-            children![(
-                // The controlled tooltip — a real Tooltip node, starts hidden.
-                // Decorative (non-interactive) ⇒ `Pickable::IGNORE` so a hit
-                // resolves to the trigger root.
-                TooltipNode,
-                Text(tip.clone()),
-                FontSize(TOOLTIP_FONT_SIZE),
-                TextColor::default(),
-                A11yLabel(tip),
-                tooltip_box_model(),
-                tooltip_background(),
-                CssVisibility::Hidden,
-                Pickable::IGNORE,
-            )],
+            A11yLabel(label.clone()),
+            children![
+                // The visible trigger glyph (e.g. "?") — the rendered icon; the
+                // accessible name stays on the root `A11yLabel`. Pick-through so a
+                // hit resolves to the trigger root.
+                (
+                    Text(label),
+                    FontSize(TOOLTIP_FONT_SIZE),
+                    TextColor::default(),
+                    TextAlign::Center,
+                    Pickable::IGNORE,
+                ),
+                (
+                    // The controlled tooltip — a real Tooltip node, starts hidden.
+                    // Decorative (non-interactive) ⇒ `Pickable::IGNORE` so a hit
+                    // resolves to the trigger root.
+                    TooltipNode,
+                    Text(tip.clone()),
+                    FontSize(TOOLTIP_FONT_SIZE),
+                    TextColor::default(),
+                    A11yLabel(tip),
+                    tooltip_box_model(),
+                    tooltip_background(),
+                    CssVisibility::Hidden,
+                    Pickable::IGNORE,
+                ),
+            ],
         )
     }
 }

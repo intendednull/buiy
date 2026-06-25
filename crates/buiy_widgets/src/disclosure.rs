@@ -45,7 +45,10 @@ use buiy_core::{
     a11y::{A11yExpanded, A11yLabel, A11yRelations, A11yRole},
     components::Node,
     focus::Focusable,
-    layout::{BoxModel, Rotate, Style},
+    layout::{
+        AlignItems, BoxModel, Display, FlexAxis, FlexGap, FlexParams, Inset, Length, Position,
+        PositionKind, Rotate, Sizing, Style,
+    },
     render::color::ColorToken,
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
     text::{FontSize, Text},
@@ -89,6 +92,14 @@ pub(crate) const DISCLOSURE_FONT_SIZE: f32 = 16.0;
     BoxModel = disclosure_box_model(),
     Background = disclosure_background(),
     Border = disclosure_border(),
+    // Lay the [caret, label] HEADER out as a centered row (like every other
+    // labelled widget). The controlled panel is the 3rd child but is taken OUT of
+    // this flow (`DisclosurePanel` is `Position::Absolute`), so the header row is
+    // just [caret, label] and the panel sits BELOW. `Position::Relative` makes the
+    // trigger the absolute panel's containing block.
+    Display = Display::flex_row(),
+    FlexParams = disclosure_row_flex(),
+    Position = disclosure_relative_position(),
     Focusable,
     A11yRole = A11yRole::Button,
     A11yExpanded,
@@ -114,7 +125,7 @@ pub struct DisclosureCaret;
 /// trigger's children.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
 #[reflect(Component, Default)]
-#[require(Node, A11yRole = A11yRole::Region)]
+#[require(Node, A11yRole = A11yRole::Region, Position = disclosure_panel_position())]
 pub struct DisclosurePanel;
 
 // The initializer fns are `pub(crate)` so the `scene` module's `disclosure()`
@@ -124,6 +135,44 @@ pub struct DisclosurePanel;
 // TODO(buiy-widget-catalog-design): replace hardcoded sizes with size tokens.
 pub(crate) fn disclosure_box_model() -> BoxModel {
     Style::default().width_px(160.0).height_px(24.0).box_model
+}
+
+/// The trigger HEADER row: `[caret, label]` laid out horizontally, vertically
+/// centered, with a small gap. (The controlled panel is out of this flow.)
+pub(crate) fn disclosure_row_flex() -> FlexParams {
+    FlexParams {
+        direction: FlexAxis::Row,
+        align_items: AlignItems::Center,
+        gap: FlexGap {
+            row: Length::px(6.0),
+            column: Length::px(6.0),
+        },
+        ..Default::default()
+    }
+}
+
+/// `Position::Relative` on the trigger — it moves nowhere (default inset) but
+/// becomes the containing block for the absolutely-positioned panel below.
+pub(crate) fn disclosure_relative_position() -> Position {
+    Position {
+        kind: PositionKind::Relative,
+        inset: Inset::default(),
+    }
+}
+
+/// The controlled panel is `Position::Absolute`, anchored just BELOW the 24px
+/// header (top inset = the header height), so it is OUT of the header row's flow
+/// (collapsed ⇒ the trigger is a clean `[caret, label]` row) and drops below the
+/// trigger when revealed.
+pub(crate) fn disclosure_panel_position() -> Position {
+    Position {
+        kind: PositionKind::Absolute,
+        inset: Inset {
+            top: Sizing::Length(Length::px(24.0)),
+            left: Sizing::Length(Length::px(0.0)),
+            ..Default::default()
+        },
+    }
 }
 
 /// The default disclosure trigger fill (the `color.surface.secondary` token).

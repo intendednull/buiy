@@ -15,13 +15,18 @@
 //! decrement, Home → min, End → max, PageUp/PageDown → the page step. Keyboard and
 //! agent converge on the one contract `honor`.
 //!
-//! **C4 half (the pixels + pick-through):** the constructor spawns a child
-//! **track** (the rail), a child **thumb** (the draggable knob), and a child label
-//! `Text`, all `Pickable::IGNORE` so a hit resolves to the widget root the router
-//! addresses. [`update_slider_visual`] reads `Changed<A11yValue>` on each slider
-//! and positions its thumb via the decomposed `Translate` longhand: the fraction
-//! `(now − min) / (max − min)` maps onto `[0, SLIDER_THUMB_TRAVEL]`. The track/
-//! thumb carry the *pixels*; the root keeps `A11yLabel` (the AT name).
+//! **C4 half (the pixels + pick-through):** a slider is a horizontal **row** of
+//! `[track, label]` (so the label sits BESIDE the rail instead of squishing inside
+//! it — the widget-catalog rendering bug, the `Checkbox` precedent). The root is
+//! the focusable, accessible flex-row container; the visible rail lives on the
+//! [`SliderTrack`] child, and the draggable [`SliderThumb`] is a child of THAT
+//! track (a grandchild of the slider root). The constructor adds the visible label
+//! as a sibling `Text` beside the track. The track + label are `Pickable::IGNORE`
+//! so a hit anywhere on the row resolves to the widget root the router addresses.
+//! [`update_slider_visual`] reads `Changed<A11yValue>` on each slider, walks to the
+//! thumb under its track, and positions it via the decomposed `Translate` longhand:
+//! the fraction `(now − min) / (max − min)` maps onto `[0, SLIDER_THUMB_TRAVEL]`.
+//! The track/thumb carry the *pixels*; the root keeps `A11yLabel` (the AT name).
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
@@ -29,7 +34,9 @@ use buiy_core::{
     a11y::{A11yLabel, A11yOrientation, A11yRole, A11yValue, Orientation},
     components::Node,
     focus::Focusable,
-    layout::{BoxModel, Length, Style, Translate},
+    layout::{
+        AlignItems, BoxModel, Display, FlexAxis, FlexGap, FlexParams, Length, Style, Translate,
+    },
     render::color::ColorToken,
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text},
@@ -55,10 +62,15 @@ pub const SLIDER_THUMB_TRAVEL: f32 = SLIDER_TRACK_WIDTH - SLIDER_THUMB_SIZE;
 /// layout-visible + paintable + focusable + accessible entity, carrying the
 /// valued range the contract + visual read.
 ///
-/// The require list:
+/// The require list — a slider is a horizontal **row** of `[track, label]`: the
+/// root is the focusable, accessible flex-row container; the visible rail + its
+/// draggable thumb live on the [`SliderTrack`] child, and the visible label is the
+/// sibling `Text` the constructor adds. Putting the rail box on the root (the
+/// pre-fix shape) trapped the label inside the rail's bounding box where it wrapped
+/// to one glyph per line — the widget-catalog rendering bug.
 /// - `Node` — the layout marker (pulls the full `Style` decomposition).
-/// - `BoxModel = slider_box_model()` — the canonical track bounding box.
-/// - `Background` / `Border` — the rail fill + rounded edge.
+/// - `Display = flex_row()` + `FlexParams = slider_row_flex()` — lay the track and
+///   label out in a centered row with a gap.
 /// - `Focusable` — keyboard-focusable (implicit `{Focus, Blur}`).
 /// - `A11yRole = A11yRole::Slider` — drives `contract_for(Slider)` (advertised
 ///   `{Increment, Decrement, SetValue}`) and the APG slider keymap.
@@ -71,9 +83,8 @@ pub const SLIDER_THUMB_TRAVEL: f32 = SLIDER_TRACK_WIDTH - SLIDER_THUMB_SIZE;
 #[reflect(Component, Default)]
 #[require(
     Node,
-    BoxModel = slider_box_model(),
-    Background = slider_background(),
-    Border = slider_border(),
+    Display = Display::flex_row(),
+    FlexParams = slider_row_flex(),
     Focusable,
     A11yRole = A11yRole::Slider,
     A11yValue,
@@ -82,16 +93,34 @@ pub const SLIDER_THUMB_TRAVEL: f32 = SLIDER_TRACK_WIDTH - SLIDER_THUMB_SIZE;
 )]
 pub struct Slider;
 
-/// The decorative **track** (rail) child of a slider — the bar the thumb travels
-/// along. A `buiy_widgets`-local **visual** marker; it defines no a11y component
-/// (the a11y state lives on the widget root). Decorative ⇒ `Pickable::IGNORE`.
+/// The visual **track** (rail) child of a slider — the bar the thumb travels
+/// along, carrying the draggable [`SliderThumb`] as ITS child. The `#[require]`
+/// carries the rail geometry + fill so the track renders identically whether
+/// spawned bare or via the constructor. A `buiy_widgets`-local **visual** marker;
+/// it defines no a11y component (the a11y state lives on the widget root).
+/// Decorative ⇒ `Pickable::IGNORE` so a click on the track resolves to the widget
+/// root.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
 #[reflect(Component, Default)]
+#[require(
+    Node,
+    BoxModel = slider_track_box_model(),
+    Background = slider_track_background(),
+    // Center the 16px thumb on the 4px rail (cross-axis). The thumb is the only
+    // child; `align_items: Center` straddles it symmetrically over the thin rail
+    // (overflow is `Visible`), and `update_slider_visual`'s post-layout `Translate`
+    // x slides it along — so the knob stays vertically centered at every value.
+    // Without this the thumb laid out at the rail's content-top and hung 6px below
+    // the rail centre, overflowing the slider row.
+    Display = Display::flex_row(),
+    FlexParams = slider_track_center_flex(),
+)]
 pub struct SliderTrack;
 
-/// The visual **thumb** child of a slider — the draggable knob whose `Translate`
-/// position [`update_slider_visual`] drives from `A11yValue`. A `buiy_widgets`-local
-/// **visual** marker; no a11y component. Decorative ⇒ `Pickable::IGNORE`.
+/// The visual **thumb** child of a slider's [`SliderTrack`] — the draggable knob
+/// whose `Translate` position [`update_slider_visual`] drives from `A11yValue`. A
+/// `buiy_widgets`-local **visual** marker; no a11y component. Decorative ⇒
+/// `Pickable::IGNORE`.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
 #[reflect(Component, Default)]
 pub struct SliderThumb;
@@ -99,27 +128,27 @@ pub struct SliderThumb;
 // The initializer fns are `pub(crate)` so the `scene` module's `slider()`
 // scene-fn can spell the SAME canonical values as the `#[require]` path.
 
-/// The canonical slider bounding box: the track width × the thumb height (so the
-/// thumb fits vertically). Logical px.
-// TODO(buiy-widget-catalog-design): replace hardcoded sizes with size tokens.
-pub(crate) fn slider_box_model() -> BoxModel {
-    Style::default()
-        .width_px(SLIDER_TRACK_WIDTH)
-        .height_px(SLIDER_THUMB_SIZE)
-        .box_model
-}
-
-/// The default slider rail fill (the `color.surface.secondary` token).
-pub(crate) fn slider_background() -> Background {
-    Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+/// The slider ROOT row: `[track, label]` laid out horizontally, vertically
+/// centered, with an 8px gap between the rail and the label.
+pub(crate) fn slider_row_flex() -> FlexParams {
+    FlexParams {
+        direction: FlexAxis::Row,
+        align_items: AlignItems::Center,
+        gap: FlexGap {
+            row: Length::px(8.0),
+            column: Length::px(8.0),
+        },
+        ..Default::default()
     }
 }
 
-/// The default slider border: fully-rounded (pill) ends on the rail.
-pub(crate) fn slider_border() -> Border {
-    Border {
-        radius: Corners::all(Radius::circular(2.0)),
+/// The track's content flex: center the thumb on the rail's cross axis (the
+/// thumb is the rail's only child; its horizontal travel is a post-layout
+/// `Translate`).
+pub(crate) fn slider_track_center_flex() -> FlexParams {
+    FlexParams {
+        direction: FlexAxis::Row,
+        align_items: AlignItems::Center,
         ..Default::default()
     }
 }
@@ -179,10 +208,11 @@ pub fn thumb_offset(value: &A11yValue) -> f32 {
 impl Slider {
     /// Spawn-ready bundle for a labelled slider over `[min, max]` starting at
     /// `now`, stepping by `step`. Returns `impl Bundle` carrying the full contract
-    /// (role + valued range + orientation + focus + a11y + track box) plus three
-    /// decorative children — the **track** rail, the sliding **thumb**, and the
-    /// visible **label** `Text` — all `Pickable::IGNORE` so a hit resolves to the
-    /// widget root (pick-through, co-drive SC-3).
+    /// (role + valued range + orientation + focus + a11y) plus two children laid
+    /// out in the flex-**row** substrate: the **track** rail (which itself carries
+    /// the draggable **thumb**) and the visible **label** `Text` BESIDE it. The
+    /// track + label are `Pickable::IGNORE` so a hit anywhere on the row resolves
+    /// to the widget root (pick-through, co-drive SC-3).
     ///
     /// The thumb is positioned by [`update_slider_visual`] on the first
     /// `Changed<A11yValue>` once the schedule runs (the `A11yValue` written here is
@@ -206,26 +236,25 @@ impl Slider {
             },
             A11yOrientation(Orientation::Horizontal),
             children![
-                // The rail the thumb travels along.
+                // The rail the thumb travels along (geometry + fill from its own
+                // `#[require]`), carrying the sliding thumb as ITS child.
                 (
                     SliderTrack,
-                    Node,
-                    slider_track_box_model(),
-                    slider_track_background(),
                     Pickable::IGNORE,
+                    children![(
+                        // The sliding thumb — starts at x = 0; `update_slider_visual`
+                        // positions it from `A11yValue` on the first frame.
+                        SliderThumb,
+                        Node,
+                        slider_thumb_box_model(),
+                        slider_thumb_background(),
+                        slider_thumb_border(),
+                        Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)),
+                        Pickable::IGNORE,
+                    )],
                 ),
-                // The sliding thumb — starts at x = 0; `update_slider_visual`
-                // positions it from `A11yValue` on the first frame.
-                (
-                    SliderThumb,
-                    Node,
-                    slider_thumb_box_model(),
-                    slider_thumb_background(),
-                    slider_thumb_border(),
-                    Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)),
-                    Pickable::IGNORE,
-                ),
-                // The visible label pixels (the AT name stays on the root).
+                // The visible label pixels BESIDE the track (the AT name stays on
+                // the root).
                 (
                     Text(label),
                     FontSize(SLIDER_LABEL_FONT_SIZE),
@@ -249,19 +278,28 @@ type ChangedSlider = (With<Slider>, Changed<A11yValue>);
 /// the slider contract's `honor` into this `A11yValue` write, and this system
 /// reacts.
 ///
-/// For each changed slider, walk its `Children` to the `SliderThumb` child and set
-/// its `Translate` x offset to [`thumb_offset`] of the live value: `now == min` →
-/// `0` (thumb at the `min` end), `now == max` → [`SLIDER_THUMB_TRAVEL`] (thumb at
-/// the `max` end), linearly in between.
+/// For each changed slider, walk its `Children` to the [`SliderTrack`] child and
+/// then to the [`SliderThumb`] *grandchild* (the thumb is a child of the track),
+/// and set the thumb's `Translate` x offset to [`thumb_offset`] of the live value:
+/// `now == min` → `0` (thumb at the `min` end), `now == max` →
+/// [`SLIDER_THUMB_TRAVEL`] (thumb at the `max` end), linearly in between.
 pub fn update_slider_visual(
     changed: Query<(&A11yValue, &Children), ChangedSlider>,
+    tracks: Query<&Children, With<SliderTrack>>,
     mut thumbs: Query<&mut Translate, With<SliderThumb>>,
 ) {
     for (value, children) in &changed {
         let x = thumb_offset(value);
+        // Slider → SliderTrack → SliderThumb: the thumb is a grandchild now that
+        // it moved off the root onto the track child.
         for &child in children {
-            if let Ok(mut translate) = thumbs.get_mut(child) {
-                translate.0 = Length::px(x);
+            let Ok(track_children) = tracks.get(child) else {
+                continue;
+            };
+            for &grandchild in track_children {
+                if let Ok(mut translate) = thumbs.get_mut(grandchild) {
+                    translate.0 = Length::px(x);
+                }
             }
         }
     }

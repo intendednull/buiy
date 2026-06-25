@@ -115,7 +115,7 @@ fn button_scene_fn_unpatched_is_the_canonical_button() {
 
     let world = app.world();
     let bm = world.get::<BoxModel>(id).expect("BoxModel");
-    assert_eq!(bm.width, Sizing::Length(Length::Px(120.0)));
+    assert_eq!(bm.width, Sizing::Auto, "content-width button");
     assert_eq!(bm.height, Sizing::Length(Length::Px(32.0)));
     assert_eq!(bm.padding, Edges::all(8.0));
     assert_eq!(world.get::<A11yLabel>(id).expect("A11yLabel").0, "Go");
@@ -184,7 +184,7 @@ fn checkbox_scene_fn_builds_contract_children_and_pick_through() {
     use bevy::ecs::hierarchy::Children;
     use bevy::picking::Pickable;
     use buiy_core::a11y::{A11yToggled, Toggled};
-    use buiy_core::render::components::CssVisibility;
+    use buiy_core::render::components::Background;
     use buiy_core::text::Text;
     use buiy_widgets::checkbox::CheckboxMark;
 
@@ -234,10 +234,16 @@ fn checkbox_scene_fn_builds_contract_children_and_pick_through() {
         .copied()
         .find(|&c| world.get::<CheckboxMark>(c).is_some())
         .expect("a CheckboxMark child");
+    // The mark IS the visible box (fill on the mark, not the root) and its glyph
+    // starts EMPTY (default toggle False — the box renders, the check on flip).
+    assert!(
+        world.get::<Background>(mark).is_some(),
+        "the mark carries the box fill"
+    );
     assert_eq!(
-        world.get::<CssVisibility>(mark).copied(),
-        Some(CssVisibility::Hidden),
-        "mark starts hidden (default toggle False)"
+        world.get::<Text>(mark).map(|t| t.0.clone()),
+        Some(String::new()),
+        "mark glyph starts empty (default toggle False)"
     );
     let label = children
         .iter()
@@ -251,15 +257,16 @@ fn checkbox_scene_fn_builds_contract_children_and_pick_through() {
     );
 }
 
-/// `switch(label)` spawns the full a11y contract plus the thumb + label children
-/// (pick-through), the thumb at the off position (`Translate` x = 0).
+/// `switch(label)` spawns the full a11y contract plus the flex-**row**
+/// `[track, label]` children (pick-through). The track carries the sliding **thumb**
+/// as ITS child (a grandchild of the root), at the off position (`Translate` x = 0).
 #[test]
 fn switch_scene_fn_builds_contract_children_and_pick_through() {
     use bevy::ecs::hierarchy::Children;
     use bevy::picking::Pickable;
     use buiy_core::a11y::{A11yToggled, Toggled};
     use buiy_core::layout::Translate;
-    use buiy_widgets::switch::SwitchThumb;
+    use buiy_widgets::switch::{SwitchThumb, SwitchTrack};
 
     let mut app = scene_test_app();
     let id = app
@@ -276,6 +283,11 @@ fn switch_scene_fn_builds_contract_children_and_pick_through() {
         "scene-fn root is a Switch"
     );
     assert_eq!(
+        world.get::<Display>(id).copied(),
+        Some(Display::flex_row()),
+        "the root lays its [track, label] out in a row"
+    );
+    assert_eq!(
         world.get::<A11yToggled>(id).map(|t| t.0),
         Some(Toggled::False),
         "binary toggle present, default False"
@@ -288,7 +300,7 @@ fn switch_scene_fn_builds_contract_children_and_pick_through() {
         .iter()
         .copied()
         .collect();
-    assert_eq!(children.len(), 2, "thumb + label children");
+    assert_eq!(children.len(), 2, "track + label children");
     for &c in &children {
         assert_eq!(
             world.get::<Pickable>(c).copied(),
@@ -296,11 +308,24 @@ fn switch_scene_fn_builds_contract_children_and_pick_through() {
             "decorative child is Pickable::IGNORE"
         );
     }
-    let thumb = children
+    // The track carries the pill fill (the box moved off the root onto the track).
+    let track = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<SwitchTrack>(c).is_some())
+        .expect("a SwitchTrack child");
+    assert!(
+        world.get::<Background>(track).is_some(),
+        "the track carries the pill fill"
+    );
+    // The thumb is a child of the track (a grandchild of the root), at off (x = 0).
+    let thumb = world
+        .get::<Children>(track)
+        .expect("the track has the thumb child")
         .iter()
         .copied()
         .find(|&c| world.get::<SwitchThumb>(c).is_some())
-        .expect("a SwitchThumb child");
+        .expect("a SwitchThumb grandchild");
     assert_eq!(
         world.get::<Translate>(thumb).map(|t| t.0),
         Some(buiy_core::layout::Length::Px(0.0)),
@@ -309,8 +334,9 @@ fn switch_scene_fn_builds_contract_children_and_pick_through() {
 }
 
 /// `slider(label, now, min, max, step)` spawns the full a11y contract (role +
-/// valued range + horizontal orientation) plus the track + thumb + label children
-/// (pick-through), with the live `A11yValue` authored.
+/// valued range + horizontal orientation) plus the flex-**row** `[track, label]`
+/// children (pick-through), with the live `A11yValue` authored. The track carries
+/// the draggable **thumb** as ITS child (a grandchild of the root).
 #[test]
 fn slider_scene_fn_builds_contract_children_and_pick_through() {
     use bevy::ecs::hierarchy::Children;
@@ -332,6 +358,11 @@ fn slider_scene_fn_builds_contract_children_and_pick_through() {
         Some(A11yRole::Slider),
         "scene-fn root is a Slider"
     );
+    assert_eq!(
+        world.get::<Display>(id).copied(),
+        Some(Display::flex_row()),
+        "the root lays its [track, label] out in a row"
+    );
     let value = world.get::<A11yValue>(id).expect("A11yValue present");
     assert_eq!((value.now, value.min, value.max), (50.0, 0.0, 100.0));
     assert_eq!(value.step, Some(1.0));
@@ -348,7 +379,7 @@ fn slider_scene_fn_builds_contract_children_and_pick_through() {
         .iter()
         .copied()
         .collect();
-    assert_eq!(children.len(), 3, "track + thumb + label children");
+    assert_eq!(children.len(), 2, "track + label children");
     for &c in &children {
         assert_eq!(
             world.get::<Pickable>(c).copied(),
@@ -356,21 +387,28 @@ fn slider_scene_fn_builds_contract_children_and_pick_through() {
             "decorative child is Pickable::IGNORE"
         );
     }
-    assert_eq!(
-        children
-            .iter()
-            .filter(|&&c| world.get::<SliderTrack>(c).is_some())
-            .count(),
-        1,
-        "one SliderTrack child"
+    // Exactly one track child; it carries the rail fill (the box moved off the
+    // root onto the track).
+    let track = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<SliderTrack>(c).is_some())
+        .expect("one SliderTrack child");
+    assert!(
+        world.get::<Background>(track).is_some(),
+        "the track carries the rail fill"
     );
+    // The thumb is a child of the track (a grandchild of the root).
     assert_eq!(
-        children
+        world
+            .get::<Children>(track)
+            .expect("the track has the thumb child")
             .iter()
-            .filter(|&&c| world.get::<SliderThumb>(c).is_some())
+            .copied()
+            .filter(|&c| world.get::<SliderThumb>(c).is_some())
             .count(),
         1,
-        "one SliderThumb child"
+        "one SliderThumb grandchild under the track"
     );
 }
 
@@ -565,7 +603,24 @@ fn tooltip_trigger_scene_fn_builds_contract_child_and_wires_described_by() {
         .iter()
         .copied()
         .collect();
-    assert_eq!(children.len(), 1, "one tooltip child");
+    assert_eq!(
+        children.len(),
+        2,
+        "the visible trigger glyph child + the controlled tooltip child"
+    );
+    // The non-TooltipNode child is the visible trigger glyph `Text`.
+    let glyph = children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<TooltipNode>(c).is_none())
+        .expect("a visible glyph child");
+    assert_eq!(
+        world
+            .get::<buiy_core::text::Text>(glyph)
+            .map(|t| t.0.clone()),
+        Some("Help".to_string()),
+        "the trigger renders its visible glyph label"
+    );
 
     let tooltip = children
         .iter()

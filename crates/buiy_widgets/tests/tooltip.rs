@@ -96,7 +96,23 @@ fn tooltip_trigger_new_spawns_tooltip_and_wires_described_by() {
         .expect("trigger has children")
         .iter()
         .collect::<Vec<_>>();
-    assert_eq!(children.len(), 1, "one tooltip child");
+    assert_eq!(
+        children.len(),
+        2,
+        "the visible trigger glyph child + the controlled tooltip child"
+    );
+    // One child is the visible trigger glyph `Text` (the rendered icon); the AT
+    // name stays on the root. It is NOT the TooltipNode.
+    let glyph = children
+        .iter()
+        .copied()
+        .find(|&c| app.world().get::<TooltipNode>(c).is_none())
+        .expect("a visible glyph child");
+    assert_eq!(
+        app.world().get::<Text>(glyph).map(|t| t.0.clone()),
+        Some("Help".to_string()),
+        "the trigger renders its visible glyph label"
+    );
 
     let tooltip = child_with::<TooltipNode>(&app, t);
     let world = app.world();

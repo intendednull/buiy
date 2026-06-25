@@ -54,6 +54,54 @@ fn commit_reshapes_the_buffer_to_the_final_content_box() {
     assert_eq!(h, Some(20.0), "committed height = the ceil'd measured line");
 }
 
+/// **The widget-catalog rendering-bug regression guard.** A `Text` authored with
+/// NO explicit `Node` — exactly the `bsn!` label-child shape a widget scene-fn
+/// emits (`(Text(…) FontSize(…))`) — must STILL become a layout node and get
+/// laid out + shaped: `Text` `#[require(Node)]`s. Before that require, a bare
+/// `Text` had no Taffy node, no `ResolvedLayout`, no `ComputedTextLayout`, and
+/// painted NOTHING (the gallery's row labels / button labels / status were
+/// invisible while their accessible names existed). This pins the precondition
+/// for the text ever reaching the screen.
+#[test]
+fn bare_text_requires_node_and_lays_out_and_shapes() {
+    let mut app = text_app();
+    // A BARE `Text` — not `(Node, Style, Text)`. The `#[require(Node)]` must
+    // supply the whole layout substrate so it participates in layout + paint.
+    let label = app.world_mut().spawn(Text(String::from("hello"))).id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(200.0)
+                .height_px(50.0),
+        ))
+        .add_child(label);
+    settle(&mut app);
+
+    assert!(
+        app.world().get::<Node>(label).is_some(),
+        "a bare Text materializes a Node (require(Node))"
+    );
+    let resolved = app
+        .world()
+        .get::<ResolvedLayout>(label)
+        .expect("the bare Text is laid out (ResolvedLayout present)");
+    assert!(
+        resolved.size.x > 0.0 && resolved.size.y > 0.0,
+        "the laid-out label has a non-zero box (it occupies space): {:?}",
+        resolved.size
+    );
+    let computed = app
+        .world()
+        .get::<ComputedTextLayout>(label)
+        .expect("the bare Text is shaped (ComputedTextLayout present)");
+    assert!(
+        !computed.lines.is_empty() && computed.size.x > 0.0,
+        "the label shaped to real glyph geometry (it will paint): {computed:?}"
+    );
+}
+
 /// § 6 — ComputedTextLayout carries the per-line LayoutRun geometry and
 /// ResolvedBaseline carries first/last line_y.
 #[test]

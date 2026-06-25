@@ -1664,3 +1664,37 @@ follow-ups surfaced during implementation:
   they'd consume IS built (C1+C3), so un-deferring reads a real hit_test, no AABB
   shim; `MultilineTextInput`/`AlertDialog`/multi-thumb-slider/Accordion variants;
   `owns` re-parent + `TreeView::Merged` + the #12 proptest fuzz corpus; P2/`buiy_mcp`.
+
+## Widget-catalog live-run fixes (2026-06-24) — remaining minor items
+
+See `docs/reports/2026-06-24-widget-catalog-rendering-and-crash-bugs.md` for the
+two bugs (the editor-coherence crash + the invisible-content rendering bug) and
+their fixes. Remaining polish (none blocking; the gallery renders + runs):
+
+- **Symbol glyphs render as tofu (latin-subset font).** The checkbox check `✓`
+  (U+2713) and the disclosure caret `▸` (U+25B8) are absent from the embedded
+  `FiraSans-latin` subset, so they render as `.notdef` boxes. Options: embed a
+  fuller glyph (a Symbols/Dingbats subset), draw the check/caret as a primitive
+  (a rotated border, like real TodoMVC), or enable opt-in system fonts
+  (`BuiyTextPlugin { system_fonts: true }` — the async scan path is now
+  coherence-safe under `reshape_edited_editors`).
+- **S3 overlay closed-state positioning.** Closed/anchored overlays (the popover,
+  the closed menu) overlap in a single captured frame — the pre-existing
+  `painters_z` single-frame-ordering fragility (resolves over live frames). The
+  `overlay_menu_screen.snap` is sensitive to unrelated `Update`-set additions for
+  the same reason; pin the popover/menu positioning explicitly after
+  layout+transform so the single-frame result is deterministic.
+- **`Disclosure` restructured — LANDED (this change).** The disclosure trigger now
+  lays its `[caret, label]` out as a centered flex-row header (`Display::flex_row`
+  + `disclosure_row_flex`), with `Position::Relative` on the trigger and the
+  controlled `DisclosurePanel` as `Position::Absolute` (inset top=24/left=0) so it
+  drops BELOW the header out of flow (collapsed ⇒ a clean header row; the panel
+  reveals below). Caret + panel stay direct children so `update_disclosure_visual`
+  /`wire_disclosure_controls` are unchanged. Verified in `showcase_screen.snap`
+  (caret `pos=0,2`, label `pos=17,2`, panel `pos=0,24`). Residual: the caret glyph
+  `▸` (U+25B8) is tofu under the latin-subset font — same font-coverage item as the
+  `✓` checkmark above.
+- **Verify `button` coverage fixture is now content-width-empty.** With the
+  content-width button default, the `button.resting.*` CPU coverage fixture spawns
+  a tiny empty box (no label); give the fixture a label so it remains a meaningful
+  visual sample.

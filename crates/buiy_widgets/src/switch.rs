@@ -11,10 +11,16 @@
 //! Space-only Checkbox). All three modalities converge on the one `OnPress`
 //! consumer, [`advance_toggle_on_press`](crate::advance_toggle_on_press).
 //!
-//! **C4 half (the pixels + pick-through):** the constructor spawns a child
-//! **thumb** and a child label `Text`, both `Pickable::IGNORE` so a hit resolves
-//! to the widget root the router addresses. [`update_switch_visual`] reads
-//! `Changed<A11yToggled>` on each switch and positions its thumb via the decomposed
+//! **C4 half (the pixels + pick-through):** a switch is a horizontal **row** of
+//! `[track-pill, label]` (so the label sits BESIDE the pill instead of squishing
+//! inside it — the widget-catalog rendering bug, the `Checkbox` precedent). The
+//! root is the focusable, accessible flex-row container; the visible 40×20 pill
+//! lives on the [`SwitchTrack`] child, and the sliding [`SwitchThumb`] is a child
+//! of THAT track (a grandchild of the switch root). The constructor adds the
+//! visible label as a sibling `Text` beside the track. The track + label are
+//! `Pickable::IGNORE` so a hit anywhere on the row resolves to the widget root the
+//! router addresses. [`update_switch_visual`] reads `Changed<A11yToggled>` on each
+//! switch, walks to the thumb under its track, and positions it via the decomposed
 //! `Translate` longhand: `False` puts the thumb off (left, `x = 0`), `True` slides
 //! it on (right, by [`SWITCH_THUMB_TRAVEL`]). The thumb carries the *pixels*; the
 //! root keeps `A11yLabel` (the AT name).
@@ -25,7 +31,9 @@ use buiy_core::{
     a11y::{A11yLabel, A11yRole, A11yToggled, Toggled},
     components::Node,
     focus::Focusable,
-    layout::{BoxModel, Length, Style, Translate},
+    layout::{
+        AlignItems, BoxModel, Display, FlexAxis, FlexGap, FlexParams, Length, Style, Translate,
+    },
     render::color::ColorToken,
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text},
@@ -45,10 +53,15 @@ pub const SWITCH_THUMB_TRAVEL: f32 = 20.0;
 /// layout-visible + paintable + focusable + accessible entity, carrying the
 /// **binary** `A11yToggled` the contract + visual read.
 ///
-/// The require list:
+/// The require list — a switch is a horizontal **row** of `[track-pill, label]`:
+/// the root is the focusable, accessible flex-row container; the visible 40×20
+/// pill + its sliding thumb live on the [`SwitchTrack`] child, and the visible
+/// label is the sibling `Text` the constructor adds. Putting the pill on the root
+/// (the pre-fix shape) trapped the label inside the 40×20 pill where it wrapped to
+/// one glyph per line — the widget-catalog rendering bug.
 /// - `Node` — the layout marker (pulls the full `Style` decomposition).
-/// - `BoxModel = switch_box_model()` — the canonical 40×20 pill track.
-/// - `Background` / `Border` — the track fill + pill-rounded edge.
+/// - `Display = flex_row()` + `FlexParams = switch_row_flex()` — lay the track and
+///   label out in a centered row with a gap.
 /// - `Focusable` — keyboard-focusable (implicit `{Focus, Blur}`).
 /// - `A11yRole = A11yRole::Switch` — drives `contract_for(Switch)` (advertised
 ///   verbs + `honor`) and the APG Space+Enter keymap.
@@ -58,9 +71,8 @@ pub const SWITCH_THUMB_TRAVEL: f32 = 20.0;
 #[reflect(Component, Default)]
 #[require(
     Node,
-    BoxModel = switch_box_model(),
-    Background = switch_background(),
-    Border = switch_border(),
+    Display = Display::flex_row(),
+    FlexParams = switch_row_flex(),
     Focusable,
     A11yRole = A11yRole::Switch,
     A11yToggled,
@@ -68,8 +80,31 @@ pub const SWITCH_THUMB_TRAVEL: f32 = 20.0;
 )]
 pub struct Switch;
 
-/// The visual thumb child of a switch — the sliding knob whose `Translate`
-/// position [`update_switch_visual`] drives from `A11yToggled`. A
+/// The visual **track** child of a switch — the 40×20 pill (fill + pill-rounded
+/// border) that carries the sliding [`SwitchThumb`] as ITS child. The `#[require]`
+/// carries the pill geometry + paint companions so the track renders identically
+/// whether spawned bare or via the constructor. A `buiy_widgets`-local **visual**
+/// marker; it defines no a11y component (the a11y state lives on the widget root).
+/// Decorative ⇒ `Pickable::IGNORE` so a click on the track resolves to the widget
+/// root.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug)]
+#[reflect(Component, Default)]
+#[require(
+    Node,
+    BoxModel = switch_box_model(),
+    Background = switch_background(),
+    Border = switch_border(),
+    // Center the 16px thumb on the 20px pill's cross axis (mirrors SliderTrack /
+    // CheckboxMark). `update_switch_visual` only writes the thumb's horizontal
+    // `Translate`, so without this the knob laid out at the pill's content-top
+    // (2px high of centre). Now it straddles the pill centered.
+    Display = Display::flex_row(),
+    FlexParams = switch_track_center_flex(),
+)]
+pub struct SwitchTrack;
+
+/// The visual thumb child of a switch's [`SwitchTrack`] — the sliding knob whose
+/// `Translate` position [`update_switch_visual`] drives from `A11yToggled`. A
 /// `buiy_widgets`-local **visual** marker; it defines no a11y component (the a11y
 /// state lives on the widget root). Decorative ⇒ `Pickable::IGNORE`.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
@@ -100,12 +135,37 @@ pub(crate) fn switch_border() -> Border {
     }
 }
 
+/// The switch ROOT row: `[track-pill, label]` laid out horizontally, vertically
+/// centered, with an 8px gap between the pill and the label.
+pub(crate) fn switch_row_flex() -> FlexParams {
+    FlexParams {
+        direction: FlexAxis::Row,
+        align_items: AlignItems::Center,
+        gap: FlexGap {
+            row: Length::px(8.0),
+            column: Length::px(8.0),
+        },
+        ..Default::default()
+    }
+}
+
+/// The pill's content flex: center the thumb on the pill's cross axis (the thumb
+/// is the pill's only child; its horizontal slide is a post-layout `Translate`).
+pub(crate) fn switch_track_center_flex() -> FlexParams {
+    FlexParams {
+        direction: FlexAxis::Row,
+        align_items: AlignItems::Center,
+        ..Default::default()
+    }
+}
+
 impl Switch {
     /// Spawn-ready bundle for a labelled switch. Returns `impl Bundle` carrying
-    /// the full contract (role + binary toggle + focus + a11y + track) plus two
-    /// decorative children: the sliding **thumb** and the visible **label**
-    /// `Text`, both `Pickable::IGNORE` so a hit resolves to the widget root
-    /// (pick-through, co-drive SC-3).
+    /// the full contract (role + binary toggle + focus + a11y) plus two children
+    /// laid out in the flex-**row** substrate: the **track** pill (which itself
+    /// carries the sliding **thumb**) and the visible **label** `Text` BESIDE it.
+    /// The track + label are `Pickable::IGNORE` so a hit anywhere on the row
+    /// resolves to the widget root (pick-through, co-drive SC-3).
     ///
     /// The thumb starts at the off position (`Translate` x = 0) because the
     /// default `A11yToggled` is `False`; [`update_switch_visual`] slides it on the
@@ -117,17 +177,24 @@ impl Switch {
             Switch,
             A11yLabel(label.clone()),
             children![
-                // The sliding thumb — starts off (Translate x = 0).
+                // The 40×20 track pill (geometry + fill + border from its own
+                // `#[require]`), carrying the sliding thumb as ITS child.
                 (
-                    SwitchThumb,
-                    Node,
-                    switch_thumb_box_model(),
-                    switch_thumb_background(),
-                    switch_thumb_border(),
-                    Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)),
+                    SwitchTrack,
                     Pickable::IGNORE,
+                    children![(
+                        // The sliding thumb — starts off (Translate x = 0).
+                        SwitchThumb,
+                        Node,
+                        switch_thumb_box_model(),
+                        switch_thumb_background(),
+                        switch_thumb_border(),
+                        Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)),
+                        Pickable::IGNORE,
+                    )],
                 ),
-                // The visible label pixels (the AT name stays on the root).
+                // The visible label pixels BESIDE the track (the AT name stays on
+                // the root).
                 (
                     Text(label),
                     FontSize(SWITCH_LABEL_FONT_SIZE),
@@ -169,13 +236,15 @@ type ChangedSwitch = (With<Switch>, Changed<A11yToggled>);
 /// toggle from any modality (pointer, Space/Enter, AT-`Click`) flows through the
 /// one `OnPress` consumer into this `A11yToggled` write, and this system reacts.
 ///
-/// For each changed switch, walk its `Children` to the `SwitchThumb` child and set
-/// its `Translate` x offset: `True` → slid right by [`SWITCH_THUMB_TRAVEL`],
-/// `False` → back to `0`. (`Mixed` is not a switch state; the binary contract
-/// never produces it, but it is treated as `True` for robustness, matching
-/// `A11yToggled::toggle_switch`.)
+/// For each changed switch, walk its `Children` to the [`SwitchTrack`] child and
+/// then to the [`SwitchThumb`] *grandchild* (the thumb is a child of the track),
+/// and set the thumb's `Translate` x offset: `True` → slid right by
+/// [`SWITCH_THUMB_TRAVEL`], `False` → back to `0`. (`Mixed` is not a switch state;
+/// the binary contract never produces it, but it is treated as `True` for
+/// robustness, matching `A11yToggled::toggle_switch`.)
 pub fn update_switch_visual(
     changed: Query<(&A11yToggled, &Children), ChangedSwitch>,
+    tracks: Query<&Children, With<SwitchTrack>>,
     mut thumbs: Query<&mut Translate, With<SwitchThumb>>,
 ) {
     for (toggled, children) in &changed {
@@ -183,9 +252,16 @@ pub fn update_switch_visual(
             Toggled::False => 0.0,
             Toggled::True | Toggled::Mixed => SWITCH_THUMB_TRAVEL,
         };
+        // Switch → SwitchTrack → SwitchThumb: the thumb is a grandchild now that
+        // the pill moved off the root onto its own track child.
         for &child in children {
-            if let Ok(mut translate) = thumbs.get_mut(child) {
-                translate.0 = Length::px(x);
+            let Ok(track_children) = tracks.get(child) else {
+                continue;
+            };
+            for &grandchild in track_children {
+                if let Ok(mut translate) = thumbs.get_mut(grandchild) {
+                    translate.0 = Length::px(x);
+                }
             }
         }
     }
