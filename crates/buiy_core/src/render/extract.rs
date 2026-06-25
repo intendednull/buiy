@@ -14,10 +14,11 @@
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
 use crate::theme::Theme;
+use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
 use crate::components::{Node, ResolvedLayout};
-use crate::layout::BoxModel;
+use crate::layout::{BoxModel, Stacking};
 use crate::render::components::{
     AncestorClip, BackdropFilter, Background, BackgroundLayers, Border, BoxShadow, ClipRect,
     ComputedPaintSkip, EffectGroup, EffectReason, FilterFn, Opacity, Outline,
@@ -932,7 +933,7 @@ pub fn cross_root_rank(top_layer: crate::layout::TopLayer) -> u8 {
 }
 
 use crate::components::StackingContext;
-use crate::layout::{Stacking, TopLayer};
+use crate::layout::TopLayer;
 use crate::render::clip::clip_for_primitive;
 use bevy::render::Extract;
 use bevy::window::PrimaryWindow;
@@ -980,6 +981,76 @@ pub fn effective_outline_clip(
     }
 }
 
+/// The per-entity paint read for one node, as a single `#[derive(QueryData)]`
+/// projection — the LOGICAL PARTITION of the extract fan, by concern.
+///
+/// **Why a struct, not a tuple (parity REDESIGN, spec § 2).** The paint fan grew
+/// to Bevy's 15-term `QueryData` tuple-arity ceiling; the parity-prototype's
+/// mid-flight patch nested the two Wave-B terms in a sub-tuple to stay under it
+/// (always flagged as a stopgap). A flat, named projection has **no arity
+/// ceiling** — each field is one term, but the derive expands them without the
+/// tuple cap — so a future paint input is added by adding a field here, never by
+/// re-nesting another sub-tuple. The fields are grouped by the same logical
+/// sub-system the REDESIGN names (base / colors / effects / gradients), so the
+/// query reads as that partition while keeping `extract_buiy_nodes` ONE system
+/// behind ONE all-or-nothing damage gate — the partition is at the data-projection
+/// layer, not split into separate systems (a multi-system split would desync the
+/// retain-damage gate against the GPU-proven paint-order walk; see the journal
+/// follow-up). This mirrors the established `a11y::A11yNodeQuery` fix for the
+/// identical ceiling (a11y/mod.rs § "Why a struct, not a tuple").
+///
+/// Read-only (no `#[query_data(mutable)]`): the derive generates the item type
+/// `NodePaintQueryItem<'_>` the build loop destructures.
+#[derive(QueryData)]
+pub struct NodePaintQuery {
+    // --- base: geometry + the single skip source (the REDESIGN `…_base` set:
+    // Node membership is the query filter; ResolvedLayout + GlobalTransform are
+    // the required terms; the clip inputs resolve the box's scissor rect). ---
+    entity: Entity,
+    /// Painted top-left + the 2D affine — folded geometry (pillar 5). A
+    /// `Display::None` entity has no `ResolvedLayout` and is dropped by the query.
+    global_transform: &'static GlobalTransform,
+    layout: &'static ResolvedLayout,
+    /// The computed subtree paint-skip marker (§ 5.3 / § 5.4) — the SINGLE skip
+    /// source. Its presence ⇒ emit nothing for this entity (the whole subtree is
+    /// stamped by `write_paint_skip`), so extract never reads `CssVisibility` /
+    /// `OffscreenAuto` directly.
+    paint_skip: Option<&'static ComputedPaintSkip>,
+    /// Clip inputs: the computed per-entity clip AABB + its ancestor-only
+    /// companion (consumed by `clip_for_primitive`), and `Stacking` so a
+    /// top-layer member is forced to the full-view sentinel (`clip = None`,
+    /// paint-order § 3.2).
+    clip_rect: Option<&'static ClipRect>,
+    ancestor_clip: Option<&'static AncestorClip>,
+    stacking: Option<&'static Stacking>,
+    // --- colors: the solid + band fills (the REDESIGN `…_colors` set —
+    // Background/Border/TextColor; the band thickness is the layout-owned
+    // `BoxModel.border`, read alongside). ---
+    /// The solid background fill quad (a node with none rides the byte-stable
+    /// solid-only path; `BackgroundLayers` paints ABOVE it, in `gradients`).
+    bg: Option<&'static Background>,
+    /// The focus-ring / selection outline band (rides a DISTINCT band record +
+    /// the entity's `AncestorClip`, not its own box — styling-f-tier.md § 2.4).
+    outline: Option<&'static Outline>,
+    /// The per-side border paint (color/style/radius); its band THICKNESS is the
+    /// layout-owned `BoxModel.border` (a Taffy input, § 3.5), read below.
+    border: Option<&'static Border>,
+    box_model: Option<&'static BoxModel>,
+    /// The box-shadow list (outset-only, drawn BEHIND the box — § 2.2).
+    box_shadow: Option<&'static BoxShadow>,
+    // --- effects: the off-screen compositor fan (the REDESIGN `…_effects` set —
+    // BackdropFilter/EffectGroup; `Opacity` is the alpha applied at composite). ---
+    effect_group: Option<&'static EffectGroup>,
+    opacity: Option<&'static Opacity>,
+    /// B4: the backdrop-filter list (samples the painted window backdrop),
+    /// resolved into the group's `backdrop_blur_px` below.
+    backdrop_filter: Option<&'static BackdropFilter>,
+    // --- gradients: the layered fills (the REDESIGN `…_gradients` set —
+    // `BackgroundLayers`, the gradient / layered fills painted above the solid
+    // `Background.color` quad). ---
+    background_layers: Option<&'static BackgroundLayers>,
+}
+
 /// Per-frame, `Changed`-gated extract (architecture.md § 1.2/§ 3/§ 4). Reads
 /// the main world's layout + render-owned components through `Extract`, walks
 /// the primary view's stacking order, and writes the per-view `ExtractedNodes`.
@@ -1008,67 +1079,11 @@ pub fn extract_buiy_nodes(
     // a *whether-to-rebuild* probe (`changed`/`removed`/`theme` below), not a
     // *what-to-include* filter — building the full set is CPU-cheap; the GPU
     // re-upload is what the gate protects (architecture.md § 3.1).
-    nodes: Extract<
-        Query<
-            (
-                Entity,
-                &GlobalTransform,
-                &ResolvedLayout,
-                Option<&Background>,
-                // The computed subtree paint-skip marker (§ 5.3 / § 5.4) —
-                // the SINGLE skip source. `write_paint_skip` resolves the
-                // per-entity `CssVisibility` / `OffscreenAuto` inputs into it
-                // (root AND descendants), so extract never reads those
-                // author-set components directly.
-                Option<&ComputedPaintSkip>,
-                // Clip inputs (R8b): the computed per-entity clip AABB + its
-                // ancestor-only companion (consumed by `clip_for_primitive`),
-                // and `Stacking` so a top-layer member is forced to the
-                // full-view sentinel (`clip = None`, paint-order § 3.2).
-                Option<&ClipRect>,
-                Option<&AncestorClip>,
-                Option<&Stacking>,
-                // Effect-compositor fan (effect-compositor.md § 1.1): the
-                // `EffectGroup` marker (which entities form an off-screen group +
-                // their `reason`) and `Opacity` (the alpha applied at composite).
-                // FAN: add Option<&BoxShadow>/&Border and the reserved effect
-                // components here as their tier lands (architecture § 1.2
-                // illustrative subset). C6-a adds Option<&Outline> below (the
-                // focus-ring / selection-outline band channel).
-                // NOTE: Containment is NOT in the fan — content-visibility:hidden
-                // paints the entity's own box and prunes descendants layout-side
-                // (paint-order § 5.2), so it is not a render skip input.
-                Option<&EffectGroup>,
-                Option<&Opacity>,
-                // C6-a: the outline paint (focus ring / selection outline). It
-                // rides a DISTINCT band record + the entity's `AncestorClip`
-                // (resolved below), not its own box (styling-f-tier.md § 2.4).
-                Option<&Outline>,
-                // C6-b: the per-side border paint + the layout-owned per-side
-                // WIDTH. `Border` carries color/style/radius (paint); the band's
-                // thickness is the layout input `BoxModel.border` (a Taffy input,
-                // § 3.5), so both are read here and resolved into the SAME band
-                // record `Outline` rides — but AT the box edge (styling-f-tier.md
-                // § 2.3). `BoxShadow` feeds the reserved `(Shadow, layer)` bucket
-                // (drawn BEHIND the box, § 2.2).
-                Option<&Border>,
-                Option<&BoxModel>,
-                Option<&BoxShadow>,
-                // Parity Wave B render-paint fan, nested in ONE sub-tuple to keep
-                // the top-level query within Bevy's 15-element `QueryData` tuple
-                // bound (the fan has grown to that limit). Both are background /
-                // backdrop paint inputs:
-                //  - B1 `BackgroundLayers`: the gradient / layered fills, painted
-                //    ABOVE the solid `Background.color` quad (a node with none
-                //    rides the byte-stable solid-only path).
-                //  - B4 `BackdropFilter`: the backdrop-filter list (samples the
-                //    painted window backdrop), resolved into the former's
-                //    `backdrop_blur_px` / `backdrop_box` below.
-                (Option<&BackgroundLayers>, Option<&BackdropFilter>),
-            ),
-            With<Node>,
-        >,
-    >,
+    // The paint fan is the `NodePaintQuery` projection (grouped by concern: base /
+    // colors / effects / gradients) — one `#[derive(QueryData)]` struct with no
+    // 15-tuple arity ceiling. A new paint input is a new field there, never another
+    // nested sub-tuple. `With<Node>` is the membership filter.
+    nodes: Extract<Query<NodePaintQuery, With<Node>>>,
     // The parent link, used to resolve each painted node's nearest `EffectGroup`
     // ancestor (the off-screen group it belongs to). Read over ALL `Node`s so the
     // walk can climb through non-group ancestors to the enclosing group.
@@ -1222,24 +1237,28 @@ pub fn extract_buiy_nodes(
     let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32, Option<f32>)> =
         std::collections::HashMap::new();
     let forced_colors = prefs.forced_colors;
-    for (
-        entity,
-        gt,
-        layout,
-        bg,
-        paint_skip,
-        clip_rect,
-        ancestor_clip,
-        stacking,
-        effect_group,
-        opacity,
-        outline,
-        border,
-        box_model,
-        box_shadow,
-        (background_layers, backdrop_filter),
-    ) in nodes.iter()
-    {
+    for n in nodes.iter() {
+        // Destructure the `NodePaintQuery` projection into the per-concern locals
+        // the resolve calls below consume (the field names match the prior tuple
+        // bindings, so the resolution body is unchanged from the sub-tuple era).
+        let NodePaintQueryItem {
+            entity,
+            global_transform: gt,
+            layout,
+            paint_skip,
+            clip_rect,
+            ancestor_clip,
+            stacking,
+            bg,
+            outline,
+            border,
+            box_model,
+            box_shadow,
+            effect_group,
+            opacity,
+            backdrop_filter,
+            background_layers,
+        } = n;
         // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
         // computed marker ⇒ emit nothing for this entity. `write_paint_skip`
         // stamps the marker on the hidden/offscreen ROOT and every
