@@ -37,11 +37,24 @@ pub use buiy_core::{
     scroll::{ScrollExtent, ScrollInputPlugin},
     text::{
         BuiyTextPlugin, ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize,
-        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, LineHeight,
-        ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer, TextCommitReshapeCount,
-        TextMeasureCallCount, TextStyleDefaults, TextSyncAppliedCount, TextWrap, WhiteSpace,
+        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, LetterSpacing,
+        LineHeight, ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer,
+        TextCommitReshapeCount, TextMeasureCallCount, TextStyleDefaults, TextSyncAppliedCount,
+        TextWrap, WhiteSpace,
     },
-    theme::{Theme, UserPreferences, default_light_theme},
+    theme::{SetAccent, Theme, UserPreferences, default_light_theme},
+};
+// Foundation primitives promoted to the crate root (→ `buiy::prelude` below).
+// Animation: the `Tween<T>` per-property model + `Easing` curve enum + the
+// per-property tween *components* a `bsn!` author attaches to a node
+// (`TranslateTween`/`RotateTween`/`ScaleTween`/`OpacityTween`/
+// `BackgroundColorTween`) and the `AnimatedBackgroundColor` color marker. These
+// are everyday authoring primitives (widget-catalog parity § 3.3), so they
+// belong next to the other component surface. (`Repeat`/PingPong loop control
+// lands with the render-polish wave that introduces it — promoted there.)
+pub use buiy_core::animation::{
+    AnimatedBackgroundColor, BackgroundColorTween, Easing, OpacityTween, RotateTween, ScaleTween,
+    TranslateTween, Tween,
 };
 // The editor's seed/set channel is the existing `EditCommand` verbs (`Insert`,
 // `SelectAll` + `Insert` — no `SetValue` variant; the `EditCommand` surface is
