@@ -231,6 +231,13 @@ pub fn default_dark_theme() -> Theme {
         "color.surface.danger-soft".into(),
         Color::srgb_u8(0x1a, 0x12, 0x13),
     );
+    // The delete-confirm button face — a saturated red distinct from the dim
+    // `surface.danger` tile (values.md § 7.2 Modal "Confirm button (delete)
+    // bg #cf3a36"; JS 723 `confirmStyle`). Only the modal delete-confirm uses it.
+    c.insert(
+        "color.surface.danger-strong".into(),
+        Color::srgb_u8(0xcf, 0x3a, 0x36),
+    );
     c.insert("color.surface.transparent".into(), Color::NONE);
 
     // --- border.* (values.md § 1.1) ---
@@ -320,6 +327,45 @@ pub fn default_dark_theme() -> Theme {
     c.insert(
         "color.scrollbar.thumb-hover".into(),
         Color::srgb_u8(0x39, 0x40, 0x4a), // == border.muted
+    );
+
+    // --- shadow.* — the box-shadow catalog colors (values.md § 2). The design's
+    // drop shadows are all `rgba(0,0,0,α)`; the offset/blur/spread live on each
+    // `Shadow` term, the COLOR (incl. alpha) is the token. These were referenced
+    // by the C-tier showcase (`color.shadow.card`) before any theme defined them —
+    // a pre-existing magenta-sentinel miss the parity journal flagged (2026-06-25
+    // C1 note); seeding them here resolves the showcase shadow AND the C2 toast/
+    // menu/modal drop shadows to the real design alphas.
+    c.insert(
+        "color.shadow.card".into(),
+        Color::srgba_u8(0x00, 0x00, 0x00, (0.70 * 255.0_f32).round() as u8), // rgba(0,0,0,.7)
+    );
+    c.insert(
+        "color.shadow.menu".into(),
+        Color::srgba_u8(0x00, 0x00, 0x00, (0.80 * 255.0_f32).round() as u8), // rgba(0,0,0,.8)
+    );
+    c.insert(
+        "color.shadow.modal".into(),
+        Color::srgba_u8(0x00, 0x00, 0x00, (0.85 * 255.0_f32).round() as u8), // rgba(0,0,0,.85)
+    );
+    // The showcase slider/switch thumb drop shadows (values.md § 2
+    // `shadow.slider-thumb` `0 2px 6px rgba(0,0,0,.5)` / `shadow.switch-thumb`
+    // `0 1px 3px rgba(0,0,0,.4)`; HTML 335 / JS 638). The offset/blur live on the
+    // `Shadow` term; the COLOR (incl. alpha) is the token.
+    c.insert(
+        "color.shadow.slider-thumb".into(),
+        Color::srgba_u8(0x00, 0x00, 0x00, (0.50 * 255.0_f32).round() as u8), // rgba(0,0,0,.5)
+    );
+    c.insert(
+        "color.shadow.switch-thumb".into(),
+        Color::srgba_u8(0x00, 0x00, 0x00, (0.40 * 255.0_f32).round() as u8), // rgba(0,0,0,.4)
+    );
+    // The delete-confirm button's red glow (values.md § 2 `shadow.danger-button`
+    // `0 8px 20px -8px rgba(207,58,54,.5)`; JS 723). Unlike the other drop shadows
+    // (opaque black) this is a colored accent-style glow keyed to `#cf3a36`.
+    c.insert(
+        "color.shadow.danger-button".into(),
+        Color::srgba_u8(0xcf, 0x3a, 0x36, (0.50 * 255.0_f32).round() as u8), // rgba(207,58,54,.5)
     );
 
     // --- accent ramp (color.accent + lighter/soft/glow), seeded for blue ---

@@ -1,37 +1,55 @@
 ---
 source: examples/buiy_gallery/tests/todomvc_layout.rs
+assertion_line: 49
 expression: todomvc_screen
 ---
 # buiy-layout-dump v1
-TodoCard pos=0,0 size=608,324
-  AddField pos=24,24 size=216,48
-  Footer pos=24,252 size=560,48
-    ClearButton pos=304,0 size=135,48
-      entity#94 pos=8,14 size=119,20
-    FilterActive pos=133,0 size=60,48
-      entity#90 pos=8,14 size=44,20
-    FilterAll pos=90,0 size=35,48
-      entity#88 pos=8,14 size=19,20
-    FilterCompleted pos=201,0 size=95,48
-      entity#92 pos=8,14 size=79,20
-    ItemsLeft pos=0,0 size=82,48
-      ItemsLeftCount pos=0,0 size=82,20
-  TodoList pos=24,84 size=560,156
-    TodoRow pos=0,0 size=560,48
-      RowCheckbox pos=0,0 size=173,48
-        entity#97 pos=0,15 size=18,18
-        entity#98 pos=26,14 size=147,20
-      RowDestroy pos=181,0 size=24,48
-        entity#100 pos=8,14 size=8,20
-    TodoRow pos=0,54 size=560,48
-      RowCheckbox pos=0,0 size=212,48
-        entity#103 pos=0,15 size=18,18
-        entity#104 pos=26,14 size=186,20
-      RowDestroy pos=220,0 size=24,48
-        entity#106 pos=8,14 size=8,20
-    TodoRow pos=0,108 size=560,48
-      RowCheckbox pos=0,0 size=252,48
-        entity#109 pos=0,15 size=18,18
-        entity#110 pos=26,14 size=226,20
-      RowDestroy pos=260,0 size=24,48
-        entity#112 pos=8,14 size=8,20
+#TodoScreen pos=0,0 size=800,447
+  #TodoWrap pos=96,0 size=608,447
+    #TodoCaption pos=24,369 size=560,14
+    #TodoCard pos=24,102 size=560,253
+      #TodoDraftRow pos=1,1 size=558,51
+        #AddField pos=50,15 size=460,20
+        #TodoKbd pos=522,15 size=20,20
+          #TodoKbdGlyph pos=7,4 size=6,12
+        #ToggleAll pos=16,14 size=22,22
+          #ToggleAllChevron pos=3,3 size=16,16
+      #TodoEmpty pos=0,0 size=0,0
+      #TodoFooter pos=1,205 size=558,47
+        #ClearButton pos=477,12 size=67,24
+          #ClearDoneLabel pos=4,5 size=59,14
+        #ItemsLeft pos=14,17 size=49,14
+          #ItemsLeftCount pos=0,0 size=49,14
+        #TodoFilters pos=195,12 size=150,24
+          #FilterActive pos=40,0 size=56,24
+            #FilterLabel pos=11,5 size=34,14
+          #FilterAll pos=0,0 size=37,24
+            #FilterLabel pos=11,5 size=15,14
+          #FilterCompleted pos=99,0 size=51,24
+            #FilterLabel pos=11,5 size=29,14
+      #TodoList pos=1,52 size=558,153
+        #TodoRow pos=0,0 size=558,51
+          #RowCheckbox pos=16,14 size=490,23
+            #RowCheckBox pos=0,0 size=23,23
+              #RowCheckIcon pos=5,5 size=13,13
+            #RowLabel pos=35,3 size=455,18
+          #RowDestroy pos=518,12 size=26,26
+            #RowDeleteIcon pos=6,6 size=14,14
+        #TodoRow pos=0,51 size=558,51
+          #RowCheckbox pos=16,14 size=490,23
+            #RowCheckBox pos=0,0 size=23,23
+              #RowCheckIcon pos=5,5 size=13,13
+            #RowLabel pos=35,3 size=455,18
+          #RowDestroy pos=518,12 size=26,26
+            #RowDeleteIcon pos=6,6 size=14,14
+        #TodoRow pos=0,102 size=558,51
+          #RowCheckbox pos=16,14 size=490,23
+            #RowCheckBox pos=0,0 size=23,23
+              #RowCheckIcon pos=5,5 size=13,13
+            #RowLabel pos=35,3 size=455,18
+          #RowDestroy pos=518,12 size=26,26
+            #RowDeleteIcon pos=6,6 size=14,14
+    #TodoHeading pos=24,48 size=560,36
+      #TodoH1 pos=0,0 size=80,36
+      #TodoRemainingBadge pos=475,11 size=85,25
+        #TodoRemaining pos=10,5 size=65,15

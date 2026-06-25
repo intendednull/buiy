@@ -3,17 +3,53 @@ source: examples/buiy_gallery/tests/modal_layout.rs
 expression: modal_screen
 ---
 # buiy-layout-dump v1
-ModalDialog pos=0,0 size=320,180
-  ModalBody pos=0,22 size=320,17
-  ModalClose pos=0,59 size=320,48
-    entity#95 pos=140,14 size=40,20
-  ModalSwitch pos=0,39 size=320,20
-    entity#91 pos=0,0 size=40,20
-      entity#92 pos=0,2 size=16,16
-    entity#93 pos=48,0 size=57,20
-  ModalTitle pos=0,0 size=320,22
-ModalRoot pos=0,0 size=800,600
-  ModalBackgroundButton pos=0,48 size=800,48
-    entity#86 pos=332,14 size=136,20
-  ModalInvoker pos=0,0 size=800,48
-    entity#97 pos=356,14 size=88,20
+#ModalRoot pos=0,0 size=880,680
+  #ModalCaption pos=275,356 size=331,29
+  #ModalTriggers pos=320,296 size=240,40
+    #ModalCreateTrigger pos=0,0 size=130,40
+      #ModalTriggerIcon pos=16,12 size=16,16
+      #ModalTriggerLabel pos=40,12 size=74,16
+    #ModalDeleteTrigger pos=142,0 size=98,40
+      #ModalTriggerIcon pos=16,12 size=16,16
+      #ModalTriggerLabel pos=40,12 size=42,16
+ModalDialog pos=0,0 size=848,648
+  #ModalCard pos=203,132 size=442,384
+    #ModalCreateBody pos=1,73 size=440,245
+      #ModalKindField pos=20,95 size=400,58
+        #ModalKind pos=0,21 size=400,37
+          #SegmentedOption-0 pos=4,4 size=130,29
+            #SegmentedLabel-0 pos=46,7 size=38,15
+          #SegmentedOption-1 pos=138,4 size=132,29
+            #SegmentedLabel-1 pos=46,7 size=39,15
+          #SegmentedOption-2 pos=274,4 size=122,29
+            #SegmentedLabel-2 pos=46,7 size=30,15
+        #ModalKindLabel pos=0,0 size=400,14
+      #ModalNameField pos=20,18 size=400,61
+        #ModalNameInput pos=0,21 size=400,40
+        #ModalNameLabel pos=0,0 size=400,14
+      #ModalRegisterRow pos=20,169 size=400,58
+        #ModalRegisterCol pos=15,13 size=153,32
+          #ModalRegisterSub pos=0,18 size=153,14
+          #ModalRegisterTitle pos=0,0 size=153,16
+        #ModalRegisterSwitch pos=345,19 size=40,20
+          entity#107 pos=0,0 size=40,20
+            entity#108 pos=0,2 size=16,16
+    #ModalDeleteBody pos=0,0 size=0,0
+      #ModalDeleteText pos=0,0 size=0,0
+      #ModalWarnTile pos=0,0 size=0,0
+        #ModalWarnIcon pos=0,0 size=0,0
+    #ModalFooter pos=1,318 size=440,65
+      #ModalCancel pos=265,14 size=72,38
+        #ModalCloseLabel pos=15,11 size=42,16
+      #ModalConfirm pos=347,15 size=73,36
+        #ModalConfirmLabel pos=16,10 size=41,16
+      #ModalEscKbd pos=20,22 size=88,22
+        #ModalEscGlyph pos=8,5 size=72,12
+      #ModalFooterSpacer pos=118,33 size=137,0
+    #ModalHeader pos=1,1 size=440,72
+      #ModalCloseX pos=390,18 size=30,30
+        #ModalCloseIcon pos=8,8 size=14,14
+      #ModalTitleCol pos=20,18 size=358,39
+        #ModalSub pos=0,23 size=358,16
+        #ModalTitle pos=0,0 size=358,20
+  #ModalScrim pos=0,0 size=848,648

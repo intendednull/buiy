@@ -14,9 +14,9 @@
 use bevy::MinimalPlugins;
 use bevy::app::App;
 use bevy::asset::AssetPlugin;
-use bevy::scene::{ScenePlugin, WorldSceneExt};
+use bevy::scene::ScenePlugin;
 use buiy::{BuiyTextPlugin, CorePlugin, LayoutPlugin, WidgetsPlugin};
-use buiy_gallery::{fill_scroll_list, screen_scroll_list};
+use buiy_gallery::{fill_scroll_list, spawn_scroll_screen};
 use buiy_verify::snapshot::assert_layout_snapshot;
 
 /// The row count the snapshot pins (small + reviewable; the scale-game is in the
@@ -34,11 +34,10 @@ fn scroll_list_screen_lays_out_as_expected() {
         .add_plugins(BuiyTextPlugin::default())
         .add_plugins(WidgetsPlugin);
 
-    // Author the static screen, then seed a small row set (rows are dynamic — the
+    // Build the entity-tree screen (imperative — composite/icon-heavy, like S1's
+    // `spawn_todomvc_screen`), then seed a small row set (rows are dynamic — the
     // binary seeds 1000 the same way via `fill_scroll_list`).
-    app.world_mut()
-        .spawn_scene(screen_scroll_list(SNAPSHOT_ROWS))
-        .expect("spawn the scroll-list screen");
+    spawn_scroll_screen(app.world_mut());
     fill_scroll_list(app.world_mut(), SNAPSHOT_ROWS);
 
     assert_layout_snapshot(&mut app, "scroll_list_screen");

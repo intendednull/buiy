@@ -1,4 +1,4 @@
-//! C8-c — the **S4 (modal + focus-trap) + S5 (F-tier showcase) inspection-driver
+//! C8-c — the **S4 (modal + focus-trap) + S5 (Controls showcase) inspection-driver
 //! acceptance** (widget-gallery-exemplar §6 / co-drive grounding loops). The LAST
 //! pair of screens. Mirrors the C8-a/b acceptance pattern (`todomvc_c8a.rs`,
 //! `scroll_overlay_c8b.rs`): every interaction is driven through the C7
@@ -6,12 +6,13 @@
 //! dialog-lifecycle path) or the in-process a11y driver
 //! (`buiy_core::a11y::inprocess`: `get_by_role`/`snapshot`/`click`/`increment`/
 //! `expand`) and asserted through the live state + the a11y tree — never by reading
-//! bespoke internal state. The F-tier PAINT is asserted at the display-list /
-//! extract tier (the C6-a/b channels), headlessly, with no GPU.
+//! bespoke internal state. The PAINT is asserted at the display-list / extract tier
+//! (the border + shadow channels), headlessly, with no GPU.
 //!
 //! The screens + their composition are `buiy_gallery::{spawn_modal,
-//! screen_showcase, …}` (pure composition over the landed C5-d Dialog lifecycle +
-//! the C6 styling + the P1d widgets). These are the live gates; the static layout
+//! spawn_showcase, …}` (pure composition over the landed C5-d Dialog lifecycle +
+//! the C6 styling + the P1d widgets — the S5 controls grid restyled to exact
+//! design parity in parity Wave C3). These are the live gates; the static layout
 //! snapshots live in `examples/buiy_gallery/tests`.
 //!
 //! ## S4 — modal + focus-trap (the C5-d behaviors, composed in a gallery screen)
@@ -26,18 +27,19 @@
 //!    pruned from the a11y tree (the snapshot shows only the modal subtree);
 //!    restored on close.
 //!
-//! ## S5 — F-tier showcase (function via the driver + the F-tier paint)
+//! ## S5 — Controls showcase (function via the driver + the design paint)
 //!  - **Switch toggles** (driver `click` → `OnPress` → the toggle consumer): the
 //!    `A11yToggled` flips, observed through the a11y tree.
 //!  - **Slider increments** (driver `increment`): the slider contract raises the
 //!    live `A11yValue.now` by step, observed through the a11y tree.
 //!  - **Disclosure expands** (driver `expand` / `click`): the `A11yExpanded` flips,
 //!    observed through the a11y tree.
-//!  - **F-tier paint**: the styled card emits a `BoxShadow` + a per-side `Border`
-//!    band in the extract output, and a keyboard-focused widget emits the C6-a
-//!    focus-ring `Outline` band — all at the display-list tier, headlessly.
-//!  - **(Optional, `#[ignore]` GPU lane)** a programmatic readback that the
-//!    showcase paints non-canvas pixels on a real adapter (adapter-tolerant).
+//!  - **Design paint**: the five flat controls cards each emit a per-side `Border`
+//!    band, the slider preview square emits its single accent-glow `BoxShadow`, and
+//!    a keyboard-focused widget emits the C6-a focus-ring `Outline` band — all at
+//!    the display-list tier, headlessly.
+//!  - **(Optional, `#[ignore]` GPU lane)** a programmatic readback that the slider
+//!    preview paints non-canvas pixels on a real adapter (adapter-tolerant).
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -50,8 +52,8 @@ use buiy_core::focus::{FocusPlugin, FocusVisible, FocusedEntity};
 use buiy_core::text::BuiyTextPlugin;
 use buiy_gallery::{
     MODAL_BG_BUTTON, MODAL_INVOKER, SHOWCASE_DISCLOSURE, SHOWCASE_SLIDER, SHOWCASE_SLIDER_NOW,
-    SHOWCASE_SLIDER_STEP, SHOWCASE_SWITCH, ShowcaseCard, screen_showcase, showcase_card_border,
-    showcase_card_shadow, spawn_modal,
+    SHOWCASE_SLIDER_STEP, SHOWCASE_SWITCH, ShowcasePlugin, ShowcasePreview, showcase_card_border,
+    showcase_preview_shadow, spawn_modal, spawn_showcase,
 };
 use buiy_verify::pointer::PointerHarness;
 use buiy_widgets::WidgetsPlugin;
@@ -159,15 +161,21 @@ fn s4_tab_traps_inside_the_modal_and_wraps() {
     let focusables = dialog_focusables(h.world_mut(), dialog);
     open_via_invoker(&mut h, invoker);
     assert!(is_open(h.world(), dialog));
+    // The parity create-modal (Wave C3) has EIGHT focusable controls: the header
+    // close ×, the Name input, the three Kind segmented buttons, the Register
+    // switch, and the footer Cancel + Create confirm. (The delete body carries no
+    // focusable — it is a warning tile + text — and is `Display::None` at rest.)
     assert_eq!(
         focusables.len(),
-        2,
-        "two focusable controls in the dialog (Switch + Close)"
+        8,
+        "eight focusable controls in the create modal (close, name, 3×kind, switch, \
+         cancel, confirm); got {focusables:?}"
     );
 
-    // Tab N times: focus is ALWAYS one of the dialog's focusables — never the
-    // invoker, never the background button.
-    for i in 0..8 {
+    // Tab N+ times: focus is ALWAYS one of the dialog's focusables — never the
+    // invoker, never the background button (the C5-d trap confines Tab to the modal
+    // subtree, however many focusables it has).
+    for i in 0..(focusables.len() * 2) {
         h.press_key(KeyCode::Tab);
         let f = focused(h.world());
         assert!(
@@ -177,15 +185,28 @@ fn s4_tab_traps_inside_the_modal_and_wraps() {
         );
     }
 
-    // Two focusables ⇒ Tab wraps: from a stop, two Tabs return to it.
+    // The trap WRAPS: from any stop, N Tabs (N = focusable count) return to it, and
+    // each single Tab advances (no stuck cursor). Establish a stop, then walk a full
+    // cycle and confirm we land back on it.
     h.press_key(KeyCode::Tab);
-    let a = focused(h.world());
+    let start = focused(h.world());
+    let mut prev = start;
+    for step in 1..focusables.len() {
+        h.press_key(KeyCode::Tab);
+        let now = focused(h.world());
+        assert_ne!(
+            prev, now,
+            "Tab step {step} advanced to a different focusable (no stuck cursor)"
+        );
+        prev = now;
+    }
+    // The Nth Tab wraps back to the starting stop.
     h.press_key(KeyCode::Tab);
-    let b = focused(h.world());
-    h.press_key(KeyCode::Tab);
-    let c = focused(h.world());
-    assert_ne!(a, b, "Tab moves between the two dialog focusables");
-    assert_eq!(a, c, "Tab wraps within the modal (back to the same stop)");
+    let wrapped = focused(h.world());
+    assert_eq!(
+        start, wrapped,
+        "Tab wraps within the modal after a full cycle (back to the same stop)"
+    );
 }
 
 #[test]
@@ -327,13 +348,217 @@ fn s4_open_modal_prunes_the_background_from_the_a11y_tree_and_restores_on_close(
     );
 }
 
+// ---------------------------------------------------------------------------
+// S4 create-form (parity Wave C3) — the Kind segmented selection + the Register
+// switch, the two interactive controls inside the create body. Driven over the
+// shared `OnPress` sink + the in-process `click` (the same routes a real
+// pointer/keyboard/AT use); the `ModalPlugin` create-form app logic restyles the
+// Kind group, and the buiy_widgets `Switch` toggles itself.
+// ---------------------------------------------------------------------------
+
+/// A headless app with the a11y/focus/layout/widget surface PLUS the gallery's
+/// `ModalPlugin` (the create/delete body swap + Kind-selection wiring). The Kind
+/// segmented restyle + the body swap need it; the C5-d open/trap/Esc lifecycle is
+/// `WidgetsPlugin`. No ScenePlugin — `spawn_modal` is scene-free.
+fn modal_form_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(buiy_core::CorePlugin);
+    app.add_plugins(A11yPlugin);
+    app.add_plugins(FocusPlugin);
+    app.add_plugins(buiy_core::layout::LayoutPlugin);
+    app.add_plugins(BuiyTextPlugin::default());
+    app.add_plugins(WidgetsPlugin);
+    app.add_plugins(buiy_gallery::ModalPlugin);
+    app.init_resource::<ButtonInput<KeyCode>>();
+    app
+}
+
+/// The modal's Kind segmented option buttons, in index order (the C2
+/// `SegmentedOption(idx)` children of the modal `ModalKindTrack`).
+fn kind_options(world: &mut World) -> Vec<(Entity, usize)> {
+    let track = {
+        let mut q = world.query_filtered::<Entity, With<buiy_gallery::ModalKindTrack>>();
+        q.iter(world).next().expect("the modal has a Kind track")
+    };
+    let kids: Vec<Entity> = world
+        .get::<Children>(track)
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    let mut opts: Vec<(Entity, usize)> = kids
+        .into_iter()
+        .filter_map(|c| {
+            world
+                .get::<buiy_gallery::composites::SegmentedOption>(c)
+                .map(|o| (c, o.0))
+        })
+        .collect();
+    opts.sort_by_key(|&(_, idx)| idx);
+    opts
+}
+
+/// The `Background` token key of an entity (the segmented pill fill), for the
+/// selected/unselected assertion.
+fn bg_token(world: &World, e: Entity) -> Option<String> {
+    match world
+        .get::<buiy_core::render::components::Background>(e)?
+        .color
+        .clone()
+    {
+        buiy_core::render::ColorToken::Token(t) => Some(t.to_string()),
+        _ => None,
+    }
+}
+
+#[test]
+fn s4_create_form_kind_selection_restyles_the_segmented_group() {
+    let mut app = modal_form_app();
+    let (invoker, dialog, _delete) = spawn_modal(app.world_mut());
+    for _ in 0..4 {
+        app.update();
+    }
+
+    // Open in create mode (the default) so the Kind body is visible.
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(invoker);
+    app.world_mut()
+        .write_message(buiy_core::interaction::OnPress(invoker));
+    for _ in 0..4 {
+        app.update();
+    }
+    assert!(is_open(app.world(), dialog), "the create modal opened");
+
+    let opts = kind_options(app.world_mut());
+    assert_eq!(
+        opts.len(),
+        3,
+        "three Kind options (Button / Layout / Input)"
+    );
+    // At rest the first option (Button, idx 0) is the selected accent pill; the
+    // others are transparent.
+    assert_eq!(
+        bg_token(app.world(), opts[0].0).as_deref(),
+        Some("color.accent"),
+        "Button is the selected pill at rest"
+    );
+    assert_eq!(
+        bg_token(app.world(), opts[1].0).as_deref(),
+        Some("color.surface.transparent"),
+        "Layout is unselected at rest"
+    );
+
+    // Press the "Layout" option (idx 1) over the shared OnPress sink; ModalPlugin's
+    // `select_modal_kind` restyles the group so Layout becomes the accent pill.
+    let layout = opts[1].0;
+    app.world_mut()
+        .write_message(buiy_core::interaction::OnPress(layout));
+    for _ in 0..2 {
+        app.update();
+    }
+    assert_eq!(
+        bg_token(app.world(), opts[1].0).as_deref(),
+        Some("color.accent"),
+        "selecting Layout made it the accent pill"
+    );
+    assert_eq!(
+        bg_token(app.world(), opts[0].0).as_deref(),
+        Some("color.surface.transparent"),
+        "Button deselected when Layout was chosen (exclusive segmented group)"
+    );
+}
+
+#[test]
+fn s4_create_form_register_switch_toggles() {
+    let mut app = modal_form_app();
+    let (invoker, dialog, _delete) = spawn_modal(app.world_mut());
+    for _ in 0..4 {
+        app.update();
+    }
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(invoker);
+    app.world_mut()
+        .write_message(buiy_core::interaction::OnPress(invoker));
+    for _ in 0..4 {
+        app.update();
+    }
+    assert!(is_open(app.world(), dialog), "the create modal opened");
+
+    // The Register switch — addressable by role+name. It defaults ON (the design's
+    // `mPublic:true`).
+    let sw = get_by_role(
+        app.world_mut(),
+        A11yRole::Switch,
+        Some("Register globally"),
+        None,
+    )
+    .expect("the register switch is addressable by role+name");
+    let sw_entity = buiy_core::a11y::translate::entity_for_node_id(sw).unwrap();
+    assert_eq!(
+        app.world().get::<A11yToggled>(sw_entity).map(|t| t.0),
+        Some(Toggled::True),
+        "the register switch defaults ON (mPublic:true)"
+    );
+
+    // Driver click → OnPress → the toggle consumer flips it OFF (the control still
+    // functions inside the open modal's focus trap).
+    click(app.world_mut(), sw).expect("AT click on the register switch honored");
+    app.update();
+    assert_eq!(
+        app.world().get::<A11yToggled>(sw_entity).map(|t| t.0),
+        Some(Toggled::False),
+        "clicking the register switch toggled it ON → OFF inside the trap"
+    );
+}
+
+#[test]
+fn s4_delete_trigger_opens_the_delete_body() {
+    // The "Delete" trigger opens the dialog in delete mode: the delete body shows
+    // (the warning text is in the a11y tree) + the title becomes "Delete widget".
+    let mut app = modal_form_app();
+    let (_create, dialog, delete) = spawn_modal(app.world_mut());
+    for _ in 0..4 {
+        app.update();
+    }
+
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(delete);
+    app.world_mut()
+        .write_message(buiy_core::interaction::OnPress(delete));
+    for _ in 0..4 {
+        app.update();
+    }
+    assert!(
+        is_open(app.world(), dialog),
+        "the delete trigger opened the dialog"
+    );
+
+    // The visible title text reflects the delete mode (the design's `modalTitle`).
+    let title = {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&buiy_core::text::Text, With<buiy_gallery::ModalTitleField>>();
+        q.iter(app.world()).next().map(|t| t.0.clone())
+    };
+    assert_eq!(
+        title.as_deref(),
+        Some(buiy_gallery::MODAL_TITLE_DELETE),
+        "the delete trigger swapped the modal title to the delete-mode title"
+    );
+
+    // The delete body is now a11y-visible (its warning text is in the tree) and the
+    // create body is pruned (`A11yHidden` on switch).
+    let snap = snapshot(app.world_mut(), Default::default());
+    assert!(
+        snap.by_role(A11yRole::Text)
+            .any(|n| n.name == buiy_gallery::MODAL_BODY),
+        "the delete-mode warning body is in the a11y tree while the delete body shows"
+    );
+}
+
 // ###########################################################################
 // S5 — F-tier showcase
 // ###########################################################################
 
 // ---------------------------------------------------------------------------
 // S5 function via the in-process driver — a full A11yPlugin app with ScenePlugin
-// (so `screen_showcase`'s `spawn_scene` resolves) + the widget systems (the
+// (so the C2 composites' `spawn_scene` text fields resolve) + the widget systems (the
 // OnPress→toggle/expand consumers + the slider contract honor).
 // ---------------------------------------------------------------------------
 
@@ -353,15 +578,16 @@ fn showcase_app() -> App {
     app.add_plugins(BuiyTextPlugin::default());
     app.add_plugins(FocusPlugin);
     app.add_plugins(WidgetsPlugin);
+    // `ShowcasePlugin` runs the S5 controls behavior (the switch/slider/disclosure
+    // visual drivers + the segmented/stepper/meter app logic). The driver function
+    // tests exercise the widget contracts; the visual drivers settle the pixels.
+    app.add_plugins(ShowcasePlugin);
     // The slider's APG keyboard reads `Messages<KeyboardInput>` + the toggle
     // keyboard path reads `Res<ButtonInput<KeyCode>>`. MinimalPlugins seeds neither.
     app.add_message::<KeyboardInput>();
     app.init_resource::<ButtonInput<KeyCode>>();
 
-    use bevy::scene::WorldSceneExt;
-    app.world_mut()
-        .spawn_scene(screen_showcase())
-        .expect("spawn the showcase screen");
+    spawn_showcase(app.world_mut());
     // Settle so build_tree populates the a11y tree the driver reads + the widget
     // visuals settle from their initial state.
     for _ in 0..4 {
@@ -547,7 +773,6 @@ struct ShowcaseExtractHarness {
 
 impl ShowcaseExtractHarness {
     fn new() -> Self {
-        use bevy::scene::WorldSceneExt;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(bevy::asset::AssetPlugin::default())
@@ -562,6 +787,8 @@ impl ShowcaseExtractHarness {
             // the framework ring `Outline` the extract reads.
             .add_plugins(FocusPlugin)
             .add_plugins(WidgetsPlugin)
+            // `ShowcasePlugin` settles the S5 controls visuals from their state.
+            .add_plugins(ShowcasePlugin)
             // The MAIN-world render half (clip/effects/forced-colors) registers
             // headless; its render half is guarded on a RenderApp that never exists.
             .add_plugins(buiy_core::render::BuiyRenderPlugin);
@@ -576,9 +803,7 @@ impl ShowcaseExtractHarness {
             PrimaryWindow,
         ));
 
-        app.world_mut()
-            .spawn_scene(screen_showcase())
-            .expect("spawn the showcase screen");
+        spawn_showcase(app.world_mut());
 
         let mut render = World::new();
         render.init_resource::<ExtractedNodesView>();
@@ -630,21 +855,26 @@ impl ShowcaseExtractHarness {
     }
 }
 
-/// The single `ShowcaseCard` entity (the styled F-tier card).
-fn card_entity(app: &mut App) -> Entity {
+/// The slider **preview square** entity (the only shadowed element on the flat
+/// controls screen — the `shadow.slider-preview` glow target).
+fn preview_entity(app: &mut App) -> Entity {
     let mut q = app
         .world_mut()
-        .query_filtered::<Entity, With<ShowcaseCard>>();
+        .query_filtered::<Entity, With<ShowcasePreview>>();
     q.single(app.world())
-        .expect("one ShowcaseCard in the screen")
+        .expect("one ShowcasePreview (the slider gradient square) in the screen")
 }
 
-/// The showcase switch entity (a focusable inside the card) — the focus-ring target.
+/// A showcase switch entity (a focusable — the focus-ring target). The design's
+/// controls screen has three switches; the FIRST in spawn order is the ring target
+/// (any switch would do — they share the `#[require]` Focusable contract).
 fn switch_entity(app: &mut App) -> Entity {
     let mut q = app
         .world_mut()
         .query_filtered::<Entity, With<buiy_widgets::Switch>>();
-    q.single(app.world()).expect("one Switch in the showcase")
+    q.iter(app.world())
+        .next()
+        .expect("at least one Switch in the showcase")
 }
 
 fn settle(h: &mut ShowcaseExtractHarness) {
@@ -654,65 +884,59 @@ fn settle(h: &mut ShowcaseExtractHarness) {
 }
 
 #[test]
-fn s5_styled_card_extracts_shadow_and_border_bands() {
-    // The styled card carries the C6 channels authored by `screen_showcase`: a
-    // multi-term BoxShadow + a per-side Border (2px BoxModel.border width + styled
-    // sides). The display-list acceptance: those bands ARE in the extract output.
+fn s5_cards_and_slider_preview_extract_border_and_shadow_bands() {
+    // The design's controls screen has FLAT cards: each of the five cards emits a
+    // 1px border band (radius 12, `border.default`), and the screen's box-shadows
+    // are the slider preview square's `shadow.slider-preview` accent glow (HTML
+    // 309/331) plus the small switch/slider THUMB drop shadows — but NOT any card
+    // (the earlier placeholder F-tier card's invented 2-term elevation is gone —
+    // the real cards are bordered, not shadowed). The display-list acceptance: the
+    // preview's glow + the per-card border bands ARE in the extract output.
     let mut h = ShowcaseExtractHarness::new();
     settle(&mut h);
-    let card = card_entity(&mut h.app);
+    let preview = preview_entity(&mut h.app);
 
-    // Sanity: the card authored both channels (the source the test shares with the
-    // screen-fn) — the term count + the styled-side guarantee.
+    // Sanity: the shared paint sources spell the real design channels.
     assert_eq!(
-        showcase_card_shadow().0.len(),
-        2,
-        "the card authors a two-term BoxShadow (the F-tier elevation)"
+        showcase_preview_shadow().0.len(),
+        1,
+        "the preview authors a single box-shadow term (the slider-preview glow)"
     );
-    let _ = showcase_card_border(); // a per-side styled Border (asserted via extract).
+    let _ = showcase_card_border(); // a flat 1px card border (asserted via extract).
 
     h.extract();
-    let node = h
-        .node_for(card)
-        .expect("the styled card reaches the display list");
 
-    // The border band resolved: the 2px layout-owned width threads in, the per-side
-    // colors resolved (not the magenta missing-token sentinel).
-    let border = node
-        .border
-        .expect("the styled card extracts a per-side Border band (C6-b)");
+    // The slider preview square extracts its single accent-glow shadow term.
+    let preview_node = h
+        .node_for(preview)
+        .expect("the slider preview square reaches the display list");
     assert_eq!(
-        border.width,
-        [2.0, 2.0, 2.0, 2.0],
-        "the 2px BoxModel.border width threads into the band"
-    );
-    let sentinel = [1.0, 0.0, 1.0, 1.0];
-    assert_ne!(
-        border.color_top, sentinel,
-        "the border side color resolved, not magenta-miss"
-    );
-
-    // The shadow resolved: two outset terms (the elevation), each with sigma=blur/2.
-    assert_eq!(
-        node.shadows.len(),
-        2,
-        "the card extracts two box-shadow terms (the F-tier elevation)"
+        preview_node.shadows.len(),
+        1,
+        "the slider preview extracts one box-shadow term (the accent glow)"
     );
     assert!(
-        node.shadows.iter().all(|s| s.sigma > 0.0),
-        "each shadow term carries a positive blur sigma"
+        preview_node.shadows.iter().all(|s| s.sigma > 0.0),
+        "the preview shadow term carries a positive blur sigma"
     );
 
-    // The packers route them into the band + shadow blobs (the >= asserts tolerate
-    // other bordered widgets in the showcase — the card's bands are present).
+    // The cards emit per-side border bands: at least five (one per card) reach the
+    // packer, each resolving its `border.default` color (not the magenta miss).
     assert!(
-        h.band_count() >= 1,
-        "at least one border band instance (the card's)"
+        h.band_count() >= 5,
+        "at least five border band instances (one per controls card), got {}",
+        h.band_count()
     );
+    // The screen is lightly shadowed: the preview glow + the switch/slider thumb
+    // drop shadows (the three switch thumbs + the slider thumb), but NO card. The
+    // exact total is the design's five (1 preview + 3 switch thumbs + 1 slider
+    // thumb); assert the preview's glow is present + the count is the design's.
     assert_eq!(
         h.shadow_count(),
-        2,
-        "exactly two shadow instances (only the card is shadowed)"
+        5,
+        "five shadow instances (the preview glow + the switch/slider thumb shadows), \
+         got {}",
+        h.shadow_count()
     );
 }
 
@@ -778,78 +1002,94 @@ fn s5_pointer_focused_widget_gets_no_focus_ring() {
 
 // ---------------------------------------------------------------------------
 // S5 GPU programmatic readback (the additive `#[ignore]` GPU lane) — paints the
-// F-tier styled card (the same C6 shadow + per-side border channels
-// `screen_showcase` authors, spelled via the shared `showcase_card_*` sources)
-// to an offscreen texture on a real adapter through the canonical
+// design's slider preview square (the gradient-filled, accent-glow-shadowed box —
+// the same `shadow.slider-preview` channel + a rounded border the showcase
+// authors, spelled via the shared `showcase_preview_shadow()` source) to an
+// offscreen texture on a real adapter through the canonical
 // `DeterministicApp::capture` path, and asserts non-canvas pixels are present.
 // Adapter-TOLERANT: it asserts the fixture painted SOMETHING beyond the black
-// canvas (the shadow blur + border band + fill rasterized), not an RX-XT-exact
-// pixel golden (CI is pinned lavapipe). Run on a GPU host:
+// canvas (the gradient fill + the glow blur rasterized), not an RX-XT-exact pixel
+// golden (CI is pinned lavapipe). Run on a GPU host:
 //   `cargo test -p buiy_verify -j 2 -- --ignored --test-threads=1`
 //
 // The capture stack (`capture_app_scaled`) is paint-only (no ScenePlugin /
-// WidgetsPlugin), so the fixture spawns the styled card with EXPLICIT components
-// (the `showcase_card_shadow()`/`showcase_card_border()` sources + a 2px border
-// width) rather than the `screen_showcase` scene-fn — the same shape the
-// display-list tier asserts on the card, now rasterized on the adapter.
+// WidgetsPlugin), so the fixture spawns the preview square with EXPLICIT components
+// (the gradient + the `showcase_preview_shadow()` source) rather than the
+// `spawn_showcase` builder — the same shape the display-list tier asserts on the
+// preview, now rasterized on the adapter.
 // ---------------------------------------------------------------------------
 
-/// Spawn the F-tier styled card into the capture app: a bordered + shadowed fill
-/// (the C6 channels the showcase card carries). The border WIDTH is layout-owned
-/// (`Style::border`); the per-side PAINT + the shadow are render components, both
-/// from the `buiy_gallery` sources so the GPU residue matches the screen's card.
+/// Spawn the design's slider preview square into the capture app: a 150deg accent
+/// gradient fill + the `shadow.slider-preview` accent glow + a rounded border. The
+/// gradient + the shadow are render components from the `buiy_gallery` source so the
+/// GPU residue matches the screen's preview.
 #[cfg(test)]
-fn showcase_card_fixture(app: &mut App) {
+fn showcase_preview_fixture(app: &mut App) {
     use buiy_core::components::Node;
     use buiy_core::layout::{Inset, Length, Sizing, Style};
-    use buiy_core::render::components::Background;
+    use buiy_core::render::ColorToken;
+    use buiy_core::render::components::{
+        BackgroundLayer, BackgroundLayers, Border, ColorStop, Corners, LinearGradient, Radius,
+    };
     use std::borrow::Cow;
 
-    let card = app
+    let preview = app
         .world_mut()
         .spawn((
             Node,
             Style::default()
                 .absolute()
                 .inset(Inset {
-                    top: Sizing::Length(Length::px(12.0)),
-                    left: Sizing::Length(Length::px(12.0)),
+                    top: Sizing::Length(Length::px(16.0)),
+                    left: Sizing::Length(Length::px(16.0)),
                     ..default()
                 })
-                .width_px(120.0)
-                .height_px(80.0)
-                // The layout-owned border WIDTH (the band extracts only when > 0).
-                .border(2.0),
-            Background {
-                color: buiy_core::render::ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+                .width_px(88.0)
+                .height_px(88.0),
+            // The 150deg accent gradient (`gradient.accent-150`).
+            BackgroundLayers(vec![BackgroundLayer::Linear(LinearGradient {
+                angle_deg: 150.0,
+                stops: vec![
+                    ColorStop {
+                        color: ColorToken::Token(Cow::Borrowed("color.accent")),
+                        position: 0.0,
+                    },
+                    ColorStop {
+                        color: ColorToken::Token(Cow::Borrowed("color.accent.lighter")),
+                        position: 1.0,
+                    },
+                ],
+            })]),
+            Border {
+                radius: Corners::all(Radius::circular(14.0)),
+                ..Default::default()
             },
-            // The same C6 channels the showcase card carries (shared sources).
-            showcase_card_shadow(),
-            showcase_card_border(),
+            // The shared preview-shadow source (the slider-preview accent glow).
+            showcase_preview_shadow(),
         ))
         .id();
     app.world_mut()
         .spawn((Node, Style::default()))
-        .add_children(&[card]);
+        .add_children(&[preview]);
 }
 
 #[test]
 #[ignore = "GPU lane: needs a real wgpu adapter (offscreen render-to-texture + readback)"]
-fn s5_showcase_card_paints_shadow_border_on_a_real_adapter() {
+fn s5_slider_preview_paints_gradient_and_glow_on_a_real_adapter() {
     use buiy_verify::determinism::DeterministicApp;
 
-    // Capture the styled card to an offscreen RGBA image on the real adapter (the
+    // Capture the preview square to an offscreen RGBA image on the real adapter (the
     // canonical deterministic capture path the GPU goldens use).
-    let image = DeterministicApp::new(160, 120).capture(showcase_card_fixture);
+    let image = DeterministicApp::new(160, 120).capture(showcase_preview_fixture);
 
-    // Adapter-tolerant: the fixture painted beyond the black canvas — the card fill
-    // + its per-side border band + the shadow blur all rasterized. We assert
-    // non-clear pixels exist (the `goldens.rs` non-vacuous discipline), NOT an
-    // exact golden (lavapipe vs RX-XT differ on the AA rim / blur kernel).
+    // Adapter-tolerant: the fixture painted beyond the black canvas — the gradient
+    // fill + the accent-glow blur both rasterized. We assert non-clear pixels exist
+    // (the `goldens.rs` non-vacuous discipline), NOT an exact golden (lavapipe vs
+    // RX-XT differ on the AA rim / blur kernel).
     let painted = image.pixels().filter(|p| p.0 != [0, 0, 0, 255]).count();
     assert!(
         painted > 100,
-        "the F-tier card painted a meaningful number of non-canvas pixels on the adapter \
-         (the fill + border band + shadow blur), got {painted}"
+        "the slider preview painted a meaningful number of non-canvas pixels on the adapter \
+         (the gradient fill + the accent-glow blur), got {painted}"
     );
 }

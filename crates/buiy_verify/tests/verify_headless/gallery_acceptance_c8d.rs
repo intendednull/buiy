@@ -313,12 +313,9 @@ fn outline_px(o: &Outline) -> f32 {
 // ###########################################################################
 
 fn spawn_s1(app: &mut App) {
-    use bevy::scene::WorldSceneExt;
-    use buiy_gallery::{DEMO_SEEDS, TodoMvcPlugin, append_row, screen_todomvc};
+    use buiy_gallery::{DEMO_SEEDS, TodoMvcPlugin, append_row, spawn_todomvc_screen};
     app.add_plugins(TodoMvcPlugin);
-    app.world_mut()
-        .spawn_scene(screen_todomvc(DEMO_SEEDS))
-        .expect("spawn the TodoMVC screen");
+    spawn_todomvc_screen(app.world_mut());
     for &(label, completed) in DEMO_SEEDS {
         append_row(app.world_mut(), label, completed);
     }
@@ -353,11 +350,11 @@ fn s1_todomvc_wcag_focus_tab_rings_and_no_trap() {
 const S2_ROWS: usize = 8;
 
 fn spawn_s2(app: &mut App) {
-    use bevy::scene::WorldSceneExt;
-    use buiy_gallery::{fill_scroll_list, screen_scroll_list};
-    app.world_mut()
-        .spawn_scene(screen_scroll_list(S2_ROWS))
-        .expect("spawn the scroll-list screen");
+    use buiy_gallery::{ScrollListPlugin, fill_scroll_list, spawn_scroll_screen};
+    // S2 now carries app logic (search + row selection), so the acceptance adds the
+    // plugin — the screen's search field + clickable rows are live, like the binary.
+    app.add_plugins(ScrollListPlugin);
+    spawn_scroll_screen(app.world_mut());
     fill_scroll_list(app.world_mut(), S2_ROWS);
 }
 
@@ -374,13 +371,18 @@ fn s2_scroll_list_wcag_focus_tab_rings_and_no_trap() {
     let mut app = acceptance_app();
     spawn_s2(&mut app);
     settle(&mut app);
-    // S2's focusable is the `ScrollArea` container (the container owns keyboard
-    // scroll); the rows are plain `Text` lines (not focusable). One focusable ⇒ Tab
-    // lands on it and the ring shows; "no trap" degenerates to the single stop.
+    // S2 has two focusables: the heading **search field** (`Filter nodes…`, the
+    // C2 `search_input` composite's editable single-line input) and the
+    // `ScrollArea` container (which owns keyboard scroll). The rows are styled
+    // cells (clickable for selection but not Tab-focusable). Tab over a 4-press
+    // cycle visits both, each shows the C6-a focus ring, and it wraps (no trap) —
+    // the helper enforces the >= 2-distinct + finite-cycle invariants internally.
     let stops = assert_tab_traversal_and_rings(&mut app, "S2 scroll-list", 4);
+    let distinct: std::collections::HashSet<Entity> = stops.iter().copied().collect();
     assert!(
-        stops.iter().all(|&s| Some(s) == stops.first().copied()),
-        "S2 scroll-list: the single scroll container is the only Tab stop"
+        distinct.len() >= 2,
+        "S2 scroll-list: Tab visits both the search field and the scroll container \
+         (got {distinct:?})"
     );
 }
 
@@ -562,11 +564,9 @@ fn descendant_focusables(world: &mut World, root: Entity) -> Vec<Entity> {
 // ###########################################################################
 
 fn spawn_s5(app: &mut App) {
-    use bevy::scene::WorldSceneExt;
-    use buiy_gallery::screen_showcase;
-    app.world_mut()
-        .spawn_scene(screen_showcase())
-        .expect("spawn the showcase screen");
+    use buiy_gallery::{ShowcasePlugin, spawn_showcase};
+    app.add_plugins(ShowcasePlugin);
+    spawn_showcase(app.world_mut());
 }
 
 #[test]
@@ -582,9 +582,11 @@ fn s5_showcase_wcag_focus_tab_rings_and_no_trap() {
     let mut app = acceptance_app();
     spawn_s5(&mut app);
     settle(&mut app);
-    // S5: Switch + Slider + Disclosure (each `#[require]`s Focusable) are the
-    // focusables; Tab cycles all three, each ringed, never trapped.
-    assert_tab_traversal_and_rings(&mut app, "S5 showcase", 6);
+    // S5 Controls: 3 Switches + 1 Slider + 3 Disclosures + the C2 composites'
+    // buttons (segmented ×3, stepper ×2, "Run build") are the focusables; Tab
+    // cycles the full ring (each ringed, never trapped). Drive 13 tabs to traverse
+    // the whole cycle.
+    assert_tab_traversal_and_rings(&mut app, "S5 showcase", 13);
 }
 
 // ###########################################################################

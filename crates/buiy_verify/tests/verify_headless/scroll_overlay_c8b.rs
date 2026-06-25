@@ -54,8 +54,8 @@ use buiy_core::render::components::CssVisibility;
 use buiy_core::scroll::{ScrollExtent, ScrollInputPlugin};
 use buiy_core::text::BuiyTextPlugin;
 use buiy_gallery::{
-    MENU_ITEM_LABELS, MenuActivations, OverlayMenuPlugin, ScrollList, screen_scroll_list,
-    spawn_overlay_menu,
+    MENU_ITEM_LABELS, MenuActivations, OverlayMenuPlugin, ScrollList, spawn_overlay_menu,
+    spawn_scroll_screen as spawn_gallery_scroll_screen,
 };
 use buiy_verify::pointer::PointerHarness;
 use buiy_widgets::menu::{Menu, MenuButton, MenuItem};
@@ -247,11 +247,8 @@ fn scroll_list_entity(app: &mut App) -> Entity {
 
 #[test]
 fn s2_a11y_snapshot_reflects_the_scroll_offset_and_extent() {
-    use bevy::scene::WorldSceneExt;
     let mut app = scroll_a11y_app();
-    app.world_mut()
-        .spawn_scene(screen_scroll_list(ROWS))
-        .expect("spawn the scroll-list screen");
+    spawn_gallery_scroll_screen(app.world_mut());
     buiy_gallery::fill_scroll_list(app.world_mut(), ROWS);
     // Settle: layout → extent → a11y scroll source → build_tree.
     for _ in 0..6 {

@@ -161,10 +161,12 @@ fn font_weight_and_family_changes_resync() {
     assert_eq!(applied(&app), 1, "Changed<FontFamily> fires the union");
 }
 
-/// The letter-spacing (px) the entity's buffer carries on its first line's
-/// DEFAULT attrs — the surface `text_sync_buffers` lowers `LetterSpacing`
-/// into (`Attrs.letter_spacing` → the per-glyph advance at shaping). `None`
-/// means `normal` (the unset/zero case never builds the opt).
+/// The letter-spacing the entity's buffer carries on its first line's DEFAULT
+/// attrs — the surface `text_sync_buffers` lowers `LetterSpacing` into
+/// (`Attrs.letter_spacing` → the per-glyph advance at shaping). This is the
+/// cosmic-text value, which is **em** (`px / font_size`), not the authored px
+/// — see [`letter_spacing_syncs_as_px_not_em`]. `None` means `normal` (the
+/// unset/zero case never builds the opt).
 fn buffer_letter_spacing(app: &App, entity: Entity) -> Option<f32> {
     app.world()
         .get::<TextBuffer>(entity)
@@ -181,7 +183,11 @@ fn buffer_letter_spacing(app: &App, entity: Entity) -> Option<f32> {
 
 /// parity-prototype A1: `LetterSpacing` lowers onto the buffer's `Attrs`
 /// (the shaping path) — a `-0.75 px` tracking authored as the design's
-/// `-.025em @ 30px` headline reaches cosmic-text's advance accumulator.
+/// `-.025em @ 30px` headline reaches cosmic-text's advance accumulator. The
+/// authored value is logical **px**, but cosmic-text 0.19's `letter_spacing`
+/// is **em** (`shape.rs` adds it to the em-unit advance, then multiplies by
+/// font-size at width time), so the lowering divides by the font-size:
+/// `-0.75 px @ 30 px → -0.025 em` (exactly the design's `-.025em`).
 #[test]
 fn letter_spacing_syncs_to_the_shaping_attrs() {
     let mut app = text_app();
@@ -191,15 +197,18 @@ fn letter_spacing_syncs_to_the_shaping_attrs() {
             Node,
             Style::default(),
             Text(String::from("todos")),
+            FontSize(30.0),
             LetterSpacing(-0.75),
         ))
         .id();
     settle(&mut app);
 
-    assert_eq!(
-        buffer_letter_spacing(&app, entity),
-        Some(-0.75),
-        "LetterSpacing(px) lowers to Attrs.letter_spacing on the shaped buffer"
+    // px → em: -0.75 / 30 = -0.025 em (the design's authored `-.025em`).
+    let em = buffer_letter_spacing(&app, entity).expect("tracking lowered");
+    assert!(
+        (em - (-0.025)).abs() < 1e-6,
+        "LetterSpacing(-0.75 px) @ 30 px lowers to -0.025 em on the shaped \
+         buffer (px / font_size), got {em}"
     );
 }
 
@@ -232,10 +241,11 @@ fn letter_spacing_change_resyncs_and_relowers() {
         .insert(LetterSpacing(1.4));
     app.update();
     assert_eq!(applied(&app), 1, "Changed<LetterSpacing> fires the union");
-    assert_eq!(
-        buffer_letter_spacing(&app, entity),
-        Some(1.4),
-        "the new tracking re-lowers onto the buffer"
+    // 1.4 px @ the default 16 px → 0.0875 em (px / font_size).
+    let em = buffer_letter_spacing(&app, entity).expect("tracking lowered");
+    assert!(
+        (em - (1.4 / 16.0)).abs() < 1e-6,
+        "the new tracking re-lowers onto the buffer as em (px / font_size), got {em}"
     );
 }
 

@@ -73,7 +73,9 @@ type TextSyncTriggers = Or<(
     Changed<FontWeight>,
     // parity-prototype A1: letter-spacing rides Attrs (like weight/family),
     // so an edit must reshape — the per-glyph advance changes (cosmic-text
-    // shape.rs advance += letter_spacing).
+    // shape.rs adds the lowered em value to each glyph's advance). The lowered
+    // value is `px / font_size` (see AuthoredStyle::spaced), so a FontSize edit
+    // also changes it — already covered by the Changed<FontSize> trigger above.
     Changed<LetterSpacing>,
     // T3 carriers (measure §§ 5.1–5.3). TextAlign is TRIGGER-ONLY here:
     // its value is applied at TextCommit (§ 5.3 — a finalize concern);
@@ -426,8 +428,9 @@ struct AuthoredStyle<'a> {
     size: f32,
     weight: u16,
     /// parity-prototype A1: extra inter-glyph tracking, logical px. `0.0`
-    /// (the `LetterSpacing` default) = CSS `normal`; lowered to
-    /// `Attrs.letter_spacing` only when non-zero (see [`Self::spaced`]).
+    /// (the `LetterSpacing` default) = CSS `normal`; lowered (as em —
+    /// `px / font_size`) to `Attrs.letter_spacing` only when non-zero (see
+    /// [`Self::spaced`] for the px→em conversion and why cosmic-text needs it).
     letter_spacing: f32,
     line_height: LineHeight,
     white_space: WhiteSpace,
@@ -498,16 +501,32 @@ impl<'a> AuthoredStyle<'a> {
     }
 
     /// parity-prototype A1: apply `letter-spacing` (logical px) to the
-    /// shared `Attrs` surface — the cosmic-text shaper adds it to each
-    /// glyph's advance (`shape.rs`: advance `+= letter_spacing`). Skipped
-    /// when zero so a `normal` (unset) run carries `letter_spacing_opt: None`
-    /// exactly like before this knob existed (no spurious `Attrs`
-    /// inequality, no reshape churn). Shared by BOTH attrs constructors
-    /// ([`Self::attrs`] and [`span_attrs`]) so every span of a tracked node
-    /// carries the same spacing — the [`Self::decorated`] precedent.
+    /// shared `Attrs` surface. The authored contract is **logical px** of
+    /// extra inter-glyph tracking, independent of font size — but cosmic-text
+    /// 0.19's `Attrs::letter_spacing` is **em** (a multiple of font-size): its
+    /// `shape.rs` adds the value to the per-glyph advance while that advance is
+    /// still in em units (`x_advance / units_per_em + letter_spacing`), and the
+    /// advance is multiplied by `font_size` only at width time
+    /// (`ShapeGlyph::width`). So the on-screen px contribution per glyph is
+    /// `letter_spacing × font_size`. To honor the px contract we lower
+    /// `px / font_size` (em), making the final advance exactly `px` regardless
+    /// of size. We divide by `self.size.max(METRICS_FLOOR)` — the SAME effective
+    /// font-size the buffer metrics use (see [`Self::metrics`]) — so the round
+    /// trip is exact and a zero/sub-floor size can't divide-by-zero.
+    ///
+    /// Skipped when zero so a `normal` (unset) run carries
+    /// `letter_spacing_opt: None` exactly like before this knob existed (no
+    /// spurious `Attrs` inequality, no reshape churn). Shared by BOTH attrs
+    /// constructors ([`Self::attrs`] and [`span_attrs`]) so every span of a
+    /// tracked node carries the same spacing — the [`Self::decorated`]
+    /// precedent. Both constructors lower the node's single font-size into the
+    /// buffer metrics (no per-span `metrics_opt`), so the node-level `self.size`
+    /// is the correct divisor for every span.
     fn spaced<'b>(&self, attrs: Attrs<'b>) -> Attrs<'b> {
         if self.letter_spacing != 0.0 {
-            attrs.letter_spacing(self.letter_spacing)
+            // px → em: divide by the effective font-size cosmic-text will
+            // multiply the advance back by at width time.
+            attrs.letter_spacing(self.letter_spacing / self.size.max(METRICS_FLOOR))
         } else {
             attrs
         }
