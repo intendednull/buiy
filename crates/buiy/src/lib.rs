@@ -237,6 +237,10 @@ impl Plugin for BuiyPlugin {
             // shared FontSystem + the FontsGeneration reshape trigger.
             // System-font scan stays opt-in/off in the composed default.
             buiy_core::text::BuiyTextPlugin::default(),
+            // Tween registry (widget-catalog parity § 3.3 / § 8): the per-property
+            // tween-update systems wired into the existing `BuiySet::Animate`.
+            // Added before `WidgetsPlugin` since widgets spawn tweens.
+            buiy_core::animation::AnimationPlugin,
             WidgetsPlugin,
             // The render plugin is added in `build`, NOT `finish`: Bevy's
             // `App::finish` iterates `0..plugin_registry.len()` with the length

@@ -10,6 +10,7 @@ use bevy::transform::systems::{
 };
 
 pub mod a11y;
+pub mod animation;
 pub mod components;
 pub mod focus;
 pub mod interaction;
@@ -21,6 +22,10 @@ pub mod text;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
+pub use animation::{
+    AnimatedBackgroundColor, AnimationPlugin, BackgroundColorTween, Easing, Lerp, OnComplete,
+    OpacityTween, RotateTween, ScaleTween, TranslateTween, Tween,
+};
 pub use components::{Node, ResolvedLayout, ResolvedTransform, StackingContext};
 pub use focus::{
     FocusPlugin, FocusReturn, FocusRingMarker, FocusScope, FocusScopeMode, FocusVisible, Focusable,
