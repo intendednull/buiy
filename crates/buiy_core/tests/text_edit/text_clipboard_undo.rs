@@ -266,6 +266,46 @@ fn discrete_and_composition_never_coalesce() {
     assert_eq!(stack.undo_len(), 4, "each composition is its own unit");
 }
 
+/// C2 — the editor's programmatic whole-value set is the EXISTING `SelectAll` +
+/// `Insert` verbs (the agent-interface `Action::SetValue` lowering — there is no
+/// `EditCommand::SetValue`). C2 adds NO new undo grouping; the set inherits the
+/// existing verbs' undo behavior, so assert RESTORABILITY (not a specific unit
+/// count, which is the existing verbs' agent-interface-owned behavior).
+#[test]
+fn programmatic_set_via_select_all_plus_insert_is_undoable() {
+    use buiy_core::text::SharedFontSystem;
+    use buiy_core::text::edit::{EditCommand, TextEditState};
+
+    let fonts = SharedFontSystem::new();
+    // for_font_size(16.0) — the ONE constructor form across all plans (state.rs:170).
+    let mut state = TextEditState::for_font_size(16.0);
+    let mut fs = fonts.lock();
+    state.apply(&mut fs, EditCommand::Insert("seed".into()), false, false);
+    // Programmatic whole-value set via the EXISTING verbs (the agent-interface
+    // Action::SetValue lowering — action-router.md § 4). No EditCommand::SetValue.
+    state.apply(&mut fs, EditCommand::SelectAll, false, false);
+    state.apply(
+        &mut fs,
+        EditCommand::Insert("whole new value".into()),
+        false,
+        false,
+    );
+    assert_eq!(state.value(), "whole new value");
+    // Undo walks back via the existing recorded edits; the set is reversible.
+    for _ in 0..4 {
+        if state.value() != "whole new value" {
+            break;
+        }
+        state.apply(&mut fs, EditCommand::Undo, false, false);
+    }
+    assert_ne!(
+        state.value(),
+        "whole new value",
+        "the programmatic set is undoable via the existing verbs"
+    );
+    drop(fs);
+}
+
 // ── Image flavor (behind the `clipboard-image` cargo feature) ────────────
 // Run with: cargo test -p buiy_core --features clipboard-image
 // The default `cargo test --workspace` gate compiles this module out.

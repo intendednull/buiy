@@ -142,6 +142,19 @@ fn matrix_goldens() {
             app.insert_resource(prefs);
             (fx.spawn)(&mut app);
 
+            // Bless-guard (C7 §2.4): refuse to record a baseline for a
+            // text-bearing cell that silently shaped to zero glyphs. The same
+            // `(text_bearing, glyph_count)` the content-presence invariant
+            // computes, so the corpus boundary and the invariant agree. In
+            // Wave 1 the only catalog fixture is the non-text `button`, so this
+            // resolves to `bless_guard_check(false, 0)` (the no-op `Ok` path);
+            // the guard's teeth are proven by the `bless_guard_refuses_zero_…`
+            // unit test, and it becomes load-bearing the moment C8 adds a text
+            // fixture, with no further edit.
+            let (text_bearing, glyph_count) = buiy_verify::invariant::glyph_census(&mut app);
+            buiy_verify::golden::bless_guard_check(text_bearing, glyph_count)
+                .unwrap_or_else(|e| panic!("bless-guard refused cell {}: {e}", key.slug()));
+
             let img = buiy_core::render::golden::capture_to_image(&mut app, &cfg);
             assert_golden(&key, &img, &budget_for(&cov));
             asserted += 1;

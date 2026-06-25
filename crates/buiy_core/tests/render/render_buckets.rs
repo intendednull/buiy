@@ -141,6 +141,9 @@ fn node(entity: u32, position: Vec2, size: Vec2, color: Color) -> ExtractedNode 
         clip: None,
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
+        border: None,
+        shadows: Vec::new(),
     }
 }
 
@@ -224,8 +227,14 @@ fn pack_view_skips_transparent_nodes() {
     let opaque = node(1, Vec2::ZERO, Vec2::splat(10.0), Color::WHITE);
     let transparent = node(2, Vec2::splat(5.0), Vec2::splat(20.0), Color::NONE);
 
-    assert_eq!(pack_view(&[opaque]).total_instances(), 1);
-    assert_eq!(pack_view(&[transparent]).total_instances(), 0);
+    assert_eq!(
+        pack_view(std::slice::from_ref(&opaque)).total_instances(),
+        1
+    );
+    assert_eq!(
+        pack_view(std::slice::from_ref(&transparent)).total_instances(),
+        0
+    );
 
     // Mixed: only the opaque node survives the pack seam.
     let buckets = pack_view(&[opaque, transparent]);
@@ -251,6 +260,9 @@ fn grouped(entity: u32, color: Color, group: Option<usize>) -> ExtractedNode {
         clip: None,
         group,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
+        border: None,
+        shadows: Vec::new(),
     }
 }
 

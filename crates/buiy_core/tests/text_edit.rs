@@ -24,6 +24,8 @@ mod text_caret_selection;
 mod text_caret_selection_e3_gpu;
 #[path = "text_edit/text_clipboard_undo.rs"]
 mod text_clipboard_undo;
+#[path = "text_edit/text_coherence_property.rs"]
+mod text_coherence_property;
 #[path = "text_edit/text_edit_submit.rs"]
 mod text_edit_submit;
 #[path = "text_edit/text_edit_substrate.rs"]
@@ -34,6 +36,8 @@ mod text_editing_ops;
 mod text_effect_group_gpu;
 #[path = "text_edit/text_focus_lifecycle.rs"]
 mod text_focus_lifecycle;
+#[path = "text_edit/text_font_reload_survival.rs"]
+mod text_font_reload_survival;
 #[path = "text_edit/text_ime_ops.rs"]
 mod text_ime_ops;
 #[path = "text_edit/text_ime_preedit_gpu.rs"]
@@ -54,6 +58,8 @@ mod text_preedit_paint;
 mod text_selection_caret_gpu;
 #[path = "text_edit/text_selection_model.rs"]
 mod text_selection_model;
+#[path = "text_edit/text_set_value.rs"]
+mod text_set_value;
 #[path = "text_edit/text_undo_ops.rs"]
 mod text_undo_ops;
 #[path = "text_edit/text_undo_property.rs"]

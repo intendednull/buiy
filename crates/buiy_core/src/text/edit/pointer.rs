@@ -1,21 +1,26 @@
 //! E3 — mouse selection (editing-and-ime § 4, mouse gestures). The pure mapping
 //! (`pointer_to_cursor`), the click-count state machine (`ClickTracker` /
 //! `PointerGesture`), and the gesture→`Action` application on `TextEditState`.
-//! The windowed wiring (reading `PointerLocation`/`Hovered`, setting
-//! `FocusedEntity`) is `pointer_selection`, registered in `BuiySet::Input`.
-//! This file NAMES `Action`/`Edit` (the lowering) ⇒ inside the facade.
+//! The windowed wiring (the `Pointer<Press>` / `Pointer<Drag>` observers that
+//! source the gesture) is [`editor_pointer_press`]/[`editor_pointer_drag`],
+//! registered as observers by `BuiyTextPlugin`. This file NAMES `Action`/`Edit`
+//! (the lowering) ⇒ inside the facade.
+//!
+//! Focus-on-click is NOT here: C3d (input-event-model.md § 2.7) consolidated it
+//! into one widget-agnostic `focus.rs::focus_on_click` observer over every
+//! `Focusable`. The editor entity is `Focusable`, so clicking it still focuses
+//! it — via that shared path, not this file. `editor_pointer_press` now owns
+//! only the click-to-place-cursor gesture.
 
 use std::time::Duration;
 
-use bevy::input::ButtonInput;
 use bevy::math::Vec2;
-use bevy::picking::pointer::PointerLocation;
+use bevy::picking::events::{Drag, Pointer, Press};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use cosmic_text::{Action, Buffer, Cursor, Edit, FontSystem};
 
 use super::state::{Disabled, TextEditState};
-use crate::FocusedEntity;
-use crate::picking::Hovered;
 use crate::text::{ComputedTextLayout, SharedFontSystem};
 
 /// The classified pointer gesture (one mouse-down).
@@ -111,70 +116,85 @@ impl TextEditState {
     }
 }
 
-/// The focus-gated mouse-selection system (editing-and-ime § 4), `BuiySet::Input`
-/// (alongside `apply_keyboard_edits`). On a left press over an editable, non-
-/// `Disabled` entity it sets `FocusedEntity` (focus-on-click — CORE mechanism,
-/// since the caret is core; widget focus POLICY is E6) and applies a classified
-/// Click/Double/Triple. While the button stays held and the pointer moves it
-/// applies `Drag`. All `Option<...>` params so a headless harness without
-/// picking/input infra runs it inertly (the apply_keyboard_edits precedent).
+/// The focus-gated mouse-selection press observer (editing-and-ime § 4),
+/// registered on the `Pointer<Press>` stream by `BuiyTextPlugin`. C3c migrated
+/// the gesture *source* off the legacy `Hovered` resource onto the bevy_picking
+/// `Pointer<E>` layer: the press observer fires for the **picked entity**
+/// directly (capture→target→bubble), so the hit target is `press.entity` (no
+/// `Hovered` read) and the window-space cursor is `press.pointer_location.position`.
 ///
-/// **One-frame `Hovered` lag (accepted).** `Hovered` is written by
-/// `update_hovered` in `BuiySet::Picking`, which runs AFTER `BuiySet::Input`
-/// (lib.rs ordering) — so a press this frame hit-tests against LAST frame's
-/// `Hovered`. Functionally correct and consistent with the OQ#1 one-frame
-/// latency posture (a pointer that moved between frames is a sub-frame
-/// nicety); not a bug. Note: `origin` folds `GlobalTransform + content_offset`
-/// only — it does NOT fold `ScrollOffset`, correct for E3 (auto-scroll-into-view
-/// is E6; until then the buffer is laid out at full size at the node origin).
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn pointer_selection(
+/// On a primary press over an editable, non-`Disabled` entity it applies a
+/// classified Click/Double/Triple via the editor's own `ClickTracker` (the
+/// multi-click window+radius bevy_picking does not provide — § 2.8 keeps the
+/// classifier). It no longer touches `FocusedEntity`: C3d
+/// (input-event-model.md § 2.7) moved focus-on-click into the single shared
+/// `focus.rs::focus_on_click` observer, which focuses the editor entity (it is
+/// `Focusable`) and clears `FocusVisible`. This observer keeps only the
+/// click-to-place-cursor / selection gesture; focus and caret placement now flow
+/// through independent observers on the same `Pointer<Press>`.
+///
+/// Note: `origin` folds `GlobalTransform + content_offset` only — it does NOT
+/// fold `ScrollOffset`, correct for E3 (auto-scroll-into-view is E6; until then
+/// the buffer is laid out at full size at the node origin). The one-frame
+/// `GlobalTransform` lag `emit_picks` documents (§ 3.3) is inherited: the press
+/// hit-tests against last frame's transform, an accepted sub-frame nicety.
+///
+/// Observers fire only when the picking pipeline (the meta-crate's
+/// `PointerInputPlugin` + the hover stage) is present, so a headless harness
+/// without that infra is inert by construction — the same robustness the old
+/// `Option<...>`-param system had, achieved structurally.
+pub fn editor_pointer_press(
+    press: On<Pointer<Press>>,
     time: Res<Time>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
-    hovered: Option<Res<Hovered>>,
-    pointers: Query<&PointerLocation>,
     fonts: Res<SharedFontSystem>,
-    mut focused: Option<ResMut<FocusedEntity>>,
     mut tracker: Local<ClickTracker>,
     mut editors: Query<
         (&mut TextEditState, &GlobalTransform, &ComputedTextLayout),
         Without<Disabled>,
     >,
 ) {
-    let (Some(mouse), Some(hovered), Some(focused)) = (mouse, hovered, focused.as_mut()) else {
+    if press.event.button != PointerButton::Primary {
         return;
-    };
-    // The active pointer's window-space position (logical px).
-    let Some(pointer_pos) = pointers
-        .iter()
-        .find_map(|p| p.location.as_ref().map(|l| l.position))
-    else {
-        return;
-    };
-
-    let pressed = mouse.just_pressed(MouseButton::Left);
-    let held = mouse.pressed(MouseButton::Left);
-
-    if pressed {
-        // Focus-on-click: only when the press lands on an editable entity.
-        let Some(hit) = hovered.0 else { return };
-        if editors.get(hit).is_err() {
-            return; // clicked a non-editor — leave focus to other handlers
-        }
-        focused.0 = Some(hit);
-        let gesture = tracker.classify(pointer_pos, time.elapsed());
-        if let Ok((mut state, gt, layout)) = editors.get_mut(hit) {
-            let origin = gt.translation().truncate() + layout.content_offset;
-            let mut fs = fonts.lock();
-            state.apply_pointer_gesture(&mut fs, gesture, pointer_pos, origin);
-        }
-    } else if held {
-        // Drag-extend on the focused editor (the press already focused it).
-        let Some(entity) = focused.0 else { return };
-        if let Ok((mut state, gt, layout)) = editors.get_mut(entity) {
-            let origin = gt.translation().truncate() + layout.content_offset;
-            let mut fs = fonts.lock();
-            state.apply_pointer_gesture(&mut fs, PointerGesture::Drag, pointer_pos, origin);
-        }
     }
+    // The picked target IS the hit (no `Hovered` round-trip). A press that
+    // bubbles up to a non-editor ancestor classifies against that ancestor; the
+    // editable check below drops it, exactly as the old hovered-hit check did.
+    let hit = press.entity;
+    let Ok((mut state, gt, layout)) = editors.get_mut(hit) else {
+        return; // pressed a non-editor — nothing to place a caret in
+    };
+    let pointer_pos = press.pointer_location.position;
+    let gesture = tracker.classify(pointer_pos, time.elapsed());
+    let origin = gt.translation().truncate() + layout.content_offset;
+    let mut fs = fonts.lock();
+    state.apply_pointer_gesture(&mut fs, gesture, pointer_pos, origin);
+}
+
+/// The drag-extend observer (editing-and-ime § 4), registered on the
+/// `Pointer<Drag>` stream by `BuiyTextPlugin`. bevy_picking emits `Pointer<Drag>`
+/// over the press target while a button is held and the pointer moves, so this
+/// replaces the old `held`-branch poll: it applies a `Drag` gesture to the
+/// dragged editor, extending the selection from the press anchor
+/// (`apply_pointer_gesture(Drag)` keeps the anchor fixed and moves the active
+/// endpoint — see `text_mouse_selection.rs`). Drag fires on the press target, so
+/// `drag.entity` is the editor the press focused; the `FocusedEntity` is no
+/// longer needed to route the drag.
+pub fn editor_pointer_drag(
+    drag: On<Pointer<Drag>>,
+    fonts: Res<SharedFontSystem>,
+    mut editors: Query<
+        (&mut TextEditState, &GlobalTransform, &ComputedTextLayout),
+        Without<Disabled>,
+    >,
+) {
+    if drag.event.button != PointerButton::Primary {
+        return;
+    }
+    let Ok((mut state, gt, layout)) = editors.get_mut(drag.entity) else {
+        return;
+    };
+    let pointer_pos = drag.pointer_location.position;
+    let origin = gt.translation().truncate() + layout.content_offset;
+    let mut fs = fonts.lock();
+    state.apply_pointer_gesture(&mut fs, PointerGesture::Drag, pointer_pos, origin);
 }

@@ -24,7 +24,7 @@ use bevy::shader::Shader;
 
 use crate::render::buckets::BuiyPrimitiveKind;
 use crate::render::composite::BuiySpecializedPipelines;
-use crate::render::primitive::{BuiyPrimitiveKey, BuiyPrimitives};
+use crate::render::primitive::{BuiyBandKey, BuiyBandPipeline, BuiyPrimitiveKey, BuiyPrimitives};
 
 /// Stable UUID for the rounded-rect shader asset.
 ///
@@ -64,6 +64,20 @@ const COVERAGE_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0103_0000_0000_0000_00
 /// MAIN world by `BuiyRenderPlugin::build` (`load_internal_asset!`).
 pub fn coverage_shader_handle() -> Handle<Shader> {
     Handle::Uuid(COVERAGE_SHADER_UUID, PhantomData)
+}
+
+/// Stable UUID for the border/outline BAND shader (octet `..06`). Octet `..05`
+/// is the composite shader; the band channel (styling-f-tier.md § 2.3) takes
+/// the next reserved slot.
+const BAND_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0106_0000_0000_0000_0000_0000_0006u128);
+
+/// Weak handle to the border/outline band WGSL shader (octet `..06`).
+///
+/// Backed by `band.wgsl` (the outer-minus-inner rounded-rect SDF band — C6-a
+/// feeds the OUTLINE channel through it), loaded under `BAND_SHADER_UUID` into
+/// the MAIN world by `BuiyRenderPlugin::build` (`load_internal_asset!`).
+pub fn band_shader_handle() -> Handle<Shader> {
+    Handle::Uuid(BAND_SHADER_UUID, PhantomData)
 }
 
 /// The bind-group-layout entries for the per-view view uniform: one
@@ -142,6 +156,19 @@ pub struct BuiyPipeline {
     /// `BuiyPrimitives` specializer (the `Glyph` kind), so it reuses
     /// `coverage.wgsl` + the `@group(0)`/`@group(1)` layout.
     pub glyph_id: CachedRenderPipelineId,
+    /// The `Band@Rgba8UnormSrgb@1x` baseline id for the border/outline band
+    /// pipeline (styling-f-tier.md § 2.3 — C6-a). Same eager-baseline role as
+    /// `id`/`glyph_id` (the node draws [`BuiyViewPipelines::band`]); built
+    /// through the same `BuiyBandPipeline` specializer so the 1x default-format
+    /// view's per-view key dedups onto it.
+    pub band_id: CachedRenderPipelineId,
+    /// The `Shadow@Rgba8UnormSrgb@1x` baseline id for the box-shadow pipeline
+    /// (styling-f-tier.md § 2.2 — C6-b). Same eager-baseline role as
+    /// `id`/`glyph_id`/`band_id` (the node draws [`BuiyViewPipelines::shadow`]);
+    /// built through the same `BuiyPrimitives` specializer (the `Shadow` kind,
+    /// `shadow.wgsl` + the quad-family vertex layout) so the 1x default-format
+    /// view's per-view key dedups onto it.
+    pub shadow_id: CachedRenderPipelineId,
     /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
     /// at pipeline registration and reused every frame. Phase 0 closeout
     /// scope: vertex emission order matches the `cull_mode: None` setting in
@@ -241,28 +268,57 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // compiling duplicates. `register` runs at plugin finish, before any
     // `ViewTarget` exists, so the literals stand in for the default view here;
     // a multisampled / HDR view gets its own variant from the prepare pass.
-    let (id, glyph_id) =
+    let (id, glyph_id, band_id, shadow_id) =
         world.resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
             let pipeline_cache = world.resource::<PipelineCache>();
-            let mut specialize = |kind| {
-                pipelines.primitives.specialize(
-                    pipeline_cache,
-                    &BuiyPrimitives,
-                    BuiyPrimitiveKey {
-                        kind,
-                        format: TextureFormat::Rgba8UnormSrgb,
-                        samples: 1,
-                    },
-                )
-            };
-            (
-                specialize(BuiyPrimitiveKind::Quad),
-                specialize(BuiyPrimitiveKind::Glyph),
-            )
+            let quad = pipelines.primitives.specialize(
+                pipeline_cache,
+                &BuiyPrimitives,
+                BuiyPrimitiveKey {
+                    kind: BuiyPrimitiveKind::Quad,
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            let glyph = pipelines.primitives.specialize(
+                pipeline_cache,
+                &BuiyPrimitives,
+                BuiyPrimitiveKey {
+                    kind: BuiyPrimitiveKind::Glyph,
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            // The band (border/outline) baseline through the distinct
+            // `BuiyBandPipeline` specializer + cache (styling-f-tier.md § 2.3).
+            let band = pipelines.band.specialize(
+                pipeline_cache,
+                &BuiyBandPipeline,
+                BuiyBandKey {
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            // The box-shadow baseline through the same `BuiyPrimitives`
+            // specializer (the `Shadow` kind — `shadow.wgsl` + the quad-family
+            // vertex layout; styling-f-tier.md § 2.2 — C6-b). Buildable today,
+            // only never specialized before this child.
+            let shadow = pipelines.primitives.specialize(
+                pipeline_cache,
+                &BuiyPrimitives,
+                BuiyPrimitiveKey {
+                    kind: BuiyPrimitiveKind::Shadow,
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            (quad, glyph, band, shadow)
         });
     world.insert_resource(BuiyPipeline {
         id,
         glyph_id,
+        band_id,
+        shadow_id,
         vertex_buffer,
         view_layout,
         atlas_layout,
@@ -285,6 +341,12 @@ pub struct BuiyViewPipelines {
     pub quad: CachedRenderPipelineId,
     /// `Glyph @ (view format, view samples)` — the window-pass glyph draw.
     pub glyph: CachedRenderPipelineId,
+    /// `Band @ (view format, view samples)` — the window-pass border/outline
+    /// band draw (styling-f-tier.md § 2.3 — C6-a outline, C6-b per-side border).
+    pub band: CachedRenderPipelineId,
+    /// `Shadow @ (view format, view samples)` — the window-pass box-shadow draw
+    /// (styling-f-tier.md § 2.2 — C6-b). Drawn FIRST (behind the quad).
+    pub shadow: CachedRenderPipelineId,
 }
 
 /// `RenderSystems::Prepare` system: specialize the view-pass quad + glyph
@@ -307,20 +369,36 @@ pub(crate) fn prepare_buiy_view_pipelines(
     views: Query<(Entity, &ViewTarget, &Msaa)>,
 ) {
     for (entity, view_target, msaa) in &views {
+        let format = view_target.main_texture_format();
+        let samples = msaa.samples();
         let mut specialize = |kind| {
             pipelines.primitives.specialize(
                 &pipeline_cache,
                 &BuiyPrimitives,
                 BuiyPrimitiveKey {
                     kind,
-                    format: view_target.main_texture_format(),
-                    samples: msaa.samples(),
+                    format,
+                    samples,
                 },
             )
         };
+        let quad = specialize(BuiyPrimitiveKind::Quad);
+        let glyph = specialize(BuiyPrimitiveKind::Glyph);
+        // The box-shadow variant rides the SAME `BuiyPrimitives` specializer (the
+        // `Shadow` kind, `shadow.wgsl` + quad-family vertex layout; § 2.2 — C6-b).
+        let shadow = specialize(BuiyPrimitiveKind::Shadow);
+        // The band (border/outline) variant rides its own specializer/cache — a
+        // distinct pipeline keyed by record, not a `BuiyPrimitiveKind`.
+        let band = pipelines.band.specialize(
+            &pipeline_cache,
+            &BuiyBandPipeline,
+            BuiyBandKey { format, samples },
+        );
         let view_pipelines = BuiyViewPipelines {
-            quad: specialize(BuiyPrimitiveKind::Quad),
-            glyph: specialize(BuiyPrimitiveKind::Glyph),
+            quad,
+            glyph,
+            band,
+            shadow,
         };
         commands.entity(entity).insert(view_pipelines);
     }

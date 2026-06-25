@@ -214,6 +214,36 @@ fn accessor_invalidate_clears_the_authoritative_cache() {
     assert_eq!(item.intrinsics(), None);
 }
 
+/// The C2 content-vs-style split point: `has_edit()` distinguishes an editor
+/// entity (owns its content; `TextSync` re-applies STYLE only, never `set_text`)
+/// from a display-only entity (content+style path). The read-only companion is
+/// what `query.get` yields here.
+#[test]
+fn has_edit_distinguishes_editor_from_display_entities() {
+    use buiy_core::text::TextBuffer;
+    use buiy_core::text::edit::{TextBufferAccess, TextEditState};
+    use cosmic_text::Metrics;
+
+    let metrics = Metrics::new(16.0, 19.2); // for the display TextBuffer
+    let mut world = World::new();
+    let display = world.spawn(TextBuffer::new(metrics)).id();
+    // Editor uses the facade constructor (for_font_size == Metrics::new(16.0,
+    // 19.2), state.rs:170) — the ONE form across all plans.
+    let editor = world
+        .spawn((TextBuffer::new(metrics), TextEditState::for_font_size(16.0)))
+        .id();
+
+    let mut q = world.query::<TextBufferAccess>();
+    assert!(
+        !q.get(&world, display).unwrap().has_edit(),
+        "a display-only entity has no editor"
+    );
+    assert!(
+        q.get(&world, editor).unwrap().has_edit(),
+        "an entity with TextEditState owns its buffer"
+    );
+}
+
 /// The bypass-change-detection contract on the EDITOR arm of `with_buffer_mut`
 /// (measure § 7, access.rs decision 4): a width probe is not a damage signal,
 /// so a mutable buffer write through the accessor must NOT tick
@@ -276,10 +306,24 @@ fn settle(app: &mut App) {
     app.update();
 }
 
-/// THE flagship invariant: an entity with `TextEditState` (+ `Text`) shapes,
-/// measures, and lays out IDENTICALLY to the equivalent display-only entity
-/// — because both route through `TextBufferAccess`, editor-preferred. The
-/// editor's owned buffer is the one that gets the text and produces the
+/// Seed an editor entity's OWNED content via the explicit `EditCommand::Insert`
+/// verb (C2 § 2.3) — the editor owns its content; the display `Text`→editor
+/// content seam is gone (C2 § 2.1). Locks the shared `FontSystem` the way the
+/// edit-path tests do.
+fn seed_editor(app: &mut App, editor: Entity, content: &str) {
+    use buiy_core::text::SharedFontSystem;
+    use buiy_core::text::edit::EditCommand;
+    let fonts = app.world().resource::<SharedFontSystem>().clone();
+    let mut fs = fonts.lock();
+    let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+    state.apply(&mut fs, EditCommand::Insert(content.into()), false, false);
+}
+
+/// THE flagship invariant: an entity with `TextEditState` shapes, measures, and
+/// lays out IDENTICALLY to the equivalent display-only entity — because both
+/// route through `TextBufferAccess`, editor-preferred. The editor's owned buffer
+/// is the one that gets the text (seeded via `EditCommand::Insert` — the editor
+/// owns its content; the display `Text` seam is gone, C2 § 2.1) and produces the
 /// layout.
 #[test]
 fn editor_entity_lays_out_identically_to_display_entity() {
@@ -297,10 +341,14 @@ fn editor_entity_lays_out_identically_to_display_entity() {
         .spawn((
             Node,
             Style::default(),
-            Text(String::from("hello editor world")),
+            Text(String::new()), // inert display carrier (editor owns its content)
             TextEditState::new(Metrics::new(16.0, 19.2)),
         ))
         .id();
+    // Seed the editor's OWNED content via the explicit verb (C2 § 2.3): the
+    // display `Text`→editor seam is gone, so equivalent content reaches the
+    // editor through `Insert`, not by TextSync lowering the display `Text`.
+    seed_editor(&mut app, editor, "hello editor world");
     // Two FlexStart rows so cross-axis stretch doesn't mask measured height.
     for child in [display, editor] {
         app.world_mut()

@@ -21,8 +21,22 @@ use crate::render::color::ColorToken;
 /// `TextSync` rewrites the entity's `TextBuffer` in place via the 0.19 lazy
 /// setters and dirty-marks the Taffy node. Shaping happens at the next
 /// lock-bearing site (T3's measure closure / `TextCommit`), never here.
+///
+/// **`#[require(Node)]`:** text is content laid out in a box — the whole
+/// pipeline (TextSync → measure → TextCommit → extract) only acts on entities
+/// that ARE layout nodes (a Taffy node, a `ResolvedLayout`, a slot in
+/// `painters_z`). A `Text` on a non-`Node` entity is silently never measured,
+/// never shaped, never painted — the exact trap a `bsn!`-authored bare-`Text`
+/// label fell into (it set an `A11yLabel`/`Text` but no `Node`, so it had an
+/// accessible name yet rendered nothing). Requiring `Node` makes "this text
+/// participates in layout & paint" structural rather than conventional, so a
+/// scene-authored `(Text(…) FontSize(…))` label is renderable by construction —
+/// matching the `(Node, Style, Text(…))` shape every headless fixture already
+/// spells out. Idempotent where `Node` is already present (the editor display
+/// carrier, every widget root).
 #[derive(Component, Reflect, Default, Clone, PartialEq, Eq, Debug)]
 #[reflect(Component, Default)]
+#[require(crate::Node)]
 pub struct Text(pub String);
 
 /// The `font-family` stack value (font-assets § 6; foundation text.md:10, F).

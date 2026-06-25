@@ -28,9 +28,10 @@ use bevy::render::render_resource::{
 
 // Owned by R6 (render::buckets) — imported, not redefined.
 use crate::render::buckets::BuiyPrimitiveKind;
+use crate::render::instance::BORDER_BAND_INSTANCE_STRIDE_BYTES;
 use crate::render::pipeline::{
-    atlas_layout_descriptor, coverage_shader_handle, shader_handle, shadow_shader_handle,
-    view_uniform_layout_descriptor,
+    atlas_layout_descriptor, band_shader_handle, coverage_shader_handle, shader_handle,
+    shadow_shader_handle, view_uniform_layout_descriptor,
 };
 
 /// One `SpecializedRenderPipeline` variant: a primitive built for a specific
@@ -228,6 +229,188 @@ impl BuiyPrimitives {
             BuiyPrimitiveKind::Shadow => shadow_shader_handle(),
             BuiyPrimitiveKind::Glyph => coverage_shader_handle(),
             BuiyPrimitiveKind::Path => shader_handle(),
+        }
+    }
+}
+
+/// One `SpecializedRenderPipeline` variant of the border/outline BAND pipeline
+/// (styling-f-tier.md § 2.3 / § 3.4): a distinct pipeline keyed by record type
+/// (NOT a new `BuiyPrimitiveKind`), built for a specific target color-attachment
+/// format + sample count exactly like [`BuiyPrimitiveKey`]. The band draws
+/// within the `(Quad, layer)` slot (so it paints over the fill within a box),
+/// but rides its own `band.wgsl` shader + the distinct `BorderBandInstance`
+/// vertex layout, leaving the 68 B quad stride byte-stable.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BuiyBandKey {
+    /// The bound attachment's format (view format / `Rgba16Float` group target).
+    pub format: TextureFormat,
+    /// The bound attachment's sample count (the per-view `Msaa` count).
+    pub samples: u32,
+}
+
+/// The border/outline band `SpecializedRenderPipeline`. Its own vertex layout
+/// (the `BorderBandInstance` record) + shader (`band.wgsl`), sharing the quad
+/// family's `@group(0)` view uniform — no `@group(1)`. `SpecializedRenderPipelines<BuiyBandPipeline>`
+/// dedupes identical `(format, samples)` keys onto one `CachedRenderPipelineId`.
+#[derive(Default)]
+pub struct BuiyBandPipeline;
+
+impl BuiyBandPipeline {
+    /// The two interleaved vertex-buffer layouts for the band pipeline: the
+    /// shared static unit quad (stride 16, VBO 0) and the per-instance
+    /// [`BorderBandInstance`] record (VBO 1, `step_mode: Instance`). The
+    /// attribute offsets/formats MUST match `BorderBandInstance`'s `#[repr(C)]`
+    /// field offsets byte-for-byte and `band.wgsl`'s `@location`s.
+    ///
+    /// [`BorderBandInstance`]: crate::render::instance::BorderBandInstance
+    fn band_vertex_buffers() -> Vec<VertexBufferLayout> {
+        vec![
+            VertexBufferLayout {
+                array_stride: 16,
+                step_mode: VertexStepMode::Vertex,
+                attributes: vec![
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                ],
+            },
+            VertexBufferLayout {
+                array_stride: BORDER_BAND_INSTANCE_STRIDE_BYTES as u64,
+                step_mode: VertexStepMode::Instance,
+                attributes: vec![
+                    // rect_pos @0, rect_size @8
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 2,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 3,
+                    },
+                    // color_top @16, color_right @32, color_bottom @48, color_left @64
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 4,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 32,
+                        shader_location: 5,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 48,
+                        shader_location: 6,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 64,
+                        shader_location: 7,
+                    },
+                    // width @80 ([t,r,b,l])
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 80,
+                        shader_location: 8,
+                    },
+                    // outer_radius @96 (8 f32 = 32 B) split TL/TR @96, BR/BL @112
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 96,
+                        shader_location: 9,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 112,
+                        shader_location: 10,
+                    },
+                    // inner_radius @128 split TL/TR @128, BR/BL @144
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 128,
+                        shader_location: 11,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 144,
+                        shader_location: 12,
+                    },
+                    // clip_min @160, clip_max @168
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 160,
+                        shader_location: 13,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 168,
+                        shader_location: 14,
+                    },
+                    // affine cols @176, @184
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 176,
+                        shader_location: 15,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 184,
+                        shader_location: 16,
+                    },
+                ],
+            },
+        ]
+    }
+}
+
+impl SpecializedRenderPipeline for BuiyBandPipeline {
+    type Key = BuiyBandKey;
+
+    fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        let shader = band_shader_handle();
+        RenderPipelineDescriptor {
+            label: Some("buiy_band_pipeline".into()),
+            layout: vec![view_uniform_layout_descriptor()],
+            immediate_size: 0,
+            vertex: VertexState {
+                shader: shader.clone(),
+                shader_defs: vec![],
+                entry_point: Some("vertex".into()),
+                buffers: Self::band_vertex_buffers(),
+            },
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleStrip,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: PolygonMode::Fill,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState {
+                count: key.samples,
+                ..Default::default()
+            },
+            fragment: Some(FragmentState {
+                shader,
+                shader_defs: vec![],
+                entry_point: Some("fragment".into()),
+                targets: vec![Some(ColorTargetState {
+                    format: key.format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            zero_initialize_workgroup_memory: false,
         }
     }
 }

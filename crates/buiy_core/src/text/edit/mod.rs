@@ -43,7 +43,9 @@ pub use input::{EditContext, EditOutcome, EditSubmitted, TextChanged, apply_keyb
 pub use keymap::{Keymap, KeymapTable, Modifiers, default_keymap_for_platform};
 pub use lifecycle::focus_lifecycle;
 pub use placeholder::{PlaceholderActive, PlaceholderBuffer, sync_placeholder};
-pub use pointer::{ClickTracker, PointerGesture, pointer_selection, pointer_to_cursor};
+pub use pointer::{
+    ClickTracker, PointerGesture, editor_pointer_drag, editor_pointer_press, pointer_to_cursor,
+};
 pub use scroll::{auto_scroll_caret, clamp_into_view};
 pub use selection::{SelectionRange, TextSelection};
 pub use state::{CaretBlink, Disabled, Placeholder, ReadOnly, SingleLine, TextEditState};

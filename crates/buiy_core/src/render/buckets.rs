@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, HashMap, hash_map::Entry};
 use std::ops::Range;
 
 use crate::render::extract::{ExtractedNode, TextQuad};
-use crate::render::instance::{PackedInstance, pack_extracted, pack_text_quad};
+use crate::render::instance::{
+    BorderBandInstance, PackedInstance, pack_border, pack_extracted, pack_outline, pack_shadow,
+    pack_text_quad,
+};
 use bevy::prelude::{Color, Entity};
 use bytemuck::Pod;
 
@@ -186,6 +189,58 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
         buckets.push(quad0, packed_to_raw(&pack_extracted(node)));
     }
     buckets
+}
+
+/// Pack a view's node list into the flat border/outline BAND instance blob, in
+/// paint order (styling-f-tier.md § 2.3 / § 2.4). One [`BorderBandInstance`] per
+/// node BORDER (C6-b, drawn AT the box edge) and one per node OUTLINE (C6-a, the
+/// ring outside the box); nodes with neither contribute nothing (the byte-stable
+/// no-band path). The band buffer draws AFTER the quad/glyph window draw, so a
+/// band sits on top of the fill + text within the box; within a node the BORDER
+/// is pushed before the OUTLINE so the outline paints over the border (CSS:
+/// border paints inside the box, outline outside on top).
+///
+/// The border uses the entity's OWN clip (it is inside the border box); the
+/// outline uses the entity's `AncestorClip` (resolved at extract), so a focus
+/// ring survives an `overflow:hidden` ancestor. Both are resolved at extract.
+///
+/// v1: the band rides the FLAT window draw only — it is not partitioned into
+/// effect-group off-screen targets (a ring/border on a grouped element is a
+/// follow-up; the common case is a top-level widget).
+pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
+    let mut bands = Vec::new();
+    for n in nodes {
+        // Border first (inside the box), then outline (outside, on top).
+        if let Some(border) = n.border.as_ref() {
+            bands.push(pack_border(border));
+        }
+        if let Some(outline) = n.outline.as_ref() {
+            bands.push(pack_outline(outline));
+        }
+    }
+    bands
+}
+
+/// Pack a view's node list into the flat box-shadow instance blob, in paint
+/// order (styling-f-tier.md § 2.2 — C6-b). One [`PackedInstance`] per
+/// [`ExtractedShadow`](crate::render::extract::ExtractedShadow) term across all
+/// nodes, in node-walk order then CSS
+/// list order within a node (index 0 frontmost). A node with no shadow
+/// contributes nothing. The shadow primitive draws BEHIND the box (the
+/// `(Shadow, layer)` bucket has the lowest `paint_order`), so the shadow blob
+/// is drawn FIRST in `node.rs`, before the quad/glyph/band draws.
+///
+/// Reuses the frozen 68 B [`PackedInstance`] (radius slot → blur sigma — no
+/// stride change). Like the band, v1 rides the FLAT window draw only (no
+/// effect-group partitioning).
+pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
+    let mut shadows = Vec::new();
+    for n in nodes {
+        for s in &n.shadows {
+            shadows.push(pack_shadow(s));
+        }
+    }
+    shadows
 }
 
 /// The instance-range partition of a packed view (effect-compositor.md § 1.1 /

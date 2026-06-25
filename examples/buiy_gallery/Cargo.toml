@@ -1,0 +1,25 @@
+[package]
+name = "buiy_gallery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_winit", "x11", "wayland"] }
+buiy = { path = "../../crates/buiy" }
+# The screen reads/writes the decomposed a11y-state components + the editor
+# messages (`A11yToggled`/`Toggled`/`A11yLive`/`EditSubmitted`/…) that the `buiy`
+# prelude does not flatten. The widget tests reach these the same way — directly
+# from `buiy_core`. No cycle: `buiy` depends on `buiy_core`, not the reverse.
+buiy_core = { path = "../../crates/buiy_core" }
+# `buiy_widgets::checkbox::CheckboxMark` distinguishes the checkbox's decorative
+# mark child from its label child (the edit-in-place target); not flattened into
+# the `buiy` prelude. The same crate the widget tests reach directly.
+buiy_widgets = { path = "../../crates/buiy_widgets" }
+
+[dev-dependencies]
+# The headless layout-snapshot gate drives the same scene the binary authors.
+buiy_verify = { path = "../../crates/buiy_verify" }

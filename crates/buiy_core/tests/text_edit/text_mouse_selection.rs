@@ -1,8 +1,8 @@
 //! E3 headless — the mouse-selection LOGIC (editing-and-ime § 4, mouse
 //! Click/DoubleClick/TripleClick/Drag): the window→buffer-local mapping, the
 //! click-count classifier, and the gesture→Action application. The full
-//! PointerLocation/Hovered wiring is GPU/windowed; here we pin the platform-
-//! independent geometry + state machine.
+//! `Pointer<Press>`/`Pointer<Drag>` observer wiring (C3c) is GPU/windowed; here
+//! we pin the platform-independent geometry + state machine the observers drive.
 
 use std::time::Duration;
 

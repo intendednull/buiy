@@ -166,18 +166,41 @@ fn focus_plugin_populates_input_set() {
 }
 
 #[test]
-fn picking_plugin_populates_picking_set() {
-    // `PickingPlugin::build` adds `update_hovered.in_set(BuiySet::Picking)`
-    // (`picking/mod.rs:28`).
-    let delta = set_membership_delta(BuiySet::Picking, |app| {
-        // `update_hovered` reads `MessageReader<PointerHits>`; bevy's
-        // PickingPlugin provides the `Messages<PointerHits>` resource it needs.
-        app.add_plugins(bevy::picking::PickingPlugin);
-        app.add_plugins(buiy_core::picking::PickingPlugin);
-    });
+fn picking_plugin_registers_pointer_producers_as_observers() {
+    // C3c retired `update_hovered` (the lone `BuiySet::Picking` system), so
+    // `PickingPlugin` no longer populates that set — it now registers its C3
+    // pointer producers as OBSERVERS on the `Pointer<E>` stream
+    // (`pointer_click_emits_on_press` → `OnPress`, `derive_multi_click` →
+    // `MultiClick`; `picking/mod.rs`). Observers are entities carrying the
+    // `Observer` component, so count them with the plugin vs without it: the
+    // delta is `PickingPlugin`'s contribution (plus whatever bevy_picking's
+    // `InteractionPlugin` brings, which is also part of what `PickingPlugin`
+    // composes). This replaces the old in-set membership check with the faithful
+    // successor — the producers moved from a scheduled system to observers.
+    //
+    // `BuiySet::Picking` itself survives as the pure ordering anchor upstream
+    // writers target via `.before(BuiySet::Picking)` (the transform bridge, clip
+    // rects, visibility, the text caret); its inter-set placement is pinned by
+    // `buiy_sets_run_in_documented_order` above.
+    let count_observers = |with_plugin: bool| -> usize {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(CorePlugin);
+        if with_plugin {
+            // bevy's `PickingPlugin` provides the `Messages<PointerHits>` +
+            // `PickingSystems` Buiy's `PickingPlugin` builds on.
+            app.add_plugins(bevy::picking::PickingPlugin);
+            app.add_plugins(buiy_core::picking::PickingPlugin);
+        }
+        app.update();
+        let mut q = app.world_mut().query::<&bevy::ecs::observer::Observer>();
+        q.iter(app.world()).count()
+    };
+    let delta = count_observers(true) - count_observers(false);
     assert!(
-        delta >= 1,
-        "PickingPlugin must place update_hovered in BuiySet::Picking (delta was {delta})"
+        delta >= 2,
+        "PickingPlugin must register its C3 pointer producers as observers \
+         (pointer_click_emits_on_press + derive_multi_click); observed delta was {delta}"
     );
 }
 
@@ -196,16 +219,29 @@ fn a11y_plugin_populates_a11y_update_set() {
 
 #[test]
 fn plugins_only_populate_their_own_set() {
-    // Membership is *selective*: A11yPlugin must NOT inflate the Input set, and
-    // FocusPlugin must NOT inflate the A11yUpdate set. This gives the membership
-    // assertions teeth — a plugin that mis-tags its system into the wrong set
-    // would still pass a lone `>= 1` on the right set, but reddens here.
+    // Membership is *selective*: FocusPlugin must NOT inflate the A11yUpdate set.
+    // This gives the membership assertions teeth — a plugin that mis-tags its
+    // system into the wrong set would still pass a lone `>= 1` on the right set,
+    // but reddens here.
+    //
+    // P1c-b INTENTIONALLY adds the inbound action router to `BuiySet::Input` from
+    // `A11yPlugin` (action-router.md §7): the router (`route_action_requests`) +
+    // its keyboard siblings (`keyboard_activation`, the per-role APG activation
+    // keymap; and `slider_keyboard`, the slice-2 APG slider value keymap) are
+    // Input-stage PRODUCERS — they synthesize focus/activation/value changes in
+    // `Input` so an inbound request reflects outbound in the SAME frame's
+    // `A11yUpdate`. So A11yPlugin now legitimately contributes to BOTH `A11yUpdate`
+    // (the outbound `build_tree`) and `Input` (the inbound router + keymaps). The
+    // earlier "A11yPlugin adds nothing to Input" invariant is superseded by the
+    // P1c-b router. Pin the exact count so an accidental mis-tag (e.g. dropping
+    // `.in_set(Input)`, or a future system landing in the wrong set) still reddens.
     let a11y_into_input = set_membership_delta(BuiySet::Input, |app| {
         app.add_plugins(buiy_core::a11y::A11yPlugin);
     });
     assert_eq!(
-        a11y_into_input, 0,
-        "A11yPlugin must not add systems to BuiySet::Input"
+        a11y_into_input, 3,
+        "A11yPlugin adds exactly the P1c-b inbound router systems \
+         (route_action_requests + keyboard_activation + slider_keyboard) to BuiySet::Input"
     );
     let focus_into_a11y = set_membership_delta(BuiySet::A11yUpdate, |app| {
         app.init_resource::<ButtonInput<KeyCode>>();

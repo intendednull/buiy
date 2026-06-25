@@ -14,6 +14,21 @@ buiy_core = { path = "../buiy_core" }
 buiy_widgets = { path = "../buiy_widgets" }
 serde.workspace = true
 serde_json.workspace = true
+# The a11y snapshot tier names AccessKit ids/types directly (`accesskit::NodeId`,
+# `accesskit::TreeId` in the gate-#3 consumer lookup). Already in the graph via
+# `buiy_core`; declared here so `buiy_verify::a11y` can name the crate. Pinned to
+# the workspace `accesskit = "0.24"`, no new supply-chain surface.
+accesskit.workspace = true
+# In-process AccessKit consumer — the gate-#3 read tier (inprocess-api.md §6,
+# verification.md). `buiy_verify::a11y::consume` builds the real `TreeUpdate` via
+# `buiy_core`'s production `build_tree_update` fold and feeds it to an
+# `accesskit_consumer::Tree`, the same consumer a real AT drives. The co-drive
+# (§5 SC-4) pins this helper's single home to `buiy_verify::a11y` so C7
+# (widget-catalog) and the P1c driver never fork it — hence the dep lives here,
+# not in `buiy_core` (which reaches it transitively). Pinned to the version the
+# resolved accesskit 0.24.1 winit stack already pulls (0.36.0): no new graph node,
+# no new `cargo deny` surface.
+accesskit_consumer.workspace = true
 image.workspace = true
 proptest.workspace = true
 # Already a workspace dep (used by buiy_core for the `PackedInstance` POD layout).
@@ -50,3 +65,12 @@ base64.workspace = true
 # rejected: a hand-maintained `&[Fixture]` const (defeats "zero edits to
 # enroll a new fixture").
 inventory = "0.3"
+
+[dev-dependencies]
+# The C8 TodoMVC inspection-driver acceptance test
+# (`tests/verify_headless/todomvc_c8a.rs`) drives the `buiy_gallery` S1 screen +
+# its `TodoMvcPlugin` through the in-process a11y driver + the C7 `PointerHarness`.
+# A DEV-dep (test-only): `buiy_gallery` already dev-depends on `buiy_verify`, and a
+# dev-dep ↔ dev-dep relationship is allowed (dev-deps do not enter the normal
+# cycle check). The crate ships no normal dependency on the gallery.
+buiy_gallery = { path = "../../examples/buiy_gallery" }

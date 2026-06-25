@@ -152,6 +152,13 @@ entity `E` it computes the **intersection** of:
 1. **`E`'s own box** — `Rect::from(resolved.position, resolved.size)`. (Self-box
    is included so a `ClipRect` is always ⊆ the entity; render can use it as the
    instance's scissor without a separate box read.)
+
+   > **Superseded by C1 (2026-06-22, widget-catalog campaign):** the producer now
+   > computes the own box from `GlobalTransform.translation().truncate()`, not
+   > `ResolvedLayout.position`, consistent with pillar 5 § B.5 (render/picking read
+   > `GlobalTransform`). `ResolvedLayout.position` is parent-local; the absolute
+   > basis is `GlobalTransform`. See
+   > docs/specs/2026-06-22-buiy-widget-catalog-design/coordinate-space-correctness.md.
 2. For each ancestor `A` walked via `ChildOf` from `E` to the layout root, in
    order:
    - if `A.Overflow` clips on an axis (`Hidden` / `Clip` / `Scroll` / `Auto` —

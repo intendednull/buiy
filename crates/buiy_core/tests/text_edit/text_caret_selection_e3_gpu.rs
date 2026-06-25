@@ -157,12 +157,30 @@ fn capture() -> Vec<u8> {
                 .height_px(H as f32),
         ))
         .add_child(editor);
-    // Settle TWICE: the sync path lowers the authored `Text` into the editor-
-    // OWNED buffer on the frame AFTER spawn (the first update measures/commits an
-    // empty editor buffer; the second seeds + reshapes "hello עולם world"). A
-    // single update would leave the editor buffer empty, so `Motion::End` below
-    // would land at index 0 (the caret stuck at the left edge — the assertion's
-    // failure mode). Mirrors the headless caret fixtures' settle discipline.
+    // Seed the editor's OWNED buffer via the C2 `EditCommand` channel. The C2
+    // anti-clobber `TextSync` (008efa6) re-applies STYLE to an editor-owned buffer
+    // but NEVER `set_text`s it, so the authored `Text` above no longer lowers its
+    // string into the buffer — only the `set_value` / `EditCommand` seed path does
+    // (text_set_value.rs), which is what production `TextInput` uses. Insert the
+    // corpus through the editor so the buffer is non-empty BEFORE the settle shapes
+    // it; without this the buffer stays empty, `Motion::End` lands at index 0
+    // (caret stuck at the left edge) AND no glyph ink paints — the GPU-lane failure
+    // mode that surfaced the day the GPU lane first ran on CI. C2 moved the headless
+    // editor tests to this channel; these `#[ignore]` GPU goldens were the stragglers.
+    {
+        let fonts = app.world().resource::<SharedFontSystem>().clone();
+        let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        let mut fs = fonts.lock();
+        state.apply(
+            &mut fs,
+            EditCommand::Insert("hello עולם world".into()),
+            false,
+            false,
+        );
+    }
+    // Settle TWICE: the first update measures/commits, the second applies the
+    // synced editor STYLE (the FontFamily incl. Hebrew) + reshapes the seeded
+    // corpus. Mirrors the headless caret fixtures' settle discipline.
     app.update();
     app.update();
     app.world_mut().resource_mut::<FocusedEntity>().0 = Some(editor);
@@ -275,6 +293,21 @@ fn capture_boundary() -> Vec<u8> {
                 .height_px(H as f32),
         ))
         .add_child(editor);
+    // Seed via the C2 `EditCommand` channel (see `capture` for the why): the
+    // anti-clobber `TextSync` (008efa6) no longer lowers the authored `Text` into
+    // an editor-owned buffer, so Insert the corpus through the editor before the
+    // settle shapes it — the boundary derivation below reads the shaped buffer.
+    {
+        let fonts = app.world().resource::<SharedFontSystem>().clone();
+        let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        let mut fs = fonts.lock();
+        state.apply(
+            &mut fs,
+            EditCommand::Insert("hello עולם world".into()),
+            false,
+            false,
+        );
+    }
     app.update();
     app.update();
     app.world_mut().resource_mut::<FocusedEntity>().0 = Some(editor);

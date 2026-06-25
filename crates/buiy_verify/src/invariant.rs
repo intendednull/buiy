@@ -40,3 +40,6 @@ pub use predicates::{
 
 pub mod bidi;
 pub use bidi::{arb_bidi_text, bidi_caret_roundtrips, caret_in_cluster};
+
+pub mod content_presence;
+pub use content_presence::{content_is_present, glyph_census};

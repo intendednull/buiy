@@ -12,15 +12,21 @@ use bevy::transform::systems::{
 pub mod a11y;
 pub mod components;
 pub mod focus;
+pub mod interaction;
 pub mod layout;
 pub mod picking;
 pub mod render;
+pub mod scroll;
 pub mod text;
 pub mod theme;
 
 pub use a11y::{A11yDescription, A11yLabel, A11yNodeView, A11yPlugin, A11yRole, A11yTreeBuilder};
 pub use components::{Node, ResolvedLayout, ResolvedTransform, StackingContext};
-pub use focus::{FocusPlugin, FocusVisible, Focusable, FocusedEntity};
+pub use focus::{
+    FocusPlugin, FocusReturn, FocusRingMarker, FocusScope, FocusScopeMode, FocusVisible, Focusable,
+    FocusedEntity,
+};
+pub use interaction::{InteractionPlugin, OnPress};
 pub use layout::{
     AlignContent, AlignItems, Anchor, AnchorErrorKind, AnchorName, AnchorRef, AspectRatio,
     BackfaceVisibility, BoxModel, BoxSizing, BreakAfter, BreakBefore, BreakInside, BuiyLayoutStep,
@@ -37,7 +43,9 @@ pub use layout::{
     TransformMatrix, TransformOrigin, TransformStyle, Translate, TryCondition, UiTransform,
     UnicodeBidi, WillChange, WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
 };
-pub use picking::{BuiyPickingBackendPlugin, Hovered, PickingPlugin, hit_test};
+pub use picking::{
+    BuiyPickingBackendPlugin, MultiClick, PickingPlugin, global_paint_order, hit_test,
+};
 pub use render::color::{ColorToken, SystemColorKeyword};
 pub use render::components::{
     AncestorClip, BackdropFilter, Background, Border, BorderSide, BoxShadow, ClipRadius, ClipRect,
@@ -50,6 +58,7 @@ pub use render::forced_colors_analyzer::{
 };
 #[allow(deprecated)]
 pub use render::golden::{GoldenConfig, perceptual_diff};
+pub use scroll::{ScrollExtent, ScrollInputPlugin};
 pub use text::{
     BuiyTextPlugin, ComputedTextLayout, FontFamily, FontSize, FontWeight, FontsGeneration,
     LineHeight, ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer,
@@ -79,6 +88,12 @@ pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
+        // The shared `OnPress` activation sink (co-drive SC-1). Registered in
+        // core (not `WidgetsPlugin`) so `Messages<OnPress>` exists for the
+        // in-core producers (the P1c action router, the C3 pointer layer)
+        // regardless of whether `buiy_widgets` is present.
+        app.add_plugins(crate::interaction::InteractionPlugin);
+
         app.register_type::<Node>()
             .register_type::<ResolvedLayout>()
             .configure_sets(

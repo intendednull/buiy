@@ -73,19 +73,32 @@ fn single_line_caret_past_right_edge_pans_x_only() {
                 .width_px(40.0)
                 .height_px(20.0)
                 .overflow_hidden(),
-            Text(String::from("the quick brown fox jumps")),
+            Text(String::new()), // inert display carrier (editor owns its content)
             TextEditState::new(Metrics::new(16.0, 19.2)),
             SingleLine,
             ScrollOffset::default(),
         ))
         .id();
+    // Seed the editor's OWNED content via the explicit verb (C2 § 2.3): the
+    // display `Text`→editor seam is gone (C2 § 2.1).
+    {
+        let fonts = app.world().resource::<SharedFontSystem>().clone();
+        let mut fs = fonts.lock();
+        let mut state = app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        state.apply(
+            &mut fs,
+            EditCommand::Insert("the quick brown fox jumps".into()),
+            true,
+            false,
+        );
+    }
     app.world_mut()
         .spawn((
             Node,
             Style::default().flex_row().width_px(400.0).height_px(40.0),
         ))
         .add_child(editor);
-    // Settle so TextSync lowers Text → editor buffer and TextCommit shapes it.
+    // Settle so TextSync re-applies style and TextCommit shapes the seeded buffer.
     app.update();
     app.update();
     app.world_mut().resource_mut::<FocusedEntity>().0 = Some(editor);

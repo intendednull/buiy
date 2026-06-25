@@ -1602,3 +1602,99 @@ reproduce the canonical rasterizer USER-SPACE (no sudo): download the
 `install-mesa`-pinned Mesa tarball + a matching `libLLVM`/`libxml2`/`icu` (e.g.
 from the Arch archive) onto `LD_LIBRARY_PATH`, write an ICD JSON pointing at
 `libvulkan_lvp.so`, and set `VK_DRIVER_FILES` + `WGPU_ADAPTER_NAME=llvmpipe`.
+
+## Verify (C7) — catalog-wide `content_is_present` enroll auto-check — DEFERRED (Wave 3+, with C8)
+
+**Originated:** widget-catalog C7 (verification real-input tier + content-presence),
+`docs/plans/2026-06-22-buiy-widget-catalog-c7-verification.md` Task 1. The
+`content_is_present` invariant + golden bless-guard landed (RED-first proof via a
+whitespace-only zero-glyph fixture); the predicate runs the production
+`extract_buiy_glyphs` adapterless and asserts a text-bearing scene emits >0 glyph
+instances.
+
+**Deferred:** a catalog-wide `enroll_all`-driven auto-check that EVERY text-bearing
+fixture cell satisfies `content_is_present`. Blocked on **(a)** a text fixture in
+the catalog (Wave 1's only fixture is the non-text `button`) and **(b)** a
+text-capable enroll stack — `coverage::enroll::build_app` is
+`MinimalPlugins + CorePlugin + LayoutPlugin` only, with NO `BuiyTextPlugin`, so
+`glyph_census` would panic on the missing `SharedFontSystem` on every enrolled cell.
+Until both land (C8 adds a text fixture; the enroll stack gains a text-capable
+variant), the predicate's teeth are gated by the two dedicated full-stack unit tests
+in `crates/buiy_verify/tests/verify_headless/content_presence.rs` (the whitespace
+zero-glyph RED + the "Hi!" GREEN) and the `bless_guard_refuses_zero_glyph_text_bearing`
+unit test. Pick this up when C8's text-bearing gallery fixtures land.
+
+## Widget-catalog × agent-interface co-drive — post-landing follow-ups (2026-06-23)
+
+The co-drive campaign (Waves 0–5: P1a/P1b a11y substrate, P1c inspection driver,
+C1/C2 correctness, C3 Pointer<E>, C4 widget visuals, C5 containers, C6 F-tier
+styling, C8 gallery) landed on the integration branch (`worktree-todomvc-reimpl-research2`,
+not yet PR'd). Demand-pulled deferrals are tracked in the coordination plan's ledger
+(`docs/plans/2026-06-22-widget-catalog-agent-interface-codrive.md` §3.2). Net-new
+follow-ups surfaced during implementation:
+
+- **Idle-CPU / per-frame scan at scale (corroborates the prototype audit's ~50%
+  idle-CPU concern).** C8-b's 1000-row S2 screen burns ~22 ms/idle-frame (debug)
+  with zero input/state change — an all-entities-per-frame scan in the
+  `CorePlugin + LayoutPlugin + Text` path — plus ~6 ms from `A11yPlugin::build_tree`
+  rebuilding the whole tree each frame. Candidates: layout/reshape change-detection
+  gating, and the agent-interface follow-up "lazy `TreeUpdate` diffing gated on
+  `AccessibilityRequested`" (its phasing.md follow-up #4). Not a correctness issue;
+  pick up as a perf pass.
+- **Gallery authoring guide + matrix enrollment.** `examples/buiy_gallery` has the 5
+  screens + per-screen layout snapshots + the inspection-driver acceptance, but the
+  spec's `Matrix::gallery_screen()` reduced-matrix enrollment + an `AUTHORING.md`
+  (how to add a screen) are not yet written. The coverage `enroll::build_app` still
+  lacks a text-capable stack (the deferred auto-check above) — C8 added text fixtures
+  (S1) but via full `A11yPlugin` apps, not the coverage matrix.
+- **Pre-existing text-caret GPU golden diverges on non-lavapipe adapters (NOT a
+  campaign regression).** `text_caret_selection_e3_gpu` fails on the RX 6700 XT at
+  `white_cols.last().expect("the glyph ink painted")` — the lavapipe-calibrated
+  `is_white_ink` predicate matches no pixels under a different rasterizer. The
+  campaign touched neither this test nor the glyph-rasterization path; CI's
+  pinned-lavapipe GPU lane (the calibration target) is green. Same class as the
+  testing-audit's "cross-rasterizer golden contradiction" — fold these goldens into
+  the perceptual-metric / adapter-tolerant tier rather than exact `is_white_ink`.
+- **Doc-status flip on merge.** The widget-catalog child specs (C1–C8) are still
+  `[draft]`; flip to `[landed]` when the campaign PRs to `main` (they describe the
+  now-built target state).
+- **Deferred-by-ledger (not regressions), for completeness:** `EditCommand::SetSelection`
+  + `SetTextSelection`/`ReplaceSelectedText`; the actionability gates
+  (`act_when_actionable`/`HitTargetable`/`Stable`) — the stacking-aware `hit_test`
+  they'd consume IS built (C1+C3), so un-deferring reads a real hit_test, no AABB
+  shim; `MultilineTextInput`/`AlertDialog`/multi-thumb-slider/Accordion variants;
+  `owns` re-parent + `TreeView::Merged` + the #12 proptest fuzz corpus; P2/`buiy_mcp`.
+
+## Widget-catalog live-run fixes (2026-06-24) — remaining minor items
+
+See `docs/reports/2026-06-24-widget-catalog-rendering-and-crash-bugs.md` for the
+two bugs (the editor-coherence crash + the invisible-content rendering bug) and
+their fixes. Remaining polish (none blocking; the gallery renders + runs):
+
+- **Symbol glyphs render as tofu (latin-subset font).** The checkbox check `✓`
+  (U+2713) and the disclosure caret `▸` (U+25B8) are absent from the embedded
+  `FiraSans-latin` subset, so they render as `.notdef` boxes. Options: embed a
+  fuller glyph (a Symbols/Dingbats subset), draw the check/caret as a primitive
+  (a rotated border, like real TodoMVC), or enable opt-in system fonts
+  (`BuiyTextPlugin { system_fonts: true }` — the async scan path is now
+  coherence-safe under `reshape_edited_editors`).
+- **S3 overlay closed-state positioning.** Closed/anchored overlays (the popover,
+  the closed menu) overlap in a single captured frame — the pre-existing
+  `painters_z` single-frame-ordering fragility (resolves over live frames). The
+  `overlay_menu_screen.snap` is sensitive to unrelated `Update`-set additions for
+  the same reason; pin the popover/menu positioning explicitly after
+  layout+transform so the single-frame result is deterministic.
+- **`Disclosure` restructured — LANDED (this change).** The disclosure trigger now
+  lays its `[caret, label]` out as a centered flex-row header (`Display::flex_row`
+  + `disclosure_row_flex`), with `Position::Relative` on the trigger and the
+  controlled `DisclosurePanel` as `Position::Absolute` (inset top=24/left=0) so it
+  drops BELOW the header out of flow (collapsed ⇒ a clean header row; the panel
+  reveals below). Caret + panel stay direct children so `update_disclosure_visual`
+  /`wire_disclosure_controls` are unchanged. Verified in `showcase_screen.snap`
+  (caret `pos=0,2`, label `pos=17,2`, panel `pos=0,24`). Residual: the caret glyph
+  `▸` (U+25B8) is tofu under the latin-subset font — same font-coverage item as the
+  `✓` checkmark above.
+- **Verify `button` coverage fixture is now content-width-empty.** With the
+  content-width button default, the `button.resting.*` CPU coverage fixture spawns
+  a tiny empty box (no label); give the fixture a label so it remains a meaningful
+  visual sample.

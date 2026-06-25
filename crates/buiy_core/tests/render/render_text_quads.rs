@@ -17,6 +17,9 @@ fn node(entity: Entity, x: f32, color: Color, group: Option<usize>) -> Extracted
         clip: None,
         group,
         affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
+        border: None,
+        shadows: Vec::new(),
     }
 }
 

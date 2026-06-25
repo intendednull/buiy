@@ -18,8 +18,8 @@ use buiy_core::render::atlas::{AtlasConfig, AtlasKey, BuiyAtlas, maintain_atlas}
 use buiy_core::render::extract::ExtractedTextQuads;
 use buiy_core::render::prepare::ExtractedGlyphs;
 use buiy_core::text::{
-    BuiySwashCache, BuiyTextPlugin, FontKeyInterner, GlyphMetaCache, ResidentTextKeys,
-    SharedFontSystem, extract_buiy_glyphs,
+    BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontsGeneration, GlyphMetaCache,
+    ResidentTextKeys, SharedFontSystem, extract_buiy_glyphs,
 };
 
 /// Mirrors `prepare_buiy_instances`' glyph gate: counts frames on which
@@ -173,5 +173,24 @@ impl TextExtractHarness {
 
     pub fn atlas(&self) -> &BuiyAtlas {
         self.render.resource::<BuiyAtlas>()
+    }
+
+    /// Inject the `FontsGeneration` bump deterministically: increment the
+    /// `FontsGeneration` resource the way `apply_font_registry`
+    /// (registry.rs:543) does on a runtime add_font, then run one frame. This
+    /// is the trigger for Bugs 2/3 (the all-buffers `TextSync` sweep fires on
+    /// EVERY runtime add_font, not just startup — audit Bug 3). `TextSync` keys
+    /// its sweep on `fonts_generation.is_changed() && !is_added()`
+    /// (sync.rs:251); writing through `resource_mut` sets the `Changed` tick, so
+    /// the sweep fires next frame — the same path the real `apply_font_registry`
+    /// bump triggers. C2 must confirm this reproduces the clobber identically to
+    /// the async loader path (C7 §3.3 hand-off).
+    pub fn bump_fonts_generation(&mut self) -> &mut Self {
+        {
+            let mut generation = self.app.world_mut().resource_mut::<FontsGeneration>();
+            generation.0 += 1;
+        }
+        self.frame();
+        self
     }
 }

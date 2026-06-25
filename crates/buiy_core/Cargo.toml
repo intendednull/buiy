@@ -11,6 +11,19 @@ tracing.workspace = true
 bytemuck.workspace = true
 accesskit.workspace = true
 accesskit_winit.workspace = true
+# In-process AccessKit consumer — the same retained-tree reader a real
+# assistive technology drives (inprocess-api.md §6). The P1c in-process
+# inspection driver (`a11y::inprocess`) feeds `build_tree_update`'s `TreeUpdate`
+# into an `accesskit_consumer::Tree` and reads each node BACK through the
+# consumer (role-implied defaults, relation resolution, focus) — the
+# act-then-observe `snapshot`. The driver is `buiy_core`'s, so the dependency is
+# `buiy_core`'s (it was previously declared only on `buiy_verify`, which reaches
+# it transitively); `buiy_verify`/`buiy_mcp` consume it through here.
+# Already in the graph via the `accesskit_winit` → `accesskit_unix` →
+# `accesskit_atspi_common` stack (`cargo tree -i accesskit_consumer@0.36.0`):
+# declaring it adds NO new supply-chain node, just an explicit edge. Pinned to
+# the version the resolved accesskit 0.24.1 stack already pulls (0.36.0).
+accesskit_consumer.workspace = true
 guillotiere = { workspace = true }
 smallvec = { workspace = true }
 arboard = { workspace = true }

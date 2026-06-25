@@ -19,6 +19,8 @@
 
 #[path = "verify_headless/a11y.rs"]
 mod a11y;
+#[path = "verify_headless/content_presence.rs"]
+mod content_presence;
 #[path = "verify_headless/contrast.rs"]
 mod contrast;
 #[path = "verify_headless/coverage_display_list.rs"]
@@ -33,6 +35,10 @@ mod coverage_layout;
 mod coverage_meta;
 #[path = "verify_headless/determinism_ahem.rs"]
 mod determinism_ahem;
+#[path = "verify_headless/dialog_modal_c5d.rs"]
+mod dialog_modal_c5d;
+#[path = "verify_headless/gallery_acceptance_c8d.rs"]
+mod gallery_acceptance_c8d;
 #[path = "verify_headless/golden_keys.rs"]
 mod golden_keys;
 #[path = "verify_headless/golden_persistence.rs"]
@@ -45,12 +51,30 @@ mod invariant_bidi;
 mod invariant_mutations;
 #[path = "verify_headless/invariant_predicates.rs"]
 mod invariant_predicates;
+#[path = "verify_headless/menu_dismiss_c5c.rs"]
+mod menu_dismiss_c5c;
 #[path = "verify_headless/metric.rs"]
 mod metric;
+#[path = "verify_headless/modal_showcase_c8c.rs"]
+mod modal_showcase_c8c;
+#[path = "verify_headless/overlay_dismiss_c5b.rs"]
+mod overlay_dismiss_c5b;
+#[path = "verify_headless/pointer_events_c3b.rs"]
+mod pointer_events_c3b;
+#[path = "verify_headless/pointer_focus_c3d.rs"]
+mod pointer_focus_c3d;
+#[path = "verify_headless/pointer_offset_regression.rs"]
+mod pointer_offset_regression;
+#[path = "verify_headless/pointer_press_smoke.rs"]
+mod pointer_press_smoke;
 #[path = "verify_headless/reftest_independence.rs"]
 mod reftest_independence;
 #[path = "verify_headless/scene_generator_smoke.rs"]
 mod scene_generator_smoke;
+#[path = "verify_headless/scroll_c5a.rs"]
+mod scroll_c5a;
+#[path = "verify_headless/scroll_overlay_c8b.rs"]
+mod scroll_overlay_c8b;
 #[path = "verify_headless/sdf_oracle.rs"]
 mod sdf_oracle;
 #[path = "verify_headless/smoke.rs"]
@@ -63,5 +87,7 @@ mod snapshot_dump;
 mod snapshot_instance_hex;
 #[path = "verify_headless/snapshot_layout.rs"]
 mod snapshot_layout;
+#[path = "verify_headless/todomvc_c8a.rs"]
+mod todomvc_c8a;
 #[path = "verify_headless/visual.rs"]
 mod visual;

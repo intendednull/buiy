@@ -26,7 +26,7 @@
 //! (**buiy-theme-tokens-design**, font-assets § 9).
 
 use bevy::prelude::*;
-use cosmic_text::{Attrs, Buffer, Family, Metrics, Weight};
+use cosmic_text::{Attrs, AttrsList, Buffer, Family, Metrics, Weight};
 
 use crate::layout::{LayoutTree, WritingModeResolved};
 
@@ -329,16 +329,39 @@ fn sync_one(item: SyncedTextItem<'_>, ctx: &mut SyncContext<'_>, commands: &mut 
     // performs the bypass internally on whichever side is authoritative
     // (`tests/text_edit_substrate.rs` pins the editor arm;
     // `tests/text_sync.rs` pins `Changed<TextBuffer>` never fires past insertion).
+    let is_editor = access.has_edit();
+    // Whether an explicit `FontSize` carrier drives the metrics. For an editor
+    // with NO carrier, the seeded metric (`TextEditState::for_font_size`) is the
+    // editor's OWNED baseline — the style-only sweep must preserve it, not reset
+    // it to the global default (the C2 editor-style-stays-live contract). When a
+    // carrier IS present the sweep re-applies it (the spec's "metrics update on a
+    // FontSize change"). Production `TextInput` carries both, so they agree.
+    let size_present = size.is_some();
     let blocked = access.with_buffer_mut(|buffer| {
-        apply_authored_to_buffer(
-            buffer,
-            text,
-            &style,
-            ctx.registry,
-            ctx.index,
-            ctx.now,
-            single_line,
-        )
+        if is_editor {
+            // Bug-3 fix (§ 2.1): editor entities own their content. Re-apply the
+            // SAME metrics/wrap/tab-width as the display path and refresh the
+            // per-line default attrs, but NEVER set_text — that is the clobber.
+            apply_authored_style_to_editor_buffer(
+                buffer,
+                &style,
+                ctx.registry,
+                ctx.index,
+                ctx.now,
+                single_line,
+                size_present,
+            )
+        } else {
+            apply_authored_to_buffer(
+                buffer,
+                text,
+                &style,
+                ctx.registry,
+                ctx.index,
+                ctx.now,
+                single_line,
+            )
+        }
     });
     // Invalidate the AUTHORITATIVE cache (the accessor picks the right side) —
     // every content change keys the intrinsics cache off this invalidation.
@@ -549,6 +572,90 @@ fn apply_authored_to_buffer(
         ),
     }
     resolution.blocked
+}
+
+/// Style-only re-lower onto an editor-owned buffer (Bug 3 fix, § 2.1). Applies
+/// the SAME metrics/wrap/tab-width as [`apply_authored_to_buffer`] but
+/// PRESERVES the buffer's existing line text — `set_text` is the clobber, so
+/// it is never called. The editor owns its content (seeded via the existing
+/// `EditCommand::Insert`, programmatic-set via `SelectAll` + `Insert`);
+/// `TextSync` remains the sole writer of its STYLE.
+///
+/// Returns the `font-display: block` flag (derived over the buffer's CURRENT
+/// first-line text), so a Block family still gates the editor.
+///
+/// `size_present` records whether an explicit `FontSize` carrier drives the
+/// metrics. With NO carrier the editor's seeded metric
+/// (`TextEditState::for_font_size`) is its OWNED baseline and is preserved (the
+/// sweep does not downgrade it to the global default); with a carrier the sweep
+/// re-applies it (a `FontSize` change reaches the live editor). The other
+/// style facets (wrap/tab-width/default-attrs) always re-apply — TextSync is
+/// their sole writer (commit only does size/align).
+fn apply_authored_style_to_editor_buffer(
+    buffer: &mut Buffer,
+    style: &AuthoredStyle<'_>,
+    registry: &FontRegistry,
+    index: &mut FontMatchIndex,
+    now: f64,
+    single_line: bool,
+    size_present: bool,
+) -> bool {
+    if size_present {
+        buffer.set_metrics(style.metrics());
+    }
+    // § 3.3: a SingleLine editor never wraps, regardless of white-space /
+    // text-wrap. The marker wins over the resolved wrap.
+    let wrap = if single_line {
+        cosmic_text::Wrap::None
+    } else {
+        resolve_wrap(style.white_space, style.text_wrap)
+    };
+    buffer.set_wrap(wrap);
+    buffer.set_tab_width(DEFAULT_TAB_WIDTH);
+    // Refresh each line's resolved default attrs (weight/family/decoration
+    // bits) WITHOUT dropping its text. `set_attrs_list` resets the line's shape
+    // cache when it differs, so TextCommit reshapes it at the next lock site (it
+    // is also the shape-unset the § 2.2 shape_stale guard catches and reshapes).
+    refresh_line_default_attrs(buffer, style);
+    // The block flag derives from resolving the CURRENT first-line text against
+    // the authored family (a Block family must still gate the editor's paint).
+    style_block_flag(buffer, style, registry, index, now)
+}
+
+/// Rewrite each `BufferLine`'s default attrs to the authored base attrs,
+/// preserving the line text. Reuses the `AttrsList::new(&base)` precedent the
+/// rest of the text stack carries to keep resolved attrs across surgery. A v1
+/// editor is a single default-attrs run; per-span rich-text editor refresh is a
+/// documented follow-up (C2 § 7).
+fn refresh_line_default_attrs(buffer: &mut Buffer, style: &AuthoredStyle<'_>) {
+    let base = style.attrs();
+    for line in buffer.lines.iter_mut() {
+        // Replace the line's attrs list with one defaulting to the new base.
+        // set_attrs_list resets shaping when it differs (cosmic buffer_line.rs),
+        // which is exactly the re-measure trigger we want; an unchanged base is
+        // a no-op (no spurious reshape). The returned `bool` is discarded.
+        let attrs_list = AttrsList::new(&base);
+        line.set_attrs_list(attrs_list);
+    }
+}
+
+/// The `font-display: block` flag for an editor buffer: resolve the buffer's
+/// CURRENT first-line text against the authored family/weight (the content
+/// path derives `blocked` from `resolve_spans` over the lowered text — the
+/// editor has no `Text` to lower, so resolve over its own first line). An
+/// empty buffer (one empty line) resolves to `false` (nothing blocks).
+fn style_block_flag(
+    buffer: &Buffer,
+    style: &AuthoredStyle<'_>,
+    registry: &FontRegistry,
+    index: &mut FontMatchIndex,
+    now: f64,
+) -> bool {
+    let first_line = buffer.lines.first().map(|l| l.text()).unwrap_or("");
+    if first_line.is_empty() {
+        return false;
+    }
+    resolve_spans(first_line, style.family, style.weight, registry, index, now).blocked
 }
 
 /// Base attrs + the span's resolved family. Weight rides the committed

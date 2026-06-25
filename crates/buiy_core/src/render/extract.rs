@@ -17,9 +17,12 @@ use crate::theme::Theme;
 use bevy::prelude::*;
 
 use crate::components::{Node, ResolvedLayout};
+use crate::layout::BoxModel;
 use crate::render::components::{
-    AncestorClip, Background, ClipRect, ComputedPaintSkip, EffectGroup, EffectReason, Opacity,
+    AncestorClip, Background, Border, BoxShadow, ClipRect, ComputedPaintSkip, EffectGroup,
+    EffectReason, Opacity, Outline,
 };
+use crate::theme::UserPreferences;
 
 /// One extracted effect group's CPU record (effect-compositor.md § 1.1). Emitted
 /// alongside the flat node list by [`extract_buiy_nodes`]; the prepare pass turns
@@ -62,7 +65,12 @@ pub struct ExtractedEffectGroups(pub Vec<EffectGroupExtract>);
 /// `ExtractedNodes` (Task 5) holds, keyed by `Entity` so a partial re-extract
 /// patches only changed entities (architecture.md § 3.1). v1 carries the
 /// solid-fill quad inputs; shadow/border/glyph fields are added by their tier.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// NOT `Copy`: the F-tier `shadows: Vec<ExtractedShadow>` (styling-f-tier.md
+/// § 2.1) carries a heap list, so the record is `Clone` only. Most nodes carry
+/// no shadow (an empty `Vec` does not allocate), so the assemble-time `clone`
+/// is cheap for the common case.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExtractedNode {
     /// The source main-world entity (the partial-re-extract key).
     pub entity: Entity,
@@ -104,6 +112,133 @@ pub struct ExtractedNode {
     /// into contiguous per-group ranges off this tag (off-screen targets), so a
     /// group member is drawn once into its target, never flat.
     pub group: Option<usize>,
+    /// Resolved `Outline` (the focus ring / selection outline), painted OUTSIDE
+    /// the border box through the distinct band-pipeline record
+    /// [`BorderBandInstance`](crate::render::instance::BorderBandInstance).
+    /// `None` == no outline (the byte-stable fast path). The outline is clipped
+    /// by the entity's `AncestorClip`, NOT its own box, so a focus ring survives
+    /// an `overflow:hidden` ancestor (styling-f-tier.md § 2.4 — C6-a).
+    pub outline: Option<ExtractedOutline>,
+    /// Resolved per-side `Border` (color + width + per-corner radius), painted
+    /// AT the box edge (inside the border box) through the SAME distinct
+    /// band-pipeline record [`BorderBandInstance`](crate::render::instance::BorderBandInstance)
+    /// the outline rides. `None` == no border band (the byte-stable fast path).
+    /// Unlike the outline, the border uses the entity's OWN clip (`ExtractedNode::clip`),
+    /// since the band sits inside the border box (styling-f-tier.md § 2.3 — C6-b).
+    pub border: Option<ExtractedBorder>,
+    /// Resolved, spread/offset-expanded, blur-sigma'd box-shadow terms, in CSS
+    /// list order (index 0 frontmost). Each term packs one `(Shadow, layer)`
+    /// instance drawn BEHIND the box (styling-f-tier.md § 2.2 — C6-b). Empty ==
+    /// no shadow. Suppressed at the PRODUCER when forced-colors is active (the
+    /// vec is then empty — § 2.5), and outset-only in v1 (inset warns-once).
+    pub shadows: Vec<ExtractedShadow>,
+}
+
+/// One resolved `Outline` (styling-f-tier.md § 2.4), built at extract time from
+/// the author/framework `Outline` component + the entity's border box +
+/// `AncestorClip`. A flat `Copy` record (no token, no `Length`) — every term is
+/// pre-resolved to logical px / linear color so the packer
+/// ([`pack_outline`](crate::render::instance::pack_outline)) and the band shader
+/// are pure consumers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedOutline {
+    /// Outer-box top-left, logical px = border-box origin shifted out by
+    /// `width + offset` on the top/left.
+    pub outer_pos: Vec2,
+    /// Outer-box size, logical px = border-box size grown by `2*(width+offset)`.
+    pub outer_size: Vec2,
+    /// Pre-linearized ring color (uniform — the outline is a single stroke).
+    pub color: [f32; 4],
+    /// Ring thickness, logical px (`>= 2px` for the focus ring — WCAG 2.4.11).
+    pub width: f32,
+    /// Per-corner OUTER elliptical radius `(rx, ry) × 4` (TL, TR, BR, BL): the
+    /// border radius grown by `(width + offset)` (CSS-faithful outline
+    /// rounding). `[0; 8]` == square.
+    pub outer_radius: [f32; 8],
+    /// Per-corner INNER radius — the outer edge shrunk inward by `width` so the
+    /// ring is `width` thick.
+    pub inner_radius: [f32; 8],
+    /// The OUTLINE clip = the entity's `AncestorClip` (never its own
+    /// `ClipRect`); `None` = the full-view sentinel (no ancestor clips it, or a
+    /// top-layer member). styling-f-tier.md § 2.4.
+    pub clip: Option<ClipRect>,
+    /// The 2D affine basis (same source as [`ExtractedNode::affine`]).
+    pub affine: [[f32; 2]; 2],
+}
+
+/// One resolved per-side `Border` (styling-f-tier.md § 2.3 — C6-b), built at
+/// extract time from the render `Border` component (per-side color + style +
+/// per-corner radius) and the layout-owned `BoxModel.border` (the per-side
+/// WIDTH, a Taffy input). A flat `Copy` record — every term is pre-resolved to
+/// logical px / linear color so the packer
+/// ([`pack_border`](crate::render::instance::pack_border)) and the band shader
+/// are pure consumers.
+///
+/// Unlike the outline, the border band sits AT the box edge (inside the border
+/// box): the outer box is the border box itself, and the band is `width` thick
+/// INWARD (`inner_half = outer_half - width`). It uses the entity's OWN clip
+/// (`ExtractedNode::clip`), not the `AncestorClip`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedBorder {
+    /// Border-box top-left, logical px (the painted origin — `ExtractedNode::position`).
+    pub outer_pos: Vec2,
+    /// Border-box size, logical px (`ResolvedLayout.size` — the border box).
+    pub outer_size: Vec2,
+    /// Pre-linearized per-side color (top / right / bottom / left). A side whose
+    /// style is `None` / zero width / transparent contributes a transparent
+    /// color so the band's per-side selection paints nothing there.
+    pub color_top: [f32; 4],
+    pub color_right: [f32; 4],
+    pub color_bottom: [f32; 4],
+    pub color_left: [f32; 4],
+    /// Per-side WIDTH `[top, right, bottom, left]`, logical px, from
+    /// `BoxModel.border` (the layout-owned Taffy input — § 3.5).
+    pub width: [f32; 4],
+    /// Per-corner OUTER elliptical radius `(rx, ry) × 4` (TL, TR, BR, BL),
+    /// resolved from `Border.radius` (clamped to the box). `[0; 8]` == square.
+    pub outer_radius: [f32; 8],
+    /// Per-corner INNER radius — the outer radius shrunk inward by the adjacent
+    /// width (clamped `>= 0`, the oracle's load-bearing shrink).
+    pub inner_radius: [f32; 8],
+    /// The border clip = the entity's OWN clip (own box ∩ ancestors), since the
+    /// band sits inside the border box. `None` = the full-view sentinel.
+    pub clip: Option<ClipRect>,
+    /// The 2D affine basis (same source as [`ExtractedNode::affine`]).
+    pub affine: [[f32; 2]; 2],
+}
+
+/// One resolved, spread/offset-expanded, blur-sigma'd box-shadow term
+/// (styling-f-tier.md § 2.2 — C6-b), built at extract time from one `Shadow`
+/// entry + the entity's border box. A flat `Copy` record — every term is
+/// pre-resolved to logical px / linear color / blur sigma so the packer
+/// ([`pack_shadow`](crate::render::instance::pack_shadow)) and the shadow shader
+/// are pure consumers. v1 ships OUTSET shadows only (inset warns-once at the
+/// producer); the shadow draws BEHIND the box through the `(Shadow, layer)`
+/// bucket.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedShadow {
+    /// The spread-and-offset-expanded shadow box top-left, logical px: the
+    /// border box translated by `(offset_x, offset_y)` and grown by `spread`.
+    pub rect_pos: Vec2,
+    /// The expanded shadow box size, logical px (border box grown by
+    /// `2*spread`, clamped `>= 0`).
+    pub rect_size: Vec2,
+    /// Pre-linearized shadow color.
+    pub color: [f32; 4],
+    /// The EFFECTIVE Gaussian blur sigma in logical px = `blur / 2` (the CSS
+    /// blur-radius → sigma factor, § 3.2). The shadow shader reads this as
+    /// `@location(5) blur` (the radius slot reinterpreted).
+    pub sigma: f32,
+    /// The entity's OWN clip (own box ∩ ancestors). `None` = the full-view
+    /// sentinel. A shadow is NOT clipped to the caster's own box in CSS, but it
+    /// IS cropped by ancestor `overflow:hidden`; v1 carries the entity's
+    /// resolved fill clip (own box ∩ ancestors) as the conservative bound —
+    /// the exact "ancestor-only, not own-box" shadow clip is a fast-follow
+    /// (the outline already proves the `AncestorClip` path; the shadow's common
+    /// case is an un-clipped card/button).
+    pub clip: Option<ClipRect>,
+    /// The 2D affine basis (same source as [`ExtractedNode::affine`]).
+    pub affine: [[f32; 2]; 2],
 }
 
 /// Build one [`ExtractedNode`] from the layout box + composed transform + the
@@ -144,7 +279,274 @@ pub fn extracted_node_for(
         clip: clip.copied(),
         group: None,
         affine,
+        // The outline rides a distinct record + clip (`AncestorClip`, not the
+        // own box), so it is resolved separately by `extract_buiy_nodes` via
+        // `resolve_outline` and assigned post-build — `extracted_node_for`
+        // (also called by the Tier-2 snapshot harness) stays outline-free.
+        outline: None,
+        // The border band + shadow list are resolved separately by
+        // `extract_buiy_nodes` (they need `Border`/`BoxModel`/`BoxShadow` +
+        // the forced-colors flag), so this builder leaves them empty.
+        border: None,
+        shadows: Vec::new(),
     }
+}
+
+/// Resolve one entity's [`ExtractedOutline`] from its `Outline` component, the
+/// border box (`position`/`size`, the painted origin + `ResolvedLayout.size`),
+/// the entity's `AncestorClip`-derived outline clip, the resolved 2D affine
+/// basis, and the active theme. Returns `None` when the outline paints nothing
+/// (no style / zero width / a fully-transparent color), so a node with a
+/// defaulted `Outline` rides the byte-stable no-band path.
+///
+/// Geometry (styling-f-tier.md § 2.4): the outer box is the border box grown by
+/// `width + offset` on every side; `outer_radius` is the border radius grown by
+/// `(width + offset)`; `inner_radius` is the outer radius shrunk by `width`
+/// (clamped `>= 0`) so the ring is exactly `width` thick. The clip is the
+/// caller-resolved outline clip (the entity's `AncestorClip`, NEVER its own
+/// box), so a focus ring survives an `overflow:hidden` ancestor. Pure: no ECS /
+/// GPU access beyond the borrowed inputs, so it is unit-testable headless.
+pub fn resolve_outline(
+    outline: &Outline,
+    position: Vec2,
+    size: Vec2,
+    outline_clip: Option<ClipRect>,
+    affine: [[f32; 2]; 2],
+    theme: &Theme,
+) -> Option<ExtractedOutline> {
+    use crate::render::clip::px_or_zero;
+    use crate::render::components::LineStyle;
+
+    // No stroke: `style: None` or a non-positive width paints nothing.
+    let width = px_or_zero(outline.width);
+    if outline.style == LineStyle::None || width <= 0.0 {
+        return None;
+    }
+    let color = crate::render::color::resolve_token(&outline.color, theme);
+    if color == Color::NONE {
+        return None; // fully transparent ⇒ no band.
+    }
+    let lin = LinearRgba::from(color);
+
+    let offset = px_or_zero(outline.offset);
+    // The ring sits `width + offset` outside the border box on every side.
+    let out = width + offset;
+    let outer_pos = position - Vec2::splat(out);
+    let outer_size = size + Vec2::splat(2.0 * out);
+
+    // No author `Border.radius` is fed in C6-a, so the focus ring is a square
+    // ring (the common case for buttons/inputs). Outline rounding off a real
+    // `Border.radius` lands when C6-b feeds the border channel; until then the
+    // outer/inner radii are square (`0`), which is the correct CSS rendering of
+    // an outline on a square box.
+    let outer_radius = [0.0f32; 8];
+    let inner_radius = [0.0f32; 8];
+
+    Some(ExtractedOutline {
+        outer_pos,
+        outer_size,
+        color: [lin.red, lin.green, lin.blue, lin.alpha],
+        width,
+        outer_radius,
+        inner_radius,
+        clip: outline_clip,
+        affine,
+    })
+}
+
+/// Resolve a `Border.radius` ([`Corners`](crate::render::components::Corners)) to
+/// the per-corner OUTER elliptical radius array `(rx, ry) × 4` (TL, TR, BR, BL),
+/// each `px_or_zero`-resolved and clamped to `<= min(half_w, half_h)` per the
+/// CSS overlap rule so a radius can never exceed the box. Shared by
+/// [`resolve_border`] (and the future borderless-rounded-fill path). Pure.
+fn resolve_corner_radii(corners: &crate::render::components::Corners, size: Vec2) -> [f32; 8] {
+    use crate::render::clip::px_or_zero;
+    // CSS clamps each corner radius to half the box dimension on its axis.
+    let max_r = (size * 0.5).max(Vec2::ZERO);
+    let clamp = |r: &crate::render::components::Radius| -> [f32; 2] {
+        [
+            px_or_zero(r.x).clamp(0.0, max_r.x),
+            px_or_zero(r.y).clamp(0.0, max_r.y),
+        ]
+    };
+    let tl = clamp(&corners.top_left);
+    let tr = clamp(&corners.top_right);
+    let br = clamp(&corners.bottom_right);
+    let bl = clamp(&corners.bottom_left);
+    [tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1]]
+}
+
+/// Resolve one entity's [`ExtractedBorder`] from its render `Border` component
+/// (per-side color + style + per-corner radius), the layout-owned per-side
+/// WIDTH (`BoxModel.border`, a Taffy input — § 3.5), the border box
+/// (`position`/`size`), the entity's OWN clip (own box ∩ ancestors — NOT the
+/// `AncestorClip` the outline uses, since the band sits inside the border box),
+/// the 2D affine basis, and the active theme. Returns `None` when no side paints
+/// (every side `None`-style / zero-width / transparent), so a borderless node
+/// rides the byte-stable no-band path.
+///
+/// Geometry (styling-f-tier.md § 2.3): the OUTER box is the border box itself
+/// (the band draws AT the edge, inward), so `inner_half = outer_half - width`
+/// and `inner_radius = max(outer_radius - adjacent_width, 0)` (the oracle's
+/// load-bearing shrink). Per-side: a side whose style is `None`, zero width, or
+/// transparent contributes a TRANSPARENT color so the band's per-side selection
+/// paints nothing on that edge while the other sides still paint. Pure: no ECS /
+/// GPU access beyond the borrowed inputs, so it is unit-testable headless.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_border(
+    border: &Border,
+    border_widths: crate::layout::Edges,
+    position: Vec2,
+    size: Vec2,
+    border_clip: Option<ClipRect>,
+    affine: [[f32; 2]; 2],
+    theme: &Theme,
+) -> Option<ExtractedBorder> {
+    use crate::render::clip::px_or_zero;
+    use crate::render::components::{BorderSide, LineStyle};
+
+    // Resolve one side to (linear color, width). A side paints iff its style is
+    // not `None`, its width is positive, AND its color is not transparent —
+    // otherwise it contributes a transparent color + its width (so the inner
+    // hole still shrinks correctly even if the side does not paint a color).
+    let side = |s: &BorderSide, width_len: crate::Length| -> ([f32; 4], f32, bool) {
+        let w = px_or_zero(width_len).max(0.0);
+        if s.style == LineStyle::None || w <= 0.0 {
+            return ([0.0; 4], w, false);
+        }
+        let color = crate::render::color::resolve_token(&s.color, theme);
+        if color == Color::NONE {
+            return ([0.0; 4], w, false);
+        }
+        let lin = LinearRgba::from(color);
+        ([lin.red, lin.green, lin.blue, lin.alpha], w, true)
+    };
+
+    let (c_top, w_top, p_top) = side(&border.top, border_widths.top);
+    let (c_right, w_right, p_right) = side(&border.right, border_widths.right);
+    let (c_bottom, w_bottom, p_bottom) = side(&border.bottom, border_widths.bottom);
+    let (c_left, w_left, p_left) = side(&border.left, border_widths.left);
+
+    // No side paints ⇒ no band (the byte-stable fast path).
+    if !(p_top || p_right || p_bottom || p_left) {
+        return None;
+    }
+
+    let width = [w_top, w_right, w_bottom, w_left];
+    let outer_radius = resolve_corner_radii(&border.radius, size);
+    // Inner radius shrinks per corner by the adjacent border width (the oracle's
+    // load-bearing shrink, `render_border_sdf.rs`): each corner touches two
+    // sides; shrink each axis by the side that bounds it. TL touches top+left,
+    // TR touches top+right, BR touches bottom+right, BL touches bottom+left.
+    let shrink = |outer: [f32; 2], wx: f32, wy: f32| -> [f32; 2] {
+        [(outer[0] - wx).max(0.0), (outer[1] - wy).max(0.0)]
+    };
+    let or = &outer_radius;
+    let tl = shrink([or[0], or[1]], w_left, w_top);
+    let tr = shrink([or[2], or[3]], w_right, w_top);
+    let br = shrink([or[4], or[5]], w_right, w_bottom);
+    let bl = shrink([or[6], or[7]], w_left, w_bottom);
+    let inner_radius = [tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1]];
+
+    Some(ExtractedBorder {
+        outer_pos: position,
+        outer_size: size,
+        color_top: c_top,
+        color_right: c_right,
+        color_bottom: c_bottom,
+        color_left: c_left,
+        width,
+        outer_radius,
+        inner_radius,
+        clip: border_clip,
+        affine,
+    })
+}
+
+/// Resolve one entity's [`BoxShadow`] component into the per-term
+/// [`ExtractedShadow`] list (styling-f-tier.md § 2.2 — C6-b), in CSS list order
+/// (index 0 frontmost). The border box (`position`/`size`) is grown by `spread`
+/// and translated by `(offset_x, offset_y)`; the CSS blur radius maps to the
+/// Gaussian sigma `blur / 2` (the § 3.2 factor, pinned at the producer). The
+/// entity's OWN clip is carried verbatim.
+///
+/// Forced-colors suppression (§ 2.5): when `forced_colors` is set the list is
+/// EMPTY (one branch at the producer) — a shadow-only affordance is then
+/// invisible, which the structural-cue guarantee relies on (border / outline /
+/// fill survive the forced-colors swap untouched).
+///
+/// v1 ships OUTSET shadows only: an `inset` term is skipped with a one-time
+/// `warn!` (the inset padding-box clip + inner SDF is a deferred fast-follow,
+/// § 3.1). A fully-transparent / zero-coverage term contributes nothing. Pure:
+/// no ECS / GPU access beyond the borrowed inputs, so it is unit-testable
+/// headless.
+pub fn resolve_shadows(
+    shadows: &BoxShadow,
+    position: Vec2,
+    size: Vec2,
+    clip: Option<ClipRect>,
+    affine: [[f32; 2]; 2],
+    forced_colors: bool,
+    theme: &Theme,
+) -> Vec<ExtractedShadow> {
+    use crate::render::clip::px_or_zero;
+
+    // Forced-colors: suppress every shadow at the producer (§ 2.5) — structural,
+    // not per-widget. Border/Outline/Background survive untouched.
+    if forced_colors {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for shadow in &shadows.0 {
+        if shadow.inset {
+            // v1: outset only. Warn ONCE (the layout warn-and-fallback idiom)
+            // and skip — the inset padding-box clip + inner SDF is a fast-follow.
+            inset_shadow_warn_once();
+            continue;
+        }
+        let color = crate::render::color::resolve_token(&shadow.color, theme);
+        if color == Color::NONE {
+            continue; // fully transparent ⇒ contributes nothing.
+        }
+        let lin = LinearRgba::from(color);
+
+        let offset = Vec2::new(px_or_zero(shadow.offset_x), px_or_zero(shadow.offset_y));
+        let spread = px_or_zero(shadow.spread);
+        // The shadow box = border box ⊕ spread ⊕ offset. Spread grows the box on
+        // every side; a spread that would invert the box clamps to zero size.
+        let rect_pos = position + offset - Vec2::splat(spread);
+        let rect_size = (size + Vec2::splat(2.0 * spread)).max(Vec2::ZERO);
+        if rect_size.x <= 0.0 || rect_size.y <= 0.0 {
+            continue; // collapsed by a negative spread ⇒ nothing to draw.
+        }
+        // CSS blur radius → Gaussian sigma (§ 3.2): sigma = blur / 2.
+        let sigma = px_or_zero(shadow.blur) * 0.5;
+
+        out.push(ExtractedShadow {
+            rect_pos,
+            rect_size,
+            color: [lin.red, lin.green, lin.blue, lin.alpha],
+            sigma,
+            clip,
+            affine,
+        });
+    }
+    out
+}
+
+/// One-time `warn!` for an unsupported inset box-shadow term (v1 ships outset
+/// only — § 3.1). Mirrors layout's warn-and-fallback idiom so a missing inset
+/// shadow is diagnosable without spamming the log every frame.
+fn inset_shadow_warn_once() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        tracing::warn!(
+            "inset box-shadow is not supported in v1 (outset only); the inset \
+             term is skipped — styling-f-tier.md § 3.1"
+        );
+    });
 }
 
 /// Per-view CPU instance set — the `Changed`-gated per-frame product of
@@ -316,6 +718,25 @@ pub fn effective_clip(
     }
 }
 
+/// The OUTLINE clip for one entity (the focus-ring / selection-outline band).
+/// Like [`effective_clip`] this forces the full-view sentinel for a top-layer
+/// member, but otherwise takes the `Outline` path of `clip_for_primitive`
+/// (`is_outline = true`): the entity's **`AncestorClip`** WITHOUT the own-box
+/// step, so a ring drawn outside the border box is cropped by ancestor clips
+/// (e.g. a scroll container) yet NOT erased by the element's own
+/// `overflow:hidden` box (styling-f-tier.md § 2.4 / clip-and-transform.md § A.2).
+pub fn effective_outline_clip(
+    stacking: Option<&Stacking>,
+    ancestor_clip: Option<&AncestorClip>,
+) -> Option<ClipRect> {
+    let is_top_layer = stacking.is_some_and(|s| s.top_layer != TopLayer::None);
+    if is_top_layer {
+        None
+    } else {
+        clip_for_primitive(true, None, ancestor_clip)
+    }
+}
+
 /// Per-frame, `Changed`-gated extract (architecture.md § 1.2/§ 3/§ 4). Reads
 /// the main world's layout + render-owned components through `Extract`, walks
 /// the primary view's stacking order, and writes the per-view `ExtractedNodes`.
@@ -367,14 +788,29 @@ pub fn extract_buiy_nodes(
                 // Effect-compositor fan (effect-compositor.md § 1.1): the
                 // `EffectGroup` marker (which entities form an off-screen group +
                 // their `reason`) and `Opacity` (the alpha applied at composite).
-                // FAN: add Option<&BoxShadow>/&Outline/&Border and the reserved
-                // effect components here as their tier lands (architecture § 1.2
-                // illustrative subset).
+                // FAN: add Option<&BoxShadow>/&Border and the reserved effect
+                // components here as their tier lands (architecture § 1.2
+                // illustrative subset). C6-a adds Option<&Outline> below (the
+                // focus-ring / selection-outline band channel).
                 // NOTE: Containment is NOT in the fan — content-visibility:hidden
                 // paints the entity's own box and prunes descendants layout-side
                 // (paint-order § 5.2), so it is not a render skip input.
                 Option<&EffectGroup>,
                 Option<&Opacity>,
+                // C6-a: the outline paint (focus ring / selection outline). It
+                // rides a DISTINCT band record + the entity's `AncestorClip`
+                // (resolved below), not its own box (styling-f-tier.md § 2.4).
+                Option<&Outline>,
+                // C6-b: the per-side border paint + the layout-owned per-side
+                // WIDTH. `Border` carries color/style/radius (paint); the band's
+                // thickness is the layout input `BoxModel.border` (a Taffy input,
+                // § 3.5), so both are read here and resolved into the SAME band
+                // record `Outline` rides — but AT the box edge (styling-f-tier.md
+                // § 2.3). `BoxShadow` feeds the reserved `(Shadow, layer)` bucket
+                // (drawn BEHIND the box, § 2.2).
+                Option<&Border>,
+                Option<&BoxModel>,
+                Option<&BoxShadow>,
             ),
             With<Node>,
         >,
@@ -414,6 +850,20 @@ pub fn extract_buiy_nodes(
                     // go stale. Kept in lockstep with the `nodes` fan above.
                     Changed<EffectGroup>,
                     Changed<Opacity>,
+                    // C6-a: an outline insert/remove/edit (the focus ring is a
+                    // framework-owned `Outline` the ring lowering toggles) must
+                    // re-extract so the band appears/vanishes. Kept in lockstep
+                    // with the `nodes` fan above. The `AncestorClip` the outline
+                    // clips against already rides `Changed<AncestorClip>` above.
+                    Changed<Outline>,
+                    // C6-b: a border-paint edit (`Border` — color/style/radius)
+                    // re-extracts so the band updates. A border-WIDTH edit lives
+                    // in `BoxModel.border` (a Taffy input), so it re-runs layout →
+                    // `Changed<ResolvedLayout>` above — `Changed<BoxModel>` is NOT
+                    // added (it would be redundant, § 3.5). A `BoxShadow` edit
+                    // re-extracts so the shadow appears/vanishes/moves.
+                    Changed<Border>,
+                    Changed<BoxShadow>,
                     // FAN: extend the Or-set in lockstep with the `nodes` tuple
                     // (architecture § 3.1 trigger union).
                 )>,
@@ -437,6 +887,11 @@ pub fn extract_buiy_nodes(
     // root(s) — it does NOT flat-concatenate this query in archetype order.
     contexts: Extract<Query<(Entity, &StackingContext)>>,
     theme: Extract<Res<Theme>>,
+    // C6-b forced-colors (§ 2.5): the shadow producer emits NO `ExtractedShadow`
+    // when `forced_colors` is set (one structural branch). It is NOT a per-entity
+    // `Changed` term — the forced-colors swap mutates `Res<Theme>`, so a flip
+    // already rides the `theme.is_changed()` re-extract edge below (§ 2.1).
+    prefs: Extract<Res<UserPreferences>>,
     // Reserved per-window structure: read ALL windows, not just primary
     // (architecture § 4) — v1 still resolves every Node to the primary view.
     _windows: Extract<Query<(Entity, &Window)>>,
@@ -503,6 +958,7 @@ pub fn extract_buiy_nodes(
     // while the fan is borrowed (effect-compositor.md § 1.1).
     let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32)> =
         std::collections::HashMap::new();
+    let forced_colors = prefs.forced_colors;
     for (
         entity,
         gt,
@@ -514,6 +970,10 @@ pub fn extract_buiy_nodes(
         stacking,
         effect_group,
         opacity,
+        outline,
+        border,
+        box_model,
+        box_shadow,
     ) in nodes.iter()
     {
         // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
@@ -534,10 +994,56 @@ pub fn extract_buiy_nodes(
         // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
         // clips to its own box ∩ ancestor clips. See [`effective_clip`].
         let clip = effective_clip(stacking, clip_rect, ancestor_clip);
-        by_entity.insert(
-            entity,
-            extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme),
-        );
+        let mut node = extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme);
+        // C6-a: resolve the outline (focus ring / selection outline) against the
+        // entity's `AncestorClip` (NOT its own box, `effective_outline_clip`) so
+        // it survives an `overflow:hidden` ancestor (styling-f-tier.md § 2.4).
+        if let Some(outline) = outline {
+            let outline_clip = effective_outline_clip(stacking, ancestor_clip);
+            node.outline = resolve_outline(
+                outline,
+                node.position,
+                node.size,
+                outline_clip,
+                node.affine,
+                theme,
+            );
+        }
+        // C6-b: resolve the per-side border band. Unlike the outline, it uses the
+        // entity's OWN clip (`node.clip`) since the band sits inside the border
+        // box. Width comes from `BoxModel.border` (the layout-owned Taffy input,
+        // § 3.5); a node with no `BoxModel` has no border widths (`Edges::ZERO`),
+        // so `resolve_border` returns `None`.
+        if let Some(border) = border {
+            let widths = box_model
+                .map(|b| b.border)
+                .unwrap_or(crate::layout::Edges::ZERO);
+            node.border = resolve_border(
+                border,
+                widths,
+                node.position,
+                node.size,
+                node.clip,
+                node.affine,
+                theme,
+            );
+        }
+        // C6-b: resolve the box-shadow list (outset-only, sigma = blur/2),
+        // suppressed wholesale under forced-colors (§ 2.5). The shadow uses the
+        // entity's own fill clip as the conservative bound (the un-clipped card
+        // is the common case).
+        if let Some(box_shadow) = box_shadow {
+            node.shadows = resolve_shadows(
+                box_shadow,
+                node.position,
+                node.size,
+                node.clip,
+                node.affine,
+                forced_colors,
+                theme,
+            );
+        }
+        by_entity.insert(entity, node);
     }
 
     // Resolve each painted node's NEAREST `EffectGroup` ancestor (the group it
@@ -633,7 +1139,9 @@ pub fn extract_buiy_nodes(
         assemble_context_tree(
             root,
             &painters_z_of,
-            &mut |e| by_entity.get(&e).copied(),
+            // `ExtractedNode` is no longer `Copy` (it carries the F-tier
+            // `shadows: Vec`), so the assemble build clones the cached record.
+            &mut |e| by_entity.get(&e).cloned(),
             &mut all.nodes,
         );
     }

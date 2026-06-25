@@ -14,6 +14,10 @@ mod support;
 
 #[path = "render/render_border_sdf.rs"]
 mod render_border_sdf;
+#[path = "render/render_border_shadow.rs"]
+mod render_border_shadow;
+#[path = "render/render_border_shadow_gpu.rs"]
+mod render_border_shadow_gpu;
 #[path = "render/render_buckets.rs"]
 mod render_buckets;
 #[path = "render/render_capture_app_gpu.rs"]
@@ -40,6 +44,10 @@ mod render_effect_groups;
 mod render_extract;
 #[path = "render/render_extract_background.rs"]
 mod render_extract_background;
+#[path = "render/render_focus_ring.rs"]
+mod render_focus_ring;
+#[path = "render/render_focus_ring_gpu.rs"]
+mod render_focus_ring_gpu;
 #[path = "render/render_forced_colors_analyzer.rs"]
 mod render_forced_colors_analyzer;
 #[path = "render/render_forced_colors_swap.rs"]

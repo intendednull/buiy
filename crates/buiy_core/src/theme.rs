@@ -136,6 +136,16 @@ pub fn forced_colors_theme() -> Theme {
     for (kw, color) in pairs {
         t.colors.insert(kw.token().to_string(), color);
     }
+    // The C6-a focus ring resolves `Token("color.focus.ring")` (NOT a
+    // `SystemColor` token — that would disturb the `Highlight`-prefers-when-
+    // present resolvers like `resolve_selection_bg`). Under forced-colors the
+    // wholesale swap drops the default theme's `color.focus.ring`, so map it to
+    // the high-contrast `Highlight` value here — the ring stays visible (≥ 3:1)
+    // under forced-colors without the lowering choosing a different token
+    // (styling-f-tier.md § 2.6). The authoritative value is
+    // `buiy-theme-tokens-design`'s; the KEY (the focus ring resolves) is the
+    // contract.
+    t.colors.insert("color.focus.ring".to_string(), yellow);
     t
 }
 

@@ -567,3 +567,199 @@ fn pruned_node_drops_its_stale_clip() {
         "descendant of pruned drops AncestorClip"
     );
 }
+
+#[test]
+fn offset_clipper_clips_in_absolute_space() {
+    // The C1-specific gate (audit §1 MISSED #1): no existing clip test offsets
+    // a clipper. Outer is translated (70,90); the clipper is its child at
+    // parent-local (0,0), so its ABSOLUTE box is (70,90)..(170,190). A child
+    // overflowing it must be clipped to that ABSOLUTE box. Pre-C1 (own box from
+    // ResolvedLayout.position) the clip is wrongly anchored at the origin
+    // (0,0)..(100,100); post-C1 it is the absolute (70,90)..(170,190).
+    let mut app = app();
+    let outer = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(400.0)
+                .translate_px(70.0, 90.0),
+        ))
+        .id();
+    let clipper = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .overflow(OverflowMode::Hidden, OverflowMode::Hidden),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(300.0)))
+        .id();
+    app.world_mut().entity_mut(outer).add_child(clipper);
+    app.world_mut().entity_mut(clipper).add_child(child);
+    app.update();
+    app.update();
+
+    let anc = *app
+        .world()
+        .get::<AncestorClip>(child)
+        .expect("child clipped by the offset clipper");
+    assert_eq!(
+        anc.min,
+        Vec2::new(70.0, 90.0),
+        "ancestor clip min = clipper ABSOLUTE top-left, not the origin"
+    );
+    assert_eq!(
+        anc.max,
+        Vec2::new(170.0, 190.0),
+        "ancestor clip max = clipper ABSOLUTE bottom-right"
+    );
+    let clip = *app
+        .world()
+        .get::<ClipRect>(child)
+        .expect("child has clip rect");
+    assert_eq!(clip.min, Vec2::new(70.0, 90.0), "ClipRect min = absolute");
+    assert_eq!(clip.max, Vec2::new(170.0, 190.0), "ClipRect max = absolute");
+}
+
+#[test]
+fn clip_reflects_post_bridge_transform_same_frame() {
+    // A scroll container scrolls its content; a CLIPPER nested inside the
+    // scrolled content moves in absolute space by the scroll delta. Clip must
+    // read the POST-bridge GlobalTransform, so the deeper child's clip tracks
+    // the clipper's new absolute position within the same settled frame —
+    // proving write_clip_rects runs .after(sync_simple_transforms) (D3).
+    let mut app = app();
+    let scroller = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(400.0)
+                .height_px(400.0)
+                .overflow(OverflowMode::Scroll, OverflowMode::Scroll),
+            ScrollOffset::default(),
+        ))
+        .id();
+    let clipper = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .overflow(OverflowMode::Hidden, OverflowMode::Hidden),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(300.0)))
+        .id();
+    app.world_mut().entity_mut(scroller).add_child(clipper);
+    app.world_mut().entity_mut(clipper).add_child(child);
+    app.update();
+    app.update();
+
+    // Before scroll: clipper absolute box = (0,0)..(100,100); the child's
+    // AncestorClip is that box ∩ the scroller's own viewport (0,0)..(400,400) =
+    // (0,0)..(100,100).
+    let before = *app.world().get::<AncestorClip>(child).expect("clipped");
+    assert_eq!(before.min, Vec2::ZERO);
+    assert_eq!(before.max, Vec2::new(100.0, 100.0));
+
+    // Scroll the OUTER container by (0,+50): content (incl. clipper) shifts up
+    // by 50px in absolute space => clipper absolute box = (0,-50)..(100,50). The
+    // child's AncestorClip is that box ∩ the scroller viewport (0,0)..(400,400):
+    // the scroller's own clip clamps min.y back to 0, but max.y drops to 50 — and
+    // THAT drop is the freshness witness. A clip that read a STALE (pre-bridge)
+    // transform would keep max.y = 100; reading the POST-bridge transform yields
+    // max.y = 50, proving write_clip_rects runs .after(sync_simple_transforms).
+    {
+        let mut off = app.world_mut().get_mut::<ScrollOffset>(scroller).unwrap();
+        off.y = 50.0; // positive scroll offset moves content up (acc add, bridge.rs:184)
+    }
+    app.update();
+
+    let after = *app
+        .world()
+        .get::<AncestorClip>(child)
+        .expect("still clipped");
+    assert_eq!(
+        after.max,
+        Vec2::new(100.0, 50.0),
+        "clip max tracks the clipper's POST-bridge absolute position (not stale): \
+         the scrolled clipper's bottom edge moved from y=100 to y=50"
+    );
+    // min.x/min.y are clamped to the scroller's own viewport origin (0,0); the
+    // freshness discriminator is max.y above.
+    assert_eq!(
+        after.min,
+        Vec2::ZERO,
+        "clamped to the scroller viewport origin"
+    );
+}
+
+#[test]
+fn clipper_without_global_transform_contributes_no_clip() {
+    // A clipper Node with a resolved box but NO GlobalTransform contributes no
+    // clip (the `_ =>` arm clears, does not fall back to rl.position — D2). Its
+    // child therefore has NO AncestorClip.
+    //
+    // To produce a genuinely un-bridged clipper we settle the tree (so layout +
+    // bridge run), then strip BOTH Transform and GlobalTransform and run one
+    // more *no-change* frame: with nothing dirty the bridge walk descends no
+    // subtree and re-adds neither component (verified: the bridge only writes
+    // seeded subtrees), so the clip pass sees `GlobalTransform: None` and must
+    // drop the clip rather than silently using ResolvedLayout.position.
+    let mut app = app();
+    let clipper = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(100.0)
+                .height_px(100.0)
+                .overflow(OverflowMode::Hidden, OverflowMode::Hidden),
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(300.0)))
+        .id();
+    app.world_mut().entity_mut(clipper).add_child(child);
+    // Settle: layout + bridge run; the clipper IS bridged and clips its child.
+    for _ in 0..4 {
+        app.update();
+    }
+    assert!(
+        app.world().get::<AncestorClip>(child).is_some(),
+        "the bridged clipper clips its child while it has a GlobalTransform"
+    );
+
+    // Strip both transform components so the clipper is genuinely un-bridged,
+    // then run one no-change frame: nothing is dirty, so the bridge walk does
+    // not re-add them.
+    app.world_mut()
+        .entity_mut(clipper)
+        .remove::<GlobalTransform>();
+    app.world_mut().entity_mut(clipper).remove::<Transform>();
+    assert!(
+        app.world().get::<GlobalTransform>(clipper).is_none(),
+        "the clipper has no GlobalTransform before the clip pass"
+    );
+    app.update();
+    assert!(
+        app.world().get::<GlobalTransform>(clipper).is_none(),
+        "the no-change frame did not re-bridge the clipper"
+    );
+    assert!(
+        app.world().get::<AncestorClip>(child).is_none(),
+        "an un-bridged clipper contributes no clip (no fallback to ResolvedLayout.position)"
+    );
+}

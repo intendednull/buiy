@@ -8,15 +8,28 @@
 //! throughput. Wall-clock performance of the shape→layout→extract hot path is
 //! the criterion bench `crates/buiy_core/benches/pipeline.rs` (`cargo bench -p
 //! buiy_core --bench pipeline`); cite THAT for perf, this file for the
-//! N → N+1 frame contract.
+//! frame contract.
 //!
-//! The contract: a keystroke applied in `BuiySet::Input` (the editor path)
-//! reaches a freshly-published `ExtractedGlyphs` in exactly ONE more frame
-//! (N → N+1), because Input runs two sets AFTER Layout, so the edit's reshape is
-//! picked up by NEXT frame's TextSync → measure → TextCommit → extract. This is
-//! DISTINCT from T8's `text_typing_latency` fixture, which mutates `Text` BEFORE
-//! Layout (the sync-side path) — that fixture must not be cited as editor-path
-//! proof (readiness § gate caveat).
+//! The contract (REVISED — the shape-coherence fix): a keystroke applied in
+//! `BuiySet::Input` (the editor path) reaches a freshly-published
+//! `ExtractedGlyphs` the SAME frame. `reshape_edited_editors` runs
+//! `.after(BuiySet::Input).before(write_caret_and_selection)` and reshapes the
+//! just-edited editor buffer + rewrites its `ComputedTextLayout` BEFORE extract,
+//! so the new glyph publishes on frame N — not N+1.
+//!
+//! WHY THE CHANGE: the old design deferred the edit's reshape to next frame's
+//! TextCommit, leaving the editor buffer UNSHAPED at frame end. The render
+//! extract reads every text entity on any damage frame (extract.rs § 6.2), so a
+//! keystroke that coincided with any other damage (the first char's
+//! empty↔non-empty `PlaceholderActive` toggle, a sibling row, a theme tick) read
+//! the transiently-unshaped editor and tripped the `layout_runs().count() ==
+//! ComputedTextLayout.lines.len()` invariant — a live crash. Coherence and the
+//! old one-frame GLYPH latency are mutually exclusive (extract rebuilds ALL
+//! entities on ANY damage), so the buffer is now made coherent the same frame.
+//! Only the BOX LAYOUT still re-measures next frame (an edit reshapes at the
+//! prior commit's content box; the already-accepted one-frame LAYOUT latency).
+//! This is DISTINCT from T8's `text_typing_latency` fixture, which mutates
+//! `Text` BEFORE Layout (the sync-side path).
 //!
 //! Headless on the adapterless extract harness; the edit is driven through
 //! the real `apply_keyboard_edits` system (a synthetic `KeyboardInput` +
@@ -37,16 +50,29 @@ use cosmic_text::Metrics;
 /// one typed char appends exactly one new instance (the T8 fixture shape,
 /// but EDITABLE and focused).
 fn spawn_focused_editor(h: &mut TextExtractHarness) -> Entity {
+    use buiy_core::text::SharedFontSystem;
+    use buiy_core::text::edit::EditCommand;
+
     let editor = h
         .app
         .world_mut()
         .spawn((
             Node,
             Style::default(),
-            Text(String::from("Hi")),
+            Text(String::new()), // inert display carrier (editor owns its content)
             TextEditState::new(Metrics::new(16.0, 19.2)),
         ))
         .id();
+    // Seed the editor's OWNED content via the explicit verb (C2 § 2.3): the
+    // display `Text`→editor seam is gone (C2 § 2.1). Unlike the old `set_text`
+    // seam (which left the caret at 0), `Insert` leaves the caret AFTER the
+    // inserted text, so a subsequently-typed char APPENDS.
+    {
+        let fonts = h.app.world().resource::<SharedFontSystem>().clone();
+        let mut fs = fonts.lock();
+        let mut state = h.app.world_mut().get_mut::<TextEditState>(editor).unwrap();
+        state.apply(&mut fs, EditCommand::Insert("Hi".into()), false, false);
+    }
     h.app
         .world_mut()
         .spawn((
@@ -75,7 +101,7 @@ fn spawn_focused_editor(h: &mut TextExtractHarness) -> Entity {
 }
 
 #[test]
-fn one_frame_from_input_edit_to_glyph_publish() {
+fn editor_input_edit_publishes_its_glyph_the_same_frame() {
     let mut h = TextExtractHarness::new();
     let editor = spawn_focused_editor(&mut h);
     h.settle();
@@ -86,8 +112,9 @@ fn one_frame_from_input_edit_to_glyph_publish() {
 
     // THE keystroke: a synthetic KeyboardInput '!' enqueued so that the
     // edit is applied by apply_keyboard_edits in BuiySet::Input THIS frame
-    // (frame N) — AFTER Layout already ran. The reshape is therefore picked
-    // up by frame N+1's TextSync.
+    // (frame N), AFTER Layout already ran. `reshape_edited_editors` then runs
+    // (still frame N, after Input) and reshapes the edited buffer + rewrites
+    // ComputedTextLayout before extract.
     h.app.world_mut().write_message(KeyboardInput {
         key_code: KeyCode::Digit1,
         logical_key: Key::Character("!".into()),
@@ -97,57 +124,49 @@ fn one_frame_from_input_edit_to_glyph_publish() {
         window,
     });
 
-    // Frame N: Update applies the edit in Input (post-Layout) — so this
-    // frame's extract sees the OLD glyph set (the edit missed this frame's
-    // TextSync/measure/commit).
+    // Frame N: Update applies the edit in Input (post-Layout), then
+    // reshape_edited_editors reshapes the editor buffer and ticks
+    // ComputedTextLayout — so THIS frame's extract publishes the new glyph AND
+    // the editor buffer is coherent (layout_runs == ComputedTextLayout.lines)
+    // when extract reads it (no dirty-at-extract crash).
     h.frame();
-    // The edit DID land in the editor buffer this frame (apply_keyboard_edits
-    // ran in Input) — this is the M1 proof half: the buffer changed, the
-    // node was dirty-marked, but the glyphs have NOT flowed yet.
-    //
-    // The '!' inserts at the editor's caret, which is at buffer index 0: a
-    // freshly-seeded editor (Text("Hi") lowered via the sync `set_text` path)
-    // leaves the cosmic cursor at (0,0) — `set_text` seeds the buffer but does
-    // NOT move the editor caret, and caret-on-focus-gain (move to end) is an
-    // E6 lifecycle behavior, not E2's. So the typed char prepends ⇒ "!Hi".
-    // (The plan's `"Hi!"` presumed a caret-at-end this substrate does not yet
-    // establish; the latency gate — Task 8's subject — is insert-position-
-    // independent: one inserted char publishes exactly one new glyph wherever
-    // it lands.)
+    // The '!' inserts at the editor's caret, which sits AFTER the seed: the
+    // editor is seeded via `EditCommand::Insert("Hi")` (the editor owns its
+    // content, C2 § 2.1/§2.3), and `Insert` leaves the caret after the inserted
+    // text. So the typed char APPENDS ⇒ "Hi!".
     assert_eq!(
         h.app.world().get::<TextEditState>(editor).unwrap().value(),
-        "!Hi",
+        "Hi!",
         "the edit applied to the editor buffer on frame N (in BuiySet::Input); \
-         caret sits at index 0 post-seed (caret-on-focus-gain is E6)"
+         caret sits after the Insert-seeded content (post-seed)"
     );
-    assert_eq!(
-        h.changed_frames(),
-        publishes0,
-        "frame N (edit applied post-Layout) does NOT republish — the edit \
-         missed this frame's TextSync"
-    );
-    assert_eq!(
-        h.glyph_count(),
-        count0,
-        "frame N still shows the pre-edit glyphs"
-    );
-
-    // Frame N+1: the node was Taffy-dirtied by apply_keyboard_edits (M1), so
-    // even though TextSyncTriggers do NOT fire (Text is unchanged), this
-    // frame's measure → TextCommit → extract reshape and publish the new
-    // glyph. WITHOUT the dirty-mark this assertion fails (the cache holds and
-    // nothing republishes) — it is the M1 regression guard.
-    h.frame();
     assert_eq!(
         h.changed_frames(),
         publishes0 + 1,
-        "frame N+1 publishes the edit (one-FRAME editor-input convergence — \
-         OQ#1, a frame count not a wall-clock latency; proves the M1 dirty-mark \
-         entered the measure path)"
+        "frame N publishes the edit the SAME frame — reshape_edited_editors \
+         reshaped the buffer + ticked ComputedTextLayout after Input, before \
+         extract (the shape-coherence fix; the old one-frame GLYPH latency is \
+         gone — only the BOX re-measures next frame)"
     );
     assert_eq!(
         h.glyph_count(),
         count0 + 1,
-        "the '!' glyph is in the N+1 published set"
+        "the '!' glyph is in frame N's published set (same-frame convergence)"
+    );
+
+    // Frame N+1: the box re-measures (the one-frame LAYOUT latency that
+    // remains), but the glyph set is already steady — no spurious republish,
+    // no extra glyph (a coherent, idempotent steady frame).
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        publishes0 + 1,
+        "frame N+1 is steady — the edit already published on N; the box \
+         re-measure does not republish identical glyphs"
+    );
+    assert_eq!(
+        h.glyph_count(),
+        count0 + 1,
+        "still exactly one new glyph after the box re-measure settles"
     );
 }

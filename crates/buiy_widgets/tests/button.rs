@@ -1,5 +1,6 @@
 //! Phase 0 contract test: spawning a `Button` attaches role + label +
-//! focusable + a default style; clicking a hovered button emits `OnPress`.
+//! focusable + a default style; clicking a button emits `OnPress` (C3c: via the
+//! bevy_picking `Pointer<Click>` producer, not the retired `Hovered` poll).
 //!
 //! Bevy 0.18 renamed buffered `Event` → `Message` and `EventWriter`/`EventReader`
 //! → `MessageWriter`/`MessageReader`. Phase 0 leans on the `Message` flavor for
@@ -40,10 +41,12 @@ fn bare_button_marker_materializes_the_full_required_contract() {
     assert!(world.get::<FlexParams>(entity).is_some(), "FlexParams");
     assert!(world.get::<Overflow>(entity).is_some(), "Overflow");
     let box_model = world.get::<BoxModel>(entity).expect("BoxModel");
-    // The canonical button box (120x32, 8px padding) — shared with
-    // `Button::new()` via the `button_box_model()` initializer.
+    // The canonical button box — **content-width** (Auto) × 32, 8px padding —
+    // shared with `Button::new()` via the `button_box_model()` initializer. A
+    // fixed width oversized short labels and overflowed dense footers; a button
+    // now sizes to its label (an author patches `BoxModel { width }` for fixed).
     use buiy_core::layout::{Edges, Length, Sizing};
-    assert_eq!(box_model.width, Sizing::Length(Length::Px(120.0)));
+    assert_eq!(box_model.width, Sizing::Auto, "content-width");
     assert_eq!(box_model.height, Sizing::Length(Length::Px(32.0)));
     assert_eq!(box_model.padding, Edges::all(8.0));
     // Paint + interaction + a11y companions.
@@ -79,26 +82,94 @@ fn spawning_a_button_attaches_role_label_focusable_and_default_style() {
     assert_eq!(label.0, "Save");
 }
 
+/// Clicking a button emits `OnPress` — C3c migrated this off the legacy
+/// `Hovered` resource (hand-set + `just_pressed` poll) onto the bevy_picking
+/// `Pointer<E>` layer. The driving mechanism changed (a synthetic
+/// `PointerInput` press+release over the button's absolute box, through the real
+/// picking pipeline → `Pointer<Click>` → C3b's `pointer_click_emits_on_press`
+/// producer), but the asserted intent is identical: a click on the button emits
+/// the shared `OnPress` activation message for that entity.
+///
+/// The full Buiy backend (bevy_picking's `PickingPlugin`, Buiy's `PickingPlugin`,
+/// and `BuiyPickingBackendPlugin`) is added explicitly — `CorePlugin` does not
+/// pull them (the meta-crate `BuiyPlugin` does), but the C3b activation producer
+/// lives in Buiy's `PickingPlugin`. The button is given a `ResolvedLayout` and a
+/// matching `GlobalTransform` (the absolute basis `emit_picks` reads) plus a
+/// window and `Camera2d` so the backend resolves a real camera; the pointer is
+/// injected via `PointerInput`, the lessons-sanctioned synthetic path (no winit).
 #[test]
 fn clicking_a_button_emits_on_press() {
-    use buiy_core::picking::Hovered;
+    use bevy::camera::{Camera2d, NormalizedRenderTarget, RenderTarget};
+    use bevy::picking::pointer::{
+        Location, PointerAction, PointerButton, PointerId, PointerLocation,
+    };
+    use bevy::window::{PrimaryWindow, Window, WindowRef, WindowResolution};
+    use buiy_core::ResolvedLayout;
+    use buiy_core::picking::{BuiyPickingBackendPlugin, PickingPlugin};
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::picking::PickingPlugin);
     app.add_plugins(CorePlugin);
+    app.add_plugins(PickingPlugin);
+    app.add_plugins(BuiyPickingBackendPlugin);
     app.add_plugins(WidgetsPlugin);
-    // Phase 0 picking lives in CorePlugin; the click handler reads
-    // `Hovered` + `ButtonInput<MouseButton>`. Provide both as resources
-    // since MinimalPlugins doesn't include the input plugin.
-    app.init_resource::<ButtonInput<MouseButton>>();
 
-    let entity = app.world_mut().spawn(Button::new("Save")).id();
-    // Manually mark hovered + simulate a primary mouse press.
-    app.world_mut().insert_resource(Hovered(Some(entity)));
+    // A synthetic primary window + a Camera2d targeting it — `emit_picks`
+    // resolves the pointer's window → this camera (§3.1); without a matching
+    // camera the backend emits no hits.
+    let window = app
+        .world_mut()
+        .spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..Default::default()
+            },
+            PrimaryWindow,
+        ))
+        .id();
     app.world_mut()
-        .resource_mut::<ButtonInput<MouseButton>>()
-        .press(MouseButton::Left);
-    app.update();
+        .spawn((Camera2d, RenderTarget::Window(WindowRef::Entity(window))));
+
+    // The button at an absolute box (0,0)..(120,32). The `Button` marker carries
+    // `A11yRole::Button` via its `#[require]` contract, which the C3b producer
+    // keys activation on. Hand-give it the absolute basis `emit_picks` reads
+    // (ResolvedLayout + a matching GlobalTransform) so the synthetic pointer hits
+    // it without standing up the full layout→bridge chain.
+    let entity = app.world_mut().spawn(Button::new("Save")).id();
+    app.world_mut().entity_mut(entity).insert((
+        ResolvedLayout {
+            position: Vec2::ZERO,
+            size: Vec2::new(120.0, 32.0),
+        },
+        GlobalTransform::IDENTITY,
+    ));
+
+    // The synthetic pointer at the button's center.
+    let target = WindowRef::Entity(window).normalize(Some(window)).unwrap();
+    let location = Location {
+        target: NormalizedRenderTarget::Window(target),
+        position: Vec2::new(60.0, 16.0),
+    };
+    app.world_mut()
+        .spawn((PointerId::Mouse, PointerLocation::new(location.clone())));
+    app.update(); // let the backend emit a hit + the hover stage register Over.
+
+    // Inject a primary press then release at the same location — bevy_picking
+    // emits `Pointer<Click>` (press + release share the target), which C3b's
+    // producer lowers to `OnPress`.
+    for action in [
+        PointerAction::Press(PointerButton::Primary),
+        PointerAction::Release(PointerButton::Primary),
+    ] {
+        app.world_mut()
+            .write_message(bevy::picking::pointer::PointerInput {
+                pointer_id: PointerId::Mouse,
+                location: location.clone(),
+                action,
+            });
+        app.update();
+    }
 
     let messages = app.world().resource::<Messages<OnPress>>();
     let mut cursor = messages.get_cursor();
@@ -108,5 +179,8 @@ fn clicking_a_button_emits_on_press() {
             found = true;
         }
     }
-    assert!(found, "OnPress message for clicked button");
+    assert!(
+        found,
+        "OnPress message for clicked button (via the C3b Pointer<Click> producer)"
+    );
 }

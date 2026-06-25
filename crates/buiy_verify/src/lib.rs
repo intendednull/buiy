@@ -34,6 +34,7 @@ pub mod determinism;
 pub mod golden;
 pub mod invariant;
 pub mod metric;
+pub mod pointer;
 pub mod reftest;
 pub mod snapshot;
 pub mod support;

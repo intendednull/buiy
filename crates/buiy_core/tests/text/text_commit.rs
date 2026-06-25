@@ -54,6 +54,54 @@ fn commit_reshapes_the_buffer_to_the_final_content_box() {
     assert_eq!(h, Some(20.0), "committed height = the ceil'd measured line");
 }
 
+/// **The widget-catalog rendering-bug regression guard.** A `Text` authored with
+/// NO explicit `Node` — exactly the `bsn!` label-child shape a widget scene-fn
+/// emits (`(Text(…) FontSize(…))`) — must STILL become a layout node and get
+/// laid out + shaped: `Text` `#[require(Node)]`s. Before that require, a bare
+/// `Text` had no Taffy node, no `ResolvedLayout`, no `ComputedTextLayout`, and
+/// painted NOTHING (the gallery's row labels / button labels / status were
+/// invisible while their accessible names existed). This pins the precondition
+/// for the text ever reaching the screen.
+#[test]
+fn bare_text_requires_node_and_lays_out_and_shapes() {
+    let mut app = text_app();
+    // A BARE `Text` — not `(Node, Style, Text)`. The `#[require(Node)]` must
+    // supply the whole layout substrate so it participates in layout + paint.
+    let label = app.world_mut().spawn(Text(String::from("hello"))).id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(200.0)
+                .height_px(50.0),
+        ))
+        .add_child(label);
+    settle(&mut app);
+
+    assert!(
+        app.world().get::<Node>(label).is_some(),
+        "a bare Text materializes a Node (require(Node))"
+    );
+    let resolved = app
+        .world()
+        .get::<ResolvedLayout>(label)
+        .expect("the bare Text is laid out (ResolvedLayout present)");
+    assert!(
+        resolved.size.x > 0.0 && resolved.size.y > 0.0,
+        "the laid-out label has a non-zero box (it occupies space): {:?}",
+        resolved.size
+    );
+    let computed = app
+        .world()
+        .get::<ComputedTextLayout>(label)
+        .expect("the bare Text is shaped (ComputedTextLayout present)");
+    assert!(
+        !computed.lines.is_empty() && computed.size.x > 0.0,
+        "the label shaped to real glyph geometry (it will paint): {computed:?}"
+    );
+}
+
 /// § 6 — ComputedTextLayout carries the per-line LayoutRun geometry and
 /// ResolvedBaseline carries first/last line_y.
 #[test]
@@ -256,10 +304,107 @@ fn steady_state_zero_measure_calls_and_zero_reshapes() {
         0,
         "no-change frame: zero measure invocations"
     );
+    // The shape_stale guard (C2 § 2.2) WALKS layout_runs().count() here but must
+    // not TRIGGER a reshape in steady state: layout_runs().count() ==
+    // computed.lines.len() holds, so the short-circuit still fires (§ 3.4 cost).
     assert_eq!(
         app.world().resource::<TextCommitReshapeCount>().0,
         0,
         "no-change frame: zero buffer relayouts"
+    );
+}
+
+/// Bug-2 ISOLATION (C2 § 2.2; audit § 2 Bug 2, Appendix-A.5). The `shape_stale`
+/// guard's NON-VACUOUS proof: a buffer that was committed (has a
+/// `ComputedTextLayout`) but is then UNSHAPED — with its content-box size,
+/// per-line align, and content offset all UNCHANGED — must be reshaped by
+/// `text_commit`, because extract asserts `layout_runs().count() ==
+/// computed.lines.len()` (extract.rs:712).
+///
+/// Why this isolates `shape_stale` where the end-to-end font-reload path
+/// CANNOT: the real `FontsGeneration` bump auto-heals via the
+/// `text_sync_buffers` sweep, which calls `tree.mark_dirty_for_entity`
+/// (sync.rs) → Taffy re-measures → the buffer reshapes regardless of the
+/// guard. This test removes that auto-heal entirely: it unshapes the buffer by
+/// a DIRECT `reset_shaping()` on the buffer line (NO FontsGeneration bump, NO
+/// Text/style-carrier edit), so the TextSync sweep never runs (its triggers are
+/// `fonts_generation.is_changed()` or the `Or<(Changed<Text>, …)>` set;
+/// `Changed<TextBuffer>` is NOT a trigger) and Taffy never re-measures. The ONLY
+/// system that can reshape the buffer on the next frame is `text_commit`, and the
+/// ONLY guard term that can fire is `shape_stale` (size/align/offset are equal) —
+/// so a PASS proves the `shape_stale` term did the reshape. WITHOUT the term this
+/// is RED (the buffer stays unshaped, `layout_runs().count() == 0`).
+#[test]
+fn shape_stale_reshapes_a_committed_but_unshaped_buffer() {
+    let mut app = text_app();
+    let text = app
+        .world_mut()
+        .spawn((Node, Style::default(), Text(String::from("hello"))))
+        .id();
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_child(text);
+    settle(&mut app);
+    app.update(); // flush any cascade remnant — reach a true steady state
+    // (the steady_state test's discipline): a plain frame here
+    // reshapes 0 buffers, so the post-unshape reshape below is
+    // attributable solely to shape_stale.
+
+    // Precondition: committed and shaped. One line ("hello"), one layout run.
+    let committed_lines = {
+        let tb = app.world().get::<TextBuffer>(text).unwrap();
+        let computed = app.world().get::<ComputedTextLayout>(text).unwrap();
+        assert_eq!(
+            tb.buffer.layout_runs().count(),
+            computed.lines.len(),
+            "precondition: settled buffer is shaped (runs == committed lines)"
+        );
+        assert_eq!(computed.lines.len(), 1, "single-line 'hello'");
+        let size = tb.buffer.size();
+        assert!(size.0.is_some() && size.1.is_some(), "both axes committed");
+        computed.lines.len()
+    };
+
+    // Construct the committed-but-UNSHAPED state directly: reset the line's
+    // shape+layout cache. This is the EXACT mismatch extract asserts —
+    // layout_runs() now terminates at the first unshaped line — while
+    // buffer.size()/align/content_offset are all unchanged (so commit's
+    // size/align/offset terms stay false). Mutating via a direct get_mut does
+    // NOT bump FontsGeneration and does NOT touch Text, so the TextSync sweep
+    // (the auto-heal) never runs.
+    {
+        let mut tb = app.world_mut().get_mut::<TextBuffer>(text).unwrap();
+        tb.buffer.lines[0].reset_shaping();
+        assert_eq!(
+            tb.buffer.layout_runs().count(),
+            0,
+            "constructed RED state: buffer unshaped (runs=0) while committed lines=1"
+        );
+    }
+
+    // One frame: TextSync does NOT sweep (no bump, no Text change), Taffy does
+    // NOT re-measure (resolved size unchanged), so text_commit is the only
+    // system that can reshape — and only via shape_stale.
+    app.update();
+
+    let tb = app.world().get::<TextBuffer>(text).unwrap();
+    assert_eq!(
+        tb.buffer.layout_runs().count(),
+        committed_lines,
+        "shape_stale must reshape the unshaped-but-committed buffer back to \
+         layout_runs().count() == computed.lines.len() (WITHOUT the term this \
+         is 0 — the silent-no-paint / debug_assert state at extract)"
+    );
+    assert_eq!(
+        app.world().resource::<TextCommitReshapeCount>().0,
+        1,
+        "exactly one buffer reshaped this frame — the shape_stale-triggered reshape"
     );
 }
 

@@ -113,12 +113,15 @@ impl Plugin for BuiyRenderPlugin {
                     .in_set(crate::BuiySet::Style),
             );
 
-        // Main-world render-prep: clip computation runs between Animate and
-        // Picking (architecture.md § 5.2) so picking + extract see settled
-        // ClipRects. Runs on CI/headless — no RenderApp required.
+        // Main-world render-prep: clip computation reads GlobalTransform (C1),
+        // so it MUST run AFTER the bridge's propagation chain (sync_simple_transforms
+        // is its last system, lib.rs) — and before Picking, so picking + extract
+        // see settled ClipRects (architecture.md § 5.2). Runs on CI/headless —
+        // no RenderApp required.
         app.add_systems(
             Update,
             clip::write_clip_rects
+                .after(bevy::transform::systems::sync_simple_transforms)
                 .after(crate::BuiySet::Animate)
                 .before(crate::BuiySet::Picking),
         );
@@ -223,6 +226,17 @@ impl Plugin for BuiyRenderPlugin {
                 app,
                 composite::composite_shader_handle(),
                 "composite.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
+            // The border/outline BAND shader (octet ..06, styling-f-tier.md
+            // § 2.3 — C6-a feeds the OUTLINE channel). Loaded into the MAIN world
+            // like its siblings; the band pipeline (primitive.rs
+            // `BuiyBandPipeline::specialize`) resolves this handle through the
+            // PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::band_shader_handle(),
+                "band.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
         }

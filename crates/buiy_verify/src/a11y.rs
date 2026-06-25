@@ -2,8 +2,11 @@
 //! stable JSON suitable for golden-file comparison.
 //! See: docs/specs/2026-05-07-buiy-foundation/verification.md (CI gate #3).
 
+use accesskit::{NodeId, TreeId};
+use accesskit_consumer::Tree as ConsumerTree;
+use bevy::prelude::App;
 use buiy_core::a11y::translate::node_id_for;
-use buiy_core::a11y::{A11yNodeView, A11yRole};
+use buiy_core::a11y::{A11yNodeView, A11yRole, build_tree_update};
 use serde::Serialize;
 
 // LINT: Field order here is the snapshot wire format. Do not reorder
@@ -46,6 +49,11 @@ fn role_to_str(r: A11yRole) -> &'static str {
         A11yRole::MultilineTextInput => "MultilineTextInput",
         A11yRole::Region => "Region",
         A11yRole::Group => "Group",
+        A11yRole::Menu => "Menu",
+        A11yRole::MenuItem => "MenuItem",
+        A11yRole::Status => "Status",
+        A11yRole::Alert => "Alert",
+        A11yRole::Log => "Log",
         _ => "Unknown",
     }
 }
@@ -88,6 +96,101 @@ pub fn diff_snapshots(left: &str, right: &str) -> Option<String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// gate-#3 in-process `accesskit_consumer` read tier
+//
+// The lowest verification rung for the AccessKit tree (inprocess-api.md §4,
+// verification.md "Gate #3"): build the SAME `TreeUpdate` the real adapter
+// ships — via `buiy_core`'s production `build_tree_update` fold, NOT a
+// test-private shortcut — and feed it into an `accesskit_consumer::Tree`, the
+// same consumer an assistive technology drives. Fixtures then read nodes back
+// the way an AT does (role / name / state getters), proving the producer →
+// consumer round-trip end-to-end with no winit adapter and no GPU.
+//
+// This helper has ONE home (co-drive §5 SC-4): the P1a state fixtures, the C7
+// widget-catalog assertions, and the P1c in-process driver all consume it here,
+// so the three never fork a parallel consumer path.
+// ---------------------------------------------------------------------------
+
+/// Which projection of the canonical tree a snapshot reads.
+///
+/// Re-exported from the P1c in-process driver
+/// ([`buiy_core::a11y::inprocess::TreeView`]) so there is **one** `TreeView`
+/// vocabulary across the consumer string helper here and the structured driver —
+/// they are the same projection selector, not two. `Unmerged` (the default) is
+/// the canonical structural tree; `Merged` is reserved for a later phase
+/// (identical to `Unmerged` until merge components exist).
+pub use buiy_core::a11y::inprocess::TreeView;
+
+/// Build the production [`accesskit::TreeUpdate`] for `views` via
+/// `buiy_core`'s isolated translate fold and wrap it in an in-process
+/// [`accesskit_consumer::Tree`] — the gate-#3 read tier.
+///
+/// `focused` is the AccessKit `NodeId` of the focused node (use
+/// [`node_id_for`]); `None` focuses the
+/// synthetic root. Read a node back with [`node_for`] (or, manually,
+/// `tree.state().node_by_tree_local_id(node_id_for(entity), TreeId::ROOT)`).
+///
+/// This is the *same* `TreeUpdate` the real `accesskit_winit::Adapter` consumes
+/// (`build_tree_update`), so what the fixture observes is what a live AT would.
+///
+/// **API note (accesskit_consumer 0.36):** the consumer keys nodes by its own
+/// `accesskit_consumer::NodeId` — a `(TreeIndex, LocalNodeId)` pair distinct
+/// from the producer's `accesskit::NodeId`. A producer-side id (what
+/// [`node_id_for`] returns, what an inbound `ActionRequest.target` carries) is
+/// resolved with `node_by_tree_local_id(id, TreeId::ROOT)`, NOT `node_by_id`
+/// (which takes the internal pair). The single-tree-per-window model means
+/// `TreeId::ROOT` is always the tree id (`build_tree_update` sets it).
+pub fn consume(views: &[A11yNodeView], focused: Option<NodeId>) -> ConsumerTree {
+    // `root_entity: None` — the headless consumer has no window, so the
+    // synthetic root keys off the stable `ROOT_NODE_ID` (semantic-tree.md §7.2).
+    let update = build_tree_update(views, focused, None);
+    // `is_host_focused = true`: in a headless fixture the Buiy "window" is the
+    // focused host, so the consumer applies the update's `focus` directly.
+    ConsumerTree::new(update, true)
+}
+
+/// Resolve a producer-side [`accesskit::NodeId`] (from
+/// [`node_id_for`]) to its
+/// [`accesskit_consumer::Node`] in `tree`, or `None` if the producer never
+/// emitted it.
+///
+/// Wraps the 0.36 `node_by_tree_local_id(id, TreeId::ROOT)` lookup so fixtures
+/// address a node by the same id an inbound `ActionRequest.target` carries
+/// without repeating the `TreeId::ROOT` boilerplate or tripping on the
+/// `node_by_id`-vs-`node_by_tree_local_id` distinction (see [`consume`]).
+pub fn node_for(tree: &ConsumerTree, id: NodeId) -> Option<accesskit_consumer::Node<'_>> {
+    tree.state().node_by_tree_local_id(id, TreeId::ROOT)
+}
+
+/// Snapshot a running [`App`]'s AccessKit tree as an insta-friendly stable
+/// string (one line per node: `role  name`).
+///
+/// Projects from the P1c in-process driver's structured
+/// [`SemanticTree`](buiy_core::a11y::inprocess::SemanticTree) — i.e. it calls
+/// [`buiy_core::a11y::inprocess::snapshot`], the **same** consumer-tier observe
+/// the structured driver and (later) the MCP companion use, then renders one
+/// `role  name` line per node. There is therefore **one** tree-derivation path:
+/// both this string helper and the structured driver read the canonical
+/// `A11yTreeBuilder` views through the same `build_tree_update` → consumer fold
+/// (inprocess-api.md §§2,4 — no forked second path).
+///
+/// The caller is expected to have driven at least one `app.update()` so the
+/// builder reflects the current world; this fn does not tick the schedule (so the
+/// caller controls when the frame settles).
+///
+/// The line is `role  name`. As snapshot consumers want richer assertions they
+/// read the structured `SemanticTree` directly (present-only state, actions,
+/// relations); this string view stays the additive, diff-friendly default.
+pub fn semantic_tree(app: &mut App, view: TreeView) -> String {
+    let tree = buiy_core::a11y::inprocess::snapshot(app.world_mut(), view);
+    tree.nodes
+        .iter()
+        .map(|n| format!("{}  {}", role_to_str(n.role), n.name))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +220,11 @@ mod tests {
         A11yRole::MultilineTextInput,
         A11yRole::Region,
         A11yRole::Group,
+        A11yRole::Menu,
+        A11yRole::MenuItem,
+        A11yRole::Status,
+        A11yRole::Alert,
+        A11yRole::Log,
     ];
 
     #[test]

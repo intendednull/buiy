@@ -1,29 +1,368 @@
-//! Buiy widgets. Phase 0 ships a single `Button` to validate the
-//! foundation. Full APG widget catalog lives in `buiy-widget-catalog-design`.
+//! Buiy widgets. Phase 0 shipped a single `Button`; Wave-3 slice-1 adds the
+//! Checkbox + Switch toggle widgets, slice-2 adds the Slider value widget (the
+//! P1d a11y bundle + the C4 visual layer, bundle-then-pixels in one pass). Full
+//! APG widget catalog lives in `buiy-widget-catalog-design`.
 
 use bevy::prelude::*;
+use buiy_core::{
+    BuiySet,
+    a11y::{A11yExpanded, A11yRole, A11yToggled},
+};
 
 pub mod button;
+pub mod checkbox;
+pub mod dialog;
+pub mod disclosure;
+pub mod dismiss;
+pub mod menu;
+pub mod popover;
 pub mod scene;
+pub mod scroll_area;
+pub mod slider;
+pub mod switch;
 pub mod text_input;
-pub use button::{Button, OnPress};
-pub use scene::{button, text_input_multi_line, text_input_single_line};
-pub use text_input::{TextInput, focus_on_click};
+pub mod tooltip;
+pub use button::Button;
+pub use checkbox::Checkbox;
+pub use dialog::Dialog;
+pub use disclosure::Disclosure;
+pub use dismiss::LightDismiss;
+pub use menu::{Menu, MenuButton, MenuItem};
+pub use popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide};
+pub use scroll_area::ScrollArea;
+pub use slider::Slider;
+pub use switch::Switch;
+pub use tooltip::TooltipTrigger;
+// `OnPress` relocated to `buiy_core` (co-drive SC-1) so the in-core P1c action
+// router and C3 pointer layer can write the same activation sink. Re-exported
+// here for source-compat: `buiy_widgets::OnPress` and the `buiy` prelude keep
+// resolving unchanged.
+pub use buiy_core::interaction::OnPress;
+pub use dialog::dialog_invoker;
+pub use scene::{
+    button, checkbox as checkbox_scene, dialog as dialog_scene, disclosure as disclosure_scene,
+    menu as menu_scene, menu_button as menu_button_scene, menu_item, popover as popover_scene,
+    scroll_area, slider as slider_scene, switch as switch_scene, tooltip_trigger,
+};
+pub use scene::{text_input_multi_line, text_input_single_line};
+pub use text_input::TextInput;
+
+/// The single `OnPress` consumer that advances a toggle widget's `A11yToggled`
+/// (co-drive SC-1 — "one sink, consumers read `OnPress`"). EVERY activation
+/// modality converges here:
+///
+/// - the pointer producer (`pointer_click_emits_on_press`) writes `OnPress` for an
+///   activatable role on a `Pointer<Click>`,
+/// - the keyboard keymap (`keyboard_activation`) writes `OnPress` on the role's
+///   APG activation keys (Checkbox = Space only; Switch = Space + Enter),
+/// - the inbound AT router's `honor(Click)` writes `OnPress`.
+///
+/// This system reads each `OnPress(entity)`, looks up the entity's role + its
+/// `A11yToggled`, and advances it: a **Checkbox** advances tri-state
+/// (`False → True → False`, `Mixed → False`); a **Switch** flips binary
+/// (`False ↔ True`). A `Button` carries no `A11yToggled`, so its `OnPress` is
+/// inert here (the button fires its own callback elsewhere). Because all three
+/// modalities feed this one consumer, a toggle advances **exactly once** per
+/// activation regardless of source — and the C4 visual systems' `Changed<…>`
+/// gates then repaint once.
+pub fn advance_toggle_on_press(
+    mut reader: MessageReader<OnPress>,
+    mut toggles: Query<(&A11yRole, &mut A11yToggled)>,
+) {
+    for OnPress(entity) in reader.read() {
+        let Ok((role, mut toggled)) = toggles.get_mut(*entity) else {
+            // Not a toggle widget (no `A11yToggled`) — e.g. a Button. Inert.
+            continue;
+        };
+        match role {
+            A11yRole::Checkbox => toggled.advance_checkbox(),
+            A11yRole::Switch => toggled.toggle_switch(),
+            // A non-toggle role that nonetheless carries `A11yToggled` (e.g. a
+            // toggle Button via aria-pressed) is the Button widget's concern, not
+            // this consumer's — leave it untouched here.
+            _ => {}
+        }
+    }
+}
+
+/// The single `OnPress` consumer that **toggles** an expandable widget's
+/// `A11yExpanded` (the Disclosure analog of [`advance_toggle_on_press`], Wave-3
+/// slice-3). A Disclosure-trigger is `A11yRole::Button` (so its `Click` rides the
+/// Button contract → `OnPress`), and it is *expandable* (it carries
+/// [`A11yExpanded`]). Pointer click, keyboard activation (Enter/Space via the
+/// Button keymap), and an inbound AT `Action::Click` all converge on the one
+/// `OnPress` sink — this consumer flips `A11yExpanded` once per activation, so
+/// every modality toggles the disclosure identically.
+///
+/// The explicit AT **set-verbs** `Expand`/`Collapse` take a *different* route: the
+/// router honors them generically (action.rs), writing the absolute target state.
+/// Together they give the disclosure three converging toggle modalities
+/// (pointer/keyboard/AT-`Click`) plus the two absolute AT set-verbs, all over the
+/// single `A11yExpanded` source of truth the C4 visual reads.
+///
+/// Querying `&mut A11yExpanded` (not gated on role) keeps this reusable: any future
+/// expandable that activates through `OnPress` toggles by carrying `A11yExpanded`.
+/// An entity without it (a Button/Checkbox/Slider) is simply not matched here, so
+/// its `OnPress` is inert for this consumer (it flows through
+/// `advance_toggle_on_press` or the button callback instead).
+pub fn advance_expanded_on_press(
+    mut reader: MessageReader<OnPress>,
+    mut expandables: Query<&mut A11yExpanded>,
+) {
+    for OnPress(entity) in reader.read() {
+        if let Ok(mut expanded) = expandables.get_mut(*entity) {
+            expanded.0 = !expanded.0;
+        }
+    }
+}
 
 pub struct WidgetsPlugin;
 
 impl Plugin for WidgetsPlugin {
     fn build(&self, app: &mut App) {
-        // Bevy 0.18 split buffered events into `Message`; `add_event` was
-        // renamed to `add_message`. `OnPress` is a `Message` so it lives in
-        // `Messages<OnPress>` and is read with `MessageReader` / a cursor.
+        // `Messages<OnPress>` is registered by `CorePlugin`
+        // (`InteractionPlugin`, co-drive SC-1), not here — the shared
+        // activation sink lives in `buiy_core` so in-core producers can write
+        // it. `WidgetsPlugin` is always composed after `CorePlugin`.
+        //
+        // C3c retired the Phase-0 `Hovered`-polling input systems
+        // (input-event-model.md § 2.8): Button activation now lowers through
+        // `buiy_core`'s C3b `Pointer<Click>` → `OnPress` producer (registered by
+        // `PickingPlugin`). C3d (§ 2.7) then consolidated focus-on-click into
+        // `buiy_core`'s single `focus::focus_on_click` observer (registered by
+        // `FocusPlugin`) over every `Focusable`, so the widget crate carries no
+        // focus observer either — `TextInput` `#[require]`s `Focusable` and is
+        // focused through that shared path.
         app.register_type::<Button>()
-            .register_type::<text_input::TextInput>()
-            .add_message::<OnPress>()
-            .add_systems(
-                Update,
-                (button::emit_on_press_on_click, text_input::focus_on_click)
-                    .in_set(buiy_core::BuiySet::Input),
-            );
+            .register_type::<Checkbox>()
+            .register_type::<checkbox::CheckboxMark>()
+            .register_type::<Switch>()
+            .register_type::<switch::SwitchThumb>()
+            .register_type::<Slider>()
+            .register_type::<slider::SliderTrack>()
+            .register_type::<slider::SliderThumb>()
+            .register_type::<Disclosure>()
+            .register_type::<disclosure::DisclosureCaret>()
+            .register_type::<disclosure::DisclosurePanel>()
+            .register_type::<Dialog>()
+            .register_type::<dialog::DialogTitle>()
+            .register_type::<dialog::DialogBody>()
+            .register_type::<dialog::DialogClose>()
+            .register_type::<dialog::PendingFocus>()
+            .register_type::<TooltipTrigger>()
+            .register_type::<tooltip::TooltipNode>()
+            .register_type::<scroll_area::ScrollArea>()
+            .register_type::<popover::Popover>()
+            .register_type::<dismiss::LightDismiss>()
+            .register_type::<menu::Menu>()
+            .register_type::<menu::MenuButton>()
+            .register_type::<menu::MenuItem>()
+            .register_type::<text_input::TextInput>();
+
+        // Wave-3 slice-1: the single `OnPress` toggle consumer + the C4 visual
+        // systems.
+        //
+        // `advance_toggle_on_press` reads the shared `OnPress` sink and advances
+        // `A11yToggled`. It runs in `BuiySet::Input` (the activation stage) — the
+        // pointer/keyboard producers write `OnPress` in the same stage, and a
+        // Message written this frame is readable the same frame, so the toggle
+        // advances within the frame and the (later) `BuiySet::A11yUpdate`
+        // outbound fold sees the new state. (For the headless AT driver, whose
+        // `dispatch_action_request` writes `OnPress` synchronously without
+        // ticking, the consumer runs on the next `app.update()` — the documented
+        // `perform`-then-`update` contract.)
+        //
+        // The C4 visual systems read `Changed<A11yToggled>` to repaint; they run
+        // in `Update` AFTER the consumer (`.after`) so a same-frame toggle is
+        // observed by the visual the same frame, then settle on the `Changed`
+        // gate.
+        app.add_systems(Update, advance_toggle_on_press.in_set(BuiySet::Input));
+        // The Disclosure analog of the toggle consumer (slice-3): pointer/keyboard/
+        // AT-`Click` all converge on `OnPress`; this flips `A11yExpanded`. Runs in
+        // the same activation stage (`BuiySet::Input`) as the toggle consumer and
+        // the producers, so a same-frame activation flips expanded the same frame
+        // and the later `BuiySet::A11yUpdate` fold sees it.
+        app.add_systems(Update, advance_expanded_on_press.in_set(BuiySet::Input));
+        app.add_systems(
+            Update,
+            (
+                checkbox::update_checkbox_visual,
+                switch::update_switch_visual,
+            )
+                .after(advance_toggle_on_press),
+        );
+        // The Disclosure C4 visual (slice-3) reads `Changed<A11yExpanded>` to rotate
+        // the caret + show/hide the panel. `A11yExpanded` is flipped by the
+        // `advance_expanded_on_press` consumer (pointer/keyboard/AT-`Click`) and by
+        // the router's generic `Expand`/`Collapse` honor (the absolute AT set-verbs),
+        // both in `BuiySet::Input`; this visual runs `.after` the consumer so a
+        // same-frame toggle is observed the same frame, then settles on the
+        // `Changed<A11yExpanded>` gate.
+        app.add_systems(
+            Update,
+            disclosure::update_disclosure_visual.after(advance_expanded_on_press),
+        );
+        // Wire each disclosure trigger's `A11yRelations.controls = [panel]` once its
+        // `children!` exist (the `controls` edge references the panel entity, which
+        // does not exist at root-spawn time, so it can't ride the `#[require]` /
+        // `Disclosure::new` bundle). Idempotent over the scene-fn path (which
+        // authors `controls` directly).
+        app.add_systems(Update, disclosure::wire_disclosure_controls);
+        // Wire each dialog's `A11yRelations.labelled_by = [title]` / `described_by
+        // = [body]` once its `children!` exist (the labelling edges reference the
+        // title/body child entities, unknown at root-spawn time — the disclosure
+        // `controls` precedent). Idempotent over the scene-fn path (which authors
+        // the edges directly).
+        app.add_systems(Update, dialog::wire_dialog_relations);
+
+        // C5-d (scroll-overlay-modal.md §C.5) — the Dialog open/close/focus-trap/
+        // Esc/restore + inert-background overlay state machine.
+        //
+        // `open_dialog_on_invoker_press` reads the shared `OnPress` sink (the
+        // invoker's Click → OnPress via the Button contract) and shows the
+        // controlled dialog + queues the deferred focus-into. Runs in
+        // `BuiySet::Input` so a same-frame activation opens the same frame.
+        //
+        // `close_dialog_on_escape` (Escape — WCAG 2.1.2, always escapes) and
+        // `close_dialog_on_button` (a `DialogClose` button) hide the top-most /
+        // enclosing dialog. Both in `BuiySet::Input`.
+        //
+        // `apply_dialog_modal_state` reacts to `Changed<CssVisibility>` on a Dialog
+        // to mark/clear the inert background (`A11yHidden` on the rest-of-tree) and
+        // capture/restore `FocusReturn`. Ordered `.after` the open/close systems so
+        // the same-frame visibility flip is reacted to the same frame.
+        //
+        // `resolve_pending_focus` drains the deferred focus-into the frame after the
+        // dialog's children spawn (§B.3a). `.after(apply_dialog_modal_state)` so the
+        // inert background is already in place when it picks the first focusable.
+        app.add_systems(
+            Update,
+            (
+                dialog::open_dialog_on_invoker_press,
+                dialog::close_dialog_on_escape,
+                dialog::close_dialog_on_button,
+            )
+                .in_set(BuiySet::Input),
+        );
+        app.add_systems(
+            Update,
+            dialog::apply_dialog_modal_state
+                .in_set(BuiySet::Input)
+                .after(dialog::open_dialog_on_invoker_press)
+                .after(dialog::close_dialog_on_escape)
+                .after(dialog::close_dialog_on_button),
+        );
+        app.add_systems(
+            Update,
+            dialog::resolve_pending_focus
+                .in_set(BuiySet::Input)
+                .after(dialog::apply_dialog_modal_state),
+        );
+        // Wire each tooltip trigger's `A11yRelations.described_by = [tooltip]` once
+        // its `children!` exist (the edge references the tooltip child entity,
+        // unknown at root-spawn time). This edge is also the source of truth the
+        // router's generic `ShowTooltip`/`HideTooltip` honor reads to find which
+        // node to show/hide. Idempotent over the scene-fn path.
+        app.add_systems(Update, tooltip::wire_tooltip_described_by);
+        // The slider C4 visual (slice-2) reads `Changed<A11yValue>` to reposition
+        // the thumb. A slider's value is mutated by the slider contract's `honor`
+        // (driven by the APG `slider_keyboard` system / an inbound AT verb, both in
+        // `buiy_core`'s `BuiySet::Input`), NOT through the `OnPress` toggle sink —
+        // so this visual does not chain after `advance_toggle_on_press`; it runs in
+        // `Update` and settles on the `Changed<A11yValue>` gate.
+        app.add_systems(Update, slider::update_slider_visual);
+
+        // P1d TextInput a11y sync: mirror the editor's live value into
+        // `A11yTextValue` and the `Placeholder` into `A11yPlaceholder` on each
+        // `TextInput` root, so the outbound a11y fold (`build_tree`, in
+        // `BuiySet::A11yUpdate`) sees the live text. It runs in `BuiySet::Animate`,
+        // which the `CorePlugin` set-chain orders strictly BEFORE `A11yUpdate`
+        // (`… → Animate → Picking → A11yUpdate → …`), so a value mutated this frame
+        // (keyboard edit, or an inbound AT `SetValue` honored in `BuiySet::Input`)
+        // is synced into `A11yTextValue` and folded into the a11y tree in the SAME
+        // frame. (`build_tree` is `pub(crate)` to `buiy_core`, so cross-crate
+        // `.before(build_tree)` is not expressible; the set-chain provides the
+        // ordering instead.)
+        app.add_systems(
+            Update,
+            text_input::sync_text_input_a11y.in_set(BuiySet::Animate),
+        );
+
+        // C5-b (scroll-overlay-modal.md §B) — overlay positioning + light-dismiss.
+        //
+        // `position_popover` lowers each `Popover` onto its required `Anchor`
+        // (the placement candidates → an `Anchor.position_try` flip chain). It
+        // runs `.before(BuiySet::Layout)` and mutates the `Anchor` IN PLACE, so
+        // the same-frame `anchor_resolution` (inside `BuiySet::Layout`) positions
+        // the popover with no command-sync frame lag.
+        app.add_systems(Update, popover::position_popover.before(BuiySet::Layout));
+        // Wire each tooltip node's placement (anchor to its trigger parent +
+        // top-layer `Tooltip` stacking + `LightDismiss`) once it gains its parent
+        // link (§B.4 — the placement the P1d tooltip slice deferred to C5). The
+        // `Anchor` it inserts is consumed by the same-frame `anchor_resolution`.
+        app.add_systems(Update, tooltip::position_tooltip);
+        // Escape closes the top-most open light-dismiss overlay (§B.5, keyboard
+        // channel). Runs in `BuiySet::Input` alongside the other keyboard handlers.
+        app.add_systems(Update, dismiss::escape_dismiss.in_set(BuiySet::Input));
+        // The pointer light-dismiss observer (§B.5, pointer channel): a primary
+        // `Pointer<Press>` outside the top-most open overlay closes it. An
+        // observer (not a system) so it rides the C3 `Pointer<E>` capture→bubble
+        // layer with the picking-resolved target.
+        app.add_observer(dismiss::light_dismiss_on_press);
+
+        // C5-c (scroll-overlay-modal.md §B.3) — Menu / MenuButton / MenuItem.
+        //
+        // Wire each MenuButton↔Menu pair's two-way edges (`controls = [menu]` on
+        // the button, `Popover.anchor = button` on the menu) once the button's
+        // `children!` exist — the menu child entity is unknown at root-spawn time
+        // (the disclosure `wire_disclosure_controls` precedent).
+        app.add_systems(Update, menu::wire_menu_button);
+        // Attach the click-containment observers to each new Menu so a press/click
+        // inside the menu does not bubble up the `ChildOf` chain to the controlling
+        // button (which would toggle the menu closed + steal focus). Gated on
+        // `Added<Menu>`.
+        app.add_systems(Update, menu::guard_menu_clicks);
+        //
+        // The MenuButton reuses the Disclosure state-keyed `A11yExpanded` open/
+        // close pattern: `advance_expanded_on_press` (registered above) flips the
+        // button's `A11yExpanded` on every `OnPress` (pointer / keyboard Enter+Space
+        // via the Button keymap / AT-`Click`), and `sync_menu_open` reacts to
+        // `Changed<A11yExpanded>` to show/hide the controlled menu, set/clear its
+        // `active_descendant`, and move/restore focus. It runs `.after` the
+        // expanded consumer so a same-frame activation opens the menu the same frame.
+        app.add_systems(
+            Update,
+            menu::sync_menu_open
+                .in_set(BuiySet::Input)
+                .after(advance_expanded_on_press),
+        );
+        // Reconcile the button's `A11yExpanded` from the menu's ACTUAL visibility
+        // after the dismiss handlers (`escape_dismiss` / `light_dismiss_on_press`)
+        // may have hidden it directly — keeps `aria-expanded` in lock-step with a
+        // light-dismiss so re-open works (§B.5). Runs `.after(escape_dismiss)` so a
+        // same-frame Escape dismiss is reconciled the same frame; idempotent, so it
+        // does not ping-pong with `sync_menu_open`.
+        app.add_systems(
+            Update,
+            menu::sync_menu_dismissed
+                .in_set(BuiySet::Input)
+                .after(dismiss::escape_dismiss)
+                .after(menu::sync_menu_open),
+        );
+        // Roving / `aria-activedescendant` keyboard nav for the focused open menu
+        // (§B.3): Arrow/Home/End move the menu's `active_descendant`, Enter/Space
+        // activate the active item (write the shared `OnPress` sink) + close, Escape
+        // closes. An exclusive `&mut World` system (it writes the button's
+        // `A11yExpanded` to close + the `OnPress` message), in `BuiySet::Input`
+        // alongside the other keyboard handlers. Ordered `.before(sync_menu_open)`
+        // so a same-frame Enter/Escape close (which flips the button's
+        // `A11yExpanded`) is applied (hide + active-descendant clear + focus
+        // restore) the same frame.
+        app.add_systems(
+            Update,
+            menu::menu_keyboard_nav
+                .in_set(BuiySet::Input)
+                .before(menu::sync_menu_open),
+        );
     }
 }
