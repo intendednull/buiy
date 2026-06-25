@@ -163,13 +163,22 @@ pub fn default_dark_theme() -> Theme {
 
     // --- Canonical keys shared with the light theme (must all resolve) ---
     // Mapped to sensible dark values per the design.
-    c.insert("color.surface.primary".into(), Color::srgb_u8(0x0b, 0x0c, 0x0e)); // surface.app
+    c.insert(
+        "color.surface.primary".into(),
+        Color::srgb_u8(0x0b, 0x0c, 0x0e),
+    ); // surface.app
     c.insert(
         "color.surface.secondary".into(),
         Color::srgb_u8(0x16, 0x18, 0x1c), // surface.card
     );
-    c.insert("color.text.primary".into(), Color::srgb_u8(0xf1, 0xf3, 0xf6));
-    c.insert("color.text.secondary".into(), Color::srgb_u8(0xc2, 0xc8, 0xd2));
+    c.insert(
+        "color.text.primary".into(),
+        Color::srgb_u8(0xf1, 0xf3, 0xf6),
+    );
+    c.insert(
+        "color.text.secondary".into(),
+        Color::srgb_u8(0xc2, 0xc8, 0xd2),
+    );
     // color.accent + the ramp tokens are seeded together below.
     c.insert("color.focus.ring".into(), DARK_ACCENT_DEFAULT);
     // ::selection is hard-coded blue in the design (values.md § 1.1, ambiguity
@@ -178,7 +187,10 @@ pub fn default_dark_theme() -> Theme {
         "color.selection.bg".into(),
         Color::srgba_u8(0x5b, 0x86, 0xf5, (0.32 * 255.0_f32).round() as u8),
     );
-    c.insert("color.selection.fg".into(), Color::srgb_u8(0xf1, 0xf3, 0xf6));
+    c.insert(
+        "color.selection.fg".into(),
+        Color::srgb_u8(0xf1, 0xf3, 0xf6),
+    );
     c.insert(
         "color.text.placeholder".into(),
         Color::srgb_u8(0x55, 0x5c, 0x67), // text.dim — search/draft placeholder hint
@@ -187,19 +199,34 @@ pub fn default_dark_theme() -> Theme {
 
     // --- surface.* (values.md § 1.1) ---
     c.insert("color.surface.app".into(), Color::srgb_u8(0x0b, 0x0c, 0x0e));
-    c.insert("color.surface.chrome".into(), Color::srgb_u8(0x0d, 0x0e, 0x11));
+    c.insert(
+        "color.surface.chrome".into(),
+        Color::srgb_u8(0x0d, 0x0e, 0x11),
+    );
     c.insert(
         "color.surface.chrome-translucent".into(),
         Color::srgba_u8(0x0d, 0x0e, 0x11, 0xcc), // #0d0e11cc (80% alpha)
     );
-    c.insert("color.surface.card".into(), Color::srgb_u8(0x16, 0x18, 0x1c));
-    c.insert("color.surface.inset".into(), Color::srgb_u8(0x12, 0x14, 0x17));
-    c.insert("color.surface.raised".into(), Color::srgb_u8(0x1a, 0x1d, 0x22));
+    c.insert(
+        "color.surface.card".into(),
+        Color::srgb_u8(0x16, 0x18, 0x1c),
+    );
+    c.insert(
+        "color.surface.inset".into(),
+        Color::srgb_u8(0x12, 0x14, 0x17),
+    );
+    c.insert(
+        "color.surface.raised".into(),
+        Color::srgb_u8(0x1a, 0x1d, 0x22),
+    );
     c.insert(
         "color.surface.raised-alt".into(),
         Color::srgb_u8(0x1e, 0x21, 0x27),
     );
-    c.insert("color.surface.danger".into(), Color::srgb_u8(0x39, 0x1b, 0x1a));
+    c.insert(
+        "color.surface.danger".into(),
+        Color::srgb_u8(0x39, 0x1b, 0x1a),
+    );
     c.insert(
         "color.surface.danger-soft".into(),
         Color::srgb_u8(0x1a, 0x12, 0x13),
@@ -207,19 +234,34 @@ pub fn default_dark_theme() -> Theme {
     c.insert("color.surface.transparent".into(), Color::NONE);
 
     // --- border.* (values.md § 1.1) ---
-    c.insert("color.border.subtle".into(), Color::srgb_u8(0x1c, 0x1f, 0x24));
+    c.insert(
+        "color.border.subtle".into(),
+        Color::srgb_u8(0x1c, 0x1f, 0x24),
+    );
     c.insert(
         "color.border.subtle-2".into(),
         Color::srgb_u8(0x14, 0x16, 0x1a),
     );
-    c.insert("color.border.default".into(), Color::srgb_u8(0x26, 0x2a, 0x31));
-    c.insert("color.border.strong".into(), Color::srgb_u8(0x2c, 0x31, 0x3a));
+    c.insert(
+        "color.border.default".into(),
+        Color::srgb_u8(0x26, 0x2a, 0x31),
+    );
+    c.insert(
+        "color.border.strong".into(),
+        Color::srgb_u8(0x2c, 0x31, 0x3a),
+    );
     c.insert(
         "color.border.strong-2".into(),
         Color::srgb_u8(0x3a, 0x41, 0x50),
     );
-    c.insert("color.border.muted".into(), Color::srgb_u8(0x39, 0x40, 0x4a));
-    c.insert("color.border.danger".into(), Color::srgb_u8(0x3a, 0x24, 0x22));
+    c.insert(
+        "color.border.muted".into(),
+        Color::srgb_u8(0x39, 0x40, 0x4a),
+    );
+    c.insert(
+        "color.border.danger".into(),
+        Color::srgb_u8(0x3a, 0x24, 0x22),
+    );
 
     // --- text.* ink ladder (values.md § 1.1) ---
     c.insert("color.text.bright".into(), Color::srgb_u8(0xe7, 0xea, 0xef));
@@ -232,18 +274,33 @@ pub fn default_dark_theme() -> Theme {
         "color.text.danger-dim".into(),
         Color::srgb_u8(0x7a, 0x3a, 0x36),
     );
-    c.insert("color.text.on-accent".into(), Color::srgb_u8(0x07, 0x10, 0x1f));
+    c.insert(
+        "color.text.on-accent".into(),
+        Color::srgb_u8(0x07, 0x10, 0x1f),
+    );
 
     // --- accent.* selectable options (values.md § 1.1) ---
     c.insert("color.accent.blue".into(), Color::srgb_u8(0x5b, 0x86, 0xf5));
-    c.insert("color.accent.green".into(), Color::srgb_u8(0x45, 0xc0, 0x7d));
-    c.insert("color.accent.violet".into(), Color::srgb_u8(0xb9, 0x8a, 0xff));
-    c.insert("color.accent.coral".into(), Color::srgb_u8(0xf0, 0x65, 0x5b));
+    c.insert(
+        "color.accent.green".into(),
+        Color::srgb_u8(0x45, 0xc0, 0x7d),
+    );
+    c.insert(
+        "color.accent.violet".into(),
+        Color::srgb_u8(0xb9, 0x8a, 0xff),
+    );
+    c.insert(
+        "color.accent.coral".into(),
+        Color::srgb_u8(0xf0, 0x65, 0x5b),
+    );
 
     // --- status.* (values.md § 1.1) ---
     c.insert("color.status.ok".into(), Color::srgb_u8(0x45, 0xc0, 0x7d));
     c.insert("color.status.warn".into(), Color::srgb_u8(0xd7, 0xa2, 0x3f));
-    c.insert("color.status.error".into(), Color::srgb_u8(0xf0, 0x65, 0x5b));
+    c.insert(
+        "color.status.error".into(),
+        Color::srgb_u8(0xf0, 0x65, 0x5b),
+    );
 
     // --- misc / specials (values.md § 1.1) ---
     c.insert("color.misc.white".into(), Color::WHITE);
@@ -395,7 +452,12 @@ mod tests {
     fn hex(color: Color) -> String {
         let s = Srgba::from(color);
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-        format!("#{:02x}{:02x}{:02x}", to_u8(s.red), to_u8(s.green), to_u8(s.blue))
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            to_u8(s.red),
+            to_u8(s.green),
+            to_u8(s.blue)
+        )
     }
 
     /// `Color` alpha channel as a rounded u8 (for the rgba specials).
@@ -449,7 +511,10 @@ mod tests {
         let scrim = dark.color("color.scrim").unwrap();
         assert_eq!(hex(scrim), "#040507");
         assert_eq!(alpha_u8(scrim), (0.66 * 255.0_f32).round() as u8);
-        assert_eq!(alpha_u8(dark.color("color.selection.bg").unwrap()), (0.32 * 255.0_f32).round() as u8);
+        assert_eq!(
+            alpha_u8(dark.color("color.selection.bg").unwrap()),
+            (0.32 * 255.0_f32).round() as u8
+        );
 
         // Radius scale (values.md § 3).
         assert_eq!(dark.radius("radius.pill").unwrap(), 99.0);
@@ -459,8 +524,7 @@ mod tests {
     #[test]
     fn derive_accent_ramp_matches_values_md_blue_and_green() {
         // Blue #5b86f5 → ac2 #7fa1f7 (values.md § 1.2 authoritative recompute).
-        let (blue_ac2, blue_soft, blue_glow) =
-            derive_accent_ramp(Color::srgb_u8(0x5b, 0x86, 0xf5));
+        let (blue_ac2, blue_soft, blue_glow) = derive_accent_ramp(Color::srgb_u8(0x5b, 0x86, 0xf5));
         assert_eq!(hex(blue_ac2), "#7fa1f7");
         assert_eq!(hex(blue_soft), "#5b86f5");
         assert_eq!(alpha_u8(blue_soft), (0.16 * 255.0_f32).round() as u8);
@@ -485,8 +549,14 @@ mod tests {
         assert_eq!(hex(dark.color("color.accent").unwrap()), "#5b86f5");
         assert_eq!(hex(dark.color("color.accent.lighter").unwrap()), "#7fa1f7");
         assert_eq!(hex(dark.color("color.accent.soft").unwrap()), "#5b86f5");
-        assert_eq!(alpha_u8(dark.color("color.accent.soft").unwrap()), (0.16 * 255.0_f32).round() as u8);
-        assert_eq!(alpha_u8(dark.color("color.accent.glow").unwrap()), (0.55 * 255.0_f32).round() as u8);
+        assert_eq!(
+            alpha_u8(dark.color("color.accent.soft").unwrap()),
+            (0.16 * 255.0_f32).round() as u8
+        );
+        assert_eq!(
+            alpha_u8(dark.color("color.accent.glow").unwrap()),
+            (0.55 * 255.0_f32).round() as u8
+        );
     }
 
     #[test]
