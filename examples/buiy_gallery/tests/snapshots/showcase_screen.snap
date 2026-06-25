@@ -5,8 +5,8 @@ expression: showcase_screen
 # buiy-layout-dump v1
 ShowcaseCard pos=0,0 size=324,140
   ShowcaseDisclosure pos=22,94 size=160,24
-    entity#91 pos=0,2 size=11,20
-    entity#92 pos=17,2 size=71,20
+    entity#91 pos=0,2 size=14,20
+    entity#92 pos=20,2 size=71,20
     entity#93 pos=0,24 size=160,48
   ShowcaseSlider pos=22,58 size=280,20
     entity#87 pos=0,8 size=160,4
