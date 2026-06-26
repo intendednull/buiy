@@ -1577,6 +1577,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "buiy_bench_support"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy_core",
+]
+
+[[package]]
 name = "buiy_bsn"
 version = "0.0.1"
 dependencies = [
@@ -1595,6 +1603,7 @@ dependencies = [
  "arboard",
  "bevy",
  "bitflags 2.13.0",
+ "buiy_bench_support",
  "buiy_verify",
  "bytemuck",
  "cosmic-text",

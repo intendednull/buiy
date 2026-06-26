@@ -23,6 +23,7 @@ members = [
     "crates/buiy_core",
     "crates/buiy_widgets",
     "crates/buiy_verify",
+    "crates/buiy_bench_support",
     "examples/buiy_gallery",
     "examples/hello_bsn",
     "examples/hello_button",

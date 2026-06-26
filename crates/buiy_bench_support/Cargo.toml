@@ -1,0 +1,20 @@
+# DEV-ONLY shared harness for buiy_core performance measurement. Consumed ONLY as
+# a dev-dependency (by buiy_core's criterion bench, the dhat alloc-budget test, and
+# the iai-callgrind bench), so it is NEVER in any production dependency graph —
+# wasm-safe by construction. (buiy_core dev-depends on this, and this depends on
+# buiy_core: a dev-dependency cycle, which Cargo allows.)
+[package]
+name = "buiy_bench_support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Dev-only shared adapterless extract harness + scenes for buiy_core perf measurement (criterion/dhat/iai). Never in the production graph."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bevy = { workspace = true }
+buiy_core = { path = "../buiy_core" }
