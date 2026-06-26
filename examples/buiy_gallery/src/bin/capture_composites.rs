@@ -30,7 +30,9 @@ use bevy::render::view::Msaa;
 
 use buiy_core::animation::AnimationPlugin;
 use buiy_core::theme::default_dark_theme;
-use buiy_gallery::composites::{ToastPlugin, composites_showcase, set_meter, show_toast};
+use buiy_gallery::composites::{ToastPlugin, composites_showcase, show_toast};
+// `set_meter` was promoted to the framework (Wave 5 refinement).
+use buiy_widgets::composites::set_meter;
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 760;

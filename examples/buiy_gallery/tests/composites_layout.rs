@@ -29,8 +29,10 @@ use buiy::{BuiyTextPlugin, CorePlugin, LayoutPlugin, WidgetsPlugin};
 use buiy_core::layout::Scale;
 use buiy_core::render::components::{Background, TextColor};
 use buiy_core::theme::default_dark_theme;
-use buiy_gallery::composites::{MeterFill, SegmentedOption, TableRow, composites_showcase};
+use buiy_gallery::composites::{SegmentedOption, composites_showcase};
+// `MeterFill` / `TableRow` were promoted to the framework (Wave 5 refinement).
 use buiy_verify::snapshot::assert_layout_snapshot;
+use buiy_widgets::composites::{MeterFill, TableRow};
 
 /// Build the live composites-showcase tree: a 1280×900 headless window, the dark
 /// theme, then [`composites_showcase`]. Returns `(app, meter_fill)`.
@@ -215,7 +217,7 @@ fn set_meter_animates_x_scale_to_target() {
 
     use bevy::time::Time;
     use buiy_core::animation::{AnimationPlugin, ScaleTween};
-    use buiy_gallery::composites::{meter, set_meter};
+    use buiy_widgets::composites::{meter, set_meter};
 
     let mut app = App::new();
     app.init_resource::<Time>();

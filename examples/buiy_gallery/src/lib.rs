@@ -1680,7 +1680,10 @@ fn is_descendant(world: &World, e: Entity, ancestor: Entity) -> bool {
 // resident entities but only the on-screen window costs paint + shaping.
 // ###########################################################################
 
-use crate::composites::{
+// The general composites the scroll/menu screens build from were promoted to the
+// framework (`buiy_widgets::composites`, Wave 5 refinement) and are font-NEUTRAL —
+// the gallery threads its Geist faces (`geist()` / `geist_mono()`) into them.
+use buiy_widgets::composites::{
     TableRowData, kbd_content, pulse_blink, search_input, set_table_row_selected, status_dot,
     table_header, table_row,
 };
@@ -1732,8 +1735,7 @@ pub enum ScrollCountField {
 /// One entity-tree row's app-state: its node index (so search can hide/show + the
 /// footer reports the selection) and lower-cased searchable text (type + name,
 /// precomputed so the filter is a cheap substring test). Carried on each
-/// `table_row` (which also carries the composite [`TableRow`](crate::composites::TableRow)
-/// marker).
+/// `table_row` (which also carries the composite [`TableRow`] marker).
 #[derive(Component, Clone)]
 pub struct ScrollNode {
     /// The node's 0-based index (the design's `#NNNN` selection id + sort key).
@@ -1899,7 +1901,7 @@ fn build_scroll_heading(world: &mut World) -> Entity {
     // The 240px search box (the C2 `search_input` composite: magnifier + a real
     // focusable single-line field). Tag the field with `ScrollSearch` so the live
     // `TextChanged` filter reads it.
-    let search = search_input(world, "Filter nodes…", 240.0);
+    let search = search_input(world, "Filter nodes…", geist(), 240.0);
     if let Some(field) = descendant_with_edit_state(world, search) {
         world.entity_mut(field).insert(ScrollSearch);
     }
@@ -1935,6 +1937,7 @@ fn build_scroll_card(world: &mut World) -> Entity {
             ("FRAME", Some(66.0)),
             ("STATE", Some(42.0)),
         ],
+        geist_mono(),
     );
 
     // The scroll viewport: the `ScrollArea` marker triggers the full C5-a contract
@@ -2078,6 +2081,7 @@ pub fn fill_scroll_list(world: &mut World, n: usize) -> usize {
                 state: node.state,
                 state_color: node.state_color,
             },
+            geist_mono(),
             false,
         );
         // The row carries its app-state: the index + the precomputed lower-cased
@@ -2922,7 +2926,13 @@ fn build_menu_item(world: &mut World, idx: usize, spec: &MenuItemSpec) -> Entity
             Pickable::IGNORE,
         ))
         .id();
-    let kbd_chip = kbd_content(world, "#MenuItemKbd", spec.kbd, tok(kbd_color));
+    let kbd_chip = kbd_content(
+        world,
+        "#MenuItemKbd",
+        spec.kbd,
+        geist_mono(),
+        tok(kbd_color),
+    );
     // A per-item name (the label slug) so the layout-dump can order the items
     // deterministically even when the screen is INACTIVE in the shell (all items
     // collapse to pos/size 0 under `Display::None`, where same-named siblings are
@@ -4453,8 +4463,8 @@ pub struct ShowcaseChevron;
 #[derive(Component, Clone, Default)]
 pub struct ShowcaseDiscBody;
 
-/// The live meter handle (the fill entity [`set_meter`](crate::composites::set_meter)
-/// re-targets) + the running animation state. `run_showcase_build` sets it; the
+/// The live meter handle (the fill entity [`set_meter`] re-targets) + the running
+/// animation state. `run_showcase_build` sets it; the
 /// per-frame [`tick_showcase_build`] advances the "N%" label as the tween runs.
 #[derive(Resource, Default)]
 pub struct ShowcaseBuild {
@@ -5202,7 +5212,8 @@ fn build_showcase_meter_card(world: &mut World) -> Entity {
         .add_children(&[label, value])
         .id();
 
-    let (meter_track, meter_fill) = crate::composites::meter(world, 280.0, SHOWCASE_METER_NOW);
+    let (meter_track, meter_fill) =
+        buiy_widgets::composites::meter(world, 280.0, SHOWCASE_METER_NOW);
     world.insert_resource(ShowcaseBuild {
         fill: Some(meter_fill),
         progress: SHOWCASE_METER_NOW,
@@ -5576,7 +5587,7 @@ fn step_showcase(world: &mut World, increment: bool) {
 }
 
 /// Kick off the build animation: animate the meter `0 → 100%` (the C2
-/// [`set_meter`](crate::composites::set_meter) tween) and arm the
+/// [`set_meter`] tween) and arm the
 /// [`ShowcaseBuild`] ramp so [`tick_showcase_build`] counts the "N%" label up. A
 /// no-op when a build is already in flight (the design disables the button while
 /// `building`).
@@ -5588,8 +5599,8 @@ fn run_showcase_build(world: &mut World) {
     let fill = world.resource::<ShowcaseBuild>().fill;
     if let Some(fill) = fill {
         // Reset to 0 then animate to full (the design's `runBuild` restart).
-        crate::composites::set_meter(world, fill, 0.0);
-        crate::composites::set_meter(world, fill, 1.0);
+        buiy_widgets::composites::set_meter(world, fill, 0.0);
+        buiy_widgets::composites::set_meter(world, fill, 1.0);
     }
     let mut build = world.resource_mut::<ShowcaseBuild>();
     build.building = true;

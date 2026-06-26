@@ -68,6 +68,19 @@ pub use buiy_widgets::{
     Popover, PopoverAlign, PopoverPlacement, PopoverSide, ScrollArea, Slider, Switch, TextInput,
     TooltipTrigger, WidgetsPlugin, dialog_invoker,
 };
+// The general composite builders (widget-catalog parity § 2 REFINE — "promote the
+// genuinely-general composites to `buiy_widgets`"): imperative `World`-spawning
+// trees that compose the primitive widgets/render components into a recognizable
+// higher-level control (a progress `meter`, a `table_row`/`table_header`, a
+// `search_input`, a `kbd` chip, a `status_dot` + its `pulse_blink`). They are
+// font-NEUTRAL (each text-bearing builder takes a `FontFamily` — the app owns its
+// typeface), so they fold into the prelude next to the widget surface for any app,
+// not just the gallery they were extracted from.
+pub use buiy_widgets::composites::{
+    CMD_GLYPH_ICON, MeterFill, RowSelBar, TableRow, TableRowData, kbd, kbd_content, meter,
+    pulse_blink, search_input, set_meter, set_table_row_selected, status_dot, table_header,
+    table_row,
+};
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `checkbox(label)`, `switch(label)`, `slider(label, now, min, max, step)`,
 // `disclosure(label)`, `dialog(title, body)`, `tooltip_trigger(label, tip)`,
