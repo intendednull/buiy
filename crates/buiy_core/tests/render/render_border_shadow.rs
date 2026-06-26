@@ -426,6 +426,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
                 affine: [[1.0, 0.0], [0.0, 1.0]],
             },
         ],
+        gradients: Vec::new(),
     };
     let plain = ExtractedNode {
         entity: Entity::from_raw_u32(2).unwrap(),
@@ -438,6 +439,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     };
 
     let nodes = [bordered_and_shadowed, plain];

@@ -12,6 +12,8 @@
 #[path = "support/mod.rs"]
 mod support;
 
+#[path = "render/render_backdrop_blur_gpu.rs"]
+mod render_backdrop_blur_gpu;
 #[path = "render/render_border_sdf.rs"]
 mod render_border_sdf;
 #[path = "render/render_border_shadow.rs"]
@@ -44,6 +46,8 @@ mod render_effect_groups;
 mod render_extract;
 #[path = "render/render_extract_background.rs"]
 mod render_extract_background;
+#[path = "render/render_extract_composite.rs"]
+mod render_extract_composite;
 #[path = "render/render_focus_ring.rs"]
 mod render_focus_ring;
 #[path = "render/render_focus_ring_gpu.rs"]
@@ -58,8 +62,18 @@ mod render_golden_config;
 mod render_golden_harness;
 #[path = "render/render_gpu_harness.rs"]
 mod render_gpu_harness;
+#[path = "render/render_gradient.rs"]
+mod render_gradient;
+#[path = "render/render_gradient_gpu.rs"]
+mod render_gradient_gpu;
+#[path = "render/render_gradient_paint_order_gpu.rs"]
+mod render_gradient_paint_order_gpu;
 #[path = "render/render_group_contiguity_gpu.rs"]
 mod render_group_contiguity_gpu;
+#[path = "render/render_icon.rs"]
+mod render_icon;
+#[path = "render/render_icon_gpu.rs"]
+mod render_icon_gpu;
 #[path = "render/render_instance.rs"]
 mod render_instance;
 #[path = "render/render_msaa.rs"]
@@ -88,6 +102,8 @@ mod render_specialize_gpu;
 mod render_text_quads;
 #[path = "render/render_theme_switch.rs"]
 mod render_theme_switch;
+#[path = "render/render_top_layer_paint_gpu.rs"]
+mod render_top_layer_paint_gpu;
 #[path = "render/render_transform_bridge.rs"]
 mod render_transform_bridge;
 #[path = "render/render_view_uniform.rs"]

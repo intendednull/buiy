@@ -393,14 +393,22 @@ pub fn extract_buiy_glyphs(
     let fonts: &SharedFontSystem = &fonts;
     let theme: &Theme = &theme;
 
-    // painters_z order — the same walk extract_buiy_nodes runs (§ 2).
+    // painters_z order — the same walk extract_buiy_nodes runs (§ 2), including the
+    // cross-root rank so a parentless top-layer root (modal/popover) glyphs paint
+    // over the whole window (the M6 fix — same root ordering the node walk uses).
     let sc_by_entity: std::collections::HashMap<Entity, &[Entity]> = contexts
         .iter()
         .map(|(e, sc)| (e, sc.painters_z.as_slice()))
         .collect();
     let painters_z_of = |e: Entity| -> Option<&[Entity]> { sc_by_entity.get(&e).copied() };
+    let rank_by_entity: std::collections::HashMap<Entity, u8> = contexts
+        .iter()
+        .map(|(e, sc)| (e, sc.cross_root_rank))
+        .collect();
     let mut order = Vec::new();
-    for root in context_roots(&sc_by_entity) {
+    for root in context_roots(&sc_by_entity, |e| {
+        rank_by_entity.get(&e).copied().unwrap_or(0)
+    }) {
         context_tree_paint_order(root, &painters_z_of, &mut order);
     }
 

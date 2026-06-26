@@ -24,7 +24,10 @@ use bevy::shader::Shader;
 
 use crate::render::buckets::BuiyPrimitiveKind;
 use crate::render::composite::BuiySpecializedPipelines;
-use crate::render::primitive::{BuiyBandKey, BuiyBandPipeline, BuiyPrimitiveKey, BuiyPrimitives};
+use crate::render::primitive::{
+    BuiyBandKey, BuiyBandPipeline, BuiyGradientKey, BuiyGradientPipeline, BuiyPrimitiveKey,
+    BuiyPrimitives,
+};
 
 /// Stable UUID for the rounded-rect shader asset.
 ///
@@ -78,6 +81,20 @@ const BAND_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0106_0000_0000_0000_0000_0
 /// the MAIN world by `BuiyRenderPlugin::build` (`load_internal_asset!`).
 pub fn band_shader_handle() -> Handle<Shader> {
     Handle::Uuid(BAND_SHADER_UUID, PhantomData)
+}
+
+/// Stable UUID for the background-gradient shader (octet `..07`, parity Wave B1).
+const GRADIENT_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0107_0000_0000_0000_0000_0000_0007u128);
+
+/// Weak handle to the background-gradient WGSL shader (octet `..07`).
+///
+/// Backed by `gradient.wgsl` (the 2-stop linear/radial gradient fill — parity
+/// Wave B1), loaded under `GRADIENT_SHADER_UUID` into the MAIN world by
+/// `BuiyRenderPlugin::build` (`load_internal_asset!`). The gradient pipeline
+/// (`primitive.rs` `BuiyGradientPipeline::specialize`) resolves this handle
+/// through the PipelineCache's extracted GPU mirror.
+pub fn gradient_shader_handle() -> Handle<Shader> {
+    Handle::Uuid(GRADIENT_SHADER_UUID, PhantomData)
 }
 
 /// The bind-group-layout entries for the per-view view uniform: one
@@ -169,6 +186,12 @@ pub struct BuiyPipeline {
     /// `shadow.wgsl` + the quad-family vertex layout) so the 1x default-format
     /// view's per-view key dedups onto it.
     pub shadow_id: CachedRenderPipelineId,
+    /// The `Gradient@Rgba8UnormSrgb@1x` baseline id for the background-gradient
+    /// pipeline (parity Wave B1). Same eager-baseline role as the others (the
+    /// node draws [`BuiyViewPipelines::gradient`]); built through the
+    /// `BuiyGradientPipeline` specializer so the 1x default-format view's
+    /// per-view key dedups onto it.
+    pub gradient_id: CachedRenderPipelineId,
     /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
     /// at pipeline registration and reused every frame. Phase 0 closeout
     /// scope: vertex emission order matches the `cull_mode: None` setting in
@@ -268,7 +291,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // compiling duplicates. `register` runs at plugin finish, before any
     // `ViewTarget` exists, so the literals stand in for the default view here;
     // a multisampled / HDR view gets its own variant from the prepare pass.
-    let (id, glyph_id, band_id, shadow_id) =
+    let (id, glyph_id, band_id, shadow_id, gradient_id) =
         world.resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
             let pipeline_cache = world.resource::<PipelineCache>();
             let quad = pipelines.primitives.specialize(
@@ -312,13 +335,24 @@ pub(crate) fn register(render_app: &mut SubApp) {
                     samples: 1,
                 },
             );
-            (quad, glyph, band, shadow)
+            // The background-gradient baseline through its own
+            // `BuiyGradientPipeline` specializer + cache (parity Wave B1).
+            let gradient = pipelines.gradient.specialize(
+                pipeline_cache,
+                &BuiyGradientPipeline,
+                BuiyGradientKey {
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            (quad, glyph, band, shadow, gradient)
         });
     world.insert_resource(BuiyPipeline {
         id,
         glyph_id,
         band_id,
         shadow_id,
+        gradient_id,
         vertex_buffer,
         view_layout,
         atlas_layout,
@@ -347,6 +381,10 @@ pub struct BuiyViewPipelines {
     /// `Shadow @ (view format, view samples)` — the window-pass box-shadow draw
     /// (styling-f-tier.md § 2.2 — C6-b). Drawn FIRST (behind the quad).
     pub shadow: CachedRenderPipelineId,
+    /// `Gradient @ (view format, view samples)` — the window-pass
+    /// background-gradient draw (parity Wave B1). Drawn AFTER the solid quad,
+    /// BEFORE glyphs/bands (over the fill, under text/border).
+    pub gradient: CachedRenderPipelineId,
 }
 
 /// `RenderSystems::Prepare` system: specialize the view-pass quad + glyph
@@ -394,11 +432,19 @@ pub(crate) fn prepare_buiy_view_pipelines(
             &BuiyBandPipeline,
             BuiyBandKey { format, samples },
         );
+        // The background-gradient variant rides its own specializer/cache too
+        // (parity Wave B1) — a distinct pipeline keyed by record.
+        let gradient = pipelines.gradient.specialize(
+            &pipeline_cache,
+            &BuiyGradientPipeline,
+            BuiyGradientKey { format, samples },
+        );
         let view_pipelines = BuiyViewPipelines {
             quad,
             glyph,
             band,
             shadow,
+            gradient,
         };
         commands.entity(entity).insert(view_pipelines);
     }

@@ -14,18 +14,172 @@ use crate::Length;
 use crate::render::color::ColorToken;
 use bevy::prelude::*;
 
-/// Solid background fill (v1). Replaces `Visual.background_token`.
-/// Absent component == transparent.
+/// Solid background fill (the F-tier fast path). Replaces
+/// `Visual.background_token`. Absent component == transparent.
 ///
-/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 3.
+/// `color` is the SOLID surface — `ColorToken::default()` (transparent) == no
+/// fill, matching `Visual.background_token == ""`. Gradient / layered fills
+/// (parity Wave B1) ride a SIBLING decomposed component, [`BackgroundLayers`],
+/// painted ON TOP of this solid fill. Keeping the two as separate components
+/// (rather than a `layers` field here) is what keeps every existing
+/// `Background { color }` literal — and the `bsn!` `Background { color: { … } }`
+/// authoring form, which has no struct-update syntax — source-compatible: a node
+/// with no gradient never mentions `BackgroundLayers` and is byte-identical to
+/// the pre-gradient path. It mirrors this module's decomposed-component idiom
+/// (`Border` / `BoxShadow` / `Outline` are each their own component, not fields
+/// of one mega-`Visual`).
+///
+/// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/component-model.md § 3
+/// (solid `color`); docs/specs/2026-06-25-widget-catalog-parity-design.md § 3.2
+/// (gradients — realized as `BackgroundLayers`, §8 "the layers field" intent).
 #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
 #[reflect(Component, Default)]
 pub struct Background {
-    /// F: solid fill. `ColorToken::default()` (transparent) == no fill,
-    /// matching `Visual.background_token == ""`. The reserved layered/
-    /// gradient surface (`layers: Vec<BackgroundLayer>`, C-tier) lands with
-    /// the gradient/image fast-follow — not a v1 field.
+    /// F: solid fill. `ColorToken::default()` (transparent) == no fill. Painted
+    /// BENEATH any [`BackgroundLayers`] (CSS: `background-color` sits under the
+    /// `background-image` stack).
     pub color: ColorToken,
+}
+
+/// Gradient / layered background fills (parity Wave B1) — the CSS
+/// `background-image` stack, painted ON TOP of the sibling [`Background`]'s solid
+/// `color`. A SIBLING decomposed component (not a `Background` field) so every
+/// existing `Background { color }` literal and `bsn!` patch stays
+/// source-compatible; a node with no gradient simply carries no `BackgroundLayers`.
+///
+/// Layers paint front-to-back in index order (index 0 frontmost — CSS
+/// `background-image` paint order). Each [`BackgroundLayer`] resolves its
+/// token(s) to concrete `Color` at extract and paints through a distinct
+/// gradient instance + `gradient.wgsl` (the band/shadow precedent — the 68 B
+/// quad stride is untouched). The design uses LINEAR gradients; `Radial` is the
+/// seam B2 (dotted-grid pattern) fills in.
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-parity-design.md § 3.2.
+#[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct BackgroundLayers(pub Vec<BackgroundLayer>);
+
+/// One background-image layer (parity Wave B1). A `Solid` layer is a flat token
+/// fill (the layered-solid case CSS allows); `Linear` / `Radial` are gradients.
+/// Token(s) resolve to concrete `Color` at extract — the GPU only ever sees
+/// resolved colors, so a live theme/accent swap re-resolves through the existing
+/// `theme.is_changed()` re-extract (no atlas, no cached colors).
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-parity-design.md § 3.2.
+#[derive(Reflect, Clone, PartialEq, Debug)]
+pub enum BackgroundLayer {
+    /// A flat token fill painted as a layer (over `Background.color`).
+    Solid(ColorToken),
+    /// A CSS `linear-gradient(<angle>, <stops>)`.
+    Linear(LinearGradient),
+    /// A CSS `radial-gradient(...)`. The B1 seam B2 (dotted-grid pattern) fills
+    /// in; the B1 gradient pipeline carries a kind flag so a `Radial` packs and
+    /// draws through the same instance, with the radial branch in the shader.
+    Radial(RadialGradient),
+}
+
+impl Default for BackgroundLayer {
+    /// A transparent solid — the no-op layer (mirrors `ColorToken`'s
+    /// `Transparent` default). Only matters for the reflect/`Default` surface; a
+    /// real author always names a concrete variant.
+    fn default() -> Self {
+        Self::Solid(ColorToken::Transparent)
+    }
+}
+
+/// A CSS `linear-gradient(<angle>, <stops>)`. The gradient axis is the CSS
+/// gradient line: `angle_deg` is the CSS angle (`0deg` points UP, angles go
+/// CLOCKWISE), and the stops interpolate along that line across the box's
+/// gradient-line length (`|W·sinθ| + |H·cosθ|`). The design uses 2 stops
+/// (`linear-gradient(150deg, --ac, --ac2)` and `90deg`); the data model carries
+/// a `Vec` for generality but the B1 GPU fast path is 2 stops.
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-values.md § 8.
+#[derive(Reflect, Default, Clone, PartialEq, Debug)]
+pub struct LinearGradient {
+    /// CSS gradient angle in DEGREES. `0` = bottom→top (up), increasing
+    /// clockwise: `90` = left→right, `180` = top→bottom, `150` = the design's
+    /// logo/button/preview gradient.
+    pub angle_deg: f32,
+    /// Color stops along the gradient line, in line order (position `0.0` = the
+    /// start of the line, `1.0` = the end). Each stop's token resolves at
+    /// extract.
+    pub stops: Vec<ColorStop>,
+}
+
+/// A CSS `radial-gradient(...)` — both the single centered gradient over the box
+/// AND the **repeating dotted-grid pattern** (parity Wave B2, the viewport bg).
+///
+/// One data model spans both cases via two optional parameters:
+///
+/// - `tile: None` (default) — a SINGLE radial gradient covering the box: stops
+///   run from the box center (position `0.0`) out to `radius` (or, if `radius`
+///   is `None`, the box's farthest-corner distance `0.5·|size|`, the CSS
+///   `farthest-corner` default).
+/// - `tile: Some(t)` — the gradient REPEATS once per `t.x × t.y` logical-px tile
+///   (CSS `background-size`), each tile a copy centered in the tile. This is the
+///   design's dotted bg: `radial-gradient(#16181c 1px, transparent 1px)` over a
+///   `22×22` tile is `RadialGradient { stops: [dot@0, transparent@1], radius:
+///   Some(1.0), tile: Some(22,22) }` — a hard-edged 1px dot of stop-0's color
+///   centered in every 22px cell, transparent between (the 1px edge is
+///   smoothstep-AA'd in the shader, matching the rounded-rect SDF rim).
+///
+/// `radius` is in LOGICAL px (the dot radius for the tiled case; the gradient
+/// extent for the single case). `None` = the box-derived farthest-corner extent.
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-parity-design.md § 3.8;
+/// docs/specs/2026-06-25-widget-catalog-values.md § 7.3 (dotted bg).
+#[derive(Reflect, Default, Clone, PartialEq, Debug)]
+pub struct RadialGradient {
+    /// Color stops from the center (position `0.0`) outward (`1.0`). For the
+    /// dotted-grid: stop 0 is the dot color, stop 1 (transparent) the gap.
+    pub stops: Vec<ColorStop>,
+    /// Gradient extent in LOGICAL px: the dot radius (tiled case) or the
+    /// single-gradient extent. `None` = the box farthest-corner default
+    /// (`0.5·|size|`).
+    pub radius: Option<f32>,
+    /// `Some(tile)` repeats the gradient once per `tile.x × tile.y` logical-px
+    /// cell (CSS `background-size` — the dotted-grid). `None` (default) = a
+    /// single gradient over the whole box.
+    pub tile: Option<Vec2>,
+}
+
+impl RadialGradient {
+    /// The design's viewport **dotted radial-grid** background: a hard-edged dot
+    /// of `dot_color` (token `color.misc.dot-bg` == `#16181c`) of `dot_radius`
+    /// logical px (1px), centered in every `tile_px × tile_px` cell (22px),
+    /// transparent between (`radial-gradient(#16181c 1px, transparent 1px)`;
+    /// `background-size: 22px 22px` — values.md § 7.3). The gap stop is
+    /// `Transparent` so the app bg (`color.surface.app` == `#0b0c0e`) shows
+    /// through.
+    pub fn dot_grid(dot_color: ColorToken, dot_radius: f32, tile_px: f32) -> Self {
+        Self {
+            stops: vec![
+                ColorStop {
+                    color: dot_color,
+                    position: 0.0,
+                },
+                ColorStop {
+                    color: ColorToken::Transparent,
+                    position: 1.0,
+                },
+            ],
+            radius: Some(dot_radius),
+            tile: Some(Vec2::splat(tile_px)),
+        }
+    }
+}
+
+/// One gradient color stop: a token (resolved at extract) at a normalized
+/// position along the gradient line / radius (`0.0..=1.0`).
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-values.md § 8.
+#[derive(Reflect, Default, Clone, PartialEq, Debug)]
+pub struct ColorStop {
+    /// The stop color token, resolved to a concrete `Color` at extract.
+    pub color: ColorToken,
+    /// Normalized position along the gradient line (`0.0` = start, `1.0` = end).
+    pub position: f32,
 }
 
 /// Glyph foreground color (v1 text) — the graduated `Visual.foreground_token`
@@ -88,6 +242,62 @@ impl Default for CaretColor {
     /// would render the caret invisible.
     fn default() -> Self {
         Self(ColorToken::CurrentColor)
+    }
+}
+
+/// A real vector (SVG-path) icon (parity Wave B3, parity-design § 3.5;
+/// values.md § 6). The design renders ~25 inline `<svg>` line icons (logo bars,
+/// rail glyphs, menu/stepper actions, checkmarks, chevrons, search, the gear,
+/// the GitHub mark) at 13–24 px with **stroke-width 1.7–2.4**. An icon-font
+/// bakes one stroke-width, so the design rejects it (§ 8); instead the icon
+/// producer (`render::icon_producer`) tessellates this `path_d` via lyon,
+/// rasterizes it to an `R8` coverage bitmap (`render::icon_raster`), and inserts
+/// it into the SAME glyph-alpha atlas a font glyph uses — so an icon paints
+/// through the EXISTING coverage shader and **re-tints live** on a theme/accent
+/// swap exactly like text (the atlas bitmap is monochrome coverage, the color is
+/// per-instance; § 3.5).
+///
+/// The icon paints at the entity's resolved layout box origin (content-box
+/// top-left, like text glyphs) at `size_px × size_px` logical px. `color` is a
+/// token resolved against the live theme per frame — the design's per-icon
+/// "color-per-state" (values.md § 6): an accent icon re-themes on a swatch
+/// click, an ink icon follows the foreground. Default `CurrentColor` defers to
+/// the entity's resolved foreground (the `TextColor` precedent), NOT the derived
+/// `Transparent` default (which would paint the icon invisible).
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-parity-design.md § 3.5;
+/// docs/specs/2026-06-25-widget-catalog-values.md § 6.
+#[derive(Component, Reflect, Clone, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct Icon {
+    /// The SVG path `d` (the design's `<path d="…">`), authored on the 24×24
+    /// viewBox values.md § 6 pins. Parsed + tessellated by the producer; a
+    /// malformed `d` paints nothing (the producer logs once, never panics).
+    pub path_d: String,
+    /// Stroke width in viewBox units (the design's per-icon `stroke-width`,
+    /// 1.7–2.4). Ignored when `fill` — a filled glyph has no stroke.
+    pub stroke_width: f32,
+    /// Render size in logical px (the SVG `width`/`height`, 13–24 in the
+    /// design). Uniformly scales the 24×24 viewBox.
+    pub size_px: u16,
+    /// `true` for the one solid `fill` glyph (the GitHub mark); `false`
+    /// (default) for every stroked line icon (round cap + round join).
+    pub fill: bool,
+    /// The per-instance tint token, resolved against the live theme each frame
+    /// (values.md § 6 color-per-state). `CurrentColor` (default) defers to the
+    /// entity's resolved foreground.
+    pub color: ColorToken,
+}
+
+impl Default for Icon {
+    fn default() -> Self {
+        Self {
+            path_d: String::new(),
+            stroke_width: 2.0,
+            size_px: 16,
+            fill: false,
+            color: ColorToken::CurrentColor,
+        }
     }
 }
 
@@ -437,18 +647,32 @@ pub struct EffectGroup {
 }
 
 /// Why the forward paint walk skips an entity (paint-order-and-top-layer.md
-/// § 5). `Display::None` is NOT a variant: such entities never reach extract
-/// (no `ResolvedLayout`, absent from `painters_z`), so there is nothing to
-/// skip — the absence IS the skip. `content-visibility: hidden` is likewise NOT
-/// a variant: § 5.2 keeps the Hidden entity's own box painting and prunes its
-/// descendants layout-side (they never enter `painters_z`), so render inherits
-/// the prune for free.
+/// § 5). `content-visibility: hidden` is NOT a variant: § 5.2 keeps the Hidden
+/// entity's own box painting and prunes its descendants layout-side (they never
+/// enter `painters_z`), so render inherits the prune for free.
+///
+/// `Display::None` IS a variant ([`SkipReason::DisplayNone`]). § 5.1 assumed a
+/// `Display::None` entity never reaches extract because Taffy never gives it a
+/// node (so it has no `ResolvedLayout`). That holds when an entity is born
+/// `Display::None`, but NOT when `Display::None` is applied as a runtime
+/// mutation to a previously-laid-out subtree: Taffy retains the descendant
+/// nodes and `write_resolved_layout` keeps writing them a collapsed
+/// `ResolvedLayout` at the origin, which the GPU extract (a flat
+/// `&ResolvedLayout` query, not the `painters_z` walk) would then paint —
+/// stacked at the layout origin. So `write_paint_skip` treats `Display::None`
+/// as a subtree-rooting suppression, the same subtree-scoped skip the sibling
+/// `write_clip_rects` pass already applies to `Display::None` (clip.rs § A.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SkipReason {
     /// `CssVisibility::Hidden` — render-owned paint-skip, keep the box (§ 5.4).
     CssHidden,
     /// Off-screen `content-visibility: auto` (the `OffscreenAuto` marker, § 5.3).
     OffscreenAuto,
+    /// `Display::None` — the subtree is laid out as zero-size at the origin (a
+    /// runtime-applied `Display::None` keeps its Taffy nodes), so it must be
+    /// paint-skipped (root AND descendants). § 5.1's "never reaches extract"
+    /// holds only for born-`None` entities; this closes the runtime-flip gap.
+    DisplayNone,
 }
 
 /// Computed subtree paint-skip marker. Written by the `write_paint_skip`
@@ -479,6 +703,60 @@ mod tests {
     #[test]
     fn background_default_is_transparent() {
         assert_eq!(Background::default().color, ColorToken::Transparent);
+    }
+
+    #[test]
+    fn background_layers_default_is_empty() {
+        // No layers == solid-only (the pre-gradient byte-identical path).
+        assert!(BackgroundLayers::default().0.is_empty());
+    }
+
+    #[test]
+    fn background_layer_default_is_transparent_solid() {
+        // The no-op layer mirrors `ColorToken`'s `Transparent` default.
+        assert_eq!(
+            BackgroundLayer::default(),
+            BackgroundLayer::Solid(ColorToken::Transparent)
+        );
+    }
+
+    #[test]
+    fn linear_gradient_carries_angle_and_stops_in_order() {
+        let g = LinearGradient {
+            angle_deg: 150.0,
+            stops: vec![
+                ColorStop {
+                    color: ColorToken::Token("color.accent".into()),
+                    position: 0.0,
+                },
+                ColorStop {
+                    color: ColorToken::Token("color.accent.lighter".into()),
+                    position: 1.0,
+                },
+            ],
+        };
+        assert_eq!(g.angle_deg, 150.0);
+        assert_eq!(g.stops.len(), 2);
+        assert_eq!(g.stops[0].position, 0.0);
+        assert_eq!(g.stops[1].position, 1.0);
+        assert_eq!(g.stops[0].color, ColorToken::Token("color.accent".into()));
+    }
+
+    #[test]
+    fn color_stop_default_is_transparent_at_zero() {
+        let s = ColorStop::default();
+        assert_eq!(s.color, ColorToken::Transparent);
+        assert_eq!(s.position, 0.0);
+    }
+
+    #[test]
+    fn background_layer_variants_are_distinct() {
+        let solid = BackgroundLayer::Solid(ColorToken::Token("a".into()));
+        let linear = BackgroundLayer::Linear(LinearGradient::default());
+        let radial = BackgroundLayer::Radial(RadialGradient::default());
+        assert_ne!(solid, linear);
+        assert_ne!(linear, radial);
+        assert_ne!(solid, radial);
     }
 
     #[test]

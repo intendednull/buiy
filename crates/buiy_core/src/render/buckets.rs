@@ -15,8 +15,8 @@ use std::ops::Range;
 
 use crate::render::extract::{ExtractedNode, TextQuad};
 use crate::render::instance::{
-    BorderBandInstance, PackedInstance, pack_border, pack_extracted, pack_outline, pack_shadow,
-    pack_text_quad,
+    BorderBandInstance, GradientInstance, PackedInstance, pack_border, pack_extracted,
+    pack_gradient, pack_outline, pack_shadow, pack_text_quad,
 };
 use bevy::prelude::{Color, Entity};
 use bytemuck::Pod;
@@ -243,6 +243,125 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
     shadows
 }
 
+/// Pack a view's node list into the flat background-gradient instance blob, in
+/// paint order (parity Wave B1). One [`GradientInstance`] per
+/// [`ExtractedGradient`](crate::render::extract::ExtractedGradient) across all
+/// nodes, in node-walk order then the producer's back-to-front layer order
+/// within a node. A node with no gradient layers contributes nothing. The
+/// gradient draws AFTER the quad (over the solid fill), BEFORE glyphs/bands, so
+/// the gradient blob is drawn after the quad in `node.rs`.
+///
+/// Its OWN `GradientInstance` layout (the 68 B quad stride is untouched). Like
+/// the band/shadow, v1 rides the FLAT window draw only (no effect-group
+/// partitioning — the common case is a top-level gradient widget).
+///
+/// Returns the gradient blob PLUS a parallel `anchors` vec (one entry per emitted
+/// gradient instance): `anchors[i]` is the quad-blob index `node_quad_anchors`
+/// recorded for the node that emitted gradient `i` — its paint-order draw
+/// position (after the node's own quad, before its descendants'). `node.rs`
+/// interleaves the gradient blob with the flat quad runs by these so an ancestor
+/// node's gradient never overpaints a descendant's opaque fill (parity bleed
+/// fix). `node_quad_anchors` MUST be the [`PackedPartition::node_quad_anchors`]
+/// from the SAME node walk (one entry per input node); a node missing an anchor
+/// (length mismatch — never in practice) falls back to anchor `0`.
+pub fn pack_gradient_instances(
+    nodes: &[ExtractedNode],
+    node_quad_anchors: &[u32],
+) -> (Vec<GradientInstance>, Vec<u32>) {
+    let mut gradients = Vec::new();
+    let mut anchors = Vec::new();
+    for (i, n) in nodes.iter().enumerate() {
+        let anchor = node_quad_anchors.get(i).copied().unwrap_or(0);
+        for g in &n.gradients {
+            gradients.push(pack_gradient(g));
+            anchors.push(anchor);
+        }
+    }
+    (gradients, anchors)
+}
+
+/// One draw step in the interleaved flat quad + background-gradient window pass
+/// ([`interleave_flat_quads_and_gradients`]). The flat pass binds the quad
+/// pipeline for a [`Quads`](Self::Quads) step and the gradient pipeline for a
+/// [`Gradients`](Self::Gradients) step; each holds the instance-index sub-range
+/// to `draw`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlatDrawStep {
+    /// Draw this sub-range of the flat quad instance blob (the quad pipeline).
+    Quads(Range<u32>),
+    /// Draw this sub-range of the background-gradient instance blob (the
+    /// gradient pipeline).
+    Gradients(Range<u32>),
+}
+
+/// Interleave the flat quad runs with the background-gradient blob in PAINT
+/// ORDER (parity gradient-bleed fix). Each gradient `i` draws at its `anchor`
+/// (`gradient_anchors[i]` — the quad-blob index just after its node's own quad),
+/// so a node's gradient paints after that node's own fill and BEFORE any
+/// descendant's quad: an ancestor's gradient layer (e.g. the viewport
+/// dotted-grid) never overpaints a descendant card's opaque fill.
+///
+/// `flat_ranges` are the non-group quad runs the flat window pass draws
+/// (gradients still ride the flat draw only — no effect-group off-screen
+/// partition, the documented v1 contract). `gradient_anchors` is non-decreasing
+/// (gradients are emitted in node-walk paint order, and all gradients on one
+/// node share its anchor), so the walk is a single forward sweep: draw every
+/// not-yet-drawn flat quad with blob-index `< anchor`, then the gradient, repeat,
+/// then the remaining flat quads. A gradient whose anchor falls inside a group
+/// gap (its node's quad is in an off-screen group range, not flat) draws right
+/// after the last flat quad before the gap — the existing "gradient on a grouped
+/// element" limitation, unchanged. Empty `gradient_anchors` ⇒ the steps are just
+/// the flat quad runs (byte-for-byte the pre-fix flat draw).
+///
+/// Pure (no GPU / ECS) — unit-tested headless; `node.rs` executes the returned
+/// schedule against the open render pass.
+pub fn interleave_flat_quads_and_gradients(
+    flat_ranges: &[Range<u32>],
+    gradient_anchors: &[u32],
+) -> Vec<FlatDrawStep> {
+    let mut steps: Vec<FlatDrawStep> = Vec::new();
+    // Quad cursor across the ascending, disjoint flat runs: `fi` is the current
+    // range index, `pos` the next undrawn instance index within it.
+    let mut fi = 0usize;
+    let mut pos = flat_ranges.first().map_or(0, |r| r.start);
+
+    // Push Quads steps for every not-yet-drawn flat instance with index < limit.
+    let mut emit_quads_up_to = |limit: u32, steps: &mut Vec<FlatDrawStep>| {
+        while fi < flat_ranges.len() {
+            let r = &flat_ranges[fi];
+            if pos < r.start {
+                pos = r.start; // jump the group gap to the next flat run
+            }
+            if r.start >= limit {
+                break; // this run begins at/after the limit — nothing more yet
+            }
+            let end = r.end.min(limit);
+            if pos < end {
+                steps.push(FlatDrawStep::Quads(pos..end));
+                pos = end;
+            }
+            if r.end <= limit {
+                fi += 1; // run fully drawn — advance
+            } else {
+                break; // run drawn up to the limit — resume here next time
+            }
+        }
+    };
+
+    for (gi, &anchor) in gradient_anchors.iter().enumerate() {
+        emit_quads_up_to(anchor, &mut steps);
+        let g = gi as u32;
+        // Coalesce consecutive gradients (same or non-increasing anchors) into
+        // one run so the pass binds the gradient pipeline once for the group.
+        match steps.last_mut() {
+            Some(FlatDrawStep::Gradients(run)) if run.end == g => run.end = g + 1,
+            _ => steps.push(FlatDrawStep::Gradients(g..g + 1)),
+        }
+    }
+    emit_quads_up_to(u32::MAX, &mut steps);
+    steps
+}
+
 /// The instance-range partition of a packed view (effect-compositor.md § 1.1 /
 /// decided fork 3): the flat quad blob plus, per effect group, the contiguous
 /// `[start, end)` instance range its members occupy, and the complement
@@ -273,6 +392,17 @@ pub struct PackedPartition {
     pub group_ranges: Vec<std::ops::Range<u32>>,
     /// Maximal runs of consecutive NON-group instances — the flat window draw.
     pub flat_ranges: Vec<std::ops::Range<u32>>,
+    /// `node_quad_anchors[i]` = the quad-instance-blob index immediately AFTER
+    /// input node `i`'s own solid quad (and BEFORE its spliced text quads). This
+    /// is the paint-order ANCHOR a node's background gradient draws at: the node
+    /// draws (or skips) its own quad, the gradient paints right after it, then
+    /// the node's text quads and every descendant follow. `pack_gradient_instances`
+    /// tags each gradient with its node's anchor, and `node.rs` interleaves the
+    /// gradient blob with [`flat_ranges`](Self::flat_ranges) by these — so an
+    /// ANCESTOR's gradient never overpaints a DESCENDANT's opaque fill (parity
+    /// gradient-bleed bug). One entry per input node, in node-walk (paint) order,
+    /// so it is non-decreasing.
+    pub node_quad_anchors: Vec<u32>,
 }
 
 /// Pack a view's nodes into the flat quad blob AND its per-group instance-range
@@ -317,11 +447,17 @@ pub fn pack_view_partitioned(
     }
 
     let mut p = Partitioner::new(nodes.len() + text_quads.len(), group_count);
+    let mut node_quad_anchors = Vec::with_capacity(nodes.len());
     for node in nodes {
         let g = node.group.filter(|&g| g < group_count);
         if node.color != Color::NONE {
             p.push(packed_to_raw(&pack_extracted(node)), g);
         }
+        // The gradient paint-order anchor (parity gradient-bleed fix): the
+        // instance count right AFTER this node's own quad (or its `Color::NONE`
+        // skip) and BEFORE its text quads. The node's background gradient draws
+        // here — over its own fill, under its own decorations + every descendant.
+        node_quad_anchors.push(p.len());
         // § 4.6: splice the entity's text quads IMMEDIATELY after its node
         // record, adopting the node's group — partition placement can never
         // disagree with the entity's, so contiguity holds by construction.
@@ -337,7 +473,9 @@ pub fn pack_view_partitioned(
             }
         }
     }
-    p.finish()
+    let mut partition = p.finish();
+    partition.node_quad_anchors = node_quad_anchors;
+    partition
 }
 
 /// The run bookkeeping of [`pack_view_partitioned`], hoisted out of the node
@@ -365,12 +503,21 @@ impl Partitioner {
         self.ranges.push(g);
     }
 
+    /// The number of instances pushed so far — the running quad-blob index a
+    /// gradient anchor is read from (between a node's own quad and its text quads).
+    fn len(&self) -> u32 {
+        self.instances.len() as u32
+    }
+
     fn finish(self) -> PackedPartition {
         let (group_ranges, flat_ranges) = self.ranges.finish();
         PackedPartition {
             instances: self.instances,
             group_ranges,
             flat_ranges,
+            // Filled by `pack_view_partitioned` after `finish` (it owns the
+            // per-node anchor walk); empty here keeps `Partitioner` blob-only.
+            node_quad_anchors: Vec::new(),
         }
     }
 }

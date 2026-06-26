@@ -11,8 +11,24 @@ use cosmic_text::{Fallback, FontSystem, fontdb};
 use unicode_script::Script;
 
 /// Family name the embedded default font registers under, and the target of
-/// all five generic-family pins (font-assets § 4).
+/// the serif/cursive/fantasy generic-family pins (font-assets § 4). The
+/// sans-serif and monospace generics are re-pinned to Geist / Geist Mono
+/// when those embed (parity-prototype A1).
 pub const DEFAULT_FONT_FAMILY: &str = "Fira Sans";
+
+/// The embedded Geist UI sans family name (parity-prototype A1; widget-catalog
+/// values § 4). Declared `name` ID 1 of `Geist-Variable.ttf`, matched verbatim
+/// by fontdb (`Family::Name("Geist")`). The variable `wght` axis (100–900)
+/// covers every authored weight (400/450/500/600/700) from one face —
+/// cosmic-text applies `Attrs.weight` as the `wght` coordinate
+/// (`font/system.rs` `variable_weight_match`).
+pub const GEIST_SANS_FAMILY: &str = "Geist";
+
+/// The embedded Geist Mono family name (parity-prototype A1). Declared
+/// `name` ID 1 of `GeistMono-Variable.ttf`; the target of the monospace
+/// generic pin so `GenericFamily::Monospace` resolves to a TRUE monospace
+/// (it pinned to Fira Sans before Geist Mono embedded).
+pub const GEIST_MONO_FAMILY: &str = "Geist Mono";
 
 /// The embedded deterministic default font: Fira Sans Regular, latin subset,
 /// OFL-1.1. Generated ONLY by `tools/fonts/subset_default_font.sh` (which
@@ -20,6 +36,18 @@ pub const DEFAULT_FONT_FAMILY: &str = "Fira Sans";
 /// the license ships alongside at `assets/fonts/OFL-FiraSans.txt`.
 #[cfg(feature = "default_font")]
 static DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/FiraSans-Regular-latin.ttf");
+
+/// The embedded Geist + Geist Mono variable faces (parity-prototype A1).
+/// OFL-1.1 (`assets/fonts/OFL-Geist.txt`), sourced verbatim from
+/// `vercel/geist-font` (`packages/next/dist/fonts/geist-{sans,mono}/*-Variable.ttf`).
+/// One variable face per family — the `wght` axis spans every authored weight,
+/// so no per-weight static files. The widget-catalog parity gallery authors
+/// runs as `FontFamily(["Geist"])` / `FontFamily(["Geist Mono"])` or via the
+/// monospace generic.
+#[cfg(feature = "default_font")]
+static GEIST_SANS_BYTES: &[u8] = include_bytes!("../../assets/fonts/Geist-Variable.ttf");
+#[cfg(feature = "default_font")]
+static GEIST_MONO_BYTES: &[u8] = include_bytes!("../../assets/fonts/GeistMono-Variable.ttf");
 
 /// The one cosmic-text `FontSystem`, shared across the main and render worlds
 /// (architecture § 1.1). `FontSystem` is verified `Send + Sync` in 0.19, so
@@ -119,16 +147,43 @@ pub fn registered_fonts_db() -> fontdb::Database {
     let mut db = fontdb::Database::new();
     #[cfg(feature = "default_font")]
     {
+        // Fira Sans loads FIRST so `db.faces().next()` stays the embedded
+        // default (the resolver/atlas tests key the "first face" off it) and
+        // the sans-serif generic keeps resolving to it (app-wide default
+        // unchanged — Geist is opt-in by name for the parity gallery).
         let ids = db.load_font_source(fontdb::Source::Binary(Arc::new(DEFAULT_FONT_BYTES)));
         debug_assert_eq!(ids.len(), 1, "the embedded subset is a single-face ttf");
-        // Pin ALL FIVE generic families to the embedded face so no generic
-        // ever dangles (cosmic-text's built-in defaults name fonts that are
-        // simply not in a registered-only database — font-assets § 4).
+
+        // parity-prototype A1: embed Geist (UI sans) + Geist Mono. Each is a
+        // single VARIABLE face whose `wght` axis covers every authored weight
+        // (400/450/500/600/700) — cosmic-text applies `Attrs.weight` as the
+        // `wght` coordinate (`font/system.rs` `variable_weight_match`), so one
+        // face per family suffices. `load_font_source` parses exactly one face.
+        let geist_sans = db.load_font_source(fontdb::Source::Binary(Arc::new(GEIST_SANS_BYTES)));
+        debug_assert_eq!(
+            geist_sans.len(),
+            1,
+            "Geist-Variable.ttf is a single-face ttf"
+        );
+        let geist_mono = db.load_font_source(fontdb::Source::Binary(Arc::new(GEIST_MONO_BYTES)));
+        debug_assert_eq!(
+            geist_mono.len(),
+            1,
+            "GeistMono-Variable.ttf is a single-face ttf"
+        );
+
+        // Pin ALL FIVE generic families so no generic ever dangles
+        // (font-assets § 4). Sans-serif/serif/cursive/fantasy stay on the
+        // embedded default (the established app-wide sans default is NOT
+        // changed — Geist is reached BY NAME: `Family::Name("Geist")`).
+        // Monospace re-pins to Geist Mono: it formerly pointed at Fira Sans
+        // (NOT a monospace), so `GenericFamily::Monospace` now resolves to a
+        // TRUE monospace face — the task's first-class-monospace requirement.
         db.set_sans_serif_family(DEFAULT_FONT_FAMILY);
         db.set_serif_family(DEFAULT_FONT_FAMILY);
-        db.set_monospace_family(DEFAULT_FONT_FAMILY);
         db.set_cursive_family(DEFAULT_FONT_FAMILY);
         db.set_fantasy_family(DEFAULT_FONT_FAMILY);
+        db.set_monospace_family(GEIST_MONO_FAMILY);
     }
     db
 }

@@ -36,6 +36,7 @@ fn two_node_scene(swap: bool) -> (ExtractedNodes, NameLookup) {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     };
     let tooltip = ExtractedNode {
         entity: tooltip_e,
@@ -51,6 +52,7 @@ fn two_node_scene(swap: bool) -> (ExtractedNodes, NameLookup) {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     };
     let nodes = ExtractedNodes {
         // Stored paint order is modal (bottom) then tooltip (top); the dump
@@ -129,6 +131,7 @@ fn missing_token_surfaces_as_magenta() {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     };
     let nodes = ExtractedNodes {
         nodes: vec![node],

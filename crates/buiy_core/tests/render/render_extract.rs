@@ -124,6 +124,48 @@ fn absent_background_is_transparent() {
 }
 
 #[test]
+fn resolve_background_color_prefers_animated_then_token_then_none() {
+    // Parity § 2 REFINE: `resolve_background_color` auto-composites a live
+    // `AnimatedBackgroundColor` (the crossfade a `BackgroundColorTween` writes)
+    // OVER the static `Background` token, falls back to the resolved token when
+    // no animation is present, and to `Color::NONE` (transparent) when neither
+    // is present. The extract production loop wires this per node; this pins the
+    // pure resolution priority. End-to-end wiring: render_extract_composite.rs.
+    use buiy_core::animation::AnimatedBackgroundColor;
+    use buiy_core::render::extract::resolve_background_color;
+
+    let theme = default_light_theme();
+    let bg = Background {
+        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+    };
+    let token_color = resolve_token(&bg.color, &theme);
+    let animated = AnimatedBackgroundColor(Color::srgb(0.12, 0.34, 0.56));
+    assert_ne!(
+        animated.0, token_color,
+        "test setup: animated must differ from token"
+    );
+
+    // Animated present ⇒ paint the interpolated color (token ignored).
+    assert_eq!(
+        resolve_background_color(Some(&bg), Some(&animated), &theme),
+        animated.0
+    );
+    // Animated absent ⇒ resolve the Background token.
+    assert_eq!(
+        resolve_background_color(Some(&bg), None, &theme),
+        token_color
+    );
+    // No background and no animation ⇒ transparent.
+    assert_eq!(resolve_background_color(None, None, &theme), Color::NONE);
+    // Animated present with NO background still paints the animated color (the
+    // override does not require a token to ride on).
+    assert_eq!(
+        resolve_background_color(None, Some(&animated), &theme),
+        animated.0
+    );
+}
+
+#[test]
 fn extracted_node_for_carries_clip_when_provided() {
     // The per-primitive clip AABB is threaded through extract: a `Some(clip)`
     // is carried verbatim onto the record; `None` (no clip / top-layer
@@ -170,6 +212,7 @@ fn assemble_preserves_clip_per_entity() {
             outline: None,
             border: None,
             shadows: Vec::new(),
+            gradients: Vec::new(),
         })
     });
     let clips: Vec<Option<ClipRect>> = nodes.nodes.iter().map(|n| n.clip).collect();
@@ -403,6 +446,7 @@ fn assemble_emits_in_painters_z_order() {
             outline: None,
             border: None,
             shadows: Vec::new(),
+            gradients: Vec::new(),
         })
     });
     let got: Vec<Entity> = nodes.nodes.iter().map(|n| n.entity).collect();
@@ -434,6 +478,7 @@ fn assemble_drops_skipped_entities() {
                 outline: None,
                 border: None,
                 shadows: Vec::new(),
+                gradients: Vec::new(),
             })
         }
     });
@@ -473,6 +518,7 @@ fn hit_test_order_is_paint_order_reversed() {
             outline: None,
             border: None,
             shadows: Vec::new(),
+            gradients: Vec::new(),
         })
     });
     // Paint order is painters_z forward.
@@ -537,6 +583,7 @@ fn nested_context_is_entered_atomically_at_its_parent_position() {
                 outline: None,
                 border: None,
                 shadows: Vec::new(),
+                gradients: Vec::new(),
             })
         },
         &mut out,
@@ -589,6 +636,7 @@ fn tree_assembly_skips_dropped_entities_across_the_boundary() {
                     outline: None,
                     border: None,
                     shadows: Vec::new(),
+                    gradients: Vec::new(),
                 })
             }
         },

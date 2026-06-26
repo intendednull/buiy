@@ -27,6 +27,7 @@
 //! ratified): 2026-06-06-render-subtree-visibility-suppression-design.md.
 
 use crate::components::Node;
+use crate::layout::Display;
 use crate::render::clip::reconcile_one;
 use bevy::prelude::*;
 
@@ -41,14 +42,26 @@ use crate::render::components::{CssVisibility, OffscreenAuto};
 /// `None` => the entity introduces no suppression of its own (it may still be
 /// inside an ancestor's suppressed subtree — that is the walk's job, not this
 /// predicate's). Inputs are bound as `Option<&T>` / `bool` exactly as the
-/// walk's input fan binds them. Precedence (first match wins): render-owned
-/// `CssVisibility::Hidden`, then `OffscreenAuto`. `content-visibility: hidden`
-/// is deliberately NOT consulted here — the Hidden entity's own box paints
-/// (§ 5.2) and its descendants are pruned layout-side.
+/// walk's input fan binds them. Precedence (first match wins): `Display::None`
+/// (the strongest — no box at all), then render-owned `CssVisibility::Hidden`,
+/// then `OffscreenAuto`. `content-visibility: hidden` is deliberately NOT
+/// consulted here — the Hidden entity's own box paints (§ 5.2) and its
+/// descendants are pruned layout-side.
+///
+/// `Display::None` is consulted because a runtime-applied `display:none` keeps
+/// its descendants' Taffy nodes (laid out collapsed at the origin), so they
+/// retain a `ResolvedLayout` the GPU extract would otherwise paint — the
+/// header-artifact bug. The sibling `write_clip_rects` pass already prunes
+/// `Display::None` subtrees the same way (clip.rs § A.3); this keeps the two
+/// render-prep walks symmetric. See [`SkipReason::DisplayNone`].
 pub fn node_skip_reason(
+    display: Option<&Display>,
     css_visibility: Option<&CssVisibility>,
     offscreen_auto: bool,
 ) -> Option<SkipReason> {
+    if matches!(display, Some(Display::None)) {
+        return Some(SkipReason::DisplayNone);
+    }
     if matches!(css_visibility, Some(CssVisibility::Hidden)) {
         return Some(SkipReason::CssHidden);
     }
@@ -58,10 +71,14 @@ pub fn node_skip_reason(
     None
 }
 
-/// The per-entity suppression inputs the walk reads (the two § 5.3/§ 5.4
+/// The per-entity suppression inputs the walk reads (the § 5.1/§ 5.3/§ 5.4
 /// skip carriers). A `type` alias keeps the `Query` signature readable,
 /// matching the sibling `ClipNodeData` in `render::clip`.
-type SkipInputs<'w> = (Option<&'w CssVisibility>, Option<&'w OffscreenAuto>);
+type SkipInputs<'w> = (
+    Option<&'w Display>,
+    Option<&'w CssVisibility>,
+    Option<&'w OffscreenAuto>,
+);
 
 /// Render-prep — computes the subtree-scoped [`ComputedPaintSkip`] marker by
 /// a top-down `Children` walk (§ 5.3 / § 5.4): every entity inside a
@@ -97,12 +114,15 @@ pub fn write_paint_skip(
     existing: Query<Option<&ComputedPaintSkip>>,
     // Seed probe: did any suppression input or hierarchy link change this
     // frame? `Changed<T>` includes `Added<T>`, so a freshly-spawned hidden
-    // root or a child newly parented under one seeds the walk.
+    // root or a child newly parented under one seeds the walk. `Display` is in
+    // the set so a runtime `Display::None` flip (the screen-router toggle that
+    // produced the header-artifact bug) re-marks the now-hidden subtree.
     seeds: Query<
         (),
         (
             With<Node>,
             Or<(
+                Changed<Display>,
                 Changed<CssVisibility>,
                 Changed<OffscreenAuto>,
                 Changed<Children>,
@@ -110,10 +130,13 @@ pub fn write_paint_skip(
             )>,
         ),
     >,
-    // Removals — the seeds `Changed` cannot see: dropping the CssVisibility /
-    // OffscreenAuto component un-hides a subtree, and a hierarchy detach
-    // (child pulled out to become a root, last child leaving a parent) must
-    // clear stale markers. Drained every frame so the cursors never lag.
+    // Removals — the seeds `Changed` cannot see: dropping the Display /
+    // CssVisibility / OffscreenAuto component un-hides a subtree, and a
+    // hierarchy detach (child pulled out to become a root, last child leaving
+    // a parent) must clear stale markers. Drained every frame so the cursors
+    // never lag. (`Display` is `#[require]`d on every `Node`, so its removal
+    // is rare — but draining the cursor keeps the seed contract complete.)
+    mut removed_display: RemovedComponents<Display>,
     mut removed_vis: RemovedComponents<CssVisibility>,
     mut removed_offscreen: RemovedComponents<OffscreenAuto>,
     mut removed_child_of: RemovedComponents<ChildOf>,
@@ -122,7 +145,8 @@ pub fn write_paint_skip(
     // Drain ALL removal cursors before the early-out (the cursor-advance
     // idiom extract's despawn stream uses) — a removal this frame must seed
     // the walk, and an un-drained cursor would replay stale events later.
-    let removal_seeded = removed_vis.read().count() > 0
+    let removal_seeded = removed_display.read().count() > 0
+        || removed_vis.read().count() > 0
         || removed_offscreen.read().count() > 0
         || removed_child_of.read().count() > 0
         || removed_children.read().count() > 0;
@@ -160,11 +184,11 @@ fn walk(
     // A non-Node entity in the Children tree is not a Buiy node — skip it and
     // its subtree (paint suppression applies to the Buiy node tree), matching
     // the clip walk's boundary rule.
-    let Ok((css_vis, offscreen)) = inputs.get(entity) else {
+    let Ok((display, css_vis, offscreen)) = inputs.get(entity) else {
         return;
     };
 
-    let own = node_skip_reason(css_vis, offscreen.is_some());
+    let own = node_skip_reason(display, css_vis, offscreen.is_some());
     let effective = own.or(inherited);
 
     let prev = existing.get(entity).unwrap_or(None);
@@ -189,9 +213,10 @@ mod tests {
     // Helper mirroring what the walk binds per entity: Option of each skip
     // input. The same shape the old extract-side leaf predicate had — the
     // predicate moved producer-side unchanged when the computed marker became
-    // extract's single skip source.
+    // extract's single skip source. `display = None` here means "no Display
+    // override" (a default-`Block` node), not `Display::None`.
     fn skip(css_vis: Option<CssVisibility>, offscreen: bool) -> Option<SkipReason> {
-        node_skip_reason(css_vis.as_ref(), offscreen)
+        node_skip_reason(None, css_vis.as_ref(), offscreen)
     }
 
     #[test]
@@ -236,6 +261,37 @@ mod tests {
         assert_eq!(
             skip(Some(CssVisibility::Hidden), true),
             Some(SkipReason::CssHidden)
+        );
+    }
+
+    #[test]
+    fn display_none_roots_a_suppressed_subtree() {
+        // A runtime-applied `Display::None` keeps its descendants' Taffy nodes
+        // (collapsed at the origin), so they retain a `ResolvedLayout` the GPU
+        // extract would paint — `Display::None` must root a paint-skip.
+        assert_eq!(
+            node_skip_reason(Some(&Display::None), None, false),
+            Some(SkipReason::DisplayNone)
+        );
+    }
+
+    #[test]
+    fn display_block_or_flex_is_not_a_paint_skip() {
+        // Only `Display::None` suppresses; a displayed box paints normally.
+        assert_eq!(node_skip_reason(Some(&Display::Block), None, false), None);
+        assert_eq!(
+            node_skip_reason(Some(&Display::flex_row()), None, false),
+            None
+        );
+    }
+
+    #[test]
+    fn display_none_takes_precedence_over_css_hidden_and_offscreen() {
+        // `Display::None` is the strongest suppression (no box at all), so its
+        // reason wins for the marker even when other inputs also suppress.
+        assert_eq!(
+            node_skip_reason(Some(&Display::None), Some(&CssVisibility::Hidden), true),
+            Some(SkipReason::DisplayNone)
         );
     }
 }

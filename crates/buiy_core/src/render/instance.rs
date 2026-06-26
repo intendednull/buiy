@@ -338,3 +338,117 @@ pub fn border_band_stride_agrees() -> bool {
     BORDER_BAND_INSTANCE_STRIDE_BYTES == std::mem::size_of::<BorderBandInstance>()
         && BORDER_BAND_INSTANCE_STRIDE_BYTES == 48 * std::mem::size_of::<f32>()
 }
+
+/// Gradient instance-kind discriminant (the `params.x` flag the gradient shader
+/// branches on). `Linear` is the only kind the design uses; `Radial` is the
+/// seam B2 (dotted-grid pattern) fills the shader branch for.
+pub const GRADIENT_KIND_LINEAR: f32 = 0.0;
+/// Radial gradient kind (B2 seam — distance-to-center). Reserved here so the
+/// instance + pipeline + shader carry the flag in B1; B1 only paints `Linear`.
+pub const GRADIENT_KIND_RADIAL: f32 = 1.0;
+
+/// Stride of [`GradientInstance`] in bytes (the gradient quad-variant record).
+/// MUST match the per-instance `array_stride` the gradient pipeline declares in
+/// `BuiyGradientPipeline::gradient_vertex_buffers` and the `@location`-bound
+/// fields of `gradient.wgsl`. Computed from the struct so the two can never
+/// disagree (asserted by [`gradient_stride_agrees`]).
+pub const GRADIENT_INSTANCE_STRIDE_BYTES: usize = std::mem::size_of::<GradientInstance>();
+
+/// The gradient quad-variant instance — a record DISTINCT from [`PackedInstance`]
+/// (NOT a stride bump on the 68 B quad), exactly like [`BorderBandInstance`]: its
+/// own [`bevy::render::render_resource::RawBufferVec`], its own
+/// `VertexBufferLayout`, its own shader (`gradient.wgsl`), painted through a
+/// dedicated gradient pipeline in the quad paint slot. The no-gradient quad path
+/// is UNTOUCHED — `PackedInstance` stays byte-identical `[f32;17]`, so R1/R2
+/// byte-stability holds and a 1000-quad scene carries ZERO gradient bytes.
+///
+/// **Two-stop fast path.** The widget-catalog design only ever uses 2-stop
+/// linear gradients, so the record inlines exactly 2 resolved (CPU-linearized)
+/// stop colors + their normalized positions — no variable-length stop buffer.
+/// A future N-stop need extends the record (or adds a stop SSBO) without
+/// disturbing the 2-stop path.
+///
+/// **CPU-precomputed axis.** The shader does NO trig: the CPU resolves the CSS
+/// angle to a unit gradient-axis direction in the box's y-DOWN fragment space
+/// (`axis = (sinθ, -cosθ)` — CSS `0deg` points up / y-up, flipped to y-down) and
+/// the gradient-line length (`|W·sinθ| + |H·cosθ|`). The fragment projects its
+/// box-local centered point onto the axis: `t = 0.5 + dot(p, axis)/line_len`,
+/// then interpolates the 2 stops by `t`.
+///
+/// Spec: docs/specs/2026-06-25-widget-catalog-parity-design.md § 3.2;
+/// docs/specs/2026-06-25-widget-catalog-values.md § 8.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct GradientInstance {
+    /// Box top-left, logical px (the fill box origin — `ExtractedNode.position`).
+    pub rect_pos: [f32; 2],
+    /// Box size, logical px (positive) — `ResolvedLayout.size`.
+    pub rect_size: [f32; 2],
+    /// Stop 0 resolved linear RGBA (CPU-pre-linearized — the gradient START,
+    /// position `stops[0]`).
+    pub color0: [f32; 4],
+    /// Stop 1 resolved linear RGBA (the gradient END, position `stops[1]`).
+    pub color1: [f32; 4],
+    /// The two stop positions `[pos0, pos1]` (normalized `0..1` along the
+    /// gradient line). For the design's 2-stop gradients this is `[0, 1]`.
+    pub stops: [f32; 2],
+    /// CPU-precomputed unit gradient axis in the box's y-DOWN fragment space
+    /// `[ax, ay] = [sinθ, -cosθ]` (the direction from the 0%-stop end toward the
+    /// 100%-stop end). Linear gradients only; ignored by the radial branch.
+    pub axis: [f32; 2],
+    /// `params = [kind, line_len]`: the gradient-kind flag
+    /// ([`GRADIENT_KIND_LINEAR`] / [`GRADIENT_KIND_RADIAL`]) and the
+    /// CPU-precomputed CSS gradient-line length `|W·sinθ| + |H·cosθ|` (linear) /
+    /// the max radius (radial, B2).
+    pub params: [f32; 2],
+    /// Clip AABB min in logical px (same space as
+    /// [`crate::render::components::ClipRect`]); `[-INFINITY; 2]` = full-view
+    /// sentinel (unclipped / top-layer).
+    pub clip_min: [f32; 2],
+    /// Clip AABB max in logical px; `[+INFINITY; 2]` = full-view sentinel.
+    pub clip_max: [f32; 2],
+    /// The 2D affine basis `[m00, m10, m01, m11]` — the gradient box rides the
+    /// SAME transform path as the fill so a rotated/scaled element's gradient
+    /// stays aligned. Identity `[1, 0, 0, 1]` paints axis-aligned.
+    pub affine: [f32; 4],
+}
+
+/// Pack one [`ExtractedGradient`](crate::render::extract::ExtractedGradient) into
+/// a [`GradientInstance`]. The colors are already CPU-linearized and the axis /
+/// line-length already CPU-computed by the extract producer
+/// ([`resolve_gradients`](crate::render::extract::resolve_gradients)); this is a
+/// pure field copy (the clip sentinel + affine flatten mirror `pack_outline` /
+/// `pack_shadow`).
+pub fn pack_gradient(g: &crate::render::extract::ExtractedGradient) -> GradientInstance {
+    let (clip_min, clip_max) = match g.clip {
+        Some(c) => ([c.min.x, c.min.y], [c.max.x, c.max.y]),
+        None => (CLIP_SENTINEL_MIN, CLIP_SENTINEL_MAX),
+    };
+    GradientInstance {
+        rect_pos: [g.rect_pos.x, g.rect_pos.y],
+        rect_size: [g.rect_size.x, g.rect_size.y],
+        color0: g.color0,
+        color1: g.color1,
+        stops: g.stops,
+        axis: g.axis,
+        params: [g.kind, g.line_len],
+        clip_min,
+        clip_max,
+        affine: [
+            g.affine[0][0],
+            g.affine[0][1],
+            g.affine[1][0],
+            g.affine[1][1],
+        ],
+    }
+}
+
+/// `true` iff [`GRADIENT_INSTANCE_STRIDE_BYTES`] equals the actual
+/// [`GradientInstance`] size and the value the gradient pipeline declares
+/// (26 f32 = 104 B). The parallel of [`border_band_stride_agrees`] for the
+/// distinct gradient record.
+pub fn gradient_stride_agrees() -> bool {
+    // 2 + 2 + 4 + 4 + 2 + 2 + 2 + 2 + 2 + 4 = 26 f32 = 104 B.
+    GRADIENT_INSTANCE_STRIDE_BYTES == std::mem::size_of::<GradientInstance>()
+        && GRADIENT_INSTANCE_STRIDE_BYTES == 26 * std::mem::size_of::<f32>()
+}

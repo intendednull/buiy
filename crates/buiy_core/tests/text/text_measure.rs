@@ -14,7 +14,8 @@ use buiy_core::layout::{
     Length, QueryCondition, Sizing, Style,
 };
 use buiy_core::text::{
-    BuiyTextPlugin, SharedFontSystem, Text, TextBuffer, TextMeasureCallCount, WhiteSpace,
+    BuiyTextPlugin, FontSize, LetterSpacing, SharedFontSystem, Text, TextBuffer,
+    TextMeasureCallCount, WhiteSpace,
 };
 use buiy_core::{CorePlugin, Node, ResolvedLayout};
 use cosmic_text::{Attrs, Buffer, Metrics, Shaping};
@@ -330,6 +331,89 @@ fn preserved_tabs_advance_intrinsic_width() {
         .intrinsics()
         .unwrap();
     assert!(tabbed_intr.max_content > plain_intr.max_content);
+}
+
+/// A `LetterSpacing(px)` leaf, sized to a parent wide enough that nothing
+/// wraps, whose unwrapped `max_content` width.
+fn spacing_max_content(app: &mut App, content: &str, font_px: f32, tracking: Option<f32>) -> f32 {
+    let mut entity = app.world_mut().spawn((
+        Node,
+        Style::default(),
+        Text(String::from(content)),
+        FontSize(font_px),
+        // Keep it one line so max_content is the full shaped width.
+        WhiteSpace::Pre,
+    ));
+    if let Some(px) = tracking {
+        entity.insert(LetterSpacing(px));
+    }
+    let leaf = entity.id();
+    let parent = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_row()
+                .align_items(AlignItems::FlexStart)
+                .width_px(4000.0)
+                .height_px(200.0),
+        ))
+        .id();
+    app.world_mut().entity_mut(parent).add_child(leaf);
+    settle(app);
+
+    app.world()
+        .get::<TextBuffer>(leaf)
+        .unwrap()
+        .intrinsics()
+        .expect("first measure caches intrinsics")
+        .max_content
+}
+
+/// parity-prototype A1 (the C3 letter-spacing bug fix): `LetterSpacing(px)`
+/// is **logical px** — its on-screen tracking is independent of font size.
+/// cosmic-text 0.19's `Attrs::letter_spacing` is **em** (`shape.rs` adds it to
+/// the em-unit advance, then multiplies by font-size at width time), so the
+/// lowering divides by font-size (`px / font_size`). This pins the contract:
+/// the EXTRA width `LetterSpacing(2.0)` adds is the SAME at 10 px and at 30 px
+/// (the buggy raw-px lowering made it 3× larger at 30 px — the "S C R E E N S"
+/// sprawl). Asserts a relation (delta-at-10 == delta-at-30), never a font
+/// constant — the measure-test style (header).
+#[test]
+fn letter_spacing_adds_the_same_px_tracking_at_every_font_size() {
+    let mut app = text_app();
+    // A single word (no internal spaces) so max_content == the whole shaped run
+    // and Wrap can never split it; 6 glyphs.
+    let word = "tracks";
+    let tracking = 2.0_f32;
+
+    let plain_10 = spacing_max_content(&mut app, word, 10.0, None);
+    let spaced_10 = spacing_max_content(&mut app, word, 10.0, Some(tracking));
+    let plain_30 = spacing_max_content(&mut app, word, 30.0, None);
+    let spaced_30 = spacing_max_content(&mut app, word, 30.0, Some(tracking));
+
+    let delta_10 = spaced_10 - plain_10;
+    let delta_30 = spaced_30 - plain_30;
+
+    // The added tracking is purely the letter-spacing contribution: the glyph
+    // advances are identical between the plain/spaced runs at a fixed size, so
+    // the delta is `tracking_px × glyph_count` and depends ONLY on px — NOT on
+    // font size. Equal at 10 px and 30 px to within rasterization rounding.
+    assert!(
+        delta_10 > 0.0,
+        "LetterSpacing(2.0) must add tracking, got delta {delta_10} @ 10 px"
+    );
+    assert!(
+        (delta_10 - delta_30).abs() < 0.05,
+        "px-not-em: the tracking LetterSpacing(2.0) adds must be the SAME at \
+         10 px and 30 px — got {delta_10} @ 10 px vs {delta_30} @ 30 px \
+         (a 3× gap here would mean the buggy em lowering is back)"
+    );
+    // And it is a meaningful amount (6 glyphs × 2 px ≈ 10–12 px), not a no-op.
+    assert!(
+        delta_10 > 6.0,
+        "6 glyphs × 2 px of tracking should add ~10 px, got {delta_10}"
+    );
 }
 
 /// Charter risk 2 — `shape_until_scroll(fs, false)` with `height_opt =

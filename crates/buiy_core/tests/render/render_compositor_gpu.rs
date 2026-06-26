@@ -64,12 +64,13 @@ fn compositor_register_adds_no_extra_core2d_pass() {
 // Number of systems `BuiyRenderPlugin` adds to the `Render` schedule:
 // `prepare_buiy_instances` (render/mod.rs), `prepare_buiy_view_pipelines`
 // (render/pipeline.rs — per-view format+Msaa pipeline specialization),
-// `prepare_effect_groups` (render/compositor.rs `register`), and
-// `prepare_atlas_textures` (atlas/mod.rs `register`), all
+// `prepare_effect_groups` (render/compositor.rs `register`),
+// `prepare_atlas_textures` (atlas/mod.rs `register`), and
+// `prepare_backdrop_blurs` (render/blur.rs `register` — parity Wave B4), all
 // `.in_set(RenderSystems::Prepare)` and queued in `build`.
 // Mirrors `BUIY_RENDER_SYSTEM_COUNT` in tests/render_prepare.rs; bump in
 // lockstep whenever the plugin's `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 4;
+const BUIY_RENDER_SYSTEM_COUNT: usize = 5;
 
 // Count the systems in a RenderApp's `Render` schedule graph. `graph().systems`
 // is populated at `add_systems` time (in `build`), so this is pure introspection
@@ -125,9 +126,9 @@ fn prepare_effect_groups_runs_in_prepare_set() {
         with_plugin_count - baseline_count,
         BUIY_RENDER_SYSTEM_COUNT,
         "BuiyRenderPlugin must register {BUIY_RENDER_SYSTEM_COUNT} systems in the \
-         Render schedule (prepare_buiy_instances + prepare_effect_groups); got a \
-         delta of {} — a missing add_systems(Render, prepare_effect_groups…) in \
-         render/compositor.rs `register`",
+         Render schedule (prepare_buiy_instances + prepare_effect_groups + \
+         prepare_backdrop_blurs + …); got a delta of {} — a missing \
+         add_systems(Render, …) in render/compositor.rs or render/blur.rs `register`",
         with_plugin_count - baseline_count,
     );
     // The set-membership (RenderSystems::Prepare) is pinned by register() and

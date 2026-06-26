@@ -37,11 +37,36 @@ pub use buiy_core::{
     scroll::{ScrollExtent, ScrollInputPlugin},
     text::{
         BuiyTextPlugin, ComputedTextLayout, ComputedTextLine, FamilyEntry, FontFamily, FontSize,
-        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, LineHeight,
-        ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer, TextCommitReshapeCount,
-        TextMeasureCallCount, TextStyleDefaults, TextSyncAppliedCount, TextWrap, WhiteSpace,
+        FontStack, FontWeight, FontsGeneration, GenericFamily, IntrinsicWidths, LetterSpacing,
+        LineHeight, ResolvedBaseline, SharedFontSystem, Text, TextAlign, TextBuffer,
+        TextCommitReshapeCount, TextMeasureCallCount, TextStyleDefaults, TextSyncAppliedCount,
+        TextWrap, WhiteSpace,
     },
-    theme::{Theme, UserPreferences, default_light_theme},
+    theme::{SetAccent, Theme, UserPreferences, default_light_theme},
+};
+// Foundation primitives promoted to the crate root (→ `buiy::prelude` below).
+// Animation: the `Tween<T>` per-property model + `Easing` curve enum + the
+// `Repeat` loop control (`Once`/`Loop`/`PingPong` — the blink/pulse status dots
+// the values table marks `infinite` need it) + the per-property tween
+// *components* a `bsn!` author attaches to a node
+// (`TranslateTween`/`RotateTween`/`ScaleTween`/`OpacityTween`/
+// `BackgroundColorTween`) and the `AnimatedBackgroundColor` color marker. These
+// are everyday authoring primitives (widget-catalog parity § 3.3 / spec § 2
+// REFINE prelude promotions), so they belong next to the other component surface.
+pub use buiy_core::animation::{
+    AnimatedBackgroundColor, BackgroundColorTween, Easing, OpacityTween, Repeat, RotateTween,
+    ScaleTween, TranslateTween, Tween,
+};
+// The gradient + vector-icon render primitives the Widget-Catalog parity work
+// added (spec § 2 REFINE prelude promotions): the layered-background fan
+// (`BackgroundLayers`/`BackgroundLayer` + `LinearGradient`/`RadialGradient`/
+// `ColorStop`) and the `Icon` vector glyph. The gallery is the first real
+// consumer and proved these are everyday authoring primitives (the logo
+// gradient, the dotted-grid canvas, the 25-icon catalog), so they join the
+// component surface next to `Background`/`Border` rather than living buried in
+// `buiy_core::render::components`.
+pub use buiy_core::render::components::{
+    BackgroundLayer, BackgroundLayers, ColorStop, Icon, LinearGradient, RadialGradient,
 };
 // The editor's seed/set channel is the existing `EditCommand` verbs (`Insert`,
 // `SelectAll` + `Insert` — no `SetValue` variant; the `EditCommand` surface is
@@ -53,6 +78,19 @@ pub use buiy_widgets::{
     Button, Checkbox, Dialog, Disclosure, LightDismiss, Menu, MenuButton, MenuItem, OnPress,
     Popover, PopoverAlign, PopoverPlacement, PopoverSide, ScrollArea, Slider, Switch, TextInput,
     TooltipTrigger, WidgetsPlugin, dialog_invoker,
+};
+// The general composite builders (widget-catalog parity § 2 REFINE — "promote the
+// genuinely-general composites to `buiy_widgets`"): imperative `World`-spawning
+// trees that compose the primitive widgets/render components into a recognizable
+// higher-level control (a progress `meter`, a `table_row`/`table_header`, a
+// `search_input`, a `kbd` chip, a `status_dot` + its `pulse_blink`). They are
+// font-NEUTRAL (each text-bearing builder takes a `FontFamily` — the app owns its
+// typeface), so they fold into the prelude next to the widget surface for any app,
+// not just the gallery they were extracted from.
+pub use buiy_widgets::composites::{
+    CMD_GLYPH_ICON, MeterFill, RowSelBar, TableRow, TableRowData, kbd, kbd_content, meter,
+    pulse_blink, search_input, set_meter, set_table_row_selected, status_dot, table_header,
+    table_row,
 };
 // Widget BSN scene-fns (the mergeable styled-authoring path): `button(label)`,
 // `checkbox(label)`, `switch(label)`, `slider(label, now, min, max, step)`,
@@ -237,6 +275,10 @@ impl Plugin for BuiyPlugin {
             // shared FontSystem + the FontsGeneration reshape trigger.
             // System-font scan stays opt-in/off in the composed default.
             buiy_core::text::BuiyTextPlugin::default(),
+            // Tween registry (widget-catalog parity § 3.3 / § 8): the per-property
+            // tween-update systems wired into the existing `BuiySet::Animate`.
+            // Added before `WidgetsPlugin` since widgets spawn tweens.
+            buiy_core::animation::AnimationPlugin,
             WidgetsPlugin,
             // The render plugin is added in `build`, NOT `finish`: Bevy's
             // `App::finish` iterates `0..plugin_registry.len()` with the length
@@ -250,6 +292,69 @@ impl Plugin for BuiyPlugin {
             // come AFTER `DefaultPlugins`, so the `RenderApp` already exists;
             // without one (headless tests) the plugin's own guard no-ops its
             // render half.
+            buiy_core::render::BuiyRenderPlugin,
+        ));
+    }
+}
+
+/// The **headless render subset** of the Buiy stack: everything needed to lay out,
+/// shape, and *paint* a UI tree to an offscreen target, with **no winit window and
+/// no picking** (no live pointer input). It composes exactly the data-and-render
+/// sub-plugins — `core` · `theme` · `a11y` · `focus` · `layout` · `text` · `widgets`
+/// · `render` — and deliberately omits:
+///
+/// - **winit / OS bridges:** `PointerInputPlugin` (the winit cursor reader) and
+///   `AccessKitAdapterPlugin` (the OS-accessibility bridge) — both need a real
+///   window. The in-process a11y *tree* (`A11yPlugin`) is kept; only the OS adapter
+///   is dropped.
+/// - **picking:** `bevy::picking::PickingPlugin` + Buiy's `PickingPlugin` /
+///   `BuiyPickingBackendPlugin` — a static capture forces widget state directly
+///   instead of routing pointer hits.
+/// - **runtime interaction:** `ScrollInputPlugin` and `AnimationPlugin` — not needed
+///   to paint a single settled frame. A capture that wants tween motion (e.g. a
+///   progress meter ramp) adds [`buiy_core::animation::AnimationPlugin`] on top.
+///
+/// This is the production replacement for the hand-rolled, drift-prone ~8-line
+/// plugin list the offscreen capture bins used to maintain (widget-catalog parity
+/// § 2 REDESIGN). The plugin order mirrors [`BuiyPlugin`]'s canonical order with the
+/// excluded plugins removed.
+///
+/// # Required Bevy plugins
+///
+/// `BuiyHeadlessPlugin` is the *Buiy* subset only; the caller composes the headless
+/// **Bevy** stack itself (and adds it BEFORE this plugin so the `RenderApp` exists
+/// when `BuiyRenderPlugin::build` runs — the same "after the render plugin" contract
+/// [`BuiyPlugin`] documents). A minimal offscreen harness adds, in order:
+/// `MinimalPlugins`, a sized `WindowPlugin`, `AssetPlugin`, `ScenePlugin`,
+/// `RenderPlugin`, `ImagePlugin`, `CameraPlugin`, `CorePipelinePlugin`, and
+/// `bevy::input::InputPlugin` (the focus/keymap systems read
+/// `Res<ButtonInput<KeyCode>>`), then `BuiyHeadlessPlugin`.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy::BuiyHeadlessPlugin;
+///
+/// App::new()
+///     .add_plugins(MinimalPlugins)
+///     // … the offscreen Bevy render stack (RenderPlugin, CameraPlugin, …) …
+///     .add_plugins(bevy::input::InputPlugin)
+///     .add_plugins(BuiyHeadlessPlugin)
+///     .run();
+/// ```
+pub struct BuiyHeadlessPlugin;
+
+impl Plugin for BuiyHeadlessPlugin {
+    fn build(&self, app: &mut App) {
+        // The subset of `BuiyPlugin`'s composition that paints a frame, in the same
+        // relative order, minus winit/picking/scroll/animation (see the type doc).
+        app.add_plugins((
+            CorePlugin,
+            buiy_core::theme::ThemePlugin,
+            buiy_core::a11y::A11yPlugin,
+            buiy_core::focus::FocusPlugin,
+            buiy_core::layout::LayoutPlugin,
+            buiy_core::text::BuiyTextPlugin::default(),
+            WidgetsPlugin,
             buiy_core::render::BuiyRenderPlugin,
         ));
     }

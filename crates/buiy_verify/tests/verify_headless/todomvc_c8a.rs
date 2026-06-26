@@ -8,9 +8,9 @@
 //! real synthetic `Pointer<Click>` — pointer + keyboard + AT converge on the one
 //! `A11yToggled` advance.
 //!
-//! The screen + its app logic are `buiy_gallery::{screen_todomvc, TodoMvcPlugin}`
-//! (pure composition over the landed P1d widgets). This test is the live gate;
-//! the static layout snapshot lives in `examples/buiy_gallery/tests`.
+//! The screen + its app logic are `buiy_gallery::{spawn_todomvc_screen,
+//! TodoMvcPlugin}` (pure composition over the landed P1d widgets). This test is the
+//! live gate; the static layout snapshot lives in `examples/buiy_gallery/tests`.
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -23,7 +23,9 @@ use buiy_core::a11y::{
 use buiy_core::a11y::{A11yToggled, Toggled};
 use buiy_core::focus::{FocusPlugin, FocusedEntity};
 use buiy_core::text::BuiyTextPlugin;
-use buiy_gallery::{DEMO_SEEDS, TodoMvcPlugin, append_row, items_left_text, screen_todomvc};
+use buiy_gallery::{
+    DEMO_SEEDS, TodoMvcPlugin, append_row, items_left_utterance, spawn_todomvc_screen,
+};
 use buiy_widgets::WidgetsPlugin;
 
 // ===========================================================================
@@ -54,10 +56,8 @@ fn todomvc_app(seed: bool) -> App {
     app.add_message::<KeyboardInput>();
     app.init_resource::<ButtonInput<KeyCode>>();
 
-    // Spawn the screen (the static tree); seed the demo rows imperatively if asked.
-    app.world_mut()
-        .spawn_scene(screen_todomvc(DEMO_SEEDS))
-        .expect("spawn the todomvc screen");
+    // Build the screen frame; seed the demo rows imperatively if asked.
+    spawn_todomvc_screen(app.world_mut());
     if seed {
         for &(label, completed) in DEMO_SEEDS {
             append_row(app.world_mut(), label, completed);
@@ -118,7 +118,7 @@ fn driver_add_todo_via_set_value_then_enter_appends_a_row() {
     assert_eq!(before, 0, "no rows before add (read through the a11y tree)");
     assert_eq!(
         items_left(&mut app).as_deref(),
-        Some(items_left_text(0).as_str())
+        Some(items_left_utterance(0).as_str())
     );
 
     // get_by_role(TextInput) — strict single match (the add-field).
@@ -251,7 +251,7 @@ fn driver_click_destroy_removes_the_row_from_the_tree() {
 }
 
 // ===========================================================================
-// 4. CLEAR-COMPLETED — driver click "Clear completed" → done rows leave the tree
+// 4. CLEAR-COMPLETED — driver click "Clear done" → done rows leave the tree
 // ===========================================================================
 
 #[test]
@@ -262,13 +262,8 @@ fn driver_clear_completed_removes_only_done_rows() {
     let tree = snapshot(app.world_mut(), TreeView::default());
     assert!(has_checkbox_named(&tree, "Taste BSN authoring"));
 
-    let clear = get_by_role(
-        app.world_mut(),
-        A11yRole::Button,
-        Some("Clear completed"),
-        None,
-    )
-    .expect("the clear-completed button");
+    let clear = get_by_role(app.world_mut(), A11yRole::Button, Some("Clear done"), None)
+        .expect("the clear-done button");
     click(app.world_mut(), clear).expect("AT click on clear honored");
     app.update();
 
@@ -285,7 +280,7 @@ fn driver_clear_completed_removes_only_done_rows() {
 }
 
 // ===========================================================================
-// 5. FILTER — driver click "Active"/"Completed"/"All" → the tree prunes/restores
+// 5. FILTER — driver click "Active"/"Done"/"All" → the tree prunes/restores
 // ===========================================================================
 
 #[test]
@@ -306,10 +301,10 @@ fn driver_filter_prunes_and_restores_rows_in_the_tree() {
     );
     assert!(!has_checkbox_named(&tree, "Taste BSN authoring"));
 
-    // Filter → Completed: only the completed row is present.
-    let completed =
-        get_by_role(app.world_mut(), A11yRole::Button, Some("Completed"), None).unwrap();
-    click(app.world_mut(), completed).expect("filter Completed honored");
+    // Filter → Done: only the completed row is present (the design labels the
+    // "completed" filter "Done").
+    let completed = get_by_role(app.world_mut(), A11yRole::Button, Some("Done"), None).unwrap();
+    click(app.world_mut(), completed).expect("filter Done honored");
     app.update();
     let tree = snapshot(app.world_mut(), TreeView::default());
     assert_eq!(
@@ -463,9 +458,7 @@ fn synthetic_pointer_click_flips_the_same_row_toggle() {
 
     // Spawn a real gallery row, give its checkbox an absolute box (the basis
     // `emit_picks` reads), and aim a synthetic pointer at its center.
-    app.world_mut()
-        .spawn_scene(screen_todomvc(DEMO_SEEDS))
-        .expect("spawn screen");
+    spawn_todomvc_screen(app.world_mut());
     let row = append_row(app.world_mut(), "Compose the P1d widgets", false);
     let checkbox = app
         .world()

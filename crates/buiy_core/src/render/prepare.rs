@@ -33,13 +33,14 @@ use std::ops::Range;
 
 use crate::render::atlas::GlyphAlphaInstance;
 use crate::render::buckets::{
-    pack_band_instances, pack_shadow_instances, pack_view, pack_view_partitioned,
-    partition_glyph_ranges,
+    pack_band_instances, pack_gradient_instances, pack_shadow_instances, pack_view,
+    pack_view_partitioned, partition_glyph_ranges,
 };
 use crate::render::extract::{
     ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads,
 };
-use crate::render::instance::BorderBandInstance;
+use crate::render::icon_producer::ExtractedIcons;
+use crate::render::instance::{BorderBandInstance, GradientInstance};
 use crate::render::view_uniform::BuiyViewUniform;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
@@ -100,6 +101,16 @@ pub struct BuiyInstanceBuffers {
     /// `ShaderType`, so it rides the raw, CPU-readable vertex path. Grows in
     /// place; the node draws it after the quad draw (paint order glyph > quad).
     pub glyph: RawBufferVec<GlyphAlphaInstance>,
+    /// Vector-ICON coverage instances (parity Wave B3). A
+    /// `RawBufferVec<GlyphAlphaInstance>` — an icon record IS a
+    /// `GlyphAlphaInstance` (R8 coverage + per-instance tint), so it rides the
+    /// EXACT same raw-vertex path and the EXACT same coverage pipeline + atlas
+    /// bind group as `glyph`, drawn through a SEPARATE buffer/draw only so the
+    /// wholesale-rebuilt glyph carrier stays decoupled from the icon carrier
+    /// (§ 3.5; no new GPU shader). Grows in place; the node draws it right after
+    /// the glyph draw (both coverage tier). Gated on its OWN `ExtractedIcons`
+    /// change signal, independent of the glyph/quad gates.
+    pub icon: RawBufferVec<GlyphAlphaInstance>,
     /// Border/outline BAND instances (styling-f-tier.md § 2.3 — C6-a feeds the
     /// OUTLINE channel, C6-b adds the per-side BORDER). A
     /// `RawBufferVec<BorderBandInstance>` for the same reason as `quad`/`glyph`:
@@ -116,6 +127,14 @@ pub struct BuiyInstanceBuffers {
     /// the quad), so a shadow paints BEHIND its caster (shadow < quad in
     /// `paint_order`).
     pub shadow: RawBufferVec<[f32; 17]>,
+    /// Background-GRADIENT instances (parity Wave B1). A
+    /// `RawBufferVec<GradientInstance>` — `GradientInstance` is a raw `#[repr(C)]`
+    /// vertex POD (the gradient pipeline-descriptor layout), `NoUninit` but not a
+    /// `ShaderType`, so it rides the raw, CPU-readable vertex path like
+    /// `quad`/`glyph`/`band`. Grows in place; the node draws it AFTER the quad
+    /// (over the solid fill), BEFORE glyphs/bands. Packed from the SAME node walk
+    /// as the quad, so it rides the quad gate.
+    pub gradient: RawBufferVec<GradientInstance>,
     /// The per-view logical->clip + scale_factor uniform (`col0 ++ col1 ++
     /// [scale_factor, 0, 0, 0]`, [`BuiyViewUniform::as_std140_array`]).
     ///
@@ -133,12 +152,18 @@ pub struct BuiyInstanceBuffers {
     pub quad_count: u32,
     /// Glyph instance count written this frame (the glyph instanced draw range).
     pub glyph_count: u32,
+    /// Vector-icon instance count written this frame (parity Wave B3). Gated on
+    /// the `ExtractedIcons` change signal, independent of the glyph gate.
+    pub icon_count: u32,
     /// Border/outline band instance count written this frame (C6-a/C6-b). Rides
     /// the quad gate (the band is packed from the same node walk).
     pub band_count: u32,
     /// Box-shadow instance count written this frame (C6-b). Rides the quad gate
     /// (shadows are packed from the same node walk).
     pub shadow_count: u32,
+    /// Background-gradient instance count written this frame (parity Wave B1).
+    /// Rides the quad gate (gradients are packed from the same node walk).
+    pub gradient_count: u32,
     /// Per-effect-group contiguous quad-instance ranges (`group_ranges[g]` =
     /// group `g`'s members), recomputed each quad-buffer upload from
     /// `ExtractedNode.group` (effect-compositor.md § 1.1 / decided fork 3). The
@@ -166,6 +191,26 @@ pub struct BuiyInstanceBuffers {
     /// `0..glyph_count` run, so the flat path is byte-for-byte the pre-T8
     /// draw.
     pub glyph_flat_ranges: Vec<Range<u32>>,
+    /// Per-effect-group contiguous ICON-instance ranges (parity Wave B3 — the
+    /// glyph mirror), recomputed from `ExtractedIcons::entity_runs` ×
+    /// `ExtractedNode.group`. The node's step-1 group pass draws each into the
+    /// group's off-screen target via the same Glyph specialization.
+    pub icon_group_ranges: Vec<Range<u32>>,
+    /// The complement: maximal runs of non-group icon instances — the flat
+    /// window icon draw covers exactly these. No live group ⇒ the single full
+    /// `0..icon_count` run.
+    pub icon_flat_ranges: Vec<Range<u32>>,
+    /// Per-gradient-instance PAINT-ORDER anchors (parity gradient-bleed fix):
+    /// `gradient_anchors[i]` is the quad-blob index just after gradient `i`'s
+    /// node's own quad. CPU-side draw metadata (NOT uploaded — the byte-stable
+    /// `GradientInstance` layout is untouched): the node draws the flat quad runs
+    /// and the gradient blob INTERLEAVED by these so a node's gradient paints
+    /// after its own fill and before its descendants' quads (an ancestor's
+    /// gradient never overpaints a descendant's opaque fill). One entry per
+    /// gradient instance, in node-walk (paint) order, so it is non-decreasing.
+    /// Rides the quad gate (gradients + anchors are packed from the same node
+    /// walk as the quad partition).
+    pub gradient_anchors: Vec<u32>,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -173,17 +218,24 @@ impl Default for BuiyInstanceBuffers {
         Self {
             quad: RawBufferVec::new(BufferUsages::VERTEX),
             glyph: RawBufferVec::new(BufferUsages::VERTEX),
+            icon: RawBufferVec::new(BufferUsages::VERTEX),
             band: RawBufferVec::new(BufferUsages::VERTEX),
             shadow: RawBufferVec::new(BufferUsages::VERTEX),
+            gradient: RawBufferVec::new(BufferUsages::VERTEX),
             view_uniform: UniformBuffer::default(),
             quad_count: 0,
             glyph_count: 0,
+            icon_count: 0,
             band_count: 0,
             shadow_count: 0,
+            gradient_count: 0,
             group_ranges: Vec::new(),
             flat_ranges: Vec::new(),
             glyph_group_ranges: Vec::new(),
             glyph_flat_ranges: Vec::new(),
+            icon_group_ranges: Vec::new(),
+            icon_flat_ranges: Vec::new(),
+            gradient_anchors: Vec::new(),
         }
     }
 }
@@ -236,6 +288,7 @@ pub fn prepare_buiy_instances(
     nodes: Res<ExtractedNodesView>,
     groups: Res<ExtractedEffectGroups>,
     glyphs: Res<ExtractedGlyphs>,
+    icons: Res<ExtractedIcons>,
     text_quads: Res<ExtractedTextQuads>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
     mut stats: ResMut<BufferUploadStats>,
@@ -259,6 +312,10 @@ pub fn prepare_buiy_instances(
     // INDEPENDENTLY gated — a caret blink (T7) re-uploads glyphs only.
     let quad_dirty = nodes.is_changed() || groups.is_changed() || text_quads.is_changed();
     let glyph_dirty = glyphs.is_changed();
+    // Vector icons (parity Wave B3) are gated on their OWN carrier, independent of
+    // the glyph gate: an accent-swatch re-tint re-extracts only `ExtractedIcons`,
+    // so the icon buffer re-uploads without touching the glyph buffer.
+    let icon_dirty = icons.is_changed();
     if quad_dirty {
         // Consume R5's ExtractedNodes: pack its per-view records into the flat
         // quad blob, the per-group instance-range partition, and build the view
@@ -320,6 +377,28 @@ pub fn prepare_buiy_instances(
         buffers.shadow_count = shadows.len() as u32;
         buffers.shadow.write_buffer(&render_device, &render_queue);
 
+        // Background-gradient buffer (parity Wave B1). Packed from the SAME node
+        // walk (it rides the quad gate); a node with no gradient layers
+        // contributes nothing, so a gradient-free frame uploads an empty buffer
+        // (gradient_count = 0) and the node skips the gradient draw. Its OWN
+        // `GradientInstance` layout (the 68 B quad stride is untouched). The
+        // `anchors` are the per-instance PAINT-ORDER positions (the quad-blob
+        // index after each gradient's node's own quad — `partition.node_quad_anchors`
+        // from the SAME walk): `node.rs` interleaves the gradient blob with the
+        // flat quad runs by these, so a node's gradient paints over its own fill
+        // and BEFORE its descendants' quads (an ancestor gradient never
+        // overpaints a descendant's opaque fill). Anchors are CPU-side draw
+        // metadata, not uploaded (the byte-stable layout is untouched).
+        let (gradients, gradient_anchors) =
+            pack_gradient_instances(&nodes.0.nodes, &partition.node_quad_anchors);
+        buffers.gradient.clear();
+        for gradient in &gradients {
+            buffers.gradient.push(*gradient);
+        }
+        buffers.gradient_count = gradients.len() as u32;
+        buffers.gradient.write_buffer(&render_device, &render_queue);
+        buffers.gradient_anchors = gradient_anchors;
+
         // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
         // Regroup the flat 12 floats into the three `vec4` columns the WGSL
         // `BuiyView` reads; `[Vec4; 3]` is a valid std140 payload (16-byte
@@ -341,6 +420,19 @@ pub fn prepare_buiy_instances(
         buffers.glyph_count = glyphs.glyphs.len() as u32;
         buffers.glyph.write_buffer(&render_device, &render_queue);
         stats.glyph_uploads += 1;
+    }
+
+    // Icon buffer (parity Wave B3 — the SAME coverage primitive as glyphs, drawn
+    // through a separate buffer so the two producers stay decoupled). Gated on
+    // `ExtractedIcons` independently of glyphs/quads, so an accent-swatch re-tint
+    // re-uploads icons ONLY.
+    if icon_dirty {
+        buffers.icon.clear();
+        for inst in &icons.icons {
+            buffers.icon.push(*inst);
+        }
+        buffers.icon_count = icons.icons.len() as u32;
+        buffers.icon.write_buffer(&render_device, &render_queue);
     }
 
     // T8 (D1/D2): derive the glyph partition from the FRESH node list — group
@@ -368,6 +460,28 @@ pub fn prepare_buiy_instances(
         );
         buffers.glyph_group_ranges = group_ranges;
         buffers.glyph_flat_ranges = flat_ranges;
+    }
+
+    // Icon partition (parity Wave B3 — the glyph-partition mirror over the icon
+    // carrier's own entity_runs). Recompute under the icon-or-quad union: a group
+    // can form/drop on a node-only frame while icons are retained, and an
+    // icon-only rebuild moves run boundaries. `ExtractedIcons::entity_runs` is its
+    // OWN contiguous-from-0 source, so the partition's contiguity assert holds.
+    if quad_dirty || icon_dirty {
+        let group_count = groups.0.len();
+        let group_by_entity: HashMap<Entity, Option<usize>> =
+            nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
+        let (group_ranges, flat_ranges) = partition_glyph_ranges(
+            icons
+                .entity_runs
+                .iter()
+                .map(|r| (r.entity, r.instances.clone())),
+            icons.icons.len() as u32,
+            group_count,
+            |e| group_by_entity.get(&e).copied().flatten(),
+        );
+        buffers.icon_group_ranges = group_ranges;
+        buffers.icon_flat_ranges = flat_ranges;
     }
 }
 

@@ -11,6 +11,7 @@ use buiy_core::{
 
 pub mod button;
 pub mod checkbox;
+pub mod composites;
 pub mod dialog;
 pub mod disclosure;
 pub mod dismiss;
@@ -46,6 +47,15 @@ pub use scene::{
 };
 pub use scene::{text_input_multi_line, text_input_single_line};
 pub use text_input::TextInput;
+// The general composite builders (Wave-5 parity promotion): imperative
+// `World`-spawning trees that compose the primitive widgets/render components into
+// a recognizable control. Re-exported at the crate root next to the markers +
+// scene-fns; also folded into `buiy::prelude` via the `buiy` crate.
+pub use composites::{
+    CMD_GLYPH_ICON, MeterFill, RowSelBar, TableRow, TableRowData, kbd, kbd_content, meter,
+    pulse_blink, search_input, set_meter, set_table_row_selected, status_dot, table_header,
+    table_row,
+};
 
 /// The single `OnPress` consumer that advances a toggle widget's `A11yToggled`
 /// (co-drive SC-1 — "one sink, consumers read `OnPress`"). EVERY activation
@@ -322,6 +332,14 @@ impl Plugin for WidgetsPlugin {
         // button (which would toggle the menu closed + steal focus). Gated on
         // `Added<Menu>`.
         app.add_systems(Update, menu::guard_menu_clicks);
+        // The per-item pointer producer: a primary `Pointer<Click>` on a `MenuItem`
+        // writes the shared `OnPress` sink for it + closes the menu (the pointer
+        // mirror of the keyboard Enter/Space activate-and-close). `MenuItem` is not
+        // in `is_activatable_role`, so the generic `pointer_click_emits_on_press`
+        // does not cover it; this dedicated observer does. It fires at the item
+        // during the `Pointer<Click>` bubble, before `guard_menu_clicks` stops it at
+        // the menu root.
+        app.add_observer(menu::menu_item_click_emits_on_press);
         //
         // The MenuButton reuses the Disclosure state-keyed `A11yExpanded` open/
         // close pattern: `advance_expanded_on_press` (registered above) flips the

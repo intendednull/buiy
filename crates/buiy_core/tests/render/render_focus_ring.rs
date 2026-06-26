@@ -207,6 +207,7 @@ fn pack_band_instances_emits_one_band_per_outlined_node() {
         }),
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     };
     let plain = ExtractedNode {
         entity: Entity::from_raw_u32(2).unwrap(),
@@ -219,6 +220,7 @@ fn pack_band_instances_emits_one_band_per_outlined_node() {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     };
     assert_eq!(pack_band_instances(std::slice::from_ref(&plain)).len(), 0);
     assert_eq!(pack_band_instances(&[outlined, plain.clone()]).len(), 1);

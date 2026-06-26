@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+# `cargo run -p buiy_gallery` runs the shell (the `capture_shell` bin is the
+# explicit on-demand screenshotter, never the default).
+default-run = "buiy_gallery"
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_winit", "x11", "wayland"] }
@@ -19,6 +22,32 @@ buiy_core = { path = "../../crates/buiy_core" }
 # mark child from its label child (the edit-in-place target); not flattened into
 # the `buiy` prelude. The same crate the widget tests reach directly.
 buiy_widgets = { path = "../../crates/buiy_widgets" }
+
+# `image` backs the offscreen shell-capture bin (`capture_shell`): render-to-
+# texture + GPU readback → PNG (parity Wave C1 verification artifact, the same
+# path `examples/capture` uses for the README assets). A normal dep (not dev) so
+# `cargo run -p buiy_gallery --bin capture_shell` builds without a feature flag.
+image = { workspace = true }
+
+[[bin]]
+name = "buiy_gallery"
+path = "src/main.rs"
+
+# The offscreen shell screenshotter — run on demand on a GPU host to eyeball the
+# shell against the design (`docs/reports/parity-proto-assets/c1-shell.png`). Not
+# a CI gate; the headless `shell_layout` / `shell_router` tests are the regression
+# guards. Kept out of the default `cargo run -p buiy_gallery` (which is the shell).
+[[bin]]
+name = "capture_shell"
+path = "src/bin/capture_shell.rs"
+
+# The offscreen composites-showcase screenshotter (parity Wave C2) — run on demand
+# on a GPU host to eyeball the composite widgets against the design
+# (`docs/reports/parity-proto-assets/c2-composites.png`). Not a CI gate; the
+# headless `composites_layout` test is the regression guard.
+[[bin]]
+name = "capture_composites"
+path = "src/bin/capture_composites.rs"
 
 [dev-dependencies]
 # The headless layout-snapshot gate drives the same scene the binary authors.

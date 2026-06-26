@@ -14,13 +14,15 @@
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
 use crate::theme::Theme;
+use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
+use crate::animation::AnimatedBackgroundColor;
 use crate::components::{Node, ResolvedLayout};
-use crate::layout::BoxModel;
+use crate::layout::{BoxModel, Stacking};
 use crate::render::components::{
-    AncestorClip, Background, Border, BoxShadow, ClipRect, ComputedPaintSkip, EffectGroup,
-    EffectReason, Opacity, Outline,
+    AncestorClip, BackdropFilter, Background, BackgroundLayers, Border, BoxShadow, ClipRect,
+    ComputedPaintSkip, EffectGroup, EffectReason, FilterFn, Opacity, Outline,
 };
 use crate::theme::UserPreferences;
 
@@ -51,6 +53,30 @@ pub struct EffectGroupExtract {
     /// Logical-px painted bounds: the union of the group entity's own box and
     /// every box it transitively encloses, folded through `GlobalTransform`.
     pub bounds: Rect,
+    /// Backdrop-blur radius in LOGICAL px (parity Wave B4): the first
+    /// `FilterFn::Blur(Px)` in the former's `BackdropFilter`, or `None` if this
+    /// group is not a backdrop-filter former (or carries no px blur). The blur
+    /// samples the painted window backdrop within the FORMER'S OWN box (NOT the
+    /// transitive `bounds`, which includes descendants painting over the blur) —
+    /// see [`Self::backdrop_box`].
+    pub backdrop_blur_px: Option<f32>,
+    /// The backdrop-filter former's OWN box in logical px (the rect the blur is
+    /// sampled + blitted over), or `None` if not a backdrop-filter former.
+    /// Distinct from `bounds` (which grows to the descendant union): the blur
+    /// region is the element's own box, not its content's bounds.
+    pub backdrop_box: Option<Rect>,
+}
+
+/// Resolve a [`BackdropFilter`] list to its blur radius in logical px (parity
+/// Wave B4): the first `FilterFn::Blur(Length::Px)` term. Non-px lengths
+/// (`%`/`cq*`) and the other filter functions (brightness/saturate/…) resolve
+/// to no blur in v1 — the gallery's two uses are `blur(2px)`/`blur(6px)`, both
+/// px; the wider filter family is a documented follow-up. `None` == no blur.
+pub fn backdrop_blur_px(filter: &BackdropFilter) -> Option<f32> {
+    filter.0.iter().find_map(|f| match f {
+        FilterFn::Blur(crate::layout::Length::Px(r)) if *r > 0.0 => Some(*r),
+        _ => None,
+    })
 }
 
 /// Per-view list of extracted effect groups (effect-compositor.md § 1.1),
@@ -132,6 +158,13 @@ pub struct ExtractedNode {
     /// no shadow. Suppressed at the PRODUCER when forced-colors is active (the
     /// vec is then empty — § 2.5), and outset-only in v1 (inset warns-once).
     pub shadows: Vec<ExtractedShadow>,
+    /// Resolved background gradient layers (parity Wave B1), in BACK-to-front
+    /// draw order (the gradient pipeline draws this list in order, so index 0
+    /// here is the bottom-most layer and the last entry paints on top). Each
+    /// resolves its stop tokens to linear color + a CPU-precomputed axis. Painted
+    /// ABOVE the solid `Background.color` quad, BELOW glyphs/bands. Empty == no
+    /// gradient (the byte-stable solid-only path).
+    pub gradients: Vec<ExtractedGradient>,
 }
 
 /// One resolved `Outline` (styling-f-tier.md § 2.4), built at extract time from
@@ -241,6 +274,213 @@ pub struct ExtractedShadow {
     pub affine: [[f32; 2]; 2],
 }
 
+/// One resolved background gradient layer (parity Wave B1), built at extract
+/// time from a [`BackgroundLayer`](crate::render::components::BackgroundLayer) +
+/// the entity's border box + clip + affine. A flat `Copy` record — every term is
+/// pre-resolved to logical px / linear color / a CPU-precomputed gradient axis,
+/// so the packer ([`pack_gradient`](crate::render::instance::pack_gradient)) and
+/// `gradient.wgsl` are pure consumers (no trig on the GPU).
+///
+/// **Two-stop fast path.** The design only uses 2-stop linear gradients, so the
+/// record carries exactly 2 resolved stop colors + positions. A `Solid` layer is
+/// lowered to a degenerate 2-stop gradient (both stops the same color), so the
+/// gradient pipeline paints it with no special case.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedGradient {
+    /// Box top-left, logical px (`ExtractedNode::position`).
+    pub rect_pos: Vec2,
+    /// Box size, logical px (`ResolvedLayout.size`).
+    pub rect_size: Vec2,
+    /// Stop 0 (start) pre-linearized RGBA.
+    pub color0: [f32; 4],
+    /// Stop 1 (end) pre-linearized RGBA.
+    pub color1: [f32; 4],
+    /// The two stop positions `[pos0, pos1]`, normalized `0..1` along the line.
+    pub stops: [f32; 2],
+    /// LINEAR: the CPU-precomputed unit gradient axis in y-DOWN fragment space
+    /// `[sinθ, -cosθ]`. RADIAL: the **tile size** in logical px (`[tile_w,
+    /// tile_h]`) when the gradient repeats per-tile (the dotted-grid, B2), or
+    /// `[0, 0]` for a single (non-tiled) radial over the box. (One reused slot —
+    /// the linear axis is meaningless for a radial, and a radial has no angle.)
+    pub axis: [f32; 2],
+    /// The gradient-kind flag ([`GRADIENT_KIND_LINEAR`](crate::render::instance::GRADIENT_KIND_LINEAR)
+    /// / [`GRADIENT_KIND_RADIAL`](crate::render::instance::GRADIENT_KIND_RADIAL)).
+    pub kind: f32,
+    /// LINEAR: the CSS gradient-line length `|W·sinθ| + |H·cosθ|`. RADIAL: the
+    /// gradient extent (the dot radius for the tiled dotted-grid; the box
+    /// farthest-corner extent `0.5·|size|` for a single radial) — both in
+    /// logical px (B2).
+    pub line_len: f32,
+    /// The entity's OWN clip (own box ∩ ancestors). `None` = full-view sentinel.
+    pub clip: Option<ClipRect>,
+    /// The 2D affine basis (same source as [`ExtractedNode::affine`]).
+    pub affine: [[f32; 2]; 2],
+}
+
+/// Resolve one entity's [`BackgroundLayers`] component into the per-layer
+/// [`ExtractedGradient`] list (parity Wave B1), in CSS
+/// `background-image` paint order (index 0 frontmost, so the list is REVERSED to
+/// paint back-to-front: the gradient pipeline draws this list in order, last
+/// entry on top). Each layer's token(s) resolve to concrete linear `Color` here,
+/// and the gradient axis + line length are precomputed from the box size, so the
+/// GPU does no token lookup and no trig.
+///
+/// - `Linear`: the CSS angle → a y-down unit axis `(sinθ, -cosθ)` (CSS `0deg`
+///   points up; the box fragment space is y-down) + line length
+///   `|W·sinθ| + |H·cosθ|`. Fewer than 2 stops degenerates to a flat fill of the
+///   single (or transparent) stop; more than 2 uses the first + last for the B1
+///   2-stop fast path (the design never exceeds 2 — a `warn!`-free clamp, not a
+///   silent drop of a case the design needs).
+/// - `Solid`: a degenerate 2-stop gradient (both stops the layer color), so the
+///   one pipeline paints layered solids too.
+/// - `Radial` (B2): carries the radial kind flag + first/last stop, the gradient
+///   extent in `line_len` (the explicit `radius` — the dot radius for the
+///   dotted-grid — else the box farthest-corner default), and the TILE size in
+///   the `axis` slot (`[0,0]` = a single radial over the box; `[w,h]` = repeat
+///   per `w×h` cell — the viewport's dotted radial-grid bg, § 3.8). The shader's
+///   radial branch consumes these (distance-to-center, per-tile modulo when
+///   tiled, smoothstep-AA at `radius`).
+///
+/// A fully-transparent resolved layer (e.g. `Solid(Transparent)`) contributes no
+/// instance (it would paint nothing — mirrors the fill's `Color::NONE` skip).
+/// Pure: no ECS / GPU access beyond the borrowed inputs (unit-testable headless).
+pub fn resolve_gradients(
+    layers: &crate::render::components::BackgroundLayers,
+    position: Vec2,
+    size: Vec2,
+    clip: Option<ClipRect>,
+    affine: [[f32; 2]; 2],
+    theme: &Theme,
+) -> Vec<ExtractedGradient> {
+    use crate::render::components::BackgroundLayer;
+    use crate::render::instance::{GRADIENT_KIND_LINEAR, GRADIENT_KIND_RADIAL};
+
+    // Resolve one stop token → linear RGBA (the fill/band linearization path).
+    let lin = |token: &crate::render::color::ColorToken| -> [f32; 4] {
+        let c = crate::render::color::resolve_token(token, theme);
+        let l = LinearRgba::from(c);
+        [l.red, l.green, l.blue, l.alpha]
+    };
+    // `true` iff a resolved color is fully transparent (paints nothing).
+    let is_transparent = |c: &[f32; 4]| c[3] <= 0.0;
+
+    // Pick the 2-stop fast-path endpoints from a stop list: first + last (the
+    // design only uses 2). Empty → both transparent; one → both that stop.
+    let endpoints =
+        |stops: &[crate::render::components::ColorStop]| -> ([f32; 4], [f32; 4], [f32; 2]) {
+            match stops {
+                [] => ([0.0; 4], [0.0; 4], [0.0, 1.0]),
+                [only] => {
+                    let c = lin(&only.color);
+                    (c, c, [0.0, 1.0])
+                }
+                [first, .., last] => (
+                    lin(&first.color),
+                    lin(&last.color),
+                    [first.position, last.position],
+                ),
+            }
+        };
+
+    // CSS-paint order is index 0 frontmost; the pipeline draws the returned list
+    // front-to-back (later entries on top), so emit in REVERSE so the last list
+    // entry is layer index 0 (the frontmost). The solid `Background.color` is
+    // drawn separately, beneath all of these (the quad pass, before gradients).
+    let mut out = Vec::new();
+    for layer in layers.0.iter().rev() {
+        let (color0, color1, stops, kind, axis, line_len) = match layer {
+            BackgroundLayer::Solid(token) => {
+                let c = lin(token);
+                (c, c, [0.0, 1.0], GRADIENT_KIND_LINEAR, [1.0, 0.0], 1.0)
+            }
+            BackgroundLayer::Linear(g) => {
+                let (c0, c1, stops) = endpoints(&g.stops);
+                let (axis, line_len) = linear_axis(g.angle_deg, size);
+                (c0, c1, stops, GRADIENT_KIND_LINEAR, axis, line_len)
+            }
+            BackgroundLayer::Radial(g) => {
+                let (c0, c1, stops) = endpoints(&g.stops);
+                // RADIAL extent (`line_len`): the explicit `radius` (the dot
+                // radius for the dotted-grid) when set, else the box
+                // farthest-corner default `0.5·|size|`. The `axis` slot carries
+                // the TILE size in logical px (`[0,0]` = a single, non-tiled
+                // radial over the box) — the shader's radial branch reads it to
+                // repeat per `tile×tile` cell (the dotted-grid).
+                let line_len = g.radius.unwrap_or(0.5 * size.length());
+                let tile = g.tile.map(|t| [t.x, t.y]).unwrap_or([0.0, 0.0]);
+                (c0, c1, stops, GRADIENT_KIND_RADIAL, tile, line_len)
+            }
+        };
+        // A gradient whose BOTH stops are transparent paints nothing — skip.
+        if is_transparent(&color0) && is_transparent(&color1) {
+            continue;
+        }
+        out.push(ExtractedGradient {
+            rect_pos: position,
+            rect_size: size,
+            color0,
+            color1,
+            stops,
+            axis,
+            kind,
+            line_len,
+            clip,
+            affine,
+        });
+    }
+    out
+}
+
+/// The CSS linear-gradient axis + line length for an angle (degrees) over a box
+/// of `size` logical px. CSS `0deg` points UP and angles go CLOCKWISE, so the
+/// y-UP unit axis is `(sinθ, cosθ)`; the box fragment space is y-DOWN, so the
+/// returned axis is `(sinθ, -cosθ)` — the direction from the 0%-stop end toward
+/// the 100%-stop end. The gradient-line length is the CSS formula
+/// `|W·sinθ| + |H·cosθ|` (the projection of the box onto the axis). Pure +
+/// trig-only so the GPU never computes it. Split out for unit testing the
+/// angle→axis mapping at 0/45/90/135/150°.
+pub fn linear_axis(angle_deg: f32, size: Vec2) -> ([f32; 2], f32) {
+    let theta = angle_deg.to_radians();
+    let (s, c) = theta.sin_cos();
+    // y-up axis (sinθ, cosθ) flipped to the box's y-down fragment space.
+    let axis = [s, -c];
+    let line_len = (size.x * s).abs() + (size.y * c).abs();
+    (axis, line_len)
+}
+
+/// Resolve a node's painted background fill color, compositing a live
+/// [`AnimatedBackgroundColor`] over the static token when one is present.
+///
+/// **Auto-composite (spec § 2 REFINE).** The design's `background .12s/.15s`
+/// transitions (switch/nav/filter tracks) are driven by a
+/// [`BackgroundColorTween`](crate::animation::BackgroundColorTween) that writes a
+/// resolved `Color` into [`AnimatedBackgroundColor`] each frame. That color
+/// CANNOT live in `Background.color` because the parity design locks the token
+/// surface (no `ColorToken::Literal`, spec § 8) — a crossfade is intrinsically a
+/// resolved-`Color` op. So the animated color rides its own component and this
+/// resolver prefers it: present ⇒ paint the interpolated color (auto, for EVERY
+/// node — not an opt-in widget special-case the prototype left unconsumed);
+/// absent ⇒ resolve the `Background` token (no background ⇒ transparent). A live
+/// theme/accent swap still re-resolves the token endpoints through the tween's
+/// own re-spawn, and the `theme.is_changed()` re-extract picks up the rest.
+///
+/// Pure: no ECS / GPU access beyond the borrowed inputs, so it is unit-testable
+/// headless. The `animated_bg` arg is `None` on the Tier-2 snapshot path (which
+/// has no live tweens) and the per-entity component in the production loop.
+pub fn resolve_background_color(
+    background: Option<&Background>,
+    animated_bg: Option<&AnimatedBackgroundColor>,
+    theme: &Theme,
+) -> Color {
+    if let Some(animated) = animated_bg {
+        return animated.0;
+    }
+    match background {
+        Some(bg) => crate::render::color::resolve_token(&bg.color, theme),
+        None => Color::NONE,
+    }
+}
+
 /// Build one [`ExtractedNode`] from the layout box + composed transform + the
 /// (optional) background token + the (optional) per-primitive clip AABB. Pure:
 /// no GPU, no ECS access beyond the borrowed components. `position` is the
@@ -267,10 +507,7 @@ pub fn extracted_node_for(
     // top-left and an identity transform yields the `[[1,0],[0,1]]` fast path.
     let m = global_transform.affine().matrix3;
     let affine = [[m.x_axis.x, m.x_axis.y], [m.y_axis.x, m.y_axis.y]];
-    let color = match background {
-        Some(bg) => crate::render::color::resolve_token(&bg.color, theme),
-        None => Color::NONE,
-    };
+    let color = resolve_background_color(background, None, theme);
     ExtractedNode {
         entity,
         position: translation.truncate(),
@@ -284,11 +521,13 @@ pub fn extracted_node_for(
         // `resolve_outline` and assigned post-build — `extracted_node_for`
         // (also called by the Tier-2 snapshot harness) stays outline-free.
         outline: None,
-        // The border band + shadow list are resolved separately by
-        // `extract_buiy_nodes` (they need `Border`/`BoxModel`/`BoxShadow` +
-        // the forced-colors flag), so this builder leaves them empty.
+        // The border band + shadow list + gradient layers are resolved
+        // separately by `extract_buiy_nodes` (they need `Border`/`BoxModel`/
+        // `BoxShadow`/`BackgroundLayers` + the forced-colors flag), so this
+        // builder leaves them empty.
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 
@@ -666,14 +905,34 @@ pub fn context_tree_paint_order<'a>(
     }
 }
 
-/// The root context entities of a forming-context map — those no other
-/// context lists as a painter (a nested root appears in exactly its parent's
-/// list, paint-order § 1.1) — sorted by entity so a (degenerate) multi-root
-/// tree assembles deterministically rather than in archetype order (the
-/// `extract_buiy_nodes` tiebreak, hoisted so both producers share it).
-/// Cross-root order is unspecified by `painters_z`, so the tiebreak is
-/// render-local and never overrides an in-context order.
-pub fn context_roots(sc_by_entity: &std::collections::HashMap<Entity, &[Entity]>) -> Vec<Entity> {
+/// The root context entities of a forming-context map — those no other context
+/// lists as a painter (a nested root appears in exactly its parent's list,
+/// paint-order § 1.1) — ordered for cross-root paint.
+///
+/// **Cross-root order:** roots sort by `(rank_of(e), e)`. `rank_of` is the root's
+/// [`StackingContext::cross_root_rank`] (set by layout 6f): `0` for an in-flow
+/// root (paints first / bottom) and a higher value for a TOP-LAYER root so it
+/// paints LAST (topmost). The entity id is the deterministic tiebreak within a
+/// rank (replaces archetype order).
+///
+/// Why rank matters: a top-layer node that is its OWN root (a *parentless*
+/// `TopLayer::Modal`/`Popover` tree — e.g. a dialog authored outside the main
+/// content tree) cannot escape into a parent root's `painters_z` tail (it has no
+/// parent). Without rank it would sort by raw entity id and could paint UNDER the
+/// main content root (the M6 modal bug: the dialog painted first, then the whole
+/// shell painted over it). Ranking top-layer roots LAST makes a parentless modal
+/// paint on top of the entire window — the cross-ROOT companion to the within-root
+/// escaped tail (stacking-and-top-layer.md § 4). A parented top-layer node still
+/// escapes to its root's tail as before; this only affects the cross-ROOT order.
+///
+/// `rank_of` resolves a root entity to its `cross_root_rank`. Both producers
+/// (render node walk, text glyph walk) and the picking depth derivation pass a
+/// lookup over the SAME `StackingContext` query, so all three order roots
+/// identically (the "paint == hit-test" invariant).
+pub fn context_roots(
+    sc_by_entity: &std::collections::HashMap<Entity, &[Entity]>,
+    rank_of: impl Fn(Entity) -> u8,
+) -> Vec<Entity> {
     let nested: std::collections::HashSet<Entity> = sc_by_entity
         .values()
         .flat_map(|painters| painters.iter().copied())
@@ -684,12 +943,28 @@ pub fn context_roots(sc_by_entity: &std::collections::HashMap<Entity, &[Entity]>
         .copied()
         .filter(|e| !nested.contains(e))
         .collect();
-    roots.sort_unstable();
+    roots.sort_unstable_by_key(|&e| (rank_of(e), e));
     roots
 }
 
+/// The cross-root paint rank for a top-layer-aware root sort (the value layout 6f
+/// stamps into [`StackingContext::cross_root_rank`]): an IN-FLOW context (not a
+/// top-layer member) ranks `0` so it paints FIRST (bottom); a top-layer context
+/// ranks by its tier so it paints LAST (topmost), tiers ordered the same way as
+/// the escaped tail (Fullscreen < Tooltip < Popover < Modal). `1 + paint_rank`
+/// keeps every top-layer tier strictly above the `0` in-flow rank while preserving
+/// the tier order (`top_layer_paint_rank` ranks Fullscreen 0 < … < Modal 3).
+pub fn cross_root_rank(top_layer: crate::layout::TopLayer) -> u8 {
+    use crate::layout::TopLayer;
+    if top_layer == TopLayer::None {
+        0
+    } else {
+        1 + crate::layout::top_layer_paint_rank(top_layer)
+    }
+}
+
 use crate::components::StackingContext;
-use crate::layout::{Stacking, TopLayer};
+use crate::layout::TopLayer;
 use crate::render::clip::clip_for_primitive;
 use bevy::render::Extract;
 use bevy::window::PrimaryWindow;
@@ -737,6 +1012,83 @@ pub fn effective_outline_clip(
     }
 }
 
+/// The per-entity paint read for one node, as a single `#[derive(QueryData)]`
+/// projection — the LOGICAL PARTITION of the extract fan, by concern.
+///
+/// **Why a struct, not a tuple (parity REDESIGN, spec § 2).** The paint fan grew
+/// to Bevy's 15-term `QueryData` tuple-arity ceiling; the parity-prototype's
+/// mid-flight patch nested the two Wave-B terms in a sub-tuple to stay under it
+/// (always flagged as a stopgap). A flat, named projection has **no arity
+/// ceiling** — each field is one term, but the derive expands them without the
+/// tuple cap — so a future paint input is added by adding a field here, never by
+/// re-nesting another sub-tuple. The fields are grouped by the same logical
+/// sub-system the REDESIGN names (base / colors / effects / gradients), so the
+/// query reads as that partition while keeping `extract_buiy_nodes` ONE system
+/// behind ONE all-or-nothing damage gate — the partition is at the data-projection
+/// layer, not split into separate systems (a multi-system split would desync the
+/// retain-damage gate against the GPU-proven paint-order walk; see the journal
+/// follow-up). This mirrors the established `a11y::A11yNodeQuery` fix for the
+/// identical ceiling (a11y/mod.rs § "Why a struct, not a tuple").
+///
+/// Read-only (no `#[query_data(mutable)]`): the derive generates the item type
+/// `NodePaintQueryItem<'_>` the build loop destructures.
+#[derive(QueryData)]
+pub struct NodePaintQuery {
+    // --- base: geometry + the single skip source (the REDESIGN `…_base` set:
+    // Node membership is the query filter; ResolvedLayout + GlobalTransform are
+    // the required terms; the clip inputs resolve the box's scissor rect). ---
+    entity: Entity,
+    /// Painted top-left + the 2D affine — folded geometry (pillar 5). A
+    /// `Display::None` entity has no `ResolvedLayout` and is dropped by the query.
+    global_transform: &'static GlobalTransform,
+    layout: &'static ResolvedLayout,
+    /// The computed subtree paint-skip marker (§ 5.3 / § 5.4) — the SINGLE skip
+    /// source. Its presence ⇒ emit nothing for this entity (the whole subtree is
+    /// stamped by `write_paint_skip`), so extract never reads `CssVisibility` /
+    /// `OffscreenAuto` directly.
+    paint_skip: Option<&'static ComputedPaintSkip>,
+    /// Clip inputs: the computed per-entity clip AABB + its ancestor-only
+    /// companion (consumed by `clip_for_primitive`), and `Stacking` so a
+    /// top-layer member is forced to the full-view sentinel (`clip = None`,
+    /// paint-order § 3.2).
+    clip_rect: Option<&'static ClipRect>,
+    ancestor_clip: Option<&'static AncestorClip>,
+    stacking: Option<&'static Stacking>,
+    // --- colors: the solid + band fills (the REDESIGN `…_colors` set —
+    // Background/Border/TextColor; the band thickness is the layout-owned
+    // `BoxModel.border`, read alongside). ---
+    /// The solid background fill quad (a node with none rides the byte-stable
+    /// solid-only path; `BackgroundLayers` paints ABOVE it, in `gradients`).
+    bg: Option<&'static Background>,
+    /// The crossfaded background color a live [`BackgroundColorTween`](crate::animation::BackgroundColorTween)
+    /// writes (the design's `background .12s/.15s` transitions). When present it
+    /// AUTO-COMPOSITES over the `bg` token in `resolve_background_color` — every
+    /// node, not an opt-in widget special-case (spec § 2 REFINE) — so any node a
+    /// tween touches paints the interpolated color for the tween's duration and
+    /// falls back to its token `bg` at rest.
+    animated_bg: Option<&'static AnimatedBackgroundColor>,
+    /// The focus-ring / selection outline band (rides a DISTINCT band record +
+    /// the entity's `AncestorClip`, not its own box — styling-f-tier.md § 2.4).
+    outline: Option<&'static Outline>,
+    /// The per-side border paint (color/style/radius); its band THICKNESS is the
+    /// layout-owned `BoxModel.border` (a Taffy input, § 3.5), read below.
+    border: Option<&'static Border>,
+    box_model: Option<&'static BoxModel>,
+    /// The box-shadow list (outset-only, drawn BEHIND the box — § 2.2).
+    box_shadow: Option<&'static BoxShadow>,
+    // --- effects: the off-screen compositor fan (the REDESIGN `…_effects` set —
+    // BackdropFilter/EffectGroup; `Opacity` is the alpha applied at composite). ---
+    effect_group: Option<&'static EffectGroup>,
+    opacity: Option<&'static Opacity>,
+    /// B4: the backdrop-filter list (samples the painted window backdrop),
+    /// resolved into the group's `backdrop_blur_px` below.
+    backdrop_filter: Option<&'static BackdropFilter>,
+    // --- gradients: the layered fills (the REDESIGN `…_gradients` set —
+    // `BackgroundLayers`, the gradient / layered fills painted above the solid
+    // `Background.color` quad). ---
+    background_layers: Option<&'static BackgroundLayers>,
+}
+
 /// Per-frame, `Changed`-gated extract (architecture.md § 1.2/§ 3/§ 4). Reads
 /// the main world's layout + render-owned components through `Extract`, walks
 /// the primary view's stacking order, and writes the per-view `ExtractedNodes`.
@@ -765,56 +1117,11 @@ pub fn extract_buiy_nodes(
     // a *whether-to-rebuild* probe (`changed`/`removed`/`theme` below), not a
     // *what-to-include* filter — building the full set is CPU-cheap; the GPU
     // re-upload is what the gate protects (architecture.md § 3.1).
-    nodes: Extract<
-        Query<
-            (
-                Entity,
-                &GlobalTransform,
-                &ResolvedLayout,
-                Option<&Background>,
-                // The computed subtree paint-skip marker (§ 5.3 / § 5.4) —
-                // the SINGLE skip source. `write_paint_skip` resolves the
-                // per-entity `CssVisibility` / `OffscreenAuto` inputs into it
-                // (root AND descendants), so extract never reads those
-                // author-set components directly.
-                Option<&ComputedPaintSkip>,
-                // Clip inputs (R8b): the computed per-entity clip AABB + its
-                // ancestor-only companion (consumed by `clip_for_primitive`),
-                // and `Stacking` so a top-layer member is forced to the
-                // full-view sentinel (`clip = None`, paint-order § 3.2).
-                Option<&ClipRect>,
-                Option<&AncestorClip>,
-                Option<&Stacking>,
-                // Effect-compositor fan (effect-compositor.md § 1.1): the
-                // `EffectGroup` marker (which entities form an off-screen group +
-                // their `reason`) and `Opacity` (the alpha applied at composite).
-                // FAN: add Option<&BoxShadow>/&Border and the reserved effect
-                // components here as their tier lands (architecture § 1.2
-                // illustrative subset). C6-a adds Option<&Outline> below (the
-                // focus-ring / selection-outline band channel).
-                // NOTE: Containment is NOT in the fan — content-visibility:hidden
-                // paints the entity's own box and prunes descendants layout-side
-                // (paint-order § 5.2), so it is not a render skip input.
-                Option<&EffectGroup>,
-                Option<&Opacity>,
-                // C6-a: the outline paint (focus ring / selection outline). It
-                // rides a DISTINCT band record + the entity's `AncestorClip`
-                // (resolved below), not its own box (styling-f-tier.md § 2.4).
-                Option<&Outline>,
-                // C6-b: the per-side border paint + the layout-owned per-side
-                // WIDTH. `Border` carries color/style/radius (paint); the band's
-                // thickness is the layout input `BoxModel.border` (a Taffy input,
-                // § 3.5), so both are read here and resolved into the SAME band
-                // record `Outline` rides — but AT the box edge (styling-f-tier.md
-                // § 2.3). `BoxShadow` feeds the reserved `(Shadow, layer)` bucket
-                // (drawn BEHIND the box, § 2.2).
-                Option<&Border>,
-                Option<&BoxModel>,
-                Option<&BoxShadow>,
-            ),
-            With<Node>,
-        >,
-    >,
+    // The paint fan is the `NodePaintQuery` projection (grouped by concern: base /
+    // colors / effects / gradients) — one `#[derive(QueryData)]` struct with no
+    // 15-tuple arity ceiling. A new paint input is a new field there, never another
+    // nested sub-tuple. `With<Node>` is the membership filter.
+    nodes: Extract<Query<NodePaintQuery, With<Node>>>,
     // The parent link, used to resolve each painted node's nearest `EffectGroup`
     // ancestor (the off-screen group it belongs to). Read over ALL `Node`s so the
     // walk can climb through non-group ancestors to the enclosing group.
@@ -844,12 +1151,36 @@ pub fn extract_buiy_nodes(
                     Changed<Stacking>,
                     Changed<ClipRect>,
                     Changed<AncestorClip>,
-                    // Effect-compositor damage (effect-compositor.md § 1.1): a
-                    // group forming/dropping (`EffectGroup`) or an opacity change
-                    // re-extracts so group membership + the composite alpha never
-                    // go stale. Kept in lockstep with the `nodes` fan above.
-                    Changed<EffectGroup>,
-                    Changed<Opacity>,
+                    // Effect-compositor damage (effect-compositor.md § 1.1),
+                    // grouped into a NESTED `Or` sub-union. `Or<T>` is itself a
+                    // `QueryFilter`, so an inner `Or<(..)>` is one element of the
+                    // outer tuple with no change to the flat OR semantics — and it
+                    // keeps the outer tuple under Bevy's 15-arity `QueryFilter`
+                    // ceiling (the FILTER-side mirror of the `NodePaintQuery`
+                    // `QueryData` partition; FAN: this trio tracks the
+                    // `effect_group` / `opacity` / `backdrop_filter` fields of the
+                    // `nodes` projection). A group forming/dropping
+                    // (`EffectGroup`) or an opacity change re-extracts so group
+                    // membership + the composite alpha never go stale.
+                    Or<(
+                        Changed<EffectGroup>,
+                        Changed<Opacity>,
+                        // Parity Wave B4: a backdrop-filter EDIT (a runtime
+                        // blur-radius change on an EXISTING former).
+                        // `Changed<EffectGroup>` only fires when the group FORMS
+                        // or DROPS — the marker stores the reason BITSET, which a
+                        // 6px→12px radius change does not touch — so without this
+                        // term an isolated `BackdropFilter` edit is the one
+                        // NodePaintQuery paint input with no matching gate term,
+                        // and a radius edit would not re-capture `backdrop_blur_px`
+                        // (the value prepare plans the dual-Kawase pyramid from).
+                        // NB: today the main-world render-prep passes re-insert
+                        // their markers every frame, so an effect-group node
+                        // already re-extracts each frame; this term makes the
+                        // radius edge PRINCIPLED (and robust if that re-insertion
+                        // is ever change-gated).
+                        Changed<BackdropFilter>,
+                    )>,
                     // C6-a: an outline insert/remove/edit (the focus ring is a
                     // framework-owned `Outline` the ring lowering toggles) must
                     // re-extract so the band appears/vanishes. Kept in lockstep
@@ -864,6 +1195,20 @@ pub fn extract_buiy_nodes(
                     // re-extracts so the shadow appears/vanishes/moves.
                     Changed<Border>,
                     Changed<BoxShadow>,
+                    // Parity Wave B1: a gradient-layer edit (add/remove/restyle)
+                    // re-extracts so the gradient appears/vanishes/recolors. Kept
+                    // in lockstep with the `nodes` fan. A live accent swap rides
+                    // the `theme.is_changed()` re-extract (the stop tokens
+                    // re-resolve), not this per-entity term.
+                    Changed<BackgroundLayers>,
+                    // Parity § 2 REFINE: a live background-color crossfade. The
+                    // `BackgroundColorTween` system re-inserts `AnimatedBackgroundColor`
+                    // every frame it advances (marking it `Changed`), so this term
+                    // re-extracts the node each frame of the transition — the fill
+                    // paints the interpolated color (resolve_background_color), then
+                    // the tween completes + removes the component and the node falls
+                    // back to its `Background` token on the next change.
+                    Changed<AnimatedBackgroundColor>,
                     // FAN: extend the Or-set in lockstep with the `nodes` tuple
                     // (architecture § 3.1 trigger union).
                 )>,
@@ -956,26 +1301,35 @@ pub fn extract_buiy_nodes(
     // The painted-bounds union + parent links are derived below from the
     // `ChildOf` chain; the per-entity `EffectReason`/`Opacity` are captured here
     // while the fan is borrowed (effect-compositor.md § 1.1).
-    let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32)> =
+    // entity → (reason, opacity, backdrop_blur_px). The blur radius (logical px)
+    // is captured here while the `BackdropFilter` fan is borrowed — the prepare
+    // pass needs it to plan the dual-Kawase pyramid (parity Wave B4).
+    let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32, Option<f32>)> =
         std::collections::HashMap::new();
     let forced_colors = prefs.forced_colors;
-    for (
-        entity,
-        gt,
-        layout,
-        bg,
-        paint_skip,
-        clip_rect,
-        ancestor_clip,
-        stacking,
-        effect_group,
-        opacity,
-        outline,
-        border,
-        box_model,
-        box_shadow,
-    ) in nodes.iter()
-    {
+    for n in nodes.iter() {
+        // Destructure the `NodePaintQuery` projection into the per-concern locals
+        // the resolve calls below consume (the field names match the prior tuple
+        // bindings, so the resolution body is unchanged from the sub-tuple era).
+        let NodePaintQueryItem {
+            entity,
+            global_transform: gt,
+            layout,
+            paint_skip,
+            clip_rect,
+            ancestor_clip,
+            stacking,
+            bg,
+            animated_bg,
+            outline,
+            border,
+            box_model,
+            box_shadow,
+            effect_group,
+            opacity,
+            backdrop_filter,
+            background_layers,
+        } = n;
         // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
         // computed marker ⇒ emit nothing for this entity. `write_paint_skip`
         // stamps the marker on the hidden/offscreen ROOT and every
@@ -988,13 +1342,30 @@ pub fn extract_buiy_nodes(
             // carries a `< 1` value, but capture it unconditionally so a group
             // that ALSO has opacity composites at the right alpha.
             let a = opacity.map(|o| o.0).unwrap_or(1.0);
-            group_formers.insert(entity, (eg.reason, a));
+            // Parity Wave B4: capture the backdrop-blur radius (logical px) for a
+            // backdrop-filter former. Only meaningful when the reason carries the
+            // BACKDROP_FILTER bit; resolved from the `BackdropFilter` component.
+            let blur = if eg.reason.contains(EffectReason::BACKDROP_FILTER) {
+                backdrop_filter.and_then(backdrop_blur_px)
+            } else {
+                None
+            };
+            group_formers.insert(entity, (eg.reason, a, blur));
         }
         // A top-layer member escapes every ancestor clip and paints over the
         // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
         // clips to its own box ∩ ancestor clips. See [`effective_clip`].
         let clip = effective_clip(stacking, clip_rect, ancestor_clip);
         let mut node = extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme);
+        // Auto-composite a live background-color crossfade over the static token
+        // (spec § 2 REFINE). `extracted_node_for` resolved only the `bg` token (it
+        // is also the Tier-2 snapshot builder, which has no tweens); here in the
+        // production loop a node carrying a `BackgroundColorTween`'s
+        // `AnimatedBackgroundColor` paints the interpolated color instead, for
+        // every node — no widget opt-in.
+        if animated_bg.is_some() {
+            node.color = resolve_background_color(bg, animated_bg, theme);
+        }
         // C6-a: resolve the outline (focus ring / selection outline) against the
         // entity's `AncestorClip` (NOT its own box, `effective_outline_clip`) so
         // it survives an `overflow:hidden` ancestor (styling-f-tier.md § 2.4).
@@ -1043,6 +1414,21 @@ pub fn extract_buiy_nodes(
                 theme,
             );
         }
+        // Parity Wave B1: resolve the background gradient / layered fills. They
+        // use the entity's OWN clip (`node.clip`) — the gradient paints inside
+        // the fill box, like the border band. Stop tokens resolve to linear
+        // color here, so a live theme/accent swap re-resolves through the
+        // `theme.is_changed()` re-extract.
+        if let Some(background_layers) = background_layers {
+            node.gradients = resolve_gradients(
+                background_layers,
+                node.position,
+                node.size,
+                node.clip,
+                node.affine,
+                theme,
+            );
+        }
         by_entity.insert(entity, node);
     }
 
@@ -1079,7 +1465,7 @@ pub fn extract_buiy_nodes(
     let mut groups: Vec<EffectGroupExtract> = group_entities
         .iter()
         .map(|&e| {
-            let (reason, opacity) = group_formers[&e];
+            let (reason, opacity, blur_px) = group_formers[&e];
             // The enclosing group is the nearest former STRICTLY above `e`.
             let parent = child_of
                 .get(e)
@@ -1092,6 +1478,14 @@ pub fn extract_buiy_nodes(
                 min: n.position,
                 max: n.position + n.size,
             });
+            // Parity Wave B4: a backdrop-filter former blurs the painted backdrop
+            // within its OWN box (own.unwrap), distinct from the transitive
+            // `bounds`. `backdrop_box`/`backdrop_blur_px` are `Some` only when this
+            // former actually carries a px blur.
+            let (backdrop_blur_px, backdrop_box) = match (blur_px, own) {
+                (Some(px), Some(b)) => (Some(px), Some(b)),
+                _ => (None, None),
+            };
             EffectGroupExtract {
                 entity: e,
                 parent,
@@ -1101,6 +1495,8 @@ pub fn extract_buiy_nodes(
                     min: Vec2::ZERO,
                     max: Vec2::ZERO,
                 }),
+                backdrop_blur_px,
+                backdrop_box,
             }
         })
         .collect();
@@ -1117,11 +1513,21 @@ pub fn extract_buiy_nodes(
         .map(|(e, sc)| (e, sc.painters_z.as_slice()))
         .collect();
     let painters_z_of = |e: Entity| -> Option<&[Entity]> { sc_by_entity.get(&e).copied() };
+    // The cross-root rank lookup (layout 6f stamps `cross_root_rank` per context).
+    let rank_by_entity: std::collections::HashMap<Entity, u8> = contexts
+        .iter()
+        .map(|(e, sc)| (e, sc.cross_root_rank))
+        .collect();
 
-    // Root contexts (the shared [`context_roots`] helper): the forming
-    // entities no other context lists as a painter, entity-sorted. v1 expects
-    // a single root (architecture § 4, D2).
-    let roots = context_roots(&sc_by_entity);
+    // Root contexts (the shared helper): the forming entities no other context
+    // lists as a painter. Ranked so a parentless TOP-LAYER root (a dialog authored
+    // outside the main content tree) paints LAST — over the whole window — rather
+    // than wherever its raw entity id falls (the M6 modal-under-shell bug). A
+    // parented top-layer node escapes to its root's painters_z tail (layout 6f)
+    // and never reaches this sort, so this only fixes the cross-ROOT case.
+    let roots = context_roots(&sc_by_entity, |e| {
+        rank_by_entity.get(&e).copied().unwrap_or(0)
+    });
 
     // The view-level logical→clip terms (architecture § 4, D2: every Node
     // resolves to the primary window's view). `BuiyViewUniform::for_view`
@@ -1222,4 +1628,48 @@ pub struct TextQuad {
 #[derive(Resource, Default, Clone, Debug)]
 pub struct ExtractedTextQuads {
     pub quads: Vec<TextQuad>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::Length;
+
+    #[test]
+    fn backdrop_blur_resolves_first_px_blur() {
+        // parity Wave B4: the resolver picks the first `Blur(Px)` term.
+        let f = BackdropFilter(vec![FilterFn::Blur(Length::px(6.0))]);
+        assert_eq!(backdrop_blur_px(&f), Some(6.0));
+    }
+
+    #[test]
+    fn backdrop_blur_skips_non_px_and_non_blur() {
+        // No blur term → None.
+        assert_eq!(
+            backdrop_blur_px(&BackdropFilter(vec![FilterFn::Brightness(0.5)])),
+            None
+        );
+        // A zero-radius blur is a no-op (treated as no blur).
+        assert_eq!(
+            backdrop_blur_px(&BackdropFilter(vec![FilterFn::Blur(Length::ZERO)])),
+            None
+        );
+        // A percent blur (no concrete px) is not resolved in v1.
+        assert_eq!(
+            backdrop_blur_px(&BackdropFilter(vec![FilterFn::Blur(Length::Percent(10.0))])),
+            None
+        );
+        // An empty list → None.
+        assert_eq!(backdrop_blur_px(&BackdropFilter(vec![])), None);
+    }
+
+    #[test]
+    fn backdrop_blur_picks_blur_among_other_filters() {
+        // A blur AFTER a brightness term is still found.
+        let f = BackdropFilter(vec![
+            FilterFn::Brightness(0.8),
+            FilterFn::Blur(Length::px(2.0)),
+        ]);
+        assert_eq!(backdrop_blur_px(&f), Some(2.0));
+    }
 }

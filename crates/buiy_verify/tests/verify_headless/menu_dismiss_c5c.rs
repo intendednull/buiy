@@ -155,11 +155,16 @@ fn press_inside_an_open_menu_keeps_it_open() {
     let (_button, menu, _items) = spawn_open_menu(&mut h);
     assert!(is_open(&h, menu), "the menu starts open");
 
-    // Press at the menu's own center — an INSIDE press must NOT dismiss it.
+    // Press-DOWN at the menu's own center — an INSIDE press must NOT light-dismiss
+    // it. Light-dismiss fires on `Pointer<Press>` (dismiss.rs), so a press-down is
+    // the precise inside/outside containment test. We deliberately do NOT release:
+    // a full click here lands on the centre `MenuItem` and SELECTS it (close-on-
+    // select — the pointer mirror of keyboard Enter, see
+    // `menu_item_click_emits_on_press` + its activation tests), which is a separate
+    // behaviour from light-dismiss. The press-down alone must keep the menu open.
     let center = h.global_center(menu);
     h.move_to(center);
     h.press(PointerButton::Primary);
-    h.release(PointerButton::Primary);
     for _ in 0..2 {
         h.update();
     }

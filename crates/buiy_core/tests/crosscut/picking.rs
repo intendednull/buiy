@@ -51,6 +51,7 @@ fn spawn_paint_order(app: &mut App, entities: &[Entity]) -> Entity {
     app.world_mut()
         .spawn(StackingContext {
             painters_z: entities.to_vec(),
+            ..Default::default()
         })
         .id()
 }
@@ -375,11 +376,13 @@ fn global_paint_order_equals_render_context_tree_flatten() {
     let nested = world
         .spawn(StackingContext {
             painters_z: vec![c, d],
+            ..Default::default()
         })
         .id();
     let root = world
         .spawn(StackingContext {
             painters_z: vec![a, nested, b],
+            ..Default::default()
         })
         .id();
 

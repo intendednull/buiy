@@ -43,9 +43,9 @@ pub use commit::{TextCommitReshapeCount, text_commit};
 pub use components::{
     CaretVisual, ComputedTextLayout, ComputedTextLine, DecorationLineStyle, DecorationLines,
     FamilyEntry, FontFamily, FontSize, FontStack, FontWeight, GenericFamily, IntrinsicWidths,
-    LineHeight, PreeditVisual, ResolvedBaseline, SelectionVisual, TEXT_SHAPING, Text, TextAlign,
-    TextBuffer, TextDecorations, TextDirection, TextStyleDefaults, TextWrap, WhiteSpace,
-    resolve_wrap,
+    LetterSpacing, LineHeight, PreeditVisual, ResolvedBaseline, SelectionVisual, TEXT_SHAPING,
+    Text, TextAlign, TextBuffer, TextDecorations, TextDirection, TextStyleDefaults, TextWrap,
+    WhiteSpace, resolve_wrap,
 };
 pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
@@ -65,8 +65,8 @@ pub use extract::{
 };
 pub use font_asset::{BuiyFont, BuiyFontLoader, BuiyFontLoaderError, sniff_sfnt};
 pub use font_system::{
-    BuiyFallback, DEFAULT_FONT_FAMILY, FontDbLineage, FontsGeneration, SharedFontSystem,
-    registered_fonts_db,
+    BuiyFallback, DEFAULT_FONT_FAMILY, FontDbLineage, FontsGeneration, GEIST_MONO_FAMILY,
+    GEIST_SANS_FAMILY, SharedFontSystem, registered_fonts_db,
 };
 pub use match_index::FontMatchIndex;
 pub use measure::{TextMeasureCallCount, TextMeasureParam};
@@ -142,6 +142,7 @@ impl Plugin for BuiyTextPlugin {
             .register_type::<GenericFamily>()
             .register_type::<FontSize>()
             .register_type::<FontWeight>()
+            .register_type::<LetterSpacing>()
             .register_type::<LineHeight>()
             .register_type::<WhiteSpace>()
             .register_type::<TextWrap>()

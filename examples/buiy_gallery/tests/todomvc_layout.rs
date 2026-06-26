@@ -1,12 +1,12 @@
 //! Headless layout-snapshot gate for the S1 TodoMVC screen (Tier 1 of the
 //! `buiy_verify` pyramid — no GPU, no window). Drives the **same**
-//! `screen_todomvc` tree the binary authors + seeds the demo rows, then pins the
-//! resolved layout of every `#Name`-tagged entity. A structural regression (a
+//! `spawn_todomvc_screen` tree the binary authors + seeds the demo rows, then pins
+//! the resolved layout of every `#Name`-tagged entity. A structural regression (a
 //! dropped child, a lost merge, a wrong box) shows as a `.snap` diff.
 //!
 //! This is the "example IS the fixture" discipline applied to S1: the screen is
-//! authored once (`buiy_gallery::screen_todomvc`) and both the runnable binary
-//! and this gate spawn the exact same tree. Matrix enrollment of screen fixtures
+//! authored once (`buiy_gallery::spawn_todomvc_screen`) and both the runnable
+//! binary and this gate build the exact same tree. Matrix enrollment of fixtures
 //! (the reduced `Matrix::gallery_screen()`) is a later C8 slice; this dedicated
 //! scene-based snapshot covers S1's layout structure without modifying the
 //! coverage `build_app` (which has no `ScenePlugin`).
@@ -15,15 +15,15 @@ use bevy::MinimalPlugins;
 use bevy::app::App;
 use bevy::asset::AssetPlugin;
 use bevy::ecs::entity::Entity;
-use bevy::scene::{ScenePlugin, WorldSceneExt};
+use bevy::scene::ScenePlugin;
 use buiy::{BuiyTextPlugin, CorePlugin, LayoutPlugin, WidgetsPlugin};
 use buiy_core::ResolvedLayout;
 use buiy_core::text::{ComputedTextLayout, Text};
-use buiy_gallery::{DEMO_SEEDS, append_row, screen_todomvc};
+use buiy_gallery::{DEMO_SEEDS, EmptyLabel, append_row, spawn_todomvc_screen};
 use buiy_verify::snapshot::assert_layout_snapshot;
 
 /// Build the live TodoMVC tree (the same one the binary authors): the static
-/// screen + the imperatively-seeded demo rows.
+/// screen frame + the imperatively-seeded demo rows.
 fn todomvc_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
@@ -34,11 +34,9 @@ fn todomvc_app() -> App {
         .add_plugins(BuiyTextPlugin::default())
         .add_plugins(WidgetsPlugin);
 
-    // Author the static screen, then seed the demo rows imperatively (rows are
-    // dynamic — the binary seeds them in `setup` the same way).
-    app.world_mut()
-        .spawn_scene(screen_todomvc(DEMO_SEEDS))
-        .expect("spawn the todomvc screen");
+    // Build the static screen frame, then seed the demo rows imperatively (rows are
+    // dynamic — the binary seeds them in `spawn_todo_screen` the same way).
+    spawn_todomvc_screen(app.world_mut());
     for &(label, completed) in DEMO_SEEDS {
         append_row(app.world_mut(), label, completed);
     }
@@ -71,15 +69,23 @@ fn todomvc_content_text_is_laid_out_and_shaped_so_it_paints() {
     let mut q = app.world_mut().query::<(
         Entity,
         &Text,
+        Option<&EmptyLabel>,
         Option<&ResolvedLayout>,
         Option<&ComputedTextLayout>,
     )>();
     let world = app.world();
     let mut checked = 0usize;
-    for (e, text, layout, computed) in q.iter(world) {
+    for (e, text, empty, layout, computed) in q.iter(world) {
         // Skip the EMPTY carriers (the input editor's `Text("")` display carrier,
         // an unchecked checkbox mark) — they legitimately paint nothing.
         if text.0.trim().is_empty() {
+            continue;
+        }
+        // Skip the empty-state label: with seeded rows it is INTENTIONALLY
+        // `Display::None` at rest (collapsed out of layout — it carries text only
+        // so `apply_filter` can reveal it when a filter matches no rows), so a
+        // zero-size box here is correct, not the require(Node) regression.
+        if empty.is_some() {
             continue;
         }
         let layout = layout.unwrap_or_else(|| {

@@ -42,6 +42,7 @@ fn node(entity: Entity, size: Vec2) -> ExtractedNode {
         outline: None,
         border: None,
         shadows: Vec::new(),
+        gradients: Vec::new(),
     }
 }
 

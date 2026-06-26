@@ -58,6 +58,14 @@ taffy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = "0.25"
+# Vector-icon tessellation (parity Wave B3, parity-design § 3.5). `lyon` is the
+# stroke/fill tessellator (round caps/joins, arc flattening); `lyon_extra`
+# carries the SVG-path-`d` parser (`lyon_extra::parser`, over `svgtypes`). Both
+# MIT/Apache-2.0, no_std-friendly, pure-CPU (no GPU/sys deps). Consumed only by
+# `buiy_core::render::icon_raster` to produce R8 coverage for the glyph-alpha
+# atlas — see crates/buiy_core/Cargo.toml for the full rationale.
+lyon = "1.0"
+lyon_extra = "1.1"
 proptest = "1"
 # Clipboard for the text editor (editing-and-ime § 7). arboard is the
 # ecosystem standard (egui/bevy_egui lineage), 1Password-stewarded,

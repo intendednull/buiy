@@ -127,6 +127,19 @@ impl Default for ResolvedTransform {
 #[reflect(Component)]
 pub struct StackingContext {
     pub painters_z: Vec<Entity>,
+    /// Cross-ROOT paint rank: the order this context sorts against OTHER root
+    /// contexts when it is itself a root (not listed as a painter in any other
+    /// context). `0` for an in-flow root (paints first / bottom); a higher value
+    /// for a TOP-LAYER root so a *parentless* top-layer tree (a dialog/popover
+    /// authored outside the main content tree) paints LAST — over the whole window
+    /// — instead of wherever its raw entity id falls (the M6 modal-under-shell
+    /// bug). Set by sub-pass 6f from the entity's `Stacking.top_layer`
+    /// (`render::extract::cross_root_rank`). Ignored for a NESTED context (it
+    /// never reaches the root sort) and for the within-root order (a parented
+    /// top-layer node escapes to its root's `painters_z` tail in 6f, untouched by
+    /// this rank). The single source of truth read by every paint-order consumer
+    /// (render node + glyph walks, picking depth) so they order roots identically.
+    pub cross_root_rank: u8,
 }
 
 #[cfg(test)]

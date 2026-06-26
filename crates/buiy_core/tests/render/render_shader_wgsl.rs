@@ -19,6 +19,7 @@ const SHADOW_WGSL: &str = include_str!("../../src/render/shadow.wgsl");
 const COVERAGE_WGSL: &str = include_str!("../../src/render/coverage.wgsl");
 const COMPOSITE_WGSL: &str = include_str!("../../src/render/composite.wgsl");
 const BAND_WGSL: &str = include_str!("../../src/render/band.wgsl");
+const GRADIENT_WGSL: &str = include_str!("../../src/render/gradient.wgsl");
 
 #[test]
 fn quad_shader_parses_and_has_entry_points() {
@@ -177,6 +178,51 @@ fn band_shader_parses_and_has_entry_points() {
     assert!(
         BAND_WGSL.contains("affine_col0") && BAND_WGSL.contains("affine_col1"),
         "band shader declares the affine basis columns"
+    );
+}
+
+#[test]
+fn gradient_shader_parses_and_has_entry_points() {
+    // The background-gradient shader (gradient.wgsl, octet ..07 — parity Wave B1).
+    // Device compilation rides the `#[ignore]` GPU lane, so naga is the merge-gate
+    // guard against a syntax/binding/attribute regression.
+    let m = parse_wgsl("gradient", GRADIENT_WGSL);
+    assert!(
+        has_entry_point(&m, "vertex"),
+        "gradient shader has `vertex`"
+    );
+    assert!(
+        has_entry_point(&m, "fragment"),
+        "gradient shader has `fragment`"
+    );
+    // Shares the quad family's view uniform at @group(0) @binding(0) (no
+    // @group(1) — the gradient is computed in-shader, samples no texture).
+    assert!(
+        GRADIENT_WGSL.contains("@group(0) @binding(0) var<uniform> view"),
+        "gradient shader shares the quad view uniform at @group(0) @binding(0)"
+    );
+    assert!(
+        !GRADIENT_WGSL.contains("@group(1)"),
+        "the gradient pipeline binds no @group(1) (it samples no texture)"
+    );
+    // The clip discard + the affine basis match the GradientInstance layout.
+    assert!(
+        GRADIENT_WGSL.contains("clip_min") && GRADIENT_WGSL.contains("clip_max"),
+        "gradient shader discards outside the clip AABB"
+    );
+    assert!(
+        GRADIENT_WGSL.contains("affine_col0") && GRADIENT_WGSL.contains("affine_col1"),
+        "gradient shader declares the affine basis columns"
+    );
+    // The two stop colors + the axis projection (linear) / center distance
+    // (radial branch) are the load-bearing gradient pieces.
+    assert!(
+        GRADIENT_WGSL.contains("color0") && GRADIENT_WGSL.contains("color1"),
+        "gradient shader interpolates two stop colors"
+    );
+    assert!(
+        GRADIENT_WGSL.contains("dot(in.local, in.axis)"),
+        "gradient shader projects the fragment onto the precomputed axis (linear)"
     );
 }
 
