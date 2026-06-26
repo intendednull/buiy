@@ -1390,6 +1390,9 @@ pub fn extract_buiy_nodes(
     // manual extract test harnesses (which don't register it) still run the system —
     // no registration drift, no missing-resource skip (the counters pattern).
     mut index: Option<ResMut<RetainedNodeIndex>>,
+    // #2 Stage C3b: the Full-vs-Patch tag for prepare (Stage D). `Option` for the same
+    // test-harness reason as `index`.
+    mut damage: Option<ResMut<NodeDamage>>,
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
@@ -1411,6 +1414,9 @@ pub fn extract_buiy_nodes(
         *groups_res = ExtractedEffectGroups::default();
         if let Some(idx) = index.as_deref_mut() {
             idx.0.clear();
+        }
+        if let Some(d) = damage.as_deref_mut() {
+            *d = NodeDamage::Full;
         }
         record_node_counts(&mut counters, 0, 0, 0);
         return;
@@ -1454,6 +1460,74 @@ pub fn extract_buiy_nodes(
     let mut group_formers: EntityHashMap<(EffectReason, f32, Option<f32>)> =
         EntityHashMap::default();
     let forced_colors = prefs.forced_colors;
+
+    // #2 Stage C3b: attempt an in-place PATCH before the O(N) Full build. A Patch
+    // re-resolves ONLY the changed entities and overwrites their existing slots in the
+    // retained `ExtractedNodesView`, leaving every untouched sibling record + the slot
+    // ORDER intact (R5 trap — never rebuild the ordered Vec from the changed set). It is
+    // eligible iff there is no structural / hierarchy / group-membership / despawn /
+    // paint-skip-lift / theme change AND every changed entity is a group-free,
+    // footprint-stable painting node already resident in the prior index (so its slot is
+    // stable and its band layout unchanged). Anything else falls through to the Full
+    // build. The overwrite marks `view` changed, so prepare still does a FULL repack from
+    // the patched records (text quads are a separate carrier, re-spliced normally) — the
+    // extract O(N)->O(changed) win is HERE; the partial UPLOAD is Stage D.
+    let patch_candidate =
+        structural_changed.is_empty() && !despawned && !skip_lifted && !theme_changed;
+    if patch_candidate && let Some(idx) = index.as_deref() {
+        let mut patches: Vec<(usize, ExtractedNode)> = Vec::new();
+        let mut patchable = true;
+        // Read the prior records IMMUTABLY here (no `is_changed` trip) to decide + resolve.
+        {
+            let prior = &view.0.nodes;
+            for e in changed.iter() {
+                let Some(&slot) = idx.0.get(&e) else {
+                    patchable = false;
+                    break;
+                };
+                let Some(old) = prior.get(slot as usize) else {
+                    patchable = false;
+                    break;
+                };
+                // v1 scope: group-free quad-only. A grouped node would re-pack its group's
+                // off-screen target; defer to Full.
+                if old.group.is_some() {
+                    patchable = false;
+                    break;
+                }
+                let Ok(item) = nodes.get(e) else {
+                    patchable = false;
+                    break;
+                };
+                let Some(new) = resolve_one(item, theme, forced_colors) else {
+                    patchable = false;
+                    break;
+                };
+                // A footprint change (a band appeared/vanished, emits_quad flipped) shifts
+                // the slot count -> Full repack.
+                if node_footprint(&new) != node_footprint(old) {
+                    patchable = false;
+                    break;
+                }
+                patches.push((slot as usize, new));
+            }
+        }
+        if patchable && !patches.is_empty() {
+            // APPLY: overwrite each changed entity's slot in place. DerefMut marks `view`
+            // changed so prepare repacks; the retained siblings + order are untouched.
+            let patched = patches.len();
+            for (slot, new) in patches {
+                view.0.nodes[slot] = new;
+            }
+            record_node_counts(&mut counters, 0, patched, 1);
+            if let Some(d) = damage.as_deref_mut() {
+                *d = NodeDamage::Patch(changed.iter().collect());
+            }
+            return;
+        }
+        // Not all changed entities were patchable — fall through to the Full build.
+    }
+
     for item in nodes.iter() {
         // #2 Stage C3a: capture each effect-group former while the fan is borrowed —
         // Full-build group-tag state, NOT part of the per-node record (a Patch only
@@ -1634,41 +1708,13 @@ pub fn extract_buiy_nodes(
     // later Patch stage will additionally require a per-entity footprint match, so
     // this coarse signal is an upper-ish bound used to size the Patch-path payoff
     // (the `node_patches` counter) before building the in-place Patch path.
-    // #2 Stage C2: PER-ENTITY Patch classification (still observation-only — the
-    // rebuild above is Full). A frame is Patch-eligible iff there is no structural
-    // change anywhere and EVERY changed entity is a value-only tweak (color / position
-    // / size) to a group-free, footprint-stable node that maps to an existing slot in
-    // the prior view it can overwrite in place. The prior records + index are read HERE,
-    // before the `*view =` overwrite + index rebuild below. Replaces Stage B's coarse
-    // scene-level `group_formers.is_empty()` (which forced Full whenever the scene held
-    // ANY effect group — too coarse for real UIs whose static cards are groups). A
-    // changed entity absent from the prior index (a non-painting container or a freshly
-    // painting node) is conservatively NOT patchable -> Full.
-    let patch_eligible =
-        !despawned && !skip_lifted && !theme_changed && structural_changed.is_empty() && {
-            let prior = &view.0.nodes;
-            let mut any = false;
-            let mut all_patchable = true;
-            for e in changed.iter() {
-                any = true;
-                let patchable = index
-                    .as_deref()
-                    .and_then(|idx| idx.0.get(&e))
-                    .and_then(|&slot| prior.get(slot as usize))
-                    .is_some_and(|old| {
-                        old.group.is_none()
-                            && by_entity
-                                .get(&e)
-                                .is_some_and(|new| node_footprint(new) == node_footprint(old))
-                    });
-                if !patchable {
-                    all_patchable = false;
-                    break;
-                }
-            }
-            any && all_patchable
-        };
-    record_node_counts(&mut counters, 1, all.nodes.len(), patch_eligible as u32);
+    // #2 Stage C3b: reaching here means the Patch attempt above bailed (a footprint /
+    // group mismatch or a non-resident changed entity) or the frame was never a Patch
+    // candidate (structural / despawn / theme) — so this is a Full rebuild, node_patches = 0.
+    record_node_counts(&mut counters, 1, all.nodes.len(), 0);
+    if let Some(d) = damage.as_deref_mut() {
+        *d = NodeDamage::Full;
+    }
     *view = ExtractedNodesView(all);
     // #2 Stage C: rebuild the entity->slot index from the freshly-published ordered
     // nodes — the foundation for a later in-place Patch overwrite at `index[e]`.
@@ -1700,6 +1746,21 @@ pub struct ExtractedNodesView(pub ExtractedNodes);
 /// ordered Vec from the changed set (the R5 sibling-drop trap).
 #[derive(Resource, Default)]
 pub struct RetainedNodeIndex(pub EntityHashMap<u32>);
+
+/// #2 Stage C3b: how this frame re-extracted the node set, for prepare (Stage D) to
+/// size its instance-buffer upload. `Full` = the whole set was rebuilt (cold frame,
+/// structural change, or a Patch-ineligible change) — prepare repacks + uploads all.
+/// `Patch(entities)` = only these entities' records were overwritten in place (a
+/// group-free, footprint-stable value change) — Stage D will upload only their slots.
+/// In C3b prepare still does a FULL repack on Patch (the extract O(N)->O(changed) win
+/// lands here; the partial UPLOAD is Stage D); the tag is published now so D can consume
+/// it. Published every dirty frame, mirroring the `ExtractedNodesView` overwrite contract.
+#[derive(Resource, Clone, Debug, Default)]
+pub enum NodeDamage {
+    #[default]
+    Full,
+    Patch(Vec<Entity>),
+}
 
 /// One text quad-tier visual (decoration-and-paint § 4.6): selection rects
 /// (T7) and underline/overline (T6), keyed by the SOURCE entity. A flat

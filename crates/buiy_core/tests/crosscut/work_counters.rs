@@ -39,8 +39,9 @@ fn idle_text_frame_touches_one_per_resident_key() {
     );
 }
 
-/// The audit-#2 rebuild-rate gate: a settled scene rebuilds 0×; a single changed
-/// entity rebuilds exactly ONCE (not N×), and a rebuild builds every node record.
+/// The audit-#2 gate: a settled scene rebuilds 0×; a single group-free value change is
+/// an in-place PATCH of exactly ONE record (#2 C3b — the O(N)->O(1) win), not a Full
+/// rebuild of all N.
 #[test]
 fn idle_zero_rebuilds_one_change_exactly_one() {
     let (mut h, victim) = build_flat_bg_scene(64);
@@ -54,33 +55,36 @@ fn idle_zero_rebuilds_one_change_exactly_one() {
     assert_eq!(idle.node_rebuilds, 0, "idle frame: no node rebuild");
     assert_eq!(idle.instances_built, 0, "idle frame: no records built");
 
-    // One interactive change to a single node → exactly one full rebuild.
+    // One interactive change to a single node → an in-place PATCH of exactly that one
+    // record (#2 C3b: the O(N)->O(1) win, NOT a Full rebuild of all 64).
     if let Some(mut bg) = h.app.world_mut().get_mut::<Background>(victim) {
         bg.set_changed();
     }
     h.frame();
     let changed = *h.render.resource::<RenderWorkCounters>();
     assert_eq!(
-        changed.node_rebuilds, 1,
-        "#2: one changed entity triggers exactly one rebuild, not N"
+        changed.node_rebuilds, 0,
+        "#2 C3b: a group-free value change is a Patch, not a Full rebuild"
     );
-    assert!(
-        changed.instances_built >= 64,
-        "a rebuild builds every node record (got {} for 64 painting nodes)",
-        changed.instances_built
+    assert_eq!(
+        changed.node_patches, 1,
+        "#2 C3b: the frame is classified + applied as a Patch"
+    );
+    assert_eq!(
+        changed.instances_built, 1,
+        "#2 C3b: a Patch re-resolves exactly the one changed record, not all 64"
     );
 }
 
-/// #2 Stage B classifier (observation-only — the extract still does a Full rebuild):
-/// a value-only change (Background re-tint) on a group-free scene is Patch-ELIGIBLE
-/// (`node_patches == 1`), while a structural/footprint change (a Border appearing)
-/// forces a Full rebuild (`node_patches == 0`). This measures the Patch-vs-Full mix
-/// that sizes the C/D Patch-path payoff before it is built.
+/// #2 C3b Patch classification: a value-only change (Background re-tint) on a group-free
+/// scene is an in-place PATCH (`node_patches == 1`, `node_rebuilds == 0`), while a
+/// structural/footprint change (a Border appearing) forces a Full rebuild
+/// (`node_patches == 0`, `node_rebuilds == 1`).
 #[test]
-fn stage_b_classifies_value_change_patch_structural_full() {
+fn patch_classifies_value_change_patch_structural_full() {
     use buiy_core::render::components::Border;
 
-    // Value-only: hover-retint a solid bg node, no effect groups -> Patch-eligible.
+    // Value-only: hover-retint a solid bg node, no effect groups -> in-place Patch.
     let (mut h, victim) = build_flat_bg_scene(32);
     for _ in 0..8 {
         h.frame();
@@ -91,12 +95,12 @@ fn stage_b_classifies_value_change_patch_structural_full() {
     h.frame();
     let c = *h.render.resource::<RenderWorkCounters>();
     assert_eq!(
-        c.node_rebuilds, 1,
-        "Stage B is observation-only: value change still rebuilds"
+        c.node_rebuilds, 0,
+        "#2 C3b: a group-free value change is a Patch, not a Full rebuild"
     );
     assert_eq!(
         c.node_patches, 1,
-        "#2 Stage B: a group-free value-only change is Patch-eligible"
+        "#2 C3b: a group-free value-only change is applied as a Patch"
     );
 
     // Structural: a Border appears (a footprint change) -> Full, not Patch.
@@ -113,6 +117,51 @@ fn stage_b_classifies_value_change_patch_structural_full() {
     assert_eq!(c2.node_rebuilds, 1, "structural change rebuilds");
     assert_eq!(
         c2.node_patches, 0,
-        "#2 Stage B: a Border appearing (footprint change) forces a Full rebuild"
+        "#2 C3b: a Border appearing (footprint change) forces a Full rebuild"
     );
+}
+
+/// #2 C3b R5 trap: an in-place Patch overwrites ONLY the changed entity's slot — every
+/// retained sibling record stays byte-identical and the slot ORDER is preserved (the
+/// Patch never rebuilds the ordered Vec from the changed set). Together with the
+/// `instances_built == 1` counter (one record re-resolved), this proves the Patch is
+/// surgical, not a disguised full rebuild.
+#[test]
+fn patch_retains_sibling_records_byte_identical() {
+    use buiy_core::render::extract::ExtractedNodesView;
+
+    let (mut h, victim) = build_flat_bg_scene(64);
+    for _ in 0..8 {
+        h.frame();
+    }
+    // The full ordered record set after a settled Full build.
+    let before: Vec<_> = h.render.resource::<ExtractedNodesView>().0.nodes.clone();
+
+    // One group-free value change -> a Patch.
+    if let Some(mut bg) = h.app.world_mut().get_mut::<Background>(victim) {
+        bg.set_changed();
+    }
+    h.frame();
+    let c = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(c.node_patches, 1, "the single value change is a Patch");
+    assert_eq!(c.node_rebuilds, 0, "a Patch is not a Full rebuild");
+
+    let after = &h.render.resource::<ExtractedNodesView>().0.nodes;
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "R5: a Patch preserves the ordered record count (no sibling dropped)"
+    );
+    for (b, a) in before.iter().zip(after.iter()) {
+        assert_eq!(
+            b.entity, a.entity,
+            "R5: a Patch preserves slot order (same entity at each slot)"
+        );
+        if a.entity != victim {
+            assert_eq!(
+                b, a,
+                "R5: every sibling record is byte-identical — retained, not re-derived"
+            );
+        }
+    }
 }

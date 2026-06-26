@@ -31,7 +31,7 @@ use buiy_core::render::atlas::{AtlasConfig, BuiyAtlas, maintain_atlas};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::render::extract::{
-    ExtractedEffectGroups, ExtractedNodesView, ExtractedTextQuads, RetainedNodeIndex,
+    ExtractedEffectGroups, ExtractedNodesView, ExtractedTextQuads, NodeDamage, RetainedNodeIndex,
     extract_buiy_nodes,
 };
 use buiy_core::render::prepare::ExtractedGlyphs;
@@ -92,6 +92,7 @@ impl PipelineHarness {
         render.init_resource::<ExtractedNodesView>();
         render.init_resource::<ExtractedEffectGroups>();
         render.init_resource::<RetainedNodeIndex>();
+        render.init_resource::<NodeDamage>();
         // P0b: the deterministic work-unit counters, registered here so the gate
         // tests can read them — the SAME `RenderWorkCounters` the real RenderApp
         // registers (one type, one registration list).
