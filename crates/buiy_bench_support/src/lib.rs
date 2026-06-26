@@ -34,6 +34,7 @@ use buiy_core::render::extract::{
     ExtractedEffectGroups, ExtractedNodesView, ExtractedTextQuads, extract_buiy_nodes,
 };
 use buiy_core::render::prepare::ExtractedGlyphs;
+use buiy_core::render::{RenderWorkCounters, record_text_work_counters};
 use buiy_core::text::{
     BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontSize, GlyphMetaCache, ResidentTextKeys,
     SharedFontSystem, Text, extract_buiy_glyphs,
@@ -89,6 +90,10 @@ impl PipelineHarness {
         // gate-skip path on a clean frame has a resident resource to retain).
         render.init_resource::<ExtractedNodesView>();
         render.init_resource::<ExtractedEffectGroups>();
+        // P0b: the deterministic work-unit counters, registered here so the gate
+        // tests can read them — the SAME `RenderWorkCounters` the real RenderApp
+        // registers (one type, one registration list).
+        render.init_resource::<RenderWorkCounters>();
         render.init_resource::<FontKeyInterner>();
         render.init_resource::<ResidentTextKeys>();
         render.init_resource::<GlyphMetaCache>();
@@ -97,7 +102,17 @@ impl PipelineHarness {
         render.init_resource::<MainWorld>();
 
         let mut extract = Schedule::new(ExtractSchedule);
-        extract.add_systems((maintain_atlas, extract_buiy_glyphs, extract_buiy_nodes).chain());
+        // `record_text_work_counters` runs AFTER `extract_buiy_glyphs` (reads the
+        // refreshed `ResidentTextKeys`); `extract_buiy_nodes` sets its own counts.
+        extract.add_systems(
+            (
+                maintain_atlas,
+                extract_buiy_glyphs,
+                record_text_work_counters,
+                extract_buiy_nodes,
+            )
+                .chain(),
+        );
 
         Self {
             app,

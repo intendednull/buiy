@@ -24,6 +24,7 @@ use crate::render::components::{
     AncestorClip, BackdropFilter, Background, BackgroundLayers, Border, BoxShadow, ClipRect,
     ComputedPaintSkip, EffectGroup, EffectReason, FilterFn, Opacity, Outline,
 };
+use crate::render::counters::{RenderWorkCounters, record_node_counts};
 use crate::theme::UserPreferences;
 
 /// One extracted effect group's CPU record (effect-compositor.md § 1.1). Emitted
@@ -1250,6 +1251,11 @@ pub fn extract_buiy_nodes(
     // GPU — invisible to the CPU-only buffer assertions but fatal on a real
     // adapter (caught by the gate-#2 readback harness).
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
+    // P0b work-unit counters: `node_rebuilds` (0 idle / 1 rebuild) +
+    // `instances_built` (0 idle / N rebuild), set in every return path below.
+    // `Option` so a harness without the resource is unaffected (no registration
+    // drift, no missing-resource skip).
+    mut counters: Option<ResMut<RenderWorkCounters>>,
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
@@ -1269,6 +1275,7 @@ pub fn extract_buiy_nodes(
     let Ok(primary_window) = primary.single() else {
         commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
         commands.insert_resource(ExtractedEffectGroups::default());
+        record_node_counts(&mut counters, 0, 0);
         return;
     };
 
@@ -1284,6 +1291,7 @@ pub fn extract_buiy_nodes(
     // buffers (the node re-binds + re-draws them). This is the O(0) steady-state
     // the spec's gate-#14 budget requires.
     if changed.is_empty() && !despawned && !skip_lifted && !theme.is_changed() {
+        record_node_counts(&mut counters, 0, 0);
         return;
     }
 
@@ -1577,6 +1585,8 @@ pub fn extract_buiy_nodes(
     // no ExtractedNodesPrimary/ExtractedNodesResource wrapper). The precise
     // target-entity resolution is the one piece that needs the render world and
     // is exercised only under the GPU e2e path (Task 8 / R6/R8).
+    // P0b rebuild path: this frame passed the damage gate and built the full set.
+    record_node_counts(&mut counters, 1, all.nodes.len());
     commands.insert_resource(ExtractedNodesView(all));
     // The per-view effect-group list (effect-compositor.md § 1.1). Emitted on
     // EVERY rebuild frame (incl. when empty) so a frame that drops the last group

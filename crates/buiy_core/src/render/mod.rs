@@ -22,6 +22,7 @@ pub mod color;
 pub mod components;
 pub mod composite;
 pub mod compositor;
+pub mod counters;
 pub mod effect;
 pub mod extract;
 pub mod forced_colors;
@@ -37,6 +38,8 @@ pub mod primitive;
 pub mod top_layer;
 pub mod view_uniform;
 pub mod visibility;
+
+pub use counters::{RenderWorkCounters, record_text_work_counters};
 
 pub use bridge::ScrollDirty;
 pub use clip::write_clip_rects;
@@ -300,6 +303,10 @@ impl Plugin for BuiyRenderPlugin {
             // test reads them to pin "a blink frame re-uploads the glyph
             // buffer ONLY" (decoration-and-paint § 6.3; verification § 1.3).
             .init_resource::<prepare::BufferUploadStats>()
+            // Deterministic per-frame work-unit counters (perf-final P0b) — the
+            // host-independent measurement gate. Registered here AND in the
+            // `buiy_bench_support` harness via the same `RenderWorkCounters` type.
+            .init_resource::<counters::RenderWorkCounters>()
             // The render-world glyph-instance list, filled per frame by
             // `text::extract_buiy_glyphs` (registered by `BuiyTextPlugin`, T4).
             // Kept `init_resource`'d here so the prepare gate works even if the
@@ -323,6 +330,12 @@ impl Plugin for BuiyRenderPlugin {
             .add_systems(ExtractSchedule, extract_buiy_draws)
             // The per-view extract rework (R5). architecture § 1.2/§ 3/§ 4.
             .add_systems(ExtractSchedule, extract::extract_buiy_nodes)
+            // P0b: record atlas_touch_ops/resident_keys AFTER the glyph producer
+            // refreshes `ResidentTextKeys` (the audit-#5 blind-spot counter).
+            .add_systems(
+                ExtractSchedule,
+                counters::record_text_work_counters.after(crate::text::extract_buiy_glyphs),
+            )
             // The vector-icon producer (parity Wave B3): rasterizes + atlas-inserts
             // each `Icon` and emits a tinted coverage instance. `.after(maintain_atlas)`
             // so inserts/touches use the just-advanced atlas frame clock (the
