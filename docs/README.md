@@ -171,7 +171,21 @@ The interactive widget-catalog subsystem — real `Pointer<E>` input, accessible
 - [C7 — verification (real-input tier)](plans/2026-06-22-buiy-widget-catalog-c7-verification.md) — Wave-1 TDD plan: the `PointerHarness`, font-reload-survival harness, and content-presence invariant; RED-first, extends the landed nextest + consolidated test infra. `[active]`
 - [Widget Catalog parity — FINAL plan (Phase 3)](plans/2026-06-26-widget-catalog-parity-final.md) — the 6-wave "port the validated prototype + land the re-decided refinements" plan: API/prelude + extract-partition design, port A (theme/anim/fonts), port B (render caps) + the extract refactor, the shell + 5 screens, inspector + composite promotion + the headless plugin, and the Wave-6 parity audit + full gate + human-review prep. `[active]`
 
+### Performance
+
+Cross-cutting per-frame performance: the audit → prototype → production-final campaign.
+
+**Specs**
+
+- [Performance final-pass design](specs/2026-06-26-buiy-performance-final-design.md) — the production design realizing the [audit](reports/2026-06-25-performance-audit.md): measurement infrastructure FIRST (deterministic hardware-INDEPENDENT gates — work-unit counters + dhat alloc + **iai-callgrind instruction counts**, the weak-machine backbone), then #9/#11/#5/#3/#16/#2 each red→green. Headlines the #5 atlas-touch blind-spot (`atlas_touch_ops` counter), #3's idempotent-by-construction layout gating, and #2's two-tier Full/Patch keyed partial re-extract (WebRender GpuCache + Bevy SyncWorldPlugin precedent). Constraints: 60 Hz hard floor / weak machines / zero new wasm obstacles. `[active]`
+
+**Plans**
+
+- [Performance final-pass plan](plans/2026-06-26-buiy-performance-final.md) — phase-by-phase: Phase 0 (0a shared `bench_support` → 0b counters → 0c dhat+iai gates), Phase 1 (#9/#11/#5), Phase 2 (#3 gating), Phase 3 (#16 SoA), Phase 4 (#2 partial re-extract), Phase 5 (observability), then sustained autonomous iteration to the architectural wall. Includes the standing regression-guard (headless gate + GPU lane + live-interaction tier + gallery render) and the gallery S2 complex-scene workload. `[active]`
+
 ### Reports
+
+- [Performance audit](reports/2026-06-25-performance-audit.md) — first performance-lens pass (19-agent subsystem + prior-art workflow, one real benchmark, perf-validated critic; 108 findings → 16 prioritized). Headline: Buiy is **measurement-blind**; the one measured number — a static 128-node text screen at 10.9 ms/frame — root-causes to the O(V·E) atlas-LRU touch (#5). Two bigger suspected cliffs: all-or-nothing extract→prepare rebuild (#2) + ~12 ungated full-tree idle passes (#3). Ships a 6-phase measurement-infra roadmap ending in a non-flaky CI gate. Realized by the [final-pass design](specs/2026-06-26-buiy-performance-final-design.md). `[active]`
 
 - [Text-editing design-readiness review](reports/2026-06-13-text-editing-design-readiness.md) — three-verifier audit of `editing-and-ime.md` against current `main` before the `buiy-text-editing` campaign: every integration seam confirmed in code, the no-new-GPU-work painting claim upheld, and OQ#1 (edit→layout frame-ordering) resolved as accepted one-frame latency. Verdict: ready-with-patches (now applied). Its readiness premise is overtaken: the campaign it gated landed as E1–E6 (PRs #62–#67). `[superseded]`
 - [Visual-bug detection strategy](reports/2026-06-14-visual-bug-detection-strategy.md) — how to catch visual regressions as Buiy scales: a five-tier pyramid (layout-number → display-list/paint-order → metamorphic/property → reftests + CPU-cross-check → golden screenshots), reftests-first, grounded on canonical `main`. Audits the existing golden/forced-colors/text-shaping infra and names the gaps; input to `buiy-verification-design`. Pairs with the five `prior-art/` folders below. Realized by the [verification design](specs/2026-06-15-buiy-verification-design/README.md) + the landed `buiy_verify` harness. `[superseded]`
