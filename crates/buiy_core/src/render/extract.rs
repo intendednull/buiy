@@ -1105,7 +1105,14 @@ pub struct NodePaintQuery {
 // window set); splitting them into a bundle param would obscure, not clarify.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_nodes(
-    mut commands: Commands,
+    // #2 Stage A: the node + effect-group carriers are RETAINED resources written
+    // via `ResMut` (not `Commands::insert_resource`), so they persist across frames
+    // — the foundation for the keyed partial re-extract (a later Patch stage mutates
+    // them in place). On a dirty frame they are overwritten (so `is_changed()` is
+    // true → prepare repacks, exactly as before); the idle gate-skip below MUST NOT
+    // deref either, keeping `is_changed()` false (the O(0) steady-state contract).
+    mut view: ResMut<ExtractedNodesView>,
+    mut groups_res: ResMut<ExtractedEffectGroups>,
     // The author-set + handoff fan: Option<&T> for every independently-inserted
     // component (architecture § 1.2 — a non-Option term would silently drop a
     // Node missing that component). Required terms: &ResolvedLayout (a
@@ -1273,8 +1280,8 @@ pub fn extract_buiy_nodes(
     let skip_lifted = removed_skip.read().count() > 0;
 
     let Ok(primary_window) = primary.single() else {
-        commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
-        commands.insert_resource(ExtractedEffectGroups::default());
+        *view = ExtractedNodesView::default();
+        *groups_res = ExtractedEffectGroups::default();
         record_node_counts(&mut counters, 0, 0);
         return;
     };
@@ -1587,11 +1594,11 @@ pub fn extract_buiy_nodes(
     // is exercised only under the GPU e2e path (Task 8 / R6/R8).
     // P0b rebuild path: this frame passed the damage gate and built the full set.
     record_node_counts(&mut counters, 1, all.nodes.len());
-    commands.insert_resource(ExtractedNodesView(all));
+    *view = ExtractedNodesView(all);
     // The per-view effect-group list (effect-compositor.md § 1.1). Emitted on
     // EVERY rebuild frame (incl. when empty) so a frame that drops the last group
     // clears the carrier — mirrors the `ExtractedNodesView` overwrite contract.
-    commands.insert_resource(ExtractedEffectGroups(std::mem::take(&mut groups)));
+    *groups_res = ExtractedEffectGroups(std::mem::take(&mut groups));
 }
 
 /// v1 carrier-by-resource: the primary view's `ExtractedNodes`, inserted by
