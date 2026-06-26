@@ -31,11 +31,11 @@ pub use caret::{
     CaretMoved, SelectionChanged, caret_rect_for, secondary_caret_rect_for,
     write_caret_and_selection,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use clipboard::ArboardClipboard;
 #[cfg(feature = "clipboard-image")]
 pub use clipboard::ClipboardImage;
 pub use clipboard::{Clipboard, ClipboardProvider, MemClipboard};
-#[cfg(not(target_arch = "wasm32"))]
-pub use clipboard::ArboardClipboard;
 pub use command::EditCommand;
 pub use ime::{
     CompositionEnd, CompositionStart, CompositionUpdate, PREEDIT_METADATA, PreeditSpan, apply_ime,

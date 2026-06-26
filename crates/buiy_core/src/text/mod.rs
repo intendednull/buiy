@@ -54,10 +54,10 @@ pub use direction::prepend_strong_marks;
 #[cfg(not(target_arch = "wasm32"))]
 pub use edit::ArboardClipboard;
 pub use edit::{
-    CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled,
-    EditCommand, EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
-    MemClipboard, Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange,
-    SingleLine, TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
+    CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled, EditCommand,
+    EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap, MemClipboard,
+    Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange, SingleLine,
+    TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
     apply_keyboard_edits, editor_pointer_drag, editor_pointer_press, pointer_to_cursor,
     write_caret_and_selection, write_ime_window,
 };
