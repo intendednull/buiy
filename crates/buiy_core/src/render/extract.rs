@@ -14,6 +14,7 @@
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
 use crate::theme::Theme;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
@@ -931,6 +932,9 @@ pub fn context_tree_paint_order<'a>(
 /// lookup over the SAME `StackingContext` query, so all three order roots
 /// identically (the "paint == hit-test" invariant).
 pub fn context_roots(
+    // std HashMap (not EntityHashMap): this is a cross-module helper also called by
+    // picking/depth.rs + text/extract.rs; `sc_by_entity` is small (one entry per
+    // forming stacking context, not per node), so the hasher barely matters here.
     sc_by_entity: &std::collections::HashMap<Entity, &[Entity]>,
     rank_of: impl Fn(Entity) -> u8,
 ) -> Vec<Entity> {
@@ -1310,8 +1314,7 @@ pub fn extract_buiy_nodes(
     // can't be called here because it would move out of the `Extract` deref.
     let theme: &Theme = &theme;
     // `std::collections::HashMap` matches the convention in layout/systems.rs.
-    let mut by_entity: std::collections::HashMap<Entity, ExtractedNode> =
-        std::collections::HashMap::new();
+    let mut by_entity: EntityHashMap<ExtractedNode> = EntityHashMap::default();
     // Effect-group formers seen this frame, keyed by entity → (reason, opacity).
     // The painted-bounds union + parent links are derived below from the
     // `ChildOf` chain; the per-entity `EffectReason`/`Opacity` are captured here
@@ -1319,8 +1322,8 @@ pub fn extract_buiy_nodes(
     // entity → (reason, opacity, backdrop_blur_px). The blur radius (logical px)
     // is captured here while the `BackdropFilter` fan is borrowed — the prepare
     // pass needs it to plan the dual-Kawase pyramid (parity Wave B4).
-    let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32, Option<f32>)> =
-        std::collections::HashMap::new();
+    let mut group_formers: EntityHashMap<(EffectReason, f32, Option<f32>)> =
+        EntityHashMap::default();
     let forced_colors = prefs.forced_colors;
     for n in nodes.iter() {
         // Destructure the `NodePaintQuery` projection into the per-concern locals
@@ -1472,7 +1475,7 @@ pub fn extract_buiy_nodes(
     // nearest enclosing former of its OWN parent) and seed its painted bounds.
     let mut group_entities: Vec<Entity> = group_formers.keys().copied().collect();
     group_entities.sort_unstable(); // deterministic indices
-    let group_index: std::collections::HashMap<Entity, usize> = group_entities
+    let group_index: EntityHashMap<usize> = group_entities
         .iter()
         .enumerate()
         .map(|(i, &e)| (e, i))
@@ -1529,7 +1532,7 @@ pub fn extract_buiy_nodes(
         .collect();
     let painters_z_of = |e: Entity| -> Option<&[Entity]> { sc_by_entity.get(&e).copied() };
     // The cross-root rank lookup (layout 6f stamps `cross_root_rank` per context).
-    let rank_by_entity: std::collections::HashMap<Entity, u8> = contexts
+    let rank_by_entity: EntityHashMap<u8> = contexts
         .iter()
         .map(|(e, sc)| (e, sc.cross_root_rank))
         .collect();
