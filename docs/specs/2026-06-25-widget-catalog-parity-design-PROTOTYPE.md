@@ -1,7 +1,12 @@
 # Widget Catalog — Exact Visual Parity (Prototype Spec)
 
-**Status:** Phase 2 (PROTOTYPE) target-state design. Exploratory — informs the
-final version. **Not for merge.**
+**Status:** `[superseded]` by the Phase 3 FINAL design
+`docs/specs/2026-06-26-widget-catalog-parity-final-design.md` (the mergeable,
+human-review-gated version that re-decided this prototype's choices from the full
+picture). This Phase 2 (PROTOTYPE) target-state design is **exploratory and was
+never merged** — it remains here as the reference that informed the final. The
+prototype→final decision record is `docs/reports/2026-06-26-parity-final-decisions.md`.
+**Not for merge.**
 **Research:** `docs/reports/2026-06-25-parity-research-findings.md` (8-track fleet,
 full coverage). **Target:** `docs/reference-designs/widget-catalog/Widget Catalog.dc.html`.
 **Journal:** `docs/reports/2026-06-25-parity-prototype-journal.md`.

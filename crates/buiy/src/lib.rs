@@ -57,6 +57,17 @@ pub use buiy_core::animation::{
     AnimatedBackgroundColor, BackgroundColorTween, Easing, OpacityTween, Repeat, RotateTween,
     ScaleTween, TranslateTween, Tween,
 };
+// The gradient + vector-icon render primitives the Widget-Catalog parity work
+// added (spec § 2 REFINE prelude promotions): the layered-background fan
+// (`BackgroundLayers`/`BackgroundLayer` + `LinearGradient`/`RadialGradient`/
+// `ColorStop`) and the `Icon` vector glyph. The gallery is the first real
+// consumer and proved these are everyday authoring primitives (the logo
+// gradient, the dotted-grid canvas, the 25-icon catalog), so they join the
+// component surface next to `Background`/`Border` rather than living buried in
+// `buiy_core::render::components`.
+pub use buiy_core::render::components::{
+    BackgroundLayer, BackgroundLayers, ColorStop, Icon, LinearGradient, RadialGradient,
+};
 // The editor's seed/set channel is the existing `EditCommand` verbs (`Insert`,
 // `SelectAll` + `Insert` — no `SetValue` variant; the `EditCommand` surface is
 // agent-interface-owned). Apps and the controlled `TextField` drive them through

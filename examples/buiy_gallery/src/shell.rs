@@ -40,10 +40,10 @@ use buiy::prelude::*;
 use buiy_core::BuiySet;
 use buiy_core::a11y::A11yHidden;
 use buiy_core::interaction::OnPress;
-use buiy_core::render::components::{
-    BackdropFilter, BackgroundLayer, BackgroundLayers, BoxShadow, ColorStop, FilterFn, Icon,
-    LineStyle, LinearGradient, RadialGradient, Shadow,
-};
+// `BackgroundLayers`/`BackgroundLayer`/`LinearGradient`/`RadialGradient`/
+// `ColorStop`/`Icon` now reach us through `buiy::prelude::*` (spec § 2 REFINE
+// promotions); only the not-yet-promoted render primitives are imported here.
+use buiy_core::render::components::{BackdropFilter, BoxShadow, FilterFn, LineStyle, Shadow};
 use buiy_core::text::{FamilyEntry, FontStack, LetterSpacing};
 
 use crate::{

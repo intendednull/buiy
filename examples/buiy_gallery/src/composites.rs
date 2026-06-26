@@ -49,7 +49,8 @@ use buiy::prelude::*;
 use buiy_core::BuiySet;
 use buiy_core::animation::{Easing, OpacityTween, TranslateTween, Tween};
 use buiy_core::layout::{Stacking, TopLayer, Translate};
-use buiy_core::render::components::{BoxShadow, Icon, LineStyle, Opacity, Shadow};
+// `Icon` reaches us through `buiy::prelude::*` (spec § 2 REFINE promotion).
+use buiy_core::render::components::{BoxShadow, LineStyle, Opacity, Shadow};
 use buiy_core::text::{FamilyEntry, FontStack, LetterSpacing};
 
 // ===========================================================================
