@@ -51,8 +51,10 @@ pub use decoration::{
     DecorationKind, DecorationRect, snap_thickness, snap_y, span_decoration_rects, span_x_extent,
 };
 pub use direction::prepend_strong_marks;
+#[cfg(not(target_arch = "wasm32"))]
+pub use edit::ArboardClipboard;
 pub use edit::{
-    ArboardClipboard, CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled,
+    CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled,
     EditCommand, EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
     MemClipboard, Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange,
     SingleLine, TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
@@ -299,8 +301,16 @@ impl Plugin for BuiyTextPlugin {
         // headless build with no display arboard construction fails and the
         // provider degrades to "empty" (ArboardClipboard::handle returns None) —
         // never a panic. Tests override this resource with a MemClipboard.
+        #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(crate::text::edit::Clipboard(Box::new(
             crate::text::edit::ArboardClipboard::new(),
+        )));
+        // arboard has no wasm backend (D4): default to the pure-Rust in-app
+        // MemClipboard on the web. Cross-app paste via async navigator.clipboard
+        // is deferred (spec D9).
+        #[cfg(target_arch = "wasm32")]
+        app.insert_resource(crate::text::edit::Clipboard(Box::new(
+            crate::text::edit::MemClipboard::default(),
         )));
         app.add_message::<crate::text::edit::TextChanged>();
         // E6 (editing-and-ime § 11): the host-facing single-line submit Message.

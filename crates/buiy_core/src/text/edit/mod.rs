@@ -33,7 +33,9 @@ pub use caret::{
 };
 #[cfg(feature = "clipboard-image")]
 pub use clipboard::ClipboardImage;
-pub use clipboard::{ArboardClipboard, Clipboard, ClipboardProvider, MemClipboard};
+pub use clipboard::{Clipboard, ClipboardProvider, MemClipboard};
+#[cfg(not(target_arch = "wasm32"))]
+pub use clipboard::ArboardClipboard;
 pub use command::EditCommand;
 pub use ime::{
     CompositionEnd, CompositionStart, CompositionUpdate, PREEDIT_METADATA, PreeditSpan, apply_ime,
