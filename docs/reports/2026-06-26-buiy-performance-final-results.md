@@ -133,3 +133,38 @@ next *large* gain (#13a viewport cull) is tractable and a sensible next campaign
 *past* it (#13b depth pre-pass) is a major architectural change that warrants a human design
 decision. Per the campaign's stop condition, that boundary is surfaced here rather than
 forced.
+
+## 7. #13a viewport-cull — readiness seed (for the next campaign)
+
+Researched but deliberately NOT started in this pass: #13a is a real next gain but a
+campaign-sized, **visual-correctness-risk** effort (a wrongly-culled node *disappears* —
+unlike #2, which was render-identical), best run as a fresh, focused campaign rather than
+forced at the tail of this one. The grounding, so it starts informed:
+
+- **Where:** the `extract_buiy_nodes` build loop (`for item in nodes.iter()` →
+  `resolve_one` → `by_entity.insert`) + the group-tag walk. The viewport is
+  `primary_window.resolution.size()` (logical, already read for the view uniform); a node's
+  screen box is `ExtractedNode.position`/`size` under its `affine`; its clip is
+  `ExtractedNode.clip`.
+- **Two layers, increasing payoff + risk:** (a) **cull-the-upload** — drop off-screen
+  records from the instance blob (after the group-tag walk, where `group` is known); saves
+  pack + upload, leaves resolve O(N). (b) **cull-the-extract** — skip `resolve_one` for
+  off-screen nodes; also saves the resolve, but needs the AABB from the raw
+  `GlobalTransform`+`ResolvedLayout` and a group-membership pre-check *before* resolve.
+- **The #2-Patch interaction (load-bearing):** a culled node has no record / no
+  `index` / no `quad_slot_of` entry, so a scroll bringing a node INTO view is already forced
+  to Full by the existing classifier (`index.0.get(&e)` → `None`). The gap is the
+  scrolled-OUT node (still in the prior index, now off-screen): the C3b/D2 classifier must
+  gain a **per-changed-entity visibility check** — if a changed entity's current visibility
+  ≠ its `index` membership, the cull set flipped → force Full. Without it, a Patch would keep
+  a stale off-screen instance. Synergy once correct: a scroll is a Full of only the ~visible
+  N (cheap *because* of the cull), a hover stays a Patch of 1.
+- **v1 scope to de-risk:** cull only NON-grouped nodes whose box (∩ clip) is ENTIRELY outside
+  the viewport (intersect-keep, so partially-visible nodes are never dropped); use the
+  affine-transformed AABB for rotated/scaled nodes; do not cull effect-group members in v1
+  (or cull a whole group only when its bounds are entirely off-screen — deferred).
+- **Verification it will need:** a cull-count work-counter gate (a 1000-row scroll scene with
+  ~K visible asserts ~K emitted, not 1000), a scroll-scene GPU reftest (scrolled content is
+  pixel-correct at the viewport boundary), the affine/clip edge cases, and the gallery.
+- **NOT in #13a:** layout still runs O(N) — a 10k list still lays out 10k. Layout
+  virtualization (culling the layout pass) is a separate, larger change.
