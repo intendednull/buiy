@@ -29,7 +29,7 @@
 use crate::components::{ResolvedLayout, StackingContext};
 use crate::picking::depth::{PickCandidate, global_paint_order, paint_index_lookup, resolve_picks};
 use crate::picking::point_in_node;
-use crate::render::components::ClipRect;
+use crate::render::components::{ClipRect, ComputedPaintSkip};
 use bevy::camera::{Camera, NormalizedRenderTarget, RenderTarget};
 use bevy::picking::Pickable;
 use bevy::picking::PickingSystems;
@@ -63,6 +63,16 @@ fn emit_picks(
         &GlobalTransform,
         Option<&ClipRect>,
         Option<&Pickable>,
+        // The render-prep paint-skip marker (`write_paint_skip`): a node hidden by
+        // `Display::None` / `CssVisibility::Hidden` / `OffscreenAuto` carries it and
+        // is NOT painted. Picking must honour the SAME set — pick-set == paint-set,
+        // the visibility analogue of the pick-order == paint-order co-drive (SC-3).
+        // Without this, a hidden-but-laid-out node (e.g. a closed top-layer modal
+        // Dialog that keeps its full-window box under `CssVisibility::Hidden`) stays
+        // pickable and, sitting topmost in the stack, swallows every click while
+        // painting nothing — the whole app reads as non-interactive. Also matches
+        // web semantics: `visibility:hidden` / `display:none` are not hit-targets.
+        Option<&ComputedPaintSkip>,
     )>,
     contexts: Query<(Entity, &StackingContext)>,
     mut output: MessageWriter<PointerHits>,
@@ -95,7 +105,13 @@ fn emit_picks(
         // cursor, paired with its global paint index. C1: absolute basis =
         // GlobalTransform.
         let mut candidates: Vec<PickCandidate> = Vec::new();
-        for (entity, layout, gt, clip, pickable) in nodes.iter() {
+        for (entity, layout, gt, clip, pickable, paint_skip) in nodes.iter() {
+            // pick-set == paint-set: a node the renderer skips (hidden) is not a
+            // hit-target. Excludes hidden top-layer overlays (e.g. a closed modal
+            // Dialog) that keep a layout box but paint nothing.
+            if paint_skip.is_some() {
+                continue;
+            }
             let abs_pos = gt.translation().truncate();
             if !point_in_node(cursor, abs_pos, layout.size, clip) {
                 continue;

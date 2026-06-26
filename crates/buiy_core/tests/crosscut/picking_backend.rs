@@ -232,3 +232,113 @@ fn overlapping_nodes_emit_picks_top_painted_first_with_ascending_depths() {
     );
     assert_eq!(hit.order, 0.5, "PointerHits order == camera.order + 0.5");
 }
+
+/// **Regression — the gallery-interactivity bug (2026-06-26,
+/// `docs/reports/2026-06-26-gallery-interactivity-rootcause.md`).** A node the
+/// renderer skips — one carrying [`ComputedPaintSkip`] (stamped by
+/// `write_paint_skip` on a `Display::None` / `CssVisibility::Hidden` / off-screen
+/// subtree) — must NEVER be a pick candidate, even when it is the topmost-painted
+/// box directly over an activatable node. The shipped bug: a CLOSED top-layer modal
+/// `Dialog` (`CssVisibility::Hidden`, full-window, topmost in the stack) kept its
+/// full layout box and absorbed EVERY click while painting nothing, so the whole
+/// composed app read as non-interactive. The fix is `emit_picks` skipping any
+/// `ComputedPaintSkip` node (pick-set == paint-set, the visibility analogue of the
+/// pick-order == paint-order co-drive).
+///
+/// This pins the invariant two ways: the emitted `PointerHits` excludes the hidden
+/// overlay (and resolves to the target beneath it), and a full click on the target
+/// still lowers to `OnPress` — i.e. the hidden overlay neither receives nor
+/// occludes the activation.
+#[test]
+fn paint_skipped_overlay_never_absorbs_the_click_beneath_it() {
+    use bevy::picking::pointer::{PointerAction, PointerButton, PointerInput};
+    use buiy_core::a11y::A11yRole;
+    use buiy_core::interaction::OnPress;
+    use buiy_core::render::components::{ComputedPaintSkip, SkipReason};
+
+    let mut app = backend_app();
+    // The C3b `Pointer<Click>` → `OnPress` producer lives in Buiy's `PickingPlugin`
+    // (already added by `backend_app`); the a11y role gate it keys on needs no extra
+    // plugin. Register the `A11yRole` type-less path is unnecessary — the role is a
+    // plain component read.
+    let window = spawn_window_and_camera(&mut app);
+
+    // The activatable target — a full-window box at (0,0)..(200,200), role Button so
+    // a `Pointer<Click>` on it lowers to `OnPress` (the same gate the real buttons
+    // use). Default `Pickable` (blocks lower).
+    let target = spawn_node(&mut app, Vec2::ZERO, Vec2::new(200.0, 200.0));
+    app.world_mut().entity_mut(target).insert(A11yRole::Button);
+
+    // A HIDDEN full-window overlay painted ON TOP of the target (the closed-modal
+    // analogue): same box, higher paint order, default `Pickable` (would block), but
+    // carrying `ComputedPaintSkip`. Without the fix it occludes `target` and eats the
+    // click; with the fix it is excluded from the candidate set entirely.
+    let hidden = spawn_node(&mut app, Vec2::ZERO, Vec2::new(200.0, 200.0));
+    app.world_mut()
+        .entity_mut(hidden)
+        .insert(ComputedPaintSkip {
+            reason: SkipReason::CssHidden,
+        });
+    // Paint order: target bottom, hidden TOP (the topmost-painted box).
+    spawn_paint_order(&mut app, &[target, hidden]);
+
+    // Pointer at (100,100) — inside BOTH boxes.
+    let center = Vec2::new(100.0, 100.0);
+    let location = {
+        let t = WindowRef::Entity(window).normalize(Some(window)).unwrap();
+        Location {
+            target: NormalizedRenderTarget::Window(t),
+            position: center,
+        }
+    };
+    app.world_mut()
+        .spawn((PointerId::Mouse, PointerLocation::new(location.clone())));
+    app.update();
+
+    // (1) Pick-set == paint-set: the emitted hits are EXACTLY the target — the
+    //     paint-skipped overlay is neither hit nor an occluder.
+    let picked: Vec<Entity> = {
+        let world = app.world_mut();
+        let messages = world.resource::<Messages<PointerHits>>();
+        let mut cursor = messages.get_cursor();
+        cursor
+            .read(messages)
+            .last()
+            .expect("a PointerHits is emitted every frame the pointer targets the window")
+            .picks
+            .iter()
+            .map(|(e, _)| *e)
+            .collect()
+    };
+    assert!(
+        !picked.contains(&hidden),
+        "the paint-skipped (hidden) overlay must NEVER be a pick candidate, got {picked:?}"
+    );
+    assert_eq!(
+        picked,
+        vec![target],
+        "the target beneath the hidden overlay is the sole pick (the overlay neither hits nor occludes)"
+    );
+
+    // (2) Behavioral: a full primary click on the target lowers to `OnPress`
+    //     (proving the hidden overlay did not swallow the activation).
+    for action in [
+        PointerAction::Press(PointerButton::Primary),
+        PointerAction::Release(PointerButton::Primary),
+    ] {
+        app.world_mut().write_message(PointerInput {
+            pointer_id: PointerId::Mouse,
+            location: location.clone(),
+            action,
+        });
+        app.update();
+    }
+    let world = app.world();
+    let messages = world.resource::<Messages<OnPress>>();
+    let mut cursor = messages.get_cursor();
+    let fired = cursor.read(messages).any(|OnPress(e)| *e == target);
+    assert!(
+        fired,
+        "a click on the target still fires OnPress — the hidden top-layer overlay did not absorb it"
+    );
+}
