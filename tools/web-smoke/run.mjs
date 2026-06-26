@@ -26,10 +26,16 @@ const browser = await chromium.launch({
   headless: true,
   args: [
     '--no-sandbox',
-    '--enable-unsafe-swiftshader', // software WebGPU for GPU-less CI runners
-    '--ignore-gpu-blocklist',
+    // Chrome's WebGPU on Linux is Dawn-on-Vulkan, so it needs a Vulkan ICD AND
+    // `--enable-features=Vulkan` to expose an adapter — `--enable-unsafe-swiftshader`
+    // alone yields none (requestAdapter() -> null, then bevy panics at renderer
+    // init). On a host with a real GPU that ICD is the driver; on GPU-less CI it
+    // is lavapipe (the pinned Mesa software Vulkan the CI job installs, same as the
+    // GPU lane). The swiftshader flag stays as a last-resort fallback.
     '--enable-features=Vulkan',
     '--use-angle=vulkan',
+    '--ignore-gpu-blocklist',
+    '--enable-unsafe-swiftshader',
   ],
 });
 
