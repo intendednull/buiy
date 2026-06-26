@@ -14,6 +14,7 @@
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
 use crate::theme::Theme;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
@@ -24,6 +25,7 @@ use crate::render::components::{
     AncestorClip, BackdropFilter, Background, BackgroundLayers, Border, BoxShadow, ClipRect,
     ComputedPaintSkip, EffectGroup, EffectReason, FilterFn, Opacity, Outline,
 };
+use crate::render::counters::{RenderWorkCounters, record_node_counts};
 use crate::theme::UserPreferences;
 
 /// One extracted effect group's CPU record (effect-compositor.md § 1.1). Emitted
@@ -796,7 +798,7 @@ fn inset_shadow_warn_once() {
 /// the per-window partition is wired.
 ///
 /// **R5 owns this type; R6 consumes it.** Single carrier — there is no parallel
-/// `ExtractedNodes`/`ExtractedNodesResource` rebuilt from `ExtractedDraws`.
+/// `ExtractedNodes`/`ExtractedNodesResource` wrapper.
 /// `Default` is MANUAL so `scale_factor` is `1.0` (a derived `Default` would be
 /// `0.0` and divide-by-zero the logical→physical map).
 #[derive(Component, Clone, Debug)]
@@ -929,7 +931,104 @@ pub fn context_tree_paint_order<'a>(
 /// (render node walk, text glyph walk) and the picking depth derivation pass a
 /// lookup over the SAME `StackingContext` query, so all three order roots
 /// identically (the "paint == hit-test" invariant).
+/// The #2 partial-re-extract FOOTPRINT of a node: the per-entity quantities that fix
+/// its slot layout in the instance buffers — whether it emits a solid background quad,
+/// and how many gradient / border / shadow / outline band slots it occupies. Two
+/// records with the SAME footprint occupy the SAME slots, so a value change between
+/// them (color / position / size) can overwrite those slots in place; a footprint
+/// CHANGE (a border appears, a shadow is added/removed) changes the slot count and
+/// forces a Full re-pack. Position / size / color VALUES are deliberately excluded —
+/// those are exactly what a Patch updates.
+fn node_footprint(r: &ExtractedNode) -> (bool, usize, bool, usize, bool) {
+    (
+        r.color != Color::NONE,
+        r.gradients.len(),
+        r.border.is_some(),
+        r.shadows.len(),
+        r.outline.is_some(),
+    )
+}
+
+/// Resolve ONE painted node's full [`ExtractedNode`] record from its paint-query item
+/// — the body of the Full build loop, factored out (#2 Stage C3a) so the Patch path can
+/// re-resolve a single changed entity through the SAME code (Full and Patch records are
+/// byte-identical by construction). Returns `None` for a paint-skipped entity (it emits
+/// nothing). Group membership is NOT set here — it is the Full build's group-tag walk's
+/// job; a Patch only re-resolves group-free nodes, whose `group` stays `None`.
+fn resolve_one(
+    item: NodePaintQueryItem,
+    theme: &Theme,
+    forced_colors: bool,
+) -> Option<ExtractedNode> {
+    if item.paint_skip.is_some() {
+        return None;
+    }
+    let clip = effective_clip(item.stacking, item.clip_rect, item.ancestor_clip);
+    let mut node = extracted_node_for(
+        item.entity,
+        item.global_transform,
+        item.layout,
+        item.bg,
+        clip.as_ref(),
+        theme,
+    );
+    if item.animated_bg.is_some() {
+        node.color = resolve_background_color(item.bg, item.animated_bg, theme);
+    }
+    if let Some(outline) = item.outline {
+        let outline_clip = effective_outline_clip(item.stacking, item.ancestor_clip);
+        node.outline = resolve_outline(
+            outline,
+            node.position,
+            node.size,
+            outline_clip,
+            node.affine,
+            theme,
+        );
+    }
+    if let Some(border) = item.border {
+        let widths = item
+            .box_model
+            .map(|b| b.border)
+            .unwrap_or(crate::layout::Edges::ZERO);
+        node.border = resolve_border(
+            border,
+            widths,
+            node.position,
+            node.size,
+            node.clip,
+            node.affine,
+            theme,
+        );
+    }
+    if let Some(box_shadow) = item.box_shadow {
+        node.shadows = resolve_shadows(
+            box_shadow,
+            node.position,
+            node.size,
+            node.clip,
+            node.affine,
+            forced_colors,
+            theme,
+        );
+    }
+    if let Some(background_layers) = item.background_layers {
+        node.gradients = resolve_gradients(
+            background_layers,
+            node.position,
+            node.size,
+            node.clip,
+            node.affine,
+            theme,
+        );
+    }
+    Some(node)
+}
+
 pub fn context_roots(
+    // std HashMap (not EntityHashMap): this is a cross-module helper also called by
+    // picking/depth.rs + text/extract.rs; `sc_by_entity` is small (one entry per
+    // forming stacking context, not per node), so the hasher barely matters here.
     sc_by_entity: &std::collections::HashMap<Entity, &[Entity]>,
     rank_of: impl Fn(Entity) -> u8,
 ) -> Vec<Entity> {
@@ -1104,7 +1203,14 @@ pub struct NodePaintQuery {
 // window set); splitting them into a bundle param would obscure, not clarify.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_nodes(
-    mut commands: Commands,
+    // #2 Stage A: the node + effect-group carriers are RETAINED resources written
+    // via `ResMut` (not `Commands::insert_resource`), so they persist across frames
+    // — the foundation for the keyed partial re-extract (a later Patch stage mutates
+    // them in place). On a dirty frame they are overwritten (so `is_changed()` is
+    // true → prepare repacks, exactly as before); the idle gate-skip below MUST NOT
+    // deref either, keeping `is_changed()` false (the O(0) steady-state contract).
+    mut view: ResMut<ExtractedNodesView>,
+    mut groups_res: ResMut<ExtractedEffectGroups>,
     // The author-set + handoff fan: Option<&T> for every independently-inserted
     // component (architecture § 1.2 — a non-Option term would silently drop a
     // Node missing that component). Required terms: &ResolvedLayout (a
@@ -1250,12 +1356,49 @@ pub fn extract_buiy_nodes(
     // GPU — invisible to the CPU-only buffer assertions but fatal on a real
     // adapter (caught by the gate-#2 readback harness).
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
+    // P0b work-unit counters: `node_rebuilds` (0 idle / 1 rebuild) +
+    // `instances_built` (0 idle / N rebuild), set in every return path below.
+    // `Option` so a harness without the resource is unaffected (no registration
+    // drift, no missing-resource skip).
+    mut counters: Option<ResMut<RenderWorkCounters>>,
+    // #2 Stage B classifier: the STRUCTURAL damage probe. A change to any of these
+    // reorders paint, changes effect-group membership, or changes a node's
+    // per-buffer footprint (border/outline/shadow band slots) — so the frame is NOT
+    // Patch-eligible (a Patch reuses paint order + slot layout). Value-only changes
+    // (Background / GlobalTransform / ResolvedLayout) are absent here, so they stay
+    // Patch-eligible. Entity-only; used as an `is_empty()` probe.
+    structural_changed: Extract<
+        Query<
+            (),
+            Or<(
+                Changed<StackingContext>,
+                Changed<Stacking>,
+                Changed<ClipRect>,
+                Changed<AncestorClip>,
+                Changed<ComputedPaintSkip>,
+                Changed<bevy::prelude::Children>,
+                Changed<EffectGroup>,
+                Changed<Opacity>,
+                Changed<Outline>,
+                Changed<Border>,
+                Changed<BoxShadow>,
+            )>,
+        >,
+    >,
+    // #2 Stage C: entity -> slot map, rebuilt on Full, retained on idle/Patch. The
+    // gate-skip path below must NOT deref it (leave it retained). `Option` so the
+    // manual extract test harnesses (which don't register it) still run the system —
+    // no registration drift, no missing-resource skip (the counters pattern).
+    mut index: Option<ResMut<RetainedNodeIndex>>,
+    // #2 Stage C3b: the Full-vs-Patch tag for prepare (Stage D). `Option` for the same
+    // test-harness reason as `index`.
+    mut damage: Option<ResMut<NodeDamage>>,
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
-    // the carrier with an EMPTY set rather than early-returning: Phase-0's
-    // `extract_buiy_draws` always `insert_resource`s an `ExtractedDraws` (it
-    // never early-returns), so a vanished window clears to empty. Returning here
+    // the carrier with an EMPTY set rather than early-returning: this system always
+    // publishes the carrier (it never early-returns past the publish leaving stale
+    // data), so a vanished window clears to empty. Returning here
     // would instead leave the prior frame's nodes resident once the carrier is
     // `init_resource`'d (Task 7), and render would keep painting stale nodes.
     // Drain the removal streams FIRST, before any early-return, so the
@@ -1267,8 +1410,15 @@ pub fn extract_buiy_nodes(
     let skip_lifted = removed_skip.read().count() > 0;
 
     let Ok(primary_window) = primary.single() else {
-        commands.insert_resource(ExtractedNodesView(ExtractedNodes::default()));
-        commands.insert_resource(ExtractedEffectGroups::default());
+        *view = ExtractedNodesView::default();
+        *groups_res = ExtractedEffectGroups::default();
+        if let Some(idx) = index.as_deref_mut() {
+            idx.0.clear();
+        }
+        if let Some(d) = damage.as_deref_mut() {
+            *d = NodeDamage::Full;
+        }
+        record_node_counts(&mut counters, 0, 0, 0);
         return;
     };
 
@@ -1283,20 +1433,22 @@ pub fn extract_buiy_nodes(
     // resident and `is_changed()` is false in prepare, which retains the persistent
     // buffers (the node re-binds + re-draws them). This is the O(0) steady-state
     // the spec's gate-#14 budget requires.
-    if changed.is_empty() && !despawned && !skip_lifted && !theme.is_changed() {
+    // Capture before the `let theme: &Theme = &theme` shadow below — the #2 Stage B
+    // classifier at the publish needs it (a theme swap is a Full rebuild, not Patch).
+    let theme_changed = theme.is_changed();
+    if changed.is_empty() && !despawned && !skip_lifted && !theme_changed {
+        record_node_counts(&mut counters, 0, 0, 0);
         return;
     }
 
     // Build a per-entity index so the painters_z walk can look each painter up.
     // (A HashMap keyed by Entity; the partial-re-extract cache keyed by Entity
     // inside ExtractedNodes is R6/R8's optimization — v1 rebuilds the changed set.)
-    // `&Theme` via the `Extract<Res<Theme>>` deref chain (matches the
-    // `&main_world_theme` idiom in `extract_buiy_draws`); `Res::into_inner`
+    // `&Theme` via the `Extract<Res<Theme>>` deref chain; `Res::into_inner`
     // can't be called here because it would move out of the `Extract` deref.
     let theme: &Theme = &theme;
     // `std::collections::HashMap` matches the convention in layout/systems.rs.
-    let mut by_entity: std::collections::HashMap<Entity, ExtractedNode> =
-        std::collections::HashMap::new();
+    let mut by_entity: EntityHashMap<ExtractedNode> = EntityHashMap::default();
     // Effect-group formers seen this frame, keyed by entity → (reason, opacity).
     // The painted-bounds union + parent links are derived below from the
     // `ChildOf` chain; the per-entity `EffectReason`/`Opacity` are captured here
@@ -1304,132 +1456,102 @@ pub fn extract_buiy_nodes(
     // entity → (reason, opacity, backdrop_blur_px). The blur radius (logical px)
     // is captured here while the `BackdropFilter` fan is borrowed — the prepare
     // pass needs it to plan the dual-Kawase pyramid (parity Wave B4).
-    let mut group_formers: std::collections::HashMap<Entity, (EffectReason, f32, Option<f32>)> =
-        std::collections::HashMap::new();
+    let mut group_formers: EntityHashMap<(EffectReason, f32, Option<f32>)> =
+        EntityHashMap::default();
     let forced_colors = prefs.forced_colors;
-    for n in nodes.iter() {
-        // Destructure the `NodePaintQuery` projection into the per-concern locals
-        // the resolve calls below consume (the field names match the prior tuple
-        // bindings, so the resolution body is unchanged from the sub-tuple era).
-        let NodePaintQueryItem {
-            entity,
-            global_transform: gt,
-            layout,
-            paint_skip,
-            clip_rect,
-            ancestor_clip,
-            stacking,
-            bg,
-            animated_bg,
-            outline,
-            border,
-            box_model,
-            box_shadow,
-            effect_group,
-            opacity,
-            backdrop_filter,
-            background_layers,
-        } = n;
-        // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
-        // computed marker ⇒ emit nothing for this entity. `write_paint_skip`
-        // stamps the marker on the hidden/offscreen ROOT and every
-        // descendant, so this one per-entity read covers the whole subtree.
-        if paint_skip.is_some() {
-            continue;
+
+    // #2 Stage C3b: attempt an in-place PATCH before the O(N) Full build. A Patch
+    // re-resolves ONLY the changed entities and overwrites their existing slots in the
+    // retained `ExtractedNodesView`, leaving every untouched sibling record + the slot
+    // ORDER intact (R5 trap — never rebuild the ordered Vec from the changed set). It is
+    // eligible iff there is no structural / hierarchy / group-membership / despawn /
+    // paint-skip-lift / theme change AND every changed entity is a group-free,
+    // footprint-stable painting node already resident in the prior index (so its slot is
+    // stable and its band layout unchanged). Anything else falls through to the Full
+    // build. The overwrite marks `view` changed, so prepare still does a FULL repack from
+    // the patched records (text quads are a separate carrier, re-spliced normally) — the
+    // extract O(N)->O(changed) win is HERE; the partial UPLOAD is Stage D.
+    let patch_candidate =
+        structural_changed.is_empty() && !despawned && !skip_lifted && !theme_changed;
+    if patch_candidate && let Some(idx) = index.as_deref() {
+        let mut patches: Vec<(usize, ExtractedNode)> = Vec::new();
+        let mut patchable = true;
+        // Read the prior records IMMUTABLY here (no `is_changed` trip) to decide + resolve.
+        {
+            let prior = &view.0.nodes;
+            for e in changed.iter() {
+                let Some(&slot) = idx.0.get(&e) else {
+                    patchable = false;
+                    break;
+                };
+                let Some(old) = prior.get(slot as usize) else {
+                    patchable = false;
+                    break;
+                };
+                // v1 scope: group-free quad-only. A grouped node would re-pack its group's
+                // off-screen target; defer to Full.
+                if old.group.is_some() {
+                    patchable = false;
+                    break;
+                }
+                let Ok(item) = nodes.get(e) else {
+                    patchable = false;
+                    break;
+                };
+                let Some(new) = resolve_one(item, theme, forced_colors) else {
+                    patchable = false;
+                    break;
+                };
+                // A footprint change (a band appeared/vanished, emits_quad flipped) shifts
+                // the slot count -> Full repack.
+                if node_footprint(&new) != node_footprint(old) {
+                    patchable = false;
+                    break;
+                }
+                patches.push((slot as usize, new));
+            }
         }
-        if let Some(eg) = effect_group {
-            // `Opacity` default is 1.0 (no-op); only an opacity-formed group
-            // carries a `< 1` value, but capture it unconditionally so a group
-            // that ALSO has opacity composites at the right alpha.
-            let a = opacity.map(|o| o.0).unwrap_or(1.0);
-            // Parity Wave B4: capture the backdrop-blur radius (logical px) for a
-            // backdrop-filter former. Only meaningful when the reason carries the
-            // BACKDROP_FILTER bit; resolved from the `BackdropFilter` component.
+        if patchable && !patches.is_empty() {
+            // APPLY: overwrite each changed entity's slot in place. DerefMut marks `view`
+            // changed so prepare repacks; the retained siblings + order are untouched.
+            let patched = patches.len();
+            for (slot, new) in patches {
+                view.0.nodes[slot] = new;
+            }
+            record_node_counts(&mut counters, 0, patched, 1);
+            if let Some(d) = damage.as_deref_mut() {
+                *d = NodeDamage::Patch(changed.iter().collect());
+            }
+            return;
+        }
+        // Not all changed entities were patchable — fall through to the Full build.
+    }
+
+    for item in nodes.iter() {
+        // #2 Stage C3a: capture each effect-group former while the fan is borrowed —
+        // Full-build group-tag state, NOT part of the per-node record (a Patch only
+        // re-resolves group-free nodes). Guarded by `paint_skip.is_none()` to match the
+        // old `continue` (a paint-skipped entity forms no group and emits no record).
+        if item.paint_skip.is_none()
+            && let Some(eg) = item.effect_group
+        {
+            // `Opacity` default is 1.0 (no-op); capture unconditionally so a group that
+            // ALSO has opacity composites at the right alpha. Parity Wave B4: capture
+            // the backdrop-blur radius (logical px) for a backdrop-filter former.
+            let a = item.opacity.map(|o| o.0).unwrap_or(1.0);
             let blur = if eg.reason.contains(EffectReason::BACKDROP_FILTER) {
-                backdrop_filter.and_then(backdrop_blur_px)
+                item.backdrop_filter.and_then(backdrop_blur_px)
             } else {
                 None
             };
-            group_formers.insert(entity, (eg.reason, a, blur));
+            group_formers.insert(item.entity, (eg.reason, a, blur));
         }
-        // A top-layer member escapes every ancestor clip and paints over the
-        // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
-        // clips to its own box ∩ ancestor clips. See [`effective_clip`].
-        let clip = effective_clip(stacking, clip_rect, ancestor_clip);
-        let mut node = extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme);
-        // Auto-composite a live background-color crossfade over the static token
-        // (spec § 2 REFINE). `extracted_node_for` resolved only the `bg` token (it
-        // is also the Tier-2 snapshot builder, which has no tweens); here in the
-        // production loop a node carrying a `BackgroundColorTween`'s
-        // `AnimatedBackgroundColor` paints the interpolated color instead, for
-        // every node — no widget opt-in.
-        if animated_bg.is_some() {
-            node.color = resolve_background_color(bg, animated_bg, theme);
+        // #2 Stage C3a: the per-node record via the shared single-entity resolver.
+        // The Patch path re-resolves a changed entity through the SAME `resolve_one`,
+        // so Full-build and Patch records are byte-identical by construction.
+        if let Some(node) = resolve_one(item, theme, forced_colors) {
+            by_entity.insert(node.entity, node);
         }
-        // C6-a: resolve the outline (focus ring / selection outline) against the
-        // entity's `AncestorClip` (NOT its own box, `effective_outline_clip`) so
-        // it survives an `overflow:hidden` ancestor (styling-f-tier.md § 2.4).
-        if let Some(outline) = outline {
-            let outline_clip = effective_outline_clip(stacking, ancestor_clip);
-            node.outline = resolve_outline(
-                outline,
-                node.position,
-                node.size,
-                outline_clip,
-                node.affine,
-                theme,
-            );
-        }
-        // C6-b: resolve the per-side border band. Unlike the outline, it uses the
-        // entity's OWN clip (`node.clip`) since the band sits inside the border
-        // box. Width comes from `BoxModel.border` (the layout-owned Taffy input,
-        // § 3.5); a node with no `BoxModel` has no border widths (`Edges::ZERO`),
-        // so `resolve_border` returns `None`.
-        if let Some(border) = border {
-            let widths = box_model
-                .map(|b| b.border)
-                .unwrap_or(crate::layout::Edges::ZERO);
-            node.border = resolve_border(
-                border,
-                widths,
-                node.position,
-                node.size,
-                node.clip,
-                node.affine,
-                theme,
-            );
-        }
-        // C6-b: resolve the box-shadow list (outset-only, sigma = blur/2),
-        // suppressed wholesale under forced-colors (§ 2.5). The shadow uses the
-        // entity's own fill clip as the conservative bound (the un-clipped card
-        // is the common case).
-        if let Some(box_shadow) = box_shadow {
-            node.shadows = resolve_shadows(
-                box_shadow,
-                node.position,
-                node.size,
-                node.clip,
-                node.affine,
-                forced_colors,
-                theme,
-            );
-        }
-        // Parity Wave B1: resolve the background gradient / layered fills. They
-        // use the entity's OWN clip (`node.clip`) — the gradient paints inside
-        // the fill box, like the border band. Stop tokens resolve to linear
-        // color here, so a live theme/accent swap re-resolves through the
-        // `theme.is_changed()` re-extract.
-        if let Some(background_layers) = background_layers {
-            node.gradients = resolve_gradients(
-                background_layers,
-                node.position,
-                node.size,
-                node.clip,
-                node.affine,
-                theme,
-            );
-        }
-        by_entity.insert(entity, node);
     }
 
     // Resolve each painted node's NEAREST `EffectGroup` ancestor (the group it
@@ -1457,7 +1579,7 @@ pub fn extract_buiy_nodes(
     // nearest enclosing former of its OWN parent) and seed its painted bounds.
     let mut group_entities: Vec<Entity> = group_formers.keys().copied().collect();
     group_entities.sort_unstable(); // deterministic indices
-    let group_index: std::collections::HashMap<Entity, usize> = group_entities
+    let group_index: EntityHashMap<usize> = group_entities
         .iter()
         .enumerate()
         .map(|(i, &e)| (e, i))
@@ -1514,7 +1636,7 @@ pub fn extract_buiy_nodes(
         .collect();
     let painters_z_of = |e: Entity| -> Option<&[Entity]> { sc_by_entity.get(&e).copied() };
     // The cross-root rank lookup (layout 6f stamps `cross_root_rank` per context).
-    let rank_by_entity: std::collections::HashMap<Entity, u8> = contexts
+    let rank_by_entity: EntityHashMap<u8> = contexts
         .iter()
         .map(|(e, sc)| (e, sc.cross_root_rank))
         .collect();
@@ -1577,11 +1699,34 @@ pub fn extract_buiy_nodes(
     // no ExtractedNodesPrimary/ExtractedNodesResource wrapper). The precise
     // target-entity resolution is the one piece that needs the render world and
     // is exercised only under the GPU e2e path (Task 8 / R6/R8).
-    commands.insert_resource(ExtractedNodesView(all));
+    // P0b rebuild path: this frame passed the damage gate and built the full set.
+    // #2 Stage B classifier (OBSERVATION-ONLY — the rebuild above is still Full):
+    // a dirty frame is Patch-ELIGIBLE if the damage is value-only — no structural /
+    // hierarchy / footprint change (`structural_changed`), no effect groups in the
+    // scene (`group_formers`), and not a despawn / paint-skip-lift / theme swap. A
+    // later Patch stage will additionally require a per-entity footprint match, so
+    // this coarse signal is an upper-ish bound used to size the Patch-path payoff
+    // (the `node_patches` counter) before building the in-place Patch path.
+    // #2 Stage C3b: reaching here means the Patch attempt above bailed (a footprint /
+    // group mismatch or a non-resident changed entity) or the frame was never a Patch
+    // candidate (structural / despawn / theme) — so this is a Full rebuild, node_patches = 0.
+    record_node_counts(&mut counters, 1, all.nodes.len(), 0);
+    if let Some(d) = damage.as_deref_mut() {
+        *d = NodeDamage::Full;
+    }
+    *view = ExtractedNodesView(all);
+    // #2 Stage C: rebuild the entity->slot index from the freshly-published ordered
+    // nodes — the foundation for a later in-place Patch overwrite at `index[e]`.
+    if let Some(idx) = index.as_deref_mut() {
+        idx.0.clear();
+        for (i, n) in view.0.nodes.iter().enumerate() {
+            idx.0.insert(n.entity, i as u32);
+        }
+    }
     // The per-view effect-group list (effect-compositor.md § 1.1). Emitted on
     // EVERY rebuild frame (incl. when empty) so a frame that drops the last group
     // clears the carrier — mirrors the `ExtractedNodesView` overwrite contract.
-    commands.insert_resource(ExtractedEffectGroups(std::mem::take(&mut groups)));
+    *groups_res = ExtractedEffectGroups(std::mem::take(&mut groups));
 }
 
 /// v1 carrier-by-resource: the primary view's `ExtractedNodes`, inserted by
@@ -1592,6 +1737,29 @@ pub fn extract_buiy_nodes(
 /// SUPERSEDED-BY: R6/R8 (node.rs/buckets read the per-view `ExtractedNodes`).
 #[derive(Resource, Default, Clone, Debug)]
 pub struct ExtractedNodesView(pub ExtractedNodes);
+
+/// #2 Stage C: entity -> its slot (index) in the retained `ExtractedNodesView.0.nodes`
+/// ordered Vec. Rebuilt on every Full extract; retained (untouched) on idle + (later)
+/// Patch frames, where the slots are paint-order-stable. Lets a future Patch stage
+/// find a changed entity's record and overwrite it IN PLACE without rebuilding the
+/// ordered Vec from the changed set (the R5 sibling-drop trap).
+#[derive(Resource, Default)]
+pub struct RetainedNodeIndex(pub EntityHashMap<u32>);
+
+/// #2 Stage C3b: how this frame re-extracted the node set, for prepare (Stage D) to
+/// size its instance-buffer upload. `Full` = the whole set was rebuilt (cold frame,
+/// structural change, or a Patch-ineligible change) — prepare repacks + uploads all.
+/// `Patch(entities)` = only these entities' records were overwritten in place (a
+/// group-free, footprint-stable value change) — Stage D will upload only their slots.
+/// In C3b prepare still does a FULL repack on Patch (the extract O(N)->O(changed) win
+/// lands here; the partial UPLOAD is Stage D); the tag is published now so D can consume
+/// it. Published every dirty frame, mirroring the `ExtractedNodesView` overwrite contract.
+#[derive(Resource, Clone, Debug, Default)]
+pub enum NodeDamage {
+    #[default]
+    Full,
+    Patch(Vec<Entity>),
+}
 
 /// One text quad-tier visual (decoration-and-paint § 4.6): selection rects
 /// (T7) and underline/overline (T6), keyed by the SOURCE entity. A flat

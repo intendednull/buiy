@@ -23,6 +23,7 @@ members = [
     "crates/buiy_core",
     "crates/buiy_widgets",
     "crates/buiy_verify",
+    "crates/buiy_bench_support",
     "examples/buiy_gallery",
     "examples/hello_bsn",
     "examples/hello_button",
@@ -123,6 +124,13 @@ base64 = "0.22"
 # `cargo_bench_support` feature is kept (the `cargo bench` integration). MIT/
 # Apache-2.0; `cargo deny check` gates the add.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# Allocation-count gate (perf-final P0c). dhat-rs is a pure-Rust heap profiler;
+# in `testing()` mode an isolated test target with `#[global_allocator] dhat::Alloc`
+# measures one steady frame's allocations and asserts a committed band — a
+# deterministic, CROSS-PLATFORM gate (no Valgrind, unlike iai). DEV-ONLY (the
+# global allocator is scoped to its own test binary, never the library), so it is
+# never in the production/wasm graph. MIT/Apache-2.0; `cargo deny check` gates it.
+dhat = "0.3"
 
 # --- Build profiles --------------------------------------------------------
 # Disable debuginfo for the dev + test profiles. The bulk of CI target-dir disk

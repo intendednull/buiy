@@ -40,6 +40,8 @@ mod layout_multicol;
 mod layout_overflow;
 #[path = "layout/layout_pipeline_order.rs"]
 mod layout_pipeline_order;
+#[path = "layout/layout_post_taffy_gate.rs"]
+mod layout_post_taffy_gate;
 #[path = "layout/layout_post_taffy_overrides_clear.rs"]
 mod layout_post_taffy_overrides_clear;
 #[path = "layout/layout_scroll_offset_no_invalidate.rs"]

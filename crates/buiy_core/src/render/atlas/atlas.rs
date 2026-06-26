@@ -62,7 +62,7 @@ impl BuiyAtlas {
         coverage: impl FnOnce() -> AtlasBitmap,
     ) -> AtlasEntry {
         if let Some(entry) = self.entries.get(&key).copied() {
-            self.lru.touch(key, self.frame);
+            self.lru.touch(&key, self.frame);
             return entry;
         }
         let bitmap = coverage();
@@ -71,7 +71,7 @@ impl BuiyAtlas {
             "bitmap format must match the key's format"
         );
         let entry = self.allocate_and_record(key.clone(), format, bitmap);
-        self.lru.touch(key, self.frame);
+        self.lru.touch(&key, self.frame);
         entry
     }
 
@@ -96,7 +96,7 @@ impl BuiyAtlas {
     /// § 2.4 step 1. Exposed for tests as `touch_existing`.)
     pub fn touch_existing(&mut self, key: &AtlasKey) {
         if self.entries.contains_key(key) {
-            self.lru.touch(key.clone(), self.frame);
+            self.lru.touch(key, self.frame);
         }
     }
 

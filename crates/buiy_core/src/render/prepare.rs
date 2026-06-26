@@ -24,6 +24,7 @@
 //! from `crate::render::extract`. This module owns only `BuiyInstanceBuffers`
 //! (the persistent GPU buffers) and the `prepare_buiy_instances` system.
 
+use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::prelude::*;
 use bevy::render::render_resource::{BufferUsages, RawBufferVec, UniformBuffer};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
@@ -34,13 +35,14 @@ use std::ops::Range;
 use crate::render::atlas::GlyphAlphaInstance;
 use crate::render::buckets::{
     pack_band_instances, pack_gradient_instances, pack_shadow_instances, pack_view,
-    pack_view_partitioned, partition_glyph_ranges,
+    pack_view_partitioned, packed_to_raw, partition_glyph_ranges,
 };
 use crate::render::extract::{
-    ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads,
+    ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads, NodeDamage,
+    RetainedNodeIndex,
 };
 use crate::render::icon_producer::ExtractedIcons;
-use crate::render::instance::{BorderBandInstance, GradientInstance};
+use crate::render::instance::{BorderBandInstance, GradientInstance, pack_extracted};
 use crate::render::view_uniform::BuiyViewUniform;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
@@ -211,6 +213,11 @@ pub struct BuiyInstanceBuffers {
     /// Rides the quad gate (gradients + anchors are packed from the same node
     /// walk as the quad partition).
     pub gradient_anchors: Vec<u32>,
+    /// #2 Stage D1: entity -> its quad-instance slot (`PackedPartition::quad_slot_of`),
+    /// stored on every full quad repack. A subsequent Patch frame (stable paint order)
+    /// reads it to overwrite only the changed entities' quad slots via `quad.set` +
+    /// `write_buffer_range`, instead of re-uploading the whole blob.
+    pub quad_slot_of: EntityHashMap<u32>,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -236,6 +243,7 @@ impl Default for BuiyInstanceBuffers {
             icon_group_ranges: Vec::new(),
             icon_flat_ranges: Vec::new(),
             gradient_anchors: Vec::new(),
+            quad_slot_of: EntityHashMap::default(),
         }
     }
 }
@@ -252,6 +260,10 @@ pub struct BufferUploadStats {
     pub quad_uploads: u64,
     /// Glyph-buffer `write_buffer` calls (the glyph gate fired).
     pub glyph_uploads: u64,
+    /// #2 Stage D2: quad INSTANCES written this frame — `N` (the whole blob) on a Full
+    /// repack, but only the changed-entity count on a pure-bg-quad Patch partial upload.
+    /// The audit-#2 upload-rate signal: a single hover should move 1 instance, not N.
+    pub instances_uploaded: u64,
 }
 
 /// Pure CPU half of the prepare phase: pack one view's [`ExtractedNodes`] into
@@ -290,6 +302,11 @@ pub fn prepare_buiy_instances(
     glyphs: Res<ExtractedGlyphs>,
     icons: Res<ExtractedIcons>,
     text_quads: Res<ExtractedTextQuads>,
+    // #2 Stage D2: the partial-upload inputs. `damage` says whether this frame was a
+    // Patch + which entities; `index` maps an entity to its record slot in
+    // `ExtractedNodesView` (to re-pack just that record).
+    index: Res<RetainedNodeIndex>,
+    damage: Res<NodeDamage>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
     mut stats: ResMut<BufferUploadStats>,
 ) {
@@ -316,7 +333,77 @@ pub fn prepare_buiy_instances(
     // the glyph gate: an accent-swatch re-tint re-extracts only `ExtractedIcons`,
     // so the icon buffer re-uploads without touching the glyph buffer.
     let icon_dirty = icons.is_changed();
-    if quad_dirty {
+
+    // #2 Stage D2: the partial-upload fast path. When extract published a Patch (a
+    // group-free, footprint-stable value change) and the ONLY dirty carrier is the node
+    // quad blob, overwrite just the changed entities' quad slots in place + upload only
+    // the spanned range — instead of repacking + re-uploading the whole O(N) blob. Only
+    // PURE bg-quad nodes qualify: their bg quad is their sole instance across every
+    // buffer (no band/shadow/gradient, no own text quads), so a single `set` is correct
+    // for any value change. Anything else falls through to the Full repack below.
+    let partial_done = if quad_dirty {
+        'partial: {
+            let NodeDamage::Patch(ents) = &*damage else {
+                break 'partial false;
+            };
+            if ents.is_empty()
+                || groups.is_changed()
+                || text_quads.is_changed()
+                || glyphs.is_changed()
+                || icons.is_changed()
+            {
+                break 'partial false;
+            }
+            // Entities whose OWN text quads live (interleaved) in the quad buffer — a
+            // value change would move those too, so they are not pure-bg-quad.
+            let text_ents: EntityHashSet = text_quads.quads.iter().map(|q| q.entity).collect();
+            let mut slots: Vec<u32> = Vec::with_capacity(ents.len());
+            for &e in ents {
+                let (Some(&qslot), Some(&rslot)) = (buffers.quad_slot_of.get(&e), index.0.get(&e))
+                else {
+                    break 'partial false;
+                };
+                let Some(rec) = nodes.0.nodes.get(rslot as usize) else {
+                    break 'partial false;
+                };
+                let pure_bg_quad = rec.color != Color::NONE
+                    && rec.border.is_none()
+                    && rec.shadows.is_empty()
+                    && rec.gradients.is_empty()
+                    && rec.outline.is_none()
+                    && !text_ents.contains(&e);
+                if !pure_bg_quad {
+                    break 'partial false;
+                }
+                slots.push(qslot);
+            }
+            // Overwrite each changed entity's quad slot in place (siblings untouched).
+            for (&e, &qslot) in ents.iter().zip(slots.iter()) {
+                let rslot = index.0[&e] as usize;
+                let raw = packed_to_raw(&pack_extracted(&nodes.0.nodes[rslot]));
+                debug_assert!(qslot < buffers.quad_count, "#2 D2: patch slot in range");
+                buffers.quad.set(qslot, raw);
+            }
+            // Upload only the spanned element range (one slot for a single-entity hover;
+            // any unchanged slots inside the span keep their prior, still-correct values).
+            let lo = *slots.iter().min().unwrap() as usize;
+            let hi = *slots.iter().max().unwrap() as usize;
+            if buffers
+                .quad
+                .write_buffer_range(&render_queue, lo..hi + 1)
+                .is_err()
+            {
+                break 'partial false; // uninitialised/cold buffer -> fall back to Full
+            }
+            stats.quad_uploads += 1;
+            stats.instances_uploaded += ents.len() as u64;
+            true
+        }
+    } else {
+        false
+    };
+
+    if quad_dirty && !partial_done {
         // Consume R5's ExtractedNodes: pack its per-view records into the flat
         // quad blob, the per-group instance-range partition, and build the view
         // uniform (logical_size + scale_factor are R5's). The view uniform rides
@@ -327,9 +414,13 @@ pub fn prepare_buiy_instances(
         // window — so a group member is never double-painted. Text quads splice
         // in by the § 4.6 fresh-node-list walk (each entity's quads land right
         // after its node instance, adopting its group).
-        let partition = pack_view_partitioned(&nodes.0.nodes, groups.0.len(), &text_quads.quads);
+        let mut partition =
+            pack_view_partitioned(&nodes.0.nodes, groups.0.len(), &text_quads.quads);
         let uniform =
             BuiyViewUniform::for_view(nodes.0.logical_size, nodes.0.scale_factor).as_std140_array();
+        // D1: cache entity -> quad slot from this full pack so a later Patch frame (D2)
+        // can overwrite just the changed slots. Additive — stored but unused until D2.
+        buffers.quad_slot_of = std::mem::take(&mut partition.quad_slot_of);
 
         // Repack the quad buffer in place: clear + extend (the Vec backing
         // grows; the GPU buffer grows only on capacity overflow).
@@ -340,6 +431,7 @@ pub fn prepare_buiy_instances(
         buffers.quad_count = partition.instances.len() as u32;
         buffers.quad.write_buffer(&render_device, &render_queue);
         stats.quad_uploads += 1;
+        stats.instances_uploaded += partition.instances.len() as u64;
         // When NO group is live, the whole buffer is the flat draw — `pack_view_
         // partitioned` returns it as the single non-group run, so the node's flat
         // path stays byte-for-byte the pre-compositor draw.
@@ -443,7 +535,7 @@ pub fn prepare_buiy_instances(
     // rebuild (a caret blink) moves the run boundaries. CPU-only — no upload
     // rides this branch, so the independent buffer gating (and the
     // blink-reuploads-glyphs-only property) is untouched.
-    if quad_dirty || glyph_dirty {
+    if (quad_dirty && !partial_done) || glyph_dirty {
         let group_count = groups.0.len();
         let group_by_entity: HashMap<Entity, Option<usize>> =
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
@@ -467,7 +559,7 @@ pub fn prepare_buiy_instances(
     // can form/drop on a node-only frame while icons are retained, and an
     // icon-only rebuild moves run boundaries. `ExtractedIcons::entity_runs` is its
     // OWN contiguous-from-0 source, so the partition's contiguity assert holds.
-    if quad_dirty || icon_dirty {
+    if (quad_dirty && !partial_done) || icon_dirty {
         let group_count = groups.0.len();
         let group_by_entity: HashMap<Entity, Option<usize>> =
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
