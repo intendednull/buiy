@@ -598,12 +598,11 @@ fn menu_button_click_opens_then_keyboard_activates_an_item() {
 
     // Activate the active item via the keyboard (the design's roving-focus model:
     // open → the menu container holds focus with the first item as
-    // `active_descendant` → Enter activates it). A *pointer* click on a `MenuItem`
-    // does NOT activate it — `MenuItem` is role `MenuItem`, which is not in
-    // `is_activatable_role`, and per-item pointer activation is an explicitly
-    // deferred handler (`buiy_widgets/src/menu.rs` `guard_menu_clicks` — "a future
-    // per-item pointer handler"). Enter on the open+focused menu writes the shared
-    // `OnPress` for the active (first) item → `record_menu_activation`.
+    // `active_descendant` → Enter activates it). This test exercises the KEYBOARD
+    // roving path specifically; the POINTER path (a click directly on an item) is
+    // covered by `menu_item_click_activates_that_item_and_closes` below — both
+    // converge on the shared `OnPress` sink → `record_menu_activation`. Enter on the
+    // open+focused menu writes the shared `OnPress` for the active (first) item.
     g.press_key(KeyCode::Enter, Key::Enter);
     g.settle(2);
     assert_eq!(
@@ -615,6 +614,73 @@ fn menu_button_click_opens_then_keyboard_activates_an_item() {
             .map(String::as_str),
         Some("Open"),
         "activating the first item records its label (record_menu_activation)",
+    );
+}
+
+/// The POINTER per-item path (`buiy_widgets` `menu_item_click_emits_on_press`): a
+/// click directly on a `MenuItem` activates THAT item (records its label) and closes
+/// the menu — the pointer mirror of the keyboard Enter/Space activate-and-close.
+/// Before that handler existed, clicking an item was a dead interaction (the menu's
+/// `guard_menu_clicks` contained the click and no producer lowered it to `OnPress`).
+#[test]
+fn menu_item_click_activates_that_item_and_closes() {
+    use buiy_gallery::{MenuAction, MenuActivations};
+
+    let mut g = Gallery::new();
+    g.goto(Screen::Menu);
+
+    let button = single::<MenuButton>(g.world_app());
+    let menu = single::<Menu>(g.world_app());
+
+    // Open the dropdown (button click → A11yExpanded true → sync_menu_open shows it).
+    g.click(button);
+    g.settle(2);
+    assert_eq!(
+        g.world_app().world().get::<CssVisibility>(menu).copied(),
+        Some(CssVisibility::Visible),
+        "the dropdown is open before the item click",
+    );
+
+    // Click the SECOND item ("Rename", MenuAction(1)) — deliberately NOT the first,
+    // so the recorded label proves the POINTER targets the clicked item, not the
+    // keyboard's first-item-on-open default.
+    let rename = find_where::<MenuAction>(g.world_app(), |a| a.0 == 1);
+    g.click(rename);
+    g.settle(2);
+
+    // The clicked item's label is recorded — the dedicated pointer producer wrote
+    // OnPress(rename) → record_menu_activation. "Rename" (not "Open") distinguishes
+    // pointer-targeting from the keyboard first-item default.
+    assert_eq!(
+        g.world_app()
+            .world()
+            .resource::<MenuActivations>()
+            .0
+            .last()
+            .map(String::as_str),
+        Some("Rename"),
+        "clicking the Rename item records ITS label (menu_item_click_emits_on_press)",
+    );
+
+    // Menu state matches the keyboard activate-and-close: collapsed + hidden + focus
+    // restored to the button (the shared `close_menu` path).
+    assert_eq!(
+        g.world_app()
+            .world()
+            .get::<A11yExpanded>(button)
+            .map(|e| e.0),
+        Some(false),
+        "clicking an item closes the menu (A11yExpanded false) — matches the keyboard Enter close",
+    );
+    assert_eq!(
+        g.world_app().world().get::<CssVisibility>(menu).copied(),
+        Some(CssVisibility::Hidden),
+        "the dropdown hides after the item click",
+    );
+    assert_eq!(
+        g.world_app().world().resource::<FocusedEntity>().0,
+        Some(button),
+        "focus is restored to the menu button on close (matches the keyboard close)",
     );
 }
 

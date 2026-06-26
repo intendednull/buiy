@@ -33,6 +33,7 @@ use crate::popover::popover_stacking;
 use crate::popover::{Popover, is_open};
 use bevy::picking::Pickable;
 use bevy::picking::events::{Click, Pointer, Press};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use buiy_core::interaction::OnPress;
 use buiy_core::{
@@ -142,8 +143,11 @@ pub struct Menu;
 /// scroll-overlay-modal.md §B.3). A menu item is **not** `Focusable` (the menu
 /// container owns focus; the roving model tracks the active item via the menu's
 /// `active_descendant`, not per-item DOM focus) and **not** in `is_activatable_role`
-/// (a pointer click is not routed through the activatable-role producer — the menu
-/// keyboard nav writes the shared `OnPress` for the active item directly).
+/// (so the generic `pointer_click_emits_on_press` producer does not fire for it —
+/// activating an item must ALSO close the menu, which that role-keyed producer can
+/// not do). A pointer click on an item is instead routed through the dedicated
+/// [`menu_item_click_emits_on_press`] observer (writes the shared `OnPress` sink +
+/// closes the menu), the pointer mirror of the keyboard nav's Enter/Space branch.
 ///
 /// The require list:
 /// - `Node` — the layout marker.
@@ -392,9 +396,10 @@ pub fn wire_menu_button(
 /// (which are correctly role-keyed and widget-agnostic), each menu gets an entity
 /// observer that **stops propagation** of `Pointer<Press>`/`Pointer<Click>` at the
 /// menu root: the event still reaches the menu and its items (item activation rides
-/// the menu's own keyboard nav / a future per-item pointer handler), but never
-/// bubbles past the menu to the controlling button. Gated on `Added<Menu>` so the
-/// observers attach exactly once per menu. Registered in `WidgetsPlugin`.
+/// the menu's own keyboard nav and the [`menu_item_click_emits_on_press`] per-item
+/// pointer handler — which fires at the item DURING the bubble, before this stop),
+/// but never bubbles past the menu to the controlling button. Gated on `Added<Menu>`
+/// so the observers attach exactly once per menu. Registered in `WidgetsPlugin`.
 pub fn guard_menu_clicks(mut commands: Commands, menus: Query<Entity, Added<Menu>>) {
     for menu in &menus {
         commands
@@ -410,6 +415,67 @@ pub fn guard_menu_clicks(mut commands: Commands, menus: Query<Entity, Added<Menu
                 click.propagate(false);
             });
     }
+}
+
+/// Pointer-side activation for a clicked [`MenuItem`] (C5-c — the per-item pointer
+/// handler [`guard_menu_clicks`] deferred). `MenuItem` is deliberately NOT in
+/// `is_activatable_role`, so the generic buiy_core `pointer_click_emits_on_press`
+/// producer never lowers a clicked item to the shared [`OnPress`] sink — this
+/// dedicated global observer does, and it is the pointer **mirror of the keyboard
+/// nav's Enter/Space branch** ([`menu_keyboard_nav`]): on a primary `Pointer<Click>`
+/// whose (bubbled) target is a `MenuItem`, it (1) writes `OnPress(item)` — the SAME
+/// sink the keyboard / AT path write, so an item callback consumer converges on one
+/// route — and (2) **closes** the containing menu (reusing `close_menu`, which
+/// flips the controlling button's `A11yExpanded` → [`sync_menu_open`] hides + clears
+/// the active descendant + restores focus), exactly the keyboard close-on-activate.
+///
+/// **Why a global observer keyed on the marker works through the propagation stop:**
+/// `Pointer<Click>` is an `EntityEvent` that bubbles up the `ChildOf` chain,
+/// re-targeting `click.entity` to each ancestor as it goes. The deepest pick may be
+/// an item's label/icon child, but the event then bubbles to the `MenuItem` root —
+/// where this observer fires with `click.entity == item` — and only AFTER that
+/// reaches the menu root, where [`guard_menu_clicks`] stops propagation. So this
+/// fires at the item regardless of which descendant was picked (no per-child
+/// `Pickable::IGNORE` needed) and before the containment stop. Registered as a
+/// global observer by [`WidgetsPlugin`](crate::WidgetsPlugin).
+pub fn menu_item_click_emits_on_press(
+    click: On<Pointer<Click>>,
+    items: Query<(), With<MenuItem>>,
+    mut writer: MessageWriter<OnPress>,
+    mut commands: Commands,
+) {
+    if click.event.button != PointerButton::Primary {
+        return;
+    }
+    let item = click.entity;
+    // Only fire when the (bubbled) event target is a MenuItem — a click on the menu
+    // panel chrome / a non-item child resolves to a non-`MenuItem` target and is a
+    // no-op here (the bubble visits the item itself separately).
+    if !items.contains(item) {
+        return;
+    }
+    // Activate via the shared sink (the pointer mirror of the keyboard Enter branch;
+    // `record_menu_activation` / a callback consumer read it).
+    writer.write(OnPress(item));
+    // Close the containing menu on select — match the keyboard close-on-activate.
+    // Deferred through a command because `close_menu` needs exclusive `&mut World`
+    // (it flips the controlling button's `A11yExpanded`, which `sync_menu_open` then
+    // reacts to next-run: hide + clear active descendant + restore focus).
+    commands.queue(move |world: &mut World| {
+        if let Some(menu) = menu_of_item(world, item) {
+            close_menu(world, menu);
+        }
+    });
+}
+
+/// The [`Menu`] that owns `item` (its `ChildOf` parent carrying the [`Menu`] marker),
+/// or `None` if `item` is not a direct menu child. Used by
+/// [`menu_item_click_emits_on_press`] to find the menu to close on select; items are
+/// always direct children of their menu (the `MenuButton::new` / `Menu::new`
+/// authoring + the gallery's imperative idiom both spawn them as such).
+fn menu_of_item(world: &World, item: Entity) -> Option<Entity> {
+    let parent = world.get::<ChildOf>(item)?.parent();
+    world.get::<Menu>(parent).is_some().then_some(parent)
 }
 
 // ---------------------------------------------------------------------------
@@ -714,7 +780,7 @@ fn set_active(world: &mut World, menu: Entity, item: Entity) {
 /// is the single source of the button↔menu link. If no controlling button is found
 /// (a standalone `Menu` with no `MenuButton`), the menu is hidden directly so
 /// Escape still closes it.
-fn close_menu(world: &mut World, menu: Entity) {
+pub(crate) fn close_menu(world: &mut World, menu: Entity) {
     // Find the controlling button (the one whose `controls` references this menu).
     let mut button = None;
     let mut q = world.query_filtered::<(Entity, &A11yRelations), With<MenuButton>>();

@@ -332,6 +332,14 @@ impl Plugin for WidgetsPlugin {
         // button (which would toggle the menu closed + steal focus). Gated on
         // `Added<Menu>`.
         app.add_systems(Update, menu::guard_menu_clicks);
+        // The per-item pointer producer: a primary `Pointer<Click>` on a `MenuItem`
+        // writes the shared `OnPress` sink for it + closes the menu (the pointer
+        // mirror of the keyboard Enter/Space activate-and-close). `MenuItem` is not
+        // in `is_activatable_role`, so the generic `pointer_click_emits_on_press`
+        // does not cover it; this dedicated observer does. It fires at the item
+        // during the `Pointer<Click>` bubble, before `guard_menu_clicks` stops it at
+        // the menu root.
+        app.add_observer(menu::menu_item_click_emits_on_press);
         //
         // The MenuButton reuses the Disclosure state-keyed `A11yExpanded` open/
         // close pattern: `advance_expanded_on_press` (registered above) flips the
