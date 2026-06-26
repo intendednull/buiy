@@ -256,6 +256,9 @@ impl Plugin for BuiyRenderPlugin {
         };
         render_app
             .init_resource::<extract::ExtractedNodesView>()
+            // #2 Stage C: the entity->slot index, rebuilt on Full extract (the
+            // foundation for in-place Patch overwrites).
+            .init_resource::<extract::RetainedNodeIndex>()
             // The per-view effect-group carrier `prepare_effect_groups` reads as a
             // non-Option `Res`. `extract_buiy_nodes` overwrites it every frame
             // (both paths), but init it here for the same reason as

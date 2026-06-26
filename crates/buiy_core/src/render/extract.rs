@@ -1289,6 +1289,11 @@ pub fn extract_buiy_nodes(
             )>,
         >,
     >,
+    // #2 Stage C: entity -> slot map, rebuilt on Full, retained on idle/Patch. The
+    // gate-skip path below must NOT deref it (leave it retained). `Option` so the
+    // manual extract test harnesses (which don't register it) still run the system —
+    // no registration drift, no missing-resource skip (the counters pattern).
+    mut index: Option<ResMut<RetainedNodeIndex>>,
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
@@ -1308,6 +1313,9 @@ pub fn extract_buiy_nodes(
     let Ok(primary_window) = primary.single() else {
         *view = ExtractedNodesView::default();
         *groups_res = ExtractedEffectGroups::default();
+        if let Some(idx) = index.as_deref_mut() {
+            idx.0.clear();
+        }
         record_node_counts(&mut counters, 0, 0, 0);
         return;
     };
@@ -1635,6 +1643,14 @@ pub fn extract_buiy_nodes(
         && !theme_changed;
     record_node_counts(&mut counters, 1, all.nodes.len(), patch_eligible as u32);
     *view = ExtractedNodesView(all);
+    // #2 Stage C: rebuild the entity->slot index from the freshly-published ordered
+    // nodes — the foundation for a later in-place Patch overwrite at `index[e]`.
+    if let Some(idx) = index.as_deref_mut() {
+        idx.0.clear();
+        for (i, n) in view.0.nodes.iter().enumerate() {
+            idx.0.insert(n.entity, i as u32);
+        }
+    }
     // The per-view effect-group list (effect-compositor.md § 1.1). Emitted on
     // EVERY rebuild frame (incl. when empty) so a frame that drops the last group
     // clears the carrier — mirrors the `ExtractedNodesView` overwrite contract.
@@ -1649,6 +1665,14 @@ pub fn extract_buiy_nodes(
 /// SUPERSEDED-BY: R6/R8 (node.rs/buckets read the per-view `ExtractedNodes`).
 #[derive(Resource, Default, Clone, Debug)]
 pub struct ExtractedNodesView(pub ExtractedNodes);
+
+/// #2 Stage C: entity -> its slot (index) in the retained `ExtractedNodesView.0.nodes`
+/// ordered Vec. Rebuilt on every Full extract; retained (untouched) on idle + (later)
+/// Patch frames, where the slots are paint-order-stable. Lets a future Patch stage
+/// find a changed entity's record and overwrite it IN PLACE without rebuilding the
+/// ordered Vec from the changed set (the R5 sibling-drop trap).
+#[derive(Resource, Default)]
+pub struct RetainedNodeIndex(pub EntityHashMap<u32>);
 
 /// One text quad-tier visual (decoration-and-paint § 4.6): selection rects
 /// (T7) and underline/overline (T6), keyed by the SOURCE entity. A flat

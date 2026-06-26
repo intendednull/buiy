@@ -31,7 +31,8 @@ use buiy_core::render::atlas::{AtlasConfig, BuiyAtlas, maintain_atlas};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::render::extract::{
-    ExtractedEffectGroups, ExtractedNodesView, ExtractedTextQuads, extract_buiy_nodes,
+    ExtractedEffectGroups, ExtractedNodesView, ExtractedTextQuads, RetainedNodeIndex,
+    extract_buiy_nodes,
 };
 use buiy_core::render::prepare::ExtractedGlyphs;
 use buiy_core::render::{RenderWorkCounters, record_text_work_counters};
@@ -90,6 +91,7 @@ impl PipelineHarness {
         // gate-skip path on a clean frame has a resident resource to retain).
         render.init_resource::<ExtractedNodesView>();
         render.init_resource::<ExtractedEffectGroups>();
+        render.init_resource::<RetainedNodeIndex>();
         // P0b: the deterministic work-unit counters, registered here so the gate
         // tests can read them — the SAME `RenderWorkCounters` the real RenderApp
         // registers (one type, one registration list).
