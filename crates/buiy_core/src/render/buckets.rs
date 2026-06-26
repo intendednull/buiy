@@ -18,6 +18,7 @@ use crate::render::instance::{
     BorderBandInstance, GradientInstance, PackedInstance, pack_border, pack_extracted,
     pack_gradient, pack_outline, pack_shadow, pack_text_quad,
 };
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::{Color, Entity};
 use bytemuck::Pod;
 
@@ -403,6 +404,14 @@ pub struct PackedPartition {
     /// gradient-bleed bug). One entry per input node, in node-walk (paint) order,
     /// so it is non-decreasing.
     pub node_quad_anchors: Vec<u32>,
+    /// #2 Stage D1: entity -> its quad-instance slot in `instances` (only painting
+    /// nodes — a `Color::NONE` node has no quad). Rebuilt every full pack. A Patch
+    /// (provably stable paint order — no structural change) reuses this to overwrite
+    /// just the changed entity's quad slot via `RawBufferVec::set` +
+    /// `write_buffer_range`, instead of re-uploading the whole blob. (The general
+    /// rejection of a recorded paint-order index — see the `quads_by_entity` note in
+    /// `pack_view_partitioned` — is about REORDER staleness, which a Patch precludes.)
+    pub quad_slot_of: EntityHashMap<u32>,
 }
 
 /// Pack a view's nodes into the flat quad blob AND its per-group instance-range
@@ -448,9 +457,13 @@ pub fn pack_view_partitioned(
 
     let mut p = Partitioner::new(nodes.len() + text_quads.len(), group_count);
     let mut node_quad_anchors = Vec::with_capacity(nodes.len());
+    let mut quad_slot_of: EntityHashMap<u32> = EntityHashMap::default();
     for node in nodes {
         let g = node.group.filter(|&g| g < group_count);
         if node.color != Color::NONE {
+            // D1: record this painting node's quad slot (the index it is about to
+            // occupy) so the partial-upload Patch path can overwrite it in place.
+            quad_slot_of.insert(node.entity, p.len());
             p.push(packed_to_raw(&pack_extracted(node)), g);
         }
         // The gradient paint-order anchor (parity gradient-bleed fix): the
@@ -475,6 +488,7 @@ pub fn pack_view_partitioned(
     }
     let mut partition = p.finish();
     partition.node_quad_anchors = node_quad_anchors;
+    partition.quad_slot_of = quad_slot_of;
     partition
 }
 
@@ -518,6 +532,7 @@ impl Partitioner {
             // Filled by `pack_view_partitioned` after `finish` (it owns the
             // per-node anchor walk); empty here keeps `Partitioner` blob-only.
             node_quad_anchors: Vec::new(),
+            quad_slot_of: EntityHashMap::default(),
         }
     }
 }

@@ -24,6 +24,7 @@
 //! from `crate::render::extract`. This module owns only `BuiyInstanceBuffers`
 //! (the persistent GPU buffers) and the `prepare_buiy_instances` system.
 
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use bevy::render::render_resource::{BufferUsages, RawBufferVec, UniformBuffer};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
@@ -211,6 +212,11 @@ pub struct BuiyInstanceBuffers {
     /// Rides the quad gate (gradients + anchors are packed from the same node
     /// walk as the quad partition).
     pub gradient_anchors: Vec<u32>,
+    /// #2 Stage D1: entity -> its quad-instance slot (`PackedPartition::quad_slot_of`),
+    /// stored on every full quad repack. A subsequent Patch frame (stable paint order)
+    /// reads it to overwrite only the changed entities' quad slots via `quad.set` +
+    /// `write_buffer_range`, instead of re-uploading the whole blob.
+    pub quad_slot_of: EntityHashMap<u32>,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -236,6 +242,7 @@ impl Default for BuiyInstanceBuffers {
             icon_group_ranges: Vec::new(),
             icon_flat_ranges: Vec::new(),
             gradient_anchors: Vec::new(),
+            quad_slot_of: EntityHashMap::default(),
         }
     }
 }
@@ -327,9 +334,13 @@ pub fn prepare_buiy_instances(
         // window — so a group member is never double-painted. Text quads splice
         // in by the § 4.6 fresh-node-list walk (each entity's quads land right
         // after its node instance, adopting its group).
-        let partition = pack_view_partitioned(&nodes.0.nodes, groups.0.len(), &text_quads.quads);
+        let mut partition =
+            pack_view_partitioned(&nodes.0.nodes, groups.0.len(), &text_quads.quads);
         let uniform =
             BuiyViewUniform::for_view(nodes.0.logical_size, nodes.0.scale_factor).as_std140_array();
+        // D1: cache entity -> quad slot from this full pack so a later Patch frame (D2)
+        // can overwrite just the changed slots. Additive — stored but unused until D2.
+        buffers.quad_slot_of = std::mem::take(&mut partition.quad_slot_of);
 
         // Repack the quad buffer in place: clear + extend (the Vec backing
         // grows; the GPU buffer grows only on capacity overflow).
