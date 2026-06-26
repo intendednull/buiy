@@ -46,7 +46,11 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use buiy_core::layout::{LayoutPlugin, Style};
 use buiy_core::render::BuiyRenderPlugin;
 use buiy_core::render::atlas::{AtlasConfig, BuiyAtlas, maintain_atlas};
-use buiy_core::render::extract::ExtractedTextQuads;
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::Background;
+use buiy_core::render::extract::{
+    ExtractedEffectGroups, ExtractedNodesView, ExtractedTextQuads, extract_buiy_nodes,
+};
 use buiy_core::render::prepare::ExtractedGlyphs;
 use buiy_core::text::{
     BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontSize, GlyphMetaCache, ResidentTextKeys,
@@ -90,6 +94,11 @@ impl PipelineHarness {
         render.insert_resource(BuiyAtlas::new(AtlasConfig::default()));
         render.init_resource::<ExtractedGlyphs>();
         render.init_resource::<ExtractedTextQuads>();
+        // Audit #2 node-extract path: the per-view carrier + effect groups
+        // `extract_buiy_nodes` overwrites each dirty frame (init'd so the
+        // gate-skip path on a clean frame has a resident resource to retain).
+        render.init_resource::<ExtractedNodesView>();
+        render.init_resource::<ExtractedEffectGroups>();
         render.init_resource::<FontKeyInterner>();
         render.init_resource::<ResidentTextKeys>();
         render.init_resource::<GlyphMetaCache>();
@@ -98,7 +107,7 @@ impl PipelineHarness {
         render.init_resource::<MainWorld>();
 
         let mut extract = Schedule::new(ExtractSchedule);
-        extract.add_systems((maintain_atlas, extract_buiy_glyphs).chain());
+        extract.add_systems((maintain_atlas, extract_buiy_glyphs, extract_buiy_nodes).chain());
 
         Self {
             app,
@@ -246,5 +255,149 @@ fn bench_steady_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cold_pipeline, bench_steady_pipeline);
+/// A flat, TEXT-FREE scene: `nodes` fixed-size plain `Node`s in a padded flex
+/// column. No `Text`, so the per-frame cost is dominated by the LAYOUT pipeline
+/// — the Taffy compute plus the ~12 post-Taffy full-tree passes (stacking,
+/// transform composition, `ResolvedLayout` readback, writing-mode inherit, the
+/// positioning sub-passes) that run UNCONDITIONALLY every frame with no run
+/// condition (perf audit #3). Isolates #3 from the text/atlas cost (#5).
+fn build_flat_scene(nodes: usize) -> PipelineHarness {
+    let mut h = PipelineHarness::new();
+    let mut children = Vec::with_capacity(nodes);
+    for _ in 0..nodes {
+        let id = h
+            .app
+            .world_mut()
+            .spawn((Node, Style::default().width_px(40.0).height_px(20.0)))
+            .id();
+        children.push(id);
+    }
+    let root = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(800.0)
+                .padding(8.0)
+                .gap_px(2.0),
+        ))
+        .id();
+    h.app.world_mut().entity_mut(root).add_children(&children);
+    h
+}
+
+/// Bench the per-frame STEADY layout cost on a large flat scene: settle once,
+/// then time a single `app.update()` (the full BuiySet chain) on the
+/// already-laid-out tree. An ungated full-tree pass (#3) shows up here as a
+/// per-frame cost that grows with node count even though nothing changed — the
+/// "static frame is not free" thesis, isolated from text.
+fn bench_flat_steady(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout_flat");
+    for &nodes in &[1000usize, 5000] {
+        group.bench_function(format!("steady/{nodes}_nodes"), |b| {
+            let mut h = build_flat_scene(nodes);
+            for _ in 0..6 {
+                h.app.update();
+            }
+            b.iter(|| {
+                h.app.update();
+                black_box(h.app.world().entities().len())
+            });
+        });
+    }
+    group.finish();
+}
+
+/// A flat scene of `nodes` painting `Background` nodes for the audit-#2
+/// node-extract measurement. Each node carries a `Background`, so
+/// `extract_buiy_nodes` builds a per-entity `ExtractedNode` record for ALL N on
+/// any dirty frame. Returns the harness + one victim entity to mutate.
+fn build_flat_bg_scene(nodes: usize) -> (PipelineHarness, Entity) {
+    let mut h = PipelineHarness::new();
+    let mut children = Vec::with_capacity(nodes);
+    let mut victim = Entity::PLACEHOLDER;
+    for i in 0..nodes {
+        let id = h
+            .app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default().width_px(40.0).height_px(20.0),
+                Background {
+                    color: ColorToken::Token("surface".into()),
+                },
+            ))
+            .id();
+        if i == 0 {
+            victim = id;
+        }
+        children.push(id);
+    }
+    let root = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(800.0)
+                .padding(8.0)
+                .gap_px(2.0),
+        ))
+        .id();
+    h.app.world_mut().entity_mut(root).add_children(&children);
+    (h, victim)
+}
+
+/// Bench audit #2 (all-or-nothing extract). `extract_buiy_nodes` is gated: a
+/// CLEAN frame early-returns (the O(0) damage gate); ANY changed entity rebuilds
+/// the FULL `by_entity` record set + re-clones every ~480 B `ExtractedNode`. So
+/// `steady_gated` (no change → gate skips) vs `one_change` (mutate ONE node →
+/// full N-node rebuild) sizes the CPU cost a single hover/caret-blink/scroll
+/// pays per interactive frame. Both run `app.update()` (the layout pipeline), so
+/// the DELTA isolates the extract rebuild. Adapterless: no RenderApp/GPU, so the
+/// prepare re-upload (audit #2's other half) is NOT measured here.
+fn bench_node_extract(c: &mut Criterion) {
+    let mut group = c.benchmark_group("node_extract");
+    for &nodes in &[1000usize, 5000] {
+        group.bench_function(format!("steady_gated/{nodes}"), |b| {
+            let (mut h, _victim) = build_flat_bg_scene(nodes);
+            for _ in 0..6 {
+                h.frame();
+            }
+            b.iter(|| {
+                h.app.update();
+                h.extract_only();
+                black_box(h.app.world().entities().len())
+            });
+        });
+        group.bench_function(format!("one_change/{nodes}"), |b| {
+            let (mut h, victim) = build_flat_bg_scene(nodes);
+            for _ in 0..6 {
+                h.frame();
+            }
+            b.iter(|| {
+                h.app.update();
+                // One interactive change: mark a single node's paint dirty so the
+                // damage gate trips and re-extracts the whole scene.
+                if let Some(mut bg) = h.app.world_mut().get_mut::<Background>(victim) {
+                    bg.set_changed();
+                }
+                h.extract_only();
+                black_box(h.app.world().entities().len())
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_cold_pipeline,
+    bench_steady_pipeline,
+    bench_flat_steady,
+    bench_node_extract
+);
 criterion_main!(benches);
