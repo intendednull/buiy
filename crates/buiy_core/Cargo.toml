@@ -105,6 +105,9 @@ proptest = { workspace = true }
 # below. Dev-only + informational (see the workspace-dep comment); `harness =
 # false` on the `[[bench]]` target hands `main` to criterion instead of libtest.
 criterion = { workspace = true }
+# P0c allocation-count gate — drives tests/alloc_budget.rs (its own isolated test
+# binary with `#[global_allocator] dhat::Alloc`). Dev-only, cross-platform.
+dhat = { workspace = true }
 # The shared adapterless extract harness + scenes for the perf benches/tests
 # (criterion `pipeline`, the dhat alloc-budget test, the iai-callgrind bench).
 # DEV-ONLY cycle (buiy_core → buiy_bench_support → buiy_core), the same pattern as
