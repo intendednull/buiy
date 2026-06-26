@@ -120,7 +120,7 @@ pub struct LayoutTaffyComputeCount(pub u32);
 pub struct SyncStylesIterCount(pub usize);
 
 /// Per-frame gate flag for the `BuiyLayoutStep::PostTaffyOverrides` set
-/// (perf audit #3). Seeded once per frame by [`seed_layout_dirty`] (the new
+/// (perf audit #3). Seeded once per frame by `seed_layout_dirty` (the new
 /// FIRST step `BuiyLayoutStep::SeedLayoutDirty`) to `true` **iff** any input
 /// the post-Taffy override chain reads changed since the previous frame, and
 /// consumed by `configure_sets(PostTaffyOverrides.run_if(layout_is_dirty))`.
@@ -142,9 +142,9 @@ pub struct SyncStylesIterCount(pub usize);
 pub struct LayoutDirtyThisFrame(pub bool);
 
 /// Per-frame instrument — how many times the gated `PostTaffyOverrides` chain
-/// ran this frame. Reset to `0` at frame start by [`seed_layout_dirty`]
+/// ran this frame. Reset to `0` at frame start by `seed_layout_dirty`
 /// (mirrors `taffy_compute` resetting `LayoutTaffyComputeCount`), then bumped
-/// by [`clear_post_taffy_overrides`] (the chain's first member). So it reads
+/// by `clear_post_taffy_overrides` (the chain's first member). So it reads
 /// `0` on a frame the #3 gate SKIPPED the chain and `>= 1` on a frame it ran —
 /// the deterministic signal the gate tests assert (idle frame `== 0`, mutate a
 /// node `>= 1`).
