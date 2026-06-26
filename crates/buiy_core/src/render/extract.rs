@@ -931,6 +931,24 @@ pub fn context_tree_paint_order<'a>(
 /// (render node walk, text glyph walk) and the picking depth derivation pass a
 /// lookup over the SAME `StackingContext` query, so all three order roots
 /// identically (the "paint == hit-test" invariant).
+/// The #2 partial-re-extract FOOTPRINT of a node: the per-entity quantities that fix
+/// its slot layout in the instance buffers — whether it emits a solid background quad,
+/// and how many gradient / border / shadow / outline band slots it occupies. Two
+/// records with the SAME footprint occupy the SAME slots, so a value change between
+/// them (color / position / size) can overwrite those slots in place; a footprint
+/// CHANGE (a border appears, a shadow is added/removed) changes the slot count and
+/// forces a Full re-pack. Position / size / color VALUES are deliberately excluded —
+/// those are exactly what a Patch updates.
+fn node_footprint(r: &ExtractedNode) -> (bool, usize, bool, usize, bool) {
+    (
+        r.color != Color::NONE,
+        r.gradients.len(),
+        r.border.is_some(),
+        r.shadows.len(),
+        r.outline.is_some(),
+    )
+}
+
 pub fn context_roots(
     // std HashMap (not EntityHashMap): this is a cross-module helper also called by
     // picking/depth.rs + text/extract.rs; `sc_by_entity` is small (one entry per
@@ -1278,8 +1296,10 @@ pub fn extract_buiy_nodes(
             (),
             Or<(
                 Changed<StackingContext>,
+                Changed<Stacking>,
                 Changed<ClipRect>,
                 Changed<AncestorClip>,
+                Changed<ComputedPaintSkip>,
                 Changed<bevy::prelude::Children>,
                 Changed<EffectGroup>,
                 Changed<Opacity>,
@@ -1636,11 +1656,40 @@ pub fn extract_buiy_nodes(
     // later Patch stage will additionally require a per-entity footprint match, so
     // this coarse signal is an upper-ish bound used to size the Patch-path payoff
     // (the `node_patches` counter) before building the in-place Patch path.
-    let patch_eligible = structural_changed.is_empty()
-        && group_formers.is_empty()
-        && !despawned
-        && !skip_lifted
-        && !theme_changed;
+    // #2 Stage C2: PER-ENTITY Patch classification (still observation-only — the
+    // rebuild above is Full). A frame is Patch-eligible iff there is no structural
+    // change anywhere and EVERY changed entity is a value-only tweak (color / position
+    // / size) to a group-free, footprint-stable node that maps to an existing slot in
+    // the prior view it can overwrite in place. The prior records + index are read HERE,
+    // before the `*view =` overwrite + index rebuild below. Replaces Stage B's coarse
+    // scene-level `group_formers.is_empty()` (which forced Full whenever the scene held
+    // ANY effect group — too coarse for real UIs whose static cards are groups). A
+    // changed entity absent from the prior index (a non-painting container or a freshly
+    // painting node) is conservatively NOT patchable -> Full.
+    let patch_eligible =
+        !despawned && !skip_lifted && !theme_changed && structural_changed.is_empty() && {
+            let prior = &view.0.nodes;
+            let mut any = false;
+            let mut all_patchable = true;
+            for e in changed.iter() {
+                any = true;
+                let patchable = index
+                    .as_deref()
+                    .and_then(|idx| idx.0.get(&e))
+                    .and_then(|&slot| prior.get(slot as usize))
+                    .is_some_and(|old| {
+                        old.group.is_none()
+                            && by_entity
+                                .get(&e)
+                                .is_some_and(|new| node_footprint(new) == node_footprint(old))
+                    });
+                if !patchable {
+                    all_patchable = false;
+                    break;
+                }
+            }
+            any && all_patchable
+        };
     record_node_counts(&mut counters, 1, all.nodes.len(), patch_eligible as u32);
     *view = ExtractedNodesView(all);
     // #2 Stage C: rebuild the entity->slot index from the freshly-published ordered
