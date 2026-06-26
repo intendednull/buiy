@@ -152,12 +152,6 @@ pub mod prelude {
     pub use crate::*;
 }
 
-// `buiy_core::render::ExtractedDraws` is intentionally NOT re-exported at
-// the crate root: it is a render-world resource only, populated during the
-// extract phase. Main-world consumers reading it would see an empty Vec.
-// Render-world plugin authors who need it can reach `buiy::buiy_core::render`
-// (or depend on `buiy_core` directly) without crate-root surface pollution.
-
 /// Top-level Buiy plugin. Composes sub-plugins in the documented order:
 /// core → theme → a11y → focus → input → widgets. Render registration
 /// happens in `Plugin::finish` so RenderApp exists when we reach it.
