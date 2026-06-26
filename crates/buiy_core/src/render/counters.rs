@@ -42,6 +42,14 @@ pub struct RenderWorkCounters {
     /// `atlas_touch_ops == resident_keys` on an idle text frame (no per-glyph
     /// reorder work beyond the unavoidable one-touch-per-key bookkeeping).
     pub resident_keys: usize,
+    /// `1` if this dirty frame is Patch-ELIGIBLE (audit #2 Stage B classifier):
+    /// the damage is value-only (no structural/hierarchy/group/despawn/theme
+    /// change), so a future Patch stage COULD re-extract only the changed slots
+    /// instead of the whole scene. `0` on a Full (structural) rebuild and on idle.
+    /// Stage B is observation-only — the extract still does a Full rebuild; this
+    /// counter measures the Patch-vs-Full mix to size the C/D Patch-path payoff
+    /// before building it.
+    pub node_patches: u32,
 }
 
 /// Set `node_rebuilds` + `instances_built` (the `extract_buiy_nodes` work counts)
@@ -51,10 +59,12 @@ pub(crate) fn record_node_counts(
     counters: &mut Option<ResMut<RenderWorkCounters>>,
     rebuilds: u32,
     built: usize,
+    patches: u32,
 ) {
     if let Some(c) = counters.as_deref_mut() {
         c.node_rebuilds = rebuilds;
         c.instances_built = built;
+        c.node_patches = patches;
     }
 }
 

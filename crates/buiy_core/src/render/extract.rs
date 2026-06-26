@@ -1267,6 +1267,28 @@ pub fn extract_buiy_nodes(
     // `Option` so a harness without the resource is unaffected (no registration
     // drift, no missing-resource skip).
     mut counters: Option<ResMut<RenderWorkCounters>>,
+    // #2 Stage B classifier: the STRUCTURAL damage probe. A change to any of these
+    // reorders paint, changes effect-group membership, or changes a node's
+    // per-buffer footprint (border/outline/shadow band slots) — so the frame is NOT
+    // Patch-eligible (a Patch reuses paint order + slot layout). Value-only changes
+    // (Background / GlobalTransform / ResolvedLayout) are absent here, so they stay
+    // Patch-eligible. Entity-only; used as an `is_empty()` probe.
+    structural_changed: Extract<
+        Query<
+            (),
+            Or<(
+                Changed<StackingContext>,
+                Changed<ClipRect>,
+                Changed<AncestorClip>,
+                Changed<bevy::prelude::Children>,
+                Changed<EffectGroup>,
+                Changed<Opacity>,
+                Changed<Outline>,
+                Changed<Border>,
+                Changed<BoxShadow>,
+            )>,
+        >,
+    >,
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
@@ -1286,7 +1308,7 @@ pub fn extract_buiy_nodes(
     let Ok(primary_window) = primary.single() else {
         *view = ExtractedNodesView::default();
         *groups_res = ExtractedEffectGroups::default();
-        record_node_counts(&mut counters, 0, 0);
+        record_node_counts(&mut counters, 0, 0, 0);
         return;
     };
 
@@ -1301,8 +1323,11 @@ pub fn extract_buiy_nodes(
     // resident and `is_changed()` is false in prepare, which retains the persistent
     // buffers (the node re-binds + re-draws them). This is the O(0) steady-state
     // the spec's gate-#14 budget requires.
-    if changed.is_empty() && !despawned && !skip_lifted && !theme.is_changed() {
-        record_node_counts(&mut counters, 0, 0);
+    // Capture before the `let theme: &Theme = &theme` shadow below — the #2 Stage B
+    // classifier at the publish needs it (a theme swap is a Full rebuild, not Patch).
+    let theme_changed = theme.is_changed();
+    if changed.is_empty() && !despawned && !skip_lifted && !theme_changed {
+        record_node_counts(&mut counters, 0, 0, 0);
         return;
     }
 
@@ -1596,7 +1621,19 @@ pub fn extract_buiy_nodes(
     // target-entity resolution is the one piece that needs the render world and
     // is exercised only under the GPU e2e path (Task 8 / R6/R8).
     // P0b rebuild path: this frame passed the damage gate and built the full set.
-    record_node_counts(&mut counters, 1, all.nodes.len());
+    // #2 Stage B classifier (OBSERVATION-ONLY — the rebuild above is still Full):
+    // a dirty frame is Patch-ELIGIBLE if the damage is value-only — no structural /
+    // hierarchy / footprint change (`structural_changed`), no effect groups in the
+    // scene (`group_formers`), and not a despawn / paint-skip-lift / theme swap. A
+    // later Patch stage will additionally require a per-entity footprint match, so
+    // this coarse signal is an upper-ish bound used to size the Patch-path payoff
+    // (the `node_patches` counter) before building the in-place Patch path.
+    let patch_eligible = structural_changed.is_empty()
+        && group_formers.is_empty()
+        && !despawned
+        && !skip_lifted
+        && !theme_changed;
+    record_node_counts(&mut counters, 1, all.nodes.len(), patch_eligible as u32);
     *view = ExtractedNodesView(all);
     // The per-view effect-group list (effect-compositor.md § 1.1). Emitted on
     // EVERY rebuild frame (incl. when empty) so a frame that drops the last group

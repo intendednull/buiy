@@ -70,3 +70,49 @@ fn idle_zero_rebuilds_one_change_exactly_one() {
         changed.instances_built
     );
 }
+
+/// #2 Stage B classifier (observation-only — the extract still does a Full rebuild):
+/// a value-only change (Background re-tint) on a group-free scene is Patch-ELIGIBLE
+/// (`node_patches == 1`), while a structural/footprint change (a Border appearing)
+/// forces a Full rebuild (`node_patches == 0`). This measures the Patch-vs-Full mix
+/// that sizes the C/D Patch-path payoff before it is built.
+#[test]
+fn stage_b_classifies_value_change_patch_structural_full() {
+    use buiy_core::render::components::Border;
+
+    // Value-only: hover-retint a solid bg node, no effect groups -> Patch-eligible.
+    let (mut h, victim) = build_flat_bg_scene(32);
+    for _ in 0..8 {
+        h.frame();
+    }
+    if let Some(mut bg) = h.app.world_mut().get_mut::<Background>(victim) {
+        bg.set_changed();
+    }
+    h.frame();
+    let c = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(
+        c.node_rebuilds, 1,
+        "Stage B is observation-only: value change still rebuilds"
+    );
+    assert_eq!(
+        c.node_patches, 1,
+        "#2 Stage B: a group-free value-only change is Patch-eligible"
+    );
+
+    // Structural: a Border appears (a footprint change) -> Full, not Patch.
+    let (mut h2, victim2) = build_flat_bg_scene(32);
+    for _ in 0..8 {
+        h2.frame();
+    }
+    h2.app
+        .world_mut()
+        .entity_mut(victim2)
+        .insert(Border::default());
+    h2.frame();
+    let c2 = *h2.render.resource::<RenderWorkCounters>();
+    assert_eq!(c2.node_rebuilds, 1, "structural change rebuilds");
+    assert_eq!(
+        c2.node_patches, 0,
+        "#2 Stage B: a Border appearing (footprint change) forces a Full rebuild"
+    );
+}
