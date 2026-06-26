@@ -119,6 +119,38 @@ pub struct LayoutTaffyComputeCount(pub u32);
 #[derive(Resource, Default, Debug)]
 pub struct SyncStylesIterCount(pub usize);
 
+/// Per-frame gate flag for the `BuiyLayoutStep::PostTaffyOverrides` set
+/// (perf audit #3). Seeded once per frame by [`seed_layout_dirty`] (the new
+/// FIRST step `BuiyLayoutStep::SeedLayoutDirty`) to `true` **iff** any input
+/// the post-Taffy override chain reads changed since the previous frame, and
+/// consumed by `configure_sets(PostTaffyOverrides.run_if(layout_is_dirty))`.
+///
+/// **Why gating off an idle frame is output-identical.** Every override pass
+/// writes IDEMPOTENTLY (inserts/overwrites only when the value differs —
+/// `write_resolved_layout`, `transform_composition`, `stacking_context`, and
+/// the sticky/table/multicol/anchor sub-passes via the per-frame-cleared
+/// `PostTaffyPositionOverrides` map), so skipping a frame on which no input
+/// changed produces byte-identical output. The seed ORs the full decomposed
+/// layout-input `Changed` set (so component-driven geometry / transform /
+/// stacking edits fire the gate **the same frame**, no lag) PLUS
+/// `Changed<ResolvedLayout>` as the SELF-HEAL keystone: any geometry cause the
+/// component union under-covers — notably text edits, which mutate geometry via
+/// `tree.mark_dirty_for_entity` and produce NO layout-component `Changed` —
+/// fires the gate the NEXT frame (a one-frame lag, never a permanent miss),
+/// because `write_resolved_layout` stays UNGATED and rewrites `ResolvedLayout`.
+#[derive(Resource, Default, Debug)]
+pub struct LayoutDirtyThisFrame(pub bool);
+
+/// Per-frame instrument — how many times the gated `PostTaffyOverrides` chain
+/// ran this frame. Reset to `0` at frame start by [`seed_layout_dirty`]
+/// (mirrors `taffy_compute` resetting `LayoutTaffyComputeCount`), then bumped
+/// by [`clear_post_taffy_overrides`] (the chain's first member). So it reads
+/// `0` on a frame the #3 gate SKIPPED the chain and `>= 1` on a frame it ran —
+/// the deterministic signal the gate tests assert (idle frame `== 0`, mutate a
+/// node `>= 1`).
+#[derive(Resource, Default, Debug)]
+pub struct LayoutPostTaffyRunCount(pub usize);
+
 /// Phase 6 — anchor-name lookup table maintained by observers on
 /// `On<Insert, Anchor>` / `On<Discard, Anchor>` / `On<Remove, Anchor>`.
 ///
@@ -301,8 +333,180 @@ pub struct LayoutWarnedOnceSession {
 /// sub-passes can be inserted without ordering surprises.
 ///
 /// Spec: docs/specs/2026-05-08-buiy-layout-design/architecture.md § 3.
-pub(super) fn clear_post_taffy_overrides(mut overrides: ResMut<PostTaffyPositionOverrides>) {
+pub(super) fn clear_post_taffy_overrides(
+    mut overrides: ResMut<PostTaffyPositionOverrides>,
+    mut run_count: ResMut<LayoutPostTaffyRunCount>,
+) {
     overrides.by_entity.clear();
+    // The chain's first member: bump the per-frame instrument so it reads
+    // `>= 1` whenever the #3 gate let the chain run, and stays `0` (reset by
+    // `seed_layout_dirty`) on a frame the gate skipped it.
+    run_count.0 += 1;
+}
+
+/// New FIRST step `BuiyLayoutStep::SeedLayoutDirty` (perf audit #3). Seeds the
+/// shared [`LayoutDirtyThisFrame`] flag that gates the `PostTaffyOverrides` set,
+/// and resets the [`LayoutPostTaffyRunCount`] instrument for the frame.
+///
+/// Sets `LayoutDirtyThisFrame(true)` iff ANY input the override chain reads
+/// changed since this system's previous run. The chain writes
+/// `PostTaffyPositionOverrides` (sticky/table/multicol/anchor), `ResolvedTransform`
+/// (transform_composition), and `StackingContext` (stacking_context), so the OR
+/// must cover every read of those passes:
+///
+/// * the full **layout-input** `Changed` set `sync_styles` re-translates on
+///   (so a component-driven geometry edit fires the gate the SAME frame),
+/// * `Changed<ResolvedLayout>` — the SELF-HEAL keystone for geometry causes the
+///   component set under-covers (text edits, CQ cascades), one-frame lag,
+/// * the **transform** inputs (`UiTransform`/`Translate`/`Rotate`/`Scale`) —
+///   these do NOT change `ResolvedLayout`, so they would NEVER self-heal and
+///   MUST be explicit,
+/// * the **stacking / paint** inputs the stacking pass reads
+///   (`Stacking`/`Opacity`/`Filter`/`MixBlendMode`/`Containment`),
+/// * `ScrollOffset` — deliberately EXCLUDED from `sync_styles` (the scroll-O(0)
+///   invariant) but READ by `sticky_offset`, so it must seed the override gate,
+/// * `Window` — `sticky_offset`/`anchor_resolution` read the primary window for
+///   viewport-relative insets / clamping; a resize is an input a fixed-size
+///   tree's `ResolvedLayout` self-heal would miss,
+/// * a `RemovedComponents` tuple — `Changed<T>` never fires on REMOVAL, so
+///   despawns and removals of the optional override inputs (transform parts,
+///   effect formers, `Anchor`, `ScrollOffset`, …) seed via removal cursors.
+///   Each cursor is read EVERY frame (advancing it) and the results OR'd with
+///   no `||` short-circuit — a stranded cursor would break the gate next frame.
+///
+/// The split across query params honors Bevy's 15-term `Or` / 16-element
+/// SystemParam-tuple caps. Runs every frame (the removal cursors must always
+/// advance); the cold first frame seeds dirty because `Changed` includes
+/// `Added`, so the whole cold build runs.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(super) fn seed_layout_dirty(
+    mut dirty: ResMut<LayoutDirtyThisFrame>,
+    mut run_count: ResMut<LayoutPostTaffyRunCount>,
+    // Layout-input set A — the geometry inputs `sync_styles` re-translates on
+    // (mirrors its Or-filter) PLUS the `ResolvedLayout` self-heal keystone.
+    geom_a: Query<
+        (),
+        Or<(
+            Changed<Display>,
+            Changed<BoxModel>,
+            Changed<Position>,
+            Changed<FlexParams>,
+            Changed<FlexItem>,
+            Changed<Overflow>,
+            Changed<Scroll>,
+            Changed<GridParams>,
+            Changed<GridItem>,
+            Changed<WritingMode>,
+            Changed<WritingModeResolved>,
+            Changed<Children>,
+            Changed<ChildOf>,
+            Changed<ResolvedLayout>,
+        )>,
+    >,
+    // Layout-input set B — container-query / anchor / multicol / containment
+    // (the inner-Or tail of `sync_styles`) PLUS `ScrollOffset` (sticky reads
+    // it; `sync_styles` deliberately does not).
+    geom_b: Query<
+        (),
+        Or<(
+            Changed<Container>,
+            Changed<ContainerQuery>,
+            Changed<ContainerQueryActive>,
+            Changed<ContainerQueryInactive>,
+            Changed<Anchor>,
+            Changed<MultiColumn>,
+            Changed<Containment>,
+            Changed<ScrollOffset>,
+        )>,
+    >,
+    // Transform inputs — do NOT change `ResolvedLayout`, so non-self-healing.
+    transform_inputs: Query<
+        (),
+        Or<(
+            Changed<UiTransform>,
+            Changed<Translate>,
+            Changed<Rotate>,
+            Changed<Scale>,
+        )>,
+    >,
+    // Stacking / paint inputs the stacking pass reads (effect formers).
+    stacking_inputs: Query<
+        (),
+        Or<(
+            Changed<Stacking>,
+            Changed<Opacity>,
+            Changed<Filter>,
+            Changed<MixBlendMode>,
+        )>,
+    >,
+    // Window VIEWPORT SIZE only — NOT `Changed<Window>`, which fires on every
+    // cursor-position write in a real winit app (so the chain would re-run on
+    // every mouse-move, defeating the idle gain). Only sticky/anchor's viewport
+    // read depends on the window, and only on its SIZE — so compare the primary
+    // window's logical size to the last seen via a system-`Local`.
+    primary_window: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    mut last_window_size: Local<Option<Vec2>>,
+    // Removal cursors — bind EACH, read EACH every frame, OR with no
+    // short-circuit. Despawn => `ResolvedLayout`/`Position`/`ChildOf`/`Children`
+    // removals; the rest are the optional override inputs whose REMOVAL (not
+    // mutation) changes an override output and which `Changed<T>` cannot see.
+    mut removed: (
+        RemovedComponents<ResolvedLayout>,
+        RemovedComponents<Position>,
+        RemovedComponents<ChildOf>,
+        RemovedComponents<Children>,
+        RemovedComponents<Translate>,
+        RemovedComponents<Rotate>,
+        RemovedComponents<Scale>,
+        RemovedComponents<Stacking>,
+        RemovedComponents<Opacity>,
+        RemovedComponents<Filter>,
+        RemovedComponents<MixBlendMode>,
+        RemovedComponents<Anchor>,
+        RemovedComponents<ScrollOffset>,
+    ),
+) {
+    // Frame-start reset of the run-count instrument (mirrors `taffy_compute`
+    // resetting `LayoutTaffyComputeCount`). `clear_post_taffy_overrides` bumps
+    // it back to `>= 1` when the gated chain actually runs.
+    run_count.0 = 0;
+
+    // Drain EVERY removal cursor unconditionally — `.read().count()` advances
+    // the cursor even when its result is unused. Binding each to a `let` (not a
+    // `||` chain) guarantees no cursor is stranded, which would otherwise leave
+    // a removal buffered into a later frame and desync the gate.
+    let removed_any = {
+        let r0 = removed.0.read().count() > 0;
+        let r1 = removed.1.read().count() > 0;
+        let r2 = removed.2.read().count() > 0;
+        let r3 = removed.3.read().count() > 0;
+        let r4 = removed.4.read().count() > 0;
+        let r5 = removed.5.read().count() > 0;
+        let r6 = removed.6.read().count() > 0;
+        let r7 = removed.7.read().count() > 0;
+        let r8 = removed.8.read().count() > 0;
+        let r9 = removed.9.read().count() > 0;
+        let r10 = removed.10.read().count() > 0;
+        let r11 = removed.11.read().count() > 0;
+        let r12 = removed.12.read().count() > 0;
+        r0 | r1 | r2 | r3 | r4 | r5 | r6 | r7 | r8 | r9 | r10 | r11 | r12
+    };
+
+    // Viewport-size change only (resolution, not any Window write — see the
+    // `last_window_size` param comment). Cold frame: `None != Some(size)` => dirty.
+    let window_size_changed = {
+        let cur = primary_window.iter().next().map(|w| w.resolution.size());
+        let changed = *last_window_size != cur;
+        *last_window_size = cur;
+        changed
+    };
+
+    dirty.0 = !geom_a.is_empty()
+        || !geom_b.is_empty()
+        || !transform_inputs.is_empty()
+        || !stacking_inputs.is_empty()
+        || window_size_changed
+        || removed_any;
 }
 
 /// Phase 7 — clears the session-scoped warn-dedup set on app
@@ -5536,6 +5740,9 @@ mod tests {
     fn clear_post_taffy_overrides_clears_by_entity() {
         let mut app = App::new();
         app.init_resource::<PostTaffyPositionOverrides>();
+        // `clear_post_taffy_overrides` now also bumps the #3 run-count
+        // instrument, so the resource must exist for the direct-attach call.
+        app.init_resource::<LayoutPostTaffyRunCount>();
         app.add_systems(Update, clear_post_taffy_overrides);
         app.world_mut()
             .resource_mut::<PostTaffyPositionOverrides>()

@@ -15,8 +15,8 @@
 
 use bevy::math::Vec2;
 use bevy::prelude::*;
-use buiy_core::PostTaffyPositionOverrides;
-use buiy_core::layout::LayoutPlugin;
+use buiy_core::layout::{LayoutPlugin, Style};
+use buiy_core::{Node, PostTaffyPositionOverrides};
 
 /// Seed `PostTaffyPositionOverrides` with a fake entry, run one update
 /// of the live `LayoutPlugin`, and assert the map is empty afterwards.
@@ -28,6 +28,14 @@ use buiy_core::layout::LayoutPlugin;
 fn post_taffy_position_overrides_clears_each_frame() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins).add_plugins(LayoutPlugin);
+
+    // Spawn one node so the frame is DIRTY — perf audit #3 gates the
+    // `PostTaffyOverrides` chain (including `clear_post_taffy_overrides`) on
+    // `LayoutDirtyThisFrame`, which a freshly-spawned `Node` (all components
+    // `Added`) sets. An empty world would be a legitimately-idle frame on which
+    // the gate correctly skips the chain (the retained map is already valid),
+    // so the wiring this test guards is only exercised on a dirty frame.
+    app.world_mut().spawn((Node, Style::default()));
 
     // Seed the resource with a stale entry. We use `Entity::from_raw_u32`
     // to avoid spawning — the clear system doesn't care whether the

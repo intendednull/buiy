@@ -18,6 +18,12 @@ use bevy::prelude::*;
 /// stub steps. The order is asserted by `tests/layout_pipeline_order.rs`.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum BuiyLayoutStep {
+    /// Pre-step-0 — seed the per-frame `LayoutDirtyThisFrame` gate flag (perf
+    /// audit #3). Runs FIRST (before any pass mutates a layout input) so its
+    /// `Changed`/`RemovedComponents` reads observe the prior frame's writes,
+    /// and gates `PostTaffyOverrides`. Always runs (it must advance the removal
+    /// cursors every frame). **Perf-final #3.**
+    SeedLayoutDirty,
     /// Step 0 — drop despawned entities from `LayoutTree`.
     RemovedNodesGc,
     /// Pre-step-1 — populate `WritingModeResolved` by walking the
@@ -76,11 +82,20 @@ pub enum BuiyLayoutStep {
     TextCommit,
 }
 
+/// Run condition for `BuiyLayoutStep::PostTaffyOverrides` (perf audit #3):
+/// gate the ~7-pass post-Taffy override chain on the per-frame dirty flag
+/// `seed_layout_dirty` seeds. An idle frame (no override input changed) skips
+/// the whole chain — output-identical, because every pass writes idempotently.
+fn layout_is_dirty(dirty: Res<super::systems::LayoutDirtyThisFrame>) -> bool {
+    dirty.0
+}
+
 /// Configure the ordered step chain inside `BuiySet::Layout`.
 pub fn configure_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
+            BuiyLayoutStep::SeedLayoutDirty,
             BuiyLayoutStep::RemovedNodesGc,
             BuiyLayoutStep::WritingModeInherit,
             BuiyLayoutStep::TextSync,
@@ -97,5 +112,15 @@ pub fn configure_pipeline(app: &mut App) {
         )
             .chain()
             .in_set(crate::BuiySet::Layout),
+    );
+
+    // Perf audit #3 — gate ONLY the post-Taffy override chain on the per-frame
+    // dirty flag. `write_resolved_layout`, `inherit_writing_mode`, and
+    // `taffy_compute` stay UNGATED (increment 1): the first keeps
+    // `Changed<ResolvedLayout>` a complete self-healing geometry proxy, and the
+    // last keeps its per-frame counter resets from being stranded.
+    app.configure_sets(
+        Update,
+        BuiyLayoutStep::PostTaffyOverrides.run_if(layout_is_dirty),
     );
 }

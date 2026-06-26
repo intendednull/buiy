@@ -19,10 +19,10 @@ pub use components::{
 pub use pipeline::BuiyLayoutStep;
 pub use style::{LogicalBoxModel, LogicalInset, Style};
 pub use systems::{
-    AnchorNameRegistry, ContentVisibilityMargin, LayoutAnchorWarnedThisFrame,
-    LayoutTaffyComputeCount, LayoutWarnedOnceSession, PostTaffyPositionOverrides,
-    SyncStylesIterCount, TopLayerActivation, compose_transform, paint_key, painters_z_for_context,
-    top_layer_paint_rank,
+    AnchorNameRegistry, ContentVisibilityMargin, LayoutAnchorWarnedThisFrame, LayoutDirtyThisFrame,
+    LayoutPostTaffyRunCount, LayoutTaffyComputeCount, LayoutWarnedOnceSession,
+    PostTaffyPositionOverrides, SyncStylesIterCount, TopLayerActivation, compose_transform,
+    paint_key, painters_z_for_context, top_layer_paint_rank,
 };
 pub use tree::LayoutTree;
 pub use types::{
@@ -55,6 +55,13 @@ impl Plugin for LayoutPlugin {
         app.init_resource::<systems::CqReRunRequested>();
         app.init_resource::<systems::LayoutTaffyComputeCount>();
         app.init_resource::<systems::SyncStylesIterCount>();
+
+        // Perf audit #3 — the per-frame gate flag for the `PostTaffyOverrides`
+        // chain (seeded by `seed_layout_dirty`, consumed by the `run_if` on the
+        // set) and the run-count instrument (reset by the seed, bumped by
+        // `clear_post_taffy_overrides`; `0` on a gated-off idle frame).
+        app.init_resource::<systems::LayoutDirtyThisFrame>();
+        app.init_resource::<systems::LayoutPostTaffyRunCount>();
 
         // Phase 6/7 — anchor-positioning + shared override-map resources.
         // `AnchorNameRegistry` is maintained by the observers below;
@@ -211,6 +218,10 @@ impl Plugin for LayoutPlugin {
         app.add_systems(
             Update,
             (
+                // Perf audit #3 — seeds `LayoutDirtyThisFrame` (gates the
+                // `PostTaffyOverrides` chain) and resets the run-count
+                // instrument. First step; always runs.
+                systems::seed_layout_dirty.in_set(BuiyLayoutStep::SeedLayoutDirty),
                 systems::gc_removed_nodes.in_set(BuiyLayoutStep::RemovedNodesGc),
                 systems::inherit_writing_mode.in_set(BuiyLayoutStep::WritingModeInherit),
                 systems::sync_styles.in_set(BuiyLayoutStep::SyncStyles),
