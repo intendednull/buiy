@@ -48,6 +48,7 @@ use bevy::render::{
 use super::{
     atlas::AtlasGpu,
     blur::{BlurParams, BlurPipeline, PreparedBackdropBlurs},
+    buckets::{FlatDrawStep, interleave_flat_quads_and_gradients},
     composite::CompositePipeline,
     compositor::{EffectReason, PreparedEffectGroups, PreparedEffectTargets},
     pipeline::{BuiyPipeline, BuiyViewPipelines},
@@ -345,49 +346,69 @@ pub fn buiy_pass(
         pass.draw(0..4, 0..buffers.shadow_count);
     }
 
-    // --- Quad draw (paint order: quad after shadow, before glyph) --------
-    // `buffer()` is `None` until the first `write_buffer`; a zero-count or
-    // not-yet-uploaded quad buffer simply skips the quad draw (glyphs may
-    // still draw below).
-    if buffers.quad_count > 0
-        && let Some(instance_buffer) = buffers.quad.buffer()
-    {
-        pass.set_render_pipeline(pipeline);
-        pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        // Effect-group double-paint exclusion (effect-compositor § 3 / decided
-        // fork 3): draw ONLY the non-group instance ranges. A group member is
-        // rasterized into its own off-screen target (step 1 above) and
-        // composited back into the window (step 2 below), so drawing it flat
-        // here too would double-paint it (over-bright overlap). `flat_ranges`
-        // is the complement of `group_ranges`: when NO group is live it is the
-        // single full `0..quad_count` run (so the flat path is byte-for-byte the
-        // pre-compositor draw); when EVERY instance is a group member it is
-        // empty, and the flat draw is correctly a no-op (the composite paints
-        // the content). It is never wrong to iterate it — an empty `flat_ranges`
-        // means "nothing to draw flat", NOT "draw everything".
-        for r in &buffers.flat_ranges {
-            pass.draw(0..4, r.clone());
+    // --- Quad + background-gradient draw, INTERLEAVED in paint order -----
+    // Paint order shadow < quad < gradient < glyph, with the gradient tier
+    // INTERLEAVED per node: each node's background gradient paints right after
+    // that node's OWN quad and BEFORE any descendant's quad, so an ANCESTOR's
+    // gradient layer (e.g. the viewport dotted-grid `RadialGradient`) never
+    // overpaints a descendant card's opaque fill. The pre-fix pass drew the
+    // WHOLE quad blob (the `flat_ranges`) then the WHOLE gradient blob (one
+    // `draw(0..gradient_count)`), so every gradient painted over every quad — an
+    // ancestor gradient bled onto its descendants (parity gradient-bleed bug).
+    //
+    // `gradient_anchors[i]` is the quad-blob index just after gradient i's node's
+    // own quad; gradients are in node-walk (paint) order so anchors ascend, and
+    // `interleave_flat_quads_and_gradients` walks the quad `flat_ranges` (the
+    // effect-group double-paint complement of `group_ranges` — a group member is
+    // rasterized off-screen in step 1 and composited back in step 2, never drawn
+    // flat) pausing to emit each gradient at its anchor. Gradients still ride the
+    // flat draw ONLY (no effect-group partition; a gradient on a grouped element
+    // stays the documented v1 follow-up). A gradient still paints OVER its own
+    // node's solid fill (its anchor is AFTER that quad) and UNDER its own
+    // text/icons (the glyph/icon tiers draw in their own later passes below).
+    // When no group is live, `flat_ranges` is the single full `0..quad_count` run
+    // and the only re-sequencing is the gradient interleave; an empty
+    // `gradient_anchors` yields exactly the pre-fix flat quad draw.
+    //
+    // Effect-group safety: this ONLY re-sequences the flat-window draws that
+    // already happened here — the same `flat_ranges` quads + the same gradient
+    // blob. The off-screen group passes (above) and the backdrop-blur + root/
+    // nested composites (below, after `drop(pass)`) are untouched.
+    let quad_buffer = (buffers.quad_count > 0)
+        .then(|| buffers.quad.buffer())
+        .flatten();
+    let gradient_ready = buffers.gradient_count > 0;
+    let gradient_pipeline = gradient_ready
+        .then(|| pipeline_cache.get_render_pipeline(view_pipelines.gradient))
+        .flatten();
+    let gradient_buffer = gradient_ready.then(|| buffers.gradient.buffer()).flatten();
+    // Gradients only ride the schedule when their pipeline + buffer are ready;
+    // otherwise the schedule is the plain flat quad runs (this frame paints no
+    // gradient, exactly like the pre-fix async-compile / not-yet-uploaded skip).
+    let anchors: &[u32] = if gradient_pipeline.is_some() && gradient_buffer.is_some() {
+        &buffers.gradient_anchors
+    } else {
+        &[]
+    };
+    for step in interleave_flat_quads_and_gradients(&buffers.flat_ranges, anchors) {
+        match step {
+            FlatDrawStep::Quads(r) => {
+                if let Some(qb) = quad_buffer {
+                    pass.set_render_pipeline(pipeline);
+                    pass.set_vertex_buffer(1, qb.slice(..));
+                    pass.draw(0..4, r);
+                }
+            }
+            FlatDrawStep::Gradients(r) => {
+                if let (Some(gp), Some(gb)) = (gradient_pipeline, gradient_buffer) {
+                    // `@group(0)` (view) + the static unit-quad VBO 0 stay bound;
+                    // the gradient instance buffer is VBO 1.
+                    pass.set_render_pipeline(gp);
+                    pass.set_vertex_buffer(1, gb.slice(..));
+                    pass.draw(0..4, r);
+                }
+            }
         }
-    }
-
-    // --- Background-gradient draw (paint order: gradient after the quad) --
-    // Parity Wave B1: the background-gradient fill, drawn AFTER the solid quad
-    // so a gradient layer paints OVER the solid `Background.color`, and BEFORE
-    // glyphs/bands so text + borders sit on top. Uses the distinct
-    // `GradientInstance` blob + `gradient.wgsl` pipeline (the 68 B quad stride is
-    // untouched). Binds only the shared `@group(0)` view uniform (no atlas
-    // `@group(1)`). v1 draws the whole gradient blob flat (no effect-group
-    // partition). A zero-count or not-yet-uploaded / not-yet-compiled gradient
-    // buffer simply skips this draw without disturbing the surrounding draws.
-    if buffers.gradient_count > 0
-        && let Some(gradient_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.gradient)
-        && let Some(gradient_buffer) = buffers.gradient.buffer()
-    {
-        pass.set_render_pipeline(gradient_pipeline);
-        // `@group(0)` (view) + the static unit-quad VBO 0 stay bound; the
-        // gradient instance buffer is VBO 1.
-        pass.set_vertex_buffer(1, gradient_buffer.slice(..));
-        pass.draw(0..4, 0..buffers.gradient_count);
     }
 
     // --- Glyph draw (paint order: glyph after quad) ----------------------

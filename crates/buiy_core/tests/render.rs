@@ -66,6 +66,8 @@ mod render_gpu_harness;
 mod render_gradient;
 #[path = "render/render_gradient_gpu.rs"]
 mod render_gradient_gpu;
+#[path = "render/render_gradient_paint_order_gpu.rs"]
+mod render_gradient_paint_order_gpu;
 #[path = "render/render_group_contiguity_gpu.rs"]
 mod render_group_contiguity_gpu;
 #[path = "render/render_icon.rs"]

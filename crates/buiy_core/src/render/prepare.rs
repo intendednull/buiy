@@ -200,6 +200,17 @@ pub struct BuiyInstanceBuffers {
     /// window icon draw covers exactly these. No live group ⇒ the single full
     /// `0..icon_count` run.
     pub icon_flat_ranges: Vec<Range<u32>>,
+    /// Per-gradient-instance PAINT-ORDER anchors (parity gradient-bleed fix):
+    /// `gradient_anchors[i]` is the quad-blob index just after gradient `i`'s
+    /// node's own quad. CPU-side draw metadata (NOT uploaded — the byte-stable
+    /// `GradientInstance` layout is untouched): the node draws the flat quad runs
+    /// and the gradient blob INTERLEAVED by these so a node's gradient paints
+    /// after its own fill and before its descendants' quads (an ancestor's
+    /// gradient never overpaints a descendant's opaque fill). One entry per
+    /// gradient instance, in node-walk (paint) order, so it is non-decreasing.
+    /// Rides the quad gate (gradients + anchors are packed from the same node
+    /// walk as the quad partition).
+    pub gradient_anchors: Vec<u32>,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -224,6 +235,7 @@ impl Default for BuiyInstanceBuffers {
             glyph_flat_ranges: Vec::new(),
             icon_group_ranges: Vec::new(),
             icon_flat_ranges: Vec::new(),
+            gradient_anchors: Vec::new(),
         }
     }
 }
@@ -369,15 +381,23 @@ pub fn prepare_buiy_instances(
         // walk (it rides the quad gate); a node with no gradient layers
         // contributes nothing, so a gradient-free frame uploads an empty buffer
         // (gradient_count = 0) and the node skips the gradient draw. Its OWN
-        // `GradientInstance` layout (the 68 B quad stride is untouched). Drawn
-        // AFTER the quad in `node.rs`, so a gradient paints OVER the solid fill.
-        let gradients = pack_gradient_instances(&nodes.0.nodes);
+        // `GradientInstance` layout (the 68 B quad stride is untouched). The
+        // `anchors` are the per-instance PAINT-ORDER positions (the quad-blob
+        // index after each gradient's node's own quad — `partition.node_quad_anchors`
+        // from the SAME walk): `node.rs` interleaves the gradient blob with the
+        // flat quad runs by these, so a node's gradient paints over its own fill
+        // and BEFORE its descendants' quads (an ancestor gradient never
+        // overpaints a descendant's opaque fill). Anchors are CPU-side draw
+        // metadata, not uploaded (the byte-stable layout is untouched).
+        let (gradients, gradient_anchors) =
+            pack_gradient_instances(&nodes.0.nodes, &partition.node_quad_anchors);
         buffers.gradient.clear();
         for gradient in &gradients {
             buffers.gradient.push(*gradient);
         }
         buffers.gradient_count = gradients.len() as u32;
         buffers.gradient.write_buffer(&render_device, &render_queue);
+        buffers.gradient_anchors = gradient_anchors;
 
         // Upload the std140 uniform (col0 ++ col1 ++ [scale_factor, 0, 0, 0]).
         // Regroup the flat 12 floats into the three `vec4` columns the WGSL

@@ -425,3 +425,181 @@ fn glyph_partition_out_of_bounds_group_is_flat() {
 fn glyph_partition_gap_trips_the_debug_assert() {
     let _ = partition_glyph_ranges([run(1, 0..2), run(2, 3..4)], 4, 0, |_| None);
 }
+
+// --- node_quad_anchors + pack_gradient_instances (parity gradient-bleed fix) -
+
+use buiy_core::render::buckets::pack_gradient_instances;
+use buiy_core::render::extract::ExtractedGradient;
+
+/// A minimal 2-stop gradient record at box origin `x` (the fields the bleed-fix
+/// tests don't assert on are arbitrary-but-valid).
+fn grad(x: f32) -> ExtractedGradient {
+    ExtractedGradient {
+        rect_pos: Vec2::new(x, 0.0),
+        rect_size: Vec2::splat(10.0),
+        color0: [1.0, 0.0, 0.0, 1.0],
+        color1: [0.0, 1.0, 0.0, 1.0],
+        stops: [0.0, 1.0],
+        axis: [1.0, 0.0],
+        kind: 0.0,
+        line_len: 10.0,
+        clip: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
+    }
+}
+
+fn node_with_grads(entity: u32, color: Color, grads: Vec<ExtractedGradient>) -> ExtractedNode {
+    let mut n = grouped(entity, color, None);
+    n.gradients = grads;
+    n
+}
+
+/// `node_quad_anchors[i]` is the quad-blob index right AFTER node i's own quad —
+/// the paint-order position its background gradient draws at.
+#[test]
+fn partition_records_node_quad_anchors() {
+    let nodes = vec![
+        grouped(1, Color::WHITE, None), // own quad at 0 → anchor 1
+        grouped(2, Color::WHITE, None), // own quad at 1 → anchor 2
+        grouped(3, Color::WHITE, None), // own quad at 2 → anchor 3
+    ];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.node_quad_anchors, vec![1, 2, 3]);
+}
+
+/// A transparent (`Color::NONE`) node emits NO quad, so its anchor is the running
+/// count UNCHANGED — its gradient (the dot-grid viewport case: a solid-less bg
+/// with only a gradient layer) draws BEFORE its descendants' quads.
+#[test]
+fn partition_transparent_node_anchor_is_current_count() {
+    let nodes = vec![
+        grouped(1, Color::NONE, None),  // no own quad → anchor 0
+        grouped(2, Color::WHITE, None), // own quad at 0 → anchor 1
+    ];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.node_quad_anchors, vec![0, 1]);
+    assert_eq!(p.instances.len(), 1);
+}
+
+/// `pack_gradient_instances` tags each emitted gradient with its node's anchor;
+/// multiple gradients on one node share that anchor (the bleed-fix wiring).
+#[test]
+fn pack_gradient_instances_tags_each_node_with_its_anchor() {
+    let nodes = vec![
+        node_with_grads(1, Color::WHITE, vec![grad(0.0), grad(1.0)]), // quad@0 → anchor 1
+        node_with_grads(2, Color::WHITE, vec![grad(2.0)]),            // quad@1 → anchor 2
+    ];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.node_quad_anchors, vec![1, 2]);
+    let (gradients, anchors) = pack_gradient_instances(&nodes, &p.node_quad_anchors);
+    assert_eq!(gradients.len(), 3);
+    // node0's two gradients both at anchor 1; node1's at anchor 2.
+    assert_eq!(anchors, vec![1, 1, 2]);
+}
+
+// --- interleave_flat_quads_and_gradients (the paint-order draw schedule) -----
+
+use buiy_core::render::buckets::{FlatDrawStep, interleave_flat_quads_and_gradients};
+
+/// Build flat quad runs from `(start, end)` pairs. Routing the ranges through a
+/// helper keeps every call uniform and sidesteps clippy's
+/// `single_range_in_vec_init` (a bare `&[a..b]` reads as an ambiguous range
+/// literal); these are intentional N-element slices of `Range<u32>`.
+fn runs(pairs: &[(u32, u32)]) -> Vec<Range<u32>> {
+    pairs.iter().map(|&(s, e)| s..e).collect()
+}
+
+/// No gradients ⇒ the schedule is exactly the flat quad runs (byte-for-byte the
+/// pre-fix flat draw), including across a group gap.
+#[test]
+fn interleave_no_gradients_is_just_the_flat_runs() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 3)]), &[]),
+        vec![FlatDrawStep::Quads(0..3)]
+    );
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 2), (5, 8)]), &[]),
+        vec![FlatDrawStep::Quads(0..2), FlatDrawStep::Quads(5..8)]
+    );
+}
+
+/// A gradient anchored MID-run splits the flat run: quads before the anchor, the
+/// gradient, then the rest (the leaf case — a node's own quad, its gradient over
+/// it, then later widgets).
+#[test]
+fn interleave_gradient_splits_flat_run_at_anchor() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 10)]), &[3]),
+        vec![
+            FlatDrawStep::Quads(0..3),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(3..10),
+        ]
+    );
+}
+
+/// THE BUG FIX: an ANCESTOR gradient (anchor 0 — its node has no solid quad, the
+/// viewport dot-grid) draws BEFORE every descendant quad, so the descendants
+/// paint over it (dots show only in the gaps), not the reverse.
+#[test]
+fn interleave_ancestor_gradient_draws_before_descendant_quads() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 3)]), &[0]),
+        vec![FlatDrawStep::Gradients(0..1), FlatDrawStep::Quads(0..3)]
+    );
+}
+
+/// Multiple gradients sharing a node (same anchor) coalesce into ONE gradient run
+/// (the pass binds the gradient pipeline once).
+#[test]
+fn interleave_same_anchor_gradients_coalesce() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 4)]), &[2, 2, 2]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Gradients(0..3),
+            FlatDrawStep::Quads(2..4),
+        ]
+    );
+}
+
+/// A gradient anchored PAST every quad (its node is the last painter) draws after
+/// all the flat quads.
+#[test]
+fn interleave_gradient_after_all_quads() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 3)]), &[3]),
+        vec![FlatDrawStep::Quads(0..3), FlatDrawStep::Gradients(0..1)]
+    );
+}
+
+/// Distinct ascending anchors interleave in order; the flat run splits at each.
+#[test]
+fn interleave_multiple_distinct_anchors_in_order() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 6)]), &[1, 4]),
+        vec![
+            FlatDrawStep::Quads(0..1),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(1..4),
+            FlatDrawStep::Gradients(1..2),
+            FlatDrawStep::Quads(4..6),
+        ]
+    );
+}
+
+/// A gradient whose anchor lands inside a GROUP GAP (its node's quad is in an
+/// off-screen group range, not flat) draws right after the last flat quad before
+/// the gap — the documented "gradient on a grouped element" limitation — and
+/// never drops a flat quad. flat_ranges = [0..2, 5..8] (3..5 is a group gap).
+#[test]
+fn interleave_gradient_anchored_in_group_gap() {
+    assert_eq!(
+        interleave_flat_quads_and_gradients(&runs(&[(0, 2), (5, 8)]), &[4]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(5..8),
+        ]
+    );
+}

@@ -54,6 +54,10 @@ fn quads_splice_immediately_after_their_entity() {
     // node1, its two quads IN CARRIER ORDER, node2, its quad — § 4.4 holds
     // by construction (background < decorations, per entity).
     assert_eq!(xs(&p), vec![1.0, 11.0, 12.0, 2.0, 22.0]);
+    // The gradient paint-order anchor sits right after a node's OWN quad and
+    // BEFORE its spliced text quads (a node's background gradient paints under
+    // its own decorations). Blob: node1@0, q@1, q@2, node2@3, q@4 → anchors 1, 4.
+    assert_eq!(p.node_quad_anchors, vec![1, 4]);
 }
 
 #[test]
