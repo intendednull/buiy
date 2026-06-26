@@ -28,6 +28,9 @@ targets = [
     { triple = "x86_64-apple-darwin" },
     { triple = "aarch64-apple-darwin" },
     { triple = "x86_64-pc-windows-msvc" },
+    # Web target (buiy_web WebGPU build) — audit the wasm backend deps the
+    # `webgpu` feature pulls (bevy_anti_alias, bevy_pbr, …). Spec D6.
+    { triple = "wasm32-unknown-unknown" },
 ]
 
 [advisories]

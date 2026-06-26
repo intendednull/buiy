@@ -29,6 +29,7 @@ members = [
     "examples/hello_button",
     "examples/hello_text",
     "examples/capture",
+    "examples/buiy_web",
 ]
 
 [workspace.package]

@@ -1,0 +1,25 @@
+[package]
+name = "buiy_web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# Base workspace bevy (render/winit/window/asset/picking/...). On NATIVE this is
+# all buiy_web needs — wgpu auto-selects Vulkan/Metal/DX12 — so the native
+# `--workspace` build never compiles a web backend or the 3D crates.
+bevy = { workspace = true }
+buiy = { path = "../../crates/buiy" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The WebGPU backend is enabled ONLY for the wasm build. The bevy META feature
+# is `webgpu` (-> bevy_internal/webgpu -> wgpu/webgpu); on wasm32 `settings.rs`
+# selects Backends::BROWSER_WEBGPU. NOTE (lean-feature task): `webgpu` also pulls
+# bevy_pbr/bevy_mikktspace (3D) a 2D UI lib never needs — trim to a curated
+# feature list (plan Task 3 Step 3); these crates land in Cargo.lock either way
+# (audited by `cargo deny`) but only the wasm build compiles them.
+bevy = { workspace = true, features = ["webgpu"] }
+console_error_panic_hook = "0.1"
