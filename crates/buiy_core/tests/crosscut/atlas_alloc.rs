@@ -127,11 +127,11 @@ fn k(b: u8) -> AtlasKey {
 #[test]
 fn lru_pops_least_recently_touched_first() {
     let mut lru = LruQueue::default();
-    lru.touch(k(1), 0);
-    lru.touch(k(2), 0);
-    lru.touch(k(3), 0);
+    lru.touch(&k(1), 0);
+    lru.touch(&k(2), 0);
+    lru.touch(&k(3), 0);
     // Re-touch k(1): now order from LRU is k(2), k(3), k(1).
-    lru.touch(k(1), 1);
+    lru.touch(&k(1), 1);
     assert_eq!(lru.pop_lru(), Some(k(2)));
     assert_eq!(lru.pop_lru(), Some(k(3)));
     assert_eq!(lru.pop_lru(), Some(k(1)));
@@ -141,9 +141,9 @@ fn lru_pops_least_recently_touched_first() {
 #[test]
 fn lru_touch_is_idempotent_on_membership() {
     let mut lru = LruQueue::default();
-    lru.touch(k(7), 0);
-    lru.touch(k(7), 1);
-    lru.touch(k(7), 2);
+    lru.touch(&k(7), 0);
+    lru.touch(&k(7), 1);
+    lru.touch(&k(7), 2);
     assert_eq!(lru.len(), 1, "re-touching does not duplicate the entry");
     assert_eq!(lru.pop_lru(), Some(k(7)));
     assert_eq!(lru.pop_lru(), None);
@@ -152,8 +152,8 @@ fn lru_touch_is_idempotent_on_membership() {
 #[test]
 fn lru_grace_expired_lists_keys_untouched_past_grace() {
     let mut lru = LruQueue::default();
-    lru.touch(k(1), 10); // last touched frame 10
-    lru.touch(k(2), 50); // last touched frame 50
+    lru.touch(&k(1), 10); // last touched frame 10
+    lru.touch(&k(2), 50); // last touched frame 50
     // At frame 100 with grace 60: k(1) (idle 90) expired; k(2) (idle 50) not.
     let expired = lru.grace_expired(100, 60);
     assert_eq!(expired, vec![k(1)]);
@@ -162,8 +162,8 @@ fn lru_grace_expired_lists_keys_untouched_past_grace() {
 #[test]
 fn lru_remove_drops_a_specific_key() {
     let mut lru = LruQueue::default();
-    lru.touch(k(1), 0);
-    lru.touch(k(2), 0);
+    lru.touch(&k(1), 0);
+    lru.touch(&k(2), 0);
     lru.remove(&k(1));
     assert_eq!(lru.len(), 1);
     assert_eq!(lru.pop_lru(), Some(k(2)));
