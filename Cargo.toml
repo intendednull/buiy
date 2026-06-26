@@ -154,3 +154,17 @@ debug = 0
 
 [profile.test]
 debug = 0
+
+# Size-optimized profile for the WebGPU wasm artifact (spec D5). Scoped to the
+# web build — NOT a change to `[profile.release]` — so it never degrades the
+# NATIVE release profile the perf work tunes for the 60 Hz floor. Build the
+# shipping wasm with `trunk build --release` after pointing trunk at this profile
+# (Trunk.toml `cargo_profile = "wasm-release"`), then `wasm-opt -Oz` + brotli.
+# `panic = "abort"` is the wasm default already; `strip` + `lto` + one codegen
+# unit trade compile time for a smaller binary.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

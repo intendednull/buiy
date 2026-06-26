@@ -155,7 +155,7 @@ v1 (WebGPU) sequence, basis for the implementation **plan** (`docs/plans/`): **(
 
 - **sRGB / gamma (downgraded).** Original "highest-risk" item; the prototype rendered **correct colors out of the box** on WebGPU. Likely a non-issue — still confirm vs a native side-by-side capture; a final-pass encode shader is the fallback if a surface ever lacks sRGB-encode-on-write.
 - **Shader-conformance regression (the real ongoing risk).** The D2 class is invisible to the native GPU lane forever. Mitigated by the § 4 headless-browser smoke lane — **this lane is load-bearing, not optional.**
-- **Binary size.** Even lean + `wasm-opt`, a Bevy wasm app is large (~15-30 MB class). v1 measures + documents; loading-screen deferred.
+- **Binary size.** Measured: the **debug** `buiy_web` wasm is **~98 MB** (Bevy + the WebGPU backend crates). The shipping build uses the wasm-scoped `[profile.wasm-release]` (size-optimized, perf-safe — it does NOT touch the native `[profile.release]` the perf work tunes) + `wasm-opt -Oz` + brotli; a Bevy wasm app lands in the ~15-30 MB class after that. `wasm-opt` is not in the dev/CI image here, so the fully-optimized measurement is a **release-time step** (consistent with web = manual-release-gate), to be done with the perf campaign which owns release-profile choices. Lean-feature trim (dropping the 3D crates the `webgpu` meta-feature pulls) and a loading-screen/streaming are follow-ups (§ 2-deferred D5 note).
 - **DPR / canvas sizing.** The prototype saw a physical-vs-CSS size mismatch — pin during implementation (clamp to `max_texture_dimension_2d`).
 - **WebGL2 milestone unknowns** — see § 2-deferred (W1 not yet exercised; end-to-end validation pending the band repack).
 
