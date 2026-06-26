@@ -285,3 +285,66 @@ impl Plugin for BuiyPlugin {
         ));
     }
 }
+
+/// The **headless render subset** of the Buiy stack: everything needed to lay out,
+/// shape, and *paint* a UI tree to an offscreen target, with **no winit window and
+/// no picking** (no live pointer input). It composes exactly the data-and-render
+/// sub-plugins — `core` · `theme` · `a11y` · `focus` · `layout` · `text` · `widgets`
+/// · `render` — and deliberately omits:
+///
+/// - **winit / OS bridges:** `PointerInputPlugin` (the winit cursor reader) and
+///   `AccessKitAdapterPlugin` (the OS-accessibility bridge) — both need a real
+///   window. The in-process a11y *tree* (`A11yPlugin`) is kept; only the OS adapter
+///   is dropped.
+/// - **picking:** `bevy::picking::PickingPlugin` + Buiy's `PickingPlugin` /
+///   `BuiyPickingBackendPlugin` — a static capture forces widget state directly
+///   instead of routing pointer hits.
+/// - **runtime interaction:** `ScrollInputPlugin` and `AnimationPlugin` — not needed
+///   to paint a single settled frame. A capture that wants tween motion (e.g. a
+///   progress meter ramp) adds [`buiy_core::animation::AnimationPlugin`] on top.
+///
+/// This is the production replacement for the hand-rolled, drift-prone ~8-line
+/// plugin list the offscreen capture bins used to maintain (widget-catalog parity
+/// § 2 REDESIGN). The plugin order mirrors [`BuiyPlugin`]'s canonical order with the
+/// excluded plugins removed.
+///
+/// # Required Bevy plugins
+///
+/// `BuiyHeadlessPlugin` is the *Buiy* subset only; the caller composes the headless
+/// **Bevy** stack itself (and adds it BEFORE this plugin so the `RenderApp` exists
+/// when `BuiyRenderPlugin::build` runs — the same "after the render plugin" contract
+/// [`BuiyPlugin`] documents). A minimal offscreen harness adds, in order:
+/// `MinimalPlugins`, a sized `WindowPlugin`, `AssetPlugin`, `ScenePlugin`,
+/// `RenderPlugin`, `ImagePlugin`, `CameraPlugin`, `CorePipelinePlugin`, and
+/// `bevy::input::InputPlugin` (the focus/keymap systems read
+/// `Res<ButtonInput<KeyCode>>`), then `BuiyHeadlessPlugin`.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy::BuiyHeadlessPlugin;
+///
+/// App::new()
+///     .add_plugins(MinimalPlugins)
+///     // … the offscreen Bevy render stack (RenderPlugin, CameraPlugin, …) …
+///     .add_plugins(bevy::input::InputPlugin)
+///     .add_plugins(BuiyHeadlessPlugin)
+///     .run();
+/// ```
+pub struct BuiyHeadlessPlugin;
+
+impl Plugin for BuiyHeadlessPlugin {
+    fn build(&self, app: &mut App) {
+        // The subset of `BuiyPlugin`'s composition that paints a frame, in the same
+        // relative order, minus winit/picking/scroll/animation (see the type doc).
+        app.add_plugins((
+            CorePlugin,
+            buiy_core::theme::ThemePlugin,
+            buiy_core::a11y::A11yPlugin,
+            buiy_core::focus::FocusPlugin,
+            buiy_core::layout::LayoutPlugin,
+            buiy_core::text::BuiyTextPlugin::default(),
+            WidgetsPlugin,
+            buiy_core::render::BuiyRenderPlugin,
+        ));
+    }
+}

@@ -60,18 +60,13 @@ fn main() {
         .add_plugins(CameraPlugin)
         .add_plugins(bevy::core_pipeline::CorePipelinePlugin)
         .add_plugins(bevy::input::InputPlugin)
-        // The Buiy stack the composites PAINT path needs: theme → layout → core →
-        // text → focus → a11y → widgets → render, PLUS the animation + toast
-        // plugins (so the meter `ScaleTween` + the toast entrance tweens + the
-        // toast auto-dismiss timer tick — the captured frame settles them).
-        .add_plugins(buiy_core::theme::ThemePlugin)
-        .add_plugins(buiy_core::layout::LayoutPlugin)
-        .add_plugins(buiy_core::CorePlugin)
-        .add_plugins(buiy_core::text::BuiyTextPlugin::default())
-        .add_plugins(buiy_core::focus::FocusPlugin)
-        .add_plugins(buiy_core::a11y::A11yPlugin)
-        .add_plugins(buiy_widgets::WidgetsPlugin)
-        .add_plugins(buiy_core::render::BuiyRenderPlugin)
+        // The Buiy headless render subset (theme → layout → core → text → focus →
+        // a11y → widgets → render) the composites PAINT path needs, as ONE plugin,
+        // PLUS the animation + toast plugins on top (so the meter `ScaleTween` + the
+        // toast entrance tweens + the toast auto-dismiss timer tick settle in the
+        // captured frame — `AnimationPlugin` is intentionally NOT in the headless
+        // subset, since a static capture does not need it).
+        .add_plugins(buiy::BuiyHeadlessPlugin)
         .add_plugins(AnimationPlugin)
         .add_plugins(ToastPlugin);
 

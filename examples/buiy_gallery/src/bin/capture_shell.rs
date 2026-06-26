@@ -101,19 +101,12 @@ fn main() {
         // `bevy::input` so `Res<ButtonInput<KeyCode>>` exists for any input-reading
         // widget/core system the paint path touches.
         .add_plugins(bevy::input::InputPlugin)
-        // The Buiy stack the shell PAINT path needs: theme → layout → core → text →
-        // focus → a11y → widgets → render. (The full `BuiyPlugin` also pulls
-        // scroll-input / animation / picking — runtime-interaction plugins not
-        // needed to paint a static frame; `focus` + `a11y` ARE needed because the
-        // widgets `#[require]` a11y components + read `FocusedEntity`.)
-        .add_plugins(buiy_core::theme::ThemePlugin)
-        .add_plugins(buiy_core::layout::LayoutPlugin)
-        .add_plugins(buiy_core::CorePlugin)
-        .add_plugins(buiy_core::text::BuiyTextPlugin::default())
-        .add_plugins(buiy_core::focus::FocusPlugin)
-        .add_plugins(buiy_core::a11y::A11yPlugin)
-        .add_plugins(buiy_widgets::WidgetsPlugin)
-        .add_plugins(buiy_core::render::BuiyRenderPlugin)
+        // The Buiy headless render subset (theme → layout → core → text → focus →
+        // a11y → widgets → render) the shell PAINT path needs, as ONE plugin — no
+        // winit/picking/scroll/animation (a static capture forces widget state
+        // directly; `focus` + `a11y` ARE included because the widgets `#[require]`
+        // a11y components + read `FocusedEntity`).
+        .add_plugins(buiy::BuiyHeadlessPlugin)
         // The shell's per-screen app logic (so the mounted screens are well-formed
         // — the same plugins the real binary adds).
         .add_plugins(TodoMvcPlugin)
