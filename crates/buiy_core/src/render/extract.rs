@@ -949,6 +949,82 @@ fn node_footprint(r: &ExtractedNode) -> (bool, usize, bool, usize, bool) {
     )
 }
 
+/// Resolve ONE painted node's full [`ExtractedNode`] record from its paint-query item
+/// — the body of the Full build loop, factored out (#2 Stage C3a) so the Patch path can
+/// re-resolve a single changed entity through the SAME code (Full and Patch records are
+/// byte-identical by construction). Returns `None` for a paint-skipped entity (it emits
+/// nothing). Group membership is NOT set here — it is the Full build's group-tag walk's
+/// job; a Patch only re-resolves group-free nodes, whose `group` stays `None`.
+fn resolve_one(
+    item: NodePaintQueryItem,
+    theme: &Theme,
+    forced_colors: bool,
+) -> Option<ExtractedNode> {
+    if item.paint_skip.is_some() {
+        return None;
+    }
+    let clip = effective_clip(item.stacking, item.clip_rect, item.ancestor_clip);
+    let mut node = extracted_node_for(
+        item.entity,
+        item.global_transform,
+        item.layout,
+        item.bg,
+        clip.as_ref(),
+        theme,
+    );
+    if item.animated_bg.is_some() {
+        node.color = resolve_background_color(item.bg, item.animated_bg, theme);
+    }
+    if let Some(outline) = item.outline {
+        let outline_clip = effective_outline_clip(item.stacking, item.ancestor_clip);
+        node.outline = resolve_outline(
+            outline,
+            node.position,
+            node.size,
+            outline_clip,
+            node.affine,
+            theme,
+        );
+    }
+    if let Some(border) = item.border {
+        let widths = item
+            .box_model
+            .map(|b| b.border)
+            .unwrap_or(crate::layout::Edges::ZERO);
+        node.border = resolve_border(
+            border,
+            widths,
+            node.position,
+            node.size,
+            node.clip,
+            node.affine,
+            theme,
+        );
+    }
+    if let Some(box_shadow) = item.box_shadow {
+        node.shadows = resolve_shadows(
+            box_shadow,
+            node.position,
+            node.size,
+            node.clip,
+            node.affine,
+            forced_colors,
+            theme,
+        );
+    }
+    if let Some(background_layers) = item.background_layers {
+        node.gradients = resolve_gradients(
+            background_layers,
+            node.position,
+            node.size,
+            node.clip,
+            node.affine,
+            theme,
+        );
+    }
+    Some(node)
+}
+
 pub fn context_roots(
     // std HashMap (not EntityHashMap): this is a cross-module helper also called by
     // picking/depth.rs + text/extract.rs; `sc_by_entity` is small (one entry per
@@ -1378,129 +1454,31 @@ pub fn extract_buiy_nodes(
     let mut group_formers: EntityHashMap<(EffectReason, f32, Option<f32>)> =
         EntityHashMap::default();
     let forced_colors = prefs.forced_colors;
-    for n in nodes.iter() {
-        // Destructure the `NodePaintQuery` projection into the per-concern locals
-        // the resolve calls below consume (the field names match the prior tuple
-        // bindings, so the resolution body is unchanged from the sub-tuple era).
-        let NodePaintQueryItem {
-            entity,
-            global_transform: gt,
-            layout,
-            paint_skip,
-            clip_rect,
-            ancestor_clip,
-            stacking,
-            bg,
-            animated_bg,
-            outline,
-            border,
-            box_model,
-            box_shadow,
-            effect_group,
-            opacity,
-            backdrop_filter,
-            background_layers,
-        } = n;
-        // The subtree-scoped paint skip (§ 5.3 / § 5.4): presence of the
-        // computed marker ⇒ emit nothing for this entity. `write_paint_skip`
-        // stamps the marker on the hidden/offscreen ROOT and every
-        // descendant, so this one per-entity read covers the whole subtree.
-        if paint_skip.is_some() {
-            continue;
-        }
-        if let Some(eg) = effect_group {
-            // `Opacity` default is 1.0 (no-op); only an opacity-formed group
-            // carries a `< 1` value, but capture it unconditionally so a group
-            // that ALSO has opacity composites at the right alpha.
-            let a = opacity.map(|o| o.0).unwrap_or(1.0);
-            // Parity Wave B4: capture the backdrop-blur radius (logical px) for a
-            // backdrop-filter former. Only meaningful when the reason carries the
-            // BACKDROP_FILTER bit; resolved from the `BackdropFilter` component.
+    for item in nodes.iter() {
+        // #2 Stage C3a: capture each effect-group former while the fan is borrowed —
+        // Full-build group-tag state, NOT part of the per-node record (a Patch only
+        // re-resolves group-free nodes). Guarded by `paint_skip.is_none()` to match the
+        // old `continue` (a paint-skipped entity forms no group and emits no record).
+        if item.paint_skip.is_none()
+            && let Some(eg) = item.effect_group
+        {
+            // `Opacity` default is 1.0 (no-op); capture unconditionally so a group that
+            // ALSO has opacity composites at the right alpha. Parity Wave B4: capture
+            // the backdrop-blur radius (logical px) for a backdrop-filter former.
+            let a = item.opacity.map(|o| o.0).unwrap_or(1.0);
             let blur = if eg.reason.contains(EffectReason::BACKDROP_FILTER) {
-                backdrop_filter.and_then(backdrop_blur_px)
+                item.backdrop_filter.and_then(backdrop_blur_px)
             } else {
                 None
             };
-            group_formers.insert(entity, (eg.reason, a, blur));
+            group_formers.insert(item.entity, (eg.reason, a, blur));
         }
-        // A top-layer member escapes every ancestor clip and paints over the
-        // full view (paint-order § 3.2 — the `None` sentinel); an in-flow member
-        // clips to its own box ∩ ancestor clips. See [`effective_clip`].
-        let clip = effective_clip(stacking, clip_rect, ancestor_clip);
-        let mut node = extracted_node_for(entity, gt, layout, bg, clip.as_ref(), theme);
-        // Auto-composite a live background-color crossfade over the static token
-        // (spec § 2 REFINE). `extracted_node_for` resolved only the `bg` token (it
-        // is also the Tier-2 snapshot builder, which has no tweens); here in the
-        // production loop a node carrying a `BackgroundColorTween`'s
-        // `AnimatedBackgroundColor` paints the interpolated color instead, for
-        // every node — no widget opt-in.
-        if animated_bg.is_some() {
-            node.color = resolve_background_color(bg, animated_bg, theme);
+        // #2 Stage C3a: the per-node record via the shared single-entity resolver.
+        // The Patch path re-resolves a changed entity through the SAME `resolve_one`,
+        // so Full-build and Patch records are byte-identical by construction.
+        if let Some(node) = resolve_one(item, theme, forced_colors) {
+            by_entity.insert(node.entity, node);
         }
-        // C6-a: resolve the outline (focus ring / selection outline) against the
-        // entity's `AncestorClip` (NOT its own box, `effective_outline_clip`) so
-        // it survives an `overflow:hidden` ancestor (styling-f-tier.md § 2.4).
-        if let Some(outline) = outline {
-            let outline_clip = effective_outline_clip(stacking, ancestor_clip);
-            node.outline = resolve_outline(
-                outline,
-                node.position,
-                node.size,
-                outline_clip,
-                node.affine,
-                theme,
-            );
-        }
-        // C6-b: resolve the per-side border band. Unlike the outline, it uses the
-        // entity's OWN clip (`node.clip`) since the band sits inside the border
-        // box. Width comes from `BoxModel.border` (the layout-owned Taffy input,
-        // § 3.5); a node with no `BoxModel` has no border widths (`Edges::ZERO`),
-        // so `resolve_border` returns `None`.
-        if let Some(border) = border {
-            let widths = box_model
-                .map(|b| b.border)
-                .unwrap_or(crate::layout::Edges::ZERO);
-            node.border = resolve_border(
-                border,
-                widths,
-                node.position,
-                node.size,
-                node.clip,
-                node.affine,
-                theme,
-            );
-        }
-        // C6-b: resolve the box-shadow list (outset-only, sigma = blur/2),
-        // suppressed wholesale under forced-colors (§ 2.5). The shadow uses the
-        // entity's own fill clip as the conservative bound (the un-clipped card
-        // is the common case).
-        if let Some(box_shadow) = box_shadow {
-            node.shadows = resolve_shadows(
-                box_shadow,
-                node.position,
-                node.size,
-                node.clip,
-                node.affine,
-                forced_colors,
-                theme,
-            );
-        }
-        // Parity Wave B1: resolve the background gradient / layered fills. They
-        // use the entity's OWN clip (`node.clip`) — the gradient paints inside
-        // the fill box, like the border band. Stop tokens resolve to linear
-        // color here, so a live theme/accent swap re-resolves through the
-        // `theme.is_changed()` re-extract.
-        if let Some(background_layers) = background_layers {
-            node.gradients = resolve_gradients(
-                background_layers,
-                node.position,
-                node.size,
-                node.clip,
-                node.affine,
-                theme,
-            );
-        }
-        by_entity.insert(entity, node);
     }
 
     // Resolve each painted node's NEAREST `EffectGroup` ancestor (the group it
