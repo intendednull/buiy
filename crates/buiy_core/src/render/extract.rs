@@ -798,7 +798,7 @@ fn inset_shadow_warn_once() {
 /// the per-window partition is wired.
 ///
 /// **R5 owns this type; R6 consumes it.** Single carrier — there is no parallel
-/// `ExtractedNodes`/`ExtractedNodesResource` rebuilt from `ExtractedDraws`.
+/// `ExtractedNodes`/`ExtractedNodesResource` wrapper.
 /// `Default` is MANUAL so `scale_factor` is `1.0` (a derived `Default` would be
 /// `0.0` and divide-by-zero the logical→physical map).
 #[derive(Component, Clone, Debug)]
@@ -1396,9 +1396,9 @@ pub fn extract_buiy_nodes(
 ) {
     // Resolve the primary window's view target entity. v1: all Nodes paint into
     // the primary view (D2). If there is no primary window this frame, overwrite
-    // the carrier with an EMPTY set rather than early-returning: Phase-0's
-    // `extract_buiy_draws` always `insert_resource`s an `ExtractedDraws` (it
-    // never early-returns), so a vanished window clears to empty. Returning here
+    // the carrier with an EMPTY set rather than early-returning: this system always
+    // publishes the carrier (it never early-returns past the publish leaving stale
+    // data), so a vanished window clears to empty. Returning here
     // would instead leave the prior frame's nodes resident once the carrier is
     // `init_resource`'d (Task 7), and render would keep painting stale nodes.
     // Drain the removal streams FIRST, before any early-return, so the
@@ -1444,8 +1444,7 @@ pub fn extract_buiy_nodes(
     // Build a per-entity index so the painters_z walk can look each painter up.
     // (A HashMap keyed by Entity; the partial-re-extract cache keyed by Entity
     // inside ExtractedNodes is R6/R8's optimization — v1 rebuilds the changed set.)
-    // `&Theme` via the `Extract<Res<Theme>>` deref chain (matches the
-    // `&main_world_theme` idiom in `extract_buiy_draws`); `Res::into_inner`
+    // `&Theme` via the `Extract<Res<Theme>>` deref chain; `Res::into_inner`
     // can't be called here because it would move out of the `Extract` deref.
     let theme: &Theme = &theme;
     // `std::collections::HashMap` matches the convention in layout/systems.rs.

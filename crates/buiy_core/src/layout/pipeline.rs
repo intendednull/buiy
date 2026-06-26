@@ -84,8 +84,12 @@ pub enum BuiyLayoutStep {
 
 /// Run condition for `BuiyLayoutStep::PostTaffyOverrides` (perf audit #3):
 /// gate the ~7-pass post-Taffy override chain on the per-frame dirty flag
-/// `seed_layout_dirty` seeds. An idle frame (no override input changed) skips
-/// the whole chain — output-identical, because every pass writes idempotently.
+/// `seed_layout_dirty` seeds. A truly idle frame (no override input changed) skips
+/// the whole chain output-identically, because every pass writes idempotently. The
+/// one accepted delta vs the old unconditional chain: a geometry cause the seed's
+/// component union under-covers — a text/CQ-flip-driven reflow — defers its
+/// sticky/anchor recompute by ONE frame (self-healing via `Changed<ResolvedLayout>`,
+/// never a permanent miss; see `LayoutDirtyThisFrame`'s doc).
 fn layout_is_dirty(dirty: Res<super::systems::LayoutDirtyThisFrame>) -> bool {
     dirty.0
 }

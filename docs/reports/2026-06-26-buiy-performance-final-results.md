@@ -37,9 +37,9 @@ The foundation, because "you cannot fix what you cannot see":
   the criterion bench, the dhat gate, and the counter gates — one harness, no triple-copy.
 - **Work-unit counters** (`render/counters.rs` `RenderWorkCounters`) — host-INDEPENDENT
   integers asserted exactly on a settled scene: `node_rebuilds`, `instances_built`,
-  `node_patches`, **`atlas_touch_ops`** (the #5 blind-spot closer — the atlas touch loop is
-  non-allocating and downstream of the damage gate, so neither a rebuild assertion nor dhat
-  can see it; only this counter does), `resident_keys`. Gates in `tests/crosscut/work_counters.rs`.
+  `node_patches`, **`atlas_touch_ops`** / `resident_keys` (a residency invariant — one logical
+  touch per resident glyph key, no dup/leak; honestly, NOT the #5-regression guard — see §3
+  note). Gates in `tests/crosscut/work_counters.rs`.
 - **dhat allocation-count gate** (`tests/alloc_budget.rs`) — `#[global_allocator]` dhat,
   idle vs rebuild block budgets. Pure-Rust, runs locally.
 - **iai-callgrind instruction gate** — designed as the hardware-independent CI gate (Phase 3);
@@ -53,7 +53,7 @@ work-counts and (in CI) instruction counts, not wall-clock on the dev box's RX 6
 
 | # | Optimization | Result | Proof |
 |---|---|---|---|
-| **#5** | Atlas LRU touch O(V·E)→O(1) | **8.6×** on a static-text steady frame (10.6→1.24 ms in the prototype) | `atlas_touch_ops == resident_keys` gate (was O(visible-glyphs) VecDeque scan per glyph) |
+| **#5** | Atlas LRU touch O(V·E)→O(1) | **8.6×** on a static-text steady frame (10.6→1.24 ms in the prototype) | prototype **8.6× wall-clock**; the iai instruction count (CI lane) is the regression guard. NB: the `atlas_touch_ops == resident_keys` counter assert is a *residency invariant*, not a #5 guard — the O(V·E) scan is a per-touch cost, not a count, so no work-counter can see it (review finding, corrected) |
 | **#9** | Delete dead `extract_buiy_draws` | One full-tree walk + a fresh Vec alloc removed from every frame | grep-proved dead (only `mod.rs` referenced it); full suite green after delete |
 | **#3** | Gate the post-Taffy override chain on a dirty flag | Idle layout **−22.6 % (1k) / −32.4 % (5k)** | `LayoutPostTaffyRunCount` gate + a 7-mutation differential test (output-identical) |
 | **#11** | `EntityHashMap` on the per-node extract maps | Pass-through hash replaces SipHash on `by_entity` (per-node, hot) etc. | equality-preserving (311 render tests); iai prices it in CI; also stabilizes the iai baseline |
@@ -126,7 +126,14 @@ What is left, and why it was not done in this pass:
   it changes the render-graph shape and the pipeline/blend strategy, with design tradeoffs
   (depth precision, transparency ordering) that should be decided, not defaulted.
 - **Phase 3 iai-callgrind CI gate, Phase 4/5 GPU-timing + worst-frame trend** — the remaining
-  measurement roadmap; CI-side / informational.
+  measurement roadmap; CI-side / informational. NB: the iai lane is also the *real* #5
+  regression guard (the `atlas_touch_ops` counter assert is only a residency invariant — a
+  #5 regression is a per-touch cost, not a count; corrected after the pre-merge review).
+- **Pre-merge review follow-ups** (from the PR #84 adversarial review, all non-blocking):
+  pin the **D2 partial-upload FALLBACK** with a second GPU reftest (patch a *bordered* node →
+  the pure-bg-quad guard fails → full repack → still pixel-identical, `instances_uploaded == N`);
+  the doc-honesty fixes (the #5-gate relabel, the stale `extract_buiy_draws` references) landed
+  in this PR.
 
 **The architectural wall:** the cheap, high-leverage, locally-provable wins are done. The
 next *large* gain (#13a viewport cull) is tractable and a sensible next campaign; the gain

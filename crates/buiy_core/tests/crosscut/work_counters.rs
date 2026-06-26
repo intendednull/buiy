@@ -9,12 +9,14 @@ use buiy_bench_support::{build_flat_bg_scene, build_large_scene};
 use buiy_core::render::RenderWorkCounters;
 use buiy_core::render::components::Background;
 
-/// The audit-#5 BLIND-SPOT lock: on an idle text frame the atlas-LRU touch loop
-/// runs once per resident glyph key, so `atlas_touch_ops == resident_keys > 0`.
-/// A naive "node rebuild == 0 on idle" gate is green here while the touch loop
-/// runs (and dhat is blind — the loop is non-allocating); only this counter sees
-/// the #5 cost. If a future commit re-introduces the O(visible-glyphs) VecDeque
-/// scan, `atlas_touch_ops` would exceed `resident_keys` and this reddens.
+/// Atlas-residency invariant (NOT a #5-regression guard — see `RenderWorkCounters`
+/// `atlas_touch_ops`). On an idle text frame the atlas-LRU touch loop runs once per
+/// resident glyph key, so `atlas_touch_ops == resident_keys > 0`. Both are recorded
+/// from `resident.keys.len()`, so this pins exactly one LOGICAL touch per resident key
+/// (no dup / leak) AND that the steady frame does not rebuild the node set. It does NOT
+/// catch a #5 regression: the O(visible-glyphs) VecDeque scan is a per-touch COST, not a
+/// touch COUNT, so it never moves these integers — the iai instruction count (CI) + the
+/// prototype's measured 8.6× wall-clock are the real #5 guards.
 #[test]
 fn idle_text_frame_touches_one_per_resident_key() {
     let mut h = build_large_scene(8);
@@ -31,7 +33,8 @@ fn idle_text_frame_touches_one_per_resident_key() {
     );
     assert_eq!(
         c.atlas_touch_ops, c.resident_keys,
-        "#5: exactly one atlas touch per resident key, no per-glyph reorder work"
+        "residency invariant: exactly one logical touch per resident key (this is a \
+         dup/leak sanity check, NOT a #5 guard — see counters.rs atlas_touch_ops)"
     );
     assert_eq!(
         c.node_rebuilds, 0,

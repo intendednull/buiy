@@ -29,18 +29,24 @@ pub struct RenderWorkCounters {
     /// Number of `ExtractedNode` records built this frame (`== N` on a rebuild,
     /// `0` on an idle frame — set in every `extract_buiy_nodes` return path).
     pub instances_built: usize,
-    /// Per-glyph atlas-LRU `touch_existing` calls this frame. **The audit-#5
-    /// BLIND-SPOT CLOSER:** the touch loop runs DOWNSTREAM of the extract damage
-    /// gate and is non-allocating, so neither a `node_rebuilds == 0` assertion nor
-    /// dhat can see the #5 cost — only this counter (or iai `EstimatedCycles`)
-    /// does. It equals `resident.keys.len()` (one touch per resident glyph key),
-    /// so it is recorded as a single post-extract read, never per-iteration — the
-    /// counter must never tax the hot loop it measures.
+    /// Logical atlas-LRU touches this frame — recorded as `resident.keys.len()` (one
+    /// `touch_existing` per resident glyph key), a single post-extract read so the
+    /// counter never taxes the hot loop it measures.
+    ///
+    /// HONEST SCOPE (do not over-claim). Because this is DERIVED from
+    /// `resident.keys.len()` (see `record_text_work_counters`), the
+    /// `atlas_touch_ops == resident_keys` assert is a RESIDENCY INVARIANT — one
+    /// logical touch per resident key, no dup / leak / unbounded growth — and can
+    /// NEVER diverge, so it is **not** a #5-regression guard. The #5 regression (the
+    /// O(V·E) per-touch `VecDeque` scan) is a per-touch COST, not a touch COUNT, so it
+    /// is invisible to any work-counter. The real #5 guards are the iai instruction
+    /// count (CI lane, which prices the scan) and the prototype's measured 8.6×
+    /// wall-clock — not this gate.
     pub atlas_touch_ops: usize,
     /// Resident glyph-instance key count after the frame's text extract. Guards
-    /// unbounded growth / a missing dedup; the #5 lock asserts
-    /// `atlas_touch_ops == resident_keys` on an idle text frame (no per-glyph
-    /// reorder work beyond the unavoidable one-touch-per-key bookkeeping).
+    /// unbounded growth / a missing dedup; the `atlas_touch_ops == resident_keys`
+    /// residency invariant holds on an idle text frame (one logical touch per
+    /// resident key). See `atlas_touch_ops` for why this is NOT a #5-regression guard.
     pub resident_keys: usize,
     /// `1` if this dirty frame is Patch-ELIGIBLE (audit #2 Stage B classifier):
     /// the damage is value-only (no structural/hierarchy/group/despawn/theme
