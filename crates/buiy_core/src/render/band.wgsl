@@ -108,10 +108,11 @@ fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
 fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // Per-primitive clip AABB (identical to shader.wgsl): the OUTLINE clip is
     // the AncestorClip, so a ring outside an `overflow:hidden` box still paints.
+    // WebGPU/Tint requires `fwidth` in UNIFORM control flow — compute the band
+    // unconditionally and apply the clip as an alpha mask (no early return).
+    // Behavior-identical on native; native naga is lenient, Tint rejects it.
     let frag_pos = in.frag_logical;
-    if any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    let clipped = any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max);
 
     // Band = inside(outer) AND NOT inside(inner). AA via fwidth on each SDF.
     let d_outer = sdf_rounded_rect(in.local, in.outer_half, in.outer_r);
@@ -136,5 +137,6 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
         if in.local.x < 0.0 { col = in.color_left; } else { col = in.color_right; }
     }
 
-    return vec4<f32>(col.rgb, col.a * band);
+    let mask = select(1.0, 0.0, clipped);
+    return vec4<f32>(col.rgb, col.a * band * mask);
 }

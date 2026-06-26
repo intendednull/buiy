@@ -78,14 +78,18 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // full-view sentinel (±inf) makes this never fire (unclipped / top-layer).
     // frag_logical is the affine-transformed window-logical corner (R1) — the
     // correct post-transform point, not the old axis-aligned box center.
+    // WebGPU/Tint requires derivative builtins (`fwidth`) in UNIFORM control
+    // flow, so we must NOT early-return on the per-fragment clip test before
+    // `fwidth`. Compute the SDF + AA unconditionally and apply the clip as an
+    // alpha mask. Behavior-identical on native (clipped -> alpha 0 either way);
+    // native naga is lenient and accepts the early return, Tint rejects it.
     let frag_pos = in.frag_logical;
-    if any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    let clipped = any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max);
     // SDF in logical px; AA from fwidth in logical px (the view uniform keeps
     // logical px well-scaled, so fwidth is meaningful without scale_factor).
     let d = sdf_rounded_rect(in.local_uv * in.half_size, in.half_size, in.radius);
     let aa = fwidth(d);
     let alpha = 1.0 - smoothstep(-aa, aa, d);
-    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    let mask = select(1.0, 0.0, clipped);
+    return vec4<f32>(in.color.rgb, in.color.a * alpha * mask);
 }
