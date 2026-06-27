@@ -98,11 +98,12 @@ fn sdf_rect(p: vec2<f32>, half_size: vec2<f32>) -> f32 {
 
 @fragment
 fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
-    // Per-primitive clip AABB (identical to shader.wgsl).
+    // Per-primitive clip AABB (identical to shader.wgsl). WebGPU/Tint requires
+    // `fwidth` in UNIFORM control flow, so compute coverage unconditionally and
+    // apply the clip as an alpha mask below (no early return). Behavior-identical
+    // on native; native naga is lenient, Tint rejects the early-return-before-fwidth.
     let frag_pos = in.frag_logical;
-    if any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    let clipped = any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max);
 
     // Box coverage (analytic AA via fwidth on the rect SDF).
     let d = sdf_rect(in.local, in.half_size);
@@ -156,5 +157,6 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
         col = mix(in.color1, in.color0, inside);
     }
 
-    return vec4<f32>(col.rgb, col.a * cov);
+    let mask = select(1.0, 0.0, clipped);
+    return vec4<f32>(col.rgb, col.a * cov * mask);
 }

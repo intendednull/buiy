@@ -1,0 +1,2 @@
+# trunk build output (the wasm artifact is 50-100 MB — never commit it)
+dist*/

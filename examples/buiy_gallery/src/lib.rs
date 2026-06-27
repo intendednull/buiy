@@ -119,6 +119,37 @@ use buiy_core::text::{
 };
 use buiy_widgets::checkbox::CheckboxMark;
 
+/// The whole gallery as one plugin: the **dark theme** + the shell router + all
+/// five screens' app plugins + the inspector pane + the shared toast lifecycle.
+/// Both entry points add this — the native binary (`buiy_gallery`) and the WebGPU
+/// example (`gallery_web`) — so the screen wiring lives in exactly one place and
+/// the two `main`s differ only in their window setup.
+///
+/// Boots `default_dark_theme` so the design's dark tokens resolve (the framework
+/// default theme is light — the gallery opts in here; Wave A reconciliation note).
+pub struct GalleryPlugin;
+
+impl Plugin for GalleryPlugin {
+    fn build(&self, app: &mut App) {
+        // The framework ships light by default; the gallery opts into dark.
+        app.insert_resource(buiy_core::theme::default_dark_theme());
+        // The shell router spawns the shell tree + all 5 screens at boot; the
+        // per-screen plugins supply the retained-mode app logic each needs, and
+        // `ToastPlugin` drives the shared toast lifecycle. The router toggles which
+        // screen is laid out + a11y-visible, preserving per-screen state.
+        app.add_plugins((
+            shell::ScreenRouterPlugin,
+            inspector::InspectorPlugin,
+            TodoMvcPlugin,
+            ScrollListPlugin,
+            OverlayMenuPlugin,
+            ModalPlugin,
+            ShowcasePlugin,
+            composites::ToastPlugin,
+        ));
+    }
+}
+
 // ===========================================================================
 // App-state markers + resources (C8: composition-level, NOT a widget primitive)
 // ===========================================================================

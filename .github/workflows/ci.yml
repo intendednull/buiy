@@ -308,6 +308,60 @@ jobs:
         run: cargo nextest run --profile gpu -p buiy_core -p buiy_verify -p buiy --locked --run-ignored=only
 
   # ----------------------------------------------------------------------------
+  # Web smoke. GATES the wasm BUILD always (catches arboard/lock/feature
+  # regressions — buiy + the example must compile + wasm-bindgen for wasm32).
+  # Then loads the build in headless Chrome and, IF a WebGPU adapter is present,
+  # enforces ZERO shader/pipeline errors + a non-blank canvas — the only check
+  # that runs the real Tint compiler, so the only one that catches the
+  # WGSL-uniformity class the native GPU lane (naga, lenient by design) cannot see
+  # (spec § 4 / D2; it already caught gradient.wgsl shipping the bug).
+  #
+  # Software WebGPU is NOT available on the GPU-less hosted runner — Dawn exposes
+  # no adapter over lavapipe, and headless SwiftShader yields none either (every
+  # flag combination tried gives requestAdapter() -> null). So on this runner the
+  # shader/paint check SKIPS (the runner detects "no adapter" and exits 0); it is
+  # enforced wherever a WebGPU adapter exists (dev GPU hosts; a future
+  # WebGPU-capable CI runner). This matches the foundation's web =
+  # manual-release-gate stance for the render dimension. Follow-up to make it
+  # fully CI-enforced (tint CLI, or a self-hosted GPU runner): follow-ups.md.
+  web-smoke:
+    name: Web smoke (WebGPU headless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master @ 2026-06-20
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        with:
+          tool: trunk@0.21.14,wasm-bindgen-cli@0.2.125
+      - name: Build the WebGPU wasm example
+        run: trunk build examples/buiy_web/index.html --dist examples/buiy_web/dist
+      - name: Install smoke deps + chromium
+        working-directory: tools/web-smoke
+        run: |
+          npm ci
+          npx --yes playwright@1.61.1 install --with-deps chromium
+      - name: Run the headless WebGPU smoke
+        working-directory: tools/web-smoke
+        run: |
+          python3 -m http.server 8090 --directory ../../examples/buiy_web/dist &
+          sleep 2
+          CHROME_BIN="$(node -e 'console.log(require("playwright-core").chromium.executablePath())')"
+          export CHROME_BIN
+          echo "CHROME_BIN=$CHROME_BIN"
+          SMOKE_URL=http://localhost:8090/ node run.mjs
+
+  # ----------------------------------------------------------------------------
   # Coverage (informational, audit #41 / DG-4): produces an lcov artifact; no
   # pass/fail gate yet. Gated to push/schedule (not PRs) so it never slows PR
   # turnaround. cargo-llvm-cov drives the headless suite under xvfb.

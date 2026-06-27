@@ -78,12 +78,15 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // Per-primitive clip AABB: discard fragments outside [clip_min, clip_max] in
     // logical-px window space — the same encoding as shader.wgsl (±inf sentinel =
     // unclipped / top-layer, never fires).
-    if any(in.frag_pos < in.clip_min) || any(in.frag_pos > in.clip_max) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    // WebGPU/Tint requires `textureSample` (implicit-LOD = a derivative op) in
+    // UNIFORM control flow, so sample unconditionally and apply the clip as an
+    // alpha mask rather than an early return. Behavior-identical on native;
+    // native naga accepts the early return, Tint rejects it.
+    let clipped = any(in.frag_pos < in.clip_min) || any(in.frag_pos > in.clip_max);
     // Alpha-as-color (§ 4.1): the R8 coverage modulates the per-instance linear
     // tint. The color is straight-alpha linear (matching the quad path); the
     // pipeline's ALPHA_BLENDING blends it SrcOver in linear space.
     let coverage = textureSample(atlas, atlas_samp, in.atlas_uv).r;
-    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    let mask = select(1.0, 0.0, clipped);
+    return vec4<f32>(in.color.rgb, in.color.a * coverage * mask);
 }

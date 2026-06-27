@@ -1698,3 +1698,32 @@ their fixes. Remaining polish (none blocking; the gallery renders + runs):
   content-width button default, the `button.resting.*` CPU coverage fixture spawns
   a tiny empty box (no label); give the fixture a label so it remains a meaningful
   visual sample.
+- **Fully CI-enforce the WebGPU shader-conformance gate (`web-smoke`).** The
+  `web-smoke` job gates the wasm BUILD always, but the shader-conformance / paint
+  check (the only thing that catches the WGSL-uniformity class via real Tint —
+  spec `2026-06-25-buiy-wasm-browser-support-design.md` § 4 / D2) **skips** on the
+  GPU-less hosted runner: software WebGPU is unavailable there (Dawn exposes no
+  adapter over lavapipe, and headless SwiftShader yields none — every flag
+  combination gives `requestAdapter() -> null`; naga is too lenient to catch it
+  without a real Tint compile). It IS enforced on a WebGPU-capable host (the dev
+  GPU lane machine). Two ways to make it CI-gating: (a) run buiy's WGSL through the
+  **`tint` CLI** (Dawn's standalone validator — catches the uniformity error with
+  NO adapter; needs packaging a prebuilt/built `tint` into CI), or (b) a
+  **self-hosted GPU runner** (the project already runs the GPU lane on real
+  hardware locally). Until then the render dimension stays manual-release-gate per
+  foundation § 2.9.
+- **Touch taps (and same-frame synthetic clicks) miss the first press.** The
+  picking pipeline has a documented one-frame hover lag
+  (`crates/buiy_core/src/picking/backend.rs` § 3.3): `emit_picks` runs in `PreUpdate`
+  and the hover map updates a frame behind, so a press arriving with **no prior
+  settled hover** lands before the hovered target is known and produces no
+  `Pointer<Click>`. A desktop mouse always hovers first (continuous `CursorMoved`
+  before the click), so this is **invisible for v1 web (mouse)** — empirically
+  verified: `gallery_web` is fully interactive when driven move→settle→click, but a
+  cold same-frame click misses. It bites **touch** (a tap has no prior hover —
+  deferred with the mobile/touch work, spec § D9) and any synthetic test that clicks
+  without a settled move. Fix when touch lands: resolve the press's own-frame pointer
+  location (seed the hit-test / a hover for the press's location in the same frame).
+  **Not web-specific** — identical on native; surfaced by the wasm interactivity
+  verification. **Spec touchpoint:**
+  `2026-06-25-buiy-wasm-browser-support-design.md` § 6 (Pointer interactivity — touch caveat).

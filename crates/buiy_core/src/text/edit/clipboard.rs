@@ -59,11 +59,13 @@ pub struct Clipboard(pub Box<dyn ClipboardProvider>);
 /// can fail (no display server, Wayland without a clipboard manager); we hold
 /// an `Option` and retry on each call, so a headless or transiently-broken
 /// clipboard degrades to "empty" rather than panicking at startup.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct ArboardClipboard {
     inner: Option<arboard::Clipboard>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ArboardClipboard {
     pub fn new() -> Self {
         Self::default()
@@ -78,6 +80,7 @@ impl ArboardClipboard {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ClipboardProvider for ArboardClipboard {
     fn get_text(&mut self) -> Option<String> {
         self.handle()?.get_text().ok()

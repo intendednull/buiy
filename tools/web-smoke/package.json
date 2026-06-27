@@ -1,0 +1,13 @@
+{
+  "name": "buiy-web-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless-browser WebGPU smoke gate for the Buiy web build (catches the WGSL-uniformity class via real Tint).",
+  "scripts": {
+    "smoke": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}

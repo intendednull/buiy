@@ -26,7 +26,7 @@ accesskit_winit.workspace = true
 accesskit_consumer.workspace = true
 guillotiere = { workspace = true }
 smallvec = { workspace = true }
-arboard = { workspace = true }
+# arboard moved to the non-wasm target table below (no wasm backend — D4).
 bitflags = "2.11.1"
 # Text engine (buiy-text-rendering-design, architecture § 7): Buiy's OWN pin,
 # never ridden transitively (the bevy_cosmic_edit decay path). DEFAULT
@@ -82,6 +82,11 @@ image.workspace = true
 # tessellator. MIT/Apache-2.0. Pinned to the workspace deps below.
 lyon = { workspace = true }
 lyon_extra = { workspace = true }
+
+# arboard has no wasm backend (D4) — native-only clipboard dep. The web build
+# defaults the Clipboard resource to the pure-Rust MemClipboard instead.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = { workspace = true }
 
 [features]
 default = ["default_font"]

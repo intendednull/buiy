@@ -1,0 +1,27 @@
+# The widget gallery as a WebGPU/wasm example — reuses the `buiy_gallery` lib's
+# `GalleryPlugin` (all five screens, the shell router, the inspector, the dark
+# theme) with a canvas-bound window. Build with
+# `trunk build examples/gallery_web/index.html --release`. The native `--workspace`
+# build compiles this as an ordinary binary: the `webgpu` feature (which drags in
+# the 3D backend crates) is target-gated to wasm32 below, so it never enters the
+# native build.
+[package]
+name = "gallery_web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bevy = { workspace = true }
+buiy = { path = "../../crates/buiy" }
+buiy_gallery = { path = "../buiy_gallery" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The WebGPU backend (a 2D lib doesn't want the 3D crates the meta-feature pulls,
+# but they only build for wasm32 here) + a panic hook that routes Rust panics to
+# the browser console.
+bevy = { workspace = true, features = ["webgpu"] }
+console_error_panic_hook = "0.1"
