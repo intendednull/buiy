@@ -3101,6 +3101,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gallery_web"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_gallery",
+ "console_error_panic_hook",
+]
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

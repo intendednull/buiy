@@ -1712,3 +1712,18 @@ their fixes. Remaining polish (none blocking; the gallery renders + runs):
   **self-hosted GPU runner** (the project already runs the GPU lane on real
   hardware locally). Until then the render dimension stays manual-release-gate per
   foundation § 2.9.
+- **Touch taps (and same-frame synthetic clicks) miss the first press.** The
+  picking pipeline has a documented one-frame hover lag
+  (`crates/buiy_core/src/picking/backend.rs` § 3.3): `emit_picks` runs in `PreUpdate`
+  and the hover map updates a frame behind, so a press arriving with **no prior
+  settled hover** lands before the hovered target is known and produces no
+  `Pointer<Click>`. A desktop mouse always hovers first (continuous `CursorMoved`
+  before the click), so this is **invisible for v1 web (mouse)** — empirically
+  verified: `gallery_web` is fully interactive when driven move→settle→click, but a
+  cold same-frame click misses. It bites **touch** (a tap has no prior hover —
+  deferred with the mobile/touch work, spec § D9) and any synthetic test that clicks
+  without a settled move. Fix when touch lands: resolve the press's own-frame pointer
+  location (seed the hit-test / a hover for the press's location in the same frame).
+  **Not web-specific** — identical on native; surfaced by the wasm interactivity
+  verification. **Spec touchpoint:**
+  `2026-06-25-buiy-wasm-browser-support-design.md` § 6 (Pointer interactivity — touch caveat).

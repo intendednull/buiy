@@ -30,6 +30,7 @@ members = [
     "examples/hello_text",
     "examples/capture",
     "examples/buiy_web",
+    "examples/gallery_web",
 ]
 
 [workspace.package]

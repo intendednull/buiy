@@ -21,39 +21,16 @@
 
 use bevy::prelude::*;
 use buiy::BuiyPlugin;
-use buiy_core::theme::default_dark_theme;
-use buiy_gallery::ModalPlugin;
-use buiy_gallery::OverlayMenuPlugin;
-use buiy_gallery::ScrollListPlugin;
-use buiy_gallery::ShowcasePlugin;
-use buiy_gallery::TodoMvcPlugin;
-use buiy_gallery::composites::ToastPlugin;
-use buiy_gallery::inspector::InspectorPlugin;
-use buiy_gallery::shell::ScreenRouterPlugin;
+use buiy_gallery::GalleryPlugin;
 
 fn main() {
-    let mut app = App::new();
-    app.add_plugins(DefaultPlugins).add_plugins(BuiyPlugin);
-
-    // Opt into the dark theme so the design's dark tokens resolve (the framework
-    // ships light by default — Wave A reconciliation note).
-    app.insert_resource(default_dark_theme());
-
-    // The shell router + the per-screen app plugins. The router spawns the shell
-    // tree + all 5 screens at boot (`setup_shell` in `ScreenRouterPlugin`'s
-    // Startup); `TodoMvcPlugin` (S1) + `ScrollListPlugin` (S2 search/selection) +
-    // `OverlayMenuPlugin` (S3) + `ModalPlugin` (S4 create/delete body swap) +
-    // `ShowcasePlugin` (S5 switch/slider/segmented/stepper/meter/disclosure) supply
-    // the retained-mode app logic those screens need. `ToastPlugin` runs the S5
-    // "Build finished" toast lifecycle (shared with the modal/menu toasts).
-    app.add_plugins(ScreenRouterPlugin)
-        .add_plugins(InspectorPlugin)
-        .add_plugins(TodoMvcPlugin)
-        .add_plugins(ScrollListPlugin)
-        .add_plugins(OverlayMenuPlugin)
-        .add_plugins(ModalPlugin)
-        .add_plugins(ShowcasePlugin)
-        .add_plugins(ToastPlugin);
-
-    app.run();
+    // The whole gallery — dark theme + shell router + all 5 screens' app plugins +
+    // inspector + toast — is `GalleryPlugin`, shared verbatim with the `gallery_web`
+    // WebGPU example so the screen wiring lives in exactly one place. The native
+    // binary and the web example differ only in their window setup.
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_plugins(BuiyPlugin)
+        .add_plugins(GalleryPlugin)
+        .run();
 }
