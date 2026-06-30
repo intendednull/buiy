@@ -84,6 +84,18 @@ impl TextExtractHarness {
             PrimaryWindow,
         ));
 
+        // Determinism (MT-safety): pause the virtual clock so test elapsed is
+        // driven ONLY by explicit `advance_by`, never by absorbed wall-clock
+        // deltas. An UNpaused `Time<Virtual>` also advances by each frame's real
+        // delta (clamped to 250ms); under heavy load — e.g. the multi_threaded CI
+        // lane running the whole workspace concurrently — `app.update()` stalls
+        // inflate that delta, so cumulative elapsed silently crosses blink/anim
+        // thresholds mid-test and flakes work-count assertions (observed:
+        // text_caret_selection blink-edge glyph-rebuild counts, 2 vs 1). Pausing
+        // matches the suite's existing paused-clock blink tests. See
+        // docs/specs/2026-06-30-mt-safety-design.md and the 2026-06-30 MT audit.
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+
         let fonts = app.world().resource::<SharedFontSystem>().clone();
         let mut render = World::new();
         render.insert_resource(BuiyAtlas::new(config));

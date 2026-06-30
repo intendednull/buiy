@@ -7,6 +7,14 @@ repository.workspace = true
 rust-version.workspace = true
 description = "A comprehensive UI library for Bevy with web-quality accessibility."
 
+[features]
+# MT-safety: re-export buiy_core's opt-in `multi_threaded` passthrough (OFF by
+# default). Buiy runs single-threaded in its own builds, but is kept CORRECT under
+# Bevy's multithreaded executor (which downstream apps enable transitively). This
+# lets a consumer opt in explicitly: `buiy = { ..., features = ["multi_threaded"] }`.
+# See docs/specs/2026-06-30-mt-safety-design.md (D1).
+multi_threaded = ["buiy_core/multi_threaded"]
+
 [dependencies]
 bevy.workspace = true
 buiy_bsn = { path = "../buiy_bsn" }

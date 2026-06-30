@@ -51,10 +51,15 @@ static GEIST_MONO_BYTES: &[u8] = include_bytes!("../../assets/fonts/GeistMono-Va
 
 /// The one cosmic-text `FontSystem`, shared across the main and render worlds
 /// (architecture § 1.1). `FontSystem` is verified `Send + Sync` in 0.19, so
-/// `Arc<Mutex<_>>` is sound — no `NonSend` pinning. Exactly three sites may
-/// lock it (architecture § 1.2): the Taffy measure closure (T3), `TextCommit`
-/// shaping (T3), and the glyph producer's atlas-miss closure (T4). Reviewers
-/// reject a fourth.
+/// `Arc<Mutex<_>>` is sound — no `NonSend` pinning. It is locked by many callers
+/// across the text stack (measure/shaping, `TextCommit`, the editor reshape, IME,
+/// pointer hit-testing, the glyph atlas-miss raster, a11y measurement, and font-db
+/// rebuild/scan). All are sound under the multithreaded executor: a single
+/// non-reentrant `std::sync::Mutex`, acquired exactly once per caller (no nested
+/// `lock()`), so there is no lock-ordering or deadlock surface, and shaping stays
+/// deterministic and order-independent across threads. (The earlier "exactly three
+/// sites" note was stale — count and characterization verified by the 2026-06-30
+/// MT-safety audit.)
 #[derive(Resource, Clone)]
 pub struct SharedFontSystem(pub Arc<Mutex<FontSystem>>);
 

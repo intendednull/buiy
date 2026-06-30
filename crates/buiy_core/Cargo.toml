@@ -102,6 +102,16 @@ default_font = []
 # stays lean. Exercised with `cargo test -p buiy_core --features clipboard-image`
 # — the default `cargo test --workspace` gate runs with this OFF.
 clipboard-image = ["arboard/image-data"]
+# MT-safety (2026-06-30): opt-in passthrough to Bevy's multithreaded ECS executor.
+# OFF by default — Buiy runs single-threaded in its OWN builds (wasm is hard
+# single-threaded; the perf/determinism gates assume single-thread; the serial
+# NonSend-pinned hot path gains nothing from threads). But downstream apps already
+# enable `multi_threaded` transitively via stock-bevy feature unification, so Buiy
+# must be CORRECT under it. This feature lets the CI lane (and consumers) build and
+# test Buiy under the MT executor explicitly; enabling it on buiy_core unifies
+# `bevy/multi_threaded` across the whole workspace build. See
+# docs/specs/2026-06-30-mt-safety-design.md (D1).
+multi_threaded = ["bevy/multi_threaded"]
 
 [dev-dependencies]
 naga = "29"
