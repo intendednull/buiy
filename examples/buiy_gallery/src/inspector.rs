@@ -716,13 +716,25 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
             ]
         }
         Screen::Menu => {
+            let open = menu_open(world);
             let last = world
                 .get_resource::<MenuActivations>()
                 .and_then(|m| m.0.last().cloned());
             vec![
-                // The menu's open/closed state is owned by the live `Popover`
-                // lifecycle (a11y-driven); at rest the inspector reports closed.
-                ("open", LiveCell::new("false", "color.text.dim")),
+                // The menu's open/closed state is owned by the machine-tier `MenuModel`
+                // (the W6 MVU migration); the inspector REFLECTS its live `open` field —
+                // accent while open, dim while closed (spec §14, the desync fix).
+                (
+                    "open",
+                    LiveCell::new(
+                        if open { "true" } else { "false" },
+                        if open {
+                            "color.accent"
+                        } else {
+                            "color.text.dim"
+                        },
+                    ),
+                ),
                 ("items", LiveCell::new("5", "color.text.secondary")),
                 match last {
                     Some(action) => ("last action", LiveCell::new(action, "color.accent")),
@@ -840,6 +852,17 @@ fn scroll_offset_y(world: &mut World) -> f32 {
 fn selected_scroll_index(world: &mut World) -> Option<usize> {
     let mut q = world.query_filtered::<&ScrollNode, With<SelectedRow>>();
     q.iter(world).next().map(|n| n.index)
+}
+
+/// Whether the overlay-menu screen's [`Menu`](buiy_widgets::Menu) is currently open —
+/// read LIVE from its `MenuModel.open` (the machine-tier single source of truth the W6
+/// MVU migration moved the open state into). Replaces the pre-MVU hardcoded `"false"`
+/// (a headless-invisible desync, spec §14): the inspector must REFLECT state, never
+/// duplicate or guess it. `false` when no menu is mounted (a partial harness).
+fn menu_open(world: &mut World) -> bool {
+    use buiy_widgets::menu::MenuModel;
+    let mut q = world.query::<&MenuModel>();
+    q.iter(world).next().map(|m| m.open).unwrap_or(false)
 }
 
 /// Whether the showcase switch with accessible name `label` is on

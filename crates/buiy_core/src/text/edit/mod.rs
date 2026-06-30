@@ -19,6 +19,7 @@ pub mod keymap;
 mod lifecycle;
 mod placeholder;
 mod pointer;
+mod record;
 mod scroll;
 mod selection;
 mod state;
@@ -47,6 +48,9 @@ pub use lifecycle::focus_lifecycle;
 pub use placeholder::{PlaceholderActive, PlaceholderBuffer, sync_placeholder};
 pub use pointer::{
     ClickTracker, PointerGesture, editor_pointer_drag, editor_pointer_press, pointer_to_cursor,
+};
+pub use record::{
+    EditLog, EditLogEntry, LayoutCursorMirror, MotionMirror, RecordedEdit, RecordedPreeditCursor,
 };
 pub use scroll::{auto_scroll_caret, clamp_into_view};
 pub use selection::{SelectionRange, TextSelection};

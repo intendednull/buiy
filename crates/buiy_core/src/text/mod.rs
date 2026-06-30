@@ -55,8 +55,9 @@ pub use direction::prepend_strong_marks;
 pub use edit::ArboardClipboard;
 pub use edit::{
     CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled, EditCommand,
-    EditContext, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap, MemClipboard,
-    Placeholder, PointerGesture, ReadOnly, SelectionChanged, SelectionRange, SingleLine,
+    EditContext, EditLog, EditLogEntry, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
+    LayoutCursorMirror, MemClipboard, MotionMirror, Placeholder, PointerGesture, ReadOnly,
+    RecordedEdit, RecordedPreeditCursor, SelectionChanged, SelectionRange, SingleLine,
     TextBufferAccess, TextChanged, TextEditState, TextSelection, UndoStack, UndoUnit,
     apply_keyboard_edits, editor_pointer_drag, editor_pointer_press, pointer_to_cursor,
     write_caret_and_selection, write_ime_window,
@@ -313,6 +314,22 @@ impl Plugin for BuiyTextPlugin {
             crate::text::edit::MemClipboard::default(),
         )));
         app.add_message::<crate::text::edit::TextChanged>();
+        // Editor command-sourcing (spec §6): the recordable
+        // editor command log + its `Reflect` mirror types (so an exported log
+        // round-trips cross-process). `EditLog` defaults to `RecordMode::Off`,
+        // so the record tap in `apply_keyboard_edits`/`apply_ime` pays zero
+        // until a session turns recording on.
+        app.init_resource::<crate::text::edit::EditLog>();
+        // The ONE shared record switch + global sequence the editor taps stamp
+        // their `seq` from (the same one the MVU drain uses; spec §7.2). `init_resource`
+        // is idempotent, so the text stack alone provides it, and composing with
+        // `MvuCorePlugin` (which also inits it) is a no-op — either plugin can stand
+        // up the switch.
+        app.init_resource::<crate::mvu::RecordSession>();
+        app.register_type::<crate::text::edit::RecordedEdit>()
+            .register_type::<crate::text::edit::MotionMirror>()
+            .register_type::<crate::text::edit::LayoutCursorMirror>()
+            .register_type::<crate::text::edit::RecordedPreeditCursor>();
         // E6 (editing-and-ime § 11): the host-facing single-line submit Message.
         app.add_message::<crate::text::edit::EditSubmitted>();
         // E4 (editing-and-ime § 8, 11): the undo/redo transition Messages.

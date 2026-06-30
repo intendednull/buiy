@@ -15,8 +15,16 @@ pub mod components;
 pub mod focus;
 pub mod interaction;
 pub mod layout;
+/// MVU (Model-View-Update) substrate (`docs/specs/2026-06-29-mvu-as-core-design.md`).
+/// Opt-in via [`mvu::MvuCorePlugin`] (NOT composed into `CorePlugin`). See the module header.
+pub mod mvu;
 pub mod picking;
 pub mod render;
+/// Whole-UI record/replay (spec §7). Merges the
+/// widget-fold log ([`mvu::MsgLog`]) + the editor-command log
+/// ([`text::edit::EditLog`]) under one global sequence and replays a recorded session
+/// byte-identically into a fresh app. See the module header.
+pub mod replay;
 pub mod scroll;
 pub mod text;
 pub mod theme;
@@ -48,6 +56,10 @@ pub use layout::{
     TransformMatrix, TransformOrigin, TransformStyle, Translate, TryCondition, UiTransform,
     UnicodeBidi, WillChange, WillChangeProperty, WritingMode, WritingModeKind, WritingModeResolved,
 };
+// MVU substrate. Opt-in via `MvuCorePlugin`; the full surface
+// (`Envelope`, `MsgLog`, `RecordMode`, `LogicalId`, `enqueue`, `PureEnv`, …) lives
+// under `buiy_core::mvu`.
+pub use mvu::{Cmd, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet, MvuWorkCounters};
 pub use picking::{
     BuiyPickingBackendPlugin, MultiClick, PickingPlugin, global_paint_order, hit_test,
 };

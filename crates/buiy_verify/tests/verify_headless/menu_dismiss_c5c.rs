@@ -2,8 +2,9 @@
 //! it), proven headless on the C7 `PointerHarness` (scroll-overlay-modal.md §B.3 +
 //! §B.5). The menu IS a `Popover`, so it inherits the `auto` `LightDismiss` policy;
 //! this confirms the dismiss channel still works for a *menu* and keeps the
-//! controlling button's `A11yExpanded` (`aria-expanded`) in lock-step (the
-//! `sync_menu_dismissed` reconciliation).
+//! controlling button's `A11yExpanded` (`aria-expanded`) in lock-step (the dismiss
+//! enqueues `MenuMsg::Close`; `menu_reducer` folds it and `bind_menu_model` projects
+//! the collapse — replacing the old `sync_menu_dismissed` reconciliation).
 //!
 //! Gates exercised:
 //!  - **Open menu is a top-layer overlay** — opening the menu (clicking the
@@ -49,7 +50,8 @@ fn spawn_open_menu(h: &mut PointerHarness) -> (Entity, Entity, Vec<Entity>) {
     }
     let menu = menu_of(h, button);
 
-    // Open the menu (OnPress → advance_expanded → sync_menu_open).
+    // Open the menu (OnPress → route_menu_press enqueues Toggle → menu_reducer folds
+    // Toggle→Open → bind_menu_model projects visibility + A11yExpanded).
     h.world_mut()
         .write_message(buiy_core::interaction::OnPress(button));
     // Settle: open (visible) → position_popover → anchor_resolution → bridge →
@@ -134,7 +136,8 @@ fn press_outside_an_open_menu_dismisses_it_and_collapses_the_button() {
     h.move_to(Vec2::new(700.0, 500.0));
     h.press(PointerButton::Primary);
     h.release(PointerButton::Primary);
-    // Settle the dismiss → sync_menu_dismissed reconciliation.
+    // Settle the dismiss → menu_dismiss_hook enqueues Close → menu_reducer folds it →
+    // bind_menu_model projects the collapse.
     for _ in 0..2 {
         h.update();
     }

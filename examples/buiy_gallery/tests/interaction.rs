@@ -62,6 +62,7 @@ use buiy_gallery::{
     ShowcasePlugin, ShowcasePreview, ShowcaseStepper, TodoMvcPlugin, TodoRow,
 };
 use buiy_widgets::dialog::DialogClose;
+use buiy_widgets::menu::MenuModel;
 use buiy_widgets::{Disclosure, Menu, MenuButton, Slider, Switch};
 
 // ===========================================================================
@@ -579,7 +580,8 @@ fn menu_button_click_opens_then_keyboard_activates_an_item() {
         "the menu button starts collapsed",
     );
 
-    // Click the ⋮ button → A11yExpanded(true) → sync_menu_open shows the dropdown.
+    // Click the ⋮ button → route_menu_press enqueues Toggle → menu_reducer folds Toggle→Open →
+    // bind_menu_model projects A11yExpanded(true) + shows the dropdown.
     g.click(button);
     g.settle(2);
     assert_eq!(
@@ -632,7 +634,7 @@ fn menu_item_click_activates_that_item_and_closes() {
     let button = single::<MenuButton>(g.world_app());
     let menu = single::<Menu>(g.world_app());
 
-    // Open the dropdown (button click → A11yExpanded true → sync_menu_open shows it).
+    // Open the dropdown (button click → the menu funnel folds Open → bind_menu_model shows it).
     g.click(button);
     g.settle(2);
     assert_eq!(
@@ -712,6 +714,152 @@ fn menu_outside_click_light_dismisses_the_open_menu() {
         Some(false),
         "an outside click light-dismisses the menu (A11yExpanded back to false)",
     );
+}
+
+/// **Same-frame light-dismiss (spec §4.4 — the observer-command-flush timing edge).**
+/// An outside press must close the open menu in the SAME `app.update()` the press is
+/// processed — model AND the projected a11y/visibility, not one frame late. This pins
+/// the §4.3 edge the prototype never exercised: the `light_dismiss_on_press` observer
+/// fires during `BuiySet::Picking` and enqueues `MenuMsg::Close` via a deferred
+/// `commands.queue` step (the model-agnostic `DismissRegistry` hook); the pinned
+/// `ApplyDeferred` in the early `MenuSet` window must flush that enqueue into the inbox
+/// before the early `MenuSet::Drain` reads it, so the fold + the early `MenuSet::Bind`
+/// projection (`MenuModel.open → CssVisibility + button A11yExpanded`) all land before
+/// `build_tree` runs `A11yUpdate` — within this one update. A one-frame regression would
+/// leave the menu still open after this single update.
+#[test]
+fn menu_light_dismiss_closes_in_the_same_update_as_the_outside_press() {
+    let mut g = Gallery::new();
+    g.goto(Screen::Menu);
+
+    let button = single::<MenuButton>(g.world_app());
+    let menu = single::<Menu>(g.world_app());
+    g.click(button);
+    g.settle(2);
+    // Precondition: the menu is open — model + projection agree.
+    assert_eq!(
+        g.world_app().world().get::<MenuModel>(menu).map(|m| m.open),
+        Some(true),
+        "menu open (MenuModel) before the outside press",
+    );
+    assert_eq!(
+        g.world_app().world().get::<CssVisibility>(menu).copied(),
+        Some(CssVisibility::Visible),
+        "menu visible before the outside press",
+    );
+
+    // Position the pointer on the backdrop (a Move builds the hovermap; it does NOT
+    // fire the press-only light-dismiss observer, so the menu is still open here).
+    let outside = Vec2::new(640.0, 700.0);
+    g.pointer_input(outside, PointerAction::Move { delta: Vec2::ZERO });
+    g.settle(1);
+    assert_eq!(
+        g.world_app().world().get::<MenuModel>(menu).map(|m| m.open),
+        Some(true),
+        "a Move alone does not dismiss — the menu is still open",
+    );
+
+    // THE SAME-FRAME ASSERTION: inject the outside Press, then exactly ONE update.
+    // The dismiss observer → enqueue → early drain → early bind must all complete in
+    // this single update.
+    g.pointer_input(outside, PointerAction::Press(PointerButton::Primary));
+    g.settle(1);
+
+    assert_eq!(
+        g.world_app().world().get::<MenuModel>(menu).map(|m| m.open),
+        Some(false),
+        "the outside press closes MenuModel.open in the SAME update (the early drain folds it)",
+    );
+    assert_eq!(
+        g.world_app().world().get::<CssVisibility>(menu).copied(),
+        Some(CssVisibility::Hidden),
+        "the projected CssVisibility is Hidden in the same update (the early bind ran)",
+    );
+    assert_eq!(
+        g.world_app()
+            .world()
+            .get::<A11yExpanded>(button)
+            .map(|e| e.0),
+        Some(false),
+        "the projected aria-expanded (button A11yExpanded) is false in the same update — \
+         fresh when build_tree runs A11yUpdate, no one-frame regression",
+    );
+}
+
+/// **Inspector desync fix (spec §14 — a headless-invisible bug).** The Menu screen's
+/// inspector "open" readout hardcoded `"false"` (it never reflected the live menu).
+/// Driving the REAL menu open through picking must move the inspector cell to `"true"`,
+/// and closing it must move it back — the inspector REFLECTS `MenuModel.open`, it does
+/// not duplicate or guess it.
+#[test]
+fn inspector_open_readout_follows_the_live_menu_state() {
+    let mut g = Gallery::new();
+    g.goto(Screen::Menu);
+
+    let button = single::<MenuButton>(g.world_app());
+    let menu = single::<Menu>(g.world_app());
+
+    // At rest the menu is closed and the inspector reads it closed.
+    assert_eq!(
+        g.world_app().world().get::<MenuModel>(menu).map(|m| m.open),
+        Some(false),
+        "menu closed at rest",
+    );
+    assert_eq!(
+        inspector_cell(&mut g, "open"),
+        "false",
+        "the inspector open readout reads false while the menu is closed",
+    );
+
+    // Open the menu by clicking the ⋮ button (the real picking → MenuModel funnel).
+    g.click(button);
+    g.settle(2);
+    assert_eq!(
+        g.world_app().world().get::<MenuModel>(menu).map(|m| m.open),
+        Some(true),
+        "clicking the button opens the menu (live MenuModel)",
+    );
+    assert_eq!(
+        inspector_cell(&mut g, "open"),
+        "true",
+        "the inspector open readout FOLLOWS the live menu open (the §14 desync fix)",
+    );
+
+    // Close it again (Escape) — the readout follows back to false.
+    g.press_key(KeyCode::Escape, Key::Escape);
+    g.settle(2);
+    assert_eq!(
+        g.world_app().world().get::<MenuModel>(menu).map(|m| m.open),
+        Some(false),
+        "Escape closes the menu",
+    );
+    assert_eq!(
+        inspector_cell(&mut g, "open"),
+        "false",
+        "the inspector open readout follows the menu back to closed",
+    );
+}
+
+/// The text of the active screen's inspector live-state cell tagged with `key` (the
+/// `LiveStateValue(key)` leaf the per-frame `update_inspector_live_state` rewrites).
+/// Panics if no such cell is mounted (only the active screen's rows exist).
+fn inspector_cell(g: &mut Gallery, key: &str) -> String {
+    use buiy_gallery::inspector::LiveStateValue;
+    let leaf = {
+        let mut q = g
+            .world_app()
+            .world_mut()
+            .query::<(Entity, &LiveStateValue)>();
+        q.iter(g.world_app().world())
+            .find(|(_, k)| k.0 == key)
+            .map(|(e, _)| e)
+            .unwrap_or_else(|| panic!("no inspector live-state cell for key {key:?}"))
+    };
+    g.world_app()
+        .world()
+        .get::<Text>(leaf)
+        .map(|t| t.0.to_string())
+        .unwrap_or_default()
 }
 
 // ===========================================================================

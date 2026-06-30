@@ -466,9 +466,11 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::{ButtonInput, ButtonState};
 
 use super::keymap::{KeyKind, Keymap, Modifiers};
+use super::record::{EditLog, RecordedEdit};
 use super::state::{Disabled, ReadOnly, SingleLine};
 use crate::FocusedEntity;
 use crate::layout::LayoutTree;
+use crate::mvu::{LogicalId, RecordSession};
 use crate::text::SharedFontSystem;
 
 use super::clipboard::Clipboard;
@@ -569,6 +571,17 @@ pub fn apply_keyboard_edits(
     mut clipboard: Option<ResMut<Clipboard>>,
     mut tree: Option<NonSendMut<LayoutTree>>,
     mut editors: Query<(&mut TextEditState, Has<SingleLine>, Has<ReadOnly>), Without<Disabled>>,
+    // Editor command-sourcing (spec §6): the editor record log + the stable
+    // identity it keys on. `Option<ResMut<_>>`: a bare harness without the
+    // `EditLog` (or no `LogicalId` on the editor) runs the system unchanged — the
+    // record tap is inert when the log is absent or `RecordMode::Off`.
+    mut edit_log: Option<ResMut<EditLog>>,
+    // The shared record switch + global sequence (one for the whole UI; spec §7.2). The
+    // editor tap and the widget-fold drain both stamp `seq` from here, so the two
+    // logs are totally ordered for interleaved whole-UI replay. `Option<ResMut<_>>`:
+    // a bare harness without the MVU/text record session runs the system unchanged.
+    mut record_session: Option<ResMut<RecordSession>>,
+    ids: Query<&LogicalId>,
     mut changed: MessageWriter<TextChanged>,
     mut undone: MessageWriter<super::undo::EditUndone>,
     mut redone: MessageWriter<super::undo::EditRedone>,
@@ -663,6 +676,22 @@ pub fn apply_keyboard_edits(
         let was_redo = command == EditCommand::Redo;
         let group_before_undo = state.undo_top_group();
         let group_before_redo = state.redo_top_group();
+        // Record tap (command-sourcing, spec §6): append the RESOLVED command to the
+        // editor record log BEFORE applying it (the recorded input stream that
+        // replay re-folds). For `Paste`, capture the resolved clipboard text now
+        // — the impure read is hoisted into the recorded form so replay needs no
+        // OS clipboard. This tap only READS state + appends to a resource; it
+        // mutates no buffer, so it is NOT a post-`TextCommit` buffer mutator and
+        // leaves the `reshape_edited_editors` ordering contract untouched. Gated
+        // by `RecordMode` (default Off ⇒ zero work).
+        if let (Some(log), Some(session)) = (edit_log.as_deref_mut(), record_session.as_deref_mut())
+            && let Some(seq) = session.tick_seq()
+        {
+            let lid = ids.get(entity).copied().unwrap_or(LogicalId::UNRESOLVED);
+            let recorded =
+                RecordedEdit::for_command(&command, || clip.get_text().unwrap_or_default());
+            log.record(seq, lid, recorded, now);
+        }
         let mut ctx = EditContext {
             single_line,
             read_only,

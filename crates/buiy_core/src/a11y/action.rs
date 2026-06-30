@@ -35,6 +35,67 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 
+/// A type-erased **inline-fold hook** for an absolute AT set-verb (spec §5.4).
+/// Returns `Some(Ok)` if it HANDLED `(entity, action)`, `Some(Err)` on a typed
+/// failure, `None` if it does NOT apply (fall through to the next hook / the
+/// default direct write). It receives `&mut World` so a machine-tier hook can fold
+/// its `Model` **inline + synchronously** (via
+/// [`fold_one_inline`](crate::mvu::fold_one_inline)) — including the **cross-entity
+/// hop** from the dispatched entity (e.g. a `MenuButton`) to the entity owning the
+/// model (the `Menu` carrying `MenuModel`).
+pub type InlineActionHook = Box<
+    dyn Fn(&mut World, Entity, Action, Option<&ActionData>) -> Option<Result<(), ActionError>>
+        + Send
+        + Sync,
+>;
+
+/// The write-side **machine-tier unification mechanism** for inbound AT set-verbs
+/// (spec §5.4, H4 signal-2). A resource of `buiy_widgets`-populated [`InlineActionHook`]s
+/// the generic `Expand`/`Collapse` honor consults **before** its default direct
+/// `A11yExpanded` write.
+///
+/// **Why a registry (crate direction).** Core's generic Expand/Collapse honor writes
+/// `A11yExpanded` directly; after a machine migration the real state is a `Model`
+/// (`MenuModel.open`) that a bind PROJECTS onto `A11yExpanded`, so a direct write is
+/// immediately re-clobbered by the bind from the unchanged model → the W5 "advertised
+/// but inert" gap. Core cannot name a `buiy_widgets` reducer (wrong crate direction), so
+/// `buiy_widgets` registers a hook here once at plugin build; core merely **consults**
+/// it. Mirrors [`ReplayRegistry`](crate::mvu::ReplayRegistry) — entity-free, never
+/// recorded, replay-safe infrastructure (NOT a per-entity boxed-closure component, which
+/// would be non-`Reflect` and foul seed-scene serialization, spec §9/§17).
+#[derive(Resource, Default)]
+pub struct InlineActionRegistry {
+    hooks: Vec<InlineActionHook>,
+}
+
+impl InlineActionRegistry {
+    /// Register an inline-fold hook. Called once per machine by `buiy_widgets` at plugin
+    /// build (the menu hook, then `Dialog`/`Popover` as they migrate).
+    pub fn register(&mut self, hook: InlineActionHook) {
+        self.hooks.push(hook);
+    }
+
+    /// Consult the hooks in registration order; the first that returns `Some(result)`
+    /// HANDLES the `(entity, action)` and that result is used. `None` ⇒ no hook applies
+    /// (the caller falls through to the default direct write). Takes `&mut World` (the
+    /// hooks fold inline) — call via [`World::resource_scope`] so the registry is lifted
+    /// out of the world it mutates.
+    pub fn consult(
+        &self,
+        world: &mut World,
+        entity: Entity,
+        action: Action,
+        data: Option<&ActionData>,
+    ) -> Option<Result<(), ActionError>> {
+        for hook in &self.hooks {
+            if let Some(result) = hook(world, entity, action, data) {
+                return Some(result);
+            }
+        }
+        None
+    }
+}
+
 /// Whether `action` *mutates* the target's value or text — the verbs the
 /// read-only live filter (action-router.md §3) rejects on an [`A11yReadOnly`]
 /// instance. Selecting/copying/focusing is non-mutating and stays allowed; only
@@ -257,13 +318,32 @@ pub fn dispatch_action_request(world: &mut World, req: &ActionRequest) -> Result
         // one) is an **idempotent no-op success**: the AT/agent set-verb is
         // absolute, not a toggle.
         Action::Expand | Action::Collapse => {
+            // CONSULT THE INLINE REGISTRY FIRST (spec §5.4). The §3 disabled/read-only
+            // gate already ran ABOVE (gate-before-fold, spec §5.6), so only an honored
+            // verb reaches here. A machine whose real open-state lives in a `Model` (e.g.
+            // a `MenuButton` → `MenuModel`) registers a hook that does the cross-entity hop
+            // + folds the absolute verb INLINE (live-component-synchronous) and returns
+            // `Some(Ok)`; a plain disclosure (no hook) falls through to the default direct
+            // `A11yExpanded` write below. Lifted via `resource_scope` so the hooks get
+            // `&mut World`. Guarded on the resource's presence (a partial harness without
+            // the registry simply uses the default write).
+            if world.contains_resource::<InlineActionRegistry>()
+                && let Some(result) =
+                    world.resource_scope(|world, registry: Mut<InlineActionRegistry>| {
+                        registry.consult(world, entity, action, req.data.as_ref())
+                    })
+            {
+                return result;
+            }
+
+            // Default direct write (the generic state-keyed honor, unchanged): set/clear
+            // the node's `A11yExpanded` bool directly. Idempotent — only write through
+            // `DerefMut` on a real transition so the C4 caret/panel visual repaints exactly
+            // once per actual change.
             let want = action == Action::Expand;
             let Some(mut expanded) = world.get_mut::<A11yExpanded>(entity) else {
                 return Err(ActionError::Unsupported { target, action });
             };
-            // Avoid a spurious `Changed<A11yExpanded>` tick when already at `want`
-            // (idempotency): only write through `DerefMut` on a real transition, so
-            // the C4 caret/panel visual repaints exactly once per actual change.
             if expanded.0 != want {
                 expanded.0 = want;
             }

@@ -22,10 +22,12 @@ use cosmic_text::{Action, Attrs, AttrsList, BufferLine, Cursor, Edit, FontSystem
 
 use super::caret::caret_rect_for;
 use super::input::TextChanged;
+use super::record::{EditLog, RecordedEdit, RecordedPreeditCursor};
 use super::state::{ComposeDelete, Disabled, ReadOnly, TextEditState};
 use super::undo::{GroupKind, UndoUnit};
 use crate::FocusedEntity;
 use crate::layout::LayoutTree;
+use crate::mvu::{LogicalId, RecordSession};
 use crate::text::{ComputedTextLayout, SharedFontSystem};
 
 /// Sentinel `Attrs::metadata` marking the spliced preedit span in the
@@ -433,6 +435,16 @@ pub fn apply_ime(
     fonts: Res<SharedFontSystem>,
     mut tree: Option<NonSendMut<LayoutTree>>,
     mut editors: Query<(&mut TextEditState, Has<ReadOnly>), Without<Disabled>>,
+    // Editor command-sourcing (spec §6): the editor record log keyed by the
+    // editor's stable identity. The IME sub-events carry their own resolved
+    // `value`/`cursor`, so recording them is self-contained (no OS dependency on
+    // replay). `Option<ResMut<_>>` + `RecordMode` gate ⇒ inert when absent/Off.
+    mut edit_log: Option<ResMut<EditLog>>,
+    // The shared record switch + global sequence (see `apply_keyboard_edits`).
+    // The IME sub-events and the keyboard verbs draw `seq` from the SAME session, so
+    // a whole-UI replay re-folds them in their true interleaved order.
+    mut record_session: Option<ResMut<RecordSession>>,
+    ids: Query<&LogicalId>,
     mut start: MessageWriter<CompositionStart>,
     mut update: MessageWriter<CompositionUpdate>,
     mut end: MessageWriter<CompositionEnd>,
@@ -466,6 +478,13 @@ pub fn apply_ime(
     let now = time.elapsed();
     let mut span_changed = false;
     let mut value_changed = false;
+    // Record tap (command-sourcing, spec §6): record each IME sub-event the editor
+    // ACTUALLY acts on (at the same site as the mutation, so the recorded stream
+    // == the applied stream), gated by `RecordMode`. The recording only READS
+    // state + appends to a resource — it mutates no buffer, so it adds no new
+    // post-`TextCommit` mutator and leaves the `reshape_edited_editors` contract
+    // untouched.
+    let lid = ids.get(entity).copied().unwrap_or(LogicalId::UNRESOLVED);
 
     let mut font_system = fonts.lock();
     for ev in ime_events {
@@ -474,6 +493,12 @@ pub fn apply_ime(
                 if value.is_empty() {
                     // Cancel: remove the span (invariant d). End if one was active.
                     if state.has_preedit() {
+                        if let (Some(log), Some(session)) =
+                            (edit_log.as_deref_mut(), record_session.as_deref_mut())
+                            && let Some(seq) = session.tick_seq()
+                        {
+                            log.record(seq, lid, RecordedEdit::ImeCancel, now);
+                        }
                         // A compose-over-selection cancel reverse-applies the
                         // stashed delete (value returns to original → TextChanged).
                         value_changed |= state.remove_preedit(&mut font_system);
@@ -482,6 +507,21 @@ pub fn apply_ime(
                     }
                 } else {
                     let was_composing = state.has_preedit();
+                    if let (Some(log), Some(session)) =
+                        (edit_log.as_deref_mut(), record_session.as_deref_mut())
+                        && let Some(seq) = session.tick_seq()
+                    {
+                        log.record(
+                            seq,
+                            lid,
+                            RecordedEdit::ImePreedit {
+                                value: value.clone(),
+                                cursor: cursor
+                                    .map(|(begin, end)| RecordedPreeditCursor { begin, end }),
+                            },
+                            now,
+                        );
+                    }
                     // The first splice over a selection deletes it (a genuine
                     // value change → TextChanged); the unselected path returns
                     // false (no TextChanged on a plain preedit — § 11).
@@ -495,6 +535,12 @@ pub fn apply_ime(
                 }
             }
             Ime::Commit { value, .. } => {
+                if let (Some(log), Some(session)) =
+                    (edit_log.as_deref_mut(), record_session.as_deref_mut())
+                    && let Some(seq) = session.tick_seq()
+                {
+                    log.record(seq, lid, RecordedEdit::ImeCommit(value.clone()), now);
+                }
                 state.commit_preedit(&mut font_system, &value, now);
                 end.write(CompositionEnd(entity, value));
                 span_changed = true;
@@ -502,6 +548,12 @@ pub fn apply_ime(
             }
             Ime::Disabled { .. } => {
                 if state.has_preedit() {
+                    if let (Some(log), Some(session)) =
+                        (edit_log.as_deref_mut(), record_session.as_deref_mut())
+                        && let Some(seq) = session.tick_seq()
+                    {
+                        log.record(seq, lid, RecordedEdit::ImeCancel, now);
+                    }
                     // Disabled mid-composition is a cancel: reverse-apply any
                     // compose-over-selection delete (value returns → TextChanged).
                     value_changed |= state.remove_preedit(&mut font_system);

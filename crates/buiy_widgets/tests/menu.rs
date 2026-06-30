@@ -31,9 +31,11 @@ use buiy_widgets::menu::{Menu, MenuButton, MenuItem};
 
 /// A headless app with the a11y + focus + widget surface. `A11yPlugin` runs
 /// `build_tree` (so the in-process snapshot reflects the menu), `FocusPlugin`
-/// owns `FocusedEntity`, and `WidgetsPlugin` carries the menu systems
-/// (`sync_menu_open` / `menu_keyboard_nav` / `wire_menu_button`). `KeyboardInput`
-/// is registered manually (no `InputPlugin` under `MinimalPlugins`).
+/// owns `FocusedEntity`, and `WidgetsPlugin` carries the menu machine (the
+/// `MenuModel` funnel: `route_menu_press` / `menu_reducer` / `bind_menu_model` /
+/// `menu_keyboard_nav` / `wire_menu_button`, all pinned in the early `MenuSet`
+/// window `.after(Picking).before(A11yUpdate)`). `KeyboardInput` is registered
+/// manually (no `InputPlugin` under `MinimalPlugins`).
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -209,7 +211,8 @@ fn gate3_a11y_tree_menu_role_items_and_active_descendant() {
     let mut app = app();
     let (button, menu, items) = spawn_menu_button(&mut app);
 
-    // Open the menu (click the button → OnPress → advance_expanded → sync_menu_open).
+    // Open the menu (click the button → OnPress → route_menu_press enqueues Toggle →
+    // menu_reducer folds Toggle→Open → bind_menu_model projects visibility + A11yExpanded).
     press(&mut app, button);
     assert!(
         expanded(&app, button),
@@ -397,13 +400,86 @@ fn enter_activates_the_active_item_and_closes() {
         "Enter writes OnPress for the active item (items[1]); drained = {drained:?}"
     );
 
-    // The menu closed (the button's A11yExpanded flipped to false → sync_menu_open).
+    // The menu closed (menu_reducer folded Close → bind_menu_model flipped the button's
+    // A11yExpanded to false + hid the menu).
     assert!(!expanded(&app, button), "Enter closes the menu (collapsed)");
     assert!(!is_visible(&app, menu), "menu hidden after activate");
     assert_eq!(
         app.world().resource::<FocusedEntity>().0,
         Some(button),
         "focus restored to the button after activate"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// THE D4 PROOF (spec §4.4) — same-frame `aria-expanded` on the keyboard/pointer
+// activation path. The whole point of W6a: the machine pins its drain AND its
+// projection bind (`bind_menu_model`) in the early `MenuSet` window
+// (`.after(Picking).before(A11yUpdate)`), so a synthetic press opens the menu AND
+// refreshes the button's projected `A11yExpanded` BEFORE `build_tree` runs — all in
+// ONE `app.update()`. Asserted through the PRODUCTION `build_tree` → in-process
+// snapshot (what an AT actually reads), NOT the raw component.
+//
+// With the prototype's LATE bind (`MvuSet::Bind`, `.after(A11yUpdate)`), the bind
+// would run AFTER `build_tree`, so this single-update tree read would show the STALE
+// `expanded = false` — a one-frame `aria-expanded` regression (the base writes
+// `A11yExpanded` at `BuiySet::Input`, same-frame-correct). This test would FAIL under
+// that wiring; it passes only because the bind is pinned early.
+// ---------------------------------------------------------------------------
+
+/// Read the button node's projected `aria-expanded` out of the freshly-built a11y
+/// tree (the in-process snapshot — the same cached `build_tree` views an AT consumes).
+fn tree_expanded(app: &mut App, button: Entity) -> Option<bool> {
+    let tree = snapshot(app.world_mut(), TreeView::default());
+    tree.node(node_id_for(button))
+        .expect("the menu button emits an a11y node")
+        .state
+        .expanded
+}
+
+/// The D4-proof gate (spec §4.4): the early drain+bind window projects `aria-expanded`
+/// into the a11y tree the SAME update the press opens the menu.
+#[test]
+fn same_frame_aria_expanded_projection_on_press() {
+    let mut app = app();
+    let (button, menu, _items) = spawn_menu_button(&mut app);
+
+    // Focus the menu button, then drive a synthetic activation through the shared
+    // `OnPress` sink (the pointer / keyboard-Enter+Space / AT-`Click` convergence).
+    app.world_mut().resource_mut::<FocusedEntity>().0 = Some(button);
+    app.world_mut().write_message(OnPress(button));
+
+    // ONE update: route_menu_press (MenuSet::Enqueue) → drain folds Toggle→Open
+    // (MenuSet::Drain) → bind projects button.A11yExpanded = true (MenuSet::Bind) →
+    // build_tree (A11yUpdate) reads the fresh A11yExpanded — all this frame.
+    app.update();
+
+    assert_eq!(
+        tree_expanded(&mut app, button),
+        Some(true),
+        "D4: the a11y tree shows aria-expanded=true in the SAME update the press \
+         opened the menu (the early drain+bind window). A late bind would show \
+         stale `false` here."
+    );
+    assert!(
+        is_visible(&app, menu),
+        "the menu is visible same-frame (CssVisibility projected by the early bind)"
+    );
+
+    // Symmetric close: a second synthetic press (Toggle→Close) must collapse
+    // aria-expanded in the SAME update too.
+    app.world_mut().write_message(OnPress(button));
+    app.update();
+
+    assert_eq!(
+        tree_expanded(&mut app, button),
+        Some(false),
+        "D4 (symmetric): the a11y tree shows aria-expanded=false in the SAME update \
+         the second press closed the menu"
+    );
+    assert!(
+        !is_visible(&app, menu),
+        "the menu is hidden same-frame on close"
     );
 }
 

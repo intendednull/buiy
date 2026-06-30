@@ -658,8 +658,9 @@ pub fn menu() -> impl Scene {
         }
         Background { color: { bg.color } }
         Border { radius: { border.radius } }
-        // Starts closed; the menu button opens it via `A11yExpanded` →
-        // `sync_menu_open`. Inserted as a whole value (a fieldless enum variant).
+        // Starts closed; the menu funnel (`MenuModel` → `bind_menu_model`) projects
+        // `CssVisibility::Visible` when it opens. Inserted as a whole value (a fieldless
+        // enum variant).
         template_value(CssVisibility::Hidden)
     }
 }

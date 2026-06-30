@@ -96,8 +96,8 @@ pub mod inspector;
 
 use bevy::prelude::{
     App, Camera2d, Changed, ChildOf, Children, Commands, Component, DetectChanges, Entity, Has,
-    IntoScheduleConfigs, MessageReader, Name, On, Plugin, Quat, Query, Ref, Res, ResMut, Resource,
-    Update, With, Without, World, children,
+    IntoScheduleConfigs, MessageReader, Messages, Name, On, Plugin, Quat, Query, Ref, Res, ResMut,
+    Resource, Update, With, Without, World, children,
 };
 use buiy::prelude::*;
 use buiy_core::BuiySet;
@@ -108,6 +108,7 @@ use buiy_core::a11y::{
 };
 use buiy_core::focus::FocusedEntity;
 use buiy_core::interaction::OnPress;
+use buiy_core::mvu::{Envelope, ToggleLeafSet, ToggleMsg};
 use buiy_core::render::components::{
     BackdropFilter, BackgroundLayer, BackgroundLayers, BorderSide, BoxShadow, ColorStop,
     CssVisibility, FilterFn, Icon, LineStyle, LinearGradient, Opacity, Shadow, TextColor,
@@ -963,6 +964,12 @@ impl Plugin for TodoMvcPlugin {
         app.init_resource::<Filter>()
             .init_resource::<TodoIntents>()
             .add_observer(on_label_double_click)
+            // PHASE 1 — collect intents + apply them (spawn/despawn rows, clear the input
+            // editor on submit). Kept `.after(Input).before(A11yUpdate)`: the activation/submit
+            // Messages are emitted in `BuiySet::Input` (C8 §2.5(1)), and `apply_intents` mutates
+            // the input *editor* — which MUST settle before the layout `TextCommit` reshape, so
+            // this phase stays in the early window (moving it past the toggle drain would leave
+            // a just-cleared editor dirty-unshaped — the `commit.rs` coherence invariant).
             .add_systems(
                 Update,
                 (
@@ -970,20 +977,26 @@ impl Plugin for TodoMvcPlugin {
                     collect_button_press,
                     collect_edit_submit,
                     apply_intents,
-                    apply_filter,
-                    update_count,
-                    restyle_completed,
                 )
                     .chain()
-                    // `.after(Input)`: the activation/submit Messages are emitted
-                    // (and `advance_toggle_on_press` flips `A11yToggled`) in
-                    // `BuiySet::Input`, so the logic reads them the same frame
-                    // (C8 §2.5(1)). `.before(A11yUpdate)`: the count/filter
-                    // mutations to `A11yLabel`/`A11yHidden` must land BEFORE
-                    // `build_tree` (which runs in `A11yUpdate`) so the driver's
-                    // very-next snapshot reflects them — without this the tree is
-                    // one frame stale.
                     .after(BuiySet::Input)
+                    .before(BuiySet::A11yUpdate),
+            )
+            // PHASE 2 — recount from `A11yToggled` (count, filter, completed-restyle). With the
+            // MVU toggle-leaf migration a checkbox press no longer flips `A11yToggled` in
+            // `BuiySet::Input`; it ENQUEUES a `ToggleMsg` whose fold lands in the early
+            // `ToggleLeafSet::Drain` (`.after(Picking).before(A11yUpdate)`). So the recounting
+            // systems MUST run `.after(ToggleLeafSet::Drain)` (else "N items left" lags a frame)
+            // AND `.after(apply_intents)` (to see rows added/removed this frame), still
+            // `.before(A11yUpdate)` so the driver's very-next a11y snapshot reflects the new
+            // `A11yLabel`/`A11yHidden`. (None of these three touch the input editor, so running
+            // them late is coherence-safe.)
+            .add_systems(
+                Update,
+                (apply_filter, update_count, restyle_completed)
+                    .chain()
+                    .after(apply_intents)
+                    .after(ToggleLeafSet::Drain)
                     .before(BuiySet::A11yUpdate),
             );
     }
@@ -1157,6 +1170,10 @@ pub fn append_row(world: &mut World, label: &str, completed: bool) -> Entity {
         .id();
     world.entity_mut(list).add_child(row);
 
+    // SEED (authored initial state, NOT a runtime writer): a row spawned `completed`
+    // starts checked. This is a seed-scene initial condition set at spawn time, before
+    // the toggle leaf's drain ever runs for this entity, so it stays a direct write —
+    // the D3/D10 single-writer rule governs RUNTIME mutations of `A11yToggled`.
     if completed && let Some(mut t) = world.get_mut::<A11yToggled>(checkbox) {
         t.0 = Toggled::True;
     }
@@ -1253,6 +1270,11 @@ pub fn apply_intents(world: &mut World) {
     if let Some(text) = intents.add {
         append_row(world, &text, false);
         if let Some(field) = find_single::<AddField>(world) {
+            // W3 (MVU-as-core / H5): this `set_value` rides the a11y DRIVER text
+            // channel, NOT `apply_keyboard_edits`/`apply_ime`, so the W3 record tap
+            // does NOT capture it. It is seed-scene state — a derived consequence of
+            // the Add intent — reproduced when replay rebuilds the UI from the seed
+            // and RE-RUNS this app logic, never re-applied as a recorded EditCommand.
             let _ = set_value(world, node_id_for(field), "");
         }
     }
@@ -1303,14 +1325,19 @@ fn toggle_all_rows(world: &mut World) {
     let all_done = checkboxes
         .iter()
         .all(|&cb| world.get::<A11yToggled>(cb).map(|t| t.0) == Some(Toggled::True));
-    let next = if all_done {
-        Toggled::False
-    } else {
-        Toggled::True
-    };
-    for cb in checkboxes {
-        if let Some(mut t) = world.get_mut::<A11yToggled>(cb) {
-            t.0 = next;
+    // D10 single-writer reroute: `toggleAll` is a RUNTIME mutator of `A11yToggled`,
+    // so it must NOT write `t.0` directly (that races the toggle leaf's drain — the
+    // multi-writer flicker W2 cures). Enqueue an absolute `ToggleMsg::Set(on)` per row;
+    // the early `ToggleLeafSet::Drain` (the SOLE writer) folds it via `set_if_neq`. We
+    // write the `Envelope` inbox directly because this is an exclusive `&mut World`
+    // system (no `Commands`), mirroring the menu machine's world-level enqueue helper.
+    let on = !all_done;
+    if let Some(mut inbox) = world.get_resource_mut::<Messages<Envelope<A11yToggled>>>() {
+        for cb in checkboxes {
+            inbox.write(Envelope {
+                target: cb,
+                msg: ToggleMsg::Set(on),
+            });
         }
     }
 }
@@ -1329,6 +1356,11 @@ fn begin_one_edit(world: &mut World, label: Entity) {
         .id();
     world.entity_mut(editor).insert(EditingInPlace { row });
     world.entity_mut(row).add_child(editor);
+    // W3 (MVU-as-core / H5): the freshly-spawned in-place editor's authored INITIAL
+    // CONDITION (seeded with the row's existing text). Like the W2 toggle seeds, this
+    // `set_value` is a seed-scene write on the a11y driver channel — NOT captured by
+    // the W3 record tap (`apply_keyboard_edits`/`apply_ime`). Replay reproduces it by
+    // rebuilding the editor from this seed, never by re-applying a recorded EditCommand.
     let _ = set_value(world, node_id_for(editor), &text);
     world.resource_mut::<FocusedEntity>().0 = Some(editor);
 }
@@ -2533,8 +2565,9 @@ const MENU_DOTS_ICON: &str = "M12 6h.01M12 12h.01M12 18h.01";
 /// imperative idiom S1/S2 use. Authoring the markers directly (rather than the
 /// `menu_button`/`menu_item` scene-fns, whose baked-in centered-text children fight
 /// the icon-row layout — the § 4.1c suppression gotcha) keeps the full a11y
-/// machinery (`wire_menu_button` controls/anchor edges, `sync_menu_open` open/close,
-/// roving `menu_keyboard_nav`, the `auto` `LightDismiss` outside-click close) while
+/// machinery (`wire_menu_button` controls/anchor edges, the `MenuModel` funnel
+/// (`route_menu_press`/`menu_reducer`/`bind_menu_model`) for open/close, roving
+/// `menu_keyboard_nav`, the `auto` `LightDismiss` outside-click close) while
 /// the rows match the design pixel-for-pixel. Each item carries its [`MenuAction`]
 /// index so an activation logs to [`MenuActivations`] + updates the footer.
 pub fn spawn_overlay_menu(world: &mut World) -> Entity {
@@ -2797,9 +2830,9 @@ fn build_menu_header(world: &mut World) -> Entity {
 
     // Wire the button↔menu edges manually (the menu is a sibling, so the
     // `Added<Children>`-gated `wire_menu_button` would not find it): the button
-    // `controls` the menu (the a11y edge `sync_menu_open` reads to find the menu),
-    // and the menu's `Popover.anchor` points at the button (so `position_popover`
-    // places it below the ⋮).
+    // `controls` the menu (the edge `route_menu_press` and `bind_menu_model` follow
+    // between the button and its `MenuModel`-bearing menu), and the menu's
+    // `Popover.anchor` points at the button (so `position_popover` places it below the ⋮).
     world.entity_mut(menu_button).insert(A11yRelations {
         controls: vec![menu],
         ..Default::default()
@@ -2880,8 +2913,9 @@ fn build_menu_button(world: &mut World) -> (Entity, Entity) {
 ///
 /// The bare `Menu` marker carries the popover-positioning + roving-focus
 /// machinery via its `#[require]`; the explicit box/paint here override the
-/// require defaults to the design dropdown. Starts `CssVisibility::Hidden` (the
-/// button opens it via `A11yExpanded` → `sync_menu_open`).
+/// require defaults to the design dropdown. Starts `CssVisibility::Hidden` (a button
+/// press enqueues `MenuMsg` → `menu_reducer` flips `MenuModel.open` → `bind_menu_model`
+/// projects it onto `CssVisibility`).
 fn build_menu_dropdown(world: &mut World) -> Entity {
     let items: Vec<Entity> = MENU_ITEMS
         .iter()
@@ -3726,6 +3760,10 @@ fn build_modal_register_row(world: &mut World) -> Entity {
         ))
         .id();
     strip_switch_label(world, switch);
+    // SEED (authored initial state, NOT a runtime writer): the modal's "Register
+    // globally" switch defaults ON (the design's `mPublic:true`), set at spawn time
+    // before the toggle leaf's drain runs — a seed-scene initial condition, so it
+    // stays a direct write (D3/D10 govern RUNTIME writes only).
     if let Some(mut t) = world.get_mut::<A11yToggled>(switch) {
         t.0 = Toggled::True;
     }
@@ -4884,6 +4922,10 @@ fn build_showcase_switch(world: &mut World, name: &str, on: bool) -> Entity {
         ))
         .add_child(track)
         .id();
+    // SEED (authored initial state, NOT a runtime writer): a showcase switch authored
+    // `on` starts checked, set at spawn time before the toggle leaf's drain runs — a
+    // seed-scene initial condition, so it stays a direct write (D3/D10 govern RUNTIME
+    // writes only).
     if on && let Some(mut t) = world.get_mut::<A11yToggled>(switch) {
         t.0 = Toggled::True;
     }
