@@ -24,6 +24,7 @@ use crate::BuiySet;
 use crate::a11y::A11yTreeBuilder;
 use crate::a11y::translate::build_tree_update;
 use crate::focus::FocusedEntity;
+use bevy::ecs::system::NonSendMarker;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::winit::accessibility::ACCESS_KIT_ADAPTERS;
@@ -50,6 +51,15 @@ impl Plugin for AccessKitAdapterPlugin {
 }
 
 fn push_tree_updates(
+    // MT-safety (D2): pin to the main thread. `ACCESS_KIT_ADAPTERS` is a
+    // bevy_winit thread-local owned by the main thread (populated in the winit
+    // runner). Under the `multi_threaded` executor a system with no `NonSend`
+    // param is eligible to run on any worker thread, where this thread-local is
+    // empty — silently dropping every AccessKit `TreeUpdate`. The marker pins
+    // this system to the main thread, the sanctioned mechanism (same as the
+    // layout systems' `NonSend<LayoutTree>`). See
+    // docs/specs/2026-06-30-mt-safety-design.md (D2).
+    _main_thread: NonSendMarker,
     builder: Res<A11yTreeBuilder>,
     focused: Res<FocusedEntity>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
@@ -79,4 +89,31 @@ fn push_tree_updates(
             adapter.update_if_active(|| cloned);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MT-safety (D2) regression guard. `push_tree_updates` MUST stay
+    /// main-thread-pinned (`!Send`): it touches bevy_winit's main-thread
+    /// `ACCESS_KIT_ADAPTERS` thread-local, and under the `multi_threaded` executor
+    /// a `Send` system is eligible for any worker thread — where that thread-local
+    /// is empty, silently dropping every AccessKit `TreeUpdate`. The `NonSendMarker`
+    /// param is what makes the system `!Send`; deleting it reddens HERE. This
+    /// asserts the structural guarantee because no headless test can observe the
+    /// dropped-update bug directly (none drives a real winit adapter on a worker
+    /// thread). See docs/specs/2026-06-30-mt-safety-design.md (D2).
+    #[test]
+    fn push_tree_updates_is_main_thread_pinned() {
+        let mut world = World::new();
+        let mut system = IntoSystem::into_system(push_tree_updates);
+        system.initialize(&mut world);
+        assert!(
+            !system.is_send(),
+            "push_tree_updates must be !Send (NonSend-pinned) so the multi_threaded \
+             executor never runs it on a worker thread where ACCESS_KIT_ADAPTERS \
+             (a main-thread thread-local) is empty — restore the NonSendMarker param"
+        );
+    }
 }

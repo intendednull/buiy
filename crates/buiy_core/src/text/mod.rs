@@ -215,13 +215,30 @@ impl Plugin for BuiyTextPlugin {
                 .before(crate::text::edit::write_caret_and_selection),
         );
 
+        // MT-safety (D3): unconditional TERMINAL coherence guarantee. The
+        // after-Input reshape above only covers mutators ordered before it via an
+        // explicit `.after` edge (apply_keyboard_edits/apply_ime/focus_lifecycle).
+        // A post-Input editor-buffer mutator WITHOUT that edge — e.g. an app-level
+        // `set_value`/intent system outside `text/**`, or a future core mutator —
+        // leaves the buffer unshaped, and under the `multi_threaded` executor the
+        // after-Input reshape is free to run BEFORE it. This second registration in
+        // `Last` re-shapes any still-incoherent editor before the render extract
+        // reads the world, fixing the WHOLE class (including the release-build
+        // extract no-paint, not just the debug assert) without requiring every
+        // mutator to opt into an ordering edge. Lock-free no-op on coherent frames.
+        // See docs/specs/2026-06-30-mt-safety-design.md (D3).
+        app.add_systems(bevy::app::Last, commit::reshape_edited_editors);
         // Debug-only main-world coherence invariant (the extract assert's
-        // headless-reachable mirror). In `Last` — after the whole Update set
-        // chain — so it observes the exact buffer/ComputedTextLayout state the
-        // render-world extract reads, catching any post-TextCommit mutator that
-        // leaves a buffer unshaped. Compiled out of release builds.
+        // headless-reachable mirror). In `Last` — after the whole Update set chain
+        // AND after the terminal reshape above (the `.after` edge below) — so it
+        // observes the exact buffer/ComputedTextLayout state the render-world
+        // extract reads, catching any post-TextCommit mutator that leaves a buffer
+        // unshaped. Compiled out of release builds.
         #[cfg(debug_assertions)]
-        app.add_systems(bevy::app::Last, commit::debug_assert_shape_coherence);
+        app.add_systems(
+            bevy::app::Last,
+            commit::debug_assert_shape_coherence.after(commit::reshape_edited_editors),
+        );
 
         // T7 (decoration-and-paint § 6.3): the caret-blink render-prep
         // writer — the same Animate→Picking window as write_clip_rects /

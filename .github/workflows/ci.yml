@@ -205,6 +205,41 @@ jobs:
           fi
 
   # ----------------------------------------------------------------------------
+  # MT-safety lane: build + run the headless suite under Bevy's `multi_threaded`
+  # ECS executor. Buiy builds single-threaded by default (the `test` job above),
+  # but downstream consumers enable `multi_threaded` transitively via stock-bevy
+  # feature unification — so Buiy MUST be correct under the MT executor, and this
+  # lane proves it. Enabling the feature on buiy_core unifies `bevy/multi_threaded`
+  # across the whole workspace build. The dhat alloc-budget gate is a
+  # single-threaded measurement and compiles out here by design (see
+  # crates/buiy_core/tests/alloc_budget.rs). Linux-only: MT-correctness is
+  # OS-independent, so one runner suffices. See docs/specs/2026-06-30-mt-safety-design.md.
+  test-multi-threaded:
+    name: Test (multi_threaded executor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master @ 2026-06-20
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        with:
+          tool: cargo-nextest@0.9.133
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev xvfb at-spi2-core
+      # Enabling buiy_core/multi_threaded unifies bevy/multi_threaded across the
+      # workspace, so the whole headless suite runs under the MT executor. The
+      # feature is lock-clean (it only flips compile-cfg), so `--locked` holds.
+      - name: cargo nextest run (headless under multi_threaded, xvfb)
+        run: xvfb-run -a cargo nextest run --workspace --locked --features buiy_core/multi_threaded
+
+  # ----------------------------------------------------------------------------
   # MSRV gate: the workspace declares `rust-version` (Cargo.toml
   # [workspace.package]); without a job that actually builds on it, a post-MSRV
   # API/syntax use — or a dependency raising its own MSRV on a semver-compatible

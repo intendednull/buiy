@@ -12,6 +12,24 @@
 //!
 //! Bands are committed baselines measured on the settled scene; re-bless
 //! deliberately (in its own commit) on a std/bevy bump, never silently widen.
+//!
+//! ## MT-safety scoping (compiled out under `multi_threaded`)
+//!
+//! This gate is a SINGLE-THREADED deterministic measurement (dhat `testing()`
+//! mode) of Buiy's per-frame allocation surface — a contract identical under
+//! either executor, since Buiy's own allocations don't change with the executor.
+//! Under the MT executor the per-frame task-dispatch allocations across the
+//! schedule set add irreducible noise (≈155 idle blocks unpinned; ≈69 even with
+//! the harness schedules pinned — vs the 33-block single-threaded baseline),
+//! which a tight per-frame budget cannot distinguish from a real regression.
+//! Rather than widen the budget (which would hide regressions under executor
+//! noise) or chase every executor allocation out of the harness (leaky — the
+//! `Main`/finish-added schedules aren't all reachable from the harness ctor), the
+//! gate is scoped to single-threaded: it runs on EVERY CI run via the default
+//! `test` job, and the `multi_threaded` CI lane — which exists to prove
+//! CORRECTNESS, not allocation budgets — skips this binary. See
+//! docs/specs/2026-06-30-mt-safety-design.md (D4).
+#![cfg(not(feature = "multi_threaded"))]
 
 use buiy_bench_support::build_flat_bg_scene;
 
