@@ -23,7 +23,8 @@ pub mod translate;
 
 pub use accname::{AccNameInputs, compute_accessible_name};
 pub use action::{
-    dispatch_action_request, keyboard_activation, route_action_requests, slider_keyboard,
+    InlineActionHook, InlineActionRegistry, dispatch_action_request, keyboard_activation,
+    route_action_requests, slider_keyboard,
 };
 pub use adapter::AccessKitAdapterPlugin;
 pub use contract::{A11yContract, ActionError, ContractEntry, NotActionableReason, contract_for};
@@ -43,6 +44,11 @@ pub use states::{
 // menu-button has-popup without taking a direct `accesskit` dependency.
 // `A11yToggled`/`A11yOrientation`/`A11yHasPopup` wrap these.
 pub use accesskit::{HasPopup, Orientation, Toggled};
+// Re-export the foreign `accesskit::Action`/`ActionData` so a downstream crate
+// (`buiy_widgets`) can author an [`InlineActionHook`] — whose signature names them —
+// without taking a direct `accesskit` dependency (the same convenience as the
+// `HasPopup`/`Toggled` re-exports above).
+pub use accesskit::{Action, ActionData};
 use translate::node_id_for;
 pub use translate::{build_tree_update, resolve_live, to_accesskit_node};
 
@@ -293,6 +299,12 @@ impl Plugin for A11yPlugin {
             .register_type::<A11yScroll>()
             .register_type::<A11yRelations>()
             .init_resource::<A11yTreeBuilder>()
+            // The inline-fold registry (spec §5.4): core OWNS + CONSULTS it (in the
+            // generic Expand/Collapse honor, `action.rs`); `buiy_widgets` POPULATES it
+            // (the menu hook, idempotent `init_resource` either side). Inited here so the
+            // consult site has it even in a core-only harness (it stays empty ⇒ the
+            // default direct `A11yExpanded` write is used).
+            .init_resource::<InlineActionRegistry>()
             .add_systems(Update, build_tree.in_set(BuiySet::A11yUpdate));
 
         // P1c-b inbound action router + Button keyboard activation, both in

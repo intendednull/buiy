@@ -54,6 +54,9 @@ mod text_placeholder;
 mod text_placeholder_gpu;
 #[path = "text_edit/text_preedit_paint.rs"]
 mod text_preedit_paint;
+// W3 (prototype-3, MVU-as-core / H5 command-sourcing) — the record/replay crux.
+#[path = "text_edit/text_record_replay.rs"]
+mod text_record_replay;
 #[path = "text_edit/text_selection_caret_gpu.rs"]
 mod text_selection_caret_gpu;
 #[path = "text_edit/text_selection_model.rs"]

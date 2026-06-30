@@ -11,18 +11,20 @@
 //!   basis) to find what is actually under the press, then walks that target up
 //!   the `ChildOf` chain. If the press lands **outside** the top-most open
 //!   light-dismiss overlay (neither inside the overlay subtree nor on its
-//!   anchor/trigger), the overlay is closed (`CssVisibility::Hidden`). A press
+//!   anchor/trigger), the overlay is closed (see `close_overlay`). A press
 //!   **inside** the overlay does not dismiss it.
 //! - **Escape** ([`escape_dismiss`]): a keyboard handler in `BuiySet::Input` that
 //!   closes the top-most open light-dismiss overlay on `Escape`.
 //!
 //! "Top-most" is the back of the layout `TopLayerActivation.order` deque (the
 //! most-recently-activated top-layer entity), filtered to entities that are
-//! **open** ([`is_open`]) and opt into light-dismiss ([`LightDismiss`]). Closing
-//! an overlay rides the existing [`CssVisibility`] show/hide channel — the same
-//! channel the P1d tooltip honor flips — so a dismissed overlay leaves layout +
-//! a11y presence intact and re-opens by flipping `CssVisibility` back to
-//! `Visible`.
+//! **open** ([`is_open`]) and opt into light-dismiss ([`LightDismiss`]). Both
+//! channels close through the model-agnostic `close_overlay` sink: a raw overlay
+//! (a plain tooltip / popover) rides the existing [`CssVisibility`] show/hide channel
+//! directly — the same channel the P1d tooltip honor flips — while a migrated machine
+//! overlay (a `Menu`) closes through its `Model`'s `Msg` funnel via a registered
+//! [`DismissRegistry`] hook (spec §9). A dismissed overlay leaves layout + a11y
+//! presence intact and re-opens by flipping `CssVisibility` back to `Visible`.
 //!
 //! # Why `hit_test`, not the focus-change fallback (§3.5)
 //!
@@ -44,8 +46,10 @@ use crate::popover::is_open;
 /// (a `manual`/`none` popover, or a modal that must be explicitly closed) is left
 /// alone by both dismiss channels.
 ///
-/// Closing sets [`CssVisibility::Hidden`] on the overlay root (the existing
-/// show/hide channel); re-opening flips it back to `Visible`.
+/// Closing routes through the model-agnostic `close_overlay` sink: a raw overlay
+/// sets [`CssVisibility::Hidden`] directly (the existing show/hide channel), while a
+/// machine overlay closes through its `Model`'s `Msg` funnel via [`DismissRegistry`];
+/// re-opening flips `CssVisibility` back to `Visible`.
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
 #[reflect(Component, Default)]
 pub struct LightDismiss {
@@ -54,6 +58,68 @@ pub struct LightDismiss {
     /// dismissing here would fight a trigger that re-opens on the same press).
     /// `None` = no trigger exemption.
     pub trigger: Option<Entity>,
+}
+
+/// Why a generic light-dismiss fired — the **model-agnostic** cause the two dismiss
+/// channels carry into a registered [`DismissRegistry`] hook. A machine overlay's hook
+/// maps it onto its own domain reason (the menu hook maps it to a `DismissReason`), so
+/// `dismiss.rs` never names a widget's close vocabulary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DismissCause {
+    /// The C5-b **pointer** light-dismiss channel ([`light_dismiss_on_press`]).
+    OutsidePress,
+    /// The C5-b **keyboard Escape** channel ([`escape_dismiss`]).
+    Escape,
+}
+
+/// A type-erased **close-hook** for an overlay whose visibility is owned by a
+/// machine-tier `Model` (spec §9). Given the overlay entity + the dismiss
+/// [`DismissCause`], it enqueues that machine's close-`Msg` and returns `Some(())` if
+/// it APPLIES to the overlay, or `None` if it does not (so the generic dismiss falls
+/// through to the next hook / the default direct `CssVisibility::Hidden` write). It
+/// receives `&mut World` so the hook writes the model's inbox directly (the
+/// [`crate::menu`] hook does the `MenuModel` enqueue).
+pub type DismissHook = Box<dyn Fn(&mut World, Entity, DismissCause) -> Option<()> + Send + Sync>;
+
+/// The generic **dismiss-through-the-funnel** registry (spec §9, D9) — the un-invert of
+/// the W6a `With<MenuModel>` stopgap. A resource of `buiy_widgets`-populated
+/// [`DismissHook`]s the generic `close_overlay` consults **before** its default direct
+/// `CssVisibility::Hidden` write, so a migrated overlay (a `Menu`) closes through its
+/// machine's `Msg` funnel (single-writer, recorded, projected same-frame) while
+/// `dismiss.rs` stays **model-agnostic** (it never names `MenuModel`).
+///
+/// **Why a registry (spec §9/§17).** A migrated `Menu`'s visibility must be driven by
+/// `MenuModel.open` via an enqueued `MenuMsg::Close`, but a direct `CssVisibility::Hidden`
+/// write here would be the exact second-writer that forced the old `sync_menu_dismissed`
+/// reconciliation. Core's dismiss substrate cannot name a concrete widget model without
+/// coupling, so each overlay machine registers a hook here once at plugin build; the sink
+/// merely **consults** it. Mirrors
+/// [`InlineActionRegistry`](buiy_core::a11y::InlineActionRegistry) /
+/// [`ReplayRegistry`](buiy_core::mvu::ReplayRegistry) — entity-free, never recorded,
+/// replay-safe infrastructure (NOT a per-entity `Box<dyn Fn>` component, which would be
+/// non-`Reflect` and foul seed-scene serialization).
+#[derive(Resource, Default)]
+pub struct DismissRegistry {
+    hooks: Vec<DismissHook>,
+}
+
+impl DismissRegistry {
+    /// Register a close-hook. Called once per overlay machine by `buiy_widgets` at
+    /// plugin build (the menu hook; `Dialog`/`Popover` as they migrate).
+    pub fn register(&mut self, hook: DismissHook) {
+        self.hooks.push(hook);
+    }
+
+    /// Consult the hooks in registration order; the first that returns `Some(())`
+    /// HANDLED the overlay (it enqueued the close-`Msg`). `None` ⇒ no hook applies (the
+    /// caller does the default direct `CssVisibility::Hidden` write). Takes `&mut World`
+    /// (the hooks write a model inbox) — call inside a deferred `commands.queue` World
+    /// closure, lifted via [`World::resource_scope`].
+    fn consult(&self, world: &mut World, overlay: Entity, cause: DismissCause) -> Option<()> {
+        self.hooks
+            .iter()
+            .find_map(|hook| hook(world, overlay, cause))
+    }
 }
 
 /// The top-most open light-dismiss overlay: the back-most entry of
@@ -70,13 +136,42 @@ fn topmost_open_dismissable(
     })
 }
 
-/// Close `overlay` by flipping it to [`CssVisibility::Hidden`] (the existing
-/// show/hide channel). Inserts the component if absent (an overlay that defaulted
-/// to `Visible` without an explicit `CssVisibility`).
-fn close_overlay(commands: &mut Commands, overlay: Entity, current: Option<&CssVisibility>) {
-    if current != Some(&CssVisibility::Hidden) {
-        commands.entity(overlay).insert(CssVisibility::Hidden);
-    }
+/// Close `overlay` — the model-agnostic light-dismiss sink (spec §9, the un-invert of
+/// the W6a `With<MenuModel>` stopgap). Defers a world step that first consults the
+/// [`DismissRegistry`]: a registered overlay (a migrated machine like a `Menu`) closes
+/// through its `Msg` funnel (the hook enqueues the close-`Msg`; the early machine drain
+/// folds it same-frame and the bind projects `open=false` back onto `CssVisibility` +
+/// the button's `A11yExpanded`, deleting the reconciliation by construction); an
+/// unregistered raw overlay (a plain tooltip / popover / anchored panel) takes the
+/// default direct `CssVisibility::Hidden` write (idempotent — inserted on a real
+/// transition only).
+///
+/// **Why deferred (the §4.3 timing edge).** The whole step is queued via
+/// `commands.queue` so (a) the registry consult gets `&mut World` (the hooks write a
+/// model inbox), and (b) the light-dismiss-observer-sourced enqueue is flushed into the
+/// machine inbox before the early machine drain reads it — the observer-command-flush
+/// timing the §4.4 same-frame acceptance test pins. `dismiss.rs` never names
+/// `MenuModel`; the menu's mapping lives in its registered hook.
+fn close_overlay(commands: &mut Commands, overlay: Entity, cause: DismissCause) {
+    commands.queue(move |world: &mut World| {
+        // A registered overlay closes through its machine funnel (single-writer); the
+        // first hook that claims it has enqueued the close-Msg.
+        let handled = world.contains_resource::<DismissRegistry>()
+            && world
+                .resource_scope(|world, registry: Mut<DismissRegistry>| {
+                    registry.consult(world, overlay, cause)
+                })
+                .is_some();
+        if handled {
+            return;
+        }
+        // The default direct show/hide write (a raw tooltip / popover). Idempotent —
+        // only insert on a real transition (an overlay that defaulted to `Visible`
+        // without an explicit `CssVisibility` still gets the component).
+        if world.get::<CssVisibility>(overlay) != Some(&CssVisibility::Hidden) {
+            world.entity_mut(overlay).insert(CssVisibility::Hidden);
+        }
+    });
 }
 
 /// Global observer: a primary [`Pointer<Press>`] outside the top-most open
@@ -115,8 +210,9 @@ pub fn light_dismiss_on_press(
     if is_inside(target, overlay, ld.trigger, &parents) {
         return; // press inside the overlay (or on its trigger) — keep it open
     }
-    let current = overlays.get(overlay).ok().and_then(|(_, v)| v);
-    close_overlay(&mut commands, overlay, current);
+    // A registered machine overlay (a Menu) routes its close through the funnel; a
+    // raw overlay writes `CssVisibility::Hidden`. Model-agnostic — see [`close_overlay`].
+    close_overlay(&mut commands, overlay, DismissCause::OutsidePress);
 }
 
 /// Whether `target` is `overlay`, a descendant of `overlay`, or the overlay's
@@ -167,8 +263,9 @@ pub fn escape_dismiss(
     let Some((overlay, _)) = topmost_open_dismissable(&activation, &overlays) else {
         return;
     };
-    let current = overlays.get(overlay).ok().and_then(|(_, v)| v);
-    close_overlay(&mut commands, overlay, current);
+    // A registered machine overlay (a Menu) routes its close through the funnel; a
+    // raw overlay writes `CssVisibility::Hidden`. Model-agnostic — see [`close_overlay`].
+    close_overlay(&mut commands, overlay, DismissCause::Escape);
 }
 
 /// A `&World` light-dismiss check for tests / library consumers: given a press

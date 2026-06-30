@@ -82,6 +82,10 @@ image.workspace = true
 # tessellator. MIT/Apache-2.0. Pinned to the workspace deps below.
 lyon = { workspace = true }
 lyon_extra = { workspace = true }
+# RON record tap for the MVU substrate (prototype-3 W1, `src/mvu`): `MsgLog`
+# Reflect-serializes folded messages to RON. Rides the version `bevy_asset`
+# already resolves (0.12.1) — no new crate enters the tree.
+ron = { workspace = true }
 
 # arboard has no wasm backend (D4) — native-only clipboard dep. The web build
 # defaults the Clipboard resource to the pure-Rust MemClipboard instead.
@@ -113,6 +117,10 @@ criterion = { workspace = true }
 # P0c allocation-count gate — drives tests/alloc_budget.rs (its own isolated test
 # binary with `#[global_allocator] dhat::Alloc`). Dev-only, cross-platform.
 dhat = { workspace = true }
+# Instruction-count pricer — drives benches/mvu_iai.rs (prototype-3 W1 L1). Dev-only;
+# REQUIRES valgrind + iai-callgrind-runner at RUN time (the W1 dev host has neither, so
+# the bench is a compile-only scaffold here). `harness = false` on the [[bench]] target.
+iai-callgrind = { workspace = true }
 # The shared adapterless extract harness + scenes for the perf benches/tests
 # (criterion `pipeline`, the dhat alloc-budget test, the iai-callgrind bench).
 # DEV-ONLY cycle (buiy_core → buiy_bench_support → buiy_core), the same pattern as
@@ -134,4 +142,19 @@ buiy_verify = { path = "../buiy_verify" }
 # hands `fn main` to criterion (the dev-dep above) instead of libtest.
 [[bench]]
 name = "pipeline"
+harness = false
+
+# MVU substrate wall-clock bench (prototype-3 W1, L1 pricer). INFORMATIONAL: run
+# via `cargo bench -p buiy_core --bench mvu`; NOT a CI gate (timing is host-
+# dependent). The deterministic MVU gate is `MvuWorkCounters` (crosscut `mvu`
+# tests). `harness = false` hands `fn main` to criterion.
+[[bench]]
+name = "mvu"
+harness = false
+
+# MVU instruction-count pricer (prototype-3 W1 L1). SCAFFOLD: requires valgrind +
+# iai-callgrind-runner at RUN time (absent on the W1 dev host); W1 only `cargo
+# check`s it. `harness = false` hands `fn main` to iai-callgrind.
+[[bench]]
+name = "mvu_iai"
 harness = false

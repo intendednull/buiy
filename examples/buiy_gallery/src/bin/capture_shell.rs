@@ -176,31 +176,34 @@ fn main() {
     }
 
     // For the menu screen, capture it WITH THE DROPDOWN OPEN so the artifact shows
-    // the design's `menuOpen:true` state: force the button `A11yExpanded(true)` +
-    // the menu `CssVisibility::Visible`, then let the LIVE `Popover`/`Anchor`
-    // pipeline place the dropdown below the ⋮ trigger. The dropdown's descendant
-    // `Background` fills + `Text` glyphs now extract through its own stacking
-    // context (the M1/M6 top-layer descendant-paint fix — a top-layer member forms
-    // an SC, `layout/systems.rs` trigger 7), so no `Translate` stand-in is needed.
+    // the design's `menuOpen:true` state. The open truth now
+    // lives in the machine-tier `MenuModel`; seed it open (`open: true`, first item
+    // highlighted) and the early `bind_menu_model` projection drives the rest — the
+    // menu's `CssVisibility::Visible`, the button's `A11yExpanded(true)`, and the
+    // `active_descendant` — exactly the same projection a real press takes (NOT the
+    // deleted `A11yExpanded`-driven `sync_menu_open` path). The LIVE `Popover`/`Anchor`
+    // pipeline then places the dropdown below the ⋮ trigger; its descendant
+    // `Background` fills + `Text` glyphs extract through its own stacking context (the
+    // M1/M6 top-layer descendant-paint fix — a top-layer member forms an SC,
+    // `layout/systems.rs` trigger 7), so no `Translate` stand-in is needed.
     app.finish();
     app.cleanup();
     if matches!(capture_screen(), Screen::Menu) {
-        use buiy_core::a11y::A11yExpanded;
-        use buiy_core::render::components::CssVisibility;
+        use buiy_widgets::menu::MenuModel;
         let world = app.world_mut();
-        let button = {
-            let mut q = world.query_filtered::<Entity, With<buiy_widgets::MenuButton>>();
-            q.iter(world).next()
-        };
         let menu = {
             let mut q = world.query_filtered::<Entity, With<buiy_widgets::Menu>>();
             q.iter(world).next()
         };
-        if let Some(button) = button {
-            world.entity_mut(button).insert(A11yExpanded(true));
-        }
         if let Some(menu) = menu {
-            world.entity_mut(menu).insert(CssVisibility::Visible);
+            // Seed the model open (the `MenuMsg::Open` resting state). The bind reacts
+            // to `Changed<MenuModel>` on the next frame and projects visibility +
+            // aria-expanded + active-descendant.
+            world.entity_mut(menu).insert(MenuModel {
+                open: true,
+                active: Some(0),
+                dismissed: None,
+            });
         }
     }
 

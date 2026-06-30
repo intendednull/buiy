@@ -21,6 +21,8 @@
 //! the CPU resources the producers touch; prepare/queue/draw never exist, so
 //! nothing requests a GPU.
 
+pub mod mvu_scenes;
+
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld};
 use bevy::window::{PrimaryWindow, WindowResolution};

@@ -49,6 +49,29 @@ ignore = [
     # upstreams switching to `pastey` or similar. Re-evaluate when Bevy
     # bumps wgpu past the metal/paste boundary or when image drops rav1e.
     { id = "RUSTSEC-2024-0436", reason = "transitive via Bevy/wgpu-hal and image/rav1e; no upstream fix available, tracked as advisory drift" },
+    # `ttf-parser` is unmaintained (RUSTSEC-2026-0192 — the author declared it
+    # so). It reaches us ONLY transitively through the Linux windowing/font
+    # path: bevy_winit -> winit -> sctk-adwaita (client-side decorations) ->
+    # ab_glyph -> ttf-parser. Buiy does not depend on it directly and does its
+    # own text shaping via cosmic-text; there is no safe upgrade until Bevy
+    # bumps winit/ab_glyph past it. PRE-EXISTING on the base (not introduced by
+    # the MVU-as-core work) — triaged in its own concern. Re-evaluate on the
+    # next bevy_winit bump.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; transitive via bevy_winit->winit->sctk-adwaita->ab_glyph; no direct use, no upstream fix until Bevy bumps winit/ab_glyph; pre-existing base advisory" },
+    # `iai-callgrind` (the dev-only instruction-count pricer for the MVU substrate
+    # bench, prototype-3 W1 L1 — `buiy_core/benches/mvu_iai.rs`) pulls two
+    # unmaintained transitives that enter the graph ONLY through its dev-dependency
+    # `[[bench]]` edge. iai-callgrind is NEVER in the prod/wasm runtime graph (it
+    # prices benchmarks in Valgrind instructions and only runs under `cargo bench`),
+    # so neither crate ever ships in a Buiy binary. Both have NO safe upgrade.
+    # Re-evaluate when iai-callgrind drops bincode 1.x / migrates off proc-macro-error2.
+    #
+    #   bincode 1.3.3 — development permanently ceased. Chain:
+    #     iai-callgrind -> bincode.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 unmaintained; dev-only via iai-callgrind (the MVU instruction-count bench pricer), never in the prod/wasm runtime graph; no safe upgrade" },
+    #   proc-macro-error2 2.0.1 — author-confirmed unmaintained. Chain:
+    #     iai-callgrind -> iai-callgrind-macros -> proc-macro-error2.
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained; dev-only via iai-callgrind -> iai-callgrind-macros (the MVU instruction-count bench pricer), never in the prod/wasm runtime graph; no safe upgrade" },
 ]
 
 [licenses]

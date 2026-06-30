@@ -34,6 +34,8 @@ mod atlas_register;
 mod components;
 #[path = "crosscut/focus.rs"]
 mod focus;
+#[path = "crosscut/mvu.rs"]
+mod mvu;
 #[path = "crosscut/picking.rs"]
 mod picking;
 #[path = "crosscut/picking_backend.rs"]
