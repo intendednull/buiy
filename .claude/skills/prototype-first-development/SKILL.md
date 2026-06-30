@@ -91,6 +91,14 @@ surfaced**. This seeds the final's research.
   believing a "broken" signal.
 - **The final re-decides, it doesn't copy.** keep/refine/redesign every decision
   with the full picture.
+- **Preserve the learning — COMMIT it to the durable docs system.** The journal,
+  retrospective, research synthesis, and any `prior-art/` folders are the
+  prototype's real deliverables — they belong in the project's *committed* `docs/`
+  (carried by the final's PR, or a dedicated docs PR), **not** stranded in the
+  throwaway worktree. Only the prototype CODE is the throwaway. A retrospective or
+  prior-art folder that lives only in a worktree is one `git worktree remove` from
+  gone — and worktrees DO get cleaned up. **Before removing the prototype worktree,
+  confirm its docs are on the main branch; if not, open a docs PR first.**
 
 ## Anti-patterns
 
@@ -101,6 +109,10 @@ surfaced**. This seeds the final's research.
 - **Trusting green tests without running the artifact** — the bugs hide exactly there.
 - **Polishing the prototype** — speed-to-running + learning beats polish; polish
   the final.
+- **Letting the journal / retrospective / research / prior-art die in the throwaway
+  worktree** — they're the deliverable, not the code. If they aren't committed to
+  the durable repo, cleaning up the worktree destroys the learning. Commit the docs
+  (the code stays unmerged).
 
 ## Templates
 
