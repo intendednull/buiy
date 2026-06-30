@@ -183,6 +183,13 @@ MVU as Buiy's primary state interface in `buiy_core`: widgets route state change
 
 - [MVU as core — FINAL implementation plan](plans/2026-06-29-mvu-as-core.md) — the wave-by-wave (W0 substrate+`set_if_neq` → leaf tier → editor command-sourcing → whole-UI record/replay → early-window menu machine + AT seam → dismiss un-invert → L1 perf gate → cleanup/docs/auditor) port-the-validated + land-the-re-decided plan realizing the design; one PR, human-review-gated. `[active]`
 
+**Prototype lineage & original research** (the prototype-first deliverables — the journal + retrospective ARE the prototype's product; preserved here so the learning survives worktree cleanup)
+
+- [MVU-as-core — original research synthesis](reports/2026-06-26-mvu-as-core-research/SYNTHESIS.md) — the prototype-3 Stage-1 research (7 survey dossiers + synthesis, decisions D1–D10) that the FINAL [2026-06-29 research](reports/2026-06-29-mvu-as-core-final-research/SYNTHESIS.md) re-decided with the full picture. `[archived]`
+- [Proto-3 charter](prototypes/2026-06-26-mvu-as-core-PROTO3-charter.md) · [design](prototypes/2026-06-26-mvu-as-core-PROTO3-design.md) · [journal](prototypes/2026-06-26-mvu-as-core-PROTO3-journal.md) · [retrospective](prototypes/2026-06-26-mvu-as-core-PROTO3-RETROSPECTIVE.md) — the MVU-as-core throwaway prototype's build-to-learn design, running journal (W1–W6), and the retrospective (keep/refine/redesign) that seeded the FINAL. `[archived]`
+- Proto-1/2 — [proto-1 journal](prototypes/2026-06-26-elm-bevyified-state-journal.md) · [retrospective](prototypes/2026-06-26-elm-bevyified-state-RETROSPECTIVE.md) (bespoke runtime) and [proto-2 journal](prototypes/2026-06-26-elm-bevyified-state-PROTO2-journal.md) · [retrospective](prototypes/2026-06-26-elm-bevyified-state-PROTO2-RETROSPECTIVE.md) (Bevy-native), plus the [proto-2 wave-2 report](reports/2026-06-26-mvu-spike-wave2-report.md) — the earlier MVU prototypes that proved the substrate before proto-3. `[archived]`
+- [State-management draft (opt-in crate)](specs/2026-06-26-buiy-state-management-design.md) — the original 2026-06-26 design; **superseded** by the FINAL core placement above, preserved as design lineage. `[superseded]`
+
 ### Performance
 
 Cross-cutting per-frame performance: the audit → prototype → production-final campaign.
@@ -257,6 +264,14 @@ External systems we learn from. Living documents — update on revision, archive
 - [egui](prior-art/egui/) — the dominant Rust **immediate-mode** GUI (Emil Ernerfeldt + Rerun.io stewardship); the upstream that [bevy_egui](prior-art/bevy-egui/) bridges. The paradigm contrast with Buiy's retained-mode bet, and the bar for simple-API ergonomics. Consult before any spec framing retained-vs-immediate mode, debug/dev-tooling UI, or minimal-API design. `[active]`
 - [Iced](prior-art/iced/) — the most-adopted retained-mode Rust GUI library; Elm-architecture; cosmic-text via the `cryoglyph` fork; flagship at-scale user is System76's COSMIC desktop. The strongest signal that cosmic-text scales to production outside Bevy; AccessKit absent since 2020 (the gap Buiy refuses to repeat). Consult before any spec on the cosmic-text bet, retained-mode state-management, or the AccessKit-first commitment. `[active]`
 - [Slint](prior-art/slint/) — declarative GUI toolkit (Rust + C++ + JS + Python) targeting embedded + desktop; commercial open-core triple-licensed model; `.slint` DSL above its own renderer. Consult before any spec on DSL authoring (alongside [makepad](prior-art/makepad/)), embedded targeting, or open-core licensing posture. `[active]`
+
+### State management & reactivity
+
+MVU / message-log / time-travel lineage — the prior-art behind Buiy's [MVU-as-core](specs/2026-06-29-mvu-as-core-design.md) state interface. Focused MVU-lessons folders (README + `lessons-for-buiy-mvu.md`), not full deep-dives.
+
+- [Druid](prior-art/druid/) — the Rust-native `Lens`/`Data` state-management lineage (Druid → Xilem); MVU prior-art on widget-internal state addressing + the lens pattern + keyed list reconciliation. `[archived]`
+- [relm4](prior-art/relm4/) — Rust+GTK Elm-architecture framework (per-component Model/Msg/update, factory components); MVU prior-art on tiered component granularity + the keyed-reconcile derived-list pattern. `[archived]`
+- [Elm / Redux time-travel](prior-art/elm-redux-time-travel/) — the canonical record/replay + time-travel-debugging lineage (the Elm Architecture, Redux DevTools verb algebra); MVU prior-art on the message-log replay model, the dispatch-as-agent-write-path, and its avoid-list. `[archived]`
 
 ### Game engine UI systems
 
