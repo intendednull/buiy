@@ -26,6 +26,15 @@
 | 6 | Re-scope ~40 test-injection files + reftest engine + `buiy_bsn` round-trip → `Custom(Color)` | W3 |
 | 7 | Accent swatches = literals distinct from live accent; regression test for `SetAccent` | W1+W5 |
 
+## Gate re-review closing edits (applied — CONDITIONAL GO → these make it a GO)
+
+1. **(B, MF#4) `FocusRing` is forced-colors-safe.** Add `ColorToken::FocusRing` to `is_forced_colors_safe()` — the forced theme deliberately seeds `focus.ring→yellow` ("ring stays visible under forced colors", `theme.rs:464-474`); flagging it would contradict that contract. **Restate the resolve-vs-analyzer split explicitly:** forced-*resolve* maps EVERY semantic token → a system color (safety net); the *analyzer* still flags semantic tokens (best-practice nudge) — deliberately NON-equivalent to the old magenta check. So **W1.11 GATE-1 criterion is operational, not "equivalent":** `live_catalog_has_no_forced_colors_violations` stays GREEN **and** `broken_fixture_produces_violation` (broken-brand) stays RED.
+2. **(C, W1.5) Light-value SOURCE (decided, not free-invented):** the ~46 net-new light tokens are **derived by family** from the existing 9 light neutrals + the dark palette's structure — surface.* → white→light-gray ladder; text.* → dark-ink ladder; border.* → light-gray ladder; status.* → shared semantic hues; accent* → shared live accent / `derive_accent_ramp`; shadow.* → low-alpha black; scrollbar.* → gray; misc (white/dot-bg/scrim) → literals. These are **completeness defaults, NOT pixel-critical**: no light-default consumer paints them today (they were magenta and nothing broke), so the pixel-critical parity path is the DARK/gallery theme. Expect a few headless **light snapshots to shift magenta→real → re-bless in W4** (legitimate, not a regression).
+3. **(A, W1.0) Forced-theme values are expected-to-change, NOT a parity target.** Under forced mode most semantic tokens are magenta today → W1.4 maps them to role-based system colors (an improvement). W1.1 asserts only the Normal/dark value. GATE-1 sanity-checks the forced role map (judgment calls, lossy by nature). Safety confirmed: `live_catalog_has_no_forced_colors_violations` already proves no real widget paints a semantic-token pixel under forced, so no forced golden moves.
+4. **(W2 add)** Substitution table must explicitly map `color.surface.transparent → Transparent` (22 uses, collapsed into the default) and `color.scrollbar.track → ScrollbarTrack` (resolves `NONE`) so the fan-out agents don't flag them as "not in table."
+5. **(W3 add)** Delete/repurpose the magenta-assertion tests `render_extract.rs:30` + `render_extract_background.rs:26` (they assert `resolve(fake) == magenta`, a behavior that no longer exists) — delete, not substitute.
+6. **(note)** `debug_name()` returns `"SurfaceCard"`, not the old `"color.surface.card"` — confirm `modal_showcase_c8c.rs:408`'s assertion still means the same thing after W3.4 (it asserts *a* name is extractable, not the exact string — verify).
+
 ## Enum shape (v1, locked)
 
 ```rust
@@ -54,7 +63,10 @@ impl ColorToken {
     /// Gate-#11: a token is forced-colors-safe iff it is a system/neutral kind
     /// (SystemColor / Transparent / CurrentColor), NOT a concrete semantic color.
     pub fn is_forced_colors_safe(&self) -> bool {
-        matches!(self, ColorToken::SystemColor(_) | ColorToken::Transparent | ColorToken::CurrentColor)
+        // FocusRing included: the forced theme seeds focus.ring->yellow so the ring
+        // stays visible under forced-colors (theme.rs:464-474) — not a violation.
+        matches!(self, ColorToken::SystemColor(_) | ColorToken::Transparent
+            | ColorToken::CurrentColor | ColorToken::FocusRing)
     }
     /// For introspection sites that used to read the token string.
     pub fn debug_name(&self) -> String { format!("{self:?}") }
