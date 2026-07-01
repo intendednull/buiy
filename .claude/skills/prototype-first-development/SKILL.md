@@ -43,7 +43,8 @@ it twice, with a learning gate between.
 ### Phase A — Prototype (to learn)
 - Run `staged-development` in an **isolated worktree cut from the same base as
   the eventual final** (see Mechanics). Optimize for *learning + speed-to-running*,
-  not polish. **DO NOT MERGE.**
+  not polish. **Commit freely as you build** (the commits are what make the
+  audited port possible) — but **DO NOT PUSH OR MERGE** the prototype.
 - **Keep a journal** (template below) — append every wave: what you built, what
   broke, what surprised you, what you'd do differently.
 - **Run the artifact every wave** (see Non-negotiables) — where the real bugs surface.
@@ -61,7 +62,8 @@ surfaced**. This seeds the final's research.
   prototype's — and even the spec's — wrong premises.)
 - Execute as a **hybrid: port the validated, redesign the pressure points** (see
   Mechanics).
-- **Merge-gate on human review.** Don't self-merge.
+- **Commit as you go onto the branch; don't push, merge, or open a PR until
+  explicitly asked.** Merge-gate on human review — don't self-merge.
 
 ## The concrete mechanics (the battle-tested playbook)
 

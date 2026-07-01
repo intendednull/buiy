@@ -81,6 +81,15 @@ first. When you discover a verification strategy that isn't written down, docume
 it for the next change.
 → `verification-before-completion`.
 
+## Commit as you go — but don't push
+
+Each verified unit and each gated wave is a natural checkpoint: **commit freely**
+as you land verified work onto the feature branch — you don't need to ask. Small,
+reviewable commits keep the history legible wave-by-wave and let you back out a
+wave that goes wrong. **Committing is not landing:** push, merge, and opening a
+PR are the gated, outward-facing steps — they wait for an explicit go. Keep the
+branch local until then.
+
 ## Quality over token cost
 
 Quality and developer experience matter far more than token usage. Spend the
