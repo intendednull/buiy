@@ -1,100 +1,120 @@
-# Track B — Typed Theme Tokens + Theme Contract — Implementation Plan
+# Track B — Typed Theme Tokens + Theme Contract — Implementation Plan (v2, post-gate)
 
-> **For agentic workers:** Use `subagent-driven-development` to execute wave-by-wave; gate each wave with a fresh-context reviewer + the project gate. Steps use `- [ ]`.
+> **For agentic workers:** Use `subagent-driven-development`; gate each wave with a fresh-context reviewer + the project gate. `- [ ]` steps.
+>
+> **v2** incorporates the plan-gate review (7 must-fixes). v1 was mined from `color.*` string literals only and would have broken the build + silently disabled the gate-#11 a11y analyzer. See `docs/reports/2026-07-01-llm-dev-support-prototype-retrospective.md` and the spec `specs/2026-07-01-first-class-llm-dev-support-design.md` §3.2.
 
-**Goal:** Replace the stringly `ColorToken::Token(Cow<str>)` → `HashMap<String,Color>` → magenta-fallback theme system with a **closed-enum `ColorToken`** resolved through a **compiler-enforced `Theme` contract**, so a typo or a missing token is a compile error, never a silent magenta ship (friction F6 — the one deterministic failure in every N=4 prototype probe).
+**Goal:** Replace stringly `ColorToken::Token(Cow<str>)` → `HashMap<String,Color>` → magenta with a **closed-enum `ColorToken`** resolved through a **compiler-enforced `ThemeContract`**, so a typo/missing token is a compile error, never a silent magenta ship (F6). Preserve every current behavior: forced-colors, the gate-#11 analyzer, auto-caret, and byte-identical rendered colors.
 
-**Architecture:** `ColorToken` becomes a closed enum (flat, semantic — `ColorToken::SurfaceCard`, matching the exact API a prelude-only agent guessed). `Theme` implements a `ThemeContract` trait whose `resolve(&self, ColorToken) -> Color` is an **exhaustive `match`** (a dropped token ⇒ `E0004`, the vanilla-extract completeness for free — proven in prototype R2). The dynamic accent ramp is computed inside `resolve` from the theme's stored accent (not a pre-seeded map). A `ColorToken::Custom(Color)` escape hatch covers genuinely dynamic colors. The stringly `Token(Cow<str>)` variant and the `colors: HashMap` are removed.
+**Architecture:** `ColorToken` keeps its non-semantic variants (`Transparent` `#[default]`, `CurrentColor`, `SystemColor(SystemColorKeyword)`) + gains `Custom(Color)` (the escape hatch replacing `Token`) + the **closed semantic vocabulary** (union of theme-seed keys ∪ real usage, ~55 variants). `Theme` drops `colors: HashMap`, stores a typed palette + `accent: Color` + an explicit `mode: PaletteMode { Normal, ForcedColors }`, and `impl ThemeContract` with an exhaustive `match` that branches on `mode` (forced maps every semantic token → a `SystemColorKeyword`). `caret`/`preedit-underline` are NOT resolvable variants — their consumers default to `CurrentColor` (auto). The gate-#11 analyzer switches from magenta-equality to a `ColorToken` variant-kind check.
 
-**Tech Stack:** Rust, `bevy::color::Color`, `buiy_core::{render::color, theme}`. Base: `origin/main` @ `f37c6fa`.
+**Tech Stack:** Rust, `bevy::color::Color`, `buiy_core::{render::color, render::forced_colors, render::forced_colors_analyzer, theme}`, `buiy_verify::reftest`, `buiy_bsn`. Base: `origin/main` @ `e431eef` (rebased).
 
-**Scope (v1):** COLOR tokens only (the 192 call sites). Spacing/radius/typography/motion tokens are a documented follow-on (spec §3.2 "cover all" → tracked, not in this PR). Rationale: color is where F6 lives (magenta) and where all 192 sites are; a bounded first PR de-risks the pattern before widening.
-
----
-
-## File structure
-
-- `crates/buiy_core/src/render/color.rs` — the `ColorToken` enum (redefined), `ThemeContract` trait, `resolve_token` → delegates to the contract; remove `resolve_named` + `MISSING_TOKEN_FALLBACK` (no missing path).
-- `crates/buiy_core/src/theme.rs` — `Theme` drops `colors: HashMap`, stores base palette + accent as typed fields, `impl ThemeContract for Theme` (exhaustive match, accent ramp computed here); `default_light_theme`, `SetAccent`, forced-colors updated.
-- `crates/buiy_core/src/render/forced_colors.rs` — the forced-colors theme becomes a `ThemeContract` impl (or a `Theme` in forced mode).
-- Call sites (192): `buiy_widgets` (10 files), `buiy_gallery`, `buiy_verify`, `buiy_core`, `buiy_bench_support`, `hello_bsn`, `capture` — `ColorToken::Token("color.x.y".into())` → `ColorToken::XY`.
-- Tests: `render/color.rs` unit tests (missing-token test repurposed → the escape hatch + a resolve-roundtrip test); any theme tests.
-
-## Token → variant map (the closed vocabulary, ~50 variants, flat + grouped)
-
-```
-color.surface.app|primary|secondary|card|raised|inset|chrome|danger|transparent
-  → Surface{App,Primary,Secondary,Card,Raised,Inset,Chrome,Danger,Transparent}
-color.text.primary|secondary|muted|dim|dimmer|faint|bright|placeholder|danger|bad
-  → Text{Primary,Secondary,Muted,Dim,Dimmer,Faint,Bright,Placeholder,Danger,Bad}
-color.border.default|subtle|muted|strong|danger → Border{Default,Subtle,Muted,Strong,Danger}
-color.accent[.blue|coral|green|violet|soft|lighter|glow] → Accent, Accent{Blue,Coral,Green,Violet,Soft,Lighter,Glow}
-color.status.ok|warn|error → Status{Ok,Warn,Error}
-color.shadow.card|menu|modal → Shadow{Card,Menu,Modal}
-color.selection.bg|fg → Selection{Bg,Fg}
-color.scrollbar.thumb|track → Scrollbar{Thumb,Track}
-color.caret|icon|focus.ring|scrim|misc.white → Caret, Icon, FocusRing, Scrim, White
-```
-Flat CamelCase (matches the prelude-only agent's `ColorToken::Surface*` guess). TEST-only strings (`color.a/b/g/r`, `color.brand`, `color.does.not.exist`) are NOT variants — their tests are repurposed (Wave 4).
+**Scope (v1 of the token system):** COLOR tokens. `spaces`/`radii` stay stringly HashMap (keep `Theme::space()`/`radius()`); typography/motion deferred + tracked. `Theme` becomes a hybrid (typed colors, stringly spaces/radii) — intentional.
 
 ---
 
-## Wave 1 — The typed core (enum + contract + theme), gate before consumers
+## MUST-FIX ledger (from the gate — each mapped to a wave)
 
-**Files:** `render/color.rs`, `theme.rs`, `render/forced_colors.rs`.
+| # | Must-fix | Wave |
+|---|---|---|
+| 1 | Keep `Transparent`(`#[default]`)/`CurrentColor`/`SystemColor(kw)` + `Default` derive | W1 |
+| 2 | Vocab = union(theme seed keys, usage); +~14 tokens; drop phantom `text.bad` | W1 |
+| 3 | Forced-colors: `Theme` value + explicit `mode`; re-express selection/CurrentColor prefs; system value for every token | W1 |
+| 4 | Gate-#11 analyzer → variant-KIND check, not magenta-equality; replace `MISSING_TOKEN_FALLBACK` uses | W1 |
+| 5 | `caret`/`preedit-underline` stay auto (`CurrentColor` default), NOT resolvable variants | W1 |
+| 6 | Re-scope ~40 test-injection files + reftest engine + `buiy_bsn` round-trip → `Custom(Color)` | W3 |
+| 7 | Accent swatches = literals distinct from live accent; regression test for `SetAccent` | W1+W5 |
 
-- [ ] **1.1** Write a failing test in `color.rs`: `default_light_theme().resolve(ColorToken::SurfaceCard)` returns the same `Color` the current `"color.surface.card"` HashMap entry holds (capture the current values first via a throwaway print or the existing theme source).
-- [ ] **1.2** Define `pub enum ColorToken { …variants…, Custom(Color) }` (`#[derive(Clone, Copy, Debug, PartialEq, Reflect)]`) with the full closed vocabulary above; delete `Token(Cow<str>)`.
-- [ ] **1.3** Define `pub trait ThemeContract { fn resolve(&self, token: ColorToken) -> Color; }`.
-- [ ] **1.4** Redefine `Theme` in `theme.rs`: drop `colors: HashMap`; store the base palette (the current default values) + `accent: Color`. `impl ThemeContract for Theme` with an **exhaustive match** (accent ramp computed from `self.accent`; `Custom(c) => c`). Port `default_light_theme` to build the struct; port `SetAccent`/`seed_accent_tokens` to set `accent` (the ramp is now computed in `resolve`, not seeded). Keep `spaces`/`radii` fields untouched (out of scope).
-- [ ] **1.5** `resolve_token(token, theme)` becomes `theme.resolve(token)` (keep the free fn as a thin shim so extract sites don't all change signature); remove `resolve_named` + `MISSING_TOKEN_FALLBACK`.
-- [ ] **1.6** Port `forced_colors.rs`: the forced theme is a `Theme` (or `ThemeContract` impl) resolving every token to the forced-colors palette (System colors); exhaustive.
-- [ ] **1.7** Run `cargo build -p buiy_core` — fix until it compiles (call sites in buiy_core itself, 4, migrate now).
-- [ ] **1.8** Run the color unit test (1.1) — expect PASS (values preserved).
-- [ ] **1.9** Commit: `feat(theme): typed closed-enum ColorToken + compiler-enforced ThemeContract`.
-- [ ] **GATE 1:** fresh-context reviewer — enum completeness vs the mined vocabulary, value-parity with the old HashMap (no color drift), accent-ramp math preserved, forced-colors parity, `Reflect` derive intact (BSN/inspector).
+## Enum shape (v1, locked)
 
-## Wave 2 — Migrate the 192 consumer call sites (fan out under reliable-agent-fleet)
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Default)]
+pub enum ColorToken {
+    #[default]
+    Transparent,                       // Color::NONE (KEEP)
+    CurrentColor,                      // inherit; the auto default for text/caret/icon (KEEP)
+    SystemColor(SystemColorKeyword),   // forced-colors system palette (KEEP)
+    Custom(Color),                     // genuinely-dynamic / test-only escape hatch (replaces Token)
+    // --- closed semantic vocabulary (union of theme seeds ∪ usage) ---
+    // Surface: App Primary Secondary Card Raised RaisedAlt Inset Chrome ChromeTranslucent Danger DangerSoft DangerStrong
+    // Text:    Primary Secondary Muted Dim Dimmer Faint Bright Placeholder Danger DangerDim OnAccent
+    // Border:  Default Subtle Subtle2 Muted Strong Strong2 Danger
+    // Accent (LIVE, derive from self.accent): Accent AccentLighter AccentSoft AccentGlow
+    // Accent (FIXED swatches, literals):       AccentBlue AccentGreen AccentViolet AccentCoral
+    // Status:  Ok Warn Error
+    // Shadow:  Card Menu Modal SliderThumb SwitchThumb DangerButton
+    // Selection: Bg Fg
+    // Scrollbar: Thumb ThumbHover Track
+    // Misc:    Icon FocusRing Scrim White DotBg
+    // (NOT variants: caret, preedit-underline → consumer default = CurrentColor; text.bad → test phantom)
+}
 
-**Files:** `buiy_widgets/*` (10), `buiy_gallery`, `buiy_verify`, `buiy_bench_support`, `hello_bsn`, `capture`.
+impl ColorToken {
+    /// Gate-#11: a token is forced-colors-safe iff it is a system/neutral kind
+    /// (SystemColor / Transparent / CurrentColor), NOT a concrete semantic color.
+    pub fn is_forced_colors_safe(&self) -> bool {
+        matches!(self, ColorToken::SystemColor(_) | ColorToken::Transparent | ColorToken::CurrentColor)
+    }
+    /// For introspection sites that used to read the token string.
+    pub fn debug_name(&self) -> String { format!("{self:?}") }
+}
+```
 
-- [ ] **2.1** Build the exact string→variant substitution table (from the map above).
-- [ ] **2.2** Fan out per-crate migration agents (reliable-agent-fleet: one agent per crate/example, DISTINCT files = no conflict; each returns the edits it made + a self-check that its crate compiles in isolation is NOT possible mid-migration, so each returns the sites it changed). Each: replace `ColorToken::Token("color.x.y".into())` / `ColorToken::Token(Cow::Borrowed("…"))` → the mapped variant. Flag any string not in the table.
-- [ ] **2.3** Orchestrator applies/verifies; `cargo build --workspace` — resolve residuals (dynamic/computed token strings, if any, → `Custom` or a helper).
-- [ ] **2.4** Commit per crate (or one squashed migration commit): `refactor: migrate ColorToken call sites to typed variants`.
-- [ ] **GATE 2:** reviewer — every migrated site maps to the semantically-correct variant (not a typo'd neighbor), no `Token(` remnants (`grep` must be empty), no behavior change.
+## Wave 1 — Typed core: enum + contract + theme + forced-colors + analyzer (the hard wave)
 
-## Wave 3 — Diagnostics + the escape hatch + prelude
+**Files:** `render/color.rs`, `theme.rs`, `render/forced_colors.rs`, `render/forced_colors_analyzer.rs`, `render/components.rs` (defaults).
 
-- [ ] **3.1** Ensure `ColorToken` (+ the families) are re-exported where `ColorToken` already is (prelude reach unchanged/added).
-- [ ] **3.2** `#[doc]` the enum with the token semantics; optional `#[diagnostic::on_unimplemented]` is N/A (enum, not trait) — skip.
-- [ ] **3.3** Confirm `Background { color: ColorToken::SurfaceCard }` authoring works from `buiy::prelude` (a small compile test).
-- [ ] **3.4** Commit.
+- [ ] **1.0 Capture ground truth:** dump the current resolved `Color` for EVERY (token, theme∈{light, dark, forced}) triple (a throwaway test printing `resolve_token` over all seeded keys) → the parity oracle for W1/W5. Record dark-theme values (the gallery palette) especially — these must stay byte-identical.
+- [ ] **1.1** Failing test: `default_dark_theme().resolve(SurfaceCard)` == the captured dark value; `Transparent` == `Color::NONE`; `SetAccent(green)` moves `Accent` but NOT `AccentBlue`.
+- [ ] **1.2** Define the enum (above), keeping the 3 non-semantic variants + `Default`. Delete `Token(Cow<str>)`. Add `is_forced_colors_safe` + `debug_name`.
+- [ ] **1.3** `ThemeContract { fn resolve(&self, ColorToken) -> Color; }`. `Theme`: drop `colors`, add typed palette fields + `accent: Color` + `mode: PaletteMode`. Keep `spaces`/`radii` + `space()`/`radius()`.
+- [ ] **1.4** `impl ThemeContract for Theme` — exhaustive match. `Normal`: typed palette; `Accent*` live (reuse `derive_accent_ramp(self.accent)`); `Accent{Blue,Green,Violet,Coral}` = fixed literals; `Custom(c)=>c`; `Transparent=>NONE`; `CurrentColor=>` inherit sentinel (as today); `SystemColor(kw)=>` system palette. `ForcedColors`: every semantic token → its `SystemColorKeyword` mapping (Canvas/CanvasText/Highlight/HighlightText/ButtonText/GrayText/LinkText per role); selection.bg→Highlight, selection.fg→HighlightText, text.*→CanvasText, surface.*→Canvas, border.*→CanvasText, accent/focus→Highlight/LinkText, etc.
+- [ ] **1.5** Port `default_light_theme` + `default_dark_theme` to the typed struct; **author light-theme values for the ~40 tokens it omits today** (they were magenta; pick sensible light values — this is the half-wiring fix). `SetAccent`/`seed_accent_tokens` → set `self.accent` only (ramp computed in resolve).
+- [ ] **1.6** `resolve_token(token, theme)` → `theme.resolve(token)` shim. Re-express `resolve_selection_bg/_fg` + the `CurrentColor`→CanvasText preference against `theme.mode == ForcedColors` (not HashMap presence). `resolve_caret_color`/preedit keep `CurrentColor` default (auto).
+- [ ] **1.7** `forced_colors.rs`: `forced_colors_theme()` returns a `Theme` with `mode: ForcedColors` (stays in `Res<Theme>`); `PrePreferenceTheme` save/restore unchanged (it's a `Theme`).
+- [ ] **1.8** `forced_colors_analyzer.rs`: replace `resolve_token(..) == MISSING_TOKEN_FALLBACK` with `!token.is_forced_colors_safe()`. Remove `MISSING_TOKEN_FALLBACK` (or keep private if still referenced). Keep the `non_system_token_under_forced_theme_is_a_violation` test semantics (now: a semantic-family token IS a violation).
+- [ ] **1.9** Migrate `buiy_core`'s own call sites (incl. `render/components.rs` defaults: `TextColor`/`CaretColor`/`IconColor` default `CurrentColor`; `BackgroundLayer::Solid`). `cargo build -p buiy_core`.
+- [ ] **1.10** Run 1.0/1.1 parity tests — PASS.
+- [ ] **1.11** Commit. **GATE 1 (fresh reviewer):** vocab = superset of reality; dark-theme value-parity; forced mapping covers every token + preserves the selection/CurrentColor prefs; analyzer kind-check equivalent to the old magenta check; auto-caret preserved; swatch-vs-live-accent correct.
 
-## Wave 4 — Tests + verification closure
+## Wave 2 — Migrate production `color.*` literal call sites
 
-- [ ] **4.1** Repurpose the old missing-token test: replace the `color.does.not.exist` → magenta assertion with (a) a compile-fail doc-test / note that invalid tokens can't be constructed, and (b) a `Custom(Color)` roundtrip test.
-- [ ] **4.2** Add a resolve-parity test across ALL variants (each resolves to a non-magenta, deterministic color; the exhaustive match guarantees coverage).
-- [ ] **4.3** Update any snapshot/golden that referenced token strings (unlikely — tokens resolve to the same colors, so goldens should be byte-identical; run the GPU lane to confirm).
-- [ ] **4.4** Run the FULL project gate (see below). Fix all warnings.
-- [ ] **4.5** Commit: `test(theme): typed-token resolve parity + escape hatch`.
-- [ ] **GATE 3 (verify, don't just read):**
-  - `cargo fmt --all -- --check`
-  - `cargo clippy --workspace --all-targets --locked -- -D warnings`
-  - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked`
-  - `cargo test --workspace --locked` (headless)
-  - GPU lanes (real adapter): `cargo test -p buiy_core -j2 -- --ignored --test-threads=1` + `cargo test -p buiy_verify -j2 -- --ignored --test-threads=1` (token colors must render byte-identical — goldens unchanged).
-  - `cargo deny check`
-  - **Run a real app:** `cargo run -p buiy_gallery` — screens still render with correct colors (not magenta).
+**Files:** `buiy_widgets` (10), `buiy_gallery`, `hello_bsn`, `capture` (the literal-`Token("color.x")` sites).
 
-## Wave 5 — Docs + PR
+- [ ] **2.1** Substitution table string→variant (from 1.2). Fan out under `reliable-agent-fleet` per crate (distinct files); each agent returns changed sites + flags any string not in the table (→ escalate: new variant or `Custom`).
+- [ ] **2.2** `cargo build --workspace` (widgets/gallery/examples). Resolve residuals.
+- [ ] **2.3** Commit. **GATE 2:** every site maps to the semantically-correct variant; `grep -r 'ColorToken::Token'` empty in these crates.
 
-- [ ] **5.1** Flip the spec §3.2 note (typed tokens landed for color; spacing/radius follow-on tracked). Update `docs/README.md` if a token doc is added.
-- [ ] **5.2** Open PR `feat(theme): typed closed-enum ColorToken + theme contract` → base `main`; wait for green CI (3-OS + GPU lavapipe + MSRV + web-smoke + deny); merge on green (owner-authorized for this loop).
+## Wave 3 — The idiom redesign (test injection + reftest engine + bsn) — DESIGN, not a sweep
+
+**Files:** `buiy_verify/src/reftest.rs` (+ `reftest_engine_gpu.rs`), `buiy_bsn/tests/round_trip.rs`, `verify_headless/{contrast.rs, modal_showcase_c8c.rs}`, `buiy_bench_support/{lib.rs,mvu_scenes.rs}`, and the ~40 `crates/buiy_core/tests/**/*_gpu.rs` + `buiy_verify/tests/verify_gpu/*` theme-injection tests.
+
+- [ ] **3.1** Reftest engine: replace the `theme.colors.insert(key,color) + Token(key)` draw-color path with a direct `Color` / `ColorToken::Custom(color)` field — redesign the harness API (it's shared).
+- [ ] **3.2** Test-injection files: `insert("test.red",c)+Token("test.red")` → `Custom(c)` (drop the injection). Fan out under `reliable-agent-fleet` per file; parity oracle = the same pixel.
+- [ ] **3.3** `buiy_bsn/tests/round_trip.rs`: `Token(Cow::Borrowed("color.brand"))` → a variant or `Custom` authored via the real `bsn!`/`spawn_scene` path.
+- [ ] **3.4** Introspection `modal_showcase_c8c.rs:408`: `Token(t)=>Some(t.to_string())` → `token.debug_name()`.
+- [ ] **3.5** Dynamic sites (`reftest.rs:227/211`, `render_prepare.rs:373`, `render_smoke.rs:355`, `render_border_shadow*`, `render_patch_upload_gpu.rs:46`, `bench_support`) → `Custom(color)` / helper.
+- [ ] **3.6** `cargo build --workspace --all-targets`. Commit. **GATE 3:** no `Token(` remnants anywhere; the reftest engine redesign is sound; injections preserve their pixels.
+
+## Wave 4 — Full verification (verify, don't just read)
+
+- [ ] **4.1** `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked`.
+- [ ] **4.2** `cargo test --workspace --locked` (headless).
+- [ ] **4.3** GPU lanes (real adapter): `cargo test -p buiy_core -j2 -- --ignored --test-threads=1` + `cargo test -p buiy_verify -j2 -- --ignored --test-threads=1` — **token colors byte-identical → goldens unchanged** (the core parity proof).
+- [ ] **4.4** `cargo deny check`. **Run `cargo run -p buiy_gallery`** — all screens render correct colors (not magenta), `SetAccent` still re-themes, swatches stay fixed.
+- [ ] **4.5** Commit. **GATE 4:** all lanes green; parity oracle satisfied; gallery visually correct.
+
+## Wave 5 — Regression tests + docs + PR
+
+- [ ] **5.1** Add: (a) swatch-stability under `SetAccent` (must-fix #7); (b) all-variants-resolve-non-magenta (exhaustiveness already guarantees, assert anyway); (c) forced-colors: every semantic token → a system color, `is_forced_colors_safe` matches the analyzer; (d) `Custom` roundtrip; (e) auto-caret (no `color.caret` → CurrentColor).
+- [ ] **5.2** Flip spec §3.2 note (typed color tokens landed; spacing/radius/typography follow-on tracked). Update `docs/README.md` if a token doc is added. Note the light-theme half-wiring fix (magenta→real) as intentional.
+- [ ] **5.3** Open PR `feat(theme): typed closed-enum ColorToken + theme contract` → `main`; wait for green CI (3-OS + GPU lavapipe + MSRV + web-smoke + deny); merge on green (owner-authorized).
 
 ---
 
 ## Self-review notes
-- **Spec coverage:** realizes spec §3.2 (closed enum + contract, exhaustive-match completeness, escape hatch, migration) for the color scope; spacing/radius explicitly deferred + tracked.
-- **Value-parity risk:** the load-bearing correctness check is Wave-1 GATE + Wave-4 GPU goldens — token colors must be byte-identical to today (this is a refactor, not a re-theme). Any color drift is a bug.
-- **Dynamic-token risk:** the accent ramp + any runtime-computed token must be computed in `resolve` from theme state or routed through `Custom(Color)`; Wave-2.3 catches strings that don't map.
+- **All 7 must-fixes mapped to waves** (ledger above); the gate's CRITICAL build-break (dropped variants / `MISSING_TOKEN_FALLBACK`) is closed in W1.1–1.2 + 1.8.
+- **Value-parity oracle is W1.0** — dark-theme (gallery) colors byte-identical is the load-bearing correctness check, re-proven by GPU goldens in W4.3. Light-theme missing tokens change magenta→real (intentional half-wiring fix).
+- **Forced-colors is the hardest wave (W1.4/1.7/1.8)** — explicit mode + full system mapping + analyzer-by-kind; gated hardest.
+- **Idiom redesign (W3) is design work** across ~40 files + the shared reftest engine — not a literal sweep; fanned out but oracle-checked.
