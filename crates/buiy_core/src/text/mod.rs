@@ -110,6 +110,12 @@ pub struct BuiyTextPlugin {
 
 impl Plugin for BuiyTextPlugin {
     fn build(&self, app: &mut App) {
+        // The web IME + soft-keyboard DOM bridge (§ D8): winit's web backend emits no
+        // `Ime` and a focused hidden input starves winit's canvas keyboard, so on wasm
+        // Buiy owns keyboard+IME for the focused editor via a hidden <input>.
+        #[cfg(target_arch = "wasm32")]
+        app.add_plugins(crate::text::edit::web_ime::WebImePlugin);
+
         let fonts = SharedFontSystem::new();
         app.insert_resource(fonts.clone());
         app.init_resource::<FontsGeneration>();
