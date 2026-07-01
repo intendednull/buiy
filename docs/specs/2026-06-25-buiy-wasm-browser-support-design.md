@@ -119,6 +119,14 @@ Each decision names the choice, the reason, and the rejected alternative(s). Cla
 
 ## 2-deferred. Deferred decisions (the WebGL2 reach milestone)
 
+> **Superseded (2026-06-30).** These deferred decisions are graduated + re-decided in
+> [`2026-06-30-buiy-browser-reach-widening-design.md`](2026-06-30-buiy-browser-reach-widening-design.md),
+> which is prototype-validated (Buiy renders + interacts on WebGL2). Corrections from running it:
+> the band fix needs only **ONE** fold (affine → vec4), not the radii-to-UBO move suggested below;
+> `Rgba16Float` is a render-attachment at **two** sites (compositor + blur) needing a **distinct**
+> `OES_texture_float_linear` for the blur; and WebGL2 adds **zero `Cargo.lock` churn**. Read the
+> new spec for the actionable target; the notes below are the original deferral rationale.
+
 Preserved here so the later milestone re-decides from a written design, not from scratch.
 
 - **Band pipeline ≤16 vertex attributes (was D4 / report B2).** `band.wgsl` declares **17** attributes (`@location 0..=16`); `wgpu`'s `downlevel_webgl2_defaults()` caps `max_vertex_attributes = 16`. **Prototype sharpened the impact:** the invalid band pipeline is set inside `buiy_pass`, so an invalid pipeline makes the whole `CommandEncoder` fail to finish → **the entire pass is dropped → NOTHING paints** (not the "missing borders/focus-rings" the original framing described). So on WebGL2 this is a **hard, all-or-nothing prerequisite**. Fix: repack `BorderBandInstance` + `band.wgsl` to ≤16 (fold the two clip `vec2`s into one `vec4`, the affine into one `vec4`, and/or move per-corner radii into an instance-indexed UBO). It is also WebGPU **spec-baseline insurance** (baseline is 16; desktop Dawn's ~30 masks it today — a conservative/mobile WebGPU adapter would also fail), so it may be pulled forward into the WebGPU track if mobile WebGPU is targeted.

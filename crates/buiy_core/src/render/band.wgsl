@@ -41,8 +41,11 @@ struct Instance {
     @location(12) inner_radius_br_bl: vec4<f32>,
     @location(13) clip_min: vec2<f32>,     // logical px (-inf = none)
     @location(14) clip_max: vec2<f32>,     // logical px (+inf = none)
-    @location(15) affine_col0: vec2<f32>,
-    @location(16) affine_col1: vec2<f32>,
+    // Affine basis [m00, m10, m01, m11] as ONE vec4 (was two vec2 cols at
+    // @location 15/16). Folded to keep the band layout at 16 vertex attributes —
+    // WebGL2's `max_vertex_attributes` cap (downlevel_webgl2_defaults). The two
+    // 2-col reads become `.xy` / `.zw`; native/WebGPU behavior is identical.
+    @location(15) affine: vec4<f32>,
 };
 
 struct VertexOut {
@@ -70,7 +73,7 @@ fn logical_to_clip(p: vec2<f32>) -> vec2<f32> {
 fn vertex(v: Vertex, i: Instance) -> VertexOut {
     var out: VertexOut;
     let local_corner = v.uv * i.rect_size;                  // box-local, TL at 0
-    let logical = i.rect_pos + mat2x2<f32>(i.affine_col0, i.affine_col1) * local_corner;
+    let logical = i.rect_pos + mat2x2<f32>(i.affine.xy, i.affine.zw) * local_corner;
     out.clip_position = vec4<f32>(logical_to_clip(logical), 0.0, 1.0);
 
     let outer_half = i.rect_size * 0.5;

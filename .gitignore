@@ -15,3 +15,10 @@ target/
 # either accepts them into the committed `.snap` or discards them. A CI guard
 # fails if any are present (see ci.yml snapshot-hygiene step).
 *.snap.new
+
+# trunk web build output (WebGPU/WebGL2 wasm artifacts + the two-artifact loader,
+# produced by `trunk build --features …` / `tools/build-web.sh`) — never committed.
+examples/*/dist/
+examples/*/dist-web/
+examples/*/dist-webgl2/
+examples/*/dist-webgpu/

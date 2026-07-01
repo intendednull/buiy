@@ -359,8 +359,14 @@ jobs:
   # WebGPU-capable CI runner). This matches the foundation's web =
   # manual-release-gate stance for the render dimension. Follow-up to make it
   # fully CI-enforced (tint CLI, or a self-hosted GPU runner): follow-ups.md.
+  # The WebGL2 reach backend (spec 2026-06-30 § D4) is smoked in the SAME job:
+  # software WebGL2 (SwiftShader) IS available on the GPU-less runner, so its
+  # shader-conformance + paint check is FULLY ENFORCED here (unlike the WebGPU
+  # leg, which skips without an adapter). Both examples now select the backend via
+  # `--features webgpu|webgl2` (neither is a default — the two bevy meta-features
+  # can't coexist in one binary, so reach = two artifacts + a loader).
   web-smoke:
-    name: Web smoke (WebGPU headless)
+    name: Web smoke (WebGPU + WebGL2 headless)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -380,7 +386,9 @@ jobs:
         with:
           tool: trunk@0.21.14,wasm-bindgen-cli@0.2.125
       - name: Build the WebGPU wasm example
-        run: trunk build examples/buiy_web/index.html --dist examples/buiy_web/dist
+        run: trunk build examples/buiy_web/index.html --features webgpu --dist examples/buiy_web/dist
+      - name: Build the WebGL2 wasm example (the reach backend)
+        run: trunk build examples/buiy_web/index.html --features webgl2 --dist examples/buiy_web/dist-webgl2
       - name: Install smoke deps + chromium
         working-directory: tools/web-smoke
         run: |
@@ -395,6 +403,14 @@ jobs:
           export CHROME_BIN
           echo "CHROME_BIN=$CHROME_BIN"
           SMOKE_URL=http://localhost:8090/ node run.mjs
+      - name: Run the headless WebGL2 smoke (SwiftShader — ENFORCED)
+        working-directory: tools/web-smoke
+        run: |
+          python3 -m http.server 8091 --directory ../../examples/buiy_web/dist-webgl2 &
+          sleep 2
+          CHROME_BIN="$(node -e 'console.log(require("playwright-core").chromium.executablePath())')"
+          export CHROME_BIN
+          SMOKE_URL=http://localhost:8091/ node run-webgl2.mjs
 
   # ----------------------------------------------------------------------------
   # Coverage (informational, audit #41 / DG-4): produces an lcov artifact; no

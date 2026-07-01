@@ -7,19 +7,22 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+# Render backend, selected at (wasm) build time via `trunk --features webgpu|webgl2`.
+# NEITHER is default: on NATIVE the `--workspace` build enables neither — wgpu
+# auto-selects Vulkan/Metal/DX12 — so it never compiles a web backend or the 3D
+# crates the meta-features drag in. WebGPU = the preferred backend (needs an enabled
+# WebGPU adapter — flag-gated on Firefox/older Safari/some Linux). WebGL2 = the reach
+# backend, unflagged in every modern browser. The two bevy meta-features cannot
+# coexist in one binary (`webgpu` wins), so reach = two artifacts + a loader.
+webgpu = ["bevy/webgpu"]
+webgl2 = ["bevy/webgl2"]
+
 [dependencies]
-# Base workspace bevy (render/winit/window/asset/picking/...). On NATIVE this is
-# all buiy_web needs — wgpu auto-selects Vulkan/Metal/DX12 — so the native
-# `--workspace` build never compiles a web backend or the 3D crates.
 bevy = { workspace = true }
 buiy = { path = "../../crates/buiy" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# The WebGPU backend is enabled ONLY for the wasm build. The bevy META feature
-# is `webgpu` (-> bevy_internal/webgpu -> wgpu/webgpu); on wasm32 `settings.rs`
-# selects Backends::BROWSER_WEBGPU. NOTE (lean-feature task): `webgpu` also pulls
-# bevy_pbr/bevy_mikktspace (3D) a 2D UI lib never needs — trim to a curated
-# feature list (plan Task 3 Step 3); these crates land in Cargo.lock either way
-# (audited by `cargo deny`) but only the wasm build compiles them.
-bevy = { workspace = true, features = ["webgpu"] }
+# A panic hook that routes Rust panics to the browser console (the backend bevy
+# meta-feature comes from `[features]` above, selected per `trunk --features`).
 console_error_panic_hook = "0.1"

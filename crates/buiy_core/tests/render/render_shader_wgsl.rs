@@ -173,11 +173,13 @@ fn band_shader_parses_and_has_entry_points() {
         BAND_WGSL.contains("clip_min") && BAND_WGSL.contains("clip_max"),
         "band shader discards outside the (outline/ancestor) clip AABB"
     );
-    // The per-side color inputs ride @location(4)..(7) and the affine the last
-    // two locations — matching the BorderBandInstance vertex layout.
+    // The per-side color inputs ride @location(4)..(7) and the affine basis the
+    // LAST location as a single vec4 (folded from two vec2 cols to keep the band
+    // layout at 16 vertex attributes — WebGL2's max_vertex_attributes cap) —
+    // matching the BorderBandInstance vertex layout.
     assert!(
-        BAND_WGSL.contains("affine_col0") && BAND_WGSL.contains("affine_col1"),
-        "band shader declares the affine basis columns"
+        BAND_WGSL.contains("affine: vec4<f32>"),
+        "band shader declares the affine basis as one vec4 (loc 15)"
     );
 }
 
