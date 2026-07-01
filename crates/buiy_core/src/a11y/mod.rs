@@ -20,6 +20,11 @@ pub mod inprocess;
 pub mod relations;
 pub mod states;
 pub mod translate;
+/// Wasm-only DOM/ARIA a11y sink (§ D7) — mirrors the a11y tree to a hidden ARIA
+/// DOM subtree so a browser screen reader reads the canvas (accesskit has no web
+/// adapter). Compiled + registered only on wasm (native a11y rides the winit adapter).
+#[cfg(target_arch = "wasm32")]
+pub mod web_sink;
 
 pub use accname::{AccNameInputs, compute_accessible_name};
 pub use action::{
@@ -306,6 +311,12 @@ impl Plugin for A11yPlugin {
             // default direct `A11yExpanded` write is used).
             .init_resource::<InlineActionRegistry>()
             .add_systems(Update, build_tree.in_set(BuiySet::A11yUpdate));
+
+        // The web DOM/ARIA sink (§ D7): accesskit has no web adapter, so on wasm
+        // Buiy mirrors the a11y tree into a hidden ARIA DOM subtree next to the
+        // canvas. Additive — the winit adapter sink stays (an inert no-op on web).
+        #[cfg(target_arch = "wasm32")]
+        app.add_plugins(web_sink::WebA11ySinkPlugin);
 
         // P1c-b inbound action router + Button keyboard activation, both in
         // `BuiySet::Input` (action-router.md §7). `route_action_requests` MUST

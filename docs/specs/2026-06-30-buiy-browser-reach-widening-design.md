@@ -111,14 +111,26 @@ wasm-bindgen-futures/web-sys, already in the graph), no new crates; `cargo deny`
 **Rejected.** Making the trait async (churns the whole native path for a web-only need); a full
 DOM-event bridge in v1 (defers to the follow-up — the writeText path already delivers copy).
 
-### D7 — a11y sink: Buiy-owned hidden DOM/ARIA overlay (accesskit_web does not exist)
-**Decision.** A wasm-only `WebA11ySink` at the `adapter.rs:52` seam mirroring each frame's
-`A11yNodeView` tree into a visually-hidden, ARIA-annotated DOM subtree next to `#buiy`
-(role→`role`, name→`aria-label`, toggled→`aria-checked`, expanded→`aria-expanded`, + an
-`aria-live` region), reusing `build_tree_update`'s fold. **Why.** `accesskit_web` **does not
-exist** (verified — roadmap "planned, lowest priority, funding-dependent"); the data half is
-already web-ready. **Verify with a REAL screen reader** (not spec-only). XL. **Rejected.**
-Waiting for upstream (indefinite); claiming the built tree = working a11y (silent WCAG failure).
+### D7 — a11y sink: Buiy-owned hidden DOM/ARIA overlay (accesskit_web does not exist) — **LANDED (W4, read-only v1)**
+**Decision.** A wasm-only `WebA11ySinkPlugin` (`a11y/web_sink.rs`), registered by `A11yPlugin` on
+wasm alongside the (inert-on-web) winit adapter. It mirrors each frame's `A11yNodeView` snapshot
+(`builder.snapshot()` — the SAME data `build_tree_update` consumes) into a visually-hidden
+(clip pattern, NOT `display:none`/`aria-hidden`), ARIA-annotated DOM subtree (`#buiy-a11y-tree`)
+next to the canvas: role→`role` (21 roles mapped), name→`aria-label`, description→`aria-description`,
+toggled→`aria-checked`, expanded→`aria-expanded`, selected→`aria-selected`, disabled→`aria-disabled`,
+hidden→`aria-hidden`; nested per the a11y parent/children; rebuilt only on a change signature (a
+stable AX tree). Every DOM call is fallible-swallowed (an a11y sink must not crash the app).
+**Why.** `accesskit_web` **does not exist** (verified). **Verified (W4):** the browser AX tree (CDP
+`Accessibility.getFullAXTree` — what a screen reader consumes) contains the gallery's widgets with
+correct roles + accessible names (application + 23 named buttons + 3 checkboxes + a switch + 2
+textboxes + dialog/heading/status). Lock delta: web-sys Document/Element/HtmlElement/Node features
+(no new crates); `cargo deny` clean; native unaffected (the module is `cfg(wasm32)`). **Scope
+(v1):** OUTBOUND/read-only. **Follow-ups (named):** (1) INBOUND — a screen-reader click/focus routed
+BACK into the app via the existing `ActionRequest` path (`data-buiy-entity` handle is already
+emitted); (2) a real-AT pass (NVDA/VoiceOver) beyond the AX-tree assertion; (3) `aria-activedescendant`/
+`focus()` for live focus (the `data-buiy-focused` marker is AX-observable now). **Rejected.**
+Waiting for upstream (indefinite); claiming the built tree = working a11y without verifying the AX
+tree (silent WCAG failure — this wave verifies the AX tree).
 
 ### D8 — IME + mobile soft-keyboard: Buiy DOM bridge outside winit
 **Decision.** A wasm-only bridge: a hidden focused `<input>` sibling of `#buiy` (egui TextAgent
