@@ -15,6 +15,10 @@ description = "A comprehensive UI library for Bevy with web-quality accessibilit
 # See docs/specs/2026-06-30-mt-safety-design.md (D1).
 multi_threaded = ["buiy_core/multi_threaded"]
 
+# Render all feature-gated public items on docs.rs (badges + otherwise-hidden items).
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 bevy.workspace = true
 buiy_bsn = { path = "../buiy_bsn" }

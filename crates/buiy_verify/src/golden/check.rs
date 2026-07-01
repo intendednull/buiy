@@ -298,16 +298,16 @@ fn panic_fail(key: &GoldenKey, best: Option<&(usize, Diff)>, report: &std::path:
     match best {
         None => panic!(
             "no golden committed for `{slug}` — run\n  \
-             BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored \
-             --test-threads=1\nthen REVIEW the captured PNG and commit it. \
+             BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored \
+             --test-threads=1 goldens\nthen REVIEW the captured PNG and commit it. \
              Triage report: {report:?}"
         ),
         Some((i, diff)) => panic!(
             "golden `{slug}` diverged from every positive (closest = positive {i}: \
              differing_pixels={dp}, max_channel_delta={mcd}). A pixel change is a \
              rendering change; if intended, regenerate with\n  \
-             BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored \
-             --test-threads=1\nreview the diff, and commit. Triage report: {report:?}",
+             BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored \
+             --test-threads=1 goldens\nreview the diff, and commit. Triage report: {report:?}",
             dp = diff.differing_pixels,
             mcd = diff.max_channel_delta,
         ),

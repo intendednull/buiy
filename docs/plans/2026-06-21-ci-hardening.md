@@ -4,7 +4,7 @@
 20 confirmed, 1 rejected as a false positive). This plan implements the confirmed findings
 **except** the Dependabot config (deliberately declined — see "Out of scope").
 
-**Status:** in progress (branch `worktree-ci-hardening`).
+**Status:** landed — merged in PR #78 (branch protection staged as a manual follow-up).
 
 ## Why
 

@@ -2,7 +2,17 @@
 
 ## Project Overview
 
-_TODO: one-paragraph description of Buiy — what it is, the language/stack, the core concepts. Replace this placeholder before merging real work._
+Buiy is an accessible, web-quality UI library for the [Bevy](https://bevyengine.org) game
+engine, written in Rust as a **parallel UI stack to `bevy_ui`** — not built on top of it. It
+wires the primitives Bevy uses (Taffy for layout, cosmic-text for shaping + editing, AccessKit
+for the accessibility tree, `bevy_picking` for hit-testing) behind its own decomposed,
+ECS-native component model and a **custom wgpu render pipeline** that runs as a system in
+Bevy's `Core2d` schedule. Widget state flows through an Elm-style **MVU** funnel
+(`buiy_core::mvu`), which buys record/replay and agent-drive. The north star is modern-web
+feature parity — a CSS-subset layout/styling engine, complex text with BiDi/IME, ARIA roles,
+WCAG 2.2 AA — for both game and application UIs, with every machine-testable claim gated in CI.
+Status: pre-0.1 (`0.0.1`), pre-alpha; APIs are unstable and may break in any commit. A fuller
+overview is in [`README.md`](README.md).
 
 ## Dev Guidelines
 
@@ -32,7 +42,19 @@ docs/
 └── reference-designs/  — Archived design bundles (immutable)
 ```
 
-_TODO: add the source-tree layout (e.g. `src/`, `crates/`, `packages/`) once Buiy has code._
+Source tree:
+
+```
+crates/
+├── buiy/              — public umbrella crate (BuiyPlugin / BuiyHeadlessPlugin + re-exports + buiy::bsn)
+├── buiy_core/         — components, layout, render, text + editing, a11y, focus, picking, theme, animation, and the MVU state substrate
+├── buiy_widgets/      — widget implementations (Button, TextInput, Checkbox, Switch, Slider, Disclosure, Dialog, Tooltip, Popover, Menu, ScrollArea) + composites
+├── buiy_bsn/          — BSN (`bsn!`) authoring re-exports
+├── buiy_verify/       — verification harness (visual goldens, AccessKit snapshots, contrast linter)
+└── buiy_bench_support/ — dev-only perf-measurement harness (never in the production graph)
+
+examples/              — hello_button, hello_text, hello_bsn, todomvc, buiy_gallery, gallery_web, buiy_web, capture
+```
 
 ## Build & Test
 

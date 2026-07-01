@@ -1,7 +1,7 @@
 # Widget Catalog — Exact Visual Parity, FINAL (Phase 3) Design
 
-**Status:** Phase 3 target-state. The **final, mergeable** version. Built on
-`parity-final` (off `main` @ `fdb8dda`). **Merge-gated on HUMAN REVIEW.**
+**Status:** `[landed]` — the final parity design, merged in PR #83. Built on
+`parity-final` (off `main` @ `fdb8dda`).
 **Inputs:** the prototype (phase 2, `parity-prototype`, never merged) + its
 journal/retrospective; the re-decided architecture in
 `docs/reports/2026-06-26-parity-final-research-decisions.md` (7-track fleet); the

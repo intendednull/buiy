@@ -3,7 +3,7 @@
 **Date:** 2026-06-29
 **Spec:** `docs/specs/2026-06-29-mvu-as-core-design.md` (decision log D1–D14).
 **Base:** `origin/main` @ `4010753`. **Worktree:** `mvu-core-final` (branch `worktree-mvu-core-final`).
-**Delivery:** ONE PR (ratified at the human gate), executed in the verifiable waves below.
+**Delivery:** ONE PR — ratified at the human gate and merged as PR #87 (`[landed]`), executed in the verifiable waves below.
 **Prototype reference (port source, DO NOT MERGE):** `worktree-mvu-core` — net-new files port via `cp`; edited files reconcile by hand against the wasm-bearing base.
 
 ## Execution discipline (non-negotiable)

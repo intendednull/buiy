@@ -171,7 +171,7 @@ pub fn capture_app(logical_w: u32, logical_h: u32) -> bevy::app::App {
 }
 
 /// [`capture_app`] at an explicit window scale factor (the DPR-pin builder
-/// determinism.md sizes the offscreen target through). Bevy 0.18
+/// determinism.md sizes the offscreen target through). Bevy 0.19
 /// `WindowResolution::new` takes PHYSICAL units; pass `logical × scale` plus
 /// the override so `resolution.size()` reads back the logical size the view
 /// uniform is built from.

@@ -1551,8 +1551,8 @@ output and break the CI gate. The CI-pinned baseline is the authority.
 `golden_sdf_corner` diverges from the wgpu29/naga29 toolchain (vs. the
 pre-bump baseline), review the triage diff (`target/buiy-goldens/report.html`)
 to confirm it is corner-AA-only, then re-bless with
-`BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored
---test-threads=1` and commit. The dev-host divergence above is expected and
+`BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored
+--test-threads=1 goldens` and commit. The dev-host divergence above is expected and
 not the signal — only the CI-Mesa result is.
 
 **Owner:** the CI maintainer at the 0.19 toolchain bump.

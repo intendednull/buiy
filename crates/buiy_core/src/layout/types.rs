@@ -440,7 +440,7 @@ pub enum RepeatCount {
 ///
 /// Implementation note: `MinMax`'s two arguments are stored as a
 /// `Vec<TrackSize>` (expected `len() == 2`) rather than the spec's
-/// `(Box<TrackSize>, Box<TrackSize>)` because `bevy_reflect` 0.18 has
+/// `(Box<TrackSize>, Box<TrackSize>)` because `bevy_reflect` 0.19 has
 /// no `Reflect` impl for `Box<T>`. Translation validates the arity and
 /// emits `warn!` once per session if it isn't exactly 2.
 #[derive(Reflect, Default, Clone, Debug, PartialEq)]

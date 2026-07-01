@@ -7,7 +7,7 @@
 //!
 //! # Adapter lifecycle ownership
 //!
-//! Bevy 0.18 (`bevy_winit`) owns the `Adapter` objects — they are created in
+//! Bevy 0.19 (`bevy_winit`) owns the `Adapter` objects — they are created in
 //! `prepare_accessibility_for_window` (called from the winit runner with
 //! `ActiveEventLoop` in hand) and stored in the `ACCESS_KIT_ADAPTERS`
 //! thread-local. `AccessKitAdapterPlugin` does *not* create or destroy

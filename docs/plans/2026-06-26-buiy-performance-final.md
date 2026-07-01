@@ -1,6 +1,6 @@
 # Buiy performance — final-pass plan
 
-**Status:** `[active]`
+**Status:** `[landed]` — merged in PR #84
 **Date:** 2026-06-26
 **Realizes:** [performance final-pass design](../specs/2026-06-26-buiy-performance-final-design.md)
 (which realizes the [audit](../reports/2026-06-25-performance-audit.md)).
