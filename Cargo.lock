@@ -2123,6 +2123,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "buiy_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy_core",
+ "buiy_widgets",
+]
+
+[[package]]
 name = "buiy_web"
 version = "0.0.1"
 dependencies = [
@@ -2505,6 +2514,17 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "counter_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_view",
+ "image",
 ]
 
 [[package]]

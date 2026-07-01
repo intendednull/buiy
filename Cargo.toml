@@ -22,6 +22,7 @@ members = [
     "crates/buiy_bsn",
     "crates/buiy_core",
     "crates/buiy_widgets",
+    "crates/buiy_view",
     "crates/buiy_verify",
     "crates/buiy_bench_support",
     "examples/buiy_gallery",
@@ -32,6 +33,7 @@ members = [
     "examples/buiy_web",
     "examples/gallery_web",
     "examples/todomvc",
+    "examples/counter_view",
 ]
 
 [workspace.package]
