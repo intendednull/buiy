@@ -32,6 +32,58 @@
 //! - `Cmd::task` / keyed `Subscription` / dead-letter / `catch_unwind` supervision — spec §8.
 //! - The lazy bounded-ring record buffer + `#[derive(PureEnv)]` + `Local` in the env
 //!   allowlist — flagged `TODO` at their sites.
+//!
+//! ## Example — a minimal counter
+//!
+//! ```
+//! use bevy::prelude::*;
+//! use buiy_core::mvu::{Cmd, Model, MvuCorePlugin, MvuModelExt, MvuSet, enqueue};
+//!
+//! // 1. A model: a `Clone + PartialEq + Reflect` component the drain owns.
+//! #[derive(Component, Clone, PartialEq, Reflect, Default)]
+//! #[reflect(Component)]
+//! struct Counter {
+//!     value: i32,
+//! }
+//!
+//! // 2. Its messages: `Reflect` so a recorded session round-trips.
+//! #[derive(Clone, Debug, Reflect, PartialEq)]
+//! enum CounterMsg {
+//!     Increment,
+//! }
+//!
+//! impl Model for Counter {
+//!     type Msg = CounterMsg;
+//! }
+//!
+//! // 3. A pure reducer: fold a message into the model, return an effect.
+//! fn update(counter: &mut Counter, msg: CounterMsg) -> Cmd<CounterMsg> {
+//!     match msg {
+//!         CounterMsg::Increment => counter.value += 1,
+//!     }
+//!     Cmd::none()
+//! }
+//!
+//! // 4. Wire it — the model type is inferred from the reducer (no turbofish).
+//! let mut app = App::new();
+//! app.add_plugins(MvuCorePlugin);
+//! app.mvu_model(update);
+//!
+//! // 5. Spawn an actor, then `enqueue` from any system holding `Commands` — the
+//! //    single sanctioned mutation (handlers enqueue; they never fold). Enqueuing
+//! //    in `MvuSet::Enqueue` folds the same frame.
+//! let counter = app.world_mut().spawn(Counter::default()).id();
+//! app.add_systems(
+//!     Update,
+//!     (move |mut commands: Commands| {
+//!         enqueue::<Counter>(&mut commands, counter, CounterMsg::Increment);
+//!     })
+//!     .in_set(MvuSet::Enqueue),
+//! );
+//!
+//! app.update(); // enqueue → drain → fold, all this frame
+//! assert_eq!(app.world().get::<Counter>(counter).unwrap().value, 1);
+//! ```
 
 #[cfg(debug_assertions)]
 use bevy::ecs::change_detection::Tick;

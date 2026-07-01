@@ -82,5 +82,33 @@ Cheap, unambiguous accuracy defects, corrected as a continuation of the 2026-06-
 | 8 | **Fill CLAUDE.md `## Project Overview` + source-tree TODOs** (copy-forward from README) | quick | contributor | dead placeholders since well before 87 PRs |
 | 9 | **Sweep "0.18" → "0.19" in the 8 public rustdoc comments**; fix/repoint the 5 dangling `buiy-*-design` pointers; drop the deleted `extract_buiy_draws` mentions | quick | both | accuracy tail |
 
+## Remediation applied (2026-07-01)
+
+Same-session follow-up, all verified green (`cargo fmt --check`, `cargo doc -D warnings`, the
+`buiy` + `buiy_core` doctests, `hello_mvu` build + clippy):
+
+- **#1 Getting-started guide** — `docs/guide/getting-started.md`, registered as a new **Guide**
+  doc type + a user track in `docs/README.md`, linked from the README and the `buiy` crate `//!`.
+- **#2 Dead `--test goldens`** — fixed in every live site (skill, spec `goldens.md`, the
+  `check.rs` panic ×2, `verify_gpu/goldens.rs`, and the active `follow-ups.md`). The lone
+  remaining hit is in the `[landed]` `verification-impl.md` plan, left intact as a historical
+  snapshot (its surrounding file paths are also pre-consolidation).
+- **#3 `hello_mvu`** — `examples/hello_mvu` (compiles + clippy-clean) plus a compiled MVU doctest
+  in `mvu/mod.rs` (passes).
+- **#4 `buiy` crate landing** — expanded `//!` (quick-start `no_run` doctest, prelude, MVU note,
+  feature flags) + `[package.metadata.docs.rs] all-features` on `buiy` and `buiy_core`.
+- **#6 `CONTRIBUTING.md`** — added.
+- **#7 Verification how-to** — the skill now covers the a11y + contrast gates, the
+  live-interaction tier, both GPU legs, `--locked`, the nextest/orphan-snapshot reality, and the
+  bless env vars.
+- **#8 CLAUDE.md TODOs** — Project Overview + source-tree filled (the "conventions" TODO left as
+  genuinely forward-looking).
+- **#9 (partial)** — the 8 stale `0.18` rustdoc labels swept to `0.19` (or dropped where
+  version-independent). The 5 dangling `buiy-*-design` rustdoc pointers and the deleted
+  `extract_buiy_draws` doc mentions remain **deferred**.
+
+**Deferred by owner choice:** #5 (`#![warn(missing_docs)]` + the 64 Style-method / 14-field
+backfill + converting the widget `` ```ignore `` examples to compiled doctests).
+
 ## Baseline & method note
 `origin/main` advanced to `d285e6b` during this session (4 commits past the `abb76fb` the audit ran on: #86 hot-reload docs, #88 mt-safety [lands the `multi_threaded` feature], #89 MVU-research preservation [added two `docs/README.md` blocks + codified a "don't-lose-prototype-docs" rule in the prototype-first skill], #90 skills). All drift-sensitive findings were re-verified against `d285e6b` and hold. The in-flight docs-sync + this audit sit on an `abb76fb`-based worktree and **must be rebased onto `d285e6b`** before landing (a small `docs/README.md` 3-way merge against #89's additions).

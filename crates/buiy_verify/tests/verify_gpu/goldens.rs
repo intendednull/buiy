@@ -4,11 +4,11 @@
 //! WITHOUT these.
 //!
 //! Run (assert against the committed corpus):
-//!     cargo test -p buiy_verify --test goldens -- --ignored --test-threads=1
+//!     cargo test -p buiy_verify --test verify_gpu -- --ignored --test-threads=1 goldens
 //!
 //! Bless / re-bless the committed corpus (then REVIEW the PNG diff + commit):
-//!     BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored \
-//!         --test-threads=1
+//!     BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored \
+//!         --test-threads=1 goldens
 //!
 //! ## What each test proves
 //!

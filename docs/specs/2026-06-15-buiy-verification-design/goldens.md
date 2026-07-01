@@ -219,7 +219,7 @@ captures — a *determinism* check, not a stored regression). Modeled exactly on
   §Borrow 4). One canonical invocation, documented in the module header:
 
   ```sh
-  BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored --test-threads=1
+  BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored --test-threads=1 goldens
   ```
 
 ### Diff-PNG + self-contained HTML triage report

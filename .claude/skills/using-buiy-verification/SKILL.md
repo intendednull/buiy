@@ -44,6 +44,24 @@ A property that must hold for every scene → Tier 3. "These two ways of express
 the same thing must match" → Tier 4 reftest (no stored image). Only pixels a
 rasterizer alone produces → Tier 5 golden.
 
+### Two more headless pathways (not part of the pixel pyramid)
+
+Beyond the five visual tiers, `buiy_verify` has two headless, CI-gated **accessibility**
+verification modules — reach for these when the bug is semantic, not visual:
+
+- **`a11y`** — snapshot the AccessKit semantic tree (`a11y::snapshot_tree(&views)` /
+  `semantic_tree`); tests live in `crates/buiy_verify/tests/verify_headless/a11y.rs` (gate #3).
+  Use for role / name / state / relations regressions.
+- **`contrast`** — the WCAG-2 contrast linter (gate #9); tests in
+  `crates/buiy_verify/tests/verify_headless/contrast.rs`. Use for token / theme contrast.
+
+And a **live-interaction tier** (a sixth pathway, not in the pyramid): compose the *real* shell +
+the real `bevy_picking` backend and drive a **synthetic `PointerInput` click** through it, then
+assert the resulting `OnPress` / state. It is the only tier that catches bugs where the pick-set
+diverges from the paint-set (e.g. a hidden top-layer modal absorbing clicks — the bug the five
+visual tiers missed). Pattern: `examples/buiy_gallery/tests/interaction.rs`; prove RED by reverting
+the fix. Runs in the headless workspace gate.
+
 ## Coverage-by-construction: add ONE fixture, enroll everywhere
 
 The decisive property: a **fixture** (`widget × state` BSN scene factory) authored
@@ -142,15 +160,18 @@ Goldens are **never** auto-overwritten. To create/update a baseline, capture on 
 real GPU host, then **review the PNG diff** and commit:
 ```sh
 # assert against the committed corpus (GPU lane):
-cargo test -p buiy_verify --test goldens -- --ignored --test-threads=1
+cargo test -p buiy_verify --test verify_gpu -- --ignored --test-threads=1 goldens
 # bless / re-bless, then REVIEW the diff PNG before committing:
-BUIY_BLESS=1 cargo test -p buiy_verify --test goldens -- --ignored --test-threads=1
+BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored --test-threads=1 goldens
 ```
 `BUIY_BLESS=1` writes the PNG + a TOML `BlessLedger` entry (commit, timestamp,
 budget, reason). The corpus matrix driver (`coverage_golden`) is
 **bless-on-demand**: an un-blessed cell is *pending* (skipped), a blessed cell
 must still match. On a failure the harness writes a self-contained offline HTML
 triage report (diff PNG + cards) and points at it.
+
+Two optional bless knobs: `BUIY_BLESS_REASON=<text>` records a reason in the TOML ledger, and
+`BUIY_BLESS_REPLACE=<i>` overwrites positive `i` in place instead of appending a new one.
 
 ## Determinism (why the pixel tiers are reproducible)
 
@@ -166,14 +187,22 @@ pins the **lavapipe** software rasterizer. Capture itself is
 Headless gate (every-PR CI; **must stay green without a GPU** — never runs `--ignored`):
 ```sh
 cargo fmt --all -- --check && \
-  cargo clippy --workspace --all-targets -- -D warnings && \
-  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps && \
-  xvfb-run -a cargo test --workspace      # drop xvfb-run on macOS/Windows
+  cargo clippy --workspace --all-targets --locked -- -D warnings && \
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked && \
+  xvfb-run -a cargo test --workspace --locked   # drop xvfb-run on macOS/Windows
 ```
-GPU lane (Tiers 4–5, the `#[ignore]` tests — needs a real wgpu adapter or lavapipe;
-additive, run on a GPU host):
+`--locked` matches CI (the committed `Cargo.lock`). CI actually runs the tests through
+`cargo nextest` with `--unreferenced=reject`, so an **orphaned `.snap` snapshot fails CI** even
+though the `cargo test` above won't flag it — if you add or remove snapshots, run
+`cargo insta test --workspace --test-runner nextest --unreferenced=reject` locally.
+
+GPU lane (Tiers 4–5, the `#[ignore]` tests — needs a real wgpu adapter or lavapipe; additive, run
+on a GPU host). **Two legs, both required** — `buiy_verify` alone skips the `buiy_core` render-GPU
+path (pipeline creation, extract→prepare→node draw, atlas, compositor, text pipeline), which CI's
+`gpu` job runs:
 ```sh
-cargo test -p buiy_verify -- --ignored --test-threads=1
+cargo test -p buiy_core   -j 2 -- --ignored --test-threads=1
+cargo test -p buiy_verify -j 2 -- --ignored --test-threads=1
 ```
 `--test-threads=1` serializes the single adapter context. Keep new GPU tests
 `#[ignore]`. **Never run two GPU/cargo jobs in parallel on one `target/`** — build-cache

@@ -1,6 +1,62 @@
-//! Buiy — comprehensive UI library for Bevy.
+//! # Buiy — an accessible, web-quality UI library for [Bevy](https://bevyengine.org)
 //!
-//! See: docs/specs/2026-05-07-buiy-foundation/README.md.
+//! Buiy is a comprehensive, AccessKit-first UI toolkit built as a **parallel UI stack to
+//! `bevy_ui`** — not on top of it: a CSS-subset layout engine over Taffy, complex text +
+//! editing via cosmic-text, a custom wgpu render pipeline that runs as a system in Bevy's
+//! `Core2d` schedule, and an Elm-style MVU state funnel — all behind decomposed, ECS-native
+//! components.
+//!
+//! > **Pre-0.1, pre-alpha.** APIs are unstable and may break in any commit.
+//!
+//! ## Quick start
+//!
+//! Add [`BuiyPlugin`] after `DefaultPlugins`, then spawn widgets:
+//!
+//! ```no_run
+//! use bevy::prelude::*;
+//! use buiy::prelude::*;
+//!
+//! fn main() {
+//!     App::new()
+//!         .add_plugins(DefaultPlugins)
+//!         .add_plugins(BuiyPlugin)
+//!         .add_systems(Startup, setup)
+//!         .run();
+//! }
+//!
+//! fn setup(mut commands: Commands) {
+//!     commands.spawn(Camera2d);
+//!     commands.spawn(Button::new("Save")); // focusable, accessible; emits `OnPress`
+//!     commands.spawn(TextInput::single_line("Search…")); // caret, selection, clipboard, IME
+//! }
+//! ```
+//!
+//! ## Prelude
+//!
+//! `use buiy::prelude::*;` brings the common surface — components, plugins, the widget catalog —
+//! plus the `bsn!` authoring macros into scope in one import (the flat crate root re-exports the
+//! same set for `use buiy::*;`).
+//!
+//! ## State (MVU)
+//!
+//! Widget state flows through the Model-View-Update funnel in `buiy_core::mvu` (`Model` / `Msg` /
+//! pure reducer / `Cmd`). It is **not yet re-exported through this umbrella** — reach it via
+//! `buiy_core::mvu`. See the `hello_mvu` example and the [getting-started
+//! guide](https://github.com/intendednull/buiy/blob/main/docs/guide/getting-started.md).
+//!
+//! ## Feature flags
+//!
+//! - **`default_font`** *(default)* — embed the Fira Sans latin subset as the fallback font;
+//!   disable to ship zero font bytes and supply your own.
+//! - **`clipboard-image`** — the image clipboard flavor (`ClipboardImage`, `get_image` /
+//!   `set_image`).
+//! - **`multi_threaded`** — stay correct under Bevy's `multi_threaded` executor (opt-in).
+//!
+//! ## Design docs
+//!
+//! Architecture, specs, plans, and prior art live under
+//! [`docs/`](https://github.com/intendednull/buiy/blob/main/docs/README.md) (start at the
+//! [foundation design](https://github.com/intendednull/buiy/blob/main/docs/specs/2026-05-07-buiy-foundation/README.md)).
 
 use bevy::prelude::*;
 
@@ -192,7 +248,7 @@ pub mod prelude {
 ///
 /// `FocusPlugin::handle_tab` reads `Res<ButtonInput<KeyCode>>` and the
 /// `Button` click handler reads `Res<ButtonInput<MouseButton>>`. Bevy
-/// 0.18 panics when a `Res<T>` system param is missing, so the plugin
+/// panics when a `Res<T>` system param is missing, so the plugin
 /// must be present.
 ///
 /// `BuiyPlugin` does **not** itself require `bevy::transform::TransformPlugin`

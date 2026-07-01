@@ -4,9 +4,13 @@ Master index of Buiy's design specs, implementation plans, and reports. Grouped 
 
 For build/test/dev commands, see `../CLAUDE.md`. This file does not duplicate that content.
 
-## Where to start (new agents and humans)
+## Where to start
 
-Reading order for newcomers:
+**Building a UI with Buiy (users):** the [getting-started guide](guide/getting-started.md) and the
+runnable [`examples/`](../examples/) (`hello_button` → `hello_text` → `hello_bsn` → `hello_mvu` →
+the `buiy_gallery` reference app), then the crate rustdoc.
+
+**Working on Buiy internals (contributors / agents)** — reading order for newcomers:
 
 1. [Buiy foundation design](specs/2026-05-07-buiy-foundation/README.md) — the target shape of the library: feature inventory, architectural foundation, sub-spec roadmap. Multi-file folder; start at the README, then read children in the order it lists.
 2. [Buiy layout design](specs/2026-05-08-buiy-layout-design/README.md) — the Taffy bridge and the layout/render boundary every other subsystem builds on (multi-file).
@@ -17,13 +21,14 @@ Reading order for newcomers:
 
 ## Document types
 
-Five document types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
+Six document types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
 
 - **Spec** (`specs/`) — *what we are building toward.* Target shape of the code: types, traits, invariants, public API. Long-lived, canonical.
 - **Plan** (`plans/`) — *how we get from current code to the target.* Migration steps, file-by-file changes, PR breakdown. Cites the spec it realizes. Goes stale once shipped.
 - **Report** (`reports/`) — *findings from a one-shot investigation of our codebase.* Audits, post-mortems. Dated, immutable.
 - **Prototype** (`prototypes/`) — *the committed deliverables of a throwaway prototype* (`prototype-first-development`): the build-to-learn journal + retrospective (+ charter/design). Carried over so the *learning* survives; the prototype **code stays unmerged**. Indexed under its feature area's *prototype lineage* line.
 - **Prior-art** (`prior-art/<system>/`) — *deep dive on an external system we want to learn from.* Living documents; updated as the external system evolves. One folder per system; the full catalog is the [`prior-art/README.md`](prior-art/README.md) sub-index (this file keeps only the category map).
+- **Guide** (`guide/`) — *how to USE Buiy.* Task-ordered, usage-first walkthroughs and recipes for library users (not internals). Long-lived; the [getting-started guide](guide/getting-started.md) is the entry point.
 
 An optional **`Kind:`** header field names recurring *variants within* the spec/plan types — `campaign` (a plan-of-plans), `decision` (an ADR-style note), `values` (a mined data table) — without new types or filename suffixes. `reference-designs/` holds immutable design bundles fed into specs. Full definitions in the [docs-organization design](specs/2026-05-07-docs-organization-design.md).
 

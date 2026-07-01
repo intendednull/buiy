@@ -2389,7 +2389,7 @@ pub(super) fn gc_removed_nodes(
 /// inherit system is careful to skip writes when the value is
 /// unchanged, preserving the O(0) steady-state contract). The four
 /// new Phase 5 container/CQ entries are nested under a single inner
-/// `Or<(..)>` to stay under Bevy 0.18's 15-element tuple cap on the
+/// `Or<(..)>` to stay under Bevy 0.19's 15-element tuple cap on the
 /// outer `Or`; a nested `Or` counts as a single outer entry.
 ///
 /// **`Changed<ScrollOffset>` and `Changed<ScrollSnapItem>` are
@@ -3793,7 +3793,7 @@ pub(super) fn collect_dirty_descendants(
 /// instead from `tree.layout(node_id)` (architecture.md § 3.2
 /// explicit pinning) and uses the narrower `Query<&Container>` via
 /// `resolve_nearest_container_by_name`. Both helpers are kept
-/// separate because Bevy 0.18 query parameters are structural — the
+/// separate because Bevy 0.19 query parameters are structural — the
 /// wider query cannot be passed where the narrower one is expected
 /// without an adapter, and adding the adapter just to share one walk
 /// would obscure the per-site read-set.
@@ -3891,7 +3891,7 @@ pub(super) fn resolve_nearest_container_by_name(
 /// `ContainerQuery` (mid-tree container reacting to its own
 /// ancestor). Excluding such entities silently breaks descendant
 /// resolution. Read-side concern only; `&Container` and
-/// `&ContainerQuery` are disjoint components, so Bevy 0.18's borrow
+/// `&ContainerQuery` are disjoint components, so Bevy 0.19's borrow
 /// checker doesn't require the filter.
 #[allow(clippy::type_complexity)]
 pub(super) fn cq_flip_check(

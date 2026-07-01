@@ -241,10 +241,16 @@ Before bumping any dependency, run the supply-chain check: `cargo deny check`.
 
 Architecture specs, migration plans, audit reports, and a deep prior-art corpus live under [`docs/`](docs/README.md). Good entry points:
 
+- [**Getting-started guide**](docs/guide/getting-started.md) — build your first Buiy UI: plugin → widgets → styling → input → theming → `bsn!` → MVU state.
 - [`docs/README.md`](docs/README.md) — master index of every spec, plan, report, and prior-art folder.
 - [Foundation design](docs/specs/2026-05-07-buiy-foundation/README.md) — the target shape: feature inventory, architecture, and sub-spec roadmap.
 - [MVU-as-core design](docs/specs/2026-06-29-mvu-as-core-design.md) — how widget state is routed, recorded, and replayed.
 - [Layout design](docs/specs/2026-05-08-buiy-layout-design/README.md) · [Render pipeline](docs/specs/2026-06-03-buiy-render-pipeline-design/README.md) · [Text rendering](docs/specs/2026-06-09-buiy-text-rendering-design/README.md).
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test commands, the GPU lane, and the
+PR workflow. Buiy is experimental and largely unreviewed — see the note at the top.
 
 ## License
 

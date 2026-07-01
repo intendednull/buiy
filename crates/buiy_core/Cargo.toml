@@ -117,6 +117,10 @@ clipboard-image = ["arboard/image-data"]
 # docs/specs/2026-06-30-mt-safety-design.md (D1).
 multi_threaded = ["bevy/multi_threaded"]
 
+# Render all feature-gated public items on docs.rs (e.g. ClipboardImage / get_image / set_image).
+[package.metadata.docs.rs]
+all-features = true
+
 [dev-dependencies]
 naga = "29"
 proptest = { workspace = true }
