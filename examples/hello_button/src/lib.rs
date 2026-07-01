@@ -10,10 +10,9 @@
 //! (`docs/reports/2026-06-30-demos-mvu-migration-journal.md`).
 
 use bevy::prelude::*;
+// The MVU surface (`Cmd`/`Model`/`MvuModelExt`/`MvuSet`/`enqueue`) is preluded by
+// `buiy`, so `use buiy::*;` is all an app author needs — no second dependency.
 use buiy::*;
-// DX-1: none of these are in `buiy::prelude` — they come from a second, direct
-// `buiy_core` dependency, and `enqueue` is only reachable under `::mvu::`.
-use buiy_core::mvu::{Cmd, Model, MvuModelExt, MvuSet, enqueue};
 
 // ---------------------------------------------------------------------------
 // MODEL — the single source of truth. Must be a `Component` (DX-4: there is no

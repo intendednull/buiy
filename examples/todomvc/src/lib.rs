@@ -13,10 +13,10 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
+// MVU (`Cmd`/`Model`/`MvuModelExt`/`MvuSet`/`enqueue`) AND the editor-bridge types
+// (`EditSubmitted`/`TextEditState`) are preluded by `buiy` — `use buiy::*;` is the
+// whole app-author surface; no direct `buiy_core` dependency in the demo code.
 use buiy::*;
-use buiy_core::mvu::{Cmd, Model, MvuModelExt, MvuSet, enqueue};
-// DX-1 (again): the editor bridge types are NOT in the `buiy` prelude either.
-use buiy_core::text::edit::{EditSubmitted, TextEditState};
 
 // ---------------------------------------------------------------------------
 // MODEL — the whole app state in one component (DX-4: on a chosen entity).

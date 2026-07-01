@@ -545,6 +545,11 @@ FINAL. Ordered by value ÷ risk.)_
    `enqueue` only under `::mvu::`; editor `EditSubmitted`/`TextEditState` also
    absent). Re-export `Cmd`/`Model`/`enqueue`/`MvuModelExt`/`MvuSet` (+ the editor
    bridge types) through `buiy::prelude`. Pure re-exports; unblocks discoverability.
+   **✅ LANDED (follow-up):** the MVU surface (`Cmd`/`Model`/`Envelope`/`LogicalId`/
+   `MvuAppExt`/`MvuModelExt`/`MvuCorePlugin`/`MvuSet`/`MvuWorkCounters`/`enqueue`/
+   `fold_one_inline`) + `EditSubmitted`/`TextEditState` are now preluded by `buiy`;
+   the three demos dropped their `use buiy_core::mvu` imports and use only
+   `buiy::prelude`.
 2. **[High value / low risk] A `using-mvu` app-author guide/skill.** No
    task-oriented "define Model → reducer → route a press → bind" doc exists (only
    the internal design spec). Analogous to `using-buiy-verification`. Would also
