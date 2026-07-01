@@ -88,9 +88,10 @@ measure nonzero, no matter what font is "registered."
 
 **The fix (V14):** add `BuiyTextPlugin { system_fonts: false, .. }` to the shared
 `build_app` and make **Ahem the sole resolvable family** (mirroring the GPU capture
-stack's `FontMode::Ahem` determinism discipline, `determinism.rs`), then register the
-deterministic Ahem bytes (`determinism::ahem_bytes`, now with a `FontRegistry` present)
-and point the fixture label at `font-family: Ahem`. The button label then measures, and
+stack's `FontMode::Ahem` determinism discipline, `determinism.rs`), then stage the
+deterministic Ahem font via `determinism::stage_ahem` (which registers the bytes with **no**
+`app.update()`, preserving `build_app`'s "no update yet" contract) and point the fixture
+label at `determinism::AHEM_FAMILY` ("Ahem"). The button label then measures, and
 the `button.resting.*` layout + display-list snapshots re-bless (label `0×0` → measured;
 the button may re-center its child). **Treat the rebless count as expected≈12,
 verify-empirically** — the exact set is governed by `paints_cell`/`snapshots_cell`, not
@@ -140,11 +141,12 @@ persistence that does not exist).
 
 ### W2 — GPU host (PR #2: needs a real wgpu adapter; RX 6700 XT is available here)
 
-**V19 — adapter-robust ink detection.** Replace the absolute `is_white_ink` (`p>=180`
-all-channels) predicate in three GPU text tests (`text_caret_selection_e3_gpu.rs`,
-`text_selection_caret_gpu.rs`, `text_ime_preedit_gpu.rs`) with a **background-relative**
-ink detector (any pixel meaningfully brighter than the black background), via a shared
-helper. `>=180` assumes lavapipe's coverage/gamma; a different rasterizer paints the
+**V19 — adapter-robust ink detection.** Replace the **five** absolute-`>=180`-family ink
+predicates across three GPU text tests (`is_white_ink` in all three, plus `is_blue_ink` in
+`text_selection_caret_gpu.rs` and the colored-ink predicate in `text_ime_preedit_gpu.rs`)
+with a shared **channel-parametric** detector ("channel *c* meaningfully above the measured
+black background"), so per-color discrimination (blue selection vs. white ink) survives — a
+scalar brightness test would collapse it. `>=180` assumes lavapipe's coverage/gamma; a different rasterizer paints the
 white ink dimmer, so `cols_where()` returns empty and `.expect("glyph ink painted")`
 **panics on the RX today** (a live failing test). Each test's *semantic geometric*
 assertion (caret right of ink; selection bands; preedit ink present) is preserved.
