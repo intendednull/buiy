@@ -92,13 +92,24 @@ navigates in a real WebGL2 browser; headless `cold_touch_tap_activates_widget_ro
 crosscut suites green. **Rejected.** Forking bevy_picking; Part A only (insufficient — proven);
 observing `Pointer<Release>` (never fires for a tap — proven by running).
 
-### D6 — Cross-app clipboard: sync-facade + async-fill latch (web provider)
-**Decision.** A wasm-only `WebClipboard` swapped in at `text/mod.rs:311-314`. Copy/cut stay
+### D6 — Cross-app clipboard: sync-facade + async-fill latch (web provider) — **LANDED (W3)**
+**Decision.** A wasm-only `WebClipboard` swapped in at `text/mod.rs` (the wasm arm). Copy/cut stay
 sync (fire-and-forget `navigator.clipboard.write_text`); paste = a sync `get_text()` facade
-backed by an async `read_text()`-filled latch (`spawn_local`/`JsFuture`), first paste possibly
-stale. **Why.** The `ClipboardProvider` trait is sync; `read_text()` is a Promise; the latch
-keeps the trait unchanged. Browser: secure-context + transient-activation gated. **Rejected.**
-Making the trait async (churns the whole native path for a web-only need).
+backed by an async `read_text()`-filled latch (`spawn_local`/`JsFuture`), falling back to the
+in-app copy where the OS read is denied. **Why.** The `ClipboardProvider` trait is sync;
+`read_text()` is a Promise; the latch keeps the trait unchanged. The web-sys Clipboard API is
+behind `--cfg=web_sys_unstable_apis` (wired in `.cargo/config.toml` + the web-smoke CI job, since
+the workflow-global `RUSTFLAGS` shadows the config). **Verified (W3):** cross-app COPY works
+end-to-end — typing in the gallery input + Ctrl+A/Ctrl+C put the text on the real OS clipboard
+via `writeText` (headless Chrome, clipboard permissions granted). **Known limitation:** cross-app
+PASTE is BEST-EFFORT — `read_text()` needs the clipboard-read permission + transient activation,
+and Bevy's `Update` runs on the rAF tick (not inside the paste gesture), so where the OS read is
+denied `get_text` falls back to the in-app copy (in-app copy/paste always works). **A guaranteed
+cross-app paste needs a DOM `paste`-event bridge** (reads `clipboardData` inside the gesture) —
+a named follow-up. Lock delta: 4 dependency EDGES on `buiy_core` (js-sys/wasm-bindgen/
+wasm-bindgen-futures/web-sys, already in the graph), no new crates; `cargo deny` clean.
+**Rejected.** Making the trait async (churns the whole native path for a web-only need); a full
+DOM-event bridge in v1 (defers to the follow-up — the writeText path already delivers copy).
 
 ### D7 — a11y sink: Buiy-owned hidden DOM/ARIA overlay (accesskit_web does not exist)
 **Decision.** A wasm-only `WebA11ySink` at the `adapter.rs:52` seam mirroring each frame's

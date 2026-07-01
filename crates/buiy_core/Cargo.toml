@@ -88,9 +88,20 @@ lyon_extra = { workspace = true }
 ron = { workspace = true }
 
 # arboard has no wasm backend (D4) — native-only clipboard dep. The web build
-# defaults the Clipboard resource to the pure-Rust MemClipboard instead.
+# reaches the OS clipboard via `WebClipboard` (text/edit/clipboard.rs) instead.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard = { workspace = true }
+
+# The web build's OS clipboard: `WebClipboard` uses web-sys `navigator.clipboard`
+# (behind the `web_sys_unstable_apis` cfg — .cargo/config.toml) + `spawn_local` for
+# the async paste latch. All four crates are already in the graph via bevy's wasm
+# deps; these version reqs match the committed lock (no new lock crates), and only
+# add the Clipboard/Navigator/Window web-sys features.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Clipboard"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 
 [features]
 default = ["default_font"]

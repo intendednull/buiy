@@ -1,0 +1,7 @@
+# wasm-only build flags. `web_sys_unstable_apis` enables the `web-sys` Clipboard
+# API (navigator.clipboard read_text/write_text — still behind the unstable gate
+# upstream) used by `WebClipboard` (crates/buiy_core/src/text/edit/clipboard.rs).
+# Target-scoped to wasm32, so native builds (the `--workspace` gate, clippy, the
+# 3-OS test lanes) are unaffected; only the wasm web build sees it.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]

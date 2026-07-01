@@ -53,6 +53,8 @@ pub use decoration::{
 pub use direction::prepend_strong_marks;
 #[cfg(not(target_arch = "wasm32"))]
 pub use edit::ArboardClipboard;
+#[cfg(target_arch = "wasm32")]
+pub use edit::WebClipboard;
 pub use edit::{
     CaretBlink, CaretMoved, ClickTracker, Clipboard, ClipboardProvider, Disabled, EditCommand,
     EditContext, EditLog, EditLogEntry, EditRedone, EditSubmitted, EditUndone, GroupKind, Keymap,
@@ -323,12 +325,13 @@ impl Plugin for BuiyTextPlugin {
         app.insert_resource(crate::text::edit::Clipboard(Box::new(
             crate::text::edit::ArboardClipboard::new(),
         )));
-        // arboard has no wasm backend (D4): default to the pure-Rust in-app
-        // MemClipboard on the web. Cross-app paste via async navigator.clipboard
-        // is deferred (spec D9).
+        // arboard has no wasm backend (D4): the web build reaches the OS clipboard
+        // via WebClipboard (browser-reach widening § D6) — reliable cross-app copy
+        // (navigator.clipboard.writeText), best-effort paste (an async readText
+        // latch that falls back to the in-app copy where the OS read is denied).
         #[cfg(target_arch = "wasm32")]
         app.insert_resource(crate::text::edit::Clipboard(Box::new(
-            crate::text::edit::MemClipboard::default(),
+            crate::text::edit::WebClipboard::new(),
         )));
         app.add_message::<crate::text::edit::TextChanged>();
         // Editor command-sourcing (spec §6): the recordable

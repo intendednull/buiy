@@ -2069,6 +2069,7 @@ dependencies = [
  "guillotiere",
  "iai-callgrind",
  "image",
+ "js-sys",
  "lyon",
  "lyon_extra",
  "naga",
@@ -2081,6 +2082,9 @@ dependencies = [
  "tracing",
  "unicode-script",
  "unicode-segmentation",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

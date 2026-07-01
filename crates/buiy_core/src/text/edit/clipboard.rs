@@ -167,3 +167,105 @@ impl ClipboardProvider for MemClipboard {
         self.image = Some(image);
     }
 }
+
+/// The web build's OS clipboard, behind the [`ClipboardProvider`] facade
+/// (browser-reach widening § D6). Copy reaches the real OS clipboard reliably;
+/// paste is best-effort.
+///
+/// - **Copy/cut (`set_text`)** → `navigator.clipboard.writeText` (fire-and-forget).
+///   In a secure context (https/localhost) with a focused document, this reaches
+///   the OS clipboard — cross-app copy works. Failures are a silent no-op (the
+///   Promise is dropped), exactly as the trait's contract allows.
+/// - **Paste (`get_text`)** returns an async-fill LATCH refreshed from
+///   `navigator.clipboard.readText`. Because `readText` needs the clipboard-read
+///   permission + transient activation and Bevy's `Update` runs on the rAF tick
+///   (not inside the paste gesture), the OS read is BEST-EFFORT: where it resolves,
+///   cross-app paste works (the first paste after focus may be one value stale, then
+///   self-corrects); where it is denied, `get_text` falls back to the in-app `mem`
+///   copy, so copy/paste WITHIN the app always works. A guaranteed cross-app paste
+///   needs a DOM `paste`-event bridge (reads `clipboardData` inside the gesture) —
+///   a named follow-up, not v1.
+///
+/// HTML + image flavors stay in-app (`mem`) in v1 — the OS path is plain text.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+pub struct WebClipboard {
+    /// In-app fallback + the HTML/image flavor store (the OS path is text-only).
+    mem: MemClipboard,
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// The last text read from the OS clipboard (async-filled by [`WebClipboard::spawn_os_read`]).
+    static OS_TEXT_LATCH: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebClipboard {
+    /// Construct + warm the OS-read latch so the first paste has a value if the
+    /// browser grants the read.
+    pub fn new() -> Self {
+        Self::spawn_os_read();
+        Self::default()
+    }
+
+    fn os_clipboard() -> Option<web_sys::Clipboard> {
+        web_sys::window().map(|w| w.navigator().clipboard())
+    }
+
+    /// Fire an async `readText` into [`OS_TEXT_LATCH`]. The result lands on a later
+    /// microtask (permission/activation permitting); errors are swallowed.
+    fn spawn_os_read() {
+        let Some(clip) = Self::os_clipboard() else {
+            return;
+        };
+        let promise = clip.read_text();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(js) = wasm_bindgen_futures::JsFuture::from(promise).await {
+                if let Some(s) = js.as_string() {
+                    OS_TEXT_LATCH.with(|c| *c.borrow_mut() = Some(s));
+                }
+            }
+        });
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl ClipboardProvider for WebClipboard {
+    fn get_text(&mut self) -> Option<String> {
+        let os = OS_TEXT_LATCH.with(|c| c.borrow().clone());
+        // Refill for the next paste (async — see the type doc's best-effort note).
+        Self::spawn_os_read();
+        os.or_else(|| self.mem.get_text())
+    }
+
+    fn set_text(&mut self, text: String) {
+        if let Some(clip) = Self::os_clipboard() {
+            // Fire-and-forget: the returned Promise is dropped (the caller needs no
+            // result; a rejection is a silent no-op per the trait contract).
+            let _ = clip.write_text(&text);
+        }
+        // Keep the latch + in-app copy coherent so an immediate in-app paste works.
+        OS_TEXT_LATCH.with(|c| *c.borrow_mut() = Some(text.clone()));
+        self.mem.set_text(text);
+    }
+
+    fn get_html(&mut self) -> Option<String> {
+        self.mem.get_html()
+    }
+
+    fn set_html(&mut self, html: String) {
+        self.mem.set_html(html);
+    }
+
+    #[cfg(feature = "clipboard-image")]
+    fn get_image(&mut self) -> Option<ClipboardImage> {
+        self.mem.get_image()
+    }
+
+    #[cfg(feature = "clipboard-image")]
+    fn set_image(&mut self, image: ClipboardImage) {
+        self.mem.set_image(image);
+    }
+}
