@@ -47,9 +47,14 @@ cat > "$OUT/index.html" <<HTML
   <script type="module">
     // Feature-detect a usable WebGPU adapter; load the WebGPU build if present,
     // else the WebGL2 reach build. \`?force=webgpu|webgl2\` overrides (test hook).
+    //
+    // Resolve each build's assets against THIS page's own directory (not the
+    // domain root), so the bundle is relocatable: it serves correctly whether it
+    // sits at the site root OR under a project-page subpath like \`…github.io/<repo>/\`.
+    const at = (p) => new URL(p, new URL('.', location.href)).href;
     const BUILDS = {
-      webgpu: { js: '/webgpu/${gpu_js}', wasm: '/webgpu/${gpu_wasm}' },
-      webgl2: { js: '/webgl2/${gl2_js}', wasm: '/webgl2/${gl2_wasm}' },
+      webgpu: { js: at('webgpu/${gpu_js}'), wasm: at('webgpu/${gpu_wasm}') },
+      webgl2: { js: at('webgl2/${gl2_js}'), wasm: at('webgl2/${gl2_wasm}') },
     };
     async function pick() {
       const f = new URLSearchParams(location.search).get('force');
