@@ -214,9 +214,7 @@ impl TextColor {
     /// selectable — it simply carries no CaretVisual/SelectionVisual; the
     /// editing campaign owns the when-empty swap.)
     pub fn placeholder() -> Self {
-        Self(ColorToken::Token(
-            crate::render::color::PLACEHOLDER_COLOR_TOKEN.into(),
-        ))
+        Self(ColorToken::TextPlaceholder)
     }
 }
 
@@ -726,11 +724,11 @@ mod tests {
             angle_deg: 150.0,
             stops: vec![
                 ColorStop {
-                    color: ColorToken::Token("color.accent".into()),
+                    color: ColorToken::Accent,
                     position: 0.0,
                 },
                 ColorStop {
-                    color: ColorToken::Token("color.accent.lighter".into()),
+                    color: ColorToken::AccentLighter,
                     position: 1.0,
                 },
             ],
@@ -739,7 +737,7 @@ mod tests {
         assert_eq!(g.stops.len(), 2);
         assert_eq!(g.stops[0].position, 0.0);
         assert_eq!(g.stops[1].position, 1.0);
-        assert_eq!(g.stops[0].color, ColorToken::Token("color.accent".into()));
+        assert_eq!(g.stops[0].color, ColorToken::Accent);
     }
 
     #[test]
@@ -751,7 +749,7 @@ mod tests {
 
     #[test]
     fn background_layer_variants_are_distinct() {
-        let solid = BackgroundLayer::Solid(ColorToken::Token("a".into()));
+        let solid = BackgroundLayer::Solid(ColorToken::Custom(Color::srgb(0.1, 0.2, 0.3)));
         let linear = BackgroundLayer::Linear(LinearGradient::default());
         let radial = BackgroundLayer::Radial(RadialGradient::default());
         assert_ne!(solid, linear);

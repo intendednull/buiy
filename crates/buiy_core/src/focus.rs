@@ -35,7 +35,6 @@ use crate::render::components::{CssVisibility, LineStyle, Outline};
 use bevy::picking::events::{Pointer, Press};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use std::borrow::Cow;
 
 /// Marks an entity as part of the focus tree.
 #[derive(Component, Reflect, Default, Clone, Debug)]
@@ -132,17 +131,17 @@ const FOCUS_RING_WIDTH_PX: f32 = 2.0;
 const FOCUS_RING_OFFSET_PX: f32 = 2.0;
 
 /// The framework focus-ring [`Outline`]: a `Solid`, ≥ 2px, offset-2px stroke in
-/// the `color.focus.ring` token (WCAG 2.4.11). The token resolves at extract
-/// against the active theme — the default light theme's `color.focus.ring` (a
+/// the [`ColorToken::FocusRing`] token (WCAG 2.4.11). It resolves at extract
+/// against the active theme — the default light theme's focus-ring color (a
 /// high-contrast accent, ≥ 3:1 vs the white canvas) and, under forced-colors,
-/// the wholesale swap's `color.focus.ring` mapped to the system `Highlight`
-/// value (theme.rs) — so the ring is forced-colors-safe AND re-tints on a
-/// theme/forced-colors change with no relowering. A `Token` (not a
-/// `SystemColor`) deliberately, so it does not disturb the
-/// `Highlight`-prefers-when-present resolvers (`resolve_selection_bg`).
+/// the system `Highlight` value the forced resolve maps `FocusRing` to
+/// (theme.rs) — so the ring re-tints on a theme/forced-colors change with no
+/// relowering. `FocusRing` is deliberately one of the forced-colors-**safe**
+/// kinds ([`ColorToken::is_forced_colors_safe`]): the gate-#11 analyzer must not
+/// flag it, since the forced theme keeps the ring visible on purpose.
 fn focus_ring_outline() -> Outline {
     Outline {
-        color: ColorToken::Token(Cow::Borrowed(crate::render::color::FOCUS_RING_TOKEN)),
+        color: ColorToken::FocusRing,
         style: LineStyle::Solid,
         width: Length::px(FOCUS_RING_WIDTH_PX),
         offset: Length::px(FOCUS_RING_OFFSET_PX),
