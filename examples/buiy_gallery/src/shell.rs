@@ -34,12 +34,15 @@
 
 use bevy::prelude::{
     App, Camera2d, Commands, Component, DetectChanges, Entity, IntoScheduleConfigs, Message,
-    MessageReader, MessageWriter, Name, Plugin, Query, Res, Resource, Startup, Update, With, World,
+    MessageReader, MessageWriter, Name, Plugin, Query, Reflect, ReflectComponent, ReflectDefault,
+    Res, Resource, Startup, Update, With, World,
 };
 use buiy::prelude::*;
 use buiy_core::BuiySet;
 use buiy_core::a11y::A11yHidden;
 use buiy_core::interaction::OnPress;
+// W3 (prototype MVU migration): the screen router now folds through an MVU model.
+use buiy_core::mvu::{Cmd, Model, MvuAppExt, fold_one_inline};
 // `BackgroundLayers`/`BackgroundLayer`/`LinearGradient`/`RadialGradient`/
 // `ColorStop`/`Icon` now reach us through `buiy::prelude::*` (spec § 2 REFINE
 // promotions); only the not-yet-promoted render primitives are imported here.
@@ -56,7 +59,10 @@ use crate::{
 // ===========================================================================
 
 /// One of the five gallery screens hosted in the viewport.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+///
+/// W3 (prototype MVU migration): `Reflect` added so it can be a field of the
+/// `NavModel` MVU model + its `NavMsg` (the record log serializes via `Reflect`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Reflect)]
 pub enum Screen {
     /// S1 — the TodoMVC exemplar (the default screen, mirroring the design's
     /// initial `screen: 'todo'`).
@@ -161,6 +167,46 @@ pub struct ScreenRouter(pub Screen);
 /// same `.after(Input)` ordering as every other gallery interaction.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct SwitchScreen(pub Screen);
+
+// ---------------------------------------------------------------------------
+// W3 (prototype): the screen router migrated onto the MVU substrate.
+//
+// The active screen is now an MVU **model** (`NavModel`) — the single, recorded
+// source of truth — folded by a pure `nav_reducer`. `apply_screen_router` folds a
+// `SwitchScreen` request through it via the synchronous `fold_one_inline` seam and
+// then PROJECTS the folded screen onto the legacy `ScreenRouter` resource, so the
+// existing chrome-reflect + inspector readers (`reflect_active_screen`,
+// `reflect_rail_active_state`, `inspector::rebuild_inspector_on_switch`) are
+// untouched. This is the "strangler" migration: the model owns the truth, the
+// resource becomes a bind-derived projection kept for compatibility.
+// ---------------------------------------------------------------------------
+
+/// The MVU model for the active screen (W3). The single recorded source of truth;
+/// `nav_reducer` is its sole (inline) writer. Projected onto [`ScreenRouter`].
+#[derive(Component, Reflect, Clone, Copy, PartialEq, Debug, Default)]
+#[reflect(Component, Default)]
+pub struct NavModel(pub Screen);
+
+impl Model for NavModel {
+    type Msg = NavMsg;
+}
+
+/// Messages folded into [`NavModel`]. Absolute (`Switch(screen)`), never a toggle,
+/// so the inline fold is deterministic.
+#[derive(Clone, Debug, Reflect, PartialEq)]
+pub enum NavMsg {
+    /// Switch the active screen to this one.
+    Switch(Screen),
+}
+
+/// The pure [`NavModel`] reducer (W3). `set_if_neq` in the fold makes a switch to
+/// the already-active screen an idempotent no-op.
+pub fn nav_reducer(model: &mut NavModel, msg: NavMsg) -> Cmd<NavMsg> {
+    match msg {
+        NavMsg::Switch(screen) => model.0 = screen,
+    }
+    Cmd::none()
+}
 
 /// Re-themes the whole app to a new accent — re-exported here under the gallery's
 /// own name so the C4 inspector accent swatches can `write` it. (The framework
@@ -1465,12 +1511,29 @@ pub fn apply_screen_router(world: &mut World) {
     let Some(target) = requested else {
         return;
     };
-    let current = world.resource::<ScreenRouter>().0;
-    if target == current {
+    // W3: fold the switch THROUGH the MVU `NavModel` (the recorded source of truth)
+    // via the synchronous inline seam, then project onto the legacy `ScreenRouter`.
+    // Lazy-spawn the model seeded to the current router so every harness driving
+    // this applier gets it without extra wiring (tests don't add ScreenRouterPlugin).
+    let nav = {
+        let mut q = world.query_filtered::<Entity, With<NavModel>>();
+        match q.iter(world).next() {
+            Some(e) => e,
+            None => {
+                let cur = world.resource::<ScreenRouter>().0;
+                world.spawn((NavModel(cur), Name::new("#NavModel"))).id()
+            }
+        }
+    };
+    // `set_if_neq` in the fold ⇒ `changed` is false when target == current (the
+    // original early-return, now expressed through the model).
+    let changed = fold_one_inline::<NavModel>(world, nav, NavMsg::Switch(target), nav_reducer);
+    if !changed {
         return;
     }
-    world.resource_mut::<ScreenRouter>().0 = target;
-    set_active_screen(world, target);
+    let screen = world.get::<NavModel>(nav).map(|m| m.0).unwrap_or(target);
+    world.resource_mut::<ScreenRouter>().0 = screen; // the projection consumers read
+    set_active_screen(world, screen);
 }
 
 /// Map a rail nav button's `OnPress` to a [`SwitchScreen`] request: read the
@@ -1644,6 +1707,11 @@ pub struct ScreenRouterPlugin;
 
 impl Plugin for ScreenRouterPlugin {
     fn build(&self, app: &mut App) {
+        // W3: register the MVU nav model (record/replay-readiness). The applier
+        // lazy-spawns the `NavModel` entity, so no Startup spawn is needed here.
+        app.register_type::<Screen>()
+            .register_type::<NavModel>()
+            .add_model::<NavModel>();
         app.init_resource::<ScreenRouter>()
             .add_message::<SwitchScreen>()
             .add_systems(Startup, setup_shell)

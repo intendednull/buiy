@@ -1,28 +1,27 @@
 [package]
-name = "hello_button"
+name = "todomvc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+description = "TodoMVC built on the Buiy MVU paradigm (prototype) — the canonical real MVU app, used to pressure-test the keyed-list / structural-reconcile bind."
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "hello_button"
+name = "todomvc"
 path = "src/main.rs"
 
-# GPU capture: render the counter offscreen + read back to PNG (prototype RUN+view).
 [[bin]]
-name = "capture_counter"
-path = "src/bin/capture_counter.rs"
+name = "capture_todomvc"
+path = "src/bin/capture_todomvc.rs"
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "x11", "wayland"] }
 buiy = { path = "../../crates/buiy" }
-# PROTOTYPE DX-1: MVU is NOT in the `buiy` prelude, so a demo that wants to use
-# the state paradigm must take a *second*, direct dependency on `buiy_core`.
+# DX-1: MVU is not in the `buiy` prelude — second, direct dep required.
 buiy_core = { path = "../../crates/buiy_core" }
 image = { workspace = true }
