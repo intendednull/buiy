@@ -5,13 +5,9 @@
 //! phase grows it. Same idiom as render_instance.rs's sdf port.
 
 use bevy::math::Vec2;
-
-/// Signed distance to a rounded rect centered at origin (port of
-/// shader.wgsl::sdf_rounded_rect). Negative inside.
-fn sdf_rounded_rect(p: Vec2, half: Vec2, r: f32) -> f32 {
-    let q = p.abs() - half + Vec2::splat(r);
-    q.max(Vec2::ZERO).length() + q.x.max(q.y).min(0.0) - r
-}
+// The canonical CPU twin of `shader.wgsl::sdf_rounded_rect` (negative inside),
+// shared across the SDF oracle + render tests so the ports cannot drift.
+use buiy_core::render::sdf_rounded_rect;
 
 /// Border band coverage: a fragment is "in the band" iff it is inside the
 /// outer rounded rect AND outside the inner (content) rounded rect.

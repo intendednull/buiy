@@ -157,7 +157,7 @@ Each row is a `reftest!` pairing; the reference column is the disjoint oracle (w
 
 ## CPU-vs-GPU SDF cross-check (Tier 4.5)
 
-The golden-free rasterization oracle for the one property no markup reference can reach: **SDF corner AA**. Vello's pattern (vello/lessons.md "Top of file"), but *stronger* — Buiy's CPU oracle and GPU shader evaluate the **same closed-form `sdf_rounded_rect`** (`render/shader.wgsl:60`; CPU port at `tests/render_instance.rs:12`), so their agreement-to-tolerance is a *durable* invariant whose divergence localizes a real shader bug (wrong half-extent, radius clamp, premultiply, AA step). Keep it **permanently** — do not inherit Vello's "phase out the cross-check" posture (vello/lessons.md Avoid), which applies only to their two-independent-implementation case.
+The golden-free rasterization oracle for the one property no markup reference can reach: **SDF corner AA**. Vello's pattern (vello/lessons.md "Top of file"), but *stronger* — Buiy's CPU oracle and GPU shader evaluate the **same closed-form `sdf_rounded_rect`** (`render/shader.wgsl:60`; the single canonical CPU port is `buiy_core::render::sdf_rounded_rect`, shared by the oracle + the render unit tests), so their agreement-to-tolerance is a *durable* invariant whose divergence localizes a real shader bug (wrong half-extent, radius clamp, premultiply, AA step). Keep it **permanently** — do not inherit Vello's "phase out the cross-check" posture (vello/lessons.md Avoid), which applies only to their two-independent-implementation case.
 
 Promote the CPU port from three scalar point-probes to a **full-tile rasterizer** (vello/lessons.md Borrow #1):
 
