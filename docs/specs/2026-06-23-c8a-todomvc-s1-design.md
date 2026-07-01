@@ -1,6 +1,10 @@
 # C8-a — S1 TodoMVC screen + inspection-driver acceptance (design)
 
-`2026-06-23` · `[active]` · realizes child **C8** (`docs/specs/2026-06-22-buiy-widget-catalog-design/widget-gallery-exemplar.md`) **S1 only**
+**Date:** 2026-06-23
+**Status:** landed
+**Kind:** decision — a scoped design note (records the picks + the runner-up for S1)
+
+Realizes child **C8** (`docs/specs/2026-06-22-buiy-widget-catalog-design/widget-gallery-exemplar.md`) **S1 only**.
 
 > Two reasonable approaches existed for the "add a todo" commit seam and for the
 > screen's app-logic placement; this note records the picks + the runner-up,
