@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-25
 **Revised:** 2026-06-26 — re-decided after a throwaway prototype built and ran Buiy in a real browser (see § 7 Provenance).
-**Status:** draft
+**Status:** active
 
 Graduates the **web** target out of the [foundation roadmap](2026-05-07-buiy-foundation/README.md#4-sub-spec-roadmap) into its own design spec, and resolves the web portion of the foundation's **§ 5 "Platform support staging"** open question. Aligns with — does not contradict — [architecture.md § 2.9 "Platform support — staged"](2026-05-07-buiy-foundation/architecture.md), which classifies web as a deferred, manual-release-gate platform; this spec gives that a concrete **v1 target** (WebGPU-only) and entry conditions.
 

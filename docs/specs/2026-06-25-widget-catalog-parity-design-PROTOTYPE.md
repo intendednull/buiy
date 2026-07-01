@@ -9,7 +9,7 @@ prototype→final decision record is `docs/reports/2026-06-26-parity-final-decis
 **Not for merge.**
 **Research:** `docs/reports/2026-06-25-parity-research-findings.md` (8-track fleet,
 full coverage). **Target:** `docs/reference-designs/widget-catalog/Widget Catalog.dc.html`.
-**Journal:** `docs/reports/2026-06-25-parity-prototype-journal.md`.
+**Journal:** kept on the throwaway `parity-prototype` worktree (not preserved in-tree).
 
 ## 1. Goal & scope
 
