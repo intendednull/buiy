@@ -132,15 +132,33 @@ emitted); (2) a real-AT pass (NVDA/VoiceOver) beyond the AX-tree assertion; (3) 
 Waiting for upstream (indefinite); claiming the built tree = working a11y without verifying the AX
 tree (silent WCAG failure — this wave verifies the AX tree).
 
-### D8 — IME + mobile soft-keyboard: Buiy DOM bridge outside winit
+### D8 — IME + mobile soft-keyboard: Buiy DOM bridge outside winit — **DEFERRED (W5, prototype-first; evidence below)**
 **Decision.** A wasm-only bridge: a hidden focused `<input>` sibling of `#buiy` (egui TextAgent
 pattern); on editor focus `.focus()` (raises the OSK) + move to `ime_position`; register
 `compositionstart/update/end` + `input` → `MessageWriter<Ime>` feeding the unchanged E5 engine
 (the OUTPUT seam `ime_enabled`/`ime_position` at `ime.rs:571,585`, INPUT seam
 `MessageReader<Ime>` at `ime.rs:429`). **Why.** winit#4424 is OPEN with no timeline (winit web
 emits no `Ime`); the engine is winit-free + reusable. EditContext is Chromium-only → the hidden
-`<input>` is the cross-browser path. **Rejected.** Waiting on winit#4424; owning a full IME
-engine (already exists).
+`<input>` is the cross-browser path.
+
+> **Empirical finding (W5 probe, 2026-07-01 — why W5 is its own prototype-first wave, not a quick
+> shim).** A no-rebuild browser probe + the winit-0.30.13 source establish that focusing the hidden
+> input **starves winit's text keyboard**: winit's `WindowEvent::KeyboardInput` (the path bevy's
+> editor consumes) is attached to the **canvas** (`web/web_sys/canvas.rs:301`); with the input
+> focused, canvas `keydown` fires **0/3** (probe) while `window` `keydown` still fires 3/3 by
+> bubbling — but the window-level winit listener (`event_loop/runner.rs:347`) only emits raw
+> `DeviceEvent::Key` (device-events-gated), which the editor does NOT use for text. So the
+> hidden-input bridge must **fully replace** keyboard for the focused editor (the egui TextAgent
+> model): route ALL input from the input back into bevy — text via `input`/composition → `Ime`,
+> and **every non-text key (arrows, Enter, Backspace, Tab, Esc, Ctrl/Cmd shortcuts) via `keydown`
+> → synthesized `bevy::input::keyboard::KeyboardInput`**, needing a DOM-`code`→bevy-`KeyCode`
+> mapping table. Plus focus-sync (focus/blur on `ime_enabled`), double-insertion avoidance, and a
+> touch-vs-desktop policy (focusing the input on desktop is otherwise a keyboard REGRESSION). This
+> is a substantial, regression-risky, prototype-first effort — **scoped to its own wave** rather
+> than rushed. W1–W4 are landed + verified; W5 is the remaining wave.
+
+**Rejected.** Waiting on winit#4424; owning a full IME engine (already exists); a naive
+focus-the-input shim (proven to starve the editor's keyboard — a regression, not a feature).
 
 ### D9 — Web target stays purely additive
 Every change is `cfg(target_arch="wasm32")`-gated or a new build target, EXCEPT the shared-code
@@ -149,20 +167,25 @@ behavior unchanged; `--workspace` enables no backend feature.
 
 ## 3. Phasing (→ the plan)
 
-Render reach is proven and lands first; platform-service stages behind it, each independently
-mergeable + gated:
+**Status (2026-07-01): 4 waves LANDED + verified on `main`; 2 items remain.**
 
-1. **W1 Render reach** (D2 band fold + D1 feature plumbing + `build-web.sh` loader + D4 CI
-   webgl2 leg). The flag-removal deliverable — **fully verified here** (renders + CI-gated on
-   SwiftShader). **D3 (`Rgba16Float` capability gate) is deliberately NOT in W1:** the float-less
-   break targets older mobile and is not reproducible on desktop/SwiftShader (both expose the
-   float extensions), so shipping it in the "verified core" would ship unverified code. It moves
-   to W2 (mobile hardening), where a float-less rig or a forced-fallback test can exercise it.
-2. **W2 Mobile hardening** (D5 touch Part A + Part B + headless cold-tap/touch test; **D3**
-   `Rgba16Float` capability gate + forced-Rgba8 test) — the mobile population W1 reaches.
-3. **W3 Clipboard** (D6 WebClipboard) — verifiable in-browser.
-4. **W4 a11y overlay** (D7) — XL, real-screen-reader-gated.
-5. **W5 IME/soft-keyboard** (D8) — CJK-browser-gated.
+1. **W1 Render reach** — **✅ LANDED (#94).** D2 band fold + D1 feature plumbing + `build-web.sh`
+   loader + D4 CI webgl2 leg. The flag-removal deliverable — verified (renders + CI-gated on
+   SwiftShader). **D3 (`Rgba16Float` float-less fallback) was deliberately excluded** (not
+   reproducible on desktop/SwiftShader — both expose the float extensions), and **remains
+   DEFERRED** to a float-less-rig / forced-fallback wave.
+2. **W2 Touch** — **✅ LANDED (#98).** D5 Part A + Part B + headless cold-tap/touch tests; verified
+   in a real WebGL2 browser. (D3 was NOT bundled here — it needs a float-less rig it lacks.)
+3. **W3 Clipboard** — **✅ LANDED (#99).** D6 WebClipboard; cross-app copy verified end-to-end
+   (best-effort paste documented).
+4. **W4 a11y overlay** — **✅ LANDED (#100).** D7 WebA11ySink; the AX tree verified via CDP
+   (read-only v1; inbound/real-AT follow-ups named).
+5. **W5 IME/soft-keyboard** — **⏳ DEFERRED (prototype-first).** D8 — the W5 probe proved the
+   hidden-input bridge starves winit's canvas text keyboard, so it needs a full egui-TextAgent
+   input bridge (a regression-risky, prototype-first effort). See D8's empirical finding.
+6. **D3 `Rgba16Float` float-less fallback** — **⏳ DEFERRED.** Needs a float-less WebGL2 rig (or a
+   forced-`Rgba8` test) that the dev/CI adapters can't provide (all expose the float extensions);
+   the desktop/common-mobile path already works (both float extensions present).
 
 ## 4. Verification
 
