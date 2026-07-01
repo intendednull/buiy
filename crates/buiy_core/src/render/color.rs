@@ -1,14 +1,17 @@
 //! The `ColorToken` themeable color reference (the layout↔render paint
-//! boundary's color seam) + the CSS `SystemColorKeyword` set. Canonical
-//! owner per color-and-forced-colors.md § 2.0; the R11 forced-colors phase
-//! EXTENDS this file with resolution logic (it must not redefine these
-//! enums). `render/components.rs` imports `ColorToken` from here.
+//! boundary's color seam) + the CSS `SystemColorKeyword` set, plus the
+//! [`ThemeContract`] resolution trait. Canonical owner per
+//! color-and-forced-colors.md § 2.0; `render/components.rs` imports
+//! `ColorToken` from here.
+//!
+//! Track B made `ColorToken` a **closed enum** resolved through a
+//! compiler-enforced [`ThemeContract`]: a typo/missing token is a compile
+//! error, never a silent magenta ship (spec § 3.2, F6).
 //!
 //! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md § 2.0.
 
 use crate::theme::Theme;
 use bevy::prelude::*;
-use std::borrow::Cow;
 
 /// CSS system-color keyword. Foundation-**F** set (16 keywords). Defined
 /// here as a v1 unit prerequisite so `ColorToken::SystemColor(_)` compiles;
@@ -83,142 +86,223 @@ impl SystemColorKeyword {
     }
 }
 
-/// A themeable color reference, resolved against `Res<Theme>` at extract
-/// time (color-and-forced-colors.md § 2.1). Default is `Transparent`,
-/// matching `Visual.background_token == ""` and the CSS-initial "no fill"
-/// semantics (component-model.md § 2 / § 3).
+/// A themeable color reference — the layout↔render paint boundary's color seam
+/// (color-and-forced-colors.md § 2.0). Resolved against the active [`Theme`]
+/// via [`ThemeContract::resolve`] at extract time.
+///
+/// This is a **closed vocabulary**: three non-semantic kinds (`Transparent` —
+/// the `#[default]`, `CurrentColor`, `SystemColor`), a
+/// [`Custom`](ColorToken::Custom) escape hatch for genuinely-dynamic / test
+/// colors, and one variant per semantic design token (`values.md` § 1). Because
+/// the vocabulary is closed and [`Theme`] resolves it through an exhaustive
+/// match, a missing/typo'd token is a **compile error**, never a silent magenta
+/// ship (Track B, spec § 3.2 F6). There is deliberately no `caret` /
+/// `preedit-underline` variant — those consumers default to `CurrentColor`
+/// (CSS `auto`; see [`resolve_caret_color`] / [`resolve_preedit_underline`]).
 ///
 /// Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md § 2.0.
-#[derive(Reflect, Clone, Default, PartialEq, Debug)]
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Default)]
 pub enum ColorToken {
-    /// CSS `transparent` (and the empty-token "skip the fill" case). The
-    /// default; resolves to `Color::NONE` (alpha 0). Extract skips emitting
-    /// a quad for a transparent fill.
+    /// CSS `transparent` (the empty-token "skip the fill" case, and the former
+    /// `color.surface.transparent`). The default; resolves to `Color::NONE`.
+    /// Extract skips emitting a quad for a transparent fill.
     #[default]
     Transparent,
-    /// A named theme token, e.g. `Token("color.surface.secondary")`.
-    /// Resolves via `Theme::color(name)`; a miss is the magenta sentinel.
-    Token(Cow<'static, str>),
-    /// CSS `currentColor`: resolves to the inherited text color (v1 fallback
-    /// = theme default foreground token). Carrier owned by
-    /// `buiy-text-rendering-design`.
+    /// CSS `currentColor`: the inherited text color; the auto default for
+    /// text/caret/icon. Resolves to the system `CanvasText` under forced-colors,
+    /// else to `color.text.primary` (the v1 foreground fallback).
     CurrentColor,
-    /// A CSS system-color keyword; under forced-colors the only set that
-    /// resolves.
+    /// A CSS system-color keyword. Under forced-colors the whole semantic
+    /// vocabulary maps onto this set; it is one of the kinds the gate-#11
+    /// analyzer treats as forced-colors-safe.
     SystemColor(SystemColorKeyword),
+    /// A genuinely-dynamic or test-only color, carried inline. The escape hatch
+    /// that replaced the old stringly `Token(Cow<str>)`; NOT forced-colors-safe
+    /// (a concrete color, not a system reference).
+    Custom(Color),
+
+    // --- Closed semantic vocabulary (values.md § 1). One variant per design
+    //     token; resolved to the active theme's palette by `Theme::resolve`. ---
+
+    // Surface
+    SurfaceApp,
+    SurfacePrimary,
+    SurfaceSecondary,
+    SurfaceCard,
+    SurfaceRaised,
+    SurfaceRaisedAlt,
+    SurfaceInset,
+    SurfaceChrome,
+    SurfaceChromeTranslucent,
+    SurfaceDanger,
+    SurfaceDangerSoft,
+    SurfaceDangerStrong,
+
+    // Text ink ladder
+    TextPrimary,
+    TextSecondary,
+    TextMuted,
+    TextDim,
+    TextDimmer,
+    TextFaint,
+    TextBright,
+    TextPlaceholder,
+    TextDanger,
+    TextDangerDim,
+    TextOnAccent,
+
+    // Border
+    BorderDefault,
+    BorderSubtle,
+    BorderSubtle2,
+    BorderMuted,
+    BorderStrong,
+    BorderStrong2,
+    BorderDanger,
+
+    // Accent — LIVE ramp (derived from the theme's runtime `accent` via
+    // `derive_accent_ramp`; moved by `SetAccent`).
+    Accent,
+    AccentLighter,
+    AccentSoft,
+    AccentGlow,
+    // Accent — FIXED swatches (constant design literals; the selectable accent
+    // options — NOT moved by `SetAccent`).
+    AccentBlue,
+    AccentGreen,
+    AccentViolet,
+    AccentCoral,
+
+    // Status
+    StatusOk,
+    StatusWarn,
+    StatusError,
+
+    // Shadow (the box-shadow catalog colors incl. alpha; values.md § 2)
+    ShadowCard,
+    ShadowMenu,
+    ShadowModal,
+    ShadowSliderThumb,
+    ShadowSwitchThumb,
+    ShadowDangerButton,
+
+    // Selection (::selection)
+    SelectionBg,
+    SelectionFg,
+
+    // Scrollbar
+    ScrollbarThumb,
+    ScrollbarThumbHover,
+    ScrollbarTrack,
+
+    // Misc / specials
+    FocusRing,
+    Scrim,
+    White,
+    DotBg,
 }
 
-/// Sentinel color for a missing theme token (magenta = "missing", visible at a
-/// glance in screenshots). The accompanying `warn!` surfaces the typo'd token
-/// name. A missing token is an author bug that should be *loud*, never silently
-/// transparent (§ 2.2). It is an ordinary `Color::srgb`, so it composites
-/// through the same linear pipeline as any other color.
-pub const MISSING_TOKEN_FALLBACK: Color = Color::srgb(1.0, 0.0, 1.0);
+impl ColorToken {
+    /// Gate-#11: a token is forced-colors-safe iff its **kind** is a
+    /// system/neutral reference — a `SystemColor`, `Transparent`,
+    /// `CurrentColor`, or [`FocusRing`](ColorToken::FocusRing) — rather than a
+    /// concrete semantic color. This is the analyzer's criterion
+    /// (color-and-forced-colors.md § 3.1), replacing the old resolve-to-magenta
+    /// equality check.
+    ///
+    /// `FocusRing` is included deliberately: the forced theme maps it to the
+    /// system `Highlight` so the ring stays visible under forced-colors
+    /// (`theme.rs`, styling-f-tier.md § 2.6), so flagging it would contradict
+    /// that contract. Note the resolve-vs-analyzer split: forced *resolution*
+    /// maps EVERY semantic token to a system color (a safety net — never
+    /// magenta), while this *analyzer* predicate still flags concrete semantic
+    /// tokens (a best-practice nudge). The two are deliberately non-equivalent.
+    pub fn is_forced_colors_safe(&self) -> bool {
+        matches!(
+            self,
+            ColorToken::SystemColor(_)
+                | ColorToken::Transparent
+                | ColorToken::CurrentColor
+                | ColorToken::FocusRing
+        )
+    }
+
+    /// A stable debug name for introspection sites that used to read the token
+    /// string (e.g. `ColorToken::SurfaceCard.debug_name() == "SurfaceCard"`).
+    pub fn debug_name(&self) -> String {
+        format!("{self:?}")
+    }
+}
+
+/// The color-resolution contract: turn a [`ColorToken`] into a concrete
+/// `Color` against a palette. Implemented by [`Theme`] — a `ColorToken` is
+/// meaningless without a theme to resolve it. The exhaustive match in the impl
+/// is what makes a missing token a compile error (Track B, spec § 3.2 F6).
+pub trait ThemeContract {
+    /// Resolve `token` to its concrete `Color` under this theme.
+    fn resolve(&self, token: ColorToken) -> Color;
+}
 
 /// Resolve one [`ColorToken`] against the active [`Theme`] to a concrete
-/// `Color` (§ 2.0). Called at extract time. Never panics; a miss returns the
-/// magenta sentinel and emits a `warn!` naming the token (§ 2.2).
-///
-/// `CurrentColor` uses the v1 fallback (§ 2.0): the theme default foreground
-/// token — `CanvasText` when a `CanvasText` entry exists in the active theme
-/// (the forced-colors case), otherwise `color.text.primary`. When
-/// `buiy-text-rendering-design` lands the inherited-text-color carrier this
-/// rule switches to read it with no change to the variant set.
+/// `Color` (§ 2.0). Called at extract time. A thin shim over
+/// [`ThemeContract::resolve`], retained because callers already hold a
+/// `&ColorToken`.
 pub fn resolve_token(token: &ColorToken, theme: &Theme) -> Color {
-    match token {
-        ColorToken::Transparent => Color::NONE,
-        ColorToken::Token(name) => resolve_named(name, theme),
-        ColorToken::SystemColor(kw) => resolve_named(kw.token(), theme),
-        ColorToken::CurrentColor => {
-            // Forced-colors theme carries `CanvasText`; prefer it when present.
-            if theme
-                .color(SystemColorKeyword::CanvasText.token())
-                .is_some()
-            {
-                resolve_named(SystemColorKeyword::CanvasText.token(), theme)
-            } else {
-                resolve_named("color.text.primary", theme)
-            }
-        }
-    }
+    theme.resolve(*token)
 }
 
-fn resolve_named(name: &str, theme: &Theme) -> Color {
-    match theme.color(name) {
-        Some(c) => c,
-        None => {
-            tracing::warn!(token = %name, "missing theme color token; falling back to magenta sentinel");
-            MISSING_TOKEN_FALLBACK
-        }
-    }
-}
-
-/// `::selection` background token name (decoration-and-paint § 5.1; the
-/// palette value is `buiy-theme-tokens-design`'s).
+/// `::selection` background token name (decoration-and-paint § 5.1). Retained
+/// as the canonical dotted name for the Wave-2/3 call-site migration; live
+/// resolution goes through [`ColorToken::SelectionBg`].
 pub const SELECTION_BG_TOKEN: &str = "color.selection.bg";
-/// `::selection` foreground (selected-text re-tint) token name (§ 5.2).
+/// `::selection` foreground (selected-text re-tint) token name (§ 5.2) —
+/// [`ColorToken::SelectionFg`].
 pub const SELECTION_FG_TOKEN: &str = "color.selection.fg";
-/// The opt-in theme caret token (§ 6.2's middle tier). Deliberately NOT
-/// in the default theme — `caret-color: auto` (= currentColor) parity.
+/// The opt-in theme caret token name (§ 6.2). Deliberately absent from the
+/// vocabulary — `caret-color: auto` (= `CurrentColor`) is the only default.
 pub const CARET_COLOR_TOKEN: &str = "color.caret";
-/// `::placeholder` foreground token name (§ 7).
+/// `::placeholder` foreground token name (§ 7) — [`ColorToken::TextPlaceholder`].
 pub const PLACEHOLDER_COLOR_TOKEN: &str = "color.text.placeholder";
-
-/// The focus-ring color token name (styling-f-tier.md § 2.6 — C6-a). The
-/// framework focus-ring `Outline` (`focus::lower_focus_ring`) carries this token;
-/// it resolves to the default theme's `color.focus.ring` (a high-contrast
-/// accent) and, under the forced-colors swap, to the system `Highlight` value
-/// the swap maps `color.focus.ring` to (`theme.rs`). A plain `Token` (not a
-/// `SystemColor`) so it does NOT trip the `Highlight`-prefers-when-present
-/// resolvers (`resolve_selection_bg`).
+/// The focus-ring color token name (styling-f-tier.md § 2.6) —
+/// [`ColorToken::FocusRing`], which stays visible under forced-colors.
 pub const FOCUS_RING_TOKEN: &str = "color.focus.ring";
-
-/// `::selection` background (§ 5.1): prefer the CSS `Highlight` system key
-/// when the active theme carries it (the forced-colors case — the
-/// wholesale swap leaves no named tokens), else the named token. The
-/// `resolve_token` CurrentColor arm's prefer-when-present idiom, extended.
-pub fn resolve_selection_bg(theme: &Theme) -> Color {
-    if theme.color(SystemColorKeyword::Highlight.token()).is_some() {
-        resolve_named(SystemColorKeyword::Highlight.token(), theme)
-    } else {
-        resolve_named(SELECTION_BG_TOKEN, theme)
-    }
-}
-
-/// `::selection` foreground (§ 5.2): `HighlightText` under forced colors,
-/// else the named token. See [`resolve_selection_bg`].
-pub fn resolve_selection_fg(theme: &Theme) -> Color {
-    if theme
-        .color(SystemColorKeyword::HighlightText.token())
-        .is_some()
-    {
-        resolve_named(SystemColorKeyword::HighlightText.token(), theme)
-    } else {
-        resolve_named(SELECTION_FG_TOKEN, theme)
-    }
-}
-
-/// `caret-color` (§ 6.2): explicit token → the `color.caret` theme key if
-/// present (presence check — an opt-in tier, not a magenta miss) →
-/// `current` (the entity's resolved foreground = `caret-color: auto`).
-pub fn resolve_caret_color(explicit: Option<&ColorToken>, theme: &Theme, current: Color) -> Color {
-    if let Some(token) = explicit {
-        return resolve_token(token, theme);
-    }
-    theme.color(CARET_COLOR_TOKEN).unwrap_or(current)
-}
-
-/// Preedit (IME composition) underline token (editing-and-ime § 6.2;
-/// decoration-and-paint § 8). Opt-in like the caret token; absent ⇒ the
-/// entity's resolved foreground (currentColor parity — the composing text
-/// is underlined in its own ink).
+/// Preedit (IME composition) underline token name. Like the caret, absent from
+/// the vocabulary — the composing text is underlined in its own ink
+/// (`CurrentColor`).
 pub const PREEDIT_UNDERLINE_TOKEN: &str = "color.text.preedit-underline";
 
-/// `preedit-underline` color: the `color.text.preedit-underline` theme key
-/// if present (presence check — an opt-in tier, not a magenta miss), else
-/// `current` (the entity's resolved foreground).
-pub fn resolve_preedit_underline(theme: &Theme, current: Color) -> Color {
-    theme.color(PREEDIT_UNDERLINE_TOKEN).unwrap_or(current)
+/// `::selection` background (§ 5.1): the theme's
+/// [`SelectionBg`](ColorToken::SelectionBg) — which under forced-colors already
+/// resolves to the system `Highlight` (the resolve branches on `Theme::mode`).
+pub fn resolve_selection_bg(theme: &Theme) -> Color {
+    theme.resolve(ColorToken::SelectionBg)
+}
+
+/// `::selection` foreground (§ 5.2): the theme's
+/// [`SelectionFg`](ColorToken::SelectionFg) — system `HighlightText` under
+/// forced-colors. See [`resolve_selection_bg`].
+pub fn resolve_selection_fg(theme: &Theme) -> Color {
+    theme.resolve(ColorToken::SelectionFg)
+}
+
+/// `caret-color` (§ 6.2): an explicit token resolves against the theme;
+/// otherwise the caret uses `current` (the entity's resolved foreground —
+/// `caret-color: auto`, CSS parity). There is no theme-caret middle tier: the
+/// closed vocabulary carries no caret token.
+pub fn resolve_caret_color(explicit: Option<&ColorToken>, theme: &Theme, current: Color) -> Color {
+    match explicit {
+        Some(token) => theme.resolve(*token),
+        None => current,
+    }
+}
+
+/// `preedit-underline` color (editing-and-ime § 6.2; decoration-and-paint § 8):
+/// always `current` (the entity's resolved foreground) — the composing text is
+/// underlined in its own ink (`currentColor` parity). The closed vocabulary
+/// carries no preedit token; `theme` is unused but kept for signature stability
+/// with the extract-time caller.
+pub fn resolve_preedit_underline(_theme: &Theme, current: Color) -> Color {
+    current
 }
 
 /// WCAG 2.x relative luminance of a color (sRGB → linear, then the 0.2126 /
@@ -248,6 +332,7 @@ pub fn contrast_ratio(a: Color, b: Color) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::default_dark_theme;
 
     #[test]
     fn color_token_default_is_transparent() {
@@ -255,17 +340,77 @@ mod tests {
     }
 
     #[test]
-    fn color_token_from_static_token_round_trips() {
-        let t = ColorToken::Token(Cow::Borrowed("color.surface.secondary"));
-        assert_eq!(
-            t,
-            ColorToken::Token(Cow::Borrowed("color.surface.secondary"))
-        );
+    fn custom_color_round_trips_and_resolves_to_itself() {
+        // The `Custom` escape hatch replaces the old stringly `Token`: it round-
+        // trips by value and resolves to itself under any theme.
+        let c = Color::srgb(0.1, 0.2, 0.3);
+        let t = ColorToken::Custom(c);
+        assert_eq!(t, ColorToken::Custom(c));
         assert_ne!(t, ColorToken::Transparent);
+        assert_eq!(default_dark_theme().resolve(t), c);
     }
 
     #[test]
     fn system_color_keyword_default_is_canvas() {
         assert_eq!(SystemColorKeyword::default(), SystemColorKeyword::Canvas);
+    }
+
+    #[test]
+    fn is_forced_colors_safe_is_a_kind_check() {
+        // System/neutral kinds are safe...
+        assert!(ColorToken::Transparent.is_forced_colors_safe());
+        assert!(ColorToken::CurrentColor.is_forced_colors_safe());
+        assert!(ColorToken::SystemColor(SystemColorKeyword::Canvas).is_forced_colors_safe());
+        assert!(ColorToken::FocusRing.is_forced_colors_safe());
+        // ...concrete semantic colors and `Custom` are not.
+        assert!(!ColorToken::SurfaceCard.is_forced_colors_safe());
+        assert!(!ColorToken::Accent.is_forced_colors_safe());
+        assert!(!ColorToken::SelectionBg.is_forced_colors_safe());
+        assert!(!ColorToken::Custom(Color::WHITE).is_forced_colors_safe());
+    }
+
+    #[test]
+    fn dark_theme_resolves_key_tokens_byte_identical() {
+        // Byte-identical parity guard (Track B W1.1). Each RHS is the exact
+        // literal moved out of `default_dark_theme`'s former HashMap inserts, so
+        // this proves the typed port preserved the gallery palette exactly.
+        let t = default_dark_theme();
+        assert_eq!(
+            t.resolve(ColorToken::SurfaceCard),
+            Color::srgb_u8(0x16, 0x18, 0x1c)
+        );
+        assert_eq!(
+            t.resolve(ColorToken::TextPrimary),
+            Color::srgb_u8(0xf1, 0xf3, 0xf6)
+        );
+        assert_eq!(
+            t.resolve(ColorToken::BorderStrong),
+            Color::srgb_u8(0x2c, 0x31, 0x3a)
+        );
+        assert_eq!(
+            t.resolve(ColorToken::TextOnAccent),
+            Color::srgb_u8(0x07, 0x10, 0x1f)
+        );
+        // Live accent base + fixed swatch (initially the same blue).
+        assert_eq!(
+            t.resolve(ColorToken::Accent),
+            Color::srgb_u8(0x5b, 0x86, 0xf5)
+        );
+        assert_eq!(
+            t.resolve(ColorToken::AccentBlue),
+            Color::srgb_u8(0x5b, 0x86, 0xf5)
+        );
+        // Alpha specials.
+        assert_eq!(
+            t.resolve(ColorToken::SelectionBg),
+            Color::srgba_u8(0x5b, 0x86, 0xf5, (0.32 * 255.0_f32).round() as u8)
+        );
+        assert_eq!(
+            t.resolve(ColorToken::ShadowModal),
+            Color::srgba_u8(0x00, 0x00, 0x00, (0.85 * 255.0_f32).round() as u8)
+        );
+        // Transparent-family.
+        assert_eq!(t.resolve(ColorToken::Transparent), Color::NONE);
+        assert_eq!(t.resolve(ColorToken::ScrollbarTrack), Color::NONE);
     }
 }
