@@ -53,7 +53,7 @@ crates/
 ├── buiy_verify/       — verification harness (visual goldens, AccessKit snapshots, contrast linter)
 └── buiy_bench_support/ — dev-only perf-measurement harness (never in the production graph)
 
-examples/              — hello_button, hello_text, hello_bsn, hello_mvu, buiy_gallery, gallery_web, buiy_web, capture
+examples/              — hello_button, hello_text, hello_bsn, todomvc, buiy_gallery, gallery_web, buiy_web, capture
 ```
 
 ## Build & Test

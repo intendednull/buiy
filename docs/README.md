@@ -7,7 +7,7 @@ For build/test/dev commands, see `../CLAUDE.md`. This file does not duplicate th
 ## Where to start
 
 **Building a UI with Buiy (users):** the [getting-started guide](guide/getting-started.md) and the
-runnable [`examples/`](../examples/) (`hello_button` → `hello_text` → `hello_bsn` → `hello_mvu` →
+runnable [`examples/`](../examples/) (`hello_button` → `hello_text` → `hello_bsn` → `todomvc` →
 the `buiy_gallery` reference app), then the crate rustdoc.
 
 **Working on Buiy internals (contributors / agents)** — reading order for newcomers:

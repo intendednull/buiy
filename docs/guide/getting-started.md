@@ -181,16 +181,12 @@ its `Msg`; a pure reducer folds messages; handlers `enqueue` (never mutate direc
 drain is the sole writer; a bind projects the folded model into the view. This is what makes state
 recordable and replayable.
 
-MVU currently lives in `buiy_core::mvu` and is **not yet re-exported through `buiy`** (a known
-ergonomics gap — see the [coverage audit](../reports/2026-06-30-documentation-coverage-audit.md)),
-so an app authoring its own model depends on `buiy_core` directly:
-
-```toml
-buiy_core = { path = "…/crates/buiy_core" } # or the git dep
-```
+The MVU surface is re-exported through `buiy::prelude` (as of the dogfooding pass — see the
+[demos→MVU migration report](../reports/2026-06-30-demos-mvu-migration-journal.md)):
 
 ```rust
-use buiy_core::mvu::{Cmd, Model, MvuModelExt, MvuSet, enqueue};
+use bevy::prelude::*;
+use buiy::prelude::*;
 
 #[derive(Component, Clone, PartialEq, Reflect, Default)]
 #[reflect(Component)]
@@ -215,9 +211,10 @@ app.mvu_model(update);
 app.add_systems(Update, (my_handler.in_set(MvuSet::Enqueue), my_bind));
 ```
 
-The full, runnable end-to-end version (a `+ / −` counter wired to buttons and a live label) is
-[`examples/hello_mvu`](../../examples/hello_mvu) — `cargo run -p hello_mvu`. See the
-[MVU design](../specs/2026-06-29-mvu-as-core-design.md) for tiers (leaf / machine / raw-ECS),
+Runnable end-to-end examples: [`examples/hello_button`](../../examples/hello_button) is a `+ / −`
+counter (`cargo run -p hello_button`), and [`examples/todomvc`](../../examples/todomvc) models a
+whole list in one model (`cargo run -p todomvc`). See the
+[MVU design](../specs/2026-06-29-mvu-as-core-design.md) for the tiers (leaf / machine / raw-ECS),
 record/replay, and the `enqueue`-not-fold rule.
 
 ## 9. Testing your UI
@@ -231,7 +228,8 @@ serves screen readers also backs an in-process test/agent driver.
 
 ## Where to go next
 
-- **Examples:** [`examples/`](../../examples/) — `hello_button`, `hello_text`, `hello_bsn`,
-  `hello_mvu`, and the `buiy_gallery` reference app (plus `buiy_web` / `gallery_web` for WebGPU).
+- **Examples:** [`examples/`](../../examples/) — `hello_button` (an MVU counter), `hello_text`,
+  `hello_bsn`, `todomvc`, and the `buiy_gallery` reference app (plus `buiy_web` / `gallery_web` for
+  the browser).
 - **API reference:** the crate rustdoc (start at the `buiy` crate root).
 - **Design + architecture:** [`docs/README.md`](../README.md) — specs, plans, reports, prior-art.

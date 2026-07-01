@@ -29,7 +29,7 @@ Buiy is a comprehensive, AccessKit-first UI toolkit built as a **parallel UI sta
 - **MVU state management in the core** — every stateful widget routes its state changes through one ordered, recordable message funnel (`Model` / `Msg` / pure reducer / `Cmd`), with `enqueue` as the single sanctioned mutation and one drain as the sole writer. A recorded session of real input replays **byte-identically**, including widget-internal state (toggle values, a menu's open index, the editor buffer + caret + selection) that an app-boundary log can't reach.
 - **A real widget catalog + a live gallery** — accessible, keyboard-driven Button, TextInput, Checkbox, Switch, Slider, Disclosure, Dialog, Tooltip, Popover, Menu, and ScrollArea (plus composites: progress meter, table rows, search input, kbd chip, status dot), each authorable three ways — a bundle constructor, a `bsn!` scene-fn, or in the unified [widget gallery](examples/buiy_gallery) (five screens: TodoMVC, a 1,000-row virtual list, an overlay menu, a modal dialog, and a controls showcase).
 - **Declarative `bsn!` authoring** — the thin `buiy_bsn` crate re-exports Bevy 0.19's `bsn!` / `bsn_list!` scene macros and spawn-ext traits, folded into `buiy::prelude`, so widget trees can be authored declaratively against the same decomposed components.
-- **Runs in the browser on WebGPU** — the same custom wgpu pipeline compiles to `wasm32-unknown-unknown` and renders into an HTML `<canvas>`; the full five-screen gallery runs and is mouse-interactive in a WebGPU browser. WebGPU-only for v1 — a WebGL2 fallback, browser screen-reader a11y, IME, and the mobile soft-keyboard are named and deferred, not silently shipped.
+- **Runs in the browser (WebGPU + WebGL2)** — the same custom wgpu pipeline compiles to `wasm32-unknown-unknown` and renders into an HTML `<canvas>`; the full five-screen gallery runs and is mouse-interactive. It ships both a **WebGPU** build and an **unflagged WebGL2 reach build** (any modern browser, no experimental flags). Browser screen-reader a11y, IME, and the mobile soft-keyboard are named and deferred, not silently shipped.
 - **Accessibility is foundational, not bolted on** — decomposed `A11yRole` / `A11yLabel` / `A11yDescription` components feed a per-frame AccessKit tree pushed to real per-window adapters, so screen readers see the live UI. The same tree is read by an in-process driver that backs both tests and (opt-in) LLM-agent inspection. Plus a CI a11y-snapshot gate and a WCAG-2 contrast linter.
 - **Verification as a deliverable** — a dedicated `buiy_verify` crate, a perceptual-diff golden harness, and an honest CI-vs-GPU gate split.
 
@@ -147,12 +147,13 @@ fn on_press(mut presses: MessageReader<OnPress>) {
 
 ## Demos
 
-Seven examples live under `examples/`. The native demos run with `cargo run -p <name>`:
+Eight examples live under `examples/`. The native demos run with `cargo run -p <name>`:
 
 ```sh
-cargo run -p hello_button   # a single clickable "Save" button; logs OnPress to stdout
+cargo run -p hello_button   # an MVU counter — interactive state routed through the MVU funnel
 cargo run -p hello_text     # a themed title above a wrapped body paragraph
 cargo run -p hello_bsn      # the same tree authored declaratively with the bsn! macro
+cargo run -p todomvc        # a full TodoMVC — the whole list modeled in one MVU model
 cargo run -p buiy_gallery   # the full widget gallery: an IDE-style shell hosting all five screens
 ```
 
@@ -164,10 +165,10 @@ cargo run -p buiy_gallery   # the full widget gallery: an IDE-style shell hostin
 
 The hero image at the top is the `buiy_gallery` shell rendered headlessly; the demo asset here is produced by Buiy's own render pipeline. Regenerate the primitive demo assets with `cargo run -p capture --release` (offscreen render-to-texture + GPU readback, no window — see [`examples/capture/`](examples/capture/)), and the gallery hero with `CAPTURE_SHELL_SCREEN=showcase CAPTURE_SHELL_OUT=docs/assets/gallery.png cargo run -p buiy_gallery --bin capture_shell --release`. Both need a real wgpu adapter and are run on demand, not in CI.
 
-Two more examples target the browser via WebGPU (built with [`trunk`](https://trunkrs.dev), not `cargo run`):
+Two more examples target the browser (WebGPU + the WebGL2 reach build), built with [`trunk`](https://trunkrs.dev), not `cargo run`:
 
 ```sh
-trunk serve examples/buiy_web/index.html      # smallest WebGPU target: one button on a canvas
+trunk serve examples/buiy_web/index.html      # smallest browser target: one button on a canvas
 trunk serve examples/gallery_web/index.html   # the full five-screen gallery in the browser
 ```
 
@@ -206,9 +207,10 @@ crates/
 └── buiy_bench_support/ — dev-only shared extract harness + scenes for perf measurement (never in the production graph)
 
 examples/
-├── hello_button/ — minimal clickable button
+├── hello_button/ — an MVU counter (state routed through the MVU funnel)
 ├── hello_text/   — themed shaped-text scene
 ├── hello_bsn/    — the same tree authored via the bsn! macro
+├── todomvc/      — a full TodoMVC (the whole list modeled in one MVU model)
 ├── buiy_gallery/ — native widget gallery (IDE-style shell, five catalog screens)
 ├── gallery_web/  — the gallery in the browser (WebGPU), shares GalleryPlugin
 ├── buiy_web/     — minimal WebGPU browser target (single button on a canvas)

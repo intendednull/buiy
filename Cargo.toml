@@ -27,7 +27,6 @@ members = [
     "examples/buiy_gallery",
     "examples/hello_bsn",
     "examples/hello_button",
-    "examples/hello_mvu",
     "examples/hello_text",
     "examples/capture",
     "examples/buiy_web",

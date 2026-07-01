@@ -85,7 +85,7 @@ Cheap, unambiguous accuracy defects, corrected as a continuation of the 2026-06-
 ## Remediation applied (2026-07-01)
 
 Same-session follow-up, all verified green (`cargo fmt --check`, `cargo doc -D warnings`, the
-`buiy` + `buiy_core` doctests, `hello_mvu` build + clippy):
+`buiy` + `buiy_core` doctests, clippy):
 
 - **#1 Getting-started guide** — `docs/guide/getting-started.md`, registered as a new **Guide**
   doc type + a user track in `docs/README.md`, linked from the README and the `buiy` crate `//!`.
@@ -93,10 +93,13 @@ Same-session follow-up, all verified green (`cargo fmt --check`, `cargo doc -D w
   `check.rs` panic ×2, `verify_gpu/goldens.rs`, and the active `follow-ups.md`). The lone
   remaining hit is in the `[landed]` `verification-impl.md` plan, left intact as a historical
   snapshot (its surrounding file paths are also pre-consolidation).
-- **#3 `hello_mvu`** — `examples/hello_mvu` (compiles + clippy-clean) plus a compiled MVU doctest
-  in `mvu/mod.rs` (passes).
+- **#3 MVU worked example** — a compiled MVU doctest added to `mvu/mod.rs` (passes). The
+  standalone `examples/hello_mvu` was **dropped as redundant** on rebase: PR #91 landed the same
+  worked MVU counter (`hello_button` migrated to MVU) plus a whole-list `examples/todomvc`.
 - **#4 `buiy` crate landing** — expanded `//!` (quick-start `no_run` doctest, prelude, MVU note,
-  feature flags) + `[package.metadata.docs.rs] all-features` on `buiy` and `buiy_core`.
+  feature flags) + `[package.metadata.docs.rs] all-features` on `buiy` and `buiy_core`. The
+  audit's MVU-not-in-prelude finding was independently closed by PR #93 (which preluded the MVU
+  surface, acting on PR #91's dogfooding report); the guide + `//!` reflect that.
 - **#6 `CONTRIBUTING.md`** — added.
 - **#7 Verification how-to** — the skill now covers the a11y + contrast gates, the
   live-interaction tier, both GPU legs, `--locked`, the nextest/orphan-snapshot reality, and the
@@ -111,4 +114,10 @@ Same-session follow-up, all verified green (`cargo fmt --check`, `cargo doc -D w
 backfill + converting the widget `` ```ignore `` examples to compiled doctests).
 
 ## Baseline & method note
-`origin/main` advanced to `d285e6b` during this session (4 commits past the `abb76fb` the audit ran on: #86 hot-reload docs, #88 mt-safety [lands the `multi_threaded` feature], #89 MVU-research preservation [added two `docs/README.md` blocks + codified a "don't-lose-prototype-docs" rule in the prototype-first skill], #90 skills). All drift-sensitive findings were re-verified against `d285e6b` and hold. The in-flight docs-sync + this audit sit on an `abb76fb`-based worktree and **must be rebased onto `d285e6b`** before landing (a small `docs/README.md` 3-way merge against #89's additions).
+The audit ran at `abb76fb`; `origin/main` then advanced rapidly during the session, and
+drift-sensitive findings were re-verified as it moved. Notably **PR #91** (demos→MVU: the
+`hello_button` counter + `examples/todomvc` + a DX report), **PR #93** (preluding the MVU surface —
+its recommendation #1), and **PR #94** (WebGL2 render reach) independently overtook parts of the
+remediation: the MVU-prelude finding was closed by #93, the worked-MVU-example need by #91 (so this
+PR's `hello_mvu` was dropped), and the "WebGPU-only for v1" framing softened by #94. This PR is
+rebased onto the current tip (`0a1ca73`, #94) and reconciled against all three.

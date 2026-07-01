@@ -3392,15 +3392,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hello_mvu"
-version = "0.0.1"
-dependencies = [
- "bevy",
- "buiy",
- "buiy_core",
-]
-
-[[package]]
 name = "hello_text"
 version = "0.0.1"
 dependencies = [

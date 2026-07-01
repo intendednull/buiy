@@ -39,9 +39,9 @@
 //!
 //! ## State (MVU)
 //!
-//! Widget state flows through the Model-View-Update funnel in `buiy_core::mvu` (`Model` / `Msg` /
-//! pure reducer / `Cmd`). It is **not yet re-exported through this umbrella** — reach it via
-//! `buiy_core::mvu`. See the `hello_mvu` example and the [getting-started
+//! Widget state flows through the Model-View-Update funnel in `buiy_core::mvu` — now re-exported
+//! through this crate's prelude (`Model` / `Msg` / a pure reducer / `Cmd` / `mvu_model` /
+//! `enqueue`). See the `hello_button` counter and `todomvc` examples and the [getting-started
 //! guide](https://github.com/intendednull/buiy/blob/main/docs/guide/getting-started.md).
 //!
 //! ## Feature flags
