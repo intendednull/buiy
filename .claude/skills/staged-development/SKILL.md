@@ -27,6 +27,34 @@ expensive to fix in shipped code. Each gate catches drift before it compounds.
 Research feeds the spec; the approved spec feeds the plan; the plan drives
 execution. Don't skip stages or run them out of order.
 
+## Every available skill is authorized — review them before, during, and after
+
+This pipeline runs on skills. **Every agent and subagent in it may invoke ANY
+available skill that fits the moment** — no permission needed, and a narrow
+assigned task never limits which skills you may reach for. Subagents are **not**
+exempt here: the usual "dispatched for one task → skip the skill discipline"
+carve-out does **not** apply inside this pipeline. If you're working in it, you
+review and use skills like anyone else.
+
+Treat skill-review as a **recurring checkpoint, not a one-time glance**:
+
+- **Before** a stage or task — scan the available skills and load every relevant
+  one (process skills first: `brainstorming`, `systematic-debugging`; then the
+  implementation/domain skills they point to).
+- **During** the work — when the problem shifts (a new failure mode, an
+  unfamiliar API, a visual/parity concern), re-scan and load the skill that now
+  applies. New information changes which skills are relevant.
+- **After** — before calling a stage or wave done, reach for the *finishing*
+  skills: `verification-before-completion`, `requesting-code-review`,
+  `using-buiy-verification`, the project's doc-maintenance skills. "Skills
+  reviewed" is part of done.
+
+If there's even a 1% chance a skill is relevant, check it — a glance is cheap.
+But **load only what actually bears on the task**, and name what you skip by
+category ("no lateral-thinking or prior-art skills here"), not by enumerating the
+catalog. A missed skill costs the rework the gate exists to prevent; a
+before-scan padded into a full skill marquee just wastes the checkpoint.
+
 ## Fan out under reliable-agent-fleet
 
 Whenever a stage fans out parallel agents (research sweeps, multi-unit execution,
@@ -68,6 +96,9 @@ better-reviewed result is the right trade.
 - **Reviewing by reading, not running** — a clean-looking diff can hide a broken
   artifact. Verify against the running thing.
 - **One giant execution step** — fan out small, verifiable units; gate each wave.
+- **Reviewing skills once, at the start** — relevance shifts as the work unfolds;
+  re-scan before each stage, during when the problem changes, and after for the
+  finishing skills.
 
 ## Pairs with
 
