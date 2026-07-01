@@ -172,6 +172,8 @@ trunk serve examples/buiy_web/index.html      # smallest browser target: one but
 trunk serve examples/gallery_web/index.html   # the full five-screen gallery in the browser
 ```
 
+**Live demo.** The gallery is deployed to GitHub Pages at **https://intendednull.github.io/buiy/** by [`.github/workflows/pages.yml`](.github/workflows/pages.yml) — WebGPU where the browser supports it, falling back to the WebGL2 build everywhere else. To reproduce the deployable bundle locally (both artifacts plus the `navigator.gpu` feature-detect loader, into `dist-web/`), run `RELEASE=1 tools/build-web.sh examples/gallery_web` and serve `examples/gallery_web/dist-web/`.
+
 ### Requirements
 
 - **Rust:** stable, edition 2024. The MSRV (1.95, the floor bevy 0.19 requires) is declared by `rust-version` in the workspace manifest and enforced by a dedicated CI `msrv` job; `rust-toolchain.toml` pins the floating `stable` channel and the `rustfmt`/`clippy` components.

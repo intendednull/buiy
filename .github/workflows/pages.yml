@@ -1,0 +1,92 @@
+# Deploy the Buiy widget-gallery web demo to GitHub Pages.
+#
+# Builds `examples/gallery_web` as the two-artifact WebGPU + WebGL2 bundle with a
+# `navigator.gpu` feature-detect loader (`tools/build-web.sh` → `dist-web/`), then
+# publishes it via the GitHub Pages "GitHub Actions" source. The bundle is
+# relocatable (the loader resolves asset URLs against the page's own location), so
+# it serves correctly under the project-page subpath `…github.io/<repo>/` with no
+# base-URL configuration.
+#
+# SETUP: `configure-pages` below runs with `enablement: true`, so on the first run
+# it tries to enable Pages with the "GitHub Actions" source via the API (the
+# `pages: write` token below). If the repo/org disallows token-based enablement,
+# do it once by hand: repo Settings → Pages → "Build and deployment" → Source:
+# **GitHub Actions**.
+#
+# Reach: WebGPU where a usable adapter exists (Chrome/Edge/Safari-26+/Android-12+),
+# else the WebGL2 build (unflagged in every modern browser). See
+# docs/specs/2026-06-30-buiy-browser-reach-widening-design.md § D1.
+name: Deploy web demo (GitHub Pages)
+
+on:
+  # Manual is the primary trigger — a full bevy wasm build (×2 artifacts) is slow,
+  # and the showcase demo does not need to redeploy on every merge. The push
+  # filter refreshes it automatically only when the demo, its shared gallery lib,
+  # the build script, or this workflow change. Widen `paths` to `crates/**` if you
+  # want every library change to redeploy the demo.
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "examples/gallery_web/**"
+      - "examples/buiy_gallery/**"
+      - "tools/build-web.sh"
+      - ".github/workflows/pages.yml"
+
+# Least-privilege token + the OIDC id-token the Pages deployment needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer run supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build web bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Early, before the ~40-min wasm build: enable Pages (Actions source) on
+      # first run, and otherwise fail fast here — not after the whole build — if
+      # Pages can't be set up.
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        with:
+          enablement: true
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master @ 2026-06-20
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install Linux deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+        with:
+          tool: trunk@0.21.14,wasm-bindgen-cli@0.2.125
+      # No RUSTFLAGS env here on purpose: the wasm build's `--cfg=web_sys_unstable_apis`
+      # (WebClipboard) comes from `.cargo/config.toml` (target-scoped to wasm32); a
+      # job-level RUSTFLAGS would SHADOW that target rustflags and drop the cfg.
+      - name: Build the two-artifact web bundle (WebGPU + WebGL2 + loader)
+        run: RELEASE=1 tools/build-web.sh examples/gallery_web
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: examples/gallery_web/dist-web
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
