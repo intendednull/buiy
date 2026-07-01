@@ -71,6 +71,18 @@ impl Plugin for PickingPlugin {
         //  - `Pointer<Click>` → `MultiClick` when the `ClickTracker` heuristic
         //    classifies the run as double/triple (§2.11).
         app.add_observer(activation::pointer_click_emits_on_press);
+        // Touch activation (the `Click`/`Release` path is mouse/pen — neither fires
+        // for a cold touch tap, which never populates the previous-frame hover map;
+        // §touch-input fix): record the touch press target (a `Pointer<Press>`
+        // observer, which DOES fire on the current hover map), then activate on the
+        // raw `Release` `PointerInput` gated on the current hover map — a system run
+        // after `PickingSystems::Hover` so both are ready.
+        app.init_resource::<activation::TouchPressTargets>();
+        app.add_observer(activation::touch_press_records_target);
+        app.add_systems(
+            PreUpdate,
+            activation::touch_tap_activates.after(bevy::picking::PickingSystems::Hover),
+        );
         app.add_observer(gesture::derive_multi_click);
 
         // Register every component the free `hit_test` and the backend query so

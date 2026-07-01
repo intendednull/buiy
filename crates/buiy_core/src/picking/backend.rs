@@ -34,7 +34,7 @@ use bevy::camera::{Camera, NormalizedRenderTarget, RenderTarget};
 use bevy::picking::Pickable;
 use bevy::picking::PickingSystems;
 use bevy::picking::backend::{HitData, PointerHits};
-use bevy::picking::pointer::{PointerId, PointerLocation};
+use bevy::picking::pointer::{PointerAction, PointerId, PointerInput, PointerLocation};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -45,7 +45,44 @@ pub struct BuiyPickingBackendPlugin;
 
 impl Plugin for BuiyPickingBackendPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, emit_picks.in_set(PickingSystems::Backend));
+        // `sync_pointer_location_on_button` runs BEFORE `emit_picks` (both in
+        // `PickingSystems::Backend`, which is after `PickingSystems::Input` where
+        // `PointerInput::receive` lives). It patches a Press/Release's OWN location
+        // into `PointerLocation`, which upstream `receive` discards for button
+        // actions — so a touch tap (no prior hover) hit-tests where it landed (the
+        // touch-input fix, part A; the activation half is in `picking/activation.rs`).
+        app.add_systems(
+            PreUpdate,
+            (sync_pointer_location_on_button, emit_picks)
+                .chain()
+                .in_set(PickingSystems::Backend),
+        );
+    }
+}
+
+/// Apply a Press/Release `PointerInput`'s own `location` to that pointer's
+/// [`PointerLocation`]. bevy_picking's `PointerInput::receive` only applies `Move`
+/// locations, discarding Press/Release ones — so a cold click / touch tap with no
+/// preceding `CursorMoved` would leave `PointerLocation` stale and `emit_picks`
+/// would skip it. Shared code — native mouse is unaffected (it always has a fresh
+/// `Move` location from the continuous cursor stream); touch/cold-tap gains a
+/// correct same-frame hit.
+fn sync_pointer_location_on_button(
+    mut inputs: MessageReader<PointerInput>,
+    mut pointers: Query<(&PointerId, &mut PointerLocation)>,
+) {
+    for input in inputs.read() {
+        if !matches!(
+            input.action,
+            PointerAction::Press(_) | PointerAction::Release(_)
+        ) {
+            continue;
+        }
+        for (id, mut loc) in pointers.iter_mut() {
+            if *id == input.pointer_id {
+                *loc = PointerLocation::new(input.location.clone());
+            }
+        }
     }
 }
 

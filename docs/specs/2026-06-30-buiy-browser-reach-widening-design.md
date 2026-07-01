@@ -73,15 +73,24 @@ hosted runners → SKIPS), software WebGL2 works headless, so the WebGL2 conform
 CI-enforceable — a strict improvement. Ignore non-render 404s. **Rejected.** Best-effort-only
 (wastes the SwiftShader capability WebGL2 uniquely has).
 
-### D5 — Touch: shared-code Part A + Part B (REDESIGN from prototype)
+### D5 — Touch: shared-code Part A + Part B (REDESIGN from prototype) — **LANDED (W2)**
 **Decision.** (A) `sync_pointer_location_on_button` in `PickingSystems::Backend` before
-`emit_picks` — applies a Press/Release's own location to `PointerLocation` (KEEP; validated,
-29 tests green). (B) a Buiy press-based activation emitting the widget action from
-`Pointer<Press>`+`Pointer<Release>` on the CURRENT hover map. **Why.** Running proved Part A
-alone does NOT fix a browser cold-tap (touch pointer's short lifespan → `Pointer<Click>` reads
-an unpopulated previous_hover_map). Shared code (native mouse unaffected). **Test:** a headless
-cold-tap + `PointerId::Touch` Started/Ended in `buiy_verify/src/pointer.rs`. **Rejected.**
-Forking bevy_picking; Part A only (insufficient — proven).
+`emit_picks` — applies a Press/Release's own location to `PointerLocation`. (B) touch activation:
+record the press target via a `Pointer<Press>` observer (`touch_press_records_target`), then
+activate on the raw `Release` `PointerInput` gated on the CURRENT `HoverMap`
+(`touch_tap_activates`, a system after `PickingSystems::Hover`); the `Click` path is
+suppressed for `PointerId::Touch` so it never double-fires. **Why.** Running proved Part A alone
+does NOT fix a browser cold-tap. **Implementation correction (W2, found by running the fix in a
+browser + a console DIAG):** the prototype's plan to observe `Pointer<Press>`+`Pointer<Release>`
+does NOT work — bevy_picking's `Pointer<Release>` (like `Pointer<Click>`) targets the PREVIOUS
+frame's hover map (events.rs:656), which a first-touch tap never populates, so **`Pointer<Release>`
+never fires for a cold tap** (only `Pointer<Press>`, which uses the current map, does). Hence Part
+B reads the RAW `Release` `PointerInput` + the current `HoverMap` instead of `Pointer<Release>`.
+Shared code (native mouse keeps the `Click` path, unaffected). **Verified:** cold touch-tap
+navigates in a real WebGL2 browser; headless `cold_touch_tap_activates_widget_root` +
+`touch_release_off_target_does_not_activate` guard it (`pointer_events_c3b.rs`); full headless +
+crosscut suites green. **Rejected.** Forking bevy_picking; Part A only (insufficient — proven);
+observing `Pointer<Release>` (never fires for a tap — proven by running).
 
 ### D6 — Cross-app clipboard: sync-facade + async-fill latch (web provider)
 **Decision.** A wasm-only `WebClipboard` swapped in at `text/mod.rs:311-314`. Copy/cut stay

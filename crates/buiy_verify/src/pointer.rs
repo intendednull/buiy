@@ -62,6 +62,10 @@ pub struct PointerHarness {
     app: App,
     pointer: Entity,
     window: Entity,
+    /// The lazily-spawned `PointerId::Touch(0)` pointer (the touch-tap tests). The
+    /// harness has no `PointerInputPlugin`, so no `touch_pick_events` spawns it —
+    /// [`Self::touch_tap`] spawns it on first use.
+    touch: Option<Entity>,
 }
 
 impl PointerHarness {
@@ -165,6 +169,7 @@ impl PointerHarness {
             app,
             pointer,
             window,
+            touch: None,
         }
     }
 
@@ -271,6 +276,53 @@ impl PointerHarness {
     pub fn click(&mut self, button: PointerButton) {
         self.press(button);
         self.release(button);
+    }
+
+    /// Inject a `PointerId::Touch(0)` tap: a primary Press at `press_pos` then a
+    /// Release at `release_pos`, each in its own frame, with NO prior hover/move
+    /// (the COLD-tap case). The touch pointer is spawned lazily with a stale
+    /// off-screen location, so the touch-input fix must set its location from the
+    /// press input ([`sync_pointer_location_on_button`]) and activate on the
+    /// release via the CURRENT hover map ([`touch_tap_activates`]) — bevy_picking's
+    /// `Pointer<Click>`/`Pointer<Release>` can't (both read the previous frame's
+    /// empty hover map for a first-touch pointer). `press_pos == release_pos` is a
+    /// normal tap; a different `release_pos` models a finger dragged off the target.
+    ///
+    /// [`sync_pointer_location_on_button`]: buiy_core::picking::backend
+    /// [`touch_tap_activates`]: buiy_core::picking::activation::touch_tap_activates
+    pub fn touch_tap(&mut self, press_pos: Vec2, release_pos: Vec2) {
+        let target = WindowRef::Entity(self.window)
+            .normalize(Some(self.window))
+            .expect("normalize window target");
+        let loc = |p: Vec2| Location {
+            target: NormalizedRenderTarget::Window(target),
+            position: p,
+        };
+        let touch_id = PointerId::Touch(0);
+        if self.touch.is_none() {
+            let e = self
+                .app
+                .world_mut()
+                .spawn((touch_id, PointerLocation::new(loc(Vec2::splat(-1.0e6)))))
+                .id();
+            self.touch = Some(e);
+        }
+        for (pos, action) in [
+            (press_pos, PointerAction::Press(PointerButton::Primary)),
+            (release_pos, PointerAction::Release(PointerButton::Primary)),
+        ] {
+            self.app.world_mut().write_message(PointerInput {
+                pointer_id: touch_id,
+                location: loc(pos),
+                action,
+            });
+            self.app.update();
+        }
+    }
+
+    /// A cold touch tap at a single point (press + release at `pos`).
+    pub fn touch_tap_cold(&mut self, pos: Vec2) {
+        self.touch_tap(pos, pos);
     }
 
     /// A full click immediately repeated — a double-click — at the current
