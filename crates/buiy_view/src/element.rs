@@ -31,6 +31,12 @@ pub enum Kind {
     /// A real single-line `buiy_widgets::TextInput` (the command-sourced
     /// editor). Controlled: the reconciler keeps its buffer equal to `value`.
     TextInput,
+    /// A zero-paint **placeholder that still occupies a slot** (FW3's
+    /// conditional [`when`]). Swapping content↔`Empty` at a fixed child index is
+    /// a *kind change* the reconciler despawns + respawns in place, so a hidden
+    /// child never shifts its siblings' indices — the positional-churn cure for
+    /// `if cond { .. }` show/hide.
+    Empty,
 }
 
 /// An inert description of a piece of UI. Built by the widget builders,
@@ -126,6 +132,14 @@ impl<Msg> Element<Msg> {
         let mut e = Self::new(Kind::Row);
         e.children = children;
         e
+    }
+
+    /// An inert, zero-paint placeholder that occupies a slot (FW3). See
+    /// [`when`]: a conditional renders this instead of removing the child, so
+    /// show/hide is a kind-swap at a fixed index rather than a count change that
+    /// churns siblings.
+    pub fn empty() -> Self {
+        Self::new(Kind::Empty)
     }
 
     // --- Uniform dot-method modifiers (spec §2: no method-vs-bare-attribute
@@ -229,6 +243,71 @@ impl<Msg> Element<Msg> {
         self.on_submit = Some(msg);
         self
     }
+
+    // --- FW3: message-lifting (the Elm `Html.map` analog, spec §2 #6) ------
+
+    /// **Lift** every message this subtree can emit through `f`, turning a
+    /// reusable child component's `Element<Msg>` into the parent's
+    /// `Element<Parent>` (`counter::view(&s.left).map(Msg::Left)`). This is how
+    /// the surface composes sub-components while keeping ONE parent model + ONE
+    /// `view`: the child is held as **parent-owned sub-state** (a field of the
+    /// single model), and its `view`/`update` are reused verbatim; the parent
+    /// reducer delegates one line (`counter::update(&mut s.left, cm)`). Keeping
+    /// all structural truth in the one on-log model is what preserves the
+    /// whole-UI-replay property (spec §5) through composition.
+    ///
+    /// `f` is a **bare fn pointer** — an enum tuple-variant ctor like `Msg::Left`
+    /// is exactly `fn(ChildMsg) -> Parent`, so it is `Copy` + determinism-clean
+    /// (the same discipline `on_input` uses). It maps the value handlers
+    /// (`on_press`, `on_submit`) and recurses into children.
+    ///
+    /// **Known limit (spec §2, deferred to PR3 #17):** `on_input` is a bare
+    /// `fn(String) -> Msg` and CANNOT be composed with `f` into a new bare
+    /// `fn(String) -> Parent` (that needs a closure), so a lifted subtree
+    /// **drops** `on_input`. Harmless for a button-only child (the Counter —
+    /// asserted below in debug); lifting an *input-bearing* child needs a boxed
+    /// `Fn` on the element — the P3 residual.
+    pub fn map<Parent>(self, f: fn(Msg) -> Parent) -> Element<Parent> {
+        debug_assert!(
+            self.on_input.is_none(),
+            "Element::map cannot lift `on_input` (a bare fn cannot compose into a \
+             new bare fn — needs a boxed Fn); lifting an input-bearing child is a \
+             PR3 gap (spec §2 #17)"
+        );
+        Element {
+            kind: self.kind,
+            text: self.text,
+            font_size: self.font_size,
+            gap: self.gap,
+            padding: self.padding,
+            align_center: self.align_center,
+            disabled: self.disabled,
+            background: self.background,
+            radius: self.radius,
+            on_press: self.on_press.map(f),
+            children: self.children.into_iter().map(|c| c.map(f)).collect(),
+            key: self.key,
+            keyed: self.keyed,
+            checked: self.checked,
+            value: self.value,
+            placeholder: self.placeholder,
+            // A bare fn cannot be re-tagged into a new bare fn (see the doc note).
+            on_input: None,
+            on_submit: self.on_submit.map(f),
+        }
+    }
+}
+
+/// The `Option<Element>` → [`Kind::Empty`] auto-wrap (spec §2 #5, "defense in
+/// depth"). The `column!` / `row!` child slots accept `impl Into<Element<Msg>>`,
+/// so a stray `Option<Element>` at a non-terminal position lowers to a
+/// **stable-index** `Empty` slot instead of changing the child count and
+/// churning every following sibling. `Some(e) ⇒ e`, `None ⇒ Empty`. ([`when`] is
+/// the blessed spelling; this is the safety net for a raw `Option`.)
+impl<Msg> From<Option<Element<Msg>>> for Element<Msg> {
+    fn from(opt: Option<Element<Msg>>) -> Self {
+        opt.unwrap_or_else(Element::empty)
+    }
 }
 
 /// A text node (the `text(..)` builder; see also the [`text!`](crate::text!)
@@ -266,6 +345,20 @@ pub fn text_input<Msg>(value: impl Into<String>) -> Element<Msg> {
     e
 }
 
+/// A **conditional slot** (FW3, spec §2 #5): `el` when `cond`, else an
+/// [`Element::empty`] placeholder that STILL occupies the position. Because the
+/// slot is always present, a show/hide is a content↔`Empty` **kind-swap at a
+/// fixed index** — the reconciler despawns the old + spawns the new WITHOUT
+/// shifting the siblings after it (contrast a bare absent child, which changes
+/// the child count and churns every following sibling under positional
+/// reconcile). The author may also write a plain `if cond { a } else { b }`
+/// returning two *different-kind* elements at one slot; the reconciler swaps them
+/// the same way. `when` is the spelling for the show/*hide* case where there is
+/// no natural "else" element.
+pub fn when<Msg>(cond: bool, el: Element<Msg>) -> Element<Msg> {
+    if cond { el } else { Element::empty() }
+}
+
 /// A **required-key** list (FW2's headline builder). Unlike [`column!`](crate::column!),
 /// the key is a *mandatory argument* — the deliberate fix for the panel's
 /// silent-`.key()` landmine. The reconciler matches rows to elements **by key**,
@@ -294,19 +387,22 @@ pub fn keyed_column<T, Msg>(
     e
 }
 
-/// `column![a, b, c]` — a vertical container.
+/// `column![a, b, c]` — a vertical container. Each child slot accepts
+/// `impl Into<Element>`, so a stray `Option<Element>` auto-wraps to a stable
+/// `Empty` slot (spec §2 #5) rather than churning siblings.
 #[macro_export]
 macro_rules! column {
     ($($child:expr),* $(,)?) => {
-        $crate::Element::column(::std::vec![$($child),*])
+        $crate::Element::column(::std::vec![$(::core::convert::Into::into($child)),*])
     };
 }
 
-/// `row![a, b, c]` — a horizontal container.
+/// `row![a, b, c]` — a horizontal container. Each child slot accepts
+/// `impl Into<Element>` (see [`column!`](crate::column!)).
 #[macro_export]
 macro_rules! row {
     ($($child:expr),* $(,)?) => {
-        $crate::Element::row(::std::vec![$($child),*])
+        $crate::Element::row(::std::vec![$(::core::convert::Into::into($child)),*])
     };
 }
 

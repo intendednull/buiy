@@ -59,8 +59,12 @@
 //! keyed reconcile — match / reorder rows by key without rebuild), the two
 //! stateful-leaf widgets (`checkbox` on the real `Checkbox` leaf, `text_input`
 //! on the command-sourced editor) + their `on_toggle` / `on_input` / `on_submit`
-//! handlers and editor bridges, and re-authors TodoMVC. Conditionals (`when`)
-//! and `map` composition arrive in FW3–FW4.
+//! handlers and editor bridges, and re-authors TodoMVC. **FW3** adds the
+//! conditional [`when`] + [`Kind::Empty`] (a stable-index show/hide kind-swap,
+//! plus the `Option<Element>` → `Empty` auto-wrap), [`Element::map`]
+//! message-lifting (parent-owned child sub-state), and the [`ViewWorkCounters`]
+//! gate (the W4 steady-frame go/no-go: idle ⇒ `reconciles == 0`; a localized
+//! value change patches exactly one node with the layout dirty-set bounded).
 
 mod app;
 mod element;
@@ -69,7 +73,8 @@ mod router;
 mod tokens;
 
 pub use app::{BuiyViewAppExt, IntoViewReducer, MODEL_LID, ViewSet};
-pub use element::{Element, Kind, button, checkbox, keyed_column, text, text_input};
+pub use element::{Element, Kind, button, checkbox, keyed_column, text, text_input, when};
+pub use reconcile::ViewWorkCounters;
 pub use tokens::{Color, Radius, Space};
 // `column!` / `row!` / `text!` are `#[macro_export]`ed at the crate root by
 // `element` — reachable as `buiy_view::{column, row, text}` (the macro `text!`

@@ -42,6 +42,71 @@ use crate::app::{UiRoot, ViewFn};
 use crate::element::{Element, Kind};
 use crate::router::{InputAction, PressAction, SubmitAction};
 
+/// Per-frame reconciler work counts — the host-independent measurement gate for
+/// the view surface (spec §5 #14, modeled on `buiy_core::mvu::MvuWorkCounters` /
+/// `render::RenderWorkCounters`). A settled app asserts these EXACTLY, identical
+/// on any CPU, so a re-introduced rebuild-storm reddens on a slow runner just as
+/// on the dev box.
+///
+/// **Overwrite convention (mirrors `MvuWorkCounters`).** All fields are RESET to
+/// 0 at the TOP of the reconcile each frame (before the `Changed<M>` early-out),
+/// then accumulated by that same reconcile pass — so the values read after
+/// `app.update()` describe THIS frame only. An idle frame reads all-0 (the
+/// reconcile early-outs before touching a field).
+///
+/// **`nodes_patched` counts NODES that received a real value-changing write** — a
+/// `set_if_neq` (or `!=`-guarded write) that leaves every component of a node
+/// unchanged does **not** increment it. This is the load-bearing rule: a
+/// walk-and-write-everything reconciler cannot pass the W4 gate by touching all
+/// nodes, because an untripped `set_if_neq` is not counted. Router-handler
+/// (re)attach (`PressAction` / `InputAction` / `SubmitAction`) is layout-inert
+/// bookkeeping the routers re-read each frame — it is **not** a node patch and is
+/// not counted here (it does not feed layout or paint, so it cannot defeat the
+/// downstream-bound check).
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct ViewWorkCounters {
+    /// Reconcile passes that actually ran this frame (past the `Changed<M>`
+    /// early-out). `0` on an idle frame — the load-bearing proof the funnel's
+    /// `set_if_neq` discipline carries through: an idempotent fold leaves
+    /// `Changed<M>` untripped, so the reconciler never even runs.
+    pub reconciles: u64,
+    /// `Element` nodes spawned into fresh entities this frame (`0` on a
+    /// patch-in-place value change; `> 0` when a `when`/kind-swap or a keyed
+    /// insert realizes new structure).
+    pub nodes_spawned: u64,
+    /// Retained node subtrees despawned this frame (kind-swap replace, positional
+    /// excess, keyed removal). `0` on a patch-in-place value change.
+    pub nodes_despawned: u64,
+    /// Retained nodes patched in place with a REAL value change this frame (see
+    /// the type doc: an untripped `set_if_neq` is NOT counted). Bounded to the
+    /// changed subtree — a localized `Inc` patches exactly the one label
+    /// (`nodes_patched == 1`), never the whole tree.
+    pub nodes_patched: u64,
+}
+
+/// Bump [`ViewWorkCounters::nodes_patched`] (a real value-changing write landed
+/// on a node). Inert when the counter is unregistered (the `Option<ResMut>`
+/// idiom — a harness that does not install it simply does not count).
+fn bump_patched(world: &mut World) {
+    if let Some(mut c) = world.get_resource_mut::<ViewWorkCounters>() {
+        c.nodes_patched += 1;
+    }
+}
+
+/// Bump [`ViewWorkCounters::nodes_spawned`].
+fn bump_spawned(world: &mut World) {
+    if let Some(mut c) = world.get_resource_mut::<ViewWorkCounters>() {
+        c.nodes_spawned += 1;
+    }
+}
+
+/// Bump [`ViewWorkCounters::nodes_despawned`].
+fn bump_despawned(world: &mut World) {
+    if let Some(mut c) = world.get_resource_mut::<ViewWorkCounters>() {
+        c.nodes_despawned += 1;
+    }
+}
+
 /// Records where a realized widget's patchable content lives, so a label patch
 /// reads the slot instead of re-walking the widget's children (spec §3 #12).
 /// Stamped by the reconciler at spawn — entirely internal to `buiy_view`; the
@@ -68,6 +133,12 @@ pub(crate) struct RowKey(pub(crate) u64);
 /// cheapness comes from an internal `Changed<M>` emptiness early-out (spec §3
 /// #10 "Scheduling caveat").
 pub(crate) fn reconcile<M: Model>(world: &mut World) {
+    // Reset the per-frame work counters BEFORE the early-out (overwrite
+    // convention, spec §5 #14): an idle frame that early-outs reads all-0.
+    if let Some(mut c) = world.get_resource_mut::<ViewWorkCounters>() {
+        *c = ViewWorkCounters::default();
+    }
+
     // Which model changed this frame? (Frame 1: the `Startup`-spawned model is
     // `Changed`, so the initial tree is built here.) Empty ⇒ idle frame ⇒ return.
     let (model_entity, model) = {
@@ -77,6 +148,11 @@ pub(crate) fn reconcile<M: Model>(world: &mut World) {
             None => return,
         }
     };
+
+    // We are reconciling this frame (a real `Changed<M>` reached us).
+    if let Some(mut c) = world.get_resource_mut::<ViewWorkCounters>() {
+        c.reconciles += 1;
+    }
 
     let view = world.resource::<ViewFn<M>>().view;
     let tree = view(&model);
@@ -101,7 +177,10 @@ fn reconcile_node<M: Model>(
 ) -> Entity {
     if world.get::<Kind>(entity).copied() != Some(el.kind) {
         // Kind changed (or not one of ours) — the retained entity can't be
-        // reused. Despawn the subtree and build fresh.
+        // reused. Despawn the subtree and build fresh. This is the `when`
+        // content↔`Empty` swap (and the `if a else b` two-kind swap): a stable
+        // slot whose OCCUPANT changes kind, so siblings keep their identity.
+        bump_despawned(world);
         world.entity_mut(entity).despawn();
         return spawn_node::<M>(world, el, model);
     }
@@ -110,36 +189,48 @@ fn reconcile_node<M: Model>(
 }
 
 /// Patch an entity of the SAME kind in place (the "reuse, don't rebuild" path).
+///
+/// Each write helper returns whether it made a REAL value change; a node is
+/// counted in [`ViewWorkCounters::nodes_patched`] once iff any of its content /
+/// style writes tripped. Router-handler (re)attach is layout-inert and NOT
+/// counted (see the counter type doc). Children bump themselves (they are
+/// reconciled by their own `patch_node` calls).
 fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>, model: Entity) {
+    let mut changed = false;
     match el.kind {
         Kind::Text => {
             if let Some(t) = &el.text {
-                set_text(world, entity, t);
+                changed |= set_text(world, entity, t);
             }
-            set_font_size(world, entity, el.font_size);
+            changed |= set_font_size(world, entity, el.font_size);
         }
         Kind::Button => {
             if let Some(t) = &el.text {
-                set_button_label(world, entity, t);
+                changed |= set_button_label(world, entity, t);
             }
             update_press::<M>(world, entity, el, model);
-            update_disabled(world, entity, el.disabled);
+            changed |= update_disabled(world, entity, el.disabled);
         }
         Kind::Checkbox => {
             // Controlled: re-assert the leaf `A11yToggled` from the model
             // (drift-only), and refresh the toggle route (`f(!checked)` stamped
             // as a `PressAction`).
-            set_checkbox_checked(world, entity, el.checked);
+            changed |= set_checkbox_checked(world, entity, el.checked);
             update_press::<M>(world, entity, el, model);
         }
         Kind::TextInput => {
-            set_editor_value(world, entity, el.value.as_deref().unwrap_or(""));
+            changed |= set_editor_value(world, entity, el.value.as_deref().unwrap_or(""));
             update_text_actions::<M>(world, entity, el, model);
         }
         Kind::Column | Kind::Row => {
-            apply_container_props(world, entity, el);
+            changed |= apply_container_props(world, entity, el);
             reconcile_children::<M>(world, entity, &el.children, model, el.keyed);
         }
+        // A placeholder holds a slot but has no state to patch (FW3 `when`).
+        Kind::Empty => {}
+    }
+    if changed {
+        bump_patched(world);
     }
 }
 
@@ -184,6 +275,7 @@ fn reconcile_positional_children<M: Model>(
     }
     // Despawn any retained children the new tree no longer has.
     for &old in existing.iter().skip(children_el.len()) {
+        bump_despawned(world);
         world.entity_mut(old).despawn();
     }
     world.entity_mut(parent).replace_children(&ordered);
@@ -239,6 +331,7 @@ fn reconcile_keyed_children<M: Model>(
     // Despawn rows whose key vanished.
     for (&k, &old) in by_key.iter() {
         if !new_keys.contains(&k) {
+            bump_despawned(world);
             world.entity_mut(old).despawn();
         }
     }
@@ -250,7 +343,15 @@ fn reconcile_keyed_children<M: Model>(
 /// constructors. Uses immediate `world.spawn` so the entities are queryable
 /// this frame.
 fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) -> Entity {
+    // One `Element` node is being realized into a fresh entity (its container
+    // children each bump themselves via the recursive `spawn_node` calls below).
+    bump_spawned(world);
     match el.kind {
+        // A zero-paint placeholder (FW3 `when`): a bare node that occupies its
+        // slot so a hidden child does not shift its siblings' indices. `Node`
+        // `#[require]`s the full `Style` at defaults; nothing is painted (no
+        // `Text` / `Background`).
+        Kind::Empty => world.spawn((Node, Kind::Empty)).id(),
         Kind::Text => {
             // `Node` makes the text node layout-visible (a bare `Text` without
             // `Node` is silently skipped by layout — the widget-catalog lesson).
@@ -340,15 +441,20 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
 ///
 /// Only ever touches container-owned layout/paint components — never a widget's
 /// `#[require]`'d contract (the §3 #12 suppression-gotcha guard).
-fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) {
+///
+/// Returns whether any component was really changed (every write is `set_if_neq`
+/// or an `insert`/`remove` of a component that actually appeared/vanished), so
+/// the caller counts this container in `nodes_patched` only on real drift.
+fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
     let axis = match el.kind {
         Kind::Row => FlexAxis::Row,
         _ => FlexAxis::Column,
     };
+    let mut changed = false;
 
     // Display: flex row/column.
     if let Some(mut d) = world.get_mut::<Display>(e) {
-        d.set_if_neq(Display::Flex(axis));
+        changed |= d.set_if_neq(Display::Flex(axis));
     }
 
     // FlexParams: direction + cross-axis alignment + the flex gap (the `FlexGap`
@@ -366,7 +472,7 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) {
             row: Length::Px(gap),
             column: Length::Px(gap),
         };
-        fp.set_if_neq(want);
+        changed |= fp.set_if_neq(want);
     }
 
     // BoxModel: inner padding.
@@ -374,34 +480,36 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) {
         let pad = el.padding.unwrap_or(0.0);
         let mut want = bm.clone();
         want.padding = Edges::all(pad);
-        bm.set_if_neq(want);
+        changed |= bm.set_if_neq(want);
     }
 
-    apply_background(world, e, el.background);
-    apply_radius(world, e, el.radius);
+    changed |= apply_background(world, e, el.background);
+    changed |= apply_radius(world, e, el.radius);
+    changed
 }
 
-/// Patch (or remove) the container's `Background` fill in place.
-fn apply_background(world: &mut World, e: Entity, bg: Option<crate::tokens::Color>) {
+/// Patch (or remove) the container's `Background` fill in place. Returns whether
+/// the fill really changed (drift-only).
+fn apply_background(world: &mut World, e: Entity, bg: Option<crate::tokens::Color>) -> bool {
     match bg {
         Some(c) => {
             let want = Background {
                 color: c.to_token(),
             };
             if let Some(mut cur) = world.get_mut::<Background>(e) {
-                cur.set_if_neq(want);
+                cur.set_if_neq(want)
             } else {
                 world.entity_mut(e).insert(want);
+                true
             }
         }
-        None => {
-            world.entity_mut(e).remove::<Background>();
-        }
+        None => world.entity_mut(e).take::<Background>().is_some(),
     }
 }
 
-/// Patch (or remove) the container's rounded-corner `Border` in place.
-fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) {
+/// Patch (or remove) the container's rounded-corner `Border` in place. Returns
+/// whether the radius really changed (drift-only).
+fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) -> bool {
     match r {
         Some(radius) => {
             let want = Border {
@@ -409,14 +517,13 @@ fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) 
                 ..Default::default()
             };
             if let Some(mut cur) = world.get_mut::<Border>(e) {
-                cur.set_if_neq(want);
+                cur.set_if_neq(want)
             } else {
                 world.entity_mut(e).insert(want);
+                true
             }
         }
-        None => {
-            world.entity_mut(e).remove::<Border>();
-        }
+        None => world.entity_mut(e).take::<Border>().is_some(),
     }
 }
 
@@ -424,22 +531,27 @@ fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) 
 // Leaf patch helpers (drift-only writes, #11).
 // ---------------------------------------------------------------------------
 
-/// Set a `Text` node's content iff it differs (never trips `Changed` on a no-op).
-fn set_text(world: &mut World, entity: Entity, s: &str) {
+/// Set a `Text` node's content iff it differs (never trips `Changed` on a
+/// no-op). Returns whether it really changed.
+fn set_text(world: &mut World, entity: Entity, s: &str) -> bool {
     if let Some(mut t) = world.get_mut::<Text>(entity)
         && t.0 != s
     {
         t.0 = s.to_string();
+        return true;
     }
+    false
 }
 
-/// Set a `Text` node's font size iff it differs.
-fn set_font_size(world: &mut World, entity: Entity, px: f32) {
+/// Set a `Text` node's font size iff it differs. Returns whether it changed.
+fn set_font_size(world: &mut World, entity: Entity, px: f32) -> bool {
     if let Some(mut f) = world.get_mut::<FontSize>(entity)
         && f.0 != px
     {
         f.0 = px;
+        return true;
     }
+    false
 }
 
 /// The label-child `Text` of a `Button::new(..)` (its centered, pick-through
@@ -454,17 +566,21 @@ fn find_label_child(world: &mut World, button: Entity) -> Option<Entity> {
 
 /// A `Button`'s visible label is its `ViewSlot`-recorded child `Text`; its
 /// accessible name is the root `A11yLabel`. Patch both in place — no child
-/// re-walk (spec §3 #12).
-fn set_button_label(world: &mut World, button: Entity, label: &str) {
+/// re-walk (spec §3 #12). Returns whether the label really changed (a11y name
+/// OR visible text), so the button counts as one patched node.
+fn set_button_label(world: &mut World, button: Entity, label: &str) -> bool {
+    let mut changed = false;
     if let Some(mut a) = world.get_mut::<A11yLabel>(button)
         && a.0 != label
     {
         a.0 = label.to_string();
+        changed = true;
     }
     let slot = world.get::<ViewSlot>(button).and_then(|s| s.label);
     if let Some(child) = slot {
-        set_text(world, child, label);
+        changed |= set_text(world, child, label);
     }
+    changed
 }
 
 /// Attach/refresh (or remove) the press handler that the router reads (#11:
@@ -484,15 +600,19 @@ fn update_press<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg
 }
 
 /// Dim a disabled interactive element (evidence in the PNG; the routing is
-/// already suppressed by [`update_press`]). Drift-only.
-fn update_disabled(world: &mut World, entity: Entity, disabled: bool) {
+/// already suppressed by [`update_press`]). Drift-only. Returns whether the
+/// opacity really changed.
+fn update_disabled(world: &mut World, entity: Entity, disabled: bool) -> bool {
     let want = if disabled { 0.4 } else { 1.0 };
     if let Some(mut o) = world.get_mut::<Opacity>(entity) {
         if o.0 != want {
             o.0 = want;
+            return true;
         }
+        false
     } else {
         world.entity_mut(entity).insert(Opacity(want));
+        true
     }
 }
 
@@ -515,7 +635,7 @@ fn toggled_of(checked: bool) -> Toggled {
 /// already agree after a click, so this is a no-op there; it earns its keep on
 /// **replay** — re-deriving the visual toggle from the replayed model even when
 /// the off-log leaf fold dead-lettered.
-fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) {
+fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) -> bool {
     let want = toggled_of(checked);
     let current = world.get::<A11yToggled>(entity).map(|t| t.0);
     if current != Some(want) {
@@ -525,7 +645,9 @@ fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) {
                 target: entity,
                 msg: ToggleMsg::Set(checked),
             });
+        return true;
     }
+    false
 }
 
 /// Set the controlled value of a real editor to `value`, iff it differs from
@@ -537,13 +659,14 @@ fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) {
 ///
 /// `clear ≠ Insert("")`: an empty insert deletes nothing, so clearing is
 /// `SelectAll` + `Delete` (select the whole buffer, then delete the selection).
-fn set_editor_value(world: &mut World, entity: Entity, value: &str) {
+fn set_editor_value(world: &mut World, entity: Entity, value: &str) -> bool {
     let current = world.get::<TextEditState>(entity).map(|s| s.value());
     if current.as_deref() == Some(value) {
-        return;
+        return false;
     }
     let fonts = world.resource::<SharedFontSystem>().clone();
     let mut fs = fonts.lock();
+    let mut changed = false;
     if let Some(mut state) = world.get_mut::<TextEditState>(entity) {
         // Replace the whole buffer: select all, then delete-to-clear or
         // insert-over (single_line = true, read_only = false).
@@ -553,7 +676,9 @@ fn set_editor_value(world: &mut World, entity: Entity, value: &str) {
         } else {
             state.apply(&mut fs, EditCommand::Insert(value.to_string()), true, false);
         }
+        changed = true;
     }
+    changed
 }
 
 /// Attach / refresh (or remove) a text-input's `on_input` / `on_submit` handlers

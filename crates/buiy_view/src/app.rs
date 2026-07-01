@@ -15,7 +15,7 @@ use buiy_core::BuiySet;
 use buiy_core::mvu::{Cmd, LogicalId, Model, MvuAppExt, MvuSet};
 
 use crate::element::Element;
-use crate::reconcile::reconcile;
+use crate::reconcile::{ViewWorkCounters, reconcile};
 use crate::router::{route_presses, route_text_input, route_text_submit};
 
 /// The stable [`LogicalId`] the single `ui()` model carries, so a recorded
@@ -111,6 +111,10 @@ impl BuiyViewAppExt for App {
             root: None,
             _pd: PhantomData,
         });
+        // The view work-counters gate (spec §5 #14). Non-generic + shared (P1 is
+        // single-root, one reconcile), reset each frame at the top of the
+        // reconcile. `init_resource` is idempotent — harmless if already present.
+        self.init_resource::<ViewWorkCounters>();
 
         // Spawn the model (its own entity, with a stable LogicalId) + a 2D
         // camera at startup. The reconciler materializes the view on frame 1
