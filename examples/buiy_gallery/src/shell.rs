@@ -41,8 +41,9 @@ use buiy::prelude::*;
 use buiy_core::BuiySet;
 use buiy_core::a11y::A11yHidden;
 use buiy_core::interaction::OnPress;
-// W3 (prototype MVU migration): the screen router now folds through an MVU model.
-use buiy_core::mvu::{Cmd, Model, MvuAppExt, fold_one_inline};
+// W3 (MVU migration): the screen router folds through an MVU model. `Cmd`,
+// `Model`, `MvuAppExt`, and `fold_one_inline` now come from `buiy::prelude::*`
+// (the preluded MVU surface), so no `buiy_core::mvu` import is needed.
 // `BackgroundLayers`/`BackgroundLayer`/`LinearGradient`/`RadialGradient`/
 // `ColorStop`/`Icon` now reach us through `buiy::prelude::*` (spec § 2 REFINE
 // promotions); only the not-yet-promoted render primitives are imported here.

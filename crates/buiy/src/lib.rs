@@ -73,7 +73,22 @@ pub use buiy_core::render::components::{
 // agent-interface-owned). Apps and the controlled `TextField` drive them through
 // `EditCommand`, so the type belongs in the prelude next to the widget surface;
 // `TextChanged` pairs with it (the message the Bug-3 fix keeps honest). Audit § 4.
-pub use buiy_core::text::edit::{EditCommand, TextChanged};
+pub use buiy_core::text::edit::{EditCommand, EditSubmitted, TextChanged, TextEditState};
+// MVU (Model-View-Update) — Buiy's PRIMARY state interface. The demos→MVU
+// dogfooding (docs/reports/2026-06-30-demos-mvu-migration-journal.md) found the #1
+// app-author wall was that NONE of the MVU surface was preluded: an app had to take
+// a *second*, direct `buiy_core` dependency and hunt for `enqueue` (which is not
+// even at the `buiy_core` root). Prelude the everyday app-author surface so
+// `use buiy::prelude::*;` is enough to define a `Model` + reducer, register it
+// (`mvu_model`/`add_reducer`), place systems in the `MvuSet` windows, and `enqueue`
+// messages. `fold_one_inline` (the synchronous seam that makes an in-place applier
+// migration tractable — the gallery router) and `LogicalId`/`Envelope` (replay +
+// the direct-inbox test idiom) round out the surface. (Recommendation #1 of the
+// dogfooding report.)
+pub use buiy_core::mvu::{
+    Cmd, Envelope, LogicalId, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet,
+    MvuWorkCounters, enqueue, fold_one_inline,
+};
 pub use buiy_widgets::{
     Button, Checkbox, Dialog, Disclosure, LightDismiss, Menu, MenuButton, MenuItem, OnPress,
     Popover, PopoverAlign, PopoverPlacement, PopoverSide, ScrollArea, Slider, Switch, TextInput,

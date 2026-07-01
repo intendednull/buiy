@@ -22,6 +22,7 @@ path = "src/bin/capture_todomvc.rs"
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "x11", "wayland"] }
 buiy = { path = "../../crates/buiy" }
-# DX-1: MVU is not in the `buiy` prelude — second, direct dep required.
+# The demo code uses only `buiy`'s prelude; `buiy_core` is here solely for the
+# headless test + GPU-capture harnesses (theme/a11y/plugin composition).
 buiy_core = { path = "../../crates/buiy_core" }
 image = { workspace = true }

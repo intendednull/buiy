@@ -22,7 +22,7 @@ path = "src/bin/capture_counter.rs"
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "x11", "wayland"] }
 buiy = { path = "../../crates/buiy" }
-# PROTOTYPE DX-1: MVU is NOT in the `buiy` prelude, so a demo that wants to use
-# the state paradigm must take a *second*, direct dependency on `buiy_core`.
+# The MVU demo code uses only `buiy`'s prelude. `buiy_core` is here solely for the
+# headless test + GPU-capture harnesses (theme/a11y/plugin composition).
 buiy_core = { path = "../../crates/buiy_core" }
 image = { workspace = true }
