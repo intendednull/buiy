@@ -23,10 +23,11 @@ Quality + longevity beat speed + convenience.
 
 ```
 docs/
-├── README.md           — Master index of specs, plans, reports, and prior-art (start here)
+├── README.md           — Master index of specs, plans, reports, prototypes, and prior-art (start here)
 ├── specs/              — Target state — what we are building toward (YYYY-MM-DD-<name>-design.md)
 ├── plans/              — Migration steps — how we get to the target (YYYY-MM-DD-<name>.md)
 ├── reports/            — One-shot audits and investigations of our code
+├── prototypes/         — Prototype-first journals + retrospectives (learning kept; code stays unmerged)
 ├── prior-art/          — Deep dives on external systems we learn from (one folder per system)
 └── reference-designs/  — Archived design bundles (immutable)
 ```
@@ -112,7 +113,7 @@ Other useful one-offs:
 
 ## Code Conventions
 
-- **Docs entry point:** `docs/README.md` is the master index of specs, plans, reports, and prior-art folders, grouped by area. Read it before adding any new doc or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
+- **Docs entry point:** `docs/README.md` is the master index of specs, plans, reports, prototypes, and prior-art folders, grouped by area. Read it before adding any new doc or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
 - **Prior-art workflow:** the `researching-prior-art` skill drives the 7-stage parallel-agent creation of a `docs/prior-art/<system>/` folder; the `using-prior-art` skill is the consumer-side flow that surfaces relevant folders during spec/plan/review work.
 - **Visual-bug verification (`buiy_verify`):** before adding/changing any visual, layout, paint-order, color, or render test — or adding a widget fixture, writing a reftest, or blessing a golden — use the `using-buiy-verification` skill (the task-oriented how-to: pick a tier, add a fixture, run the gates, gotchas). It mirrors the design spec `docs/specs/2026-06-15-buiy-verification-design/` and the crate root doc `crates/buiy_verify/src/lib.rs`. Rule of thumb: add a test at the **lowest tier that can observe the bug** (layout snapshot → display-list snapshot → invariant → reftest → golden); goldens are the last resort for the rasterization residue only. The GPU `--ignored` lane (Tiers 4–5) is additive and must pass on a GPU host; the headless gate must stay green without an adapter.
 - **BSN authoring (`buiy_bsn`):** the thin `buiy_bsn` crate re-exports Bevy 0.19's `bsn!` / `bsn_list!` + spawn ext traits (no new syntax); it is reached via `buiy::bsn` and folded into `buiy::prelude`, so `use buiy::prelude::*;` brings `bsn!` into scope. Author the **decomposed components directly** (`bsn! { BoxModel { … } Background(…) }`) — `Style` is a `Bundle` builder, not a Component, so it is not `bsn!`-authorable. Widgets carry `#[require(...)]` contracts; **style them via the parameterized scene-fns in `buiy_widgets`** (`button("…")`, `text_input_*`, re-exported through `buiy::prelude`), never a single-field patch of a `#[require]`'d component (that drops the widget's other defaults — the § 4.1c suppression gotcha). Pin: `docs/specs/2026-06-18-buiy-bsn-integration-design.md`.

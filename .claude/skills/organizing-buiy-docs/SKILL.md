@@ -21,11 +21,12 @@ If you are *reading* docs (not changing them), go to `docs/README.md` directly �
 
 ## Document types
 
-Four types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
+Five types, each with one job. If a doc does not fit one of these, the type list is wrong, not the doc.
 
 - **Spec** (`docs/specs/`) — *what we are building toward.* Target shape of the code: types, traits, invariants, public API, architectural boundaries. May briefly note current state for contrast, but the bulk is the destination, not the journey. Long-lived, canonical.
 - **Plan** (`docs/plans/`) — *how we get from current code to the target.* Migration steps, file-by-file changes, ordering, risks, test strategy, PR-level breakdown. Cites the spec it realizes. Goes stale once shipped.
 - **Report** (`docs/reports/`) — *findings from a one-shot investigation of our codebase.* Audits, post-mortems, performance investigations. Dated, immutable.
+- **Prototype** (`docs/prototypes/`) — *the committed deliverables of a throwaway prototype* (the `prototype-first-development` skill): a build-to-learn **journal** + **retrospective** (+ optional charter / design). Carried over so the *learning* survives worktree cleanup; the prototype **CODE stays unmerged** — only these docs are committed. `[active]` while the prototype runs, `[archived]` once a final supersedes. Indexed under its feature area's *prototype lineage* line, not a separate area. See `prototype-first-development`.
 - **Prior-art** (`docs/prior-art/<system>/README.md`) — *deep dive on an external system we want to learn from.* Living documents; updated as the external system evolves and as our framing of what's relevant shifts. Each system gets its own subfolder so it can grow supporting children (sub-deep-dives, captured diagrams, archived snapshots) without the top-level prior-art directory turning into noise. Category grouping (Bevy UI ecosystem, Rust GUI, game-engine UI, substrate, etc.) lives in the catalog index only — the on-disk layout stays flat.
 
 Implications:
@@ -43,6 +44,7 @@ Implications:
 | Multi-file spec | `docs/specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-05-07-example-design/README.md` |
 | Plan | `docs/plans/YYYY-MM-DD-<kebab>.md` (no `-design`) | `2026-05-07-example-plan.md` |
 | Report | `docs/reports/YYYY-MM-DD-<kebab>.md` | `2026-05-07-example-audit.md` |
+| Prototype | `docs/prototypes/YYYY-MM-DD-<kebab>-{journal,RETROSPECTIVE}.md` (+ `-charter`/`-design`) | `2026-06-26-mvu-as-core-PROTO3-journal.md` |
 | Prior-art | `docs/prior-art/<system>/README.md` (no date prefix) | `docs/prior-art/bevy-feathers/README.md` |
 | Prior-art child | `docs/prior-art/<system>/<facet>.md` | `docs/prior-art/bevy-feathers/architecture.md` |
 
@@ -118,6 +120,15 @@ Multiple independent documents that share a topic are flat siblings, not childre
 7. **Commit the doc and the README entry together.**
 
 Children (focused sub-deep-dives, captured diagrams, archived screenshots, raw research notes worth preserving) go in the same folder as siblings to `README.md` — e.g. `docs/prior-art/<system>/architecture.md`. The README links them. No date prefix on children.
+
+## Carrying over prototype docs
+
+When a `prototype-first-development` prototype completes (or you're about to remove its throwaway worktree), **promote its docs** — the CODE stays unmerged, the *learning* is the deliverable:
+
+1. **Copy** the journal + retrospective (+ any charter / design) from the throwaway worktree into `docs/prototypes/`, keeping the `YYYY-MM-DD-<kebab>-journal.md` / `-RETROSPECTIVE.md` names.
+2. **Index them** with a *prototype lineage* catalog entry under the relevant feature area in `docs/README.md` (e.g. the MVU prototypes sit under **State management (MVU)**) — one line linking journal + retrospective (+ charter/design), tagged `[active]` (prototype still the current learning, no final yet) or `[archived]` (a final has superseded them).
+3. Do this **before** the prototype worktree is removed — a retrospective that lives only in a worktree is one `git worktree remove` from gone (the skill's non-negotiable). Carry it on the final's PR or a dedicated docs PR.
+4. The prototype docs will reference their unmerged code by path (e.g. `examples/<lab>`) — that's expected and fine; they're historical / branch references, not links into main.
 
 ## Prior-art structure
 
