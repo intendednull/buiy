@@ -40,7 +40,23 @@
 //!     .padding(Space::Xl)
 //!     .align_center()
 //! }
+//!
+//! // `ui(init, update, view)` is the whole install (M is inferred from all
+//! // three). Call it on an app already carrying the Buiy plugins.
+//! fn install(app: &mut App) {
+//!     app.ui(Counter::default(), update, view);
+//! }
 //! ```
+//!
+//! ## Import path
+//!
+//! Downstream apps reach this surface through the umbrella `buiy` crate's
+//! **`buiy::view`** sub-prelude — a distinct module from `buiy::prelude`, because
+//! these `Element`-returning builders (`button` / `checkbox` / `text_input`)
+//! collide name-for-name with the `bsn!` scene-fns in the flat prelude:
+//! `use buiy::view::*;` brings the whole surface. The examples above import
+//! `buiy_view` directly only because this crate cannot depend on `buiy` (that
+//! would be a cycle).
 //!
 //! ## Crate boundary (spec §1)
 //!

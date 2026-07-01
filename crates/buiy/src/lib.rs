@@ -215,6 +215,98 @@ pub use bevy::picking::events;
 pub use buiy_bsn as bsn;
 pub use buiy_bsn::prelude::*;
 
+/// The **view-authoring** sub-prelude (`buiy_view`, "safer V"): the whole
+/// app-author surface is `Model` + `enum Msg` + `fn update` + `fn view`, where
+/// `view(&Model) -> Element<Msg>` is a declarative description a library
+/// reconciler + router realize onto real widgets and route back through the MVU
+/// funnel — no hand-written `Changed<Model>` bind, no `OnPress → Model` routing.
+/// See the [`buiy_view`] crate docs and
+/// `docs/specs/2026-07-01-buiy-view-authoring-design.md`.
+///
+/// ## Why a distinct import path (not the flat prelude)
+///
+/// `buiy::view` is a **separate module** from [`prelude`], not folded into it,
+/// because the `Element`-returning view builders (`button` / `checkbox` /
+/// `text_input`) collide **name-for-name** with the `Scene`-returning `bsn!`
+/// scene-fns already re-exported at the crate root (and thus in [`prelude`]).
+/// Two `button`s in one glob is a hard error, so the surfaces stay on distinct
+/// paths: a view-function author reaches for `buiy::view::*`; a `bsn!` scene
+/// author keeps the untouched [`prelude`] scene-fns. Pull the MVU + Bevy types a
+/// view app also needs (`Model` / `Cmd` / `App`) by **name** from `buiy::prelude`
+/// (an explicit import does not glob-collide with the view builders).
+///
+/// One papercut: the `column!` macro shares its name with the `std::column!`
+/// built-in, so under a glob it is ambiguous — import the container macro by name
+/// (`use buiy::view::column;`) to disambiguate (`row!` / `text!` have no such
+/// collision). The shipped `counter_view` / `todomvc_view` examples import the
+/// whole surface by name for the same reason.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy::prelude::{BuiyPlugin, Cmd, Model}; // by name — no glob collision
+/// use buiy::view::*; // Element, the Element-returning builders, ui(), tokens
+/// use buiy::view::column; // disambiguate `column!` from the `std::column!` built-in
+///
+/// #[derive(Component, Default, Clone, PartialEq, Reflect)]
+/// #[reflect(Component)]
+/// struct Counter {
+///     count: i32,
+/// }
+/// impl Model for Counter {
+///     type Msg = Msg;
+/// }
+///
+/// #[derive(Clone, Debug, PartialEq, Reflect)]
+/// enum Msg {
+///     Inc,
+///     Dec,
+///     Reset,
+/// }
+///
+/// fn update(s: &mut Counter, m: Msg) -> Cmd<Msg> {
+///     match m {
+///         Msg::Inc => s.count += 1,
+///         Msg::Dec => s.count -= 1,
+///         Msg::Reset => s.count = 0,
+///     }
+///     Cmd::none()
+/// }
+///
+/// fn view(s: &Counter) -> Element<Msg> {
+///     column![
+///         text!("Count: {}", s.count).size(48.0),
+///         row![
+///             button("-").on_press(Msg::Dec),
+///             button("+").on_press(Msg::Inc),
+///             button("Reset").on_press_maybe((s.count != 0).then_some(Msg::Reset)),
+///         ]
+///         .gap(Space::Sm),
+///     ]
+///     .gap(Space::Md)
+///     .padding(Space::Xl)
+///     .align_center()
+/// }
+///
+/// fn main() {
+///     App::new()
+///         .add_plugins((DefaultPlugins, BuiyPlugin))
+///         .ui(Counter::default(), update, view) // ← the whole install
+///         .run();
+/// }
+/// ```
+pub mod view {
+    // The Element-returning app-author surface (spec §1). `column` / `row` /
+    // `text` re-export the `#[macro_export]`ed `column!` / `row!` / `text!`
+    // macros by path (a single `pub use buiy_view::text` carries both the
+    // builder fn and the `text!` macro — distinct namespaces, one path). The
+    // widget scene-fns collide with these names, so this surface is a distinct
+    // module, NOT flattened into `buiy::prelude` (see the module doc).
+    pub use buiy_view::{
+        BuiyViewAppExt, Color, Element, Radius, Space, button, checkbox, column, keyed_column, row,
+        text, text_input, when,
+    };
+}
+
 /// The Buiy prelude. `use buiy::prelude::*;` brings the common Buiy surface —
 /// components, plugins, widgets — and the BSN authoring macros (`bsn!`,
 /// `bsn_list!`) + spawn extension traits into scope in one import. Mirrors the

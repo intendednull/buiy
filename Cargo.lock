@@ -2030,6 +2030,7 @@ dependencies = [
  "bevy",
  "buiy_bsn",
  "buiy_core",
+ "buiy_view",
  "buiy_widgets",
 ]
 

@@ -81,14 +81,16 @@ pub use buiy_view::{
 };
 ```
 
-An MVU view-function app imports **both** surfaces:
+An MVU view-function app imports the view surface plus the MVU/Bevy types it needs:
 
 ```rust
-use buiy::prelude::*;   // Model, Cmd, enqueue, Bevy App, … (already preluded, #93)
-use buiy::view::*;      // Element, the Element-returning builders, ui(), tokens
+use bevy::prelude::*;                        // App, Component, Reflect, …
+use buiy::prelude::{BuiyPlugin, Cmd, Model}; // the MVU/plugin types — BY NAME
+use buiy::view::*;                           // Element, the Element-returning builders, ui(), tokens
+use buiy::view::column;                      // disambiguate `column!` from the std built-in
 ```
 
-The two `button`s never live in one glob, so there is no ambiguity: a view-function author pulls `buiy::view::*`; a `bsn!` scene author keeps the untouched `buiy::prelude` scene-fns. `column!` / `row!` / `text!` are `#[macro_export]` macros that surface at `buiy_view`'s crate root (as `bsn!` does today) and are re-exported **by name** through `buiy::view` — a single `pub use buiy_view::text` re-exports **both** the builder fn `text` and the macro `text!` (distinct namespaces, one path), so no separate `_text_macro` alias is needed.
+**As-built correction.** The two `button`s must not land in one glob — but `use buiy::prelude::*;` **does** pull the `Scene`-returning scene-fn `button` (the prelude is `pub use crate::*`), so glob-importing *both* `buiy::prelude::*` **and** `buiy::view::*` makes `button` (and `checkbox`) ambiguous on use (`E0659`). The working pattern is therefore: glob **only** `buiy::view::*` for the view surface, and pull the MVU/Bevy types a view app also needs (`Model` / `Cmd` / `App` / `BuiyPlugin`) **by name** from `buiy::prelude` (an explicit import does not glob-collide). A `bsn!` scene author, conversely, keeps the untouched `buiy::prelude` scene-fns and never globs `buiy::view`. `column!` / `row!` / `text!` are `#[macro_export]` macros that surface at `buiy_view`'s crate root (as `bsn!` does today) and are re-exported **by name** through `buiy::view` — a single `pub use buiy_view::text` re-exports **both** the builder fn `text` and the macro `text!` (distinct namespaces, one path). One further papercut: the **`column!`** macro collides with the **`std::column!`** built-in under a glob, so it is imported **by name** (`use buiy::view::column;`, or the whole surface by name as the shipped examples do); `row!` / `text!` have no std collision.
 
 ---
 
@@ -100,8 +102,9 @@ The whole app-author surface is **`Model` + `enum Msg` + `fn update` + `fn view`
 
 ```rust
 use bevy::prelude::*;
-use buiy::prelude::*;   // Model, Cmd, enqueue, Bevy App
-use buiy::view::*;      // Element, the Element-returning builders, ui(), tokens
+use buiy::prelude::{BuiyPlugin, Cmd, Model}; // MVU/plugin types — by name (§1)
+use buiy::view::*;                           // Element, the Element-returning builders, ui(), tokens
+use buiy::view::column;                      // disambiguate `column!` from the std built-in
 
 #[derive(Component, Default, Clone, PartialEq, Reflect)]
 #[reflect(Component)]
@@ -225,8 +228,8 @@ Known limits of `map` (see #15/#17): it drops `on_input` (a bare fn can't be re-
 Styling is **typed enums resolved at build/patch time**, never stringly keys:
 
 - `Space::{Xs,Sm,Md,Lg,Xl}` → logical px (gap/padding).
-- `Color` → **semantic theme tokens** (`Color::Accent`, `Color::Surface`, `Color::Text`, …). The `Theme` today is a Phase-0 **string-keyed** `HashMap<String, Color>` resolved via `Theme::color(&str)`; the view `Color` enum is a **typed facade** over those keys, each variant pinned to one fixed key — `Accent → "color.accent"`, `Surface → "color.surface.primary"`, `Text → "color.text.primary"` — with a **missing key falling back to a compiled default**. Resolution happens **inside the reconciler** (an exclusive `&mut World` system — it has `Res<Theme>` access) → a concrete `Background`/`TextColor`. Resolving against the theme (not a literal) means a theme swap re-derives colors on the next reconcile.
-- `Radius` → corner radius token → `buiy_core::render::components::Radius`.
+- `Color` → **semantic theme tokens** (`Color::Accent`, `Color::Surface`, `Color::Text`, …). The `Theme` today is a Phase-0 **string-keyed** `HashMap<String, Color>` resolved via `Theme::color(&str)`; the view `Color` enum is a **typed facade** over those keys, each variant pinned to one fixed key — `Accent → "color.accent"`, `Surface → "color.surface.primary"`, `Text → "color.text.primary"`. **As-built refinement (#8):** the reconciler lowers `Color` into a `ColorToken::Token(key)` written onto `Background`/`TextColor` — **not** a concrete color; that token resolves against the live `Theme` at **extract** (`render::color`), so a theme swap re-derives the color with **no reconcile**, and a **missing key** surfaces the loud **magenta sentinel** (`MISSING_TOKEN_FALLBACK`), not a silent compiled default. (Storing the token is also the only shape the component model accepts — `ColorToken` has no concrete-`bevy::Color`-literal variant.)
+- `Radius` → corner radius token. **As-built refinement (#8):** render `Radius` is a *value* struct, not a `Component`, so `.radius(..)` patches the entity's `Border.radius: Corners` (a rounded `Border`), not a standalone `buiy_core::render::components::Radius` component.
 
 Tokens are the whole styling vocabulary the surface exposes in P1. Raw literal escape hatches are a follow-up only if a real app needs one.
 
@@ -280,10 +283,10 @@ Lowering:
 
 **Production approach.** The surface **emits the decomposed components directly** and the reconciler **patches them in place**. `container_style` becomes `apply_container_props(world, entity, el)` which computes and `set_if_neq`-patches the individual layout components the `Style` builder would have produced:
 
-- `.gap(Space)` → `FlexGap`
+- `.gap(Space)` → `FlexParams.gap` *(as-built: `FlexGap` is a **field** of `FlexParams`, not a standalone component, so gap patches `FlexParams`)*
 - `.padding(Space)` → `BoxModel` (padding edges)
 - `row!`/`column!` + `.align_center()` → `FlexParams` (direction + `AlignItems`)
-- `.background(Color)` → `Background`; `.radius(Radius)` → `Radius`
+- `.background(Color)` → `Background` *(as-built: holds a `ColorToken`, not a resolved color)*; `.radius(Radius)` → `Border.radius` *(as-built: render `Radius` is a value struct, not a `Component`, so a rounded box is a `Border` with `Corners`)*
 
 At **spawn** the reconciler still assembles the full `Style` bundle for defaults (one source of truth for initializer values); at **patch** it writes only the decomposed components that changed. Because these are real components, a runtime style change (e.g. a token that depends on model state) now patches without a rebuild.
 
@@ -392,7 +395,7 @@ Counter + TodoMVC (P1), scaling (P2) are shipped as `examples/`, each with a win
 1. **Idle frame:** no model change ⇒ `reconciles == 0` (reconciler is `Changed<M>`-gated; `set_if_neq` leaves an idempotent fold untripped, so it never even runs). This is the load-bearing proof the funnel's `set_if_neq` discipline carries through the reconciler.
 2. **Idempotent fold** (enqueue a no-op `Msg`): `MvuWorkCounters.models_mutated == 0` **and** `MvuWorkCounters.binds_fired == 0` **and** `ViewWorkCounters.reconciles == 0` — the no-op does not cascade to a reconcile.
 3. **Localized value change** (`Inc`): reconcile runs once, `nodes_spawned == 0 && nodes_despawned == 0` (patch-in-place; no rebuild), and the write set is **bounded to the changed subtree, not the tree size** — `Inc` patches **exactly the one `Count` label**, so `nodes_patched == 1` (not the loose `>= 1`, which a whole-tree rewalk that value-writes the changed node would also satisfy).
-4. **Downstream bound (the load-bearing defeats-`set_if_neq` check):** the localized change's downstream **layout dirty-set** and `RenderWorkCounters` must stay **bounded to the changed subtree** — patching the one label must **not** dirty-recompute the whole tree's layout/render (exactly what a float-noise or walk-everything reconciler would trigger, and what would defeat the funnel's `set_if_neq` discipline). Concretely: `nodes_patched == 1` **and** the layout dirty-count stays a small constant, measured against the hand-bind demos' `Changed<Model>` baseline (which patches the same single label). A regression — full-subtree rebuild on a value change, a reconcile on an idle frame, or a whole-tree layout re-dirty — **reddens the gate**.
+4. **Downstream bound (the load-bearing defeats-`set_if_neq` check):** the localized change's downstream **layout dirty-set** must stay **bounded to the changed subtree** — patching the one label must **not** dirty-recompute the whole tree's layout (exactly what a float-noise or walk-everything reconciler would trigger, and what would defeat the funnel's `set_if_neq` discipline). Concretely: `nodes_patched == 1` **and** the layout dirty-count stays a small constant. **As-built refinement (#14):** the metric is `buiy_core::layout::SyncStylesIterCount` (the headless per-frame layout re-translate count), asserted **structurally** (`max < node_count`, and in practice `<= 3`) rather than against `RenderWorkCounters` — the render counters need the GPU app, so the headless W4 gate binds the layout dirty-count directly. A regression — full-subtree rebuild on a value change, a reconcile on an idle frame, or a whole-tree layout re-dirty — **reddens the gate**.
 
 **If the gate reds** (steady-state rebuild storms), the memoization fix (memoize unchanged subtrees / skip clean children) lands as a **bounded fast-follow PR**, *not* by growing PR1 — PR1 stays the fixed-scope surface. The gate must be **green to bless the surface**, but the remedy does not expand the first PR. This is the go/no-go the final owns.
 

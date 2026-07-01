@@ -18,10 +18,10 @@
 //! `capture_todomvc_view` bin, so both drive the same authored code.
 
 use bevy::prelude::*;
-use buiy_core::mvu::{Cmd, Model};
-use buiy_view::{
+use buiy::view::{
     BuiyViewAppExt, Element, Space, button, checkbox, column, keyed_column, row, text, text_input,
 };
+use buiy_core::mvu::{Cmd, Model};
 
 /// MODEL — the whole app state in one component (the single source of truth).
 #[derive(Component, Default, Debug, Clone, PartialEq, Reflect)]

@@ -11,8 +11,8 @@
 //! `capture_counter_view` bin, so both drive the same authored code.
 
 use bevy::prelude::*;
+use buiy::view::{BuiyViewAppExt, Element, Space, button, column, row, text};
 use buiy_core::mvu::{Cmd, Model};
-use buiy_view::{BuiyViewAppExt, Element, Space, button, column, row, text};
 
 /// MODEL — the single source of truth.
 #[derive(Component, Default, Debug, Clone, PartialEq, Reflect)]
