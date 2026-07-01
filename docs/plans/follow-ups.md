@@ -1143,10 +1143,23 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   built; single-reference reftests cover the current pairings. (Follow-ups-drain
   reviewed and left deferred — re-open when a real logical-vs-physical, ≥2-reference
   pairing appears; building it now is tested-but-unused machinery.)
+  *(Re-verified 2026-07-01 by the verification-followups campaign — still no
+  ≥2-reference pairing exists to consume it, so building it now would ship
+  tested-but-unused machinery in the highest-risk tier; DEFERRED.)*
 - **`golden-prune` bin** — the advisory stale-positive pruner (`goldens.md`
   § Stale-positive guard) is a design hook, machinery deferred. (Follow-ups-drain
   reviewed and left deferred — re-open when the golden corpus grows enough that
   stale positives are plausible; nothing to prune at the current few cells.)
+  *(Re-verified 2026-07-01 by the verification-followups campaign — still only 2
+  single-positive cells, so the bin would always print "nothing to prune";
+  DEFERRED.)*
+- **Golden triage-report ignore primitives (time-boxed-ignore + flaky-auto-ignore)**
+  — recorded here to close the Task-4.7 tracking gap (2026-07-01). time-boxed-ignore
+  = a `BlessLedger` `[[ignore]]` table (slug/glob + RFC3339 `expires` + reason)
+  consulted in `check_golden` to soft-skip an unexpired cell; flaky-auto-ignore = an
+  Argos-style min-occurrences heuristic needing per-cell CI failure-history
+  persistence. Both DEFERRED until the corpus grows (see `goldens.md`
+  § deferred primitives).
 - **Shaping-corpus breadth (pure-Hebrew / VS16 / Thai / Khmer fixtures)** —
   named in audit #38 (T4.6), deliberately DEFERRED rather than landed in the
   testing-audit campaign. The shaping corpus is a curated, byte-reproducible
@@ -1163,15 +1176,21 @@ app, assert inline expected pixels, re-capture in a second fresh app,
 - **Object-store golden migration** — in-git PNGs until the named trigger
   (>50 MB total or >500 positives); the `GoldenKey`/`BlessLedger` schema is fixed
   now so the migration is mechanical (`goldens.md` § Storage staging).
-- **Invariant generator — `PositionKind` (tier-2 positioned/auto-z) coverage** —
+  *(Re-verified 2026-07-01 by the verification-followups campaign — the trigger is
+  UNMET: the corpus is 590 B / 2 positives on origin/main; confirmed still
+  deferred.)*
+- **Invariant generator — `PositionKind` (tier-2 positioned/auto-z) coverage — RESOLVED** —
   `invariant/scene.rs`'s `SceneNode` carries no `PositionKind`, so the production
   paint `paint_key`'s tier-2 *(positioned, auto-z)* class is unrepresentable and
   never exercised by the metamorphic suite. On the generated domain
   `positioned ⟺ z_index.is_some()` so the realized order still matches production
   there; closing the gap means adding a `PositionKind` axis to the generator.
   Surfaced by the 2026-06-15 fresh-agent quality review (scene.rs module doc
-  records the bound).
-- **Invariant `realize` mirrors the painters_z assembly instead of calling it** —
+  records the bound). **RESOLVED 2026-07-01 (verification-followups campaign):**
+  landed 4c1acbb; `invariant/scene.rs` carries the `PositionKind` axis
+  (`position_kind` + `arb_position_kind`, testing-audit #13) exercising all four
+  paint tiers.
+- **Invariant `realize` mirrors the painters_z assembly instead of calling it — RESOLVED** —
   `invariant/scene.rs`'s `realize` re-implements layout sub-pass 6f (the per-
   context `painters_z` z-tier sort) and passes its OWN `painters_z_of` into the
   production `context_tree_paint_order`. **Empirically confirmed (2026-06-15
@@ -1187,7 +1206,12 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   not observe production paint order either — Tier-2 paint-order coverage is the
   GPU golden tier's job. (The `Name`-sort is correct for the *dump's* determinism;
   the point is only that Tier-2's CPU dump is not a paint-order oracle.)
-- **Quiescence gate — conditions 2-4 headless coverage** — `capture_to_image`'s
+  **RESOLVED 2026-07-01 (verification-followups campaign):** `invariant/scene.rs:446`'s
+  `realize` now CALLS the shared production assembly
+  `buiy_core::layout::painters_z_for_context` (extracted as a pure fn) instead of
+  re-implementing sub-pass 6f, so the metamorphic tier exercises the real z-tier
+  code path; landed 4c1acbb.
+- **Quiescence gate — conditions 2-4 headless coverage — RESOLVED** — `capture_to_image`'s
   `quiescence_unmet` (`buiy_core::render::golden`) checks four conditions; only
   condition 1 (the `PendingCaptureAssets` asset gate) is reachable without a
   render sub-app, and it now has a headless unit test. Conditions 2-4 (atlas
@@ -1195,13 +1219,22 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   render world to unit-test headlessly, so a vacuous-check regression in those
   three is currently caught only by the GPU lane. Extract each probe behind a
   pure helper + unit-test against synthetic resources. Surfaced by the
-  2026-06-15 review (its top-3 recommendation).
-- **CPU SDF oracle ↔ shader numeric pin** — the reftest CPU oracle
+  2026-06-15 review (its top-3 recommendation). **RESOLVED 2026-07-01
+  (verification-followups campaign):** conditions 2-4 are now behind pure helpers
+  (`pipelines_compiled`/`fonts_ready`) with headless non-`#[ignore]` unit tests
+  against synthetic resources, so a vacuous-check regression is caught on every-PR
+  without the GPU lane; commits 52d9194, ae42b96.
+- **CPU SDF oracle ↔ shader numeric pin — DONE (DRY half)** — the reftest CPU oracle
   (`reftest.rs`) and `render/shader.wgsl`'s `sdf_rounded_rect` are textual
   twins; the point-probe pins only sign invariants, so a numeric `d`-value drift
   between them is caught only by the GPU cross-check lane. Add a numeric
   `d`-value agreement test (or share one Rust SDF fn across oracle + probe).
   Surfaced by the 2026-06-15 review (`reftests.md` § SDF cross-check).
+  **DONE 2026-07-01 (verification-followups campaign, V10):** the Rust DRY half
+  shipped — one canonical `buiy_core::render::sdf_rounded_rect` now replaces the 3
+  duplicate Rust copies (reftest `sdf_oracle`, `render_instance.rs`,
+  `render_border_sdf.rs`). The WGSL↔Rust numeric pin remains the CI lavapipe
+  cross-check (unchanged — a DRY nit per the 2026-06-18 audit, not a coverage gap).
 
 **Owner:** `buiy-verification-design` — worth building once the canonical CI
 GPU class exists (render `verification.md § 4.1`); tolerance budgets are that
@@ -1525,7 +1558,12 @@ individual fields.
 
 **Spec touchpoint:** `2026-06-18-buiy-bsn-integration-design.md` § 4.1c, § 5.
 
-## Verify — `rect-rounded` lavapipe golden re-bless on CI Mesa after the wgpu29/naga29 bump
+## Verify — `rect-rounded` lavapipe golden re-bless on CI Mesa after the wgpu29/naga29 bump — RESOLVED (no re-bless needed)
+
+**RESOLVED 2026-07-01 (verification-followups campaign):** the golden passes EXACT
+on the pinned CI lavapipe post-wgpu29 (blessed `b869eba`, byte-current) — no
+re-bless is needed. The standing "watch at the next toolchain bump" concern is
+owned by the sibling "0.19 lavapipe pixel-residue recalibration" note below.
 
 **Originated:** the Bevy 0.19-rc migration final gate
 ([plan](2026-06-18-bevy-0.19-bsn-migration.md) Phase 3 / T3.2).
@@ -1603,7 +1641,7 @@ reproduce the canonical rasterizer USER-SPACE (no sudo): download the
 from the Arch archive) onto `LD_LIBRARY_PATH`, write an ICD JSON pointing at
 `libvulkan_lvp.so`, and set `VK_DRIVER_FILES` + `WGPU_ADAPTER_NAME=llvmpipe`.
 
-## Verify (C7) — catalog-wide `content_is_present` enroll auto-check — DEFERRED (Wave 3+, with C8)
+## Verify (C7) — catalog-wide `content_is_present` enroll auto-check — LANDED (2026-07-01)
 
 **Originated:** widget-catalog C7 (verification real-input tier + content-presence),
 `docs/plans/2026-06-22-buiy-widget-catalog-c7-verification.md` Task 1. The
@@ -1623,6 +1661,13 @@ variant), the predicate's teeth are gated by the two dedicated full-stack unit t
 in `crates/buiy_verify/tests/verify_headless/content_presence.rs` (the whitespace
 zero-glyph RED + the "Hi!" GREEN) and the `bless_guard_refuses_zero_glyph_text_bearing`
 unit test. Pick this up when C8's text-bearing gallery fixtures land.
+
+**LANDED (verification-followups campaign, 2026-07-01):** `coverage::enroll::build_app`
+is now text-capable (`BuiyTextPlugin { system_fonts: false }` + a staged Ahem face →
+`SharedFontSystem` present), so `glyph_census` no longer panics on enrolled cells. The
+catalog-wide `every_text_bearing_catalog_cell_emits_glyphs` test asserts >0 glyph
+instances for every text-bearing cell, guarded by a `text_bearing > 0` vacuity check
+(RED-first proven).
 
 ## Widget-catalog × agent-interface co-drive — post-landing follow-ups (2026-06-23)
 
@@ -1647,6 +1692,13 @@ follow-ups surfaced during implementation:
   (how to add a screen) are not yet written. The coverage `enroll::build_app` still
   lacks a text-capable stack (the deferred auto-check above) — C8 added text fixtures
   (S1) but via full `A11yPlugin` apps, not the coverage matrix.
+  **Re-verified 2026-07-01 (verification-followups campaign) — DEFERRED to C8 as its
+  rightful owner:** `Matrix::gallery_screen()` + gallery-as-fixtures + `AUTHORING.md`
+  are *designed C8 deliverables* (`widget-gallery-exemplar.md` §3.3/§3.5/§4/step 7);
+  buildable now, but the scope/ownership belongs to the widget-catalog campaign, not
+  verification. The one verification-native piece — a text-capable `enroll::build_app`
+  — WAS delivered by this campaign (V13/V14), so the "still lacks a text-capable stack"
+  clause above is now superseded.
 - **Pre-existing text-caret GPU golden diverges on non-lavapipe adapters (NOT a
   campaign regression).** `text_caret_selection_e3_gpu` fails on the RX 6700 XT at
   `white_cols.last().expect("the glyph ink painted")` — the lavapipe-calibrated
@@ -1694,10 +1746,13 @@ their fixes. Remaining polish (none blocking; the gallery renders + runs):
   (caret `pos=0,2`, label `pos=17,2`, panel `pos=0,24`). Residual: the caret glyph
   `▸` (U+25B8) is tofu under the latin-subset font — same font-coverage item as the
   `✓` checkmark above.
-- **Verify `button` coverage fixture is now content-width-empty.** With the
+- **Verify `button` coverage fixture is now content-width-empty — RESOLVED.** With the
   content-width button default, the `button.resting.*` CPU coverage fixture spawns
   a tiny empty box (no label); give the fixture a label so it remains a meaningful
-  visual sample.
+  visual sample. **RESOLVED (verification-followups campaign, 2026-07-01):**
+  `build_app` now stages the Ahem face, so the fixture's "Save" label measures 34×20
+  (was 0×0) and the button is a meaningful visual sample; the 12 `button.resting.*`
+  snaps were reblessed (geometry only).
 - **Fully CI-enforce the WebGPU shader-conformance gate (`web-smoke`).** The
   `web-smoke` job gates the wasm BUILD always, but the shader-conformance / paint
   check (the only thing that catches the WGSL-uniformity class via real Tint —
