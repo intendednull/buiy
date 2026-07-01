@@ -52,11 +52,15 @@
 //! because these `Element`-returning builders collide name-for-name with the
 //! `bsn!` scene-fns) is wired in a later wave.
 //!
-//! PR1 / FW1 ships the positional reconciler over the four kinds the Counter
-//! needs (`column!` / `row!` / `text` / `button`) with the structural refines
-//! the prototype deferred (decomposed-style patching, reconcile-before-layout,
-//! the internal `ViewSlot`, drift-only writes). Keyed lists, the editor bridge,
-//! conditionals, and `map` composition arrive in FW2–FW4.
+//! FW1 shipped the positional reconciler over the four kinds the Counter needs
+//! (`column!` / `row!` / `text` / `button`) with the structural refines the
+//! prototype deferred (decomposed-style patching, reconcile-before-layout, the
+//! internal `ViewSlot`, drift-only writes). **FW2** adds `keyed_column` (the
+//! keyed reconcile — match / reorder rows by key without rebuild), the two
+//! stateful-leaf widgets (`checkbox` on the real `Checkbox` leaf, `text_input`
+//! on the command-sourced editor) + their `on_toggle` / `on_input` / `on_submit`
+//! handlers and editor bridges, and re-authors TodoMVC. Conditionals (`when`)
+//! and `map` composition arrive in FW3–FW4.
 
 mod app;
 mod element;
@@ -65,15 +69,18 @@ mod router;
 mod tokens;
 
 pub use app::{BuiyViewAppExt, IntoViewReducer, MODEL_LID, ViewSet};
-pub use element::{Element, Kind, button, text};
+pub use element::{Element, Kind, button, checkbox, keyed_column, text, text_input};
 pub use tokens::{Color, Radius, Space};
 // `column!` / `row!` / `text!` are `#[macro_export]`ed at the crate root by
 // `element` — reachable as `buiy_view::{column, row, text}` (the macro `text!`
 // and the fn `text` share one path, distinct namespaces).
 
 use bevy::prelude::*;
+use buiy_core::a11y::{A11yToggled, Toggled};
 use buiy_core::mvu::Model;
+use buiy_core::text::edit::TextEditState;
 
+use crate::reconcile::RowKey;
 use crate::router::PressAction;
 
 // ---------------------------------------------------------------------------
@@ -94,4 +101,46 @@ where
 /// reconciler attached/detached a handler as the model changed).
 pub fn has_press_handler<M: Model>(world: &mut World, entity: Entity) -> bool {
     world.get::<PressAction<M>>(entity).is_some()
+}
+
+/// The first realized entity of `kind` (test / capture convenience — e.g. the
+/// draft [`Kind::TextInput`]).
+pub fn find_kind(world: &mut World, kind: Kind) -> Option<Entity> {
+    let mut q = world.query::<(Entity, &Kind)>();
+    q.iter(world).find(|(_, k)| **k == kind).map(|(e, _)| e)
+}
+
+/// Every realized entity of `kind`, in query order (test convenience).
+pub fn entities_of_kind(world: &mut World, kind: Kind) -> Vec<Entity> {
+    let mut q = world.query::<(Entity, &Kind)>();
+    q.iter(world)
+        .filter(|(_, k)| **k == kind)
+        .map(|(e, _)| e)
+        .collect()
+}
+
+/// The live checked state of a realized [`Kind::Checkbox`] (reads the REAL leaf
+/// [`A11yToggled`], so it proves the reconciler drove the actual widget — not a
+/// shadow copy).
+pub fn checkbox_checked(world: &mut World, entity: Entity) -> bool {
+    matches!(
+        world.get::<A11yToggled>(entity).map(|t| t.0),
+        Some(Toggled::True)
+    )
+}
+
+/// Every keyed row as `(key, row_entity)` — lets a test assert entity
+/// **identity** is preserved across add / remove / reorder (the keyed-reconcile
+/// guarantee).
+pub fn keyed_rows(world: &mut World) -> Vec<(u64, Entity)> {
+    let mut q = world.query::<(Entity, &RowKey)>();
+    q.iter(world).map(|(e, k)| (k.0, e)).collect()
+}
+
+/// The live value of a realized [`Kind::TextInput`]'s editor.
+pub fn editor_value(world: &mut World, entity: Entity) -> String {
+    world
+        .get::<TextEditState>(entity)
+        .map(|s| s.value())
+        .unwrap_or_default()
 }

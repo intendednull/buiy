@@ -5924,6 +5924,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "todomvc_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_view",
+ "image",
+]
+
+[[package]]
 name = "toml"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

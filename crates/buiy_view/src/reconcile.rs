@@ -2,8 +2,12 @@
 //! `view(&model)`, diffs the returned [`Element`] tree against the retained
 //! Buiy widget entities, and patches / spawns / despawns to match.
 //!
-//! PR1 (FW1) ships the **positional** reconciler (match children by index) with
-//! the structural refines the prototype deferred:
+//! FW1 shipped the **positional** reconciler (match children by index); FW2 adds
+//! the **keyed** reconcile ([`reconcile_keyed_children`] — match / reorder rows
+//! by [`RowKey`] without rebuild) and the two stateful-leaf widgets (the
+//! controlled `Checkbox` leaf + the command-sourced `TextInput` editor, driven
+//! drift-only from the model). Both rest on the structural refines the prototype
+//! deferred:
 //!
 //! - **#9 patchable styling.** Containers emit **decomposed** components and the
 //!   reconciler `set_if_neq`-patches them **in place** on change — `FlexParams`
@@ -23,19 +27,20 @@
 //! created (no unlaid-out flash).
 
 use bevy::prelude::*;
-use buiy_core::a11y::A11yLabel;
+use buiy_core::a11y::{A11yLabel, A11yToggled, Toggled};
 use buiy_core::components::Node;
 use buiy_core::layout::{
     AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexParams, Length,
 };
-use buiy_core::mvu::Model;
+use buiy_core::mvu::{Envelope, Model, ToggleMsg};
 use buiy_core::render::components::{Background, Border, Opacity};
-use buiy_core::text::{FontSize, Text};
-use buiy_widgets::Button;
+use buiy_core::text::edit::{EditCommand, TextEditState};
+use buiy_core::text::{FontSize, SharedFontSystem, Text};
+use buiy_widgets::{Button, Checkbox, TextInput};
 
 use crate::app::{UiRoot, ViewFn};
 use crate::element::{Element, Kind};
-use crate::router::PressAction;
+use crate::router::{InputAction, PressAction, SubmitAction};
 
 /// Records where a realized widget's patchable content lives, so a label patch
 /// reads the slot instead of re-walking the widget's children (spec §3 #12).
@@ -46,6 +51,14 @@ pub(crate) struct ViewSlot {
     /// The widget's visible-label `Text` child (a `Button`'s label), if any.
     pub(crate) label: Option<Entity>,
 }
+
+/// The keyed-reconcile identity stamp (spec §2 #4): a [`keyed_column`](crate::keyed_column)
+/// child's stable key, stamped on its row-root entity so the reconciler can
+/// match / reorder rows by key — preserving each row's widget-entity identity +
+/// internal state (its `A11yToggled`, its editor buffer) across add / remove /
+/// reorder. Entirely internal to `buiy_view`.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RowKey(pub(crate) u64);
 
 /// The reconciler system: diff `view(&model)` against the retained tree and
 /// patch / spawn / despawn to match. Exclusive `&mut World` (it spawns real
@@ -112,10 +125,38 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             update_press::<M>(world, entity, el, model);
             update_disabled(world, entity, el.disabled);
         }
+        Kind::Checkbox => {
+            // Controlled: re-assert the leaf `A11yToggled` from the model
+            // (drift-only), and refresh the toggle route (`f(!checked)` stamped
+            // as a `PressAction`).
+            set_checkbox_checked(world, entity, el.checked);
+            update_press::<M>(world, entity, el, model);
+        }
+        Kind::TextInput => {
+            set_editor_value(world, entity, el.value.as_deref().unwrap_or(""));
+            update_text_actions::<M>(world, entity, el, model);
+        }
         Kind::Column | Kind::Row => {
             apply_container_props(world, entity, el);
-            reconcile_positional_children::<M>(world, entity, &el.children, model);
+            reconcile_children::<M>(world, entity, &el.children, model, el.keyed);
         }
+    }
+}
+
+/// Reconcile a container's children — **by key** if the container is a
+/// [`keyed_column`](crate::keyed_column) (`keyed == true`), else **by position**
+/// (`column!`/`row!`).
+fn reconcile_children<M: Model>(
+    world: &mut World,
+    parent: Entity,
+    children_el: &[Element<M::Msg>],
+    model: Entity,
+    keyed: bool,
+) {
+    if keyed {
+        reconcile_keyed_children::<M>(world, parent, children_el, model);
+    } else {
+        reconcile_positional_children::<M>(world, parent, children_el, model);
     }
 }
 
@@ -145,6 +186,63 @@ fn reconcile_positional_children<M: Model>(
     for &old in existing.iter().skip(children_el.len()) {
         world.entity_mut(old).despawn();
     }
+    world.entity_mut(parent).replace_children(&ordered);
+}
+
+/// Keyed reconcile (spec §2 #4): match existing rows to new elements **by
+/// [`RowKey`]**.
+/// - a key present in both is **reconciled in place** (entity + all its widget
+///   descendants + their internal state are preserved — a reorder or a sibling
+///   add/remove never rebuilds it);
+/// - a key only in the new tree is **spawned** (and stamped with its `RowKey`);
+/// - a key only in the old tree is **despawned**;
+/// - the parent's `Children` are then pinned to the new document order, so rows
+///   **move** without losing identity.
+fn reconcile_keyed_children<M: Model>(
+    world: &mut World,
+    parent: Entity,
+    children_el: &[Element<M::Msg>],
+    model: Entity,
+) {
+    // Existing rows: key → entity.
+    let existing: Vec<Entity> = world
+        .get::<Children>(parent)
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
+    let mut by_key: std::collections::HashMap<u64, Entity> = std::collections::HashMap::new();
+    for &child in &existing {
+        if let Some(&RowKey(k)) = world.get::<RowKey>(child) {
+            by_key.insert(k, child);
+        }
+    }
+
+    let mut new_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut ordered = Vec::with_capacity(children_el.len());
+    for child_el in children_el {
+        let key = child_el
+            .key
+            .expect("keyed_column child must carry a key (keyed_column sets it)");
+        new_keys.insert(key);
+        let e = match by_key.get(&key) {
+            // Reuse the existing row entity — reconcile it IN PLACE (no rebuild).
+            Some(&old) => reconcile_node::<M>(world, old, child_el, model),
+            // A new key — build it fresh and stamp its identity.
+            None => {
+                let e = spawn_node::<M>(world, child_el, model);
+                world.entity_mut(e).insert(RowKey(key));
+                e
+            }
+        };
+        ordered.push(e);
+    }
+
+    // Despawn rows whose key vanished.
+    for (&k, &old) in by_key.iter() {
+        if !new_keys.contains(&k) {
+            world.entity_mut(old).despawn();
+        }
+    }
+    // Pin the surviving + new rows to document order (the MOVE, without rebuild).
     world.entity_mut(parent).replace_children(&ordered);
 }
 
@@ -180,13 +278,50 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             update_disabled(world, e, el.disabled);
             e
         }
+        Kind::Checkbox => {
+            // The real stateful-leaf Checkbox. Seed its `A11yToggled` from the
+            // model (the explicit component overrides the `#[require]` default
+            // `False`), so a seeded-done item renders checked on frame 1 without
+            // waiting for a fold.
+            let want = toggled_of(el.checked);
+            let e = world
+                .spawn((Checkbox::new(""), A11yToggled(want), Kind::Checkbox))
+                .id();
+            // The toggle route: press → the eagerly-resolved `f(!checked)` value
+            // → model (stamped as a `PressAction`, exactly like a button).
+            update_press::<M>(world, e, el, model);
+            e
+        }
+        Kind::TextInput => {
+            // The real command-sourced single-line editor.
+            let placeholder = el.placeholder.clone().unwrap_or_default();
+            let e = world
+                .spawn((TextInput::single_line(placeholder), Kind::TextInput))
+                .id();
+            // Seed the controlled value into the editor buffer (no
+            // `TextChanged`/`EditLog` — `apply` is the low-level seam, not the
+            // recorded keyboard system).
+            if let Some(v) = &el.value {
+                set_editor_value(world, e, v);
+            }
+            update_text_actions::<M>(world, e, el, model);
+            e
+        }
         Kind::Column | Kind::Row => {
             let e = world.spawn((Node, el.kind)).id();
             apply_container_props(world, e, el);
             let kids: Vec<Entity> = el
                 .children
                 .iter()
-                .map(|c| spawn_node::<M>(world, c, model))
+                .map(|c| {
+                    let child = spawn_node::<M>(world, c, model);
+                    // A fresh keyed container stamps its children's identity so a
+                    // later reconcile can match them by key.
+                    if let Some(k) = c.key {
+                        world.entity_mut(child).insert(RowKey(k));
+                    }
+                    child
+                })
                 .collect();
             world.entity_mut(e).replace_children(&kids);
             e
@@ -358,5 +493,97 @@ fn update_disabled(world: &mut World, entity: Entity, disabled: bool) {
         }
     } else {
         world.entity_mut(entity).insert(Opacity(want));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FW2 — the two stateful-leaf widgets (checkbox leaf + command-sourced editor).
+// ---------------------------------------------------------------------------
+
+fn toggled_of(checked: bool) -> Toggled {
+    if checked {
+        Toggled::True
+    } else {
+        Toggled::False
+    }
+}
+
+/// Re-assert a controlled checkbox's `A11yToggled` from the model. Only writes
+/// on a real **drift** (#11), and writes THROUGH the toggle leaf's own inbox
+/// (`ToggleMsg::Set`) so the leaf's early drain stays the SOLE writer
+/// (single-writer discipline). In the live app the leaf + the model route
+/// already agree after a click, so this is a no-op there; it earns its keep on
+/// **replay** — re-deriving the visual toggle from the replayed model even when
+/// the off-log leaf fold dead-lettered.
+fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) {
+    let want = toggled_of(checked);
+    let current = world.get::<A11yToggled>(entity).map(|t| t.0);
+    if current != Some(want) {
+        world
+            .resource_mut::<Messages<Envelope<A11yToggled>>>()
+            .write(Envelope {
+                target: entity,
+                msg: ToggleMsg::Set(checked),
+            });
+    }
+}
+
+/// Set the controlled value of a real editor to `value`, iff it differs from
+/// the live content (#11 drift-only — so an in-progress edit the user just typed
+/// (already equal) is not clobbered, and no redundant work runs). Uses the
+/// low-level `apply` seam (NOT the recorded keyboard system), so it emits no
+/// `TextChanged` and writes no `EditLog` entry — the controlled set is invisible
+/// to both bridges + the record stream, avoiding a feedback loop / log flood.
+///
+/// `clear ≠ Insert("")`: an empty insert deletes nothing, so clearing is
+/// `SelectAll` + `Delete` (select the whole buffer, then delete the selection).
+fn set_editor_value(world: &mut World, entity: Entity, value: &str) {
+    let current = world.get::<TextEditState>(entity).map(|s| s.value());
+    if current.as_deref() == Some(value) {
+        return;
+    }
+    let fonts = world.resource::<SharedFontSystem>().clone();
+    let mut fs = fonts.lock();
+    if let Some(mut state) = world.get_mut::<TextEditState>(entity) {
+        // Replace the whole buffer: select all, then delete-to-clear or
+        // insert-over (single_line = true, read_only = false).
+        state.apply(&mut fs, EditCommand::SelectAll, true, false);
+        if value.is_empty() {
+            state.apply(&mut fs, EditCommand::Delete, true, false);
+        } else {
+            state.apply(&mut fs, EditCommand::Insert(value.to_string()), true, false);
+        }
+    }
+}
+
+/// Attach / refresh (or remove) a text-input's `on_input` / `on_submit` handlers
+/// that the editor bridges read (#11: an insert only carries a real handler; a
+/// handler-less element removes the component).
+fn update_text_actions<M: Model>(
+    world: &mut World,
+    entity: Entity,
+    el: &Element<M::Msg>,
+    model: Entity,
+) {
+    match el.on_input {
+        Some(f) => {
+            world
+                .entity_mut(entity)
+                .insert(InputAction::<M> { f, model });
+        }
+        None => {
+            world.entity_mut(entity).remove::<InputAction<M>>();
+        }
+    }
+    match &el.on_submit {
+        Some(msg) => {
+            world.entity_mut(entity).insert(SubmitAction::<M> {
+                msg: msg.clone(),
+                model,
+            });
+        }
+        None => {
+            world.entity_mut(entity).remove::<SubmitAction<M>>();
+        }
     }
 }

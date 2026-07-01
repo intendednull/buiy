@@ -15,15 +15,22 @@ use crate::tokens::{Color, Radius, Space};
 /// the reconciler stamps on each spawned entity so it can tell "same kind ⇒
 /// patch" from "different kind ⇒ replace".
 ///
-/// PR1 (FW1) ships the four kinds the Counter needs. Stateful-leaf widgets
-/// (`Checkbox`/`TextInput`) and the conditional `Empty` placeholder arrive in
-/// later waves.
+/// FW1 shipped the four kinds the Counter needs; FW2 adds the two stateful-leaf
+/// widgets TodoMVC needs — a real `Checkbox` (its `A11yToggled` leaf IS the
+/// model) and a real single-line `TextInput` (the command-sourced editor). The
+/// conditional `Empty` placeholder is a later wave.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Column,
     Row,
     Text,
     Button,
+    /// A real `buiy_widgets::Checkbox` (stateful leaf: `A11yToggled` is its
+    /// model — the reconciler drives it from the controlled `checked` state).
+    Checkbox,
+    /// A real single-line `buiy_widgets::TextInput` (the command-sourced
+    /// editor). Controlled: the reconciler keeps its buffer equal to `value`.
+    TextInput,
 }
 
 /// An inert description of a piece of UI. Built by the widget builders,
@@ -49,9 +56,36 @@ pub struct Element<Msg> {
     pub(crate) background: Option<Color>,
     /// Corner radius token (containers). Lowered to the render `Border`.
     pub(crate) radius: Option<Radius>,
-    /// The typed message a press enqueues. `None` ⇒ inert (or disabled).
+    /// The typed message a press enqueues. `None` ⇒ inert (or disabled). Also
+    /// carries a **checkbox**'s resolved toggle message: [`Element::on_toggle`]
+    /// eagerly evaluates `f(!checked)` into this slot, so a checkbox press routes
+    /// through the same `PressAction` value path as a button (no stored closure).
     pub(crate) on_press: Option<Msg>,
     pub(crate) children: Vec<Element<Msg>>,
+
+    // --- FW2 additions (keyed lists + the two stateful-leaf widgets) --------
+    /// The mandatory reconcile key for a [`keyed_column`] child (FW2's fix for
+    /// the silent-`.key()` landmine — set by `keyed_column`, not the author).
+    pub(crate) key: Option<u64>,
+    /// Whether this container reconciles its children **by key** ([`keyed_column`])
+    /// rather than by position (`column!`/`row!`).
+    pub(crate) keyed: bool,
+    /// A checkbox's controlled checked state (the model is the source of truth;
+    /// the reconciler re-asserts the real leaf `A11yToggled` from it).
+    pub(crate) checked: bool,
+    /// A text-input's controlled value (flows from the model draft into the real
+    /// editor buffer via the low-level `apply()` seam, drift-only).
+    pub(crate) value: Option<String>,
+    /// A text-input's placeholder prompt (shown when the value is empty).
+    pub(crate) placeholder: Option<String>,
+    /// A text-input's per-keystroke handler: `fn(new_value) -> Msg`. A **bare fn
+    /// pointer** (an enum tuple-variant ctor like `Msg::SetDraft` qualifies), so
+    /// it is `Copy` / determinism-safe and stored on the entity for the router —
+    /// never a captured closure (the replay-safety rule, spec §2). Consumed by
+    /// `route_text_input`.
+    pub(crate) on_input: Option<fn(String) -> Msg>,
+    /// A text-input's submit (Enter) message (a value, like `on_press`).
+    pub(crate) on_submit: Option<Msg>,
 }
 
 pub(crate) const DEFAULT_TEXT_SIZE: f32 = 24.0;
@@ -70,6 +104,13 @@ impl<Msg> Element<Msg> {
             radius: None,
             on_press: None,
             children: Vec::new(),
+            key: None,
+            keyed: false,
+            checked: false,
+            value: None,
+            placeholder: None,
+            on_input: None,
+            on_submit: None,
         }
     }
 
@@ -147,6 +188,47 @@ impl<Msg> Element<Msg> {
         self.disabled = d;
         self
     }
+
+    // --- FW2: checkbox + text-input handlers ------------------------------
+
+    /// A **checkbox**'s toggle handler. `f` maps the *would-be-new* checked state
+    /// to a `Msg`. Because a checkbox's toggle target is deterministic given the
+    /// current model (`!checked`), `on_toggle` **evaluates `f(!checked)` right
+    /// here** and stores the resulting `Msg` value — the closure is consumed at
+    /// build time, never stored on an entity, so the route stays a plain
+    /// `PressAction` value (replay-safe). This is why `f` may freely **capture**
+    /// (e.g. the row id): eager evaluation dissolves the capture. (Contrast
+    /// [`Element::on_input`], whose value is only known at keystroke time and so
+    /// cannot resolve eagerly — hence its bare-`fn` constraint.)
+    pub fn on_toggle(mut self, f: impl FnOnce(bool) -> Msg) -> Self {
+        self.on_press = Some(f(!self.checked));
+        self.disabled = false;
+        self
+    }
+
+    /// A **text-input**'s placeholder prompt (shown when the value is empty).
+    pub fn placeholder(mut self, s: impl Into<String>) -> Self {
+        self.placeholder = Some(s.into());
+        self
+    }
+
+    /// A **text-input**'s per-keystroke handler: `fn(new_value) -> Msg`. Takes a
+    /// **bare fn pointer** (an enum tuple-variant ctor such as `Msg::SetDraft` is
+    /// exactly `fn(String) -> Msg`), NOT an `Fn` closure — the runtime value
+    /// forbids eager evaluation, so the fn is stored on the entity for the
+    /// router; a bare fn cannot capture a `Res` snapshot, so it is
+    /// determinism-safe by type (the replay-safety rule, spec §2). A *capturing*
+    /// per-row `on_input` needs a boxed handler — deferred to PR3 (#17).
+    pub fn on_input(mut self, f: fn(String) -> Msg) -> Self {
+        self.on_input = Some(f);
+        self
+    }
+
+    /// A **text-input**'s submit (Enter) message.
+    pub fn on_submit(mut self, msg: Msg) -> Self {
+        self.on_submit = Some(msg);
+        self
+    }
 }
 
 /// A text node (the `text(..)` builder; see also the [`text!`](crate::text!)
@@ -162,6 +244,53 @@ pub fn text<Msg>(s: impl Into<String>) -> Element<Msg> {
 pub fn button<Msg>(label: impl Into<String>) -> Element<Msg> {
     let mut e = Element::new(Kind::Button);
     e.text = Some(label.into());
+    e
+}
+
+/// A **checkbox** bound to `checked` (the model is the source of truth — the
+/// reconciler drives the real `Checkbox`'s `A11yToggled` from this). Attach a
+/// handler with [`Element::on_toggle`]. The box is unlabelled here (put the
+/// row's label in a sibling [`text`]).
+pub fn checkbox<Msg>(checked: bool) -> Element<Msg> {
+    let mut e = Element::new(Kind::Checkbox);
+    e.checked = checked;
+    e
+}
+
+/// A single-line **text input** bound to `value` (controlled — the reconciler
+/// keeps the real editor's content equal to this). Attach [`Element::on_input`]
+/// / [`Element::on_submit`] / [`Element::placeholder`].
+pub fn text_input<Msg>(value: impl Into<String>) -> Element<Msg> {
+    let mut e = Element::new(Kind::TextInput);
+    e.value = Some(value.into());
+    e
+}
+
+/// A **required-key** list (FW2's headline builder). Unlike [`column!`](crate::column!),
+/// the key is a *mandatory argument* — the deliberate fix for the panel's
+/// silent-`.key()` landmine. The reconciler matches rows to elements **by key**,
+/// so it spawns new keys, despawns missing keys, and **reorders existing rows
+/// without rebuilding them** (preserving each row's widget-entity identity +
+/// internal state — the surviving checkbox keeps its `A11yToggled`, the surviving
+/// editor keeps its buffer).
+///
+/// `key_fn` yields a stable `u64` per item; `view_fn` renders one item.
+pub fn keyed_column<T, Msg>(
+    iter: impl IntoIterator<Item = T>,
+    key_fn: impl Fn(&T) -> u64,
+    view_fn: impl Fn(&T) -> Element<Msg>,
+) -> Element<Msg> {
+    let children = iter
+        .into_iter()
+        .map(|item| {
+            let key = key_fn(&item);
+            let mut child = view_fn(&item);
+            child.key = Some(key);
+            child
+        })
+        .collect();
+    let mut e = Element::column(children);
+    e.keyed = true;
     e
 }
 

@@ -16,7 +16,7 @@ use buiy_core::mvu::{Cmd, LogicalId, Model, MvuAppExt, MvuSet};
 
 use crate::element::Element;
 use crate::reconcile::reconcile;
-use crate::router::route_presses;
+use crate::router::{route_presses, route_text_input, route_text_submit};
 
 /// The stable [`LogicalId`] the single `ui()` model carries, so a recorded
 /// session replays into a fresh app (the model's identity is the same in both,
@@ -124,10 +124,20 @@ impl BuiyViewAppExt for App {
             ));
         });
 
-        // The press router (Enqueue) + the reconciler (before Layout, #10). No
+        // The routers (Enqueue) + the reconciler (before Layout, #10). No
         // app-authored routing (DX-3) and no app-authored `Changed<Model>` bind
-        // (DX-2) — the library does both.
-        self.add_systems(Update, route_presses::<M>.in_set(MvuSet::Enqueue));
+        // (DX-2) — the library does both. Presses (buttons + checkbox toggles)
+        // and the editor bridges (per-keystroke `on_input`, Enter `on_submit`)
+        // all lower to the funnel here.
+        self.add_systems(
+            Update,
+            (
+                route_presses::<M>,
+                route_text_input::<M>,
+                route_text_submit::<M>,
+            )
+                .in_set(MvuSet::Enqueue),
+        );
         self.configure_sets(Update, ViewSet::Reconcile.before(BuiySet::Layout));
         self.add_systems(Update, reconcile::<M>.in_set(ViewSet::Reconcile));
         self
