@@ -1,10 +1,11 @@
-# The widget gallery as a WebGPU/wasm example — reuses the `buiy_gallery` lib's
-# `GalleryPlugin` (all five screens, the shell router, the inspector, the dark
-# theme) with a canvas-bound window. Build with
-# `trunk build examples/gallery_web/index.html --release`. The native `--workspace`
-# build compiles this as an ordinary binary: the `webgpu` feature (which drags in
-# the 3D backend crates) is target-gated to wasm32 below, so it never enters the
-# native build.
+# The widget gallery as a WebGPU/WebGL2 wasm example — reuses the `buiy_gallery`
+# lib's `GalleryPlugin` (all five screens, the shell router, the inspector, the
+# dark theme) with a canvas-bound window. Build with one backend feature:
+#   trunk build examples/gallery_web/index.html --features webgpu --release
+#   trunk build examples/gallery_web/index.html --features webgl2 --release
+# The native `--workspace` build compiles this as an ordinary binary and enables
+# NEITHER backend feature (wgpu auto-selects Vulkan/Metal/DX12), so it never
+# compiles a web backend or the 3D crates the meta-features drag in.
 [package]
 name = "gallery_web"
 version.workspace = true
@@ -14,14 +15,22 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+# Render backend, selected at (wasm) build time. NEITHER is default: the native
+# build enables neither. WebGPU = the preferred backend (needs an enabled WebGPU
+# adapter — flag-gated on Firefox/older Safari/some Linux). WebGL2 = the reach
+# backend, unflagged in every modern browser. The two bevy meta-features cannot
+# coexist in one binary (`webgpu` takes precedence), so reach = two artifacts + a
+# loader.
+webgpu = ["bevy/webgpu"]
+webgl2 = ["bevy/webgl2"]
+
 [dependencies]
 bevy = { workspace = true }
 buiy = { path = "../../crates/buiy" }
 buiy_gallery = { path = "../buiy_gallery" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# The WebGPU backend (a 2D lib doesn't want the 3D crates the meta-feature pulls,
-# but they only build for wasm32 here) + a panic hook that routes Rust panics to
-# the browser console.
-bevy = { workspace = true, features = ["webgpu"] }
+# A panic hook that routes Rust panics to the browser console (the backend bevy
+# feature now comes from `[features]` above, selected per `trunk --features`).
 console_error_panic_hook = "0.1"

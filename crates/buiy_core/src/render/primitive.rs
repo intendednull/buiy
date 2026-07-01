@@ -356,16 +356,15 @@ impl BuiyBandPipeline {
                         offset: 168,
                         shader_location: 14,
                     },
-                    // affine cols @176, @184
+                    // affine [m00,m10,m01,m11] @176 as ONE Float32x4 (was two
+                    // Float32x2 cols at loc 15/16). Folded to 16 vertex attributes
+                    // total — WebGL2's max_vertex_attributes cap. The struct field
+                    // is already a contiguous [f32;4], so the 192 B stride is
+                    // unchanged; band.wgsl reads `.xy`/`.zw`.
                     VertexAttribute {
-                        format: VertexFormat::Float32x2,
+                        format: VertexFormat::Float32x4,
                         offset: 176,
                         shader_location: 15,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x2,
-                        offset: 184,
-                        shader_location: 16,
                     },
                 ],
             },
@@ -661,5 +660,33 @@ impl SpecializedRenderPipeline for BuiyPrimitives {
             }),
             zero_initialize_workgroup_memory: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod band_attr_cap_tests {
+    use super::*;
+
+    /// WebGL2 caps `max_vertex_attributes` at 16 (`downlevel_webgl2_defaults`), and
+    /// an over-cap band pipeline makes `create_render_pipeline` fail -> the whole
+    /// `buiy_pass` CommandEncoder fails to finish -> blank screen. This guards the
+    /// affine fold: the band layout must never exceed 16 vertex attributes again.
+    #[test]
+    fn band_layout_stays_within_webgl2_16_attribute_cap() {
+        let buffers = BuiyBandPipeline::band_vertex_buffers();
+        let locations: Vec<u32> = buffers
+            .iter()
+            .flat_map(|b| b.attributes.iter().map(|a| a.shader_location))
+            .collect();
+        assert!(
+            locations.len() <= 16,
+            "band pipeline declares {} vertex attributes; WebGL2 caps at 16",
+            locations.len()
+        );
+        let max_loc = locations.iter().copied().max().unwrap_or(0);
+        assert!(
+            max_loc <= 15,
+            "band pipeline max shader_location is {max_loc}; WebGL2's 16-attribute cap needs <= 15"
+        );
     }
 }
