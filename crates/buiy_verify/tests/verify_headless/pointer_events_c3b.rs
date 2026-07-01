@@ -96,6 +96,48 @@ fn release_off_target_does_not_activate() {
     );
 }
 
+/// Touch-input fix (cold tap): a `PointerId::Touch` tap on a widget root with NO
+/// prior hover/move emits `OnPress`. This is the case bevy_picking's `Pointer<Click>`
+/// and `Pointer<Release>` CANNOT activate — both target the PREVIOUS frame's hover
+/// map (events.rs:656), which a first-touch pointer never populates (spawned on
+/// press, despawned after release). The fix records the press via `Pointer<Press>`
+/// (current hover map) + activates on the raw `Release` `PointerInput` gated on the
+/// current hover map. Verified end-to-end in a real WebGL2 browser; this is the
+/// headless CI guard. (RED before the fix — the tap produced no `OnPress`.)
+#[test]
+fn cold_touch_tap_activates_widget_root() {
+    let mut h = PointerHarness::new();
+    let root = h.spawn_offset_tree(Vec2::new(40.0, 30.0), widget_root(120.0, 40.0));
+    let center = h.global_center(root);
+
+    // NO move_to — a cold tap (the finger's first contact IS the press).
+    h.touch_tap_cold(center);
+
+    assert!(
+        on_press_fired(&mut h, root),
+        "a cold touch tap on the widget root must emit OnPress (the touch-input fix)"
+    );
+}
+
+/// Touch drag-cancel: a touch press on the root then a release OFF the root does
+/// NOT activate — the same drag-cancel the mouse `Click` gives for free, here via
+/// the current-hover-map check in `touch_tap_activates` (the release's current
+/// hover does not contain the pressed target).
+#[test]
+fn touch_release_off_target_does_not_activate() {
+    let mut h = PointerHarness::new();
+    let root = h.spawn_offset_tree(Vec2::new(40.0, 30.0), widget_root(120.0, 40.0));
+    let center = h.global_center(root);
+
+    // Press on the root, release at empty space (finger dragged off).
+    h.touch_tap(center, Vec2::new(700.0, 560.0));
+
+    assert!(
+        !on_press_fired(&mut h, root),
+        "a touch release dragged off the pressed target must NOT activate"
+    );
+}
+
 /// Gate #3 (no-hit clears hover): moving onto a node fires `Pointer<Over>`;
 /// moving off all Buiy nodes fires `Pointer<Out>`. The Out depends on the
 /// backend's no-hit emission (§2.2) — without it the hover never clears.

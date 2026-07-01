@@ -25,9 +25,11 @@
 
 use crate::a11y::A11yRole;
 use crate::interaction::OnPress;
-use bevy::picking::events::{Click, Pointer};
-use bevy::picking::pointer::PointerButton;
+use bevy::picking::events::{Click, Pointer, Press};
+use bevy::picking::hover::HoverMap;
+use bevy::picking::pointer::{PointerAction, PointerButton, PointerId, PointerInput};
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 /// Whether a primary-click on a node of `role` lowers to the shared [`OnPress`]
 /// activation sink. The activatable roles are exactly those with a keyboard
@@ -59,10 +61,88 @@ pub fn pointer_click_emits_on_press(
     if click.event.button != PointerButton::Primary {
         return;
     }
+    // TOUCH activates via the press/release path ([`touch_press_records_target`] +
+    // [`touch_release_activates`]), NOT `Click`: bevy_picking derives `Pointer<Click>`
+    // from the PREVIOUS frame's hover map, which a first-touch tap never populates
+    // (the `PointerId::Touch` pointer is spawned on press and despawned after
+    // release), so a tap produces no `Click`. Skipping touch here is also what keeps
+    // touch from double-activating when a multi-frame tap DID yield a `Click`.
+    if matches!(click.pointer_id, PointerId::Touch(_)) {
+        return;
+    }
     let target = click.entity;
     // Only entities carrying an activatable role lower to `OnPress` — a click on
     // a text input / plain node must not activate.
     if roles.get(target).copied().is_ok_and(is_activatable_role) {
         writer.write(OnPress(target));
+    }
+}
+
+/// Per-touch-pointer press target (the touch-activation half of the touch-input
+/// fix; the location half is `picking/backend.rs::sync_pointer_location_on_button`).
+/// A `PointerId::Touch` press over an activatable widget records its target here so
+/// the matching release can activate it — see [`touch_tap_activates`] for why this
+/// can't ride `Pointer<Click>`/`Pointer<Release>` (both need the PREVIOUS frame's
+/// hover map, which a first-touch tap never populates).
+#[derive(Resource, Default)]
+pub struct TouchPressTargets(HashMap<PointerId, Entity>);
+
+/// Records the press target of a TOUCH pointer over an activatable widget root, so
+/// [`touch_tap_activates`] can fire `OnPress` if the release still hovers it.
+/// `Pointer<Press>` targets the CURRENT hover map (events.rs:928), so unlike
+/// `Pointer<Release>`/`Click` it DOES fire for a cold tap. Mouse/pen are untouched
+/// — they keep the `Click` path ([`pointer_click_emits_on_press`]). The event
+/// propagates child→parent; the (typically single) activatable ancestor is recorded.
+pub fn touch_press_records_target(
+    press: On<Pointer<Press>>,
+    roles: Query<&A11yRole>,
+    mut targets: ResMut<TouchPressTargets>,
+) {
+    if press.event.button != PointerButton::Primary {
+        return;
+    }
+    let PointerId::Touch(_) = press.pointer_id else {
+        return;
+    };
+    let target = press.entity;
+    if roles.get(target).copied().is_ok_and(is_activatable_role) {
+        targets.0.insert(press.pointer_id, target);
+    }
+}
+
+/// Activates a touch-tapped widget on the raw `Release` [`PointerInput`], gated on
+/// the CURRENT [`HoverMap`]. bevy_picking's `Pointer<Release>` and `Pointer<Click>`
+/// BOTH target the PREVIOUS frame's hover map (events.rs:656), which a first-touch
+/// tap never populates — the `PointerId::Touch` pointer is spawned on press and
+/// despawned right after release — so neither event fires for a tap (verified by
+/// running it). This reads the raw `Release` action + the current `HoverMap` (which
+/// `sync_pointer_location_on_button` → `emit_picks` populate for the release
+/// location) and fires `OnPress` iff the release still hovers the pressed target
+/// (drag-cancel: a release dragged off the pressed widget does not activate). Runs
+/// after `PickingSystems::Hover`, so the hover map is current and the press record
+/// (written by [`touch_press_records_target`], a `Pointer<Press>` observer) exists.
+pub fn touch_tap_activates(
+    mut inputs: MessageReader<PointerInput>,
+    hover_map: Res<HoverMap>,
+    mut targets: ResMut<TouchPressTargets>,
+    mut writer: MessageWriter<OnPress>,
+) {
+    for input in inputs.read() {
+        let PointerId::Touch(_) = input.pointer_id else {
+            continue;
+        };
+        if !matches!(input.action, PointerAction::Release(PointerButton::Primary)) {
+            continue;
+        }
+        let Some(pressed) = targets.0.remove(&input.pointer_id) else {
+            continue;
+        };
+        let still_over = hover_map
+            .0
+            .get(&input.pointer_id)
+            .is_some_and(|hits| hits.contains_key(&pressed));
+        if still_over {
+            writer.write(OnPress(pressed));
+        }
     }
 }
