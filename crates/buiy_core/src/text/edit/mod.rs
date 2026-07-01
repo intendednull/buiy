@@ -24,6 +24,10 @@ mod scroll;
 mod selection;
 mod state;
 mod undo;
+/// Wasm-only IME + mobile soft-keyboard DOM bridge (§ D8). Compiled + registered
+/// only on wasm; native IME rides winit.
+#[cfg(target_arch = "wasm32")]
+pub mod web_ime;
 
 pub use access::{
     TextBufferAccess, TextBufferAccessItem, TextBufferAccessReadOnly, TextBufferAccessReadOnlyItem,

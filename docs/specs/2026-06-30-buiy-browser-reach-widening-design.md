@@ -132,7 +132,7 @@ emitted); (2) a real-AT pass (NVDA/VoiceOver) beyond the AX-tree assertion; (3) 
 Waiting for upstream (indefinite); claiming the built tree = working a11y without verifying the AX
 tree (silent WCAG failure — this wave verifies the AX tree).
 
-### D8 — IME + mobile soft-keyboard: Buiy DOM bridge outside winit — **DEFERRED (W5, prototype-first; evidence below)**
+### D8 — IME + mobile soft-keyboard: Buiy DOM bridge outside winit — **LANDED (W5, prototype-first)**
 **Decision.** A wasm-only bridge: a hidden focused `<input>` sibling of `#buiy` (egui TextAgent
 pattern); on editor focus `.focus()` (raises the OSK) + move to `ime_position`; register
 `compositionstart/update/end` + `input` → `MessageWriter<Ime>` feeding the unchanged E5 engine
@@ -153,9 +153,22 @@ emits no `Ime`); the engine is winit-free + reusable. EditContext is Chromium-on
 > and **every non-text key (arrows, Enter, Backspace, Tab, Esc, Ctrl/Cmd shortcuts) via `keydown`
 > → synthesized `bevy::input::keyboard::KeyboardInput`**, needing a DOM-`code`→bevy-`KeyCode`
 > mapping table. Plus focus-sync (focus/blur on `ime_enabled`), double-insertion avoidance, and a
-> touch-vs-desktop policy (focusing the input on desktop is otherwise a keyboard REGRESSION). This
-> is a substantial, regression-risky, prototype-first effort — **scoped to its own wave** rather
-> than rushed. W1–W4 are landed + verified; W5 is the remaining wave.
+> touch-vs-desktop policy. The probe scoped W5 as its own prototype-first wave (not a shim).
+
+**Implementation (`text/edit/web_ime.rs`, wasm-only).** `WebImePlugin` (registered by `BuiyTextPlugin`
+on wasm) creates a hidden off-screen `<input>` and, on `Window.ime_enabled`, `.focus()`es it (raising
+the OSK + capturing composition). Its `keydown`/`keyup` (non-composing, `preventDefault`'d) → synthesized
+`KeyboardInput` (logical `Key` from `event.key` — the editor classifies on `logical_key`; `KeyCode` from
+`event.code` — mainly so `ButtonInput<KeyCode>` reflects modifiers); its `compositionupdate`/`end` →
+`Ime::Preedit`/`Commit`. On `ime_enabled=false` the input blurs and winit's canvas keyboard resumes.
+**Verified (W5, real WebGL2 browser):** clicking the editor focuses the hidden input; **typing** lands
+in the editor, **arrow navigation + Backspace + Enter** work, **CJK IME composition commits** (synthetic
+`compositionstart→update→end("你好")` inserted 你好), and **modifier shortcuts** (Ctrl+A + Ctrl+C → OS
+clipboard) work — all through the bridge, no panics. Native unaffected (`cfg(wasm32)` module); web-sys
+HtmlInputElement/KeyboardEvent/CompositionEvent features (no new lock crates); `cargo deny` clean.
+**Follow-ups (named):** `ime_position` tracking (position the input at the caret for the IME candidate
+window); a touch-only focus policy; the full `KeyCode` table (v1 covers letters/digits/modifiers/nav —
+the editor uses `logical_key`, so the rest only affects `ButtonInput<KeyCode>` completeness).
 
 **Rejected.** Waiting on winit#4424; owning a full IME engine (already exists); a naive
 focus-the-input shim (proven to starve the editor's keyboard — a regression, not a feature).
@@ -180,12 +193,15 @@ behavior unchanged; `--workspace` enables no backend feature.
    (best-effort paste documented).
 4. **W4 a11y overlay** — **✅ LANDED (#100).** D7 WebA11ySink; the AX tree verified via CDP
    (read-only v1; inbound/real-AT follow-ups named).
-5. **W5 IME/soft-keyboard** — **⏳ DEFERRED (prototype-first).** D8 — the W5 probe proved the
-   hidden-input bridge starves winit's canvas text keyboard, so it needs a full egui-TextAgent
-   input bridge (a regression-risky, prototype-first effort). See D8's empirical finding.
-6. **D3 `Rgba16Float` float-less fallback** — **⏳ DEFERRED.** Needs a float-less WebGL2 rig (or a
-   forced-`Rgba8` test) that the dev/CI adapters can't provide (all expose the float extensions);
-   the desktop/common-mobile path already works (both float extensions present).
+5. **W5 IME/soft-keyboard** — **✅ LANDED (prototype-first).** D8 `WebImePlugin`
+   (`text/edit/web_ime.rs`) — a hidden `<input>` fully bridges keyboard+IME for the focused editor.
+   Verified in a real WebGL2 browser: typing, arrow nav, Backspace, Enter, **CJK IME composition
+   commit**, and **Ctrl+A/Ctrl+C shortcuts** all work through the bridge; native unaffected. (The
+   probe first scoped it as prototype-first; building + running it proved it out.)
+6. **D3 `Rgba16Float` float-less fallback** — **⏳ DEFERRED (only remaining item).** Needs a
+   float-less WebGL2 rig (or a forced-`Rgba8` test) that the dev/CI adapters can't provide (all
+   expose the float extensions); the desktop/common-mobile path already works (both float
+   extensions present), so this only hardens older/low-end mobile.
 
 ## 4. Verification
 
