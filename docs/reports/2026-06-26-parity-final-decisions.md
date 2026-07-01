@@ -7,8 +7,8 @@
 the plan `docs/plans/2026-06-26-widget-catalog-parity-final.md`, the re-decided
 architecture `docs/reports/2026-06-26-parity-final-research-decisions.md`, the
 exact-values table `docs/specs/2026-06-25-widget-catalog-values.md`, and the
-prototype journal (in the `parity-prototype` worktree,
-`docs/reports/2026-06-25-parity-prototype-journal.md`).
+prototype journal (kept on the throwaway `parity-prototype` worktree; not
+preserved in-tree).
 
 This document is the single place a reviewer can read **what shipped, what
 changed from the prototype and why, and the verification evidence** without

@@ -36,6 +36,20 @@ Implications:
 - A plan without a spec is suspicious — flag it during review.
 - Prior-art docs are NOT specs. Do not encode Buiy design decisions in a prior-art doc. Capture lessons in the doc's `lessons.md` (validates / avoid / borrow) and promote real decisions into a spec.
 
+## Specialized kinds — the `Kind:` field
+
+The five types are the spine. Recurring *variants of specs and plans* are named in an optional `Kind:` header field — **not** a new type and **not** a filename suffix. The directory and the `YYYY-MM-DD-<kebab>` name are unchanged; `Kind:` is declared in the header and echoed in the catalog entry's prose, so "what *is* this doc?" is answerable without opening it:
+
+- **`campaign`** (a *plan*) — a plan-of-plans: the multi-PR umbrella that sequences a subsystem's phase-plans, sub-specs, decision notes, and reports. `Spec:` may point at the spec **or** the report/audit it realizes; it lists its member docs. Distinct from a bite-sized migration/TDD plan.
+- **`decision`** (a *spec*, top-level or a spec-folder child) — a scoped ADR-style note: one decision + its date + the rejected alternatives. The same thing the dated design-note / ADR child exception already blesses (see *Nested folders*).
+- **`values`** / **`reference`** (a *spec*) — a mined source-of-truth data table an implementation is authored against (e.g. an exact-values token table), not a prose design.
+
+`Kind:` is optional, additive, and does **not** duplicate a type: the prototype-first byproducts (journal / retrospective / charter / build-to-learn design) are the **Prototype** type, not kinds; a re-decided post-prototype design is just a spec that `Supersedes:` the throwaway one.
+
+## Reference designs — an archival location
+
+`docs/reference-designs/<name>/` holds immutable design bundles fed *into* specs (e.g. a source design HTML a UI is reimplemented against). No date prefix; cataloged under `## Reference designs` in `docs/README.md`. (The other non-spec dir, `docs/prototypes/`, is the **Prototype** type — see *Document types* and *Carrying over prototype docs*.)
+
 ## Naming
 
 | Type | Pattern | Example |
@@ -61,6 +75,7 @@ Every new spec, plan, and report opens with:
 ```
 **Date:** YYYY-MM-DD
 **Status:** draft | active | landed | superseded
+**Kind:** campaign | decision | values   (optional — names a spec/plan variant; see "Specialized kinds")
 **Spec:** docs/specs/...      (plans only — REQUIRED, points at the spec being realized)
 **Supersedes:** docs/specs/... (if applicable)
 ```
@@ -109,6 +124,16 @@ Multiple independent documents that share a topic are flat siblings, not childre
 5. **Pick the area.** Use an existing area in the catalog. If none fit, add a new area in the same commit (see below). If a doc spans areas, file it under its primary area.
 6. **Commit the doc and the README entry together.** The catalog must not lag the file.
 
+## Reconciling when work lands
+
+The checklist above covers a doc's *birth*. Rot accrues because nothing covered its *landing* — docs written pre-merge on long-lived branches never get reconciled once the work ships, so campaigns leave plans uncataloged and statuses frozen at `draft`/`active`. Close the loop at **branch-finish / PR time** (pairs with the `finishing-a-development-branch` skill), in the same change that lands the work:
+
+1. **Catalog every new doc the work introduced** — plans, reports, prototype records, reference bundles. **Required** (the one hard invariant: missing entries are not tolerable).
+2. **Reconcile status** of every spec/plan the work realized — flip `draft`/`active` → `landed` (or `superseded` + successor link) in **both** the in-doc header and the catalog `[tag]`. *Expected hygiene, not a gate* — stale tags stay tolerable, but a landed campaign is when they are cheapest to fix.
+3. **Fix references the work invalidated** — a renamed/removed doc, or a link to a file that stayed on a throwaway worktree.
+
+This is a habit at the merge boundary, deliberately **not** a CI gate: the tag stays a discovery aid, not an enforced signal.
+
 ## Adding a new prior-art doc
 
 1. **Confirm it deserves its own folder.** A prior-art doc is for systems we expect to consult repeatedly. One-shot research notes belong in `docs/reports/` instead. The `researching-prior-art` skill drives the full creation flow.
@@ -116,7 +141,7 @@ Multiple independent documents that share a topic are flat siblings, not childre
 3. **Write the main doc** at `docs/prior-art/<system>/README.md`.
 4. **Add the header** (see ## Document headers, prior-art variant).
 5. **Cover the required sections** (see ## Prior-art structure below).
-6. **Add a catalog entry** under the right category sub-section of `## Prior art` in `docs/README.md`. Categories are organizational groupings in the index only — they do NOT exist as on-disk subfolders.
+6. **Add a catalog entry** in the prior-art sub-index `docs/prior-art/README.md`, under the right category sub-section. (The master `docs/README.md` keeps only a category *map*, not the full entries — a new system needs no master-index edit; a whole new *category* is added to both.) Categories are organizational groupings in the index only — they do NOT exist as on-disk subfolders.
 7. **Commit the doc and the README entry together.**
 
 Children (focused sub-deep-dives, captured diagrams, archived screenshots, raw research notes worth preserving) go in the same folder as siblings to `README.md` — e.g. `docs/prior-art/<system>/architecture.md`. The README links them. No date prefix on children.
@@ -146,7 +171,8 @@ Optional but encouraged: glossary of system-specific terms, recommended reading 
 ## Modifying the structure
 
 - **Adding a feature area:** adds an `### ` header to the catalog plus the area name to step 5 above. Update the spec at `docs/specs/2026-05-07-docs-organization-design.md` and this skill in the same commit.
-- **Adding a prior-art category:** add a new sub-section under `## Prior art` in `docs/README.md`. Categories are catalog-only; do NOT create category subfolders on disk.
+- **Adding a prior-art category:** add the `### ` sub-section in the prior-art sub-index `docs/prior-art/README.md`, and add its one-line entry to the category *map* in `## Prior art` of the master `docs/README.md`. Categories are catalog-only; do NOT create category subfolders on disk.
+- **Splitting an area into its own sub-index:** when one area's entries grow to dominate `docs/README.md` (prior art was the first, at ~half the file), move that area's catalog to its own `<area>/README.md` and leave a category *map* + link in the master index. This is the sanctioned "volume justifies a split" case from the design spec's Non-goals — apply the same test before splitting any other area.
 - **Promoting a spec to a nested folder:** rename `<topic>-design.md` → `<topic>/README.md`. Children are added later as kebab-case files (no date). Update the catalog entry to point at the folder's `README.md`.
 - **Superseding a doc:** add `**Supersedes:**` to the new doc's header and `[superseded]` plus a link to the successor in the old doc's catalog entry. Do NOT delete the old doc.
 - **Archiving a prior-art doc:** flip its `Status:` from `active` to `archived` and add a one-line "Why archived" note under the header. Move catalog entry under an `### Archived` sub-section of `## Prior art`. The folder stays where it is.

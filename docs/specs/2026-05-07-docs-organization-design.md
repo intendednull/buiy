@@ -99,6 +99,36 @@ prior-art doc; capture lessons in the folder's `lessons.md` (validates / avoid
   consults prior art cites the folder + section, names the runner-up
   paradigm if a choice was made, and flags remaining gaps.
 
+### Specialized kinds — the `Kind:` field
+
+The five types are the spine, but months of use produced recurring *variants*
+of specs and plans that a reader needs to recognize on sight. Rather than mint
+new types or new filename suffixes (which proliferate), name the variant in an
+optional `Kind:` header field. The type (directory) is unchanged; the filename
+stays `YYYY-MM-DD-<kebab>`; `Kind:` is the one place the variant is declared,
+mirrored into the catalog entry's prose. Recognized kinds:
+
+- **`campaign`** (a *plan*) — a plan-of-plans: the multi-PR umbrella that
+  sequences a subsystem's phase-plans, sub-specs, decision notes, and reports.
+  It carries `Date`/`Status` like any plan, but its `Spec:` may point at the
+  spec **or** the report/audit it realizes, and it lists its member docs. A
+  campaign is *coordination*, distinct from a bite-sized migration/TDD plan.
+- **`decision`** (a *spec*, top-level or a spec-folder child) — a scoped
+  ADR-style note recording one decision + its date + the rejected alternatives.
+  This is the same thing the "dated design-note / ADR child" exception already
+  blesses inside spec folders; `Kind: decision` names it wherever it lives.
+- **`values`** / **`reference`** (a *spec*) — a mined source-of-truth data
+  table an implementation is authored against (e.g. an exact-values token table),
+  as opposed to a prose design.
+
+`Kind:` is optional and additive: a plain spec/plan/report needs none, and it
+does **not** duplicate a type. In particular the prototype-first byproducts
+(journal, retrospective, charter, build-to-learn design) are the **Prototype**
+type above — not kinds; and a re-decided post-prototype design is just a normal
+spec that `Supersedes:` the throwaway one. `Kind:` exists so "what *is* this
+doc?" is answerable from the header and catalog without opening the file or
+decoding the filename.
+
 ## Top-level layout
 
 ```
@@ -109,11 +139,19 @@ docs/
 ├── reports/             one-shot audits and investigations of our code
 ├── prototypes/          prototype-first journals + retrospectives (learning kept; code stays unmerged)
 ├── prior-art/           deep dives on external systems we learn from
-└── reference-designs/   archived Claude Design bundles (immutable)
+│   └── README.md        the prior-art sub-index (its own catalog; see Non-goals)
+├── reference-designs/   archived design bundles fed into specs (immutable)
+└── assets/              images referenced by docs (screenshots, diagrams)
 ```
 
 `docs/design/` does not exist in the target; design documents live in
 `docs/specs/` (or as a multi-file spec folder under `docs/specs/`).
+
+`docs/prototypes/` is the home of the **Prototype** type (above).
+`reference-designs/` is the one remaining archival *location* rather than an
+authored type: immutable design bundles that feed *into* specs (e.g. a source
+design HTML a UI is reimplemented against), no date prefix, cataloged under
+`## Reference designs`.
 
 ## Naming conventions
 
@@ -148,6 +186,7 @@ predating this convention are not retrofitted (see *Non-goals*).
 ```
 **Date:** YYYY-MM-DD
 **Status:** draft | active | landed | superseded
+**Kind:** campaign | decision | values   (optional — names a spec/plan variant; see "Specialized kinds")
 **Spec:** docs/specs/...      (plans only — REQUIRED, points at the spec being realized)
 **Supersedes:** docs/specs/... (if applicable)
 ```
@@ -249,6 +288,13 @@ the reader if it is also relevant to adjacent topics.
 A nested-folder spec appears as one entry pointing at its `README.md`. The
 index does not enumerate children — that is the parent README's job.
 
+Beyond the feature areas, the master index ends with a few standing sections:
+`## Prior art` (a **category map** linking the split-out
+[`prior-art/README.md`](../prior-art/README.md) sub-index — not the full
+entries), `## Reference designs`, and the `## Reports` bucket. Prototype records
+are cataloged under the feature area they belong to (e.g. a state-management
+prototype under that area), tagged `[archived]`.
+
 ### 4. Conventions
 
 The cemented rules — naming, document types, when to nest, how to add a new
@@ -318,7 +364,28 @@ Existing CLAUDE.md sections that duplicate doc-discovery information (e.g.
 the per-task "see `docs/specs/...`" pointers in *Architecture Notes*) are
 left in place — they are useful inline context, not redundant with the index.
 
-## Non-goals
+## Reconciling when work lands
+
+The "adding a new doc" checklist covers a doc's *birth*. Rot accrues because
+nothing covered its *landing*: docs are written pre-merge on long-lived
+branches and never reconciled once the work ships, so campaigns leave plans
+uncataloged and statuses frozen at `draft`/`active`. Close the loop at
+**branch-finish / PR time** (the `finishing-a-development-branch` flow), in the
+same change that lands the work:
+
+1. **Catalog every new doc the work introduced** — every plan, report,
+   prototype record, or reference bundle. This is **required**: it is the one
+   hard invariant ("missing entries are not tolerable"), not advisory.
+2. **Reconcile status** of every spec/plan the work realized — flip `draft`/
+   `active` → `landed` (or `superseded`, with the successor link) in **both**
+   the in-doc header and the catalog `[tag]`. This is *expected hygiene*, not a
+   gate — stale status tags remain tolerable (see Non-goals), but a landed
+   campaign is the moment they are cheapest to fix.
+3. **Fix references the work invalidated** — a renamed/removed doc, a link to a
+   file that stayed on a throwaway worktree.
+
+This is a *habit at the merge boundary*, deliberately not a CI gate: the tag
+stays a discovery aid, not an enforced project-management signal.
 
 - **Renaming existing files.** Files that predate this convention (e.g.
   specs without the `-design.md` suffix) stay as-is to preserve git history
@@ -326,7 +393,15 @@ left in place — they are useful inline context, not redundant with the index.
   explicitly. The convention applies to *new* docs only.
 - **A status-tracking system.** The `[status]` tag is a discovery aid, not a
   project-management tool. Stale tags are tolerable; missing entries are not.
-- **Per-area sub-READMEs.** Single-file index until volume justifies a split.
+  The *"Reconciling when work lands"* habit tightens this at the merge boundary
+  (reconcile statuses when a campaign ships) but keeps it a habit, not a CI
+  gate — the tag never becomes an enforced signal.
+- **Per-area sub-READMEs.** Single-file index *until volume justifies a split*.
+  Prior art crossed that line first: at ~48 rich entries it had grown to roughly
+  half the master index, so its catalog now lives in its own
+  [`prior-art/README.md`](../prior-art/README.md) and the master keeps only a
+  category map. This is the sanctioned split, not a reversal — apply the same
+  test before splitting any other area.
 
 ## Open questions
 
