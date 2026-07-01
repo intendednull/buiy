@@ -1,5 +1,5 @@
 ---
-source: crates/buiy_core/tests/render_instance.rs
+source: crates/buiy_core/tests/render/render_instance.rs
 expression: pack_instance_logical_px
 ---
 0000c84200004842000048430000a0420000803f0000803f0000803f0000803f00004041000080ff000080ff0000807f0000807f0000803f00000000000000000000803f
