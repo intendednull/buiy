@@ -2,9 +2,9 @@
 
 **Date:** 2026-06-26
 **Branch:** `worktree-perf-final` (off `origin/main` @ 7752c01)
-**Status:** `[complete]` — measurement infrastructure + 5 optimizations landed, all
+**Status:** `[landed]` — measurement infrastructure + 5 optimizations landed, all
 gate-proven; the audit's #1 finding (#2, the re-extract/re-upload cliff) fully fixed and
-real-GPU-verified. Awaiting human review + merge.
+real-GPU-verified. Merged in PR #84.
 
 Companion to the audit (`2026-06-25-performance-audit.md`), the design
 (`../specs/2026-06-26-buiy-performance-final-design.md`), and the plan

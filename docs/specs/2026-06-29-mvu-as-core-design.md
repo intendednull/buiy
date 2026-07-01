@@ -1,8 +1,8 @@
 # MVU as core — FINAL design
 
 **Date:** 2026-06-29
-**Status:** Spec / target-state design — FINAL (production, merge-targeted) `/staged-development` Stage 2. **Revised once after a 3-reviewer gate** (see §0.1).
-**Implementation:** LANDED — all functional waves (W0–W7) built + green on `worktree-mvu-core-final` (full headless workspace gate passing); the finishing wave (cleanup/docs) completes it. Merge-gated on human review.
+**Status:** `[landed]` — FINAL design, merged in PR #87 (main @ `abb76fb`); MVU is the primary state interface in `buiy_core`. `/staged-development` Stage 2, revised once after a 3-reviewer gate (see §0.1).
+**Implementation:** LANDED — all waves W0–W8 built, gated, and merged (PR #87).
 **Base:** `origin/main` @ `4010753` (includes WASM/WebGPU PR #85).
 **Worktree:** `mvu-core-final` (branch `worktree-mvu-core-final`).
 **Supersedes:** the unmerged draft `2026-06-26-buiy-state-management-design.md` (opt-in-crate placement; written on the `worktree-state-mgmt-elm-prototype` branch, never merged). This spec re-decides placement to **core** on the strength of prototype-3's evidence.

@@ -4,7 +4,7 @@ From `docs/specs/2026-06-26-widget-catalog-parity-final-design.md`. On
 `parity-final` (off `main` @ `fdb8dda`). Strategy: **port the validated prototype
 work + land the re-decided refinements.** `parity-final` shares the base
 `fdb8dda` with `parity-prototype`, so prototype commits are reachable for
-cherry-pick. **DO NOT MERGE — human-review-gated.**
+cherry-pick. **`[landed]` — merged in PR #83.**
 
 ## Execution model
 - Port a layer (cherry-pick its prototype commits, or apply the layer's diff +

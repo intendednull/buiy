@@ -1,6 +1,6 @@
 # Buiy performance — final-pass design
 
-**Status:** `[active]`
+**Status:** `[landed]` — merged in PR #84
 **Date:** 2026-06-26
 **Realizes:** [performance audit](../reports/2026-06-25-performance-audit.md) (the 16
 findings + 6-phase measurement roadmap) and the prototype-first retrospective
