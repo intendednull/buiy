@@ -11,7 +11,9 @@
 //! The structured tiers ([layout](crate::snapshot::assert_layout_snapshot),
 //! display-list, [invariant](crate::invariant)) are pure-CPU and headless — they
 //! must NOT instantiate a wgpu adapter. So [`build_app`] builds the **CPU**
-//! deterministic stack (`MinimalPlugins + CorePlugin + LayoutPlugin + Theme`),
+//! deterministic stack (`MinimalPlugins + CorePlugin + LayoutPlugin +
+//! BuiyTextPlugin{system_fonts:false} + Theme`, with the Ahem box-font staged as
+//! the sole resolvable family so text-bearing fixtures measure host-stably),
 //! pins the viewport + DPR through a synthetic `PrimaryWindow` (the same
 //! component-only window the layout solver reads its viewport from), and
 //! installs the cell's theme + forced-colors preference. The GPU golden tier
@@ -25,6 +27,7 @@ use bevy::window::{PrimaryWindow, Window, WindowResolution};
 
 use buiy_core::CorePlugin;
 use buiy_core::layout::LayoutPlugin;
+use buiy_core::text::BuiyTextPlugin;
 use buiy_core::theme::UserPreferences;
 
 use super::fixture::sorted_catalog;
@@ -46,7 +49,28 @@ pub fn build_app(fx: &super::fixture::Fixture, cell: &Cell) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(CorePlugin)
-        .add_plugins(LayoutPlugin);
+        .add_plugins(LayoutPlugin)
+        // The text pipeline: the Taffy text-measure needs `SharedFontSystem`
+        // (only `BuiyTextPlugin` inserts it), so WITHOUT this a text-bearing
+        // fixture's label measures at `0×0` — the sole coverage fixture was a
+        // padding-only box around an empty label (V14). `system_fonts: false`
+        // keeps it deterministic (no host-font scan); the render-world half is
+        // guarded on a `RenderApp` (absent under `MinimalPlugins`) and the
+        // asset-loader on an `AssetServer` (also absent), so the CPU/no-adapter
+        // invariant of `build_app` holds. This also lets the content-presence
+        // check (V13) run on this stack (`content_is_present` is CPU-side).
+        .add_plugins(BuiyTextPlugin {
+            system_fonts: false,
+        });
+
+    // The Ahem box-font substitution (the same `FontMode::Ahem` discipline the
+    // GPU capture stack applies): with system fonts off, the committed Ahem face
+    // is the ONLY resolvable family, so fixture text resolves to its host-stable
+    // em-box metrics via fallback — a label cannot pick up a host platform font.
+    // `stage_ahem` registers the bytes WITHOUT an `app.update()`, honoring this
+    // fn's "no update yet" contract; `apply_font_registry` drains it before
+    // `BuiySet::Layout` on the tier body's first update, so the label measures.
+    crate::determinism::stage_ahem(&mut app);
 
     // The cell's theme is the ACTIVE theme. We do not run the forced-colors
     // swap system here: `build_app` installs the resolved theme directly (the
