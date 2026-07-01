@@ -71,7 +71,8 @@ surfaced**. This seeds the final's research.
   base commit. That makes the prototype's validated commits cherry-pickable into
   the final — an **audited port** (neither "rebuild from scratch" nor "copy
   blindly").
-- **The prototype never merges.** It's a reference; the final is the deliverable.
+- **The prototype CODE never merges.** The code is a reference; the *docs* (journal +
+  retrospective) ARE the deliverable and DO get committed — see *Preserve the learning*.
 - **Hybrid port.** In the final, port the keep-decisions (cherry-pick / checkout
   the validated code) and re-implement the refine/redesign-decisions as deliberate
   commits. Re-evaluate each piece — keep what's right *with a re-derived rationale*.
@@ -96,7 +97,8 @@ surfaced**. This seeds the final's research.
 - **Preserve the learning — COMMIT it to the durable docs system.** The journal,
   retrospective, research synthesis, and any `prior-art/` folders are the
   prototype's real deliverables — they belong in the project's *committed* `docs/`
-  (carried by the final's PR, or a dedicated docs PR), **not** stranded in the
+  (in Buiy: the **`docs/prototypes/`** doc type — journal + retrospective; see the
+  `organizing-buiy-docs` skill), carried by the final's PR or a dedicated docs PR, **not** stranded in the
   throwaway worktree. Only the prototype CODE is the throwaway. A retrospective or
   prior-art folder that lives only in a worktree is one `git worktree remove` from
   gone — and worktrees DO get cleaned up. **Before removing the prototype worktree,
@@ -104,7 +106,8 @@ surfaced**. This seeds the final's research.
 
 ## Anti-patterns
 
-- **Merging the prototype** — it's the learning, not the product.
+- **Merging the prototype CODE** — the code is the throwaway; the journal + retrospective
+  ARE the product and DO get committed to `docs/` (the code stays unmerged).
 - **Copying the prototype into the final unaudited** — re-decide; it was blind to
   downstream.
 - **Treating prototype CODE as the deliverable** — the journal + retrospective are.
@@ -121,7 +124,7 @@ surfaced**. This seeds the final's research.
 ### Journal skeleton (append every wave)
 ```markdown
 # <Project> — Prototype Dev Journal
-> PROTOTYPE — exploratory, DO NOT MERGE. The deliverable is this journal + the retrospective.
+> PROTOTYPE journal — exploratory. The prototype CODE is throwaway (do not merge it); THIS journal + the retrospective ARE the deliverables and get carried over to the committed docs (in Buiy: `docs/prototypes/`).
 Goal: <what / why>.  Worktree: <branch, off base <sha>>.  Target/reference: <link>.
 
 ## Running log

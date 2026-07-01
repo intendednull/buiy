@@ -16,7 +16,7 @@ under `docs/plans/`, per the spec/plan distinction defined below.
 
 ## Document types
 
-Four document types, each with a single job. The split is the spine of the
+Five document types, each with a single job. The split is the spine of the
 whole structure — if a doc does not fit one of these, the type list is wrong,
 not the doc.
 
@@ -45,6 +45,26 @@ in the spec.
 
 Lives in `docs/reports/`. Audits, post-mortems, performance investigations
 of *our* codebase. Dated, immutable, does not define future direction.
+
+### Prototype — the durable output of a throwaway prototype
+
+Lives in `docs/prototypes/`. The committed **deliverables of prototype-first
+work** (the `prototype-first-development` skill): a build-to-learn **journal**
+(appended every wave) and a **retrospective** (keep / refine / redesign), plus
+any **charter** or build-to-learn **design** the prototype produced.
+
+The load-bearing rule: **the prototype CODE stays unmerged** (a throwaway
+worktree, an audited reference for the final) — only these DOCS are carried
+over, because a prototype's product is *learning*, not code. A retrospective
+that lives only in a worktree is one `git worktree remove` from gone, so it is
+promoted to `docs/prototypes/` (carried by the final's PR or a dedicated docs
+PR) *before* the worktree is cleaned up. Prototype docs legitimately reference
+their unmerged code by path — those are historical / branch references.
+
+Prototype docs are `[active]` while the prototype runs, then `[archived]` once
+a final supersedes them. They are indexed under their feature area's *prototype
+lineage* line in the catalog (e.g. the MVU prototypes under **State
+management**), not in a separate area.
 
 ### Prior-art — deep dive on an external system
 
@@ -87,6 +107,7 @@ docs/
 ├── specs/               target state — what we are building toward
 ├── plans/               migration steps — how we get there
 ├── reports/             one-shot audits and investigations of our code
+├── prototypes/          prototype-first journals + retrospectives (learning kept; code stays unmerged)
 ├── prior-art/           deep dives on external systems we learn from
 └── reference-designs/   archived Claude Design bundles (immutable)
 ```
@@ -102,6 +123,7 @@ docs/
 | Multi-file spec | `docs/specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-04-19-ui-design/README.md` |
 | Plan | `docs/plans/YYYY-MM-DD-<kebab>.md` (no `-design`) | `2026-04-21-e2e-test-architecture.md` |
 | Report | `docs/reports/YYYY-MM-DD-<kebab>.md` | `2026-04-13-test-audit.md` |
+| Prototype | `docs/prototypes/YYYY-MM-DD-<kebab>-{journal,RETROSPECTIVE}.md` (+ `-charter`/`-design`) | `2026-06-26-mvu-as-core-PROTO3-journal.md` |
 | Prior-art | `docs/prior-art/<system>/README.md` (no date prefix) | `docs/prior-art/bevy-feathers/README.md` |
 | Prior-art child | `docs/prior-art/<system>/<facet>.md` | `docs/prior-art/bevy-feathers/architecture.md` |
 
@@ -203,7 +225,7 @@ Eight or so lines that tell a new agent or human:
 
 ### 2. Document type primer
 
-Three short blocks recapping the spec / plan / report distinction. Self-
+Five short blocks recapping the spec / plan / report / prototype / prior-art distinction. Self-
 contained so an agent landing here does not need to read this design doc or
 `CLAUDE.md` to understand the catalog.
 
@@ -233,7 +255,10 @@ The cemented rules — naming, document types, when to nest, how to add a new
 spec/plan/report. Same content as this design, distilled into reference form.
 Includes a short "Adding a new spec/plan" checklist:
 
-1. Pick the right type (spec = target, plan = migration, report = audit).
+1. Pick the right type (spec = target, plan = migration, report = audit,
+   prototype = a prototype's carried-over journal + retrospective, prior-art =
+   external-system deep-dive). Prototype docs and prior-art folders have their
+   own add-flows (see the skill); this checklist is for spec/plan/report.
 2. Name with `YYYY-MM-DD-<kebab>-design.md` (spec) or `YYYY-MM-DD-<kebab>.md`
    (plan/report).
 3. Add an entry to `docs/README.md` under the right area with a 5–15 word
