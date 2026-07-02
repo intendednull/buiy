@@ -378,7 +378,7 @@ fn nav_click_reflects_rail_active_state() {
         .get::<Background>(button)
         .expect("nav button has a Background");
     assert!(
-        matches!(&bg.color, ColorToken::Token(t) if t.as_ref() == "color.surface.card"),
+        bg.color == ColorToken::SurfaceCard,
         "the clicked nav button takes the active card bg, got {:?}",
         bg.color,
     );
@@ -390,6 +390,8 @@ fn nav_click_reflects_rail_active_state() {
 
 #[test]
 fn accent_swatch_click_retones_the_theme_accent() {
+    use buiy_core::render::color::{ColorToken, ThemeContract};
+
     let mut g = Gallery::new();
 
     let green = bevy::color::Color::srgb_u8(0x45, 0xc0, 0x7d);
@@ -398,8 +400,7 @@ fn accent_swatch_click_retones_the_theme_accent() {
         .world_app()
         .world()
         .resource::<Theme>()
-        .color("color.accent")
-        .expect("theme resolves an accent");
+        .resolve(ColorToken::Accent);
     assert_ne!(srgb_u8(before), srgb_u8(green), "boot accent is not green");
 
     let swatch = find_where::<AccentSwatch>(g.world_app(), |s| srgb_u8(s.0) == srgb_u8(green));
@@ -410,8 +411,7 @@ fn accent_swatch_click_retones_the_theme_accent() {
         .world_app()
         .world()
         .resource::<Theme>()
-        .color("color.accent")
-        .expect("theme resolves an accent");
+        .resolve(ColorToken::Accent);
     assert_eq!(
         srgb_u8(after),
         srgb_u8(green),
@@ -1015,7 +1015,9 @@ fn showcase_segmented_click_selects_the_option() {
         .find(|&o| {
             !matches!(
                 g.world_app().world().get::<Background>(o),
-                Some(Background { color: ColorToken::Token(t) }) if t.as_ref() == "color.accent"
+                Some(Background {
+                    color: ColorToken::Accent
+                })
             )
         })
         .expect("an unselected segmented option");
@@ -1025,7 +1027,12 @@ fn showcase_segmented_click_selects_the_option() {
 
     let bg = g.world_app().world().get::<Background>(unselected).cloned();
     assert!(
-        matches!(&bg, Some(Background { color: ColorToken::Token(t) }) if t.as_ref() == "color.accent"),
+        matches!(
+            &bg,
+            Some(Background {
+                color: ColorToken::Accent
+            })
+        ),
         "clicking a segmented option makes it the accent-filled selection, got {bg:?}",
     );
 }

@@ -7,15 +7,8 @@ use buiy_core::components::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::ColorToken;
 use buiy_core::render::components::Background;
-use std::borrow::Cow;
 
 fn solid_box(app: &mut App) {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("test.fill.a".into(), Color::srgb(0.90, 0.10, 0.10));
-    }
     let e = app
         .world_mut()
         .spawn((
@@ -30,7 +23,7 @@ fn solid_box(app: &mut App) {
                 .width_px(40.0)
                 .height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.fill.a")),
+                color: ColorToken::Custom(Color::srgb(0.90, 0.10, 0.10)),
             },
         ))
         .id();

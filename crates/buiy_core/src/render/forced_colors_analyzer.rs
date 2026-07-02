@@ -12,7 +12,7 @@
 //! enumerated as plain descriptors; when those components land, the descriptor
 //! is built from them with no change to the analyzer or its tests.
 
-use crate::render::color::{ColorToken, MISSING_TOKEN_FALLBACK, SystemColorKeyword, resolve_token};
+use crate::render::color::{ColorToken, SystemColorKeyword};
 use crate::theme::Theme;
 
 /// One widget × state's emitted paint, as token references. Built from the
@@ -31,8 +31,10 @@ pub struct CatalogPaint {
 /// A gate-#11 violation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ForcedColorsViolation {
-    /// A paint token resolved outside the system-color set under forced-colors
-    /// (it hit the magenta sentinel — an absent/brand token).
+    /// A paint token is a concrete semantic color rather than a
+    /// forced-colors-safe kind (system / transparent / currentColor / focus
+    /// ring) — so under forced-colors it would paint a brand color where a
+    /// system color is required (color-and-forced-colors.md § 3.1).
     NonSystemColor {
         widget: &'static str,
         state: &'static str,
@@ -45,12 +47,19 @@ pub enum ForcedColorsViolation {
     },
 }
 
-/// Check (a): under `theme` (the forced-colors variant), assert every non-
-/// `Transparent` paint token resolves to a real system color — i.e. does not
-/// fall through to the magenta sentinel. Returns the violations (empty == pass).
+/// Check (a): assert every paint token is **forced-colors-safe** — i.e. its
+/// KIND is a system/neutral reference (`SystemColor` / `Transparent` /
+/// `CurrentColor` / `FocusRing`), not a concrete semantic color
+/// ([`ColorToken::is_forced_colors_safe`]). This is the Track B variant-kind
+/// check that replaced the old resolve-to-magenta equality: since the typed
+/// vocabulary can no longer miss (forced *resolution* maps every semantic token
+/// to a system color), the analyzer flags the *kind* directly.
+///
+/// `theme` is accepted for signature stability with the gate-#11 call sites but
+/// the check is theme-independent. Returns the violations (empty == pass).
 pub fn analyze_forced_colors(
     catalog: &[CatalogPaint],
-    theme: &Theme,
+    _theme: &Theme,
 ) -> Vec<ForcedColorsViolation> {
     let mut out = Vec::new();
     for paint in catalog {
@@ -59,10 +68,7 @@ pub fn analyze_forced_colors(
             ("border", &paint.border),
             ("outline", &paint.outline),
         ] {
-            if matches!(token, ColorToken::Transparent) {
-                continue;
-            }
-            if resolve_token(token, theme) == MISSING_TOKEN_FALLBACK {
+            if !token.is_forced_colors_safe() {
                 out.push(ForcedColorsViolation::NonSystemColor {
                     widget: paint.widget,
                     state: paint.state,

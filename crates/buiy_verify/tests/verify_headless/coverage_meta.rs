@@ -145,7 +145,9 @@ fn enrollment_fan_out() {
 /// fan-out totality above).
 #[test]
 fn build_app_pins_viewport_theme_and_dpr() {
+    use bevy::prelude::Color;
     use bevy::window::{PrimaryWindow, Window};
+    use buiy_core::render::color::{ColorToken, ThemeContract};
     use buiy_core::theme::Theme;
 
     let matrix = Matrix::ci_default();
@@ -155,13 +157,14 @@ fn build_app_pins_viewport_theme_and_dpr() {
     let mut app = build_app(fx, &cell);
     app.update();
 
-    // The active theme is the light theme the first cell selects.
-    assert!(
+    // The active theme is the light theme the first cell selects: its brand
+    // surface token resolves to the light palette value (white).
+    assert_eq!(
         app.world()
             .resource::<Theme>()
-            .color("color.surface.primary")
-            .is_some(),
-        "light cell installs the brand-token theme"
+            .resolve(ColorToken::SurfacePrimary),
+        Color::WHITE,
+        "light cell installs the brand light theme (surface.primary = white)"
     );
 
     // The synthetic primary window carries the cell viewport, scaled by DPR.

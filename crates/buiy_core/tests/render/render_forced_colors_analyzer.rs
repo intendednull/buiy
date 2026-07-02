@@ -31,10 +31,11 @@ fn all_system_color_tokens_pass_under_forced_theme() {
 
 #[test]
 fn non_system_token_under_forced_theme_is_a_violation() {
-    // A brand token absent from the forced map resolves to magenta → violation.
+    // A concrete semantic token (a brand color, not a forced-colors-safe kind) is
+    // a violation: its KIND is not system/neutral (Track B analyzer criterion).
     let theme = forced_colors_theme();
     let mut w = good_widget();
-    w.background = ColorToken::Token(std::borrow::Cow::Borrowed("color.accent"));
+    w.background = ColorToken::Accent;
     let report = analyze_forced_colors(&[w], &theme);
     assert_eq!(report.len(), 1);
     assert!(matches!(

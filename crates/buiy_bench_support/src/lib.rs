@@ -261,7 +261,10 @@ pub fn build_flat_bg_scene(nodes: usize) -> (PipelineHarness, Entity) {
                 Node,
                 Style::default().width_px(40.0).height_px(20.0),
                 Background {
-                    color: ColorToken::Token("surface".into()),
+                    // An opaque placeholder fill — the bench only needs a quad
+                    // emitted, not a specific color (the old `"surface"` key
+                    // missed the map and resolved to opaque magenta).
+                    color: ColorToken::Custom(Color::WHITE),
                 },
             ))
             .id();

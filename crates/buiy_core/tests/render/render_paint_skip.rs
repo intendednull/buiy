@@ -551,10 +551,9 @@ fn hidden_subtree_packs_no_quads_and_reappears_on_show() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
     use buiy_core::render::prepare::BuiyInstanceBuffers;
-    use std::borrow::Cow;
 
     let opaque = || Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     };
     let quad_count = |app: &App| {
         crate::support::render_world_resource::<BuiyInstanceBuffers>(app)

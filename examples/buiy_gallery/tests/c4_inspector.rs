@@ -21,6 +21,7 @@ use buiy::{BuiyTextPlugin, CorePlugin, LayoutPlugin, WidgetsPlugin};
 use buiy_core::ColorToken;
 use buiy_core::a11y::{A11yToggled, Toggled};
 use buiy_core::interaction::OnPress;
+use buiy_core::render::color::ThemeContract;
 use buiy_core::render::components::{Background, TextColor};
 use buiy_core::text::Text;
 use buiy_core::theme::{SetAccent, Theme, default_dark_theme};
@@ -136,15 +137,10 @@ fn nav_active_states(app: &mut App) -> Vec<(Screen, bool)> {
     let world = app.world();
     let mut v: Vec<(Screen, bool)> = q
         .iter(world)
-        .map(|(nav, bg)| (nav.0, is_token(&bg.color, "color.surface.card")))
+        .map(|(nav, bg)| (nav.0, bg.color == ColorToken::SurfaceCard))
         .collect();
     v.sort_by_key(|(s, _)| format!("{s:?}"));
     v
-}
-
-/// Whether a `ColorToken` is the named token.
-fn is_token(c: &ColorToken, name: &str) -> bool {
-    matches!(c, ColorToken::Token(t) if t.as_ref() == name)
 }
 
 #[test]
@@ -204,7 +200,7 @@ fn nav_bar_colors(app: &mut App) -> Vec<(Screen, bool)> {
             if matches!(world.get::<NavPart>(child), Some(NavPart::Bar))
                 && let Some(bg) = world.get::<Background>(child)
             {
-                is_accent = is_token(&bg.color, "color.accent");
+                is_accent = bg.color == ColorToken::Accent;
             }
         }
         v.push((screen, is_accent));
@@ -247,10 +243,7 @@ fn accent_swatch_press_retheme_resolves_new_accent() {
 
 /// The theme's resolved `color.accent`.
 fn theme_accent(app: &App) -> bevy::prelude::Color {
-    app.world()
-        .resource::<Theme>()
-        .color("color.accent")
-        .expect("the dark theme defines color.accent")
+    app.world().resource::<Theme>().resolve(ColorToken::Accent)
 }
 
 /// The swatch button whose `AccentSwatch` color matches `color`.
@@ -444,13 +437,13 @@ fn live_state_updates_when_a_todo_toggles() {
     );
     // The `remaining` row's color is accent while > 0, ok-green at 0.
     let want = if remaining_after > 0 {
-        "color.accent"
+        ColorToken::Accent
     } else {
-        "color.status.ok"
+        ColorToken::StatusOk
     };
     assert!(
         live_value_color_is(&mut app, "remaining", want),
-        "remaining color should be {want} at value {remaining_after}"
+        "remaining color should be {want:?} at value {remaining_after}"
     );
     // Reference `Filter` so the import is exercised (the live-state reads it).
     let _ = app.world().get_resource::<Filter>();
@@ -508,14 +501,14 @@ fn live_value(app: &mut App, key: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Whether the live-state row keyed `key` has `TextColor` of the named token.
-fn live_value_color_is(app: &mut App, key: &str, token: &str) -> bool {
+/// Whether the live-state row keyed `key` has `TextColor` of the given token.
+fn live_value_color_is(app: &mut App, key: &str, want: ColorToken) -> bool {
     let Some(leaf) = find_live_leaf(app, key) else {
         return false;
     };
     app.world()
         .get::<TextColor>(leaf)
-        .is_some_and(|c| is_token(&c.0, token))
+        .is_some_and(|c| c.0 == want)
 }
 
 /// The `LiveStateValue`-tagged leaf for `key`.

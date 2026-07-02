@@ -32,16 +32,12 @@ use buiy_core::render::extract::TextQuad;
 use buiy_core::text::{
     DecorationLineStyle, DecorationLines, FontSize, Text, TextDecorations, solid_stamp_key,
 };
-use std::borrow::Cow;
 use std::ops::Range;
 
 /// The `text_decoration_gpu.rs::spawn_decorated_fixture` shape, headless: "Hi"
 /// at 40 px — no descenders, so glyph ink never crosses below the baseline and
 /// band-vs-ink positioning is unambiguous (the same reasoning the GPU fixture
 /// relied on, now observed off the extract carriers instead of pixels).
-const TEXT_TOKEN: &str = "test.text";
-const DECO_TOKEN: &str = "test.deco";
-
 fn deco_red() -> Color {
     Color::srgb(1.0, 0.0, 0.0)
 }
@@ -49,17 +45,12 @@ fn deco_red() -> Color {
 fn red_deco(line: DecorationLines) -> TextDecorations {
     TextDecorations {
         line,
-        color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
+        color: Some(ColorToken::Custom(deco_red())),
         ..Default::default()
     }
 }
 
 fn spawn_decorated_40px(h: &mut TextExtractHarness, deco: TextDecorations) -> Entity {
-    {
-        let mut theme = h.app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme.colors.insert(DECO_TOKEN.into(), deco_red());
-    }
     let text = h
         .app
         .world_mut()
@@ -68,7 +59,7 @@ fn spawn_decorated_40px(h: &mut TextExtractHarness, deco: TextDecorations) -> En
             Style::default(),
             Text(String::from("Hi")),
             FontSize(40.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
             deco,
         ))
         .id();
@@ -178,7 +169,7 @@ fn double_underline_emits_two_bands_with_gap_equal_to_thickness() {
         TextDecorations {
             line: DecorationLines::UNDERLINE,
             style: DecorationLineStyle::Double,
-            color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
+            color: Some(ColorToken::Custom(deco_red())),
         },
     );
     h.settle();

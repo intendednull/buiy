@@ -203,13 +203,9 @@ fn spawn_single_primitive(app: &mut bevy::app::App, draw: &buiy_core::render::Dr
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::ColorToken;
     use buiy_core::render::components::{Background, Border, Corners, Radius};
-    use std::borrow::Cow;
-    // The capture path resolves a token; install draw.color under a fixed key.
-    let key = "sdf.cross.fill";
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(key.into(), draw.color);
-    }
+    // Carry the concrete color inline via the `Custom` escape hatch — the typed
+    // `ColorToken` closed vocabulary has no theme HashMap to install a key into,
+    // and `Custom` resolves to itself under any theme (same pixel as before).
     let e = app
         .world_mut()
         .spawn((
@@ -224,7 +220,7 @@ fn spawn_single_primitive(app: &mut bevy::app::App, draw: &buiy_core::render::Dr
                 .width_px(draw.size.x)
                 .height_px(draw.size.y),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(key)),
+                color: ColorToken::Custom(draw.color),
             },
             Border {
                 radius: Corners::all(Radius::circular(draw.radius)),
@@ -432,9 +428,9 @@ pub fn default_rules() -> Vec<IndependenceRule> {
 pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) {
     let mut app = bevy::app::App::new();
     // `ThemePlugin` + `LayoutPlugin` — no render/asset plugins, no GPU. Theme is
-    // present because real reference scenes install fill tokens
-    // (`Theme.colors.insert`) while building; the lint only needs the components
-    // to exist as DATA, not the render systems to run.
+    // present because real reference scenes resolve fill tokens against it while
+    // building; the lint only needs the components to exist as DATA, not the
+    // render systems to run.
     app.add_plugins(buiy_core::theme::ThemePlugin);
     app.add_plugins(buiy_core::layout::LayoutPlugin);
     (case.reference)(&mut app);

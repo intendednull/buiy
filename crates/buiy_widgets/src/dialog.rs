@@ -48,7 +48,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
     text::{FontSize, Text},
 };
-use std::borrow::Cow;
 
 use crate::popover::is_open;
 
@@ -149,7 +148,7 @@ pub(crate) fn dialog_box_model() -> BoxModel {
 /// The default dialog panel fill (the `color.surface.primary` token).
 pub(crate) fn dialog_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 

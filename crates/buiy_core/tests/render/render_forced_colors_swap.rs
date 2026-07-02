@@ -5,6 +5,7 @@
 
 use bevy::prelude::*;
 use buiy_core::render::BuiyRenderPlugin;
+use buiy_core::render::color::{ColorToken, SystemColorKeyword, ThemeContract};
 use buiy_core::render::forced_colors::{PrePreferenceTheme, apply_forced_colors_theme};
 use buiy_core::theme::{Theme, UserPreferences, default_light_theme};
 use buiy_core::{BuiySet, CorePlugin};
@@ -22,21 +23,29 @@ fn app() -> App {
 #[test]
 fn flipping_forced_colors_swaps_in_system_color_theme() {
     let mut app = app();
-    // Sanity: normal theme has no `Canvas` key.
-    assert!(app.world().resource::<Theme>().color("Canvas").is_none());
+    // Sanity: the normal theme resolves surface.primary to the LIGHT value.
+    assert_eq!(
+        app.world()
+            .resource::<Theme>()
+            .resolve(ColorToken::SurfacePrimary),
+        Color::WHITE,
+    );
 
     app.world_mut()
         .resource_mut::<UserPreferences>()
         .forced_colors = true;
     app.update();
 
-    // After the swap the active theme resolves the 16 system colors.
-    assert!(app.world().resource::<Theme>().color("Canvas").is_some());
-    assert!(
-        app.world()
-            .resource::<Theme>()
-            .color("CanvasText")
-            .is_some()
+    // After the swap, forced-colors mode maps every semantic token to a system
+    // color: surface.* -> Canvas, text.* -> CanvasText.
+    let t = app.world().resource::<Theme>();
+    assert_eq!(
+        t.resolve(ColorToken::SurfacePrimary),
+        t.resolve(ColorToken::SystemColor(SystemColorKeyword::Canvas)),
+    );
+    assert_eq!(
+        t.resolve(ColorToken::TextPrimary),
+        t.resolve(ColorToken::SystemColor(SystemColorKeyword::CanvasText)),
     );
 }
 
@@ -47,20 +56,23 @@ fn clearing_forced_colors_restores_prior_theme() {
         .resource_mut::<UserPreferences>()
         .forced_colors = true;
     app.update();
-    assert!(app.world().resource::<Theme>().color("Canvas").is_some());
+    let t = app.world().resource::<Theme>();
+    assert_eq!(
+        t.resolve(ColorToken::SurfacePrimary),
+        t.resolve(ColorToken::SystemColor(SystemColorKeyword::Canvas)),
+    );
 
     app.world_mut()
         .resource_mut::<UserPreferences>()
         .forced_colors = false;
     app.update();
 
-    // Prior (light) theme is back: Canvas gone, the original token resolves.
-    assert!(app.world().resource::<Theme>().color("Canvas").is_none());
+    // Prior (light) theme is back: surface.primary resolves to the light value.
     assert_eq!(
         app.world()
             .resource::<Theme>()
-            .color("color.surface.primary"),
-        Some(Color::WHITE)
+            .resolve(ColorToken::SurfacePrimary),
+        Color::WHITE,
     );
 }
 
@@ -145,7 +157,11 @@ fn swap_system_registered_by_render_plugin_runs_headless() {
         .resource_mut::<UserPreferences>()
         .forced_colors = true;
     app.update();
-    assert!(app.world().resource::<Theme>().color("Canvas").is_some());
+    let t = app.world().resource::<Theme>();
+    assert_eq!(
+        t.resolve(ColorToken::SurfacePrimary),
+        t.resolve(ColorToken::SystemColor(SystemColorKeyword::Canvas)),
+    );
 }
 
 /// Count the systems `BuiyRenderPlugin` registers in `BuiySet::Style`, as the

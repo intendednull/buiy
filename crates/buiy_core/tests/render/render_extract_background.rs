@@ -1,30 +1,21 @@
-//! Headless (no GPU): the Background `ColorToken` resolves to the same
-//! `Color` the Phase-0 `Visual.background_token` string did, and a miss
-//! still yields the magenta sentinel. Pure resolution; no RenderApp.
+//! Headless (no GPU): the Background `ColorToken` resolves to a concrete
+//! `Color` through the typed `ThemeContract`. Pure resolution; no RenderApp.
+//! (Track B closed the vocabulary — a missing/typo'd token is now a compile
+//! error, so the former magenta-miss assertions have no runtime meaning and
+//! are gone.)
 
 use bevy::prelude::*;
 use buiy_core::render::color::{ColorToken, SystemColorKeyword, resolve_token};
 use buiy_core::theme::Theme;
-use std::borrow::Cow;
-
-fn theme_with(token: &str, color: Color) -> Theme {
-    let mut t = Theme::default();
-    t.colors.insert(token.to_string(), color);
-    t
-}
 
 #[test]
-fn token_resolves_to_theme_color() {
-    let theme = theme_with("color.surface.secondary", Color::srgb(0.2, 0.3, 0.4));
-    let tok = ColorToken::Token(Cow::Borrowed("color.surface.secondary"));
-    assert_eq!(resolve_token(&tok, &theme), Color::srgb(0.2, 0.3, 0.4));
-}
-
-#[test]
-fn missing_token_falls_back_to_magenta_sentinel() {
+fn custom_token_resolves_to_its_carried_color() {
+    // The `Custom` escape hatch carries a concrete color and resolves to itself
+    // under any theme — the decoupled-from-palette successor to the old
+    // "inject a color, resolve a named token" idiom.
     let theme = Theme::default();
-    let tok = ColorToken::Token(Cow::Borrowed("nope.not.here"));
-    assert_eq!(resolve_token(&tok, &theme), Color::srgb(1.0, 0.0, 1.0));
+    let tok = ColorToken::Custom(Color::srgb(0.2, 0.3, 0.4));
+    assert_eq!(resolve_token(&tok, &theme), Color::srgb(0.2, 0.3, 0.4));
 }
 
 #[test]
@@ -34,15 +25,14 @@ fn transparent_token_resolves_to_none() {
 }
 
 #[test]
-fn system_color_misses_to_sentinel_when_theme_lacks_the_key() {
-    // The canonical resolver routes `SystemColor(kw)` through the theme's
-    // system-color map (`resolve_named(kw.token(), …)`). With a bare `Theme`
-    // (no system-color keys) the lookup misses → magenta sentinel + warn. The
-    // forced-colors stub theme (Task 3) is what supplies those keys; this pins
-    // the miss-path for a theme that lacks them.
+fn system_color_resolves_to_the_system_stub_value() {
+    // The canonical resolver routes `SystemColor(kw)` through the system-color
+    // stub palette (`system_color_value`), independent of the authored theme
+    // palette. `Canvas` is the high-contrast black backdrop — never a magenta
+    // miss (that path was removed when the vocabulary closed).
     let theme = Theme::default();
     assert_eq!(
         resolve_token(&ColorToken::SystemColor(SystemColorKeyword::Canvas), &theme),
-        Color::srgb(1.0, 0.0, 1.0)
+        Color::srgb(0.0, 0.0, 0.0)
     );
 }

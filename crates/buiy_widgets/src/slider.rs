@@ -41,7 +41,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for the slider label glyph (logical px).
 pub(crate) const SLIDER_LABEL_FONT_SIZE: f32 = 16.0;
@@ -164,7 +163,7 @@ pub(crate) fn slider_track_box_model() -> BoxModel {
 /// The track fill (the `color.surface.secondary` token — the inactive rail).
 pub(crate) fn slider_track_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 
@@ -179,7 +178,7 @@ pub(crate) fn slider_thumb_box_model() -> BoxModel {
 /// The thumb fill (the `color.surface.primary` token — a contrasting knob).
 pub(crate) fn slider_thumb_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 

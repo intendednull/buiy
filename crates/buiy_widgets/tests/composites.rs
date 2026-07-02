@@ -35,11 +35,6 @@ fn mono() -> FontFamily {
     FontFamily(FontStack(vec![FamilyEntry::Named("Geist Mono".into())]))
 }
 
-/// A `ColorToken::Token` from a key (mirrors the module's private `tok`).
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
-}
-
 /// The first child of `parent` carrying marker `T`.
 fn child_with<T: bevy::ecs::component::Component>(world: &World, parent: Entity) -> Option<Entity> {
     world
@@ -120,13 +115,13 @@ fn sample_row<'a>(idx: &'a str, name: &'a str) -> TableRowData<'a> {
     TableRowData {
         idx,
         indent_px: 0.0,
-        dot_color: "color.status.ok",
+        dot_color: ColorToken::StatusOk,
         node_type: "Button",
         name,
         ms: "0.42",
         ms_warn: false,
         state: "OK",
-        state_color: "color.status.ok",
+        state_color: ColorToken::StatusOk,
     }
 }
 
@@ -139,8 +134,8 @@ fn table_row_selected_has_accent_soft_and_bar() {
     let unsel = table_row(&mut world, &sample_row("01", "b"), mono(), false);
 
     assert_eq!(
-        world.get::<Background>(sel).map(|b| b.color.clone()),
-        Some(tok("color.accent.soft")),
+        world.get::<Background>(sel).map(|b| b.color),
+        Some(ColorToken::AccentSoft),
         "the selected row is accent.soft"
     );
     assert!(
@@ -149,8 +144,8 @@ fn table_row_selected_has_accent_soft_and_bar() {
     );
 
     assert_eq!(
-        world.get::<Background>(unsel).map(|b| b.color.clone()),
-        Some(tok("color.surface.transparent")),
+        world.get::<Background>(unsel).map(|b| b.color),
+        Some(ColorToken::Transparent),
         "the unselected row is transparent"
     );
     assert!(
@@ -170,8 +165,8 @@ fn set_table_row_selected_toggles_idempotently() {
 
     set_table_row_selected(&mut world, row, true);
     assert_eq!(
-        world.get::<Background>(row).map(|b| b.color.clone()),
-        Some(tok("color.accent.soft"))
+        world.get::<Background>(row).map(|b| b.color),
+        Some(ColorToken::AccentSoft)
     );
     assert!(child_with::<RowSelBar>(&world, row).is_some());
 
@@ -192,8 +187,8 @@ fn set_table_row_selected_toggles_idempotently() {
     set_table_row_selected(&mut world, row, false);
     assert!(child_with::<RowSelBar>(&world, row).is_none());
     assert_eq!(
-        world.get::<Background>(row).map(|b| b.color.clone()),
-        Some(tok("color.surface.transparent"))
+        world.get::<Background>(row).map(|b| b.color),
+        Some(ColorToken::Transparent)
     );
 }
 
@@ -229,7 +224,7 @@ fn table_header_builds_one_cell_per_column() {
 fn kbd_content_plain_is_leaf_cmd_is_icon_row() {
     let mut world = World::new();
 
-    let plain = kbd_content(&mut world, "#k", "F2", mono(), tok("color.text.dim"));
+    let plain = kbd_content(&mut world, "#k", "F2", mono(), ColorToken::TextDim);
     assert!(
         world.get::<Text>(plain).is_some(),
         "a plain key is a single Text leaf"
@@ -239,7 +234,7 @@ fn kbd_content_plain_is_leaf_cmd_is_icon_row() {
         "a plain key has no icon/text split children"
     );
 
-    let cmd = kbd_content(&mut world, "#k", "⌘K", mono(), tok("color.text.dim"));
+    let cmd = kbd_content(&mut world, "#k", "⌘K", mono(), ColorToken::TextDim);
     let children: Vec<Entity> = world
         .get::<Children>(cmd)
         .map(|c| c.iter().copied().collect())
@@ -279,7 +274,13 @@ fn kbd_wraps_content_in_a_chip() {
 #[test]
 fn status_dot_has_glow_shadow() {
     let mut world = World::new();
-    let dot = status_dot(&mut world, "color.status.ok", "color.status.ok", 6.0, 0.0);
+    let dot = status_dot(
+        &mut world,
+        ColorToken::StatusOk,
+        ColorToken::StatusOk,
+        6.0,
+        0.0,
+    );
     let shadow = world
         .get::<BoxShadow>(dot)
         .expect("the status dot must carry a glow BoxShadow");
@@ -290,7 +291,13 @@ fn status_dot_has_glow_shadow() {
 #[test]
 fn pulse_blink_attaches_opacity_tween() {
     let mut world = World::new();
-    let dot = status_dot(&mut world, "color.accent", "color.accent.soft", 0.0, 4.0);
+    let dot = status_dot(
+        &mut world,
+        ColorToken::Accent,
+        ColorToken::AccentSoft,
+        0.0,
+        4.0,
+    );
     pulse_blink(&mut world, dot);
     assert!(
         world.get::<OpacityTween>(dot).is_some(),

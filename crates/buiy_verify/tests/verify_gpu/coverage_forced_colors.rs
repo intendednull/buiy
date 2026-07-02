@@ -18,7 +18,6 @@ use buiy_core::render::forced_colors_analyzer::{
 };
 use buiy_core::theme::{UserPreferences, forced_colors_theme};
 use buiy_verify::coverage::{Fixture, live_catalog_paint, paint_for_fixtures};
-use std::borrow::Cow;
 
 /// The production scan: every fixture in the real catalog, derived from its LIVE
 /// spawned `Background`/`Border`/`Outline`, must pass both gate-#11 checks under
@@ -65,7 +64,7 @@ fn spawn_broken_brand_widget(app: &mut App) {
     app.world_mut().spawn((
         Name::new("brand-badge"),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
         },
         Border {
             top: BorderSide {

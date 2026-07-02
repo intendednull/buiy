@@ -33,8 +33,6 @@
 //! value (no lavapipe-specific encode); exact-pixel residue is the `buiy_verify`
 //! Tier-5 golden lane's job, adapter-gated.
 
-use std::borrow::Cow;
-
 use bevy::prelude::*;
 use buiy_core::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style};
@@ -42,7 +40,6 @@ use buiy_core::render::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
 use buiy_core::text::{FontSize, Text};
-use buiy_core::theme::Theme;
 
 /// The opaque-black clear the capture camera (`capture_to_image`) clears to —
 /// the backdrop a "something painted" probe is measured against.
@@ -53,15 +50,6 @@ const CLEAR: [u8; 4] = [0, 0, 0, 255];
 fn capture_example_pipeline_reads_back_a_non_vacuous_image() {
     let (w, h) = (200u32, 120u32);
     let mut app = capture_app(w, h);
-
-    // A themed fill token the box paints — a guaranteed-non-clear color so the
-    // non-vacuity probe is rasterizer-agnostic (no reliance on AA'd text edges).
-    {
-        let mut theme = app.world_mut().resource_mut::<Theme>();
-        theme
-            .colors
-            .insert("capture.e2e.fill".into(), Color::srgb(0.20, 0.55, 0.90));
-    }
 
     // The example's primitive vocabulary: an absolutely-positioned themed
     // background box (the load-bearing, asserted element below), plus a text node
@@ -82,7 +70,10 @@ fn capture_example_pipeline_reads_back_a_non_vacuous_image() {
                 .width_px(140.0)
                 .height_px(70.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("capture.e2e.fill")),
+                // Typed escape hatch: a guaranteed-non-clear color for the
+                // rasterizer-agnostic non-vacuity probe (was a theme-injected token
+                // via the removed stringly HashMap).
+                color: ColorToken::Custom(Color::srgb(0.20, 0.55, 0.90)),
             },
         ))
         .id();

@@ -32,12 +32,9 @@ use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
 use buiy_core::text::edit::{EditCommand, Placeholder, TextEditState};
 use buiy_core::text::{FamilyEntry, FontFamily, FontSize, FontStack, SharedFontSystem, Text};
 use buiy_core::{FocusedEntity, Node};
-use std::borrow::Cow;
 
 const W: u32 = 256;
 const H: u32 = 48;
-const PLACEHOLDER_TOKEN: &str = "color.text.placeholder";
-const TEXT_TOKEN: &str = "color.text.primary";
 // A registerable fixture (NOT the embedded default Fira Sans). Use Hebrew so the
 // placeholder + typed glyphs resolve in THIS font, the E3/E5 golden precedent.
 const FIXTURE_FAMILY: &str = "Noto Sans Hebrew";
@@ -74,13 +71,11 @@ fn capture(state: State) -> Vec<u8> {
     app.world_mut().resource_mut::<Time<Virtual>>().pause();
     crate::support::finish_and_run(&mut app, 0);
     crate::support::register_fixture_font(&mut app, FIXTURE_FAMILY, FIXTURE_FILE);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme
-            .colors
-            .insert(PLACEHOLDER_TOKEN.into(), Color::srgb(0.55, 0.55, 0.55));
-    }
+    // Track B: the text tint is a `Custom` white (the former `color.text.primary`
+    // injection). The placeholder tint is no longer injectable — it resolves
+    // through the default theme's `ColorToken::TextPlaceholder` (light-theme
+    // default `srgb(0.55, 0.55, 0.55)`, byte-identical to the value this test
+    // used to inject), so the placeholder pixel is preserved.
     let editor = app
         .world_mut()
         .spawn((
@@ -92,7 +87,7 @@ fn capture(state: State) -> Vec<u8> {
             Text(String::new()),
             FontFamily(FontStack(vec![FamilyEntry::Named(FIXTURE_FAMILY.into())])),
             FontSize(20.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
             TextEditState::for_font_size(20.0),
         ))
         .id();

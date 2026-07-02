@@ -10,17 +10,11 @@ use buiy_core::render::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_verify::metric::FuzzBudget;
 use buiy_verify::reftest::{RefCase, RefKind, run_reftest};
-use std::borrow::Cow;
 
-/// A single 40×40 fill at (left,8) in `token` color. Installs the token so the
-/// scene is self-contained across the two captures `run_reftest` drives.
-fn box_at(app: &mut App, left: f32, token: &'static str) {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert(token.into(), Color::srgb(0.90, 0.10, 0.10));
-    }
+/// A single 40×40 red fill at (left,8). The color is carried inline via
+/// `ColorToken::Custom` so the scene is self-contained across the two captures
+/// `run_reftest` drives.
+fn box_at(app: &mut App, left: f32) {
     let e = app
         .world_mut()
         .spawn((
@@ -35,7 +29,7 @@ fn box_at(app: &mut App, left: f32, token: &'static str) {
                 .width_px(40.0)
                 .height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(token)),
+                color: ColorToken::Custom(Color::srgb(0.90, 0.10, 0.10)),
             },
         ))
         .id();
@@ -45,10 +39,10 @@ fn box_at(app: &mut App, left: f32, token: &'static str) {
 }
 
 fn red_at_8(app: &mut App) {
-    box_at(app, 8.0, "test.fill.a");
+    box_at(app, 8.0);
 }
 fn red_at_120(app: &mut App) {
-    box_at(app, 120.0, "test.fill.a");
+    box_at(app, 120.0);
 }
 
 #[test]

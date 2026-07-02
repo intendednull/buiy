@@ -16,8 +16,6 @@
 //! with a working Vulkan/Metal/DX adapter; force a backend with
 //! `WGPU_BACKEND=vulkan` only if adapter selection picks the wrong device.
 
-use std::borrow::Cow;
-
 use bevy::asset::{AssetApp, RenderAssetUsages};
 use bevy::camera::{CameraPlugin, RenderTarget};
 use bevy::image::Image;
@@ -33,11 +31,11 @@ use buiy_core::render::color::ColorToken;
 use buiy_core::{CorePlugin, render::BuiyRenderPlugin};
 
 // Default light-theme tokens (see `buiy_core::theme::default_light_theme`).
-const SURFACE_PRIMARY: &str = "color.surface.primary"; // white
-const SURFACE_SECONDARY: &str = "color.surface.secondary"; // #f5f5f5
-const TEXT_PRIMARY: &str = "color.text.primary"; // #1a1a1a
-const TEXT_SECONDARY: &str = "color.text.secondary"; // #666
-const ACCENT: &str = "color.accent"; // #3372f2
+const SURFACE_PRIMARY: ColorToken = ColorToken::SurfacePrimary; // white
+const SURFACE_SECONDARY: ColorToken = ColorToken::SurfaceSecondary; // #f5f5f5
+const TEXT_PRIMARY: ColorToken = ColorToken::TextPrimary; // #1a1a1a
+const TEXT_SECONDARY: ColorToken = ColorToken::TextSecondary; // #666
+const ACCENT: ColorToken = ColorToken::Accent; // #3372f2
 
 fn main() {
     // The README hero: layout + text + theming composed from primitives.
@@ -63,14 +61,14 @@ fn main() {
 }
 
 /// Spawn a text node carrying one theme-tinted string at `size` px.
-fn spawn_text(world: &mut World, s: &str, size: f32, token: &'static str) -> Entity {
+fn spawn_text(world: &mut World, s: &str, size: f32, token: ColorToken) -> Entity {
     world
         .spawn((
             Node,
             Style::default(),
             Text(s.to_string()),
             FontSize(size),
-            TextColor(ColorToken::Token(Cow::Borrowed(token))),
+            TextColor(token),
         ))
         .id()
 }
@@ -80,8 +78,8 @@ fn spawn_text(world: &mut World, s: &str, size: f32, token: &'static str) -> Ent
 fn spawn_button(
     world: &mut World,
     label: &str,
-    bg: &'static str,
-    fg: &'static str,
+    bg: ColorToken,
+    fg: ColorToken,
     width: f32,
 ) -> Entity {
     let label = spawn_text(world, label, 15.0, fg);
@@ -94,9 +92,7 @@ fn spawn_button(
                 .flex_row()
                 .justify_content(JustifyContent::Center)
                 .align_items(AlignItems::Center),
-            Background {
-                color: ColorToken::Token(Cow::Borrowed(bg)),
-            },
+            Background { color: bg },
             Border {
                 radius: Corners::all(Radius::circular(8.0)),
                 ..Default::default()
@@ -132,7 +128,7 @@ fn scene_showcase(world: &mut World) {
                 .padding(32.0)
                 .gap_px(18.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(SURFACE_PRIMARY)),
+                color: SURFACE_PRIMARY,
             },
             Border {
                 radius: Corners::all(Radius::circular(16.0)),
