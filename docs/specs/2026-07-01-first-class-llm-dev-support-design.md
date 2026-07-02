@@ -168,6 +168,17 @@ the loop is needed.
 
 ### Track D — Buy corpus presence
 
+> **Status (Track D, 2026-07-02): the front door LANDED.** `AGENTS.md` (repo
+> root) is the agent-facing capstone — the self-sufficient prelude, the
+> widget/state/theme APIs, the GPU-free `buiy::probe` feedback loop, and the
+> silent-wrong gotchas — with every snippet compile-backed by the CI-gated
+> examples (`buiy_probe`/`counter_view`/`todomvc`/gallery) + the B/A/C tests.
+> **Deferred (speculative / bigger):** *measured-priors naming* (needs a fresh
+> agent-generation measurement to derive the neighbor spellings — not guessable)
+> and *diagnostic engineering* (`#[diagnostic::on_unimplemented]` + the §4.1c
+> bare-marker-patch footgun on the compiler channel, folded here from C5). These
+> are the campaign's remaining follow-ups.
+
 - An accuracy-gated **`AGENTS.md`/`llms.txt` + a *compiling* example cookbook** (one
   canonical example per task), CI-gated so examples always compile/run (drift poisons
   generation).
