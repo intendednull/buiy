@@ -18,6 +18,7 @@ pub mod adapter;
 pub mod contract;
 pub mod inprocess;
 pub mod relations;
+pub mod report;
 pub mod states;
 pub mod translate;
 /// Wasm-only DOM/ARIA a11y sink (§ D7) — mirrors the a11y tree to a hidden ARIA
@@ -38,6 +39,7 @@ pub use inprocess::{
     hide_tooltip, increment, perform, set_value, show_tooltip, snapshot, wait_for,
 };
 pub use relations::A11yRelations;
+pub use report::snapshot_report;
 pub use states::{
     A11yDisabled, A11yExpanded, A11yHasPopup, A11yHidden, A11yLive, A11yModal, A11yOrientation,
     A11yPlaceholder, A11yReadOnly, A11yScroll, A11ySelected, A11yTextValue, A11yToggled,
