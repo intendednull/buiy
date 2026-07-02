@@ -147,11 +147,11 @@ fn probe_fixture(fx: &Fixture) -> PaintProbe {
         if name.as_str() == fx.name {
             return PaintProbe {
                 background: bg
-                    .map(|b| b.color.clone())
+                    .map(|b| b.color)
                     .unwrap_or(ColorToken::Transparent),
                 border: border.map(border_token).unwrap_or(ColorToken::Transparent),
                 outline: outline
-                    .map(|o| o.color.clone())
+                    .map(|o| o.color)
                     .unwrap_or(ColorToken::Transparent),
                 has_shadow: shadow.map(|s| !s.0.is_empty()).unwrap_or(false),
             };
@@ -172,7 +172,7 @@ fn probe_fixture(fx: &Fixture) -> PaintProbe {
 fn border_token(border: &Border) -> ColorToken {
     for side in [&border.top, &border.right, &border.bottom, &border.left] {
         if !matches!(side.style, LineStyle::None) {
-            return side.color.clone();
+            return side.color;
         }
     }
     ColorToken::Transparent

@@ -93,8 +93,7 @@ fn model_driven_style_patches_in_place() {
         .world()
         .get::<Background>(col)
         .expect("bg")
-        .color
-        .clone();
+        .color;
     let gap0 = app.world().get::<FlexParams>(col).expect("flex").gap.row;
     let pad0 = app.world().get::<BoxModel>(col).expect("box").padding;
     assert_eq!(bg0, Color::Surface.to_token(), "seed background token");
@@ -113,8 +112,7 @@ fn model_driven_style_patches_in_place() {
         .world()
         .get::<Background>(col)
         .expect("bg")
-        .color
-        .clone();
+        .color;
     let gap1 = app.world().get::<FlexParams>(col).expect("flex").gap.row;
     let pad1 = app.world().get::<BoxModel>(col).expect("box").padding;
 

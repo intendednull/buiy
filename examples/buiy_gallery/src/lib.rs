@@ -1501,7 +1501,7 @@ pub fn update_count(
     };
     for mut icon in &mut chevrons {
         if icon.color != chevron_tint {
-            icon.color = chevron_tint.clone();
+            icon.color = chevron_tint;
         }
     }
 
@@ -1513,7 +1513,7 @@ pub fn update_count(
     };
     for mut color in &mut clear_labels {
         if color.0 != clear_tint {
-            color.0 = clear_tint.clone();
+            color.0 = clear_tint;
         }
     }
 }

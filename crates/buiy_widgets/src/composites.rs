@@ -353,7 +353,7 @@ pub fn kbd_content(
         CMD_GLYPH_ICON,
         1.5,
         11,
-        color.clone(),
+        color,
     );
     let text = text_leaf(world, "#KbdCmdText", rest, mono, 10.0, 500, color, None);
     world

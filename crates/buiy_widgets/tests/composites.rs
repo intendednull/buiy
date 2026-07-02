@@ -134,7 +134,7 @@ fn table_row_selected_has_accent_soft_and_bar() {
     let unsel = table_row(&mut world, &sample_row("01", "b"), mono(), false);
 
     assert_eq!(
-        world.get::<Background>(sel).map(|b| b.color.clone()),
+        world.get::<Background>(sel).map(|b| b.color),
         Some(ColorToken::AccentSoft),
         "the selected row is accent.soft"
     );
@@ -144,7 +144,7 @@ fn table_row_selected_has_accent_soft_and_bar() {
     );
 
     assert_eq!(
-        world.get::<Background>(unsel).map(|b| b.color.clone()),
+        world.get::<Background>(unsel).map(|b| b.color),
         Some(ColorToken::Transparent),
         "the unselected row is transparent"
     );
@@ -165,7 +165,7 @@ fn set_table_row_selected_toggles_idempotently() {
 
     set_table_row_selected(&mut world, row, true);
     assert_eq!(
-        world.get::<Background>(row).map(|b| b.color.clone()),
+        world.get::<Background>(row).map(|b| b.color),
         Some(ColorToken::AccentSoft)
     );
     assert!(child_with::<RowSelBar>(&world, row).is_some());
@@ -187,7 +187,7 @@ fn set_table_row_selected_toggles_idempotently() {
     set_table_row_selected(&mut world, row, false);
     assert!(child_with::<RowSelBar>(&world, row).is_none());
     assert_eq!(
-        world.get::<Background>(row).map(|b| b.color.clone()),
+        world.get::<Background>(row).map(|b| b.color),
         Some(ColorToken::Transparent)
     );
 }
