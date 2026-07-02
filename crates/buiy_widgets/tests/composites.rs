@@ -274,7 +274,13 @@ fn kbd_wraps_content_in_a_chip() {
 #[test]
 fn status_dot_has_glow_shadow() {
     let mut world = World::new();
-    let dot = status_dot(&mut world, ColorToken::StatusOk, ColorToken::StatusOk, 6.0, 0.0);
+    let dot = status_dot(
+        &mut world,
+        ColorToken::StatusOk,
+        ColorToken::StatusOk,
+        6.0,
+        0.0,
+    );
     let shadow = world
         .get::<BoxShadow>(dot)
         .expect("the status dot must carry a glow BoxShadow");
@@ -285,7 +291,13 @@ fn status_dot_has_glow_shadow() {
 #[test]
 fn pulse_blink_attaches_opacity_tween() {
     let mut world = World::new();
-    let dot = status_dot(&mut world, ColorToken::Accent, ColorToken::AccentSoft, 0.0, 4.0);
+    let dot = status_dot(
+        &mut world,
+        ColorToken::Accent,
+        ColorToken::AccentSoft,
+        0.0,
+        4.0,
+    );
     pulse_blink(&mut world, dot);
     assert!(
         world.get::<OpacityTween>(dot).is_some(),

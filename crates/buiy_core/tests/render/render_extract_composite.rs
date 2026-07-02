@@ -198,10 +198,7 @@ fn animated_background_color_composites_over_the_token() {
 #[test]
 fn background_token_resolves_when_no_animation_present() {
     let mut h = NodeExtractHarness::new();
-    let e = spawn_leaf(
-        &mut h.app,
-        Background { color: SURFACE },
-    );
+    let e = spawn_leaf(&mut h.app, Background { color: SURFACE });
     settle(&mut h);
     h.extract();
 

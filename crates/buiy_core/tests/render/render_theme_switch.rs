@@ -23,7 +23,10 @@ fn replacing_theme_reresolves_token_next_read() {
     let after = resolve_token(&token, &theme);
 
     assert_eq!(after, Color::BLACK);
-    assert_ne!(after, before, "the mutated theme re-resolves on the next read");
+    assert_ne!(
+        after, before,
+        "the mutated theme re-resolves on the next read"
+    );
 }
 
 /// Records `Theme::is_changed()` *inside* the schedule — the only vantage point

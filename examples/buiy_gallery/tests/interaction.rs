@@ -1015,7 +1015,9 @@ fn showcase_segmented_click_selects_the_option() {
         .find(|&o| {
             !matches!(
                 g.world_app().world().get::<Background>(o),
-                Some(Background { color: ColorToken::Accent })
+                Some(Background {
+                    color: ColorToken::Accent
+                })
             )
         })
         .expect("an unselected segmented option");
@@ -1025,7 +1027,12 @@ fn showcase_segmented_click_selects_the_option() {
 
     let bg = g.world_app().world().get::<Background>(unselected).cloned();
     assert!(
-        matches!(&bg, Some(Background { color: ColorToken::Accent })),
+        matches!(
+            &bg,
+            Some(Background {
+                color: ColorToken::Accent
+            })
+        ),
         "clicking a segmented option makes it the accent-filled selection, got {bg:?}",
     );
 }

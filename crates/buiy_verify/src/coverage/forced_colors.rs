@@ -146,13 +146,9 @@ fn probe_fixture(fx: &Fixture) -> PaintProbe {
     for (name, bg, border, outline, shadow) in q.iter(world) {
         if name.as_str() == fx.name {
             return PaintProbe {
-                background: bg
-                    .map(|b| b.color)
-                    .unwrap_or(ColorToken::Transparent),
+                background: bg.map(|b| b.color).unwrap_or(ColorToken::Transparent),
                 border: border.map(border_token).unwrap_or(ColorToken::Transparent),
-                outline: outline
-                    .map(|o| o.color)
-                    .unwrap_or(ColorToken::Transparent),
+                outline: outline.map(|o| o.color).unwrap_or(ColorToken::Transparent),
                 has_shadow: shadow.map(|s| !s.0.is_empty()).unwrap_or(false),
             };
         }

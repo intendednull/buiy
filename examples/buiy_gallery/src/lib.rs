@@ -850,16 +850,7 @@ fn build_todo_footer(world: &mut World) -> Entity {
 fn build_filter_pill(world: &mut World, mode: FilterMode, label: &str, name: &str) -> Entity {
     let active = mode == FilterMode::default();
     let (bg, fg) = filter_pill_colors(active);
-    let text = text_leaf(
-        world,
-        "#FilterLabel",
-        label,
-        geist(),
-        11.5,
-        500,
-        fg,
-        None,
-    );
+    let text = text_leaf(world, "#FilterLabel", label, geist(), 11.5, 500, fg, None);
     world
         .spawn((
             buiy::prelude::Button,
@@ -2982,13 +2973,7 @@ fn build_menu_item(world: &mut World, idx: usize, spec: &MenuItemSpec) -> Entity
             Pickable::IGNORE,
         ))
         .id();
-    let kbd_chip = kbd_content(
-        world,
-        "#MenuItemKbd",
-        spec.kbd,
-        geist_mono(),
-        kbd_color,
-    );
+    let kbd_chip = kbd_content(world, "#MenuItemKbd", spec.kbd, geist_mono(), kbd_color);
     // A per-item name (the label slug) so the layout-dump can order the items
     // deterministically even when the screen is INACTIVE in the shell (all items
     // collapse to pos/size 0 under `Display::None`, where same-named siblings are

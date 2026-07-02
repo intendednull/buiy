@@ -15,10 +15,7 @@ fn transparent_token_resolves_to_none() {
 #[test]
 fn known_token_resolves_to_theme_color() {
     let theme = default_light_theme();
-    let c = resolve_token(
-        &ColorToken::SurfacePrimary,
-        &theme,
-    );
+    let c = resolve_token(&ColorToken::SurfacePrimary, &theme);
     assert_eq!(c, Color::WHITE);
 }
 

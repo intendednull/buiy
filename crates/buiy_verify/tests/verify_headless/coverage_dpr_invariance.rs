@@ -20,9 +20,7 @@
 use bevy::prelude::*;
 use buiy_core::render::golden::Dpr;
 use buiy_verify::coverage::{Cell, Matrix, build_app, sorted_catalog};
-use buiy_verify::snapshot::{
-    NameLookup, display_list_dump, extract_nodes_from_world, layout_dump,
-};
+use buiy_verify::snapshot::{NameLookup, display_list_dump, extract_nodes_from_world, layout_dump};
 
 /// Build one (fixture, cell), run a single `update()`, and return the two CPU
 /// snapshot artifacts the tiers baseline: the Tier-1 layout dump and the Tier-2

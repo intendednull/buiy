@@ -347,14 +347,7 @@ pub fn kbd_content(
     };
     // ⌘ + text: a flex-row [vector ⌘ icon][text]. The 11px icon box matches the
     // 10px cap-height; a 1px gap keeps the symbol and text visually adjacent.
-    let cmd = icon_box(
-        world,
-        "#KbdCmdGlyph",
-        CMD_GLYPH_ICON,
-        1.5,
-        11,
-        color,
-    );
+    let cmd = icon_box(world, "#KbdCmdGlyph", CMD_GLYPH_ICON, 1.5, 11, color);
     let text = text_leaf(world, "#KbdCmdText", rest, mono, 10.0, 500, color, None);
     world
         .spawn((

@@ -60,8 +60,7 @@ fn resolve_outline_grows_box_by_width_plus_offset() {
     // The `FocusRing` token resolves to the default theme's high-contrast ring
     // color — an opaque, painted band.
     assert_ne!(
-        got.color,
-        [0.0; 4],
+        got.color, [0.0; 4],
         "the focus-ring token must resolve to a painted color"
     );
 }
