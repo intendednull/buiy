@@ -280,7 +280,6 @@ fn prepare_uploads_persistent_buffers() {
     use buiy_core::layout::Style;
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     // The real spine round-trip on a live adapter: spawn one opaque painted node,
     // drive the full layout → stacking → transform-bridge → extract → prepare
@@ -292,7 +291,7 @@ fn prepare_uploads_persistent_buffers() {
         Node,
         Style::default().width_px(50.0).height_px(50.0),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+            color: ColorToken::SurfacePrimary,
         },
     ));
 
@@ -332,14 +331,13 @@ fn static_node_survives_steady_state_frames() {
     use buiy_core::layout::Style;
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     let mut app = crate::support::gpu_test_app_with_layout();
     app.world_mut().spawn((
         Node,
         Style::default().width_px(30.0).height_px(30.0),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+            color: ColorToken::SurfacePrimary,
         },
     ));
     app.finish();
@@ -367,10 +365,9 @@ fn one_node_change_keeps_unchanged_siblings() {
     use buiy_core::layout::Style;
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
-    let opaque = |t: &'static str| Background {
-        color: ColorToken::Token(Cow::Borrowed(t)),
+    let opaque = || Background {
+        color: ColorToken::SurfacePrimary,
     };
     let mut app = crate::support::gpu_test_app_with_layout();
     let a = app
@@ -378,14 +375,14 @@ fn one_node_change_keeps_unchanged_siblings() {
         .spawn((
             Node,
             Style::default().width_px(20.0).height_px(20.0),
-            opaque("color.surface.primary"),
+            opaque(),
         ))
         .id();
     for _ in 0..2 {
         app.world_mut().spawn((
             Node,
             Style::default().width_px(20.0).height_px(20.0),
-            opaque("color.surface.primary"),
+            opaque(),
         ));
     }
     crate::support::finish_and_run(&mut app, 2);
@@ -423,7 +420,6 @@ fn despawn_drops_the_instance() {
     use buiy_core::layout::Style;
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     let mut app = crate::support::gpu_test_app_with_layout();
     let node = app
@@ -432,7 +428,7 @@ fn despawn_drops_the_instance() {
             Node,
             Style::default().width_px(25.0).height_px(25.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+                color: ColorToken::SurfacePrimary,
             },
         ))
         .id();
@@ -471,14 +467,15 @@ fn theme_swap_reresolves_extracted_color() {
     use buiy_core::render::components::Background;
     use buiy_core::render::extract::ExtractedNodesView;
     use buiy_core::theme::Theme;
-    use std::borrow::Cow;
 
     let mut app = crate::support::gpu_test_app_with_layout();
     app.world_mut().spawn((
         Node,
         Style::default().width_px(20.0).height_px(20.0),
+        // The live-accent token re-resolves from the theme's runtime `accent`, so
+        // moving that field IS a theme swap the token must follow globally.
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+            color: ColorToken::Accent,
         },
     ));
     crate::support::finish_and_run(&mut app, 2);
@@ -491,11 +488,9 @@ fn theme_swap_reresolves_extracted_color() {
         })
         .expect("an opaque node was extracted");
 
-    // Re-point the token to a new color in the live theme (a theme swap edge).
-    app.world_mut()
-        .resource_mut::<Theme>()
-        .colors
-        .insert("color.surface.primary".into(), Color::srgb(0.1, 0.2, 0.3));
+    // Re-point the token to a new color in the live theme (a theme swap edge):
+    // move the runtime accent the `Accent` token resolves from.
+    app.world_mut().resource_mut::<Theme>().accent = Color::srgb(0.1, 0.2, 0.3);
     app.update();
     app.update();
     let color_after = crate::support::render_world_resource::<ExtractedNodesView>(&app)

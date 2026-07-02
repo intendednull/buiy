@@ -1,4 +1,5 @@
 use bevy::prelude::Color;
+use buiy_core::render::color::{ColorToken, ThemeContract};
 use buiy_core::theme::default_light_theme;
 use buiy_verify::contrast::{
     ContrastSeverity, WCAG_AA_NORMAL, contrast_violations, lint_theme, wcag2_ratio,
@@ -22,8 +23,8 @@ fn equal_colors_ratio_is_1() {
 #[test]
 fn aa_passes_default_light_theme_text_on_surface() {
     let theme = default_light_theme();
-    let bg = theme.color("color.surface.primary").unwrap();
-    let fg = theme.color("color.text.primary").unwrap();
+    let bg = theme.resolve(ColorToken::SurfacePrimary);
+    let fg = theme.resolve(ColorToken::TextPrimary);
     let r = wcag2_ratio(fg, bg);
     assert!(
         r >= WCAG_AA_NORMAL,
@@ -33,12 +34,12 @@ fn aa_passes_default_light_theme_text_on_surface() {
 
 #[test]
 fn linter_reports_violations_for_failing_pair() {
-    let mut theme = default_light_theme();
-    // Insert a known-failing pair.
-    theme
-        .colors
-        .insert("color.text.bad".into(), Color::srgb(0.9, 0.9, 0.9));
-    let pairs = vec![("color.surface.primary", "color.text.bad")];
+    let theme = default_light_theme();
+    // A near-white "text" on the white surface fails AA. The failing fg color is
+    // carried inline via the `Custom` escape hatch (the theme color HashMap is
+    // gone), so the pair still fails independent of the palette.
+    let bad_fg = Color::srgb(0.9, 0.9, 0.9);
+    let pairs = vec![(ColorToken::SurfacePrimary, ColorToken::Custom(bad_fg))];
     let violations = contrast_violations(&theme, &pairs, WCAG_AA_NORMAL);
     assert_eq!(violations.len(), 1);
     assert_eq!(violations[0].severity, ContrastSeverity::Fail);

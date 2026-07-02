@@ -33,7 +33,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text, TextAlign},
 };
-use std::borrow::Cow;
 
 /// The glyph a checkbox mark shows when checked (`Toggled::True`).
 pub const CHECK_GLYPH: &str = "✓";
@@ -112,7 +111,7 @@ pub(crate) fn checkbox_box_model() -> BoxModel {
 /// The default checkbox surface fill (the `color.surface.secondary` token).
 pub(crate) fn checkbox_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 

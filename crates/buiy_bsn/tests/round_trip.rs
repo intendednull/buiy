@@ -29,7 +29,6 @@ use buiy_core::layout::{BoxModel, Display, Edges, FlexParams, Length, Overflow, 
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_widgets::{Button, TextInput, WidgetsPlugin};
-use std::borrow::Cow;
 
 /// A headless app with the BSN spawn machinery (`AssetPlugin` + `ScenePlugin`
 /// back `spawn_scene`) plus the Buiy plugins that register the widget
@@ -59,7 +58,7 @@ fn case_a_plain_data_components_patch() {
     let id = app
         .world_mut()
         .spawn_scene(bsn! {
-            Background { color: { ColorToken::Token(Cow::Borrowed("color.brand")) } }
+            Background { color: { ColorToken::Accent } }
             BoxModel {
                 width: { Sizing::Length(Length::Px(64.0)) },
                 padding: { Edges::all(4.0) },
@@ -70,7 +69,7 @@ fn case_a_plain_data_components_patch() {
 
     let world = app.world();
     let bg = world.get::<Background>(id).expect("Background present");
-    assert_eq!(bg.color, ColorToken::Token(Cow::Borrowed("color.brand")));
+    assert_eq!(bg.color, ColorToken::Accent);
 
     let bm = world.get::<BoxModel>(id).expect("BoxModel present");
     // Patched fields applied…
@@ -90,12 +89,12 @@ fn case_a_plain_data_components_patch() {
 fn case_b_styled_widget_require_plus_patches() {
     let mut app = bsn_test_app();
 
-    let brand = ColorToken::Token(Cow::Borrowed("color.brand"));
+    let brand = ColorToken::Accent;
     let id = app
         .world_mut()
         .spawn_scene(bsn! {
             Button
-            Background { color: { brand.clone() } }
+            Background { color: { brand } }
             BoxModel { width: { Sizing::Length(Length::Px(240.0)) } }
         })
         .expect("spawn_scene")

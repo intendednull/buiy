@@ -15,9 +15,11 @@
 //! ## Boundary (honest, documented)
 //!
 //! The live default [`Button::new`](buiy_widgets::Button::new) paints a *brand*
-//! token (`color.surface.secondary`) that is **not** forced-colors-safe — under
-//! `forced_colors: active` it would resolve to the magenta sentinel, a genuine
-//! `NonSystemColor` violation (color-and-forced-colors.md § 3.1). Making the
+//! token (`color.surface.secondary`) that is **not** forced-colors-safe — the
+//! analyzer flags it BY KIND (a semantic token, not a `SystemColor`/`Transparent`/
+//! `CurrentColor`/`FocusRing` variant), a genuine `NonSystemColor` violation
+//! (color-and-forced-colors.md § 3.1). (Track B: under forced mode it now resolves
+//! to a system color, not the removed magenta sentinel.) Making the
 //! *default widget* forced-colors-safe is owned by `buiy-widget-catalog-design`,
 //! not this campaign. The catalog fixtures therefore author the
 //! forced-colors-safe paint the catalog must converge to (system-color tokens),
@@ -146,13 +148,9 @@ fn probe_fixture(fx: &Fixture) -> PaintProbe {
     for (name, bg, border, outline, shadow) in q.iter(world) {
         if name.as_str() == fx.name {
             return PaintProbe {
-                background: bg
-                    .map(|b| b.color.clone())
-                    .unwrap_or(ColorToken::Transparent),
+                background: bg.map(|b| b.color).unwrap_or(ColorToken::Transparent),
                 border: border.map(border_token).unwrap_or(ColorToken::Transparent),
-                outline: outline
-                    .map(|o| o.color.clone())
-                    .unwrap_or(ColorToken::Transparent),
+                outline: outline.map(|o| o.color).unwrap_or(ColorToken::Transparent),
                 has_shadow: shadow.map(|s| !s.0.is_empty()).unwrap_or(false),
             };
         }
@@ -172,7 +170,7 @@ fn probe_fixture(fx: &Fixture) -> PaintProbe {
 fn border_token(border: &Border) -> ColorToken {
     for side in [&border.top, &border.right, &border.bottom, &border.left] {
         if !matches!(side.style, LineStyle::None) {
-            return side.color.clone();
+            return side.color;
         }
     }
     ColorToken::Transparent

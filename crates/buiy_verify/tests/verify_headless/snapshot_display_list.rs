@@ -3,7 +3,6 @@
 //! (snapshots.md § Verification #1, #4 + the magenta-sentinel signal).
 
 use bevy::prelude::*;
-use buiy_core::render::color::MISSING_TOKEN_FALLBACK;
 use buiy_core::render::components::ClipRect;
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_verify::snapshot::{DISPLAY_LIST_DUMP_VERSION, NameLookup, display_list_dump};
@@ -116,15 +115,18 @@ fn nodes_render_in_stored_paint_order() {
 }
 
 #[test]
-fn missing_token_surfaces_as_magenta() {
+fn resolved_color_renders_as_hex_and_unnamed_entity_falls_back() {
     // snapshots.md § Tier 2: `ExtractedNode.color` is already theme-resolved, so
-    // a node carrying the magenta MISSING_TOKEN_FALLBACK sentinel dumps as the
-    // literal `#ff00ffff` — an unresolved-token regression signal in the diff.
+    // it dumps as its literal `#rrggbbaa` (a color regression shows as a hex
+    // diff). The concrete magenta here just makes the hex easy to eyeball — the
+    // dump renders any resolved color the same way. (Track B removed the old
+    // magenta missing-token *sentinel*: a typo'd token is now a compile error, so
+    // there is no runtime miss to surface.)
     let node = ExtractedNode {
         entity: Entity::from_raw_u32(1).unwrap(),
         position: Vec2::ZERO,
         size: Vec2::splat(10.0),
-        color: MISSING_TOKEN_FALLBACK,
+        color: Color::srgb(1.0, 0.0, 1.0),
         clip: None,
         group: None,
         affine: [[1.0, 0.0], [0.0, 1.0]],
@@ -140,7 +142,7 @@ fn missing_token_surfaces_as_magenta() {
     let dump = display_list_dump(&nodes, &NameLookup::default());
     assert!(
         dump.contains("color=#ff00ffff"),
-        "magenta sentinel must surface as #ff00ffff, got:\n{dump}"
+        "a resolved color must surface as its #rrggbbaa hex, got:\n{dump}"
     );
     // Unnamed entity falls back to entity#<index>.
     assert!(dump.contains("entity#1 rect"), "unnamed fallback in dump");

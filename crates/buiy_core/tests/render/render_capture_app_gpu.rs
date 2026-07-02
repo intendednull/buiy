@@ -9,18 +9,13 @@ use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
-use std::borrow::Cow;
 
 #[test]
 #[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
 fn capture_app_paints_a_non_blank_frame() {
     let mut app = capture_app(64, 64);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("test.fill.a".into(), Color::srgb(0.90, 0.10, 0.10));
-    }
+    // A distinct fill carried inline as `Custom` (no theme token needed).
+    let fill = Color::srgb(0.90, 0.10, 0.10);
     let e = app
         .world_mut()
         .spawn((
@@ -35,7 +30,7 @@ fn capture_app_paints_a_non_blank_frame() {
                 .width_px(40.0)
                 .height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.fill.a")),
+                color: ColorToken::Custom(fill),
             },
         ))
         .id();

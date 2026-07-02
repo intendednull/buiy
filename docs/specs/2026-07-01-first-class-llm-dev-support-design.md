@@ -82,6 +82,14 @@ spellings), and keeps accessors chainable.
 
 ### 3.2 Theme tokens — **closed enum + theme contract** (research D4)
 
+> **Status (Track B, 2026-07-02):** the **COLOR** slice LANDED — `ColorToken` is now a
+> closed enum (`Transparent`/`CurrentColor`/`SystemColor(kw)`/`Custom(Color)` + 56 semantic
+> variants) resolved through a `ThemeContract` exhaustive match with an explicit forced-colors
+> `PaletteMode`; the 56 dark tokens resolve byte-identical (GPU goldens 93/93). **Follow-ups:**
+> spacing/radius/typography/motion tokens (still stringly `Theme.spaces`/`radii`); sweep the
+> now-fully-dead `*_TOKEN` `&str` consts in `render/color.rs` (zero non-def refs); and the
+> obsolete missing-token-sentinel gating in `buiy_verify` `coverage/{fixture,enroll}.rs`.
+
 Tokens are a **closed enum** (`ColorToken::Surface`, …; matches the observed prior)
 covering **color + spacing + radius + typography + motion** (not color-only — the F6
 half-wiring). A **`Theme` contract trait the compiler forces every theme to implement

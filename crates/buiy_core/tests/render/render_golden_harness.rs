@@ -67,7 +67,6 @@ fn overlapping_semitransparent_fills_match_golden() {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     // Pin the flake triad for the fixture's contract (device-free gating above).
     let _cfg = GoldenConfig::deterministic();
@@ -85,13 +84,8 @@ fn overlapping_semitransparent_fills_match_golden() {
 
     let mut app = crate::support::gpu_render_app(W, H);
 
-    // Known semitransparent theme tokens (set BEFORE finish so the first extract
-    // resolves them). `Theme.colors` is a public map.
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.fill.a".into(), fill_a);
-        theme.colors.insert("test.fill.b".into(), fill_b);
-    }
+    // The two semitransparent fills travel inline on their tokens as `Custom`
+    // (Track B: the test-injection theme HashMap is gone).
 
     // Offscreen target + capture camera (opaque-black clear).
     let target = crate::support::render_to_image(&mut app, W, H);
@@ -101,7 +95,7 @@ fn overlapping_semitransparent_fills_match_golden() {
     // A: x∈[8,48), y∈[8,48).  B: x∈[20,60), y∈[20,60).
     // Overlap: x∈[20,48), y∈[20,48); sampled deep-interior at (34,34) — ≥6px
     // inside every edge so the SDF anti-aliased rim never reaches it.
-    let abs_at = |left: f32, top: f32, token: &'static str| {
+    let abs_at = |left: f32, top: f32, color: Color| {
         (
             Node,
             Style::default()
@@ -114,17 +108,14 @@ fn overlapping_semitransparent_fills_match_golden() {
                 .width_px(40.0)
                 .height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(token)),
+                color: ColorToken::Custom(color),
             },
         )
     };
     // A spawned first → earlier in painters_z; B second → painted ON TOP (the
     // SrcOver source). Both under one root so a single StackingContext forms.
-    let a = app.world_mut().spawn(abs_at(8.0, 8.0, "test.fill.a")).id();
-    let b = app
-        .world_mut()
-        .spawn(abs_at(20.0, 20.0, "test.fill.b"))
-        .id();
+    let a = app.world_mut().spawn(abs_at(8.0, 8.0, fill_a)).id();
+    let b = app.world_mut().spawn(abs_at(20.0, 20.0, fill_b)).id();
     app.world_mut()
         .spawn((Node, Style::default()))
         .add_children(&[a, b]);
@@ -282,7 +273,6 @@ fn capture_to_image_returns_physical_dimensions() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
     use buiy_core::render::golden::{GoldenConfig, capture_to_image};
-    use std::borrow::Cow;
 
     const LOGICAL_W: u32 = 48;
     const LOGICAL_H: u32 = 32;
@@ -294,12 +284,8 @@ fn capture_to_image_returns_physical_dimensions() {
 
     // A known opaque fill so the capture is non-trivial (a blank frame would
     // pass the dimension check vacuously; this proves real paint flows through).
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("cap.fill".into(), Color::srgb(0.2, 0.6, 0.9));
-    }
+    // Carried inline as `Custom` (Track B: the test-injection HashMap is gone).
+    let cap_fill = Color::srgb(0.2, 0.6, 0.9);
     let fill = app
         .world_mut()
         .spawn((
@@ -314,7 +300,7 @@ fn capture_to_image_returns_physical_dimensions() {
                 .width_px(16.0)
                 .height_px(16.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("cap.fill")),
+                color: ColorToken::Custom(cap_fill),
             },
         ))
         .id();

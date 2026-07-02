@@ -100,13 +100,13 @@ fn segmented_selected_option_is_accent_filled() {
             // Selected: accent bg + on-accent label.
             assert_eq!(
                 bg.color,
-                tok("color.accent"),
+                ColorToken::Accent,
                 "selected segmented option must be accent-filled, got {:?}",
                 bg.color
             );
             assert_eq!(
                 label_color.map(|c| c.0),
-                Some(tok("color.text.on-accent")),
+                Some(ColorToken::TextOnAccent),
                 "selected segmented label must be on-accent"
             );
             saw_selected = true;
@@ -114,13 +114,13 @@ fn segmented_selected_option_is_accent_filled() {
             // Unselected: transparent bg + muted label.
             assert_eq!(
                 bg.color,
-                tok("color.surface.transparent"),
+                ColorToken::Transparent,
                 "unselected segmented option must be transparent, got {:?}",
                 bg.color
             );
             assert_eq!(
                 label_color.map(|c| c.0),
-                Some(tok("color.text.muted")),
+                Some(ColorToken::TextMuted),
                 "unselected segmented label must be muted"
             );
             saw_unselected = true;
@@ -183,7 +183,7 @@ fn selected_table_row_is_accent_soft_with_left_bar() {
                 .get::<Name>(c)
                 .is_some_and(|n| n.as_str() == "#RowSelBar")
         });
-        if bg.color == tok("color.accent.soft") {
+        if bg.color == ColorToken::AccentSoft {
             assert!(
                 has_bar,
                 "the selected (accent.soft) row must carry the left bar"
@@ -192,7 +192,7 @@ fn selected_table_row_is_accent_soft_with_left_bar() {
         } else {
             assert_eq!(
                 bg.color,
-                tok("color.surface.transparent"),
+                ColorToken::Transparent,
                 "the unselected row must be transparent"
             );
             assert!(!has_bar, "the unselected row must NOT carry a left bar");
@@ -423,9 +423,4 @@ fn toast_lays_out_bottom_center() {
         wrap_size.y - TOAST_BOTTOM
     );
     let _ = H;
-}
-
-/// A `ColorToken::Token` test helper (mirrors the module's private `tok`).
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
 }

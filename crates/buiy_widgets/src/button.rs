@@ -19,7 +19,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text, TextAlign},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for a button label (logical px).
 pub(crate) const BUTTON_LABEL_FONT_SIZE: f32 = 16.0;
@@ -91,7 +90,7 @@ pub(crate) fn button_box_model() -> BoxModel {
 /// The default button surface fill (the `color.surface.secondary` token).
 pub(crate) fn button_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 

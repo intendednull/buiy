@@ -24,7 +24,6 @@ fn z_indexed_group_member_with_interleaving_sibling_composites_once() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
     use buiy_core::render::compositor::composite_src_over;
-    use std::borrow::Cow;
 
     const W: u32 = 64;
     const H: u32 = 64;
@@ -34,18 +33,13 @@ fn z_indexed_group_member_with_interleaving_sibling_composites_once() {
     let green = Color::srgb(0.05, 0.9, 0.05);
 
     let mut app = crate::support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.blue".into(), blue);
-        theme.colors.insert("test.red".into(), red);
-        theme.colors.insert("test.green".into(), green);
-    }
 
     let target = crate::support::render_to_image(&mut app, W, H);
     crate::support::spawn_capture_camera(&mut app, target.clone());
 
-    let fill = |token: &'static str| Background {
-        color: ColorToken::Token(Cow::Borrowed(token)),
+    // Colors carried inline as `Custom` (no theme token needed).
+    let fill = |color: Color| Background {
+        color: ColorToken::Custom(color),
     };
     let abs_box = |left: f32, top: f32, w: f32, h: f32| {
         Style::default()
@@ -67,7 +61,7 @@ fn z_indexed_group_member_with_interleaving_sibling_composites_once() {
         .spawn((
             Node,
             abs_box(4.0, 4.0, 16.0, 16.0).z_index(ZIndex::Layer(2)),
-            fill("test.red"),
+            fill(red),
         ))
         .id();
     let parent = app
@@ -76,7 +70,7 @@ fn z_indexed_group_member_with_interleaving_sibling_composites_once() {
             Node,
             abs_box(4.0, 4.0, 40.0, 40.0),
             Opacity(0.5),
-            fill("test.blue"),
+            fill(blue),
         ))
         .id();
     app.world_mut().entity_mut(parent).add_children(&[member]);
@@ -90,7 +84,7 @@ fn z_indexed_group_member_with_interleaving_sibling_composites_once() {
         .spawn((
             Node,
             abs_box(48.0, 8.0, 12.0, 12.0).z_index(ZIndex::Layer(1)),
-            fill("test.green"),
+            fill(green),
         ))
         .id();
     app.world_mut()

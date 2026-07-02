@@ -18,11 +18,9 @@ use buiy_core::text::{
     FamilyEntry, FontFamily, FontSize, FontStack, GenericFamily, ResidentTextKeys, Text,
 };
 use buiy_verify::metric::{CompareOpts, FuzzBudget, compare};
-use std::borrow::Cow;
 
 const W: u32 = 128;
 const H: u32 = 64;
-const TOKEN: &str = "test.text";
 
 /// Wrap a raw RGBA readback (W×H) as an `RgbaImage` for `metric::compare`.
 fn img(bytes: &[u8]) -> image::RgbaImage {
@@ -48,10 +46,6 @@ fn assert_differs(a: &[u8], b: &[u8], msg: &str) {
 /// interior texels) under a sized column root. Returns the text entity
 /// (the churn twin mutates it).
 fn spawn_text_fixture(app: &mut App, color: Color) -> Entity {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TOKEN.into(), color);
-    }
     let text = app
         .world_mut()
         .spawn((
@@ -59,7 +53,7 @@ fn spawn_text_fixture(app: &mut App, color: Color) -> Entity {
             Style::default(),
             Text(String::from("Hi")),
             FontSize(40.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TOKEN))),
+            TextColor(ColorToken::Custom(color)),
         ))
         .id();
     app.world_mut()
@@ -146,7 +140,7 @@ fn hello_text_first_frame_is_deterministic_and_tinted() {
 #[ignore = "needs a wgpu adapter; retint byte-identity with real text (glyph-pipeline § 12 GPU b)"]
 fn retint_real_text_leaves_atlas_byte_identical() {
     let mut app = crate::support::gpu_render_app(W, H);
-    spawn_text_fixture(&mut app, Color::srgba(0.85, 0.10, 0.10, 1.0));
+    let text = spawn_text_fixture(&mut app, Color::srgba(0.85, 0.10, 0.10, 1.0));
     let target = crate::support::render_to_image(&mut app, W, H);
     crate::support::spawn_capture_camera(&mut app, target.clone());
     crate::support::finish_and_run(&mut app, 1);
@@ -154,12 +148,12 @@ fn retint_real_text_leaves_atlas_byte_identical() {
     let frame_a = crate::support::readback_rgba(&mut app, target.clone());
     let atlas_a = coverage_page0_bytes(&app);
 
-    // Theme swap: theme.is_changed() re-fires the § 6.2 gate; instances
+    // Recolor swap: Changed<TextColor> re-fires the § 6.2 gate; instances
     // re-emit with the new color; the atlas must not move.
     app.world_mut()
-        .resource_mut::<buiy_core::theme::Theme>()
-        .colors
-        .insert(TOKEN.into(), Color::srgba(0.10, 0.20, 0.90, 1.0));
+        .get_mut::<TextColor>(text)
+        .expect("the fixture's TextColor")
+        .0 = ColorToken::Custom(Color::srgba(0.10, 0.20, 0.90, 1.0));
     for _ in 0..3 {
         app.update();
     }
@@ -325,12 +319,7 @@ fn multi_script_text_renders_deterministically() {
             "NotoSansHebrew-hebrew.ttf",
         );
 
-        {
-            let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-            theme
-                .colors
-                .insert(TOKEN.into(), Color::srgba(0.92, 0.92, 0.92, 1.0));
-        }
+        let ink = Color::srgba(0.92, 0.92, 0.92, 1.0);
         // The joining-RTL line: every glyph sits on the Arabic fixture face.
         let arabic = app
             .world_mut()
@@ -343,7 +332,7 @@ fn multi_script_text_renders_deterministically() {
                     FamilyEntry::Generic(GenericFamily::SansSerif),
                 ])),
                 FontSize(20.0),
-                TextColor(ColorToken::Token(Cow::Borrowed(TOKEN))),
+                TextColor(ColorToken::Custom(ink)),
             ))
             .id();
         // The verification § 2.2 mixed-BiDi string. Latin must hit the
@@ -360,7 +349,7 @@ fn multi_script_text_renders_deterministically() {
                     FamilyEntry::Generic(GenericFamily::SansSerif),
                 ])),
                 FontSize(20.0),
-                TextColor(ColorToken::Token(Cow::Borrowed(TOKEN))),
+                TextColor(ColorToken::Custom(ink)),
             ))
             .id();
         app.world_mut()

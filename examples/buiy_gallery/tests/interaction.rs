@@ -378,7 +378,7 @@ fn nav_click_reflects_rail_active_state() {
         .get::<Background>(button)
         .expect("nav button has a Background");
     assert!(
-        matches!(&bg.color, ColorToken::Token(t) if t.as_ref() == "color.surface.card"),
+        bg.color == ColorToken::SurfaceCard,
         "the clicked nav button takes the active card bg, got {:?}",
         bg.color,
     );
@@ -390,6 +390,8 @@ fn nav_click_reflects_rail_active_state() {
 
 #[test]
 fn accent_swatch_click_retones_the_theme_accent() {
+    use buiy_core::render::color::{ColorToken, ThemeContract};
+
     let mut g = Gallery::new();
 
     let green = bevy::color::Color::srgb_u8(0x45, 0xc0, 0x7d);
@@ -398,8 +400,7 @@ fn accent_swatch_click_retones_the_theme_accent() {
         .world_app()
         .world()
         .resource::<Theme>()
-        .color("color.accent")
-        .expect("theme resolves an accent");
+        .resolve(ColorToken::Accent);
     assert_ne!(srgb_u8(before), srgb_u8(green), "boot accent is not green");
 
     let swatch = find_where::<AccentSwatch>(g.world_app(), |s| srgb_u8(s.0) == srgb_u8(green));
@@ -410,8 +411,7 @@ fn accent_swatch_click_retones_the_theme_accent() {
         .world_app()
         .world()
         .resource::<Theme>()
-        .color("color.accent")
-        .expect("theme resolves an accent");
+        .resolve(ColorToken::Accent);
     assert_eq!(
         srgb_u8(after),
         srgb_u8(green),
@@ -483,6 +483,55 @@ fn todo_filter_pill_click_sets_the_active_filter() {
     assert_eq!(
         hidden, 1,
         "the one completed row is filtered out under Active"
+    );
+}
+
+/// AUDIT (widget-catalog sweep): the filter pills must MOVE their accent
+/// highlight to the clicked segment, not just re-filter the rows. The existing
+/// `todo_filter_pill_click_sets_the_active_filter` asserts only the `Filter`
+/// resource + row visibility — it never checks the pill's rendered fill, so a
+/// "state changes but display doesn't" no-op (the stepper class) could hide here.
+#[test]
+fn todo_filter_pill_click_moves_the_active_highlight() {
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+
+    let mut g = Gallery::new();
+    // A pill is "active-looking" when its Background is the accent token (the
+    // `filter_pill_colors(true)` fill).
+    let is_accent = |g: &mut Gallery, mode: FilterMode| -> bool {
+        let pill = find_where::<FilterButton>(g.world_app(), |f| f.0 == mode);
+        matches!(
+            g.world_app().world().get::<Background>(pill),
+            Some(Background {
+                color: ColorToken::Accent
+            })
+        )
+    };
+
+    // At rest, "All" is active (accent fill); "Active" is inactive.
+    assert!(
+        is_accent(&mut g, FilterMode::All),
+        "All pill is accent at rest"
+    );
+    assert!(
+        !is_accent(&mut g, FilterMode::Active),
+        "Active pill is not accent at rest",
+    );
+
+    // Click the "Active" pill.
+    let active_pill = find_where::<FilterButton>(g.world_app(), |f| f.0 == FilterMode::Active);
+    g.click(active_pill);
+    g.settle(2);
+
+    // The accent highlight must FOLLOW the selection.
+    assert!(
+        is_accent(&mut g, FilterMode::Active),
+        "the clicked Active pill takes on the active (accent) fill",
+    );
+    assert!(
+        !is_accent(&mut g, FilterMode::All),
+        "the previously-active All pill drops the accent fill",
     );
 }
 
@@ -616,6 +665,53 @@ fn menu_button_click_opens_then_keyboard_activates_an_item() {
             .map(String::as_str),
         Some("Open"),
         "activating the first item records its label (record_menu_activation)",
+    );
+}
+
+/// AUDIT (widget-catalog sweep): the ⋮ trigger must recolor when the menu opens
+/// (the design's `menuBtnStyle`), not just toggle its aria-expanded. The existing
+/// open test asserts `A11yExpanded`/visibility only — a "state flips but the button
+/// looks identical" no-op (the same class as the filter pills) hid here.
+#[test]
+fn menu_button_click_recolors_the_trigger_open_then_closed() {
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+
+    let mut g = Gallery::new();
+    g.goto(Screen::Menu);
+
+    let button = single::<MenuButton>(g.world_app());
+    let bg = |g: &mut Gallery| -> ColorToken {
+        g.world_app()
+            .world()
+            .get::<Background>(button)
+            .expect("menu trigger has a Background")
+            .color
+    };
+
+    // Closed at rest → the inset surface.
+    assert_eq!(
+        bg(&mut g),
+        ColorToken::SurfaceInset,
+        "the trigger wears the closed (inset) surface at rest",
+    );
+
+    // Open → the raised-alt surface (the design's open menuBtnStyle).
+    g.click(button);
+    g.settle(2);
+    assert_eq!(
+        bg(&mut g),
+        ColorToken::SurfaceRaisedAlt,
+        "opening the menu recolors the trigger to the open surface",
+    );
+
+    // Close (Esc) → restores the closed surface.
+    g.press_key(KeyCode::Escape, Key::Escape);
+    g.settle(2);
+    assert_eq!(
+        bg(&mut g),
+        ColorToken::SurfaceInset,
+        "closing the menu restores the closed trigger surface",
     );
 }
 
@@ -1015,7 +1111,9 @@ fn showcase_segmented_click_selects_the_option() {
         .find(|&o| {
             !matches!(
                 g.world_app().world().get::<Background>(o),
-                Some(Background { color: ColorToken::Token(t) }) if t.as_ref() == "color.accent"
+                Some(Background {
+                    color: ColorToken::Accent
+                })
             )
         })
         .expect("an unselected segmented option");
@@ -1025,7 +1123,12 @@ fn showcase_segmented_click_selects_the_option() {
 
     let bg = g.world_app().world().get::<Background>(unselected).cloned();
     assert!(
-        matches!(&bg, Some(Background { color: ColorToken::Token(t) }) if t.as_ref() == "color.accent"),
+        matches!(
+            &bg,
+            Some(Background {
+                color: ColorToken::Accent
+            })
+        ),
         "clicking a segmented option makes it the accent-filled selection, got {bg:?}",
     );
 }

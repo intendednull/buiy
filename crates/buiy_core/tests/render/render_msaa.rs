@@ -26,7 +26,6 @@ fn msaa4_view_paints_one_node_without_pipeline_mismatch() {
     use buiy_core::layout::Style;
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     const W: u32 = 32;
     const H: u32 = 32;
@@ -39,7 +38,7 @@ fn msaa4_view_paints_one_node_without_pipeline_mismatch() {
         // 40×40 opaque fill over the 32×32 view → every pixel painted.
         Style::default().width_px(40.0).height_px(40.0),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+            color: ColorToken::SurfacePrimary,
         },
     ));
     crate::support::finish_and_run(&mut app, 3);
@@ -77,7 +76,6 @@ fn msaa4_group_opacity_composite_matches_src_over() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
     use buiy_core::render::compositor::composite_src_over;
-    use std::borrow::Cow;
 
     const W: u32 = 64;
     const H: u32 = 64;
@@ -85,10 +83,6 @@ fn msaa4_group_opacity_composite_matches_src_over() {
     let red = Color::srgb(0.9, 0.05, 0.05); // an OPAQUE red (alpha 1)
 
     let mut app = crate::support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.red".into(), red);
-    }
 
     let target = crate::support::render_to_image(&mut app, W, H);
     crate::support::spawn_capture_camera_with_msaa(&mut app, target.clone(), Msaa::Sample4);
@@ -111,7 +105,7 @@ fn msaa4_group_opacity_composite_matches_src_over() {
                 .width_px(32.0)
                 .height_px(32.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.red")),
+                color: ColorToken::Custom(red),
             },
         )
     };

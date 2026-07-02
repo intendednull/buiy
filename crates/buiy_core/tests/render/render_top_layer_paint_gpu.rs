@@ -24,7 +24,6 @@ use buiy_core::layout::{Inset, Length, Sizing, Style, TopLayer};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{Background, TextColor};
 use buiy_core::text::{FontSize, Text};
-use std::borrow::Cow;
 
 use crate::support::{
     finish_and_run, gpu_render_app, px, readback_rgba, render_to_image, spawn_capture_camera,
@@ -34,29 +33,17 @@ use crate::support::{
 const W: u32 = 200;
 const H: u32 = 160;
 
-/// `color.accent` and the glyph tint, inserted as distinct, saturated colors so
-/// the readback can tell the descendant FILL (red) and the descendant GLYPH
-/// (green) apart from the dialog card bg (a dim gray) and the black clear.
-const FILL_TOKEN: &str = "test.m6.fill"; // the descendant Background (red)
-const TEXT_TOKEN: &str = "test.m1.text"; // the descendant glyph (green)
-const CARD_TOKEN: &str = "test.card"; // the top-layer node's own bg (gray)
-
 #[test]
 #[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
 fn fix_m1m6_top_layer_descendants_fill_and_text_paint() {
     let mut app = gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert(FILL_TOKEN.into(), Color::srgb(0.90, 0.10, 0.10)); // red
-        theme
-            .colors
-            .insert(TEXT_TOKEN.into(), Color::srgb(0.10, 0.90, 0.20)); // green
-        theme
-            .colors
-            .insert(CARD_TOKEN.into(), Color::srgb(0.20, 0.20, 0.22)); // gray
-    }
+
+    // Distinct, saturated colors carried inline as `Custom` so the readback can
+    // tell the descendant FILL (red) and the descendant GLYPH (green) apart from
+    // the dialog card bg (a dim gray) and the black clear.
+    let fill_color = Color::srgb(0.90, 0.10, 0.10); // the descendant Background (red)
+    let text_color = Color::srgb(0.10, 0.90, 0.20); // the descendant glyph (green)
+    let card_color = Color::srgb(0.20, 0.20, 0.22); // the top-layer node's own bg (gray)
 
     // The descendant FILL (M6): a 70×40 red box inside the top-layer card. With
     // the card at (40,40) and 10px padding, this paints at ~(50,50)..(120,90).
@@ -67,7 +54,7 @@ fn fix_m1m6_top_layer_descendants_fill_and_text_paint() {
             Name::new("fill_child"),
             Style::default().width_px(70.0).height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(FILL_TOKEN)),
+                color: ColorToken::Custom(fill_color),
             },
         ))
         .id();
@@ -81,7 +68,7 @@ fn fix_m1m6_top_layer_descendants_fill_and_text_paint() {
             Style::default(),
             Text(String::from("M")),
             FontSize(40.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(text_color)),
         ))
         .id();
 
@@ -105,7 +92,7 @@ fn fix_m1m6_top_layer_descendants_fill_and_text_paint() {
                 .padding(10.0)
                 .top_layer(TopLayer::Modal),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(CARD_TOKEN)),
+                color: ColorToken::Custom(card_color),
             },
         ))
         .add_children(&[fill_child, text_child])

@@ -25,7 +25,6 @@ use buiy_core::{
     text::edit::{Placeholder, SingleLine, TextEditState},
     text::{FontSize, Text},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for a text input (logical px). Matches the `Button`
 /// hardcoded-size convention (TODO: size tokens — buiy-widget-catalog-design).
@@ -113,7 +112,7 @@ pub(crate) fn text_input_overflow() -> Overflow {
 /// The default input surface fill (`color.surface.secondary`).
 pub(crate) fn text_input_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 

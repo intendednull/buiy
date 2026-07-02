@@ -13,15 +13,9 @@ use buiy_core::layout::{
 };
 use buiy_core::render::ColorToken;
 use buiy_core::render::components::Background;
-use std::borrow::Cow;
 
-/// Install the shared fill token both halves of every pairing reference.
-fn install_fill(app: &mut App) {
-    let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-    theme
-        .colors
-        .insert("test.fill.a".into(), Color::srgb(0.90, 0.10, 0.10));
-}
+/// The shared fill color both halves of every pairing reference.
+const FILL: Color = Color::srgb(0.90, 0.10, 0.10);
 
 /// A block-flow `width × 40` fill box (a flex child).
 fn fill_box(width: f32) -> impl Bundle {
@@ -29,7 +23,7 @@ fn fill_box(width: f32) -> impl Bundle {
         Node,
         Style::default().width_px(width).height_px(40.0),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("test.fill.a")),
+            color: ColorToken::Custom(FILL),
         },
     )
 }
@@ -50,7 +44,7 @@ fn abs_box(app: &mut App, left: f32) -> Entity {
                 .width_px(40.0)
                 .height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.fill.a")),
+                color: ColorToken::Custom(FILL),
             },
         ))
         .id()
@@ -59,7 +53,6 @@ fn abs_box(app: &mut App, left: f32) -> Entity {
 // ---- Case 1: flex justify-content: SpaceBetween == three literal offsets ----
 
 fn flex_justify(app: &mut App) {
-    install_fill(app);
     let a = app.world_mut().spawn(fill_box(40.0)).id();
     let b = app.world_mut().spawn(fill_box(40.0)).id();
     let c = app.world_mut().spawn(fill_box(40.0)).id();
@@ -77,7 +70,6 @@ fn flex_justify(app: &mut App) {
 }
 
 fn literal_offsets(app: &mut App) {
-    install_fill(app);
     // The disjoint oracle: three boxes at the SpaceBetween-resolved literal
     // coordinates via the absolute / literal-Node layer — no flex solver, so a
     // flex-justify bug cannot be shared by this reference.
@@ -92,7 +84,6 @@ fn literal_offsets(app: &mut App) {
 // ---- Case 2: content-visibility: hidden != the visible subtree ----
 
 fn subtree(app: &mut App, hidden: bool) {
-    install_fill(app);
     let child = app.world_mut().spawn(fill_box(80.0)).id();
     // `Style` is a Bundle that already supplies `Containment`; set the
     // content-visibility via the builder (a second `Containment` alongside

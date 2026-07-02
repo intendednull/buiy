@@ -15,7 +15,7 @@ use bevy::window::PrimaryWindow;
 use buiy_core::Node;
 use buiy_core::layout::Style;
 use buiy_core::render::atlas::BuiyAtlas;
-use buiy_core::render::color::ColorToken;
+use buiy_core::render::color::{ColorToken, ThemeContract};
 use buiy_core::render::components::{Background, Border, Corners, Radius, TextColor};
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
 use buiy_core::text::{
@@ -23,7 +23,6 @@ use buiy_core::text::{
     TextDecorations,
 };
 use cosmic_text::Cursor;
-use std::borrow::Cow;
 use std::ops::Range;
 
 /// Channel tolerance for full-coverage texel probes (the text_gpu TOL idiom).
@@ -32,10 +31,8 @@ const TOL: i32 = 4;
 /// Resolve a `default_light_theme()` token to its shipped color — the
 /// expected-value side of the token-tinted asserts reads the SAME source
 /// the app's `ThemePlugin` inserts, never a duplicated literal.
-fn token_color(token: &str) -> Color {
-    buiy_core::theme::default_light_theme()
-        .color(token)
-        .unwrap_or_else(|| panic!("default_light_theme ships {token}"))
+fn token_color(token: ColorToken) -> Color {
+    buiy_core::theme::default_light_theme().resolve(token)
 }
 
 /// The sRGB8 a FULL-coverage texel of `color` encodes to (alpha 1 — the
@@ -146,7 +143,7 @@ fn capture_card() -> (Vec<u8>, Rect) {
             Style::default(),
             Text(String::from("Save")),
             FontSize(16.0),
-            TextColor(ColorToken::Token(Cow::Borrowed("color.text.primary"))),
+            TextColor(ColorToken::TextPrimary),
         ))
         .id();
     let card = app
@@ -158,7 +155,7 @@ fn capture_card() -> (Vec<u8>, Rect) {
                 .height_px(CARD_SIZE.y)
                 .padding(CARD_PAD),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+                color: ColorToken::SurfaceSecondary,
             },
             Border {
                 radius: Corners::all(Radius::circular(CARD_RADIUS)),
@@ -213,7 +210,7 @@ fn widget_card_text_is_deterministic_and_token_tinted() {
     // reads the resolved `color.surface.secondary` (quad tier, full SDF
     // coverage): 10 px in from the card's right edge at mid height — the
     // 16 px "Save" label ends well left of it.
-    let surface = full_coverage(token_color("color.surface.secondary"));
+    let surface = full_coverage(token_color(ColorToken::SurfaceSecondary));
     let interior = (
         (card.max.x - 10.0) as u32,
         (card.min.y + CARD_SIZE.y / 2.0) as u32,
@@ -228,7 +225,7 @@ fn widget_card_text_is_deterministic_and_token_tinted() {
     // by the corner radius (corner AA blends toward the black backdrop and
     // would alias as "ink"); inside that region the only dark pixels are
     // the label's glyphs.
-    let ink = full_coverage(token_color("color.text.primary"));
+    let ink = full_coverage(token_color(ColorToken::TextPrimary));
     let xs = (card.min.x as u32 + CARD_RADIUS as u32)..(card.max.x as u32 - CARD_RADIUS as u32);
     let ys = (card.min.y as u32 + CARD_RADIUS as u32)..(card.max.y as u32 - CARD_RADIUS as u32);
     // "≈ color.text.primary": well below the near-white surface. The band
@@ -305,7 +302,7 @@ fn capture_input_state(filled: bool) -> Vec<u8> {
     ));
     if filled {
         text.insert((
-            TextColor(ColorToken::Token(Cow::Borrowed("color.text.primary"))),
+            TextColor(ColorToken::TextPrimary),
             // The first ~3 clusters: bytes [0, 3) = "Sea" (1-byte ASCII
             // clusters), the `text_selection_caret_gpu` Cursor authoring.
             SelectionVisual::new(Cursor::new(0, 0), Cursor::new(0, 3)),
@@ -383,11 +380,11 @@ fn input_state_pair_placeholder_vs_selected() {
     // 16 px already did)…
     assert_px_approx(
         brightest(&placeholder_a),
-        full_coverage(token_color("color.text.placeholder")),
+        full_coverage(token_color(ColorToken::TextPlaceholder)),
         "brightest placeholder texel == the color.text.placeholder full-coverage encode",
     );
     // …and NO selection paint exists anywhere (never selectable, § 7).
-    let sel_bg = full_coverage(token_color("color.selection.bg"));
+    let sel_bg = full_coverage(token_color(ColorToken::SelectionBg));
     let stray = rows_where_in(&placeholder_a, STATE_W, 0..STATE_W, 0..STATE_H, |p| {
         px_matches(p, sel_bg)
     });
@@ -419,14 +416,10 @@ fn input_state_pair_placeholder_vs_selected() {
 
 const THEME_W: u32 = 128;
 const THEME_H: u32 = 64;
-/// The fixture's `text-color` token (the `text_gpu` TOKEN idiom — test
-/// tokens inserted into the theme, not shipped).
-const FG_TOKEN: &str = "test.fg";
-/// The fixture's `text-decoration-color` token — `TextDecorations.color`,
-/// tier 1 of the § 3.2 precedence (T6's token seat).
-const DECO_TOKEN: &str = "test.deco";
 
-/// One theme-axis palette: the colors the fixture's two tokens resolve to.
+/// One theme-axis palette: the colors the fixture's `text-color` and
+/// `text-decoration-color` carry (as `ColorToken::Custom`, tier 1 of the
+/// § 3.2 precedence for the deco seat).
 /// Deco colors stay single-channel-pure so band detection is a channel-
 /// dominance test ([`is_deco_band`]) that neither palette's glyph ink
 /// (grey / amber — never single-channel) can satisfy.
@@ -458,23 +451,28 @@ fn palette_b() -> Palette {
     }
 }
 
-/// (Re)write the two test tokens — both the fixture setup AND the live-swap
-/// mutation: writing through `resource_mut` fires `theme.is_changed()`, the
-/// § 6.2 re-emit gate the swap half exercises.
-fn insert_palette(app: &mut App, palette: &Palette) {
-    let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-    theme.colors.insert(FG_TOKEN.into(), palette.fg);
-    theme.colors.insert(DECO_TOKEN.into(), palette.deco);
+/// Repaint the fixture's text + decoration to `palette` — the live-swap
+/// mutation: editing the components fires `Changed<TextColor>` /
+/// `Changed<TextDecorations>`, the § 6.2 re-emit gate the swap half
+/// exercises (the stringly theme HashMap is gone; the colors ride the
+/// components directly as `ColorToken::Custom`).
+fn apply_palette(app: &mut App, palette: &Palette) {
+    let mut q = app
+        .world_mut()
+        .query::<(&mut TextColor, &mut TextDecorations)>();
+    for (mut fg, mut deco) in q.iter_mut(app.world_mut()) {
+        fg.0 = ColorToken::Custom(palette.fg);
+        deco.color = Some(ColorToken::Custom(palette.deco));
+    }
 }
 
 /// Build app → the themed fixture under `palette` → drive to the first
 /// text-ready frame. Returns the still-live app + target so the swap half
-/// can mutate the tokens and recapture IN PLACE; [`capture_themed`] is the
+/// can mutate the colors and recapture IN PLACE; [`capture_themed`] is the
 /// cold-path wrapper that reads back once and drops the app.
 fn build_themed_app(palette: &Palette) -> (App, Handle<Image>) {
     let _cfg = GoldenConfig::deterministic(); // the triad gates this fixture
     let mut app = crate::support::gpu_render_app(THEME_W, THEME_H);
-    insert_palette(&mut app, palette);
     let text = app
         .world_mut()
         .spawn((
@@ -482,10 +480,10 @@ fn build_themed_app(palette: &Palette) -> (App, Handle<Image>) {
             Style::default(),
             Text(String::from("Theme")),
             FontSize(24.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(FG_TOKEN))),
+            TextColor(ColorToken::Custom(palette.fg)),
             TextDecorations {
                 line: DecorationLines::UNDERLINE,
-                color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
+                color: Some(ColorToken::Custom(palette.deco)),
                 ..default()
             },
         ))
@@ -589,11 +587,11 @@ fn themed_text_pair_and_swap_equivalence() {
     assert_underline_below_ink(&fresh_a, &palette_a());
     assert_underline_below_ink(&fresh_b, &palette_b());
 
-    // (c) swap-equals-cold: capture under A, mutate the tokens to B in the
-    // SAME app (`theme.is_changed()` → the § 6.2 re-emit gate), settle 3
-    // frames (the retint idiom), recapture. Same logical fixture, same
-    // fonts, only tokens moved — the live-swap path must land on the cold
-    // path's pixels.
+    // (c) swap-equals-cold: capture under A, recolor the fixture to B in the
+    // SAME app (`Changed<TextColor>`/`Changed<TextDecorations>` → the § 6.2
+    // re-emit gate), settle 3 frames (the retint idiom), recapture. Same
+    // logical fixture, same fonts, only the colors moved — the live-swap path
+    // must land on the cold path's pixels.
     let (mut app, target) = build_themed_app(&palette_a());
     let pre_swap = crate::support::readback_rgba(&mut app, target.clone());
     let pre_diff = perceptual_diff(&pre_swap, &fresh_a);
@@ -602,7 +600,7 @@ fn themed_text_pair_and_swap_equivalence() {
         "the swap app's pre-swap frame IS a fresh-A capture (the swap below \
          really starts from A's pixels): perceptual_diff = {pre_diff}"
     );
-    insert_palette(&mut app, &palette_b());
+    apply_palette(&mut app, &palette_b());
     for _ in 0..3 {
         app.update();
     }
@@ -610,7 +608,7 @@ fn themed_text_pair_and_swap_equivalence() {
     let swap_diff = perceptual_diff(&swapped, &fresh_b);
     assert!(
         swap_diff < 1e-4,
-        "the live token swap lands on the cold palette-B pixels: \
+        "the live color swap lands on the cold palette-B pixels: \
          perceptual_diff = {swap_diff}"
     );
 }
@@ -621,11 +619,10 @@ fn themed_text_pair_and_swap_equivalence() {
 /// pixel grid moves ("shape logical, rasterize physical").
 const VIEW_W: u32 = 128;
 const VIEW_H: u32 = 64;
-/// The fixture's text-color token (the `text_gpu` TOKEN idiom — a test token
-/// inserted into the theme): bright, so the brightest texel over the black
-/// clear IS the full-coverage ink encode assertion (d) probes.
-const VIEW_TOKEN: &str = "test.viewport.fg";
 
+/// The fixture's text color, carried inline as `ColorToken::Custom`: bright,
+/// so the brightest texel over the black clear IS the full-coverage ink
+/// encode assertion (d) probes.
 fn viewport_tint() -> Color {
     Color::srgba(0.10, 0.85, 0.30, 1.0)
 }
@@ -674,10 +671,6 @@ fn capture_viewport(scale: f32) -> (Vec<u8>, u32) {
         "physical size == logical × scale"
     );
 
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(VIEW_TOKEN.into(), viewport_tint());
-    }
     let text = app
         .world_mut()
         .spawn((
@@ -685,7 +678,7 @@ fn capture_viewport(scale: f32) -> (Vec<u8>, u32) {
             Style::default(),
             Text(String::from("Hi")),
             FontSize(20.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(VIEW_TOKEN))),
+            TextColor(ColorToken::Custom(viewport_tint())),
         ))
         .id();
     app.world_mut()

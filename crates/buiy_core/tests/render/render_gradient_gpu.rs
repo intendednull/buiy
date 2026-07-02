@@ -31,7 +31,6 @@ use buiy_core::render::components::{
     Background, BackgroundLayer, BackgroundLayers, ColorStop, LinearGradient, RadialGradient,
 };
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
-use std::borrow::Cow;
 
 use crate::support::px;
 
@@ -42,16 +41,12 @@ fn linear_gradient_paints_ac_to_ac2_top_left_to_bottom_right() {
     const H: u32 = 64;
     let mut app = capture_app(W, H);
     {
-        // The design's blue accent ramp: --ac = #5b86f5, --ac2 = #7fa1f7
-        // (values.md § 1.2). Both opaque (gradient stops are opaque per § 8).
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("color.accent".into(), Color::srgb_u8(0x5b, 0x86, 0xf5));
-        theme.colors.insert(
-            "color.accent.lighter".into(),
-            Color::srgb_u8(0x7f, 0xa1, 0xf7),
-        );
+        // The design's blue accent ramp lives in the dark palette: --ac = #5b86f5,
+        // --ac2 = #7fa1f7 (values.md § 1.2), both opaque (gradient stops are opaque
+        // per § 8). Install it so `ColorToken::Accent` / `AccentLighter` resolve to
+        // those exact values (the bare capture theme is the light palette).
+        *app.world_mut().resource_mut::<buiy_core::theme::Theme>() =
+            buiy_core::theme::default_dark_theme();
     }
 
     // A 48x48 gradient box at (8,8) → box spans [8,56). The design's
@@ -74,11 +69,11 @@ fn linear_gradient_paints_ac_to_ac2_top_left_to_bottom_right() {
                 angle_deg: 150.0,
                 stops: vec![
                     ColorStop {
-                        color: ColorToken::Token(Cow::Borrowed("color.accent")),
+                        color: ColorToken::Accent,
                         position: 0.0,
                     },
                     ColorStop {
-                        color: ColorToken::Token(Cow::Borrowed("color.accent.lighter")),
+                        color: ColorToken::AccentLighter,
                         position: 1.0,
                     },
                 ],
@@ -183,16 +178,10 @@ fn dotted_grid_paints_lit_dot_and_dark_gap_one_tile_apart() {
 
     let mut app = capture_app(W, H);
     {
-        // A2's dark tokens carry `color.surface.app` (#0b0c0e) + `color.misc.dot-bg`
-        // (#16181c); seed them so the tokens resolve (the bare capture theme does
-        // not load the full dark ramp).
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("color.surface.app".into(), Color::srgb_u8(0x0b, 0x0c, 0x0e));
-        theme
-            .colors
-            .insert("color.misc.dot-bg".into(), Color::srgb_u8(0x16, 0x18, 0x1c));
+        // A2's dark palette carries `SurfaceApp` (#0b0c0e) + `DotBg` (#16181c);
+        // install it so those tokens resolve (the bare capture theme is light).
+        *app.world_mut().resource_mut::<buiy_core::theme::Theme>() =
+            buiy_core::theme::default_dark_theme();
     }
 
     // A 66×66 box (3×3 tiles) at (8,8) → box spans [8,74). Solid app-bg fill UNDER
@@ -212,10 +201,10 @@ fn dotted_grid_paints_lit_dot_and_dark_gap_one_tile_apart() {
                 .width_px(66.0)
                 .height_px(66.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.app")),
+                color: ColorToken::SurfaceApp,
             },
             BackgroundLayers(vec![BackgroundLayer::Radial(RadialGradient::dot_grid(
-                ColorToken::Token(Cow::Borrowed("color.misc.dot-bg")),
+                ColorToken::DotBg,
                 1.0,
                 TILE,
             ))]),

@@ -214,14 +214,19 @@ mod tests {
 
     #[test]
     fn theme_axis_builds_distinct_themes() {
-        // Light has the brand surface token; forced-colors has the system map.
-        assert!(
-            ThemeAxis::Light
-                .build()
-                .color("color.surface.primary")
-                .is_some()
+        use buiy_core::render::color::{ColorToken, ThemeContract};
+        use buiy_core::theme::PaletteMode;
+        // Light builds the Normal (brand-palette) theme; forced-colors builds the
+        // system-color theme — they resolve the same semantic token differently.
+        let light = ThemeAxis::Light.build();
+        let forced = ThemeAxis::ForcedColors.build();
+        assert_eq!(light.mode, PaletteMode::Normal);
+        assert_eq!(forced.mode, PaletteMode::ForcedColors);
+        assert_ne!(
+            light.resolve(ColorToken::SurfacePrimary),
+            forced.resolve(ColorToken::SurfacePrimary),
+            "forced-colors maps the brand surface onto a system color"
         );
-        assert!(ThemeAxis::ForcedColors.build().color("Canvas").is_some());
         assert_eq!(ThemeAxis::Light.key(), "light");
         assert_eq!(ThemeAxis::ForcedColors.key(), "forced");
     }

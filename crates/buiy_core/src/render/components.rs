@@ -214,20 +214,18 @@ impl TextColor {
     /// selectable — it simply carries no CaretVisual/SelectionVisual; the
     /// editing campaign owns the when-empty swap.)
     pub fn placeholder() -> Self {
-        Self(ColorToken::Token(
-            crate::render::color::PLACEHOLDER_COLOR_TOKEN.into(),
-        ))
+        Self(ColorToken::TextPlaceholder)
     }
 }
 
 /// CSS `caret-color` (decoration-and-paint § 6.2; text.md:90–91, F): the
-/// explicit tier-1 override of the caret tint. Resolution order, applied
-/// by the glyph producer at extract (`resolve_caret_color`): this token →
-/// the `color.caret` theme key when the active theme carries one
-/// (presence-checked, never a magenta miss) → the entity's resolved
-/// foreground (`caret-color: auto` — CSS parity; the default theme
-/// deliberately ships NO `color.caret`). The value lands in the stamp's
-/// per-instance color: changing it is a re-tint, never an atlas mutation.
+/// explicit override of the caret tint. Resolution order, applied by the
+/// glyph producer at extract (`resolve_caret_color`): this token → the
+/// entity's resolved foreground (`caret-color: auto` — CSS parity; the
+/// default is `CurrentColor`). (Track B removed the old `color.caret`
+/// theme-key middle tier: the typed `ColorToken` has no stringly key and no
+/// theme seeded it.) The value lands in the stamp's per-instance color:
+/// changing it is a re-tint, never an atlas mutation.
 #[derive(Component, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Component, Default)]
 pub struct CaretColor(pub ColorToken);
@@ -235,11 +233,10 @@ pub struct CaretColor(pub ColorToken);
 impl Default for CaretColor {
     /// `caret-color: auto` — defer to the resolved foreground (mirroring
     /// `TextColor`'s `CurrentColor` default). The glyph producer's
-    /// `resolve_caret_color` walks token → `color.caret` theme key →
-    /// `CurrentColor` (the entity's resolved foreground), so the absent /
-    /// default `CaretColor` and an explicit `CaretColor(CurrentColor)` tint
-    /// the caret identically. NOT the derived `Transparent` default, which
-    /// would render the caret invisible.
+    /// `resolve_caret_color` walks token → `CurrentColor` (the entity's
+    /// resolved foreground), so the absent / default `CaretColor` and an
+    /// explicit `CaretColor(CurrentColor)` tint the caret identically. NOT
+    /// the derived `Transparent` default, which would render the caret invisible.
     fn default() -> Self {
         Self(ColorToken::CurrentColor)
     }
@@ -726,11 +723,11 @@ mod tests {
             angle_deg: 150.0,
             stops: vec![
                 ColorStop {
-                    color: ColorToken::Token("color.accent".into()),
+                    color: ColorToken::Accent,
                     position: 0.0,
                 },
                 ColorStop {
-                    color: ColorToken::Token("color.accent.lighter".into()),
+                    color: ColorToken::AccentLighter,
                     position: 1.0,
                 },
             ],
@@ -739,7 +736,7 @@ mod tests {
         assert_eq!(g.stops.len(), 2);
         assert_eq!(g.stops[0].position, 0.0);
         assert_eq!(g.stops[1].position, 1.0);
-        assert_eq!(g.stops[0].color, ColorToken::Token("color.accent".into()));
+        assert_eq!(g.stops[0].color, ColorToken::Accent);
     }
 
     #[test]
@@ -751,7 +748,7 @@ mod tests {
 
     #[test]
     fn background_layer_variants_are_distinct() {
-        let solid = BackgroundLayer::Solid(ColorToken::Token("a".into()));
+        let solid = BackgroundLayer::Solid(ColorToken::Custom(Color::srgb(0.1, 0.2, 0.3)));
         let linear = BackgroundLayer::Linear(LinearGradient::default());
         let radial = BackgroundLayer::Radial(RadialGradient::default());
         assert_ne!(solid, linear);

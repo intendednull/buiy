@@ -172,7 +172,6 @@ fn group_opacity_overlap_is_single_layer_at_half() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
     use buiy_core::render::compositor::composite_src_over;
-    use std::borrow::Cow;
 
     const W: u32 = 64;
     const H: u32 = 64;
@@ -180,10 +179,6 @@ fn group_opacity_overlap_is_single_layer_at_half() {
     let red = Color::srgb(0.9, 0.05, 0.05); // an OPAQUE red (alpha 1)
 
     let mut app = crate::support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.red".into(), red);
-    }
 
     let target = crate::support::render_to_image(&mut app, W, H);
     crate::support::spawn_capture_camera(&mut app, target.clone());
@@ -207,7 +202,7 @@ fn group_opacity_overlap_is_single_layer_at_half() {
                 .width_px(32.0)
                 .height_px(32.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.red")),
+                color: ColorToken::Custom(red),
             },
         )
     };
@@ -303,10 +298,11 @@ fn rt_pool_returns_to_baseline_after_idle() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
     use buiy_core::render::compositor::RtPoolStats;
-    use std::borrow::Cow;
 
     const W: u32 = 128;
     const H: u32 = 128;
+
+    let red = Color::srgb(0.9, 0.05, 0.05);
 
     let stats = |app: &App| -> RtPoolStats {
         *app.get_sub_app(RenderApp)
@@ -316,12 +312,6 @@ fn rt_pool_returns_to_baseline_after_idle() {
     };
 
     let mut app = crate::support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("test.red".into(), Color::srgb(0.9, 0.05, 0.05));
-    }
     let target = crate::support::render_to_image(&mut app, W, H);
     crate::support::spawn_capture_camera(&mut app, target);
 
@@ -341,7 +331,7 @@ fn rt_pool_returns_to_baseline_after_idle() {
                     .width_px(24.0)
                     .height_px(24.0),
                 Background {
-                    color: ColorToken::Token(Cow::Borrowed("test.red")),
+                    color: ColorToken::Custom(red),
                 },
             ))
             .id();

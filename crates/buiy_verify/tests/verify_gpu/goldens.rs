@@ -55,7 +55,6 @@ use buiy_verify::golden::{
 use buiy_verify::metric::{CompareOpts, FuzzBudget, compare};
 use buiy_verify::support::on_pinned_lavapipe;
 use image::{Rgba, RgbaImage};
-use std::borrow::Cow;
 
 /// The one pinned rasterizer cell today (CLAUDE.md: local RX 6700 XT / CI
 /// lavapipe both compare rasterizer-internally; the corpus is keyed `Lavapipe`
@@ -82,12 +81,6 @@ fn key(widget: &str, state: &str, theme: &str, viewport: &str, dpr: Dpr) -> Gold
 /// the irreducible residue Tier-5 owns (the CPU oracle cross-checks coverage but
 /// not the GPU's analytic rim pixels).
 fn rounded_rect(app: &mut App) {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("g.fill".into(), Color::srgb(0.20, 0.65, 0.90));
-    }
     let fill = app
         .world_mut()
         .spawn((
@@ -102,7 +95,7 @@ fn rounded_rect(app: &mut App) {
                 .width_px(36.0)
                 .height_px(28.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("g.fill")),
+                color: ColorToken::Custom(Color::srgb(0.20, 0.65, 0.90)),
             },
             // The rounded corners (SDF rim residue) live on `Border.radius`;
             // a zero-width border still rounds the background fill's clip.
@@ -120,12 +113,6 @@ fn rounded_rect(app: &mut App) {
 /// Ahem box-glyph text on black — the layout-determinism class: every glyph a
 /// solid em-square, so the capture is byte-identical across hosts.
 fn ahem_text(app: &mut App) {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("g.text".into(), Color::srgb(0.95, 0.40, 0.20));
-    }
     let text = app
         .world_mut()
         .spawn((
@@ -134,7 +121,7 @@ fn ahem_text(app: &mut App) {
             Text(String::from("Hi")),
             FontFamily(FontStack(vec![FamilyEntry::Named(String::from("Ahem"))])),
             FontSize(24.0),
-            TextColor(ColorToken::Token(Cow::Borrowed("g.text"))),
+            TextColor(ColorToken::Custom(Color::srgb(0.95, 0.40, 0.20))),
         ))
         .id();
     app.world_mut()
@@ -339,15 +326,6 @@ fn golden_sdf_corner() {
 /// clear in the bottom-right region the box does not cover — the residue this
 /// golden owns. Mirrors `render_border_shadow_gpu`'s fixture geometry.
 fn box_shadow(app: &mut App) {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("g.sh.fill".into(), Color::srgb(0.85, 0.85, 0.85));
-        theme
-            .colors
-            .insert("g.sh.shadow".into(), Color::srgba(0.20, 0.55, 0.95, 0.95));
-    }
     let widget = app
         .world_mut()
         .spawn((
@@ -362,10 +340,10 @@ fn box_shadow(app: &mut App) {
                 .width_px(24.0)
                 .height_px(24.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("g.sh.fill")),
+                color: ColorToken::Custom(Color::srgb(0.85, 0.85, 0.85)),
             },
             BoxShadow(vec![Shadow {
-                color: ColorToken::Token(Cow::Borrowed("g.sh.shadow")),
+                color: ColorToken::Custom(Color::srgba(0.20, 0.55, 0.95, 0.95)),
                 offset_x: Length::px(12.0),
                 offset_y: Length::px(12.0),
                 blur: Length::px(6.0),

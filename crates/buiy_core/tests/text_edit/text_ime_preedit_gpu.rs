@@ -6,10 +6,17 @@
 //! spec § 12). The real-IME-per-platform matrix (CJK + dead keys) is named
 //! CI-impossible (§ 12) — this golden proves the PAINT path, not winit IME.
 //!
-//! The assertion is that a distinct preedit-underline color band appears under
-//! the composing glyphs: a chroma-distinct `color.text.preedit-underline` theme
-//! token (blue) over white glyph ink makes the strip detectable — the E3 golden's
-//! white-ink/red-caret classifier idiom (text_caret_selection_e3_gpu.rs).
+//! TRACK B NOTE: the preedit underline is no longer independently themeable.
+//! `resolve_preedit_underline` now always returns `currentColor` (the closed
+//! `ColorToken` vocabulary carries no preedit token — spec decision 5), so the
+//! composing text is underlined in its OWN ink. The former assertion — a
+//! chroma-distinct blue underline strip over white glyph ink, keyed off an
+//! injected `color.text.preedit-underline` token — is therefore no longer
+//! expressible (the strip is the same color as the glyphs it sits under). This
+//! golden is reduced to proving the IME paint spine RUNS end-to-end (composing
+//! ink appears + the capture is deterministic); re-establishing a dedicated
+//! underline-presence proof would need a row-band / baseline-subtraction rewrite
+//! on a GPU host (see the flag in the migration report).
 //!
 //! Run: cargo test -p buiy_core --test text_ime_preedit_gpu -- --ignored --test-threads=1
 
@@ -21,7 +28,7 @@
 use bevy::prelude::*;
 use bevy::window::Ime;
 use buiy_core::layout::Style;
-use buiy_core::render::color::PREEDIT_UNDERLINE_TOKEN;
+use buiy_core::render::ColorToken;
 use buiy_core::render::golden::perceptual_diff;
 use buiy_core::text::edit::TextEditState;
 use buiy_core::text::{FontSize, Text};
@@ -30,22 +37,10 @@ use cosmic_text::Metrics;
 
 const W: u32 = 256;
 const H: u32 = 64;
-/// Glyph tint: white — chroma-orthogonal to the blue preedit underline.
-const TEXT_TOKEN: &str = "test.text";
 
-fn underline_blue() -> Color {
-    Color::srgb(0.0, 0.2, 1.0)
-}
+// --- pixel classifiers -------------------------------------------------------
 
 // --- pixel classifiers (the E3 golden's composite math) ---------------------
-
-/// Strong blue — the preedit underline strip (alpha 1, hard-edged quad). The
-/// blue channel dominates (lit) while red is suppressed, so this rejects both
-/// the white glyph ink and the opaque-black clear. `channel_lit` (V19)
-/// robustifies the "blue is lit" half across adapters.
-fn is_strong_blue(p: [u8; 4]) -> bool {
-    crate::support::channel_lit(p[2]) && p[0] <= 80 && p[1] <= 140
-}
 
 /// Unselected white glyph ink over black: an achromatic pixel with all three
 /// channels lit above the black clear (red lit rejects the blue underline strip,
@@ -87,16 +82,9 @@ fn capture() -> Vec<u8> {
     // (text_caret_selection_e3_gpu.rs:121).
     crate::support::finish_and_run(&mut app, 0);
 
-    // Chroma-distinct tokens: white ink, blue preedit underline — so the strip is
-    // separable from the glyph ink (the E3 white-ink/red-caret idiom).
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme
-            .colors
-            .insert(PREEDIT_UNDERLINE_TOKEN.into(), underline_blue());
-    }
-
+    // Track B: white glyph ink via a `Custom` tint (the former `test.text`
+    // injection). The preedit underline is NOT separately colored — it now
+    // resolves to `currentColor` (this same white); see the module note.
     let editor = app
         .world_mut()
         .spawn((
@@ -104,9 +92,7 @@ fn capture() -> Vec<u8> {
             Style::default().width_px(240.0).height_px(48.0),
             Text("ab".to_string()),
             FontSize(24.0), // tuple struct (components.rs:97) — no `::px` ctor (m1)
-            buiy_core::render::components::TextColor(buiy_core::render::ColorToken::Token(
-                std::borrow::Cow::Borrowed(TEXT_TOKEN),
-            )),
+            buiy_core::render::components::TextColor(ColorToken::Custom(Color::WHITE)),
             TextEditState::new(Metrics::new(24.0, 28.8)),
         ))
         .id();
@@ -140,25 +126,16 @@ fn capture() -> Vec<u8> {
 fn preedit_underline_paints_over_the_composing_span() {
     let frame = capture();
 
-    // The composing "ni" renders white glyph ink…
+    // The full IME paint spine ran: the composing "ni" renders glyph ink (the
+    // underline sits beneath it in the SAME currentColor ink — Track B removed
+    // the independent preedit-underline color, so it can no longer be chroma-
+    // isolated from the glyphs; see the module note).
     let white_cols: Vec<u32> = (0..W)
         .filter(|&x| (0..H).any(|y| is_white_ink(crate::support::px(&frame, W, x, y))))
         .collect();
     assert!(
         !white_cols.is_empty(),
-        "the composing field renders glyph ink"
-    );
-
-    // …with a chroma-distinct blue preedit underline strip beneath it (the seat
-    // E5 projects from the live composition). The strip is a thin band, so a
-    // presence count is the right assertion (not a column-band shape).
-    let blue_px = frame
-        .chunks_exact(4)
-        .filter(|p| is_strong_blue([p[0], p[1], p[2], p[3]]))
-        .count();
-    assert!(
-        blue_px > 0,
-        "the preedit underline paints a chroma-distinct strip under the composing span"
+        "the composing field renders glyph ink (the IME splice→reshape→project→paint spine ran)"
     );
 
     // Re-capture determinism (the hello_text idiom): an independent fresh capture

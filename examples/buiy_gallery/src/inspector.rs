@@ -48,6 +48,7 @@ use buiy::prelude::*;
 use buiy_core::BuiySet;
 use buiy_core::a11y::{A11yLabel, A11yToggled, Toggled};
 use buiy_core::interaction::OnPress;
+use buiy_core::render::color::ThemeContract;
 use buiy_core::render::components::{BoxShadow, LineStyle, Shadow, TextColor};
 use buiy_core::text::{FamilyEntry, FontStack, LetterSpacing, LineHeight, Text};
 use buiy_core::theme::Theme;
@@ -64,11 +65,6 @@ use crate::{
 // so the inspector module stays independently buildable).
 // ===========================================================================
 
-/// A `ColorToken::Token` from a `&str` key (every paint is a named dark token).
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
-}
-
 /// The Geist sans font stack (authored by name — the sans generic resolves to
 /// Fira, Wave A note).
 fn geist() -> FontFamily {
@@ -80,10 +76,10 @@ fn geist_mono() -> FontFamily {
     FontFamily(FontStack(vec![FamilyEntry::Named("Geist Mono".into())]))
 }
 
-/// A solid 1px `BorderSide` of a token color.
-fn solid_side(token: &str) -> BorderSide {
+/// A solid 1px `BorderSide` of a [`ColorToken`] color.
+fn solid_side(token: ColorToken) -> BorderSide {
     BorderSide {
-        color: tok(token),
+        color: token,
         style: LineStyle::Solid,
     }
 }
@@ -126,7 +122,7 @@ fn text_leaf(
 /// token (the design's `META.widgets` `[name, hex]` pairs).
 struct WidgetChip {
     name: &'static str,
-    dot: &'static str,
+    dot: ColorToken,
 }
 
 /// The inspector description for a screen (the design's `META.desc`, JS 541–545).
@@ -151,99 +147,99 @@ fn inspector_widgets(screen: Screen) -> &'static [WidgetChip] {
         Screen::Todo => &[
             WidgetChip {
                 name: "Stack",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
             WidgetChip {
                 name: "TextInput",
-                dot: "color.status.warn",
+                dot: ColorToken::StatusWarn,
             },
             WidgetChip {
                 name: "Checkbox",
-                dot: "color.status.ok",
+                dot: ColorToken::StatusOk,
             },
             WidgetChip {
                 name: "Button",
-                dot: "color.status.ok",
+                dot: ColorToken::StatusOk,
             },
             WidgetChip {
                 name: "List",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
         ],
         Screen::Scroll => &[
             WidgetChip {
                 name: "ScrollView",
-                dot: "color.status.error",
+                dot: ColorToken::StatusError,
             },
             WidgetChip {
                 name: "Row",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
             WidgetChip {
                 name: "Text",
-                dot: "color.text.muted",
+                dot: ColorToken::TextMuted,
             },
             WidgetChip {
                 name: "Badge",
-                dot: "color.status.ok",
+                dot: ColorToken::StatusOk,
             },
         ],
         Screen::Menu => &[
             WidgetChip {
                 name: "Popover",
-                dot: "color.accent.violet",
+                dot: ColorToken::AccentViolet,
             },
             WidgetChip {
                 name: "MenuItem",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
             WidgetChip {
                 name: "Divider",
-                dot: "color.text.dim",
+                dot: ColorToken::TextDim,
             },
             WidgetChip {
                 name: "Icon",
-                dot: "color.status.ok",
+                dot: ColorToken::StatusOk,
             },
         ],
         Screen::Modal => &[
             WidgetChip {
                 name: "Dialog",
-                dot: "color.accent.violet",
+                dot: ColorToken::AccentViolet,
             },
             WidgetChip {
                 name: "Backdrop",
-                dot: "color.text.dim",
+                dot: ColorToken::TextDim,
             },
             WidgetChip {
                 name: "Segmented",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
             WidgetChip {
                 name: "Switch",
-                dot: "color.status.ok",
+                dot: ColorToken::StatusOk,
             },
         ],
         Screen::Showcase => &[
             WidgetChip {
                 name: "Switch",
-                dot: "color.status.ok",
+                dot: ColorToken::StatusOk,
             },
             WidgetChip {
                 name: "Slider",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
             WidgetChip {
                 name: "Segmented",
-                dot: "color.accent.blue",
+                dot: ColorToken::AccentBlue,
             },
             WidgetChip {
                 name: "Stepper",
-                dot: "color.status.warn",
+                dot: ColorToken::StatusWarn,
             },
             WidgetChip {
                 name: "Disclosure",
-                dot: "color.accent.violet",
+                dot: ColorToken::AccentViolet,
             },
         ],
     }
@@ -258,7 +254,7 @@ fn inspector_widgets(screen: Screen) -> &'static [WidgetChip] {
 /// `Color` a press writes via `SetAccent` (the swap re-seeds the ramp); the token
 /// resolves the bg fill so the swatch matches the live theme.
 struct AccentOption {
-    token: &'static str,
+    token: ColorToken,
     name: &'static str,
     color: Color,
 }
@@ -267,22 +263,22 @@ struct AccentOption {
 /// Blue / Green / Violet / Coral (values.md § 1.1 `accent.*`).
 const ACCENTS: &[AccentOption] = &[
     AccentOption {
-        token: "color.accent.blue",
+        token: ColorToken::AccentBlue,
         name: "Blue",
         color: Color::srgb_u8(0x5b, 0x86, 0xf5),
     },
     AccentOption {
-        token: "color.accent.green",
+        token: ColorToken::AccentGreen,
         name: "Green",
         color: Color::srgb_u8(0x45, 0xc0, 0x7d),
     },
     AccentOption {
-        token: "color.accent.violet",
+        token: ColorToken::AccentViolet,
         name: "Violet",
         color: Color::srgb_u8(0xb9, 0x8a, 0xff),
     },
     AccentOption {
-        token: "color.accent.coral",
+        token: ColorToken::AccentCoral,
         name: "Coral",
         color: Color::srgb_u8(0xf0, 0x65, 0x5b),
     },
@@ -365,7 +361,7 @@ fn section(world: &mut World, name: &str, divider: bool) -> Entity {
     let mut e = world.spawn((Node, Name::new(name.to_string()), style));
     if divider {
         e.insert(Border {
-            bottom: solid_side("color.border.subtle"),
+            bottom: solid_side(ColorToken::BorderSubtle),
             ..Default::default()
         });
     }
@@ -383,7 +379,7 @@ fn section_heading(world: &mut World, name: &str, s: &str) -> Entity {
         geist_mono(),
         10.0,
         500,
-        tok("color.text.dim"),
+        ColorToken::TextDim,
         Some(1.20),
     );
     world.entity_mut(e).insert(BoxModel {
@@ -408,7 +404,7 @@ fn build_name_desc_section(world: &mut World) -> Entity {
         geist(),
         14.0,
         600,
-        tok("color.text.primary"),
+        ColorToken::TextPrimary,
         None,
     );
     world.entity_mut(name).insert((
@@ -429,7 +425,7 @@ fn build_name_desc_section(world: &mut World) -> Entity {
         geist_mono(),
         11.5,
         400,
-        tok("color.text.faint"),
+        ColorToken::TextFaint,
         None,
     );
     world
@@ -455,7 +451,7 @@ fn build_name_desc_section(world: &mut World) -> Entity {
                     left: Length::px(0.0),
                 }),
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -539,13 +535,13 @@ fn build_swatch(world: &mut World, accent: &AccentOption) -> Entity {
             Name::new(format!("#AccentSwatch-{}", accent.name)),
             Style::default().width_px(30.0).height_px(30.0).border(2.0),
             Background {
-                color: tok(accent.token),
+                color: accent.token,
             },
             Border {
-                top: solid_side("color.border.default"),
-                right: solid_side("color.border.default"),
-                bottom: solid_side("color.border.default"),
-                left: solid_side("color.border.default"),
+                top: solid_side(ColorToken::BorderDefault),
+                right: solid_side(ColorToken::BorderDefault),
+                bottom: solid_side(ColorToken::BorderDefault),
+                left: solid_side(ColorToken::BorderDefault),
                 radius: Corners::all(Radius::circular(8.0)),
             },
         ))
@@ -628,11 +624,11 @@ fn live_state_keys(screen: Screen) -> &'static [&'static str] {
 /// `ac` (the live accent) → color.accent.
 struct LiveCell {
     value: String,
-    color: &'static str,
+    color: ColorToken,
 }
 
 impl LiveCell {
-    fn new(value: impl Into<String>, color: &'static str) -> Self {
+    fn new(value: impl Into<String>, color: ColorToken) -> Self {
         Self {
             value: value.into(),
             color,
@@ -661,7 +657,7 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
             vec![
                 (
                     "total",
-                    LiveCell::new(total.to_string(), "color.text.secondary"),
+                    LiveCell::new(total.to_string(), ColorToken::TextSecondary),
                 ),
                 (
                     "remaining",
@@ -670,17 +666,17 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
                     LiveCell::new(
                         remaining.to_string(),
                         if remaining > 0 {
-                            "color.accent"
+                            ColorToken::Accent
                         } else {
-                            "color.status.ok"
+                            ColorToken::StatusOk
                         },
                     ),
                 ),
                 (
                     "completed",
-                    LiveCell::new(completed.to_string(), "color.status.ok"),
+                    LiveCell::new(completed.to_string(), ColorToken::StatusOk),
                 ),
-                ("filter", LiveCell::new(filter, "color.text.secondary")),
+                ("filter", LiveCell::new(filter, ColorToken::TextSecondary)),
             ]
         }
         Screen::Scroll => {
@@ -696,22 +692,22 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
             vec![
                 (
                     "nodes",
-                    LiveCell::new(format_thousands(filtered), "color.text.secondary"),
+                    LiveCell::new(format_thousands(filtered), ColorToken::TextSecondary),
                 ),
                 (
                     "mounted",
-                    LiveCell::new(windowed.to_string(), "color.accent"),
+                    LiveCell::new(windowed.to_string(), ColorToken::Accent),
                 ),
                 // Our scroll is real-overflow (every matching row mounts, paint/
                 // layout-skipped off-screen — NOT DOM windowing), so the visible
                 // "window" is the whole filtered set: report "all".
-                ("window", LiveCell::new("all", "color.text.secondary")),
+                ("window", LiveCell::new("all", ColorToken::TextSecondary)),
                 match selected {
                     Some(i) => (
                         "selected",
-                        LiveCell::new(format!("#{i:04}"), "color.accent"),
+                        LiveCell::new(format!("#{i:04}"), ColorToken::Accent),
                     ),
-                    None => ("selected", LiveCell::new("none", "color.text.dim")),
+                    None => ("selected", LiveCell::new("none", ColorToken::TextDim)),
                 },
             ]
         }
@@ -729,16 +725,16 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
                     LiveCell::new(
                         if open { "true" } else { "false" },
                         if open {
-                            "color.accent"
+                            ColorToken::Accent
                         } else {
-                            "color.text.dim"
+                            ColorToken::TextDim
                         },
                     ),
                 ),
-                ("items", LiveCell::new("5", "color.text.secondary")),
+                ("items", LiveCell::new("5", ColorToken::TextSecondary)),
                 match last {
-                    Some(action) => ("last action", LiveCell::new(action, "color.accent")),
-                    None => ("last action", LiveCell::new("—", "color.text.dim")),
+                    Some(action) => ("last action", LiveCell::new(action, ColorToken::Accent)),
+                    None => ("last action", LiveCell::new("—", ColorToken::TextDim)),
                 },
             ]
         }
@@ -746,16 +742,16 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
             // The dialog open/mode is owned by the C5-d overlay lifecycle; at rest
             // the inspector reports the resting (closed / create) state.
             vec![
-                ("open", LiveCell::new("false", "color.text.dim")),
-                ("mode", LiveCell::new("create", "color.text.secondary")),
-                ("focus trap", LiveCell::new("idle", "color.text.dim")),
+                ("open", LiveCell::new("false", ColorToken::TextDim)),
+                ("mode", LiveCell::new("create", ColorToken::TextSecondary)),
+                ("focus trap", LiveCell::new("idle", ColorToken::TextDim)),
                 // The design uses `∅` (U+2205) for the empty-name cell and leans
                 // on the browser's font fallback; Buiy's registered-only font
                 // system (Geist / Geist Mono / Fira) carries no `∅`, so the
                 // literal tofus (finding M4). Use this inspector's OWN established
                 // empty-value glyph `—` (em-dash, dim — same as the "last action"
                 // None cell above), which Geist renders, preserving the meaning.
-                ("name", LiveCell::new("—", "color.text.dim")),
+                ("name", LiveCell::new("—", ColorToken::TextDim)),
             ]
         }
         Screen::Showcase => {
@@ -770,24 +766,24 @@ fn compute_live_state(world: &mut World, screen: Screen) -> Vec<(&'static str, L
                     LiveCell::new(
                         if wireframe { "on" } else { "off" },
                         if wireframe {
-                            "color.accent"
+                            ColorToken::Accent
                         } else {
-                            "color.text.dim"
+                            ColorToken::TextDim
                         },
                     ),
                 ),
                 (
                     "radius",
-                    LiveCell::new(format!("{radius}px"), "color.text.secondary"),
+                    LiveCell::new(format!("{radius}px"), ColorToken::TextSecondary),
                 ),
-                ("density", LiveCell::new(density, "color.text.secondary")),
+                ("density", LiveCell::new(density, ColorToken::TextSecondary)),
                 (
                     "count",
-                    LiveCell::new(count.to_string(), "color.text.secondary"),
+                    LiveCell::new(count.to_string(), ColorToken::TextSecondary),
                 ),
                 (
                     "build",
-                    LiveCell::new(format!("{build}%"), "color.text.secondary"),
+                    LiveCell::new(format!("{build}%"), ColorToken::TextSecondary),
                 ),
             ]
         }
@@ -907,9 +903,9 @@ fn showcase_density(world: &mut World) -> String {
     // The accent-filled option's first child is its label leaf (the selected one).
     let label_leaf: Option<Entity> = options.into_iter().find_map(|opt| {
         let is_option = world.get::<SegmentedOption>(opt).is_some();
-        let is_accent = world.get::<Background>(opt).is_some_and(
-            |bg| matches!(&bg.color, ColorToken::Token(t) if t.as_ref() == "color.accent"),
-        );
+        let is_accent = world
+            .get::<Background>(opt)
+            .is_some_and(|bg| matches!(bg.color, ColorToken::Accent));
         if is_option && is_accent {
             world
                 .get::<Children>(opt)
@@ -984,7 +980,7 @@ fn update_live_state_values(world: &mut World, screen: Screen) {
         {
             text.0 = cell.value.clone();
         }
-        let want = tok(cell.color);
+        let want = cell.color;
         if let Some(mut color) = world.get_mut::<TextColor>(leaf)
             && color.0 != want
         {
@@ -1036,9 +1032,10 @@ pub fn reflect_accent_selection(world: &mut World) {
     let Some(theme) = world.get_resource::<Theme>() else {
         return;
     };
-    let Some(active) = theme.color("color.accent") else {
-        return;
-    };
+    // The live accent base resolves through the typed `ThemeContract` (the
+    // string-keyed `theme.color(ColorToken::Accent)` HashMap lookup is gone); every
+    // token resolves, so there is no missing-color early-return anymore.
+    let active = theme.resolve(ColorToken::Accent);
     let swatches: Vec<(Entity, Color)> = {
         let mut q = world.query::<(Entity, &AccentSwatch)>();
         q.iter(world).map(|(e, s)| (e, s.0)).collect()
@@ -1073,9 +1070,9 @@ fn colors_match(a: Color, b: Color) -> bool {
 /// (`rgba(0,0,0,.4)` — the same alpha the design's ring uses).
 fn set_swatch_selected(world: &mut World, swatch: Entity, selected: bool) {
     let side = if selected {
-        solid_side("color.text.primary")
+        solid_side(ColorToken::TextPrimary)
     } else {
-        solid_side("color.border.default")
+        solid_side(ColorToken::BorderDefault)
     };
     if let Some(mut border) = world.get_mut::<Border>(swatch) {
         border.top = side.clone();
@@ -1088,7 +1085,7 @@ fn set_swatch_selected(world: &mut World, swatch: Entity, selected: bool) {
         // a colored drop using the (selected = current accent) hex.
         world.entity_mut(swatch).insert(BoxShadow(vec![
             Shadow {
-                color: tok("color.shadow.switch-thumb"),
+                color: ColorToken::ShadowSwitchThumb,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(0.0),
                 blur: Length::px(0.0),
@@ -1096,7 +1093,7 @@ fn set_swatch_selected(world: &mut World, swatch: Entity, selected: bool) {
                 inset: false,
             },
             Shadow {
-                color: tok("color.accent"),
+                color: ColorToken::Accent,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(4.0),
                 blur: Length::px(12.0),

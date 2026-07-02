@@ -18,10 +18,8 @@ use bevy::prelude::*;
 use buiy_core::components::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::ColorToken;
-use buiy_core::render::color::FOCUS_RING_TOKEN;
 use buiy_core::render::components::{Background, LineStyle, Outline};
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
-use std::borrow::Cow;
 
 use crate::support::px;
 
@@ -31,14 +29,10 @@ fn outline_band_paints_a_ring_outside_the_fill_box() {
     const W: u32 = 64;
     const H: u32 = 64;
     let mut app = capture_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        // A distinct fill (red) so the fill box and the ring (Highlight = the
-        // default theme's blue) are unambiguously different colors in readback.
-        theme
-            .colors
-            .insert("test.fill".into(), Color::srgb(0.90, 0.10, 0.10));
-    }
+    // A distinct fill (red) so the fill box and the ring (the default theme's
+    // blue focus ring) are unambiguously different colors in readback. Carried
+    // inline as `Custom` (Track B: the test-injection theme HashMap is gone).
+    let fill_color = Color::srgb(0.90, 0.10, 0.10);
 
     // A 24x24 fill box at (20,20). The Outline is 2px wide, 2px offset → the ring
     // occupies the 4px gap from the border box outward: x in [16,20) is the ring
@@ -57,14 +51,14 @@ fn outline_band_paints_a_ring_outside_the_fill_box() {
                 .width_px(24.0)
                 .height_px(24.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.fill")),
+                color: ColorToken::Custom(fill_color),
             },
-            // The framework focus-ring SHAPE (`color.focus.ring`, Solid, 2px, 2px
+            // The framework focus-ring SHAPE (`FocusRing`, Solid, 2px, 2px
             // offset). Painted directly here to isolate the render channel; the
             // `lower_focus_ring` lowering that inserts this exact `Outline` is
             // covered headless.
             Outline {
-                color: ColorToken::Token(Cow::Borrowed(FOCUS_RING_TOKEN)),
+                color: ColorToken::FocusRing,
                 style: LineStyle::Solid,
                 width: Length::px(2.0),
                 offset: Length::px(2.0),

@@ -41,7 +41,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
     text::{FontSize, Text, TextAlign},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for the tooltip-trigger + tooltip glyphs (logical px).
 pub(crate) const TOOLTIP_FONT_SIZE: f32 = 14.0;
@@ -109,7 +108,7 @@ pub(crate) fn tooltip_trigger_box_model() -> BoxModel {
 /// The default tooltip-trigger fill (the `color.surface.secondary` token).
 pub(crate) fn tooltip_trigger_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 
@@ -129,7 +128,7 @@ pub(crate) fn tooltip_box_model() -> BoxModel {
 /// The tooltip popup fill (the `color.surface.primary` token — a distinct bubble).
 pub(crate) fn tooltip_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 
