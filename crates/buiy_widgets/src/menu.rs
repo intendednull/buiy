@@ -1036,6 +1036,6 @@ pub fn menu_keyboard_nav(world: &mut World) {
 /// harness without the model registered).
 fn enqueue_menu(world: &mut World, menu: Entity, msg: MenuMsg) {
     if let Some(mut messages) = world.get_resource_mut::<Messages<Envelope<MenuModel>>>() {
-        messages.write(Envelope { target: menu, msg });
+        messages.write(Envelope::user(menu, msg));
     }
 }

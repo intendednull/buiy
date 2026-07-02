@@ -91,9 +91,13 @@ use bevy::ecs::system::{StaticSystemParam, SystemParam, SystemParamItem};
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
 use bevy::reflect::{FromReflect, GetTypeRegistration, TypePath, TypeRegistry};
+use bevy::tasks::{
+    AsyncComputeTaskPool, BoxedFuture, ConditionalSend, Task, block_on, futures_lite::future,
+};
 use serde::de::DeserializeSeed;
 use std::any::TypeId;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use crate::BuiySet;
 
@@ -140,9 +144,29 @@ pub trait Model:
 /// reader** — that read is the determinism/record tap. Generic per model type, so the
 /// one-Msg-type ↔ one-Model-type invariant is structural (5000 buttons of one kind share one
 /// inbox + one drain; the drain is `O(messages/frame)`, never `O(instances)` — SYNTHESIS SCALE).
+///
+/// Carries the message's [`Origin`] so the drain records the correct provenance without a
+/// second inbox: [`enqueue`] stamps [`Origin::User`], and the async-task poll
+/// (`poll_pending_tasks`) stamps [`Origin::Command`] via [`enqueue_with_origin`]. The drain
+/// reads `origin` off the envelope instead of hardcoding `User` (buiy_view design §3 #15).
 pub struct Envelope<M: Model> {
     pub target: Entity,
     pub msg: M::Msg,
+    /// The provenance of this message (`User` for a real [`enqueue`]; `Command` for an async
+    /// task result). Drain-visible so the record tap logs the right [`Origin`].
+    pub origin: Origin,
+}
+
+impl<M: Model> Envelope<M> {
+    /// A user-originated envelope — the common case (a real external message). The `origin`
+    /// convenience most call sites want; the drain stamps its fold [`Origin::User`].
+    pub fn user(target: Entity, msg: M::Msg) -> Self {
+        Envelope {
+            target,
+            msg,
+            origin: Origin::User,
+        }
+    }
 }
 
 // Manual impls: deriving on a generic-over-`Model` struct would demand `M: Message`/`M: Clone`,
@@ -153,6 +177,7 @@ impl<M: Model> Clone for Envelope<M> {
         Envelope {
             target: self.target,
             msg: self.msg.clone(),
+            origin: self.origin,
         }
     }
 }
@@ -160,9 +185,11 @@ impl<M: Model> Clone for Envelope<M> {
 /// Effects-as-values. The reducer returns these; **only the drain applies them**, so the
 /// reducer itself stays pure.
 ///
-/// **v1 keeps `None`/`Emit`/`Batch` ONLY.** `task` (async), the keyed `Subscription`, and
-/// dead-letter routing are roadmap concerns (spec §8); adding them now would be
-/// scope creep on the substrate.
+/// `None`/`Emit`/`Batch` are the synchronous, run-to-completion effects the drain applies
+/// inline. [`Task`](Cmd::Task) is the ONE async escape hatch (buiy_view §3 #15): a boxed
+/// future the drain spawns on `AsyncComputeTaskPool` without blocking; its result folds back
+/// through the funnel stamped [`Origin::Command`] (see `poll_pending_tasks`). The keyed
+/// `Subscription` and dead-letter routing remain roadmap concerns (MVU spec §8).
 pub enum Cmd<Msg> {
     /// Do nothing.
     None,
@@ -171,6 +198,14 @@ pub enum Cmd<Msg> {
     Emit(Msg),
     /// Apply several commands in order.
     Batch(Vec<Cmd<Msg>>),
+    /// **Async-as-a-value.** A boxed future the drain spawns on `AsyncComputeTaskPool` (it does
+    /// NOT block); on completion its `Msg` is enqueued back onto the same actor stamped
+    /// [`Origin::Command`]. Construct with [`Cmd::task`] — never by hand — so the result is
+    /// mapped into `Msg`. Under replay the launch is **suppressed** and the recorded result is
+    /// re-folded instead (the effect is not re-run — buiy_view design §3 #15). Uses bevy's
+    /// [`BoxedFuture`], which is `Send` on native and `?Send` on wasm, so the surface is
+    /// wasm-clean.
+    Task(BoxedFuture<'static, Msg>),
 }
 
 impl<Msg> Cmd<Msg> {
@@ -179,6 +214,66 @@ impl<Msg> Cmd<Msg> {
     }
     pub fn emit(msg: Msg) -> Self {
         Cmd::Emit(msg)
+    }
+
+    /// Launch `future` as an async effect and fold its result back through the funnel as
+    /// `map(result)` — the ergonomic constructor for [`Cmd::Task`]. The drain spawns it on
+    /// `AsyncComputeTaskPool` (no blocking); when it completes, `map(result)` is enqueued onto
+    /// the same actor stamped [`Origin::Command`] and re-folded on the next drain.
+    ///
+    /// Bounds are `ConditionalSend` (bevy's cfg-gated `Send` — required on native for the task
+    /// pool, dropped on wasm), so a wasm future that isn't `Send` still compiles.
+    ///
+    /// ```ignore
+    /// fn update(m: &mut MyModel, msg: Msg) -> Cmd<Msg> {
+    ///     match msg {
+    ///         Msg::Load => Cmd::task(async { fetch_rows().await }, Msg::Loaded),
+    ///         Msg::Loaded(rows) => { m.rows = rows; Cmd::none() }
+    ///     }
+    /// }
+    /// ```
+    pub fn task<R, Fut, F>(future: Fut, map: F) -> Self
+    where
+        Msg: 'static,
+        Fut: std::future::Future<Output = R> + ConditionalSend + 'static,
+        F: FnOnce(R) -> Msg + ConditionalSend + 'static,
+        R: 'static,
+    {
+        Cmd::Task(Box::pin(async move { map(future.await) }))
+    }
+
+    /// Re-tag every message this command carries from `Msg` into a parent `Parent` — the
+    /// effect-side companion to `Element::map`, completing message-lifting for effect-emitting
+    /// child components (buiy_view design §3 #15). Applied **eagerly** (not a stored variant, so
+    /// `Cmd` keeps its single type parameter): `None→None`, `Emit(m)→Emit(f(m))`, `Batch`
+    /// recurses, and `Task(fut)→Task(async { f(fut.await) })`.
+    ///
+    /// A parent reducer delegating to a child reducer lifts the returned command:
+    /// `child_update(&mut m.child, cm).map(Msg::Child)`.
+    pub fn map<Parent, F>(self, f: F) -> Cmd<Parent>
+    where
+        Msg: 'static,
+        Parent: 'static,
+        F: Fn(Msg) -> Parent + ConditionalSend + Sync + 'static,
+    {
+        map_cmd(self, Arc::new(f))
+    }
+}
+
+/// The `Arc`-shared recursion behind [`Cmd::map`]: `Arc<F>` is cheaply cloneable for the
+/// `Batch` children and movable into the `Task` async closure (which needs an owned,
+/// `ConditionalSend` mapper).
+fn map_cmd<Msg, Parent, F>(cmd: Cmd<Msg>, f: Arc<F>) -> Cmd<Parent>
+where
+    Msg: 'static,
+    Parent: 'static,
+    F: Fn(Msg) -> Parent + ConditionalSend + Sync + 'static,
+{
+    match cmd {
+        Cmd::None => Cmd::None,
+        Cmd::Emit(m) => Cmd::Emit(f(m)),
+        Cmd::Batch(v) => Cmd::Batch(v.into_iter().map(|c| map_cmd(c, f.clone())).collect()),
+        Cmd::Task(fut) => Cmd::Task(Box::pin(async move { f(fut.await) })),
     }
 }
 
@@ -197,23 +292,25 @@ impl LogicalId {
 }
 
 /// The provenance of a recorded fold — **baked into the v1 log format** (spec §7.2 /
-/// D14) so the §8 roadmap can filter and replay by source without a format break.
+/// D14) so record/replay can filter and replay by source without a format break.
 ///
-/// The drain stamps two of the four:
+/// The drain now stamps three of the four:
 /// - [`Origin::User`] — the fold came from the inbox (a real [`enqueue`]).
 /// - [`Origin::Folded`] — the fold came from a [`Cmd::Emit`] re-fold within the same
 ///   drain pass (the deterministic, tick-exact fold-back).
+/// - [`Origin::Command`] — the result of an async [`Cmd::Task`], enqueued by
+///   `poll_pending_tasks` when the future completes. Replay re-folds the recorded result
+///   directly and **suppresses** re-launching the effect (buiy_view design §3 #15), so a
+///   non-deterministic effect (network/clock/RNG) replays from what actually happened.
 ///
-/// [`Origin::Command`] (async-command result) and [`Origin::Subscription`] (timer/OS
-/// source) are **reserved** for the §8 roadmap — defined now only so adding them later is
-/// not a format change. The goal here is *format stability*; correctness of the
-/// User-vs-Folded split is a nice-to-have the drain happens to get right.
+/// [`Origin::Subscription`] (timer/OS source) remains **reserved** for the MVU §8 roadmap —
+/// defined now only so adding it later is not a format change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Default)]
 pub enum Origin {
     /// From the inbox / [`enqueue`] — a real external message. The default.
     #[default]
     User,
-    /// Reserved (§8): the result of an async [`Cmd`] command. Not emitted in v1.
+    /// The result of an async [`Cmd::Task`] command, enqueued by `poll_pending_tasks`.
     Command,
     /// From a [`Cmd::Emit`] re-fold within the same drain pass.
     Folded,
@@ -274,6 +371,13 @@ pub enum RecordMode {
 pub struct RecordSession {
     mode: RecordMode,
     next_seq: u64,
+    /// Set **only for the duration of [`replay_into`](crate::replay::replay_into)** — the
+    /// signal the drain reads to **suppress launching a `Cmd::Task`** during replay (buiy_view
+    /// design §3 #15). Orthogonal to [`RecordMode`]: production runs `RecordMode::Off` (the hot
+    /// path) yet MUST launch tasks, and `replay_into` itself stops the session to `Off`, so
+    /// suppression cannot key on record-mode — it keys on this flag. A recorded
+    /// [`Origin::Command`] result is re-folded from the log; its effect is not re-run.
+    replaying: bool,
 }
 
 impl RecordSession {
@@ -303,6 +407,20 @@ impl RecordSession {
     /// Stop recording (e.g. before a replay so it does not re-log).
     pub fn stop(&mut self) {
         self.mode = RecordMode::Off;
+    }
+
+    /// Whether a replay is in progress — the drain reads this to **suppress** launching a
+    /// `Cmd::Task` (the recorded [`Origin::Command`] result is re-folded instead of re-running
+    /// the effect). Set only by [`replay_into`](crate::replay::replay_into).
+    pub fn is_replaying(&self) -> bool {
+        self.replaying
+    }
+
+    /// Toggle the replay guard. [`replay_into`](crate::replay::replay_into) sets it `true` for
+    /// the duration of a replay and restores it after, so a live run (guard `false`) launches
+    /// tasks normally.
+    pub fn set_replaying(&mut self, replaying: bool) {
+        self.replaying = replaying;
     }
 
     /// The next **global** sequence number iff recording, else `None` (zero work when
@@ -502,12 +620,105 @@ pub enum MvuSet {
 /// `ApplyDeferred` between [`MvuSet::Enqueue`] and [`MvuSet::Drain`], a write from an `Enqueue`
 /// system is flushed and drained **in the same frame**. This is the hard rule's single
 /// sanctioned mutation point: handlers enqueue, they never fold.
+///
+/// Stamps the fold [`Origin::User`] (a real external message). The async-task poll uses
+/// [`enqueue_with_origin`] to stamp [`Origin::Command`] instead.
 pub fn enqueue<M: Model>(commands: &mut Commands, target: Entity, msg: M::Msg) {
+    enqueue_with_origin::<M>(commands, target, msg, Origin::User);
+}
+
+/// Enqueue `msg` for `target` stamped with an explicit [`Origin`] — the origin-aware transport
+/// (buiy_view design §3 #15). [`enqueue`] is the `Origin::User` shorthand; `poll_pending_tasks`
+/// calls this with [`Origin::Command`] so an async result folds (and records) as a command, not
+/// a user message.
+pub fn enqueue_with_origin<M: Model>(
+    commands: &mut Commands,
+    target: Entity,
+    msg: M::Msg,
+    origin: Origin,
+) {
     commands.queue(move |world: &mut World| {
         world
             .resource_mut::<Messages<Envelope<M>>>()
-            .write(Envelope { target, msg });
+            .write(Envelope {
+                target,
+                msg,
+                origin,
+            });
     });
+}
+
+// ---------------------------------------------------------------------------
+// Async effects: the `Cmd::Task` task pool + the completion poll
+// ---------------------------------------------------------------------------
+
+/// The in-flight [`Cmd::Task`] futures for model `M`, each tagged with the actor `Entity` its
+/// result folds back onto. The drain pushes here when a fold returns [`Cmd::Task`] (spawned on
+/// `AsyncComputeTaskPool`, non-blocking); `poll_pending_tasks` drains completed ones. A **bag**
+/// (not one-per-entity): concurrent tasks on the same actor both complete and both fold — the
+/// substrate does not silently cancel (a `takeLatest`/debounce policy is an app or roadmap
+/// concern, not imposed here).
+///
+/// Registered per model type by [`MvuAppExt::add_model`]. Empty in the steady state — the poll
+/// system is a cheap early-return when there is nothing in flight, so models that never launch a
+/// task pay nothing.
+#[derive(Resource)]
+pub struct PendingTasks<M: Model> {
+    tasks: Vec<(Entity, Task<M::Msg>)>,
+}
+
+// Manual `Default`: deriving would demand `M: Default`, which is wrong (the resource is an empty
+// bag regardless of the model's own `Default`).
+impl<M: Model> Default for PendingTasks<M> {
+    fn default() -> Self {
+        PendingTasks { tasks: Vec::new() }
+    }
+}
+
+impl<M: Model> PendingTasks<M> {
+    /// Track a freshly-spawned task and the actor its result folds onto.
+    fn push(&mut self, target: Entity, task: Task<M::Msg>) {
+        self.tasks.push((target, task));
+    }
+
+    /// Number of tasks currently in flight (test/introspection convenience).
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Whether no task is in flight.
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+}
+
+/// Poll model `M`'s in-flight [`Cmd::Task`] futures; for each that has completed, enqueue its
+/// `Msg` back onto its actor stamped [`Origin::Command`] and drop it from the bag. Runs in
+/// [`MvuSet::Enqueue`], so the pinned `ApplyDeferred` flushes the enqueue into the SAME-frame
+/// drain (the async result folds the frame it lands). `block_on(poll_once(..))` polls without
+/// blocking — a still-pending task simply stays in the bag for the next frame.
+///
+/// Registered per model type by [`MvuAppExt::add_model`]. Inert (early return) whenever nothing
+/// is in flight, so it costs nothing for models that never use async.
+fn poll_pending_tasks<M: Model>(pending: Option<ResMut<PendingTasks<M>>>, mut commands: Commands) {
+    let Some(mut pending) = pending else { return };
+    if pending.tasks.is_empty() {
+        return;
+    }
+    let mut i = 0;
+    while i < pending.tasks.len() {
+        // `poll_once` returns `Some(result)` iff the task has finished; `None` leaves it pending.
+        if let Some(msg) = block_on(future::poll_once(&mut pending.tasks[i].1)) {
+            let target = pending.tasks[i].0;
+            enqueue_with_origin::<M>(&mut commands, target, msg, Origin::Command);
+            // Done — remove the finished task (order in the bag is irrelevant). A named binding
+            // (not `_`) silences the `Task` `#[must_use]`: this one has already delivered its
+            // result via `poll_once`, so dropping it cancels nothing.
+            let _finished = pending.tasks.swap_remove(i);
+        } else {
+            i += 1;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +896,19 @@ fn count_binds<M: Model>(
 /// the exclusive AT-dispatch seam can both call it. `reducer` is taken by `&mut F` so the
 /// batch drain can re-use its captured (possibly stateful) reducer across the inbox loop; the
 /// AT seam passes a bare-`fn` (env-free, capture-free) reducer via [`fold_one_inline`].
-fn fold_one_with<M, F>(world: &mut World, target: Entity, msg: M::Msg, reducer: &mut F) -> bool
+///
+/// `origin` is the provenance of the FIRST fold (the inbox item's [`Origin`] — `User` for a real
+/// enqueue, `Command` for an async task result); `Cmd::Emit` re-folds within the pass are always
+/// `Folded`. A returned [`Cmd::Task`] is spawned on `AsyncComputeTaskPool` and tracked in
+/// [`PendingTasks`] — unless a replay is in progress ([`RecordSession::is_replaying`]), in which
+/// case the launch is suppressed (the recorded result is re-folded instead).
+fn fold_one_with<M, F>(
+    world: &mut World,
+    target: Entity,
+    msg: M::Msg,
+    origin: Origin,
+    reducer: &mut F,
+) -> bool
 where
     M: Model,
     F: FnMut(&mut M, M::Msg) -> Cmd<M::Msg>,
@@ -697,11 +920,12 @@ where
         .copied()
         .unwrap_or(LogicalId::UNRESOLVED);
 
-    // Local work queue: the supplied msg is `User`; `Cmd::Emit` re-folds are `Folded`. Run
-    // the Cmd stack to completion HERE (never into `Messages`) — identical to the batch
-    // drain's per-message body (spec §5.3 / §5.6).
+    // Local work queue: the supplied msg carries the caller's `origin` (`User` from the inbox,
+    // `Command` from an async task result); `Cmd::Emit` re-folds are `Folded`. Run the Cmd stack
+    // to completion HERE (never into `Messages`) — identical to the batch drain's per-message
+    // body (spec §5.3 / §5.6).
     let mut work: VecDeque<(M::Msg, Origin)> = VecDeque::new();
-    work.push_back((msg, Origin::User));
+    work.push_back((msg, origin));
 
     let mut first_changed = false;
     let mut first = true;
@@ -746,8 +970,11 @@ where
             first = false;
         }
 
-        // Apply effects: `None` / `Emit` (re-fold, run-to-completion) / `Batch`.
+        // Apply effects: `None` / `Emit` (re-fold, run-to-completion) / `Batch` / `Task` (async).
+        // `Task` futures are COLLECTED here (the `model` borrow above is still live via NLL until
+        // its last use) and spawned below once the borrow has ended.
         let mut emits = 0u64;
+        let mut tasks: Vec<BoxedFuture<'static, M::Msg>> = Vec::new();
         let mut stack = vec![cmd];
         while let Some(c) = stack.pop() {
             match c {
@@ -757,6 +984,21 @@ where
                     emits += 1;
                 }
                 Cmd::Batch(v) => stack.extend(v),
+                Cmd::Task(fut) => tasks.push(fut),
+            }
+        }
+
+        // Launch any `Cmd::Task` on the compute pool (non-blocking) and track it for the poll
+        // system — UNLESS a replay is in progress, where the recorded `Origin::Command` result is
+        // re-folded from the log and the effect must NOT re-run (buiy_view design §3 #15). The
+        // pool + the `PendingTasks<M>` bag are only touched when a task is actually returned
+        // (`get_resource_or_insert_with` creates the bag lazily on first use), so a task-free
+        // model allocates nothing and never shifts entity ids (cheap-when-absent).
+        if !tasks.is_empty() && !world.resource::<RecordSession>().is_replaying() {
+            let pool = AsyncComputeTaskPool::get();
+            let mut pending = world.get_resource_or_insert_with(PendingTasks::<M>::default);
+            for fut in tasks {
+                pending.push(target, pool.spawn(fut));
             }
         }
 
@@ -806,7 +1048,8 @@ pub fn fold_one_inline<M: Model>(
     reducer: fn(&mut M, M::Msg) -> Cmd<M::Msg>,
 ) -> bool {
     let mut reducer = reducer;
-    fold_one_with::<M, _>(world, target, msg, &mut reducer)
+    // An AT-driver action is a user action: stamp the fold `Origin::User`.
+    fold_one_with::<M, _>(world, target, msg, Origin::User, &mut reducer)
 }
 
 /// App-builder extension for wiring an MVU model.
@@ -863,6 +1106,16 @@ impl MvuAppExt for App {
         self.register_type::<M::Msg>();
         self.add_systems(Update, count_binds::<M>.in_set(MvuSet::Bind));
 
+        // Async-effect scaffolding for `Cmd::Task`: only the completion poll is registered here.
+        // The `PendingTasks<M>` bag is created **lazily by the drain on the first task launch**
+        // (`get_resource_or_insert_with`), NOT eagerly here — so a model that never launches a
+        // task allocates NOTHING and causes no entity-id drift (cheap-when-absent, the same
+        // discipline the §7.5 auditor keeps). The poll runs in `MvuSet::Enqueue` (so a completed
+        // task's `Origin::Command` result is flushed by the pinned `ApplyDeferred` into the
+        // SAME-frame drain) and is inert — its `Option<ResMut>` param is `None` — until the bag
+        // exists.
+        self.add_systems(Update, poll_pending_tasks::<M>.in_set(MvuSet::Enqueue));
+
         // Register this model's replay applier: turn a logged RON entry of its
         // `Msg` type back into an `Envelope<M>` on the inbox, so replay re-folds it
         // through the registered drain. Keyed by the `Msg` type path (the same key the
@@ -884,9 +1137,12 @@ impl MvuAppExt for App {
                 <M::Msg as FromReflect>::from_reflect(dynamic.as_ref())
                     .expect("from_reflect the logged Msg")
             };
+            // Replay forces `RecordMode::Off` (nothing is re-recorded), so the origin of a
+            // replayed fold is inert — write it as `User`. Suppression of a re-launched
+            // `Cmd::Task` keys on `is_replaying()`, not on this origin.
             world
                 .resource_mut::<Messages<Envelope<M>>>()
-                .write(Envelope { target, msg });
+                .write(Envelope::user(target, msg));
         });
         self.world_mut()
             .resource_mut::<ReplayRegistry>()
@@ -938,8 +1194,13 @@ impl MvuAppExt for App {
                 };
                 inbox.drain().collect()
             };
-            for Envelope { target, msg } in msgs {
-                fold_one_with::<M, _>(world, target, msg, &mut reducer);
+            for Envelope {
+                target,
+                msg,
+                origin,
+            } in msgs
+            {
+                fold_one_with::<M, _>(world, target, msg, origin, &mut reducer);
             }
         };
         self.add_systems(Update, drain.in_set(set));
@@ -952,6 +1213,13 @@ impl MvuAppExt for App {
         E: PureEnv + 'static,
         R: Reducer<M, E>,
     {
+        // The env-reading drain is a `SystemParam` system, so it cannot lazily insert the
+        // `PendingTasks<M>` bag on first use the way the env-free drain (`&mut World`) does. So an
+        // env-reducer model that returns `Cmd::Task` needs the bag eager-initialized here. This is
+        // reached ONLY by env-reducer models (none are shipped — see the module docs), so it never
+        // touches the common env-free path (`ui()`, the widgets) and causes no entity-id drift
+        // there; it only keeps the env path's task support correct-by-construction.
+        self.init_resource::<PendingTasks<M>>();
         let drain = move |mut inbox: MessageReader<Envelope<M>>,
                           mut models: Query<&mut M>,
                           ids: Query<&LogicalId>,
@@ -959,24 +1227,29 @@ impl MvuAppExt for App {
                           mut session: ResMut<RecordSession>,
                           registry: Res<AppTypeRegistry>,
                           mut counters: Option<ResMut<MvuWorkCounters>>,
+                          mut pending: Option<ResMut<PendingTasks<M>>>,
                           env: StaticSystemParam<E>| {
             // Snapshot the inbox so we can fold `Emit`s run-to-completion without holding the
             // reader borrow. Each work item carries its [`Origin`] (spec §7.2): the initial
             // inbox items are `User`; `Cmd::Emit` push_backs are `Folded`. This is contained
             // to the drain + `LoggedEntry` + `MsgLog::record` — `Envelope`/`enqueue` are
             // untouched (the origin is drain-local provenance, not part of the transport).
-            let mut work: VecDeque<(Envelope<M>, Origin)> = inbox
-                .read()
-                .cloned()
-                .map(|env| (env, Origin::User))
-                .collect();
+            // Each envelope carries its own `Origin` (spec §7.2): inbox items keep their
+            // transport origin (`User` from `enqueue`, `Command` from the async-task poll); a
+            // `Cmd::Emit` re-fold re-pushes with `Folded`.
+            let mut work: VecDeque<Envelope<M>> = inbox.read().cloned().collect();
             if work.is_empty() {
                 return;
             }
             // Fetch the env once; reuse `&env` across every fold this pass.
             let env = env.into_inner();
             let registry = registry.read();
-            while let Some((Envelope { target, msg }, origin)) = work.pop_front() {
+            while let Some(Envelope {
+                target,
+                msg,
+                origin,
+            }) = work.pop_front()
+            {
                 let lid = ids.get(target).copied().unwrap_or(LogicalId::UNRESOLVED);
                 // Record tap, stamped with the SHARED global `seq` (the unified session) + the
                 // item's `origin`. Free under `RecordMode::Off` — `tick_seq` returns `None`,
@@ -1002,7 +1275,7 @@ impl MvuAppExt for App {
                 let cmd = reducer.fold(&mut next, msg, &env);
                 let changed = model.set_if_neq(next);
                 // ======================================================================
-                // Apply effects: `None` / `Emit` (re-fold) / `Batch` only.
+                // Apply effects: `None` / `Emit` (re-fold) / `Batch` / `Task` (async).
                 let mut emits = 0u64;
                 let mut stack = vec![cmd];
                 while let Some(c) = stack.pop() {
@@ -1010,10 +1283,24 @@ impl MvuAppExt for App {
                         Cmd::None => {}
                         Cmd::Emit(m) => {
                             // A re-fold within the same drain pass — provenance `Folded`.
-                            work.push_back((Envelope { target, msg: m }, Origin::Folded));
+                            work.push_back(Envelope {
+                                target,
+                                msg: m,
+                                origin: Origin::Folded,
+                            });
                             emits += 1;
                         }
                         Cmd::Batch(v) => stack.extend(v),
+                        Cmd::Task(fut) => {
+                            // Launch on the compute pool + track for the poll system, UNLESS a
+                            // replay is in progress (then the recorded `Origin::Command` result is
+                            // re-folded and the effect must NOT re-run — buiy_view design §3 #15).
+                            if !session.is_replaying()
+                                && let Some(p) = pending.as_deref_mut()
+                            {
+                                p.push(target, AsyncComputeTaskPool::get().spawn(fut));
+                            }
+                        }
                     }
                 }
                 // One counter touch per folded message (drain_folds + the conditional fields).
@@ -1163,15 +1450,26 @@ impl Plugin for MvuCorePlugin {
             ApplyDeferred.after(MvuSet::Enqueue).before(MvuSet::Drain),
         );
 
-        // Per-frame counter reset BEFORE any MVU work (overwrite convention). Anchored
-        // `.before(BuiySet::Input)` (spec §5.6): the AT seam folds INLINE in
-        // `route_action_requests` (in `BuiySet::Input`) and bumps `MvuWorkCounters` via
-        // `fold_one_inline`, so the reset must precede `Input` — not merely `Picking` — or its
-        // bumps would be reset away. `Input` precedes `Picking`/`A11yUpdate`/`Render`, so this
-        // also precedes BOTH the EARLY caller-chosen leaf/machine drains (the early-window
-        // model, spec §4 — `.after(Picking).before(A11yUpdate)`) and the late `MvuSet::Drain`.
-        // Nothing writes
-        // `MvuWorkCounters` before `Input`.
-        app.add_systems(Update, reset_mvu_counters.before(BuiySet::Input));
+        // Per-frame counter reset BEFORE any MVU work (overwrite convention). It must precede
+        // EVERY site that bumps `MvuWorkCounters`, listed EXPLICITLY rather than relying on the
+        // `BuiySet` backbone being chained: `CorePlugin` chains `Input → Picking → A11yUpdate →
+        // Render`, but a minimal app (`App::new` + `MvuCorePlugin` only) leaves those as
+        // *unordered* empty sets, so `.before(Input)` alone would NOT transitively precede a
+        // drain anchored `.after(Picking)`. The three bump sites:
+        //   - `.before(BuiySet::Input)`  — the AT seam folds INLINE in `route_action_requests`
+        //     (in `Input`) via `fold_one_inline` (spec §5.6);
+        //   - `.before(BuiySet::Picking)` — the EARLY caller-chosen leaf/machine drains sit
+        //     `.after(Picking)` (the early-window model, spec §4 — e.g. `ToggleLeafSet::Drain`);
+        //   - `.before(MvuSet::Drain)`   — the late default drain.
+        // Listing all three makes the reset robustly first in BOTH full and minimal apps (it was
+        // previously correct only by system-insertion luck; adding a system could — and did —
+        // reorder an early drain ahead of the reset and zero its bumps).
+        app.add_systems(
+            Update,
+            reset_mvu_counters
+                .before(BuiySet::Input)
+                .before(BuiySet::Picking)
+                .before(MvuSet::Drain),
+        );
     }
 }

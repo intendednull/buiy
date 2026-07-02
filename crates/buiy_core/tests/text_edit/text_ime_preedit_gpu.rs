@@ -40,9 +40,14 @@ const H: u32 = 64;
 
 // --- pixel classifiers -------------------------------------------------------
 
-/// White glyph ink over black: an achromatic pixel at high coverage.
+// --- pixel classifiers (the E3 golden's composite math) ---------------------
+
+/// Unselected white glyph ink over black: an achromatic pixel with all three
+/// channels lit above the black clear (red lit rejects the blue underline strip,
+/// whose red is ≤ 80). Adapter-robust `channel_lit` threshold (V19).
 fn is_white_ink(p: [u8; 4]) -> bool {
-    p[0] >= 180 && p[1] >= 180 && p[2] >= 180
+    use crate::support::channel_lit;
+    channel_lit(p[0]) && channel_lit(p[1]) && channel_lit(p[2])
 }
 
 /// Drive the full Ime::Preedit → splice → reshape → project → extract → paint

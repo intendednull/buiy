@@ -250,17 +250,17 @@ fn quad_pipeline_registers_via_specializer() {
 
 // Same RenderApp/wgpu-adapter caveat as `quad_pipeline_registers_via_specializer`:
 // RenderPlugin::build does block_on(initialize_renderer(...)) which expect()s a
-// wgpu adapter. After R8b the per-instance vertex layout grew to stride 52 (the
+// wgpu adapter. After R8b the per-instance vertex layout grew to stride 68 (the
 // clip AABB at @location(6)/(7)); wgpu validates the layout against the WGSL
 // `Instance` at pipeline creation, so a registered BuiyPipeline on a real
-// adapter proves the stride-52 layout + clip-aware shaders compile and bind. The
+// adapter proves the stride-68 layout + clip-aware shaders compile and bind. The
 // device-free half (layout offsets, naga parse) is covered headlessly in
 // render_primitive_descriptor.rs / render_shader_wgsl.rs.
 //
 // Run locally with: `cargo test -p buiy_core --test render_smoke -- --ignored`.
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); covered by Task 19 e2e harness"]
-fn clip_aabb_pipeline_registers_with_stride_52() {
+fn clip_aabb_pipeline_registers_with_stride_68() {
     // `BuiyPipeline` is registered in `BuiyRenderPlugin::finish` and `finish()`
     // needs the full plugin set — see `pipeline_registers_in_render_app`.
     let mut app = crate::support::gpu_test_app();
@@ -270,7 +270,7 @@ fn clip_aabb_pipeline_registers_with_stride_52() {
     let pipeline = render_app
         .world()
         .get_resource::<buiy_core::render::pipeline::BuiyPipeline>()
-        .expect("BuiyPipeline registered with the stride-52 clip-AABB layout");
+        .expect("BuiyPipeline registered with the stride-68 clip-AABB layout");
     // The id is a valid handle into the cache (compilation is async; we only
     // assert the resource + id exist, not that the pipeline finished). Pipeline
     // creation is where wgpu would reject a layout/shader stride mismatch.
@@ -413,12 +413,12 @@ fn top_layer_composites_last_over_in_flow() {
 // Same RenderApp/wgpu-adapter caveat as the other render_smoke #[ignore] tests:
 // RenderPlugin::build does block_on(initialize_renderer(...)) which expect()s a
 // wgpu adapter. This is the final R8b wire-up guard: the full clip path —
-// ClipRect → ExtractedNode.clip → PackedInstance.clip_min/clip_max (stride 52) →
+// ClipRect → ExtractedNode.clip → PackedInstance.clip_min/clip_max (stride 68) →
 // the @location(6)/(7) vertex attrs consumed by the clip-aware quad/shadow WGSL
 // — is proven device-free across Tasks 1–3 (render_extract.rs, render_instance.rs,
 // render_primitive_descriptor.rs, render_shader_wgsl.rs). What only a real adapter
 // can prove is that wgpu *accepts* that end-to-end shape at pipeline creation:
-// it validates the stride-52 instance layout against the WGSL `Instance` struct
+// it validates the stride-68 instance layout against the WGSL `Instance` struct
 // and compiles the clip-discard fragment, so a registered BuiyPipeline on a live
 // device means the whole wired path binds without a layout/shader mismatch.
 //
@@ -436,11 +436,11 @@ fn clip_aabb_full_wire_up_smoke() {
         .world()
         .get_resource::<buiy_core::render::pipeline::BuiyPipeline>()
         .expect(
-            "BuiyPipeline registered: stride-52 clip layout + clip-aware WGSL accepted by wgpu",
+            "BuiyPipeline registered: stride-68 clip layout + clip-aware WGSL accepted by wgpu",
         );
     // The id is a valid handle into the cache (compilation is async; we only
     // assert the resource + id exist, not that the pipeline finished). Pipeline
-    // creation is where wgpu would reject the stride-52 layout / clip-discard
+    // creation is where wgpu would reject the stride-68 layout / clip-discard
     // shader mismatch, so a present id proves the full wired path is accepted.
     let _ = pipeline.id;
 }

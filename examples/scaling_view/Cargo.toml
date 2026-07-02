@@ -1,0 +1,31 @@
+[package]
+name = "scaling_view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Windowed demo (needs a display).
+[[bin]]
+name = "scaling_view"
+path = "src/main.rs"
+
+# Headless GPU capture → PNG (needs a wgpu adapter, no display).
+[[bin]]
+name = "capture_scaling_view"
+path = "src/bin/capture_scaling_view.rs"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "x11", "wayland"] }
+# The view-authoring surface under test.
+buiy_view = { path = "../../crates/buiy_view" }
+# `buiy` provides the plugin composition (`BuiyPlugin` / `BuiyHeadlessPlugin`);
+# `buiy_core` is used by the capture harness (theme + the funnel helpers).
+buiy = { path = "../../crates/buiy" }
+buiy_core = { path = "../../crates/buiy_core" }
+image = { workspace = true }

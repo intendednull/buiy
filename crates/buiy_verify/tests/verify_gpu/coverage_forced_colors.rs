@@ -9,14 +9,15 @@
 //! the producer observes real paint, not a stale descriptor.
 
 use bevy::prelude::*;
+use buiy_core::components::Node;
+use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::color::{ColorToken, SystemColorKeyword};
-use buiy_core::render::components::{Background, Border, BorderSide, LineStyle};
+use buiy_core::render::components::{Background, Border, BorderSide, BoxShadow, LineStyle, Shadow};
 use buiy_core::render::forced_colors_analyzer::{
     ForcedColorsViolation, analyze_forced_colors, analyze_shadow_only,
 };
-use buiy_core::theme::forced_colors_theme;
+use buiy_core::theme::{UserPreferences, forced_colors_theme};
 use buiy_verify::coverage::{Fixture, live_catalog_paint, paint_for_fixtures};
-use std::borrow::Cow;
 
 /// The production scan: every fixture in the real catalog, derived from its LIVE
 /// spawned `Background`/`Border`/`Outline`, must pass both gate-#11 checks under
@@ -143,25 +144,89 @@ fn safe_fixture_produces_no_violation() {
 }
 
 // ---------------------------------------------------------------------------
-// BLOCKED — forced-colors `BoxShadow` *visual* reftest.
+// Forced-colors `BoxShadow` *visual* reftest (Tier-4) — the residual visual half.
 // ---------------------------------------------------------------------------
+//
+// The `BoxShadow` extract/draw path landed (`resolve_shadows` is wired in
+// `extract.rs`; `shadow.wgsl` rasterizes), and forced-colors SUPPRESSES it —
+// `resolve_shadows` returns an empty vec when `prefs.forced_colors` (the
+// draw-skip). This reftest renders two scenes in one app: a bordered box WITH a
+// `BoxShadow` and the SAME box WITHOUT one, both under `forced-colors: active`.
+// Because the shadow is suppressed, the shadowed box must rasterize BYTE-FOR-BYTE
+// like the unshadowed box — a `match`. (The draw-skip is also observed headless
+// at Tier 1 (unit) and Tier 2 (display-list); this Tier-4 pixel confirmation
+// completes the forced-colors MODE cell and replaces the old assertion-free
+// `#[ignore]` placeholder — a real test that CAN fail, not a vacuous green:
+// disabling the suppression reds it with 566 differing shadow pixels.)
 
-/// The residual forced-colors *visual* half — the `BoxShadow` draw-skip under
-/// `forced-colors: active` — is a Tier-4 reftest **blocked on the unlanded
-/// `BoxShadow` extract/draw path** (`extract_buiy_nodes` has no `BoxShadow`
-/// branch yet; follow-ups.md:474–478). It is intentionally NOT authored as a
-/// runnable test: there is no draw path to assert against, and faking it green
-/// would be a stale-positive. The structured `analyze_forced_colors` /
-/// `analyze_shadow_only` scan above covers gate #11's static half now and does
-/// not depend on it.
-///
-/// This `#[ignore]`d placeholder documents the dependency so the follow-up is
-/// discoverable from the test suite (`cargo test -- --ignored` lists it with
-/// its reason); it asserts nothing and must stay ignored until the `BoxShadow`
-/// pipeline lands.
-#[test]
-#[ignore = "BLOCKED on the unlanded BoxShadow extract/draw path (follow-ups.md:474-478); \
-            do not author a runnable assertion until extract_buiy_nodes has a BoxShadow branch"]
-fn boxshadow_visual_reftest_is_blocked() {
-    // Intentionally empty: tracked-but-blocked. See the doc comment.
+/// The box both scenes share — a 30×30 forced-colors-SAFE bordered box at
+/// (24,24), under `forced-colors: active`. System-color tokens
+/// (`ButtonText`/`ButtonBorder`) resolve against the installed `forced_colors_theme`,
+/// so the box paints a real color rather than the magenta missing-token sentinel.
+fn forced_box(app: &mut App) -> Entity {
+    app.insert_resource(forced_colors_theme());
+    let mut prefs = UserPreferences::default();
+    prefs.forced_colors = true;
+    app.insert_resource(prefs);
+    let side = || BorderSide {
+        color: ColorToken::SystemColor(SystemColorKeyword::ButtonBorder),
+        style: LineStyle::Solid,
+    };
+    app.world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(24.0)),
+                    left: Sizing::Length(Length::px(24.0)),
+                    ..default()
+                })
+                .width_px(30.0)
+                .height_px(30.0),
+            Background {
+                color: ColorToken::SystemColor(SystemColorKeyword::ButtonText),
+            },
+            Border {
+                left: side(),
+                right: side(),
+                top: side(),
+                bottom: side(),
+                ..default()
+            },
+        ))
+        .id()
 }
+
+/// TEST scene: the box carrying a `BoxShadow` (offset +16,+16, blur 6), under
+/// forced-colors. The draw-skip means the shadow is NOT painted, so this must
+/// rasterize identically to `plain_box_forced`.
+fn shadowed_box_forced(app: &mut App) {
+    let w = forced_box(app);
+    app.world_mut().entity_mut(w).insert(BoxShadow(vec![Shadow {
+        color: ColorToken::SystemColor(SystemColorKeyword::ButtonText),
+        offset_x: Length::px(16.0),
+        offset_y: Length::px(16.0),
+        blur: Length::px(6.0),
+        spread: Length::px(0.0),
+        inset: false,
+    }]));
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[w]);
+}
+
+/// REFERENCE scene: the same box with NO `BoxShadow`.
+fn plain_box_forced(app: &mut App) {
+    let w = forced_box(app);
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[w]);
+}
+
+buiy_verify::reftest!(
+    match,
+    forced_colors_boxshadow_suppressed,
+    shadowed_box_forced,
+    plain_box_forced
+);

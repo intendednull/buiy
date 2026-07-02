@@ -1328,10 +1328,7 @@ fn toggle_all_rows(world: &mut World) {
     let on = !all_done;
     if let Some(mut inbox) = world.get_resource_mut::<Messages<Envelope<A11yToggled>>>() {
         for cb in checkboxes {
-            inbox.write(Envelope {
-                target: cb,
-                msg: ToggleMsg::Set(on),
-            });
+            inbox.write(Envelope::user(cb, ToggleMsg::Set(on)));
         }
     }
 }

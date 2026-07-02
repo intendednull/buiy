@@ -86,7 +86,8 @@ fn is_selection_rect(p: [u8; 4]) -> bool {
 /// high coverage reads `min(r,g,b) ≥ 180`. The blue rect (min ≈ 51) and green
 /// text (min ≈ 0) are both rejected.
 fn is_white_ink(p: [u8; 4]) -> bool {
-    p[0] >= 180 && p[1] >= 180 && p[2] >= 180
+    use crate::support::channel_lit;
+    channel_lit(p[0]) && channel_lit(p[1]) && channel_lit(p[2])
 }
 
 /// Unselected green glyph ink over black: `g ≥ 180 ∧ r,b ≤ 100` rejects the

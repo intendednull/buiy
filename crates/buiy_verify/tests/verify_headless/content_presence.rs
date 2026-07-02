@@ -107,9 +107,46 @@ fn content_test_app() -> App {
     app
 }
 
-// DEFERRED (Wave 3+, with C8): a catalog-wide `enroll_all` auto-check that
-// every text-bearing cell satisfies `content_is_present`. It is blocked on
-// (a) a text fixture in the catalog and (b) a text-capable enroll stack —
-// `build_app` (enroll.rs) has no BuiyTextPlugin, so `glyph_census` would
-// panic on the missing SharedFontSystem. Until then the predicate is gated by
-// the two unit tests in this file; see follow-ups.md.
+/// Catalog-wide content-presence auto-check (V13): EVERY text-bearing cell of
+/// EVERY fixture must emit > 0 glyph instances on the production extract path.
+/// This is the enrollment-tier analogue of the two RED-proof unit tests above —
+/// it catches a fixture whose text silently stops shaping (the silent-no-paint
+/// bug) across the whole matrix, by construction.
+///
+/// Both former blockers are gone: `build_app` is now text-capable (it installs
+/// `BuiyTextPlugin { system_fonts: false }`, so `SharedFontSystem` is present and
+/// `glyph_census` no longer panics), and the button fixture is a text-bearing
+/// cell — its "Save" label measures + shapes under the embedded default font
+/// (Fira Sans; V14). The `text_bearing > 0` guard makes the check fail loudly if
+/// it ever goes vacuous (a catalog with no text-bearing cell would silently pass
+/// without it).
+#[test]
+fn every_text_bearing_catalog_cell_emits_glyphs() {
+    use buiy_verify::coverage::{Matrix, enroll_all};
+    use buiy_verify::invariant::glyph_census;
+
+    // `enroll_all` takes `impl Fn`, so the counters use interior mutability.
+    let checked = std::cell::Cell::new(0usize);
+    let text_bearing = std::cell::Cell::new(0usize);
+
+    enroll_all(&Matrix::cpu_snapshots(), |mut app, key| {
+        app.update(); // TextSync -> measure -> commit, so the buffers are shaped
+        let (bearing, glyphs) = glyph_census(&mut app);
+        checked.set(checked.get() + 1);
+        if bearing {
+            text_bearing.set(text_bearing.get() + 1);
+            assert!(
+                glyphs > 0,
+                "text-bearing cell {} emitted 0 glyph instances (silent-no-paint)",
+                key.stem()
+            );
+        }
+    });
+
+    assert!(checked.get() > 0, "the catalog enrolled no cells");
+    assert!(
+        text_bearing.get() > 0,
+        "no text-bearing cell was exercised — the catalog-wide content-presence \
+         auto-check is VACUOUS; a text-bearing fixture must enroll for it to have teeth"
+    );
+}

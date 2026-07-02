@@ -1,0 +1,20 @@
+[package]
+name = "buiy_view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The view-authoring surface (\"safer V\") for Buiy: view(&Model) -> Element<Msg>, a reconciler, and typed routing over the MVU substrate."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The MVU substrate + the decomposed layout/render/theme/interaction/text
+# components the reconciler realizes onto. `buiy_view` depends on `buiy_core`
+# + `buiy_widgets` only — NOT `buiy` or `buiy_bsn` (spec §1, no dependency
+# cycle: `buiy` depends on `buiy_view`, never the reverse).
+bevy.workspace = true
+buiy_core = { path = "../buiy_core" }
+buiy_widgets = { path = "../buiy_widgets" }

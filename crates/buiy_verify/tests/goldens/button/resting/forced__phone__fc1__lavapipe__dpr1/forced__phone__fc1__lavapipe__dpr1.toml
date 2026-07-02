@@ -1,0 +1,18 @@
+[key]
+widget = "button"
+state = "resting"
+theme = "forced"
+viewport = "phone"
+forced_colors = true
+backend = "Lavapipe"
+dpr = 1000
+
+[[positives]]
+file = "forced__phone__fc1__lavapipe__dpr1.0.png"
+blessed_commit = "96f2ea27d45730be5eed2d51365830256369e992"
+blessed_at = "2026-07-02T01:34:19Z"
+reason = "blessed"
+
+[positives.budget]
+max_channel_delta = 0
+max_diff_pixels = 0

@@ -23,4 +23,5 @@ all-features = true
 bevy.workspace = true
 buiy_bsn = { path = "../buiy_bsn" }
 buiy_core = { path = "../buiy_core" }
+buiy_view = { path = "../buiy_view" }
 buiy_widgets = { path = "../buiy_widgets" }
