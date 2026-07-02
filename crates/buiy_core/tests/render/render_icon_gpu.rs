@@ -272,11 +272,9 @@ fn rotated_icon_paints_through_coverage_affine() {
                     stroke_width: 1.9,
                     size_px: 24,
                     fill: false,
-                    // `color.icon` was never a real theme token (pre-Track-B it
-                    // missed → the magenta sentinel). This golden is color-agnostic
-                    // (asserts rotation-differs + blue-channel ink), so reproduce the
-                    // exact prior magenta via the typed `Custom` escape hatch.
-                    color: ColorToken::Custom(Color::srgb(1.0, 0.0, 1.0)),
+                    // Tinted by the live accent (blue, set via `set_icon_accent`
+                    // above), matching the sibling icon fixtures in this file.
+                    color: ColorToken::Accent,
                 },
             ))
             .id();

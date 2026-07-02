@@ -87,7 +87,8 @@ spellings), and keeps accessors chainable.
 > variants) resolved through a `ThemeContract` exhaustive match with an explicit forced-colors
 > `PaletteMode`; the 56 dark tokens resolve byte-identical (GPU goldens 93/93). **Follow-ups:**
 > spacing/radius/typography/motion tokens (still stringly `Theme.spaces`/`radii`); sweep the
-> now-test-only `*_TOKEN` `&str` consts in `render/color.rs`.
+> now-fully-dead `*_TOKEN` `&str` consts in `render/color.rs` (zero non-def refs); and the
+> obsolete missing-token-sentinel gating in `buiy_verify` `coverage/{fixture,enroll}.rs`.
 
 Tokens are a **closed enum** (`ColorToken::Surface`, …; matches the observed prior)
 covering **color + spacing + radius + typography + motion** (not color-only — the F6

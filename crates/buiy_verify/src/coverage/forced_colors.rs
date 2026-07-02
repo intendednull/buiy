@@ -15,9 +15,11 @@
 //! ## Boundary (honest, documented)
 //!
 //! The live default [`Button::new`](buiy_widgets::Button::new) paints a *brand*
-//! token (`color.surface.secondary`) that is **not** forced-colors-safe — under
-//! `forced_colors: active` it would resolve to the magenta sentinel, a genuine
-//! `NonSystemColor` violation (color-and-forced-colors.md § 3.1). Making the
+//! token (`color.surface.secondary`) that is **not** forced-colors-safe — the
+//! analyzer flags it BY KIND (a semantic token, not a `SystemColor`/`Transparent`/
+//! `CurrentColor`/`FocusRing` variant), a genuine `NonSystemColor` violation
+//! (color-and-forced-colors.md § 3.1). (Track B: under forced mode it now resolves
+//! to a system color, not the removed magenta sentinel.) Making the
 //! *default widget* forced-colors-safe is owned by `buiy-widget-catalog-design`,
 //! not this campaign. The catalog fixtures therefore author the
 //! forced-colors-safe paint the catalog must converge to (system-color tokens),
