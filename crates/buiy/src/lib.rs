@@ -65,8 +65,23 @@
 pub use buiy_core::{
     BuiySet, CorePlugin,
     a11y::{
-        A11yDescription, A11yLabel, A11yRole, A11yScroll, A11yScrollView, A11yTreeBuilder,
+        A11yDescription,
+        A11yExpanded,
+        A11yLabel,
+        A11yRole,
+        A11yScroll,
+        A11yScrollView,
+        A11yTextValue,
+        A11yToggled,
+        A11yTreeBuilder,
+        A11yValue,
         AccessKitAdapterPlugin,
+        // The widget state components an app author queries to read live widget
+        // state (Track C / F1) — paired with the domain accessors
+        // (`Checkbox::checked`, `Switch::on`, `Slider::value`, `Disclosure::expanded`,
+        // `TextInput::value`). `accesskit::Toggled` is deliberately NOT preluded —
+        // the accessors return plain `bool`/`f64`/`&str` so the foreign enum never
+        // surfaces at a call site.
     },
     components::{Node, ResolvedLayout, ResolvedTransform, StackingContext},
     focus::{FocusVisible, Focusable, FocusedEntity},
@@ -478,6 +493,21 @@ pub mod probe {
 ///         .mvu_model(update) // register_type + add_model + add_reducer, one call
 ///         .app() // ModelWiring handle → &mut App
 ///         .run();
+/// }
+/// ```
+///
+/// Reading live **widget state** is a plain `bool`/`f64`/`&str` via the domain
+/// accessors — the widget state components and the accessors are both in the
+/// prelude, and the foreign `accesskit::Toggled` enum never appears:
+///
+/// ```no_run
+/// use buiy::prelude::*;
+///
+/// // `A11yToggled` (the state) + `Checkbox` (the accessor namespace) are both
+/// // preluded; `Checkbox::checked` returns `bool`, not `accesskit::Toggled`.
+/// fn read_checkboxes(boxes: Query<&A11yToggled, With<Checkbox>>) {
+///     let checked = boxes.iter().filter(|t| Checkbox::checked(t)).count();
+///     let _ = checked;
 /// }
 /// ```
 pub mod prelude {

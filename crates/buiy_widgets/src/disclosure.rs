@@ -271,6 +271,13 @@ impl Disclosure {
             ],
         )
     }
+
+    /// Read whether the disclosure is **expanded** from its [`A11yExpanded`] state
+    /// (Track C domain accessor — `Query<&A11yExpanded, With<Disclosure>>` then
+    /// `Disclosure::expanded(e)`).
+    pub fn expanded(state: &A11yExpanded) -> bool {
+        state.0
+    }
 }
 
 /// The query data [`wire_disclosure_controls`] reads per trigger: the trigger

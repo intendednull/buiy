@@ -175,6 +175,33 @@ impl Checkbox {
             ],
         )
     }
+
+    /// Read whether the checkbox is **checked**, as a plain `bool` — the domain
+    /// accessor over its [`A11yToggled`] state so a caller never touches the
+    /// `accesskit::Toggled` enum (Track C / F1). Query the state alongside the
+    /// marker and pass it in:
+    ///
+    /// ```ignore
+    /// fn read(q: Query<&A11yToggled, With<Checkbox>>) {
+    ///     for toggled in &q {
+    ///         if Checkbox::checked(toggled) { /* … */ }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// A tri-state checkbox that is `Mixed` (indeterminate) reads as **not**
+    /// checked (APG: a mixed checkbox is not "checked" at rest); use
+    /// [`Checkbox::indeterminate`] to observe the third state.
+    pub fn checked(state: &A11yToggled) -> bool {
+        matches!(state.0, Toggled::True)
+    }
+
+    /// Read whether the checkbox is **indeterminate** (the `Mixed` tri-state), as
+    /// a plain `bool`. Distinct from `!checked()` — an unchecked checkbox is not
+    /// indeterminate.
+    pub fn indeterminate(state: &A11yToggled) -> bool {
+        matches!(state.0, Toggled::Mixed)
+    }
 }
 
 /// The change-detection filter for [`update_checkbox_visual`]: a `Checkbox` whose

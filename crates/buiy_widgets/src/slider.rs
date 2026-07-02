@@ -191,17 +191,11 @@ pub(crate) fn slider_thumb_border() -> Border {
 }
 
 /// The horizontal offset (logical px) the thumb sits at for value `value`: the
-/// fraction `(now − min) / (max − min)` mapped onto `[0, SLIDER_THUMB_TRAVEL]`. A
-/// degenerate range (`max <= min`) maps to `0` (the thumb at the `min` end) rather
-/// than dividing by zero. The single source of the thumb geometry, shared by the
-/// visual system and its tests.
+/// normalized [`Slider::fraction`] mapped onto `[0, SLIDER_THUMB_TRAVEL]`. One
+/// source for the normalization — the visual geometry and the public accessor
+/// share the same clamped, degenerate-range-guarded fraction.
 pub fn thumb_offset(value: &A11yValue) -> f32 {
-    let span = value.max - value.min;
-    if span <= 0.0 {
-        return 0.0;
-    }
-    let fraction = ((value.now - value.min) / span).clamp(0.0, 1.0) as f32;
-    fraction * SLIDER_THUMB_TRAVEL
+    Slider::fraction(value) as f32 * SLIDER_THUMB_TRAVEL
 }
 
 impl Slider {
@@ -262,6 +256,33 @@ impl Slider {
                 ),
             ],
         )
+    }
+
+    /// Read the slider's current **value** from its [`A11yValue`] state (Track C
+    /// domain accessor — `Query<&A11yValue, With<Slider>>` then `Slider::value(v)`).
+    pub fn value(state: &A11yValue) -> f64 {
+        state.now
+    }
+
+    /// The slider's range minimum (the domain-named read of `A11yValue.min`).
+    pub fn min(state: &A11yValue) -> f64 {
+        state.min
+    }
+
+    /// The slider's range maximum (the domain-named read of `A11yValue.max`).
+    pub fn max(state: &A11yValue) -> f64 {
+        state.max
+    }
+
+    /// The slider's value as a **0.0..=1.0 fraction** of its `min..=max` range
+    /// (the normalized position a track/thumb renders from). A degenerate range
+    /// (`max <= min`) reads as `0.0`.
+    pub fn fraction(state: &A11yValue) -> f64 {
+        if state.max <= state.min {
+            0.0
+        } else {
+            ((state.now - state.min) / (state.max - state.min)).clamp(0.0, 1.0)
+        }
     }
 }
 

@@ -149,6 +149,15 @@ impl TextInput {
     pub fn multi_line(placeholder: impl Into<String>) -> impl Bundle {
         (TextInput, Placeholder(placeholder.into()))
     }
+
+    /// Read the text input's current **value** from its [`A11yTextValue`] state
+    /// (Track C domain accessor — `Query<&A11yTextValue, With<TextInput>>` then
+    /// `TextInput::value(v)`). This is the committed value the a11y tree exposes,
+    /// mirrored from the editor; for the authoritative live editor buffer read
+    /// [`TextEditState::value`](buiy_core::text::edit::TextEditState::value).
+    pub fn value(state: &A11yTextValue) -> &str {
+        &state.0
+    }
 }
 
 /// Sync the agent-interface text state onto each `TextInput` root (P1d,
