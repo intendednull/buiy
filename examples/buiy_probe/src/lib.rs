@@ -6,7 +6,7 @@
 //!
 //! 1. **Author** — edit [`scene`] below (the one slot you change).
 //! 2. **Run** — `cargo run -p buiy_probe`, which stands the scene up under
-//!    [`BuiyProbePlugin`](buiy::BuiyProbePlugin) (GPU-free, no adapter).
+//!    [`BuiyProbePlugin`] (GPU-free, no adapter).
 //! 3. **Inspect** — read the printed [`snapshot_report`](buiy::probe::snapshot_report):
 //!    a Playwright-style semantic tree (roles / accessible names / state / layout
 //!    rects) plus a `--- text & layout ---` section that surfaces plain text and

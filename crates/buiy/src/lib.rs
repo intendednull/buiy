@@ -315,8 +315,10 @@ pub mod view {
 /// The agent-facing **probe / drive** surface (spec §4 Track A) — the front
 /// door to Buiy's headless feedback loop. A coding agent runs a scene under
 /// [`BuiyProbePlugin`] (GPU-free, no window/adapter), then *reads* it with
-/// [`snapshot_report`] and *drives* it with [`click`] / [`get_by_role`] /
-/// [`wait_for`] — the whole author → run → inspect loop with no pixels.
+/// [`snapshot_report`](crate::probe::snapshot_report) and *drives* it with
+/// [`click`](crate::probe::click) / [`get_by_role`](crate::probe::get_by_role) /
+/// [`wait_for`](crate::probe::wait_for) — the whole author → run → inspect loop
+/// with no pixels.
 ///
 /// This is a distinct module (not flattened into [`prelude`]) for the same
 /// reason as [`view`]: the driver verbs (`click`, `focus`, `snapshot`,
