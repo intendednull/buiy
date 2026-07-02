@@ -24,10 +24,12 @@ use buiy_core::a11y::{
 };
 use buiy_core::focus::{FocusPlugin, Focusable, FocusedEntity};
 use buiy_core::interaction::OnPress;
-use buiy_core::render::components::CssVisibility;
+use buiy_core::layout::Length;
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::{CssVisibility, LineStyle, Outline};
 use buiy_core::{CorePlugin, components::Node};
 use buiy_widgets::WidgetsPlugin;
-use buiy_widgets::menu::{Menu, MenuButton, MenuItem};
+use buiy_widgets::menu::{Menu, MenuActiveRing, MenuButton, MenuItem};
 
 /// A headless app with the a11y + focus + widget surface. `A11yPlugin` runs
 /// `build_tree` (so the in-process snapshot reflects the menu), `FocusPlugin`
@@ -118,6 +120,12 @@ fn active_descendant(app: &App, menu: Entity) -> Option<Entity> {
     app.world()
         .get::<A11yRelations>(menu)
         .and_then(|r| r.active_descendant)
+}
+
+/// The framework roving-active ring is present iff BOTH the marker and its `Outline`
+/// are on the item (insert/remove keep them in lockstep).
+fn has_ring(app: &App, item: Entity) -> bool {
+    app.world().get::<MenuActiveRing>(item).is_some() && app.world().get::<Outline>(item).is_some()
 }
 
 fn is_visible(app: &App, e: Entity) -> bool {
@@ -498,5 +506,81 @@ fn escape_closes_the_menu_and_restores_focus() {
         app.world().resource::<FocusedEntity>().0,
         Some(button),
         "focus restored to the button after Escape"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// N2 (2026-07-02 audit) — the roving-active item carries a focus-ring Outline (painted
+// inline by `bind_menu_model`), so keyboard roving is visible; it moves with the
+// active index, clears on close, and never clobbers an author's own Outline.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn active_item_gets_a_focus_ring_that_moves_and_clears_on_close() {
+    let mut app = app();
+    let (button, menu, items) = spawn_menu_button(&mut app);
+
+    // Closed: no rings anywhere.
+    for &item in &items {
+        assert!(!has_ring(&app, item), "closed menu ⇒ no active ring");
+    }
+
+    // Open (click the button): first item active → ringed with the FocusRing token.
+    press(&mut app, button);
+    assert_eq!(active_descendant(&app, menu), Some(items[0]));
+    assert!(has_ring(&app, items[0]), "open ⇒ first item ringed");
+    assert_eq!(
+        app.world().get::<Outline>(items[0]).unwrap().color,
+        ColorToken::FocusRing,
+        "the ring uses the WCAG-contracted FocusRing token"
+    );
+    assert!(!has_ring(&app, items[1]), "only the active item is ringed");
+    assert!(!has_ring(&app, items[2]));
+
+    // ArrowDown: active → item[1]; ring moves, item[0] cleared.
+    key_down(&mut app, KeyCode::ArrowDown);
+    assert_eq!(active_descendant(&app, menu), Some(items[1]));
+    assert!(!has_ring(&app, items[0]), "ring left the old active item");
+    assert!(
+        has_ring(&app, items[1]),
+        "ring moved to the new active item"
+    );
+
+    // Esc closes: active = None → every ring cleared (and stays in lockstep with
+    // active_descendant, which also clears).
+    key_down(&mut app, KeyCode::Escape);
+    assert!(!expanded(&app, button), "menu closed");
+    assert_eq!(active_descendant(&app, menu), None);
+    for &item in &items {
+        assert!(!has_ring(&app, item), "close ⇒ all rings cleared");
+    }
+}
+
+#[test]
+fn active_item_ring_never_clobbers_an_author_outline() {
+    let mut app = app();
+    let (button, menu, items) = spawn_menu_button(&mut app);
+
+    // An app authors its OWN Outline on the first item (no MenuActiveRing marker).
+    let author = Outline {
+        color: ColorToken::Accent,
+        style: LineStyle::Solid,
+        width: Length::px(1.0),
+        offset: Length::px(0.0),
+    };
+    app.world_mut().entity_mut(items[0]).insert(author.clone());
+
+    // Open: item[0] is the active target, but the paint must NOT add its ring over
+    // the author's outline nor overwrite it.
+    press(&mut app, button);
+    assert_eq!(active_descendant(&app, menu), Some(items[0]));
+    assert!(
+        app.world().get::<MenuActiveRing>(items[0]).is_none(),
+        "no framework ring is layered onto an author-owned outline"
+    );
+    assert_eq!(
+        app.world().get::<Outline>(items[0]).cloned(),
+        Some(author),
+        "the author's own outline is preserved untouched"
     );
 }

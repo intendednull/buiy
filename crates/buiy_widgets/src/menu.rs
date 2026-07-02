@@ -47,9 +47,11 @@ use buiy_core::{
     },
     components::Node,
     focus::{FocusVisible, Focusable, FocusedEntity},
-    layout::{BoxModel, Stacking, Style},
+    layout::{BoxModel, Length, Stacking, Style},
     render::color::ColorToken,
-    render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
+    render::components::{
+        Background, Border, Corners, CssVisibility, LineStyle, Outline, Radius, TextColor,
+    },
     text::{FontSize, Text},
 };
 
@@ -840,8 +842,12 @@ pub fn bind_menu_model(
     mut menu_vis: Query<&mut CssVisibility, With<Menu>>,
     mut menu_relations: Query<&mut A11yRelations, (With<Menu>, Without<MenuButton>)>,
     mut button_expanded: Query<&mut A11yExpanded, With<MenuButton>>,
+    // Per-item ring state (audit N2): does the item carry ANY outline, and is it OUR
+    // ring? `Has` is metadata-only, so this never conflicts with the `Commands` writes.
+    item_rings: Query<(Has<Outline>, Has<MenuActiveRing>), With<MenuItem>>,
     mut focused: Option<ResMut<FocusedEntity>>,
     mut focus_visible: Option<ResMut<FocusVisible>>,
+    mut commands: Commands,
 ) {
     for (menu, model) in &changed {
         // Resolve the controlling button (the one whose `controls` references this
@@ -871,6 +877,36 @@ pub fn bind_menu_model(
             && rel.active_descendant != active_entity
         {
             rel.active_descendant = active_entity;
+        }
+
+        // Roving-active item ring (audit N2): give the active item a framework
+        // focus-ring `Outline` so sighted keyboard users see where roving focus is
+        // (the AT `active_descendant` is set above; only the visual was missing). This
+        // is folded into the bind — NOT a sibling system — because adding a system to
+        // `Update` perturbs the executor's ordering enough to flip a schedule-fragile
+        // hidden-node layout under the MT executor. Mirrors [`lower_focus_ring`]: the
+        // [`MenuActiveRing`] marker gates the framework ring so it never clobbers an
+        // author `Outline`; removal is scoped to THIS menu's items (so a second open
+        // menu is untouched); close folds `active = None`, clearing every ring.
+        if let Ok(menu_children) = children.get(menu) {
+            for &item in menu_children {
+                // Skip a non-`MenuItem` direct child (menu chrome, if any).
+                let Ok((has_outline, has_ring)) = item_rings.get(item) else {
+                    continue;
+                };
+                if Some(item) == active_entity {
+                    if !has_ring && !has_outline {
+                        commands
+                            .entity(item)
+                            .insert((menu_active_ring_outline(), MenuActiveRing));
+                    }
+                } else if has_ring {
+                    commands
+                        .entity(item)
+                        .remove::<Outline>()
+                        .remove::<MenuActiveRing>();
+                }
+            }
         }
 
         // The button's `A11yExpanded` mirrors `open` (set_if_neq).
@@ -903,6 +939,28 @@ pub fn bind_menu_model(
                 v.0 = true;
             }
         }
+    }
+}
+
+/// Marks the [`Outline`] that [`bind_menu_model`]'s roving-active ring pass owns, so it
+/// only ever inserts/removes the roving-active ring and never disturbs an author's own
+/// `Outline` on a menu item. Paint-only, framework-written — mirrors
+/// [`buiy_core::focus::FocusRingMarker`], hence the leaner derives.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MenuActiveRing;
+
+/// The active-menu-item ring: the framework focus-ring token, drawn ON the item's
+/// border-box edge (`offset: 0`) rather than the +2px *outset* the standalone focus
+/// ring uses ([`buiy_core::focus`]) — menu items are full-width and tightly stacked, so
+/// an outset ring would overlap neighbors / clip at the panel edge, while an edge ring
+/// reads cleanly. Width + color match the canonical focus ring (WCAG 2.4.11 ≥ 2px;
+/// [`ColorToken::FocusRing`] is ≥ 3:1 and forced-colors-safe).
+fn menu_active_ring_outline() -> Outline {
+    Outline {
+        color: ColorToken::FocusRing,
+        style: LineStyle::Solid,
+        width: Length::px(2.0),
+        offset: Length::px(0.0),
     }
 }
 

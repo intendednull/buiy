@@ -70,6 +70,13 @@ component, the gap that let the no-ops ship). Design + tokens: see
 
 ### Surfaced as follow-ups (framework-level; wider blast radius — not fixed here)
 
+> **Update (2026-07-02): both N1 and N2 were subsequently RESOLVED** at the framework
+> altitude — see
+> `docs/specs/2026-07-02-default-switch-track-and-menu-active-highlight-design.md`.
+> N1: `update_switch_visual` recolors the track (accent on / raised-alt off, white
+> thumb). N2: `bind_menu_model` rings the active item inline with a framework
+> focus-ring `Outline` (a fill can't meet SC 1.4.11's 3:1 on the near-black panel).
+
 - **N1 — default `Switch` track never recolors.** `update_switch_visual` slides only
   the thumb; the track fill is a static `color.surface.secondary`. The modal register
   switch (a default `Switch`) therefore never turns its track accent-on as the design

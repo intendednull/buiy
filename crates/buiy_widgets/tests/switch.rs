@@ -12,6 +12,7 @@ use buiy_core::{
     focus::Focusable,
     interaction::OnPress,
     layout::{Display, Length, Translate},
+    render::color::ColorToken,
     render::components::{Background, Border},
     text::Text,
 };
@@ -59,6 +60,11 @@ fn thumb_x(app: &App, thumb: Entity) -> f32 {
         Length::Px(px) => px,
         other => panic!("thumb translate x is not px: {other:?}"),
     }
+}
+
+fn track_bg(app: &App, sw: Entity) -> ColorToken {
+    let track = track_of(app, sw);
+    app.world().get::<Background>(track).unwrap().color
 }
 
 #[test]
@@ -222,6 +228,74 @@ fn toggling_a11y_toggled_slides_the_thumb() {
     app.world_mut().get_mut::<A11yToggled>(sw).unwrap().0 = Toggled::False;
     app.update();
     assert_eq!(thumb_x(&app, thumb), 0.0, "False ⇒ thumb back off");
+}
+
+#[test]
+fn toggling_recolors_the_track_accent_on_raisedalt_off() {
+    // N1 (2026-07-02 audit): the track fill is the primary on/off affordance. A
+    // freshly-spawned OFF switch rests at `SurfaceRaisedAlt`; toggling on recolors
+    // the track to `Accent` and back on off. The thumb is a constant white knob.
+    let mut app = app();
+    let sw = app.world_mut().spawn(Switch::new("Wi-Fi")).id();
+    app.update();
+
+    assert_eq!(
+        track_bg(&app, sw),
+        ColorToken::SurfaceRaisedAlt,
+        "resting OFF ⇒ track is surface.raised-alt (no first-toggle color jump)"
+    );
+    let thumb = thumb_of(&app, sw);
+    assert_eq!(
+        app.world().get::<Background>(thumb).unwrap().color,
+        ColorToken::White,
+        "the thumb is a constant white knob"
+    );
+
+    app.world_mut().get_mut::<A11yToggled>(sw).unwrap().0 = Toggled::True;
+    app.update();
+    assert_eq!(
+        track_bg(&app, sw),
+        ColorToken::Accent,
+        "ON ⇒ track recolors to the live accent"
+    );
+    assert_eq!(
+        app.world().get::<Background>(thumb).unwrap().color,
+        ColorToken::White,
+        "the thumb stays white when on"
+    );
+
+    app.world_mut().get_mut::<A11yToggled>(sw).unwrap().0 = Toggled::False;
+    app.update();
+    assert_eq!(
+        track_bg(&app, sw),
+        ColorToken::SurfaceRaisedAlt,
+        "OFF ⇒ track restores to surface.raised-alt"
+    );
+}
+
+#[test]
+fn seeded_on_switch_paints_accent_track_on_first_update() {
+    // A switch seeded `Toggled::True` at spawn (the S4 modal register switch) must
+    // render its accent track on the first update: the spawn initializer sets the
+    // OFF color, but `Added` counts as `Changed`, so `update_switch_visual` fires and
+    // paints `Accent` before first paint.
+    let mut app = app();
+    let sw = app
+        .world_mut()
+        .spawn((Switch::new("Register"), A11yToggled(Toggled::True)))
+        .id();
+    app.update();
+    assert_eq!(
+        track_bg(&app, sw),
+        ColorToken::Accent,
+        "seeded-on switch shows the accent track after the first update"
+    );
+    let thumb = thumb_of(&app, sw);
+    assert_eq!(
+        thumb_x(&app, thumb),
+        SWITCH_THUMB_TRAVEL,
+        "and the thumb is slid on"
+    );
 }
 
 #[test]
