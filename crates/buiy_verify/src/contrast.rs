@@ -3,7 +3,7 @@
 //! per `buiy-theme-tokens-design`.
 
 use bevy::prelude::Color;
-use buiy_core::render::color::contrast_ratio;
+use buiy_core::render::color::{ColorToken, ThemeContract, contrast_ratio};
 use buiy_core::theme::Theme;
 
 pub const WCAG_AA_NORMAL: f64 = 4.5;
@@ -45,19 +45,16 @@ pub fn wcag2_ratio(fg: Color, bg: Color) -> f64 {
 
 pub fn contrast_violations(
     theme: &Theme,
-    pairs: &[(&str, &str)],
+    pairs: &[(ColorToken, ColorToken)],
     required: f64,
 ) -> Vec<ContrastViolation> {
     let mut out = Vec::new();
-    for (bg_token, fg_token) in pairs {
-        let bg = match theme.color(bg_token) {
-            Some(c) => c,
-            None => continue,
-        };
-        let fg = match theme.color(fg_token) {
-            Some(c) => c,
-            None => continue,
-        };
+    for &(bg_token, fg_token) in pairs {
+        // Every typed `ColorToken` resolves to a concrete color (exhaustive
+        // match), so there is no missing-token skip anymore — the old
+        // `theme.color(&str)` HashMap lookup that could miss is gone.
+        let bg = theme.resolve(bg_token);
+        let fg = theme.resolve(fg_token);
         let ratio = wcag2_ratio(fg, bg);
         let severity = if ratio < required {
             ContrastSeverity::Fail
@@ -65,8 +62,8 @@ pub fn contrast_violations(
             ContrastSeverity::Pass
         };
         out.push(ContrastViolation {
-            bg_token: bg_token.to_string(),
-            fg_token: fg_token.to_string(),
+            bg_token: bg_token.debug_name(),
+            fg_token: fg_token.debug_name(),
             ratio,
             required,
             severity,
@@ -81,14 +78,14 @@ pub fn contrast_violations(
 /// Returns Ok if all pass.
 ///
 /// Phase 0 walks 3 hand-picked canonical pairs only.
-/// TODO(buiy-theme-tokens-design): expand to an exhaustive `surface.*` ×
-/// `text.*` cartesian walk once typed token enums replace the
+/// TODO(buiy-theme-tokens-design): expand to an exhaustive `Surface*` ×
+/// `Text*` cartesian walk now that the typed token enum has replaced the
 /// string-keyed `Theme` HashMap.
 pub fn lint_theme(theme: &Theme) -> Result<(), Vec<ContrastViolation>> {
     let pairs = [
-        ("color.surface.primary", "color.text.primary"),
-        ("color.surface.primary", "color.text.secondary"),
-        ("color.surface.secondary", "color.text.primary"),
+        (ColorToken::SurfacePrimary, ColorToken::TextPrimary),
+        (ColorToken::SurfacePrimary, ColorToken::TextSecondary),
+        (ColorToken::SurfaceSecondary, ColorToken::TextPrimary),
     ];
     let v = contrast_violations(theme, &pairs, WCAG_AA_NORMAL);
     if v.is_empty() { Ok(()) } else { Err(v) }
