@@ -247,3 +247,23 @@ fn on_press_toggles_expanded_and_drives_the_visual() {
         "the panel hides on collapse"
     );
 }
+
+// ── Track C / C4b: DisclosureBuilder + .expanded ──────────────────────────────
+
+/// `.expanded(true)` seeds the real `A11yExpanded`.
+#[test]
+fn disclosure_new_expanded_seeds_true() {
+    use buiy_widgets::Disclosure;
+
+    let mut app = app();
+    let d = app
+        .world_mut()
+        .spawn(Disclosure::new("Details").expanded(true))
+        .id();
+    app.update();
+
+    assert!(
+        Disclosure::expanded(app.world().get::<A11yExpanded>(d).unwrap()),
+        "`.expanded(true)` seeds A11yExpanded(true)",
+    );
+}

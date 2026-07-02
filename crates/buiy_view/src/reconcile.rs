@@ -403,10 +403,11 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
         }
         Kind::Checkbox => {
             // The real stateful-leaf Checkbox. Seed its `A11yToggled` from the
-            // model (the explicit component overrides the `#[require]` default
-            // `False`), so a seeded-done item renders checked on frame 1 without
-            // waiting for a fold.
-            let want = toggled_of(el.checked);
+            // model via the builder's `.checked(bool)` setter (Track C / C4), so a
+            // seeded-done item renders checked on frame 1 without waiting for a
+            // fold. NOTE: the builder now CARRIES `A11yToggled`, so a sibling
+            // `A11yToggled(..)` in this tuple would be a duplicate component (a
+            // runtime panic) — the setter is the only correct seed path.
             // `ControlledLeaf` (design §3 #16): the view OWNS this checkbox — its `A11yToggled`
             // is driven by the model (press → `PressAction` → model → the reconciler re-asserts
             // via `set_checkbox_checked`), so it opts OUT of `advance_toggle_on_press`'s
@@ -416,8 +417,7 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             // writer; this makes the model the sole *source*.
             let e = world
                 .spawn((
-                    Checkbox::new(""),
-                    A11yToggled(want),
+                    Checkbox::new("").checked(el.checked),
                     ControlledLeaf,
                     Kind::Checkbox,
                 ))

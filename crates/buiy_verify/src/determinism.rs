@@ -145,6 +145,17 @@ impl DeterministicApp {
         // builder — no drift).
         let mut app = buiy_core::render::golden::capture_app_scaled(w, h, self.cfg.dpr.as_f32());
 
+        // `WidgetsPlugin` (CPU-safe) so a widget fixture is FULLY FORMED in the
+        // GPU capture: since Track C / C4, a `Button::new`/`Checkbox::new` widget's
+        // visible children (label/mark glyph) are attached by the plugin's
+        // `On<Add, <Widget>Parts>` observer, NOT a plugin-free `children![]`.
+        // Without it, the button golden captures a LABEL-LESS box (1551 pixels off
+        // the committed "Save" golden on the pinned-lavapipe lane) — the same
+        // fix applied to the CPU `enroll::build_app`. `buiy_core`'s
+        // `capture_app_scaled` cannot add it (the dependency edge runs
+        // widgets → core), so it is layered here in `buiy_verify`.
+        app.add_plugins(buiy_widgets::WidgetsPlugin);
+
         // The fixed virtual clock: advance time by a fixed ZERO delta each
         // frame so the capture reads a deterministic instant, never wall time.
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));

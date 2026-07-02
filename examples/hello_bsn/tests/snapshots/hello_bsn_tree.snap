@@ -6,7 +6,7 @@ expression: hello_bsn_tree
 Toolbar pos=0,0 size=364,128
   Actions pos=12,68 size=320,48
     Cancel pos=164,0 size=65,48
-      entity#103 pos=8,14 size=49,20
+      entity#107 pos=8,14 size=49,20
     Save pos=0,0 size=156,48
-      entity#101 pos=61,14 size=34,20
+      entity#105 pos=61,14 size=34,20
   Search pos=12,12 size=216,48

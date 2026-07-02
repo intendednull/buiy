@@ -6,7 +6,9 @@
 use bevy::prelude::*;
 use buiy_core::{
     BuiySet,
-    a11y::{A11yExpanded, A11yRole, A11yToggled, A11yValue, InlineActionRegistry, Toggled},
+    a11y::{
+        A11yExpanded, A11yLabel, A11yRole, A11yToggled, A11yValue, InlineActionRegistry, Toggled,
+    },
     mvu::{
         ControlledLeaf, MvuAppExt, MvuCorePlugin, ToggleLeafSet, ToggleMsg, enqueue,
         register_toggle_leaf,
@@ -230,6 +232,77 @@ impl Plugin for WidgetsPlugin {
         // value widgets), mirroring how `OnPress` is core-registered but toggle-routed.
         app.add_message::<ValueChange<bool>>()
             .add_message::<ValueChange<f64>>();
+
+        // Track C / C4: the named-builder children observers. Each keys on a
+        // builder-only ZST trigger (`<Widget>Parts`, inserted ONLY by
+        // `Widget::new`), so bare markers / icon buttons / scene-fns never fire
+        // → no double-attach; each is idempotent (early-returns if its signature
+        // child already exists) so a respawn/re-add cannot double the children.
+        // Registered as CLOSURES per Decision D12 (`On<'w,'t,E,B>` lifetimes do
+        // not elide in named-fn signatures — the `layout/mod.rs` `On<Insert,
+        // Anchor>` precedent); each delegates to a named `attach_*_children`
+        // helper that never names `On`. `bevy::ecs::lifecycle::Add` is spelled in
+        // full to avoid the `std::ops::Add` prelude collision.
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Add, button::ButtonParts>,
+             labels: Query<&A11yLabel>,
+             children: Query<&Children>,
+             is_label: Query<(), With<button::ButtonLabel>>,
+             mut commands: Commands| {
+                button::attach_button_children(
+                    trigger.event_target(),
+                    &labels,
+                    &children,
+                    &is_label,
+                    &mut commands,
+                );
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Add, checkbox::CheckboxParts>,
+             labels: Query<&A11yLabel>,
+             children: Query<&Children>,
+             is_mark: Query<(), With<checkbox::CheckboxMark>>,
+             mut commands: Commands| {
+                checkbox::attach_checkbox_children(
+                    trigger.event_target(),
+                    &labels,
+                    &children,
+                    &is_mark,
+                    &mut commands,
+                );
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Add, switch::SwitchParts>,
+             labels: Query<&A11yLabel>,
+             children: Query<&Children>,
+             is_track: Query<(), With<switch::SwitchTrack>>,
+             mut commands: Commands| {
+                switch::attach_switch_children(
+                    trigger.event_target(),
+                    &labels,
+                    &children,
+                    &is_track,
+                    &mut commands,
+                );
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Add, disclosure::DisclosureParts>,
+             labels: Query<&A11yLabel>,
+             children: Query<&Children>,
+             is_caret: Query<(), With<disclosure::DisclosureCaret>>,
+             mut commands: Commands| {
+                disclosure::attach_disclosure_children(
+                    trigger.event_target(),
+                    &labels,
+                    &children,
+                    &is_caret,
+                    &mut commands,
+                );
+            },
+        );
 
         // `Messages<OnPress>` is registered by `CorePlugin`
         // (`InteractionPlugin`, co-drive SC-1), not here — the shared

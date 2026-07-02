@@ -169,42 +169,23 @@ impl Switch {
     /// The track + label are `Pickable::IGNORE` so a hit anywhere on the row
     /// resolves to the widget root (pick-through, co-drive SC-3).
     ///
-    /// The thumb starts at the off position (`Translate` x = 0) because the
-    /// default `A11yToggled` is `False`; [`update_switch_visual`] slides it on the
-    /// first `Changed<A11yToggled>` once the state flips.
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(label: impl Into<String>) -> impl Bundle {
-        let label = label.into();
-        (
-            Switch,
-            A11yLabel(label.clone()),
-            children![
-                // The 40×20 track pill (geometry + fill + border from its own
-                // `#[require]`), carrying the sliding thumb as ITS child.
-                (
-                    SwitchTrack,
-                    Pickable::IGNORE,
-                    children![(
-                        // The sliding thumb — starts off (Translate x = 0).
-                        SwitchThumb,
-                        Node,
-                        switch_thumb_box_model(),
-                        switch_thumb_background(),
-                        switch_thumb_border(),
-                        Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)),
-                        Pickable::IGNORE,
-                    )],
-                ),
-                // The visible label pixels BESIDE the track (the AT name stays on
-                // the root).
-                (
-                    Text(label),
-                    FontSize(SWITCH_LABEL_FONT_SIZE),
-                    TextColor::default(),
-                    Pickable::IGNORE,
-                ),
-            ],
-        )
+    /// The canonical labelled switch. Returns a named [`SwitchBuilder`] carrying
+    /// the chainable **`.on(true)`** setter that stores the real (binary)
+    /// [`A11yToggled`] (Track C / C4). The `Switch` marker's `#[require]`
+    /// materializes the contract; an `On<Add, SwitchParts>` observer attaches the
+    /// track pill (with its sliding thumb grandchild) + the visible label.
+    ///
+    /// The thumb starts at the off position (`Translate` x = 0);
+    /// [`update_switch_visual`] slides it on the first `Changed<A11yToggled>` (the
+    /// spawn `Added` counts), so an `.on(true)` switch settles on after one frame.
+    #[allow(clippy::new_ret_no_self)] // builder pattern: `new` returns the named builder
+    pub fn new(label: impl Into<String>) -> SwitchBuilder {
+        SwitchBuilder {
+            marker: Switch,
+            a11y_label: A11yLabel(label.into()),
+            toggled: A11yToggled::default(), // Toggled::False (off)
+            parts: SwitchParts,
+        }
     }
 
     /// Read whether the switch is **on**, as a plain `bool` — the domain accessor
@@ -224,6 +205,76 @@ impl Switch {
     pub fn on(state: &A11yToggled) -> bool {
         matches!(state.0, Toggled::True)
     }
+}
+
+/// Builder-only **trigger** for the [`Switch`] children observer (Track C / C4),
+/// inserted ONLY by [`Switch::new`]. Not `Reflect` (does not round-trip a
+/// scene/hot-reload/MVU-replay respawn).
+#[derive(Component)]
+pub struct SwitchParts;
+
+/// The named `Bundle` [`Switch::new`] returns; `.on(true)` stores the real
+/// (binary) [`A11yToggled`].
+#[derive(Bundle)]
+pub struct SwitchBuilder {
+    marker: Switch,
+    a11y_label: A11yLabel,
+    toggled: A11yToggled,
+    parts: SwitchParts,
+}
+
+impl SwitchBuilder {
+    /// Set the initial **on/off** state, storing the real [`A11yToggled`]
+    /// (`true` → `Toggled::True`).
+    pub fn on(mut self, on: bool) -> Self {
+        self.toggled = A11yToggled(if on { Toggled::True } else { Toggled::False });
+        self
+    }
+}
+
+/// `On<Add, SwitchParts>` observer body (Track C / C4): attach the **nested**
+/// subtree — the track pill with its sliding thumb as a GRANDCHILD (child of the
+/// track, NOT the root, so `update_switch_visual`'s root→track→thumb walk finds
+/// it) — plus the visible label beside the track. Idempotent (early-returns if a
+/// `SwitchTrack` child already exists); writes ONLY child components.
+pub(crate) fn attach_switch_children(
+    root: Entity,
+    labels: &Query<&A11yLabel>,
+    children: &Query<&Children>,
+    is_track: &Query<(), With<SwitchTrack>>,
+    commands: &mut Commands,
+) {
+    if let Ok(existing) = children.get(root)
+        && existing.iter().any(|c| is_track.get(c).is_ok())
+    {
+        return; // subtree already attached — idempotent no-op
+    }
+    let Ok(A11yLabel(text)) = labels.get(root) else {
+        return;
+    };
+    commands.entity(root).with_children(|p| {
+        // The 40×20 track pill (geometry/fill/border from its own `#[require]`),
+        // carrying the sliding thumb as ITS child (the GRANDCHILD the visual walks).
+        p.spawn((SwitchTrack, Pickable::IGNORE))
+            .with_children(|track| {
+                track.spawn((
+                    SwitchThumb,
+                    Node,
+                    switch_thumb_box_model(),
+                    switch_thumb_background(),
+                    switch_thumb_border(),
+                    Translate(Length::px(0.0), Length::px(0.0), Length::px(0.0)),
+                    Pickable::IGNORE,
+                ));
+            });
+        // The visible label BESIDE the track (the AT name stays on the root).
+        p.spawn((
+            Text(text.clone()),
+            FontSize(SWITCH_LABEL_FONT_SIZE),
+            TextColor::default(),
+            Pickable::IGNORE,
+        ));
+    });
 }
 
 /// The thumb box: a 16×16 knob.
