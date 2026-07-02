@@ -72,6 +72,21 @@ ignore = [
     #   proc-macro-error2 2.0.1 — author-confirmed unmaintained. Chain:
     #     iai-callgrind -> iai-callgrind-macros -> proc-macro-error2.
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained; dev-only via iai-callgrind -> iai-callgrind-macros (the MVU instruction-count bench pricer), never in the prod/wasm runtime graph; no safe upgrade" },
+    # `quick-xml` 0.39.4 quadratic-attribute DoS (RUSTSEC-2026-0194, disclosed
+    # 2026-06-29, patched only in >= 0.41.0). It reaches us ONLY transitively
+    # through the Linux windowing path — the SAME chain as the ttf-parser
+    # advisory above: bevy_winit -> accesskit_winit -> winit -> sctk-adwaita ->
+    # smithay-client-toolkit -> wayland-scanner -> quick-xml. `wayland-scanner`
+    # is a BUILD-TIME proc-macro that parses the FIXED, TRUSTED Wayland-protocol
+    # XML shipped with the crate — never untrusted/network input — so the DoS
+    # (a crafted start tag with millions of attributes) is unreachable in Buiy;
+    # real impact is nil. No safe upgrade: `wayland-scanner` 0.31.10 pins
+    # quick-xml `^0.39`, so reaching the patched 0.41.0 needs a newer
+    # winit/smithay/bevy_winit stack (a Bevy-level bump). Pre-existing repo-wide
+    # (fails `main` too — DB drift after PR #113's green CI), not introduced by
+    # the Track A probe work. Re-evaluate on the next bevy_winit bump.
+    # Tracking: https://github.com/tafia/quick-xml/issues/969
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39.4 quadratic-attribute DoS; transitive via bevy_winit->winit->sctk-adwaita->wayland-scanner (build-time TRUSTED Wayland XML, not untrusted input) — nil impact; patched only in >=0.41.0, unreachable until Bevy bumps winit; pre-existing base advisory" },
 ]
 
 [licenses]

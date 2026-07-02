@@ -312,6 +312,54 @@ pub mod view {
     };
 }
 
+/// The agent-facing **probe / drive** surface (spec §4 Track A) — the front
+/// door to Buiy's headless feedback loop. A coding agent runs a scene under
+/// [`BuiyProbePlugin`] (GPU-free, no window/adapter), then *reads* it with
+/// [`snapshot_report`](crate::probe::snapshot_report) and *drives* it with
+/// [`click`](crate::probe::click) / [`get_by_role`](crate::probe::get_by_role) /
+/// [`wait_for`](crate::probe::wait_for) — the whole author → run → inspect loop
+/// with no pixels.
+///
+/// This is a distinct module, not flattened into [`prelude`] — but on
+/// **altitude** grounds, not name collision (unlike [`view`], whose builders do
+/// collide name-for-name with the widget scene-fns; these verbs flatten without
+/// ambiguity). The probe surface is ~18 dev/test-driver symbols an *app author*
+/// should not inherit wholesale just by writing `use buiy::prelude::*;`; it is a
+/// separate front door you opt into when you are inspecting/driving a scene.
+/// Reach the loop through one import:
+///
+/// ```no_run
+/// use buiy::prelude::*;
+/// use buiy::probe::*;
+///
+/// # fn build(app: &mut bevy::app::App) {
+/// app.add_plugins(BuiyProbePlugin);
+/// // …spawn a scene, step frames…
+/// # let world = app.world_mut();
+/// let report = snapshot_report(world);      // read the semantic tree
+/// let save = get_by_role(world, A11yRole::Button, Some("Save"), None).unwrap();
+/// click(world, save).unwrap();              // drive it
+/// # }
+/// ```
+///
+/// Built on the shipped [`a11y::inprocess`](buiy_core::a11y::inprocess) driver —
+/// this module only re-exports it behind the probe preset as one coherent
+/// front door.
+pub mod probe {
+    #[doc(inline)]
+    pub use crate::BuiyProbePlugin;
+    #[doc(inline)]
+    pub use buiy_core::a11y::inprocess::{
+        NodeState, ScrollState, SemanticNode, SemanticTree, StateQuery, TreeView, click, expand,
+        focus, get_by_role, hide_tooltip, increment, perform, set_value, show_tooltip, snapshot,
+        wait_for,
+    };
+    #[doc(inline)]
+    pub use buiy_core::a11y::snapshot_report;
+    #[doc(inline)]
+    pub use buiy_core::a11y::{ActionError, NotActionableReason};
+}
+
 /// The Buiy prelude. `use buiy::prelude::*;` brings the common Buiy surface —
 /// components, plugins, widgets — and the BSN authoring macros (`bsn!`,
 /// `bsn_list!`) + spawn extension traits into scope in one import. Mirrors the
@@ -518,6 +566,78 @@ impl Plugin for BuiyHeadlessPlugin {
             buiy_core::text::BuiyTextPlugin::default(),
             WidgetsPlugin,
             buiy_core::render::BuiyRenderPlugin,
+        ));
+    }
+}
+
+/// The **GPU-free probe preset** — the agent's "eyes." It composes only the
+/// data-and-projection sub-plugins Buiy needs to lay out a scene and project its
+/// **semantic tree** + **widget state**, with **no render, no adapter, no
+/// window**: `core` · `theme` · `a11y` · `focus` · `layout` · `text` · `widgets`.
+/// Layout + a11y + widget state are **pure ECS projections** — a Taffy solve, an
+/// `A11yTreeBuilder` fold, and component reads — so the agent's
+/// author → build → run → *inspect* feedback loop runs fully headless: spawn a
+/// scene, step a few frames, and read it back with
+/// [`snapshot`](buiy_core::a11y::inprocess::snapshot) /
+/// [`snapshot_report`](buiy_core::a11y::snapshot_report) — no wgpu adapter, no
+/// `RenderApp`, no OS accessibility bridge.
+///
+/// It differs from [`BuiyHeadlessPlugin`] on exactly one axis: the headless
+/// preset keeps [`BuiyRenderPlugin`](buiy_core::render::BuiyRenderPlugin) (to
+/// *paint* an offscreen frame, so it needs a `RenderApp` + a real wgpu adapter);
+/// the probe **omits** it (nothing rasterizes, so no adapter is needed). Both
+/// omit winit/picking (a probe forces widget state via the
+/// [`perform`](buiy_core::a11y::inprocess::perform) action seam rather than
+/// routing live pointer hits); the probe additionally leaves out scroll +
+/// animation for the same "one settled inspection frame" reason
+/// [`BuiyHeadlessPlugin`] documents (a probe that wants tween motion or scroll
+/// geometry adds [`AnimationPlugin`](buiy_core::animation::AnimationPlugin) /
+/// [`ScrollInputPlugin`] on top).
+///
+/// Realizes Track A of the agent-interface north-star spec (the probe / "eyes"):
+/// packages the *shipped* `a11y::inprocess` driver behind a preset an agent's
+/// build/test loop can stand up with no GPU.
+///
+/// # Required Bevy plugins
+///
+/// `BuiyProbePlugin` is the *Buiy* subset only; the caller supplies the small
+/// **Bevy** substrate a headless-no-render app needs, added BEFORE this plugin:
+/// `MinimalPlugins`, `AssetPlugin` (the text stack loads its fallback font as an
+/// asset), and `bevy::input::InputPlugin` (the focus/keymap systems read
+/// `Res<ButtonInput<KeyCode>>`). No `WindowPlugin`, no `RenderPlugin`, no
+/// `CameraPlugin` — the probe never touches a surface.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy::{BuiyProbePlugin, Button};
+/// use buiy_core::a11y::inprocess::{snapshot, TreeView};
+///
+/// let mut app = App::new();
+/// app.add_plugins(MinimalPlugins)
+///     .add_plugins(bevy::asset::AssetPlugin::default())
+///     .add_plugins(bevy::input::InputPlugin)
+///     .add_plugins(BuiyProbePlugin);
+/// app.world_mut().spawn(Button::new("Save"));
+/// for _ in 0..8 {
+///     app.update();
+/// }
+/// let tree = snapshot(app.world_mut(), TreeView::Unmerged);
+/// assert!(tree.nodes.iter().any(|n| n.name == "Save"));
+/// ```
+pub struct BuiyProbePlugin;
+
+impl Plugin for BuiyProbePlugin {
+    fn build(&self, app: &mut App) {
+        // `BuiyHeadlessPlugin`'s composition minus `BuiyRenderPlugin` — the
+        // GPU-free subset (see the type doc). Same relative order.
+        app.add_plugins((
+            CorePlugin,
+            buiy_core::theme::ThemePlugin,
+            buiy_core::a11y::A11yPlugin,
+            buiy_core::focus::FocusPlugin,
+            buiy_core::layout::LayoutPlugin,
+            buiy_core::text::BuiyTextPlugin::default(),
+            WidgetsPlugin,
         ));
     }
 }

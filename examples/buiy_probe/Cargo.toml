@@ -1,0 +1,26 @@
+[package]
+name = "buiy_probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# The reference agent loop: author `scene()`, run it GPU-free, print the report.
+[[bin]]
+name = "buiy_probe"
+path = "src/main.rs"
+
+[dependencies]
+# `bevy` inherits the workspace feature set (feature unification enables
+# `bevy_render` across the graph regardless); the probe stays GPU-free by never
+# *adding* a render/winit plugin — only `MinimalPlugins` + `AssetPlugin` +
+# `InputPlugin` + `BuiyProbePlugin`. So it runs with no display and no adapter.
+bevy = { workspace = true }
+# The whole probe surface — `BuiyProbePlugin` + `buiy::probe::*` — plus the
+# widgets/components the demo scene authors.
+buiy = { path = "../../crates/buiy" }

@@ -114,6 +114,16 @@ the loop is needed.
 
 ### Track A — The loop / "eyes" (the spine + the eval rig)
 
+> **Status (Track A, 2026-07-02): LANDED.** `BuiyProbePlugin` (the GPU-free
+> no-render preset — `crates/buiy/src/lib.rs`, next to `BuiyHeadlessPlugin`) +
+> `snapshot_report(world) -> String` (`crates/buiy_core/src/a11y/report.rs`) ship
+> the closed loop. Exposed as one front door via `buiy::probe` (the shipped
+> `a11y::inprocess` driver + the plugin), with `examples/buiy_probe` as the
+> reference author → run → inspect → drive loop (its checkbox click observably
+> flips `[unchecked]` → `[checked]` in the next snapshot). Headless-only; the
+> `buiy_mcp` transport (Phase 2) and a pixel channel stay deferred per §5. Plan:
+> `docs/plans/2026-07-02-track-a-agent-probe.md`.
+
 - A first-class, agent-facing way to run a Buiy app **headless (GPU-free)** and read
   its **semantic tree + layout + text** as a text/JSON observation the agent's build/
   test command returns. Built on the existing `a11y::inprocess::{snapshot, perform,
