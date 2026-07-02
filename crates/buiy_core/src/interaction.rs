@@ -51,6 +51,13 @@ pub struct OnPress(pub Entity);
 ///   value change is a discrete commit). Reserved for continuous input: when a
 ///   slider gains pointer-drag, drag steps will report `false` and the release
 ///   `true`, so a consumer can throttle expensive work to the final value.
+///
+/// The spawn-frame insertion of the state component is skipped (a `ValueChange`
+/// is a *change*, not the starting value — read the initial state with a query).
+/// A widget whose state is *seeded on a later frame* (a controlled leaf whose
+/// model asserts a non-default value after spawn) DOES surface that
+/// default→seed transition as a `ValueChange`; seed on the spawn frame if that
+/// programmatic initialization should stay silent.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct ValueChange<T: Send + Sync + 'static> {
     /// The widget entity whose value changed.

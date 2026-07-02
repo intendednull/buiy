@@ -161,6 +161,10 @@ pub fn advance_expanded_on_press(
 /// the initial spawn insertion — a `ValueChange` is a *change*, not the starting
 /// value (read that with a query). `is_final` is always `true` (discrete toggle).
 pub fn emit_toggle_value_change(
+    // Intentionally role-agnostic (no `With<Checkbox/Switch>`): any widget whose
+    // value IS its `A11yToggled` is a `ValueChange<bool>` source. Today that's
+    // exactly Checkbox + Switch (the only widgets that `#[require]` it); it also
+    // covers a future aria-pressed toggle button without a code change.
     changed: Query<(Entity, Ref<A11yToggled>), Changed<A11yToggled>>,
     mut writer: MessageWriter<ValueChange<bool>>,
 ) {
