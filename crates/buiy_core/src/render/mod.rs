@@ -80,6 +80,22 @@ impl DrawData {
     }
 }
 
+/// Signed distance from `p` to a rounded rectangle centered at the origin with
+/// half-extents `half_size` and corner radius `r` (negative inside, positive
+/// outside). Units are logical px with a POSITIVE half-extent — the
+/// view-uniform path retired the Phase-0 y-flip / abs hack.
+///
+/// This is the **single CPU twin of `shader.wgsl::sdf_rounded_rect`**: the SDF
+/// oracle (`buiy_verify::reftest`) and the render-side unit tests all import it,
+/// so the Rust ports cannot silently drift from *each other*. It does **not** by
+/// itself pin the Rust↔WGSL numeric agreement — WGSL is not CPU-executable, so
+/// that leg is caught by the CI lavapipe SDF cross-check; this fn only DRYs the
+/// CPU side (2026-06-18 audit: a DRY nit, not new drift protection).
+pub fn sdf_rounded_rect(p: Vec2, half_size: Vec2, r: f32) -> f32 {
+    let q = p.abs() - half_size + Vec2::splat(r);
+    q.max(Vec2::ZERO).length() + q.x.max(q.y).min(0.0) - r
+}
+
 pub struct BuiyRenderPlugin;
 
 impl Plugin for BuiyRenderPlugin {

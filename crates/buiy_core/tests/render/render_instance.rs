@@ -6,14 +6,10 @@
 
 use bevy::prelude::*;
 use buiy_core::render::DrawData;
+// The canonical CPU twin of `shader.wgsl::sdf_rounded_rect` (logical px, positive
+// half_size — no abs() hack), shared across the SDF oracle + render tests.
+use buiy_core::render::sdf_rounded_rect;
 use buiy_verify::snapshot::assert_instance_hex_snapshot;
-
-// Pure-CPU port of `shader.wgsl::sdf_rounded_rect` (logical px). The view-uniform
-// path keeps the SDF in logical px with a POSITIVE half_size — no abs() hack.
-fn sdf_rounded_rect(p: Vec2, half_size: Vec2, r: f32) -> f32 {
-    let q = p.abs() - half_size + Vec2::splat(r);
-    q.max(Vec2::ZERO).length() + q.x.max(q.y).min(0.0) - r
-}
 
 #[test]
 fn logical_sdf_inside_is_filled_outside_is_empty() {

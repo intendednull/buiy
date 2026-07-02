@@ -11,7 +11,16 @@
 //! The structured tiers ([layout](crate::snapshot::assert_layout_snapshot),
 //! display-list, [invariant](crate::invariant)) are pure-CPU and headless — they
 //! must NOT instantiate a wgpu adapter. So [`build_app`] builds the **CPU**
-//! deterministic stack (`MinimalPlugins + CorePlugin + LayoutPlugin + Theme`),
+//! deterministic stack (`MinimalPlugins + CorePlugin + LayoutPlugin +
+//! BuiyTextPlugin{system_fonts:false} + Theme`). The text plugin makes
+//! text-bearing fixtures MEASURE — the Taffy text-measure needs its
+//! `SharedFontSystem`, and `system_fonts:false` keeps host fonts out so the
+//! measured metrics come only from `buiy_core`'s embedded default font (Fira
+//! Sans, `default_font` feature) — host-stable across the CI matrix without any
+//! Ahem staging (the CPU structured tiers snapshot layout *metrics*, not
+//! rasterized pixels, so an em-box substitution buys nothing here; that
+//! substitution belongs to the GPU golden tier's
+//! [`DeterministicApp`](crate::determinism)). It then
 //! pins the viewport + DPR through a synthetic `PrimaryWindow` (the same
 //! component-only window the layout solver reads its viewport from), and
 //! installs the cell's theme + forced-colors preference. The GPU golden tier
@@ -25,6 +34,7 @@ use bevy::window::{PrimaryWindow, Window, WindowResolution};
 
 use buiy_core::CorePlugin;
 use buiy_core::layout::LayoutPlugin;
+use buiy_core::text::BuiyTextPlugin;
 use buiy_core::theme::UserPreferences;
 
 use super::fixture::sorted_catalog;
@@ -46,7 +56,19 @@ pub fn build_app(fx: &super::fixture::Fixture, cell: &Cell) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(CorePlugin)
-        .add_plugins(LayoutPlugin);
+        .add_plugins(LayoutPlugin)
+        // The text pipeline: the Taffy text-measure needs `SharedFontSystem`
+        // (only `BuiyTextPlugin` inserts it), so WITHOUT this a text-bearing
+        // fixture's label measures at `0×0` — the sole coverage fixture was a
+        // padding-only box around an empty label (V14). `system_fonts: false`
+        // keeps it deterministic (no host-font scan); the render-world half is
+        // guarded on a `RenderApp` (absent under `MinimalPlugins`) and the
+        // asset-loader on an `AssetServer` (also absent), so the CPU/no-adapter
+        // invariant of `build_app` holds. This also lets the content-presence
+        // check (V13) run on this stack (`content_is_present` is CPU-side).
+        .add_plugins(BuiyTextPlugin {
+            system_fonts: false,
+        });
 
     // The cell's theme is the ACTIVE theme. We do not run the forced-colors
     // swap system here: `build_app` installs the resolved theme directly (the

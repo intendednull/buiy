@@ -256,12 +256,9 @@ pub fn mismatch_floor_ok(kind: RefKind, fuzz: &FuzzBudget) -> bool {
 pub mod sdf_oracle {
     use bevy::math::Vec2;
     use buiy_core::render::DrawData;
-
-    /// 1:1 CPU port of `shader.wgsl::sdf_rounded_rect`.
-    pub fn sdf_rounded_rect(p: Vec2, half_size: Vec2, r: f32) -> f32 {
-        let q = p.abs() - half_size + Vec2::splat(r);
-        q.max(Vec2::ZERO).length() + q.x.max(q.y).min(0.0) - r
-    }
+    // The one canonical CPU twin of `shader.wgsl::sdf_rounded_rect`, shared with
+    // the render-side unit tests so the Rust ports cannot drift from each other.
+    pub use buiy_core::render::sdf_rounded_rect;
 
     /// Rasterize one `DrawData` rounded-rect into a `w×h` RGBA tile that matches
     /// the **capture output**, not just the fragment shader. It mirrors the full
