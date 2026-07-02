@@ -8,13 +8,18 @@
 # modern browser). See docs/specs/2026-06-30-buiy-browser-reach-widening-design.md § D1.
 #
 # Usage:  tools/build-web.sh [example-dir]   (default: examples/gallery_web)
-#         RELEASE=1 tools/build-web.sh ...    (size-optimized build)
+#         RELEASE=1 tools/build-web.sh ...    (size-optimized shipping build)
+#
+# RELEASE=1 builds through the `wasm-release` cargo profile (opt-level="s" + LTO +
+# codegen-units=1 + strip) rather than the speed-tuned default `release`, then runs
+# a `wasm-opt -Oz` size pass over each artifact (see below). Use it for anything you
+# deploy; omit it for a fast dev build.
 set -euo pipefail
 
 EX="${1:-examples/gallery_web}"
 [ -f "$EX/index.html" ] || { echo "no $EX/index.html — pass a web example dir" >&2; exit 1; }
 OUT="$EX/dist-web"
-REL="${RELEASE:+--release}"
+REL="${RELEASE:+--release --cargo-profile wasm-release}"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/webgpu" "$OUT/webgl2"
@@ -29,6 +34,29 @@ gpu_js=$(cd "$OUT/webgpu" && ls *.js | grep -v -- '-loader' | head -1)
 gpu_wasm=$(cd "$OUT/webgpu" && ls *_bg.wasm | head -1)
 gl2_js=$(cd "$OUT/webgl2" && ls *.js | grep -v -- '-loader' | head -1)
 gl2_wasm=$(cd "$OUT/webgl2" && ls *_bg.wasm | head -1)
+
+# Size pass (release only): wasm-opt -Oz on each artifact, in place. We run it
+# here rather than via trunk's `data-wasm-opt` because trunk 0.21's invocation
+# omits the wasm-feature flags modern rustc emits (bulk-memory / reference-types /
+# …) and so fails outright. `-all` enables those features. Optional + graceful:
+# skipped for dev builds and when wasm-opt is absent — the `wasm-release` cargo
+# profile already did the bulk of the shrinking, so the bundle is still valid.
+if [ -n "${RELEASE:-}" ]; then
+  if command -v wasm-opt >/dev/null 2>&1; then
+    for w in "$OUT/webgpu/$gpu_wasm" "$OUT/webgl2/$gl2_wasm"; do
+      before=$(wc -c < "$w")
+      if wasm-opt -Oz -all "$w" -o "$w.opt"; then
+        mv "$w.opt" "$w"
+        echo "wasm-opt -Oz $(basename "$w"): $((before / 1048576)) MB -> $(( $(wc -c < "$w") / 1048576 )) MB"
+      else
+        rm -f "$w.opt"
+        echo "WARN: wasm-opt failed on $(basename "$w") — keeping the profile-optimized wasm" >&2
+      fi
+    done
+  else
+    echo "NOTE: wasm-opt not on PATH — shipping the wasm-release-profile build without the extra -Oz size pass (install binaryen for the smallest artifact)." >&2
+  fi
+fi
 
 cat > "$OUT/index.html" <<HTML
 <!DOCTYPE html>
