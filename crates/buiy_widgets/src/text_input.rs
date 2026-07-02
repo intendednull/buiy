@@ -113,7 +113,7 @@ pub(crate) fn text_input_overflow() -> Overflow {
 /// The default input surface fill (`color.surface.secondary`).
 pub(crate) fn text_input_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 

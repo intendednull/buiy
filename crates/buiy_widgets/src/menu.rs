@@ -203,7 +203,7 @@ pub(crate) fn menu_button_box_model() -> BoxModel {
 /// The default menu-button fill (the `color.surface.secondary` token).
 pub(crate) fn menu_button_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 
@@ -228,7 +228,7 @@ pub(crate) fn menu_box_model() -> BoxModel {
 /// panel).
 pub(crate) fn menu_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 
@@ -249,7 +249,7 @@ pub(crate) fn menu_item_box_model() -> BoxModel {
 /// item highlight is a C6 paint concern, not built here).
 pub(crate) fn menu_item_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 

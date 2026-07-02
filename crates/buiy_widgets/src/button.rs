@@ -91,7 +91,7 @@ pub(crate) fn button_box_model() -> BoxModel {
 /// The default button surface fill (the `color.surface.secondary` token).
 pub(crate) fn button_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 

@@ -164,7 +164,7 @@ pub(crate) fn slider_track_box_model() -> BoxModel {
 /// The track fill (the `color.surface.secondary` token — the inactive rail).
 pub(crate) fn slider_track_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 
@@ -179,7 +179,7 @@ pub(crate) fn slider_thumb_box_model() -> BoxModel {
 /// The thumb fill (the `color.surface.primary` token — a contrasting knob).
 pub(crate) fn slider_thumb_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 

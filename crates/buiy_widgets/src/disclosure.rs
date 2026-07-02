@@ -178,7 +178,7 @@ pub(crate) fn disclosure_panel_position() -> Position {
 /// The default disclosure trigger fill (the `color.surface.secondary` token).
 pub(crate) fn disclosure_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        color: ColorToken::SurfaceSecondary,
     }
 }
 
@@ -198,7 +198,7 @@ pub(crate) fn disclosure_panel_box_model() -> BoxModel {
 /// The panel surface fill (the `color.surface.primary` token — a distinct panel).
 pub(crate) fn disclosure_panel_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 

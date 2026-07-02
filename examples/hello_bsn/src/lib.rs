@@ -48,7 +48,7 @@ pub fn hello_bsn_scene() -> impl Scene {
             width: { Sizing::Length(Length::Px(340.0)) },
             padding: { Edges::all(12.0) },
         }
-        Background { color: { ColorToken::Token("color.surface.primary".into()) } }
+        Background { color: { ColorToken::SurfacePrimary } }
         Children [
             (#Search text_input_single_line("Search…")),
             (

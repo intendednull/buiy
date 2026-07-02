@@ -383,7 +383,7 @@ fn section_heading(world: &mut World, name: &str, s: &str) -> Entity {
         geist_mono(),
         10.0,
         500,
-        tok("color.text.dim"),
+        ColorToken::TextDim,
         Some(1.20),
     );
     world.entity_mut(e).insert(BoxModel {
@@ -408,7 +408,7 @@ fn build_name_desc_section(world: &mut World) -> Entity {
         geist(),
         14.0,
         600,
-        tok("color.text.primary"),
+        ColorToken::TextPrimary,
         None,
     );
     world.entity_mut(name).insert((
@@ -429,7 +429,7 @@ fn build_name_desc_section(world: &mut World) -> Entity {
         geist_mono(),
         11.5,
         400,
-        tok("color.text.faint"),
+        ColorToken::TextFaint,
         None,
     );
     world
@@ -1088,7 +1088,7 @@ fn set_swatch_selected(world: &mut World, swatch: Entity, selected: bool) {
         // a colored drop using the (selected = current accent) hex.
         world.entity_mut(swatch).insert(BoxShadow(vec![
             Shadow {
-                color: tok("color.shadow.switch-thumb"),
+                color: ColorToken::ShadowSwitchThumb,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(0.0),
                 blur: Length::px(0.0),
@@ -1096,7 +1096,7 @@ fn set_swatch_selected(world: &mut World, swatch: Entity, selected: bool) {
                 inset: false,
             },
             Shadow {
-                color: tok("color.accent"),
+                color: ColorToken::Accent,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(4.0),
                 blur: Length::px(12.0),

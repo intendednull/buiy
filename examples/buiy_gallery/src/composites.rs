@@ -238,7 +238,7 @@ pub fn stepper(world: &mut World, count: i32) -> Entity {
         &format!("{count:02}"),
         20.0,
         600,
-        tok("color.text.primary"),
+        ColorToken::TextPrimary,
     );
     // `min-width:44px; text-align:center` (values.md § 7.2). A centered flex-box
     // wrapper gives the count its min-width without disturbing the leaf's own
@@ -286,7 +286,7 @@ fn stepper_button(world: &mut World, which: StepperButton, path_d: &str) -> Enti
         path_d,
         2.0,
         15,
-        tok("color.text.secondary"),
+        ColorToken::TextSecondary,
     );
     world
         .spawn((
@@ -296,7 +296,7 @@ fn stepper_button(world: &mut World, which: StepperButton, path_d: &str) -> Enti
             Name::new(format!("#StepperButton-{label}")),
             square_button_style(34.0),
             Background {
-                color: tok("color.surface.inset"),
+                color: ColorToken::SurfaceInset,
             },
             border_all("color.border.strong", 8.0),
         ))
@@ -404,9 +404,9 @@ fn segmented_option(world: &mut World, idx: usize, label: &str, selected: bool) 
 /// The `(bg, fg)` token pair for a segmented option in `selected` state.
 fn segmented_colors(selected: bool) -> (&'static str, ColorToken) {
     if selected {
-        ("color.accent", tok("color.text.on-accent"))
+        ("color.accent", ColorToken::TextOnAccent)
     } else {
-        ("color.surface.transparent", tok("color.text.muted"))
+        ("color.surface.transparent", ColorToken::TextMuted)
     }
 }
 
@@ -478,7 +478,7 @@ pub fn toast(world: &mut World, msg: &str) -> Entity {
         "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M8.5 12l2.5 2.5 4.5-5",
         1.8,
         16,
-        tok("color.accent"),
+        ColorToken::Accent,
     );
     let label = sans_leaf(
         world,
@@ -486,7 +486,7 @@ pub fn toast(world: &mut World, msg: &str) -> Entity {
         msg,
         12.5,
         500,
-        tok("color.text.primary"),
+        ColorToken::TextPrimary,
     );
 
     let card = world
@@ -500,13 +500,13 @@ pub fn toast(world: &mut World, msg: &str) -> Entity {
                 .padding_edges(Edges::axis(16.0, 11.0))
                 .border(1.0),
             Background {
-                color: tok("color.surface.raised"),
+                color: ColorToken::SurfaceRaised,
             },
             border_all("color.border.strong", 10.0),
             // shadow.menu — `0 16px 40px -12px rgba(0,0,0,.8)` (values.md § 2). The
             // spread is the design's negative `-12px`.
             BoxShadow(vec![Shadow {
-                color: tok("color.shadow.menu"),
+                color: ColorToken::ShadowMenu,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(16.0),
                 blur: Length::px(40.0),
@@ -657,7 +657,7 @@ pub fn badge(world: &mut World, label: &str, radius: f32) -> Entity {
         label,
         11.0,
         500,
-        tok("color.text.muted"),
+        ColorToken::TextMuted,
     );
     let b = box_node(
         world,
@@ -701,7 +701,7 @@ pub fn chip(world: &mut World, label: &str, dot_color: &str) -> Entity {
         label,
         11.0,
         500,
-        tok("color.text.secondary"),
+        ColorToken::TextSecondary,
     );
     let c = box_node(
         world,
@@ -729,14 +729,14 @@ pub fn chip(world: &mut World, label: &str, dot_color: &str) -> Entity {
 /// space-between). Returns the row. (The rail's own stats are built in `shell.rs`;
 /// this is the reusable extraction the inspector live-state + showcase reuse.)
 pub fn stat_row(world: &mut World, key: &str, value: &str) -> Entity {
-    let key_leaf = sans_leaf(world, "#StatKey", key, 11.5, 400, tok("color.text.muted"));
+    let key_leaf = sans_leaf(world, "#StatKey", key, 11.5, 400, ColorToken::TextMuted);
     let val_leaf = mono_leaf(
         world,
         "#StatVal",
         value,
         11.5,
         500,
-        tok("color.text.secondary"),
+        ColorToken::TextSecondary,
     );
     world
         .spawn((
@@ -769,7 +769,7 @@ fn showcase_cell(world: &mut World, caption: &str, content: Entity) -> Entity {
         geist_mono(),
         10.0,
         500,
-        tok("color.text.dim"),
+        ColorToken::TextDim,
         Some(1.20),
     );
     world
@@ -858,7 +858,7 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
                 Name::new("#TablePanel"),
                 Style::default().flex_column().width_px(360.0),
                 Background {
-                    color: tok("color.surface.card"),
+                    color: ColorToken::SurfaceCard,
                 },
                 border_all("color.border.default", 8.0),
             ))
@@ -947,7 +947,7 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
                 .width(Sizing::Length(Length::percent(100.0)))
                 .height(Sizing::Length(Length::percent(100.0))),
             Background {
-                color: tok("color.surface.app"),
+                color: ColorToken::SurfaceApp,
             },
         ))
         .add_children(&[grid])

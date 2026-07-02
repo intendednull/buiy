@@ -516,7 +516,7 @@ pub fn build_shell(world: &mut World) -> Entity {
                 .height(Sizing::Length(Length::percent(100.0)))
                 .overflow_hidden(),
             Background {
-                color: tok("color.surface.app"),
+                color: ColorToken::SurfaceApp,
             },
         ))
         .id();
@@ -538,7 +538,7 @@ fn build_chrome(world: &mut World) -> Entity {
         2.4,
         13,
         false,
-        tok("color.text.on-accent"),
+        ColorToken::TextOnAccent,
     );
     let logo = world
         .spawn((
@@ -555,11 +555,11 @@ fn build_chrome(world: &mut World) -> Entity {
                 angle_deg: 150.0,
                 stops: vec![
                     ColorStop {
-                        color: tok("color.accent"),
+                        color: ColorToken::Accent,
                         position: 0.0,
                     },
                     ColorStop {
-                        color: tok("color.accent.lighter"),
+                        color: ColorToken::AccentLighter,
                         position: 1.0,
                     },
                 ],
@@ -577,7 +577,7 @@ fn build_chrome(world: &mut World) -> Entity {
         world,
         "#Wordmark",
         "buiy",
-        TextSpec::mono(15.0, 600, tok("color.text.primary")).ls(-0.15),
+        TextSpec::mono(15.0, 600, ColorToken::TextPrimary).ls(-0.15),
     );
 
     // "widget catalog" accent badge (Geist Mono 11 / 500 / .22px, accent tint).
@@ -586,7 +586,7 @@ fn build_chrome(world: &mut World) -> Entity {
             world,
             "#CatalogBadgeText",
             "widget catalog",
-            TextSpec::mono(11.0, 500, tok("color.accent")).ls(0.22),
+            TextSpec::mono(11.0, 500, ColorToken::Accent).ls(0.22),
         );
         let b = chip(
             world,
@@ -623,13 +623,13 @@ fn build_chrome(world: &mut World) -> Entity {
             world,
             "#CargoPrefix",
             "$ ",
-            TextSpec::mono(11.5, 500, tok("color.text.dim")),
+            TextSpec::mono(11.5, 500, ColorToken::TextDim),
         );
         let cmd = text_leaf(
             world,
             "#CargoCmd",
             "cargo run -p buiy_gallery",
-            TextSpec::mono(11.5, 500, tok("color.text.muted")),
+            TextSpec::mono(11.5, 500, ColorToken::TextMuted),
         );
         let c = chip(
             world,
@@ -653,13 +653,13 @@ fn build_chrome(world: &mut World) -> Entity {
             1.7,
             13,
             false,
-            tok("color.text.muted"),
+            ColorToken::TextMuted,
         );
         let label = text_leaf(
             world,
             "#ThemeLabel",
             "dark",
-            TextSpec::mono(11.0, 500, tok("color.text.muted")),
+            TextSpec::mono(11.0, 500, ColorToken::TextMuted),
         );
         let c = chip(
             world,
@@ -684,7 +684,7 @@ fn build_chrome(world: &mut World) -> Entity {
             0.0,
             15,
             true,
-            tok("color.text.secondary"),
+            ColorToken::TextSecondary,
         );
         world
             .spawn((
@@ -698,7 +698,7 @@ fn build_chrome(world: &mut World) -> Entity {
                     .align_items(AlignItems::Center)
                     .border(1.0),
                 Background {
-                    color: tok("color.surface.inset"),
+                    color: ColorToken::SurfaceInset,
                 },
                 Border {
                     top: solid_side("color.border.default"),
@@ -735,7 +735,7 @@ fn build_chrome(world: &mut World) -> Entity {
                     left: Length::px(0.0),
                 }),
             Background {
-                color: tok("color.surface.chrome"),
+                color: ColorToken::SurfaceChrome,
             },
             Border {
                 bottom: solid_side("color.border.subtle"),
@@ -806,7 +806,7 @@ fn build_rail(world: &mut World) -> Entity {
                     left: Length::px(0.0),
                 }),
             Background {
-                color: tok("color.surface.chrome"),
+                color: ColorToken::SurfaceChrome,
             },
             Border {
                 right: solid_side("color.border.subtle"),
@@ -827,7 +827,7 @@ fn section_label(world: &mut World, name: &str, s: &str) -> Entity {
         world,
         name,
         s,
-        TextSpec::mono(10.0, 500, tok("color.text.dim")).ls(1.40),
+        TextSpec::mono(10.0, 500, ColorToken::TextDim).ls(1.40),
     )
 }
 
@@ -839,29 +839,29 @@ fn section_label(world: &mut World, name: &str, s: &str) -> Entity {
 /// seeds the boot-time active styling (the default screen).
 fn build_nav_button(world: &mut World, screen: Screen, active: bool) -> Entity {
     let bar_color = if active {
-        tok("color.accent")
+        ColorToken::Accent
     } else {
-        tok("color.surface.transparent")
+        ColorToken::Transparent
     };
     let idx_color = if active {
-        tok("color.accent")
+        ColorToken::Accent
     } else {
-        tok("color.text.dim")
+        ColorToken::TextDim
     };
     let icon_color = if active {
-        tok("color.text.primary")
+        ColorToken::TextPrimary
     } else {
-        tok("color.text.muted")
+        ColorToken::TextMuted
     };
     let name_color = if active {
-        tok("color.text.primary")
+        ColorToken::TextPrimary
     } else {
-        tok("color.text.secondary")
+        ColorToken::TextSecondary
     };
     let bg = if active {
-        tok("color.surface.card")
+        ColorToken::SurfaceCard
     } else {
-        tok("color.surface.transparent")
+        ColorToken::Transparent
     };
 
     // The active accent left-bar: absolute, left:0, top/bottom:8px, width 2.5px,
@@ -929,7 +929,7 @@ fn build_nav_button(world: &mut World, screen: Screen, active: bool) -> Entity {
         world,
         "#NavDesc",
         screen.desc(),
-        TextSpec::sans(11.0, 400, tok("color.text.faint")),
+        TextSpec::sans(11.0, 400, ColorToken::TextFaint),
     );
     let label_col = flex_box(
         world,
@@ -1013,13 +1013,13 @@ fn stat_row(world: &mut World, k: &str, v: &str) -> Entity {
         world,
         "#StatKey",
         k,
-        TextSpec::sans(11.5, 400, tok("color.text.muted")),
+        TextSpec::sans(11.5, 400, ColorToken::TextMuted),
     );
     let val = text_leaf(
         world,
         "#StatVal",
         v,
-        TextSpec::mono(11.5, 500, tok("color.text.secondary")),
+        TextSpec::mono(11.5, 500, ColorToken::TextSecondary),
     );
     let row = flex_box(
         world,
@@ -1076,12 +1076,12 @@ fn build_viewport(world: &mut World) -> Entity {
     );
     world.entity_mut(viewport).insert((
         Background {
-            color: tok("color.surface.app"),
+            color: ColorToken::SurfaceApp,
         },
         // The dotted radial-grid: a 1px `color.misc.dot-bg` dot centered in every
         // 22px cell, transparent between (values.md § 7.3; B2 `dot_grid`).
         BackgroundLayers(vec![BackgroundLayer::Radial(RadialGradient::dot_grid(
-            tok("color.misc.dot-bg"),
+            ColorToken::DotBg,
             1.0,
             22.0,
         ))]),
@@ -1102,7 +1102,7 @@ fn build_viewport_header(world: &mut World) -> Entity {
         world,
         "#VpScreenName",
         initial.name(),
-        TextSpec::mono(12.5, 500, tok("color.text.secondary")),
+        TextSpec::mono(12.5, 500, ColorToken::TextSecondary),
     );
     world.entity_mut(name).insert(ViewportHeaderField::Name);
 
@@ -1110,7 +1110,7 @@ fn build_viewport_header(world: &mut World) -> Entity {
         world,
         "#VpScreenPath",
         initial.path(),
-        TextSpec::mono(11.0, 400, tok("color.text.dim")),
+        TextSpec::mono(11.0, 400, ColorToken::TextDim),
     );
     world.entity_mut(path).insert(ViewportHeaderField::Path);
 
@@ -1121,7 +1121,7 @@ fn build_viewport_header(world: &mut World) -> Entity {
         world,
         "#VpSizeBadge",
         initial.size_badge(),
-        TextSpec::mono(11.0, 500, tok("color.text.muted")),
+        TextSpec::mono(11.0, 500, ColorToken::TextMuted),
     );
     world
         .entity_mut(size_text)
@@ -1154,7 +1154,7 @@ fn build_viewport_header(world: &mut World) -> Entity {
                     left: Length::px(0.0),
                 }),
             Background {
-                color: tok("color.surface.chrome-translucent"),
+                color: ColorToken::SurfaceChromeTranslucent,
             },
             Border {
                 bottom: solid_side("color.border.subtle"),
@@ -1187,13 +1187,13 @@ fn build_inspector(world: &mut World) -> Entity {
         1.5,
         15,
         false,
-        tok("color.accent"),
+        ColorToken::Accent,
     );
     let label = text_leaf(
         world,
         "#InspectorLabel",
         "INSPECTOR",
-        TextSpec::mono(10.0, 500, tok("color.text.muted")).ls(1.40),
+        TextSpec::mono(10.0, 500, ColorToken::TextMuted).ls(1.40),
     );
     let header = flex_box(
         world,
@@ -1228,7 +1228,7 @@ fn build_inspector(world: &mut World) -> Entity {
                     left: Length::px(1.0),
                 }),
             Background {
-                color: tok("color.surface.chrome"),
+                color: ColorToken::SurfaceChrome,
             },
             Border {
                 left: solid_side("color.border.subtle"),
@@ -1255,14 +1255,14 @@ fn build_status_bar(world: &mut World) -> Entity {
             Name::new("#ReadyDot"),
             Style::default().width_px(7.0).height_px(7.0),
             Background {
-                color: tok("color.status.ok"),
+                color: ColorToken::StatusOk,
             },
             Border {
                 radius: Corners::all(Radius::circular(99.0)),
                 ..Default::default()
             },
             BoxShadow(vec![Shadow {
-                color: tok("color.status.ok"),
+                color: ColorToken::StatusOk,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(0.0),
                 blur: Length::px(6.0),
@@ -1276,7 +1276,7 @@ fn build_status_bar(world: &mut World) -> Entity {
         world,
         "#ReadyLabel",
         "ready",
-        TextSpec::mono(11.0, 500, tok("color.status.ok")),
+        TextSpec::mono(11.0, 500, ColorToken::StatusOk),
     );
     let ready = flex_box(
         world,
@@ -1293,7 +1293,7 @@ fn build_status_bar(world: &mut World) -> Entity {
         world,
         "#StatusPath",
         initial.path(),
-        TextSpec::mono(11.0, 500, tok("color.text.muted")),
+        TextSpec::mono(11.0, 500, ColorToken::TextMuted),
     );
     world.entity_mut(path).insert(ViewportHeaderField::Path);
     let status_spacer = spacer(world, "#StatusSpacer");
@@ -1301,14 +1301,14 @@ fn build_status_bar(world: &mut World) -> Entity {
         world,
         "#StatusRight",
         "inspector on",
-        TextSpec::mono(11.0, 500, tok("color.text.dim")),
+        TextSpec::mono(11.0, 500, ColorToken::TextDim),
     );
     let sep2 = status_sep(world);
     let version = text_leaf(
         world,
         "#StatusVersion",
         "buiy 0.3.0",
-        TextSpec::mono(11.0, 500, tok("color.text.muted")),
+        TextSpec::mono(11.0, 500, ColorToken::TextMuted),
     );
 
     let status = world
@@ -1328,7 +1328,7 @@ fn build_status_bar(world: &mut World) -> Entity {
                     left: Length::px(0.0),
                 }),
             Background {
-                color: tok("color.surface.chrome"),
+                color: ColorToken::SurfaceChrome,
             },
             Border {
                 top: solid_side("color.border.subtle"),
@@ -1354,7 +1354,7 @@ fn status_sep(world: &mut World) -> Entity {
         world,
         "#StatusSep",
         "|",
-        TextSpec::mono(11.0, 500, tok("color.text.dimmer")),
+        TextSpec::mono(11.0, 500, ColorToken::TextDimmer),
     )
 }
 
@@ -1606,9 +1606,9 @@ pub fn reflect_rail_active_state(world: &mut World) {
         let is_active = screen == active;
         // The button card bg (`surface.card` active / transparent not).
         let bg = if is_active {
-            tok("color.surface.card")
+            ColorToken::SurfaceCard
         } else {
-            tok("color.surface.transparent")
+            ColorToken::Transparent
         };
         if let Some(mut b) = world.get_mut::<Background>(button)
             && b.color != bg
@@ -1623,9 +1623,9 @@ pub fn reflect_rail_active_state(world: &mut World) {
             match part {
                 NavPart::Bar => {
                     let color = if is_active {
-                        tok("color.accent")
+                        ColorToken::Accent
                     } else {
-                        tok("color.surface.transparent")
+                        ColorToken::Transparent
                     };
                     if let Some(mut b) = world.get_mut::<Background>(child)
                         && b.color != color
@@ -1645,9 +1645,9 @@ pub fn reflect_rail_active_state(world: &mut World) {
                 NavPart::Icon => {
                     // The icon's tint lives on its `Icon.color` (a coverage glyph).
                     let color = if is_active {
-                        tok("color.text.primary")
+                        ColorToken::TextPrimary
                     } else {
-                        tok("color.text.muted")
+                        ColorToken::TextMuted
                     };
                     if let Some(mut icon) = world.get_mut::<Icon>(child)
                         && icon.color != color

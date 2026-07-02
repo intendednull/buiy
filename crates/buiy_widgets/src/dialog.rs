@@ -149,7 +149,7 @@ pub(crate) fn dialog_box_model() -> BoxModel {
 /// The default dialog panel fill (the `color.surface.primary` token).
 pub(crate) fn dialog_background() -> Background {
     Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     }
 }
 

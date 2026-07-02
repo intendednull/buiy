@@ -190,11 +190,11 @@ pub fn meter(world: &mut World, width: f32, pct: f32) -> (Entity, Entity) {
                 angle_deg: 90.0,
                 stops: vec![
                     ColorStop {
-                        color: tok("color.accent"),
+                        color: ColorToken::Accent,
                         position: 0.0,
                     },
                     ColorStop {
-                        color: tok("color.accent.lighter"),
+                        color: ColorToken::AccentLighter,
                         position: 1.0,
                     },
                 ],
@@ -275,7 +275,7 @@ pub fn search_input(world: &mut World, placeholder: &str, font: FontFamily, widt
         "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14M20 20l-4-4",
         1.7,
         15,
-        tok("color.text.dim"),
+        ColorToken::TextDim,
     );
     // A real single-line text field (focusable + editable), grown to fill the row.
     // The `TextInput` `#[require]` box model is 200×32 + 8px padding → a 48px
@@ -381,7 +381,7 @@ pub fn kbd_content(
 /// symbol as a vector icon. `mono` is the caller's monospace face. Returns the kbd
 /// root.
 pub fn kbd(world: &mut World, key: &str, mono: FontFamily) -> Entity {
-    let text = kbd_content(world, "#KbdGlyph", key, mono, tok("color.text.dim"));
+    let text = kbd_content(world, "#KbdGlyph", key, mono, ColorToken::TextDim);
     let k = box_node(
         world,
         "#Kbd",
@@ -511,7 +511,7 @@ pub fn table_row(
         font.clone(),
         11.0,
         500,
-        tok("color.text.dim"),
+        ColorToken::TextDim,
         None,
     );
     world
@@ -556,7 +556,7 @@ pub fn table_row(
         font.clone(),
         12.5,
         500,
-        tok("color.text.secondary"),
+        ColorToken::TextSecondary,
         None,
     );
 
@@ -567,7 +567,7 @@ pub fn table_row(
         font.clone(),
         12.5,
         400,
-        tok("color.text.faint"),
+        ColorToken::TextFaint,
         None,
     );
     world.entity_mut(name).insert((
@@ -579,9 +579,9 @@ pub fn table_row(
     ));
 
     let ms_color = if data.ms_warn {
-        tok("color.status.warn")
+        ColorToken::StatusWarn
     } else {
-        tok("color.text.faint")
+        ColorToken::TextFaint
     };
     let ms = text_leaf(
         world,
@@ -685,7 +685,7 @@ fn spawn_row_sel_bar(world: &mut World) -> Entity {
                 })
                 .width_px(2.5),
             Background {
-                color: tok("color.accent"),
+                color: ColorToken::Accent,
             },
             Pickable::IGNORE,
         ))
@@ -712,7 +712,7 @@ pub fn table_header(world: &mut World, cols: &[(&str, Option<f32>)], font: FontF
                 font.clone(),
                 10.0,
                 500,
-                tok("color.text.dim"),
+                ColorToken::TextDim,
                 Some(1.00),
             );
             match width {
