@@ -184,7 +184,14 @@ pub fn meter(world: &mut World, width: f32, pct: f32) -> (Entity, Entity) {
             Name::new("#MeterFill"),
             Style::default()
                 .width(Sizing::Length(Length::percent(100.0)))
-                .height(Sizing::Length(Length::percent(100.0))),
+                .height(Sizing::Length(Length::percent(100.0)))
+                // Pin the scale pivot to the LEFT edge so the fill grows from the
+                // left (a left-anchored progress bar). `compose_transform` now
+                // honors `transform-origin` (default `50% 50%` = center); without
+                // this the `Scale(pct,1,1)` below would grow from the middle. y is
+                // irrelevant (scale.y == 1) — `0%`/`50%` both reproduce the prior
+                // top-left behavior byte-for-byte.
+                .transform_origin(Length::percent(0.0), Length::percent(50.0)),
             // The 90deg accent gradient (opaque stops).
             BackgroundLayers(vec![BackgroundLayer::Linear(LinearGradient {
                 angle_deg: 90.0,
@@ -203,12 +210,9 @@ pub fn meter(world: &mut World, width: f32, pct: f32) -> (Entity, Entity) {
                 radius: Corners::all(Radius::circular(99.0)),
                 ..Default::default()
             },
-            // The resting X scale = the initial fill fraction. A decomposed `Scale`
-            // pivots about the box-LOCAL ORIGIN (the top-left corner), so
-            // `Scale(pct, 1, 1)` grows the full-width fill from the LEFT edge:
-            // exactly a left-anchored progress fill, with NO transform-origin
-            // needed (`compose_transform` is `T·R·S·M`, origin-free, and the corner
-            // pivot is what we want here).
+            // The resting X scale = the initial fill fraction. With the left-edge
+            // `transform-origin` set above, `Scale(pct, 1, 1)` grows the full-width
+            // fill from the LEFT edge: exactly a left-anchored progress fill.
             Scale(pct, 1.0, 1.0),
             Pickable::IGNORE,
         ))

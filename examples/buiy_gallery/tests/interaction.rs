@@ -53,7 +53,7 @@ use buiy_core::render::components::CssVisibility;
 use buiy_core::text::Text;
 use buiy_core::theme::{Theme, default_dark_theme};
 
-use buiy_gallery::composites::{SegmentedOption, StepperButton, ToastPlugin};
+use buiy_gallery::composites::{SegmentedOption, StepperButton, StepperCount, ToastPlugin};
 use buiy_gallery::inspector::{AccentSwatch, InspectorPlugin};
 use buiy_gallery::shell::{Screen, ScreenNav, ScreenRoot, ScreenRouter, ScreenRouterPlugin};
 use buiy_gallery::{
@@ -1043,6 +1043,29 @@ fn showcase_stepper_plus_and_minus_clicks_change_the_count() {
         .unwrap()
         .count;
 
+    // The VISIBLE readout leaf — the regression this test now also guards: the
+    // count state used to advance while the displayed text stayed frozen, because
+    // `stepper()` never inserted the `StepperCount` marker so `set_stepper` was a
+    // silent no-op. Assert the rendered text, not only the state.
+    let count_leaf = {
+        let leaves = in_screen::<StepperCount>(g.world_app(), Screen::Showcase);
+        assert_eq!(leaves.len(), 1, "exactly one showcase stepper count leaf");
+        leaves[0]
+    };
+    let rendered = |g: &mut Gallery| {
+        g.world_app()
+            .world()
+            .get::<Text>(count_leaf)
+            .expect("count leaf has Text")
+            .0
+            .clone()
+    };
+    assert_eq!(
+        rendered(&mut g),
+        format!("{start:02}"),
+        "seed count rendered"
+    );
+
     let plus = find_where::<StepperButton>(g.world_app(), |b| *b == StepperButton::Increment);
     g.click(plus);
     g.settle(2);
@@ -1054,6 +1077,11 @@ fn showcase_stepper_plus_and_minus_clicks_change_the_count() {
             .count,
         start + 1,
         "clicking + increments the stepper count",
+    );
+    assert_eq!(
+        rendered(&mut g),
+        format!("{:02}", start + 1),
+        "clicking + updates the VISIBLE readout (not only the state)",
     );
 
     let minus = find_where::<StepperButton>(g.world_app(), |b| *b == StepperButton::Decrement);
@@ -1067,6 +1095,11 @@ fn showcase_stepper_plus_and_minus_clicks_change_the_count() {
             .count,
         start,
         "clicking − decrements it back",
+    );
+    assert_eq!(
+        rendered(&mut g),
+        format!("{start:02}"),
+        "clicking − updates the VISIBLE readout back",
     );
 }
 

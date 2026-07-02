@@ -22,7 +22,8 @@ use smallvec::SmallVec;
 use crate::components::{Node, ResolvedLayout, StackingContext};
 use crate::layout::Stacking;
 use crate::render::atlas::{
-    AtlasBitmap, AtlasEntry, AtlasFormat, AtlasKey, BuiyAtlas, GlyphAlphaInstance,
+    AtlasBitmap, AtlasEntry, AtlasFormat, AtlasKey, BuiyAtlas, GLYPH_IDENTITY_AFFINE,
+    GlyphAlphaInstance,
 };
 use crate::render::color::{
     resolve_caret_color, resolve_preedit_underline, resolve_selection_bg, resolve_selection_fg,
@@ -77,6 +78,26 @@ pub fn physical_offset(content_origin: Vec2, line_y: f32, scale_factor: f32) -> 
 /// `Placement{width, height}`). A physical-grid-aligned rect divided by the
 /// scale lands back on the same physical texels under the exact-linear view
 /// transform — crisp text under the pinned Nearest sampler.
+/// Re-pivot a window-space glyph/decoration rect's ORIGIN by the entity's 2D
+/// affine about `translation`, so a rotated/scaled text run rotates rigidly about
+/// the entity's transform-origin (the pivot 6e baked into `GlobalTransform`):
+/// `rect.xy -> translation + A·(rect.xy - translation)` = `transform_point` of the
+/// box-local corner. The size (`zw`) is left untouched — `coverage.wgsl` applies
+/// the SAME affine to the box-local extent, so `rect.xy + A·(v.uv·size)` becomes
+/// `transform_point(box_local_corner)`. Identity affine early-returns the rect
+/// UNCHANGED, so untransformed text is byte-identical.
+fn repivot_origin(rect: [f32; 4], translation: Vec2, affine: [f32; 4]) -> [f32; 4] {
+    if affine == GLYPH_IDENTITY_AFFINE {
+        return rect;
+    }
+    let lx = rect[0] - translation.x;
+    let ly = rect[1] - translation.y;
+    // affine cols [m00, m10, m01, m11]: world = A·local.
+    let wx = affine[0] * lx + affine[2] * ly;
+    let wy = affine[1] * lx + affine[3] * ly;
+    [translation.x + wx, translation.y + wy, rect[2], rect[3]]
+}
+
 pub fn glyph_rect_logical(
     phys_x: i32,
     phys_y: i32,
@@ -448,6 +469,16 @@ pub fn extract_buiy_glyphs(
         let resolved_entity_color = resolve_token(&color.unwrap_or(&default_color).0, theme);
         let entity_color = linear_color(resolved_entity_color);
         let origin = gt.translation().truncate() + computed.content_offset;
+        // The entity's 2D affine (GlobalTransform's linear part, cols
+        // [m00,m10,m01,m11]) + its translation — so a rotated/scaled text run
+        // paints its glyphs/decorations rotated rigidly about the transform-origin
+        // (6e-baked). `repivot_origin` moves each window-space rect's ORIGIN by the
+        // affine about `translation`; `coverage.wgsl` then applies the same affine
+        // to the box-local extent. Identity affine leaves every rect byte-identical
+        // (repivot early-returns), so untransformed text is unchanged.
+        let translation = gt.translation().truncate();
+        let m = gt.affine().matrix3;
+        let glyph_affine = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
         let blocked = pending_block.is_some();
         // § 3.2 tier 1: the -color token, resolved at extract against the
         // live theme (decision 1 — retheme re-emits, never reshapes).
@@ -681,6 +712,8 @@ pub fn extract_buiy_glyphs(
                         color,
                         clip,
                         scale_factor,
+                        translation,
+                        glyph_affine,
                     );
                 }
                 // § 4.4 seat 5: line-through paints OVER the run's glyphs —
@@ -700,11 +733,12 @@ pub fn extract_buiy_glyphs(
                     }
                     for (rect, color) in strikes {
                         new_glyphs.push(GlyphAlphaInstance {
-                            rect,
+                            rect: repivot_origin(rect, translation, glyph_affine),
                             uv: stamp_uv(&entry),
                             color,
                             clip,
                             page: entry.page as u32,
+                            affine: glyph_affine,
                         });
                         // § 6.3: one key per instance — the un-gated touch pass
                         // keeps a live stamp LRU-warm through retained frames.
@@ -752,6 +786,8 @@ pub fn extract_buiy_glyphs(
                             ph_color,
                             clip,
                             scale_factor,
+                            translation,
+                            glyph_affine,
                         );
                     }
                 }
@@ -784,11 +820,16 @@ pub fn extract_buiy_glyphs(
                     warn_once_page_overflow(); // § 11.1 v1 mitigation
                 }
                 new_glyphs.push(GlyphAlphaInstance {
-                    rect: caret_stamp_rect(origin, cv.rect, scale_factor),
+                    rect: repivot_origin(
+                        caret_stamp_rect(origin, cv.rect, scale_factor),
+                        translation,
+                        glyph_affine,
+                    ),
                     uv: stamp_uv(&entry),
                     color: linear_color(color),
                     clip,
                     page: entry.page as u32,
+                    affine: glyph_affine,
                 });
                 // §§ 4.1, 5: the SECONDARY split-caret indicator — a second
                 // solid stamp at the boundary's before-glyph logical-end edge,
@@ -797,11 +838,16 @@ pub fn extract_buiy_glyphs(
                 // (do NOT push it twice).
                 if let Some(sec) = cv.secondary {
                     new_glyphs.push(GlyphAlphaInstance {
-                        rect: caret_stamp_rect(origin, sec, scale_factor),
+                        rect: repivot_origin(
+                            caret_stamp_rect(origin, sec, scale_factor),
+                            translation,
+                            glyph_affine,
+                        ),
                         uv: stamp_uv(&entry),
                         color: linear_color(color),
                         clip,
                         page: entry.page as u32,
+                        affine: glyph_affine,
                     });
                 }
                 // § 6.3: the stamp key joins the un-gated touch pass — a
@@ -971,6 +1017,12 @@ fn emit_glyph<'a>(
     color: [f32; 4],
     clip: [f32; 4],
     scale_factor: f32,
+    // The entity translation + 2D affine so a rotated/scaled run rotates rigidly
+    // about the transform-origin. The full-origin `physical()` binning above is
+    // UNCHANGED (subpixel atlas cell identical); we only re-pivot the resulting
+    // window rect's origin. Identity affine ⇒ rect byte-identical.
+    translation: Vec2,
+    glyph_affine: [f32; 4],
 ) {
     let key = glyph_atlas_key(&phys.cache_key, interner);
     let Some((entry, bearing)) =
@@ -981,8 +1033,9 @@ fn emit_glyph<'a>(
     if entry.page > 0 {
         warn_once_page_overflow(); // § 11.1 v1 mitigation
     }
+    let rect = glyph_rect_logical(phys.x, phys.y, bearing, entry.px.size(), scale_factor);
     new_glyphs.push(GlyphAlphaInstance {
-        rect: glyph_rect_logical(phys.x, phys.y, bearing, entry.px.size(), scale_factor),
+        rect: repivot_origin(rect, translation, glyph_affine),
         uv: [
             entry.uv.min.x,
             entry.uv.min.y,
@@ -992,6 +1045,7 @@ fn emit_glyph<'a>(
         color,
         clip,
         page: entry.page as u32,
+        affine: glyph_affine,
     });
     new_keys.push(key);
 }

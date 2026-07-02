@@ -143,6 +143,7 @@ fn seam_speaks_only_render_types() {
                 f32::INFINITY,
             ],
             page: entry.page as u32,
+            affine: [1.0, 0.0, 0.0, 1.0],
         }]
     }
 
