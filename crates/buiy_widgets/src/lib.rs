@@ -7,7 +7,10 @@ use bevy::prelude::*;
 use buiy_core::{
     BuiySet,
     a11y::{A11yExpanded, A11yRole, A11yToggled, InlineActionRegistry},
-    mvu::{MvuAppExt, MvuCorePlugin, ToggleLeafSet, ToggleMsg, enqueue, register_toggle_leaf},
+    mvu::{
+        ControlledLeaf, MvuAppExt, MvuCorePlugin, ToggleLeafSet, ToggleMsg, enqueue,
+        register_toggle_leaf,
+    },
 };
 
 pub mod button;
@@ -89,12 +92,17 @@ pub use composites::{
 /// `BuiySet::A11yUpdate` builds the a11y tree — all in the SAME frame (REFINE #1).
 pub fn advance_toggle_on_press(
     mut reader: MessageReader<OnPress>,
-    toggles: Query<&A11yRole, With<A11yToggled>>,
+    // `Without<ControlledLeaf>`: a widget whose `A11yToggled` is owned by an external model
+    // (e.g. a `buiy_view` controlled checkbox — design §3 #16) opts OUT of the press-to-toggle
+    // leaf, so its model route is the sole source of the fold (no double-fold). The drain stays
+    // the sole writer either way.
+    toggles: Query<&A11yRole, (With<A11yToggled>, Without<ControlledLeaf>)>,
     mut commands: Commands,
 ) {
     for OnPress(entity) in reader.read() {
         let Ok(role) = toggles.get(*entity) else {
-            // Not a toggle widget (no `A11yToggled`) — e.g. a Button. Inert.
+            // Not a toggle widget (no `A11yToggled`), or a `ControlledLeaf` one an external model
+            // owns — inert here either way.
             continue;
         };
         // Only Checkbox/Switch toggle on press; a non-toggle role that nonetheless

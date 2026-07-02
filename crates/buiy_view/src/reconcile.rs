@@ -32,7 +32,7 @@ use buiy_core::components::Node;
 use buiy_core::layout::{
     AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexParams, Length,
 };
-use buiy_core::mvu::{Envelope, Model, ToggleMsg};
+use buiy_core::mvu::{ControlledLeaf, Envelope, Model, ToggleMsg};
 use buiy_core::render::components::{Background, Border, Opacity};
 use buiy_core::text::edit::{EditCommand, TextEditState};
 use buiy_core::text::{FontSize, SharedFontSystem, Text};
@@ -395,8 +395,20 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             // `False`), so a seeded-done item renders checked on frame 1 without
             // waiting for a fold.
             let want = toggled_of(el.checked);
+            // `ControlledLeaf` (design §3 #16): the view OWNS this checkbox — its `A11yToggled`
+            // is driven by the model (press → `PressAction` → model → the reconciler re-asserts
+            // via `set_checkbox_checked`), so it opts OUT of `advance_toggle_on_press`'s
+            // press-to-toggle leaf. Without this marker the press would ALSO fold the leaf
+            // directly (the double-fold): correct (it converges via drift-reassert) but not
+            // cleanly view-owned. The single ordered `ToggleLeafSet::Drain` stays the sole
+            // writer; this makes the model the sole *source*.
             let e = world
-                .spawn((Checkbox::new(""), A11yToggled(want), Kind::Checkbox))
+                .spawn((
+                    Checkbox::new(""),
+                    A11yToggled(want),
+                    ControlledLeaf,
+                    Kind::Checkbox,
+                ))
                 .id();
             // The toggle route: press → the eagerly-resolved `f(!checked)` value
             // → model (stamped as a `PressAction`, exactly like a button).
@@ -697,11 +709,12 @@ fn update_text_actions<M: Model>(
     el: &Element<M::Msg>,
     model: Entity,
 ) {
-    match el.on_input {
-        Some(f) => {
-            world
-                .entity_mut(entity)
-                .insert(InputAction::<M> { f, model });
+    match &el.on_input {
+        Some(handler) => {
+            world.entity_mut(entity).insert(InputAction::<M> {
+                handler: handler.clone(),
+                model,
+            });
         }
         None => {
             world.entity_mut(entity).remove::<InputAction<M>>();

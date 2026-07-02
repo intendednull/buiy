@@ -30,6 +30,24 @@ use super::{Cmd, Model, MvuAppExt};
 use crate::BuiySet;
 use crate::a11y::A11yToggled;
 
+/// Opt-out marker: an entity carrying `ControlledLeaf` is **excluded from the built-in
+/// press-to-toggle leaf** (`buiy_widgets::advance_toggle_on_press` filters `Without<ControlledLeaf>`),
+/// so *something else* owns its [`A11yToggled`] — routing it through a model instead.
+///
+/// The motivating owner is the `buiy_view` authoring surface (design §3 #16): a controlled
+/// checkbox there would otherwise **double-fold** — the leaf flips `A11yToggled` on press AND the
+/// view's router enqueues the model `Msg` (which the reconciler re-asserts back onto
+/// `A11yToggled` via a single-writer `ToggleMsg::Set`-on-drift). The two converge (no flicker,
+/// proven by the prototype), but the surface cannot cleanly *own* the widget. Stamping
+/// `ControlledLeaf` suppresses the press-driven leaf fold, making the model route (→ reconciler
+/// re-assert → the SAME `ToggleLeafSet::Drain`) the **sole** source of `A11yToggled` writes. The
+/// drain stays the sole *writer* either way; this only changes the *source* of the fold.
+///
+/// A surgical, idiomatic opt-out: one marker + one `Without` filter, versus the impossible
+/// alternative of despawning a widget's built-in systems per-entity (design §3 #16).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ControlledLeaf;
+
 /// The toggle leaf's **early, activation-stage** scheduling window (the early-window model, spec §4).
 ///
 /// Unlike the generic late [`MvuSet::Drain`](super::MvuSet::Drain) — correct for the machine
