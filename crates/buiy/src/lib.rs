@@ -217,51 +217,30 @@ pub use bevy::picking::events;
 // `DefaultPlugins` app never needs `bevy::prelude::*`, so Buiy's `Text`/`Node`
 // (and `Style`) stay unambiguous. Curated — NOT a blanket `pub use
 // bevy::prelude::*` — only the names the N=4 probes reached for plus the minimum
-// to wire an MVU app. `Visibility` is deliberately EXCLUDED: Buiy nodes hide via
-// `CssVisibility`, so shadowing that with bevy's render `Visibility` would be a
-// silent-wrong.
+// to wire an MVU app (grouped below; each group notes its load-bearing / excluded
+// members).
+// App + scheduling.
 pub use bevy::prelude::{
-    // Query filters
-    Added,
-    // App + scheduling
-    App,
-    // Derive macros / traits
-    Bundle,
-    // Everyday components / types
-    Camera2d,
-    Changed,
-    Color,
-    // System params
-    Commands,
-    Component,
-    Entity,
-    Event,
-    FixedUpdate,
-    IntoScheduleConfigs,
-    Local,
-    Message,
-    MessageReader,
-    MessageWriter,
-    Name,
-    Or,
-    Plugin,
-    PostUpdate,
-    PreUpdate,
-    Query,
-    Res,
-    ResMut,
-    Resource,
-    Single,
-    Startup,
-    Time,
-    Timer,
-    TimerMode,
-    Transform,
-    Update,
-    With,
-    Without,
-    // Helper
-    default,
+    App, FixedUpdate, IntoScheduleConfigs, Plugin, PostUpdate, PreUpdate, Startup, Update,
+};
+// Derive macros + reflection. `Reflect` + `ReflectComponent` are load-bearing for
+// the PRIMARY state path: the `Model` trait bounds `Reflect`, and every model
+// derives `#[derive(Reflect)] #[reflect(Component)]` (the latter expands to name
+// `ReflectComponent`) — so without these two, authoring an MVU `Model` from the
+// prelude alone is impossible, which is exactly the "wire an MVU app" the slice
+// promises.
+pub use bevy::prelude::{Bundle, Component, Event, Message, Reflect, ReflectComponent, Resource};
+// System params.
+pub use bevy::prelude::{
+    Commands, Local, MessageReader, MessageWriter, Query, Res, ResMut, Single,
+};
+// Query filters.
+pub use bevy::prelude::{Added, Changed, Or, With, Without};
+// Everyday components / types + the `default()` helper. `Visibility` is
+// deliberately EXCLUDED: Buiy nodes hide via `CssVisibility`, so shadowing that
+// with bevy's render `Visibility` would be a silent-wrong.
+pub use bevy::prelude::{
+    Camera2d, Color, Entity, Name, Time, Timer, TimerMode, Transform, default,
 };
 
 // BSN authoring (docs/specs/2026-06-18-buiy-bsn-integration-design.md § 4.2).
@@ -457,6 +436,47 @@ pub mod probe {
 ///         .add_plugins(BuiyPlugin)
 ///         .add_systems(Startup, setup)
 ///         .add_systems(Update, count_presses)
+///         .run();
+/// }
+/// ```
+///
+/// The **MVU model** path — Buiy's primary state interface — is expressible from
+/// the prelude alone too. The `Model` trait bounds `Reflect`, and a model derives
+/// `#[derive(Reflect)] #[reflect(Component)]`, so `Reflect`/`ReflectComponent` are
+/// part of the curated set — authoring a model no longer forces the bevy glob:
+///
+/// ```no_run
+/// use buiy::prelude::*;
+///
+/// #[derive(Component, Default, Clone, PartialEq, Reflect)]
+/// #[reflect(Component)]
+/// struct Counter {
+///     value: i64,
+/// }
+///
+/// #[derive(Clone, Debug, PartialEq, Reflect)]
+/// enum CounterMsg {
+///     Increment,
+///     Reset,
+/// }
+///
+/// impl Model for Counter {
+///     type Msg = CounterMsg;
+/// }
+///
+/// fn update(model: &mut Counter, msg: CounterMsg) -> Cmd<CounterMsg> {
+///     match msg {
+///         CounterMsg::Increment => model.value += 1,
+///         CounterMsg::Reset => model.value = 0,
+///     }
+///     Cmd::none()
+/// }
+///
+/// fn main() {
+///     App::new()
+///         .add_plugins(BuiyPlugin)
+///         .mvu_model(update) // register_type + add_model + add_reducer, one call
+///         .app() // ModelWiring handle → &mut App
 ///         .run();
 /// }
 /// ```
