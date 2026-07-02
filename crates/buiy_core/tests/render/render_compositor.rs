@@ -374,7 +374,7 @@ fn churn_never_exceeds_rt_pool_budget() {
 // ---------------------------------------------------------------------------
 
 use buiy_core::render::atlas::{GLYPH_ALPHA_FLOAT_OFFSET, GlyphAlphaInstance};
-use buiy_core::render::compositor::{DegradedGroup, fold_root_degraded_into_flat};
+use buiy_core::render::compositor::{DegradedGroup, fold_degraded_groups};
 use buiy_core::render::instance::ALPHA_FLOAT_OFFSET;
 use std::ops::Range;
 
@@ -432,7 +432,7 @@ fn degraded_fold_multiplies_quad_alpha_and_merges_flat_range() {
     ];
     let allocate = [false, true]; // A degraded, B allocated.
 
-    fold_root_degraded_into_flat(
+    fold_degraded_groups(
         &allocate,
         &groups,
         true, // fold_quad
@@ -502,7 +502,7 @@ fn degraded_fold_coalesces_adjacent_flat_runs() {
         opacity: 0.25,
         parent: None,
     }];
-    fold_root_degraded_into_flat(
+    fold_degraded_groups(
         &[false],
         &groups,
         true,
@@ -538,7 +538,7 @@ fn degraded_fold_multiplies_glyph_alpha_at_offset_11() {
         opacity: 0.5,
         parent: None,
     }];
-    fold_root_degraded_into_flat(
+    fold_degraded_groups(
         &[false],
         &groups,
         true,
@@ -591,7 +591,7 @@ fn degraded_fold_reads_source_alpha_not_accumulated() {
         opacity: 0.5,
         parent: None,
     }];
-    fold_root_degraded_into_flat(
+    fold_degraded_groups(
         &[false],
         &groups,
         true,
@@ -625,7 +625,7 @@ fn degraded_fold_per_tier_gate_skips_ungated_tier() {
         opacity: 0.5,
         parent: None,
     }];
-    fold_root_degraded_into_flat(
+    fold_degraded_groups(
         &[false],
         &groups,
         true,  // fold_quad
@@ -676,7 +676,7 @@ fn degraded_glyph_range_remerges_on_quad_dirty_only_frame() {
         opacity: 0.5,
         parent: None,
     }];
-    fold_root_degraded_into_flat(
+    fold_degraded_groups(
         &[false],
         &groups,
         true,  // fold_quad   (quad buffer repacked this frame)
@@ -702,30 +702,39 @@ fn degraded_glyph_range_remerges_on_quad_dirty_only_frame() {
 }
 
 #[test]
-fn degraded_fold_skips_nested_group_in_release_path() {
-    // A degraded NESTED group (parent == Some): the slice scopes to root-degraded.
-    // In release, the nested group's ranges are NOT merged and its alpha is left
-    // untouched (no worse than today's vanish — tracked by a follow-up). Under
-    // debug the fn debug_asserts; this test must run release-only to assert the
-    // containment behavior.
-    if cfg!(debug_assertions) {
-        // Debug builds debug_assert!(false) on a nested degraded group — that is
-        // the loud-in-dev guard; the release containment is what we assert.
-        return;
-    }
-    let mut quad: Vec<[f32; 17]> = vec![quad_with_alpha(0.8)];
-    let mut glyph: Vec<GlyphAlphaInstance> = Vec::new();
+fn degraded_fold_folds_nested_alpha_but_never_merges_it() {
+    // A degraded ROOT group and a degraded NESTED group (parent == Some), side by
+    // side. The fold folds EVERY degraded group's own opacity into its members'
+    // alpha (root AND nested), but merges the flat range only for ROOTS — a nested
+    // degraded group's members are injected into its parent target by the node
+    // (effect-compositor.md § 2.3 case A), never into the window flat draw. Runs in
+    // the default (debug_assertions ON) gate: the old nested debug_assert is gone,
+    // so a nested degraded group no longer panics prepare.
+    let mut quad: Vec<[f32; 17]> = (0..4).map(|_| quad_with_alpha(0.8)).collect();
+    let mut glyph: Vec<GlyphAlphaInstance> = vec![glyph_with_alpha(0.6)];
     let mut quad_flat: Vec<Range<u32>> = vec![];
     let mut glyph_flat: Vec<Range<u32>> = vec![];
-    let original = quad.clone();
-    let groups = [DegradedGroup {
-        quad_range: 0..1,
-        glyph_range: 0..0,
-        opacity: 0.5,
-        parent: Some(7), // nested under group 7
-    }];
-    fold_root_degraded_into_flat(
-        &[false],
+    let orig_quad = quad.clone();
+    let orig_glyph = glyph.clone();
+
+    let groups = [
+        // ROOT degraded.
+        DegradedGroup {
+            quad_range: 0..2,
+            glyph_range: 0..0,
+            opacity: 0.5,
+            parent: None,
+        },
+        // NESTED degraded (under group 0) — carries the glyph tier too.
+        DegradedGroup {
+            quad_range: 2..4,
+            glyph_range: 0..1,
+            opacity: 0.5,
+            parent: Some(0),
+        },
+    ];
+    fold_degraded_groups(
+        &[false, false],
         &groups,
         true,
         true,
@@ -736,9 +745,32 @@ fn degraded_fold_skips_nested_group_in_release_path() {
         &mut quad_flat,
         &mut glyph_flat,
     );
-    assert_eq!(
-        quad[0], original[0],
-        "nested degraded alpha untouched in release"
+
+    // Both groups' quad alpha folded by 0.5 — the NESTED group is no longer skipped.
+    for i in 0..4 {
+        let want = orig_quad[i][ALPHA_FLOAT_OFFSET] * 0.5;
+        assert!(
+            (quad[i][ALPHA_FLOAT_OFFSET] - want).abs() < 1e-6,
+            "instance {i} alpha folded (root AND nested)"
+        );
+    }
+    // The nested group's glyph tier folds color[3] too.
+    assert!(
+        (glyph[0].color[3] - orig_glyph[0].color[3] * 0.5).abs() < 1e-6,
+        "nested glyph alpha folded at color[3]"
     );
-    assert!(quad_flat.is_empty(), "nested degraded range NOT merged");
+    // ROOT range merged into flat; NESTED range NEVER merged (the node injects it
+    // into the parent target instead of the window flat draw).
+    assert!(
+        quad_flat.contains(&(0..2)),
+        "root degraded range merged into flat: {quad_flat:?}"
+    );
+    assert!(
+        !quad_flat.iter().any(|r| r.start == 2),
+        "nested degraded range must NOT be merged into flat: {quad_flat:?}"
+    );
+    assert!(
+        glyph_flat.is_empty(),
+        "nested degraded glyph range must NOT be merged into flat: {glyph_flat:?}"
+    );
 }
