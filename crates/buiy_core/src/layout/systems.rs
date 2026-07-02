@@ -4333,7 +4333,34 @@ pub fn compose_transform(
         None => Mat4::IDENTITY,
     };
     let m_transform = transform_matrix_to_mat4(&ui.matrix, box_size);
-    t_mat * r_mat * s_mat * m_transform
+    let inner = t_mat * r_mat * s_mat * m_transform;
+
+    // `transform-origin` (default `50% 50%` = center) is the pivot for
+    // rotate/scale/matrix. A pure translate is origin-invariant, so skip the
+    // conjugation entirely for the translate-only case — this keeps the
+    // translate-only path (switch/slider thumbs, etc.) BIT-IDENTICAL rather than
+    // relying on `(O + v) − O == v` rounding.
+    let has_linear = r.is_some() || s.is_some() || !matches!(ui.matrix, TransformMatrix::None);
+    if !has_linear {
+        return inner;
+    }
+
+    // Bake the pivot HERE (M = T(O) · inner · T(-O)) so every downstream consumer
+    // that reads `ResolvedTransform`/`GlobalTransform` agrees — the box/quad
+    // extract, the coverage (glyph/icon) producers, and picking. NOTE: picking is a
+    // translation-anchored AABB that does NOT model rotation (`picking::point_in_aabb`
+    // tests the unrotated `layout.size` at `gt.translation()`), so baking the pivot
+    // shifts a rotated element's pick box. This is safe ONLY because every
+    // rotated/scaled element is `Pickable::IGNORE` (meter fill, disclosure caret,
+    // showcase chevron); a future rotated *pickable* element would need picking to
+    // invert this matrix. Identity `inner` ⇒ `T(O)·I·T(-O) == I` (bit-exact), so the
+    // `m == Mat4::IDENTITY` gate in `transform_composition` still removes it.
+    let origin = Vec3::new(
+        translate_length_px(&ui.origin.x, box_size.x),
+        translate_length_px(&ui.origin.y, box_size.y),
+        translate_length_px(&ui.origin.z, 0.0),
+    );
+    Mat4::from_translation(origin) * inner * Mat4::from_translation(-origin)
 }
 
 /// The top-layer **paint rank**: a total order over [`TopLayer`] variants where
@@ -5676,6 +5703,72 @@ mod tests {
             * Mat4::from_scale(Vec3::new(2.0, 2.0, 1.0))
             * Mat4::from_quat(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
         assert_eq!(m, expected);
+    }
+
+    #[test]
+    fn compose_rotate_pivots_about_transform_origin_center() {
+        // Default origin `50% 50%` = box center: a 90° rotation FIXES the center
+        // (spins in place) — the disclosure-chevron fix. Pre-fix, 6e ignored the
+        // origin and the fixed point was the top-left corner (chevron swung away).
+        use super::super::types::TransformOrigin;
+        let _ = TransformOrigin::default();
+        let box_size = Vec2::new(100.0, 40.0);
+        let center = Vec3::new(50.0, 20.0, 0.0);
+        let ui = UiTransform {
+            matrix: TransformMatrix::Rotate(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+            ..Default::default()
+        };
+        let m = compose_transform(&ui, None, None, None, box_size);
+        let mapped = m.transform_point3(center);
+        assert!(
+            (mapped - center).length() < 1e-4,
+            "center is the rotation fixed point, got {mapped:?}",
+        );
+        let tl = m.transform_point3(Vec3::ZERO);
+        assert!(
+            tl.length() > 1.0,
+            "top-left must MOVE under a center-pivot rotation, got {tl:?}",
+        );
+    }
+
+    #[test]
+    fn compose_left_origin_scale_anchors_left_edge() {
+        // The meter-fill case: Scale(2,1,1) about a LEFT-edge origin (x=0%, y=50%)
+        // keeps the left edge fixed (left-anchored progress fill).
+        use super::super::types::TransformOrigin;
+        let box_size = Vec2::new(100.0, 40.0);
+        let ui = UiTransform {
+            origin: TransformOrigin {
+                x: Length::Percent(0.0),
+                y: Length::Percent(50.0),
+                z: Length::ZERO,
+            },
+            ..Default::default()
+        };
+        let s = Scale(2.0, 1.0, 1.0);
+        let m = compose_transform(&ui, None, None, Some(&s), box_size);
+        let left = m.transform_point3(Vec3::new(0.0, 20.0, 0.0));
+        let right = m.transform_point3(Vec3::new(100.0, 20.0, 0.0));
+        assert!(
+            (left - Vec3::new(0.0, 20.0, 0.0)).length() < 1e-4,
+            "left edge is fixed, got {left:?}",
+        );
+        assert!(
+            (right.x - 200.0).abs() < 1e-4,
+            "right edge scales out from the left (100 -> 200), got {right:?}",
+        );
+    }
+
+    #[test]
+    fn compose_translate_only_ignores_transform_origin() {
+        // A pure translate is origin-invariant: even with a non-zero box + center
+        // origin, the result is EXACTLY from_translation (the conjugation is
+        // skipped) — the switch/slider thumb path must not perturb.
+        let box_size = Vec2::new(100.0, 40.0);
+        let ui = UiTransform::default(); // origin center, matrix None
+        let t = Translate(Length::px(7.0), Length::px(9.0), Length::ZERO);
+        let m = compose_transform(&ui, Some(&t), None, None, box_size);
+        assert_eq!(m, Mat4::from_translation(Vec3::new(7.0, 9.0, 0.0)));
     }
 
     #[test]
