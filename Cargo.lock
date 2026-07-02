@@ -2030,6 +2030,7 @@ dependencies = [
  "bevy",
  "buiy_bsn",
  "buiy_core",
+ "buiy_view",
  "buiy_widgets",
 ]
 
@@ -2120,6 +2121,15 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "buiy_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy_core",
+ "buiy_widgets",
 ]
 
 [[package]]
@@ -2505,6 +2515,17 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "counter_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_view",
+ "image",
 ]
 
 [[package]]
@@ -5900,6 +5921,17 @@ dependencies = [
  "bevy",
  "buiy",
  "buiy_core",
+ "image",
+]
+
+[[package]]
+name = "todomvc_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_view",
  "image",
 ]
 

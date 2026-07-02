@@ -155,15 +155,17 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 ### Authoring / BSN
 
-Cross-cutting render + authoring: the Bevy 0.18→0.19-rc migration (the enabler) plus the `buiy_bsn` authoring layer (`bsn!` re-exports + widget scene-fns + component conformance). The `.bsn` asset-file loader and component hot-reload stay deferred (await the upstream loader).
+Cross-cutting render + authoring: the Bevy 0.18→0.19-rc migration (the enabler), the `buiy_bsn` component-authoring layer (`bsn!` re-exports + widget scene-fns + component conformance), and the `buiy_view` **view-authoring** surface ("safer V" — `view(&Model) -> Element<Msg>` + a reconciler + typed routing over the MVU substrate, reached via `buiy::view`). The `.bsn` asset-file loader and component hot-reload stay deferred (await the upstream loader).
 
 **Specs**
 
 - [Buiy BSN integration design](specs/2026-06-18-buiy-bsn-integration-design.md) — Bevy 0.19-rc.3 pin (policy exception), render-graph→`Core2d` systems, `buiy_bsn` (`bsn!` re-exports + widget `#[require]` + scene-fns), reflect-gap closure; `.bsn` loader + hot-reload deferred. `[landed]`
+- [Buiy view-authoring surface ("safer V") design](specs/2026-07-01-buiy-view-authoring-design.md) — the net-new `buiy_view` crate: the whole app-author surface is `Model` + `enum Msg` + `fn update` + `fn view(&Model) -> Element<Msg>`, realized by a library reconciler (positional + keyed, decomposed-style patch-in-place, reconcile-before-layout, drift-only controlled writes) + typed press/editor routers over the MVU funnel — deleting the hand-written `Changed<Model>` bind (DX-2) and `OnPress→Model` routing (DX-3). Typed tokens (`Space`/`Color`/`Radius`), `keyed_column`, `when`/`Empty`, `Element::map`, `ui(init,update,view)`, and the W4 steady-frame go/no-go gate. Reached via the `buiy::view` sub-prelude (distinct path — the `Element`-returning builders collide name-for-name with the `bsn!` scene-fns). The Phase-B FINAL of a prototype-first effort; PR1 scoped (Counter + TodoMVC), `Cmd::task`/capturing-`on_input`/`ControlledLeaf`/`ViewWidget` deferred to PR2/PR3. `[active]`
 
 **Plans**
 
 - [Bevy 0.19-rc + BSN migration](plans/2026-06-18-bevy-0.19-bsn-migration.md) — dependency-ordered phases (deps → compile → headless → GPU → `buiy_bsn` → `hello_bsn` → docs) realizing the BSN integration design. `[landed]`
+- [Buiy view PR1 — audited-port execution plan](plans/2026-07-01-buiy-view-pr1.md) — the four-wave PR1 build (FW1 crate + Element + reconciler + press router + Counter → FW2 keyed lists + editor bridge + TodoMVC → FW3 conditional/`map` + work-counters + W4 gate → FW4 `buiy::view` prelude wiring + docs + full mechanical gate → merge-ready). An audited port of the throwaway safer-V prototype, re-implementing the deferred REFINE items (`#7`–`#12`, `#14`). Ships `crates/buiy_view` + `examples/counter_view` + `examples/todomvc_view`. `[active]`
 
 ### Widgets / interaction
 
