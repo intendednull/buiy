@@ -40,16 +40,19 @@ fn underline_blue() -> Color {
 // --- pixel classifiers (the E3 golden's composite math) ---------------------
 
 /// Strong blue — the preedit underline strip (alpha 1, hard-edged quad). The
-/// blue channel dominates while red is suppressed, so this rejects both the
-/// white glyph ink and the opaque-black clear.
+/// blue channel dominates (lit) while red is suppressed, so this rejects both
+/// the white glyph ink and the opaque-black clear. `channel_lit` (V19)
+/// robustifies the "blue is lit" half across adapters.
 fn is_strong_blue(p: [u8; 4]) -> bool {
-    p[2] >= 180 && p[0] <= 80 && p[1] <= 140
+    crate::support::channel_lit(p[2]) && p[0] <= 80 && p[1] <= 140
 }
 
-/// Unselected white glyph ink over black: an achromatic pixel at high coverage.
-/// `b ≥ 180 && r ≥ 180` rejects the blue underline strip (its red is ≤ 80).
+/// Unselected white glyph ink over black: an achromatic pixel with all three
+/// channels lit above the black clear (red lit rejects the blue underline strip,
+/// whose red is ≤ 80). Adapter-robust `channel_lit` threshold (V19).
 fn is_white_ink(p: [u8; 4]) -> bool {
-    p[0] >= 180 && p[1] >= 180 && p[2] >= 180
+    use crate::support::channel_lit;
+    channel_lit(p[0]) && channel_lit(p[1]) && channel_lit(p[2])
 }
 
 /// Drive the full Ime::Preedit → splice → reshape → project → extract → paint

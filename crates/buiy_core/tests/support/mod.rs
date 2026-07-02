@@ -633,6 +633,22 @@ pub fn px(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
 }
 
+/// Is one channel "lit" — risen well above the capture's opaque-black clear —
+/// rather than background? The GPU text tests classify glyph/selection ink by
+/// which channels are lit; an absolute `>= 180` assumed pinned-lavapipe's exact
+/// coverage/gamma and could miss a dimmer rasterizer's anti-aliased glyph ink,
+/// so `cols_where(is_white_ink)` would return empty and the `.expect("…ink
+/// painted")` panic on that adapter (V19 — adapter-brittle ink detection). `>=
+/// 128` (well above the black clear, well below saturation) is adapter-robust
+/// while still telling a lit channel from an unlit one, so callers keep their
+/// per-channel color discrimination (white glyph ink = all three channels lit;
+/// blue selection = blue lit, red not) by composing this with their own
+/// "channel is off" bounds. The background is the opaque-black capture clear, so
+/// this absolute test IS background-relative for these tests.
+pub fn channel_lit(v: u8) -> bool {
+    v >= 128
+}
+
 /// The sRGB8 the target stores for a FULL-coverage texel of linear
 /// straight-alpha `color` over the opaque-black clear: SrcOver in linear
 /// (dst = 0), then the Rgba8UnormSrgb linear→sRGB encode.

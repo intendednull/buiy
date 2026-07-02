@@ -67,16 +67,20 @@ fn is_strong_red(p: [u8; 4]) -> bool {
     p[0] >= 200 && p[1] <= 20 && p[2] <= 20
 }
 
-/// Re-tinted (selection fg, pure blue) glyph ink over the red selection
-/// rect: coverage ≥ ~0.7 reads b ≥ 180 with the red residual ≤ 150.
+/// Re-tinted (selection fg, pure blue) glyph ink over the red selection rect:
+/// blue lit while the red residual stays ≤ 150. `channel_lit` (V19) robustifies
+/// the "blue is lit" half across adapters; the red bound keeps it distinct from
+/// white ink.
 fn is_blue_ink(p: [u8; 4]) -> bool {
-    p[2] >= 180 && p[0] <= 150
+    crate::support::channel_lit(p[2]) && p[0] <= 150
 }
 
-/// Unselected white glyph ink over black: an achromatic pixel at ≥ ~0.61
-/// coverage. `g ≥ 180` alone already rejects every red/blue composite.
+/// Unselected white glyph ink over black: an achromatic pixel with all three
+/// channels lit above the black clear (green lit alone already rejects every
+/// red/blue composite). Adapter-robust `channel_lit` threshold (V19).
 fn is_white_ink(p: [u8; 4]) -> bool {
-    p[0] >= 180 && p[1] >= 180 && p[2] >= 180
+    use crate::support::channel_lit;
+    channel_lit(p[0]) && channel_lit(p[1]) && channel_lit(p[2])
 }
 
 /// Rows (top→bottom) where ANY pixel satisfies `pred`.
