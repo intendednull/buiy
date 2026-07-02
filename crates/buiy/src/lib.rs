@@ -521,3 +521,75 @@ impl Plugin for BuiyHeadlessPlugin {
         ));
     }
 }
+
+/// The **GPU-free probe preset** — the agent's "eyes." It composes only the
+/// data-and-projection sub-plugins Buiy needs to lay out a scene and project its
+/// **semantic tree** + **widget state**, with **no render, no adapter, no
+/// window**: `core` · `theme` · `a11y` · `focus` · `layout` · `text` · `widgets`.
+/// Layout + a11y + widget state are **pure ECS projections** — a Taffy solve, an
+/// `A11yTreeBuilder` fold, and component reads — so the agent's
+/// author → build → run → *inspect* feedback loop runs fully headless: spawn a
+/// scene, step a few frames, and read it back with
+/// [`snapshot`](buiy_core::a11y::inprocess::snapshot) /
+/// [`snapshot_report`](buiy_core::a11y::snapshot_report) — no wgpu adapter, no
+/// `RenderApp`, no OS accessibility bridge.
+///
+/// It differs from [`BuiyHeadlessPlugin`] on exactly one axis: the headless
+/// preset keeps [`BuiyRenderPlugin`](buiy_core::render::BuiyRenderPlugin) (to
+/// *paint* an offscreen frame, so it needs a `RenderApp` + a real wgpu adapter);
+/// the probe **omits** it (nothing rasterizes, so no adapter is needed). Both
+/// omit winit/picking (a probe forces widget state via the
+/// [`perform`](buiy_core::a11y::inprocess::perform) action seam rather than
+/// routing live pointer hits); the probe additionally leaves out scroll +
+/// animation for the same "one settled inspection frame" reason
+/// [`BuiyHeadlessPlugin`] documents (a probe that wants tween motion or scroll
+/// geometry adds [`AnimationPlugin`](buiy_core::animation::AnimationPlugin) /
+/// [`ScrollInputPlugin`] on top).
+///
+/// Realizes Track A of the agent-interface north-star spec (the probe / "eyes"):
+/// packages the *shipped* `a11y::inprocess` driver behind a preset an agent's
+/// build/test loop can stand up with no GPU.
+///
+/// # Required Bevy plugins
+///
+/// `BuiyProbePlugin` is the *Buiy* subset only; the caller supplies the small
+/// **Bevy** substrate a headless-no-render app needs, added BEFORE this plugin:
+/// `MinimalPlugins`, `AssetPlugin` (the text stack loads its fallback font as an
+/// asset), and `bevy::input::InputPlugin` (the focus/keymap systems read
+/// `Res<ButtonInput<KeyCode>>`). No `WindowPlugin`, no `RenderPlugin`, no
+/// `CameraPlugin` — the probe never touches a surface.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use buiy::{BuiyProbePlugin, Button};
+/// use buiy_core::a11y::inprocess::{snapshot, TreeView};
+///
+/// let mut app = App::new();
+/// app.add_plugins(MinimalPlugins)
+///     .add_plugins(bevy::asset::AssetPlugin::default())
+///     .add_plugins(bevy::input::InputPlugin)
+///     .add_plugins(BuiyProbePlugin);
+/// app.world_mut().spawn(Button::new("Save"));
+/// for _ in 0..8 {
+///     app.update();
+/// }
+/// let tree = snapshot(app.world_mut(), TreeView::Unmerged);
+/// assert!(tree.nodes.iter().any(|n| n.name == "Save"));
+/// ```
+pub struct BuiyProbePlugin;
+
+impl Plugin for BuiyProbePlugin {
+    fn build(&self, app: &mut App) {
+        // `BuiyHeadlessPlugin`'s composition minus `BuiyRenderPlugin` — the
+        // GPU-free subset (see the type doc). Same relative order.
+        app.add_plugins((
+            CorePlugin,
+            buiy_core::theme::ThemePlugin,
+            buiy_core::a11y::A11yPlugin,
+            buiy_core::focus::FocusPlugin,
+            buiy_core::layout::LayoutPlugin,
+            buiy_core::text::BuiyTextPlugin::default(),
+            WidgetsPlugin,
+        ));
+    }
+}
