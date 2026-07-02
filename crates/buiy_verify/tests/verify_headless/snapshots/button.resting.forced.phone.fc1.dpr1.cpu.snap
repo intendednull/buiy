@@ -4,4 +4,4 @@ expression: button.resting.forced.phone.fc1.dpr1.cpu
 ---
 # buiy-layout-dump v1
 button pos=0,0 size=50,48
-  entity#64 pos=8,14 size=34,20
+  entity#79 pos=8,14 size=34,20

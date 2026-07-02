@@ -392,3 +392,97 @@ fn controlled_leaf_checkbox_opts_out_of_press_to_toggle() {
         "control: a plain checkbox still toggles on press via the built-in leaf"
     );
 }
+
+// ── Track C / C4: CheckboxBuilder + .checked/.indeterminate + observer ─────────
+
+fn c4_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(CorePlugin)
+        .add_plugins(WidgetsPlugin);
+    app
+}
+
+/// The spec §6 headline acceptance: `Checkbox::new("Dark mode").checked(true)`
+/// seeds the REAL `A11yToggled(Toggled::True)` at spawn — a bare `impl Bundle`
+/// tuple could not carry this setter.
+#[test]
+fn checkbox_new_checked_seeds_toggled_true() {
+    let mut app = c4_app();
+    let cb = app
+        .world_mut()
+        .spawn(Checkbox::new("Dark mode").checked(true))
+        .id();
+    app.update();
+
+    let state = app.world().get::<A11yToggled>(cb).expect("A11yToggled");
+    assert!(
+        Checkbox::checked(state),
+        "`.checked(true)` seeds Toggled::True"
+    );
+    assert_eq!(state.0, Toggled::True);
+}
+
+/// `.indeterminate(true)` seeds the `Mixed` tri-state; `.checked(false)` seeds
+/// `False` (the default is also `False`).
+#[test]
+fn checkbox_new_indeterminate_and_unchecked() {
+    let mut app = c4_app();
+    let mixed = app
+        .world_mut()
+        .spawn(Checkbox::new("Tri").indeterminate(true))
+        .id();
+    let off = app
+        .world_mut()
+        .spawn(Checkbox::new("Off").checked(false))
+        .id();
+    app.update();
+
+    let world = app.world();
+    assert!(Checkbox::indeterminate(
+        world.get::<A11yToggled>(mixed).unwrap()
+    ));
+    assert_eq!(world.get::<A11yToggled>(off).unwrap().0, Toggled::False);
+}
+
+/// The `On<Add, CheckboxParts>` observer attaches exactly one `CheckboxMark`
+/// child + a label `Text`, reading the accessible name off the root — and is
+/// idempotent when the trigger is re-added (respawn belt).
+#[test]
+fn checkbox_observer_attaches_mark_and_label_idempotently() {
+    use buiy_widgets::checkbox::CheckboxParts;
+
+    let mut app = c4_app();
+    let cb = app.world_mut().spawn(Checkbox::new("Dark mode")).id();
+    app.update();
+
+    let mark_count = |app: &App| {
+        let w = app.world();
+        w.get::<Children>(cb)
+            .map(|ch| {
+                ch.iter()
+                    .filter(|&c| w.get::<CheckboxMark>(c).is_some())
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    assert_eq!(mark_count(&app), 1, "one mark child attached");
+    // The visible label Text child carries the accessible name.
+    let has_label = {
+        let w = app.world();
+        w.get::<Children>(cb).unwrap().iter().any(|c| {
+            w.get::<CheckboxMark>(c).is_none()
+                && w.get::<Text>(c).map(|t| t.0.as_str()) == Some("Dark mode")
+        })
+    };
+    assert!(has_label, "the label child carries the accessible name");
+
+    // Re-fire the observer (as a respawn would): the guard must prevent doubling.
+    app.world_mut().entity_mut(cb).insert(CheckboxParts);
+    app.update();
+    assert_eq!(
+        mark_count(&app),
+        1,
+        "idempotent: re-added trigger does not double the mark"
+    );
+}

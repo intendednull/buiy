@@ -184,3 +184,91 @@ fn clicking_a_button_emits_on_press() {
         "OnPress message for clicked button (via the C3b Pointer<Click> producer)"
     );
 }
+
+// ── Track C / C4: the named ButtonBuilder + children-via-observer ──────────────
+
+/// `Button::new` returns a named builder that attaches EXACTLY ONE visible label
+/// `Text` child (marked `ButtonLabel`), reading the text off the root `A11yLabel`.
+#[test]
+fn button_new_attaches_exactly_one_label_child() {
+    use buiy_core::text::Text;
+    use buiy_widgets::button::ButtonLabel;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(CorePlugin)
+        .add_plugins(WidgetsPlugin);
+
+    let button = app.world_mut().spawn(Button::new("Save")).id();
+    app.update();
+
+    let world = app.world();
+    let children = world.get::<Children>(button).expect("button has children");
+    let labels: Vec<_> = children
+        .iter()
+        .filter(|&c| world.get::<ButtonLabel>(c).is_some())
+        .collect();
+    assert_eq!(labels.len(), 1, "exactly one ButtonLabel child");
+    assert_eq!(
+        world.get::<Text>(labels[0]).map(|t| t.0.as_str()),
+        Some("Save"),
+        "the label child carries the accessible name as its glyph text",
+    );
+}
+
+/// Idempotency: re-adding `ButtonParts` (the defensive belt against a
+/// scene/hot-reload/MVU-replay respawn re-triggering the observer) must NOT
+/// double the label child.
+#[test]
+fn button_children_are_idempotent_on_retriggered_parts() {
+    use buiy_widgets::button::{ButtonLabel, ButtonParts};
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(CorePlugin)
+        .add_plugins(WidgetsPlugin);
+
+    let button = app.world_mut().spawn(Button::new("Save")).id();
+    app.update();
+    // Re-fire the observer by re-adding the trigger, as a respawn would.
+    app.world_mut().entity_mut(button).insert(ButtonParts);
+    app.update();
+
+    let world = app.world();
+    let n = world
+        .get::<Children>(button)
+        .expect("children")
+        .iter()
+        .filter(|&c| world.get::<ButtonLabel>(c).is_some())
+        .count();
+    assert_eq!(
+        n, 1,
+        "idempotent: re-triggered ButtonParts must not double the label"
+    );
+}
+
+/// The synchronous-flush guarantee (pinned per the C4 design): an imperative
+/// `world.spawn(builder).id()` flushes the observer's `with_child`, so an
+/// IMMEDIATE `get::<Children>` — with NO `app.update()` — already sees the label.
+/// (`commands.spawn` defers to the next flush; this covers the imperative reads
+/// buiy_view/gallery rely on.)
+#[test]
+fn world_spawn_flushes_the_children_observer_synchronously() {
+    use buiy_widgets::button::ButtonLabel;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(CorePlugin)
+        .add_plugins(WidgetsPlugin);
+
+    let world = app.world_mut();
+    let button = world.spawn(Button::new("Save")).id();
+    // No update() — the observer must have run synchronously at spawn.
+    let attached = world
+        .get::<Children>(button)
+        .is_some_and(|ch| ch.iter().any(|c| world.get::<ButtonLabel>(c).is_some()));
+    assert!(
+        attached,
+        "world.spawn(Button::new(..)).id() must synchronously attach the label child",
+    );
+}

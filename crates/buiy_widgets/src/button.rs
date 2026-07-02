@@ -102,30 +102,80 @@ pub(crate) fn button_border() -> Border {
     }
 }
 
+/// Builder-only **trigger** for the [`Button`] children observer (Track C / C4).
+/// Inserted ONLY by [`Button::new`] (never by the bare `Button` marker, the
+/// `(Button, A11yLabel)` icon-button path, or the `button()` scene-fn), so the
+/// `On<Add, ButtonParts>` observer attaches the label child ONLY to a
+/// `Button::new(..)` root — bare/icon/scene spawns stay label-less. Deliberately
+/// **not** `Reflect`/`register_type`'d: a transient authoring signal that must
+/// not round-trip through a scene / hot-reload / MVU-replay respawn (so the
+/// observer never re-fires on a reconstructed entity).
+#[derive(Component)]
+pub struct ButtonParts;
+
+/// Marker on the button's visible label `Text` child — the idempotency signature
+/// the `attach_button_children` observer checks so it never double-attaches.
+#[derive(Component)]
+pub struct ButtonLabel;
+
 impl Button {
-    /// Spawn-ready bundle for a labelled button. Returns `impl Bundle`
-    /// (not `Self`) so callers get the full Phase 0 button contract.
+    /// The canonical labelled button. Returns a named [`ButtonBuilder`] (a
+    /// `Bundle`) spawned directly with `commands.spawn(Button::new("Save"))`.
     ///
-    /// The `Button` marker's `#[require(...)]` materializes the node, style,
-    /// paint, focus, and a11y companions; this constructor layers the a11y label
-    /// (the accessible name) PLUS a centered, pick-through **label `Text`** child
-    /// — the visible button text. The bare marker (`spawn(Button)`) is a
-    /// label-less box (an icon button's canvas); `new`/`button()` give it text.
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(label: impl Into<String>) -> impl Bundle {
-        let label = label.into();
-        (
-            Button,
-            A11yLabel(label.clone()),
-            children![(
-                Text(label),
-                FontSize(BUTTON_LABEL_FONT_SIZE),
-                TextColor::default(),
-                TextAlign::Center,
-                Pickable::IGNORE,
-            )],
-        )
+    /// The `Button` marker's `#[require(...)]` materializes the node/style/paint/
+    /// focus/a11y companions; the builder adds the accessible name (`A11yLabel`)
+    /// and the [`ButtonParts`] trigger, and an `On<Add, ButtonParts>` observer
+    /// attaches the centered, pick-through visible **label `Text`** child. The
+    /// bare marker (`spawn(Button)`) or `(Button, A11yLabel)` stays a label-less
+    /// box (an icon button's canvas) — no `ButtonParts`, so no label child.
+    #[allow(clippy::new_ret_no_self)] // builder pattern: `new` returns the named builder
+    pub fn new(label: impl Into<String>) -> ButtonBuilder {
+        ButtonBuilder {
+            marker: Button,
+            a11y_label: A11yLabel(label.into()),
+            parts: ButtonParts,
+        }
     }
+}
+
+/// The named `Bundle` [`Button::new`] returns: the `Button` marker (fires the
+/// `#[require]` contract) + the accessible name + the [`ButtonParts`] trigger.
+#[derive(Bundle)]
+pub struct ButtonBuilder {
+    marker: Button,
+    a11y_label: A11yLabel,
+    parts: ButtonParts,
+}
+
+/// `On<Add, ButtonParts>` observer body (Track C / C4): attach the visible label
+/// `Text` child to a `Button::new(..)` root, reading the accessible name off the
+/// root's `A11yLabel` (single source — no duplicate label string). Idempotent:
+/// early-returns if a [`ButtonLabel`] child already exists, so a re-added trigger
+/// (a defensive belt against any respawn path) never double-attaches. The child
+/// tuple is byte-identical to the pre-C4 hand-wired `children![…]`.
+pub(crate) fn attach_button_children(
+    root: Entity,
+    labels: &Query<&A11yLabel>,
+    children: &Query<&Children>,
+    is_label: &Query<(), With<ButtonLabel>>,
+    commands: &mut Commands,
+) {
+    if let Ok(existing) = children.get(root)
+        && existing.iter().any(|c| is_label.get(c).is_ok())
+    {
+        return; // label already attached — idempotent no-op
+    }
+    let Ok(A11yLabel(text)) = labels.get(root) else {
+        return;
+    };
+    commands.entity(root).with_child((
+        ButtonLabel,
+        Text(text.clone()),
+        FontSize(BUTTON_LABEL_FONT_SIZE),
+        TextColor::default(),
+        TextAlign::Center,
+        Pickable::IGNORE,
+    ));
 }
 
 // Pointer activation: C3c retired the Phase-0 `emit_on_press_on_click` poll

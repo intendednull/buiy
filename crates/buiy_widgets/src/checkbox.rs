@@ -138,42 +138,32 @@ pub(crate) fn checkbox_row_flex() -> FlexParams {
 }
 
 impl Checkbox {
-    /// Spawn-ready bundle for a labelled checkbox. Returns `impl Bundle` carrying
-    /// the full contract (role + tri-state toggle + focus + a11y + box) plus two
-    /// decorative children: the check/dash **mark** glyph and the visible
-    /// **label** `Text`, both `Pickable::IGNORE` so a hit resolves to the widget
-    /// root the router addresses (pick-through, co-drive SC-3).
+    /// The canonical labelled checkbox. Returns a named [`CheckboxBuilder`] (a
+    /// `Bundle`) spawned directly — and, being a named type, it carries the
+    /// chainable **`.checked(true)` / `.indeterminate(true)`** setters that store
+    /// the real [`A11yToggled`] (the spec §3.1/§6 headline `impl Bundle` tuples
+    /// cannot express):
     ///
-    /// The mark BOX renders from the start; its glyph starts EMPTY (the default
-    /// `A11yToggled` is `False`), and [`update_checkbox_visual`] writes the `✓`/`–`
-    /// glyph on the first `Changed<A11yToggled>` once the state flips.
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(label: impl Into<String>) -> impl Bundle {
-        let label = label.into();
-        (
-            Checkbox,
-            A11yLabel(label.clone()),
-            children![
-                // The 18×18 mark box; its glyph starts EMPTY (default
-                // `A11yToggled::False`) — the box renders, the check appears on
-                // the first flip (`update_checkbox_visual`).
-                (
-                    CheckboxMark,
-                    Text(String::new()),
-                    FontSize(CHECKBOX_MARK_FONT_SIZE),
-                    TextColor::default(),
-                    TextAlign::Center,
-                    Pickable::IGNORE,
-                ),
-                // The visible label pixels (the AT name stays on the root).
-                (
-                    Text(label),
-                    FontSize(CHECKBOX_MARK_FONT_SIZE),
-                    TextColor::default(),
-                    Pickable::IGNORE,
-                ),
-            ],
-        )
+    /// ```ignore
+    /// commands.spawn(Checkbox::new("Dark mode").checked(true));
+    /// ```
+    ///
+    /// The `Checkbox` marker's `#[require(...)]` materializes the contract; the
+    /// builder adds the accessible name + the initial toggle + a [`CheckboxParts`]
+    /// trigger, and an `On<Add, CheckboxParts>` observer attaches the two
+    /// pick-through children — the check/dash **mark** glyph and the visible
+    /// **label** `Text`. The mark's glyph starts EMPTY;
+    /// [`update_checkbox_visual`] writes the `✓`/`–` on the first
+    /// `Changed<A11yToggled>` (the spawn-frame `Added` counts), so a
+    /// `.checked(true)` box shows its `✓` on frame one.
+    #[allow(clippy::new_ret_no_self)] // builder pattern: `new` returns the named builder
+    pub fn new(label: impl Into<String>) -> CheckboxBuilder {
+        CheckboxBuilder {
+            marker: Checkbox,
+            a11y_label: A11yLabel(label.into()),
+            toggled: A11yToggled::default(), // Toggled::False
+            parts: CheckboxParts,
+        }
     }
 
     /// Read whether the checkbox is **checked**, as a plain `bool` — the domain
@@ -202,6 +192,94 @@ impl Checkbox {
     pub fn indeterminate(state: &A11yToggled) -> bool {
         matches!(state.0, Toggled::Mixed)
     }
+}
+
+/// Builder-only **trigger** for the [`Checkbox`] children observer (Track C /
+/// C4). Inserted ONLY by [`Checkbox::new`], so the `On<Add, CheckboxParts>`
+/// observer attaches the mark + label children ONLY to a `Checkbox::new(..)` root
+/// (never the bare marker or the `checkbox()` scene-fn). Not `Reflect`/
+/// `register_type`'d — a transient authoring signal that must not round-trip
+/// through a scene/hot-reload/MVU-replay respawn.
+#[derive(Component)]
+pub struct CheckboxParts;
+
+/// The named `Bundle` [`Checkbox::new`] returns. Its chainable setters store the
+/// **real** components: `.checked(true)` / `.indeterminate(true)` write the
+/// [`A11yToggled`] tri-state (the spec §3.1/§6 headline capability).
+#[derive(Bundle)]
+pub struct CheckboxBuilder {
+    marker: Checkbox,
+    a11y_label: A11yLabel,
+    toggled: A11yToggled,
+    parts: CheckboxParts,
+}
+
+impl CheckboxBuilder {
+    /// Set the initial **checked** state, storing the real [`A11yToggled`]
+    /// (`true` → `Toggled::True`, `false` → `Toggled::False`). The spec §6
+    /// acceptance: `Checkbox::new("Dark mode").checked(true)`.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.toggled = A11yToggled(if checked {
+            Toggled::True
+        } else {
+            Toggled::False
+        });
+        self
+    }
+
+    /// Seed the **indeterminate** (`Mixed`) tri-state (`false` → `Toggled::False`).
+    /// Mutually exclusive with `.checked` — the last setter wins.
+    pub fn indeterminate(mut self, indeterminate: bool) -> Self {
+        self.toggled = A11yToggled(if indeterminate {
+            Toggled::Mixed
+        } else {
+            Toggled::False
+        });
+        self
+    }
+}
+
+/// `On<Add, CheckboxParts>` observer body (Track C / C4): attach the two
+/// pick-through children — the `CheckboxMark` glyph box + the visible label
+/// `Text` — reading the accessible name off the root's `A11yLabel` (single
+/// source). Idempotent: early-returns if a `CheckboxMark` child already exists,
+/// so a respawn/re-added trigger never doubles the subtree. Writes ONLY child
+/// components — never the root `A11yToggled` (that would trip a phantom
+/// `ValueChange`). Byte-identical to the pre-C4 hand-wired `children![…]`.
+pub(crate) fn attach_checkbox_children(
+    root: Entity,
+    labels: &Query<&A11yLabel>,
+    children: &Query<&Children>,
+    is_mark: &Query<(), With<CheckboxMark>>,
+    commands: &mut Commands,
+) {
+    if let Ok(existing) = children.get(root)
+        && existing.iter().any(|c| is_mark.get(c).is_ok())
+    {
+        return; // subtree already attached — idempotent no-op
+    }
+    let Ok(A11yLabel(text)) = labels.get(root) else {
+        return;
+    };
+    commands.entity(root).with_children(|p| {
+        // The 18×18 mark box; glyph starts EMPTY, `update_checkbox_visual` writes
+        // the `✓`/`–` on the first `Changed<A11yToggled>` (the spawn `Added`).
+        p.spawn((
+            CheckboxMark,
+            Text(String::new()),
+            FontSize(CHECKBOX_MARK_FONT_SIZE),
+            TextColor::default(),
+            TextAlign::Center,
+            Pickable::IGNORE,
+        ));
+        // The visible label pixels (the AT name stays on the root).
+        p.spawn((
+            Text(text.clone()),
+            FontSize(CHECKBOX_MARK_FONT_SIZE),
+            TextColor::default(),
+            Pickable::IGNORE,
+        ));
+    });
 }
 
 /// The change-detection filter for [`update_checkbox_visual`]: a `Checkbox` whose

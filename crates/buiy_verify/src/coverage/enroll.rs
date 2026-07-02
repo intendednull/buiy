@@ -68,7 +68,16 @@ pub fn build_app(fx: &super::fixture::Fixture, cell: &Cell) -> App {
         // check (V13) run on this stack (`content_is_present` is CPU-side).
         .add_plugins(BuiyTextPlugin {
             system_fonts: false,
-        });
+        })
+        // `WidgetsPlugin` (CPU-safe — no adapter) so widget fixtures are FULLY
+        // FORMED: since Track C / C4, a `Button::new`/`Checkbox::new` widget's
+        // visible children (label/mark glyph) are attached by the plugin's
+        // `On<Add, <Widget>Parts>` observer, not by a plugin-free `children![…]`
+        // in the constructor. Without it a labelled widget fixture would render
+        // its box but NO label glyph — the exact silent-no-paint class the
+        // content-presence check (V13) guards. It pulls the MVU toggle-leaf chain
+        // (also CPU-only), keeping `build_app`'s no-adapter invariant.
+        .add_plugins(buiy_widgets::WidgetsPlugin);
 
     // The cell's theme is the ACTIVE theme. We do not run the forced-colors
     // swap system here: `build_app` installs the resolved theme directly (the

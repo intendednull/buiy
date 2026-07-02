@@ -5,6 +5,6 @@ expression: button.resting.forced.tablet.fc0.dpr1.cpu@0
 # buiy-display-list-dump v1
 [nodes painters_z]
 0 button rect pos=0,0 size=50,48 color=#ffffffff clip=none group=none
-1 entity#64 rect pos=8,14 size=34,20 color=#00000000 clip=none group=none
+1 entity#79 rect pos=8,14 size=34,20 color=#00000000 clip=none group=none
 [buckets draw-order]
 (Quad,layer=0) x1
