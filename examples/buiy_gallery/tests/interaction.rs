@@ -715,6 +715,55 @@ fn menu_button_click_recolors_the_trigger_open_then_closed() {
     );
 }
 
+/// AUDIT (widget-catalog sweep, N2): roving the open menu with the arrows must show a
+/// VISIBLE active-item indicator (a framework focus-ring `Outline`), not just move the
+/// AT `active_descendant`. Before this, keyboard roving was invisible to sighted users
+/// — the "state moves but nothing paints" class (like the filter pills). This drives
+/// the real open + arrow + Esc through picking/keyboard and asserts the ring follows
+/// the active item and clears on close.
+#[test]
+fn menu_roving_paints_a_focus_ring_on_the_active_item() {
+    use buiy_core::render::components::Outline;
+    use buiy_gallery::MenuAction;
+    use buiy_widgets::menu::MenuActiveRing;
+
+    let mut g = Gallery::new();
+    g.goto(Screen::Menu);
+
+    let button = single::<MenuButton>(g.world_app());
+    let item0 = find_where::<MenuAction>(g.world_app(), |a| a.0 == 0);
+    let item1 = find_where::<MenuAction>(g.world_app(), |a| a.0 == 1);
+
+    let ringed = |g: &mut Gallery, e: Entity| -> bool {
+        let w = g.world_app().world();
+        w.get::<MenuActiveRing>(e).is_some() && w.get::<Outline>(e).is_some()
+    };
+
+    // Closed at rest: no active ring.
+    assert!(!ringed(&mut g, item0), "closed menu ⇒ no active ring");
+
+    // Open (click the ⋮): the first item is active → ringed; others are not.
+    g.click(button);
+    g.settle(2);
+    assert!(
+        ringed(&mut g, item0),
+        "opening rings the first (active) item"
+    );
+    assert!(!ringed(&mut g, item1), "only the active item is ringed");
+
+    // ArrowDown: the ring follows the active index to the second item.
+    g.press_key(KeyCode::ArrowDown, Key::ArrowDown);
+    g.settle(2);
+    assert!(!ringed(&mut g, item0), "ring left the old active item");
+    assert!(ringed(&mut g, item1), "ring moved to the new active item");
+
+    // Esc closes → every ring clears.
+    g.press_key(KeyCode::Escape, Key::Escape);
+    g.settle(2);
+    assert!(!ringed(&mut g, item0), "close clears the ring");
+    assert!(!ringed(&mut g, item1), "close clears the ring");
+}
+
 /// The POINTER per-item path (`buiy_widgets` `menu_item_click_emits_on_press`): a
 /// click directly on a `MenuItem` activates THAT item (records its label) and closes
 /// the menu — the pointer mirror of the keyboard Enter/Space activate-and-close.
@@ -1039,6 +1088,92 @@ fn modal_dialog_close_button_click_closes_the_open_dialog() {
         g.world_app().world().get::<CssVisibility>(dialog).copied(),
         Some(CssVisibility::Hidden),
         "clicking the dialog ✕ closes it",
+    );
+}
+
+/// AUDIT (widget-catalog sweep, N1): the modal "Register globally" switch is a DEFAULT
+/// `Switch` (unlike the showcase switches, which use custom track pixels), so it
+/// exhibited the framework "thumb slides but the track never recolors" no-op. This
+/// opens the dialog and toggles the switch via a real click, asserting the track fill
+/// recolors accent (on) / surface.raised-alt (off) to match the flipped state.
+#[test]
+fn modal_register_switch_track_recolors_on_toggle() {
+    use bevy::prelude::{Children, Name};
+    use buiy_core::a11y::{A11yToggled, Toggled};
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
+    use buiy_widgets::switch::SwitchTrack;
+
+    let mut g = Gallery::new();
+    g.goto(Screen::Modal);
+
+    // Open the Create dialog so its register switch is visible + clickable.
+    let invoker = find_where::<ModalInvoker>(g.world_app(), |m| m.0 == ModalMode::Create);
+    g.click(invoker);
+    g.settle(2);
+
+    // The default `Switch` named "#ModalRegisterSwitch" (seeded ON at spawn).
+    let sw = {
+        let mut q = g
+            .world_app()
+            .world_mut()
+            .query_filtered::<(Entity, &Name), With<Switch>>();
+        q.iter(g.world_app().world())
+            .find(|(_, n)| n.as_str().contains("ModalRegisterSwitch"))
+            .map(|(e, _)| e)
+            .expect("the #ModalRegisterSwitch default Switch")
+    };
+
+    // The track Background lives on the `SwitchTrack` child (pill), not the root.
+    let track_bg = |g: &mut Gallery| -> ColorToken {
+        let world = g.world_app().world();
+        let track = world
+            .get::<Children>(sw)
+            .expect("switch has children")
+            .iter()
+            .copied()
+            .find(|&c| world.get::<SwitchTrack>(c).is_some())
+            .expect("a SwitchTrack child");
+        world
+            .get::<Background>(track)
+            .expect("the track carries the pill Background")
+            .color
+    };
+    let toggled = |g: &mut Gallery| g.world_app().world().get::<A11yToggled>(sw).unwrap().0;
+    let expected = |t: Toggled| match t {
+        Toggled::False => ColorToken::SurfaceRaisedAlt,
+        _ => ColorToken::Accent,
+    };
+
+    // Resting: the track already matches the toggle (seeded ON ⇒ accent), proving the
+    // spawn-time color is right (no first-toggle jump).
+    let t0 = toggled(&mut g);
+    assert_eq!(
+        track_bg(&mut g),
+        expected(t0),
+        "the resting track fill matches the switch state",
+    );
+
+    // Toggle via a real click: the track must recolor to match the flipped state.
+    g.click(sw);
+    g.settle(2);
+    let t1 = toggled(&mut g);
+    assert_ne!(t1, t0, "clicking the switch flips its state");
+    assert_eq!(
+        track_bg(&mut g),
+        expected(t1),
+        "the track recolors to match the flipped state (the N1 fix)",
+    );
+
+    // Toggle back: the track recolors back.
+    g.click(sw);
+    g.settle(2);
+    let t2 = toggled(&mut g);
+    assert_eq!(t2, t0, "clicking again flips it back");
+    assert_eq!(
+        track_bg(&mut g),
+        expected(t2),
+        "the track recolors back to the original state",
     );
 }
 

@@ -1889,7 +1889,12 @@ their fixes. Remaining polish (none blocking; the gallery renders + runs):
   verification. **Spec touchpoint:**
   `2026-06-25-buiy-wasm-browser-support-design.md` § 6 (Pointer interactivity — touch caveat).
 
-## Widgets — default `Switch` track never recolors on toggle
+## Widgets — default `Switch` track never recolors on toggle — LANDED
+
+**Status:** **Landed** (2026-07-02) — `update_switch_visual` now recolors the
+`SwitchTrack` fill (`Accent` on / `SurfaceRaisedAlt` off) and the resting/thumb
+initializers were aligned to the design (white thumb). Decided in
+`docs/specs/2026-07-02-default-switch-track-and-menu-active-highlight-design.md`.
 
 **Originated:** the 2026-07-01 gallery widget-catalog audit
 (`docs/reports/2026-07-01-gallery-widget-catalog-audit.md`, finding N1).
@@ -1910,7 +1915,15 @@ when on, `surface.secondary` when off), guarded with `set_if_neq`. Framework-lev
 gallery fix — an opinionated default-widget change with a wide blast radius. Not a
 regression (thumb still conveys state).
 
-## Widgets — menu items have no active-descendant highlight (roving focus is invisible)
+## Widgets — menu items have no active-descendant highlight (roving focus is invisible) — LANDED
+
+**Status:** **Landed** (2026-07-02) — `bind_menu_model` now rings the
+`MenuModel.active` item inline with a framework focus-ring `Outline` (the
+`MenuActiveRing` marker keeps it from clobbering an author outline), meeting SC 1.4.11
+(a background fill can't — no surface token reaches 3:1 on the near-black menu panel).
+Painted inline in the bind rather than as a sibling system, because adding an `Update`
+system perturbed a schedule-fragile hidden-node layout under the MT executor. Decided
+in `docs/specs/2026-07-02-default-switch-track-and-menu-active-highlight-design.md`.
 
 **Originated:** the 2026-07-01 gallery widget-catalog audit
 (`docs/reports/2026-07-01-gallery-widget-catalog-audit.md`, finding N2).
@@ -1926,3 +1939,69 @@ expected-but-unwired highlight (accessibility/UX gap, not a design regression).
 **Direction:** a C6-style active-item paint — `bind_menu_model` (or a gallery
 reflect) tints the `MenuModel.active` item (e.g. `surface.raised-alt`) and clears the
 rest, on `Changed<MenuModel>`. Low severity; pairs with a keyboard-nav visual pass.
+**Landed as** a focus-ring `Outline` rather than a fill (see Status above).
+
+## Widgets — `menu_item_background()` doc/code contradiction
+
+**Originated:** the 2026-07-02 audit of N2
+(`docs/specs/2026-07-02-default-switch-track-and-menu-active-highlight-design.md`).
+
+**Symptom:** `crates/buiy_widgets/src/menu.rs` `menu_item_background()` returns
+`ColorToken::SurfacePrimary` while its doc comment says "transparent — the menu panel
+shows through". Visually moot today (the default `menu_background()` is also
+`SurfacePrimary`, so a default item is the same color as the panel), but the code
+contradicts its own contract. N2 landed as an `Outline` (never touches item
+`Background`), so this was left untouched.
+
+**Direction:** change `menu_item_background()` → `ColorToken::Transparent` to match
+its doc (pixel-identical on the default panel; the gallery already sets items
+`Transparent`). One-line cleanup; confirm no default-`Menu` display-list snapshot
+counts the item fill quad first.
+
+## Widgets — disabled `Switch` would still recolor its track
+
+**Originated:** the 2026-07-02 N1 fix.
+
+**Symptom:** `update_switch_visual` is gated purely on `Changed<A11yToggled>` with no
+disabled check, so if a disabled `Switch` state lands later, toggling it would still
+recolor the track to `Accent`. No disabled `Switch` state exists today, so this is
+latent, not a live bug.
+
+**Direction:** when a disabled `Switch` visual lands, give the disabled state a muted
+track/thumb and skip the accent recolor (or resolve via the theme's disabled tokens).
+
+## Widgets — open-menu container ring vs active-item ring (possible double-ring)
+
+**Originated:** the 2026-07-02 N2 fix.
+
+**Symptom:** when a menu opens, `bind_menu_model` focuses the menu **container**, so
+`lower_focus_ring` rings the whole panel; the bind's inline ring pass also rings the
+active **item**. Both are correct in isolation but may read as a double-ring. The
+2026-07-02 GPU eyeball judged the combination acceptable, so no change was made.
+
+**Direction:** if a keyboard-nav visual pass finds the container ring competes with
+the item ring, suppress the container ring for `active_descendant` containers (a menu
+that delegates its visible focus to the active item does not also need a panel ring).
+
+## Verify/layout — gallery layout snapshots pin schedule-order-fragile invisible nodes
+
+**Originated:** the 2026-07-02 N2 fix.
+
+**Symptom:** the N2 fix was FIRST implemented as a separate `paint_menu_active_item`
+system in `Update`. That flipped the resolved `pos.y` of a **size-0, hidden** tooltip
+child node (`InfoTip`'s `entity#…`) from `0,6` to `0,0` in two gallery layout
+snapshots — and, decisively, the **single-threaded and multi-threaded executors
+disagreed** on the value (single→0,0, MT→0,6), so no snapshot value passed both CI
+lanes. The node is invisible (size 0,0 in a hidden subtree), so the shift has zero
+visible/functional impact (all visible entities + every `#MenuItem` unchanged; all
+behavior + GPU tests green) — the resolved position of a degenerate node is simply
+sensitive to the `Update` system SET, which differs by executor, and the layout
+snapshots pin those invisible nodes. **Worked around** by folding the ring paint into
+the existing `bind_menu_model` (adds no system → schedule unchanged → node keeps its
+base position under both executors), but the underlying fragility remains: any future
+system addition can re-trigger it.
+
+**Direction:** either (a) make the layout/transform resolve for size-0/hidden nodes
+schedule-order-invariant in `buiy_core` (the robustness fix), or (b) have the gallery
+layout-snapshot dump SKIP invisible (size-0 in a hidden subtree) nodes so the Tier-1
+gate pins only observable geometry (the cheaper, snapshot-side fix). Low severity.

@@ -595,7 +595,7 @@ per-icon. "Render size" = the `width`/`height` attributes (px).
 | Card (each) | 1px `#262a31`, radius 12, bg `#16181c`, `padding:16px` |
 | Section label margin-bottom | 14px (switch/slider), 12px (segmented/stepper/meter) |
 | Switch list | `gap:13px` |
-| Switch track (JS 637) | 40×23, radius 99; bg `--ac` on / `#2a2f37` off |
+| Switch track (JS 637) | 40×23, radius 99; bg `--ac` on / `#2a2f37` off — the framework default `Switch` and the gallery showcase switch both map on→`ColorToken::Accent`, off→`ColorToken::SurfaceRaisedAlt` (`#1e2127`, a slightly-darker named approximation of `#2a2f37`, forced-colors-safe; see the [2026-07-02 switch/menu decision](2026-07-02-default-switch-track-and-menu-active-highlight-design.md)) |
 | Switch thumb (JS 638) | 17×17, radius 99, `top:3px`, `left` 3px↔20px, bg `#fff` |
 | Slider preview square | 88×88, gradient, radius `{radius}px` (0–40), `shadow.slider-preview` |
 | Slider track | height **6px**, radius 99, bg `#1e2127` |

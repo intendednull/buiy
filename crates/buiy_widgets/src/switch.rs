@@ -119,10 +119,13 @@ pub(crate) fn switch_box_model() -> BoxModel {
     Style::default().width_px(40.0).height_px(20.0).box_model
 }
 
-/// The default switch track fill (the `color.surface.secondary` token).
+/// The default switch track fill — the OFF-state color (`color.surface.raised-alt`,
+/// the named approximation of the design's `#2a2f37`; matches the showcase switch).
+/// [`update_switch_visual`] recolors it to `Accent` when the switch is on, so this
+/// is both the spawn-time resting color and the value the driver restores on OFF.
 pub(crate) fn switch_background() -> Background {
     Background {
-        color: ColorToken::SurfaceSecondary,
+        color: ColorToken::SurfaceRaisedAlt,
     }
 }
 
@@ -228,10 +231,12 @@ pub(crate) fn switch_thumb_box_model() -> BoxModel {
     Style::default().width_px(16.0).height_px(16.0).box_model
 }
 
-/// The thumb fill (the `color.surface.primary` token — a contrasting knob).
+/// The thumb fill — the design's constant white knob (`color.misc.white`). White is
+/// the only thumb legible on *both* track colors (the dark-grey OFF track and the
+/// accent ON track); it never recolors (only the thumb's `Translate` position moves).
 pub(crate) fn switch_thumb_background() -> Background {
     Background {
-        color: ColorToken::SurfacePrimary,
+        color: ColorToken::White,
     }
 }
 
@@ -248,33 +253,40 @@ pub(crate) fn switch_thumb_border() -> Border {
 /// clippy's `type_complexity` bar.
 type ChangedSwitch = (With<Switch>, Changed<A11yToggled>);
 
-/// C4 visual system: drive each switch's thumb from its `A11yToggled` state,
-/// gated on `Changed<A11yToggled>` so the slide fires exactly once per flip. A
-/// toggle from any modality (pointer, Space/Enter, AT-`Click`) flows through the
-/// one `OnPress` consumer into this `A11yToggled` write, and this system reacts.
+/// C4 visual system: drive each switch's track fill + thumb position from its
+/// `A11yToggled` state, gated on `Changed<A11yToggled>` so it fires exactly once per
+/// flip. A toggle from any modality (pointer, Space/Enter, AT-`Click`) flows through
+/// the one `OnPress` consumer into this `A11yToggled` write, and this system reacts.
 ///
-/// For each changed switch, walk its `Children` to the [`SwitchTrack`] child and
-/// then to the [`SwitchThumb`] *grandchild* (the thumb is a child of the track),
-/// and set the thumb's `Translate` x offset: `True` → slid right by
-/// [`SWITCH_THUMB_TRAVEL`], `False` → back to `0`. (`Mixed` is not a switch state;
-/// the binary contract never produces it, but it is treated as `True` for
-/// robustness, matching `A11yToggled::toggle_switch`.)
+/// For each changed switch, walk its `Children` to the [`SwitchTrack`] child (whose
+/// `Background` is the pill fill) and then to the [`SwitchThumb`] *grandchild*:
+/// - recolor the track — `Accent` when on, `SurfaceRaisedAlt` when off — the primary
+///   on/off affordance (a web/native switch recolors its track), `set_if_neq`;
+/// - set the thumb's `Translate` x offset — `True` → slid right by
+///   [`SWITCH_THUMB_TRAVEL`], `False` → back to `0`.
+///
+/// (`Mixed` is not a switch state; the binary contract never produces it, but it is
+/// treated as `True` for robustness, matching `A11yToggled::toggle_switch`.) `Added`
+/// counts as `Changed`, so a seeded-on switch paints `Accent` on its first update.
 pub fn update_switch_visual(
     changed: Query<(&A11yToggled, &Children), ChangedSwitch>,
-    tracks: Query<&Children, With<SwitchTrack>>,
+    mut tracks: Query<(&Children, &mut Background), With<SwitchTrack>>,
     mut thumbs: Query<&mut Translate, With<SwitchThumb>>,
 ) {
     for (toggled, children) in &changed {
-        let x = match toggled.0 {
-            Toggled::False => 0.0,
-            Toggled::True | Toggled::Mixed => SWITCH_THUMB_TRAVEL,
+        let (x, track_fill) = match toggled.0 {
+            Toggled::False => (0.0, ColorToken::SurfaceRaisedAlt),
+            Toggled::True | Toggled::Mixed => (SWITCH_THUMB_TRAVEL, ColorToken::Accent),
         };
         // Switch → SwitchTrack → SwitchThumb: the thumb is a grandchild now that
         // the pill moved off the root onto its own track child.
         for &child in children {
-            let Ok(track_children) = tracks.get(child) else {
+            let Ok((track_children, mut track_bg)) = tracks.get_mut(child) else {
                 continue;
             };
+            if track_bg.color != track_fill {
+                track_bg.color = track_fill;
+            }
             for &grandchild in track_children {
                 if let Ok(mut translate) = thumbs.get_mut(grandchild) {
                     translate.0 = Length::px(x);

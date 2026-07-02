@@ -489,7 +489,11 @@ impl Plugin for WidgetsPlugin {
             Update,
             menu::menu_keyboard_nav.in_set(menu::MenuSet::Enqueue),
         );
-        // The projection bind (the EARLY `MenuSet::Bind`, the D4 correction).
+        // The projection bind (the EARLY `MenuSet::Bind`, the D4 correction). It also
+        // paints the roving-active item ring (audit N2) inline — folded in rather than
+        // a sibling system, because adding ANY system to `Update` perturbs the
+        // executor's ordering enough to flip a schedule-fragile hidden-node layout
+        // under the MT executor (the tooltip-primitive snapshot fragility).
         app.add_systems(Update, menu::bind_menu_model.in_set(menu::MenuSet::Bind));
     }
 }
