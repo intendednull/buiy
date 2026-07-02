@@ -46,23 +46,24 @@ Run the unit test → GREEN. `cargo test -p buiy_core` (headless, no GPU) stays 
 
 In `render_compositor.rs` (or the compositor unit tests), add a pure-function test
 with two `(extent, EffectReason::OPACITY)` pairs matching the S4 GPU fixture's
-**bucketed** extents. Concrete, provably-different buckets (the gate's nit — a
-60px and a 36px bounds must NOT both round to 64):
+**bucketed** extents. Concrete, provably-different buckets (the gate's nit — the two
+bounds must NOT both round to the same pow2). Note each group's bounds are SEEDED
+with the group's own box at its (0,0) origin (extract.rs) and then grown by its own
+direct members, so INNER's bounds = (0,0)..(inner_fill.max):
 
 - `outer` bounds **60×60** → `next_power_of_two(60) = 64` → `(64,64)` →
   `target_bytes = 64·64·8 = 32768`.
-- `inner` bounds **16×16** → `next_power_of_two(16) = 16` → `(16,16)` →
-  `target_bytes = 16·16·8 = 2048`.
-- budget **33000** ∈ `[32768, 32768+2048) = [32768, 34816)`.
+- `inner` bounds **24×24** (origin ∪ a 16×16 fill at (8,8)) →
+  `next_power_of_two(24) = 32` → `(32,32)` → `target_bytes = 32·32·8 = 8192`.
+- budget **33000** ∈ `[32768, 32768+8192) = [32768, 40960)`.
 
-Assert `plan_allocation(&[(uvec2(64,64), OPACITY), (uvec2(16,16), OPACITY)], 33000)
+Assert `plan_allocation(&[(uvec2(64,64), OPACITY), (uvec2(32,32), OPACITY)], 33000)
 == vec![true, false]` (outer kept, inner degraded → case A). Deterministic, no GPU.
 Pins the budget↔extent relationship so a later bucket/threshold change that would
 silently move S4 onto a deferred path fails here loudly. Also assert the window
-edges: budget `< 2048` (below both) → `[false,false]`; budget `≥ 34816` (above
-both) → `[true,true]`; and `2048 ≤ budget < 32768` → still `[false,false]` (outer,
-the larger, degrades whenever the pair doesn't fit and outer alone exceeds budget —
-confirm against `plan_allocation`'s smallest-first drop, documenting the real edge).
+edges: budget `< 8192` (below both) → `[false,false]`; budget `≥ 40960` (above
+both) → `[true,true]`; and `8192 ≤ budget < 32768` → still `[false,false]` (outer,
+the larger, degrades whenever the pair doesn't fit and outer alone exceeds budget).
 
 ## S3 — Node injection (node.rs step-2a)
 
@@ -91,11 +92,11 @@ No dedicated test here — S4's GPU test is the observable check.
 **RED first (after S1, before/with S3).** In
 `crates/buiy_core/tests/render_degraded_group_gpu.rs`, rebuild
 `nested_degraded_group_does_not_corrupt_parent` into a case-A positive:
-1. Give `outer` (the `Opacity(0.8)` group) its **own** larger `Background` that
-   **spatially contains** the inner (e.g. a ~60×60 fill at (8,8); `inner_fill`
-   16×16 at (20,20) inside it) so `outer.bounds` ⊋ `inner.bounds` and
-   `target_bytes(outer) > target_bytes(inner)`. Keep inner ⊆ outer's own-paint box
-   (avoids the pre-existing parent-target-undersizing clip).
+1. Give `outer` (the `Opacity(0.8)` group) its **own** larger `Background` (a 60×60
+   fill at (0,0)) that **spatially contains** the inner (`inner_fill` 16×16 at
+   (8,8), so inner bounds = (0,0)..(24,24)) so `outer.bounds` ⊋ `inner.bounds` and
+   `target_bytes(outer) = 32768 > target_bytes(inner) = 8192`. Keep inner ⊆ outer's
+   own-paint box (avoids the pre-existing parent-target-undersizing clip).
 2. Set the budget into `[target_bytes(outer), target_bytes(outer) +
    target_bytes(inner))` so `plan_allocation` keeps outer, degrades only inner
    (the exact budget cross-checked by the S2 pin).

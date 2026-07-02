@@ -472,7 +472,7 @@ fn nested_degraded_child_forward_composites_into_parent() {
     let interior = px(16, 16); // inner-fill center (8,8)+8 → the injected child
     let outer_only = px(50, 50); // inside outer bg (0..60), outside inner (8..24)
     let corner = px(88, 88); // outside outer entirely → clear
-    println!("interior (28,28)={interior:?} expected≈{expected_inner:?}");
+    println!("interior (16,16)={interior:?} expected≈{expected_inner:?}");
     println!("outer_only (50,50)={outer_only:?} expected≈{expected_outer:?}");
     println!("corner (88,88)={corner:?}");
 
