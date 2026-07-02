@@ -28,10 +28,12 @@ Make `use buiy::prelude::*;` express a whole Buiy app *and its systems* without 
 - **Resolve the `Text`/`Node` collision** by making `buiy::prelude` **self-sufficient**: an author uses ONLY `buiy::prelude::*` (buiy's `Text`/`Node` win, no `bevy::prelude::*` needed), so the glob-collision never arises. Document this as the one-import contract.
 - **Risk:** low (additive re-exports). **Ripple:** none to widgets. **Verify:** a new `examples/` (or doctest) authoring a full system with ONLY `buiy::prelude::*`; confirm the in-repo examples still compile.
 
-### C2 — Domain accessors (F1)
+### C2 — Domain accessors (F1) — **DECIDED**
 Read widget state without the foreign `accesskit::Toggled`.
-- `Checkbox::checked(&…) -> bool`, `Switch::on(&…) -> bool`, `Slider::value(&…) -> f64`, `Disclosure::expanded(&…) -> bool` (+ `TextInput::value`). **Design decision (record in the C2 slice plan):** accessor shape — extension trait over the state component vs. associated fn taking `&A11yToggled` — and the `Toggled::Mixed → bool` mapping (checkbox is tri-state).
-- **Risk:** medium (shape choice). **Ripple:** migrates the `.0 == Toggled::True` call sites (gallery tests, `interaction.rs`). **Additive**; lands before C4 uses it.
+- **Shape (decided):** **associated functions on the widget markers, taking the state component by ref** — `Checkbox::checked(&A11yToggled) -> bool`, `Checkbox::indeterminate(&A11yToggled) -> bool`, `Switch::on(&A11yToggled) -> bool`, `Slider::value(&A11yValue) -> f64` (+ `min`/`max`/`fraction`), `Disclosure::expanded(&A11yExpanded) -> bool`, `TextInput::value(&A11yTextValue) -> &str`. Chosen over inherent methods on the state components because it matches the spec's `Checkbox::checked()`/`Switch::on()` **domain-namespaced** spelling, is discoverable via the widget type the agent already knows (`Checkbox::` autocompletes `checked`), and distinguishes checkbox-vs-switch semantics (both read `Toggled::True`, but the name steers). Returns plain `bool`/`f64`/`&str` — the `accesskit::Toggled` enum never appears in the caller.
+- **`Toggled::Mixed` mapping:** `checked()` = `matches!(Toggled::True)` (so `Mixed → false`); `indeterminate()` = `matches!(Toggled::Mixed)` exposes the third state explicitly. (Matches the resting-read APG convention: a mixed checkbox is not "checked".)
+- **Also prelude the state components** (`A11yToggled`, `A11yValue`, `A11yExpanded`, `A11yTextValue`) through `buiy` — today they are NOT preluded, so an agent cannot even name them to query; that is half of F1. `accesskit::Toggled` stays UN-preluded (the accessors make it unnecessary).
+- **Risk:** medium. **Ripple:** dogfood-migrate the clearest internal `.0 == Toggled::True` readers (gallery inspector test, `interaction.rs`) to the accessors. **Additive**; lands before C4.
 
 ### C3 — Typed events (F2 / D2)
 `ValueChange<T>{is_final}` over the untyped `OnPress`.

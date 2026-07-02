@@ -263,6 +263,23 @@ impl Slider {
             ],
         )
     }
+
+    /// Read the slider's current **value** from its [`A11yValue`] state (Track C
+    /// domain accessor — `Query<&A11yValue, With<Slider>>` then `Slider::value(v)`).
+    pub fn value(state: &A11yValue) -> f64 {
+        state.now
+    }
+
+    /// The slider's value as a **0.0..=1.0 fraction** of its `min..=max` range
+    /// (the normalized position a track/thumb renders from). A degenerate range
+    /// (`max <= min`) reads as `0.0`.
+    pub fn fraction(state: &A11yValue) -> f64 {
+        if state.max <= state.min {
+            0.0
+        } else {
+            ((state.now - state.min) / (state.max - state.min)).clamp(0.0, 1.0)
+        }
+    }
 }
 
 /// The change-detection filter for [`update_slider_visual`]: a `Slider` whose

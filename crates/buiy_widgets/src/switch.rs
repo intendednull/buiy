@@ -203,6 +203,24 @@ impl Switch {
             ],
         )
     }
+
+    /// Read whether the switch is **on**, as a plain `bool` — the domain accessor
+    /// over its (binary) [`A11yToggled`] state so a caller never touches the
+    /// `accesskit::Toggled` enum (Track C / F1). Query the state alongside the
+    /// marker and pass it in:
+    ///
+    /// ```ignore
+    /// fn read(q: Query<&A11yToggled, With<Switch>>) {
+    ///     for toggled in &q {
+    ///         if Switch::on(toggled) { /* … */ }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// A switch is binary; an out-of-contract `Mixed` reads as **not** on.
+    pub fn on(state: &A11yToggled) -> bool {
+        matches!(state.0, Toggled::True)
+    }
 }
 
 /// The thumb box: a 16×16 knob.
