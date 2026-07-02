@@ -43,7 +43,9 @@ use bevy::render::Extract;
 
 use crate::components::{Node, ResolvedLayout};
 use crate::layout::Stacking;
-use crate::render::atlas::{AtlasEntryKind, AtlasFormat, AtlasKey, BuiyAtlas, GlyphAlphaInstance};
+use crate::render::atlas::{
+    AtlasEntryKind, AtlasFormat, AtlasKey, BuiyAtlas, GLYPH_IDENTITY_AFFINE, GlyphAlphaInstance,
+};
 use crate::render::color::resolve_token;
 use crate::render::components::{AncestorClip, ClipRect, ComputedPaintSkip, Icon};
 use crate::render::extract::effective_clip;
@@ -329,6 +331,9 @@ pub fn extract_buiy_icons(
             color: linear_color(color),
             clip,
             page: entry.page as u32,
+            // W2: identity (byte-stable no-op). W3 wires the real 2D affine +
+            // transform_point origin so rotated/scaled icons paint off-axis.
+            affine: GLYPH_IDENTITY_AFFINE,
         });
         new_keys.push(key);
         new_runs.push(IconEntityRun {

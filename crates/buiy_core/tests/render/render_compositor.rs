@@ -397,6 +397,7 @@ fn glyph_with_alpha(alpha: f32) -> GlyphAlphaInstance {
         color: [0.1, 0.2, 0.3, alpha],
         clip: [9.0, 10.0, 11.0, 12.0],
         page: 0,
+        affine: [1.0, 0.0, 0.0, 1.0],
     }
 }
 
@@ -558,7 +559,7 @@ fn degraded_fold_multiplies_glyph_alpha_at_offset_11() {
         );
         // Raw-view parity: the named const points at color[3] (= float idx 11).
         assert_eq!(GLYPH_ALPHA_FLOAT_OFFSET, 11);
-        let raw: &[f32; 17] = bytemuck::cast_ref::<GlyphAlphaInstance, [f32; 17]>(&glyph[i]);
+        let raw: &[f32; 21] = bytemuck::cast_ref::<GlyphAlphaInstance, [f32; 21]>(&glyph[i]);
         assert!(
             (raw[GLYPH_ALPHA_FLOAT_OFFSET] - glyph[i].color[3]).abs() < 1e-6,
             "raw float index 11 == color[3]"

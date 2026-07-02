@@ -22,7 +22,8 @@ use smallvec::SmallVec;
 use crate::components::{Node, ResolvedLayout, StackingContext};
 use crate::layout::Stacking;
 use crate::render::atlas::{
-    AtlasBitmap, AtlasEntry, AtlasFormat, AtlasKey, BuiyAtlas, GlyphAlphaInstance,
+    AtlasBitmap, AtlasEntry, AtlasFormat, AtlasKey, BuiyAtlas, GLYPH_IDENTITY_AFFINE,
+    GlyphAlphaInstance,
 };
 use crate::render::color::{
     resolve_caret_color, resolve_preedit_underline, resolve_selection_bg, resolve_selection_fg,
@@ -705,6 +706,8 @@ pub fn extract_buiy_glyphs(
                             color,
                             clip,
                             page: entry.page as u32,
+                            // W2: identity no-op; W3 wires the real per-entity affine.
+                            affine: GLYPH_IDENTITY_AFFINE,
                         });
                         // § 6.3: one key per instance — the un-gated touch pass
                         // keeps a live stamp LRU-warm through retained frames.
@@ -789,6 +792,7 @@ pub fn extract_buiy_glyphs(
                     color: linear_color(color),
                     clip,
                     page: entry.page as u32,
+                    affine: GLYPH_IDENTITY_AFFINE,
                 });
                 // §§ 4.1, 5: the SECONDARY split-caret indicator — a second
                 // solid stamp at the boundary's before-glyph logical-end edge,
@@ -802,6 +806,7 @@ pub fn extract_buiy_glyphs(
                         color: linear_color(color),
                         clip,
                         page: entry.page as u32,
+                        affine: GLYPH_IDENTITY_AFFINE,
                     });
                 }
                 // § 6.3: the stamp key joins the un-gated touch pass — a
@@ -992,6 +997,7 @@ fn emit_glyph<'a>(
         color,
         clip,
         page: entry.page as u32,
+        affine: GLYPH_IDENTITY_AFFINE,
     });
     new_keys.push(key);
 }
