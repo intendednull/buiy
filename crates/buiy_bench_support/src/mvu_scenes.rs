@@ -302,7 +302,9 @@ pub fn build_blink_render_scene() -> (PipelineHarness, Entity) {
             Node,
             Style::default().width_px(40.0).height_px(20.0),
             Background {
-                color: ColorToken::Token("surface".into()),
+                // Opaque placeholder fill (see `build_flat_bg_scene`): the bench
+                // only needs a quad emitted, not a specific color.
+                color: ColorToken::Custom(Color::WHITE),
             },
             BlinkLeaf { phase: true },
             LogicalId(1),
