@@ -299,6 +299,7 @@ fn merge_ranges(ranges: &mut Vec<Range<u32>>) {
 ///   injects its (already-folded) members into the parent's `Rgba16Float` target
 ///   at step-2a when the parent kept a target (case A), or skips it when the
 ///   parent is also degraded (the deferred chain — folded-but-undrawn, harmless).
+///
 /// Either way the group dims exactly once instead of vanishing.
 ///
 /// **Two DIFFERENT gates per tier — alpha-fold vs range-merge (§ 2.3).** The

@@ -165,14 +165,12 @@ pub fn buiy_pass(
                 continue;
             }
             let Some(target) = targets.targets.get(group.index).and_then(|t| t.as_ref()) else {
-                // Degraded group (no target): skip the off-screen pass here. A
-                // ROOT degraded group is NOT lost — `prepare_effect_groups`
-                // folded its `opacity` into its members' alpha and merged its
-                // ranges into the flat draw, so the flat WINDOW pass below
-                // paints it (effect-compositor.md § 2.3 forward-composite). A
-                // NESTED degraded group is still skipped (its correct
-                // forward-composite into the parent target is a node-side
-                // follow-up; the prepare fold debug-asserts on it).
+                // Degraded group (no target): skip the off-screen pass here — it is
+                // NOT lost. `fold_degraded_groups` folded its `opacity` into its
+                // members' alpha; a ROOT group also merged its ranges into the flat
+                // draw, so the flat WINDOW pass below paints it, and a NESTED group
+                // is injected into its parent's target at step-2a for case A (or
+                // skipped for the deferred chain) — effect-compositor.md § 2.3.
                 continue;
             };
             let placement = &targets.placements[group.index];
@@ -254,6 +252,20 @@ pub fn buiy_pass(
     // this loop is a no-op there; it is the seam nesting slots into.
     if let (Some(prepared), Some(targets)) = (prepared, prepared_targets) {
         let composite = world.resource::<CompositePipeline>();
+        // Re-fetch the Rgba16Float group pipelines + page-0 atlas bind group for
+        // the case-A injection below. Step 1 scopes its own copies locally and this
+        // is a separate `if let` block, so they are refetched here (same pipelines
+        // step 1 draws groups with). `None` until compiled (async) — the injection
+        // mirrors step 1's per-half readiness skip.
+        let group_quad_pipeline = prepared
+            .quad_pipeline
+            .and_then(|id| pipeline_cache.get_render_pipeline(id));
+        let group_glyph_pipeline = prepared
+            .glyph_pipeline
+            .and_then(|id| pipeline_cache.get_render_pipeline(id));
+        let atlas_bind_group = world
+            .get_resource::<AtlasGpu>()
+            .and_then(|a| a.coverage_bind_group());
         for &gi in &prepared.composite_order {
             let group = &prepared.groups[gi];
             if is_pure_backdrop_filter(group.reason) {
@@ -262,12 +274,86 @@ pub fn buiy_pass(
             let Some(parent_idx) = group.parent else {
                 continue; // root group → composited into the window below.
             };
-            let (Some(src), Some(parent_tex)) = (
-                targets.targets.get(gi).and_then(|t| t.as_ref()),
-                targets.targets.get(parent_idx).and_then(|t| t.as_ref()),
-            ) else {
-                continue; // a degraded group on either end: skip (no target).
+            // The parent MUST have a target for either path. If the parent is
+            // itself degraded, this is a deferred case — `(Some,None)`
+            // kept-child-under-degraded-parent or `(None,None)` chain — skipped as
+            // today (the child vanishes; no worse than before). See the
+            // nested-degraded-forward-composite design § Deferred.
+            let Some(parent_tex) = targets.targets.get(parent_idx).and_then(|t| t.as_ref()) else {
+                continue;
             };
+            let Some(src) = targets.targets.get(gi).and_then(|t| t.as_ref()) else {
+                // CASE A (effect-compositor.md § 2.3): the child DEGRADED (no
+                // target) but the parent kept one. Forward-composite the child's
+                // already-folded members DIRECTLY into the parent's `Rgba16Float`
+                // target — the same draw as step 1's group pass, but `LoadOp::Load`
+                // into the PARENT target using the PARENT's view columns (the
+                // child's members sit at logical positions inside the parent's
+                // bounds, so the parent view places them at exactly the position
+                // the normal composite would). `fold_degraded_groups` folded the
+                // child's opacity into the buffer, so there is no per-draw opacity.
+                // Post-order runs this before the parent composites upward, so the
+                // child rides along in the parent's composite.
+                let child_placement = &targets.placements[gi];
+                let parent_placement = &targets.placements[parent_idx];
+                let quad_range = child_placement.instance_range.clone();
+                let glyph_range = child_placement.glyph_range.clone();
+                if quad_range.is_empty() && glyph_range.is_empty() {
+                    continue; // nothing of either tier to inject.
+                }
+                let group_view_buf =
+                    render_context
+                        .render_device()
+                        .create_buffer_with_data(&BufferInitDescriptor {
+                            label: Some("buiy_degraded_inject_view_uniform"),
+                            contents: bytemuck::cast_slice(&parent_placement.target_view_columns),
+                            usage: BufferUsages::UNIFORM,
+                        });
+                let group_view_bg = render_context.render_device().create_bind_group(
+                    "buiy_degraded_inject_view_bind_group",
+                    &buiy_pipeline.view_layout,
+                    &BindGroupEntries::single(group_view_buf.as_entire_binding()),
+                );
+                let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                    label: Some("buiy_degraded_inject_pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &parent_tex.default_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            // Preserve the parent's step-1 content — inject on top.
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_bind_group(0, &group_view_bg, &[]);
+                pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
+                if !quad_range.is_empty()
+                    && let Some(pipeline) = group_quad_pipeline
+                    && let Some(quad_buffer) = buffers.quad.buffer()
+                {
+                    pass.set_render_pipeline(pipeline);
+                    pass.set_vertex_buffer(1, quad_buffer.slice(..));
+                    pass.draw(0..4, quad_range);
+                }
+                if !glyph_range.is_empty()
+                    && let Some(pipeline) = group_glyph_pipeline
+                    && let Some(atlas_bg) = atlas_bind_group
+                    && let Some(glyph_buffer) = buffers.glyph.buffer()
+                {
+                    pass.set_render_pipeline(pipeline);
+                    pass.set_bind_group(1, atlas_bg, &[]);
+                    pass.set_vertex_buffer(1, glyph_buffer.slice(..));
+                    pass.draw(0..4, glyph_range);
+                }
+                continue;
+            };
+            // `(Some, Some)`: both kept a target — the existing nested composite.
             let placement = &targets.placements[gi];
             let Some(comp_id) = placement.composite_pipeline else {
                 continue;

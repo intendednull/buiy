@@ -280,6 +280,51 @@ fn plan_allocation_degrades_all_when_even_top_priority_alone_exceeds_budget() {
 }
 
 #[test]
+fn plan_allocation_pins_case_a_budget_outer_kept_inner_degraded() {
+    // The GPU fixture for the nested-degraded case-A test
+    // (render_degraded_group_gpu.rs) relies on `plan_allocation` keeping the OUTER
+    // group and degrading only the smaller nested INNER group. Group bounds grow
+    // by OWN DIRECT members only (extract.rs:1685-1689), so this pins the exact
+    // bucketed extents + budget the fixture uses: a bucket/threshold change that
+    // would silently move the GPU test onto a deferred (chain) path fails HERE,
+    // deterministically and without a GPU. Both groups OPACITY-only, so the
+    // degrade order is purely by size.
+    //
+    //   outer bounds 60×60 → next_pow2 = 64 → (64,64) → 32768 bytes.
+    //   inner bounds 24×24 (seed origin ∪ 16×16 fill at (8,8)) → next_pow2 = 32 →
+    //     (32,32) → 8192 bytes.  (The extents differ — no bucket collapse.)
+    let outer = (UVec2::new(64, 64), EffectReason::OPACITY);
+    let inner = (UVec2::new(32, 32), EffectReason::OPACITY);
+    assert_eq!(target_bytes(outer.0), 32768);
+    assert_eq!(target_bytes(inner.0), 8192);
+
+    // Budget in [outer, outer+inner) → keep outer, degrade only inner (CASE A).
+    assert_eq!(
+        plan_allocation(&[outer, inner], 33_000), // 32768 ≤ 33000 < 40960
+        vec![true, false],
+        "case A: outer kept, inner degraded"
+    );
+
+    // Window edges — a later threshold shift is caught rather than silently
+    // changing which case the fixture exercises.
+    assert_eq!(
+        plan_allocation(&[outer, inner], 20_000),
+        vec![false, false],
+        "budget below outer's own target (but above inner) → both degrade"
+    );
+    assert_eq!(
+        plan_allocation(&[outer, inner], 1_000),
+        vec![false, false],
+        "budget below even inner → both degrade"
+    );
+    assert_eq!(
+        plan_allocation(&[outer, inner], 40_960),
+        vec![true, true],
+        "budget fits both → neither degrades"
+    );
+}
+
+#[test]
 fn composite_group_opacity_scales_sampled_alpha() {
     // Opaque group sample (a=1) composited at group opacity 0.5 over a
     // black backdrop: dst = src * 0.5 (premultiplied SrcOver).

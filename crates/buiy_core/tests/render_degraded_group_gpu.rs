@@ -354,43 +354,52 @@ fn degraded_glyph_fold_idempotent_under_quad_dirty_only_frame() {
 
 #[test]
 #[ignore = "needs a wgpu adapter (real GPU or lavapipe); run with --ignored"]
-fn nested_degraded_group_does_not_corrupt_parent() {
-    // Scope guard (MAJOR-1): a NESTED group forced to degrade. The root-degraded
-    // slice does NOT handle nested forward-composite (that routes into the PARENT
-    // target, a node-side follow-up). `fold_root_degraded_into_flat`
-    // debug_asserts on a nested degraded group, so in a DEBUG build this fixture
-    // would panic in prepare — which is the intended loud guard. In a RELEASE
-    // build the nested child is left untouched (it vanishes, tracked) and must NOT
-    // mis-place at window level or corrupt the parent. We assert the parent's
-    // composited region is not corrupted (a plausible non-degraded sibling still
-    // paints). Under debug we skip the body (the debug_assert is the containment).
-    if cfg!(debug_assertions) {
-        // The prepare-side debug_assert is the containment in debug builds.
-        return;
-    }
+fn nested_degraded_child_forward_composites_into_parent() {
+    // CASE A (effect-compositor.md § 2.3; nested-degraded-forward-composite
+    // design): a NESTED effect group that degrades under RT-pool pressure while its
+    // immediate parent KEEPS its target must forward-composite its (folded) members
+    // DIRECTLY into the parent's Rgba16Float target at node step-2a — present at the
+    // composed opacity, NOT vanished, and NOT mis-placed at window level.
+    //
+    // The fixture reaches case A by construction. Each group's bounds are SEEDED
+    // with the group's own box at its (0,0) origin, then grown by OWN DIRECT
+    // members only (extract.rs) — so INNER's bounds = (0,0)..(inner_fill.max). With
+    // inner_fill at (8,8) 16×16, inner bounds = 24×24 → 32² bucket → 8192 B; OUTER
+    // (a 60×60 green bg → 64² bucket → 32768 B) is the LARGER target. A budget in
+    // [32768, 40960) keeps outer, degrades only inner — that
+    // allocation is pinned deterministically WITHOUT a GPU by the headless
+    // `plan_allocation_pins_case_a_budget_outer_kept_inner_degraded` test; this GPU
+    // test proves the PIXELS. The old `cfg!(debug_assertions)` skip is gone: nested
+    // groups no longer panic prepare (`fold_degraded_groups` dropped the
+    // debug_assert). RED before the node injection: inner is nested-degraded → not
+    // drawn → interior fails the red-dominance assertion.
     use buiy_core::Node;
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
+    use buiy_core::render::compositor::composite_src_over;
     use std::borrow::Cow;
 
     const W: u32 = 96;
     const H: u32 = 96;
-    let red = Color::srgb(0.9, 0.05, 0.05);
+    let red = Color::srgb(0.9, 0.05, 0.05); // inner fill
+    let green = Color::srgb(0.05, 0.6, 0.05); // outer's own bg
+    const INNER_OP: f32 = 0.5;
+    const OUTER_OP: f32 = 0.8;
 
-    // Budget that fits the OUTER group's target but degrades the smaller INNER
-    // (nested) one: plan_allocation degrades lowest-cost (smallest) first.
     let mut app = support::gpu_render_app(W, H);
-    force_tiny_rt_budget(&mut app, 4096);
+    // Case-A budget: keeps outer (32768 B), degrades only inner (8192 B).
+    force_tiny_rt_budget(&mut app, 33_000);
     {
         let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
         theme.colors.insert("test.red".into(), red);
+        theme.colors.insert("test.green".into(), green);
     }
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
 
-    // Outer Opacity group (large) containing an inner Opacity group (small) with
-    // a fill — the inner is the nested degrade candidate.
+    // INNER group: Opacity(0.5) wrapping a 16×16 red fill at (8,8). Its bounds =
+    // (0,0)..(24,24) (seed origin ∪ fill) → 32² bucket → the smaller, degraded target.
     let inner_fill = app
         .world_mut()
         .spawn((
@@ -398,8 +407,8 @@ fn nested_degraded_group_does_not_corrupt_parent() {
             Style::default()
                 .absolute()
                 .inset(Inset {
-                    top: Sizing::Length(Length::px(20.0)),
-                    left: Sizing::Length(Length::px(20.0)),
+                    top: Sizing::Length(Length::px(8.0)),
+                    left: Sizing::Length(Length::px(8.0)),
                     ..default()
                 })
                 .width_px(16.0)
@@ -411,14 +420,24 @@ fn nested_degraded_group_does_not_corrupt_parent() {
         .id();
     let inner = app
         .world_mut()
-        .spawn((Node, Style::default().absolute(), Opacity(0.5)))
+        .spawn((Node, Style::default().absolute(), Opacity(INNER_OP)))
         .id();
     app.world_mut()
         .entity_mut(inner)
         .add_children(&[inner_fill]);
+    // OUTER group: Opacity(0.8) with its OWN 60×60 green bg at (0,0) — spatially
+    // CONTAINS the inner fill (so the injection isn't clipped) and is the LARGER
+    // target (64² bucket), so it keeps its target while inner degrades.
     let outer = app
         .world_mut()
-        .spawn((Node, Style::default().absolute(), Opacity(0.8)))
+        .spawn((
+            Node,
+            Style::default().absolute().width_px(60.0).height_px(60.0),
+            Opacity(OUTER_OP),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed("test.green")),
+            },
+        ))
         .id();
     app.world_mut().entity_mut(outer).add_children(&[inner]);
     app.world_mut()
@@ -427,12 +446,72 @@ fn nested_degraded_group_does_not_corrupt_parent() {
 
     support::finish_and_run(&mut app, 4);
     let pixels = support::readback_rgba(&mut app, target);
-    // The corner is untouched: the slice's flat-merge must NOT have mis-placed the
-    // nested child at window level (a wrong-space paint would smear it here).
-    let corner = support::px(&pixels, W, 1, 1);
+    let px = |x: u32, y: u32| support::px(&pixels, W, x, y);
+
+    // Expected composed values, via the two compositing stages the pipeline runs.
+    // Stage 1 (step-2a inject): inner red folded to alpha INNER_OP, straight-alpha
+    // SrcOver over the outer bg in the outer target. Stage 2 (step-2b root
+    // composite): the outer target composited into the black window at OUTER_OP.
+    let red_lin = LinearRgba::from(red);
+    let green_lin = LinearRgba::from(green);
+    let black = LinearRgba::new(0.0, 0.0, 0.0, 1.0);
+    let enc = |lin: LinearRgba| {
+        let s = Srgba::from(lin);
+        [
+            (s.red * 255.0).round() as u8,
+            (s.green * 255.0).round() as u8,
+            (s.blue * 255.0).round() as u8,
+            255u8,
+        ]
+    };
+    let folded_inner = LinearRgba::new(red_lin.red, red_lin.green, red_lin.blue, INNER_OP);
+    let inner_in_outer = composite_src_over(folded_inner, green_lin, 1.0); // inject over outer bg
+    let expected_inner = enc(composite_src_over(inner_in_outer, black, OUTER_OP));
+    let expected_outer = enc(composite_src_over(green_lin, black, OUTER_OP)); // outer bg only
+
+    let interior = px(16, 16); // inner-fill center (8,8)+8 → the injected child
+    let outer_only = px(50, 50); // inside outer bg (0..60), outside inner (8..24)
+    let corner = px(88, 88); // outside outer entirely → clear
+    println!("interior (28,28)={interior:?} expected≈{expected_inner:?}");
+    println!("outer_only (50,50)={outer_only:?} expected≈{expected_outer:?}");
+    println!("corner (88,88)={corner:?}");
+
+    const TOL: i32 = 8;
+    // (1) The injected inner is PRESENT (not vanished) at the composed level.
+    for ch in 0..3 {
+        assert!(
+            (interior[ch] as i32 - expected_inner[ch] as i32).abs() <= TOL,
+            "case A: injected inner channel {ch}: got {}, expected {} (±{TOL})",
+            interior[ch],
+            expected_inner[ch]
+        );
+    }
+    // (2) Red dominates at the inner position AND clearly exceeds the outer-only
+    // red — the child is present ON TOP of the parent, not vanished.
+    assert!(
+        interior[0] as i32 > interior[1] as i32 + 20
+            && interior[0] as i32 > outer_only[0] as i32 + 20,
+        "inner must be red-dominant and brighter-red than the outer-only region: \
+         interior {interior:?} vs outer_only {outer_only:?}"
+    );
+    // (3) The parent KEPT its target and painted: the outer-only region is its
+    // green bg at OUTER_OP (proves this is case A, not both-degraded).
+    for ch in 0..3 {
+        assert!(
+            (outer_only[ch] as i32 - expected_outer[ch] as i32).abs() <= TOL,
+            "outer-only channel {ch}: got {}, expected {} (±{TOL})",
+            outer_only[ch],
+            expected_outer[ch]
+        );
+    }
+    assert!(
+        outer_only[1] as i32 > outer_only[0] as i32 + 20,
+        "outer-only region must be green-dominant (parent kept + painted): {outer_only:?}"
+    );
+    // (4) No mis-placement at window level: a point outside the parent is clear.
     assert_eq!(
         corner,
         [0, 0, 0, 255],
-        "nested degrade must not mis-place the child at window level (corner clean)"
+        "nested inject must not mis-place the child at window level (corner clean)"
     );
 }
