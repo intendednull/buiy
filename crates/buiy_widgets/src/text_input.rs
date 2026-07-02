@@ -25,7 +25,6 @@ use buiy_core::{
     text::edit::{Placeholder, SingleLine, TextEditState},
     text::{FontSize, Text},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for a text input (logical px). Matches the `Button`
 /// hardcoded-size convention (TODO: size tokens — buiy-widget-catalog-design).

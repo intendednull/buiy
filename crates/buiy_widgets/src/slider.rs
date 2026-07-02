@@ -41,7 +41,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for the slider label glyph (logical px).
 pub(crate) const SLIDER_LABEL_FONT_SIZE: f32 = 16.0;

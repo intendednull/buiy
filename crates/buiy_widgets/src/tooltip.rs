@@ -41,7 +41,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
     text::{FontSize, Text, TextAlign},
 };
-use std::borrow::Cow;
 
 /// The catalog font size for the tooltip-trigger + tooltip glyphs (logical px).
 pub(crate) const TOOLTIP_FONT_SIZE: f32 = 14.0;

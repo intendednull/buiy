@@ -33,7 +33,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, Radius, TextColor},
     text::{FontSize, Text, TextAlign},
 };
-use std::borrow::Cow;
 
 /// The glyph a checkbox mark shows when checked (`Toggled::True`).
 pub const CHECK_GLYPH: &str = "✓";

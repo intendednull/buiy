@@ -57,22 +57,16 @@ use crate::scene::text_input_single_line;
 // the family as an argument so this module never hard-codes a typeface.
 // ===========================================================================
 
-/// A `ColorToken::Token` from a `&str` key (every paint is a named theme token,
-/// so the forced-colors discipline stays enforceable).
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
-}
-
-/// A solid 1px [`BorderSide`] of a token color.
-fn solid_side(token: &str) -> BorderSide {
+/// A solid 1px [`BorderSide`] of a [`ColorToken`] color.
+fn solid_side(token: ColorToken) -> BorderSide {
     BorderSide {
-        color: tok(token),
+        color: token,
         style: LineStyle::Solid,
     }
 }
 
 /// A uniform 1px [`Border`] of `token` with `radius` rounded corners.
-fn border_all(token: &str, radius: f32) -> Border {
+fn border_all(token: ColorToken, radius: f32) -> Border {
     Border {
         top: solid_side(token),
         right: solid_side(token),
@@ -145,13 +139,13 @@ fn icon_box(
 /// A token-filled box with a uniform 1px border + radius + flex layout. The
 /// generic "card / chip / track" body the composites share. Children are added by
 /// the caller.
-fn box_node(world: &mut World, name: &str, style: Style, bg: &str, border: Border) -> Entity {
+fn box_node(world: &mut World, name: &str, style: Style, bg: ColorToken, border: Border) -> Entity {
     world
         .spawn((
             Node,
             Name::new(name.to_string()),
             style,
-            Background { color: tok(bg) },
+            Background { color: bg },
             border,
         ))
         .id()
@@ -222,7 +216,7 @@ pub fn meter(world: &mut World, width: f32, pct: f32) -> (Entity, Entity) {
             .height_px(8.0)
             .overflow_hidden()
             .relative(),
-        "color.surface.raised-alt",
+        ColorToken::SurfaceRaisedAlt,
         Border {
             radius: Corners::all(Radius::circular(99.0)),
             ..Default::default()
@@ -315,8 +309,8 @@ pub fn search_input(world: &mut World, placeholder: &str, font: FontFamily, widt
             .height_px(34.0)
             .padding_edges(Edges::axis(11.0, 0.0))
             .border(1.0),
-        "color.surface.card",
-        border_all("color.border.default", 8.0),
+        ColorToken::SurfaceCard,
+        border_all(ColorToken::BorderDefault, 8.0),
     );
     world.entity_mut(row).add_children(&[glyph, field]);
     row
@@ -390,8 +384,8 @@ pub fn kbd(world: &mut World, key: &str, mono: FontFamily) -> Entity {
             .align_items(AlignItems::Center)
             .padding_edges(Edges::axis(6.0, 3.0))
             .border(1.0),
-        "color.surface.inset",
-        border_all("color.border.default", 5.0),
+        ColorToken::SurfaceInset,
+        border_all(ColorToken::BorderDefault, 5.0),
     );
     world.entity_mut(k).add_children(&[text]);
     k
@@ -407,8 +401,8 @@ pub fn kbd(world: &mut World, key: &str, mono: FontFamily) -> Entity {
 /// blur (a steady glow = 6, a ring = 0). Returns the dot root.
 pub fn status_dot(
     world: &mut World,
-    color: &str,
-    glow_color: &str,
+    color: ColorToken,
+    glow_color: ColorToken,
     blur_px: f32,
     spread_px: f32,
 ) -> Entity {
@@ -417,13 +411,13 @@ pub fn status_dot(
             Node,
             Name::new("#StatusDot"),
             Style::default().width_px(7.0).height_px(7.0),
-            Background { color: tok(color) },
+            Background { color },
             Border {
                 radius: Corners::all(Radius::circular(99.0)),
                 ..Default::default()
             },
             BoxShadow(vec![Shadow {
-                color: tok(glow_color),
+                color: glow_color,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(0.0),
                 blur: Length::px(blur_px),
@@ -472,7 +466,7 @@ pub struct TableRowData<'a> {
     /// between the index and the dot so nested nodes step right.
     pub indent_px: f32,
     /// The type-dot color token.
-    pub dot_color: &'a str,
+    pub dot_color: ColorToken,
     /// The node type cell (mono, `text.secondary`).
     pub node_type: &'a str,
     /// The node name cell (mono, `text.faint`, ellipsis — `flex:1`).
@@ -485,7 +479,7 @@ pub struct TableRowData<'a> {
     /// The state cell (OK/WARN/ERR) + its color token.
     pub state: &'a str,
     /// The state color token.
-    pub state_color: &'a str,
+    pub state_color: ColorToken,
 }
 
 /// Marks a table row (so [`set_table_row_selected`] can find + restyle it).
@@ -539,7 +533,7 @@ pub fn table_row(
             Name::new("#RowDot"),
             Style::default().width_px(7.0).height_px(7.0),
             Background {
-                color: tok(data.dot_color),
+                color: data.dot_color,
             },
             Border {
                 radius: Corners::all(Radius::circular(2.0)),
@@ -608,7 +602,7 @@ pub fn table_row(
         font,
         10.0,
         500,
-        tok(data.state_color),
+        data.state_color,
         None,
     );
     world.entity_mut(state).insert((
@@ -621,9 +615,9 @@ pub fn table_row(
     ));
 
     let bg = if selected {
-        "color.accent.soft"
+        ColorToken::AccentSoft
     } else {
-        "color.surface.transparent"
+        ColorToken::Transparent
     };
     let row = world
         .spawn((
@@ -643,9 +637,9 @@ pub fn table_row(
                     bottom: Length::px(1.0),
                     left: Length::px(0.0),
                 }),
-            Background { color: tok(bg) },
+            Background { color: bg },
             Border {
-                bottom: solid_side("color.border.subtle-2"),
+                bottom: solid_side(ColorToken::BorderSubtle2),
                 ..Default::default()
             },
         ))
@@ -744,9 +738,9 @@ pub fn table_header(world: &mut World, cols: &[(&str, Option<f32>)], font: FontF
                 bottom: Length::px(1.0),
                 left: Length::px(0.0),
             }),
-        "color.surface.inset",
+        ColorToken::SurfaceInset,
         Border {
-            bottom: solid_side("color.border.subtle"),
+            bottom: solid_side(ColorToken::BorderSubtle),
             ..Default::default()
         },
     );
@@ -761,12 +755,12 @@ pub fn table_header(world: &mut World, cols: &[(&str, Option<f32>)], font: FontF
 /// already in the requested state).
 pub fn set_table_row_selected(world: &mut World, row: Entity, selected: bool) {
     let bg = if selected {
-        "color.accent.soft"
+        ColorToken::AccentSoft
     } else {
-        "color.surface.transparent"
+        ColorToken::Transparent
     };
     if let Some(mut b) = world.get_mut::<Background>(row) {
-        b.color = tok(bg);
+        b.color = bg;
     }
 
     let existing_bar: Option<Entity> = world

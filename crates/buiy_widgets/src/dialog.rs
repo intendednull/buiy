@@ -48,7 +48,6 @@ use buiy_core::{
     render::components::{Background, Border, Corners, CssVisibility, Radius, TextColor},
     text::{FontSize, Text},
 };
-use std::borrow::Cow;
 
 use crate::popover::is_open;
 
