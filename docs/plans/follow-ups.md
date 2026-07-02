@@ -1030,13 +1030,13 @@ forces degradation deterministically. (R1's named `ALPHA_FLOAT_OFFSET = 7`
 const + append-after-13 `PackedInstance` layout supplied the byte-stable quad
 offset this fold depends on.)
 
-**Out of scope (nested):** a NESTED degraded child (`parent == Some`) is NOT
-handled by this slice — see the next section. The fold debug-asserts on it and
-leaves it untouched in release (no worse than the prior vanish).
+**Out of scope (nested):** a NESTED degraded child (`parent == Some`) was NOT
+handled by this slice — see the next section, now **LANDED (case A)**. (The
+`fold_root_degraded_into_flat` fn has since been renamed `fold_degraded_groups`.)
 
 **Spec touchpoint:** `effect-compositor.md § 2.3` (as-landed note added).
 
-## Render — nested degraded effect group must forward-composite into the parent target (not the window)
+## Render — nested degraded effect group must forward-composite into the parent target (not the window) — LANDED (case A; chain + kept-child deferred)
 
 **Originated:** R2 (degraded-group forward-composite), MAJOR-1 scope decision.
 
@@ -1051,22 +1051,58 @@ composite (which already skips when either end lacks a target) would then
 sample a parent target the child never reached — double-wrong. So R2 scoped to
 root-degraded.
 
-**Fix (node-side):** route a degraded nested child's `group_ranges[i]` /
-`glyph_group_ranges[i]` into the PARENT group's step-1 target draw (the
-parent's `target_view_columns`, into the parent's `Rgba16Float` target), with
-`group.opacity` folded per-instance, BEFORE the parent composites — instead of
-the window flat draw. This is a different draw path from the root case (parent
-off-screen target vs. window flat pass), which is why it was split out.
+**Status: LANDED (case A, 2026-07-01).**
+[spec](../specs/2026-07-01-nested-degraded-forward-composite-design.md) /
+[plan](2026-07-01-nested-degraded-forward-composite.md).
 
-**Current containment:** `compositor::fold_root_degraded_into_flat`
-`debug_assert!(false, …)`s on a nested degraded group (loud in dev/tests) and
-in release leaves it untouched (it vanishes — no worse than today). The GPU
-test `nested_degraded_group_does_not_corrupt_parent`
-(`tests/render_degraded_group_gpu.rs`) guards that the slice's flat-merge does
-NOT mis-place a nested child at window level.
+**Fix (as landed):** the fold (`fold_root_degraded_into_flat` → renamed
+`fold_degraded_groups`) now folds EVERY degraded group's own opacity into its
+members' alpha (root + nested) and merges into `flat_ranges` only for ROOTS. The
+node's step-2a loop gains a `(child=None, parent=Some)` arm — case A — that draws
+the nested child's already-folded `instance_range`/`glyph_range` directly into the
+PARENT's `Rgba16Float` target (`LoadOp::Load`, the parent's `target_view_columns`)
+before the parent composites, so the child rides along in the parent's composite.
+No cumulative opacity is needed for case A (the parent's own composite supplies the
+parent opacity). Because bounds grow by OWN DIRECT members only
+(`extract.rs:1685-1689`), case A occurs when the parent carries the larger,
+spatially-containing direct paint — the spec-gate corrected an initial premise that
+assumed nesting depth drives degrade order.
 
-**Spec touchpoint:** `effect-compositor.md § 2.3` ("directly into its parent
-target" wording).
+**Bonus win:** removing the nested `debug_assert!(false, …)` means a nested
+degraded group no longer PANICS prepare in a debug build (incl. the default test
+gate) — it skips cleanly (folded-but-undrawn) where not injected.
+
+**Verification:** a headless `plan_allocation` pin
+(`plan_allocation_pins_case_a_budget_outer_kept_inner_degraded`) proves the GPU
+fixture's exact bucketed extents (outer 64²=32768 B, inner 32²=8192 B) + budget
+33000 yield [keep outer, degrade inner] with no GPU; the flipped fold unit test
+(`degraded_fold_folds_nested_alpha_but_never_merges_it`) proves nested is
+folded-not-merged; the GPU test (renamed
+`nested_degraded_child_forward_composites_into_parent`) proves the injected inner
+is present at the exact two-stage composed level (`composite_src_over` ×2). RX 6700
+XT: allocate=[true,false], injection fires, all 4 degraded-group GPU tests green.
+
+**Deferred (still vanish — folded + node-skipped, no worse than before), each its own follow-up:**
+1. **`(None,None)` degraded chain** — a nested group whose immediate parent is ALSO
+   degraded. Needs cumulative opacity (the child gets no free parent composite) AND
+   an ancestor-first injection order (post-order would flatten a descendant UNDER
+   its ancestor). Often the MORE common shape: a bare-`Opacity` wrapper parent (no
+   direct paint) has ~empty bounds and degrades first, so wrapper-nesting tends to
+   land here, not in case A.
+2. **`(Some,None)` kept child under a degraded parent** — a group that kept its own
+   target but whose parent degraded away its target; its target is orphaned (the
+   parent has none to composite into). Fix = route the kept child's composite past
+   the degraded parent to the nearest kept ancestor/window with the parent's
+   opacity folded — a distinct forward-composite case.
+3. **Parent-target undersizing (pre-existing, out of scope of the fix)** — because a
+   group's bounds omit nested-child extent (`extract.rs:1685-1689`), a parent's
+   pooled target can be too small to hold a nested child that exceeds the parent's
+   own paint box; this already threatens the `(Some,Some)` composite path and would
+   equally clip a case-A injection. The case-A test sidesteps it by keeping the
+   inner ⊆ the outer's own paint.
+
+**Spec touchpoint:** `effect-compositor.md § 2.3` (flipped to case-A landed);
+`docs/specs/2026-07-01-nested-degraded-forward-composite-design.md`.
 
 ## Text — production ASCII pre-warm (rejected as unmeasured)
 
