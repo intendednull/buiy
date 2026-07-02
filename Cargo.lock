@@ -2101,6 +2101,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "buiy_probe"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+]
+
+[[package]]
 name = "buiy_verify"
 version = "0.0.1"
 dependencies = [

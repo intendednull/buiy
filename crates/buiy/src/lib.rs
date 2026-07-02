@@ -312,6 +312,49 @@ pub mod view {
     };
 }
 
+/// The agent-facing **probe / drive** surface (spec §4 Track A) — the front
+/// door to Buiy's headless feedback loop. A coding agent runs a scene under
+/// [`BuiyProbePlugin`] (GPU-free, no window/adapter), then *reads* it with
+/// [`snapshot_report`] and *drives* it with [`click`] / [`get_by_role`] /
+/// [`wait_for`] — the whole author → run → inspect loop with no pixels.
+///
+/// This is a distinct module (not flattened into [`prelude`]) for the same
+/// reason as [`view`]: the driver verbs (`click`, `focus`, `snapshot`,
+/// `perform`) are generic names that would collide with the widget/focus
+/// surface in the prelude. Reach the loop through one import:
+///
+/// ```no_run
+/// use buiy::prelude::*;
+/// use buiy::probe::*;
+///
+/// # fn build(app: &mut bevy::app::App) {
+/// app.add_plugins(BuiyProbePlugin);
+/// // …spawn a scene, step frames…
+/// # let world = app.world_mut();
+/// let report = snapshot_report(world);      // read the semantic tree
+/// let save = get_by_role(world, A11yRole::Button, Some("Save"), None).unwrap();
+/// click(world, save).unwrap();              // drive it
+/// # }
+/// ```
+///
+/// Built on the shipped [`a11y::inprocess`](buiy_core::a11y::inprocess) driver —
+/// this module only re-exports it behind the probe preset as one coherent
+/// front door.
+pub mod probe {
+    #[doc(inline)]
+    pub use crate::BuiyProbePlugin;
+    #[doc(inline)]
+    pub use buiy_core::a11y::inprocess::{
+        NodeState, ScrollState, SemanticNode, SemanticTree, StateQuery, TreeView, click, expand,
+        focus, get_by_role, hide_tooltip, increment, perform, set_value, show_tooltip, snapshot,
+        wait_for,
+    };
+    #[doc(inline)]
+    pub use buiy_core::a11y::snapshot_report;
+    #[doc(inline)]
+    pub use buiy_core::a11y::{ActionError, NotActionableReason};
+}
+
 /// The Buiy prelude. `use buiy::prelude::*;` brings the common Buiy surface —
 /// components, plugins, widgets — and the BSN authoring macros (`bsn!`,
 /// `bsn_list!`) + spawn extension traits into scope in one import. Mirrors the
