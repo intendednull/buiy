@@ -87,6 +87,13 @@ ignore = [
     # the Track A probe work. Re-evaluate on the next bevy_winit bump.
     # Tracking: https://github.com/tafia/quick-xml/issues/969
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39.4 quadratic-attribute DoS; transitive via bevy_winit->winit->sctk-adwaita->wayland-scanner (build-time TRUSTED Wayland XML, not untrusted input) — nil impact; patched only in >=0.41.0, unreachable until Bevy bumps winit; pre-existing base advisory" },
+    # `quick-xml` 0.39.4 NsReader unbounded-namespace-allocation DoS
+    # (RUSTSEC-2026-0195, disclosed 2026-06-29, quick-xml#970) — the SIBLING of
+    # 0194 above: same crate, same version, same trusted-build-time
+    # `wayland-scanner` path, same nil impact, same unreachable `>= 0.41.0` fix.
+    # Ignored on the identical rationale. Re-evaluate both together on the next
+    # bevy_winit bump. Tracking: https://github.com/tafia/quick-xml/issues/970
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.39.4 NsReader namespace-allocation DoS; sibling of RUSTSEC-2026-0194 — same crate/version/path (build-time TRUSTED Wayland XML via wayland-scanner), nil impact, patched only in >=0.41.0 unreachable until Bevy bumps winit" },
 ]
 
 [licenses]
