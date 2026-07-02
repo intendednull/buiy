@@ -97,10 +97,7 @@ fn toggle(app: &mut App) {
         .expect("model entity");
     app.world_mut()
         .resource_mut::<Messages<Envelope<Cond>>>()
-        .write(Envelope {
-            target: model,
-            msg: Msg::Toggle,
-        });
+        .write(Envelope::user(model, Msg::Toggle));
     app.update(); // frame N: drain folds — model changes
     app.update(); // frame N+1: reconcile (before Layout) swaps the slot
 }

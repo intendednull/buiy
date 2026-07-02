@@ -355,9 +355,19 @@ None of these block authoring a real app; each is documented at its site.
 
 **Note on `map`/`when` demo coverage.** Their combined end-to-end showcase — the scaling demo (embed Counter twice + a `when`-gated panel) — is a **PR2** example, so in PR1 `map` and `when` are validated by the child-lift and conditional **logic tests** (§5), not by a demo app. This is acceptable (both paths are exercised); if a demo-level composition showcase is wanted in PR1, add a minimal two-Counter `map`+`when` example rather than waiting for PR2.
 
-### PR2 — `Cmd::task` in core + async composition (follow-up)
+### PR2 — `Cmd::task` in core + async composition (follow-up) — **DELIVERED**
 
 `Cmd::Task` + `Cmd::map` + `Origin::Command` emission + the replay guard in `buiy_core::mvu` (#15); the **scaling demo** (embeds Counter twice via `map`, `when`-gated panel, and a real async load) re-authored as an example; async + `Cmd::map` tests. Depends on PR1. Distinct because it touches the core enum, drain, and replay driver — a self-contained, separately-reviewable change.
+
+**As-built (PR2):**
+- **`Cmd::Task(BoxedFuture<'static, Msg>)`** + the ergonomic `Cmd::task(future, map)` constructor. The field type is bevy's own `BoxedFuture` (`Send` on native, `?Send` on wasm via `ConditionalSend`), so the surface is **wasm-clean** by construction (verified: the whole stack compiles for `wasm32-unknown-unknown` under `-D warnings`).
+- **`Cmd::map`** is the eager combinator the spec called for (`None→None`, `Emit(m)→Emit(f(m))`, `Batch` recurses, `Task(fut)→Task(async { f(fut.await) })`), `Arc`-sharing the mapper so `Batch` recursion + the `Task` async-move both work.
+- **Origin-aware transport (as-built):** `Envelope<M>` gained an `origin: Origin` field (with an `Envelope::user` constructor for the User shorthand); `enqueue` stamps `User`, the new `enqueue_with_origin` stamps `Command`, and both drains read `env.origin` instead of hardcoding `User`. A completed task's result folds — and records — as `Origin::Command`.
+- **Lowering:** the drain spawns a returned `Cmd::Task` on `AsyncComputeTaskPool` into a per-model `PendingTasks<M>` bag (a bag, not one-per-entity — the substrate does not silently cancel concurrent tasks); `poll_pending_tasks<M>` (registered per model in `add_model`, running in `MvuSet::Enqueue`) polls and enqueues the result stamped `Command` so it folds the same frame.
+- **Replay guard:** a `RecordSession.replaying` flag (set only for the duration of `replay_into`, orthogonal to `RecordMode`) makes the drain **suppress re-launching** a `Cmd::Task`; the recorded `Origin::Command` result is re-folded from the log instead, so a non-deterministic effect replays from what actually happened. Proven by a determinism test (the effect increments a shared counter live; replay reproduces the model with the counter untouched).
+- **The buiy_view surface needed NO change** — `ui()` already wires the (now `Task`-capable) env-free drain, so a `view`-authored `update` returning `Cmd::task` gets async end-to-end (the reconciler re-renders on the async-driven model change); proven by `crates/buiy_view/tests/async_task.rs`. This is the clean outcome §1's "the sole core-touching item" anticipated.
+- **Root-caused an exposed latent bug:** adding the per-model poll system perturbed system-execution order and revealed that `reset_mvu_counters` was ordered before the *early* leaf drain only by insertion luck (the `BuiySet` backbone is unchained in minimal `MvuCorePlugin`-only apps). Fixed by anchoring the reset explicitly before all three bump sites (`BuiySet::Input`, `BuiySet::Picking`, `MvuSet::Drain`).
+- **Ships:** `examples/scaling_view` (windowed `scaling_view` bin + headless `capture_scaling_view` GPU bin, RUN-verified on a real adapter — left=2/right=1 via `map`, the `when` panel, and "42 rows" via `Cmd::task`).
 
 ### PR3 — composition completeness (follow-up)
 

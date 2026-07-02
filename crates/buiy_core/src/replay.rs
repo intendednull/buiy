@@ -166,9 +166,15 @@ pub fn unified_stream<'a>(msg_log: &'a MsgLog, edit_log: &'a EditLog) -> Vec<Uni
 /// `msg_log`/`edit_log` come from the *recorded* app (or a deserialized file); `app` is a
 /// *different* app, so borrowing the logs while mutating the replay app is sound.
 pub fn replay_into(app: &mut App, msg_log: &MsgLog, edit_log: &EditLog) -> Vec<DeadLetter> {
-    // Force recording OFF so the re-folds + re-applies do not re-enter the logs.
+    // Force recording OFF (so re-folds do not re-enter the logs) AND set the replay guard: a
+    // re-folded `Cmd::Task` is SUPPRESSED for the duration — the recorded `Origin::Command`
+    // result already in the log is what re-drives the model, so the effect (network/clock/RNG)
+    // is not re-run (buiy_view design §3 #15). The guard is orthogonal to record-mode: it must
+    // be an explicit flag because `RecordMode::Off` is also the normal production hot path,
+    // where tasks MUST launch.
     if let Some(mut session) = app.world_mut().get_resource_mut::<RecordSession>() {
         session.stop();
+        session.set_replaying(true);
     }
 
     let stream = unified_stream(msg_log, edit_log);

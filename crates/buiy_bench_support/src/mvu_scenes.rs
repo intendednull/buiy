@@ -166,7 +166,7 @@ pub fn build_mvu_single_app(mode: RecordMode) -> (App, Entity) {
 pub fn enqueue_direct(app: &mut App, target: Entity, msg: CounterMsg) {
     app.world_mut()
         .resource_mut::<Messages<Envelope<C0>>>()
-        .write(Envelope { target, msg });
+        .write(Envelope::user(target, msg));
 }
 
 // ============================================================================
@@ -257,7 +257,7 @@ fn wire_blink(app: &mut App) {
 pub fn enqueue_blink_direct(app: &mut App, target: Entity, msg: BlinkMsg) {
     app.world_mut()
         .resource_mut::<Messages<Envelope<BlinkLeaf>>>()
-        .write(Envelope { target, msg });
+        .write(Envelope::user(target, msg));
 }
 
 /// A MINIMAL headless blink app (no render pipeline) for the iai funnel-cost pricer:
