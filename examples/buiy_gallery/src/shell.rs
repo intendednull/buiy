@@ -281,12 +281,6 @@ pub enum ViewportHeaderField {
 // than one giant `bsn!` block — the `examples/capture` + `spawn_modal` idiom).
 // ===========================================================================
 
-/// A `ColorToken::Token` from a `&str` key — the shell authors every paint as a
-/// named dark token (never a literal), keeping the forced-colors gate enforceable.
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
-}
-
 /// The Geist sans font stack (`FontFamily([Named("Geist")])`). The sans generic
 /// still resolves to Fira (Wave A note), so the shell authors Geist **by name**.
 fn geist() -> FontFamily {
@@ -399,8 +393,8 @@ fn chip(
     name: &str,
     padding: Edges,
     radius: f32,
-    bg: &str,
-    border_color: &str,
+    bg: ColorToken,
+    border_color: ColorToken,
     gap: f32,
 ) -> Entity {
     world
@@ -413,7 +407,7 @@ fn chip(
                 .gap_px(gap)
                 .padding_edges(padding)
                 .border(1.0),
-            Background { color: tok(bg) },
+            Background { color: bg },
             Border {
                 top: solid_side(border_color),
                 right: solid_side(border_color),
@@ -425,10 +419,10 @@ fn chip(
         .id()
 }
 
-/// A solid 1px `BorderSide` of a token color.
-fn solid_side(token: &str) -> BorderSide {
+/// A solid 1px `BorderSide` of a [`ColorToken`] color.
+fn solid_side(token: ColorToken) -> BorderSide {
     BorderSide {
-        color: tok(token),
+        color: token,
         style: LineStyle::Solid,
     }
 }
@@ -593,8 +587,8 @@ fn build_chrome(world: &mut World) -> Entity {
             "#CatalogBadge",
             Edges::axis(7.0, 3.0),
             5.0,
-            "color.surface.inset",
-            "color.border.default",
+            ColorToken::SurfaceInset,
+            ColorToken::BorderDefault,
             0.0,
         );
         world.entity_mut(b).add_children(&[label]);
@@ -636,8 +630,8 @@ fn build_chrome(world: &mut World) -> Entity {
             "#CargoChip",
             Edges::axis(9.0, 5.0),
             6.0,
-            "color.surface.inset",
-            "color.border.default",
+            ColorToken::SurfaceInset,
+            ColorToken::BorderDefault,
             0.0,
         );
         world.entity_mut(c).add_children(&[prefix, cmd]);
@@ -666,8 +660,8 @@ fn build_chrome(world: &mut World) -> Entity {
             "#ThemeChip",
             Edges::axis(9.0, 5.0),
             6.0,
-            "color.surface.inset",
-            "color.border.default",
+            ColorToken::SurfaceInset,
+            ColorToken::BorderDefault,
             6.0,
         );
         world.entity_mut(c).add_children(&[moon, label]);
@@ -701,10 +695,10 @@ fn build_chrome(world: &mut World) -> Entity {
                     color: ColorToken::SurfaceInset,
                 },
                 Border {
-                    top: solid_side("color.border.default"),
-                    right: solid_side("color.border.default"),
-                    bottom: solid_side("color.border.default"),
-                    left: solid_side("color.border.default"),
+                    top: solid_side(ColorToken::BorderDefault),
+                    right: solid_side(ColorToken::BorderDefault),
+                    bottom: solid_side(ColorToken::BorderDefault),
+                    left: solid_side(ColorToken::BorderDefault),
                     radius: Corners::all(Radius::circular(6.0)),
                 },
             ))
@@ -738,7 +732,7 @@ fn build_chrome(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceChrome,
             },
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -809,7 +803,7 @@ fn build_rail(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceChrome,
             },
             Border {
-                right: solid_side("color.border.subtle"),
+                right: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -995,7 +989,7 @@ fn build_stats(world: &mut World) -> Entity {
                     left: Length::px(0.0),
                 }),
             Border {
-                top: solid_side("color.border.subtle"),
+                top: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -1131,8 +1125,8 @@ fn build_viewport_header(world: &mut World) -> Entity {
         "#VpSizeChip",
         Edges::axis(8.0, 3.0),
         5.0,
-        "color.surface.inset",
-        "color.border.default",
+        ColorToken::SurfaceInset,
+        ColorToken::BorderDefault,
         0.0,
     );
     world.entity_mut(size_badge).add_children(&[size_text]);
@@ -1157,7 +1151,7 @@ fn build_viewport_header(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceChromeTranslucent,
             },
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
             // backdrop-filter: blur(6px) — the translucent header blurs the dotted
@@ -1231,7 +1225,7 @@ fn build_inspector(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceChrome,
             },
             Border {
-                left: solid_side("color.border.subtle"),
+                left: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -1331,7 +1325,7 @@ fn build_status_bar(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceChrome,
             },
             Border {
-                top: solid_side("color.border.subtle"),
+                top: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -1637,9 +1631,9 @@ pub fn reflect_rail_active_state(world: &mut World) {
                     world,
                     child,
                     if is_active {
-                        "color.accent"
+                        ColorToken::Accent
                     } else {
-                        "color.text.dim"
+                        ColorToken::TextDim
                     },
                 ),
                 NavPart::Icon => {
@@ -1659,9 +1653,9 @@ pub fn reflect_rail_active_state(world: &mut World) {
                     world,
                     child,
                     if is_active {
-                        "color.text.primary"
+                        ColorToken::TextPrimary
                     } else {
-                        "color.text.secondary"
+                        ColorToken::TextSecondary
                     },
                 ),
             }
@@ -1670,8 +1664,8 @@ pub fn reflect_rail_active_state(world: &mut World) {
 }
 
 /// Set a text leaf's `TextColor` to a token (only on change).
-fn set_text_color(world: &mut World, leaf: Entity, token: &str) {
-    let want = tok(token);
+fn set_text_color(world: &mut World, leaf: Entity, token: ColorToken) {
+    let want = token;
     if let Some(mut c) = world.get_mut::<buiy_core::render::components::TextColor>(leaf)
         && c.0 != want
     {

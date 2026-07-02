@@ -306,12 +306,6 @@ pub const DEMO_SEEDS: &[(&str, bool)] = &[
 // rows, § 2 shadows, § 3 radii, § 6 icons, § 7.2 Todo layout).
 // ===========================================================================
 
-/// A `ColorToken::Token` from a `&str` key — every paint is a named dark token
-/// (the forced-colors gate stays enforceable; the shell uses the same `tok`).
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
-}
-
 /// The Geist sans font stack (the sans generic still resolves to Fira — Wave A
 /// note — so author Geist by name, like the shell / composites do).
 fn geist() -> FontFamily {
@@ -323,16 +317,16 @@ fn geist_mono() -> FontFamily {
     FontFamily(FontStack(vec![FamilyEntry::Named("Geist Mono".into())]))
 }
 
-/// A solid 1px `BorderSide` of a token color.
-fn solid_side(token: &str) -> BorderSide {
+/// A solid 1px `BorderSide` of a [`ColorToken`] color.
+fn solid_side(token: ColorToken) -> BorderSide {
     BorderSide {
-        color: tok(token),
+        color: token,
         style: LineStyle::Solid,
     }
 }
 
 /// A uniform 1px `Border` of `token` with `radius` rounded corners.
-fn border_all(token: &str, radius: f32) -> Border {
+fn border_all(token: ColorToken, radius: f32) -> Border {
     Border {
         top: solid_side(token),
         right: solid_side(token),
@@ -521,7 +515,7 @@ fn build_todo_heading(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceInset,
             },
-            border_all("color.border.default", 99.0),
+            border_all(ColorToken::BorderDefault, 99.0),
         ))
         .add_child(badge_text)
         .id();
@@ -568,7 +562,7 @@ fn build_todo_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.strong", 12.0),
+            border_all(ColorToken::BorderStrong, 12.0),
             // shadow.card — `0 12px 32px -16px rgba(0,0,0,.7)` (values.md § 2).
             BoxShadow(vec![Shadow {
                 color: ColorToken::ShadowCard,
@@ -678,7 +672,7 @@ fn build_todo_header(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceInset,
             },
-            border_all("color.border.default", 5.0),
+            border_all(ColorToken::BorderDefault, 5.0),
         ))
         .add_child(kbd_text)
         .id();
@@ -697,7 +691,7 @@ fn build_todo_header(world: &mut World) -> Entity {
                     ..Default::default()
                 }),
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -838,7 +832,7 @@ fn build_todo_footer(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceInset,
             },
             Border {
-                top: solid_side("color.border.subtle"),
+                top: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -863,7 +857,7 @@ fn build_filter_pill(world: &mut World, mode: FilterMode, label: &str, name: &st
         geist(),
         11.5,
         500,
-        tok(fg),
+        fg,
         None,
     );
     world
@@ -877,7 +871,7 @@ fn build_filter_pill(world: &mut World, mode: FilterMode, label: &str, name: &st
                 .justify_content(JustifyContent::Center)
                 .align_items(AlignItems::Center)
                 .padding_edges(Edges::axis(11.0, 5.0)),
-            Background { color: tok(bg) },
+            Background { color: bg },
             Border {
                 radius: Corners::all(Radius::circular(6.0)),
                 ..Default::default()
@@ -889,11 +883,11 @@ fn build_filter_pill(world: &mut World, mode: FilterMode, label: &str, name: &st
 
 /// The `(bg, fg)` token pair for a filter pill in `active` state (design `style`):
 /// active = accent bg + on-accent label; inactive = transparent + muted.
-fn filter_pill_colors(active: bool) -> (&'static str, &'static str) {
+fn filter_pill_colors(active: bool) -> (ColorToken, ColorToken) {
     if active {
-        ("color.accent", "color.text.on-accent")
+        (ColorToken::Accent, ColorToken::TextOnAccent)
     } else {
-        ("color.surface.transparent", "color.text.muted")
+        (ColorToken::Transparent, ColorToken::TextMuted)
     }
 }
 
@@ -1049,10 +1043,10 @@ pub fn append_row(world: &mut World, label: &str, completed: bool) -> Entity {
                 color: ColorToken::Transparent,
             },
             Border {
-                top: solid_side("color.border.muted"),
-                right: solid_side("color.border.muted"),
-                bottom: solid_side("color.border.muted"),
-                left: solid_side("color.border.muted"),
+                top: solid_side(ColorToken::BorderMuted),
+                right: solid_side(ColorToken::BorderMuted),
+                bottom: solid_side(ColorToken::BorderMuted),
+                left: solid_side(ColorToken::BorderMuted),
                 radius: Corners::all(Radius::circular(99.0)),
             },
             Pickable::IGNORE,
@@ -1162,7 +1156,7 @@ pub fn append_row(world: &mut World, label: &str, completed: bool) -> Entity {
                     ..Default::default()
                 }),
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -1590,11 +1584,11 @@ pub fn restyle_completed(
 /// fill + 1.5px `border.muted`.
 fn restyle_check_box(bg: &mut Background, border: &mut Border, completed: bool) {
     let (fill, side) = if completed {
-        ("color.accent", "color.surface.transparent")
+        (ColorToken::Accent, ColorToken::Transparent)
     } else {
-        ("color.surface.transparent", "color.border.muted")
+        (ColorToken::Transparent, ColorToken::BorderMuted)
     };
-    bg.color = tok(fill);
+    bg.color = fill;
     border.top = solid_side(side);
     border.right = solid_side(side);
     border.bottom = solid_side(side);
@@ -1815,17 +1809,17 @@ pub struct SelectedRow;
 
 /// The synthetic node-type cycle (the design JS `TYPES`, values.md § 1.1 type-dot
 /// palette + § 9 generator). Each entry is `(type label, dot color token)`.
-const SCROLL_TYPES: &[(&str, &str)] = &[
-    ("Stack", "color.accent.blue"),
-    ("Row", "color.accent.blue"),
-    ("Grid", "color.accent.blue"),
-    ("Text", "color.text.muted"),
-    ("Button", "color.status.ok"),
-    ("Icon", "color.status.ok"),
-    ("Image", "color.accent.violet"),
-    ("Input", "color.status.warn"),
-    ("Scroll", "color.status.error"),
-    ("Spacer", "color.text.dim"),
+const SCROLL_TYPES: &[(&str, ColorToken)] = &[
+    ("Stack", ColorToken::AccentBlue),
+    ("Row", ColorToken::AccentBlue),
+    ("Grid", ColorToken::AccentBlue),
+    ("Text", ColorToken::TextMuted),
+    ("Button", ColorToken::StatusOk),
+    ("Icon", ColorToken::StatusOk),
+    ("Image", ColorToken::AccentViolet),
+    ("Input", ColorToken::StatusWarn),
+    ("Scroll", ColorToken::StatusError),
+    ("Spacer", ColorToken::TextDim),
 ];
 
 /// The synthetic node-name stems (the design JS `names`, values.md § 9 generator).
@@ -1841,11 +1835,11 @@ const SCROLL_NAMES: &[&str] = &[
 struct GenNode {
     index: usize,
     node_type: &'static str,
-    dot_color: &'static str,
+    dot_color: ColorToken,
     depth: usize,
     ms: f32,
     state: &'static str,
-    state_color: &'static str,
+    state_color: ColorToken,
     name: String,
 }
 
@@ -1855,11 +1849,11 @@ fn gen_node(i: usize) -> GenNode {
     let depth = if i == 0 { 0 } else { (i * 13) % 5 };
     let ms = ((i * 37) % 180) as f32 / 100.0 + 0.02;
     let (state, state_color) = if i.is_multiple_of(53) {
-        ("WARN", "color.status.warn")
+        ("WARN", ColorToken::StatusWarn)
     } else if i.is_multiple_of(131) {
-        ("ERR", "color.status.error")
+        ("ERR", ColorToken::StatusError)
     } else {
-        ("OK", "color.status.ok")
+        ("OK", ColorToken::StatusOk)
     };
     let name = format!("{}_{:04}", SCROLL_NAMES[(i * 11) % SCROLL_NAMES.len()], i);
     GenNode {
@@ -2042,7 +2036,7 @@ fn build_scroll_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
             // shadow.card — `0 12px 32px -16px rgba(0,0,0,.7)` (values.md § 2).
             BoxShadow(vec![Shadow {
                 color: ColorToken::ShadowCard,
@@ -2107,7 +2101,7 @@ fn build_scroll_footer(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceInset,
             },
             Border {
-                top: solid_side("color.border.subtle"),
+                top: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -2692,7 +2686,7 @@ fn build_menu_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
             // shadow.card — `0 12px 32px -16px rgba(0,0,0,.7)` (values.md § 2).
             BoxShadow(vec![Shadow {
                 color: ColorToken::ShadowCard,
@@ -2821,7 +2815,7 @@ fn build_menu_header(world: &mut World) -> Entity {
                     ..Default::default()
                 }),
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -2900,7 +2894,7 @@ fn build_menu_button(world: &mut World) -> (Entity, Entity) {
             Background {
                 color: ColorToken::SurfaceInset,
             },
-            border_all("color.border.default", 8.0),
+            border_all(ColorToken::BorderDefault, 8.0),
         ))
         .add_child(dots_center)
         .id();
@@ -2942,7 +2936,7 @@ fn build_menu_dropdown(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceRaised,
             },
-            border_all("color.border.strong", 10.0),
+            border_all(ColorToken::BorderStrong, 10.0),
             // shadow.menu — `0 16px 40px -12px rgba(0,0,0,.8)` (values.md § 2).
             BoxShadow(vec![Shadow {
                 color: ColorToken::ShadowMenu,
@@ -2964,11 +2958,11 @@ fn build_menu_dropdown(world: &mut World) -> Entity {
 /// (mono 10px `text.dim`, danger `text.danger-dim`). Carries [`MenuAction`]`(idx)`.
 fn build_menu_item(world: &mut World, idx: usize, spec: &MenuItemSpec) -> Entity {
     let (label_color, kbd_color) = if spec.danger {
-        ("color.text.danger", "color.text.danger-dim")
+        (ColorToken::TextDanger, ColorToken::TextDangerDim)
     } else {
-        ("color.text.bright", "color.text.dim")
+        (ColorToken::TextBright, ColorToken::TextDim)
     };
-    let icon = icon_box(world, "#MenuItemIcon", spec.icon, 1.7, 15, tok(label_color));
+    let icon = icon_box(world, "#MenuItemIcon", spec.icon, 1.7, 15, label_color);
     let label = text_leaf(
         world,
         "#MenuItemLabel",
@@ -2976,7 +2970,7 @@ fn build_menu_item(world: &mut World, idx: usize, spec: &MenuItemSpec) -> Entity
         geist(),
         13.0,
         450,
-        tok(label_color),
+        label_color,
         None,
     );
     let label_spacer = world
@@ -2996,7 +2990,7 @@ fn build_menu_item(world: &mut World, idx: usize, spec: &MenuItemSpec) -> Entity
         "#MenuItemKbd",
         spec.kbd,
         geist_mono(),
-        tok(kbd_color),
+        kbd_color,
     );
     // A per-item name (the label slug) so the layout-dump can order the items
     // deterministically even when the screen is INACTIVE in the shell (all items
@@ -3040,7 +3034,7 @@ fn build_menu_footer(world: &mut World) -> Entity {
     // looping/`Repeat` capability). `Opacity < 1` auto-forms an effect group, so the
     // dot composites + pulses; reduced motion snaps it to a steady-lit 1.0. (Invisible
     // in the single-frame capture, but the live app pulses.)
-    let dot = status_dot(world, "color.accent", "color.accent.soft", 0.0, 4.0);
+    let dot = status_dot(world, ColorToken::Accent, ColorToken::AccentSoft, 0.0, 4.0);
     world.entity_mut(dot).insert((
         Name::new("#MenuBlinkDot"),
         Style::default().width_px(8.0).height_px(8.0),
@@ -3348,16 +3342,16 @@ fn build_modal_trigger(world: &mut World, mode: ModalMode, dialog: Entity) -> En
             "#ModalCreateTrigger",
             "M12 5v14M5 12h14",
             2.2,
-            "color.text.on-accent",
-            "color.accent",
+            ColorToken::TextOnAccent,
+            ColorToken::Accent,
         ),
         ModalMode::Delete => (
             MODAL_BG_BUTTON,
             "#ModalDeleteTrigger",
             "M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13",
             1.7,
-            "color.text.danger",
-            "color.surface.danger-soft",
+            ColorToken::TextDanger,
+            ColorToken::SurfaceDangerSoft,
         ),
     };
 
@@ -3367,7 +3361,7 @@ fn build_modal_trigger(world: &mut World, mode: ModalMode, dialog: Entity) -> En
         icon_d,
         icon_stroke,
         16,
-        tok(label_tok),
+        label_tok,
     );
     let text = text_leaf(
         world,
@@ -3376,7 +3370,7 @@ fn build_modal_trigger(world: &mut World, mode: ModalMode, dialog: Entity) -> En
         geist(),
         13.0,
         600,
-        tok(label_tok),
+        label_tok,
         None,
     );
 
@@ -3395,7 +3389,7 @@ fn build_modal_trigger(world: &mut World, mode: ModalMode, dialog: Entity) -> En
             .gap_px(8.0)
             .height_px(40.0)
             .padding_edges(Edges::axis(16.0, 0.0)),
-        Background { color: tok(bg_tok) },
+        Background { color: bg_tok },
     ));
     // `dialog_invoker` is `Button::new(label)` which injects a default-styled label
     // child; strip it so only our icon + token-tinted label render (the gallery
@@ -3417,7 +3411,7 @@ fn build_modal_trigger(world: &mut World, mode: ModalMode, dialog: Entity) -> En
             ));
         }
         ModalMode::Delete => {
-            e.insert(border_all("color.border.danger", 9.0));
+            e.insert(border_all(ColorToken::BorderDanger, 9.0));
         }
     }
     let trigger = e.id();
@@ -3456,7 +3450,7 @@ fn build_modal_dialog(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.strong", 14.0),
+            border_all(ColorToken::BorderStrong, 14.0),
             // shadow.modal — `0 30px 70px -20px rgba(0,0,0,.85)` (values.md § 2).
             BoxShadow(vec![Shadow {
                 color: ColorToken::ShadowModal,
@@ -3578,9 +3572,9 @@ fn build_modal_header(world: &mut World) -> Entity {
         "#ModalCloseX",
         28.0,
         7.0,
-        "color.border.default",
+        ColorToken::BorderDefault,
         "Close",
-        Some(("M6 6l12 12M18 6 6 18", 1.7, 14, "color.text.muted")),
+        Some(("M6 6l12 12M18 6 6 18", 1.7, 14, ColorToken::TextMuted)),
         None,
     );
 
@@ -3603,7 +3597,7 @@ fn build_modal_header(world: &mut World) -> Entity {
                     ..Default::default()
                 }),
             Border {
-                bottom: solid_side("color.border.subtle"),
+                bottom: solid_side(ColorToken::BorderSubtle),
                 ..Default::default()
             },
         ))
@@ -3668,7 +3662,7 @@ fn build_modal_name_field(world: &mut World) -> Entity {
         Background {
             color: ColorToken::SurfaceInset,
         },
-        border_all("color.border.strong", 8.0),
+        border_all(ColorToken::BorderStrong, 8.0),
         BoxModel {
             height: Sizing::Length(Length::px(38.0)),
             width: Sizing::Auto,
@@ -3781,7 +3775,7 @@ fn build_modal_register_row(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceInset,
             },
-            border_all("color.border.default", 9.0),
+            border_all(ColorToken::BorderDefault, 9.0),
         ))
         .add_children(&[label_col, switch])
         .id()
@@ -3910,7 +3904,7 @@ fn build_modal_footer(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceInset,
             },
-            border_all("color.border.default", 6.0),
+            border_all(ColorToken::BorderDefault, 6.0),
             Pickable::IGNORE,
         ))
         .add_children(&[esc_text])
@@ -3939,10 +3933,10 @@ fn build_modal_footer(world: &mut World) -> Entity {
         "#ModalCancel",
         36.0,
         8.0,
-        "color.border.strong",
+        ColorToken::BorderStrong,
         "Cancel",
         None,
-        Some(("Cancel", "color.text.secondary")),
+        Some(("Cancel", ColorToken::TextSecondary)),
     );
     world.entity_mut(cancel).insert(Background {
         color: ColorToken::SurfaceCard,
@@ -3970,7 +3964,7 @@ fn build_modal_footer(world: &mut World) -> Entity {
                 color: ColorToken::SurfaceInset,
             },
             Border {
-                top: solid_side("color.border.subtle"),
+                top: solid_side(ColorToken::BorderSubtle),
                 // The asymmetric bottom-only radius `0 0 11px 11px` (values.md § 3):
                 // the footer's top edge is flush against the divider, the bottom two
                 // corners round to 11 (inside the card's 14 outer radius).
@@ -4049,10 +4043,10 @@ fn build_modal_close_button(
     name: &str,
     height: f32,
     radius: f32,
-    border_tok: &str,
+    border_tok: ColorToken,
     a11y_label: &str,
-    icon: Option<(&str, f32, u16, &str)>,
-    text: Option<(&str, &str)>,
+    icon: Option<(&str, f32, u16, ColorToken)>,
+    text: Option<(&str, ColorToken)>,
 ) -> Entity {
     use buiy_widgets::dialog::DialogClose;
 
@@ -4066,7 +4060,7 @@ fn build_modal_close_button(
         .border(1.0);
     let child = if let Some((path_d, stroke, px, color_tok)) = icon {
         style = style.width_px(height);
-        icon_box(world, "#ModalCloseIcon", path_d, stroke, px, tok(color_tok))
+        icon_box(world, "#ModalCloseIcon", path_d, stroke, px, color_tok)
     } else {
         let (label, color_tok) = text.expect("a close button has either an icon or a text label");
         style = style.padding_edges(Edges::axis(14.0, 0.0));
@@ -4077,7 +4071,7 @@ fn build_modal_close_button(
             geist(),
             12.5,
             600,
-            tok(color_tok),
+            color_tok,
             None,
         )
     };
@@ -4302,26 +4296,26 @@ pub fn set_modal_mode(world: &mut World, mode: ModalMode) {
     if let Some(confirm) = find_single::<ModalConfirm>(world) {
         let (bg, glow, label_tok, label) = if is_create {
             (
-                "color.accent",
-                "color.accent.glow",
-                "color.text.on-accent",
+                ColorToken::Accent,
+                ColorToken::AccentGlow,
+                ColorToken::TextOnAccent,
                 "Create",
             )
         } else {
             (
-                "color.surface.danger-strong",
-                "color.shadow.danger-button",
-                "color.misc.white",
+                ColorToken::SurfaceDangerStrong,
+                ColorToken::ShadowDangerButton,
+                ColorToken::White,
                 "Delete",
             )
         };
         if let Some(mut b) = world.get_mut::<Background>(confirm) {
-            b.color = tok(bg);
+            b.color = bg;
         }
         if let Some(mut s) = world.get_mut::<BoxShadow>(confirm)
             && let Some(term) = s.0.first_mut()
         {
-            term.color = tok(glow);
+            term.color = glow;
         }
         if let Some(mut a) = world.get_mut::<A11yLabel>(confirm) {
             a.0 = label.to_string();
@@ -4331,7 +4325,7 @@ pub fn set_modal_mode(world: &mut World, mode: ModalMode) {
                 t.0 = label.to_string();
             }
             if let Some(mut c) = world.get_mut::<TextColor>(lbl) {
-                c.0 = tok(label_tok);
+                c.0 = label_tok;
             }
         }
     }
@@ -4578,7 +4572,7 @@ pub fn showcase_preview_shadow() -> buiy_core::render::components::BoxShadow {
 /// screen-fn + the display-list / GPU acceptances share (the card emits a border
 /// band; the design's controls cards are flat — bordered, NOT shadowed).
 pub fn showcase_card_border() -> Border {
-    border_all("color.border.default", 12.0)
+    border_all(ColorToken::BorderDefault, 12.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4651,7 +4645,7 @@ fn showcase_card_box(world: &mut World, name: &str) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
         ))
         .id()
 }
@@ -4898,11 +4892,11 @@ fn build_showcase_switch(world: &mut World, name: &str, on: bool) -> Entity {
                 .flex_row()
                 .align_items(AlignItems::Center),
             Background {
-                color: tok(if on {
-                    "color.accent"
+                color: if on {
+                    ColorToken::Accent
                 } else {
-                    "color.surface.raised-alt"
-                }),
+                    ColorToken::SurfaceRaisedAlt
+                },
             },
             Border {
                 radius: Corners::all(Radius::circular(99.0)),
@@ -4946,7 +4940,7 @@ fn build_showcase_slider_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
         ))
         .id();
 
@@ -5192,7 +5186,7 @@ fn build_showcase_seg_stepper_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
         ))
         .id();
 
@@ -5244,7 +5238,7 @@ fn build_showcase_meter_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
         ))
         .id();
 
@@ -5326,7 +5320,7 @@ fn build_showcase_meter_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceRaisedAlt,
             },
-            border_all("color.border.strong", 8.0),
+            border_all(ColorToken::BorderStrong, 8.0),
         ))
         .add_child(run_label)
         .id();
@@ -5356,7 +5350,7 @@ fn build_showcase_disclosure_card(world: &mut World) -> Entity {
             Background {
                 color: ColorToken::SurfaceCard,
             },
-            border_all("color.border.default", 12.0),
+            border_all(ColorToken::BorderDefault, 12.0),
         ))
         .id();
 
@@ -5395,11 +5389,11 @@ fn build_showcase_disclosure_item(
         "M9 5l7 7-7 7",
         1.9,
         16,
-        tok(if open {
-            "color.accent"
+        if open {
+            ColorToken::Accent
         } else {
-            "color.text.muted"
-        }),
+            ColorToken::TextMuted
+        },
     );
     world.entity_mut(chevron).insert((
         ShowcaseChevron,
@@ -5508,7 +5502,7 @@ fn build_showcase_disclosure_item(
     ));
     if divider {
         item.insert(Border {
-            bottom: solid_side("color.border.subtle-2"),
+            bottom: solid_side(ColorToken::BorderSubtle2),
             ..Default::default()
         });
     }
@@ -5738,11 +5732,11 @@ pub fn drive_showcase_switches(
             let Ok((mut bg, track_children)) = tracks.get_mut(child) else {
                 continue;
             };
-            bg.color = tok(if on {
-                "color.accent"
+            bg.color = if on {
+                ColorToken::Accent
             } else {
-                "color.surface.raised-alt"
-            });
+                ColorToken::SurfaceRaisedAlt
+            };
             for &grandchild in track_children {
                 if let Ok(mut translate) = thumbs.get_mut(grandchild) {
                     translate.0 = Length::px(if on {
@@ -5826,11 +5820,11 @@ pub fn drive_showcase_disclosures(
                 } else {
                     Rotate(Quat::IDENTITY)
                 };
-                icon.color = tok(if open {
-                    "color.accent"
+                icon.color = if open {
+                    ColorToken::Accent
                 } else {
-                    "color.text.muted"
-                });
+                    ColorToken::TextMuted
+                };
             }
         }
         // The body is a SIBLING of the trigger (both children of the item wrapper).
@@ -5871,7 +5865,7 @@ mod tests {
         // = 0.07, state OK, name names[(55)%20=15]=item → item_0005.
         let n5 = gen_node(5);
         assert_eq!(n5.node_type, "Scroll");
-        assert_eq!(n5.dot_color, "color.status.error");
+        assert_eq!(n5.dot_color, ColorToken::StatusError);
         assert_eq!(n5.name, "item_0005");
         assert_eq!(n5.state, "OK");
 

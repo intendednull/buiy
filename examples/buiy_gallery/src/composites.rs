@@ -59,12 +59,6 @@ use buiy_core::text::{FamilyEntry, FontStack, LetterSpacing};
 // `shell` helpers and vice versa).
 // ===========================================================================
 
-/// A `ColorToken::Token` from a `&str` key (every paint is a named dark token —
-/// the forced-colors gate stays enforceable; the shell uses the same `tok`).
-fn tok(key: &str) -> ColorToken {
-    ColorToken::Token(key.to_string().into())
-}
-
 /// The Geist sans font stack (the sans generic still resolves to Fira — Wave A
 /// note — so author Geist by name, like the shell does).
 fn geist() -> FontFamily {
@@ -76,16 +70,16 @@ fn geist_mono() -> FontFamily {
     FontFamily(FontStack(vec![FamilyEntry::Named("Geist Mono".into())]))
 }
 
-/// A solid 1px `BorderSide` of a token color.
-fn solid_side(token: &str) -> BorderSide {
+/// A solid 1px `BorderSide` of a [`ColorToken`] color.
+fn solid_side(token: ColorToken) -> BorderSide {
     BorderSide {
-        color: tok(token),
+        color: token,
         style: LineStyle::Solid,
     }
 }
 
 /// A uniform 1px `Border` of `token` with `radius` rounded corners.
-fn border_all(token: &str, radius: f32) -> Border {
+fn border_all(token: ColorToken, radius: f32) -> Border {
     Border {
         top: solid_side(token),
         right: solid_side(token),
@@ -182,13 +176,13 @@ fn icon_box(
 /// A token-filled box with a uniform 1px border + radius + flex layout. The
 /// generic "card / chip / track" body the composites share. Children are added by
 /// the caller.
-fn box_node(world: &mut World, name: &str, style: Style, bg: &str, border: Border) -> Entity {
+fn box_node(world: &mut World, name: &str, style: Style, bg: ColorToken, border: Border) -> Entity {
     world
         .spawn((
             Node,
             Name::new(name.to_string()),
             style,
-            Background { color: tok(bg) },
+            Background { color: bg },
             border,
         ))
         .id()
@@ -298,7 +292,7 @@ fn stepper_button(world: &mut World, which: StepperButton, path_d: &str) -> Enti
             Background {
                 color: ColorToken::SurfaceInset,
             },
-            border_all("color.border.strong", 8.0),
+            border_all(ColorToken::BorderStrong, 8.0),
         ))
         .add_children(&[glyph])
         .id()
@@ -348,8 +342,8 @@ pub fn segmented(world: &mut World, options: &[&str], selected: usize) -> Entity
             .gap_px(4.0)
             .padding(3.0)
             .border(1.0),
-        "color.surface.inset",
-        border_all("color.border.default", 9.0),
+        ColorToken::SurfaceInset,
+        border_all(ColorToken::BorderDefault, 9.0),
     );
     world.entity_mut(track).add_children(&buttons);
     track
@@ -387,7 +381,7 @@ fn segmented_option(world: &mut World, idx: usize, label: &str, selected: bool) 
                 .justify_content(JustifyContent::Center)
                 .align_items(AlignItems::Center)
                 .padding_edges(Edges::axis(0.0, 7.0)),
-            Background { color: tok(bg) },
+            Background { color: bg },
             Border {
                 radius: Corners::all(Radius::circular(6.0)),
                 ..Default::default()
@@ -402,11 +396,11 @@ fn segmented_option(world: &mut World, idx: usize, label: &str, selected: bool) 
 }
 
 /// The `(bg, fg)` token pair for a segmented option in `selected` state.
-fn segmented_colors(selected: bool) -> (&'static str, ColorToken) {
+fn segmented_colors(selected: bool) -> (ColorToken, ColorToken) {
     if selected {
-        ("color.accent", ColorToken::TextOnAccent)
+        (ColorToken::Accent, ColorToken::TextOnAccent)
     } else {
-        ("color.surface.transparent", ColorToken::TextMuted)
+        (ColorToken::Transparent, ColorToken::TextMuted)
     }
 }
 
@@ -418,7 +412,7 @@ pub fn set_segmented(world: &mut World, track: Entity, selected: usize) {
     for (btn, idx) in options {
         let (bg, fg) = segmented_colors(idx == selected);
         if let Some(mut b) = world.get_mut::<Background>(btn) {
-            b.color = tok(bg);
+            b.color = bg;
         }
         // Re-tint the option's label leaf.
         if let Some(label) = first_text_child(world, btn)
@@ -502,7 +496,7 @@ pub fn toast(world: &mut World, msg: &str) -> Entity {
             Background {
                 color: ColorToken::SurfaceRaised,
             },
-            border_all("color.border.strong", 10.0),
+            border_all(ColorToken::BorderStrong, 10.0),
             // shadow.menu — `0 16px 40px -12px rgba(0,0,0,.8)` (values.md § 2). The
             // spread is the design's negative `-12px`.
             BoxShadow(vec![Shadow {
@@ -667,8 +661,8 @@ pub fn badge(world: &mut World, label: &str, radius: f32) -> Entity {
             .align_items(AlignItems::Center)
             .padding_edges(Edges::axis(9.0, 5.0))
             .border(1.0),
-        "color.surface.inset",
-        border_all("color.border.default", radius),
+        ColorToken::SurfaceInset,
+        border_all(ColorToken::BorderDefault, radius),
     );
     world.entity_mut(b).add_children(&[text]);
     b
@@ -679,15 +673,13 @@ pub fn badge(world: &mut World, label: &str, radius: f32) -> Entity {
 /// 6×6 radius 2). The dot is `dot_color`; the label is Geist Mono 11 / 500
 /// `text.secondary` (values.md § 4 "Inspector — Composed of chips"); 1px
 /// `border.default`, radius 6, `gap:6px`. Returns the chip root.
-pub fn chip(world: &mut World, label: &str, dot_color: &str) -> Entity {
+pub fn chip(world: &mut World, label: &str, dot_color: ColorToken) -> Entity {
     let dot = world
         .spawn((
             Node,
             Name::new("#ChipDot"),
             Style::default().width_px(6.0).height_px(6.0),
-            Background {
-                color: tok(dot_color),
-            },
+            Background { color: dot_color },
             Border {
                 radius: Corners::all(Radius::circular(2.0)),
                 ..Default::default()
@@ -712,8 +704,8 @@ pub fn chip(world: &mut World, label: &str, dot_color: &str) -> Entity {
             .gap_px(6.0)
             .padding_edges(Edges::axis(9.0, 4.0))
             .border(1.0),
-        "color.surface.card",
-        border_all("color.border.default", 6.0),
+        ColorToken::SurfaceCard,
+        border_all(ColorToken::BorderDefault, 6.0),
     );
     world.entity_mut(c).add_children(&[dot, text]);
     c
@@ -810,7 +802,7 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
         showcase_cell(world, "BADGE", b)
     };
     let chip_cell = {
-        let c = chip(world, "Button", "color.status.ok");
+        let c = chip(world, "Button", ColorToken::StatusOk);
         showcase_cell(world, "CHIP", c)
     };
     let kbd_cell = {
@@ -831,8 +823,8 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
             .id();
         // The "ready" dot (status.ok, 6px glow) + the blink dot (accent, 4px soft
         // ring) — values.md § 6 CSS dots / § 2 shadow.ready-dot/blink-dot.
-        let ready = status_dot(world, "color.status.ok", "color.status.ok", 6.0, 0.0);
-        let blink = status_dot(world, "color.accent", "color.accent.soft", 0.0, 4.0);
+        let ready = status_dot(world, ColorToken::StatusOk, ColorToken::StatusOk, 6.0, 0.0);
+        let blink = status_dot(world, ColorToken::Accent, ColorToken::AccentSoft, 0.0, 4.0);
         // The design's `blink 1.6s infinite` pulse (opacity 1→.25→1).
         pulse_blink(world, blink);
         world.entity_mut(row).add_children(&[ready, blink]);
@@ -860,7 +852,7 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
                 Background {
                     color: ColorToken::SurfaceCard,
                 },
-                border_all("color.border.default", 8.0),
+                border_all(ColorToken::BorderDefault, 8.0),
             ))
             .id();
         // The promoted `table_header`/`table_row` are font-neutral — thread the
@@ -880,13 +872,13 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
             &TableRowData {
                 idx: "00",
                 indent_px: 0.0,
-                dot_color: "color.accent.blue",
+                dot_color: ColorToken::AccentBlue,
                 node_type: "Stack",
                 name: "root_0000",
                 ms: "0.42",
                 ms_warn: false,
                 state: "OK",
-                state_color: "color.status.ok",
+                state_color: ColorToken::StatusOk,
             },
             geist_mono(),
             false,
@@ -896,13 +888,13 @@ pub fn composites_showcase(world: &mut World) -> (Entity, Entity) {
             &TableRowData {
                 idx: "01",
                 indent_px: 13.0,
-                dot_color: "color.status.ok",
+                dot_color: ColorToken::StatusOk,
                 node_type: "Button",
                 name: "primary_0001",
                 ms: "1.62",
                 ms_warn: true,
                 state: "WARN",
-                state_color: "color.status.warn",
+                state_color: ColorToken::StatusWarn,
             },
             geist_mono(),
             true,
