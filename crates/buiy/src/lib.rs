@@ -58,7 +58,9 @@
 //! [`docs/`](https://github.com/intendednull/buiy/blob/main/docs/README.md) (start at the
 //! [foundation design](https://github.com/intendednull/buiy/blob/main/docs/specs/2026-05-07-buiy-foundation/README.md)).
 
-use bevy::prelude::*;
+// (Bevy's prelude is not glob-imported here; the curated `pub use
+// bevy::prelude::{…}` block below brings the ECS essentials into scope for both
+// this crate's own code and — via `pub` — every `use buiy::prelude::*;` author.)
 
 pub use buiy_core::{
     BuiySet, CorePlugin,
@@ -205,6 +207,41 @@ pub use bevy::picking::pointer::PointerButton;
 // `buiy::events::Scroll` (the picking events module, re-exported below); a
 // `ScrollArea` (C5) observes `Pointer<buiy::events::Scroll>`.
 pub use bevy::picking::events;
+
+// Bevy ECS authoring essentials — the curated subset an app author needs to
+// define components and WRITE SYSTEMS from `use buiy::prelude::*;` ALONE, with no
+// second `use bevy::prelude::*;` (Track C / spec § "Track C"). This closes the
+// prototype's N1 wall (the Buiy prelude could not express a Bevy system, forcing
+// the colliding bevy glob) AND resolves the `Text`/`Node` collision *by
+// construction*: because the prelude is now self-sufficient, a downstream
+// `DefaultPlugins` app never needs `bevy::prelude::*`, so Buiy's `Text`/`Node`
+// (and `Style`) stay unambiguous. Curated — NOT a blanket `pub use
+// bevy::prelude::*` — only the names the N=4 probes reached for plus the minimum
+// to wire an MVU app (grouped below; each group notes its load-bearing / excluded
+// members).
+// App + scheduling.
+pub use bevy::prelude::{
+    App, FixedUpdate, IntoScheduleConfigs, Plugin, PostUpdate, PreUpdate, Startup, Update,
+};
+// Derive macros + reflection. `Reflect` + `ReflectComponent` are load-bearing for
+// the PRIMARY state path: the `Model` trait bounds `Reflect`, and every model
+// derives `#[derive(Reflect)] #[reflect(Component)]` (the latter expands to name
+// `ReflectComponent`) — so without these two, authoring an MVU `Model` from the
+// prelude alone is impossible, which is exactly the "wire an MVU app" the slice
+// promises.
+pub use bevy::prelude::{Bundle, Component, Event, Message, Reflect, ReflectComponent, Resource};
+// System params.
+pub use bevy::prelude::{
+    Commands, Local, MessageReader, MessageWriter, Query, Res, ResMut, Single,
+};
+// Query filters.
+pub use bevy::prelude::{Added, Changed, Or, With, Without};
+// Everyday components / types + the `default()` helper. `Visibility` is
+// deliberately EXCLUDED: Buiy nodes hide via `CssVisibility`, so shadowing that
+// with bevy's render `Visibility` would be a silent-wrong.
+pub use bevy::prelude::{
+    Camera2d, Color, Entity, Name, Time, Timer, TimerMode, Transform, default,
+};
 
 // BSN authoring (docs/specs/2026-06-18-buiy-bsn-integration-design.md § 4.2).
 // `buiy::bsn` is the named path to the authoring crate; the BSN prelude
@@ -361,9 +398,88 @@ pub mod probe {
 }
 
 /// The Buiy prelude. `use buiy::prelude::*;` brings the common Buiy surface —
-/// components, plugins, widgets — and the BSN authoring macros (`bsn!`,
-/// `bsn_list!`) + spawn extension traits into scope in one import. Mirrors the
-/// flat crate-root re-export the examples use via `use buiy::*;`.
+/// components, plugins, widgets, the MVU state funnel — the BSN authoring macros
+/// (`bsn!`, `bsn_list!`) + spawn ext traits, **and a curated set of Bevy ECS
+/// authoring essentials** (`Component`/`Commands`/`Query`/`Res`/`MessageReader`/
+/// `With`/`Camera2d`/`App`/`Startup`/`Update`/…) into scope in one import. Mirrors
+/// the flat crate-root re-export the examples use via `use buiy::*;`.
+///
+/// It is **self-sufficient**: you can define components *and wire systems* from
+/// this one import, with no second `use bevy::prelude::*;` — which is also how
+/// the `Text`/`Node` name-collision with `bevy::prelude` is avoided (you never
+/// need the bevy glob, so Buiy's `Text`/`Node`/`Style` stay unambiguous).
+///
+/// ```no_run
+/// use buiy::prelude::*;
+///
+/// #[derive(Component)]
+/// struct Score(u32);
+///
+/// fn setup(mut commands: Commands) {
+///     commands.spawn(Camera2d);
+///     commands.spawn(Button::new("Save"));
+///     commands.spawn(Score(0));
+/// }
+///
+/// // Reads the activation sink + a query — the exact shape an agent writes, but
+/// // which `buiy::prelude::*` alone could not express before Track C.
+/// fn count_presses(mut presses: MessageReader<OnPress>, mut scores: Query<&mut Score>) {
+///     for _press in presses.read() {
+///         for mut score in &mut scores {
+///             score.0 += 1;
+///         }
+///     }
+/// }
+///
+/// fn main() {
+///     App::new()
+///         .add_plugins(BuiyPlugin)
+///         .add_systems(Startup, setup)
+///         .add_systems(Update, count_presses)
+///         .run();
+/// }
+/// ```
+///
+/// The **MVU model** path — Buiy's primary state interface — is expressible from
+/// the prelude alone too. The `Model` trait bounds `Reflect`, and a model derives
+/// `#[derive(Reflect)] #[reflect(Component)]`, so `Reflect`/`ReflectComponent` are
+/// part of the curated set — authoring a model no longer forces the bevy glob:
+///
+/// ```no_run
+/// use buiy::prelude::*;
+///
+/// #[derive(Component, Default, Clone, PartialEq, Reflect)]
+/// #[reflect(Component)]
+/// struct Counter {
+///     value: i64,
+/// }
+///
+/// #[derive(Clone, Debug, PartialEq, Reflect)]
+/// enum CounterMsg {
+///     Increment,
+///     Reset,
+/// }
+///
+/// impl Model for Counter {
+///     type Msg = CounterMsg;
+/// }
+///
+/// fn update(model: &mut Counter, msg: CounterMsg) -> Cmd<CounterMsg> {
+///     match msg {
+///         CounterMsg::Increment => model.value += 1,
+///         CounterMsg::Reset => model.value = 0,
+///     }
+///     Cmd::none()
+/// }
+///
+/// fn main() {
+///     App::new()
+///         .add_plugins(BuiyPlugin)
+///         .mvu_model(update) // register_type + add_model + add_reducer, one call
+///         .app() // ModelWiring handle → &mut App
+///         .run();
+/// }
+/// ```
 pub mod prelude {
     pub use crate::*;
 }
