@@ -314,7 +314,19 @@ fn reconcile_keyed_children<M: Model>(
         let key = child_el
             .key
             .expect("keyed_column child must carry a key (keyed_column sets it)");
-        new_keys.insert(key);
+        // `insert` returns `false` on a collision: the app's `key_fn` returned the SAME key for
+        // two rows. That silently corrupts reconciliation — both rows resolve to one `by_key`
+        // entity (the second reconcile clobbers the first's content) and that entity is pushed to
+        // `ordered` twice, so `replace_children` gets a duplicate. Guard it loudly in dev/test (a
+        // `key_fn` bug the author must fix), free in release: the `insert` runs unconditionally and
+        // `fresh` stays used via the `cfg!` short-circuit, so only the panic path is debug-only.
+        let fresh = new_keys.insert(key);
+        if cfg!(debug_assertions) && !fresh {
+            panic!(
+                "keyed_column: duplicate key {key} — key_fn must return a UNIQUE key per row \
+                 (a collision silently corrupts reconciliation)"
+            );
+        }
         let e = match by_key.get(&key) {
             // Reuse the existing row entity — reconcile it IN PLACE (no rebuild).
             // Re-stamp the key afterward: on a top-level Kind change (e.g. a keyed
