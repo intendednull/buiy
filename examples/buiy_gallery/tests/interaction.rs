@@ -1060,7 +1060,11 @@ fn showcase_stepper_plus_and_minus_clicks_change_the_count() {
             .0
             .clone()
     };
-    assert_eq!(rendered(&mut g), format!("{start:02}"), "seed count rendered");
+    assert_eq!(
+        rendered(&mut g),
+        format!("{start:02}"),
+        "seed count rendered"
+    );
 
     let plus = find_where::<StepperButton>(g.world_app(), |b| *b == StepperButton::Increment);
     g.click(plus);

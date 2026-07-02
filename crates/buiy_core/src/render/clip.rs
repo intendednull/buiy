@@ -41,6 +41,38 @@ impl Aabb {
         }
     }
 
+    /// The axis-aligned bounds of an entity's border box AFTER its transform —
+    /// the min/max of the 4 transformed corners. For an untransformed /
+    /// translate-only entity this is bit-identical to
+    /// `from_box(gt.translation(), size)` (an identity linear part maps each
+    /// box-local corner to `translation + corner`). But a rotated/scaled entity's
+    /// box no longer sits axis-aligned at `gt.translation()` — with a center
+    /// `transform-origin` the translation is pivot-shifted — so the paint clip
+    /// must bound the TRANSFORMED quad, not `[translation, translation+size]`
+    /// (else a rotated element clips its own off-axis content away).
+    fn from_transformed_box(gt: &GlobalTransform, size: Vec2) -> Self {
+        // Fast path: no rotation/scale (identity linear part). The box is
+        // axis-aligned at the translation — bit-identical to the prior
+        // `from_box(gt.translation(), size)` clip (the untransformed corpus).
+        if gt.affine().matrix3 == bevy::math::Mat3A::IDENTITY {
+            return Self::from_box(gt.translation().truncate(), size);
+        }
+        let corners = [
+            Vec2::ZERO,
+            Vec2::new(size.x, 0.0),
+            Vec2::new(0.0, size.y),
+            size,
+        ];
+        let mut min = Vec2::splat(f32::INFINITY);
+        let mut max = Vec2::splat(f32::NEG_INFINITY);
+        for c in corners {
+            let p = gt.transform_point(c.extend(0.0)).truncate();
+            min = min.min(p);
+            max = max.max(p);
+        }
+        Self { min, max }
+    }
+
     /// Component-wise AABB intersection (may be degenerate if disjoint).
     fn intersect(self, other: Aabb) -> Aabb {
         Aabb {
@@ -285,8 +317,12 @@ fn walk(
     // descendants with the unchanged ancestor clip.
     let child_ancestor = match (rl, gt) {
         (Some(rl), Some(gt)) => {
-            let abs = gt.translation().truncate(); // C1: absolute basis, not rl.position
-            let own = Aabb::from_box(abs, rl.size);
+            // C1: absolute basis, not rl.position. The transformed-corner AABB is
+            // bit-identical to `from_box(gt.translation, size)` for untransformed /
+            // translate-only nodes, but correctly bounds a rotated/scaled node's
+            // off-axis paint (a center-pivot rotation shifts `gt.translation()`
+            // away from the box top-left — using it raw clips the content away).
+            let own = Aabb::from_transformed_box(gt, rl.size);
             let clip = ancestor.map(|a| a.intersect(own));
             reconcile(entity, clip, ancestor, commands, existing);
             // The clip box THIS node imposes on its descendants, folded into
@@ -375,6 +411,40 @@ mod tests {
         let a = Aabb::from_box(Vec2::new(10.0, 20.0), Vec2::new(100.0, 50.0));
         assert_eq!(a.min, Vec2::new(10.0, 20.0));
         assert_eq!(a.max, Vec2::new(110.0, 70.0));
+    }
+
+    #[test]
+    fn transformed_box_clip_matches_from_box_for_translate() {
+        // Identity linear part (translate only) → bit-identical to from_box, so the
+        // untransformed corpus's clips are unchanged.
+        use bevy::transform::components::{GlobalTransform, Transform};
+        let gt = GlobalTransform::from(Transform::from_xyz(10.0, 20.0, 0.0));
+        let a = Aabb::from_transformed_box(&gt, Vec2::new(100.0, 50.0));
+        let b = Aabb::from_box(Vec2::new(10.0, 20.0), Vec2::new(100.0, 50.0));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn transformed_box_clip_bounds_a_rotated_box() {
+        // A 16×16 box rotated +90° about the origin: corners (0,0),(16,0),(0,16),
+        // (16,16) → (0,0),(0,16),(-16,0),(-16,16), so the AABB is [-16,0]×[0,16].
+        // The pre-fix `from_box(gt.translation(), size)` would have returned
+        // [0,16]×[0,16] (translation = origin), clipping the rotated content away.
+        use bevy::math::Quat;
+        use bevy::transform::components::{GlobalTransform, Transform};
+        use std::f32::consts::FRAC_PI_2;
+        let gt = GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_z(FRAC_PI_2)));
+        let a = Aabb::from_transformed_box(&gt, Vec2::splat(16.0));
+        assert!(
+            (a.min - Vec2::new(-16.0, 0.0)).length() < 1e-4,
+            "min {:?}",
+            a.min
+        );
+        assert!(
+            (a.max - Vec2::new(0.0, 16.0)).length() < 1e-4,
+            "max {:?}",
+            a.max
+        );
     }
 
     #[test]

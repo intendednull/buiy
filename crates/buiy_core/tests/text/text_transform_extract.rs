@@ -25,7 +25,10 @@ fn spawn_text(h: &mut TextExtractHarness, style: Style) -> Entity {
         .world_mut()
         .spawn((
             Node,
-            Style::default().flex_column().width_px(300.0).height_px(100.0),
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
         ))
         .add_child(text);
     text
@@ -34,7 +37,11 @@ fn spawn_text(h: &mut TextExtractHarness, style: Style) -> Entity {
 /// The entity's 2D affine basis `[m00, m10, m01, m11]` — the value the producer
 /// should stamp onto each glyph.
 fn entity_affine(h: &TextExtractHarness, e: Entity) -> [f32; 4] {
-    let gt = h.app.world().get::<GlobalTransform>(e).expect("GlobalTransform");
+    let gt = h
+        .app
+        .world()
+        .get::<GlobalTransform>(e)
+        .expect("GlobalTransform");
     let m = gt.affine().matrix3;
     [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y]
 }

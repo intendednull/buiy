@@ -154,11 +154,8 @@ fn rotated_fill_paints_off_axis() {
     // that column (≥10px away horizontally) proves the rotation moved fill onto
     // a horizontal extent the axis-aligned rect never reaches. Scan the rotated
     // sweep band around the center row (y≈47), where the 30×4 bar y∈[45,49) lands.
-    let off_axis_painted = (0..W).any(|x| {
-        (x + 10 < 32 || x > 36 + 10) && {
-            (44..=50).any(|y| px(x, y) != [0, 0, 0, 255])
-        }
-    });
+    let off_axis_painted = (0..W)
+        .any(|x| (x + 10 < 32 || x > 36 + 10) && { (44..=50).any(|y| px(x, y) != [0, 0, 0, 255]) });
     assert!(
         off_axis_painted,
         "the 90° rotation must paint fill off the unrotated thin column \
