@@ -252,7 +252,7 @@ pub fn plan_allocation(groups: &[(UVec2, EffectReason)], budget: u64) -> Vec<boo
 /// § 2.3): the already-packed quad + glyph instance ranges its members occupy
 /// (extract index == `group_ranges`/`glyph_group_ranges` index), the `Opacity`
 /// to fold per-instance, and its parent link (`None` == ROOT group). Consumed by
-/// [`fold_root_degraded_into_flat`].
+/// [`fold_degraded_groups`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct DegradedGroup {
     /// The group's quad-instance range (`BuiyInstanceBuffers::group_ranges[i]`).
@@ -261,9 +261,11 @@ pub struct DegradedGroup {
     pub glyph_range: Range<u32>,
     /// Group opacity to fold into each member instance's alpha.
     pub opacity: f32,
-    /// Parent group index, or `None` for a ROOT group. Only ROOT groups are
-    /// forward-composited by this slice (§ 2.3 scope); a nested degraded group
-    /// is a documented follow-up (debug-asserted, release-skipped).
+    /// Parent group index, or `None` for a ROOT group. Both fork the PLACEMENT of
+    /// the (always-folded) members: a ROOT group merges into the flat window draw;
+    /// a NESTED group is injected by the node into the parent's target for case A
+    /// (parent kept a target) or skipped for the deferred chain (parent also
+    /// degraded) — see the nested-degraded-forward-composite design.
     pub parent: Option<usize>,
 }
 
@@ -284,14 +286,21 @@ fn merge_ranges(ranges: &mut Vec<Range<u32>>) {
     *ranges = merged;
 }
 
-/// Forward-composite the ROOT degraded effect groups FLAT (effect-compositor.md
-/// § 2.3): for every group `i` with `allocate[i] == false` and `parent == None`,
-/// fold its `opacity` into the ALPHA slot of every member instance IN PLACE
-/// (quad alpha at [`ALPHA_FLOAT_OFFSET`](crate::render::instance::ALPHA_FLOAT_OFFSET),
-/// glyph alpha at `color[3]` =
-/// [`GLYPH_ALPHA_FLOAT_OFFSET`](crate::render::atlas::GLYPH_ALPHA_FLOAT_OFFSET)) and merge its instance ranges into the flat
-/// ranges so the node's flat WINDOW draw paints them — the group dims exactly
-/// once and paints flat, instead of vanishing.
+/// Forward-composite the degraded effect groups (effect-compositor.md § 2.3).
+/// For **every** group `i` with `allocate[i] == false`, fold its `opacity` into
+/// the ALPHA slot of every member instance IN PLACE (quad alpha at
+/// [`ALPHA_FLOAT_OFFSET`](crate::render::instance::ALPHA_FLOAT_OFFSET), glyph
+/// alpha at `color[3]` =
+/// [`GLYPH_ALPHA_FLOAT_OFFSET`](crate::render::atlas::GLYPH_ALPHA_FLOAT_OFFSET)).
+/// Placement then forks on nesting:
+/// - a **ROOT** degraded group (`parent == None`) merges its instance ranges into
+///   the flat ranges, so the node's flat WINDOW draw paints them;
+/// - a **NESTED** degraded group (`parent == Some`) is NOT merged here — the node
+///   injects its (already-folded) members into the parent's `Rgba16Float` target
+///   at step-2a when the parent kept a target (case A), or skips it when the
+///   parent is also degraded (the deferred chain — folded-but-undrawn, harmless).
+///
+/// Either way the group dims exactly once instead of vanishing.
 ///
 /// **Two DIFFERENT gates per tier — alpha-fold vs range-merge (§ 2.3).** The
 /// alpha-fold and the range-merge answer to DIFFERENT invariants, so each tier
@@ -322,16 +331,15 @@ fn merge_ranges(ranges: &mut Vec<Range<u32>>) {
 /// correct, because the retained buffer still carries last frame's fold; only the
 /// PARTITION needs re-stitching, not the alpha.
 ///
-/// **Scope: ROOT degraded groups only.** `plan_allocation` can degrade a NESTED
-/// child while its parent keeps a target; routing a nested child's ranges into
-/// the WINDOW flat draw paints it in the wrong space/clip and leaves the parent's
-/// composite sampling a target the child never reached. Forward-compositing a
-/// nested child correctly is a node-side change (route into the PARENT's step-1
-/// target pass) tracked as a follow-up. Here a nested degraded group
-/// `debug_assert!(false, …)`s (loud in dev/tests) and in release is left
-/// untouched + un-merged — no worse than today's vanish.
+/// **Nested groups are folded but never flat-merged here.** Merging a nested
+/// child's ranges into the WINDOW flat draw would paint it in the wrong
+/// space/clip and leave the parent compositing a target the child never reached
+/// (§ 2.3). So a nested degraded group's opacity is folded into its members
+/// (above), but its ranges are left out of `*_flat`; the node owns its placement
+/// (inject into the parent target for case A, skip for the deferred chain —
+/// `docs/specs/2026-07-01-nested-degraded-forward-composite-design.md`).
 #[allow(clippy::too_many_arguments)]
-pub fn fold_root_degraded_into_flat(
+pub fn fold_degraded_groups(
     allocate: &[bool],
     groups: &[DegradedGroup],
     fold_quad: bool,
@@ -353,17 +361,9 @@ pub fn fold_root_degraded_into_flat(
         if allocate.get(i).copied().unwrap_or(true) {
             continue;
         }
-        // MAJOR-1: nested degraded groups are out of this slice's charter.
-        if group.parent.is_some() {
-            debug_assert!(
-                false,
-                "nested degraded effect-group forward-composite into the parent \
-                 target is not yet implemented (follow-up); group {i} parent {:?} \
-                 — root-degraded only this slice (effect-compositor.md § 2.3)",
-                group.parent
-            );
-            continue; // release: leave the nested child untouched (vanishes — tracked).
-        }
+        // ROOT vs NESTED forks the PLACEMENT (merge-to-flat vs node injection),
+        // NOT the alpha fold: every degraded group folds its own opacity below.
+        let is_root = group.parent.is_none();
 
         let opacity = group.opacity;
 
@@ -379,7 +379,9 @@ pub fn fold_root_degraded_into_flat(
                 }
             }
         }
-        if merge_quad && group.quad_range.start < group.quad_range.end {
+        // ROOT only: a nested group's members are injected by the node into the
+        // parent target, never merged into the window flat draw.
+        if is_root && merge_quad && group.quad_range.start < group.quad_range.end {
             quad_flat.push(group.quad_range.clone());
             quad_merged = true;
         }
@@ -401,7 +403,7 @@ pub fn fold_root_degraded_into_flat(
                 }
             }
         }
-        if merge_glyph && group.glyph_range.start < group.glyph_range.end {
+        if is_root && merge_glyph && group.glyph_range.start < group.glyph_range.end {
             glyph_flat.push(group.glyph_range.clone());
             glyph_merged = true;
         }
@@ -507,14 +509,14 @@ pub struct PreparedEffectGroups {
 pub struct PreparedEffectTargets {
     /// Per-group off-screen `Rgba16Float` targets (extract order). `None` == the
     /// group degraded under budget (`plan_allocation` == false) and has no target.
-    /// The node's step-1 group pass `continue`s on a `None` target — but a ROOT
+    /// The node's step-1 group pass `continue`s on a `None` target — but a
     /// degraded group is NOT lost: `prepare_effect_groups` folded its `opacity`
-    /// into its member instances' alpha in place and merged its ranges into
-    /// `flat_ranges`/`glyph_flat_ranges`, so the FLAT window draw paints it
-    /// (effect-compositor.md § 2.3 forward-composite). A NESTED degraded group
-    /// (parent == Some) is the one case still skipped here (its correct
-    /// forward-composite is into the PARENT target, a node-side follow-up;
-    /// `fold_root_degraded_into_flat` debug-asserts on it).
+    /// into its member instances' alpha in place. A ROOT degraded group also
+    /// merged its ranges into `flat_ranges`/`glyph_flat_ranges`, so the FLAT
+    /// window draw paints it; a NESTED degraded group is injected by the node at
+    /// step-2a into the parent's target when the parent kept one (case A), or
+    /// skipped for the deferred chain (effect-compositor.md § 2.3
+    /// forward-composite).
     pub targets: Vec<Option<CachedTexture>>,
     /// Per-group placement: the logical→target view-uniform columns (to render
     /// the group's subtree INTO its target), the composite quad's logical bounds,
@@ -876,7 +878,7 @@ pub(crate) fn prepare_effect_groups(
         // instead of letting it vanish.
         let merge_glyph = quad_dirty || glyph_dirty;
         let buffers = &mut *buffers;
-        fold_root_degraded_into_flat(
+        fold_degraded_groups(
             &allocate,
             &degraded,
             quad_dirty,
