@@ -27,7 +27,7 @@ use crate::text::SharedFontSystem;
 use crate::text::edit::{EditCommand, SingleLine, TextEditState};
 use accesskit::{Action, ActionData, NodeId};
 use bevy::ecs::world::World;
-use bevy::prelude::Entity;
+use bevy::prelude::{DetectChangesMut, Entity};
 
 /// Why an advertised verb could not be honored on a specific instance this
 /// frame (the [`ActionError::NotActionable`] payload). Distinct from
@@ -384,13 +384,24 @@ impl A11yContract for Slider {
         let Some(mut value) = world.get_mut::<A11yValue>(entity) else {
             return Err(ActionError::BadData { target, action });
         };
+        // Mutate a CLONE and commit via `set_if_neq`, so `Changed<A11yValue>` only
+        // trips on a REAL change. The `A11yValue` mutators (`increment`/`set_now`)
+        // clamp into `[min, max]`, so a verb that saturates (Right-arrow at the
+        // maximum, `SetValue` to the current value) is a no-op — and must NOT trip
+        // `Changed` (that would fire a phantom `ValueChange<f64>` and a redundant
+        // thumb reposition). This mirrors the toggle leaf's `set_if_neq` drain, so
+        // both value widgets are change-honest.
         match action {
             Action::Increment => {
-                value.increment();
+                let mut next = value.clone();
+                next.increment();
+                value.set_if_neq(next);
                 Ok(())
             }
             Action::Decrement => {
-                value.decrement();
+                let mut next = value.clone();
+                next.decrement();
+                value.set_if_neq(next);
                 Ok(())
             }
             // `SetValue` carries the absolute target as a `NumericValue(f64)`; a
@@ -398,7 +409,9 @@ impl A11yContract for Slider {
             // `[min, max]` (an out-of-range request saturates, never errors).
             Action::SetValue => match data {
                 Some(ActionData::NumericValue(v)) => {
-                    value.set_now(*v);
+                    let mut next = value.clone();
+                    next.set_now(*v);
+                    value.set_if_neq(next);
                     Ok(())
                 }
                 _ => Err(ActionError::BadData { target, action }),

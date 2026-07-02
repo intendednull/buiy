@@ -32,8 +32,8 @@ ModalDialog pos=0,0 size=848,648
           #ModalRegisterSub pos=0,18 size=153,14
           #ModalRegisterTitle pos=0,0 size=153,16
         #ModalRegisterSwitch pos=345,19 size=40,20
-          entity#121 pos=0,0 size=40,20
-            entity#122 pos=0,2 size=16,16
+          entity#123 pos=0,0 size=40,20
+            entity#124 pos=0,2 size=16,16
     #ModalDeleteBody pos=0,0 size=0,0
       #ModalDeleteText pos=0,0 size=0,0
       #ModalWarnTile pos=0,0 size=0,0

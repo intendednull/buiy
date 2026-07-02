@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use buiy_core::{
     BuiySet,
-    a11y::{A11yExpanded, A11yRole, A11yToggled, InlineActionRegistry},
+    a11y::{A11yExpanded, A11yRole, A11yToggled, A11yValue, InlineActionRegistry, Toggled},
     mvu::{
         ControlledLeaf, MvuAppExt, MvuCorePlugin, ToggleLeafSet, ToggleMsg, enqueue,
         register_toggle_leaf,
@@ -41,8 +41,10 @@ pub use tooltip::TooltipTrigger;
 // `OnPress` relocated to `buiy_core` (co-drive SC-1) so the in-core P1c action
 // router and C3 pointer layer can write the same activation sink. Re-exported
 // here for source-compat: `buiy_widgets::OnPress` and the `buiy` prelude keep
-// resolving unchanged.
-pub use buiy_core::interaction::OnPress;
+// resolving unchanged. `ValueChange<T>` (Track C / F2) is the typed value-change
+// notification the emitters below write; re-exported alongside `OnPress` (and it
+// brings the type into this module's scope for the emitters).
+pub use buiy_core::interaction::{OnPress, ValueChange};
 pub use dialog::dialog_invoker;
 pub use scene::{
     button, checkbox as checkbox_scene, dialog as dialog_scene, disclosure as disclosure_scene,
@@ -152,6 +154,57 @@ pub fn advance_expanded_on_press(
     }
 }
 
+/// Track C / F2 — emit a typed [`ValueChange<bool>`] when a toggle widget's
+/// **committed** `A11yToggled` changes (checkbox / switch / aria-pressed button).
+/// Runs after [`ToggleLeafSet::Drain`] (the single writer), so the value is
+/// settled and this never competes with the writer. `Ref` + `!is_added()` skips
+/// the initial spawn insertion — a `ValueChange` is a *change*, not the starting
+/// value (read that with a query). `is_final` is always `true` (discrete toggle).
+pub fn emit_toggle_value_change(
+    // Intentionally role-agnostic (no `With<Checkbox/Switch>`): any widget whose
+    // value IS its `A11yToggled` is a `ValueChange<bool>` source. Today that's
+    // exactly Checkbox + Switch (the only widgets that `#[require]` it); it also
+    // covers a future aria-pressed toggle button without a code change.
+    changed: Query<(Entity, Ref<A11yToggled>), Changed<A11yToggled>>,
+    mut writer: MessageWriter<ValueChange<bool>>,
+) {
+    for (entity, toggled) in &changed {
+        if toggled.is_added() {
+            continue;
+        }
+        writer.write(ValueChange {
+            source: entity,
+            value: matches!(toggled.0, Toggled::True),
+            is_final: true,
+        });
+    }
+}
+
+/// The `Changed<A11yValue>`-on-a-`Slider` filter for [`emit_slider_value_change`]
+/// (factored out to keep the query type under clippy's `type_complexity` bar,
+/// mirroring `slider::ChangedSlider`).
+type ChangedSliderValue = (With<Slider>, Changed<A11yValue>);
+
+/// Track C / F2 — emit a typed [`ValueChange<f64>`] when a [`Slider`]'s committed
+/// `A11yValue` changes. Same post-commit `Changed` + `!is_added()` discipline as
+/// [`emit_toggle_value_change`]. `is_final` is always `true` today (the slider has
+/// no continuous pointer-drag — every change is a discrete keyboard/AT commit).
+pub fn emit_slider_value_change(
+    changed: Query<(Entity, Ref<A11yValue>), ChangedSliderValue>,
+    mut writer: MessageWriter<ValueChange<f64>>,
+) {
+    for (entity, value) in &changed {
+        if value.is_added() {
+            continue;
+        }
+        writer.write(ValueChange {
+            source: entity,
+            value: value.now,
+            is_final: true,
+        });
+    }
+}
+
 pub struct WidgetsPlugin;
 
 impl Plugin for WidgetsPlugin {
@@ -169,6 +222,14 @@ impl Plugin for WidgetsPlugin {
             app.add_plugins(MvuCorePlugin);
         }
         register_toggle_leaf(app);
+
+        // Track C / F2: the typed value-change notifications (`buiy_core::interaction`)
+        // the emitters below write — `ValueChange<bool>` (checkbox/switch) and
+        // `ValueChange<f64>` (slider). The generic type lives in `buiy_core`; its
+        // concrete registrations + emitters live here (the widget crate owns the
+        // value widgets), mirroring how `OnPress` is core-registered but toggle-routed.
+        app.add_message::<ValueChange<bool>>()
+            .add_message::<ValueChange<f64>>();
 
         // `Messages<OnPress>` is registered by `CorePlugin`
         // (`InteractionPlugin`, co-drive SC-1), not here — the shared
@@ -246,6 +307,9 @@ impl Plugin for WidgetsPlugin {
             (
                 checkbox::update_checkbox_visual,
                 switch::update_switch_visual,
+                // Track C / F2: emit `ValueChange<bool>` from the SAME committed
+                // `Changed<A11yToggled>` the visuals read, after the drain.
+                emit_toggle_value_change,
             )
                 .after(ToggleLeafSet::Drain),
         );
@@ -328,7 +392,12 @@ impl Plugin for WidgetsPlugin {
         // `buiy_core`'s `BuiySet::Input`), NOT through the `OnPress` toggle sink —
         // so this visual does not chain after `advance_toggle_on_press`; it runs in
         // `Update` and settles on the `Changed<A11yValue>` gate.
-        app.add_systems(Update, slider::update_slider_visual);
+        app.add_systems(
+            Update,
+            // Track C / F2: emit `ValueChange<f64>` from the same committed
+            // `Changed<A11yValue>` the visual reads.
+            (slider::update_slider_visual, emit_slider_value_change),
+        );
 
         // P1d TextInput a11y sync: mirror the editor's live value into
         // `A11yTextValue` and the `Placeholder` into `A11yPlaceholder` on each
