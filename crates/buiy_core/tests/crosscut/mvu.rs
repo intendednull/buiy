@@ -74,7 +74,7 @@ fn spawn_counter(app: &mut App, lid: u64) -> Entity {
 fn write(app: &mut App, target: Entity, msg: CounterMsg) {
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<buiy_core::mvu::Envelope<Counter>>>()
-        .write(buiy_core::mvu::Envelope { target, msg });
+        .write(buiy_core::mvu::Envelope::user(target, msg));
 }
 
 fn value(app: &App, e: Entity) -> i64 {
@@ -317,7 +317,7 @@ fn toggle_app() -> App {
 fn toggle_write(app: &mut App, target: Entity, msg: ToggleMsg) {
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<buiy_core::mvu::Envelope<A11yToggled>>>()
-        .write(buiy_core::mvu::Envelope { target, msg });
+        .write(buiy_core::mvu::Envelope::user(target, msg));
 }
 
 fn toggled(app: &App, e: Entity) -> Toggled {
@@ -638,5 +638,292 @@ mod funnel_auditor {
                 "the violation names the offending entity"
             );
         }
+    }
+}
+
+// ============================================================================
+// `Cmd::task` — async-as-a-value (buiy_view design §3 #15).
+//
+// Three properties:
+//   (1) a `Cmd::task` result folds back through the funnel stamped `Origin::Command`
+//       (the origin-aware transport), running the effect exactly once;
+//   (2) `Cmd::map` lifts a child reducer's emitted `Cmd` into the parent's `Msg` — the
+//       effect-side companion to `Element::map`;
+//   (3) THE determinism guarantee: replay re-folds the recorded `Origin::Command` result
+//       and SUPPRESSES re-launching the effect — so a non-deterministic effect replays
+//       from what actually happened, not by re-running it.
+// ============================================================================
+mod cmd_task {
+    use super::*;
+    use buiy_core::mvu::Origin;
+    use buiy_core::replay::replay_into;
+    use buiy_core::text::edit::EditLog;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bevy::tasks::{AsyncComputeTaskPool, TaskPool};
+
+    // --- A model whose `Load` launches an async effect that folds back as `Loaded`. -----
+
+    #[derive(Component, Default, Debug, Clone, PartialEq, Reflect)]
+    #[reflect(Component)]
+    struct Loader {
+        loading: bool,
+        result: Option<i64>,
+        loads: u32,
+    }
+    impl Model for Loader {
+        type Msg = LoadMsg;
+    }
+
+    #[derive(Clone, Debug, Reflect, PartialEq)]
+    enum LoadMsg {
+        Load,
+        Loaded(i64),
+    }
+
+    /// Build a Loader app whose async effect bumps `effect` (a shared side-effect counter) —
+    /// so a test can prove the effect ran (live) or did NOT (suppressed under replay). Inits
+    /// the compute pool (App::new does not) so a `Cmd::task` can actually spawn.
+    fn loader_app(effect: Arc<AtomicUsize>) -> App {
+        AsyncComputeTaskPool::get_or_init(TaskPool::default);
+        let mut app = App::new();
+        app.add_plugins(MvuCorePlugin);
+        app.register_type::<Loader>();
+        app.add_model::<Loader>();
+        app.add_reducer::<Loader, _>(move |m: &mut Loader, msg: LoadMsg| match msg {
+            LoadMsg::Load => {
+                m.loading = true;
+                let effect = effect.clone();
+                // The effect (network/db/RNG stand-in): a side-effecting future the drain
+                // spawns. `map` tags the result back into `LoadMsg::Loaded`.
+                Cmd::task(
+                    async move {
+                        effect.fetch_add(1, Ordering::SeqCst);
+                        42i64
+                    },
+                    LoadMsg::Loaded,
+                )
+            }
+            LoadMsg::Loaded(v) => {
+                m.loading = false;
+                m.result = Some(v);
+                m.loads += 1;
+                Cmd::none()
+            }
+        });
+        app
+    }
+
+    fn spawn_loader(app: &mut App, lid: u64) -> Entity {
+        app.world_mut()
+            .spawn((Loader::default(), LogicalId(lid)))
+            .id()
+    }
+
+    fn write_load(app: &mut App, target: Entity, msg: LoadMsg) {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<buiy_core::mvu::Envelope<Loader>>>()
+            .write(buiy_core::mvu::Envelope::user(target, msg));
+    }
+
+    fn loader(app: &App, e: Entity) -> Loader {
+        app.world().get::<Loader>(e).unwrap().clone()
+    }
+
+    /// Run frames (each ticks the poll) until the async result folds back, or a frame budget
+    /// elapses. Returns whether it folded (a trivial task completes near-instantly on the
+    /// threaded compute pool, but the exact frame is timing-dependent — so we poll a bounded loop).
+    fn run_until_loaded(app: &mut App, e: Entity) -> bool {
+        for _ in 0..200 {
+            app.update();
+            if loader(app, e).result.is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    // --- (1) the result folds back stamped `Origin::Command` ----------------------------
+
+    #[test]
+    fn task_result_folds_back_stamped_command() {
+        let effect = Arc::new(AtomicUsize::new(0));
+        let mut app = loader_app(effect.clone());
+        let e = spawn_loader(&mut app, 1);
+        settle(&mut app);
+        // Record so we can inspect the logged origins.
+        app.world_mut().resource_mut::<RecordSession>().start();
+
+        write_load(&mut app, e, LoadMsg::Load);
+        assert!(
+            run_until_loaded(&mut app, e),
+            "the async task result folded back within the frame budget"
+        );
+
+        let m = loader(&app, e);
+        assert_eq!(
+            m.result,
+            Some(42),
+            "the mapped result folded into the model"
+        );
+        assert_eq!(m.loads, 1, "exactly one load completed");
+        assert!(!m.loading, "the result fold cleared `loading`");
+        assert_eq!(
+            effect.load(Ordering::SeqCst),
+            1,
+            "the effect ran EXACTLY once (the drain spawned it once)"
+        );
+
+        // The log has exactly two folds: the user `Load`, then the command `Loaded`.
+        let log = app.world().resource::<MsgLog>();
+        assert_eq!(log.entries.len(), 2, "Load + Loaded recorded");
+        assert_eq!(
+            log.entries[0].origin,
+            Origin::User,
+            "the user-initiated Load recorded as Origin::User"
+        );
+        assert!(log.entries[0].ron.contains("Load"), "entry 0 is the Load");
+        assert_eq!(
+            log.entries[1].origin,
+            Origin::Command,
+            "LOAD-BEARING: the async result recorded as Origin::Command (the origin-aware transport)"
+        );
+        assert!(
+            log.entries[1].ron.contains("Loaded"),
+            "entry 1 is the async Loaded(42)"
+        );
+    }
+
+    // --- (2) `Cmd::map` lifts a child reducer's emitted Cmd into the parent's Msg --------
+
+    #[derive(Clone, Debug, PartialEq, Reflect, Default)]
+    struct Child {
+        n: i64,
+    }
+    #[derive(Clone, Debug, Reflect, PartialEq)]
+    enum ChildMsg {
+        /// Bumps by 1 and EMITS a follow-up (the effect the parent must re-fold via `map`).
+        Bump,
+        BumpAgain,
+    }
+    fn child_update(c: &mut Child, m: ChildMsg) -> Cmd<ChildMsg> {
+        match m {
+            ChildMsg::Bump => {
+                c.n += 1;
+                Cmd::emit(ChildMsg::BumpAgain)
+            }
+            ChildMsg::BumpAgain => {
+                c.n += 10;
+                Cmd::none()
+            }
+        }
+    }
+
+    #[derive(Component, Default, Debug, Clone, PartialEq, Reflect)]
+    #[reflect(Component)]
+    struct Parent {
+        child: Child,
+    }
+    impl Model for Parent {
+        type Msg = ParentMsg;
+    }
+    #[derive(Clone, Debug, Reflect, PartialEq)]
+    enum ParentMsg {
+        Child(ChildMsg),
+    }
+    // The parent delegates to the child reducer on its owned sub-state and LIFTS the returned
+    // command with `.map(ParentMsg::Child)` — so the child's emitted `BumpAgain` re-folds
+    // through the parent as `ParentMsg::Child(BumpAgain)`.
+    fn parent_update(p: &mut Parent, m: ParentMsg) -> Cmd<ParentMsg> {
+        match m {
+            ParentMsg::Child(cm) => child_update(&mut p.child, cm).map(ParentMsg::Child),
+        }
+    }
+
+    #[test]
+    fn cmd_map_lifts_child_emit_into_parent() {
+        let mut app = App::new();
+        app.add_plugins(MvuCorePlugin);
+        app.register_type::<Parent>();
+        app.add_model::<Parent>();
+        app.add_reducer::<Parent, _>(parent_update);
+        let e = app
+            .world_mut()
+            .spawn((Parent::default(), LogicalId(1)))
+            .id();
+        settle(&mut app);
+
+        // One `Child(Bump)`: child_update bumps n→1 and emits BumpAgain; `.map` re-tags it to
+        // ParentMsg::Child(BumpAgain), which re-folds in the SAME drain pass (n += 10 → 11).
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<buiy_core::mvu::Envelope<Parent>>>()
+            .write(buiy_core::mvu::Envelope::user(
+                e,
+                ParentMsg::Child(ChildMsg::Bump),
+            ));
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Parent>(e).unwrap().child.n,
+            11,
+            "LOAD-BEARING: Cmd::map lifted the child's emitted BumpAgain — it re-folded through the parent"
+        );
+        let c = counters(&app);
+        assert_eq!(c.drain_folds, 2, "Bump + the lifted BumpAgain");
+        assert_eq!(c.emits_refolded, 1, "the lifted Emit was re-queued once");
+    }
+
+    // --- (3) THE determinism guarantee: replay re-folds the result, effect NOT re-run ---
+
+    #[test]
+    fn replay_replays_command_result_without_rerunning_effect() {
+        // LIVE run: record a Load session. The effect runs once, the result folds back.
+        let live_effect = Arc::new(AtomicUsize::new(0));
+        let mut live = loader_app(live_effect.clone());
+        let e = spawn_loader(&mut live, 7);
+        settle(&mut live);
+        live.world_mut().resource_mut::<RecordSession>().start();
+        write_load(&mut live, e, LoadMsg::Load);
+        assert!(run_until_loaded(&mut live, e), "live: the task completed");
+        assert_eq!(loader(&live, e).result, Some(42), "live: result folded");
+        assert_eq!(
+            live_effect.load(Ordering::SeqCst),
+            1,
+            "live: the effect ran once"
+        );
+
+        // Snapshot the recorded widget log (no editor entries in this session).
+        let msg_log = MsgLog {
+            entries: live.world().resource::<MsgLog>().entries.clone(),
+        };
+        let edit_log = EditLog::default();
+
+        // REPLAY into a FRESH app (same seed / same LogicalId, a SEPARATE effect counter).
+        let replay_effect = Arc::new(AtomicUsize::new(0));
+        let mut fresh = loader_app(replay_effect.clone());
+        let _e2 = spawn_loader(&mut fresh, 7); // SAME LogicalId(7) as recorded
+        settle(&mut fresh);
+
+        let dead = replay_into(&mut fresh, &msg_log, &edit_log);
+        assert!(dead.is_empty(), "no dead letters — the seed matches");
+
+        // The model reached the SAME state as the live run...
+        let m = fresh
+            .world_mut()
+            .query::<&Loader>()
+            .iter(fresh.world())
+            .next()
+            .expect("loader present")
+            .clone();
+        assert_eq!(m.result, Some(42), "replay reproduced the model state");
+        assert_eq!(m.loads, 1, "replay folded the recorded Loaded exactly once");
+        // ...but the effect was NOT re-run: the recorded Origin::Command result was re-folded
+        // directly, and the drain SUPPRESSED re-launching the `Cmd::Task` under `is_replaying`.
+        assert_eq!(
+            replay_effect.load(Ordering::SeqCst),
+            0,
+            "LOAD-BEARING: replay did NOT re-run the effect — the recorded result re-drove the model"
+        );
     }
 }

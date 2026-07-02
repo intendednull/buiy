@@ -5403,6 +5403,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scaling_view"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_view",
+ "image",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

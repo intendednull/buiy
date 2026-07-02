@@ -35,6 +35,7 @@ members = [
     "examples/todomvc",
     "examples/counter_view",
     "examples/todomvc_view",
+    "examples/scaling_view",
 ]
 
 [workspace.package]

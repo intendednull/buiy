@@ -89,7 +89,7 @@ fn enqueue(app: &mut App, msg: Msg) {
     let model = model_entity(app);
     app.world_mut()
         .resource_mut::<Messages<Envelope<Counter>>>()
-        .write(Envelope { target: model, msg });
+        .write(Envelope::user(model, msg));
 }
 
 fn view_counters(app: &App) -> ViewWorkCounters {

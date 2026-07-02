@@ -76,10 +76,7 @@ fn toggle(app: &mut App) {
     let model = model_entity(app);
     app.world_mut()
         .resource_mut::<Messages<Envelope<Skin>>>()
-        .write(Envelope {
-            target: model,
-            msg: Toggle,
-        });
+        .write(Envelope::user(model, Toggle));
     app.update(); // frame N: drain folds — model changes
     app.update(); // frame N+1: reconcile (before Layout) patches the style
 }

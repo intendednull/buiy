@@ -651,10 +651,7 @@ fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) -> boo
     if current != Some(want) {
         world
             .resource_mut::<Messages<Envelope<A11yToggled>>>()
-            .write(Envelope {
-                target: entity,
-                msg: ToggleMsg::Set(checked),
-            });
+            .write(Envelope::user(entity, ToggleMsg::Set(checked)));
         return true;
     }
     false
