@@ -320,10 +320,13 @@ pub mod view {
 /// [`wait_for`](crate::probe::wait_for) — the whole author → run → inspect loop
 /// with no pixels.
 ///
-/// This is a distinct module (not flattened into [`prelude`]) for the same
-/// reason as [`view`]: the driver verbs (`click`, `focus`, `snapshot`,
-/// `perform`) are generic names that would collide with the widget/focus
-/// surface in the prelude. Reach the loop through one import:
+/// This is a distinct module, not flattened into [`prelude`] — but on
+/// **altitude** grounds, not name collision (unlike [`view`], whose builders do
+/// collide name-for-name with the widget scene-fns; these verbs flatten without
+/// ambiguity). The probe surface is ~18 dev/test-driver symbols an *app author*
+/// should not inherit wholesale just by writing `use buiy::prelude::*;`; it is a
+/// separate front door you opt into when you are inspecting/driving a scene.
+/// Reach the loop through one import:
 ///
 /// ```no_run
 /// use buiy::prelude::*;

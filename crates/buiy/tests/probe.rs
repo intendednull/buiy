@@ -79,3 +79,42 @@ fn snapshot_report_surfaces_a11y_node_and_plain_text() {
         "text section must surface the plain (non-a11y) Text \"Settings\"; report =\n{report}",
     );
 }
+
+/// F1 regression — a **nested** node's reported `@x,y` is its ABSOLUTE top-left
+/// (accumulated through its ancestors), not its parent-relative offset. The
+/// `ResolvedLayout.position` a naive serializer reads is parent-relative; the
+/// probe must source absolute coords from `GlobalTransform` (which the transform
+/// bridge populates GPU-free under `BuiyProbePlugin`). Depth-0 scenes can't
+/// observe this — only a nested one where absolute ≠ relative.
+#[test]
+fn nested_node_reports_absolute_position() {
+    let mut app = probe_app();
+
+    // root(padding 40) → middle(padding 30) → Button("Nested"). The button's
+    // parent-relative offset within `middle` is (30,30); its ABSOLUTE top-left
+    // accumulates both paddings to (70,70).
+    app.world_mut()
+        .spawn((Node, Style::default().padding(40.0)))
+        .with_children(|root| {
+            root.spawn((Node, Style::default().padding(30.0)))
+                .with_children(|middle| {
+                    middle.spawn(Button::new("Nested"));
+                });
+        });
+
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let report = snapshot_report(app.world_mut());
+    let line = report
+        .lines()
+        .find(|l| l.contains("Button \"Nested\""))
+        .unwrap_or_else(|| panic!("report has no Nested button line:\n{report}"));
+
+    assert!(
+        line.contains("@70,70"),
+        "nested button must report its ABSOLUTE top-left @70,70 (40+30 padding), \
+         not its parent-relative @30,30; line = {line:?}\nfull report:\n{report}",
+    );
+}

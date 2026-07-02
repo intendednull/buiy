@@ -11,11 +11,13 @@
 //!
 //! - **layout rects** — each node's [`ResolvedLayout`] (position + size), so
 //!   "where is it / how big is it" is observable, resolved by `entity_for_node_id`;
-//! - **a `--- text & layout ---` section** — every laid-out entity carrying a
-//!   [`Text`] (or an [`A11yLabel`]), so **plain, non-a11y `Text`** content (which
-//!   the semantic tree drops — a role-less label never becomes a node) **and
-//!   zero-size "invisible content"** (a bug class the widget-catalog campaign hit)
-//!   both surface.
+//! - **a `--- text & layout ---` section** — the signal the tree can't carry:
+//!   **plain, non-a11y `Text`** content (which the semantic tree drops — a
+//!   role-less label never becomes a node) and **zero-size "invisible content"**
+//!   (a bug class the widget-catalog campaign hit). It lists laid-out
+//!   text-bearing entities but does not re-echo a node's a11y label when that node
+//!   is already in the tree section (unless it's zero-size), to keep the report
+//!   dense.
 //!
 //! The output is **deterministic**: the tree walks in canonical document order
 //! (roots then children, following the snapshot's `children` refs), and the text
@@ -46,9 +48,10 @@ use crate::text::Text;
 ///    `Role "name" [state] @x,y wxh` (the `[state]` bracket is present only when a
 ///    node carries observable state: `checked`/`unchecked`/`mixed`,
 ///    `expanded`/`collapsed`, `disabled`, `focused`, `value=…`);
-/// 2. a `--- text & layout ---` section listing every laid-out text-bearing
-///    entity as `size=wxh text="…"` (or `label="…"`), flagging any `ZERO-SIZE`
-///    box — the invisible-content signal.
+/// 2. a `--- text & layout ---` section listing laid-out text-bearing entities as
+///    `size=wxh text="…"` (or `label="…"`), flagging any `ZERO-SIZE` box — the
+///    invisible-content signal. A node's a11y label is not re-echoed here when the
+///    node already appears in the tree section (unless it is zero-size).
 ///
 /// Reads the tree from [`snapshot`] (so the caller must have driven at least one
 /// `app.update()`; this fn does not tick the schedule — same contract as
@@ -66,7 +69,7 @@ pub fn snapshot_report(world: &mut World) -> String {
         .filter_map(|n| {
             let entity = entity_for_node_id(n.r#ref)?;
             let layout = world.get::<ResolvedLayout>(entity)?;
-            Some((n.r#ref, (layout.position, layout.size)))
+            Some((n.r#ref, (absolute_pos(world, entity, layout), layout.size)))
         })
         .collect();
     let by_id: HashMap<NodeId, &SemanticNode> = tree.nodes.iter().map(|n| (n.r#ref, n)).collect();
@@ -87,8 +90,35 @@ pub fn snapshot_report(world: &mut World) -> String {
         }
     }
 
-    write_text_section(&mut out, world);
+    // Entities already shown in the tree section (with their role, name, and rect)
+    // so the text section can skip re-listing their label — it exists to surface
+    // what the tree CAN'T show (plain role-less text, zero-size boxes), not to echo
+    // every a11y node.
+    let a11y_entities: HashSet<Entity> = tree
+        .nodes
+        .iter()
+        .filter_map(|n| entity_for_node_id(n.r#ref))
+        .collect();
+
+    write_text_section(&mut out, world, &a11y_entities);
     out
+}
+
+/// The **absolute** top-left of a laid-out entity, in the same logical-px,
+/// y-down space as [`ResolvedLayout`]. [`ResolvedLayout::position`] is
+/// *parent-relative* and must NOT be used as an absolute coordinate
+/// (`components.rs` § `ResolvedLayout`); the transform bridge accumulates
+/// `position − ancestor_scroll` into `GlobalTransform`, so a **nested** node
+/// reports its real screen position (not its offset within its parent) and the
+/// reading-order sort stays correct for real UIs. The bridge runs GPU-free in
+/// `Update` (`CorePlugin`), so this is populated under `BuiyProbePlugin`. Falls
+/// back to the parent-relative position only if the bridge has not run yet —
+/// harmless for roots, which are already absolute.
+fn absolute_pos(world: &World, entity: Entity, layout: &ResolvedLayout) -> Vec2 {
+    world
+        .get::<GlobalTransform>(entity)
+        .map(|gt| gt.translation().truncate())
+        .unwrap_or(layout.position)
 }
 
 /// Emit one node line, indented by `depth`, then recurse into its children in
@@ -146,8 +176,16 @@ fn state_tokens(state: &NodeState) -> Vec<String> {
         Some(false) => tokens.push("collapsed".to_string()),
         None => {}
     }
+    match state.selected {
+        Some(true) => tokens.push("selected".to_string()),
+        Some(false) => tokens.push("unselected".to_string()),
+        None => {}
+    }
     if state.disabled {
         tokens.push("disabled".to_string());
+    }
+    if state.modal {
+        tokens.push("modal".to_string());
     }
     if state.focused {
         tokens.push("focused".to_string());
@@ -162,22 +200,45 @@ fn state_tokens(state: &NodeState) -> Vec<String> {
     tokens
 }
 
-/// Append the `--- text & layout ---` section: every laid-out entity carrying a
-/// [`Text`] or an [`A11yLabel`], one line each, in reading order. Surfaces plain
-/// (role-less) `Text` the semantic tree drops, and flags zero-size boxes.
-fn write_text_section(out: &mut String, world: &mut World) {
+/// Append the `--- text & layout ---` section — the signal the semantic tree
+/// CAN'T show: **plain, role-less `Text`** the tree drops, and **zero-size**
+/// ("invisible") boxes. One line per laid-out text-bearing entity, in reading
+/// order. Entities already listed in the tree section (`a11y_entities`) are not
+/// re-echoed by their label unless they are zero-size (the invisibility signal a
+/// tree line carries no room for).
+fn write_text_section(out: &mut String, world: &mut World, a11y_entities: &HashSet<Entity>) {
     let mut rows: Vec<(Vec2, Vec2, Entity, String)> = Vec::new();
-    let mut query = world.query::<(Entity, &ResolvedLayout, Option<&A11yLabel>, Option<&Text>)>();
-    for (entity, layout, label, text) in query.iter(world) {
+    let mut query = world.query::<(
+        Entity,
+        &ResolvedLayout,
+        Option<&GlobalTransform>,
+        Option<&A11yLabel>,
+        Option<&Text>,
+    )>();
+    for (entity, layout, transform, label, text) in query.iter(world) {
+        let zero_size = layout.size.x == 0.0 || layout.size.y == 0.0;
         // Prefer the rendered `Text` glyph content (the thing the semantic tree
-        // cannot show); fall back to the a11y label for a labeled-but-textless
-        // node. Skip pure structural boxes (no text signal at all).
+        // cannot show — glyph text is independent of a node's accessible name);
+        // fall back to the a11y label for a labeled-but-textless entity, but skip
+        // that label when the entity is already a tree node (redundant) and not
+        // zero-size. Skip pure structural boxes (no text signal at all).
         let content = match (text, label) {
             (Some(text), _) => format!("text={:?}", text.0),
-            (None, Some(label)) => format!("label={:?}", label.0),
+            (None, Some(label)) => {
+                if a11y_entities.contains(&entity) && !zero_size {
+                    continue;
+                }
+                format!("label={:?}", label.0)
+            }
             (None, None) => continue,
         };
-        rows.push((layout.position, layout.size, entity, content));
+        // Sort by the ABSOLUTE position (parent-relative `ResolvedLayout.position`
+        // would put a deeply-nested small-`y` node ahead of an earlier top-level
+        // one), same source as the tree rects.
+        let pos = transform
+            .map(|t| t.translation().truncate())
+            .unwrap_or(layout.position);
+        rows.push((pos, layout.size, entity, content));
     }
 
     // Deterministic reading order: top-to-bottom, left-to-right, `Entity` as the
@@ -197,5 +258,80 @@ fn write_text_section(out: &mut String, world: &mut World) {
             ""
         };
         let _ = writeln!(out, "size={:.0}x{:.0} {content}{flag}", size.x, size.y);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The absolute-position helper (F1): prefer the accumulated `GlobalTransform`
+    /// over the *parent-relative* `ResolvedLayout.position`, falling back to the
+    /// layout position only when no `GlobalTransform` has propagated yet.
+    #[test]
+    fn absolute_pos_prefers_global_transform_over_parent_relative_layout() {
+        let mut world = World::new();
+        let layout = ResolvedLayout {
+            position: Vec2::new(8.0, 8.0), // parent-relative offset
+            size: Vec2::new(50.0, 20.0),
+        };
+
+        // With a `GlobalTransform` (parent 300,200 + local 8,8 = 308,208 absolute),
+        // the helper reports the absolute top-left, NOT the (8,8) parent offset.
+        let nested = world
+            .spawn((
+                layout.clone(),
+                GlobalTransform::from(Transform::from_xyz(308.0, 208.0, 0.0)),
+            ))
+            .id();
+        assert_eq!(
+            absolute_pos(&world, nested, &layout),
+            Vec2::new(308.0, 208.0),
+        );
+
+        // Without a `GlobalTransform`, fall back to the layout position (harmless
+        // for roots, which are already absolute).
+        let bare = world.spawn(layout.clone()).id();
+        assert_eq!(absolute_pos(&world, bare, &layout), Vec2::new(8.0, 8.0));
+    }
+
+    /// The `[state]` token set — including `selected`/`unselected` and `modal`
+    /// (F5), which the header advertises but the first cut dropped. An
+    /// all-inert state yields no bracket at all.
+    #[test]
+    fn state_tokens_cover_every_observable_flag() {
+        assert!(state_tokens(&NodeState::default()).is_empty());
+
+        let full = NodeState {
+            toggled: Some(Toggled::True),
+            expanded: Some(false),
+            selected: Some(true),
+            disabled: true,
+            modal: true,
+            focused: true,
+            ..NodeState::default()
+        };
+        let tokens = state_tokens(&full);
+        for expected in [
+            "checked",
+            "collapsed",
+            "selected",
+            "disabled",
+            "modal",
+            "focused",
+        ] {
+            assert!(
+                tokens.iter().any(|t| t == expected),
+                "state tokens {tokens:?} must include {expected:?}",
+            );
+        }
+
+        assert_eq!(
+            state_tokens(&NodeState {
+                selected: Some(false),
+                ..NodeState::default()
+            }),
+            vec!["unselected".to_string()],
+        );
     }
 }

@@ -230,11 +230,16 @@ Cross-cutting per-frame performance: the audit → prototype → production-fina
 
 ### Developer experience & LLM support
 
-Cross-cutting authoring ergonomics with a first-class LLM-development workflow (author → compile → run headless → inspect the semantic tree → iterate). Prototype-first pass done; the FINAL implementation is human-review-gated.
+Cross-cutting authoring ergonomics with a first-class LLM-development workflow (author → compile → run headless → inspect the semantic tree → iterate). Prototype-first pass done; the FINAL is landing track-by-track (B typed tokens + A probe landed; C one-surface + D corpus next), each its own review-gated PR.
 
 **Specs**
 
-- [First-class LLM development support design](specs/2026-07-01-first-class-llm-dev-support-design.md) — north-star framing the four tracks + the closed autonomous loop as one target: the loop/eyes (GPU-free semantic-tree probe, built on the Phase-0 in-process driver), kill-silent-wrong (typed **closed-enum tokens + theme contract**, missing-camera panic), one coherent surface (**Builder→Bundle** canonical constructor + domain accessors + typed events + curated prelude), buy-corpus-presence (accuracy-gated example pack + measured-priors naming). Re-weights the human-DX frictions F1–F8 through the LLM-as-author lens; validated by the [prototype retrospective](reports/2026-07-01-llm-dev-support-prototype-retrospective.md). (N1 "MVU not in prelude" was partly addressed upstream by #93.) `[draft]`
+- [First-class LLM development support design](specs/2026-07-01-first-class-llm-dev-support-design.md) — north-star framing the four tracks + the closed autonomous loop as one target: the loop/eyes (GPU-free semantic-tree probe, built on the Phase-0 in-process driver), kill-silent-wrong (typed **closed-enum tokens + theme contract**, missing-camera panic), one coherent surface (**Builder→Bundle** canonical constructor + domain accessors + typed events + curated prelude), buy-corpus-presence (accuracy-gated example pack + measured-priors naming). Re-weights the human-DX frictions F1–F8 through the LLM-as-author lens; validated by the [prototype retrospective](reports/2026-07-01-llm-dev-support-prototype-retrospective.md). Per-track status notes inline. (N1 "MVU not in prelude" was partly addressed upstream by #93.) `[active]`
+
+**Plans**
+
+- [Track B — typed theme tokens + contract](plans/2026-07-01-track-b-typed-tokens.md) — realizes design §3.2: closed-enum `ColorToken` (60 variants) + compiler-enforced `ThemeContract` + `PaletteMode{Normal,ForcedColors}`, killing the stringly-token silent-wrong class (the prototype's #1 deterministic failure). Merged in PR #113 (GPU 94/94 byte-identical). `[landed]`
+- [Track A — the agent probe / "eyes"](plans/2026-07-02-track-a-agent-probe.md) — realizes design §4 Track A: `BuiyProbePlugin` (GPU-free no-render preset) + `snapshot_report` semantic-tree serializer + the `buiy::probe` front door + `examples/buiy_probe`, closing the author → run → inspect → drive loop with no GPU. `[active]`
 
 ### Reports
 
