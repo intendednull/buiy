@@ -71,6 +71,8 @@ mod text_sync;
 mod text_system_scan;
 #[path = "text/text_touch_pass.rs"]
 mod text_touch_pass;
+#[path = "text/text_transform_extract.rs"]
+mod text_transform_extract;
 #[path = "text/text_typing_churn.rs"]
 mod text_typing_churn;
 #[path = "text/text_typing_latency.rs"]

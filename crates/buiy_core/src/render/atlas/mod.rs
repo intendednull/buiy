@@ -73,7 +73,8 @@ pub use atlas::BuiyAtlas;
 
 mod primitive;
 pub use primitive::{
-    GLYPH_ALPHA_FLOAT_OFFSET, GLYPH_ALPHA_INSTANCE_STRIDE_BYTES, GlyphAlphaInstance, IconInstance,
+    GLYPH_ALPHA_FLOAT_OFFSET, GLYPH_ALPHA_INSTANCE_STRIDE_BYTES, GLYPH_IDENTITY_AFFINE,
+    GlyphAlphaInstance, IconInstance,
 };
 
 mod warmup;

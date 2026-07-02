@@ -6,9 +6,15 @@ use bytemuck::{Pod, Zeroable};
 
 /// Stride of [`GlyphAlphaInstance`] in bytes. MUST equal the per-instance
 /// `array_stride` the Glyph vertex-buffer layout declares
-/// (`primitive.rs::glyph_vertex_buffers`, 68 B) and the byte span
-/// `coverage.wgsl`'s instance `@location`s read. `[f32;4]×4 + u32 = 68`.
-pub const GLYPH_ALPHA_INSTANCE_STRIDE_BYTES: usize = 68;
+/// (`primitive.rs::glyph_vertex_buffers`, 84 B) and the byte span
+/// `coverage.wgsl`'s instance `@location`s read. `[f32;4]×5 + u32 = 84`
+/// (`rect ++ uv ++ color ++ clip ++ page ++ affine`).
+pub const GLYPH_ALPHA_INSTANCE_STRIDE_BYTES: usize = 84;
+
+/// The identity 2D affine basis (`[m00, m10, m01, m11]` columns) for a glyph
+/// instance — no rotation/scale. Byte-for-byte reproduces the pre-affine
+/// axis-aligned coverage output (`coverage.wgsl` reduces to `rect.xy + v.uv*size`).
+pub const GLYPH_IDENTITY_AFFINE: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 /// Float index of the per-glyph straight-alpha (`color[3]`) when a
 /// [`GlyphAlphaInstance`] is viewed as a flat `[f32]` raw record. The fields
@@ -45,7 +51,8 @@ const _: () = assert!(
 /// (`render/primitive.rs::glyph_vertex_buffers`) and `coverage.wgsl`'s instance
 /// `@location`s mirror byte-for-byte:
 /// `rect` @0 (loc 2), `uv` @16 (loc 3), `color` @32 (loc 4), `clip` @48 (loc 5),
-/// `page` @64 (loc 6). Stride [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`] = 68 B. The
+/// `page` @64 (loc 6), `affine` @68 (loc 7). Stride
+/// [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`] = 84 B. The
 /// `clip` AABB uses the SAME `[±INFINITY]` unclipped sentinel as
 /// [`PackedInstance`](crate::render::instance::PackedInstance) (`clip = [min.x,
 /// min.y, max.x, max.y]`).
@@ -75,6 +82,14 @@ pub struct GlyphAlphaInstance {
     pub clip: [f32; 4],
     /// Which `CoverageR8` page → selects the bind slot.
     pub page: u32,
+    /// 2D affine basis (`[m00, m10, m01, m11]` columns of `GlobalTransform`'s
+    /// linear part), applied about the entity origin in `coverage.wgsl` so a
+    /// rotated/scaled text run or icon paints off-axis — the coverage-path mirror
+    /// of [`PackedInstance.affine`](crate::render::instance::PackedInstance).
+    /// [`GLYPH_IDENTITY_AFFINE`] (`[1,0,0,1]`) is the no-transform value and keeps
+    /// the axis-aligned output byte-identical. Appended AFTER `page` so `color`
+    /// (and thus [`GLYPH_ALPHA_FLOAT_OFFSET`]) keeps its offset.
+    pub affine: [f32; 4],
 }
 
 /// One instance per full-color stamp — themed raster icons, color-emoji
@@ -95,8 +110,8 @@ pub struct IconInstance {
 
 // The alignment-bug firewall, asserted at compile time: `GlyphAlphaInstance`'s
 // `#[repr(C)]` size must equal both the vertex-buffer `array_stride`
-// (`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`, 68 B) AND a contiguous pack — `4 f32×4 +
-// u32 = 68` with align 4, so there is no trailing pad and instances tile the
+// (`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`, 84 B) AND a contiguous pack — `5 f32×4 +
+// u32 = 84` with align 4, so there is no trailing pad and instances tile the
 // buffer with no gaps. A field reorder or width change that broke the agreement
 // with the Glyph vertex layout / `coverage.wgsl` would fail here.
 const _: () = assert!(
@@ -104,6 +119,6 @@ const _: () = assert!(
     "GlyphAlphaInstance size must equal the declared Glyph vertex-buffer stride"
 );
 const _: () = assert!(
-    core::mem::size_of::<GlyphAlphaInstance>() == 4 * 4 * 4 + 4,
-    "GlyphAlphaInstance must be 4 vec4 + u32 with no trailing padding"
+    core::mem::size_of::<GlyphAlphaInstance>() == 4 * 4 * 4 + 4 + 4 * 4,
+    "GlyphAlphaInstance must be 5 vec4 + u32 with no trailing padding"
 );

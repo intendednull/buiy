@@ -234,3 +234,75 @@ fn vector_icons_paint_in_accent_and_retint_on_theme_swap() {
         "the icon stays painted after the swap (re-tint, not blank): {after:?}"
     );
 }
+
+/// A rotated icon paints its 2D affine THROUGH the coverage path — the pixel-level
+/// proof for `coverage.wgsl`'s affine multiply (the box reftests in
+/// `render_transform_paint_gpu.rs` only exercise the QUAD shader). An asymmetric
+/// chevron rotated 90° about its box center (default transform-origin, honored by
+/// 6e) MUST render different pixels than unrotated; a dropped affine (the pre-fix
+/// bug) would paint the axis-aligned chevron identically in both.
+#[test]
+#[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
+fn rotated_icon_paints_through_coverage_affine() {
+    use std::f32::consts::FRAC_PI_2;
+    const W: u32 = 48;
+    const H: u32 = 48;
+    const CHEVRON: &str = "M9 5l7 7-7 7"; // asymmetric — not 90°-symmetric
+
+    // Render the chevron (24×24 box centered in the 48×48 frame) at `rot` radians.
+    let capture = |rot: f32| -> Vec<u8> {
+        let mut app = capture_app(W, H);
+        set_icon_accent(&mut app, ACCENT_BLUE);
+        let icon = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .absolute()
+                    .inset(Inset {
+                        top: Sizing::Length(Length::px(12.0)),
+                        left: Sizing::Length(Length::px(12.0)),
+                        ..default()
+                    })
+                    .width_px(24.0)
+                    .height_px(24.0)
+                    .rotate_z(rot),
+                Icon {
+                    path_d: CHEVRON.to_string(),
+                    stroke_width: 1.9,
+                    size_px: 24,
+                    fill: false,
+                    color: ColorToken::Token(Cow::Borrowed("color.icon")),
+                },
+            ))
+            .id();
+        let root = app.world_mut().spawn((Node, Style::default())).id();
+        app.world_mut().entity_mut(root).add_children(&[icon]);
+        capture_to_image(&mut app, &GoldenConfig::deterministic()).into_raw()
+    };
+
+    let unrotated = capture(0.0);
+    let rotated = capture(FRAC_PI_2);
+    assert_eq!(unrotated.len(), rotated.len());
+
+    // A dropped affine → byte-identical (0 differing bytes). Applied → the rotated
+    // chevron's ink lands elsewhere, differing in many bytes.
+    let differing = unrotated
+        .iter()
+        .zip(&rotated)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > 100,
+        "a 90° rotation must move the chevron's ink through coverage.wgsl \
+         (a dropped affine renders identical); differing bytes = {differing}"
+    );
+    // Both actually painted (sanity: not two blank frames).
+    let ink = |buf: &[u8]| buf.chunks_exact(4).filter(|p| p[2] > 80).count();
+    assert!(
+        ink(&unrotated) > 20 && ink(&rotated) > 20,
+        "both renders paint chevron ink (unrotated {}, rotated {})",
+        ink(&unrotated),
+        ink(&rotated)
+    );
+}

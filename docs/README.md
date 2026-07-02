@@ -105,8 +105,11 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 **Specs**
 
 - [Buiy render-pipeline design](specs/2026-06-03-buiy-render-pipeline-design/README.md) — Bevy render-graph integration, render-side component model, clipping, top-layer compositing, effect compositor, atlasing, forced-colors; consumes layout's immutable paint inputs (multi-file). `[active]`
+- [Glyph/icon affine transform + transform-origin](specs/2026-07-01-glyph-affine-transform-design.md) — extend the R1 2D affine paint to the coverage (glyph/icon) path + honor `transform-origin` at layout 6e (center pivot), so rotated/scaled text + icons paint off-axis (fixes the disclosure chevron). `[landed]`
 
 **Plans**
+
+- [2026-07-01-glyph-affine-transform](plans/2026-07-01-glyph-affine-transform.md) — wave plan for the glyph/icon affine + 6e transform-origin fix (W1 6e pivot + meter, W2 carrier+shader, W3 producers, GPU verify). `[landed]`
 
 - [2026-06-03-buiy-render-r1-component-model](plans/2026-06-03-buiy-render-r1-component-model.md) — render-side decomposed component model; sole definer of the shared render types (`components.rs` + `color.rs`). `[landed]`
 - [2026-06-03-buiy-render-r2-clip-rects](plans/2026-06-03-buiy-render-r2-clip-rects.md) — `WriteClipRects` render-prep pass; the `ClipRect`/`AncestorClip` clip-chain components. `[landed]`

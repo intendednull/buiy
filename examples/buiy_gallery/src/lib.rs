@@ -5380,7 +5380,7 @@ fn build_showcase_disclosure_item(
     world.entity_mut(chevron).insert((
         ShowcaseChevron,
         if open {
-            Rotate(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2))
+            Rotate(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2))
         } else {
             Rotate(Quat::IDENTITY)
         },
@@ -5798,7 +5798,7 @@ pub fn drive_showcase_disclosures(
         for &child in header_children {
             if let Ok((mut rotate, mut icon)) = chevrons.get_mut(child) {
                 *rotate = if open {
-                    Rotate(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2))
+                    Rotate(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2))
                 } else {
                     Rotate(Quat::IDENTITY)
                 };

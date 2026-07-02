@@ -29,14 +29,16 @@ struct Vertex {
     @location(1) uv: vec2<f32>,         // unit-quad uv in [0,1]
 };
 
-// GlyphAlphaInstance (render/atlas/primitive.rs), stride 68. Field order/offsets
-// are the byte-level contract: rect @0, uv @16, color @32, clip @48, page @64.
+// GlyphAlphaInstance (render/atlas/primitive.rs), stride 84. Field order/offsets
+// are the byte-level contract: rect @0, uv @16, color @32, clip @48, page @64,
+// affine @68.
 struct Instance {
     @location(2) rect: vec4<f32>,       // logical px: pos.xy (top-left), size.zw (positive)
     @location(3) uv_rect: vec4<f32>,    // atlas UV: min.xy, max.zw (normalized [0,1])
     @location(4) color: vec4<f32>,      // linear-light pre-linearized STRAIGHT-alpha tint (alpha-as-color; NOT premultiplied — frag scales only alpha)
     @location(5) clip: vec4<f32>,       // clip AABB: min.xy (-inf=none), max.zw (+inf=none)
     @location(6) page: u32,             // CoverageR8 page index (v1: single page bound)
+    @location(7) affine: vec4<f32>,     // 2D affine basis cols [m00,m10,m01,m11]; identity [1,0,0,1] = axis-aligned
 };
 
 struct VertexOut {
@@ -57,7 +59,13 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
     var out: VertexOut;
     let pos = i.rect.xy;
     let size = i.rect.zw;
-    let logical = pos + v.uv * size;                 // logical-px corner of the glyph quad
+    // Apply the 2D affine to the box-local corner, mirroring the quad/band path
+    // (shader.wgsl / band.wgsl). The PRODUCER pre-rotates the instance origin
+    // (`rect.xy = gt.transform_point(box_local_topleft)`), so `rect.xy + A*(v.uv*size)`
+    // = `transform_point(box_local_corner)` — the whole run/icon rotates rigidly
+    // about the entity's transform-origin. Identity `[1,0,0,1]` ⇒ `pos + v.uv*size`
+    // (byte-identical to the pre-affine axis-aligned path).
+    let logical = pos + mat2x2<f32>(i.affine.xy, i.affine.zw) * (v.uv * size);
     out.clip_position = vec4<f32>(logical_to_clip(logical), 0.0, 1.0);
     // Interpolate the atlas UV across the quad: v.uv in [0,1] maps the cell's
     // [uv_min, uv_max] rect (so the glyph's coverage cell is sampled, not the

@@ -208,12 +208,15 @@ pub fn caret_rotation_collapsed() -> Rotate {
     Rotate(Quat::IDENTITY)
 }
 
-/// The caret's `Rotate` for the expanded state: a 90° clockwise turn about z so the
-/// `▶` glyph points **down** (the conventional expanded disclosure triangle). The
+/// The caret's `Rotate` for the expanded state: a 90° turn about z so the `▶`
+/// glyph points **down** (the conventional expanded disclosure triangle). The
 /// single source of the expanded caret orientation.
 pub fn caret_rotation_expanded() -> Rotate {
-    // Negative z = clockwise in Buiy's y-down screen space, turning ▶ to ▼.
-    Rotate(Quat::from_rotation_z(-FRAC_PI_2))
+    // +z turns ▶ to ▼ under the render's affine convention (y-down screen space,
+    // columns [m00,m10,m01,m11] from GlobalTransform's linear part): the tip at
+    // +x maps to +y (down). Empirically verified once the coverage path applied
+    // the affine (before that, the rotation was dropped and never rendered).
+    Rotate(Quat::from_rotation_z(FRAC_PI_2))
 }
 
 impl Disclosure {

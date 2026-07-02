@@ -21,7 +21,7 @@ use super::types::{
     Edges, FlexAxis, FlexGap, FlexWrap, GridAreas, GridAutoFlow, Inset, Isolation, JustifyContent,
     JustifyItems, Length, LogicalEdges, OverflowMode, PositionKind, ScrollBehavior,
     ScrollbarGutter, ScrollbarWidth, Sizing, SnapType, TextOrientation, TopLayer, TrackSize,
-    TransformMatrix, UnicodeBidi, WritingModeKind, ZIndex,
+    TransformMatrix, TransformOrigin, UnicodeBidi, WritingModeKind, ZIndex,
 };
 use bevy::ecs::bundle::Bundle;
 use bevy::math::Quat;
@@ -505,6 +505,20 @@ impl Style {
     /// Ergonomic setter — rotate about the z axis (radians).
     pub fn rotate_z(mut self, radians: f32) -> Self {
         self.ui_transform.matrix = TransformMatrix::Rotate(Quat::from_rotation_z(radians));
+        self
+    }
+
+    /// Ergonomic setter — the `transform-origin` pivot for rotate/scale/matrix
+    /// (default `50% 50%` = center). `Percent` resolves against the entity's own
+    /// border box at compose time (x = width, y = height); `Px` is absolute. A
+    /// pure translate is origin-invariant. E.g. `transform_origin(Length::percent(0.0),
+    /// Length::percent(50.0))` = left-edge pivot (a left-anchored scale/progress fill).
+    pub fn transform_origin(mut self, x: Length, y: Length) -> Self {
+        self.ui_transform.origin = TransformOrigin {
+            x,
+            y,
+            z: Length::ZERO,
+        };
         self
     }
 

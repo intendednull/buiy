@@ -25,6 +25,8 @@ use buiy_core::interaction::OnPress;
 use buiy_core::mvu::{Model, enqueue};
 use buiy_core::text::edit::{EditSubmitted, TextChanged, TextEditState};
 
+use crate::element::InputHandler;
+
 /// The message a press on this entity enqueues, and onto which model. Generic
 /// over the model `M` so the value is the concrete `M::Msg` — no type erasure,
 /// no stored closure (a value suffices for `on_press`).
@@ -55,7 +57,7 @@ pub(crate) fn route_presses<M: Model>(
 /// recorded thing is the *result* `Msg` folded onto the model, not the fn).
 #[derive(Component)]
 pub(crate) struct InputAction<M: Model> {
-    pub(crate) f: fn(String) -> M::Msg,
+    pub(crate) handler: InputHandler<M::Msg>,
     pub(crate) model: Entity,
 }
 
@@ -79,7 +81,7 @@ pub(crate) fn route_text_input<M: Model>(
 ) {
     for TextChanged(e) in changes.read() {
         if let Ok((action, editor)) = actions.get(*e) {
-            let msg = (action.f)(editor.value());
+            let msg = action.handler.call(editor.value());
             enqueue::<M>(&mut commands, action.model, msg);
         }
     }

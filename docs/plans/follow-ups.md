@@ -638,13 +638,33 @@ and `BackfaceVisibility::Hidden` are stored on `UiTransform` but render does not
 consume them (render/mod.rs ~388). The 2D affine path does not carry a
 projective channel.
 
-**Residual A (newly surfaced — layout side):** `transform-origin` is NOT honored
-by layout sub-pass 6e (`compose_transform` ignores `ui.origin`), so the composed
-matrix rotates/scales about the box-local TOP-LEFT, not the 50%/50% center.
-Render transports the affine EXACTLY as `GlobalTransform` encodes it so render ==
-picking by construction; it must NOT independently re-apply an origin (a
-double-apply would diverge from picking). Honoring `transform-origin` is a
-layout-side follow-up (a 6e change + a picking re-verify).
+**Residual A (LANDED 2026-07-01 — `docs/specs/2026-07-01-glyph-affine-transform-design.md`):**
+`transform-origin` IS now honored by 6e — `compose_transform` conjugates the
+composed matrix by the resolved origin (`M = T(O)·t·r·s·m·T(-O)`, default
+`50% 50%` = center), baking the pivot into `ResolvedTransform`/`GlobalTransform`
+once so every consumer agrees. The identity fast-path is bit-exact; a pure
+translate skips the conjugation. The meter fill opts back into a left-edge origin
+to keep its left-anchored `Scale`. **Picking correction:** picking is a
+translation-anchored AABB that never modeled rotation (it does NOT invert the
+affine), so the pivot bake is safe only because every rotated/scaled element is
+`Pickable::IGNORE` — see the new picking residual below.
+
+**Residual A2 (newly surfaced — picking, DEFERRED):** picking
+(`picking::point_in_aabb`) hit-tests the *unrotated* `layout.size` at
+`gt.translation()` and never inverts the 2D affine, so a rotated/scaled element's
+pick box is wrong (shifted). Harmless today (all rotated elements are
+`Pickable::IGNORE`), but a rotated *pickable* element (e.g. a rotated drag handle)
+would pick wrong. Fix = invert `ResolvedTransform` in the hit-test (spec
+`buiy-input-events` says picking is done in transformed space — currently
+aspirational for rotation).
+
+**Residual A3 (newly surfaced — text-quad decorations, DEFERRED):**
+underline / overline / selection / preedit paint through the `PackedInstance`
+text-quad carrier (`pack_text_quad`), which packs `IDENTITY_AFFINE` — so a rotated
+text run's *decorations* stay axis-aligned even though its glyphs (+ strike, a
+coverage stamp) now rotate. Same root cause, different carrier; no current
+consumer rotates a decorated text run, so deferred. Fix = thread the entity affine
+into `pack_text_quad` (the carrier already has the slot).
 
 **Residual B (newly surfaced — bridge fidelity):** skew (`TransformMatrix::Skew`)
 and general `TransformMatrix::Matrix` paint are BOUNDED by the bridge's lossy

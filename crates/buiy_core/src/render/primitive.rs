@@ -161,8 +161,9 @@ impl BuiyPrimitives {
     /// | color   | 32  | Float32x4    | 4 |
     /// | clip    | 48  | Float32x4    | 5 |
     /// | page    | 64  | Uint32       | 6 |
+    /// | affine  | 68  | Float32x4    | 7 |
     ///
-    /// Total instance stride 68 B = [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`].
+    /// Total instance stride 84 B = [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`].
     ///
     /// [`GLYPH_ALPHA_INSTANCE_STRIDE_BYTES`]: crate::render::atlas::GLYPH_ALPHA_INSTANCE_STRIDE_BYTES
     fn glyph_vertex_buffers() -> Vec<VertexBufferLayout> {
@@ -184,7 +185,7 @@ impl BuiyPrimitives {
                 ],
             },
             VertexBufferLayout {
-                array_stride: 68,
+                array_stride: crate::render::atlas::GLYPH_ALPHA_INSTANCE_STRIDE_BYTES as u64,
                 step_mode: VertexStepMode::Instance,
                 attributes: vec![
                     VertexAttribute {
@@ -211,6 +212,14 @@ impl BuiyPrimitives {
                         format: VertexFormat::Uint32,
                         offset: 64,
                         shader_location: 6,
+                    },
+                    // 2D affine basis (coverage-path rotate/scale) — mirrors the
+                    // band's single-Float32x4 fold; keeps the glyph pipeline at
+                    // 8/16 vertex attributes (WebGL2-safe).
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 68,
+                        shader_location: 7,
                     },
                 ],
             },
@@ -687,6 +696,28 @@ mod band_attr_cap_tests {
         assert!(
             max_loc <= 15,
             "band pipeline max shader_location is {max_loc}; WebGL2's 16-attribute cap needs <= 15"
+        );
+    }
+
+    /// The coverage (glyph/icon) pipeline gained a 2D affine attribute (loc 7).
+    /// Same WebGL2 cap as the band: guard that the layout stays <= 16 attributes /
+    /// max location <= 15 so a future field add can't silently break WebGL2.
+    #[test]
+    fn glyph_layout_stays_within_webgl2_16_attribute_cap() {
+        let buffers = BuiyPrimitives::glyph_vertex_buffers();
+        let locations: Vec<u32> = buffers
+            .iter()
+            .flat_map(|b| b.attributes.iter().map(|a| a.shader_location))
+            .collect();
+        assert!(
+            locations.len() <= 16,
+            "glyph/coverage pipeline declares {} vertex attributes; WebGL2 caps at 16",
+            locations.len()
+        );
+        let max_loc = locations.iter().copied().max().unwrap_or(0);
+        assert!(
+            max_loc <= 15,
+            "glyph/coverage pipeline max shader_location is {max_loc}; WebGL2's cap needs <= 15"
         );
     }
 }

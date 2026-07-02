@@ -296,13 +296,19 @@ pub fn extract_buiy_icons(
         }
 
         // Place the icon CENTERED in the entity's resolved box (the design sizes
-        // each icon's box to the glyph). `GlobalTransform.translation` is the
-        // absolute border-box top-left (the documented absolute-consumer path —
-        // ResolvedLayout.position is parent-relative). Centering avoids needing
-        // the content-box padding offset for the prototype.
-        let origin = gt.translation().truncate();
+        // each icon's box to the glyph). The icon's box-local top-left is the
+        // centering offset; `gt.transform_point` folds the translation AND the 2D
+        // linear part (rotation/scale about the 6e-baked transform-origin), so a
+        // rotated/scaled icon spins in place. Under identity this equals the old
+        // `translation + offset` (bit-identical). `coverage.wgsl` then applies the
+        // same 2D affine (below) to the quad corners about this origin.
         let size = Vec2::splat(icon.size_px as f32);
-        let pos = origin + (layout.size - size) * 0.5;
+        let local_tl = (layout.size - size) * 0.5;
+        let pos = gt.transform_point(local_tl.extend(0.0)).truncate();
+        // The 2D affine basis (GlobalTransform's linear part), columns
+        // [m00,m10,m01,m11] — same convention as the quad path (render::extract).
+        let m = gt.affine().matrix3;
+        let affine = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
 
         // Self-inclusive clip (own ClipRect ∩ ancestors; a top-layer member forces
         // the unclipped sentinel) — same resolution as a glyph's clip.
@@ -329,6 +335,7 @@ pub fn extract_buiy_icons(
             color: linear_color(color),
             clip,
             page: entry.page as u32,
+            affine,
         });
         new_keys.push(key);
         new_runs.push(IconEntityRun {
