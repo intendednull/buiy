@@ -235,11 +235,16 @@ pub use buiy_bsn::prelude::*;
 /// view app also needs (`Model` / `Cmd` / `App`) by **name** from `buiy::prelude`
 /// (an explicit import does not glob-collide with the view builders).
 ///
-/// One papercut: the `column!` macro shares its name with the `std::column!`
-/// built-in, so under a glob it is ambiguous — import the container macro by name
-/// (`use buiy::view::column;`) to disambiguate (`row!` / `text!` have no such
-/// collision). The shipped `counter_view` / `todomvc_view` examples import the
-/// whole surface by name for the same reason.
+/// Two papercuts, each resolved by importing the offender **by name**:
+/// - the `column!` macro shares its name with the `std::column!` built-in, so
+///   under a glob it is ambiguous — `use buiy::view::column;` (`row!` / `text!`
+///   have no such collision);
+/// - the typed tokens `Color` and `Radius` collide with `bevy::prelude::Color`
+///   and the render `Radius` under the `use bevy::prelude::*;` + `use buiy::view::*;`
+///   dual glob — import those by name too (`use buiy::view::{Color, Radius};`).
+///
+/// The shipped `counter_view` / `todomvc_view` examples import the whole surface
+/// by name for the same reason.
 ///
 /// ```no_run
 /// use bevy::prelude::*;

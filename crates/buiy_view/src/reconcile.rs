@@ -317,7 +317,17 @@ fn reconcile_keyed_children<M: Model>(
         new_keys.insert(key);
         let e = match by_key.get(&key) {
             // Reuse the existing row entity — reconcile it IN PLACE (no rebuild).
-            Some(&old) => reconcile_node::<M>(world, old, child_el, model),
+            // Re-stamp the key afterward: on a top-level Kind change (e.g. a keyed
+            // row entering per-row edit mode) `reconcile_node` despawns+respawns a
+            // fresh, KEYLESS entity — without re-inserting `RowKey` the next
+            // reconcile can't match it by key, so it rebuilds the row again
+            // (discarding just-built widget state) and orphans the intermediate.
+            // The insert is idempotent for the survive case and repairs the respawn.
+            Some(&old) => {
+                let e = reconcile_node::<M>(world, old, child_el, model);
+                world.entity_mut(e).insert(RowKey(key));
+                e
+            }
             // A new key — build it fresh and stamp its identity.
             None => {
                 let e = spawn_node::<M>(world, child_el, model);

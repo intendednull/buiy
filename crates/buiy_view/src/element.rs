@@ -184,7 +184,10 @@ impl<Msg> Element<Msg> {
     /// Route this message when pressed.
     pub fn on_press(mut self, msg: Msg) -> Self {
         self.on_press = Some(msg);
-        self.disabled = false;
+        // NB: do NOT reset `disabled` here — attaching a handler must not silently
+        // re-enable a button an author explicitly `.disabled(true)`'d (a fresh
+        // Element is enabled by default, so the reset only ever clobbered an
+        // intentional disable, contradicting the `disabled` builder's contract).
         self
     }
 

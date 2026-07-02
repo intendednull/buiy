@@ -26,7 +26,8 @@ use counter_view::{Counter, Msg};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
-const OUT_DIR: &str = "/home/intendednull/.claude-personal/jobs/035402f5/tmp";
+// Repo-relative output (under the gitignored `target/`); `capture()` create_dir_all's it.
+const OUT_DIR: &str = "target/view-captures";
 
 fn main() {
     let mut app = App::new();
