@@ -2,8 +2,7 @@
 //! Wave B1 background-gradient render channel actually PAINTS. Spawns a box
 //! carrying `BackgroundLayers(Linear(150deg, --ac, --ac2))` — the design's
 //! logo / accent-button / slider-preview gradient — renders it to an offscreen
-//! target, writes the PNG to `docs/reports/parity-proto-assets/b1-gradient.png`,
-//! and asserts PROGRAMMATICALLY (adapter-tolerant — passes on this RX 6700 XT
+//! target and asserts PROGRAMMATICALLY (adapter-tolerant — passes on this RX 6700 XT
 //! host AND CI's lavapipe) that the gradient runs in the right DIRECTION with the
 //! right COLORS:
 //!
@@ -14,8 +13,8 @@
 //!     axis (which in y-down fragment space points right-and-down).
 //!
 //! This is NOT a blessed CI golden (CI's lavapipe pixels differ from this host —
-//! the FINAL phase handles CI goldens). The PNG + the relative corner-channel
-//! assertions are the prototype proof that the gradient pipeline is correct.
+//! the FINAL phase handles CI goldens). The relative corner-channel assertions
+//! are the prototype proof that the gradient pipeline is correct.
 //!
 //! The render-side complement to the headless `render_gradient.rs` (extract tier,
 //! no adapter). It exercises the gradient pipeline + `gradient.wgsl` end-to-end.
@@ -92,15 +91,6 @@ fn linear_gradient_paints_ac_to_ac2_top_left_to_bottom_right() {
     let img = capture_to_image(&mut app, &GoldenConfig::deterministic());
     assert_eq!(img.dimensions(), (W, H));
 
-    // Write the PNG proof artifact (NOT a blessed golden — the prototype proof).
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/reports/parity-proto-assets/b1-gradient.png");
-    if let Some(parent) = out.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    img.save(&out)
-        .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
-
     let pixels = img.clone().into_raw();
 
     // Sample the two corners, a few px inside the box edge to avoid the SDF-AA
@@ -158,8 +148,7 @@ fn linear_gradient_paints_ac_to_ac2_top_left_to_bottom_right() {
 /// the 22px tiles) with a solid `Background(#0b0c0e)` (the app bg) UNDER a
 /// `BackgroundLayers(Radial(dot_grid(#16181c, 1px, 22px)))` — the design's
 /// `radial-gradient(#16181c 1px, transparent 1px); background-size: 22px 22px`
-/// (values.md § 7.3). It renders to an offscreen target, writes the PNG to
-/// `docs/reports/parity-proto-assets/b2-dotgrid.png`, and asserts PROGRAMMATICALLY
+/// (values.md § 7.3). It renders to an offscreen target and asserts PROGRAMMATICALLY
 /// that the PATTERN + SPACING are right:
 ///
 ///   - a DOT-CENTER pixel (the cell center, 11px into a tile) is the dot color
@@ -227,15 +216,6 @@ fn dotted_grid_paints_lit_dot_and_dark_gap_one_tile_apart() {
 
     let img = capture_to_image(&mut app, &GoldenConfig::deterministic());
     assert_eq!(img.dimensions(), (W, H));
-
-    // Write the PNG proof artifact (NOT a blessed golden — the prototype proof).
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/reports/parity-proto-assets/b2-dotgrid.png");
-    if let Some(parent) = out.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    img.save(&out)
-        .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
 
     let pixels = img.clone().into_raw();
 

@@ -341,6 +341,14 @@ jobs:
           tool: cargo-nextest@0.9.133
       - name: cargo nextest run (GPU #[ignore] lane on pinned lavapipe)
         run: cargo nextest run --profile gpu -p buiy_core -p buiy_verify -p buiy --locked --run-ignored=only
+      # Hygiene guard: the GPU lane must READ/assert committed report assets, never
+      # rewrite them. A `#[ignore]` render test that `img.save`s into a committed
+      # `docs/reports/**` PNG dirties the tree with adapter-specific bytes (the bug
+      # this guard was added for). Tracked-only (`git diff`) by design — untracked
+      # scratch under target/ is fine; goldens are BUIY_BLESS-gated (off here), so
+      # a plain --run-ignored=only run writes nothing tracked under docs/reports/.
+      - name: Assert the GPU lane mutated no committed report asset
+        run: git diff --exit-code -- docs/reports/
 
   # ----------------------------------------------------------------------------
   # Web smoke. GATES the wasm BUILD always (catches arboard/lock/feature

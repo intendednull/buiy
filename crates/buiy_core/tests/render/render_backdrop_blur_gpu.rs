@@ -7,8 +7,7 @@
 //!
 //! Setup: a STRIPED backdrop (alternating bright/dark vertical bars — maximal
 //! horizontal local variance), with a `BackdropFilter(blur(6px))` element
-//! covering the right half. Render to an offscreen target, write the PNG to
-//! `docs/reports/parity-proto-assets/b4-blur.png`, and assert PROGRAMMATICALLY
+//! covering the right half. Render to an offscreen target and assert PROGRAMMATICALLY
 //! (adapter-tolerant):
 //!
 //!   - the element's own (translucent) fill PAINTS over the blurred backdrop —
@@ -158,15 +157,6 @@ fn backdrop_filter_blurs_the_window_backdrop() {
 
     let img = capture_to_image(&mut app, &GoldenConfig::deterministic());
     assert_eq!(img.dimensions(), (W, H));
-
-    // Write the PNG proof artifact (NOT a blessed golden — the prototype proof).
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/reports/parity-proto-assets/b4-blur.png");
-    if let Some(parent) = out.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    img.save(&out)
-        .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
 
     let pixels = img.clone().into_raw();
 
