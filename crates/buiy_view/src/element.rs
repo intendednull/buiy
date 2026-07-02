@@ -7,9 +7,65 @@
 //! the app's message type `Msg` so a handler stores a concrete `Msg` value (the
 //! replay-safety rule, spec §2).
 
+use std::sync::Arc;
+
 use bevy::prelude::Component;
 
 use crate::tokens::{Color, Radius, Space};
+
+/// A text-input's per-keystroke handler — `value → Msg` (design §2, #13/#17).
+///
+/// Two forms, both replay-safe by construction (the recorded thing is the *result* `Msg`, not
+/// the handler):
+/// - [`Bare`](InputHandler::Bare) — a bare `fn(String) -> Msg` (an enum tuple-variant ctor like
+///   `Msg::SetDraft` is exactly this). Cannot capture, so it is determinism-clean by type; the
+///   default via [`Element::on_input`].
+/// - [`Boxed`](InputHandler::Boxed) — an `Arc<dyn Fn>` for a **capturing** per-row handler
+///   (`move |s| Msg::Edit(id, s)` — the inline-edit case, #17), via [`Element::on_input_with`].
+///
+/// **Purity contract (the author's, not statically enforced — #17).** A boxed handler MUST be
+/// pure: capture only *values* (a row id, an index), never a `Res`/`World`/clock/RNG snapshot
+/// that would diverge on a fresh-process replay. The bare form is pure by type; the boxed form
+/// trusts the caller (mirroring the reducer's purity contract). Capturing a plain id — the whole
+/// motivating case — satisfies it.
+pub(crate) enum InputHandler<Msg> {
+    /// A non-capturing `fn(String) -> Msg` (the replay-safe-by-type default).
+    Bare(fn(String) -> Msg),
+    /// A capturing `Fn(String) -> Msg` (the opt-in, author-purity-checked #17 form).
+    Boxed(Arc<dyn Fn(String) -> Msg + Send + Sync>),
+}
+
+// Manual `Clone`: `Bare` is `Copy`, `Boxed` clones the `Arc` (cheap). Derive would demand
+// `Msg: Clone`, which is wrong — the handler produces `Msg`, it does not hold one.
+impl<Msg> Clone for InputHandler<Msg> {
+    fn clone(&self) -> Self {
+        match self {
+            InputHandler::Bare(f) => InputHandler::Bare(*f),
+            InputHandler::Boxed(f) => InputHandler::Boxed(f.clone()),
+        }
+    }
+}
+
+impl<Msg: 'static> InputHandler<Msg> {
+    /// Apply the handler to the editor's live value.
+    pub(crate) fn call(&self, value: String) -> Msg {
+        match self {
+            InputHandler::Bare(f) => f(value),
+            InputHandler::Boxed(f) => f(value),
+        }
+    }
+
+    /// Lift the produced message through `f` — the `on_input` half of [`Element::map`]. A bare
+    /// handler cannot compose into a *new bare* fn (that needs a closure), so it lifts by
+    /// **boxing** (`Boxed(move |s| f(bare(s)))`); a boxed handler composes its `Arc`. So a lifted
+    /// input-bearing child no longer DROPS `on_input` (the P1 limitation #15/#17 removed).
+    pub(crate) fn map<Parent: 'static>(self, f: fn(Msg) -> Parent) -> InputHandler<Parent> {
+        match self {
+            InputHandler::Bare(bare) => InputHandler::Boxed(Arc::new(move |s| f(bare(s)))),
+            InputHandler::Boxed(boxed) => InputHandler::Boxed(Arc::new(move |s| f(boxed(s)))),
+        }
+    }
+}
 
 /// Which retained widget an [`Element`] realizes into. Doubles as the component
 /// the reconciler stamps on each spawned entity so it can tell "same kind ⇒
@@ -89,7 +145,7 @@ pub struct Element<Msg> {
     /// it is `Copy` / determinism-safe and stored on the entity for the router —
     /// never a captured closure (the replay-safety rule, spec §2). Consumed by
     /// `route_text_input`.
-    pub(crate) on_input: Option<fn(String) -> Msg>,
+    pub(crate) on_input: Option<InputHandler<Msg>>,
     /// A text-input's submit (Enter) message (a value, like `on_press`).
     pub(crate) on_submit: Option<Msg>,
 }
@@ -234,10 +290,23 @@ impl<Msg> Element<Msg> {
     /// exactly `fn(String) -> Msg`), NOT an `Fn` closure — the runtime value
     /// forbids eager evaluation, so the fn is stored on the entity for the
     /// router; a bare fn cannot capture a `Res` snapshot, so it is
-    /// determinism-safe by type (the replay-safety rule, spec §2). A *capturing*
-    /// per-row `on_input` needs a boxed handler — deferred to PR3 (#17).
+    /// determinism-safe by type (the replay-safety rule, spec §2). For a
+    /// *capturing* per-row handler (inline edit) use [`Element::on_input_with`] (#17).
     pub fn on_input(mut self, f: fn(String) -> Msg) -> Self {
-        self.on_input = Some(f);
+        self.on_input = Some(InputHandler::Bare(f));
+        self
+    }
+
+    /// A **capturing** per-keystroke handler: `Fn(new_value) -> Msg` that may close over values
+    /// (e.g. a row id — `on_input_with(move |s| Msg::EditTitle(id, s))`), the inline-edit case
+    /// the bare [`on_input`](Element::on_input) can't express (#17). Stored boxed (`Arc<dyn Fn>`).
+    ///
+    /// **Purity is the author's contract** (not statically enforced): the closure must capture
+    /// only *values*, never a `Res`/clock/RNG snapshot that would diverge on a fresh-process
+    /// replay — mirroring the reducer's purity rule. The recorded thing is the produced `Msg`, so
+    /// a pure handler stays replay-clean; capturing a plain id (the motivating case) is pure.
+    pub fn on_input_with(mut self, f: impl Fn(String) -> Msg + Send + Sync + 'static) -> Self {
+        self.on_input = Some(InputHandler::Boxed(Arc::new(f)));
         self
     }
 
@@ -262,21 +331,19 @@ impl<Msg> Element<Msg> {
     /// `f` is a **bare fn pointer** — an enum tuple-variant ctor like `Msg::Left`
     /// is exactly `fn(ChildMsg) -> Parent`, so it is `Copy` + determinism-clean
     /// (the same discipline `on_input` uses). It maps the value handlers
-    /// (`on_press`, `on_submit`) and recurses into children.
+    /// (`on_press`, `on_submit`), lifts `on_input` (see below), and recurses into
+    /// children.
     ///
-    /// **Known limit (spec §2, deferred to PR3 #17):** `on_input` is a bare
-    /// `fn(String) -> Msg` and CANNOT be composed with `f` into a new bare
-    /// `fn(String) -> Parent` (that needs a closure), so a lifted subtree
-    /// **drops** `on_input`. Harmless for a button-only child (the Counter —
-    /// asserted below in debug); lifting an *input-bearing* child needs a boxed
-    /// `Fn` on the element — the P3 residual.
-    pub fn map<Parent>(self, f: fn(Msg) -> Parent) -> Element<Parent> {
-        debug_assert!(
-            self.on_input.is_none(),
-            "Element::map cannot lift `on_input` (a bare fn cannot compose into a \
-             new bare fn — needs a boxed Fn); lifting an input-bearing child is a \
-             PR3 gap (spec §2 #17)"
-        );
+    /// **`on_input` is now lifted (was the P1 drop-limitation, closed by #17).** A bare
+    /// `fn(String) -> Msg` can't compose into a new *bare* `fn(String) -> Parent`, so it lifts by
+    /// **boxing** (`InputHandler::map` → `Boxed(move |s| f(bare(s)))`); a boxed handler composes
+    /// its `Arc`. So lifting an *input-bearing* child (an inline-edit row via `on_input_with`)
+    /// preserves its input handler — the residual gap the prototype flagged is gone.
+    pub fn map<Parent>(self, f: fn(Msg) -> Parent) -> Element<Parent>
+    where
+        Msg: 'static,
+        Parent: 'static,
+    {
         Element {
             kind: self.kind,
             text: self.text,
@@ -294,8 +361,8 @@ impl<Msg> Element<Msg> {
             checked: self.checked,
             value: self.value,
             placeholder: self.placeholder,
-            // A bare fn cannot be re-tagged into a new bare fn (see the doc note).
-            on_input: None,
+            // Lift `on_input` by boxing (see the doc note — #17 closed the drop-limitation).
+            on_input: self.on_input.map(|h| h.map(f)),
             on_submit: self.on_submit.map(f),
         }
     }

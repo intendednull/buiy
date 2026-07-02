@@ -103,7 +103,7 @@ use crate::BuiySet;
 
 /// The stateful-leaf tier (`A11yToggled` as a shared-reducer leaf model).
 pub mod leaf;
-pub use leaf::{ToggleLeafSet, ToggleMsg, register_toggle_leaf, toggle_reducer};
+pub use leaf::{ControlledLeaf, ToggleLeafSet, ToggleMsg, register_toggle_leaf, toggle_reducer};
 
 // ---------------------------------------------------------------------------
 // Core model + message

@@ -353,3 +353,42 @@ fn synthetic_pointer_click_flips_checkbox_toggled() {
         "a synthetic pointer click flips the checkbox (pointer converges with AT/keyboard)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #16 — `ControlledLeaf`: an externally-owned checkbox opts OUT of the built-in
+// press-to-toggle leaf, so a model (e.g. the `buiy_view` surface) is the sole
+// source of its `A11yToggled` fold (no double-fold). Design §3 #16.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn controlled_leaf_checkbox_opts_out_of_press_to_toggle() {
+    use buiy_core::mvu::ControlledLeaf;
+
+    let mut app = app();
+    // A `ControlledLeaf` checkbox — exactly what `buiy_view` stamps on a checkbox it owns.
+    let owned = app.world_mut().spawn((Checkbox, ControlledLeaf)).id();
+    // A plain checkbox — the control, still driven by the built-in leaf.
+    let plain = app.world_mut().spawn(Checkbox).id();
+    app.update();
+    assert_eq!(
+        app.world().get::<A11yToggled>(owned).map(|t| t.0),
+        Some(Toggled::False),
+        "seed: both unchecked"
+    );
+
+    // Press BOTH. `advance_toggle_on_press` filters `Without<ControlledLeaf>`, so it advances
+    // ONLY the plain one; the owned one is left for its model to drive.
+    press(&mut app, owned);
+    press(&mut app, plain);
+
+    assert_eq!(
+        app.world().get::<A11yToggled>(owned).map(|t| t.0),
+        Some(Toggled::False),
+        "LOAD-BEARING (#16): a ControlledLeaf checkbox does NOT auto-fold on press — its model owns the toggle (no double-fold)"
+    );
+    assert_eq!(
+        app.world().get::<A11yToggled>(plain).map(|t| t.0),
+        Some(Toggled::True),
+        "control: a plain checkbox still toggles on press via the built-in leaf"
+    );
+}
