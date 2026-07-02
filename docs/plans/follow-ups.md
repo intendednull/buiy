@@ -1092,6 +1092,43 @@ them resident was already rejected (glyph-pipeline § 6.3 runner-ups).
 
 **Spec touchpoint:** text `architecture.md § 2.3` (as-landed note).
 
+## Render / verification — GPU tests rewrote committed report-asset PNGs — LANDED
+
+**Status:** **Landed (2026-07-01).**
+[spec](../specs/2026-07-01-parity-report-asset-test-hygiene-design.md) /
+[plan](2026-07-01-parity-report-asset-test-hygiene.md).
+
+**Originated:** noticed during the verification-followups campaign (2026-07-01) —
+a plain GPU `--ignored` lane run left `git status` dirty.
+
+**What it was:** six `#[ignore]` GPU-lane tests in
+`crates/buiy_core/tests/render/` each ended with an **unconditional**
+`img.save(&out)` into a committed `docs/reports/parity-*-assets/*.png` — a
+gratuitous side-effect no assertion consumed (the tests verify programmatically
+via adapter-tolerant pixel sampling). On an adapter whose bytes differ from the
+committed capture (CI's lavapipe vs the RX host the baselines were blessed on)
+the write dirtied the tree with adapter-specific rasterizer noise; on the RX host
+it was byte-identical but still `touch`ed the file (proven via mtime).
+
+**Fix:** removed the six write blocks (the committed PNGs freeze as the one-time
+parity/paint-order proof captures — they are report illustrations, **not**
+goldens; the golden corpus under `crates/buiy_verify/tests/goldens/` is the only
+place a test writes a committed PNG, and only under `BUIY_BLESS`). Reworded the
+five module doc-comments that claimed the test "writes the PNG". Added a durable
+CI guard after the GPU-lane step (`ci.yml`): `git diff --exit-code -- docs/reports/`
+fails the lane if any future test rewrites a committed report asset. Verified
+RED→GREEN on the RX 6700 XT: pre-fix the write moved the PNG mtime; post-fix the
+mtime is stable across a full six-writer run and `git status docs/reports/` stays
+clean, all six tests still green.
+
+**Known out-of-scope sibling (NOT fixed):** `docs/reports/2026-06-30-demos-mvu-migration-assets/`
+is written by the same pattern from `src/bin/` capture binaries
+(`capture_todomvc`/`capture_counter`), which the test lane never runs. The
+broadened `docs/reports/` CI guard keeps the whole report tree honest regardless.
+
+**Spec touchpoint:** none in `buiy-verification-design` (governs the golden
+corpus, not these report illustrations).
+
 ## Render / verification — stored-PNG golden machinery (`--accept`) — LANDED
 
 **Status:** **Landed** by `buiy-verification-design`

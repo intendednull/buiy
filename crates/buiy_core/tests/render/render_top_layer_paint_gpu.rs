@@ -13,8 +13,7 @@
 //! dropped (only icons survived, since `icon_producer` iterates entities
 //! directly). This renders a top-layer subtree to an offscreen target and asserts
 //! the descendant's accent FILL and a descendant text GLYPH are present in the
-//! readback, then writes the PNG proof to
-//! `docs/reports/parity-proto-assets/fix-m1m6.png`.
+//! readback.
 //!
 //! Run:   cargo test -p buiy_core --test render fix_m1m6 -- --ignored --test-threads=1
 
@@ -111,21 +110,6 @@ fn fix_m1m6_top_layer_descendants_fill_and_text_paint() {
     finish_and_run(&mut app, 1);
     wait_for_text_ready(&mut app, 60);
     let pixels = readback_rgba(&mut app, target.clone());
-
-    // Write the PNG proof artifact (NOT a blessed CI golden — the prototype proof;
-    // lavapipe pixels differ host-to-host). The two channel assertions below are
-    // the programmatic proof.
-    {
-        let img = image::RgbaImage::from_raw(W, H, pixels.clone())
-            .expect("readback dimensions match the target");
-        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/reports/parity-proto-assets/fix-m1m6.png");
-        if let Some(parent) = out.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        img.save(&out)
-            .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
-    }
 
     // (M6) The descendant FILL paints: a pixel inside the red box (card at 40,40 +
     // 10 padding → fill at ~50,50; sample the interior at (80,65)) is red-dominant,

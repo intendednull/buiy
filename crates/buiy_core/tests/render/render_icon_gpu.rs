@@ -4,8 +4,7 @@
 //! stroke 1.9 — disclosure #24), the checkmark (`M4 12.5 9 17.5 20 6.5`, stroke
 //! 2.4 — todo check #11), and the search magnifier (`M11 18a7 7 0 1 0 0-14 7 7 0
 //! 0 0 0 14M20 20l-4-4`, stroke 1.7, has an ARC — #9) — in the accent color over
-//! a dark bg, renders them to an offscreen target, writes the PNG to
-//! `docs/reports/parity-proto-assets/b3-icons.png`, and asserts PROGRAMMATICALLY
+//! a dark bg, renders them to an offscreen target and asserts PROGRAMMATICALLY
 //! (adapter-tolerant — passes on this RX 6700 XT host AND CI's lavapipe):
 //!
 //!   - a stroke pixel of each icon is LIT and ≈ the accent color (the icon
@@ -108,15 +107,6 @@ fn vector_icons_paint_in_accent_and_retint_on_theme_swap() {
 
     let img = capture_to_image(&mut app, &GoldenConfig::deterministic());
     assert_eq!(img.dimensions(), (W, H));
-
-    // Write the PNG proof artifact (NOT a blessed golden — the prototype proof).
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/reports/parity-proto-assets/b3-icons.png");
-    if let Some(parent) = out.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    img.save(&out)
-        .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
 
     let pixels = img.clone().into_raw();
 

@@ -121,15 +121,6 @@ fn ancestor_gradient_does_not_overpaint_descendant_solid_fill() {
     let img = capture_to_image(&mut app, &GoldenConfig::deterministic());
     assert_eq!(img.dimensions(), (W, H));
 
-    // Write the PNG proof artifact (NOT a blessed golden).
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/reports/parity-final-assets/gradient-paint-order-gpu.png");
-    if let Some(parent) = out.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    img.save(&out)
-        .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
-
     let pixels = img.clone().into_raw();
 
     // Child spans [16,48); sample its center (32,32). A PARENT-ONLY pixel: (6,6),
