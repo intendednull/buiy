@@ -71,6 +71,19 @@ jobs:
       - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
         with:
           tool: trunk@0.21.14,wasm-bindgen-cli@0.2.125
+      # binaryen (wasm-opt) for the -Oz size pass in build-web.sh. Not offered by
+      # taiki-e/install-action, so pinned here by version + sha256. (trunk's own
+      # wasm-opt call omits the wasm-feature flags rustc emits and fails, so
+      # build-web.sh runs wasm-opt itself with `-all`.)
+      - name: Install binaryen (wasm-opt), pinned
+        run: |
+          ver=version_123
+          sha=e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${ver}/binaryen-${ver}-x86_64-linux.tar.gz" -o binaryen.tar.gz
+          echo "${sha}  binaryen.tar.gz" | sha256sum -c -
+          tar -xzf binaryen.tar.gz
+          echo "${PWD}/binaryen-${ver}/bin" >> "$GITHUB_PATH"
+          rm binaryen.tar.gz
       # No RUSTFLAGS env here on purpose: the wasm build's `--cfg=web_sys_unstable_apis`
       # (WebClipboard) comes from `.cargo/config.toml` (target-scoped to wasm32); a
       # job-level RUSTFLAGS would SHADOW that target rustflags and drop the cfg.

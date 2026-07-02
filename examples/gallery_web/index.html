@@ -7,7 +7,11 @@
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #16181d; overflow: hidden; }
     #buiy { display: block; width: 100vw; height: 100vh; }
   </style>
-  <link data-trunk rel="rust" data-bin="gallery_web" />
+  <!-- data-wasm-opt="0": disable trunk's built-in wasm-opt. trunk auto-runs it
+       (when wasm-opt is on PATH) as bare `-O`, without the wasm-feature flags
+       modern rustc emits (bulk-memory/…), so it aborts the build. build-web.sh's
+       release path runs wasm-opt itself with `-Oz -all` instead. -->
+  <link data-trunk rel="rust" data-bin="gallery_web" data-wasm-opt="0" />
 </head>
 <body>
   <canvas id="buiy"></canvas>
