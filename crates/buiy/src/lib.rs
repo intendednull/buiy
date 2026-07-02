@@ -165,7 +165,7 @@ pub use buiy_core::mvu::{
 pub use buiy_widgets::{
     Button, Checkbox, Dialog, Disclosure, LightDismiss, Menu, MenuButton, MenuItem, OnPress,
     Popover, PopoverAlign, PopoverPlacement, PopoverSide, ScrollArea, Slider, Switch, TextInput,
-    TooltipTrigger, WidgetsPlugin, dialog_invoker,
+    TooltipTrigger, ValueChange, WidgetsPlugin, dialog_invoker,
 };
 // The general composite builders (widget-catalog parity § 2 REFINE — "promote the
 // genuinely-general composites to `buiy_widgets`"): imperative `World`-spawning
@@ -508,6 +508,20 @@ pub mod probe {
 /// fn read_checkboxes(boxes: Query<&A11yToggled, With<Checkbox>>) {
 ///     let checked = boxes.iter().filter(|t| Checkbox::checked(t)).count();
 ///     let _ = checked;
+/// }
+/// ```
+///
+/// Reacting to a value change is a **typed** `MessageReader<ValueChange<_>>`, not
+/// demuxing the untyped `OnPress` sink — a `ValueChange<bool>` for a checkbox /
+/// switch, a `ValueChange<f64>` for a slider:
+///
+/// ```no_run
+/// use buiy::prelude::*;
+///
+/// fn on_toggle(mut changes: MessageReader<ValueChange<bool>>) {
+///     for change in changes.read() {
+///         println!("{:?} is now {}", change.source, change.value);
+///     }
 /// }
 /// ```
 pub mod prelude {
