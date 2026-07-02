@@ -244,6 +244,11 @@ pub fn stepper(world: &mut World, count: i32) -> Entity {
     // wrapper gives the count its min-width without disturbing the leaf's own
     // intrinsic text box.
     world.entity_mut(count_leaf).insert((
+        // The marker `set_stepper` walks to rewrite the visible count. Without it
+        // `descendant_with::<StepperCount>` finds nothing and `set_stepper` is a
+        // silent no-op — the `Name("#StepperCount")` above is only a debug label,
+        // not this component.
+        StepperCount,
         Style::default()
             .min_width(Sizing::Length(Length::px(44.0)))
             .flex_row()
