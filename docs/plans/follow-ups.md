@@ -1815,3 +1815,41 @@ their fixes. Remaining polish (none blocking; the gallery renders + runs):
   **Not web-specific** — identical on native; surfaced by the wasm interactivity
   verification. **Spec touchpoint:**
   `2026-06-25-buiy-wasm-browser-support-design.md` § 6 (Pointer interactivity — touch caveat).
+
+## Widgets — default `Switch` track never recolors on toggle
+
+**Originated:** the 2026-07-01 gallery widget-catalog audit
+(`docs/reports/2026-07-01-gallery-widget-catalog-audit.md`, finding N1).
+
+**Symptom:** the framework `Switch` widget's visual driver
+(`crates/buiy_widgets/src/switch.rs` `update_switch_visual`) slides only the
+`SwitchThumb` `Translate`; the `SwitchTrack` fill is a static
+`color.surface.secondary` (`switch.rs` ~124) that is never recolored. So a default
+`Switch` distinguishes on/off by thumb position only — the modal register switch
+(`examples/buiy_gallery` `#ModalRegisterSwitch`, a default `Switch`) does not turn
+its track accent-on the way the widget-catalog design shows (`swOn ? accent : …`).
+The **showcase** switches look right only because they use a custom track +
+`drive_showcase_switches`, which does recolor.
+
+**Direction:** give `update_switch_visual` an on/off track-fill token (accent-tinted
+when on, `surface.secondary` when off), guarded with `set_if_neq`. Framework-level
+(affects every default `Switch`), so decide deliberately rather than bundling into a
+gallery fix — an opinionated default-widget change with a wide blast radius. Not a
+regression (thumb still conveys state).
+
+## Widgets — menu items have no active-descendant highlight (roving focus is invisible)
+
+**Originated:** the 2026-07-01 gallery widget-catalog audit
+(`docs/reports/2026-07-01-gallery-widget-catalog-audit.md`, finding N2).
+
+**Symptom:** arrow-key roving moves `MenuModel.active` and the aria
+`active_descendant`, but nothing paints a highlight on the active item
+(`crates/buiy_widgets/src/menu.rs` ~229: "item highlight is a C6 paint concern, not
+built here"; gallery `build_menu_item` gives every item a static
+`color.surface.transparent` bg). Design-faithful today (the reference renders items
+flat), but Buiy's real keyboard roving has no visible feedback — an
+expected-but-unwired highlight (accessibility/UX gap, not a design regression).
+
+**Direction:** a C6-style active-item paint — `bind_menu_model` (or a gallery
+reflect) tints the `MenuModel.active` item (e.g. `surface.raised-alt`) and clears the
+rest, on `Changed<MenuModel>`. Low severity; pairs with a keyboard-nav visual pass.

@@ -765,7 +765,8 @@ fn build_todo_footer(world: &mut World) -> Entity {
     // The filter pills (gap 3): All / Active / Done. Each is a bare `Button`
     // (OnPress + a11y, no auto-label) carrying a Geist 11.5/500 label; All is the
     // active pill at boot (accent bg + on-accent label), the rest transparent +
-    // muted. [`apply_filter`] restyles them on a filter change.
+    // muted. [`reflect_active_filter`] re-tints them when the `Filter` changes
+    // (the runtime highlight-follows-selection; `apply_filter` only hides rows).
     let pills: Vec<Entity> = [
         (FilterMode::All, "All", "#FilterAll"),
         (FilterMode::Active, "Active", "#FilterActive"),
@@ -978,7 +979,12 @@ impl Plugin for TodoMvcPlugin {
             // them late is coherence-safe.)
             .add_systems(
                 Update,
-                (apply_filter, update_count, restyle_completed)
+                (
+                    apply_filter,
+                    update_count,
+                    restyle_completed,
+                    reflect_active_filter,
+                )
                     .chain()
                     .after(apply_intents)
                     .after(ToggleLeafSet::Drain)
@@ -1505,6 +1511,38 @@ pub fn update_count(
     for mut color in &mut clear_labels {
         if color.0 != clear_tint {
             color.0 = clear_tint;
+        }
+    }
+}
+
+/// Re-tint the filter pills so the accent highlight follows the active filter.
+/// Runs whenever the [`Filter`] resource changes — the runtime sibling of the nav
+/// rail's [`reflect_rail_active_state`](crate::shell::reflect_rail_active_state).
+/// Each [`FilterButton`] gets `filter_pill_colors(mode == filter.0)`: accent bg +
+/// on-accent label when it is the active filter, transparent + muted otherwise.
+///
+/// Without this, the styling that `build_filter_pill` applies once at spawn would
+/// freeze the accent on "All" while `apply_filter` correctly hid rows — a
+/// state-changes-but-display-doesn't no-op (the stepper class).
+pub fn reflect_active_filter(
+    filter: Res<Filter>,
+    mut pills: Query<(&FilterButton, &Children, &mut Background)>,
+    mut labels: Query<&mut TextColor>,
+) {
+    if !filter.is_changed() {
+        return;
+    }
+    for (fb, children, mut bg) in &mut pills {
+        let (new_bg, new_fg) = filter_pill_colors(fb.0 == filter.0);
+        if bg.color != new_bg {
+            bg.color = new_bg;
+        }
+        for &child in children.iter() {
+            if let Ok(mut color) = labels.get_mut(child)
+                && color.0 != new_fg
+            {
+                color.0 = new_fg;
+            }
         }
     }
 }
@@ -2825,6 +2863,12 @@ fn build_menu_header(world: &mut World) -> Entity {
     header
 }
 
+/// The ⋮ glyph inside the [`MenuButton`] trigger, so
+/// [`reflect_menu_button_open_state`] can retint it (muted → primary) when the
+/// menu opens without walking the button subtree by hand.
+#[derive(Component, Clone, Default)]
+pub struct MenuTriggerIcon;
+
 /// Build the ⋮ [`MenuButton`] (32×32, radius 8, border `border.default`, bg
 /// `surface.inset`; values.md § 7.2 Menu "Menu ⋮ button" / the `menuBtnStyle`) and
 /// its controlled [`Menu`] dropdown (the 5 file-action items). Returns
@@ -2850,6 +2894,8 @@ fn build_menu_button(world: &mut World) -> (Entity, Entity) {
         17,
         ColorToken::TextMuted,
     );
+    // Tag the ⋮ glyph so [`reflect_menu_button_open_state`] can retint it on open.
+    world.entity_mut(dots).insert(MenuTriggerIcon);
     let dots_center = world
         .spawn((
             Node,
@@ -3092,11 +3138,67 @@ pub fn setup_overlay_menu(mut commands: Commands) {
 /// effect the driver asserts — and (2) rewrite the footer "last action" value.
 pub struct OverlayMenuPlugin;
 
+/// Retint the ⋮ [`MenuButton`] trigger to reflect the
+/// open/closed menu — the design's `menuBtnStyle` (open = `surface.raised-alt` bg +
+/// `border.strong-2` + `text.primary` icon; closed = `surface.inset` +
+/// `border.default` + `text.muted` icon). Runs on the trigger's `A11yExpanded`
+/// change (projected by the menu machine's `bind_menu_model`).
+///
+/// Without this the trigger's spawn-time closed styling (`build_menu_button`)
+/// would never change when the dropdown opens — the same no-runtime-reflect class
+/// as [`reflect_active_filter`].
+#[allow(clippy::type_complexity)]
+pub fn reflect_menu_button_open_state(
+    mut triggers: Query<
+        (&A11yExpanded, &mut Background, &mut Border),
+        (With<buiy_widgets::MenuButton>, Changed<A11yExpanded>),
+    >,
+    mut icons: Query<&mut Icon, With<MenuTriggerIcon>>,
+) {
+    for (expanded, mut bg, mut border) in &mut triggers {
+        let (new_bg, new_border, new_icon) = if expanded.0 {
+            (
+                ColorToken::SurfaceRaisedAlt,
+                ColorToken::BorderStrong2,
+                ColorToken::TextPrimary,
+            )
+        } else {
+            (
+                ColorToken::SurfaceInset,
+                ColorToken::BorderDefault,
+                ColorToken::TextMuted,
+            )
+        };
+        if bg.color != new_bg {
+            bg.color = new_bg;
+        }
+        // Rebuild the 4 sides only when the color actually changes (radius 8 is the
+        // trigger's spawn radius); compares one side's token to stay extract-cheap.
+        if border.top.color != new_border {
+            *border = border_all(new_border, 8.0);
+        }
+        // The gallery has exactly one ⋮ trigger, so this global `MenuTriggerIcon`
+        // query resolves to that trigger's own glyph. If a second trigger is ever
+        // added, scope the icon to the changed trigger's descendants (as
+        // `reflect_rail_active_state` walks `Children`) to avoid cross-applying.
+        for mut icon in &mut icons {
+            if icon.color != new_icon {
+                icon.color = new_icon;
+            }
+        }
+    }
+}
+
 impl Plugin for OverlayMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuActivations>().add_systems(
             Update,
-            (record_menu_activation, update_last_action).after(BuiySet::Input),
+            (
+                record_menu_activation,
+                update_last_action,
+                reflect_menu_button_open_state,
+            )
+                .after(BuiySet::Input),
         );
     }
 }
