@@ -3,11 +3,8 @@
 //! Spec: docs/specs/2026-06-03-buiy-render-pipeline-design/color-and-forced-colors.md § 2.0.
 
 use bevy::prelude::*;
-use buiy_core::render::color::{
-    ColorToken, MISSING_TOKEN_FALLBACK, SystemColorKeyword, resolve_token,
-};
+use buiy_core::render::color::{ColorToken, SystemColorKeyword, ThemeContract, resolve_token};
 use buiy_core::theme::default_light_theme;
-use std::borrow::Cow;
 
 #[test]
 fn color_token_default_is_transparent() {
@@ -17,7 +14,7 @@ fn color_token_default_is_transparent() {
 
 #[test]
 fn color_token_variants_construct() {
-    let _ = ColorToken::Token(Cow::Borrowed("color.surface.primary"));
+    let _ = ColorToken::SurfacePrimary;
     let _ = ColorToken::CurrentColor;
     let _ = ColorToken::SystemColor(SystemColorKeyword::CanvasText);
 }
@@ -56,29 +53,14 @@ fn transparent_resolves_to_none() {
 #[test]
 fn token_hit_resolves_to_theme_color() {
     let theme = default_light_theme();
-    let got = resolve_token(
-        &ColorToken::Token(std::borrow::Cow::Borrowed("color.surface.primary")),
-        &theme,
-    );
+    let got = resolve_token(&ColorToken::SurfacePrimary, &theme);
     assert_eq!(got, Color::WHITE);
 }
 
 #[test]
-fn token_miss_resolves_to_magenta_sentinel() {
-    // A miss is an author bug: loud in screenshots and logs, never silent (§ 2.2).
-    let theme = default_light_theme();
-    let got = resolve_token(
-        &ColorToken::Token(std::borrow::Cow::Borrowed("color.does.not.exist")),
-        &theme,
-    );
-    assert_eq!(got, MISSING_TOKEN_FALLBACK);
-    assert_eq!(MISSING_TOKEN_FALLBACK, Color::srgb(1.0, 0.0, 1.0));
-}
-
-#[test]
 fn current_color_default_path_falls_back_to_foreground_token() {
-    // v1 fallback: non-forced theme → color.text.primary (§ 2.0).
+    // v1 fallback: non-forced theme → the primary text ink (§ 2.0).
     let theme = default_light_theme();
     let got = resolve_token(&ColorToken::CurrentColor, &theme);
-    assert_eq!(got, theme.color("color.text.primary").unwrap());
+    assert_eq!(got, theme.resolve(ColorToken::TextPrimary));
 }

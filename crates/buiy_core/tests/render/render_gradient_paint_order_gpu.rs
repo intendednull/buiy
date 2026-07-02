@@ -41,7 +41,6 @@ use buiy_core::render::components::{
     Background, BackgroundLayer, BackgroundLayers, ColorStop, LinearGradient,
 };
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
-use std::borrow::Cow;
 
 use crate::support::px;
 
@@ -51,23 +50,14 @@ fn ancestor_gradient_does_not_overpaint_descendant_solid_fill() {
     const W: u32 = 64;
     const H: u32 = 64;
     let mut app = capture_app(W, H);
-    {
-        // Maximally-distinct stops/fill so the bug's signature is unambiguous on
-        // the BLUE channel: the gradient (red→green) has blue ≈ 0 everywhere; the
-        // child solid is blue-dominant. If the ancestor gradient bleeds over the
-        // child, the child center reads ~no blue (FAIL); if paint order is
-        // correct, it reads the solid blue (PASS).
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("test.grad.start".into(), Color::srgb_u8(0xff, 0x00, 0x00)); // RED
-        theme
-            .colors
-            .insert("test.grad.end".into(), Color::srgb_u8(0x00, 0xff, 0x00)); // GREEN
-        theme
-            .colors
-            .insert("test.child.fill".into(), Color::srgb_u8(0x40, 0x60, 0xff)); // opaque blue
-    }
+    // Maximally-distinct stops/fill so the bug's signature is unambiguous on the
+    // BLUE channel: the gradient (red→green) has blue ≈ 0 everywhere; the child
+    // solid is blue-dominant. If the ancestor gradient bleeds over the child, the
+    // child center reads ~no blue (FAIL); if paint order is correct, it reads the
+    // solid blue (PASS). Carried inline as `Custom` (no theme token needed).
+    let grad_start = Color::srgb_u8(0xff, 0x00, 0x00); // RED
+    let grad_end = Color::srgb_u8(0x00, 0xff, 0x00); // GREEN
+    let child_fill = Color::srgb_u8(0x40, 0x60, 0xff); // opaque blue
 
     // PARENT: a 64×64 box filling the view, painted ONLY by a 90deg (left→right)
     // RED→GREEN linear gradient (no solid `Background` — the gradient is its only
@@ -89,11 +79,11 @@ fn ancestor_gradient_does_not_overpaint_descendant_solid_fill() {
                 angle_deg: 90.0,
                 stops: vec![
                     ColorStop {
-                        color: ColorToken::Token(Cow::Borrowed("test.grad.start")),
+                        color: ColorToken::Custom(grad_start),
                         position: 0.0,
                     },
                     ColorStop {
-                        color: ColorToken::Token(Cow::Borrowed("test.grad.end")),
+                        color: ColorToken::Custom(grad_end),
                         position: 1.0,
                     },
                 ],
@@ -118,7 +108,7 @@ fn ancestor_gradient_does_not_overpaint_descendant_solid_fill() {
                 .width_px(32.0)
                 .height_px(32.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.child.fill")),
+                color: ColorToken::Custom(child_fill),
             },
         ))
         .id();

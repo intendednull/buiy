@@ -29,7 +29,6 @@ use buiy_widgets::scene::{
     button, checkbox, dialog, disclosure, slider, switch, text_input_multi_line,
     text_input_single_line, tooltip_trigger,
 };
-use std::borrow::Cow;
 
 /// The BSN spawn machinery + the widget plugins (so required-components are
 /// registered before any spawn). No GPU.
@@ -96,7 +95,7 @@ fn button_scene_fn_patch_merges_keeping_canonical_fields() {
     // The canonical button surface fill is present (and unpatched here).
     assert_eq!(
         world.get::<Background>(id).expect("Background").color,
-        ColorToken::Token(Cow::Borrowed("color.surface.secondary")),
+        ColorToken::SurfaceSecondary,
         "canonical button background"
     );
 }

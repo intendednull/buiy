@@ -24,7 +24,6 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 use buiy_core::components::Node;
 use buiy_core::render::ColorToken;
 use buiy_core::render::buckets::pack_band_instances;
-use buiy_core::render::color::FOCUS_RING_TOKEN;
 use buiy_core::render::components::{AncestorClip, ClipRect, LineStyle, Outline};
 use buiy_core::render::extract::{
     ExtractedNodesView, effective_outline_clip, extract_buiy_nodes, resolve_outline,
@@ -40,7 +39,7 @@ fn resolve_outline_grows_box_by_width_plus_offset() {
     // offset → grown by 4 each side: pos (6,26), size (48,28).
     let theme = default_light_theme();
     let outline = Outline {
-        color: ColorToken::Token(std::borrow::Cow::Borrowed(FOCUS_RING_TOKEN)),
+        color: ColorToken::FocusRing,
         style: LineStyle::Solid,
         width: buiy_core::Length::px(2.0),
         offset: buiy_core::Length::px(2.0),
@@ -58,45 +57,42 @@ fn resolve_outline_grows_box_by_width_plus_offset() {
     assert_eq!(got.outer_pos, Vec2::new(6.0, 26.0));
     assert_eq!(got.outer_size, Vec2::new(48.0, 28.0));
     assert_eq!(got.width, 2.0);
-    // The `color.focus.ring` token resolves to the default theme's high-contrast
-    // ring color — NOT the magenta missing-token sentinel.
-    let sentinel = [1.0, 0.0, 1.0, 1.0];
+    // The `FocusRing` token resolves to the default theme's high-contrast ring
+    // color — an opaque, painted band.
     assert_ne!(
-        got.color, sentinel,
-        "the focus-ring token must resolve, not magenta-miss"
+        got.color,
+        [0.0; 4],
+        "the focus-ring token must resolve to a painted color"
     );
 }
 
 #[test]
 fn focus_ring_token_resolves_under_both_default_and_forced_colors() {
-    // The ring is forced-colors-safe (styling-f-tier.md § 2.6): its
-    // `color.focus.ring` token resolves to a real high-contrast color under BOTH
-    // the default theme AND the forced-colors swap (where it maps to the system
-    // `Highlight` value) — never the magenta missing-token sentinel.
-    use buiy_core::render::color::{ColorToken, SystemColorKeyword, resolve_token};
+    // The ring is forced-colors-safe (styling-f-tier.md § 2.6): its `FocusRing`
+    // token resolves to a real high-contrast color under BOTH the default theme
+    // AND the forced-colors swap (where it maps to the system `Highlight` value).
+    use buiy_core::render::color::{ColorToken, SystemColorKeyword, ThemeContract, resolve_token};
     use buiy_core::theme::forced_colors_theme;
 
-    let token = ColorToken::Token(std::borrow::Cow::Borrowed(FOCUS_RING_TOKEN));
-    let sentinel = Color::srgb(1.0, 0.0, 1.0);
+    let token = ColorToken::FocusRing;
 
+    // Under the default theme the ring resolves to a real, painted (non-
+    // transparent) high-contrast color.
     let default_ring = resolve_token(&token, &default_light_theme());
     assert_ne!(
-        default_ring, sentinel,
-        "ring resolves under the default theme"
+        default_ring,
+        Color::NONE,
+        "ring resolves to a painted color under the default theme"
     );
 
     let forced = forced_colors_theme();
     let forced_ring = resolve_token(&token, &forced);
-    assert_ne!(
-        forced_ring, sentinel,
-        "ring resolves under forced-colors too"
-    );
     // Under forced-colors the ring takes the high-contrast `Highlight` value (the
-    // swap maps `color.focus.ring` → `Highlight`), so a shadow-only / low-contrast
+    // swap maps `FocusRing` → `Highlight`), so a shadow-only / low-contrast
     // affordance can never make keyboard focus invisible there.
     assert_eq!(
         forced_ring,
-        forced.color(SystemColorKeyword::Highlight.token()).unwrap(),
+        forced.resolve(ColorToken::SystemColor(SystemColorKeyword::Highlight)),
         "forced-colors focus ring uses the system Highlight value"
     );
 }
@@ -105,7 +101,7 @@ fn focus_ring_token_resolves_under_both_default_and_forced_colors() {
 fn resolve_outline_skips_none_style_zero_width_and_transparent() {
     let theme = default_light_theme();
     let base = Outline {
-        color: ColorToken::Token(std::borrow::Cow::Borrowed(FOCUS_RING_TOKEN)),
+        color: ColorToken::FocusRing,
         style: LineStyle::Solid,
         width: buiy_core::Length::px(2.0),
         offset: buiy_core::Length::px(2.0),
@@ -160,7 +156,7 @@ fn outline_clip_is_ancestor_clip_not_own_box() {
     // The resolved outline carries that ancestor clip verbatim.
     let theme = default_light_theme();
     let outline = Outline {
-        color: ColorToken::Token(std::borrow::Cow::Borrowed(FOCUS_RING_TOKEN)),
+        color: ColorToken::FocusRing,
         style: LineStyle::Solid,
         width: buiy_core::Length::px(2.0),
         offset: buiy_core::Length::px(0.0),
@@ -316,7 +312,6 @@ impl NodeExtractHarness {
 fn spawn_focusable(app: &mut App) -> Entity {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     let child = app
         .world_mut()
@@ -332,7 +327,7 @@ fn spawn_focusable(app: &mut App) -> Entity {
                 .width_px(80.0)
                 .height_px(30.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+                color: ColorToken::SurfacePrimary,
             },
             buiy_core::focus::Focusable::default(),
         ))
@@ -448,7 +443,6 @@ fn focus_ring_outline_clip_is_ancestor_not_own_overflow_hidden_box() {
     // parent's own-box clip the way the FILL is (styling-f-tier.md § 2.4).
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     let mut h = NodeExtractHarness::new();
     // A clipping parent (overflow: hidden) with a small box.
@@ -467,7 +461,7 @@ fn focus_ring_outline_clip_is_ancestor_not_own_overflow_hidden_box() {
                 .width_px(60.0)
                 .height_px(24.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+                color: ColorToken::SurfacePrimary,
             },
             buiy_core::focus::Focusable::default(),
         ))

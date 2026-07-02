@@ -37,7 +37,6 @@ use buiy_core::render::extract::{
 };
 use buiy_core::render::instance::{border_band_stride_agrees, packed_raw_stride_agrees};
 use buiy_core::theme::{UserPreferences, default_light_theme};
-use std::borrow::Cow;
 
 // --- Tier 1: the pure border resolver ---------------------------------------
 
@@ -45,17 +44,17 @@ use std::borrow::Cow;
 /// the given uniform radius. Widths are layout-owned (`BoxModel.border`), passed
 /// separately to `resolve_border`.
 fn four_color_border(radius_px: f32) -> Border {
-    let side = |name: &'static str| BorderSide {
-        color: ColorToken::Token(Cow::Borrowed(name)),
+    let side = |color: ColorToken| BorderSide {
+        color,
         style: LineStyle::Solid,
     };
     Border {
-        // The default theme carries these accent/surface/text tokens, so each
-        // side resolves to a DISTINCT real color (not the magenta sentinel).
-        top: side("color.accent"),
-        right: side("color.text.primary"),
-        bottom: side("color.text.secondary"),
-        left: side("color.surface.secondary"),
+        // Four distinct semantic tokens, so each side resolves to a DISTINCT
+        // real color.
+        top: side(ColorToken::Accent),
+        right: side(ColorToken::TextPrimary),
+        bottom: side(ColorToken::TextSecondary),
+        left: side(ColorToken::SurfaceSecondary),
         radius: Corners::all(Radius::circular(radius_px)),
     }
 }
@@ -213,7 +212,7 @@ fn resolve_border_paints_only_the_styled_sides() {
     let theme = default_light_theme();
     let border = Border {
         top: BorderSide {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
             style: LineStyle::Solid,
         },
         ..Default::default()
@@ -245,7 +244,7 @@ fn resolve_shadows_pins_sigma_to_half_the_blur_and_expands_the_box() {
     // shadow box = border box ⊕ spread ⊕ offset.
     let theme = default_light_theme();
     let bs = BoxShadow(vec![Shadow {
-        color: ColorToken::Token(Cow::Borrowed("color.text.primary")),
+        color: ColorToken::TextPrimary,
         offset_x: Length::px(4.0),
         offset_y: Length::px(8.0),
         blur: Length::px(10.0),
@@ -282,13 +281,13 @@ fn resolve_shadows_preserves_css_list_order() {
     let theme = default_light_theme();
     let bs = BoxShadow(vec![
         Shadow {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
             offset_x: Length::px(1.0),
             blur: Length::px(2.0),
             ..Default::default()
         },
         Shadow {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
             offset_x: Length::px(9.0),
             blur: Length::px(2.0),
             ..Default::default()
@@ -315,13 +314,13 @@ fn resolve_shadows_skips_inset_terms_in_v1() {
     let theme = default_light_theme();
     let bs = BoxShadow(vec![
         Shadow {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
             blur: Length::px(4.0),
             inset: true,
             ..Default::default()
         },
         Shadow {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
             blur: Length::px(4.0),
             inset: false,
             ..Default::default()
@@ -351,7 +350,7 @@ fn resolve_shadows_suppresses_all_under_forced_colors() {
     // default theme resolves to ZERO under forced-colors.
     let theme = default_light_theme();
     let bs = BoxShadow(vec![Shadow {
-        color: ColorToken::Token(Cow::Borrowed("color.text.primary")),
+        color: ColorToken::TextPrimary,
         blur: Length::px(8.0),
         ..Default::default()
     }]);
@@ -571,11 +570,11 @@ fn spawn_bordered_shadowed(app: &mut App) -> Entity {
                 .height_px(40.0)
                 .border(3.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+                color: ColorToken::SurfacePrimary,
             },
             four_color_border(0.0),
             BoxShadow(vec![Shadow {
-                color: ColorToken::Token(Cow::Borrowed("color.text.primary")),
+                color: ColorToken::TextPrimary,
                 offset_x: Length::px(0.0),
                 offset_y: Length::px(4.0),
                 blur: Length::px(8.0),

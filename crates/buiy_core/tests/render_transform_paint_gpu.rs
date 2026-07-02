@@ -25,16 +25,11 @@ fn scaled_fill_paints_beyond_unscaled_box() {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
 
     const W: u32 = 64;
     const H: u32 = 64;
 
     let mut app = support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.fill".into(), Color::WHITE);
-    }
 
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
@@ -54,7 +49,7 @@ fn scaled_fill_paints_beyond_unscaled_box() {
             .height_px(10.0)
             .scale(2.0),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("test.fill")),
+            color: ColorToken::Custom(Color::WHITE),
         },
     );
     let c = app.world_mut().spawn(child).id();
@@ -103,17 +98,12 @@ fn rotated_fill_paints_off_axis() {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
-    use std::borrow::Cow;
     use std::f32::consts::FRAC_PI_2;
 
     const W: u32 = 64;
     const H: u32 = 64;
 
     let mut app = support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.fill".into(), Color::WHITE);
-    }
 
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
@@ -134,7 +124,7 @@ fn rotated_fill_paints_off_axis() {
             .height_px(30.0)
             .rotate_z(FRAC_PI_2),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("test.fill")),
+            color: ColorToken::Custom(Color::WHITE),
         },
     );
     let c = app.world_mut().spawn(child).id();

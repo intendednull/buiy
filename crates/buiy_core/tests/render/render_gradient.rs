@@ -12,19 +12,13 @@ use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{BackgroundLayer, BackgroundLayers, ColorStop, LinearGradient};
 use buiy_core::render::extract::{linear_axis, resolve_gradients};
 use buiy_core::render::instance::{GRADIENT_KIND_LINEAR, GRADIENT_KIND_RADIAL};
-use buiy_core::theme::Theme;
-use std::borrow::Cow;
+use buiy_core::theme::{Theme, default_dark_theme};
 
-/// A theme carrying the design's blue accent ramp (`--ac` / `--ac2`).
+/// A theme carrying the design's blue accent ramp (`--ac` / `--ac2`). The dark
+/// palette's `Accent` / `AccentLighter` resolve to the exact `#5b86f5` / `#7fa1f7`
+/// this suite asserts (theme.rs byte-identical guard), so it is the fixture.
 fn accent_theme() -> Theme {
-    let mut t = Theme::default();
-    t.colors
-        .insert("color.accent".into(), Color::srgb_u8(0x5b, 0x86, 0xf5)); // --ac
-    t.colors.insert(
-        "color.accent.lighter".into(),
-        Color::srgb_u8(0x7f, 0xa1, 0xf7), // --ac2
-    );
-    t
+    default_dark_theme()
 }
 
 fn linear_layers(angle_deg: f32) -> BackgroundLayers {
@@ -32,11 +26,11 @@ fn linear_layers(angle_deg: f32) -> BackgroundLayers {
         angle_deg,
         stops: vec![
             ColorStop {
-                color: ColorToken::Token(Cow::Borrowed("color.accent")),
+                color: ColorToken::Accent,
                 position: 0.0,
             },
             ColorStop {
-                color: ColorToken::Token(Cow::Borrowed("color.accent.lighter")),
+                color: ColorToken::AccentLighter,
                 position: 1.0,
             },
         ],
@@ -161,9 +155,7 @@ fn resolve_gradients_resolves_stops_and_packs_angle() {
 #[test]
 fn resolve_gradients_lowers_solid_layer_to_flat_two_stop() {
     let theme = accent_theme();
-    let layers = BackgroundLayers(vec![BackgroundLayer::Solid(ColorToken::Token(
-        Cow::Borrowed("color.accent"),
-    ))]);
+    let layers = BackgroundLayers(vec![BackgroundLayer::Solid(ColorToken::Accent)]);
     let out = resolve_gradients(
         &layers,
         Vec2::ZERO,
@@ -202,8 +194,8 @@ fn resolve_gradients_emits_layers_back_to_front() {
     // CSS paint order: index 0 (accent) is frontmost, index 1 (accent.lighter)
     // is behind. The draw list must be [behind, front] = [lighter, accent].
     let layers = BackgroundLayers(vec![
-        BackgroundLayer::Solid(ColorToken::Token(Cow::Borrowed("color.accent"))),
-        BackgroundLayer::Solid(ColorToken::Token(Cow::Borrowed("color.accent.lighter"))),
+        BackgroundLayer::Solid(ColorToken::Accent),
+        BackgroundLayer::Solid(ColorToken::AccentLighter),
     ]);
     let out = resolve_gradients(
         &layers,
@@ -233,11 +225,11 @@ fn resolve_gradients_marks_radial_kind() {
     let layers = BackgroundLayers(vec![BackgroundLayer::Radial(RadialGradient {
         stops: vec![
             ColorStop {
-                color: ColorToken::Token(Cow::Borrowed("color.accent")),
+                color: ColorToken::Accent,
                 position: 0.0,
             },
             ColorStop {
-                color: ColorToken::Token(Cow::Borrowed("color.accent.lighter")),
+                color: ColorToken::AccentLighter,
                 position: 1.0,
             },
         ],
@@ -279,7 +271,7 @@ fn resolve_gradients_packs_dotted_grid_params() {
     // The default dark theme carries `color.misc.dot-bg` (#16181c) — A2's token.
     let theme = buiy_core::theme::default_dark_theme();
     let layers = BackgroundLayers(vec![BackgroundLayer::Radial(RadialGradient::dot_grid(
-        ColorToken::Token(Cow::Borrowed("color.misc.dot-bg")),
+        ColorToken::DotBg,
         1.0,
         22.0,
     ))]);
@@ -329,11 +321,11 @@ fn resolve_gradients_single_radial_honors_explicit_radius() {
     let layers = BackgroundLayers(vec![BackgroundLayer::Radial(RadialGradient {
         stops: vec![
             ColorStop {
-                color: ColorToken::Token(Cow::Borrowed("color.accent")),
+                color: ColorToken::Accent,
                 position: 0.0,
             },
             ColorStop {
-                color: ColorToken::Token(Cow::Borrowed("color.accent.lighter")),
+                color: ColorToken::AccentLighter,
                 position: 1.0,
             },
         ],

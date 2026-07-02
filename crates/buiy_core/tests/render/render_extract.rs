@@ -2,9 +2,8 @@
 //! adapter, no RenderApp. Mirrors tests/render_instance.rs conventions.
 
 use bevy::prelude::*;
-use buiy_core::render::color::{ColorToken, SystemColorKeyword, resolve_token};
+use buiy_core::render::color::{ColorToken, SystemColorKeyword, ThemeContract, resolve_token};
 use buiy_core::theme::{Theme, default_light_theme, forced_colors_theme};
-use std::borrow::Cow;
 
 #[test]
 fn transparent_token_resolves_to_none() {
@@ -17,21 +16,10 @@ fn transparent_token_resolves_to_none() {
 fn known_token_resolves_to_theme_color() {
     let theme = default_light_theme();
     let c = resolve_token(
-        &ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        &ColorToken::SurfacePrimary,
         &theme,
     );
     assert_eq!(c, Color::WHITE);
-}
-
-#[test]
-fn missing_token_resolves_to_magenta_sentinel() {
-    let theme = default_light_theme();
-    let c = resolve_token(
-        &ColorToken::Token(Cow::Borrowed("nope.not.a.token")),
-        &theme,
-    );
-    // Same sentinel render/mod.rs uses for a missing token.
-    assert_eq!(c, Color::srgb(1.0, 0.0, 1.0));
 }
 
 #[test]
@@ -66,7 +54,7 @@ fn system_color_resolves_through_forced_theme_on_the_r5_path() {
     );
     assert_eq!(
         node.color,
-        theme.color("Canvas").unwrap(),
+        theme.resolve(ColorToken::SystemColor(SystemColorKeyword::Canvas)),
         "the R5 path must resolve to the forced theme's Canvas color"
     );
 }
@@ -91,7 +79,7 @@ fn extracted_node_carries_box_and_resolved_color() {
     };
     let gt = GlobalTransform::from_translation(Vec3::new(10.0, 20.0, 0.0));
     let bg = Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     };
     let entity = Entity::from_raw_u32(7).unwrap();
 
@@ -136,7 +124,7 @@ fn resolve_background_color_prefers_animated_then_token_then_none() {
 
     let theme = default_light_theme();
     let bg = Background {
-        color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+        color: ColorToken::SurfacePrimary,
     };
     let token_color = resolve_token(&bg.color, &theme);
     let animated = AnimatedBackgroundColor(Color::srgb(0.12, 0.34, 0.56));

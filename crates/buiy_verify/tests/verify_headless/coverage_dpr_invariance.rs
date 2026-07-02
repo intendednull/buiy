@@ -1,35 +1,27 @@
-//! DPR-invariance property + magenta-sentinel guard for the CPU snapshot tiers
-//! (audit 2026-06-18, "Investigated & dismissed" → T3.6). Pure-CPU, headless.
+//! DPR-invariance property for the CPU snapshot tiers (audit 2026-06-18,
+//! "Investigated & dismissed" → T3.6). Pure-CPU, headless.
 //!
-//! Two assertions that protect the CPU snapshot tiers (`coverage_layout.rs`,
-//! `coverage_display_list.rs`) after the matrix was trimmed:
+//! **DPR is inert at the CPU tiers.** `ResolvedLayout` and the display list are
+//! in LOGICAL px — DPR lives only in the GPU render-view uniform — so a CPU
+//! layout / display-list dump is byte-identical at every DPR. The snapshot tiers
+//! therefore drive a SINGLE DPR ([`Matrix::cpu_snapshots`]); previously they
+//! drove both `X1` and `X2`, doubling the `.snap` count with identical content
+//! (24 of 48 button CPU snapshots were exact dpr1==dpr2 duplicates).
+//! `cpu_snapshots_are_dpr_invariant` asserts that real invariant DIRECTLY and
+//! once — the property the duplicate baselines were implicitly (and wastefully)
+//! encoding — so collapsing the DPR axis loses no coverage. (The GPU golden tier
+//! keeps both DPRs: DPR genuinely changes the rasterized output there.)
 //!
-//! 1. **DPR is inert at the CPU tiers** (Part 1). `ResolvedLayout` and the
-//!    display list are in LOGICAL px — DPR lives only in the GPU render-view
-//!    uniform — so a CPU layout / display-list dump is byte-identical at every
-//!    DPR. The snapshot tiers therefore drive a SINGLE DPR
-//!    ([`Matrix::cpu_snapshots`]); previously they drove both `X1` and `X2`,
-//!    doubling the `.snap` count with identical content (24 of 48 button CPU
-//!    snapshots were exact dpr1==dpr2 duplicates). `cpu_snapshots_are_dpr_invariant`
-//!    asserts that real invariant DIRECTLY and once — the property the duplicate
-//!    baselines were implicitly (and wastefully) encoding — so collapsing the DPR
-//!    axis loses no coverage. (The GPU golden tier keeps both DPRs: DPR genuinely
-//!    changes the rasterized output there.)
-//!
-//! 2. **No CPU snapshot baselines the missing-token magenta sentinel** (Part 2).
-//!    A `*.light.*` system-color-only cell would resolve its `SystemColor` tokens
-//!    to `#ff00ffff` (the sentinel) — baselining that cements a known-wrong pixel
-//!    and hides a real regression to/from magenta. The fixture now declares
-//!    itself system-color-only and the snapshot enrollment skips its light cells;
-//!    `no_snapshot_cell_paints_the_sentinel` is the defense-in-depth guard that
-//!    fails if any enrolled cell ever paints the sentinel again.
+//! (The former Part-2 "no CPU snapshot baselines the missing-token magenta
+//! sentinel" guard was retired by Track B: `ColorToken` is now a closed enum
+//! resolved through an exhaustive match, so a missing/typo'd token is a compile
+//! error — there is no runtime magenta sentinel left to baseline.)
 
 use bevy::prelude::*;
-use buiy_core::render::color::MISSING_TOKEN_FALLBACK;
 use buiy_core::render::golden::Dpr;
 use buiy_verify::coverage::{Cell, Matrix, build_app, sorted_catalog};
 use buiy_verify::snapshot::{
-    NameLookup, color_hex_for_test, display_list_dump, extract_nodes_from_world, layout_dump,
+    NameLookup, display_list_dump, extract_nodes_from_world, layout_dump,
 };
 
 /// Build one (fixture, cell), run a single `update()`, and return the two CPU
@@ -47,9 +39,9 @@ fn cpu_dumps(fx: &buiy_verify::coverage::Fixture, cell: &Cell) -> (String, Strin
     (layout, display_list)
 }
 
-/// Part 1 — the DPR-invariance property. For every snapshot-enrolled cell, the
-/// CPU layout dump AND the CPU display-list dump are BYTE-IDENTICAL at `Dpr::X1`
-/// and `Dpr::X2`. This is the single, explicit assertion that replaces the 24
+/// The DPR-invariance property. For every snapshot-enrolled cell, the CPU layout
+/// dump AND the CPU display-list dump are BYTE-IDENTICAL at `Dpr::X1` and
+/// `Dpr::X2`. This is the single, explicit assertion that replaces the 24
 /// redundant dpr2 button baselines the collapse removed: it proves DPR does not
 /// affect CPU output, so a single-DPR snapshot tier loses nothing.
 ///
@@ -62,7 +54,7 @@ fn cpu_snapshots_are_dpr_invariant() {
     // `cpu_snapshots()` carries a single DPR; pair each of its cells with the
     // SECOND integer DPR to form the (X1, X2) comparison. Skip a cell the fixture
     // cannot paint (same skip the snapshot tiers honor) so we never compare two
-    // magenta-sentinel dumps and call DPR "invariant" vacuously.
+    // empty/degenerate dumps and call DPR "invariant" vacuously.
     for fx in sorted_catalog() {
         for cell in Matrix::cpu_snapshots().cells() {
             if !fx.snapshots_cell(&cell) {
@@ -104,48 +96,5 @@ fn cpu_snapshots_are_dpr_invariant() {
     assert!(
         compared > 0,
         "the DPR-invariance property must compare at least one cell (else it is vacuous)"
-    );
-}
-
-/// Part 2 — the magenta-sentinel guard. No snapshot-enrolled cell's CPU
-/// display-list dump may contain the missing-token sentinel `#ff00ffff`.
-/// Baselining the sentinel cements a known-wrong pixel as the expected color, so
-/// a real "renders magenta" regression would be invisible at that cell. The
-/// system-color-only button fixture skips its (unresolvable) light cells via
-/// `paints_cell`; this guard is the teeth — it fails loudly if any enrolled cell
-/// ever paints the sentinel again (a new fixture that forgets its skip, or a
-/// theme regression that drops a token an enrolled cell needs).
-#[test]
-fn no_snapshot_cell_paints_the_sentinel() {
-    let sentinel = color_hex_for_test(MISSING_TOKEN_FALLBACK);
-    assert_eq!(
-        sentinel, "#ff00ffff",
-        "the sentinel hex is the magenta signal"
-    );
-
-    let mut checked = 0usize;
-    for fx in sorted_catalog() {
-        for cell in Matrix::cpu_snapshots().cells() {
-            if !fx.snapshots_cell(&cell) {
-                continue;
-            }
-            let (_, display_list) = cpu_dumps(fx, &cell);
-            assert!(
-                !display_list.contains(&sentinel),
-                "enrolled cell {}.{} (theme={}, viewport={}, fc={}) paints the missing-token \
-                 sentinel {sentinel} — a snapshot tier must never baseline it (skip the cell via \
-                 the fixture's `paints_cell`, or fix the token resolution):\n{display_list}",
-                fx.name,
-                fx.state,
-                cell.theme.key(),
-                cell.viewport.key,
-                cell.forced_colors,
-            );
-            checked += 1;
-        }
-    }
-    assert!(
-        checked > 0,
-        "the sentinel guard must check at least one cell"
     );
 }

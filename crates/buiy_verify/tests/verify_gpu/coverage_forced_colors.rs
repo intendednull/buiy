@@ -63,7 +63,7 @@ fn spawn_broken_brand_widget(app: &mut App) {
     app.world_mut().spawn((
         Name::new("brand-badge"),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.accent")),
+            color: ColorToken::Accent,
         },
         Border {
             top: BorderSide {

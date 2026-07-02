@@ -19,19 +19,10 @@ use buiy_core::render::prepare::BufferUploadStats;
 const W: u32 = 64;
 const H: u32 = 96;
 
-/// A flex column of solid bg nodes, one per entry in `colors` (token names). Returns
+/// A flex column of solid bg nodes, one per entry in `colors`. Returns
 /// the GPU app, its readback target, and the child entities (index 0 is the victim).
-fn scene(colors: &[&str]) -> (App, Handle<Image>, Vec<Entity>) {
+fn scene(colors: &[Color]) -> (App, Handle<Image>, Vec<Entity>) {
     let mut app = support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("p.a".into(), Color::srgb(0.90, 0.12, 0.12));
-        theme
-            .colors
-            .insert("p.b".into(), Color::srgb(0.12, 0.25, 0.90));
-    }
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
 
@@ -43,7 +34,7 @@ fn scene(colors: &[&str]) -> (App, Handle<Image>, Vec<Entity>) {
                     Node,
                     Style::default().width_px(40.0).height_px(12.0),
                     Background {
-                        color: ColorToken::Token((*c).to_string().into()),
+                        color: ColorToken::Custom(*c),
                     },
                 ))
                 .id()
@@ -75,11 +66,12 @@ fn uploaded(app: &App) -> u64 {
 fn partial_upload_patches_one_slot_pixel_identical() {
     // App A: four solid bg nodes, then PATCH node 0's color (a group-free,
     // footprint-stable, pure-bg-quad change → C3b Patch → D2 partial upload).
-    let (mut a, ta, kids) = scene(&["p.a", "p.a", "p.a", "p.a"]);
+    let red = Color::srgb(0.90, 0.12, 0.12);
+    let blue = Color::srgb(0.12, 0.25, 0.90);
+    let (mut a, ta, kids) = scene(&[red, red, red, red]);
     support::finish_and_run(&mut a, 3);
     let before = uploaded(&a); // the full upload packed all 4 instances
-    a.world_mut().get_mut::<Background>(kids[0]).unwrap().color =
-        ColorToken::Token("p.b".to_string().into());
+    a.world_mut().get_mut::<Background>(kids[0]).unwrap().color = ColorToken::Custom(blue);
     a.update(); // the Patch frame
     a.update(); // settle
     let after = uploaded(&a);
@@ -96,7 +88,7 @@ fn partial_upload_patches_one_slot_pixel_identical() {
     );
 
     // App B: the SAME final colors rendered cold (one full pack + upload).
-    let (mut b, tb, _) = scene(&["p.b", "p.a", "p.a", "p.a"]);
+    let (mut b, tb, _) = scene(&[blue, red, red, red]);
     support::finish_and_run(&mut b, 3);
     let pixels_b = support::readback_rgba(&mut b, tb);
 

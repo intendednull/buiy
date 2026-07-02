@@ -36,7 +36,6 @@ fn render_degraded_group_gpu() {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
-    use std::borrow::Cow;
 
     const W: u32 = 64;
     const H: u32 = 64;
@@ -45,10 +44,6 @@ fn render_degraded_group_gpu() {
     let mut app = support::gpu_render_app(W, H);
     // Degrade everything: budget far below one group's target bytes.
     force_tiny_rt_budget(&mut app, 64);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.red".into(), red);
-    }
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
 
@@ -67,7 +62,7 @@ fn render_degraded_group_gpu() {
                 .width_px(32.0)
                 .height_px(32.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.red")),
+                color: ColorToken::Custom(red),
             },
         ))
         .id();
@@ -135,7 +130,6 @@ fn degraded_fold_does_not_compound_over_two_frames() {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
-    use std::borrow::Cow;
 
     const W: u32 = 64;
     const H: u32 = 64;
@@ -143,10 +137,6 @@ fn degraded_fold_does_not_compound_over_two_frames() {
 
     let mut app = support::gpu_render_app(W, H);
     force_tiny_rt_budget(&mut app, 64);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.red".into(), red);
-    }
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
 
@@ -164,7 +154,7 @@ fn degraded_fold_does_not_compound_over_two_frames() {
                 .width_px(32.0)
                 .height_px(32.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.red")),
+                color: ColorToken::Custom(red),
             },
         ))
         .id();
@@ -226,7 +216,6 @@ fn degraded_glyph_fold_idempotent_under_quad_dirty_only_frame() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity, TextColor};
     use buiy_core::text::{FontSize, Text};
-    use std::borrow::Cow;
 
     const W: u32 = 96;
     const H: u32 = 64;
@@ -234,11 +223,6 @@ fn degraded_glyph_fold_idempotent_under_quad_dirty_only_frame() {
 
     let mut app = support::gpu_render_app(W, H);
     force_tiny_rt_budget(&mut app, 64);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.blue".into(), blue);
-        theme.colors.insert("test.white".into(), Color::WHITE);
-    }
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
 
@@ -257,7 +241,7 @@ fn degraded_glyph_fold_idempotent_under_quad_dirty_only_frame() {
                 .width_px(64.0)
                 .height_px(40.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.blue")),
+                color: ColorToken::Custom(blue),
             },
         ))
         .id();
@@ -272,7 +256,7 @@ fn degraded_glyph_fold_idempotent_under_quad_dirty_only_frame() {
             }),
             Text(String::from("Hi")),
             FontSize(24.0),
-            TextColor(ColorToken::Token(Cow::Borrowed("test.white"))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
         ))
         .id();
     let parent = app
@@ -289,12 +273,8 @@ fn degraded_glyph_fold_idempotent_under_quad_dirty_only_frame() {
     let frame1 = support::readback_rgba(&mut app, target.clone());
 
     // Mutate ONLY a quad input (the bg color) → quad_dirty, glyph retained.
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("test.blue".into(), Color::srgb(0.05, 0.05, 0.7));
-    }
+    app.world_mut().get_mut::<Background>(bg).unwrap().color =
+        ColorToken::Custom(Color::srgb(0.05, 0.05, 0.7));
     support::finish_and_run(&mut app, 3);
     let frame2 = support::readback_rgba(&mut app, target);
 
@@ -372,7 +352,6 @@ fn nested_degraded_group_does_not_corrupt_parent() {
     use buiy_core::layout::{Inset, Length, Sizing, Style};
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::{Background, Opacity};
-    use std::borrow::Cow;
 
     const W: u32 = 96;
     const H: u32 = 96;
@@ -382,10 +361,6 @@ fn nested_degraded_group_does_not_corrupt_parent() {
     // (nested) one: plan_allocation degrades lowest-cost (smallest) first.
     let mut app = support::gpu_render_app(W, H);
     force_tiny_rt_budget(&mut app, 4096);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert("test.red".into(), red);
-    }
     let target = support::render_to_image(&mut app, W, H);
     support::spawn_capture_camera(&mut app, target.clone());
 
@@ -405,7 +380,7 @@ fn nested_degraded_group_does_not_corrupt_parent() {
                 .width_px(16.0)
                 .height_px(16.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.red")),
+                color: ColorToken::Custom(red),
             },
         ))
         .id();

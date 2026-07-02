@@ -6,8 +6,7 @@
 use bevy::math::Rect;
 use bevy::prelude::*;
 use buiy_core::render::color::{
-    CARET_COLOR_TOKEN, ColorToken, PLACEHOLDER_COLOR_TOKEN, SELECTION_BG_TOKEN, SELECTION_FG_TOKEN,
-    resolve_caret_color, resolve_selection_bg, resolve_selection_fg,
+    ColorToken, ThemeContract, resolve_caret_color, resolve_selection_bg, resolve_selection_fg,
 };
 use buiy_core::render::components::{CaretColor, TextColor};
 use buiy_core::text::{CaretVisual, SelectionVisual};
@@ -17,73 +16,55 @@ use cosmic_text::Cursor;
 // --- Task 1: components, tokens, resolution --------------------------------
 
 #[test]
-fn default_theme_carries_the_t7_tokens_but_not_color_caret() {
+fn default_theme_resolves_selection_and_placeholder_and_caret_defaults_to_current() {
     let t = default_light_theme();
-    assert!(t.color(SELECTION_BG_TOKEN).is_some(), "selection bg token");
-    assert!(t.color(SELECTION_FG_TOKEN).is_some(), "selection fg token");
-    assert!(
-        t.color(PLACEHOLDER_COLOR_TOKEN).is_some(),
-        "placeholder token"
-    );
-    // Decision 7: caret-color `auto` parity — NO default caret entry, the
-    // chain falls through to currentColor.
-    assert!(
-        t.color(CARET_COLOR_TOKEN).is_none(),
-        "no default caret token"
-    );
+    // Selection + placeholder are real semantic tokens in the closed vocabulary,
+    // so they always resolve to a concrete color.
+    assert_ne!(t.resolve(ColorToken::SelectionBg), Color::NONE);
+    assert_ne!(t.resolve(ColorToken::SelectionFg), Color::NONE);
+    assert_ne!(t.resolve(ColorToken::TextPlaceholder), Color::NONE);
+    // Decision 7: caret-color `auto` parity — the vocabulary carries NO caret
+    // token, so with no explicit CaretColor the chain falls through to
+    // currentColor (Track B removed the theme-caret middle tier).
+    let current = Color::srgb(0.1, 0.2, 0.3);
+    assert_eq!(resolve_caret_color(None, &t, current), current);
 }
 
 #[test]
 fn selection_colors_resolve_named_tokens_in_a_normal_theme() {
     let t = default_light_theme();
-    assert_eq!(
-        resolve_selection_bg(&t),
-        t.color(SELECTION_BG_TOKEN).unwrap()
-    );
-    assert_eq!(
-        resolve_selection_fg(&t),
-        t.color(SELECTION_FG_TOKEN).unwrap()
-    );
+    assert_eq!(resolve_selection_bg(&t), t.resolve(ColorToken::SelectionBg));
+    assert_eq!(resolve_selection_fg(&t), t.resolve(ColorToken::SelectionFg));
 }
 
 #[test]
 fn selection_colors_prefer_system_keys_under_forced_colors() {
-    // Decision 6: the wholesale forced-colors swap leaves no named tokens;
-    // Highlight/HighlightText are the CSS ::selection system pair — the
-    // resolve_token CurrentColor idiom, extended.
+    // Decision 6: under forced-colors the typed resolver maps the selection
+    // tokens onto the CSS Highlight/HighlightText system pair.
     use buiy_core::render::color::SystemColorKeyword;
     let t = forced_colors_theme();
     assert_eq!(
         resolve_selection_bg(&t),
-        t.color(SystemColorKeyword::Highlight.token()).unwrap()
+        t.resolve(ColorToken::SystemColor(SystemColorKeyword::Highlight))
     );
     assert_eq!(
         resolve_selection_fg(&t),
-        t.color(SystemColorKeyword::HighlightText.token()).unwrap()
+        t.resolve(ColorToken::SystemColor(SystemColorKeyword::HighlightText))
     );
 }
 
 #[test]
-fn caret_color_chain_explicit_then_theme_key_then_current() {
-    let mut t = default_light_theme();
+fn caret_color_chain_explicit_then_current() {
+    let t = default_light_theme();
     let current = Color::srgb(0.1, 0.2, 0.3);
 
-    // Tier 3: no explicit token, no theme key → currentColor.
+    // Auto (no explicit token): the closed vocabulary carries no caret token,
+    // so caret-color falls through to currentColor. (Track B removed the old
+    // theme-caret middle tier — there is no longer a `color.caret` to opt into.)
     assert_eq!(resolve_caret_color(None, &t, current), current);
 
-    // Tier 2: the theme caret key, when a theme opts in (presence check,
-    // never a magenta miss).
-    t.colors
-        .insert(CARET_COLOR_TOKEN.into(), Color::srgb(0.9, 0.0, 0.0));
-    assert_eq!(
-        resolve_caret_color(None, &t, current),
-        Color::srgb(0.9, 0.0, 0.0)
-    );
-
-    // Tier 1: an explicit CaretColor token wins over both.
-    t.colors
-        .insert("my.caret".into(), Color::srgb(0.0, 0.9, 0.0));
-    let explicit = ColorToken::Token("my.caret".into());
+    // An explicit CaretColor token wins over the auto default.
+    let explicit = ColorToken::Custom(Color::srgb(0.0, 0.9, 0.0));
     assert_eq!(
         resolve_caret_color(Some(&explicit), &t, current),
         Color::srgb(0.0, 0.9, 0.0)
@@ -117,7 +98,7 @@ fn selection_visual_normalizes_on_construction() {
 #[test]
 fn text_color_placeholder_is_the_token_constructor() {
     let TextColor(token) = TextColor::placeholder();
-    assert_eq!(token, ColorToken::Token(PLACEHOLDER_COLOR_TOKEN.into()));
+    assert_eq!(token, ColorToken::TextPlaceholder);
 }
 
 use buiy_core::text::{CaretBlinkInterval, blink_phase};
@@ -249,21 +230,29 @@ use buiy_core::render::extract::TextQuad;
 use buiy_core::text::{ComputedTextLayout, FontSize, Text, TextBuffer, TextDecorations};
 use buiy_core::theme::Theme;
 
-const SEL_BG: Color = Color::srgb(1.0, 0.0, 0.0);
-const SEL_FG: Color = Color::srgb(0.0, 0.0, 1.0);
+/// The default theme's resolved `::selection` background — the color the
+/// producer fills selection rects with. Track B: selection colors are no longer
+/// injectable (`SelectionVisual` carries none; the producer resolves the theme's
+/// typed `SelectionBg`), so the tests read this back from the theme instead of
+/// overriding it. The default light theme's `SelectionBg` is opaque and distinct
+/// from the text/underline colors, so exact-color quad filtering still works.
+fn selection_bg(h: &TextExtractHarness) -> Color {
+    resolve_selection_bg(h.app.world().resource::<Theme>())
+}
 
-fn set_selection_tokens(app: &mut App) {
-    let mut theme = app.world_mut().resource_mut::<Theme>();
-    theme.colors.insert(SELECTION_BG_TOKEN.into(), SEL_BG);
-    theme.colors.insert(SELECTION_FG_TOKEN.into(), SEL_FG);
+/// The default theme's resolved `::selection` foreground (the selected-glyph
+/// re-tint target).
+fn selection_fg(h: &TextExtractHarness) -> Color {
+    resolve_selection_fg(h.app.world().resource::<Theme>())
 }
 
 fn selection_quads(h: &TextExtractHarness) -> Vec<TextQuad> {
+    let bg = selection_bg(h);
     h.text_quads()
         .quads
         .iter()
         .copied()
-        .filter(|q| q.color == SEL_BG)
+        .filter(|q| q.color == bg)
         .collect()
 }
 
@@ -272,7 +261,6 @@ fn selection_quads(h: &TextExtractHarness) -> Vec<TextQuad> {
 #[test]
 fn selection_rects_match_highlight_spans_folded_by_origin() {
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     let e = h
         .app
         .world_mut()
@@ -336,7 +324,6 @@ fn mixed_bidi_selection_yields_multiple_disjoint_rects() {
     // "hello עולם world": bytes 0..6 "hello ", 6..14 עולם, 14.. " world".
     // Select mid-Hebrew → mid-"world": logical [10, 18).
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     crate::support::register_fixture_font(
         &mut h.app,
         "Noto Sans Hebrew",
@@ -382,7 +369,6 @@ fn selection_rects_precede_decoration_quads_for_the_entity() {
     // entity (decision 5's pre-pass), so the carrier segment is
     // [sel…, deco…].
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     h.app.world_mut().spawn((
         buiy_core::Node,
         buiy_core::layout::Style::default(),
@@ -394,14 +380,12 @@ fn selection_rects_precede_decoration_quads_for_the_entity() {
         SelectionVisual::new(Cursor::new(0, 0), Cursor::new(0, 8)),
     ));
     h.settle();
+    let bg = selection_bg(&h);
     let quads = &h.text_quads().quads;
-    let first_deco = quads
-        .iter()
-        .position(|q| q.color != SEL_BG)
-        .expect("underline");
+    let first_deco = quads.iter().position(|q| q.color != bg).expect("underline");
     let last_sel = quads
         .iter()
-        .rposition(|q| q.color == SEL_BG)
+        .rposition(|q| q.color == bg)
         .expect("selection");
     assert!(
         last_sel < first_deco,
@@ -422,7 +406,6 @@ fn multiline_selection_extends_to_the_line_edge_and_fills_empty_lines() {
     // caught by the exact len() == 3 below) and the re-tint predicate's
     // two line terms (caught by the tint pattern at the end).
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     let e = h
         .app
         .world_mut()
@@ -464,7 +447,7 @@ fn multiline_selection_extends_to_the_line_edge_and_fills_empty_lines() {
     // end.line] AND inside the byte range re-tint — 8 painted glyphs
     // x x | a b | (empty) | c d | e f, of which only 'b' and 'c' fall
     // inside the (1,1)-(3,1) selection.
-    let fg = LinearRgba::from(SEL_FG);
+    let fg = LinearRgba::from(selection_fg(&h));
     let fg = [fg.red, fg.green, fg.blue, fg.alpha];
     let tinted: Vec<bool> = h.glyphs().glyphs.iter().map(|g| g.color == fg).collect();
     assert_eq!(
@@ -476,7 +459,6 @@ fn multiline_selection_extends_to_the_line_edge_and_fills_empty_lines() {
 #[test]
 fn collapsed_selection_paints_nothing() {
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     h.app.world_mut().spawn((
         buiy_core::Node,
         buiy_core::layout::Style::default(),
@@ -492,7 +474,6 @@ fn collapsed_selection_paints_nothing() {
 #[test]
 fn selected_glyphs_re_tint_to_the_selection_fg() {
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     let e = h
         .app
         .world_mut()
@@ -507,7 +488,7 @@ fn selected_glyphs_re_tint_to_the_selection_fg() {
         .id();
     h.settle();
 
-    let fg = LinearRgba::from(SEL_FG);
+    let fg = LinearRgba::from(selection_fg(&h));
     let fg = [fg.red, fg.green, fg.blue, fg.alpha];
     let tinted: Vec<bool> = h.glyphs().glyphs.iter().map(|g| g.color == fg).collect();
     // 7 painted glyphs ("Hithere"): H i t h e r e → i,t,h selected.
@@ -530,7 +511,6 @@ fn selected_glyphs_re_tint_to_the_selection_fg() {
 #[test]
 fn selection_changes_fire_the_union_and_removal_clears() {
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     let e = h
         .app
         .world_mut()
@@ -633,8 +613,7 @@ fn caret_emits_one_snapped_stamp_after_all_glyphs() {
         h.app
             .world()
             .resource::<Theme>()
-            .color("color.text.primary")
-            .unwrap(),
+            .resolve(ColorToken::TextPrimary),
     );
     assert_eq!(caret.color, [auto.red, auto.green, auto.blue, auto.alpha]);
 }
@@ -658,27 +637,25 @@ fn caret_color_chain_resolves_at_emission() {
         .id();
     h.settle();
 
-    // Tier 2: a theme that opts into color.caret re-tints on theme change
-    // (theme.is_changed() is already in the union).
-    h.app
-        .world_mut()
-        .resource_mut::<Theme>()
-        .colors
-        .insert(CARET_COLOR_TOKEN.into(), Color::srgb(0.9, 0.0, 0.0));
-    h.frame();
-    let red = LinearRgba::from(Color::srgb(0.9, 0.0, 0.0));
-    assert_eq!(caret_instance(&h).unwrap().color[0], red.red);
+    // Auto (no explicit CaretColor): the caret paints in currentColor — the
+    // entity's resolved foreground (color.text.primary). Track B removed the
+    // theme-caret middle tier, so auto is the default.
+    let primary = LinearRgba::from(
+        h.app
+            .world()
+            .resource::<Theme>()
+            .resolve(ColorToken::TextPrimary),
+    );
+    assert_eq!(
+        caret_instance(&h).unwrap().color,
+        [primary.red, primary.green, primary.blue, primary.alpha]
+    );
 
-    // Tier 1: an explicit CaretColor wins.
-    h.app
-        .world_mut()
-        .resource_mut::<Theme>()
-        .colors
-        .insert("my.caret".into(), Color::srgb(0.0, 0.9, 0.0));
+    // An explicit CaretColor wins and re-tints at emission.
     h.app
         .world_mut()
         .entity_mut(e)
-        .insert(CaretColor(ColorToken::Token("my.caret".into())));
+        .insert(CaretColor(ColorToken::Custom(Color::srgb(0.0, 0.9, 0.0))));
     h.frame();
     let green = LinearRgba::from(Color::srgb(0.0, 0.9, 0.0));
     assert_eq!(caret_instance(&h).unwrap().color[1], green.green);
@@ -761,7 +738,6 @@ fn empty_text_still_carries_a_caret() {
 #[test]
 fn blink_edges_rebuild_glyphs_only_and_steady_phases_rebuild_nothing() {
     let mut h = TextExtractHarness::new();
-    set_selection_tokens(&mut h.app);
     // A fixture with BOTH carriers live: an underline (quad tier) + a
     // caret (glyph tier) — so the test can see one move without the other.
     h.app.world_mut().spawn((
@@ -855,7 +831,7 @@ fn placeholder_is_identical_to_normal_text_except_color() {
     assert_eq!(a.len(), b.len());
     let expected = {
         let theme = placeholder.app.world().resource::<Theme>();
-        let lin = LinearRgba::from(theme.color(PLACEHOLDER_COLOR_TOKEN).unwrap());
+        let lin = LinearRgba::from(theme.resolve(ColorToken::TextPlaceholder));
         [lin.red, lin.green, lin.blue, lin.alpha]
     };
     for (x, y) in a.iter().zip(b) {

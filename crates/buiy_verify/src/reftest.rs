@@ -431,9 +431,9 @@ pub fn default_rules() -> Vec<IndependenceRule> {
 pub fn assert_reference_independent(case: &RefCase, rules: &[IndependenceRule]) {
     let mut app = bevy::app::App::new();
     // `ThemePlugin` + `LayoutPlugin` — no render/asset plugins, no GPU. Theme is
-    // present because real reference scenes install fill tokens
-    // (`Theme.colors.insert`) while building; the lint only needs the components
-    // to exist as DATA, not the render systems to run.
+    // present because real reference scenes resolve fill tokens against it while
+    // building; the lint only needs the components to exist as DATA, not the
+    // render systems to run.
     app.add_plugins(buiy_core::theme::ThemePlugin);
     app.add_plugins(buiy_core::layout::LayoutPlugin);
     (case.reference)(&mut app);

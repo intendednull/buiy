@@ -50,18 +50,16 @@ use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{Background, Opacity, TextColor};
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
 use buiy_core::text::{DecorationLines, FontSize, Text, TextDecorations};
-use std::borrow::Cow;
 use std::ops::Range;
 
 const W: u32 = 128;
 const H: u32 = 64;
-/// Glyph tint: white — chroma-orthogonal to the red decoration token, so
+
+/// Glyph tint: white — chroma-orthogonal to the red decoration color, so
 /// row classification never confuses ink with lines.
-const TEXT_TOKEN: &str = "test.text";
-/// `text-decoration-color`: pure red (tier 1 of the § 3.2 precedence).
-const DECO_TOKEN: &str = "test.deco";
-/// The recolor target for the gate-term test: pure blue.
-const DECO_BLUE_TOKEN: &str = "test.deco.blue";
+fn text_white() -> Color {
+    Color::WHITE
+}
 
 fn deco_red() -> Color {
     Color::srgb(1.0, 0.0, 0.0)
@@ -71,20 +69,13 @@ fn deco_blue() -> Color {
     Color::srgb(0.0, 0.0, 1.0)
 }
 
-/// `TextDecorations` with the shared red token (the fixtures' tier-1 color).
+/// `TextDecorations` with the shared red color (the fixtures' tier-1 color).
 fn red_deco(line: DecorationLines) -> TextDecorations {
     TextDecorations {
         line,
-        color: Some(ColorToken::Token(Cow::Borrowed(DECO_TOKEN))),
+        color: Some(ColorToken::Custom(deco_red())),
         ..Default::default()
     }
-}
-
-fn insert_theme_tokens(app: &mut App) {
-    let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-    theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-    theme.colors.insert(DECO_TOKEN.into(), deco_red());
-    theme.colors.insert(DECO_BLUE_TOKEN.into(), deco_blue());
 }
 
 /// The `text_gpu.rs::spawn_text_fixture` shape plus the decoration component:
@@ -92,7 +83,6 @@ fn insert_theme_tokens(app: &mut App) {
 /// baseline and band classification is unambiguous. Returns
 /// `(text, root)` so tests can mutate the component / add siblings.
 fn spawn_decorated_fixture(app: &mut App, deco: TextDecorations) -> (Entity, Entity) {
-    insert_theme_tokens(app);
     let text = app
         .world_mut()
         .spawn((
@@ -100,7 +90,7 @@ fn spawn_decorated_fixture(app: &mut App, deco: TextDecorations) -> (Entity, Ent
             Style::default(),
             Text(String::from("Hi")),
             FontSize(40.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(text_white())),
             deco,
         ))
         .id();
@@ -377,7 +367,7 @@ fn decoration_recolor_repacks_the_quad_buffer() {
     app.world_mut()
         .get_mut::<TextDecorations>(text)
         .expect("the fixture's TextDecorations")
-        .color = Some(ColorToken::Token(Cow::Borrowed(DECO_BLUE_TOKEN)));
+        .color = Some(ColorToken::Custom(deco_blue()));
     for _ in 0..3 {
         app.update();
     }
@@ -402,19 +392,12 @@ fn sibling_background_change_resplices_retained_quads() {
     // RETAINED), and the retained carrier must land at identical rows
     // through the fresh-node-list walk. A stale-index merge (the spec's
     // rejected round-1 painters_z key) would misplace or drop the band.
-    const BG_A: &str = "test.bg.a";
-    const BG_B: &str = "test.bg.b";
     let bg_a = Color::srgb(0.0, 1.0, 0.0);
     let bg_b = Color::srgb(0.0, 1.0, 1.0);
 
     let _cfg = GoldenConfig::deterministic();
     let mut app = crate::support::gpu_render_app(W, H);
     let (_text, root) = spawn_decorated_fixture(&mut app, red_deco(DecorationLines::UNDERLINE));
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(BG_A.into(), bg_a);
-        theme.colors.insert(BG_B.into(), bg_b);
-    }
     // The sibling: an absolute 8×8 box in the top-right corner — clear of
     // the glyph ink, the underline rows, and the red/white classifiers
     // (green/cyan match neither).
@@ -432,7 +415,7 @@ fn sibling_background_change_resplices_retained_quads() {
                 .width_px(8.0)
                 .height_px(8.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(BG_A)),
+                color: ColorToken::Custom(bg_a),
             },
         ))
         .id();
@@ -459,7 +442,7 @@ fn sibling_background_change_resplices_retained_quads() {
     app.world_mut()
         .get_mut::<Background>(sibling)
         .expect("the sibling's Background")
-        .color = ColorToken::Token(Cow::Borrowed(BG_B));
+        .color = ColorToken::Custom(bg_b);
     for _ in 0..3 {
         app.update();
     }
@@ -486,7 +469,6 @@ fn opacity_group_dims_underline_line_through_and_ink() {
     // exactly once.
     let _cfg = GoldenConfig::deterministic();
     let mut app = crate::support::gpu_render_app(W, H);
-    insert_theme_tokens(&mut app);
     let text = app
         .world_mut()
         .spawn((
@@ -494,7 +476,7 @@ fn opacity_group_dims_underline_line_through_and_ink() {
             Style::default(),
             Text(String::from("Hi")),
             FontSize(40.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(text_white())),
             red_deco(DecorationLines::UNDERLINE | DecorationLines::LINE_THROUGH),
         ))
         .id();

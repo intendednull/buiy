@@ -33,11 +33,11 @@ use buiy_core::layout::{Inset, Sizing, Style};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{BackdropFilter, Background, FilterFn};
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
-use std::borrow::Cow;
 
 use crate::support::px;
 
-/// Spawn one absolutely-positioned solid rect (a backdrop stripe or the element).
+/// Spawn one absolutely-positioned solid rect (a backdrop stripe or the element),
+/// filled with `color` carried inline as `Custom`.
 fn spawn_rect(
     app: &mut App,
     parent: Entity,
@@ -45,7 +45,7 @@ fn spawn_rect(
     y: f32,
     w: f32,
     h: f32,
-    color_token: &'static str,
+    color: Color,
 ) -> Entity {
     let e = app
         .world_mut()
@@ -61,7 +61,7 @@ fn spawn_rect(
                 .width_px(w)
                 .height_px(h),
             Background {
-                color: ColorToken::Token(Cow::Borrowed(color_token)),
+                color: ColorToken::Custom(color),
             },
         ))
         .id();
@@ -93,24 +93,16 @@ fn backdrop_filter_blurs_the_window_backdrop() {
     const H: u32 = 64;
 
     let mut app = capture_app(W, H);
-    {
-        // Seed the backdrop stripe colors + a translucent element fill. Bright =
-        // near-white, dark = near-black: maximal stripe contrast so the blur is
-        // unmistakable in the variance metric.
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("test.bright".into(), Color::srgb(0.95, 0.95, 0.95));
-        theme
-            .colors
-            .insert("test.dark".into(), Color::srgb(0.05, 0.05, 0.05));
-        // A faintly-tinted, mostly-transparent element fill (like the modal scrim
-        // rgba(4,5,7,.66) but lighter so the blurred backdrop shows through for
-        // the variance check). Alpha 0.35 over the blurred stripes.
-        theme
-            .colors
-            .insert("test.scrim".into(), Color::srgba(0.1, 0.12, 0.18, 0.35));
-    }
+
+    // The backdrop stripe colors + a translucent element fill, carried inline as
+    // `Custom`. Bright = near-white, dark = near-black: maximal stripe contrast so
+    // the blur is unmistakable in the variance metric. The scrim is a faintly-
+    // tinted, mostly-transparent element fill (like the modal scrim rgba(4,5,7,.66)
+    // but lighter so the blurred backdrop shows through the variance check) —
+    // alpha 0.35 over the blurred stripes.
+    let bright_color = Color::srgb(0.95, 0.95, 0.95);
+    let dark_color = Color::srgb(0.05, 0.05, 0.05);
+    let scrim = Color::srgba(0.1, 0.12, 0.18, 0.35);
 
     let root = app.world_mut().spawn((Node, Style::default())).id();
 
@@ -126,7 +118,7 @@ fn backdrop_filter_blurs_the_window_backdrop() {
             0.0,
             5.0,
             H as f32,
-            if bright { "test.bright" } else { "test.dark" },
+            if bright { bright_color } else { dark_color },
         );
         x += 5.0;
         bright = !bright;
@@ -149,7 +141,7 @@ fn backdrop_filter_blurs_the_window_backdrop() {
                 .width_px(60.0)
                 .height_px(H as f32),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.scrim")),
+                color: ColorToken::Custom(scrim),
             },
             BackdropFilter(vec![FilterFn::Blur(Length::px(6.0))]),
         ))

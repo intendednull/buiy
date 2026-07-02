@@ -36,12 +36,11 @@
 // other golden suites (follow-ups.md, text verification.md § 4).
 #![allow(deprecated)]
 
-use std::borrow::Cow;
 use std::ops::Range;
 
 use bevy::prelude::*;
 use buiy_core::layout::Style;
-use buiy_core::render::color::{CARET_COLOR_TOKEN, ColorToken};
+use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{CaretColor, TextColor};
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
 use buiy_core::text::edit::{EditCommand, TextEditState};
@@ -51,8 +50,6 @@ use cosmic_text::{Metrics, Motion};
 
 const W: u32 = 256;
 const H: u32 = 64;
-/// Glyph tint: white — chroma-orthogonal to the red caret stamp.
-const TEXT_TOKEN: &str = "test.text";
 
 fn caret_red() -> Color {
     Color::srgb(1.0, 0.0, 0.0)
@@ -127,11 +124,6 @@ fn capture() -> Vec<u8> {
         "Noto Sans Hebrew",
         "NotoSansHebrew-hebrew.ttf",
     );
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme.colors.insert(CARET_COLOR_TOKEN.into(), caret_red());
-    }
     let editor = app
         .world_mut()
         .spawn((
@@ -143,8 +135,8 @@ fn capture() -> Vec<u8> {
                 FamilyEntry::Named(String::from("Noto Sans Hebrew")),
             ])),
             FontSize(20.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
-            CaretColor(ColorToken::Token(Cow::Borrowed(CARET_COLOR_TOKEN))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
+            CaretColor(ColorToken::Custom(caret_red())),
             TextEditState::new(Metrics::new(20.0, 24.0)),
         ))
         .id();
@@ -263,11 +255,6 @@ fn capture_boundary() -> Vec<u8> {
         "Noto Sans Hebrew",
         "NotoSansHebrew-hebrew.ttf",
     );
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme.colors.insert(CARET_COLOR_TOKEN.into(), caret_red());
-    }
     let editor = app
         .world_mut()
         .spawn((
@@ -279,8 +266,8 @@ fn capture_boundary() -> Vec<u8> {
                 FamilyEntry::Named(String::from("Noto Sans Hebrew")),
             ])),
             FontSize(20.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
-            CaretColor(ColorToken::Token(Cow::Borrowed(CARET_COLOR_TOKEN))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
+            CaretColor(ColorToken::Custom(caret_red())),
             TextEditState::new(Metrics::new(20.0, 24.0)),
         ))
         .id();

@@ -288,7 +288,6 @@ fn node_draws_persistent_buffers_with_view_uniform() {
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::Background;
     use buiy_core::render::prepare::BuiyInstanceBuffers;
-    use std::borrow::Cow;
 
     // `gpu_render_app` adds `CorePipelinePlugin` so a live `Core2d` graph exists
     // for `BuiyRenderPlugin` to wire `BuiyNode` into — without it the node is
@@ -304,7 +303,7 @@ fn node_draws_persistent_buffers_with_view_uniform() {
         // 40×40 opaque white over the 32×32 view → the readback is fully covered.
         Style::default().width_px(40.0).height_px(40.0),
         Background {
-            color: ColorToken::Token(Cow::Borrowed("color.surface.primary")),
+            color: ColorToken::SurfacePrimary,
         },
     ));
     crate::support::finish_and_run(&mut app, 3);
@@ -349,18 +348,15 @@ fn top_layer_composites_last_over_in_flow() {
     use buiy_core::render::components::Background;
     use buiy_core::render::extract::ExtractedNodesView;
     use buiy_core::render::prepare::BuiyInstanceBuffers;
-    use std::borrow::Cow;
 
-    let opaque = |token: &'static str| Background {
-        color: ColorToken::Token(Cow::Borrowed(token)),
-    };
+    let opaque = |token: ColorToken| Background { color: token };
     let mut app = crate::support::gpu_test_app_with_layout();
     let in_flow = app
         .world_mut()
         .spawn((
             Node,
             Style::default().width_px(40.0).height_px(40.0),
-            opaque("color.surface.primary"),
+            opaque(ColorToken::SurfacePrimary),
         ))
         .id();
     let modal = app
@@ -371,7 +367,7 @@ fn top_layer_composites_last_over_in_flow() {
                 .width_px(40.0)
                 .height_px(40.0)
                 .top_layer(TopLayer::Modal),
-            opaque("color.surface.secondary"),
+            opaque(ColorToken::SurfaceSecondary),
         ))
         .id();
     app.world_mut()

@@ -32,7 +32,6 @@ use buiy_core::render::extract::{
 };
 use buiy_core::theme::Theme;
 use buiy_core::{BackdropFilter, FilterFn, Node};
-use std::borrow::Cow;
 
 /// Adapterless extract harness: swap the live main world into a bare render
 /// world's `MainWorld` slot, run an `ExtractSchedule` carrying the production
@@ -164,7 +163,7 @@ fn spawn_leaf(app: &mut App, extra: impl Bundle) -> Entity {
     child
 }
 
-const SURFACE_TOKEN: &str = "color.surface.primary";
+const SURFACE: ColorToken = ColorToken::SurfacePrimary;
 
 // --- 1. AnimatedBackgroundColor auto-composite ------------------------------
 
@@ -177,9 +176,7 @@ fn animated_background_color_composites_over_the_token() {
     let e = spawn_leaf(
         &mut h.app,
         (
-            Background {
-                color: ColorToken::Token(Cow::Borrowed(SURFACE_TOKEN)),
-            },
+            Background { color: SURFACE },
             AnimatedBackgroundColor(animated),
         ),
     );
@@ -187,7 +184,7 @@ fn animated_background_color_composites_over_the_token() {
     h.extract();
 
     let node = h.node_for(e).expect("the leaf reaches the display list");
-    let token_color = resolve_token(&ColorToken::Token(Cow::Borrowed(SURFACE_TOKEN)), &h.theme());
+    let token_color = resolve_token(&SURFACE, &h.theme());
     assert_ne!(
         animated, token_color,
         "test setup: the animated color must differ from the token so the override is observable"
@@ -203,15 +200,13 @@ fn background_token_resolves_when_no_animation_present() {
     let mut h = NodeExtractHarness::new();
     let e = spawn_leaf(
         &mut h.app,
-        Background {
-            color: ColorToken::Token(Cow::Borrowed(SURFACE_TOKEN)),
-        },
+        Background { color: SURFACE },
     );
     settle(&mut h);
     h.extract();
 
     let node = h.node_for(e).expect("the leaf reaches the display list");
-    let token_color = resolve_token(&ColorToken::Token(Cow::Borrowed(SURFACE_TOKEN)), &h.theme());
+    let token_color = resolve_token(&SURFACE, &h.theme());
     assert_eq!(
         node.color, token_color,
         "with no AnimatedBackgroundColor the node falls back to its resolved Background token"

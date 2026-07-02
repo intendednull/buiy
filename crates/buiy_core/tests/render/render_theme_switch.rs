@@ -3,23 +3,27 @@
 //! Pure CPU, no GPU. Spec: color-and-forced-colors.md § 2.3 / § 3.1.
 
 use bevy::prelude::*;
-use buiy_core::render::color::{ColorToken, resolve_token};
+use buiy_core::render::color::{ColorToken, SystemColorKeyword, ThemeContract, resolve_token};
 use buiy_core::render::forced_colors::{PrePreferenceTheme, apply_forced_colors_theme};
 use buiy_core::theme::{Theme, UserPreferences, default_light_theme, forced_colors_theme};
-use std::borrow::Cow;
 
 #[test]
 fn replacing_theme_reresolves_token_next_read() {
-    let token = ColorToken::Token(Cow::Borrowed("color.surface.primary"));
+    // The resolver reads the live Theme on every call — no cached, theme-stamped
+    // buffer (§ 2.3). Proven by mutating the theme in place and re-resolving:
+    // the live accent moves `ColorToken::Accent` immediately on the next read.
+    // (Track B: the palette is typed with private fields; the live `accent` is
+    // the mutable seam that stands in for the removed HashMap insert.)
+    let token = ColorToken::Accent;
 
-    let mut light = default_light_theme();
-    assert_eq!(resolve_token(&token, &light), Color::WHITE);
+    let mut theme = default_light_theme();
+    let before = resolve_token(&token, &theme);
 
-    // Mutate the same key to a new value (a brand/dark swap).
-    light
-        .colors
-        .insert("color.surface.primary".into(), Color::BLACK);
-    assert_eq!(resolve_token(&token, &light), Color::BLACK);
+    theme.accent = Color::BLACK;
+    let after = resolve_token(&token, &theme);
+
+    assert_eq!(after, Color::BLACK);
+    assert_ne!(after, before, "the mutated theme re-resolves on the next read");
 }
 
 /// Records `Theme::is_changed()` *inside* the schedule — the only vantage point
@@ -65,8 +69,9 @@ fn theme_swap_marks_resource_changed_for_extract() {
     );
     // And the new value is the forced palette.
     let forced = forced_colors_theme();
+    let canvas = ColorToken::SystemColor(SystemColorKeyword::Canvas);
     assert_eq!(
-        app.world().resource::<Theme>().color("Canvas"),
-        forced.color("Canvas")
+        app.world().resource::<Theme>().resolve(canvas),
+        forced.resolve(canvas)
     );
 }

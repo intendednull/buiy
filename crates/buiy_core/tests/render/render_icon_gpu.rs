@@ -37,28 +37,26 @@ use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Icon;
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
 use buiy_core::render::icon_producer::{ExtractedIcons, icon_atlas_key};
-use std::borrow::Cow;
 
 use crate::support::px;
 
-/// The design's blue accent `--ac = #5b86f5` (values.md § 1.2). Seed `color.icon`
-/// so the icons' `ColorToken::Token("color.icon")` resolves.
+/// The design's blue accent `--ac = #5b86f5` (values.md § 1.2). Icons tint with
+/// `ColorToken::Accent`, which resolves to the theme's live `accent` base.
 const ACCENT_BLUE: (u8, u8, u8) = (0x5b, 0x86, 0xf5);
 /// A clearly-different accent (the violet `--ac` option, #b98aff) for the re-tint
 /// proof — its red+blue rise vs blue, so a re-tint is unambiguous on those
 /// channels.
 const ACCENT_VIOLET: (u8, u8, u8) = (0xb9, 0x8a, 0xff);
 
-/// Seed the icon tint token on the app's theme.
+/// Move the theme's live accent base — the `ColorToken::Accent` icons re-tint to
+/// it at resolve time (the design's "swatch click re-themes the app").
 fn set_icon_accent(app: &mut App, rgb: (u8, u8, u8)) {
     let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-    theme
-        .colors
-        .insert("color.icon".into(), Color::srgb_u8(rgb.0, rgb.1, rgb.2));
+    theme.accent = Color::srgb_u8(rgb.0, rgb.1, rgb.2);
 }
 
 /// Spawn one icon `(Node, Style absolute@(x,y) size×size, Icon)` as a child of a
-/// root node, tinted by `color.icon`.
+/// root node, tinted by the live accent (`ColorToken::Accent`).
 fn spawn_icon(app: &mut App, x: f32, y: f32, size: u16, path_d: &str, stroke: f32) -> Entity {
     let icon = app
         .world_mut()
@@ -78,7 +76,7 @@ fn spawn_icon(app: &mut App, x: f32, y: f32, size: u16, path_d: &str, stroke: f3
                 stroke_width: stroke,
                 size_px: size,
                 fill: false,
-                color: ColorToken::Token(Cow::Borrowed("color.icon")),
+                color: ColorToken::Accent,
             },
         ))
         .id();

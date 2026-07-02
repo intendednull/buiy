@@ -338,15 +338,11 @@ fn entity_label(name: Option<&Name>, e: Entity) -> String {
     }
 }
 
-/// `#rrggbbaa` for a color, in sRGB (the authoring space): the `ExtractedNode`
-/// color is already theme-resolved, so the magenta `MISSING_TOKEN_FALLBACK`
-/// sentinel surfaces here as `#ff00ffff` — a literal that flags an unresolved
-/// token (snapshots.md § Tier 2).
-/// Public `#rrggbbaa` rendering of a resolved `Color`, identical to what
-/// [`display_list_dump`] writes per node. Exposed so a guard test can compute
-/// the exact hex of the missing-token sentinel (`MISSING_TOKEN_FALLBACK`) the
-/// dump would emit and assert no enrolled cell baselines it — observing the same
-/// rendering the tier records, not a hand-spelled string that could drift.
+/// Public `#rrggbbaa` rendering of a resolved `Color`, in sRGB (the authoring
+/// space) — identical to what [`display_list_dump`] writes per node. Exposed so
+/// a test can compute the exact hex the dump would emit for a given resolved
+/// color, observing the same rendering the tier records rather than a
+/// hand-spelled string that could drift (snapshots.md § Tier 2).
 pub fn color_hex_for_test(color: Color) -> String {
     color_hex(color)
 }
@@ -473,8 +469,8 @@ pub fn assert_display_list_snapshot(nodes: &ExtractedNodes, name: &str, names: &
 ///
 /// Color renders as `#rrggbbaa` (sRGB). Token-name rendering (`token:<Name>`)
 /// is intentionally NOT done here: the pinned signature carries no `Theme`, and
-/// `ExtractedNode.color` is already resolved — so the hex IS the artifact, and
-/// the magenta sentinel surfaces as `#ff00ffff` (the unresolved-token signal).
+/// `ExtractedNode.color` is already resolved — so the hex IS the artifact, and a
+/// color regression shows as a hex diff.
 pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
     let mut out = String::new();
     out.push_str(DISPLAY_LIST_DUMP_VERSION);
@@ -673,8 +669,8 @@ fn advance_virtual_to(app: &mut App, t: std::time::Duration) {
 ///
 /// Public because it is the canonical CPU display-list extraction the Tier-2
 /// snapshot baselines — a property test that asserts an attribute of that dump
-/// (DPR-invariance, or "never the magenta sentinel") must observe the SAME
-/// artifact the tier records, not a parallel re-implementation.
+/// (e.g. DPR-invariance) must observe the SAME artifact the tier records, not a
+/// parallel re-implementation.
 pub fn extract_nodes_from_world(world: &World) -> ExtractedNodes {
     use buiy_core::render::components::Background;
     use buiy_core::render::extract::extracted_node_for;

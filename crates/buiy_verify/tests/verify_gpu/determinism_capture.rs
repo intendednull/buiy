@@ -23,17 +23,10 @@ use buiy_core::render::components::{Background, TextColor};
 use buiy_core::text::{FontSize, Text};
 use buiy_verify::determinism::{DeterministicApp, Dpr, FontMode};
 use buiy_verify::metric::{CompareOpts, FuzzBudget, compare};
-use std::borrow::Cow;
 
 /// A known opaque rounded fill on a black ground — an edge-bearing fixture so
 /// the SDF analytic AA rim exercises the float path the determinism stack pins.
 fn rect_fixture(app: &mut App) {
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("det.fill".into(), Color::srgb(0.20, 0.65, 0.90));
-    }
     let fill = app
         .world_mut()
         .spawn((
@@ -48,7 +41,7 @@ fn rect_fixture(app: &mut App) {
                 .width_px(32.0)
                 .height_px(24.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("det.fill")),
+                color: ColorToken::Custom(Color::srgb(0.20, 0.65, 0.90)),
             },
         ))
         .id();
@@ -61,12 +54,6 @@ fn rect_fixture(app: &mut App) {
 /// exercised. The big size guarantees full-coverage interior texels.
 fn text_fixture(app: &mut App) {
     use buiy_core::text::{FamilyEntry, FontFamily, FontStack};
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme
-            .colors
-            .insert("det.text".into(), Color::srgb(0.95, 0.40, 0.20));
-    }
     let text = app
         .world_mut()
         .spawn((
@@ -75,7 +62,7 @@ fn text_fixture(app: &mut App) {
             Text(String::from("Hi")),
             FontFamily(FontStack(vec![FamilyEntry::Named(String::from("Ahem"))])),
             FontSize(28.0),
-            TextColor(ColorToken::Token(Cow::Borrowed("det.text"))),
+            TextColor(ColorToken::Custom(Color::srgb(0.95, 0.40, 0.20))),
         ))
         .id();
     app.world_mut()

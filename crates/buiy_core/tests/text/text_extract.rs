@@ -16,9 +16,7 @@ use buiy_core::text::{
     FontFamily, FontRegistry, FontSize, FontStack, FontsGeneration, GenericFamily, Text,
     TextDecorations, solid_stamp_key, stamp_uv,
 };
-use buiy_core::theme::Theme;
 use cosmic_text::Metrics;
-use std::borrow::Cow;
 use std::time::Duration;
 
 /// "Hi!" under a sized column root: 3 non-whitespace glyphs. Returns the
@@ -167,16 +165,11 @@ fn each_union_member_fires_exactly_one_rebuild() {
     // TextColor (Added counts as Changed) + the resolved value lands.
     h.app
         .world_mut()
-        .resource_mut::<Theme>()
-        .colors
-        .insert("test.text".into(), Color::srgb(0.2, 0.8, 0.4));
-    h.app
-        .world_mut()
         .entity_mut(text)
-        .insert(TextColor(ColorToken::Token(Cow::Borrowed("test.text"))));
+        .insert(TextColor(ColorToken::Custom(Color::srgb(0.2, 0.8, 0.4))));
     h.frame();
-    // theme.is_changed() and Changed<TextColor> may land on the same frame.
-    assert!(h.changed_frames() > expect, "color/theme fired");
+    // Changed<TextColor> (Added counts as Changed) fires the union.
+    assert!(h.changed_frames() > expect, "color fired");
     expect = h.changed_frames();
     let lin = LinearRgba::from(Color::srgb(0.2, 0.8, 0.4));
     assert_eq!(
@@ -478,11 +471,6 @@ fn text_decorations_change_republishes_quads_and_retains_glyphs() {
     // but publication is value-compared (T7 decision 4): only the quad
     // content changed here, so the glyph carrier keeps its tick.
     let mut h = TextExtractHarness::new();
-    h.app
-        .world_mut()
-        .resource_mut::<Theme>()
-        .colors
-        .insert("deco.test".into(), Color::srgb(1.0, 0.0, 0.0));
     let text = spawn_decorated(
         &mut h,
         TextDecorations {
@@ -498,7 +486,7 @@ fn text_decorations_change_republishes_quads_and_retains_glyphs() {
         .world_mut()
         .get_mut::<TextDecorations>(text)
         .unwrap()
-        .color = Some(ColorToken::Token(Cow::Borrowed("deco.test")));
+        .color = Some(ColorToken::Custom(Color::srgb(1.0, 0.0, 0.0)));
     h.frame();
     assert_eq!(
         h.changed_frames(),
@@ -524,39 +512,30 @@ fn text_decorations_change_republishes_quads_and_retains_glyphs() {
 #[test]
 fn decoration_color_precedence_at_the_producer() {
     let mut h = TextExtractHarness::new();
-    {
-        let mut theme = h.app.world_mut().resource_mut::<Theme>();
-        theme
-            .colors
-            .insert("deco.line".into(), Color::srgb(1.0, 0.0, 0.0));
-        theme
-            .colors
-            .insert("text.fg".into(), Color::srgb(0.0, 1.0, 0.0));
-    }
     let text = spawn_decorated(
         &mut h,
         TextDecorations {
             line: DecorationLines::UNDERLINE,
-            color: Some(ColorToken::Token(Cow::Borrowed("deco.line"))),
+            color: Some(ColorToken::Custom(Color::srgb(1.0, 0.0, 0.0))),
             ..Default::default()
         },
     );
     h.app
         .world_mut()
         .entity_mut(text)
-        .insert(TextColor(ColorToken::Token(Cow::Borrowed("text.fg"))));
+        .insert(TextColor(ColorToken::Custom(Color::srgb(0.0, 1.0, 0.0))));
     h.settle();
 
-    // (a) Tier 1: the resolved -color token wins.
+    // (a) Tier 1: the resolved -color wins.
     assert_eq!(h.text_quads().quads[0].color, Color::srgb(1.0, 0.0, 0.0));
 
-    // (c) Retheme = re-emit, never reshape (decision 1): swapping the
-    // token's value re-resolves on the theme.is_changed() rebuild.
+    // (c) Re-color = re-emit, never reshape (decision 1): editing the -color
+    // re-resolves the quad on the Changed<TextDecorations> rebuild.
     h.app
         .world_mut()
-        .resource_mut::<Theme>()
-        .colors
-        .insert("deco.line".into(), Color::srgb(0.0, 0.0, 1.0));
+        .get_mut::<TextDecorations>(text)
+        .unwrap()
+        .color = Some(ColorToken::Custom(Color::srgb(0.0, 0.0, 1.0)));
     h.frame();
     assert_eq!(h.text_quads().quads[0].color, Color::srgb(0.0, 0.0, 1.0));
 

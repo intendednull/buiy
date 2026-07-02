@@ -15,22 +15,18 @@ use buiy_core::render::compositor::composite_src_over;
 use buiy_core::render::golden::GoldenConfig;
 use buiy_core::render::prepare::BuiyInstanceBuffers;
 use buiy_core::text::{CaretVisual, FontSize, Text};
-use std::borrow::Cow;
 use std::ops::Range;
 
 const W: u32 = 128;
 const H: u32 = 64;
-/// Glyph tint: white (the text_decoration_gpu idiom).
-const TEXT_TOKEN: &str = "test.text";
-/// Explicit `caret-color` (tier 1 of the § 6.2 chain): pure red.
-const CARET_TOKEN: &str = "test.caret";
 
 fn caret_red() -> Color {
     Color::srgb(1.0, 0.0, 0.0)
 }
 
-/// White "Hi" at 24 px with the shared text token — the fixture's one leaf
-/// shape, spawned twice (grouped + flat).
+/// White "Hi" at 24 px (the text_decoration_gpu idiom) — the fixture's one
+/// leaf shape, spawned twice (grouped + flat). Track B: the white tint is a
+/// `Custom` inline color (the former `test.text` theme injection).
 fn spawn_white_text(app: &mut App) -> Entity {
     app.world_mut()
         .spawn((
@@ -38,7 +34,7 @@ fn spawn_white_text(app: &mut App) -> Entity {
             Style::default(),
             Text(String::from("Hi")),
             FontSize(24.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
         ))
         .id()
 }
@@ -49,9 +45,6 @@ fn spawn_white_text(app: &mut App) -> Entity {
 /// group's QUAD range is empty while its GLYPH range is not — the D5
 /// step-1 skip fix's pin.
 fn spawn_group_and_flat_text(app: &mut App) -> (Entity, Entity) {
-    let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-    theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-
     let half = |top: f32| {
         Style::default()
             .absolute()
@@ -118,20 +111,18 @@ fn is_white(p: [u8; 4]) -> bool {
 fn text_in_opacity_group_dims_exactly_once() {
     let _cfg = GoldenConfig::deterministic();
     let mut app = crate::support::gpu_render_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(CARET_TOKEN.into(), caret_red());
-    }
     let (grouped, _flat) = spawn_group_and_flat_text(&mut app);
     // A caret on the GROUPED text — § 4.5's caret half, first end-to-end
-    // coverage (T7 deferred it here): a 1×24 stamp right of the ink.
+    // coverage (T7 deferred it here): a 1×24 stamp right of the ink. Track B:
+    // the explicit red caret color is a `Custom` inline color (the former
+    // `test.caret` theme injection — tier 1 of the § 6.2 chain).
     app.world_mut().entity_mut(grouped).insert((
         CaretVisual {
             visible: true,
             rect: Rect::new(60.0, 0.0, 61.0, 24.0),
             secondary: None,
         },
-        CaretColor(ColorToken::Token(Cow::Borrowed(CARET_TOKEN))),
+        CaretColor(ColorToken::Custom(caret_red())),
     ));
     // Hold the blink phase visible across the readback's real-time polling
     // frames (the caret-blink pair test's paused-clock idiom).

@@ -93,7 +93,7 @@ fn top_layer_subtree_descendants_are_walked() {
                 Name::new("grandchild"),
                 Style::default().width_px(20.0).height_px(10.0),
                 Background {
-                    color: ColorToken::Token("color.accent".into()),
+                    color: ColorToken::Accent,
                 },
             ))
             .id();
@@ -104,7 +104,7 @@ fn top_layer_subtree_descendants_are_walked() {
                 Name::new("child"),
                 Style::default().width_px(40.0).height_px(20.0),
                 Background {
-                    color: ColorToken::Token("color.surface.card".into()),
+                    color: ColorToken::SurfaceCard,
                 },
             ))
             .add_children(&[grandchild])
@@ -119,7 +119,7 @@ fn top_layer_subtree_descendants_are_walked() {
                     .width_px(100.0)
                     .height_px(100.0),
                 Background {
-                    color: ColorToken::Token("color.surface.card".into()),
+                    color: ColorToken::SurfaceCard,
                 },
             ))
             .add_children(&[child])

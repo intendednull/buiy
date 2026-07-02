@@ -8,32 +8,40 @@
 //!
 //! ## Column classification (re-capture IS the golden — the text_gpu idiom)
 //!
-//! The fixtures use a chroma-orthogonal triple over the opaque-black clear —
-//! `color.selection.bg` = pure red, `color.selection.fg` = pure blue, text =
-//! white — so each paint source has an unambiguous pixel signature:
+//! TRACK B: the selection colors are no longer injectable — `SelectionVisual`
+//! carries no color, and the producer resolves the fill/re-tint through the
+//! theme's `ColorToken::SelectionBg` / `SelectionFg`. So the selection golden
+//! now uses the DEFAULT (light) theme's selection pair — an OPAQUE blue rect
+//! (`srgb(0.20, 0.45, 0.95)`) with a WHITE re-tint — and a chroma-distinct
+//! `Custom` GREEN text tint so unselected ink is separable from both. The caret
+//! golden keeps a `Custom` red caret over `Custom` white text (the caret color
+//! IS component-carried via `CaretColor`, so it stays fully controllable).
+//! Signatures over the opaque-black clear:
 //!
-//! - **Selection rect (quad tier, red):** a tall solid box spanning the full
-//!   line height; the rows between the line-box top/bottom and the glyph ink
-//!   read the exact full-coverage red encode, so "column x is inside a
-//!   selection rect" ⇔ "ANY pixel in column x is strong red". Projecting
-//!   onto columns and coalescing recovers the rect spans — this refines the
-//!   plan sketch's single mid-line-row scan, which glyph ink (painted OVER
-//!   the rect) would interrupt into spurious runs.
-//! - **Re-tinted ink (glyph tier, blue) composites over the red rect:**
-//!   linear `(1−c)·red + c·blue` per coverage `c`, so `b ≥ 180 ∧ r ≤ 150`
-//!   (≈ c ≥ 0.7 — stroke interiors at 20 px reach it) reads selected ink and
-//!   nothing else: white ink has r ≥ b, red has b ≈ 0.
-//! - **Unselected ink (white over black):** gray `r = g = b = encode(c)`;
-//!   `min(r,g,b) ≥ 180` rejects every red/blue mix (their g ≈ 0).
+//! - **Selection rect (quad tier, opaque blue):** a tall solid box spanning the
+//!   full line height; glyph-free rows read the full-coverage blue encode, so
+//!   "column x is inside a selection rect" ⇔ "ANY pixel in column x is strong
+//!   blue" ([`is_selection_rect`]). Projecting onto columns and coalescing
+//!   recovers the rect spans.
+//! - **Re-tinted ink (glyph tier, white) over the blue rect:** high coverage
+//!   reads `min(r,g,b) ≥ 180` ([`is_white_ink`]) — the blue rect (min ≈ 51) and
+//!   the green text (min ≈ 0) are both rejected.
+//! - **Unselected ink (green over black):** `g ≥ 180 ∧ r,b ≤ 100`
+//!   ([`is_green_ink`]) rejects the blue rect and the white re-tint.
 //! - **Caret (glyph-tier solid stamp, red):** hard-edged at alpha 1 (no SDF
-//!   AA) — a § 3.3-snapped 1-physical-px column of the exact red encode.
+//!   AA) — a § 3.3-snapped 1-physical-px column of the exact red encode
+//!   ([`is_strong_red`]).
+//!
+//! Threshold note: the reworked selection classifiers below were adapted for the
+//! default-theme blue/white/green scheme without a GPU run (Track B migration);
+//! W4.3 (GPU lane) is the confirming pass.
 #![allow(deprecated)] // perceptual_diff is deprecated; these GPU sites migrate to buiy_verify::metric in Phase 3 (tier-5 goldens).
 
 use bevy::math::Rect;
 use bevy::prelude::*;
 use buiy_core::Node;
 use buiy_core::layout::Style;
-use buiy_core::render::color::{ColorToken, SELECTION_BG_TOKEN, SELECTION_FG_TOKEN};
+use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{CaretColor, TextColor};
 use buiy_core::render::golden::{GoldenConfig, perceptual_diff};
 use buiy_core::render::prepare::BufferUploadStats;
@@ -42,41 +50,49 @@ use buiy_core::text::{
     Text,
 };
 use cosmic_text::Cursor;
-use std::borrow::Cow;
 use std::ops::Range;
 use std::time::Duration;
 
-/// Glyph tint: white — chroma-orthogonal to the red/blue selection pair.
-const TEXT_TOKEN: &str = "test.text";
-/// Explicit `caret-color` (tier 1 of the § 6.2 chain): pure red.
-const CARET_TOKEN: &str = "test.caret";
-
-fn sel_red() -> Color {
-    Color::srgb(1.0, 0.0, 0.0)
+/// Unselected text tint for the selection golden — a `Custom` green, chroma-
+/// distinct from both the default-theme blue selection rect and its white
+/// re-tint (the former injected pure-blue selection.fg).
+fn sel_text_green() -> Color {
+    Color::srgb(0.0, 1.0, 0.0)
 }
 
-fn sel_blue() -> Color {
-    Color::srgb(0.0, 0.0, 1.0)
+/// Explicit `caret-color` (tier 1 of the § 6.2 chain): pure red — a `Custom`
+/// inline color (the former `test.caret` theme injection).
+fn caret_red() -> Color {
+    Color::srgb(1.0, 0.0, 0.0)
 }
 
 // --- pixel classifiers (module doc: derived from the composite math) --------
 
-/// Full-strength red — the selection rect's glyph-free rows and the caret
-/// stamp's interior (both alpha 1 over black or under nothing).
+/// Full-strength red — the caret stamp's interior (alpha 1 over black or under
+/// nothing).
 fn is_strong_red(p: [u8; 4]) -> bool {
     p[0] >= 200 && p[1] <= 20 && p[2] <= 20
 }
 
-/// Re-tinted (selection fg, pure blue) glyph ink over the red selection
-/// rect: coverage ≥ ~0.7 reads b ≥ 180 with the red residual ≤ 150.
-fn is_blue_ink(p: [u8; 4]) -> bool {
-    p[2] >= 180 && p[0] <= 150
+/// The opaque blue selection rect's glyph-free rows (default-theme
+/// `srgb(0.20, 0.45, 0.95)` ≈ `(51, 115, 242)`): a strong blue channel with a
+/// low red channel. Rejects the green text (b ≈ 0) and the white re-tint
+/// (r ≈ 255).
+fn is_selection_rect(p: [u8; 4]) -> bool {
+    p[2] >= 180 && p[0] <= 120 && p[1] <= 170
 }
 
-/// Unselected white glyph ink over black: an achromatic pixel at ≥ ~0.61
-/// coverage. `g ≥ 180` alone already rejects every red/blue composite.
+/// Re-tinted (selection fg = white) glyph ink over the blue selection rect:
+/// high coverage reads `min(r,g,b) ≥ 180`. The blue rect (min ≈ 51) and green
+/// text (min ≈ 0) are both rejected.
 fn is_white_ink(p: [u8; 4]) -> bool {
     p[0] >= 180 && p[1] >= 180 && p[2] >= 180
+}
+
+/// Unselected green glyph ink over black: `g ≥ 180 ∧ r,b ≤ 100` rejects the
+/// blue rect and the white re-tint.
+fn is_green_ink(p: [u8; 4]) -> bool {
+    p[1] >= 180 && p[0] <= 100 && p[2] <= 100
 }
 
 /// Rows (top→bottom) where ANY pixel satisfies `pred`.
@@ -130,12 +146,10 @@ fn capture_bidi_selection() -> Vec<u8> {
         "Noto Sans Hebrew",
         "NotoSansHebrew-hebrew.ttf",
     );
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme.colors.insert(SELECTION_BG_TOKEN.into(), sel_red());
-        theme.colors.insert(SELECTION_FG_TOKEN.into(), sel_blue());
-    }
+    // Track B: the selection rect/re-tint colors come from the theme's typed
+    // `SelectionBg`/`SelectionFg` (no longer injectable). The text tint is a
+    // `Custom` GREEN so unselected ink is chroma-distinct from the default-theme
+    // blue selection rect and its white re-tint.
     let text = app
         .world_mut()
         .spawn((
@@ -147,7 +161,7 @@ fn capture_bidi_selection() -> Vec<u8> {
                 FamilyEntry::Named(String::from("Noto Sans Hebrew")),
             ])),
             FontSize(20.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(sel_text_green())),
             SelectionVisual::new(Cursor::new(0, 10), Cursor::new(0, 18)),
         ))
         .id();
@@ -173,10 +187,10 @@ fn mixed_bidi_selection_paints_disjoint_rects_and_retints() {
     let frame_a = capture_bidi_selection();
 
     // THE multi-rect contract as pixels (text.md:89): a logical range
-    // straddling the BiDi boundary paints ≥ 2 visually disjoint red rects.
-    // Width-filter the coalesced bands so an AA edge column can neither
-    // fake a rect nor split one.
-    let sel_bands = bands(&cols_where(&frame_a, SEL_W, SEL_H, is_strong_red));
+    // straddling the BiDi boundary paints ≥ 2 visually disjoint selection rects
+    // (opaque blue). Width-filter the coalesced bands so an AA edge column can
+    // neither fake a rect nor split one.
+    let sel_bands = bands(&cols_where(&frame_a, SEL_W, SEL_H, is_selection_rect));
     let wide: Vec<Range<u32>> = sel_bands
         .iter()
         .filter(|b| b.end - b.start >= 3)
@@ -184,7 +198,7 @@ fn mixed_bidi_selection_paints_disjoint_rects_and_retints() {
         .collect();
     assert!(
         wide.len() >= 2,
-        "mixed-BiDi selection must paint disjoint rects, got {wide:?} (all red bands: {sel_bands:?})"
+        "mixed-BiDi selection must paint disjoint rects, got {wide:?} (all blue bands: {sel_bands:?})"
     );
     for pair in wide.windows(2) {
         assert!(
@@ -194,21 +208,23 @@ fn mixed_bidi_selection_paints_disjoint_rects_and_retints() {
     }
 
     // Re-tint painted over the selection bg (glyph tier over quad tier):
-    // blue ink exists INSIDE the red rects…
-    let blue_cols = cols_where(&frame_a, SEL_W, SEL_H, is_blue_ink);
-    assert!(
-        blue_cols.iter().any(|x| wide.iter().any(|b| b.contains(x))),
-        "selected glyphs re-tint to the selection fg inside the rects \
-         (blue cols {blue_cols:?} vs rects {wide:?})"
-    );
-    // …and unselected text stays white OUTSIDE them.
+    // white (selection fg) ink exists INSIDE the blue rects…
     let white_cols = cols_where(&frame_a, SEL_W, SEL_H, is_white_ink);
     assert!(
         white_cols
             .iter()
+            .any(|x| wide.iter().any(|b| b.contains(x))),
+        "selected glyphs re-tint to the selection fg inside the rects \
+         (white cols {white_cols:?} vs rects {wide:?})"
+    );
+    // …and unselected text stays its own (green) tint OUTSIDE them.
+    let green_cols = cols_where(&frame_a, SEL_W, SEL_H, is_green_ink);
+    assert!(
+        green_cols
+            .iter()
             .any(|x| !sel_bands.iter().any(|b| b.contains(x))),
-        "unselected text paints untinted white outside the rects \
-         (white cols {white_cols:?} vs all red bands {sel_bands:?})"
+        "unselected text paints untinted green outside the rects \
+         (green cols {green_cols:?} vs all blue bands {sel_bands:?})"
     );
 
     // Re-capture determinism (the hello_text idiom): an independent fresh
@@ -238,11 +254,9 @@ const CARET_H: u32 = 64;
 /// ink — under a sized column root. Returns the text entity.
 fn spawn_blink_fixture(app: &mut App) -> Entity {
     app.world_mut().resource_mut::<Time<Virtual>>().pause();
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        theme.colors.insert(TEXT_TOKEN.into(), Color::WHITE);
-        theme.colors.insert(CARET_TOKEN.into(), sel_red());
-    }
+    // Track B: white text + an explicit red caret, both `Custom` inline colors
+    // (the former `test.text` / `test.caret` theme injections). The caret color
+    // is component-carried via `CaretColor`, so it stays fully controllable.
     let text = app
         .world_mut()
         .spawn((
@@ -250,13 +264,13 @@ fn spawn_blink_fixture(app: &mut App) -> Entity {
             Style::default(),
             Text(String::from("Hi")),
             FontSize(40.0),
-            TextColor(ColorToken::Token(Cow::Borrowed(TEXT_TOKEN))),
+            TextColor(ColorToken::Custom(Color::WHITE)),
             CaretVisual {
                 visible: true,
                 rect: Rect::new(80.0, 0.0, 81.0, 48.0),
                 secondary: None,
             },
-            CaretColor(ColorToken::Token(Cow::Borrowed(CARET_TOKEN))),
+            CaretColor(ColorToken::Custom(caret_red())),
         ))
         .id();
     app.world_mut()

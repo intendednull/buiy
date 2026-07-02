@@ -27,7 +27,6 @@ use buiy_core::render::components::{
     Background, Border, BorderSide, BoxShadow, Corners, LineStyle, Shadow,
 };
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
-use std::borrow::Cow;
 
 use crate::support::px;
 
@@ -37,32 +36,20 @@ fn border_band_paints_distinct_per_side_colors_at_the_box_edge() {
     const W: u32 = 64;
     const H: u32 = 64;
     let mut app = capture_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        // Distinct, saturated, channel-separable per-side colors so readback can
-        // tell the top edge (green) from the left edge (blue) unambiguously, and
-        // both from the red fill.
-        theme
-            .colors
-            .insert("test.fill".into(), Color::srgb(0.90, 0.10, 0.10)); // red
-        theme
-            .colors
-            .insert("test.top".into(), Color::srgb(0.05, 0.90, 0.05)); // green
-        theme
-            .colors
-            .insert("test.left".into(), Color::srgb(0.05, 0.05, 0.90)); // blue
-        theme
-            .colors
-            .insert("test.right".into(), Color::srgb(0.90, 0.90, 0.05)); // yellow
-        theme
-            .colors
-            .insert("test.bottom".into(), Color::srgb(0.90, 0.05, 0.90)); // magenta-ish
-    }
+    // Distinct, saturated, channel-separable per-side colors so readback can
+    // tell the top edge (green) from the left edge (blue) unambiguously, and
+    // both from the red fill. Carried inline as `Custom` (Track B: the test-
+    // injection theme HashMap is gone; the color travels on the token itself).
+    let fill_color = Color::srgb(0.90, 0.10, 0.10); // red
+    let top_color = Color::srgb(0.05, 0.90, 0.05); // green
+    let left_color = Color::srgb(0.05, 0.05, 0.90); // blue
+    let right_color = Color::srgb(0.90, 0.90, 0.05); // yellow
+    let bottom_color = Color::srgb(0.90, 0.05, 0.90); // magenta-ish
 
     // A 40x40 fill box at (12,12), 6px border on every side. The border band
     // occupies the OUTER 6px ring INSIDE the box: x in [12,18) at the left edge.
-    let side = |name: &'static str| BorderSide {
-        color: ColorToken::Token(Cow::Borrowed(name)),
+    let side = |color: Color| BorderSide {
+        color: ColorToken::Custom(color),
         style: LineStyle::Solid,
     };
     let widget = app
@@ -80,13 +67,13 @@ fn border_band_paints_distinct_per_side_colors_at_the_box_edge() {
                 .height_px(40.0)
                 .border(6.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.fill")),
+                color: ColorToken::Custom(fill_color),
             },
             Border {
-                top: side("test.top"),
-                right: side("test.right"),
-                bottom: side("test.bottom"),
-                left: side("test.left"),
+                top: side(top_color),
+                right: side(right_color),
+                bottom: side(bottom_color),
+                left: side(left_color),
                 radius: Corners::ZERO,
             },
         ))
@@ -148,19 +135,15 @@ fn box_shadow_darkens_the_region_offset_behind_the_box() {
     const W: u32 = 96;
     const H: u32 = 96;
     let mut app = capture_app(W, H);
-    {
-        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
-        // White fill so the box is unambiguous, and a COLORED (blue) shadow so
-        // the offset region is unambiguously distinguishable from the (black)
-        // clear backdrop in readback — a pure-black shadow over a black clear is
-        // indistinguishable in RGB, so the channel-separable blue is what makes
-        // "the shadow painted here" an observable, adapter-tolerant assertion
-        // (not a brittle near-zero RGB threshold).
-        theme.colors.insert("test.fill".into(), Color::WHITE);
-        theme
-            .colors
-            .insert("test.shadow".into(), Color::srgba(0.10, 0.20, 0.95, 0.95));
-    }
+    // White fill so the box is unambiguous, and a COLORED (blue) shadow so
+    // the offset region is unambiguously distinguishable from the (black)
+    // clear backdrop in readback — a pure-black shadow over a black clear is
+    // indistinguishable in RGB, so the channel-separable blue is what makes
+    // "the shadow painted here" an observable, adapter-tolerant assertion
+    // (not a brittle near-zero RGB threshold). Carried inline as `Custom`
+    // (Track B: the test-injection theme HashMap is gone).
+    let fill_color = Color::WHITE;
+    let shadow_color = Color::srgba(0.10, 0.20, 0.95, 0.95);
 
     // A 30x30 white box at (24,24). The shadow is offset (+16,+16) with blur 6,
     // no spread → the shadow box sits at (40,40), behind+below+right of the fill.
@@ -180,10 +163,10 @@ fn box_shadow_darkens_the_region_offset_behind_the_box() {
                 .width_px(30.0)
                 .height_px(30.0),
             Background {
-                color: ColorToken::Token(Cow::Borrowed("test.fill")),
+                color: ColorToken::Custom(fill_color),
             },
             BoxShadow(vec![Shadow {
-                color: ColorToken::Token(Cow::Borrowed("test.shadow")),
+                color: ColorToken::Custom(shadow_color),
                 offset_x: Length::px(16.0),
                 offset_y: Length::px(16.0),
                 blur: Length::px(6.0),

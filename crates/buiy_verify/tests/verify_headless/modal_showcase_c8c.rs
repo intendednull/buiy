@@ -397,17 +397,14 @@ fn kind_options(world: &mut World) -> Vec<(Entity, usize)> {
     opts
 }
 
-/// The `Background` token key of an entity (the segmented pill fill), for the
+/// The `Background` color token of an entity (the segmented pill fill), for the
 /// selected/unselected assertion.
-fn bg_token(world: &World, e: Entity) -> Option<String> {
-    match world
-        .get::<buiy_core::render::components::Background>(e)?
-        .color
-        .clone()
-    {
-        buiy_core::render::ColorToken::Token(t) => Some(t.to_string()),
-        _ => None,
-    }
+fn bg_token(world: &World, e: Entity) -> Option<buiy_core::render::ColorToken> {
+    Some(
+        world
+            .get::<buiy_core::render::components::Background>(e)?
+            .color,
+    )
 }
 
 #[test]
@@ -436,13 +433,13 @@ fn s4_create_form_kind_selection_restyles_the_segmented_group() {
     // At rest the first option (Button, idx 0) is the selected accent pill; the
     // others are transparent.
     assert_eq!(
-        bg_token(app.world(), opts[0].0).as_deref(),
-        Some("color.accent"),
+        bg_token(app.world(), opts[0].0),
+        Some(buiy_core::render::ColorToken::Accent),
         "Button is the selected pill at rest"
     );
     assert_eq!(
-        bg_token(app.world(), opts[1].0).as_deref(),
-        Some("color.surface.transparent"),
+        bg_token(app.world(), opts[1].0),
+        Some(buiy_core::render::ColorToken::Transparent),
         "Layout is unselected at rest"
     );
 
@@ -455,13 +452,13 @@ fn s4_create_form_kind_selection_restyles_the_segmented_group() {
         app.update();
     }
     assert_eq!(
-        bg_token(app.world(), opts[1].0).as_deref(),
-        Some("color.accent"),
+        bg_token(app.world(), opts[1].0),
+        Some(buiy_core::render::ColorToken::Accent),
         "selecting Layout made it the accent pill"
     );
     assert_eq!(
-        bg_token(app.world(), opts[0].0).as_deref(),
-        Some("color.surface.transparent"),
+        bg_token(app.world(), opts[0].0),
+        Some(buiy_core::render::ColorToken::Transparent),
         "Button deselected when Layout was chosen (exclusive segmented group)"
     );
 }
@@ -1031,7 +1028,6 @@ fn showcase_preview_fixture(app: &mut App) {
     use buiy_core::render::components::{
         BackgroundLayer, BackgroundLayers, Border, ColorStop, Corners, LinearGradient, Radius,
     };
-    use std::borrow::Cow;
 
     let preview = app
         .world_mut()
@@ -1051,11 +1047,11 @@ fn showcase_preview_fixture(app: &mut App) {
                 angle_deg: 150.0,
                 stops: vec![
                     ColorStop {
-                        color: ColorToken::Token(Cow::Borrowed("color.accent")),
+                        color: ColorToken::Accent,
                         position: 0.0,
                     },
                     ColorStop {
-                        color: ColorToken::Token(Cow::Borrowed("color.accent.lighter")),
+                        color: ColorToken::AccentLighter,
                         position: 1.0,
                     },
                 ],
