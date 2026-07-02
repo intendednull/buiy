@@ -46,7 +46,7 @@ use bevy::prelude::{
 };
 use buiy::prelude::*;
 use buiy_core::BuiySet;
-use buiy_core::a11y::{A11yLabel, A11yToggled, Toggled};
+use buiy_core::a11y::{A11yLabel, A11yToggled};
 use buiy_core::interaction::OnPress;
 use buiy_core::render::color::ThemeContract;
 use buiy_core::render::components::{BoxShadow, LineStyle, Shadow, TextColor};
@@ -811,7 +811,7 @@ fn todo_counts(world: &mut World) -> (i32, i32) {
         // `restyle_completed` reads).
         for child in children {
             if let Some(toggled) = world.get::<A11yToggled>(child) {
-                if toggled.0 == Toggled::True {
+                if Checkbox::checked(toggled) {
                     completed += 1;
                 }
                 break;
@@ -866,7 +866,7 @@ fn menu_open(world: &mut World) -> bool {
 fn showcase_switch_on(world: &mut World, label: &str) -> bool {
     let mut q = world.query::<(&A11yLabel, &A11yToggled)>();
     q.iter(world)
-        .any(|(l, t)| l.0 == label && t.0 == Toggled::True)
+        .any(|(l, t)| l.0 == label && Checkbox::checked(t))
 }
 
 /// The showcase slider's current radius value (rounded; from its `A11yValue.now`).

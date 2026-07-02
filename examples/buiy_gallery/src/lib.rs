@@ -1315,7 +1315,7 @@ fn toggle_all_rows(world: &mut World) {
     }
     let all_done = checkboxes
         .iter()
-        .all(|&cb| world.get::<A11yToggled>(cb).map(|t| t.0) == Some(Toggled::True));
+        .all(|&cb| world.get::<A11yToggled>(cb).is_some_and(Checkbox::checked));
     // D10 single-writer reroute: `toggleAll` is a RUNTIME mutator of `A11yToggled`,
     // so it must NOT write `t.0` directly (that races the toggle leaf's drain — the
     // multi-writer flicker W2 cures). Enqueue an absolute `ToggleMsg::Set(on)` per row;
@@ -1567,7 +1567,7 @@ pub fn restyle_completed(
             let Ok((toggled, cb_children)) = checkboxes.get(child) else {
                 continue;
             };
-            let completed = toggled.0 == Toggled::True;
+            let completed = Checkbox::checked(toggled);
             for &cb_child in cb_children.iter() {
                 // The label: tint + line-through.
                 if let Ok(mut color) = labels.get_mut(cb_child) {
@@ -1702,7 +1702,7 @@ fn row_completed(children: &Children, checkboxes: &Query<&A11yToggled, With<RowC
         .iter()
         .copied()
         .filter_map(|c| checkboxes.get(c).ok())
-        .any(|t| t.0 == Toggled::True)
+        .any(Checkbox::checked)
 }
 
 /// Every completed row (a `&mut World` walk for the exclusive clear-completed).
@@ -1717,7 +1717,7 @@ fn completed_rows(world: &mut World) -> Vec<Entity> {
         .filter(|(_, children)| {
             children.iter().any(|&c| {
                 world.get::<RowCheckbox>(c).is_some()
-                    && world.get::<A11yToggled>(c).map(|t| t.0) == Some(Toggled::True)
+                    && world.get::<A11yToggled>(c).is_some_and(Checkbox::checked)
             })
         })
         .map(|(row, _)| row)
@@ -5811,7 +5811,7 @@ pub fn drive_showcase_switches(
     mut thumbs: Query<&mut Translate, With<ShowcaseSwitchThumb>>,
 ) {
     for (toggled, children) in &changed {
-        let on = toggled.0 == Toggled::True;
+        let on = Switch::on(toggled);
         for &child in children {
             let Ok((mut bg, track_children)) = tracks.get_mut(child) else {
                 continue;
