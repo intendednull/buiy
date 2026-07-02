@@ -273,6 +273,36 @@ impl Plugin for WidgetsPlugin {
                 );
             },
         );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Add, switch::SwitchParts>,
+             labels: Query<&A11yLabel>,
+             children: Query<&Children>,
+             is_track: Query<(), With<switch::SwitchTrack>>,
+             mut commands: Commands| {
+                switch::attach_switch_children(
+                    trigger.event_target(),
+                    &labels,
+                    &children,
+                    &is_track,
+                    &mut commands,
+                );
+            },
+        );
+        app.add_observer(
+            |trigger: On<bevy::ecs::lifecycle::Add, disclosure::DisclosureParts>,
+             labels: Query<&A11yLabel>,
+             children: Query<&Children>,
+             is_caret: Query<(), With<disclosure::DisclosureCaret>>,
+             mut commands: Commands| {
+                disclosure::attach_disclosure_children(
+                    trigger.event_target(),
+                    &labels,
+                    &children,
+                    &is_caret,
+                    &mut commands,
+                );
+            },
+        );
 
         // `Messages<OnPress>` is registered by `CorePlugin`
         // (`InteractionPlugin`, co-drive SC-1), not here — the shared

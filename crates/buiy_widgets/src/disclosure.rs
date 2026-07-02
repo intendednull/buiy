@@ -232,44 +232,25 @@ impl Disclosure {
     /// starts hidden (`CssVisibility::Hidden`) because the default `A11yExpanded` is
     /// `false`; [`update_disclosure_visual`] rotates the caret + reveals the panel on
     /// the first `Changed<A11yExpanded>` once the state flips.
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(label: impl Into<String>) -> impl Bundle {
-        let label = label.into();
-        (
-            Disclosure,
-            A11yLabel(label.clone()),
-            // The trigger CONTROLS the panel; the panel id is resolved after spawn
-            // via the `children!` order (the panel is the third child). The
-            // `controls` edge is wired by `wire_disclosure_controls` once the
-            // children exist (a `#[require]`/closure cannot reference a sibling
-            // entity at construction).
-            children![
-                // The decorative caret — starts collapsed (pointing right).
-                (
-                    DisclosureCaret,
-                    Text(CARET_GLYPH.into()),
-                    FontSize(DISCLOSURE_FONT_SIZE),
-                    TextColor::default(),
-                    caret_rotation_collapsed(),
-                    Pickable::IGNORE,
-                ),
-                // The visible label pixels (the AT name stays on the trigger root).
-                (
-                    Text(label),
-                    FontSize(DISCLOSURE_FONT_SIZE),
-                    TextColor::default(),
-                    Pickable::IGNORE,
-                ),
-                // The controlled panel (a real Region) — starts hidden (collapsed).
-                (
-                    DisclosurePanel,
-                    Node,
-                    disclosure_panel_box_model(),
-                    disclosure_panel_background(),
-                    CssVisibility::Hidden,
-                ),
-            ],
-        )
+    /// The canonical labelled disclosure. Returns a named [`DisclosureBuilder`]
+    /// carrying the chainable **`.expanded(true)`** setter that stores the real
+    /// [`A11yExpanded`] (Track C / C4). An `On<Add, DisclosureParts>` observer
+    /// attaches the caret + label + controlled panel; `wire_disclosure_controls`
+    /// still sets the trigger's `A11yRelations.controls = [panel]` once the
+    /// children exist (the observer's `with_child` fires `Added<Children>`).
+    ///
+    /// The caret starts collapsed + the panel hidden;
+    /// [`update_disclosure_visual`] rotates/reveals on the first
+    /// `Changed<A11yExpanded>` (the spawn `Added` counts), so `.expanded(true)`
+    /// settles open after one frame.
+    #[allow(clippy::new_ret_no_self)] // builder pattern: `new` returns the named builder
+    pub fn new(label: impl Into<String>) -> DisclosureBuilder {
+        DisclosureBuilder {
+            marker: Disclosure,
+            a11y_label: A11yLabel(label.into()),
+            expanded: A11yExpanded::default(), // false (collapsed)
+            parts: DisclosureParts,
+        }
     }
 
     /// Read whether the disclosure is **expanded** from its [`A11yExpanded`] state
@@ -278,6 +259,79 @@ impl Disclosure {
     pub fn expanded(state: &A11yExpanded) -> bool {
         state.0
     }
+}
+
+/// Builder-only **trigger** for the [`Disclosure`] children observer (Track C /
+/// C4), inserted ONLY by [`Disclosure::new`]. Not `Reflect` (does not round-trip
+/// a respawn).
+#[derive(Component)]
+pub struct DisclosureParts;
+
+/// The named `Bundle` [`Disclosure::new`] returns; `.expanded(true)` stores the
+/// real [`A11yExpanded`].
+#[derive(Bundle)]
+pub struct DisclosureBuilder {
+    marker: Disclosure,
+    a11y_label: A11yLabel,
+    expanded: A11yExpanded,
+    parts: DisclosureParts,
+}
+
+impl DisclosureBuilder {
+    /// Set the initial **expanded** state, storing the real [`A11yExpanded`].
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = A11yExpanded(expanded);
+        self
+    }
+}
+
+/// `On<Add, DisclosureParts>` observer body (Track C / C4): attach the caret +
+/// label + controlled panel (byte-identical to the pre-C4 `children![…]`, in the
+/// same order so `wire_disclosure_controls` finds the panel as the third child).
+/// Idempotent (early-returns if a `DisclosureCaret` child exists); writes ONLY
+/// child components. The `with_child` still fires `Added<Children>`, so
+/// `wire_disclosure_controls` wires the `controls` edge unchanged.
+pub(crate) fn attach_disclosure_children(
+    root: Entity,
+    labels: &Query<&A11yLabel>,
+    children: &Query<&Children>,
+    is_caret: &Query<(), With<DisclosureCaret>>,
+    commands: &mut Commands,
+) {
+    if let Ok(existing) = children.get(root)
+        && existing.iter().any(|c| is_caret.get(c).is_ok())
+    {
+        return; // subtree already attached — idempotent no-op
+    }
+    let Ok(A11yLabel(text)) = labels.get(root) else {
+        return;
+    };
+    commands.entity(root).with_children(|p| {
+        // The decorative caret — starts collapsed (pointing right).
+        p.spawn((
+            DisclosureCaret,
+            Text(CARET_GLYPH.into()),
+            FontSize(DISCLOSURE_FONT_SIZE),
+            TextColor::default(),
+            caret_rotation_collapsed(),
+            Pickable::IGNORE,
+        ));
+        // The visible label pixels (the AT name stays on the trigger root).
+        p.spawn((
+            Text(text.clone()),
+            FontSize(DISCLOSURE_FONT_SIZE),
+            TextColor::default(),
+            Pickable::IGNORE,
+        ));
+        // The controlled panel (a real Region) — starts hidden (collapsed).
+        p.spawn((
+            DisclosurePanel,
+            Node,
+            disclosure_panel_box_model(),
+            disclosure_panel_background(),
+            CssVisibility::Hidden,
+        ));
+    });
 }
 
 /// The query data [`wire_disclosure_controls`] reads per trigger: the trigger

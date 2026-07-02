@@ -280,10 +280,10 @@ fn seeded_on_switch_paints_accent_track_on_first_update() {
     // OFF color, but `Added` counts as `Changed`, so `update_switch_visual` fires and
     // paints `Accent` before first paint.
     let mut app = app();
-    let sw = app
-        .world_mut()
-        .spawn((Switch::new("Register"), A11yToggled(Toggled::True)))
-        .id();
+    // C4: seed via the builder's `.on(true)` — the builder now CARRIES
+    // `A11yToggled`, so a sibling `A11yToggled(..)` would be a duplicate-component
+    // panic.
+    let sw = app.world_mut().spawn(Switch::new("Register").on(true)).id();
     app.update();
     assert_eq!(
         track_bg(&app, sw),
@@ -322,4 +322,48 @@ fn on_press_toggles_switch_binary_and_slides_thumb() {
         "second OnPress flips True→False (binary, no Mixed)"
     );
     assert_eq!(thumb_x(&app, thumb), 0.0, "thumb back off");
+}
+
+// ── Track C / C4b: SwitchBuilder + .on + the nested grandchild subtree ─────────
+
+/// `.on(true)` seeds the real binary `A11yToggled`, and the observer builds the
+/// thumb as a GRANDCHILD (child of the `SwitchTrack`, not the root) — the
+/// structure `update_switch_visual`'s root→track→thumb walk depends on (a
+/// mis-nested thumb would be a silent, GPU-invisible no-slide).
+#[test]
+fn switch_new_on_seeds_true_with_thumb_as_grandchild() {
+    use buiy_core::a11y::A11yToggled;
+
+    let mut app = app();
+    let sw = app.world_mut().spawn(Switch::new("Wi-Fi").on(true)).id();
+    app.update();
+
+    let world = app.world();
+    assert!(
+        Switch::on(world.get::<A11yToggled>(sw).unwrap()),
+        "`.on(true)` seeds Toggled::True",
+    );
+
+    // The thumb is NOT a direct child of the root…
+    let root_children: Vec<_> = world.get::<Children>(sw).unwrap().iter().collect();
+    assert!(
+        !root_children
+            .iter()
+            .any(|&c| world.get::<SwitchThumb>(c).is_some()),
+        "thumb must NOT be a direct child of the switch root",
+    );
+    // …it is a grandchild under the SwitchTrack.
+    let track = root_children
+        .iter()
+        .copied()
+        .find(|&c| world.get::<SwitchTrack>(c).is_some())
+        .expect("switch has a SwitchTrack child");
+    assert!(
+        world
+            .get::<Children>(track)
+            .unwrap()
+            .iter()
+            .any(|c| world.get::<SwitchThumb>(c).is_some()),
+        "the thumb is a grandchild under the track",
+    );
 }
