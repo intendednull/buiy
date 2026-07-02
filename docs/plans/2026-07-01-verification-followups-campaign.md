@@ -33,15 +33,16 @@ Baseline gate commands (from CLAUDE.md):
 `crates/buiy_verify/tests/verify_headless/content_presence.rs`, the 12± `button.resting.*.snap`.
 
 1. **Make `build_app` text-capable.** Add `BuiyTextPlugin { system_fonts: false }` (that is
-   the *whole* literal — `system_fonts` is the only field) to the `build_app` stack, then
-   stage Ahem as the **sole resolvable family** via **`determinism::stage_ahem(&mut app)`**
-   — NOT `register_ahem` (which runs `app.update()` and would violate `build_app`'s
-   documented "no `update()` yet" contract, enroll.rs:40-44). `stage_ahem` stages the bytes
-   with no update; `apply_font_registry` runs `.before(BuiySet::Layout)`, so the tier's first
-   `update()` drains the font *and* measures the label in one frame. (`ahem_bytes`/`AHEM_TTF`
-   are private; `AHEM_FAMILY = "Ahem"` is pub — use it for the label family.) Pure-CPU/no-adapter
-   invariant holds: `BuiyTextPlugin`'s render half is guarded on `RenderApp` (absent under
-   `MinimalPlugins`) and its asset-loader reg on `AssetServer` (also absent).
+   the *whole* literal — `system_fonts` is the only field) to the `build_app` stack. **That is
+   the entire change** — no Ahem staging, no fixture edit. The text plugin seeds
+   `SharedFontSystem` (which the Taffy text-measure requires), and `system_fonts:false` keeps
+   host fonts out so the metrics come only from the embedded default font (Fira Sans). Pure-CPU/
+   no-adapter invariant holds: `BuiyTextPlugin`'s render half is guarded on `RenderApp` (absent
+   under `MinimalPlugins`) and its asset-loader reg on `AssetServer` (also absent).
+   *(Superseded during execution: an earlier draft of this step staged Ahem via
+   `determinism::stage_ahem`; the W1 code review proved it inert for this fixture — Fira Sans
+   wins resolution — and removed it. Ahem's em-box only matters for host-stable rasterized
+   pixels, which the CPU metric tiers don't produce. See the spec's V14 deviation note.)*
 2. **Point the fixture label at Ahem** in `fixtures/button/resting.rs` so it resolves
    deterministically; update the fixture docstring (drop the "content-width-empty" note).
 3. **Re-bless** the button structured snapshots. **Do not pre-trust "12"** — run the

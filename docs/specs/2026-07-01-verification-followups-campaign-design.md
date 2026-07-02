@@ -86,16 +86,27 @@ measurement. Root cause: `build_app` (`coverage/enroll.rs`) builds only `Minimal
 the Taffy text-measure takes its no-op arm (`text/measure.rs`) and the label can never
 measure nonzero, no matter what font is "registered."
 
-**The fix (V14):** add `BuiyTextPlugin { system_fonts: false, .. }` to the shared
-`build_app` and make **Ahem the sole resolvable family** (mirroring the GPU capture
-stack's `FontMode::Ahem` determinism discipline, `determinism.rs`), then stage the
-deterministic Ahem font via `determinism::stage_ahem` (which registers the bytes with **no**
-`app.update()`, preserving `build_app`'s "no update yet" contract) and point the fixture
-label at `determinism::AHEM_FAMILY` ("Ahem"). The button label then measures, and
-the `button.resting.*` layout + display-list snapshots re-bless (label `0×0` → measured;
-the button may re-center its child). **Treat the rebless count as expected≈12,
-verify-empirically** — the exact set is governed by `paints_cell`/`snapshots_cell`, not
-pre-committed.
+**The fix (V14):** add `BuiyTextPlugin { system_fonts: false }` to the shared
+`build_app`. That alone makes the button's real "Save" label measure: the text plugin
+seeds `SharedFontSystem` (the missing dependency), and `system_fonts:false` keeps host
+fonts out so the metrics come only from `buiy_core`'s **embedded default font (Fira Sans,
+`default_font` feature)** — host-stable across the CI matrix. The `button.resting.*` layout
++ display-list snapshots re-bless (label `0×0` → measured; the button re-centers its child).
+**Treat the rebless count as expected≈12, verify-empirically** — the exact set is governed
+by `paints_cell`/`snapshots_cell`, not pre-committed.
+
+> **Deviation from the initial design (recorded per the campaign's tracker-truth
+> doctrine).** This spec first prescribed staging Ahem as the sole family (mirroring the GPU
+> `FontMode::Ahem` discipline) and naming Ahem on the fixture label. The W1 code review
+> proved that unnecessary and misleading: with `system_fonts:false`, the embedded Fira Sans
+> already gives deterministic, host-stable metrics, and a `stage_ahem` call was **inert** for
+> this fixture (Fira Sans wins resolution; removing it left every snap byte-identical — "Save"
+> measures `34×20` proportional, not Ahem's `4×16=64` em-box). Ahem's value is host-stable
+> *rasterized pixels*, which the CPU structured tiers never produce (they snapshot layout
+> metrics) — so the em-box substitution rightly stays in the GPU golden tier only. We
+> therefore do **not** stage Ahem here and do **not** touch the fixture (it keeps the real
+> `button()` bundle). One coupling to note: the reblessed metrics depend on the `default_font`
+> feature (on by default; `buiy_verify`'s snapshot tests always build with it).
 
 **V13 rides the same stack — no separate `build_text_app` needed.** Once `build_app` is
 text-capable, add the `enroll_content_presence` driver + a catalog-wide test in the

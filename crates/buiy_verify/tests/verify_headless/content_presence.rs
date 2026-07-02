@@ -114,11 +114,12 @@ fn content_test_app() -> App {
 /// bug) across the whole matrix, by construction.
 ///
 /// Both former blockers are gone: `build_app` is now text-capable (it installs
-/// `BuiyTextPlugin { system_fonts: false }` + stages Ahem, so `SharedFontSystem`
-/// is present and `glyph_census` no longer panics), and the button fixture is a
-/// text-bearing cell (its "Save" label measures + shapes under Ahem, V14). The
-/// `text_bearing > 0` guard makes the check fail loudly if it ever goes vacuous
-/// (a catalog with no text-bearing cell would silently pass without it).
+/// `BuiyTextPlugin { system_fonts: false }`, so `SharedFontSystem` is present and
+/// `glyph_census` no longer panics), and the button fixture is a text-bearing
+/// cell — its "Save" label measures + shapes under the embedded default font
+/// (Fira Sans; V14). The `text_bearing > 0` guard makes the check fail loudly if
+/// it ever goes vacuous (a catalog with no text-bearing cell would silently pass
+/// without it).
 #[test]
 fn every_text_bearing_catalog_cell_emits_glyphs() {
     use buiy_verify::coverage::{Matrix, enroll_all};

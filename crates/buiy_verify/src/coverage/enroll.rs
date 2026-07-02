@@ -12,8 +12,15 @@
 //! display-list, [invariant](crate::invariant)) are pure-CPU and headless — they
 //! must NOT instantiate a wgpu adapter. So [`build_app`] builds the **CPU**
 //! deterministic stack (`MinimalPlugins + CorePlugin + LayoutPlugin +
-//! BuiyTextPlugin{system_fonts:false} + Theme`, with the Ahem box-font staged as
-//! the sole resolvable family so text-bearing fixtures measure host-stably),
+//! BuiyTextPlugin{system_fonts:false} + Theme`). The text plugin makes
+//! text-bearing fixtures MEASURE — the Taffy text-measure needs its
+//! `SharedFontSystem`, and `system_fonts:false` keeps host fonts out so the
+//! measured metrics come only from `buiy_core`'s embedded default font (Fira
+//! Sans, `default_font` feature) — host-stable across the CI matrix without any
+//! Ahem staging (the CPU structured tiers snapshot layout *metrics*, not
+//! rasterized pixels, so an em-box substitution buys nothing here; that
+//! substitution belongs to the GPU golden tier's
+//! [`DeterministicApp`](crate::determinism)). It then
 //! pins the viewport + DPR through a synthetic `PrimaryWindow` (the same
 //! component-only window the layout solver reads its viewport from), and
 //! installs the cell's theme + forced-colors preference. The GPU golden tier
@@ -62,15 +69,6 @@ pub fn build_app(fx: &super::fixture::Fixture, cell: &Cell) -> App {
         .add_plugins(BuiyTextPlugin {
             system_fonts: false,
         });
-
-    // The Ahem box-font substitution (the same `FontMode::Ahem` discipline the
-    // GPU capture stack applies): with system fonts off, the committed Ahem face
-    // is the ONLY resolvable family, so fixture text resolves to its host-stable
-    // em-box metrics via fallback — a label cannot pick up a host platform font.
-    // `stage_ahem` registers the bytes WITHOUT an `app.update()`, honoring this
-    // fn's "no update yet" contract; `apply_font_registry` drains it before
-    // `BuiySet::Layout` on the tier body's first update, so the label measures.
-    crate::determinism::stage_ahem(&mut app);
 
     // The cell's theme is the ACTIVE theme. We do not run the forced-colors
     // swap system here: `build_app` installs the resolved theme directly (the
