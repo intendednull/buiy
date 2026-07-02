@@ -25,15 +25,17 @@
 //! paint, not a stale descriptor (the `broken_fixture_produces_violation`
 //! self-test gives that teeth).
 //!
-//! ## Residual visual half — BLOCKED
+//! ## Residual visual half — LANDED
 //!
 //! The forced-colors *visual* residual — the `BoxShadow` draw-skip under
-//! `forced-colors: active` — is a Tier-4 reftest **blocked on the unlanded
-//! `BoxShadow` extract/draw path** (`extract_buiy_nodes` has no `BoxShadow`
-//! branch; follow-ups.md:474–478). It is NOT this producer's concern: see the
-//! `boxshadow_visual_reftest_is_blocked` placeholder in
-//! `tests/coverage_forced_colors.rs`. The structured token-flow + shadow-only
-//! analyzers here cover gate #11's static half now and do not depend on it.
+//! `forced-colors: active` — is a Tier-4 reftest, `forced_colors_boxshadow_suppressed`
+//! in `tests/coverage_forced_colors.rs` (the `BoxShadow` extract/draw path landed:
+//! `resolve_shadows` is wired in `extract.rs` and returns empty under
+//! `forced_colors`, and `shadow.wgsl` rasterizes). It renders a shadowed vs an
+//! unshadowed box under forced-colors and asserts they match byte-for-byte
+//! (proven non-vacuous — disabling the suppression reds it). It is NOT this
+//! producer's concern; the structured token-flow + shadow-only analyzers here
+//! cover gate #11's static half independently.
 
 use bevy::prelude::*;
 

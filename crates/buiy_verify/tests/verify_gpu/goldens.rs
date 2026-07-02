@@ -28,18 +28,24 @@
 //!   adapter (this host's RX diverges — cross-rasterizer pixels are
 //!   non-comparable). The non-vacuous paint check runs on every adapter.
 //!
-//! The drop-shadow-kernel residue golden is a deferred follow-up: the
-//! `BoxShadow` extract/draw path is not yet landed (`extract_buiy_nodes` has no
-//! `BoxShadow` branch — docs/plans/follow-ups.md). The harness is ready for it
-//! (a shadow fixture + one `assert_golden` call); only the renderer leg is
-//! missing. The color-emoji fidelity golden likewise waits on a pinned bundled
-//! emoji font (goldens.md § "Color emoji is the canonical irreducible golden").
+//! * `golden_shadow_blur_kernel` — the committed drop-shadow Gaussian blur-kernel
+//!   residue golden (an offset `BoxShadow` whose AA falloff is Tier-5's). The
+//!   `BoxShadow` extract/draw path landed (`resolve_shadows` in `extract.rs`,
+//!   `shadow.wgsl`), so this is now a real committed golden — adapter-gated on
+//!   pinned lavapipe like `golden_sdf_corner`.
+//!
+//! The color-emoji fidelity golden remains a deferred follow-up: it waits on the
+//! color-glyph render leg (`SwashContent::Color` is still `SkipColorEmoji`; no
+//! color `IconInstance` producer/shader) and a pinned bundled COLR/CBDT emoji
+//! font (goldens.md § "Color emoji is the canonical irreducible golden").
 
 use bevy::prelude::*;
 use buiy_core::components::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::ColorToken;
-use buiy_core::render::components::{Background, Border, Corners, Radius, TextColor};
+use buiy_core::render::components::{
+    Background, Border, BoxShadow, Corners, Radius, Shadow, TextColor,
+};
 use buiy_core::render::golden::Dpr;
 use buiy_core::text::{FamilyEntry, FontFamily, FontSize, FontStack, Text};
 use buiy_verify::determinism::DeterministicApp;
@@ -323,6 +329,86 @@ fn golden_sdf_corner() {
     }
     assert_golden(
         &key("rect-rounded", "default", "dark", "sm", Dpr::X1),
+        &img,
+        &FuzzBudget::EXACT,
+    );
+}
+
+/// A 24×24 light box at (6,6) casting an OFFSET drop shadow (+12,+12, blur 6) in
+/// a bright color, so the shadow's Gaussian blur falloff paints on the black
+/// clear in the bottom-right region the box does not cover — the residue this
+/// golden owns. Mirrors `render_border_shadow_gpu`'s fixture geometry.
+fn box_shadow(app: &mut App) {
+    {
+        let mut theme = app.world_mut().resource_mut::<buiy_core::theme::Theme>();
+        theme
+            .colors
+            .insert("g.sh.fill".into(), Color::srgb(0.85, 0.85, 0.85));
+        theme
+            .colors
+            .insert("g.sh.shadow".into(), Color::srgba(0.20, 0.55, 0.95, 0.95));
+    }
+    let widget = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(6.0)),
+                    left: Sizing::Length(Length::px(6.0)),
+                    ..default()
+                })
+                .width_px(24.0)
+                .height_px(24.0),
+            Background {
+                color: ColorToken::Token(Cow::Borrowed("g.sh.fill")),
+            },
+            BoxShadow(vec![Shadow {
+                color: ColorToken::Token(Cow::Borrowed("g.sh.shadow")),
+                offset_x: Length::px(12.0),
+                offset_y: Length::px(12.0),
+                blur: Length::px(6.0),
+                spread: Length::px(0.0),
+                inset: false,
+            }]),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[widget]);
+}
+
+#[test]
+#[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
+fn golden_shadow_blur_kernel() {
+    // The drop-shadow Gaussian blur-kernel residue: the AA falloff of an offset
+    // BoxShadow is what Tier-5 owns — the algebraic CPU shadow oracle and the
+    // adapter-tolerant "region darkens" GPU check pin the geometry, not the
+    // rasterized blur pixels.
+    let img = DeterministicApp::new(48, 48).capture(box_shadow);
+    // The adapter-AGNOSTIC leg (runs on EVERY adapter): the fixture painted a
+    // non-blank frame — a blank-capture / shadow-vanished regression fails here
+    // regardless of host.
+    assert!(
+        img.pixels().any(|p| p.0 != [0, 0, 0, 255]),
+        "the box + shadow painted (non-vacuous)"
+    );
+
+    // The committed-baseline EXACT comparison is keyed against the PINNED
+    // lavapipe corpus (this host's RX diverges — cross-rasterizer pixels are
+    // non-comparable). Gate it on the selected adapter actually being lavapipe;
+    // otherwise skip-as-pending (mirror golden_sdf_corner / matrix_goldens).
+    if !on_pinned_lavapipe() {
+        eprintln!(
+            "golden_shadow_blur_kernel: selected adapter is not the pinned \
+             lavapipe — SKIPPING the committed-baseline EXACT comparison. The \
+             non-vacuous paint check above still ran."
+        );
+        return;
+    }
+    assert_golden(
+        &key("shadow", "default", "dark", "sm", Dpr::X1),
         &img,
         &FuzzBudget::EXACT,
     );

@@ -112,11 +112,28 @@ fn matrix_goldens() {
     // nothing compared" (a real vacuity bug on lavapipe) apart from "no cell
     // blessed yet" (the aspirational state, honestly green).
     let mut any_cell_blessed = false;
+    // V6: cells the fixture cannot paint (the button's light-theme cells resolve
+    // its system-color tokens to the magenta missing-token sentinel) are not part
+    // of the golden corpus — counted separately so a green run's status is honest.
+    let mut unpaintable = 0usize;
 
     for fx in sorted_catalog() {
         for cell in matrix.cells() {
             let cov = CoverageKey::for_cell(fx, &cell, CovBackend::Cpu);
             let key = golden_key(&cov);
+
+            // V6: honor the fixture's paintability BEFORE any capture/bless/assert.
+            // A cell the fixture cannot paint without the magenta missing-token
+            // sentinel (the button's light-theme cells) must never be baked into
+            // the corpus NOR asserted — the same skip the CPU snapshot tiers honor
+            // (`enroll_snapshots`). This applies in the `BUIY_BLESS` path too, so
+            // `matrix_goldens` can only ever bless the forced-colors-SAFE cells;
+            // the light cells stay pending until the default widget is
+            // forced-colors-safe (buiy-widget-catalog-design).
+            if !fx.snapshots_cell(&cell) {
+                unpaintable += 1;
+                continue;
+            }
 
             let cell_blessed = committed_positives(&key) > 0;
             any_cell_blessed |= cell_blessed;
@@ -142,20 +159,24 @@ fn matrix_goldens() {
             app.insert_resource(prefs);
             (fx.spawn)(&mut app);
 
+            // Capture FIRST — `capture_to_image` drives the app to quiescence
+            // (TextSync → measure → commit → shape), so the bless-guard below sees
+            // the ACTUAL shaped glyph count. (Running `glyph_census` on the
+            // pre-update world false-refuses a text-bearing fixture at 0 glyphs
+            // before its text has shaped — the button's "Save" label is
+            // text-bearing, not the "non-text" the old comment assumed.)
+            let img = buiy_core::render::golden::capture_to_image(&mut app, &cfg);
+
             // Bless-guard (C7 §2.4): refuse to record a baseline for a
-            // text-bearing cell that silently shaped to zero glyphs. The same
+            // text-bearing cell that silently shaped to zero glyphs — the same
             // `(text_bearing, glyph_count)` the content-presence invariant
-            // computes, so the corpus boundary and the invariant agree. In
-            // Wave 1 the only catalog fixture is the non-text `button`, so this
-            // resolves to `bless_guard_check(false, 0)` (the no-op `Ok` path);
-            // the guard's teeth are proven by the `bless_guard_refuses_zero_…`
-            // unit test, and it becomes load-bearing the moment C8 adds a text
-            // fixture, with no further edit.
+            // computes, so the corpus boundary and the invariant agree. Run on the
+            // POST-capture (shaped) world; the guard's teeth are proven by the
+            // `bless_guard_refuses_zero_…` unit test.
             let (text_bearing, glyph_count) = buiy_verify::invariant::glyph_census(&mut app);
             buiy_verify::golden::bless_guard_check(text_bearing, glyph_count)
                 .unwrap_or_else(|e| panic!("bless-guard refused cell {}: {e}", key.slug()));
 
-            let img = buiy_core::render::golden::capture_to_image(&mut app, &cfg);
             assert_golden(&key, &img, &budget_for(&cov));
             asserted += 1;
         }
@@ -178,7 +199,7 @@ fn matrix_goldens() {
     } else {
         eprintln!(
             "matrix_goldens: {asserted} cells compared against the committed corpus, \
-             {pending} pending (on_lavapipe={on_lavapipe})"
+             {pending} pending, {unpaintable} unpaintable (on_lavapipe={on_lavapipe})"
         );
     }
 

@@ -1106,11 +1106,13 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   analyzers at the live catalog (see the R11 entry above).
 
 **Still DEFERRED (renderer-blocked or out-of-scope, tracked here):**
-- **Shadow-blur-kernel & color-emoji goldens** — the two residue golden classes
-  `goldens.md` names as Tier-5-only. **Renderer-blocked**: the shadow draw path
-  and color-emoji atlas output are not yet exercised end-to-end by a capturable
-  fixture; the corpus is started with `rect-rounded`/`text-ahem` and these classes
-  are added when the renderer paths land.
+- **Shadow-blur-kernel golden — LANDED (2026-07-01, V4).** `golden_shadow_blur_kernel`
+  (`goldens.rs`) commits the drop-shadow Gaussian blur-kernel residue (an offset
+  `BoxShadow`'s AA falloff), blessed on pinned lavapipe — the renderer block was
+  stale (`resolve_shadows` + `shadow.wgsl` landed). **Color-emoji golden — still
+  deferred (V5):** blocked on the color-glyph render leg (`SwashContent::Color` is
+  still `SkipColorEmoji`; no color `IconInstance` producer/shader) AND a pinned
+  bundled COLR/CBDT emoji font — a real renderer feature, out of scope here.
 - **`coverage_golden::matrix_goldens` — skip-as-pending LANDED; remaining work is
   blessing the real residue cells.** The Tier-5 enrollment driver
   (`coverage_golden.rs`) iterates `Matrix::ci_default()` over the catalog and
@@ -1126,18 +1128,26 @@ app, assert inline expected pixels, re-capture in a second fresh app,
   prints an HONEST status line distinguishing cells *compared* from cells
   *pending*; a *blessed* cell still fails closed on drift (the "no golden
   committed for `<slug>`" message is `golden/check.rs:282`, reached only on the
-  bless/assert path — never for skipped cells). Only `rect-rounded` + `text-ahem`
-  are blessed so far. **Still deferred — blessing the residue cells (e.g.
-  `button`):** non-trivial because the default `Button` under Buiy's *wholesale*
-  forced-colors swap paints the magenta missing-token sentinel
-  (`color-and-forced-colors.md § 3.1`), so blessing those cells verbatim would
-  cement a known-wrong pixel as a golden. Bless only the forced-colors-*safe*
-  cells once the default widget is forced-colors-safe
-  (`buiy-widget-catalog-design`). The headless every-PR gate never runs
-  `--ignored` and is unaffected throughout.
-- **Forced-colors `BoxShadow` *visual* reftest** — blocked on the unlanded
-  `BoxShadow` extract/draw path (see the R11 entry above); kept as an `#[ignore]`'d
-  assertion-free placeholder, not a green test.
+  bless/assert path — never for skipped cells). **Blessing the forced-colors-safe
+  residue cells — LANDED (2026-07-01, V6):** `matrix_goldens` now honors the
+  fixture paintability predicate (`snapshots_cell`) in BOTH the assert and
+  `BUIY_BLESS` paths, so it can only ever bless the paintable cells; the 12
+  `theme==ForcedColors` `button` cells are blessed on pinned lavapipe (real white
+  `ButtonText` fill, zero magenta sentinel), flipping the lane from `asserted==0`
+  (aspirational) to 12 compared. The 12 *light-theme* cells stay pending because
+  the default `Button` under Buiy's *wholesale* forced-colors swap still paints the
+  magenta sentinel (`color-and-forced-colors.md § 3.1`) — blessing them verbatim
+  would cement a known-wrong pixel; they land once the default widget is
+  forced-colors-safe (`buiy-widget-catalog-design`). The headless every-PR gate
+  never runs `--ignored` and is unaffected throughout.
+- **Forced-colors `BoxShadow` *visual* reftest — LANDED (2026-07-01, V1).** The
+  `BoxShadow` extract/draw path landed (`resolve_shadows` returns empty under
+  `forced_colors`; `shadow.wgsl` rasterizes), so the assertion-free `#[ignore]`
+  placeholder is replaced by a real Tier-4 reftest `forced_colors_boxshadow_suppressed`
+  (`coverage_forced_colors.rs`): a shadowed box vs the same box unshadowed, both
+  under forced-colors, must rasterize identically (the draw-skip). Adapter-agnostic,
+  verified on the RX; proven non-vacuous (disabling the suppression reds it with 566
+  differing shadow pixels).
 - **Multi-reference reftest aggregation** — the `RefCase::multi` OR/AND
   aggregation (`reftests.md` § Reference independence #3) is specified but not
   built; single-reference reftests cover the current pairings. (Follow-ups-drain
@@ -1699,14 +1709,17 @@ follow-ups surfaced during implementation:
   verification. The one verification-native piece — a text-capable `enroll::build_app`
   — WAS delivered by this campaign (V13/V14), so the "still lacks a text-capable stack"
   clause above is now superseded.
-- **Pre-existing text-caret GPU golden diverges on non-lavapipe adapters (NOT a
-  campaign regression).** `text_caret_selection_e3_gpu` fails on the RX 6700 XT at
-  `white_cols.last().expect("the glyph ink painted")` — the lavapipe-calibrated
-  `is_white_ink` predicate matches no pixels under a different rasterizer. The
-  campaign touched neither this test nor the glyph-rasterization path; CI's
-  pinned-lavapipe GPU lane (the calibration target) is green. Same class as the
-  testing-audit's "cross-rasterizer golden contradiction" — fold these goldens into
-  the perceptual-metric / adapter-tolerant tier rather than exact `is_white_ink`.
+- **Text-caret/selection GPU ink predicates adapter-brittle — RESOLVED (2026-07-01, V19).**
+  The five `>=180`-family ink predicates (`is_white_ink`×3, `is_blue_ink`,
+  `is_strong_blue`) across `text_caret_selection_e3_gpu` / `text_selection_caret_gpu` /
+  `text_ime_preedit_gpu` assumed pinned-lavapipe's coverage/gamma, so a dimmer
+  rasterizer could match no pixels and panic `.expect("the glyph ink painted")`.
+  Replaced the HIGH "channel is lit" checks with a shared `crate::support::channel_lit`
+  (`>= 128`, background-relative to the opaque-black clear), keeping each predicate's
+  LOW bounds for per-color discrimination (white = all channels lit; blue = blue lit,
+  red not). Verified 6/6 on BOTH the RX 6700 XT (RADV) and pinned Mesa 24.3.4 lavapipe.
+  (Note: the older RX panic no longer reproduced on this driver — portability-hardening
+  against a latent cross-adapter flake, not a live-bug fix.)
 - **Doc-status flip on merge.** The widget-catalog child specs (C1–C8) are still
   `[draft]`; flip to `[landed]` when the campaign PRs to `main` (they describe the
   now-built target state).

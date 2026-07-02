@@ -1,0 +1,18 @@
+[key]
+widget = "button"
+state = "resting"
+theme = "forced"
+viewport = "desktop"
+forced_colors = false
+backend = "Lavapipe"
+dpr = 2000
+
+[[positives]]
+file = "forced__desktop__fc0__lavapipe__dpr2.0.png"
+blessed_commit = "96f2ea27d45730be5eed2d51365830256369e992"
+blessed_at = "2026-07-02T01:34:29Z"
+reason = "blessed"
+
+[positives.budget]
+max_channel_delta = 0
+max_diff_pixels = 0

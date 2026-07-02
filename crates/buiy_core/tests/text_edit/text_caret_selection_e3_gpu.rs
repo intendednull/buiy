@@ -65,10 +65,13 @@ fn is_strong_red(p: [u8; 4]) -> bool {
     p[0] >= 200 && p[1] <= 20 && p[2] <= 20
 }
 
-/// Unselected white glyph ink over black: an achromatic pixel at ≥ ~0.61
-/// coverage. `g ≥ 180` alone already rejects the red caret stamp.
+/// Unselected white glyph ink over black: an achromatic pixel with all three
+/// channels lit above the black clear (green lit alone already rejects the red
+/// caret stamp). Uses the adapter-robust `channel_lit` threshold (V19) rather
+/// than an absolute `>= 180` a dimmer rasterizer could paint under.
 fn is_white_ink(p: [u8; 4]) -> bool {
-    p[0] >= 180 && p[1] >= 180 && p[2] >= 180
+    use crate::support::channel_lit;
+    channel_lit(p[0]) && channel_lit(p[1]) && channel_lit(p[2])
 }
 
 /// Columns (left→right) where ANY pixel satisfies `pred`.
