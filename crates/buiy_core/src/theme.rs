@@ -645,7 +645,7 @@ pub fn apply_set_accent(mut messages: MessageReader<SetAccent>, theme: Option<Re
 /// hard v1 prerequisite), so no forced-colors paint token resolves to magenta.
 ///
 /// The carried `palette`/`accent` are unused under forced mode (resolution goes
-/// through [`system_color_value`]); we reuse the dark palette rather than invent
+/// through `system_color_value`); we reuse the dark palette rather than invent
 /// a placeholder. `spaces`/`radii` are left empty, matching the v1 stub's prior
 /// shape (the swap replaced the whole theme). The system-color VALUES are owned
 /// by `buiy-theme-tokens-design`; the role mapping is the contract.

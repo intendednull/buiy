@@ -10,16 +10,14 @@
 //!
 //! The `Background`/`TextColor` components store a [`ColorToken`], which is
 //! itself resolved against `Res<Theme>` at **extract** time (`render::color`).
-//! So the view [`Color`] enum is a **typed facade** over the theme's string
-//! keys: each variant is pinned to one fixed key (`Accent → "color.accent"`,
-//! …), and the reconciler lowers `Color` into the matching
-//! `ColorToken::Token(key)`. Storing the *token* (not a resolved literal) is
-//! what makes a runtime theme swap re-derive the color at the next extract with
-//! no reconcile — and it is the only shape the component model accepts, since
-//! [`ColorToken`] has no "concrete `bevy::Color` literal" variant (see the
-//! report's spec-deviation note on #8). A key the active theme is missing
-//! surfaces as the loud magenta sentinel at extract (`render::color`'s
-//! `MISSING_TOKEN_FALLBACK`), never silent transparency.
+//! So the view [`Color`] enum is a **typed facade** over the theme's semantic
+//! tokens: each variant is pinned to one fixed token (`Accent → ColorToken::Accent`,
+//! …), and the reconciler lowers `Color` into the matching typed [`ColorToken`]
+//! variant. Storing the *token* (not a resolved literal) is what makes a runtime
+//! theme swap re-derive the color at the next extract with no reconcile. Under
+//! Track B, [`ColorToken`] is a **closed enum** (no stringly key), so an invalid
+//! token cannot be constructed — the old magenta-miss path is gone; a genuinely
+//! dynamic color uses `ColorToken::Custom(Color)`.
 
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{Corners, Radius as RenderRadius};
@@ -47,10 +45,10 @@ impl Space {
     }
 }
 
-/// Semantic color token — a typed facade over the theme's string-keyed color
-/// map (spec §3 #8). Each variant is pinned to one fixed theme key; the
-/// reconciler lowers it into the matching [`ColorToken::Token`], which resolves
-/// against the live `Theme` at extract (so a theme swap re-derives it).
+/// Semantic color token — a typed facade over the theme's closed [`ColorToken`]
+/// vocabulary (spec §3 #8). Each variant is pinned to one fixed token; the
+/// reconciler lowers it into the matching typed [`ColorToken`] variant, which
+/// resolves against the live `Theme` at extract (so a theme swap re-derives it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Color {
     /// The accent color (`color.accent`).
