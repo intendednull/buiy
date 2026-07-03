@@ -105,6 +105,10 @@ use crate::BuiySet;
 pub mod leaf;
 pub use leaf::{ControlledLeaf, ToggleLeafSet, ToggleMsg, register_toggle_leaf, toggle_reducer};
 
+/// The poll-clock ergonomic (`ClockPlugin<M>` + the headless virtual-clock advance).
+pub mod clock;
+pub use clock::{ClockPlugin, ClockSource, advance_clock};
+
 // ---------------------------------------------------------------------------
 // Core model + message
 // ---------------------------------------------------------------------------
