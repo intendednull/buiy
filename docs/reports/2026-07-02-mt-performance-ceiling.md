@@ -256,7 +256,26 @@ floor now sits ~1.15× the static floor on both scenes — the ceiling this repo
 measured is removed for the value-change workload; structural/global changes
 still take the Full walk by design (the any-uncertainty→Full rule).
 
-<!-- SWEEP-AFTER: filled by orchestrator -->
+**Final acceptance re-measurement** (idle host, the original sweep's exact
+parameters — WARMUP=32, FRAMES=150, t=8, no user work; p50 vs the F3 baselines):
+
+| scene (text nodes) | static before → after | DIRTY before → after | dirty/static after |
+|---|---|---|---|
+| text_small (60) | 0.83 → 0.81 ms | 3.72 → **0.87 ms** (4.3×) | 1.08× |
+| text_large (240) | 2.45 → 2.44 ms | 14.16 → **2.68 ms** (5.3×) | 1.10× |
+| text_huge (960) | 9.61 → 9.39 ms | 56.55 → **10.06 ms** (5.6×) | 1.07× |
+
+And the headline ceiling itself (F2's moderate-load row, active text UI):
+
+| | bare | Buiy text DIRTY | ceiling factor |
+|---|---|---|---|
+| t=16 before | 7.83 ms (128 fps) | 22.51 ms (44 fps) | **2.9×** |
+| t=16 after | 7.64 ms (131 fps) | **10.40 ms (96 fps)** | **1.36×** |
+| t=8 after | 9.91 ms | 12.35 ms | 1.25× |
+
+The 2.9× multi-threaded-app ceiling this report measured is reduced to 1.36×;
+the residue is the pre-existing *static* extract floor (the O(resident-keys)
+touch pass + publish value-compare), not the wholesale walk.
 
 Two pre-existing bugs were found and fixed on the way: (1) a pure **ancestor
 z-reorder** over overlapping text entities never rebuilt the glyph carrier —
