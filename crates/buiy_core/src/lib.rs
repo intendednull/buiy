@@ -60,7 +60,7 @@ pub use layout::{
 // (`Envelope`, `MsgLog`, `RecordMode`, `LogicalId`, `enqueue`, `PureEnv`, …) lives
 // under `buiy_core::mvu`.
 pub use mvu::{
-    Cmd, ClockPlugin, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet, MvuWorkCounters,
+    ClockPlugin, Cmd, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet, MvuWorkCounters,
     advance_clock,
 };
 pub use picking::{

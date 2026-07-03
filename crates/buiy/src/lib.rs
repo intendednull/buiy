@@ -159,7 +159,7 @@ pub use buiy_core::text::edit::{EditCommand, EditSubmitted, TextChanged, TextEdi
 // the direct-inbox test idiom) round out the surface. (Recommendation #1 of the
 // dogfooding report.)
 pub use buiy_core::mvu::{
-    Cmd, ClockPlugin, Envelope, LogicalId, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet,
+    ClockPlugin, Cmd, Envelope, LogicalId, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet,
     MvuWorkCounters, advance_clock, enqueue, fold_one_inline,
 };
 pub use buiy_widgets::{

@@ -733,9 +733,9 @@ fn update_text_actions<M: Model>(
         }
     }
     match &el.on_submit {
-        Some(msg) => {
+        Some(handler) => {
             world.entity_mut(entity).insert(SubmitAction::<M> {
-                msg: msg.clone(),
+                handler: handler.clone(),
                 model,
             });
         }

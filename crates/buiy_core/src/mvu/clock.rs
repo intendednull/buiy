@@ -10,7 +10,7 @@
 //!   state (`seconds_left = total - (now - anchor)`), storing only the derived value —
 //!   never raw `now`. A steady sub-second frame therefore folds byte-identically, and
 //!   [`set_if_neq`](bevy::prelude::DetectChangesMut::set_if_neq) absorbs it
-//!   ([`models_mutated == 0`](super::MvuWorkCounters::models_mutated)) — the reducer is
+//!   ([`models_mutated == 0`](crate::mvu::MvuWorkCounters::models_mutated)) — the reducer is
 //!   idempotent within a bucket, so the poll is perf-free in the steady state.
 //!
 //! This is deliberately **not** an edge-triggered `Cmd::interval` / `Cmd::timeout`: a
@@ -25,16 +25,16 @@
 //! invariant). [`crate::replay::replay_into`] re-feeds those logged messages and steps the
 //! app; so the **live** driver must NOT inject fresh ticks during a replay (they would
 //! diverge from the recorded stream). [`ClockPlugin`]'s driver is therefore **suppressed
-//! while [`RecordSession::is_replaying`](super::RecordSession::is_replaying)** — the same
-//! discipline the async [`Cmd::Task`](super::Cmd::Task) launch uses.
+//! while [`RecordSession::is_replaying`](crate::mvu::RecordSession::is_replaying)** — the same
+//! discipline the async [`Cmd::Task`](crate::mvu::Cmd::Task) launch uses.
 //!
 //! ## Headless / deterministic captures
 //!
 //! [`advance_clock`] steps a headless app's **virtual** clock by a chosen delta and runs
 //! one frame, so a test (or an animation capture) drives the poll clock with **zero
 //! wall-clock flakiness** — no real sleeps. It mirrors `buiy_verify`'s per-timestamp
-//! snapshot idiom (pin [`TimeUpdateStrategy::ManualDuration`] to `ZERO`, then advance
-//! [`Time<Virtual>`]).
+//! snapshot idiom (pin `TimeUpdateStrategy::ManualDuration` to `ZERO`, then advance
+//! `Time<Virtual>`).
 //!
 //! ## Why a plugin, not a `Cmd::tick_every`
 //!
@@ -44,9 +44,9 @@
 //! `Subscription` machinery the MVU spec (`2026-06-29-mvu-as-core-design.md` §8) explicitly
 //! **reserves for a later phase**. The prototype proved the poll clock is the whole answer
 //! for game timing, so F7 ships the narrow, sufficient form: a plugin you add once per
-//! clock-bearing model type. The reserved [`Origin::Subscription`](super::Origin) stays a
+//! clock-bearing model type. The reserved [`Origin::Subscription`](crate::mvu::Origin) stays a
 //! §8 concern; a poll tick folds through the ordinary [`enqueue`] path
-//! ([`Origin::User`](super::Origin::User)).
+//! ([`Origin::User`](crate::mvu::Origin::User)).
 //!
 //! ## Example
 //!
@@ -95,7 +95,7 @@ use bevy::time::{TimeUpdateStrategy, Virtual};
 use super::{Model, MvuSet, RecordSession, enqueue};
 
 /// Holds a model `M`'s clock mapper `fn(Duration) -> M::Msg`. A resource (not a captured
-/// closure) so [`drive_clock`] is an ordinary named generic system — the codebase idiom for
+/// closure) so the driver is an ordinary named generic system — the codebase idiom for
 /// per-model generic systems (mirrors [`PendingTasks`](super::PendingTasks)). The `fn`
 /// pointer is `Copy` + determinism-clean by type (it cannot capture a `Res`/clock/RNG
 /// snapshot), so the poll stays replay-safe.
@@ -144,7 +144,7 @@ impl<M: Model> Plugin for ClockPlugin<M> {
 /// Enqueue `map(now)` onto every actor of model `M` this frame — the poll clock's per-frame
 /// work. Runs in [`MvuSet::Enqueue`], so the pinned `ApplyDeferred` flushes the enqueue into
 /// the SAME-frame drain (one designed frame of latency, no extra). Reads the elapsed time off
-/// the generic `Res<Time>` (which the `TimePlugin` syncs from [`Time<Virtual>`] at the head of
+/// the generic `Res<Time>` (which the `TimePlugin` syncs from `Time<Virtual>` at the head of
 /// each frame — so [`advance_clock`] drives it deterministically).
 ///
 /// **Replay guard.** Short-circuits while a replay is in progress: [`replay_into`] re-feeds the
@@ -174,15 +174,15 @@ fn drive_clock<M: Model>(
 /// frame, so a [`ClockPlugin`] poll clock delivers the advanced `now` with **zero wall-clock
 /// flakiness** (no real sleeps). The deterministic driver for tests and animation captures.
 ///
-/// It pins the clock to manual stepping ([`TimeUpdateStrategy::ManualDuration`] of `ZERO`,
+/// It pins the clock to manual stepping (`TimeUpdateStrategy::ManualDuration` of `ZERO`,
 /// idempotent) so the `TimePlugin`'s automatic wall-clock advance cannot leak into the logical
-/// time, then advances [`Time<Virtual>`] by `delta`; the `TimePlugin` syncs `Virtual` into the
-/// generic `Time` at the head of the `update()`, which is what [`drive_clock`] reads. Advancing
-/// by a **relative** `delta` each call composes into any schedule of steps.
+/// time, then advances `Time<Virtual>` by `delta`; the `TimePlugin` syncs `Virtual` into the
+/// generic `Time` at the head of the `update()`, which is what the [`ClockPlugin`] driver reads.
+/// Advancing by a **relative** `delta` each call composes into any schedule of steps.
 ///
 /// **Precondition:** a `TimePlugin` (via `MinimalPlugins` / `DefaultPlugins` /
-/// `BuiyHeadlessPlugin` / the probe preset), so [`Time<Virtual>`] and
-/// [`TimeUpdateStrategy`] exist.
+/// `BuiyHeadlessPlugin` / the probe preset), so `Time<Virtual>` and
+/// `TimeUpdateStrategy` exist.
 pub fn advance_clock(app: &mut App, delta: Duration) {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
     app.world_mut()
@@ -286,8 +286,14 @@ mod tests {
         advance_clock(&mut app, Duration::from_millis(10)); // now 40ms
         let c = *app.world().resource::<MvuWorkCounters>();
         assert!(c.drain_folds >= 1, "the tick was delivered + folded");
-        assert_eq!(c.models_mutated, 0, "derived seconds unchanged ⇒ set_if_neq no-op");
-        assert_eq!(c.binds_fired, 0, "no change ⇒ no cascade to the derived-view stage");
+        assert_eq!(
+            c.models_mutated, 0,
+            "derived seconds unchanged ⇒ set_if_neq no-op"
+        );
+        assert_eq!(
+            c.binds_fired, 0,
+            "no change ⇒ no cascade to the derived-view stage"
+        );
 
         // Another steady sub-second frame — still bucket 0, still no cascade.
         advance_clock(&mut app, Duration::from_millis(10)); // now 50ms
@@ -299,7 +305,10 @@ mod tests {
         advance_clock(&mut app, Duration::from_millis(1000)); // now 1050ms ⇒ seconds == 1
         let c = *app.world().resource::<MvuWorkCounters>();
         assert_eq!(c.models_mutated, 1, "a bucket crossing mutates once");
-        assert_eq!(c.binds_fired, 1, "the crossing DOES cascade to the derived-view stage");
+        assert_eq!(
+            c.binds_fired, 1,
+            "the crossing DOES cascade to the derived-view stage"
+        );
     }
 
     /// The counterfactual: a reducer that stores raw `now` mutates on a steady sub-second
@@ -386,7 +395,10 @@ mod tests {
         for n in [0u64, 2, 5, 9] {
             app.world_mut()
                 .resource_mut::<bevy::ecs::message::Messages<Envelope<Countdown>>>()
-                .write(Envelope::user(actor, ClockMsg::Tick(Duration::from_secs(n))));
+                .write(Envelope::user(
+                    actor,
+                    ClockMsg::Tick(Duration::from_secs(n)),
+                ));
             app.update();
             assert_eq!(app.world().get::<Countdown>(actor).unwrap().seconds, n);
         }
