@@ -99,7 +99,9 @@ retain mix on the real gallery + todomvc** to size the glyph-buffer mirror fast-
 
 After Phase 5 looks good, keep finding + landing gains, each regression-guarded and gate-proven,
 optimizing toward optimal (60 Hz is a floor; target weak machines via the iai instruction budget).
-Candidate follow-ups surfaced by the gates: the #2 glyph-buffer mirror (subsumes #6 caret-blink),
+Candidate follow-ups surfaced by the gates: the #2 glyph-buffer mirror (subsumes #6 caret-blink) —
+**LANDED 2026-07-03** via `docs/specs/2026-07-03-glyph-partial-reextract-design.md` (two-tier
+Full/Patch splice + suffix upload; `mt_ceiling` dirty floors 20.1→3.97 ms / 73.3→13.5 ms),
 the #5 `resident.keys` dedup, deeper #16 (ivec4-indices), the #82 band-pipeline ≤16-attr work,
 overdraw/opaque-pass (#13, needs GPU timing), the double transform propagation (#14). **STOP and
 surface to the human only when the remaining gain requires a major architectural change** (e.g. a

@@ -45,7 +45,8 @@ obligations of gates #2 (first-frame determinism + retint byte-identity), #14
 **v1 slice:** monochrome `SwashContent::Mask` glyphs only; one window (D2); one
 `TextColor` token per entity (`color_opt` honored when present); `Shaping::Advanced`
 pinned; 4-bin x-subpixel; physical-px rasterization; single `CoverageR8` page
-(warn at page-1 allocation, § 11); wholesale rebuild on text damage + un-gated
+(warn at page-1 allocation, § 11); wholesale rebuild on text damage (superseded
+2026-07-03 by two-tier Full/Patch, § 6.2 as-landed note) + un-gated
 touch pass; no warmup-queue use; no color emoji; no decorations.
 **Deliverables:** `extract_buiy_glyphs` + `FontKeyInterner` + `ResidentTextKeys`
 + `TextColor`, deleting the test fill in `tests/atlas_gpu.rs` in favor of
@@ -311,9 +312,12 @@ shared damage signal) — rejected by the as-built prepare contract:
 `prepare.rs:166-168` gates quad and glyph buffers **independently** so a
 caret/retint frame re-uploads only glyphs; collapsing the gates would re-upload
 quads on every text edit and vice versa. *Ungated per-frame rebuild* wastes the
-gate-#14 budget the retention design protects. v1 keeps wholesale
-rebuild-on-any-text-damage (per-entity patching is the same deferred
-optimization architecture.md § 3.1 names for nodes).
+gate-#14 budget the retention design protects. v1 kept wholesale
+rebuild-on-any-text-damage (per-entity patching was the same deferred
+optimization architecture.md § 3.1 names for nodes) — **superseded
+2026-07-03**: the patching landed as the two-tier Full/Patch described in
+the as-landed note below (realizing design:
+[2026-07-03-glyph-partial-reextract-design.md](../2026-07-03-glyph-partial-reextract-design.md)).
 **Rejected runner-up (scale-probe form):**
 `Extract<MessageReader<WindowScaleFactorChanged>>` — the message-stream
 equivalent of the value compare, and equally immune to the cursor-position
@@ -336,6 +340,45 @@ publication**: the rebuild stays wholesale under the one damage decision,
 but a content-identical rebuild keeps the carrier's tick, so a blink edge
 re-uploads the glyph buffer only (T7 plan decision 4; `GlyphAlphaInstance`
 gained `PartialEq` for it).
+
+**As landed (2026-07-03, keyed partial re-extract —
+[2026-07-03-glyph-partial-reextract-design.md](../2026-07-03-glyph-partial-reextract-design.md)):**
+the union above remains THE whether-dirty signal, but "on fire: rebuild
+the whole vec" is superseded by a **two-tier Full/Patch**. A classifier
+verdicts every dirty frame into a `GlyphDamage { Full | Patch { changed,
+removed, first_dirty_slot } }` render resource (the `NodeDamage` mirror),
+under an *any-uncertainty-→-Full* rule: a global trigger (theme,
+scale-factor, `FontsGeneration`, interner-lineage reseat), a structural
+change — a NEW **un-scoped** probe over `Changed<Stacking / Children /
+EffectGroup / Opacity>`, because the `With<TextBuffer>`-scoped union is
+blind to ancestor-driven paint reorders — a hide→show re-insertion, a
+changed entity absent from the retained runs (the `Added` case), live
+effect-group degradation, or a changed-set fraction above ~50 % of runs
+(the scroll bail) all escalate to Full. The un-scoped **order probe**
+(`Changed<StackingContext>`) also joins the dirty union itself; adding it
+fixed a real pre-existing bug — a pure ancestor z-reorder over overlapping
+text entities never rebuilt the carrier, leaving stale glyph paint order
+(pinned by `ancestor_z_reorder_rebuilds_and_flips_glyph_paint_order`). On
+a Patch frame the producer skips the O(scene) painters-z order walk (the
+retained `entity_runs` order IS the paint order), **touches every retained
+key before any insert** (so the patch's own atlas inserts can never
+pressure-evict a retained entity's frame-old key — the § 6.3 stale-UV
+hazard under a partial walk), re-emits each changed entity through the
+same `emit_one_entity` body the Full walk calls (byte-identical by
+construction), byte-compares, and **splice-replaces** the entity's slice
+in `ExtractedGlyphs.glyphs`, renumbering subsequent runs and co-splicing
+the per-entity key ranges of `ResidentTextKeys` and the entity's
+contiguous `ExtractedTextQuads` slice; resident despawns splice-delete.
+The publication discipline above survives intact: glyphs + `entity_runs`
+move under ONE tick, quads tick independently, and a byte-identical
+re-emission leaves both ticks untouched. Prepare consumes the published
+`first_dirty_slot` for a **suffix ranged upload**
+(`write_buffer_range(first_dirty..len)`); growth past GPU capacity, a
+cold buffer, or degraded-fold mirror residue falls back to the full
+repack (`warn_once` on a true ranged-write error). Measured on the
+`mt_ceiling` bench: the dirty extract floors collapsed 5.1×/5.4×
+(text_large 20.1 → 3.97 ms, text_huge 73.3 → 13.5 ms) with static-scene
+parity.
 
 ### § 6.3 The un-gated touch pass — the eviction-under-retention hazard
 
@@ -506,8 +549,12 @@ no one routes a quad-seat visual through the glyph path or vice versa.
    effect-group target and within the flat complement — rather than
    globally. Pending the per-(primitive, layer) interleaved batching the
    render architecture targets.
-4. **Wholesale rebuild on any text damage** (§ 6.2) — per-entity patching is
-   the named deferred optimization, same as the nodes path.
+4. **Wholesale rebuild on any text damage — LANDED (2026-07-03,
+   [glyph partial re-extract](../2026-07-03-glyph-partial-reextract-design.md)).**
+   Dirty frames now classify two-tier Full/Patch (§ 6.2 as-landed note):
+   value-only changes splice just the changed entities' runs + suffix-upload;
+   Full remains the escape for structural/global/degraded/high-fraction
+   frames — same as the nodes path.
 5. **Cold-glyph storm.** Rasterization runs in the extract sync window; the
    first frame of a large document serializes O(new glyphs) swash scaling into
    the pipeline sync point. Bounded by residency afterward. If gate-#14

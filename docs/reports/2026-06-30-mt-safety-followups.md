@@ -13,6 +13,8 @@ are either latent (no current trigger), out of MT scope, or dead code.
 
 ## H6 — `prepare_effect_groups` re-derives the dirty bits `prepare_buiy_instances` used (latent)
 
+**Actioned 2026-07-03** (Stage 0 of the glyph partial re-extract change): prepare publishes `PreparedDamage`; compositor reads it.
+
 - **Where:** `crates/buiy_core/src/render/compositor.rs:635-636` vs `render/prepare.rs:330-331`.
 - **What:** `prepare_effect_groups` recomputes `quad_dirty`/`glyph_dirty` from `is_changed()`
   to mirror the per-tier repack signals `prepare_buiy_instances` used, then gates an in-place

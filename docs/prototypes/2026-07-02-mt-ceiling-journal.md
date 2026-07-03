@@ -100,6 +100,31 @@ binary.
 - Verdict: Buiy DOES cap the ceiling, but narrowly (active text-heavy UIs) and for
   one fixable reason (non-incremental glyph extract, "§ 6.2 v1 wholesale").
 
+### 2026-07-03 — Wave 3: the recommended fix EXECUTED (glyph partial re-extract)
+- The REDESIGN item below was built as a staged production change on this same
+  worktree (design `docs/specs/2026-07-03-glyph-partial-reextract-design.md`,
+  plan `docs/plans/2026-07-03-glyph-partial-reextract.md`): Stage 0 `c9e60ed`
+  (H6 `PreparedDamage` fix) → A `b875a07` (`emit_one_entity` factor) → B
+  `e519379` (observation-only classifier + un-scoped probes) → C `a864d93`
+  (the splice Patch — THE win) → D `0f0ebeb` (suffix ranged upload) → E
+  (gallery live-run acceptance + docs flip).
+- Headline (Stage C, this bench, `BUIY_MT_THREADS=8 PAR_COST=0`, p50):
+  text_large dirty 20.1 → 3.97 ms (**5.1×**), text_huge dirty 73.3 → 13.5 ms
+  (**5.4×**), statics parity; extract-only 17.1 → 2.54 ms (**6.7×**). Dirty
+  floor ≈ 1.15× the static floor — the measured ceiling is removed for
+  value-change frames.
+- Two pre-existing bugs found + fixed on the way: the **ancestor z-reorder
+  under-trigger** (the `With<TextBuffer>`-scoped union never rebuilt on a pure
+  ancestor paint reorder → stale glyph order; fixed by the un-scoped
+  `Changed<StackingContext>` probe, Stage B) and the **degraded-fold mirror
+  residue** (a Patch would retain `fold_degraded_groups`' in-place-folded
+  bytes; guarded by `glyph_mirror_folded`, Stage D).
+- The bench needed its own fix: `dirty_scene` mutated the victim via a
+  whole-`Style`-bundle re-insert, which ticks `Changed<Stacking>` (bundle
+  inserts mark every member changed) and would have force-Full'd every frame
+  under the new structural probes. It now mutates `BoxModel` width in place —
+  pre-fix numbers unaffected (any dirty frame took the same wholesale walk).
+
 ## Prototype retrospective — for any follow-up
 
 ### Verdict

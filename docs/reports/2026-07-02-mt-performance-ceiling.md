@@ -229,3 +229,49 @@ python3 examples/mt_ceiling/analyze.py out.csv
 ```
 Knobs are env vars (see `examples/mt_ceiling/src/main.rs` header). Raw data from
 this run is archived under `examples/mt_ceiling/results/`.
+
+## Addendum (2026-07-03) — the fix landed
+
+Recommendation 1 is implemented: the glyph tier now does keyed partial re-extract
+(two-tier Full/Patch), landed as stages 0/A–E of the
+[glyph partial re-extract design](../specs/2026-07-03-glyph-partial-reextract-design.md)
+([plan](../plans/2026-07-03-glyph-partial-reextract.md)) — commits `c9e60ed`
+(Stage 0, the H6 `PreparedDamage` fix), `b875a07` (A, `emit_one_entity` factor),
+`e519379` (B, classifier + probes), `a864d93` (C, the splice Patch), `0f0ebeb`
+(D, suffix ranged upload), plus Stage E acceptance (gallery live-run + interaction
+tier + this docs flip).
+
+Stage-C measured before/after on this report's own bench (same host, interleaved,
+`BUIY_MT_THREADS=8 PAR_COST=0 WARMUP=20 FRAMES=100`; p50 — note the protocol
+differs from § F3's isolation runs, so the "before" columns differ from F3's
+floors):
+
+| scene | dirty before | dirty after | speedup | static before → after |
+|---|---|---|---|---|
+| text_large (240) | 20.1 ms | 3.97 ms | **5.1×** | 3.28 → 3.42 ms (parity) |
+| text_huge (960) | 73.3 ms | 13.5 ms | **5.4×** | 12.3 → 11.9 ms (parity) |
+
+Extract-only p50 (text_large dirty): 17.1 ms → 2.54 ms (**6.7×**). The dirty
+floor now sits ~1.15× the static floor on both scenes — the ceiling this report
+measured is removed for the value-change workload; structural/global changes
+still take the Full walk by design (the any-uncertainty→Full rule).
+
+<!-- SWEEP-AFTER: filled by orchestrator -->
+
+Two pre-existing bugs were found and fixed on the way: (1) a pure **ancestor
+z-reorder** over overlapping text entities never rebuilt the glyph carrier —
+stale paint order on screen; the § 6.2 union was `With<TextBuffer>`-scoped and
+blind to it; fixed by the un-scoped `Changed<StackingContext>` order probe
+(Stage B, RED-reproduced against pre-change code). (2) The **degraded-fold
+mirror residue**: `fold_degraded_groups` mutates the glyph CPU mirror in place,
+so a later Patch would have retained folded (dimmed) bytes; guarded by the new
+`glyph_mirror_folded` flag forcing the full upload path until repaired (Stage D).
+The fold's own cross-frame stale-dim when a group drops on a glyph-clean frame
+remains a filed follow-up (degradation-only; `docs/plans/follow-ups.md`).
+
+The bench itself gained a fix: `dirty_scene` mutated its victim via a
+whole-`Style`-bundle re-insert, which ticks `Changed<Stacking>` (a bundle insert
+marks every member changed) and would have force-Full'd every frame under the new
+structural probes — a bench artifact, not an active-UI model. It now mutates
+`BoxModel` width in place. Pre-fix numbers are unaffected (any dirty frame took
+the same wholesale walk regardless of which components ticked).

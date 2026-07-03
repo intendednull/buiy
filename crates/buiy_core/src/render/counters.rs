@@ -48,13 +48,11 @@ pub struct RenderWorkCounters {
     /// residency invariant holds on an idle text frame (one logical touch per
     /// resident key). See `atlas_touch_ops` for why this is NOT a #5-regression guard.
     pub resident_keys: usize,
-    /// `1` if this dirty frame is Patch-ELIGIBLE (audit #2 Stage B classifier):
-    /// the damage is value-only (no structural/hierarchy/group/despawn/theme
-    /// change), so a future Patch stage COULD re-extract only the changed slots
-    /// instead of the whole scene. `0` on a Full (structural) rebuild and on idle.
-    /// Stage B is observation-only — the extract still does a Full rebuild; this
-    /// counter measures the Patch-vs-Full mix to size the C/D Patch-path payoff
-    /// before building it.
+    /// `1` if `extract_buiy_nodes` EXECUTED a node Patch this frame (audit #2):
+    /// the damage was value-only (no structural/hierarchy/group/despawn/theme
+    /// change, no footprint flip), so only the changed entities' slots were
+    /// overwritten in place — `node_rebuilds` stays `0` and `instances_built`
+    /// counts the patched records. `0` on a Full rebuild and on idle.
     pub node_patches: u32,
     /// `1` if `extract_buiy_glyphs` EXECUTED its wholesale rebuild this frame
     /// (a dirty frame the classifier escalated to `GlyphDamage::Full` —

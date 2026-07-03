@@ -1,7 +1,7 @@
 # Glyph-tier keyed partial re-extract ("the glyph-buffer mirror") — design
 
 Date: 2026-07-03
-Status: active
+Status: landed (stages 0/A–E: `c9e60ed`, `b875a07`, `e519379`, `a864d93`, `0f0ebeb`, + the Stage E docs flip)
 Realizes: the **named fast-follow** in
 `docs/specs/2026-06-26-buiy-performance-final-design.md` (decision row *"#2 vs #6:
 sequence the glyph-buffer mirror AFTER the quad path proves out"* — the quad path

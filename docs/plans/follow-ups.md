@@ -2005,3 +2005,42 @@ system addition can re-trigger it.
 schedule-order-invariant in `buiy_core` (the robustness fix), or (b) have the gallery
 layout-snapshot dump SKIP invisible (size-0 in a hidden subtree) nodes so the Tier-1
 gate pins only observable geometry (the cheaper, snapshot-side fix). Low severity.
+
+## Render — icon-tier keyed partial re-extract (`ExtractedIcons` mirror)
+
+**Originated:** the 2026-07-03 glyph partial re-extract
+(`docs/specs/2026-07-03-glyph-partial-reextract-design.md`), which names the icon
+tier a non-goal.
+
+**Symptom:** `render::icon_producer` still rebuilds `ExtractedIcons` wholesale on
+every dirty frame — the exact pattern the glyph tier just shed. Cheap today (icon
+counts are small), so this is payoff-scaled housekeeping, not a bug.
+
+**Direction:** apply the same two-tier Full/Patch treatment: a damage classifier +
+per-entity splice over the retained carrier, shared single-entity emission,
+touch-before-insert on the shared atlas (`ResidentIconKeys` already exists), and a
+suffix ranged upload off a published first-dirty slot. The glyph tier's D1–D6
+machinery is the template; the icon record is already a `GlyphAlphaInstance`, so
+the prepare-side extension reuses the Stage D idiom directly. Weigh the classifier
+cost against the small icon counts before building — measure first.
+
+## Render — stale-dim residue when an effect group drops on a glyph-clean frame (degradation-only)
+
+**Originated:** Stage D of the 2026-07-03 glyph partial re-extract (commit
+`0f0ebeb`'s follow-up note) — pre-existing, out of scope there.
+
+**Symptom:** `fold_degraded_groups` mutates the glyph CPU mirror + GPU buffer in
+place on a degraded frame; if the group then DROPS on a frame where the glyph
+carrier is clean, nothing re-uploads — the folded (dimmed) glyph bytes stay on the
+GPU until the next glyph-dirty frame (a stale dim, typically a few frames).
+Reachable only under a forced tiny RT-pool budget (`RtPoolBudget` override);
+production-dead at the default 64 MiB (nothing ever degrades). Stage D's
+`BuiyInstanceBuffers::glyph_mirror_folded` flag already protects the PATCH path
+from the residue (forces the full upload path until repaired); the residue itself
+predates the change.
+
+**Direction:** treat "degradation set shrank while `glyph_mirror_folded`" as a
+repack trigger in `prepare_effect_groups` (re-upload from the unfolded source on
+the group-drop frame), or fold at draw time instead of mutating the mirror.
+Regression fixture: force budget-1, degrade, drop the group on a text-idle frame,
+assert pixel-parity with a never-degraded render.
