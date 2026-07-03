@@ -1174,3 +1174,172 @@ fn already_active_placeholder_string_reshape_re_emits() {
         "…and settled — the reshape is a one-shot rebuild"
     );
 }
+
+/// Partial-reextract Stage B (design D3) — THE reorder-escalation probe: a z
+/// flip on a positioned, SC-forming ANCESTOR reorders two overlapping text
+/// entities' paint order WITHOUT ticking any component on the text entities
+/// themselves (`Stacking` changes on the wrapper; the texts' layout, transform
+/// and paint inputs are untouched). The `With<TextBuffer>`-scoped § 6.2 union
+/// is blind to it by construction — only the un-scoped structural probe
+/// (`Changed<StackingContext>` — the walk's own order source) can fire the
+/// gate. This pins the CORRECT behavior: the carrier rebuilds and the run
+/// order flips. RED against pre-Stage-B code = the confirmed pre-existing
+/// ancestor-reorder under-trigger (stale glyph paint order on screen).
+#[test]
+fn ancestor_z_reorder_rebuilds_and_flips_glyph_paint_order() {
+    use buiy_core::layout::{Inset, Length, Sizing, Stacking, ZIndex};
+
+    let mut h = TextExtractHarness::new();
+    // Two absolutely-positioned wrappers OVERLAPPED at the same inset, each
+    // forming a stacking context (positioned + explicit z, 6f trigger 1), each
+    // with one text child. Distinct colors so the reorder changes instance
+    // BYTES (which color paints on top), not just run attribution.
+    let spawn_layer = |h: &mut TextExtractHarness, z: i32, color: Color| -> Entity {
+        let text = h
+            .app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default(),
+                Text(String::from("Hi!")),
+                FontSize(16.0),
+                TextColor(ColorToken::Custom(color)),
+            ))
+            .id();
+        h.app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .absolute()
+                    .inset(Inset {
+                        top: Sizing::Length(Length::px(0.0)),
+                        left: Sizing::Length(Length::px(0.0)),
+                        ..Default::default()
+                    })
+                    .width_px(200.0)
+                    .height_px(50.0)
+                    .z_index(ZIndex::Layer(z)),
+            ))
+            .add_child(text)
+            .id()
+    };
+    let layer_a = spawn_layer(&mut h, 1, Color::srgb(1.0, 0.0, 0.0));
+    let layer_b = spawn_layer(&mut h, 2, Color::srgb(0.0, 0.0, 1.0));
+    // ONE common root context: the wrappers must be siblings in the SAME
+    // painters_z (parentless nodes each form their own ROOT context — roots
+    // order by cross_root_rank, not z, so they would never reorder).
+    h.app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(100.0)))
+        .add_children(&[layer_a, layer_b]);
+    h.settle();
+
+    // Settled order: a (z=1) under b (z=2) — a's run first.
+    let runs_before: Vec<Entity> = h.glyphs().entity_runs.iter().map(|r| r.entity).collect();
+    assert_eq!(runs_before.len(), 2, "two emitting text entities");
+    let publishes = h.changed_frames();
+    h.frame();
+    assert_eq!(h.changed_frames(), publishes, "steady before the flip");
+
+    // The pure ancestor reorder: lift a OVER b. Ticks `Stacking` on the
+    // WRAPPER only; the text entities are untouched.
+    h.app
+        .world_mut()
+        .get_mut::<Stacking>(layer_a)
+        .unwrap()
+        .z_index = ZIndex::Layer(3);
+    h.frame();
+
+    assert_eq!(
+        h.changed_frames(),
+        publishes + 1,
+        "an ancestor paint reorder must rebuild the glyph carrier (the \
+         structural probe joins the dirty gate — pre-Stage-B this is the \
+         under-trigger: stale glyph paint order)"
+    );
+    let runs_after: Vec<Entity> = h.glyphs().entity_runs.iter().map(|r| r.entity).collect();
+    let mut flipped = runs_before.clone();
+    flipped.reverse();
+    assert_eq!(
+        runs_after, flipped,
+        "the glyph run order follows the new painters_z (a now paints over b)"
+    );
+}
+
+/// Partial-reextract Stage B (D1/D3), OBSERVATION-ONLY: one value-tier change
+/// on one of N resident text entities publishes `GlyphDamage::Patch([victim])`
+/// while the producer still executes (and publishes) the wholesale rebuild —
+/// the § 6.2 gate fires exactly once, exactly as before Stage B. A despawn, by
+/// contrast, escalates to `Full` at the INTEGRATION level: the parent's
+/// `Children` ticks, and hierarchy mutations are structural (the classifier's
+/// splice-delete verdict — unit-tested — is reachable only when no structural
+/// tick accompanies the removal; attributing despawn-caused reorders is a
+/// Stage C refinement).
+#[test]
+fn one_color_change_publishes_a_patch_verdict_while_still_rebuilding() {
+    use buiy_core::text::GlyphDamage;
+    use smallvec::SmallVec;
+
+    let mut h = TextExtractHarness::new();
+    let (victim, root) = spawn_text_with_root(&mut h);
+    // Two more siblings so the changed fraction (1 of 3) clears the D3 bail.
+    let sibling = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Yo")),
+            FontSize(16.0),
+        ))
+        .id();
+    let third = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Ok")),
+            FontSize(16.0),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .entity_mut(root)
+        .add_children(&[sibling, third]);
+    h.settle();
+    let publishes = h.changed_frames();
+    h.frame();
+    assert_eq!(h.changed_frames(), publishes, "steady before the change");
+
+    // One value-tier change on ONE resident entity.
+    h.app
+        .world_mut()
+        .entity_mut(victim)
+        .insert(TextColor(ColorToken::Custom(Color::srgb(0.9, 0.1, 0.2))));
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        publishes + 1,
+        "Stage B still executes + publishes the Full rebuild (observation-only)"
+    );
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Patch {
+            changed: SmallVec::from_slice(&[victim]),
+            removed: SmallVec::new(),
+        },
+        "the classifier verdicts the frame Patch-eligible with exactly the victim"
+    );
+
+    // A despawn ticks the parent's `Children` → structural → Full (the
+    // integration-level conservatism pinned above).
+    h.app.world_mut().entity_mut(third).despawn();
+    h.frame();
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Full,
+        "a despawn escalates via the hierarchy probe at the integration level"
+    );
+}

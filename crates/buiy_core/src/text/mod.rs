@@ -65,8 +65,8 @@ pub use edit::{
     write_caret_and_selection, write_ime_window,
 };
 pub use extract::{
-    GlyphBearing, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs, glyph_rect_logical,
-    pack_clip, physical_offset,
+    GlyphBearing, GlyphDamage, GlyphMetaCache, ResidentTextKeys, extract_buiy_glyphs,
+    glyph_rect_logical, pack_clip, physical_offset,
 };
 pub use font_asset::{BuiyFont, BuiyFontLoader, BuiyFontLoaderError, sniff_sfnt};
 pub use font_system::{
@@ -461,6 +461,9 @@ pub fn register_render_world(render_app: &mut SubApp, fonts: &SharedFontSystem) 
         .init_resource::<FontKeyInterner>()
         .init_resource::<ResidentTextKeys>()
         .init_resource::<GlyphMetaCache>()
+        // Stage B (partial-reextract D1): the producer's Full|Patch verdict,
+        // read by `record_text_work_counters` (and prepare from Stage C/D).
+        .init_resource::<extract::GlyphDamage>()
         .add_systems(
             bevy::render::ExtractSchedule,
             extract::extract_buiy_glyphs.after(crate::render::atlas::maintain_atlas),

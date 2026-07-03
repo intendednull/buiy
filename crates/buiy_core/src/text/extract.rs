@@ -30,7 +30,9 @@ use crate::render::color::{
     resolve_caret_color, resolve_preedit_underline, resolve_selection_bg, resolve_selection_fg,
     resolve_token,
 };
-use crate::render::components::{AncestorClip, CaretColor, ClipRect, ComputedPaintSkip, TextColor};
+use crate::render::components::{
+    AncestorClip, CaretColor, ClipRect, ComputedPaintSkip, EffectGroup, Opacity, TextColor,
+};
 use crate::render::extract::{
     ExtractedTextQuads, TextQuad, context_roots, context_tree_paint_order, effective_clip,
 };
@@ -176,6 +178,110 @@ pub struct ResidentTextKeys {
 #[derive(Resource, Default)]
 pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>);
 
+/// How this frame re-extracted the glyph carrier — the glyph tier's
+/// `NodeDamage` mirror (partial-reextract D1), published by
+/// [`extract_buiy_glyphs`] on EVERY dirty frame and consumed by prepare +
+/// the compositor from Stage C/D. `Full` = the whole set was rebuilt (cold
+/// frame, global trigger, structural change, or a Patch-ineligible change).
+/// `Patch { changed, removed }` = the damage is confined to the named
+/// RESIDENT entities: re-emit + splice-replace `changed`, splice-delete
+/// `removed` (D3: despawns ARE patchable, keyed by the
+/// `RemovedComponents<ResolvedLayout>` stream's ids). Untouched on clean
+/// frames (the § 6.2 O(0) contract), so consumers read freshness off the
+/// resource tick exactly like the carriers.
+///
+/// Stage B is OBSERVATION-ONLY: the verdict is published (and counted via
+/// `RenderWorkCounters`) while the producer still always executes the Full
+/// rebuild — Patch EXECUTION is Stage C.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub enum GlyphDamage {
+    /// Rebuild/consume the whole carrier.
+    #[default]
+    Full,
+    /// Value-tier damage confined to the named resident entities.
+    Patch {
+        /// Resident entities to re-emit + splice-replace (Stage C).
+        changed: SmallVec<[Entity; 8]>,
+        /// Resident despawned entities to splice-delete (Stage C).
+        removed: SmallVec<[Entity; 4]>,
+    },
+}
+
+/// The D3 changed-set-fraction bail threshold: a dirty frame whose changed
+/// set exceeds this percentage of the retained runs classifies Full — a
+/// scroll ticks `GlobalTransform` on every text descendant, and splice-all
+/// must never cost more than the wholesale walk it replaces. 50 % is the
+/// design default (partial-reextract D3, "~50 % of runs, tuned in Stage B");
+/// the Stage C `mt_ceiling`/gallery measurements own any retune.
+const GLYPH_PATCH_MAX_CHANGED_PERCENT: u64 = 50;
+
+/// The Stage B Full/Patch verdict (design D3: "any uncertainty → Full").
+/// PURE — every rule branch is unit-testable headless (the
+/// [`classify_glyph_content`] discipline); the producer owns gathering the
+/// inputs. Rule order:
+///
+/// 1. Whole-set by NATURE — `global_trigger` (theme / scale-factor /
+///    `FontsGeneration` / `FontDbLineage`, all whole-set re-resolves) — or
+///    whole-set by UNCERTAINTY — `structural_changed` (the un-scoped probes:
+///    paint order or group membership may have moved), `skip_lifted`
+///    (hide→show re-insertion: the re-shown subtree's order position is
+///    unknown without the walk), `degradation_live` (the alpha-fold's
+///    "whole buffer repacked from source" invariant, compositor.rs
+///    `fold_degraded_groups`) — → Full.
+/// 2. A changed entity ABSENT from the retained runs → Full. Absence-from-
+///    retained-runs is the Added detection (D3 "no `Added` text entities"),
+///    chosen over `Added<TextBuffer>` because one rule also catches every
+///    other way an entity can NEWLY emit (first non-whitespace edit,
+///    placeholder activation, entity-tier hide→show) — its order position
+///    is equally unknown in all of them.
+/// 3. The changed-set-fraction bail: strictly more than
+///    [`GLYPH_PATCH_MAX_CHANGED_PERCENT`] of the retained runs → Full.
+///    (A 1-entity scene therefore always classifies Full — harmless: with
+///    one run, Patch and Full walk the same entity.)
+/// 4. Else → Patch: the changed residents to re-emit, plus the RESIDENT
+///    despawns to splice-delete. A non-resident removal id is dropped —
+///    EVERY node despawn rides `RemovedComponents<ResolvedLayout>`, so a
+///    text-free despawn must classify as a no-op Patch, not escalate.
+fn classify_glyph_damage(
+    global_trigger: bool,
+    structural_changed: bool,
+    skip_lifted: bool,
+    degradation_live: bool,
+    changed: &[Entity],
+    despawned: &[Entity],
+    retained_runs: &[GlyphEntityRun],
+) -> GlyphDamage {
+    if global_trigger || structural_changed || skip_lifted || degradation_live {
+        return GlyphDamage::Full;
+    }
+    let resident: std::collections::HashSet<Entity> =
+        retained_runs.iter().map(|r| r.entity).collect();
+    // A despawned id can also arrive through a value-clear stream (a despawn
+    // removes EVERY component) — it is a delete, never a re-emit.
+    let changed_live: SmallVec<[Entity; 8]> = changed
+        .iter()
+        .copied()
+        .filter(|e| !despawned.contains(e))
+        .collect();
+    if changed_live.iter().any(|e| !resident.contains(e)) {
+        return GlyphDamage::Full;
+    }
+    if changed_live.len() as u64 * 100
+        > retained_runs.len() as u64 * GLYPH_PATCH_MAX_CHANGED_PERCENT
+    {
+        return GlyphDamage::Full;
+    }
+    let removed: SmallVec<[Entity; 4]> = despawned
+        .iter()
+        .copied()
+        .filter(|e| resident.contains(e))
+        .collect();
+    GlyphDamage::Patch {
+        changed: changed_live,
+        removed,
+    }
+}
+
 /// The render-world glyph producer (architecture § 4.4; glyph-pipeline § 6).
 /// Runs in `ExtractSchedule` `.after(maintain_atlas)` so inserts and touches
 /// use the just-advanced frame clock.
@@ -197,7 +303,10 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// `Changed<SelectionVisual>` (+ its removal stream — removal IS the clear
 /// mechanism) joined in T7's selection emission; `Changed<CaretVisual>`
 /// (+ its removal stream — focus loss hides) and `Changed<CaretColor>`
-/// joined with T7's caret emission. The ledger names zero open joins.
+/// joined with T7's caret emission. The un-scoped `Changed<StackingContext>`
+/// ORDER probe joined in partial-reextract Stage B (D3) — the scoped union
+/// is blind to ancestor-driven paint reorders. The ledger names zero open
+/// joins.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_glyphs(
     mut atlas: ResMut<BuiyAtlas>,
@@ -326,7 +435,77 @@ pub fn extract_buiy_glyphs(
         // quad) on commit/cancel.
         Extract<RemovedComponents<PreeditVisual>>,
     ),
-    contexts: Extract<Query<(Entity, &StackingContext)>>,
+    // Paint-order STRUCTURE (partial-reextract D3), tupled into ONE param
+    // (params nest — the `carriers`/`removed` precedent; the producer sits at
+    // Bevy's 16-param cap):
+    //  .0 — every forming entity's StackingContext: the walk's order source.
+    //  .1 — the ORDER probe, un-scoped `Changed<StackingContext>`: the § 6.2
+    //       union is `With<TextBuffer>`-scoped and therefore BLIND to an
+    //       ancestor-driven paint reorder (a wrapper z flip ticks nothing on
+    //       the text entities). `StackingContext` is written value-gated
+    //       (layout 6f's idempotent insert), so this term is O(0) on steady
+    //       frames and fires EXACTLY when painters_z / cross_root_rank — the
+    //       only order inputs this walk reads — actually changed. It JOINS
+    //       the dirty union below (the Stage B bug fix) and escalates the
+    //       classifier to Full.
+    //  .2 — the STRUCTURAL probe (classifier-only escalation; deliberately
+    //       NOT in the dirty union — see the per-member notes on the query).
+    structure: (
+        Extract<Query<(Entity, &StackingContext)>>,
+        Extract<Query<(), Changed<StackingContext>>>,
+        Extract<
+            Query<
+                (),
+                Or<(
+                    // A z / top-layer / isolation edit ANYWHERE: order-affecting
+                    // by definition. Every glyph-visible reorder also flows into
+                    // a `StackingContext` value change (probe .1 — order is
+                    // derived solely from painters_z), so this is conservative
+                    // defense-in-depth for the CLASSIFIER, mirroring the node
+                    // probe, not a dirty trigger.
+                    Changed<Stacking>,
+                    // A hierarchy mutation (insert/remove/reorder): the retained
+                    // run ORDER a Patch would splice into can no longer be
+                    // trusted without the walk. Same node-probe member, same
+                    // classifier-only role (the order consequence itself rides
+                    // probe .1).
+                    Changed<Children>,
+                    // An effect group forming/dropping re-partitions the glyph
+                    // GROUP ranges prepare derives (T8: entity→group off the
+                    // node list) — Patch-unsafe. NB `write_effect_groups`
+                    // re-inserts the marker EVERY frame a former holds, so any
+                    // dirty frame in a group-bearing scene classifies Full —
+                    // matching the node tier's `group.is_some()` Patch bail;
+                    // this is also exactly why it must NOT join the dirty gate.
+                    Changed<EffectGroup>,
+                    // The group-DROP edge `Changed<EffectGroup>` cannot see
+                    // (opacity → 1.0 REMOVES the marker; removal never ticks
+                    // Changed) — the node probe's `Opacity` member, same role.
+                    Changed<Opacity>,
+                    // Evaluated and EXCLUDED from the node-probe list
+                    // (render/extract.rs structural_changed):
+                    //  • ClipRect / AncestorClip — an ancestor clip edit
+                    //    propagates into each affected TEXT entity's own
+                    //    `AncestorClip` (render/clip.rs `reconcile_one`,
+                    //    value-gated), which the scoped § 6.2 union already
+                    //    watches; clip is per-instance VALUE data (pack_clip),
+                    //    never order or footprint → Patch-safe.
+                    //  • ComputedPaintSkip — the ADD direction marks every
+                    //    suppressed subtree entity individually (visibility.rs
+                    //    walk), so affected text rides the scoped union; the
+                    //    LIFT direction is the `skip_lifted` removal stream,
+                    //    already a Full escalation.
+                    //  • Outline / Border / BoxShadow — node-tier FOOTPRINT
+                    //    terms (band slot counts in the node buffers); the
+                    //    glyph producer reads none of them and glyph slices
+                    //    have no fixed footprint (splice semantics, D2).
+                    // No glyph-only additions: every other walk input is
+                    // either With<TextBuffer>-scoped in the union or derived
+                    // from painters_z (probe .1).
+                )>,
+            >,
+        >,
+    ),
     theme: Extract<Res<Theme>>,
     // The main-world font-set counters (T5): VALUE-compared against the
     // retained state below — the `theme` main-world-resource extraction
@@ -334,25 +513,39 @@ pub fn extract_buiy_glyphs(
     generation: Extract<Res<FontsGeneration>>,
     lineage: Extract<Res<FontDbLineage>>,
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
+    // Stage B (partial-reextract D1/D3): the published Full|Patch verdict.
+    // `Option` per the `NodeDamage`/`RenderWorkCounters` precedent — a harness
+    // that does not register it (buiy_verify's content-presence census) still
+    // runs the producer; no registration drift, no missing-resource skip.
+    mut damage: Option<ResMut<GlyphDamage>>,
 ) {
     let (mut glyphs, mut text_quads) = carriers;
+    let (contexts, order_probe, structural_probe) = structure;
     // Drain the removal streams FIRST so the cursors advance on every frame,
-    // including early returns (the extract.rs:409 discipline).
-    let despawned = removed.0.read().count() > 0;
+    // including early returns (the extract.rs:409 discipline). Stage B
+    // collects the IDS (previously just presence bits): despawns are the
+    // classifier's splice-delete candidates; the four value-tier clear
+    // streams name the entity to re-emit (D3).
+    let despawned_ids: SmallVec<[Entity; 8]> = removed.0.read().collect();
+    let despawned = !despawned_ids.is_empty();
     let skip_lifted = removed.1.read().count() > 0;
     // The § 7 swap-to-visible: a lifted Block (load or timeout) repaints at
     // full alpha through a normal rebuild.
-    let block_lifted = removed.2.read().count() > 0;
+    let block_lifted_ids: SmallVec<[Entity; 4]> = removed.2.read().collect();
+    let block_lifted = !block_lifted_ids.is_empty();
     // T7: a selection clear is a REMOVAL — unlike the style carriers,
     // removal here IS the hide mechanism (the T2-erratum-1 exclusion does
     // not apply), so the cleared rects must repaint away.
-    let selection_cleared = removed.3.read().count() > 0;
+    let selection_cleared_ids: SmallVec<[Entity; 4]> = removed.3.read().collect();
+    let selection_cleared = !selection_cleared_ids.is_empty();
     // T7: same for the caret — removal = focus loss, the stamp must
     // repaint away.
-    let caret_removed = removed.4.read().count() > 0;
+    let caret_removed_ids: SmallVec<[Entity; 4]> = removed.4.read().collect();
+    let caret_removed = !caret_removed_ids.is_empty();
     // E5: a preedit clear (commit / cancel / focus-loss) removes the
     // component — removal IS the clear, so the underline must repaint away.
-    let preedit_removed = removed.5.read().count() > 0;
+    let preedit_removed_ids: SmallVec<[Entity; 4]> = removed.5.read().collect();
+    let preedit_removed = !preedit_removed_ids.is_empty();
 
     let Ok(window) = primary.single() else {
         // Vanished window: clear the carriers ONCE (an unconditional clear
@@ -366,12 +559,26 @@ pub fn extract_buiy_glyphs(
             text_quads.quads.clear();
             resident.keys.clear();
             resident.key_runs.clear();
+            // The whole set vanished — whole-set damage, once (inside the
+            // once-clear so retained no-window frames stay tick-quiet).
+            if let Some(d) = damage.as_deref_mut() {
+                *d = GlyphDamage::Full;
+            }
         }
         return;
     };
     let scale_factor = window.resolution.scale_factor();
     let scale_changed = resident.last_scale_factor != Some(scale_factor);
     let fonts_changed = resident.last_generation != Some(generation.0);
+    // Partial-reextract D3 / Stage B: an ancestor-driven paint reorder JOINS
+    // the § 6.2 union. The scoped `changed` union cannot see it (a wrapper z
+    // flip ticks nothing on any text entity), so pre-Stage-B the carrier kept
+    // STALE glyph paint order — the pre-existing under-trigger the
+    // reorder-escalation pin (`ancestor_z_reorder_rebuilds_and_flips_glyph_
+    // paint_order`) reproduces. Value-gated writes keep this O(0) on steady
+    // frames; the classifier-only `structural_probe` deliberately does NOT
+    // join (its `EffectGroup` member re-ticks every frame a former holds).
+    let paint_reordered = !order_probe.is_empty();
 
     let dirty = !changed.is_empty()
         || despawned
@@ -380,6 +587,7 @@ pub fn extract_buiy_glyphs(
         || selection_cleared
         || caret_removed
         || preedit_removed
+        || paint_reordered
         || theme.is_changed()
         || scale_changed
         || fonts_changed;
@@ -395,6 +603,47 @@ pub fn extract_buiy_glyphs(
         }
         return;
     }
+
+    // ---- Stage B classification (OBSERVATION-ONLY; partial-reextract D3) --
+    // Publish the Full|Patch verdict against the RETAINED runs (pre-rebuild
+    // state — exactly what a Stage C Patch would splice into), then fall
+    // through to the wholesale rebuild regardless. `record_text_work_counters`
+    // reads the verdict off this write's tick.
+    if let Some(d) = damage.as_deref_mut() {
+        // The value-tier changed set: the § 6.2 union ∪ the four clear
+        // streams (removal IS the paint change on that entity — the cleared
+        // selection/caret/preedit/Block must repaint away/at-full-alpha).
+        let mut changed_set: Vec<Entity> = changed.iter().collect();
+        for &e in block_lifted_ids
+            .iter()
+            .chain(&selection_cleared_ids)
+            .chain(&caret_removed_ids)
+            .chain(&preedit_removed_ids)
+        {
+            if !changed_set.contains(&e) {
+                changed_set.push(e);
+            }
+        }
+        *d = classify_glyph_damage(
+            theme.is_changed() || scale_changed || fonts_changed,
+            paint_reordered || !structural_probe.is_empty(),
+            skip_lifted,
+            // Live effect-group degradation is a PREPARE-side decision
+            // (`plan_allocation` inside `prepare_effect_groups` runs AFTER
+            // extract each frame; only last frame's `RtPoolStats` echo exists
+            // here) — the producer CANNOT see the current frame's bit, so the
+            // D3 degradation bail is enforced by the CONSUMER: Stage C's
+            // prepare reads the fold state and falls back to Full there. In
+            // practice `Changed<EffectGroup>` (probe .2) already forces Full
+            // for every group-bearing dirty frame, and degradation cannot
+            // exist without a group.
+            false,
+            &changed_set,
+            &despawned_ids,
+            &glyphs.entity_runs,
+        );
+    }
+
     resident.last_scale_factor = Some(scale_factor);
     resident.last_generation = Some(generation.0);
     // § 3.2 (T5): a lineage advance means every fontdb ID was reissued —
@@ -1216,6 +1465,196 @@ fn linear_color(color: Color) -> [f32; 4] {
 /// sinks: the per-span glyph override and the decoration precedence walk.
 fn cosmic_color(c: cosmic_text::Color) -> Color {
     Color::srgba_u8(c.r(), c.g(), c.b(), c.a())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `n` fabricated entities (a scratch `World` mints real ids).
+    fn entities(n: usize) -> Vec<Entity> {
+        let mut world = World::new();
+        (0..n).map(|_| world.spawn_empty().id()).collect()
+    }
+
+    /// Retained runs naming `ents`, one 1-instance run each (the classifier
+    /// reads only `entity`; the ranges are inert here).
+    fn runs(ents: &[Entity]) -> Vec<GlyphEntityRun> {
+        ents.iter()
+            .enumerate()
+            .map(|(i, &entity)| GlyphEntityRun {
+                entity,
+                instances: i as u32..i as u32 + 1,
+            })
+            .collect()
+    }
+
+    fn classify(
+        global: bool,
+        structural: bool,
+        skip_lifted: bool,
+        degraded: bool,
+        changed: &[Entity],
+        despawned: &[Entity],
+        retained: &[GlyphEntityRun],
+    ) -> GlyphDamage {
+        classify_glyph_damage(
+            global,
+            structural,
+            skip_lifted,
+            degraded,
+            changed,
+            despawned,
+            retained,
+        )
+    }
+
+    // ---- D3 rule 1: whole-set escalations --------------------------------
+
+    #[test]
+    fn global_trigger_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(true, false, false, false, &e[..1], &[], &retained),
+            GlyphDamage::Full,
+            "theme/scale/fonts are whole-set by nature (D3)"
+        );
+    }
+
+    #[test]
+    fn structural_change_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, true, false, false, &e[..1], &[], &retained),
+            GlyphDamage::Full,
+            "a paint reorder / group-membership change is Patch-unsafe (D3)"
+        );
+    }
+
+    #[test]
+    fn skip_lift_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, true, false, &[], &[], &retained),
+            GlyphDamage::Full,
+            "hide→show re-insertion: order position unknown without the walk (D3)"
+        );
+    }
+
+    #[test]
+    fn live_degradation_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, false, true, &e[..1], &[], &retained),
+            GlyphDamage::Full,
+            "the alpha-fold repacks the WHOLE buffer from source (D3)"
+        );
+    }
+
+    // ---- D3 rule 2: Added / newly-emitting detection ----------------------
+
+    #[test]
+    fn changed_entity_absent_from_retained_runs_classifies_full() {
+        let e = entities(4);
+        // e[3] never emitted (Added, or newly non-whitespace, or re-shown).
+        let retained = runs(&e[..3]);
+        assert_eq!(
+            classify(false, false, false, false, &e[3..], &[], &retained),
+            GlyphDamage::Full,
+            "absence-from-retained-runs IS the Added detection (D3)"
+        );
+    }
+
+    // ---- D3 rule 3: the changed-set-fraction bail --------------------------
+
+    #[test]
+    fn changed_fraction_above_threshold_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        // 2 of 3 = 66 % > GLYPH_PATCH_MAX_CHANGED_PERCENT (50 %): the scroll
+        // degeneracy — splice-all must not cost more than wholesale (D3).
+        assert_eq!(
+            classify(false, false, false, false, &e[..2], &[], &retained),
+            GlyphDamage::Full
+        );
+    }
+
+    #[test]
+    fn changed_fraction_at_threshold_stays_patch() {
+        let e = entities(4);
+        let retained = runs(&e);
+        // 2 of 4 = exactly 50 %: the bail is STRICTLY-greater-than.
+        assert_eq!(
+            classify(false, false, false, false, &e[..2], &[], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::from_slice(&e[..2]),
+                removed: SmallVec::new(),
+            }
+        );
+    }
+
+    // ---- D3 rule 4: the Patch verdicts -------------------------------------
+
+    #[test]
+    fn plain_resident_value_change_classifies_patch() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, false, false, &e[..1], &[], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::from_slice(&e[..1]),
+                removed: SmallVec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn resident_despawn_classifies_patch_delete() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, false, false, &[], &e[..1], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::new(),
+                removed: SmallVec::from_slice(&e[..1]),
+            },
+            "despawns ARE patchable: splice-delete keyed by the removal ids (D3)"
+        );
+    }
+
+    #[test]
+    fn non_resident_despawn_is_a_noop_patch() {
+        let e = entities(4);
+        let retained = runs(&e[..3]);
+        // EVERY node despawn rides RemovedComponents<ResolvedLayout>; a
+        // text-free despawn must not escalate (or even splice).
+        assert_eq!(
+            classify(false, false, false, false, &[], &e[3..], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::new(),
+                removed: SmallVec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn despawned_id_in_the_changed_set_is_a_delete_not_a_reemit() {
+        let e = entities(3);
+        let retained = runs(&e);
+        // A despawn also fires the value-clear streams (every component is
+        // removed), so the id can arrive in BOTH inputs — delete wins.
+        assert_eq!(
+            classify(false, false, false, false, &e[..1], &e[..1], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::new(),
+                removed: SmallVec::from_slice(&e[..1]),
+            }
+        );
+    }
 }
 
 /// Per-span `LayoutGlyph.color_opt` override (§ 7) — cosmic carries sRGB8.

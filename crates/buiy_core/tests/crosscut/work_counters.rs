@@ -168,3 +168,73 @@ fn patch_retains_sibling_records_byte_identical() {
         }
     }
 }
+
+/// Glyph partial-reextract Stage B (D1/D3) — the observation-stage counter
+/// gate: an idle text frame records ZERO glyph work (`GlyphDamage` untouched —
+/// the § 6.2 O(0) contract); one value-tier change on one of N text entities
+/// records `glyph_full_rebuilds == 1` (the producer still rebuilds wholesale)
+/// AND `glyph_patch_candidates == 1` with exactly one patched entity (the
+/// classifier verdicted the frame Patch-eligible). The Stage C flip will move
+/// this gate to `glyph_full_rebuilds == 0, glyph_patches == 1`.
+#[test]
+fn glyph_classifier_idle_zeros_one_change_one_patch_candidate() {
+    use bevy::prelude::Color;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::TextColor;
+    use buiy_core::text::GlyphDamage;
+
+    let mut h = build_large_scene(4); // 8 text entities: 1 change ≤ the D3 fraction bail
+    for _ in 0..8 {
+        h.frame(); // settle (the cosmic-text reshape echo quiesces in a few frames)
+    }
+    // Pick the victim AFTER settling: `TextBuffer` is inserted by TextSync on
+    // the first Update, not at spawn.
+    let victim = {
+        let mut q = h
+            .app
+            .world_mut()
+            .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<buiy_core::text::TextBuffer>>();
+        q.iter(h.app.world()).next().expect("a text entity")
+    };
+
+    // Idle: no glyph rebuild, no candidate, no patched entities.
+    h.frame();
+    let idle = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(idle.glyph_full_rebuilds, 0, "idle frame: no glyph rebuild");
+    assert_eq!(
+        idle.glyph_patch_candidates, 0,
+        "idle frame: no Patch verdict"
+    );
+    assert_eq!(
+        idle.glyph_patched_entities, 0,
+        "idle frame: no patched entities"
+    );
+
+    // One value-tier change on ONE text entity.
+    h.app
+        .world_mut()
+        .entity_mut(victim)
+        .insert(TextColor(ColorToken::Custom(Color::srgb(0.2, 0.7, 0.3))));
+    h.frame();
+    let changed = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(
+        changed.glyph_full_rebuilds, 1,
+        "Stage B is observation-only: the wholesale rebuild still ran"
+    );
+    assert_eq!(
+        changed.glyph_patch_candidates, 1,
+        "the classifier verdicted the frame Patch-eligible (D3)"
+    );
+    assert_eq!(
+        changed.glyph_patched_entities, 1,
+        "exactly the one changed entity is named by the verdict"
+    );
+    assert!(
+        matches!(
+            h.render.resource::<GlyphDamage>(),
+            GlyphDamage::Patch { changed, removed }
+                if changed.as_slice() == [victim] && removed.is_empty()
+        ),
+        "GlyphDamage::Patch names exactly the victim"
+    );
+}

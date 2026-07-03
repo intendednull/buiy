@@ -16,7 +16,7 @@
 
 use bevy::prelude::*;
 
-use crate::text::ResidentTextKeys;
+use crate::text::{GlyphDamage, ResidentTextKeys};
 
 /// Per-frame render-world work counts. Read in a gate test via
 /// `harness.render.resource::<RenderWorkCounters>()`.
@@ -56,6 +56,20 @@ pub struct RenderWorkCounters {
     /// counter measures the Patch-vs-Full mix to size the C/D Patch-path payoff
     /// before building it.
     pub node_patches: u32,
+    /// `1` if `extract_buiy_glyphs` executed its wholesale rebuild this frame
+    /// (== every dirty frame while the glyph tier is at partial-reextract
+    /// Stage B — observation-only), `0` on a clean frame. The Stage C flip
+    /// gate: a 1-entity value change must move this to `0` with
+    /// `glyph_patches == 1` (the plan's counter-FLIP verify).
+    pub glyph_full_rebuilds: u32,
+    /// `1` if the glyph classifier verdicted this dirty frame Patch-eligible
+    /// (published `GlyphDamage::Patch` — partial-reextract D3), `0` on a Full
+    /// verdict and on idle. Stage B's payoff-sizing signal, mirroring
+    /// `node_patches`: the producer still rebuilt wholesale.
+    pub glyph_patch_candidates: u32,
+    /// Entities named by this frame's `GlyphDamage::Patch` verdict (re-emits
+    /// + splice-deletes); `0` on Full verdicts and clean frames.
+    pub glyph_patched_entities: usize,
 }
 
 /// Set `node_rebuilds` + `instances_built` (the `extract_buiy_nodes` work counts)
@@ -74,12 +88,14 @@ pub(crate) fn record_node_counts(
     }
 }
 
-/// Record the text/atlas work counts (`atlas_touch_ops`, `resident_keys`) AFTER
-/// `extract_buiy_glyphs` has refreshed `ResidentTextKeys`. A separate tiny system
-/// (not a param on `extract_buiy_glyphs`, which sits at Bevy's 16-param cap), and
-/// `Option<ResMut<_>>` so it is inert when the counter is unregistered.
+/// Record the text/atlas work counts (`atlas_touch_ops`, `resident_keys`) AND
+/// the Stage B glyph-damage counts AFTER `extract_buiy_glyphs` has refreshed
+/// `ResidentTextKeys` / published `GlyphDamage`. A separate tiny system (not a
+/// param on `extract_buiy_glyphs`, which sits at Bevy's 16-param cap), and
+/// `Option` so it is inert when a resource is unregistered.
 pub fn record_text_work_counters(
     resident: Res<ResidentTextKeys>,
+    damage: Option<Res<GlyphDamage>>,
     counters: Option<ResMut<RenderWorkCounters>>,
 ) {
     if let Some(mut c) = counters {
@@ -88,5 +104,21 @@ pub fn record_text_work_counters(
         // the idle and the dirty branch loop the full resident set once).
         c.atlas_touch_ops = n;
         c.resident_keys = n;
+        // The producer overwrites `GlyphDamage` on every DIRTY frame and never
+        // touches it on a clean one (the § 6.2 O(0) contract), so "written
+        // since this system's last run" — both run once per extract — IS the
+        // dirty bit: no producer counter param needed (the 16-param cap).
+        // Stage B: a dirty frame always executed the Full rebuild; the Patch
+        // verdict is observation only (partial-reextract D3).
+        let (full, candidates, patched) = match damage.as_ref() {
+            Some(d) if d.is_changed() => match &**d {
+                GlyphDamage::Full => (1, 0, 0),
+                GlyphDamage::Patch { changed, removed } => (1, 1, changed.len() + removed.len()),
+            },
+            _ => (0, 0, 0),
+        };
+        c.glyph_full_rebuilds = full;
+        c.glyph_patch_candidates = candidates;
+        c.glyph_patched_entities = patched;
     }
 }
