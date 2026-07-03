@@ -375,7 +375,13 @@ re-emission leaves both ticks untouched. Prepare consumes the published
 `first_dirty_slot` for a **suffix ranged upload**
 (`write_buffer_range(first_dirty..len)`); growth past GPU capacity, a
 cold buffer, or degraded-fold mirror residue falls back to the full
-repack (`warn_once` on a true ranged-write error). Measured on the
+repack (`warn_once` on a true ranged-write error). That degraded-fold
+residue is repaired at its source: when a degraded effect group
+UN-degrades on a glyph-clean frame, `prepare_effect_groups` restores the
+glyph mirror from `ExtractedGlyphs` (the retained, never-folded source)
+and clears `glyph_mirror_folded` — so a group that stops degrading no
+longer leaves stale-dimmed glyph bytes on the GPU until the next
+glyph-dirty frame. Measured on the
 `mt_ceiling` bench: the dirty extract floors collapsed 5.1×/5.4×
 (text_large 20.1 → 3.97 ms, text_huge 73.3 → 13.5 ms) with static-scene
 parity.

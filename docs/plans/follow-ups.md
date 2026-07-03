@@ -2049,23 +2049,39 @@ Reopen only if a widget starts emitting `Icon`s per row/cell at data-grid scale
 AND animates them (per-frame `Changed<GlobalTransform>` is the one realistic
 wholesale-every-frame trigger — the icon analog of active text).
 
-## Render — stale-dim residue when an effect group drops on a glyph-clean frame (degradation-only)
+## Render — stale-dim residue when an effect group drops on a glyph-clean frame (degradation-only) — RESOLVED (2026-07-03)
 
 **Originated:** Stage D of the 2026-07-03 glyph partial re-extract (commit
 `0f0ebeb`'s follow-up note) — pre-existing, out of scope there.
 
-**Symptom:** `fold_degraded_groups` mutates the glyph CPU mirror + GPU buffer in
-place on a degraded frame; if the group then DROPS on a frame where the glyph
-carrier is clean, nothing re-uploads — the folded (dimmed) glyph bytes stay on the
-GPU until the next glyph-dirty frame (a stale dim, typically a few frames).
-Reachable only under a forced tiny RT-pool budget (`RtPoolBudget` override);
-production-dead at the default 64 MiB (nothing ever degrades). Stage D's
-`BuiyInstanceBuffers::glyph_mirror_folded` flag already protects the PATCH path
-from the residue (forces the full upload path until repaired); the residue itself
-predates the change.
+**Was:** `fold_degraded_groups` mutates the glyph CPU mirror + GPU buffer in place
+on a degraded frame; when the degradation set SHRINKS (a group un-degrades or
+drops) on a frame where the glyph carrier is clean, nothing re-uploaded — the
+folded (dimmed) glyph bytes stayed on the GPU until the next glyph-dirty frame, so
+a group compositing back through its own target was DOUBLE-dimmed (folded-alpha ×
+opacity). Reachable only under a forced tiny RT-pool budget (`RtPoolBudget`
+override); production-dead at the default 64 MiB (nothing ever degrades).
 
-**Direction:** treat "degradation set shrank while `glyph_mirror_folded`" as a
-repack trigger in `prepare_effect_groups` (re-upload from the unfolded source on
-the group-drop frame), or fold at draw time instead of mutating the mirror.
-Regression fixture: force budget-1, degrade, drop the group on a text-idle frame,
-assert pixel-parity with a never-degraded render.
+**Fix (direction (i) — restore-from-source on the un-degrade edge).**
+`prepare_effect_groups` now takes `Res<ExtractedGlyphs>` and, when
+`glyph_mirror_folded && !glyph_dirty`, rebuilds `BuiyInstanceBuffers::glyph` from
+that retained, never-folded source BEFORE the empty-groups early return (so a full
+group drop restores too). It treats the tier as freshly repacked
+(`fold_glyph = glyph_dirty || glyph_restore`) so a surviving degraded group
+re-folds from the clean bytes, re-uploads once, and sets `glyph_mirror_folded` to
+whether a fold actually applied this frame — clearing it on a full un-degrade /
+drop (the Patch fast path may then resume), keeping it true on a partial drop. The
+prepare.rs Patch-path guard stays as defense-in-depth.
+
+*Runner-up rejected — draw-time fold* (fold the group opacity in the shader
+instead of mutating the mirror): far larger blast radius (glyph pipeline / WGSL /
+wasm) for a production-dead bug, and the un-fold belongs in the same system that
+owns the fold (`prepare_effect_groups`), so restore-from-source is the local,
+low-risk fix.
+
+**Regression test:** `undegrade_on_glyph_clean_frame_restores_unfolded_glyphs`
+(`crates/buiy_core/tests/render_degraded_group_gpu.rs`, GPU `#[ignore]` lane) —
+budget-grow un-degrade fixture (Opacity held constant so the glyph tier is
+provably clean on the edge frame), white-glyph ink R+G parity against a cold
+never-degraded render. RED (pre-fix): App A double-dimmed `[146,146,193]` vs App B
+`[183,183,199]`.

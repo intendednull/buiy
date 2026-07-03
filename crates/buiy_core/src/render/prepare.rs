@@ -222,16 +222,20 @@ pub struct BuiyInstanceBuffers {
     /// Glyph partial-reextract D6 guard: `true` while the glyph CPU mirror
     /// carries a degraded-group alpha-fold (`prepare_effect_groups` /
     /// `fold_degraded_groups` multiplied member alphas IN PLACE, diverging
-    /// the mirror from `ExtractedGlyphs`), cleared by the next full repack
-    /// from source. The suffix ranged upload retains the mirror's prefix, so
-    /// a folded prefix would freeze stale dimmed alpha on the GPU — the
-    /// Patch fast path falls back to a full repack while this holds. The
-    /// fold cannot run ON a Patch frame (Patch frames are provably
-    /// effect-group-free: `write_effect_groups` re-inserts the `EffectGroup`
-    /// marker every frame a former holds, so the classifier's
-    /// `Changed<EffectGroup>` probe escalates every group-bearing dirty
-    /// frame to Full); this flag covers the CROSS-frame residue — a fold on
-    /// an earlier Full frame whose group dropped without a glyph-dirty frame
+    /// the mirror from `ExtractedGlyphs`). Cleared TWO ways: (1) the next full
+    /// glyph repack from source (below), and (2) the un-degrade edge in
+    /// `prepare_effect_groups`, which — when the degradation lifts on a
+    /// glyph-CLEAN frame — rebuilds the mirror from `ExtractedGlyphs` and sets
+    /// this to whether any glyph fold still applies (so a full un-degrade / group
+    /// DROP clears it, a surviving degraded group keeps it true). The suffix
+    /// ranged upload retains the mirror's prefix, so a folded prefix would
+    /// freeze stale dimmed alpha on the GPU — the Patch fast path falls back to
+    /// a full repack while this holds. The fold cannot run ON a Patch frame
+    /// (Patch frames are provably effect-group-free: `write_effect_groups`
+    /// re-inserts the `EffectGroup` marker every frame a former holds, so the
+    /// classifier's `Changed<EffectGroup>` probe escalates every group-bearing
+    /// dirty frame to Full); this flag covers the CROSS-frame residue — a fold
+    /// on an earlier Full frame whose group dropped without a glyph-dirty frame
     /// in between (test-only in practice: nothing degrades at the default
     /// 64 MiB RT budget).
     pub glyph_mirror_folded: bool,

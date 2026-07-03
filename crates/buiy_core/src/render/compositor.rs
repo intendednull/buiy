@@ -625,6 +625,13 @@ pub(crate) fn prepare_effect_groups(
     // window attachment, which is multisampled under MSAA.
     views: Query<(Entity, &ViewTarget, &Msaa)>,
     nodes: Res<crate::render::extract::ExtractedNodesView>,
+    // The retained, NEVER-folded glyph source (the § 6.2 damage-gated carrier).
+    // Read ONLY to RESTORE `BuiyInstanceBuffers::glyph` from source on the
+    // un-degrade edge: a prior frame's degraded-group fold dimmed the CPU mirror
+    // IN PLACE, and when the degradation lifts on a glyph-CLEAN frame nothing
+    // else repacks it — so the folded bytes are rebuilt from here (`glyph_restore`
+    // below). Same length as the folded mirror on any glyph-clean frame.
+    glyphs: Res<crate::render::prepare::ExtractedGlyphs>,
 ) {
     // MAJOR-2: the per-tier BUFFER-repack signals `prepare_buiy_instances` used
     // this frame (prepare.rs § damage gate). The degraded-group fold re-tints a
@@ -639,12 +646,45 @@ pub(crate) fn prepare_effect_groups(
     let quad_dirty = prepared_damage.quad_dirty;
     let glyph_dirty = prepared_damage.glyph_dirty;
 
+    // Un-degrade edge (direction (i) — restore-from-source): a PRIOR frame's
+    // degraded-group fold dimmed the glyph CPU mirror + GPU buffer IN PLACE
+    // (`glyph_mirror_folded`), and THIS frame is glyph-clean (`prepare_buiy_
+    // instances` did not repack the glyph buffer from source, so it is retained
+    // — still folded). When the degradation set shrinks (a group un-degrades or
+    // drops entirely) nothing else restores the mirror, so the folded bytes
+    // would persist until the next glyph-dirty frame — a stale-dim residue: the
+    // group, now compositing through its own target at `opacity`, is DOUBLE-
+    // dimmed. Rebuild the mirror from the retained, NEVER-folded `ExtractedGlyphs`
+    // source so a SURVIVING degraded group re-folds from CLEAN bytes below
+    // (idempotent, no compounding) and a full un-degrade / group DROP clears the
+    // dim. Done BEFORE the `extracted.is_empty()` early return so a full group
+    // drop (no groups left this frame) restores too. Production-dead: the default
+    // 64 MiB budget never degrades, so `glyph_mirror_folded` is never set outside
+    // the forced-tiny-budget tests. On a glyph-clean frame `ExtractedGlyphs` is
+    // byte-identical to the pre-fold mirror, so its length matches.
+    let glyph_restore = buffers.glyph_mirror_folded && !glyph_dirty;
+    if glyph_restore {
+        buffers.glyph.clear();
+        for inst in &glyphs.glyphs {
+            buffers.glyph.push(*inst);
+        }
+        buffers.glyph_count = glyphs.glyphs.len() as u32;
+    }
+
     let extracted = &extracted.0;
 
     // No live groups: clear the carriers off every view so a frame that drops
     // the last group runs the flat path with `Option<&PreparedEffectGroups>` ==
     // the empty groups vec. Reset the stat (no buckets held this frame).
     if extracted.is_empty() {
+        // Full group DROP on the un-degrade edge: the restore above rebuilt the
+        // clean mirror — re-upload it and clear the fold flag (no group survives
+        // to re-fold this frame, so the mirror is provably unfolded and the
+        // glyph Patch fast path may resume).
+        if glyph_restore {
+            buffers.glyph.write_buffer(&render_device, &render_queue);
+            buffers.glyph_mirror_folded = false;
+        }
         *stats = RtPoolStats::default();
         for (view, _, _) in &views {
             commands
@@ -852,6 +892,14 @@ pub(crate) fn prepare_effect_groups(
     // fold + zero re-upload (gate-#14 budget). Re-uploads only the touched buffer,
     // and only when that buffer was repacked from SOURCE this frame (the per-tier
     // idempotency discipline — a retained buffer already holds the fold).
+    // The glyph alpha-fold treats the tier as freshly repacked when it was
+    // repacked from source this frame (`glyph_dirty`) OR restored from source on
+    // the un-degrade edge above (`glyph_restore`) — either way the mirror holds
+    // CLEAN source bytes, so a SURVIVING degraded group must re-fold from them
+    // (skipping the fold as "already folded" would leave it UN-dimmed after the
+    // restore). `glyph_restore` implies `!glyph_dirty`, so the two are disjoint.
+    let fold_glyph = glyph_dirty || glyph_restore;
+
     if allocate.iter().any(|a| !a) {
         let degraded: Vec<DegradedGroup> = extracted
             .iter()
@@ -867,25 +915,37 @@ pub(crate) fn prepare_effect_groups(
         // Borrow-split: `values_mut()` on each RawBufferVec + the flat-range vecs.
         // `BuiyInstanceBuffers` exposes the raw quad/glyph stores and the flat
         // ranges as distinct fields, so split them through a single `&mut buffers`.
-        // Per-tier gates (MAJOR-2). The ALPHA-fold gates on the BUFFER-repack
-        // signal so a retained (already-folded) buffer is left untouched. The
-        // RANGE-merge gates on the PARTITION-rebuild signal, because
-        // `prepare_buiy_instances` rebuilds (and re-excludes the degraded range
-        // from) each flat partition under that signal — the merge must re-add the
-        // range every rebuild. Quad: both are `quad_dirty` (the quad partition
-        // rebuilds under the quad gate). GLYPH: the fold is `glyph_dirty` (buffer
-        // repack) but the MERGE is `quad_dirty || glyph_dirty` (the glyph
-        // partition's union rebuild gate, prepare.rs `partition_glyph_ranges`) —
-        // so a quad-dirty-only frame re-merges the retained degraded glyph range
-        // instead of letting it vanish.
+        // Per-tier gates (MAJOR-2). The ALPHA-fold gates on the BUFFER-repack /
+        // restore signal (`fold_glyph`) so a retained (already-folded) buffer is
+        // left untouched. The RANGE-merge gates on the PARTITION-rebuild signal,
+        // because `prepare_buiy_instances` rebuilds (and re-excludes the degraded
+        // range from) each flat partition under that signal — the merge must
+        // re-add the range every rebuild. Quad: both are `quad_dirty` (the quad
+        // partition rebuilds under the quad gate). GLYPH: the fold is `fold_glyph`
+        // but the MERGE stays `quad_dirty || glyph_dirty` (the glyph partition's
+        // union rebuild gate, prepare.rs `partition_glyph_ranges`) — `glyph_restore`
+        // needs NO merge term: a surviving degraded group was degraded last frame
+        // too, so its range is already in the retained `glyph_flat_ranges` unless
+        // the partition was rebuilt this frame, which happens ONLY under
+        // `quad_dirty || glyph_dirty` (and a live group forces `quad_dirty` via the
+        // `Changed<EffectGroup>` re-insert anyway).
         let merge_glyph = quad_dirty || glyph_dirty;
+        // Whether the fold ACTUALLY dims any glyph this frame: it runs
+        // (`fold_glyph`) AND some degraded group has a non-empty glyph range. This
+        // drives `glyph_mirror_folded` below so a full un-degrade (no surviving
+        // degraded glyph range) clears the flag while a partial drop keeps it true.
+        let glyph_fold_applied = fold_glyph
+            && degraded
+                .iter()
+                .enumerate()
+                .any(|(i, g)| !allocate[i] && g.glyph_range.start < g.glyph_range.end);
         let buffers = &mut *buffers;
         fold_degraded_groups(
             &allocate,
             &degraded,
             quad_dirty,
             quad_dirty,
-            glyph_dirty,
+            fold_glyph,
             merge_glyph,
             buffers.quad.values_mut(),
             buffers.glyph.values_mut(),
@@ -893,23 +953,32 @@ pub(crate) fn prepare_effect_groups(
             &mut buffers.glyph_flat_ranges,
         );
 
-        // Re-upload only the buffer(s) whose CPU bytes the fold touched. The fold
-        // runs per tier iff that tier was repacked this frame, so the re-upload
-        // mirrors the same per-tier gate (a retained buffer was neither folded nor
-        // needs re-upload).
+        // Re-upload only the buffer(s) whose CPU bytes changed this frame. The
+        // quad fold runs iff that tier was repacked this frame, so its re-upload
+        // mirrors the same gate. The glyph buffer re-uploads when it was repacked
+        // (`glyph_dirty`) OR restored + possibly re-folded on the un-degrade edge
+        // (`glyph_restore`).
         if quad_dirty {
             buffers.quad.write_buffer(&render_device, &render_queue);
         }
-        if glyph_dirty {
+        if glyph_dirty || glyph_restore {
             buffers.glyph.write_buffer(&render_device, &render_queue);
-            // Glyph partial-reextract D6: the fold above diverged the glyph
-            // CPU mirror from `ExtractedGlyphs` (member alphas multiplied in
-            // place). The suffix ranged upload retains the mirror's prefix,
-            // so it must not run until a full repack (which clears this)
-            // restores mirror == carrier — set conservatively whenever the
-            // degradation branch re-uploaded the glyph buffer.
-            buffers.glyph_mirror_folded = true;
+            // Glyph partial-reextract D6: `glyph_mirror_folded` records whether the
+            // glyph CPU mirror currently carries a degraded-group fold (the suffix
+            // ranged upload retains the mirror's prefix, so a folded prefix would
+            // freeze stale dimmed alpha — the Patch fast path falls back to a full
+            // repack while this holds). Set it to whether a fold was ACTUALLY
+            // applied this frame: a surviving degraded glyph range keeps it true; a
+            // full un-degrade (fold ran on a clean mirror but no degraded glyph
+            // range survives) clears it so the Patch path may resume.
+            buffers.glyph_mirror_folded = glyph_fold_applied;
         }
+    } else if glyph_restore {
+        // Un-degrade with groups still present but NONE degrading this frame: the
+        // restore above rebuilt the clean mirror and nothing re-folds it, so
+        // re-upload the clean bytes and clear the fold flag.
+        buffers.glyph.write_buffer(&render_device, &render_queue);
+        buffers.glyph_mirror_folded = false;
     }
 
     let prepared = PreparedEffectGroups {
