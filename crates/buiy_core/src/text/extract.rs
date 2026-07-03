@@ -181,7 +181,7 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// How this frame re-extracted the glyph carrier — the glyph tier's
 /// `NodeDamage` mirror (partial-reextract D1), published by
 /// [`extract_buiy_glyphs`] on EVERY dirty frame and consumed by prepare +
-/// the compositor from Stage C/D. `Full` = the whole set was rebuilt (cold
+/// the compositor from Stage D. `Full` = the whole set was rebuilt (cold
 /// frame, global trigger, structural change, or a Patch-ineligible change).
 /// `Patch { changed, removed }` = the damage is confined to the named
 /// RESIDENT entities: re-emit + splice-replace `changed`, splice-delete
@@ -190,9 +190,13 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// frames (the § 6.2 O(0) contract), so consumers read freshness off the
 /// resource tick exactly like the carriers.
 ///
-/// Stage B is OBSERVATION-ONLY: the verdict is published (and counted via
-/// `RenderWorkCounters`) while the producer still always executes the Full
-/// rebuild — Patch EXECUTION is Stage C.
+/// From Stage C the published verdict IS what the producer EXECUTED: a
+/// `Patch` frame skips the O(scene) order walk and splices only the named
+/// entities' slices (D2); a `Full` frame ran the wholesale walk. The
+/// classifier verdict and the execution can never diverge — every
+/// force-Full condition (including the `FontDbLineage` interner reseat)
+/// feeds the classifier, so `RenderWorkCounters`' candidate/executed
+/// counts coincide by construction.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub enum GlyphDamage {
     /// Rebuild/consume the whole carrier.
@@ -215,7 +219,8 @@ pub enum GlyphDamage {
 /// the Stage C `mt_ceiling`/gallery measurements own any retune.
 const GLYPH_PATCH_MAX_CHANGED_PERCENT: u64 = 50;
 
-/// The Stage B Full/Patch verdict (design D3: "any uncertainty → Full").
+/// The Full/Patch verdict (design D3: "any uncertainty → Full") — from
+/// Stage C the producer EXECUTES it.
 /// PURE — every rule branch is unit-testable headless (the
 /// [`classify_glyph_content`] discipline); the producer owns gathering the
 /// inputs. Rule order:
@@ -279,6 +284,191 @@ fn classify_glyph_damage(
     GlyphDamage::Patch {
         changed: changed_live,
         removed,
+    }
+}
+
+/// The run-attribution shape [`splice_run`] renumbers (partial-reextract
+/// D2): one contiguous `Range<u32>` into a record vec, keyed by entity. Two
+/// carriers share the splice — `ExtractedGlyphs.entity_runs`
+/// ([`GlyphEntityRun`]) and `ResidentTextKeys.key_runs`
+/// (`(Entity, Range<u32>)`) — so the accessor is a trait, not a field.
+trait SpliceRun {
+    fn entity(&self) -> Entity;
+    fn range(&self) -> Range<u32>;
+    fn set_range(&mut self, range: Range<u32>);
+}
+
+impl SpliceRun for GlyphEntityRun {
+    fn entity(&self) -> Entity {
+        self.entity
+    }
+    fn range(&self) -> Range<u32> {
+        self.instances.clone()
+    }
+    fn set_range(&mut self, range: Range<u32>) {
+        self.instances = range;
+    }
+}
+
+impl SpliceRun for (Entity, Range<u32>) {
+    fn entity(&self) -> Entity {
+        self.0
+    }
+    fn range(&self) -> Range<u32> {
+        self.1.clone()
+    }
+    fn set_range(&mut self, range: Range<u32>) {
+        self.1 = range;
+    }
+}
+
+/// Splice-replace `entity`'s contiguous slice in a run-attributed record vec
+/// (partial-reextract D2): byte-compare first — an equal re-emission is a
+/// NO-OP (returns `false`, so the caller leaves the carrier tick untouched,
+/// D4) — else replace the slice, renumber every subsequent run's range by
+/// the length delta (O(runs)), and memmove the tail (`Vec::splice`; an
+/// equal-length replacement overwrites in place). `fresh.is_empty()` deletes
+/// the run (the despawn / no-longer-emitting splice-delete). Returns whether
+/// the carrier really changed — records or runs.
+///
+/// A Patch may never APPEND to an ordered carrier: the classifier owns
+/// order placement, and rule 2 (absence-from-retained-runs) escalates every
+/// newly-emitting entity to Full — so a non-resident entity with a
+/// non-empty `fresh` is unreachable here (debug-asserted; a non-resident
+/// delete is a no-op).
+fn splice_run<T: PartialEq + Clone, R: SpliceRun>(
+    records: &mut Vec<T>,
+    runs: &mut Vec<R>,
+    entity: Entity,
+    fresh: &[T],
+) -> bool {
+    let Some(pos) = runs.iter().position(|r| r.entity() == entity) else {
+        debug_assert!(
+            fresh.is_empty(),
+            "a Patch may never append a new run — the classifier escalates \
+             newly-emitting entities to Full (D3 rule 2)"
+        );
+        return false;
+    };
+    let old = runs[pos].range();
+    let (start, end) = (old.start as usize, old.end as usize);
+    if records[start..end] == *fresh {
+        return false; // byte-identical re-emission: no splice, no tick (D4)
+    }
+    records.splice(start..end, fresh.iter().cloned());
+    let delta = fresh.len() as i64 - (end - start) as i64;
+    let renumber_from = if fresh.is_empty() {
+        runs.remove(pos);
+        pos
+    } else {
+        runs[pos].set_range(old.start..old.start + fresh.len() as u32);
+        pos + 1
+    };
+    if delta != 0 {
+        for run in &mut runs[renumber_from..] {
+            let r = run.range();
+            run.set_range((r.start as i64 + delta) as u32..(r.end as i64 + delta) as u32);
+        }
+    }
+    true
+}
+
+/// The quad half of the splice (partial-reextract D2, "the easy half"): the
+/// quad carrier has NO run table — `entity` on each record is the splice
+/// key, per-entity CONTIGUITY is the invariant (§ 4.6 grouping), and
+/// cross-entity order is not load-bearing (quads all pack at one primitive
+/// rank; only within-entity order — selection under decoration — matters).
+/// So a resident slice is found by scan and splice-replaced in place, while
+/// an entity that newly gains quads (a selection appearing on a Patch
+/// frame) APPENDS its slice at the end — contiguous by construction.
+/// Returns whether the carrier really changed.
+fn splice_entity_quads(quads: &mut Vec<TextQuad>, entity: Entity, fresh: &[TextQuad]) -> bool {
+    debug_assert!(
+        fresh.iter().all(|q| q.entity == entity),
+        "a fresh quad slice must be single-entity (the emit is per entity)"
+    );
+    match quads.iter().position(|q| q.entity == entity) {
+        Some(start) => {
+            let end = start
+                + quads[start..]
+                    .iter()
+                    .take_while(|q| q.entity == entity)
+                    .count();
+            debug_assert!(
+                quads[end..].iter().all(|q| q.entity != entity),
+                "per-entity quad contiguity violated (§ 4.6 grouping)"
+            );
+            if quads[start..end] == *fresh {
+                return false; // byte-identical re-emission: no tick (D4)
+            }
+            quads.splice(start..end, fresh.iter().copied());
+            true
+        }
+        None => {
+            if fresh.is_empty() {
+                return false;
+            }
+            quads.extend_from_slice(fresh);
+            true
+        }
+    }
+}
+
+/// Debug tripwire (partial-reextract D2): after a Patch's splices the
+/// retained attribution must still satisfy the invariants
+/// `partition_glyph_ranges` debug_asserts at pack time — entity runs
+/// gapless from 0 and non-empty, covering every instance; key runs likewise
+/// covering every key; and the two run tables naming the same entities in
+/// the same order (the run sets coincide: every instance-emitting path
+/// pushes at least one key).
+fn debug_assert_spliced_coverage(glyphs: &ExtractedGlyphs, resident: &ResidentTextKeys) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mut next = 0u32;
+    for run in &glyphs.entity_runs {
+        debug_assert_eq!(
+            run.instances.start, next,
+            "spliced entity_runs must stay gapless from 0"
+        );
+        debug_assert!(
+            run.instances.start < run.instances.end,
+            "spliced entity_runs must stay non-empty"
+        );
+        next = run.instances.end;
+    }
+    debug_assert_eq!(
+        next as usize,
+        glyphs.glyphs.len(),
+        "spliced entity_runs must cover every instance"
+    );
+    let mut key_next = 0u32;
+    for (_, range) in &resident.key_runs {
+        debug_assert_eq!(
+            range.start, key_next,
+            "spliced key_runs must stay gapless from 0"
+        );
+        debug_assert!(
+            range.start < range.end,
+            "spliced key_runs must stay non-empty"
+        );
+        key_next = range.end;
+    }
+    debug_assert_eq!(
+        key_next as usize,
+        resident.keys.len(),
+        "spliced key_runs must cover every key"
+    );
+    debug_assert_eq!(
+        glyphs.entity_runs.len(),
+        resident.key_runs.len(),
+        "the instance and key run tables must name the same entities"
+    );
+    for (run, (entity, _)) in glyphs.entity_runs.iter().zip(&resident.key_runs) {
+        debug_assert_eq!(
+            run.entity, *entity,
+            "instance and key run order must coincide"
+        );
     }
 }
 
@@ -513,7 +703,8 @@ pub fn extract_buiy_glyphs(
     generation: Extract<Res<FontsGeneration>>,
     lineage: Extract<Res<FontDbLineage>>,
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
-    // Stage B (partial-reextract D1/D3): the published Full|Patch verdict.
+    // Partial-reextract D1/D3: the published Full|Patch verdict — from
+    // Stage C it names what the producer EXECUTED.
     // `Option` per the `NodeDamage`/`RenderWorkCounters` precedent — a harness
     // that does not register it (buiy_verify's content-presence census) still
     // runs the producer; no registration drift, no missing-resource skip.
@@ -604,12 +795,27 @@ pub fn extract_buiy_glyphs(
         return;
     }
 
-    // ---- Stage B classification (OBSERVATION-ONLY; partial-reextract D3) --
-    // Publish the Full|Patch verdict against the RETAINED runs (pre-rebuild
-    // state — exactly what a Stage C Patch would splice into), then fall
-    // through to the wholesale rebuild regardless. `record_text_work_counters`
-    // reads the verdict off this write's tick.
-    if let Some(d) = damage.as_deref_mut() {
+    // § 3.2 (T5): a lineage advance means every fontdb ID was reissued —
+    // clear the interner's ID map BEFORE any interning so keys re-seat
+    // MONOTONICALLY (old entries grace-evict on their own; `GlyphMetaCache`
+    // prunes via the residency retain below). In-lineage rebuilds no-op.
+    // The reseat return feeds the classifier's global trigger below (D3
+    // names `FontDbLineage` a whole-set trigger): every retained key's
+    // font-u32 bytes are stale, so a Patch may never retain them. In
+    // practice every lineage bump rides a generation bump (the
+    // apply_system_font_scan contract), so `fonts_changed` already forces
+    // Full — this is the defense-in-depth that keeps verdict == execution
+    // even if that contract is ever violated.
+    let lineage_reseated = interner.begin_lineage(lineage.0);
+
+    // ---- Classification (partial-reextract D3) ------------------------
+    // The Full|Patch verdict against the RETAINED runs (pre-rebuild state —
+    // exactly what the Patch branch splices into). From Stage C the verdict
+    // IS the execution decision, so it is computed unconditionally (a
+    // harness without the `GlyphDamage` resource still patches) and
+    // published when the resource exists — `record_text_work_counters`
+    // reads it off that write's tick.
+    let verdict = {
         // The value-tier changed set: the § 6.2 union ∪ the four clear
         // streams (removal IS the paint change on that entity — the cleared
         // selection/caret/preedit/Block must repaint away/at-full-alpha).
@@ -624,16 +830,19 @@ pub fn extract_buiy_glyphs(
                 changed_set.push(e);
             }
         }
-        *d = classify_glyph_damage(
-            theme.is_changed() || scale_changed || fonts_changed,
+        classify_glyph_damage(
+            theme.is_changed() || scale_changed || fonts_changed || lineage_reseated,
             paint_reordered || !structural_probe.is_empty(),
             skip_lifted,
             // Live effect-group degradation is a PREPARE-side decision
             // (`plan_allocation` inside `prepare_effect_groups` runs AFTER
             // extract each frame; only last frame's `RtPoolStats` echo exists
-            // here) — the producer CANNOT see the current frame's bit, so the
-            // D3 degradation bail is enforced by the CONSUMER: Stage C's
-            // prepare reads the fold state and falls back to Full there. In
+            // here) — the producer CANNOT see the current frame's bit. It
+            // needs no consumer-side bail either: prepare wholesale-repacks +
+            // uploads from the carrier on the glyph tick (the Stage C seam —
+            // the ranged upload is Stage D), and the spliced carrier is
+            // complete and correct, so `fold_degraded_groups`' "whole buffer
+            // repacked from source" invariant holds on Patch frames too. In
             // practice `Changed<EffectGroup>` (probe .2) already forces Full
             // for every group-bearing dirty frame, and degradation cannot
             // exist without a group.
@@ -641,18 +850,182 @@ pub fn extract_buiy_glyphs(
             &changed_set,
             &despawned_ids,
             &glyphs.entity_runs,
-        );
+        )
+    };
+    if let Some(d) = damage.as_deref_mut() {
+        *d = verdict.clone();
     }
 
     resident.last_scale_factor = Some(scale_factor);
     resident.last_generation = Some(generation.0);
-    // § 3.2 (T5): a lineage advance means every fontdb ID was reissued —
-    // clear the interner's ID map BEFORE any interning so keys re-seat
-    // MONOTONICALLY (old entries grace-evict on their own; `GlyphMetaCache`
-    // prunes via the residency retain below). In-lineage rebuilds no-op.
-    interner.begin_lineage(lineage.0);
 
-    // ---- Rebuild (wholesale, § 6.2 v1) -------------------------------
+    // ---- Patch execution (Stage C — D2/D4/D5) --------------------------
+    // The damage is confined to named RESIDENT entities: splice their
+    // slices instead of rebuilding the world. The retained `entity_runs`
+    // order IS the paint order on a Patch frame (no order input changed —
+    // the structural/order probes escalate to Full), so the O(scene)
+    // painters-z walk below is not built at all (D4).
+    if let GlyphDamage::Patch {
+        changed: patch_changed,
+        removed: patch_removed,
+    } = &verdict
+    {
+        // D5 — touch-before-insert: retained entities' keys carry frame-old
+        // LRU stamps, so this Patch's own atlas inserts would pick them as
+        // pressure-eviction victims (silent stale-UV corruption: a retained
+        // instance's embedded uv/page are NOT re-derived on a Patch frame,
+        // unlike a Full walk's). Touch every RETAINED key BEFORE any
+        // emission that could insert. Changed entities' stale ranges are
+        // skipped — their fresh keys are touched right after re-emission
+        // below — and removed entities' ranges are skipped so despawned
+        // keys go cold and grace-evict (the typing-churn return-to-baseline
+        // pin). Net effect: exactly one logical touch per POST-patch
+        // resident key — the same per-frame total the Full path's
+        // end-of-rebuild pass produces, which is the residency invariant
+        // `record_text_work_counters` derives `atlas_touch_ops` from.
+        let stale: std::collections::HashSet<Entity> = patch_changed
+            .iter()
+            .chain(patch_removed.iter())
+            .copied()
+            .collect();
+        for (entity, range) in &resident.key_runs {
+            if stale.contains(entity) {
+                continue;
+            }
+            for key in &resident.keys[range.start as usize..range.end as usize] {
+                atlas.touch_existing(key);
+            }
+        }
+
+        // The SAME shared emission context the Full walk threads — Full and
+        // Patch emit through one `emit_one_entity` signature, byte-identical
+        // by construction (D2, the node tier's `resolve_one` discipline).
+        let mut ctx = EmitContext {
+            atlas: &mut atlas,
+            meta: &mut meta,
+            fonts: &fonts,
+            font_guard: None,
+            swash: &mut swash,
+            interner: &mut interner,
+            stamp_entry: None,
+            theme: &theme,
+            scale_factor,
+        };
+
+        // FRESH per-entity accumulators, cleared per changed entity. The
+        // run vecs receive `emit_one_entity`'s 0-based single-entity
+        // attribution; the compare-and-splice below consumes the record
+        // slices (run shape — entity + length — is implied: the entity is
+        // the splice key and slice equality covers the length).
+        let mut fresh_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
+        let mut fresh_quads: Vec<TextQuad> = Vec::new();
+        let mut fresh_keys: Vec<AtlasKey> = Vec::new();
+        let mut fresh_runs: Vec<GlyphEntityRun> = Vec::new();
+        let mut fresh_key_runs: Vec<(Entity, Range<u32>)> = Vec::new();
+
+        // Mutate the carriers in place WITHOUT ticking, then ONE explicit
+        // `set_changed` per carrier that REALLY changed (D4): a no-op
+        // re-emission leaves both ticks untouched (the decorations-change /
+        // blink retention pins), glyphs + entity_runs move under ONE tick
+        // (T8 D4 — both fields live on the one resource), and the quad
+        // carrier ticks independently.
+        let glyphs_store = glyphs.bypass_change_detection();
+        let quads_store = text_quads.bypass_change_detection();
+        let resident_store = &mut *resident;
+        let mut glyph_content_changed = false;
+        let mut quad_content_changed = false;
+
+        for &entity in patch_changed.iter() {
+            fresh_glyphs.clear();
+            fresh_quads.clear();
+            fresh_keys.clear();
+            fresh_runs.clear();
+            fresh_key_runs.clear();
+            // A changed resident that no longer matches the paint query
+            // re-emits EMPTY — the splice-delete repaints it away, exactly
+            // what a Full walk (which would simply not visit it) publishes.
+            if let Ok(item) = texts.get(entity) {
+                emit_one_entity(
+                    entity,
+                    item,
+                    &mut ctx,
+                    &mut fresh_glyphs,
+                    &mut fresh_quads,
+                    &mut fresh_keys,
+                    &mut fresh_runs,
+                    &mut fresh_key_runs,
+                );
+            }
+            // The fresh keys join this frame's touch total: `resolve_glyph`
+            // reads atlas HITS through `get` (which deliberately does not
+            // touch the LRU) — on the Full path the end-of-rebuild pass
+            // covers them; here the per-entity touch does.
+            for key in &fresh_keys {
+                ctx.atlas.touch_existing(key);
+            }
+            glyph_content_changed |= splice_run(
+                &mut glyphs_store.glyphs,
+                &mut glyphs_store.entity_runs,
+                entity,
+                &fresh_glyphs,
+            );
+            splice_run(
+                &mut resident_store.keys,
+                &mut resident_store.key_runs,
+                entity,
+                &fresh_keys,
+            );
+            quad_content_changed |=
+                splice_entity_quads(&mut quads_store.quads, entity, &fresh_quads);
+        }
+        // Splice-DELETE the resident despawns (D3: despawns ARE patchable,
+        // keyed by the removal stream's ids). Their runs and keys leave the
+        // retained state, so no future touch pass warms them and the atlas
+        // grace-drains them (gate #15's return-to-baseline).
+        for &entity in patch_removed.iter() {
+            glyph_content_changed |= splice_run(
+                &mut glyphs_store.glyphs,
+                &mut glyphs_store.entity_runs,
+                entity,
+                &[],
+            );
+            splice_run(
+                &mut resident_store.keys,
+                &mut resident_store.key_runs,
+                entity,
+                &[],
+            );
+        }
+        // Quad deletion sweeps the RAW despawn stream, not `removed`: quad
+        // residency is independent of glyph residency (a selection on
+        // whitespace-only text emits quads and no instances), so a
+        // glyph-NONRESIDENT despawn — which the classifier's `removed`
+        // filter drops — can still own a quad slice.
+        for &entity in &despawned_ids {
+            quad_content_changed |= splice_entity_quads(&mut quads_store.quads, entity, &[]);
+        }
+        // Dropping the context releases lock site #3's guard (if taken) and
+        // the atlas borrow the residency prune below needs.
+        drop(ctx);
+
+        // Bearing-cache hygiene, the same clause as the Full path (decision
+        // 3) — AFTER the splice, so it prunes against post-patch residency.
+        meta.0.retain(|key, _| atlas.get(key).is_some());
+
+        // D2's coverage invariants must survive the splice — the same
+        // properties `partition_glyph_ranges` debug_asserts at pack time.
+        debug_assert_spliced_coverage(glyphs_store, resident_store);
+
+        if glyph_content_changed {
+            glyphs.set_changed();
+        }
+        if quad_content_changed {
+            text_quads.set_changed();
+        }
+        return;
+    }
+
+    // ---- Rebuild (wholesale — the Full arm; Patch returned above) ----
     let mut new_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
     // The quad-tier co-carrier (T6): rebuilt alongside the glyphs on every
     // dirty frame (decision 12), PUBLISHED value-compared (T7 decision 4 —
@@ -1654,6 +2027,178 @@ mod tests {
                 removed: SmallVec::from_slice(&e[..1]),
             }
         );
+    }
+
+    // ---- Stage C: the splice mechanics (D2) -------------------------------
+    // Unit-level pins for `splice_run` — the shared replace/delete/renumber
+    // engine both the instance and the key carrier ride. Each asserts EXACT
+    // post-splice ranges, so an off-by-delta in the renumber (the R5
+    // corruption mode: subsequent entities' slices silently misattributed)
+    // fails here first.
+
+    /// Three runs over `records = [10,11, 20,21,22, 30,31,32]`:
+    /// a: 0..2, b: 2..5, c: 5..8.
+    fn splice_fixture(e: &[Entity]) -> (Vec<i32>, Vec<GlyphEntityRun>) {
+        let records = vec![10, 11, 20, 21, 22, 30, 31, 32];
+        let runs = vec![
+            GlyphEntityRun {
+                entity: e[0],
+                instances: 0..2,
+            },
+            GlyphEntityRun {
+                entity: e[1],
+                instances: 2..5,
+            },
+            GlyphEntityRun {
+                entity: e[2],
+                instances: 5..8,
+            },
+        ];
+        (records, runs)
+    }
+
+    #[test]
+    fn splice_equal_length_overwrites_in_place() {
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert!(splice_run(&mut records, &mut runs, e[1], &[91, 92, 93]));
+        assert_eq!(records, vec![10, 11, 91, 92, 93, 30, 31, 32]);
+        assert_eq!(runs[0].instances, 0..2);
+        assert_eq!(runs[1].instances, 2..5);
+        assert_eq!(runs[2].instances, 5..8, "zero delta: no renumber");
+    }
+
+    #[test]
+    fn splice_longer_shifts_the_suffix_and_renumbers() {
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert!(splice_run(
+            &mut records,
+            &mut runs,
+            e[1],
+            &[91, 92, 93, 94, 95]
+        ));
+        assert_eq!(records, vec![10, 11, 91, 92, 93, 94, 95, 30, 31, 32]);
+        assert_eq!(runs[0].instances, 0..2, "prefix run untouched");
+        assert_eq!(runs[1].instances, 2..7, "the spliced run grew in place");
+        assert_eq!(runs[2].instances, 7..10, "suffix run shifted by +2");
+    }
+
+    #[test]
+    fn splice_shorter_shifts_the_suffix_and_renumbers() {
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert!(splice_run(&mut records, &mut runs, e[1], &[91]));
+        assert_eq!(records, vec![10, 11, 91, 30, 31, 32]);
+        assert_eq!(runs[1].instances, 2..3);
+        assert_eq!(runs[2].instances, 3..6, "suffix run shifted by -2");
+    }
+
+    #[test]
+    fn splice_delete_removes_the_run_and_renumbers() {
+        // The splice-DELETE (despawn / no-longer-emitting) unit pin: the
+        // integration despawn path escalates Full via the `Children`
+        // structural probe, so the removal splice is pinned HERE.
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert!(splice_run(&mut records, &mut runs, e[1], &[]));
+        assert_eq!(records, vec![10, 11, 30, 31, 32]);
+        assert_eq!(runs.len(), 2, "the deleted entity's run is GONE");
+        assert_eq!(runs[0].entity, e[0]);
+        assert_eq!(runs[0].instances, 0..2);
+        assert_eq!(runs[1].entity, e[2]);
+        assert_eq!(runs[1].instances, 2..5, "suffix renumbered over the gap");
+    }
+
+    #[test]
+    fn splice_byte_identical_reemission_is_a_noop() {
+        // D4: an equal re-emission must not move a tick — the caller keys
+        // `set_changed` off this return.
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        let before = records.clone();
+        assert!(!splice_run(&mut records, &mut runs, e[1], &[20, 21, 22]));
+        assert_eq!(records, before);
+        assert_eq!(runs[2].instances, 5..8);
+    }
+
+    #[test]
+    fn splice_nonresident_delete_is_a_noop() {
+        // A despawned id that never emitted (filtered `removed` should not
+        // pass one, but the engine must tolerate it) deletes nothing.
+        let e = entities(4);
+        let (mut records, mut runs) = splice_fixture(&e);
+        let before = records.clone();
+        assert!(!splice_run(&mut records, &mut runs, e[3], &[]));
+        assert_eq!(records, before);
+        assert_eq!(runs.len(), 3);
+    }
+
+    #[test]
+    fn splice_key_runs_ride_the_same_engine() {
+        // The `(Entity, Range<u32>)` impl (ResidentTextKeys.key_runs): keys
+        // are NOT 1:1 with instances, so the key carrier splices its OWN
+        // ranges — same engine, second `SpliceRun` shape.
+        let e = entities(2);
+        let mut keys = vec![1u8, 2, 7, 8, 9];
+        let mut key_runs = vec![(e[0], 0..2u32), (e[1], 2..5u32)];
+        assert!(splice_run(&mut keys, &mut key_runs, e[0], &[4]));
+        assert_eq!(keys, vec![4, 7, 8, 9]);
+        assert_eq!(key_runs[0].1, 0..1);
+        assert_eq!(key_runs[1].1, 1..4, "key suffix renumbered by -1");
+    }
+
+    // ---- Stage C: the quad splice (D2 "the easy half") ---------------------
+
+    fn quad(entity: Entity, x: f32) -> TextQuad {
+        TextQuad {
+            entity,
+            position: Vec2::new(x, 0.0),
+            size: Vec2::splat(1.0),
+            color: Color::WHITE,
+            clip: None,
+        }
+    }
+
+    #[test]
+    fn quad_splice_replaces_the_contiguous_slice() {
+        let e = entities(3);
+        let mut quads = vec![quad(e[0], 0.0), quad(e[1], 1.0), quad(e[2], 2.0)];
+        assert!(splice_entity_quads(
+            &mut quads,
+            e[1],
+            &[quad(e[1], 9.0), quad(e[1], 10.0)],
+        ));
+        assert_eq!(quads.len(), 4);
+        assert_eq!(quads[0], quad(e[0], 0.0));
+        assert_eq!(quads[1], quad(e[1], 9.0));
+        assert_eq!(quads[2], quad(e[1], 10.0));
+        assert_eq!(quads[3], quad(e[2], 2.0));
+    }
+
+    #[test]
+    fn quad_splice_appends_for_a_newly_quad_emitting_entity() {
+        // Quad residency is independent of glyph residency: a resident
+        // entity gaining its first quad (selection appears) APPENDS —
+        // cross-entity quad order is not load-bearing (§ 4.6).
+        let e = entities(2);
+        let mut quads = vec![quad(e[0], 0.0)];
+        assert!(splice_entity_quads(&mut quads, e[1], &[quad(e[1], 5.0)]));
+        assert_eq!(quads, vec![quad(e[0], 0.0), quad(e[1], 5.0)]);
+    }
+
+    #[test]
+    fn quad_splice_deletes_and_noops() {
+        let e = entities(3);
+        let mut quads = vec![quad(e[0], 0.0), quad(e[1], 1.0), quad(e[2], 2.0)];
+        // Delete the middle entity's slice.
+        assert!(splice_entity_quads(&mut quads, e[1], &[]));
+        assert_eq!(quads, vec![quad(e[0], 0.0), quad(e[2], 2.0)]);
+        // Byte-identical replacement: no change, no tick.
+        assert!(!splice_entity_quads(&mut quads, e[0], &[quad(e[0], 0.0)]));
+        // Deleting a quad-free entity: no change.
+        assert!(!splice_entity_quads(&mut quads, e[1], &[]));
+        assert_eq!(quads.len(), 2);
     }
 }
 

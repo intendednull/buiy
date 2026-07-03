@@ -169,15 +169,21 @@ fn patch_retains_sibling_records_byte_identical() {
     }
 }
 
-/// Glyph partial-reextract Stage B (D1/D3) — the observation-stage counter
-/// gate: an idle text frame records ZERO glyph work (`GlyphDamage` untouched —
-/// the § 6.2 O(0) contract); one value-tier change on one of N text entities
-/// records `glyph_full_rebuilds == 1` (the producer still rebuilds wholesale)
-/// AND `glyph_patch_candidates == 1` with exactly one patched entity (the
-/// classifier verdicted the frame Patch-eligible). The Stage C flip will move
-/// this gate to `glyph_full_rebuilds == 0, glyph_patches == 1`.
+/// Glyph partial-reextract Stage C (D1/D2/D3) — THE counter FLIP gate: an
+/// idle text frame records ZERO glyph work (`GlyphDamage` untouched — the
+/// § 6.2 O(0) contract); one value-tier change on one of N text entities
+/// EXECUTES a Patch (`glyph_patches == 1`, `glyph_full_rebuilds == 0` — the
+/// wholesale rebuild did NOT run) naming exactly the victim; a structural
+/// change (a despawn ticking the parent's `Children`) still executes a Full
+/// rebuild (`glyph_full_rebuilds == 1`, `glyph_patches == 0`).
+///
+/// History: the Stage-B ancestor of this test
+/// (`glyph_classifier_idle_zeros_one_change_one_patch_candidate`) pinned
+/// `glyph_full_rebuilds == 1` on the change frame while the verdict was
+/// observation-only; Stage C's Patch execution flips that assertion —
+/// updated consciously here, per the plan's "counter FLIP" verify.
 #[test]
-fn glyph_classifier_idle_zeros_one_change_one_patch_candidate() {
+fn glyph_flip_idle_zeros_one_change_executes_patch_structural_full() {
     use bevy::prelude::Color;
     use buiy_core::render::color::ColorToken;
     use buiy_core::render::components::TextColor;
@@ -197,10 +203,11 @@ fn glyph_classifier_idle_zeros_one_change_one_patch_candidate() {
         q.iter(h.app.world()).next().expect("a text entity")
     };
 
-    // Idle: no glyph rebuild, no candidate, no patched entities.
+    // Idle: no glyph rebuild, no patch, no patched entities.
     h.frame();
     let idle = *h.render.resource::<RenderWorkCounters>();
     assert_eq!(idle.glyph_full_rebuilds, 0, "idle frame: no glyph rebuild");
+    assert_eq!(idle.glyph_patches, 0, "idle frame: no executed patch");
     assert_eq!(
         idle.glyph_patch_candidates, 0,
         "idle frame: no Patch verdict"
@@ -210,7 +217,7 @@ fn glyph_classifier_idle_zeros_one_change_one_patch_candidate() {
         "idle frame: no patched entities"
     );
 
-    // One value-tier change on ONE text entity.
+    // One value-tier change on ONE text entity → an EXECUTED Patch.
     h.app
         .world_mut()
         .entity_mut(victim)
@@ -218,8 +225,12 @@ fn glyph_classifier_idle_zeros_one_change_one_patch_candidate() {
     h.frame();
     let changed = *h.render.resource::<RenderWorkCounters>();
     assert_eq!(
-        changed.glyph_full_rebuilds, 1,
-        "Stage B is observation-only: the wholesale rebuild still ran"
+        changed.glyph_full_rebuilds, 0,
+        "Stage C FLIP: the wholesale rebuild did NOT run for a 1-entity value change"
+    );
+    assert_eq!(
+        changed.glyph_patches, 1,
+        "Stage C FLIP: the Patch EXECUTED (order walk skipped, victim spliced)"
     );
     assert_eq!(
         changed.glyph_patch_candidates, 1,
@@ -236,5 +247,19 @@ fn glyph_classifier_idle_zeros_one_change_one_patch_candidate() {
                 if changed.as_slice() == [victim] && removed.is_empty()
         ),
         "GlyphDamage::Patch names exactly the victim"
+    );
+
+    // A structural change — a despawn ticks the parent's `Children` — still
+    // executes the Full rebuild (D3: "any uncertainty → Full").
+    h.app.world_mut().entity_mut(victim).despawn();
+    h.frame();
+    let structural = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(
+        structural.glyph_full_rebuilds, 1,
+        "a structural change still executes a Full rebuild"
+    );
+    assert_eq!(
+        structural.glyph_patches, 0,
+        "a structural change never executes a Patch"
     );
 }

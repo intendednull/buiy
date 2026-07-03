@@ -108,6 +108,119 @@ fn offscreen_keys_drain_after_grace() {
     }
 }
 
+/// Stage C D5 — touch-before-insert under REAL page-budget pressure: on a
+/// Patch frame, retained entities' keys carry frame-old LRU stamps, so the
+/// patch's own inserts would pick them as pressure-eviction victims while
+/// their instances stay retained (silent stale-UV sampling — a Patch never
+/// re-derives retained uv/page, unlike a Full walk). D5 orders a touch of
+/// every retained key BEFORE any emission insert, and deliberately does NOT
+/// touch the changed entity's stale ranges — so under pressure the LRU
+/// victims are exactly the patch's own garbage.
+///
+/// Deterministic fixture: `page_budget: 1` with a page the settled scene
+/// fills near capacity, `eviction_grace` huge so grace expiry cannot fire —
+/// any eviction inside the patch frame is pressure eviction, forced by the
+/// victim's letter-disjoint re-emission. RED without the pre-touch: the
+/// idle-frame touch pass runs in resident order (sibling keys first →
+/// OLDEST seq), so an untouched-at-patch-time sibling is the first LRU
+/// victim and its retained instances sample a freed/re-used cell.
+#[test]
+fn patch_inserts_evict_stale_keys_never_retained_ones() {
+    use buiy_core::text::GlyphDamage;
+
+    let mut h = TextExtractHarness::with_atlas_config(AtlasConfig {
+        page_size: 36,
+        page_budget: 1,
+        eviction_grace: 10_000,
+    });
+    // Letter-disjoint fixtures: the sibling's keys, the victim's old keys,
+    // and the victim's new keys never collide, so every set's residency is
+    // independently observable.
+    // Spawn the VICTIM's tree first: root contexts rank the later-spawned
+    // tree first, so the retained sibling paints FIRST — its keys sit at the
+    // OLDEST end of the LRU on the patch frame (touched earliest by the
+    // previous frame's resident-order touch pass). That is the exact
+    // ordering D5 exists for: without the pre-touch, the sibling — not the
+    // victim's stale keys — would be the first pressure-eviction victim.
+    let victim = spawn_text(&mut h, "dgq");
+    let sibling = spawn_text(&mut h, "mnrwvzu");
+    h.settle();
+
+    // Non-vacuity 1: the settled scene fits — no pressure before the patch.
+    let keys_before = h.resident_keys();
+    assert!(!keys_before.is_empty());
+    for key in &keys_before {
+        assert!(
+            h.atlas().get(key).is_some(),
+            "fixture: the settled scene must fit the page without eviction \
+             (page_size too small)"
+        );
+    }
+    let run_range = |h: &TextExtractHarness, e| {
+        h.glyphs()
+            .entity_runs
+            .iter()
+            .find(|r| r.entity == e)
+            .expect("run")
+            .instances
+            .clone()
+    };
+    let sib_range = run_range(&h, sibling);
+
+    // The Patch: re-emit the victim with disjoint letters → fresh inserts
+    // under a full page (1 changed of 2 runs = 50 % ≤ the D3 bail). The
+    // fresh glyphs ("ces", ≤ 8×9 px cells) each fit a cell freed by
+    // evicting one of the victim's taller stale glyphs ("dgq", 8–9 wide ×
+    // 13–14 tall), so with D5 intact the pressure resolves ENTIRELY against
+    // the stale set and never cascades into the retained sibling.
+    h.app.world_mut().get_mut::<Text>(victim).unwrap().0 = String::from("ces");
+    h.frame();
+    assert!(
+        matches!(h.glyph_damage(), GlyphDamage::Patch { .. }),
+        "the edit must execute as a Patch (got {:?})",
+        h.glyph_damage()
+    );
+
+    // Non-vacuity 2: the patch's inserts really pressured the page — SOME
+    // pre-patch key was evicted (grace cannot fire at 10_000 frames, so
+    // only pressure eviction removes keys inside this frame). WHICH keys
+    // were the victims is exactly what the D5 pin below discriminates.
+    assert!(
+        keys_before.iter().any(|k| h.atlas().get(k).is_none()),
+        "fixture: the patch's inserts must force pressure eviction \
+         (page_size too large)"
+    );
+
+    // THE D5 pin: every RETAINED key survived the patch's own inserts, and
+    // each retained instance still samples ITS entry (uv + page coherent —
+    // not evicted, not evicted-and-re-baked elsewhere). Plain-text fixture:
+    // keys are 1:1 with instances, so global indices align.
+    let keys_after = h.resident_keys();
+    let glyphs = h.glyphs();
+    assert_eq!(run_range(&h, sibling), sib_range, "sibling run unmoved");
+    for i in sib_range.start as usize..sib_range.end as usize {
+        assert_eq!(keys_after[i], keys_before[i], "sibling keys retained");
+        let entry = h.atlas().get(&keys_after[i]).unwrap_or_else(|| {
+            panic!(
+                "D5 violated: retained key {i} was pressure-evicted by the \
+                 patch's own inserts (touch-before-insert ordering broken)"
+            )
+        });
+        let inst = &glyphs.glyphs[i];
+        assert_eq!(
+            inst.uv,
+            [
+                entry.uv.min.x,
+                entry.uv.min.y,
+                entry.uv.max.x,
+                entry.uv.max.y
+            ],
+            "retained instance {i} must still sample its own cell"
+        );
+        assert_eq!(inst.page, entry.page as u32);
+    }
+}
+
 /// verification § 1.2's seam-contract row, half 1: the whole producer flow
 /// is expressible against the render seam types alone — an `AtlasKey` is
 /// opaque bytes, residency is `get_or_insert` with an `AtlasBitmap`, and

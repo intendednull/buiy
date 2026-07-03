@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use bevy::tasks::{ComputeTaskPool, TaskPoolBuilder};
 
 use buiy_bench_support::{PipelineHarness, build_flat_scene, build_large_scene};
-use buiy_core::layout::Style;
+use buiy_core::layout::{BoxModel, Length, Sizing};
 use buiy_core::text::Text;
 
 /// One entity of the embarrassingly-parallel user workload.
@@ -281,9 +281,19 @@ fn pick_victim(app: &mut App) -> Option<Entity> {
 }
 
 /// Force per-frame layout dirtiness (and text reshape when the victim bears
-/// text). Re-inserting a `Style` bundle with an oscillating width marks the
-/// decomposed layout components changed; setting `Text` forces cosmic-text to
+/// text). Mutating the victim's `BoxModel` width in place marks the layout
+/// component changed (→ relayout); setting `Text` forces cosmic-text to
 /// reshape. This models an *active* UI updating every frame.
+///
+/// Deliberately NOT a whole-`Style`-bundle re-insert (the pre-Stage-C form):
+/// `Style` is a Bundle that includes `Stacking`, and a bundle insert marks
+/// EVERY member `Changed` regardless of value — which trips the glyph/node
+/// tiers' conservative structural probes (`Changed<Stacking>` ⇒ paint order
+/// may have moved ⇒ Full) every frame. A real active UI mutates the fields
+/// it animates (width here, text below), not its z-index; the in-place write
+/// is the faithful model. The pre-Stage-C DIRTY baselines are unaffected by
+/// this fix: before Patch execution existed, ANY dirty frame took the same
+/// wholesale walk regardless of which components ticked.
 fn dirty_scene(app: &mut App, victim: Option<Entity>, frame: usize) {
     let Some(v) = victim else { return };
     // `BUIY_MT_DIRTY_KIND` = full (default) | style | text — decompose the
@@ -292,12 +302,14 @@ fn dirty_scene(app: &mut App, victim: Option<Entity>, frame: usize) {
     let w = 40.0 + (frame % 7) as f32;
     let world = app.world_mut();
     let has_text = world.get::<Text>(v).is_some();
-    let mut e = world.entity_mut(v);
-    if kind == "full" || kind == "style" {
-        e.insert(Style::default().width_px(w).height_px(20.0));
+    if (kind == "full" || kind == "style")
+        && let Some(mut bm) = world.get_mut::<BoxModel>(v)
+    {
+        bm.width = Sizing::Length(Length::Px(w));
+        bm.height = Sizing::Length(Length::Px(20.0));
     }
     if (kind == "full" || kind == "text") && has_text {
-        e.insert(Text(format!(
+        world.entity_mut(v).insert(Text(format!(
             "Section {frame}: a representative heading that reshapes each frame"
         )));
     }
