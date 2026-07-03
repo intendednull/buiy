@@ -4,23 +4,27 @@
 //!
 //! FW1 shipped the **positional** reconciler (match children by index); FW2 adds
 //! the **keyed** reconcile ([`reconcile_keyed_children`] — match / reorder rows
-//! by [`RowKey`] without rebuild) and the two stateful-leaf widgets (the
-//! controlled `Checkbox` leaf + the command-sourced `TextInput` editor, driven
-//! drift-only from the model). Both rest on the structural refines the prototype
-//! deferred:
+//! by [`RowKey`] without rebuild) and the two stateful-leaf widgets. **F2** adds
+//! the one coherent **layout surface** (spec §2.2) — the whole
+//! sizing/flex/spacing/positioning/scroll set lowered here from [`LayoutProps`],
+//! the `raster()` element, and the controlled stick-to-bottom
+//! ([`stick_scroll_to_bottom`]). Every lowering is a `set_if_neq` / `!=`-guarded
+//! drift, so an unchanged prop never trips `Changed` and a node with no layout
+//! modifier is byte-identical to a freshly-`#[require]`'d `Node`.
 //!
-//! - **#9 patchable styling.** Containers emit **decomposed** components and the
-//!   reconciler `set_if_neq`-patches them **in place** on change — `FlexParams`
-//!   (direction + `align_items` + the `FlexGap`), `BoxModel` (padding),
-//!   `Background`, `Border` (radius). `Node` `#[require]`s the full `Style`
-//!   decomposition, so a freshly-spawned container already carries every layout
-//!   component at its default; the reconciler writes only what a prop set.
+//! - **#9 patchable styling / layout.** Containers + the raster node emit
+//!   **decomposed** components and the reconciler `set_if_neq`-patches them **in
+//!   place** on change. `Node` `#[require]`s the full `Style` decomposition
+//!   (`Display`/`FlexParams`/`BoxModel`/`Position`/`Overflow`/`Stacking`/…), so a
+//!   freshly-spawned node already carries every layout component at its default;
+//!   the reconciler writes only what a prop set. Components `Node` does not
+//!   `#[require]` (`FlexItem`, the `ScrollOffset`/`ScrollExtent` bundle, the
+//!   internal `StickBottom` marker, `Background`, `Border`) are inserted on demand
+//!   and removed when their prop clears — no `RemovedComponents` dependence.
 //! - **#11 drift-only writes.** Every write is a `set_if_neq` (or an explicit
-//!   `!=` guard), so an unchanged prop never trips `Changed` — the funnel's
-//!   `set_if_neq` discipline carries through the reconciler.
+//!   `!=` guard), so an unchanged prop never trips `Changed`.
 //! - **#12 internal `ViewSlot`.** A realized `Button` records its label-child
-//!   `Text` entity **once at spawn** ([`ViewSlot`]); the label patch reads the
-//!   slot instead of re-walking the widget's children.
+//!   `Text` entity **once at spawn**; the label patch reads the slot.
 //!
 //! The reconciler is scheduled **`.before(BuiySet::Layout)`** (#10) by
 //! [`crate::app`] so a structurally-new node is laid out the same frame it is
@@ -30,16 +34,21 @@ use bevy::prelude::*;
 use buiy_core::a11y::{A11yLabel, A11yToggled, Toggled};
 use buiy_core::components::Node;
 use buiy_core::layout::{
-    AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexParams, Length,
+    AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset,
+    JustifyContent, Length, Overflow, OverflowMode, Position, PositionKind, ScrollOffset, Sizing,
+    Stacking, TopLayer,
 };
 use buiy_core::mvu::{ControlledLeaf, Envelope, Model, ToggleMsg};
+use buiy_core::render::RasterImage;
 use buiy_core::render::components::{Background, Border, Opacity};
+use buiy_core::scroll::ScrollExtent;
 use buiy_core::text::edit::{EditCommand, TextEditState};
-use buiy_core::text::{FontSize, SharedFontSystem, Text};
+use buiy_core::text::{FontSize, SharedFontSystem, Text, TextAlign as CoreTextAlign};
 use buiy_widgets::{Button, Checkbox, TextInput};
 
 use crate::app::{UiRoot, ViewFn};
 use crate::element::{Element, Kind};
+use crate::layout::{Align, Justify, LayoutProps, Positioning, Sides, TextAlign};
 use crate::router::{InputAction, PressAction, SubmitAction};
 
 /// Per-frame reconciler work counts — the host-independent measurement gate for
@@ -125,6 +134,13 @@ pub(crate) struct ViewSlot {
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RowKey(pub(crate) u64);
 
+/// Internal marker: this scroll container carries the model's stick-to-bottom
+/// intent (spec §2.2). Written by the reconciler from `LayoutProps.stick`
+/// (insert/remove, drift-only), consumed by [`stick_scroll_to_bottom`] AFTER
+/// layout — pinning `ScrollOffset.y` to the content's max only while present.
+#[derive(Component, Default)]
+pub(crate) struct StickBottom;
+
 /// The reconciler system: diff `view(&model)` against the retained tree and
 /// patch / spawn / despawn to match. Exclusive `&mut World` (it spawns real
 /// widget entities immediately so they are queryable this frame).
@@ -192,9 +208,9 @@ fn reconcile_node<M: Model>(
 ///
 /// Each write helper returns whether it made a REAL value change; a node is
 /// counted in [`ViewWorkCounters::nodes_patched`] once iff any of its content /
-/// style writes tripped. Router-handler (re)attach is layout-inert and NOT
-/// counted (see the counter type doc). Children bump themselves (they are
-/// reconciled by their own `patch_node` calls).
+/// style / layout writes tripped. Router-handler (re)attach is layout-inert and
+/// NOT counted. Children bump themselves (they are reconciled by their own
+/// `patch_node` calls).
 fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>, model: Entity) {
     let mut changed = false;
     match el.kind {
@@ -203,6 +219,10 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
                 changed |= set_text(world, entity, t);
             }
             changed |= set_font_size(world, entity, el.font_size);
+            changed |= set_text_align(world, entity, el.layout.text_align);
+            // A text node is a plain `Node` (no widget contract), so the whole
+            // layout surface applies to it too (`.width`/`.grow`/`.fixed`/…).
+            changed |= apply_node_layout(world, entity, &el.layout);
         }
         Kind::Button => {
             if let Some(t) = &el.text {
@@ -225,6 +245,12 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
         Kind::Column | Kind::Row => {
             changed |= apply_container_props(world, entity, el);
             reconcile_children::<M>(world, entity, &el.children, model, el.keyed);
+        }
+        Kind::Raster => {
+            // Patch the sampled image in place BY IDENTITY (entity preserved — the
+            // canvas keeps its texture across unrelated re-renders) + its layout.
+            changed |= set_raster_image(world, entity, el.raster.as_ref());
+            changed |= apply_node_layout(world, entity, &el.layout);
         }
         // A placeholder holds a slot but has no state to patch (FW3 `when`).
         Kind::Empty => {}
@@ -377,14 +403,17 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
         Kind::Text => {
             // `Node` makes the text node layout-visible (a bare `Text` without
             // `Node` is silently skipped by layout — the widget-catalog lesson).
-            world
+            let e = world
                 .spawn((
                     Node,
                     Text(el.text.clone().unwrap_or_default()),
                     FontSize(el.font_size),
                     Kind::Text,
                 ))
-                .id()
+                .id();
+            set_text_align(world, e, el.layout.text_align);
+            apply_node_layout(world, e, &el.layout);
+            e
         }
         Kind::Button => {
             // Reuse the real `buiy_widgets` Button constructor (full Phase-0
@@ -442,6 +471,15 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             update_text_actions::<M>(world, e, el, model);
             e
         }
+        Kind::Raster => {
+            // A layout `Node` carrying F1's `RasterImage` (fixed-size textured
+            // quad). `Node` gives it `ResolvedLayout` + `GlobalTransform` so
+            // extract can size/place the sampled image; the app owns + paints it.
+            let handle = el.raster.clone().unwrap_or_default();
+            let e = world.spawn((Node, RasterImage(handle), Kind::Raster)).id();
+            apply_node_layout(world, e, &el.layout);
+            e
+        }
         Kind::Column | Kind::Row => {
             let e = world.spawn((Node, el.kind)).id();
             apply_container_props(world, e, el);
@@ -465,20 +503,18 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
 }
 
 // ---------------------------------------------------------------------------
-// #9 — decomposed-style patching (containers only, `set_if_neq` in place).
+// The coherent layout lowering (spec §2.2). Containers + the raster node share
+// `apply_node_layout` (sizing / flex-item / position / scroll / stacking / the
+// stick marker); a container additionally lowers its `FlexParams` (direction +
+// justify + align + wrap + gap) and paints (background / radius). Every write is
+// `set_if_neq` / `!=`-guarded, so a node with no layout modifier is a no-op.
 // ---------------------------------------------------------------------------
 
-/// Compute + `set_if_neq`-patch the decomposed layout/paint components a
-/// container's props map to. `Node`'s `#[require]` already put `Display` /
-/// `FlexParams` / `BoxModel` on the entity at their defaults, so this only
-/// writes what a prop actually changes (spec §3 #9 / #11).
-///
-/// Only ever touches container-owned layout/paint components — never a widget's
-/// `#[require]`'d contract (the §3 #12 suppression-gotcha guard).
-///
-/// Returns whether any component was really changed (every write is `set_if_neq`
-/// or an `insert`/`remove` of a component that actually appeared/vanished), so
-/// the caller counts this container in `nodes_patched` only on real drift.
+/// Compute + patch a **container**'s decomposed layout + paint components. Only
+/// ever touches container-owned components — never a widget's `#[require]`'d
+/// contract (the §3 #12 suppression-gotcha guard). Returns whether any component
+/// really changed, so the caller counts the node in `nodes_patched` only on real
+/// drift.
 fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
     let axis = match el.kind {
         Kind::Row => FlexAxis::Row,
@@ -490,36 +526,376 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -
     if let Some(mut d) = world.get_mut::<Display>(e) {
         changed |= d.set_if_neq(Display::Flex(axis));
     }
-
-    // FlexParams: direction + cross-axis alignment + the flex gap (the `FlexGap`
-    // is a field of `FlexParams`, not a standalone component).
-    if let Some(mut fp) = world.get_mut::<FlexParams>(e) {
-        let gap = el.gap.unwrap_or(0.0);
-        let mut want = *fp;
-        want.direction = axis;
-        want.align_items = if el.align_center {
-            AlignItems::Center
-        } else {
-            AlignItems::Stretch
-        };
-        want.gap = FlexGap {
-            row: Length::Px(gap),
-            column: Length::Px(gap),
-        };
-        changed |= fp.set_if_neq(want);
-    }
-
-    // BoxModel: inner padding.
-    if let Some(mut bm) = world.get_mut::<BoxModel>(e) {
-        let pad = el.padding.unwrap_or(0.0);
-        let mut want = bm.clone();
-        want.padding = Edges::all(pad);
-        changed |= bm.set_if_neq(want);
-    }
-
+    // FlexParams (container-only): direction + main/cross alignment + wrap + gap.
+    changed |= apply_flex_params(world, e, &el.layout, axis);
+    // The node-layout common to containers + raster (sizing/flex-item/position/
+    // scroll/stacking/stick).
+    changed |= apply_node_layout(world, e, &el.layout);
+    // Paint (containers only).
     changed |= apply_background(world, e, el.background);
     changed |= apply_radius(world, e, el.radius);
     changed
+}
+
+/// The node-level layout shared by every `Node`-bearing kind (containers + the
+/// raster element): the box model (sizing + padding + the center-self margin),
+/// the flex item (grow/shrink), positioning (kind + inset), scroll
+/// (overflow + the runtime scroll bundle), the top-layer escape, and the
+/// stick-to-bottom marker. Returns whether anything really changed.
+fn apply_node_layout(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+    let mut changed = false;
+    changed |= apply_box_model(world, e, layout);
+    changed |= apply_flex_item(world, e, layout);
+    changed |= apply_position(world, e, layout);
+    changed |= apply_scroll(world, e, layout);
+    changed |= apply_top_layer(world, e, layout.top_layer);
+    changed |= apply_stick_marker(world, e, layout.stick);
+    changed
+}
+
+/// `set_if_neq`-patch a container's `FlexParams` (direction + justify + align +
+/// wrap + the `FlexGap`, all fields of `FlexParams`). Containers only.
+fn apply_flex_params(world: &mut World, e: Entity, layout: &LayoutProps, axis: FlexAxis) -> bool {
+    let Some(mut fp) = world.get_mut::<FlexParams>(e) else {
+        return false;
+    };
+    let gap = layout.gap.unwrap_or(0.0);
+    let mut want = *fp;
+    want.direction = axis;
+    want.justify_content = lower_justify(layout.justify);
+    want.align_items = lower_align(layout.align);
+    want.wrap = if layout.wrap {
+        FlexWrap::Wrap
+    } else {
+        FlexWrap::NoWrap
+    };
+    want.gap = FlexGap {
+        row: Length::Px(gap),
+        column: Length::Px(gap),
+    };
+    fp.set_if_neq(want)
+}
+
+/// `set_if_neq`-patch the box model (sizing + per-side padding + the center-self
+/// margin). Clones the current `BoxModel` and overrides only the fields the view
+/// owns, so a `border`/`box_sizing`/`aspect_ratio` set elsewhere (F3) survives.
+fn apply_box_model(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+    let Some(mut bm) = world.get_mut::<BoxModel>(e) else {
+        return false;
+    };
+    let mut want = bm.clone();
+    want.width = sizing_axis(layout.width, layout.fill_width);
+    want.height = sizing_axis(layout.height, layout.fill_height);
+    want.min_width = opt_len_sizing(layout.min_width);
+    want.min_height = opt_len_sizing(layout.min_height);
+    want.max_width = opt_len_sizing(layout.max_width);
+    want.max_height = opt_len_sizing(layout.max_height);
+    want.padding = padding_edges(&layout.padding);
+    want.margin = center_self_margin(layout);
+    bm.set_if_neq(want)
+}
+
+/// Drive a flex child's main-axis `grow` + `shrink`. `Node` does NOT `#[require]`
+/// `FlexItem`, so it is **inserted on demand** (only when a non-default grow /
+/// shrink is asked); toggling back to the default writes `grow = 0` /
+/// `shrink = 1` (drift-only — kept present, no `RemovedComponents`). Returns
+/// whether it changed.
+fn apply_flex_item(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+    let want_grow = layout.grow;
+    let want_shrink = layout.shrink;
+    let needs = want_grow != 0.0 || want_shrink != 1.0;
+    if let Some(mut fi) = world.get_mut::<FlexItem>(e) {
+        let mut changed = false;
+        if fi.grow != want_grow {
+            fi.grow = want_grow;
+            changed = true;
+        }
+        if fi.shrink != want_shrink {
+            fi.shrink = want_shrink;
+            changed = true;
+        }
+        changed
+    } else if needs {
+        world.entity_mut(e).insert(FlexItem {
+            grow: want_grow,
+            shrink: want_shrink,
+            ..Default::default()
+        });
+        true
+    } else {
+        false
+    }
+}
+
+/// `set_if_neq`-patch `Position` (kind + inset). `.fixed()`/`.absolute()` with no
+/// explicit inset on an axis default that axis's START edge to `0`, so `.fixed()`
+/// pins to the viewport origin `(0,0)` regardless of root padding (Taffy insets a
+/// fixed/absolute child by the containing block's BORDER only — root padding is
+/// excluded for an explicit inset; guarded by
+/// `buiy_core` `fixed_explicit_zero_inset_ignores_root_padding`).
+fn apply_position(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+    let want = Position {
+        kind: lower_position_kind(layout.position),
+        inset: resolve_inset(layout),
+    };
+    if let Some(mut pos) = world.get_mut::<Position>(e) {
+        pos.set_if_neq(want)
+    } else {
+        false
+    }
+}
+
+/// Drive a node's overflow modes (`.scroll_x`/`.scroll_y`) + the opt-in runtime
+/// scroll bundle. `Overflow` is `#[require]`'d (patched via `set_if_neq`);
+/// `ScrollOffset` + `ScrollExtent` are NOT (the extent cache queries `&mut
+/// ScrollExtent`, and the scroll input owns `ScrollOffset`), so the reconciler
+/// **inserts them on a scroll container** and **removes them when scrolling is
+/// turned off** — tracking the flag exactly. Returns whether anything changed.
+fn apply_scroll(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+    let mut changed = apply_overflow(world, e, layout);
+    let scrolling = layout.scroll_x || layout.scroll_y;
+    let has_bundle = world.get::<ScrollOffset>(e).is_some();
+    if scrolling && !has_bundle {
+        world
+            .entity_mut(e)
+            .insert((ScrollOffset::default(), ScrollExtent::default()));
+        changed = true;
+    } else if !scrolling && has_bundle {
+        world.entity_mut(e).remove::<ScrollOffset>();
+        world.entity_mut(e).remove::<ScrollExtent>();
+        changed = true;
+    }
+    changed
+}
+
+/// `set_if_neq`-patch the `Overflow` axis modes. Clones the current value so the
+/// scrollbar-* fields are preserved; only `x`/`y` are the view's to own.
+fn apply_overflow(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+    let Some(mut ov) = world.get_mut::<Overflow>(e) else {
+        return false;
+    };
+    let mut want = ov.clone();
+    want.x = if layout.scroll_x {
+        OverflowMode::Scroll
+    } else {
+        OverflowMode::Visible
+    };
+    want.y = if layout.scroll_y {
+        OverflowMode::Scroll
+    } else {
+        OverflowMode::Visible
+    };
+    ov.set_if_neq(want)
+}
+
+/// Drive a container's top-layer escape (`.top_layer()` ⇒ `Stacking.top_layer =
+/// Popover`). Drift-only (`Stacking` is `#[require]`'d, so `get_mut` + `!=`).
+fn apply_top_layer(world: &mut World, e: Entity, top_layer: bool) -> bool {
+    let want = if top_layer {
+        TopLayer::Popover
+    } else {
+        TopLayer::None
+    };
+    if let Some(mut st) = world.get_mut::<Stacking>(e)
+        && st.top_layer != want
+    {
+        st.top_layer = want;
+        return true;
+    }
+    false
+}
+
+/// Insert/remove the internal [`StickBottom`] marker from the model's stick
+/// intent (drift-only). Consumed by [`stick_scroll_to_bottom`] post-layout.
+fn apply_stick_marker(world: &mut World, e: Entity, stick: bool) -> bool {
+    let present = world.get::<StickBottom>(e).is_some();
+    if stick && !present {
+        world.entity_mut(e).insert(StickBottom);
+        true
+    } else if !stick && present {
+        world.entity_mut(e).remove::<StickBottom>();
+        true
+    } else {
+        false
+    }
+}
+
+/// Patch a raster node's sampled image in place (drift-only). Compares the
+/// `Handle<Image>` (`RasterImage` is not `PartialEq`, so `set_if_neq` cannot be
+/// used) and rewrites only on a real change — so an unrelated model fold never
+/// re-uploads the texture, and the canvas entity is preserved. Returns whether
+/// the handle changed.
+fn set_raster_image(world: &mut World, entity: Entity, handle: Option<&Handle<Image>>) -> bool {
+    let Some(handle) = handle else {
+        return false;
+    };
+    if let Some(mut cur) = world.get_mut::<RasterImage>(entity) {
+        if &cur.0 != handle {
+            cur.0 = handle.clone();
+            return true;
+        }
+        false
+    } else {
+        world.entity_mut(entity).insert(RasterImage(handle.clone()));
+        true
+    }
+}
+
+// --- Lowering helpers (view intents → the decomposed layout types) ----------
+
+/// Lower a per-axis sizing intent: an explicit `.width`/`.height` px wins; else
+/// `.fill*` maps to `100%` of the containing block; else `Auto` (content-sized).
+fn sizing_axis(explicit: Option<f32>, fill: bool) -> Sizing {
+    match explicit {
+        Some(px) => Sizing::Length(Length::Px(px)),
+        None if fill => Sizing::Length(Length::Percent(100.0)),
+        None => Sizing::Auto,
+    }
+}
+
+/// Lower a min/max sizing intent: an explicit px, else `Auto` (the layout
+/// default — no constraint).
+fn opt_len_sizing(px: Option<f32>) -> Sizing {
+    match px {
+        Some(v) => Sizing::Length(Length::Px(v)),
+        None => Sizing::Auto,
+    }
+}
+
+/// Lower per-side padding: an unset side resolves to `0`.
+fn padding_edges(sides: &Sides) -> Edges {
+    Edges {
+        top: Length::Px(sides.top.unwrap_or(0.0)),
+        right: Length::Px(sides.right.unwrap_or(0.0)),
+        bottom: Length::Px(sides.bottom.unwrap_or(0.0)),
+        left: Length::Px(sides.left.unwrap_or(0.0)),
+    }
+}
+
+/// The negative half-size margin that centers an absolutely-positioned box at its
+/// containing block's center (paired with the 50%/50% inset from [`resolve_inset`]).
+/// An axis with no explicit size degrades to `0` (corner-at-50% placement) — set
+/// an explicit `.width()`/`.height()` for exact centering. `Edges::default()`
+/// (all-zero) when not centering, so the write is a no-op for a normal node.
+fn center_self_margin(layout: &LayoutProps) -> Edges {
+    if !layout.center_self {
+        return Edges::default();
+    }
+    let mx = layout.width.map(|w| -w / 2.0).unwrap_or(0.0);
+    let my = layout.height.map(|h| -h / 2.0).unwrap_or(0.0);
+    Edges {
+        top: Length::Px(my),
+        left: Length::Px(mx),
+        ..Default::default()
+    }
+}
+
+fn lower_position_kind(p: Positioning) -> PositionKind {
+    match p {
+        Positioning::Static => PositionKind::Static,
+        Positioning::Relative => PositionKind::Relative,
+        Positioning::Absolute => PositionKind::Absolute,
+        Positioning::Fixed => PositionKind::Fixed,
+    }
+}
+
+/// Resolve the [`Inset`] for a positioned box. `Static`/`Relative` carry none.
+/// `center_self` uses 50%/50% (the half-size margin does the centering).
+/// Otherwise an explicit-per-side inset, with a per-axis default to the START
+/// edge (`0`) when neither side of an axis is set — so `.fixed()` pins to the
+/// viewport origin and a bare `.absolute()` to its containing block's top-left.
+fn resolve_inset(layout: &LayoutProps) -> Inset {
+    if matches!(layout.position, Positioning::Static | Positioning::Relative) {
+        return Inset::default();
+    }
+    if layout.center_self {
+        return Inset {
+            top: len_pct(50.0),
+            left: len_pct(50.0),
+            ..Default::default()
+        };
+    }
+    let s = &layout.inset;
+    let mut inset = Inset::default();
+    match (s.top, s.bottom) {
+        (None, None) => inset.top = len_px(0.0),
+        (t, b) => {
+            if let Some(t) = t {
+                inset.top = len_px(t);
+            }
+            if let Some(b) = b {
+                inset.bottom = len_px(b);
+            }
+        }
+    }
+    match (s.left, s.right) {
+        (None, None) => inset.left = len_px(0.0),
+        (l, r) => {
+            if let Some(l) = l {
+                inset.left = len_px(l);
+            }
+            if let Some(r) = r {
+                inset.right = len_px(r);
+            }
+        }
+    }
+    inset
+}
+
+fn len_px(px: f32) -> Sizing {
+    Sizing::Length(Length::Px(px))
+}
+
+fn len_pct(pct: f32) -> Sizing {
+    Sizing::Length(Length::Percent(pct))
+}
+
+/// Map the view [`Justify`] facade to the layout `JustifyContent` (all 6 values).
+fn lower_justify(j: Justify) -> JustifyContent {
+    match j {
+        Justify::Start => JustifyContent::FlexStart,
+        Justify::Center => JustifyContent::Center,
+        Justify::End => JustifyContent::FlexEnd,
+        Justify::Between => JustifyContent::SpaceBetween,
+        Justify::Around => JustifyContent::SpaceAround,
+        Justify::Evenly => JustifyContent::SpaceEvenly,
+    }
+}
+
+/// Map the view [`Align`] facade to the layout `AlignItems`.
+fn lower_align(a: Align) -> AlignItems {
+    match a {
+        Align::Start => AlignItems::FlexStart,
+        Align::Center => AlignItems::Center,
+        Align::End => AlignItems::FlexEnd,
+        Align::Stretch => AlignItems::Stretch,
+    }
+}
+
+/// Map the view [`TextAlign`] facade to the layout engine's `TextAlign`.
+fn lower_text_align(a: TextAlign) -> CoreTextAlign {
+    match a {
+        TextAlign::Start => CoreTextAlign::Start,
+        TextAlign::Center => CoreTextAlign::Center,
+        TextAlign::End => CoreTextAlign::End,
+        TextAlign::Justify => CoreTextAlign::Justify,
+    }
+}
+
+/// Insert / patch (or remove) a `Text` node's inline `TextAlign` (drift-only).
+fn set_text_align(world: &mut World, e: Entity, align: Option<TextAlign>) -> bool {
+    match align {
+        Some(a) => {
+            let want = lower_text_align(a);
+            if let Some(mut cur) = world.get_mut::<CoreTextAlign>(e) {
+                cur.set_if_neq(want)
+            } else {
+                world.entity_mut(e).insert(want);
+                true
+            }
+        }
+        None => world.entity_mut(e).take::<CoreTextAlign>().is_some(),
+    }
 }
 
 /// Patch (or remove) the container's `Background` fill in place. Returns whether
@@ -558,6 +934,35 @@ fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) 
             }
         }
         None => world.entity_mut(e).take::<Border>().is_some(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The controlled stick-to-bottom system (spec §2.2 finding #3).
+// ---------------------------------------------------------------------------
+
+/// Pin a stuck scroll container to the bottom (spec §2.2 controlled
+/// stick-to-bottom). Runs AFTER `update_scroll_extent` (post-layout), so the
+/// just-appended content's extent is fresh: for each [`StickBottom`] container
+/// with a valid extent, drift-set `ScrollOffset.y` to the max offset. Clearing
+/// the model's stick intent removes the marker (the reconciler), so the pin
+/// stops and a scrolled-away offset is left where the user (the scroll input)
+/// put it. Writing only `ScrollOffset` keeps `ResolvedLayout` valid (the
+/// scroll-O(0) invariant, `ScrollOffset` is excluded from the `sync_styles`
+/// trigger). No-op while no container sticks (the `With<StickBottom>` filter).
+pub(crate) fn stick_scroll_to_bottom(
+    mut q: Query<(&ScrollExtent, &mut ScrollOffset), With<StickBottom>>,
+) {
+    for (extent, mut offset) in &mut q {
+        if !extent.valid {
+            // The extent cache has not run yet (spawn frame, or no scroll
+            // pipeline) — do not pin to a not-yet-known zero max.
+            continue;
+        }
+        let max_y = extent.max_offset().y;
+        if offset.y != max_y {
+            offset.y = max_y;
+        }
     }
 }
 

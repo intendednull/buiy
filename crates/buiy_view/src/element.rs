@@ -2,16 +2,19 @@
 //! dot-method modifiers, and the `column!` / `row!` / `text!` macros.
 //!
 //! An `Element` is a plain value (NOT an entity): a widget [`Kind`], typed
-//! props, modifier state, a typed press handler, and children. Built by the
-//! builders, consumed by the reconciler ([`crate::reconcile`]). Generic over
-//! the app's message type `Msg` so a handler stores a concrete `Msg` value (the
-//! replay-safety rule, spec §2).
+//! props, modifier state (its whole [`LayoutProps`] layout surface, spec §2.2),
+//! a typed press handler, and children. Built by the builders, consumed by the
+//! reconciler ([`crate::reconcile`]). Generic over the app's message type `Msg`
+//! so a handler stores a concrete `Msg` value (the replay-safety rule, spec §2).
 
 use std::sync::Arc;
 
+use bevy::asset::Handle;
+use bevy::image::Image;
 use bevy::prelude::Component;
 
-use crate::tokens::{Color, Radius, Space};
+use crate::layout::LayoutProps;
+use crate::tokens::{Color, Radius};
 
 /// A text-input's per-keystroke handler — `value → Msg` (design §2, #13/#17).
 ///
@@ -74,7 +77,8 @@ impl<Msg: 'static> InputHandler<Msg> {
 /// FW1 shipped the four kinds the Counter needs; FW2 adds the two stateful-leaf
 /// widgets TodoMVC needs — a real `Checkbox` (its `A11yToggled` leaf IS the
 /// model) and a real single-line `TextInput` (the command-sourced editor). The
-/// conditional `Empty` placeholder is a later wave.
+/// conditional `Empty` placeholder is a later wave; F2 adds `Raster` (the
+/// texture-presenting drawing-canvas node).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Column,
@@ -93,25 +97,30 @@ pub enum Kind {
     /// child never shifts its siblings' indices — the positional-churn cure for
     /// `if cond { .. }` show/hide.
     Empty,
+    /// A **raster (drawing-canvas)** node carrying `buiy_core`'s `RasterImage`
+    /// (F1's textured-quad primitive), sized by `.width`/`.height` (F2). The
+    /// reconciler patches its `Handle<Image>` **by identity**, preserving the
+    /// entity so an unrelated re-render never drops the canvas texture. Authored
+    /// via [`raster`].
+    Raster,
 }
 
 /// An inert description of a piece of UI. Built by the widget builders,
 /// consumed by the reconciler.
 ///
-/// The prop set is ported from the validated prototype and trimmed to the FW1
-/// surface (containers + text + button), plus the decomposed-style props the
-/// reconciler patches in place (`background` / `radius`, spec §3 #9).
+/// The whole layout / positioning / scroll surface lives in `LayoutProps`
+/// (spec §2.2), reached via the `.width`/`.grow`/`.padding`/`.fixed`/`.scroll_y`
+/// … modifiers in the `layout` module; the reconciler lowers it into the
+/// decomposed layout components. Text / handler / style props stay here.
 pub struct Element<Msg> {
     pub(crate) kind: Kind,
     /// Text content (a `Text` node's string, or a `Button`'s label).
     pub(crate) text: Option<String>,
     pub(crate) font_size: f32,
-    /// Gap between children, logical px (containers only).
-    pub(crate) gap: Option<f32>,
-    /// Inner padding, logical px (containers only).
-    pub(crate) padding: Option<f32>,
-    /// Center children on the cross axis (containers only).
-    pub(crate) align_center: bool,
+    /// The whole layout / positioning / scroll state (spec §2.2). Its Default is
+    /// a no-op against a freshly-`#[require]`'d `Node`, so a node with no layout
+    /// modifier lowers byte-identically.
+    pub(crate) layout: LayoutProps,
     /// A disabled interactive element routes nothing and dims.
     pub(crate) disabled: bool,
     /// Background fill token (containers). Lowered to `Background`.
@@ -148,6 +157,12 @@ pub struct Element<Msg> {
     pub(crate) on_input: Option<InputHandler<Msg>>,
     /// A text-input's submit (Enter) message (a value, like `on_press`).
     pub(crate) on_submit: Option<Msg>,
+
+    // --- F2 addition (the raster / drawing-canvas element) ------------------
+    /// A [`Kind::Raster`] node's source image (authored via [`raster`]). Lowered
+    /// to `buiy_core::render::RasterImage`; patched **by identity** (entity
+    /// preserved) on change, so an unrelated fold never re-uploads the texture.
+    pub(crate) raster: Option<Handle<Image>>,
 }
 
 pub(crate) const DEFAULT_TEXT_SIZE: f32 = 24.0;
@@ -158,9 +173,7 @@ impl<Msg> Element<Msg> {
             kind,
             text: None,
             font_size: DEFAULT_TEXT_SIZE,
-            gap: None,
-            padding: None,
-            align_center: false,
+            layout: LayoutProps::default(),
             disabled: false,
             background: None,
             radius: None,
@@ -173,6 +186,7 @@ impl<Msg> Element<Msg> {
             placeholder: None,
             on_input: None,
             on_submit: None,
+            raster: None,
         }
     }
 
@@ -199,25 +213,9 @@ impl<Msg> Element<Msg> {
     }
 
     // --- Uniform dot-method modifiers (spec §2: no method-vs-bare-attribute
-    //     split — every modifier is a `.method(..)` returning `Self`). ---
-
-    /// Gap between children (containers only).
-    pub fn gap(mut self, s: Space) -> Self {
-        self.gap = Some(s.px());
-        self
-    }
-
-    /// Inner padding (containers only).
-    pub fn padding(mut self, s: Space) -> Self {
-        self.padding = Some(s.px());
-        self
-    }
-
-    /// Center children on the cross axis (containers only).
-    pub fn align_center(mut self) -> Self {
-        self.align_center = true;
-        self
-    }
+    //     split — every modifier is a `.method(..)` returning `Self`). The whole
+    //     LAYOUT surface (sizing / flex / spacing / positioning / scroll) lives
+    //     in `crate::layout`; the text / style / handler modifiers are here. ---
 
     /// Font size in logical px (text only).
     pub fn size(mut self, px: f32) -> Self {
@@ -332,7 +330,7 @@ impl<Msg> Element<Msg> {
     /// is exactly `fn(ChildMsg) -> Parent`, so it is `Copy` + determinism-clean
     /// (the same discipline `on_input` uses). It maps the value handlers
     /// (`on_press`, `on_submit`), lifts `on_input` (see below), and recurses into
-    /// children.
+    /// children. The layout / style props are pure data and pass through verbatim.
     ///
     /// **`on_input` is now lifted (was the P1 drop-limitation, closed by #17).** A bare
     /// `fn(String) -> Msg` can't compose into a new *bare* `fn(String) -> Parent`, so it lifts by
@@ -348,9 +346,7 @@ impl<Msg> Element<Msg> {
             kind: self.kind,
             text: self.text,
             font_size: self.font_size,
-            gap: self.gap,
-            padding: self.padding,
-            align_center: self.align_center,
+            layout: self.layout,
             disabled: self.disabled,
             background: self.background,
             radius: self.radius,
@@ -364,6 +360,7 @@ impl<Msg> Element<Msg> {
             // Lift `on_input` by boxing (see the doc note — #17 closed the drop-limitation).
             on_input: self.on_input.map(|h| h.map(f)),
             on_submit: self.on_submit.map(f),
+            raster: self.raster,
         }
     }
 }
@@ -415,6 +412,29 @@ pub fn text_input<Msg>(value: impl Into<String>) -> Element<Msg> {
     e
 }
 
+/// A **raster (drawing-canvas)** node sampling `handle`, sized `width`×`height`
+/// logical px (F2). Reconciles to a `Node` carrying `buiy_core`'s `RasterImage`
+/// (F1's textured-quad primitive), so a drawing canvas can live INSIDE a `view`
+/// tree — not as a hand-spawned side root. The `Handle<Image>` patches **in
+/// place, by identity**, and the entity is preserved across unrelated re-renders,
+/// so the canvas never loses its GPU texture on a model change elsewhere. The app
+/// owns + paints the image; this element only places + samples it.
+///
+/// Fixed size is mandatory (a canvas maps window px → texel 1:1); the two args set
+/// `.width`/`.height` so the caller cannot forget them. It also defaults
+/// `.shrink(false)` so a tight `.fill()`/`.grow()` flex parent cannot squish it.
+pub fn raster<Msg>(handle: Handle<Image>, width: f32, height: f32) -> Element<Msg> {
+    let mut e = Element::new(Kind::Raster);
+    e.raster = Some(handle);
+    e.layout.width = Some(width);
+    e.layout.height = Some(height);
+    // A canvas is fixed-size (window px → texel); never let a tight flex parent
+    // squish it below its size (the canvas-squish finding — a `.fill()`/`.grow()`
+    // parent shrank the 450px canvas). Pin shrink off by construction.
+    e.layout.shrink = 0.0;
+    e
+}
+
 /// A **conditional slot** (FW3, spec §2 #5): `el` when `cond`, else an
 /// [`Element::empty`] placeholder that STILL occupies the position. Because the
 /// slot is always present, a show/hide is a content↔`Empty` **kind-swap at a
@@ -427,6 +447,13 @@ pub fn text_input<Msg>(value: impl Into<String>) -> Element<Msg> {
 /// no natural "else" element.
 pub fn when<Msg>(cond: bool, el: Element<Msg>) -> Element<Msg> {
     if cond { el } else { Element::empty() }
+}
+
+/// A **vertically-scrolling column** (F2) — `column!` children in a container
+/// that scrolls when they overflow (`.scroll_y()`). Chat / scoreboard panes.
+/// Add `.stick_to_bottom()` for the controlled pin-to-bottom-on-append.
+pub fn scroll_column<Msg>(children: Vec<Element<Msg>>) -> Element<Msg> {
+    Element::column(children).scroll_y()
 }
 
 /// A **required-key** list (FW2's headline builder). Unlike [`column!`](crate::column!),
