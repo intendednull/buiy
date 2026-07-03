@@ -234,9 +234,12 @@ pub use bevy::picking::events;
 // bevy::prelude::*` — only the names the N=4 probes reached for plus the minimum
 // to wire an MVU app (grouped below; each group notes its load-bearing / excluded
 // members).
-// App + scheduling.
+// App + scheduling + the two plugin GROUPS an app bootstraps with (so a whole
+// app — plugins, systems, spawns — is expressible from `use buiy::prelude::*;`
+// alone; the agent front door `AGENTS.md` relies on this).
 pub use bevy::prelude::{
-    App, FixedUpdate, IntoScheduleConfigs, Plugin, PostUpdate, PreUpdate, Startup, Update,
+    App, DefaultPlugins, FixedUpdate, IntoScheduleConfigs, MinimalPlugins, Plugin, PostUpdate,
+    PreUpdate, Startup, Update,
 };
 // Derive macros + reflection. `Reflect` + `ReflectComponent` are load-bearing for
 // the PRIMARY state path: the `Model` trait bounds `Reflect`, and every model

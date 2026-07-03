@@ -235,7 +235,9 @@ Cross-cutting per-frame performance: the audit → prototype → production-fina
 
 ### Developer experience & LLM support
 
-Cross-cutting authoring ergonomics with a first-class LLM-development workflow (author → compile → run headless → inspect the semantic tree → iterate). Prototype-first pass done; the FINAL is landing track-by-track (B typed tokens + A probe landed; C one-surface + D corpus next), each its own review-gated PR.
+Cross-cutting authoring ergonomics with a first-class LLM-development workflow (author → compile → run headless → inspect the semantic tree → iterate). Prototype-first pass done; the FINAL landed track-by-track (B typed tokens, A probe, C one-surface, D corpus), each its own review-gated PR.
+
+**Agent front door:** [`AGENTS.md`](../AGENTS.md) (repo root) — the one-import prelude, the widget/state/theme APIs, the GPU-free `buiy::probe` feedback loop, and the silent-wrong gotchas, for a coding agent authoring Buiy UIs. (Track D "buy corpus presence".)
 
 **Specs**
 
