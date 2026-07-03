@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<span style="{{ wrapStyle }}">
+  <sc-if value="{{ hasImage }}" hint-placeholder-val="{{ false }}">
+    <img src="{{ imgSrc }}" alt="{{ altText }}" style="{{ imgStyle }}" />
+  </sc-if>
+  <sc-if value="{{ showIcon }}" hint-placeholder-val="{{ true }}">
+    <svg viewBox="0 0 40 40" style="{{ svgStyle }}">
+      <sc-for list="{{ iconPaths }}" as="p" hint-placeholder-count="3">
+        <path d="{{ p.d }}" fill="none" stroke="{{ strokeColor }}" stroke-width="{{ strokeW }}" stroke-linecap="round" stroke-linejoin="round"></path>
+      </sc-for>
+      <sc-for list="{{ iconLines }}" as="ln" hint-placeholder-count="2">
+        <line x1="{{ ln.x1 }}" y1="{{ ln.y1 }}" x2="{{ ln.x2 }}" y2="{{ ln.y2 }}" stroke="{{ strokeColor }}" stroke-width="{{ strokeW }}" stroke-linecap="round"></line>
+      </sc-for>
+      <sc-for list="{{ iconCircles }}" as="c" hint-placeholder-count="1">
+        <circle cx="{{ c.cx }}" cy="{{ c.cy }}" r="{{ c.r }}" fill="none" stroke="{{ strokeColor }}" stroke-width="{{ strokeW }}"></circle>
+      </sc-for>
+      <sc-for list="{{ iconEllipses }}" as="el" hint-placeholder-count="1">
+        <ellipse cx="{{ el.cx }}" cy="{{ el.cy }}" rx="{{ el.rx }}" ry="{{ el.ry }}" fill="none" stroke="{{ strokeColor }}" stroke-width="{{ strokeW }}"></ellipse>
+      </sc-for>
+      <sc-for list="{{ iconDots }}" as="d" hint-placeholder-count="2">
+        <circle cx="{{ d.cx }}" cy="{{ d.cy }}" r="{{ d.r }}" fill="{{ strokeColor }}"></circle>
+      </sc-for>
+    </svg>
+  </sc-if>
+</span>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:100,&quot;height&quot;:100},&quot;personName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Mara&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Content&quot;},&quot;forceIcon&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;cat&quot;,&quot;options&quot;:[&quot;cat&quot;,&quot;star&quot;,&quot;rocket&quot;,&quot;sun&quot;,&quot;cactus&quot;,&quot;dino&quot;,&quot;penguin&quot;,&quot;octopus&quot;,&quot;icecream&quot;,&quot;balloon&quot;,&quot;robot&quot;,&quot;ghost&quot;,&quot;cloud&quot;,&quot;mushroom&quot;,&quot;butterfly&quot;,&quot;fish&quot;,&quot;umbrella&quot;,&quot;snowman&quot;,&quot;owl&quot;,&quot;flower&quot;,&quot;turtle&quot;,&quot;heart&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Content&quot;},&quot;forceTint&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3a6ea5&quot;,&quot;options&quot;:[&quot;#c2410c&quot;,&quot;#1f6f54&quot;,&quot;#3a6ea5&quot;,&quot;#8a5cb0&quot;,&quot;#7a6cc4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Content&quot;},&quot;src&quot;:{&quot;editor&quot;:null,&quot;default&quot;:null,&quot;tsType&quot;:&quot;string&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:56,&quot;min&quot;:24,&quot;max&quot;:120,&quot;step&quot;:2,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Display&quot;}}">
+const TINTS = ["#c2410c", "#1f6f54", "#9a5b2b", "#3a6ea5", "#8a5cb0", "#b03a4e", "#5a7d3a", "#2f7d5b", "#a8761c", "#7a6cc4"];
+
+/* Each icon: simple hand-drawn-style doodle built from stroked primitives.
+   All rendered in a single white stroke on a tinted circular badge, so
+   they read like a paint-marker doodle (mirrors the old white-initials look). */
+const ICONS = {
+  cat: {
+    circles: [{ cx: 20, cy: 23, r: 9 }],
+    paths: [
+      { d: "M12,17 L15,8 L18,16 Z" },
+      { d: "M22,16 L25,8 L28,17 Z" },
+      { d: "M17,26 Q20,29 23,26" },
+    ],
+    lines: [
+      { x1: 6, y1: 22, x2: 13, y2: 21 }, { x1: 6, y1: 26, x2: 13, y2: 25 },
+      { x1: 34, y1: 22, x2: 27, y2: 21 }, { x1: 34, y1: 26, x2: 27, y2: 25 },
+    ],
+    dots: [{ cx: 17, cy: 21, r: 1.5 }, { cx: 23, cy: 21, r: 1.5 }],
+  },
+  star: {
+    paths: [{ d: "M20,5 L23.2,13.6 L32.4,14 L25.2,19.7 L27.6,28.5 L20,23.5 L12.4,28.5 L14.8,19.7 L7.6,14 L16.8,13.6 Z" }],
+  },
+  rocket: {
+    paths: [
+      { d: "M20,6 C25,11 26,19 24,27 L16,27 C14,19 15,11 20,6 Z" },
+      { d: "M16,24 L9,32 L16,29 Z" },
+      { d: "M24,24 L31,32 L24,29 Z" },
+      { d: "M17,29 Q20,35 23,29" },
+    ],
+    circles: [{ cx: 20, cy: 16, r: 3 }],
+  },
+  sun: {
+    circles: [{ cx: 20, cy: 20, r: 7 }],
+    lines: [
+      { x1: 30, y1: 20, x2: 35, y2: 20 }, { x1: 10, y1: 20, x2: 5, y2: 20 },
+      { x1: 20, y1: 30, x2: 20, y2: 35 }, { x1: 20, y1: 10, x2: 20, y2: 5 },
+      { x1: 27.1, y1: 27.1, x2: 30.6, y2: 30.6 }, { x1: 12.9, y1: 12.9, x2: 9.4, y2: 9.4 },
+      { x1: 12.9, y1: 27.1, x2: 9.4, y2: 30.6 }, { x1: 27.1, y1: 12.9, x2: 30.6, y2: 9.4 },
+    ],
+  },
+  cactus: {
+    paths: [
+      { d: "M17,33 L17,14 Q17,9 20,9 Q23,9 23,14 L23,33 Z" },
+      { d: "M17,22 Q10,22 10,17 Q10,13 14,13" },
+      { d: "M23,18 Q30,18 30,13 Q30,9 26,9" },
+    ],
+    lines: [
+      { x1: 9, y1: 33, x2: 31, y2: 33 }, { x1: 15, y1: 18, x2: 13, y2: 18 },
+      { x1: 27, y1: 24, x2: 29, y2: 24 }, { x1: 15, y1: 27, x2: 13, y2: 27 },
+    ],
+  },
+  dino: {
+    paths: [
+      { d: "M6,29 C6,20 11,15 18,15 C19,12 23,11 25,14 C30,14 33,18 32,23 C34,25 34,28 31,29 Z" },
+      { d: "M15,15 L17,10 L19,15 Z" }, { d: "M20,13 L22,8 L24,13 Z" }, { d: "M25,14 L27,9 L29,14 Z" },
+      { d: "M6,27 Q2,26 3,22" },
+    ],
+    lines: [{ x1: 12, y1: 29, x2: 12, y2: 33 }, { x1: 27, y1: 29, x2: 27, y2: 33 }],
+    dots: [{ cx: 11, cy: 21, r: 1.4 }],
+  },
+  penguin: {
+    ellipses: [{ cx: 20, cy: 20, rx: 9, ry: 12 }],
+    paths: [{ d: "M17,21 L13,23 L17,25 Z" }, { d: "M11,18 Q7,22 10,27" }, { d: "M29,18 Q33,22 30,27" }],
+    lines: [{ x1: 16, y1: 32, x2: 14, y2: 35 }, { x1: 24, y1: 32, x2: 26, y2: 35 }],
+    dots: [{ cx: 16, cy: 16, r: 1.4 }, { cx: 22, cy: 16, r: 1.4 }],
+  },
+  octopus: {
+    paths: [
+      { d: "M9,20 Q9,7 20,7 Q31,7 31,20 Z" },
+      { d: "M12,20 Q10,26 13,30 Q15,33 12,36" },
+      { d: "M17,20 Q17,28 15,32 Q14,35 17,37" },
+      { d: "M23,20 Q23,28 25,32 Q26,35 23,37" },
+      { d: "M28,20 Q30,26 27,30 Q25,33 28,36" },
+    ],
+    dots: [{ cx: 15, cy: 15, r: 1.6 }, { cx: 25, cy: 15, r: 1.6 }],
+  },
+  icecream: {
+    circles: [{ cx: 20, cy: 15, r: 8 }],
+    paths: [{ d: "M14,20 L20,35 L26,20 Z" }, { d: "M15,9 Q20,4 25,9" }],
+  },
+  balloon: {
+    ellipses: [{ cx: 20, cy: 16, rx: 9, ry: 11 }],
+    paths: [{ d: "M17,26 L20,29 L23,26 Z" }, { d: "M20,29 Q17,32 20,34 Q23,36 20,38" }],
+  },
+  robot: {
+    paths: [
+      { d: "M11,14 Q11,10 15,10 L25,10 Q29,10 29,14 L29,25 Q29,29 25,29 L15,29 Q11,29 11,25 Z" },
+      { d: "M15,24 Q20,27 25,24" },
+    ],
+    lines: [{ x1: 20, y1: 10, x2: 20, y2: 5 }],
+    circles: [{ cx: 20, cy: 4, r: 1.8 }],
+    dots: [{ cx: 16, cy: 18, r: 1.8 }, { cx: 24, cy: 18, r: 1.8 }],
+  },
+  ghost: {
+    paths: [{ d: "M11,32 L11,18 Q11,8 20,8 Q29,8 29,18 L29,32 Q26,29 23,32 Q20,35 17,32 Q14,29 11,32 Z" }],
+    circles: [{ cx: 20, cy: 23, r: 1.6 }],
+    dots: [{ cx: 16, cy: 18, r: 1.7 }, { cx: 24, cy: 18, r: 1.7 }],
+  },
+  cloud: {
+    paths: [{ d: "M11,25 Q7,25 7,21 Q7,17 11,17 Q11,12 17,12 Q22,12 23,16 Q29,15 29,21 Q29,25 24,25 Z" }],
+    lines: [{ x1: 14, y1: 28, x2: 13, y2: 31 }, { x1: 20, y1: 29, x2: 19, y2: 32 }, { x1: 26, y1: 28, x2: 25, y2: 31 }],
+  },
+  mushroom: {
+    paths: [{ d: "M8,20 Q8,9 20,9 Q32,9 32,20 Z" }, { d: "M15,20 L15,28 Q15,32 20,32 Q25,32 25,28 L25,20 Z" }],
+    dots: [{ cx: 14, cy: 15, r: 1.5 }, { cx: 22, cy: 13, r: 1.7 }, { cx: 27, cy: 17, r: 1.3 }],
+  },
+  butterfly: {
+    paths: [
+      { d: "M20,20 Q8,10 6,18 Q6,24 20,22 Z" }, { d: "M20,20 Q10,24 10,30 Q12,33 20,24 Z" },
+      { d: "M20,20 Q32,10 34,18 Q34,24 20,22 Z" }, { d: "M20,20 Q30,24 30,30 Q28,33 20,24 Z" },
+    ],
+    lines: [{ x1: 20, y1: 14, x2: 20, y2: 28 }, { x1: 20, y1: 14, x2: 17, y2: 9 }, { x1: 20, y1: 14, x2: 23, y2: 9 }],
+  },
+  fish: {
+    ellipses: [{ cx: 16, cy: 20, rx: 10, ry: 7 }],
+    paths: [{ d: "M28,20 L35,14 L35,26 Z" }, { d: "M16,13 L20,8 L22,14 Z" }],
+    lines: [{ x1: 11, y1: 23, x2: 14, y2: 23 }],
+    dots: [{ cx: 12, cy: 18, r: 1.5 }],
+  },
+  umbrella: {
+    paths: [
+      { d: "M6,20 Q6,7 20,7 Q34,7 34,20 Q29,16 24,20 Q20,16 16,20 Q11,16 6,20 Z" },
+      { d: "M20,33 Q14,33 14,28" },
+    ],
+    lines: [{ x1: 20, y1: 20, x2: 20, y2: 33 }, { x1: 20, y1: 7, x2: 20, y2: 4 }],
+  },
+  snowman: {
+    circles: [{ cx: 20, cy: 28, r: 8 }, { cx: 20, cy: 14, r: 6 }],
+    paths: [{ d: "M20,15 L26,16 L20,17 Z" }],
+    lines: [{ x1: 12, y1: 27, x2: 5, y2: 22 }, { x1: 28, y1: 27, x2: 35, y2: 22 }],
+    dots: [{ cx: 18, cy: 12, r: 1 }, { cx: 22, cy: 12, r: 1 }, { cx: 20, cy: 26, r: 1.2 }, { cx: 20, cy: 31, r: 1.2 }],
+  },
+  owl: {
+    ellipses: [{ cx: 20, cy: 22, rx: 11, ry: 11 }],
+    paths: [{ d: "M11,12 L9,5 L15,10 Z" }, { d: "M29,12 L31,5 L25,10 Z" }, { d: "M18,24 L20,28 L22,24 Z" }, { d: "M10,24 Q8,30 12,34" }, { d: "M30,24 Q32,30 28,34" }],
+    circles: [{ cx: 15, cy: 19, r: 4 }, { cx: 25, cy: 19, r: 4 }],
+    dots: [{ cx: 15, cy: 19, r: 1.3 }, { cx: 25, cy: 19, r: 1.3 }],
+  },
+  flower: {
+    circles: [{ cx: 20, cy: 11, r: 5 }, { cx: 28, cy: 16, r: 5 }, { cx: 25, cy: 25, r: 5 }, { cx: 15, cy: 25, r: 5 }, { cx: 12, cy: 16, r: 5 }, { cx: 20, cy: 18, r: 4 }],
+    paths: [{ d: "M20,30 Q26,28 26,33 Q21,34 20,30 Z" }],
+    lines: [{ x1: 20, y1: 23, x2: 20, y2: 36 }],
+  },
+  turtle: {
+    ellipses: [{ cx: 18, cy: 19, rx: 11, ry: 9 }],
+    paths: [{ d: "M12,19 Q20,24 28,19" }],
+    circles: [{ cx: 33, cy: 19, r: 4 }],
+    lines: [
+      { x1: 20, y1: 11, x2: 20, y2: 27 }, { x1: 11, y1: 26, x2: 7, y2: 31 }, { x1: 27, y1: 26, x2: 31, y2: 31 },
+      { x1: 11, y1: 12, x2: 7, y2: 7 }, { x1: 27, y1: 12, x2: 31, y2: 7 }, { x1: 8, y1: 19, x2: 4, y2: 19 },
+    ],
+    dots: [{ cx: 34, cy: 17, r: 1 }],
+  },
+  heart: {
+    paths: [{ d: "M20,32 C8,24 6,15 12,10 C16,7 20,9 20,14 C20,9 24,7 28,10 C34,15 32,24 20,32 Z" }],
+  },
+};
+const ICON_KEYS = Object.keys(ICONS);
+
+function hashStr(str) {
+  let h = 0;
+  const s = String(str || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+class Component extends DCLogic {
+  renderVals() {
+    const props = this.props || {};
+    const size = Number(props.size) || 40;
+    const src = props.src;
+    const hasImage = !!src;
+    const showIcon = !hasImage;
+
+    let iconKey = props.forceIcon;
+    if (!iconKey || !ICONS[iconKey]) {
+      iconKey = ICON_KEYS[hashStr(props.personName || '?') % ICON_KEYS.length];
+    }
+    let tint = props.forceTint;
+    if (!tint) {
+      tint = TINTS[hashStr((props.personName || iconKey || '?') + '-tint') % TINTS.length];
+    }
+    const icon = ICONS[iconKey] || ICONS[ICON_KEYS[0]];
+
+    return {
+      hasImage, showIcon,
+      imgSrc: src, altText: (props.personName || 'avatar') + ' profile picture',
+      wrapStyle: {
+        width: size, height: size, borderRadius: '50%',
+        background: hasImage ? '#e4e4e7' : tint,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        overflow: 'hidden', flex: 'none', position: 'relative', boxSizing: 'border-box',
+        border: '1.5px solid rgba(0,0,0,.22)',
+      },
+      imgStyle: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
+      svgStyle: { width: '68%', height: '68%', display: 'block', overflow: 'visible' },
+      strokeColor: '#ffffff', strokeW: 2.6,
+      iconPaths: icon.paths || [],
+      iconLines: icon.lines || [],
+      iconCircles: icon.circles || [],
+      iconEllipses: icon.ellipses || [],
+      iconDots: icon.dots || [],
+    };
+  }
+}
+</script>
+</body>
+</html>

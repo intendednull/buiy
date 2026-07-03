@@ -1,0 +1,7 @@
+/* ============================================================
+   Protokit · fonts
+   Geist (UI) + Geist Mono (numerals, codes, labels).
+   Loaded from Google Fonts; @font-face rules live in the served CSS.
+   Swap the import + the --font-* vars in typography.css to rebrand.
+   ============================================================ */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;450;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");

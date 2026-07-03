@@ -1,0 +1,21 @@
+/* ============================================================
+   Protokit — design system entry point.
+   Consumers link THIS one file. It is an @import manifest only:
+   tokens first, then base, then component styles. Everything reachable
+   from here is shipped to consuming projects.
+   ============================================================ */
+
+/* tokens */
+@import url("tokens/fonts.css");
+@import url("tokens/colors.css");
+@import url("tokens/typography.css");
+@import url("tokens/spacing.css");
+@import url("tokens/elevation.css");
+@import url("tokens/motion.css");
+
+/* base layer: reset, text helpers, utilities, keyframes */
+@import url("base.css");
+
+/* component styles */
+@import url("components.css");
+@import url("components/shell/shell.css");

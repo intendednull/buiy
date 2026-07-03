@@ -1,0 +1,18 @@
+/* ============================================================
+   Protokit · motion tokens
+   One easing curve does almost all the work — a confident, slightly
+   overshooting ease that feels native. Durations are short; UI motion
+   is functional (fades, small rises, scale presses), never decorative.
+   Keyframes live in base.css.
+   ============================================================ */
+
+:root {
+  --ease:     cubic-bezier(.32,.72,.32,1); /* @kind other */   /* default — most transitions */
+  --ease-out: cubic-bezier(.22,1,.36,1);   /* @kind other */   /* entrances that settle */
+  --ease-in:  cubic-bezier(.5,0,.75,0);    /* @kind other */   /* exits */
+
+  --dur-1: .12s; /* @kind other */   /* hover / press */
+  --dur-2: .18s; /* @kind other */   /* state changes */
+  --dur-3: .28s; /* @kind other */   /* popovers / toasts */
+  --dur-4: .36s; /* @kind other */   /* sheets / modals */
+}
