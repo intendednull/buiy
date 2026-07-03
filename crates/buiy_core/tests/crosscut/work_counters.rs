@@ -243,7 +243,7 @@ fn glyph_flip_idle_zeros_one_change_executes_patch_structural_full() {
     assert!(
         matches!(
             h.render.resource::<GlyphDamage>(),
-            GlyphDamage::Patch { changed, removed }
+            GlyphDamage::Patch { changed, removed, .. }
                 if changed.as_slice() == [victim] && removed.is_empty()
         ),
         "GlyphDamage::Patch names exactly the victim"

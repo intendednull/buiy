@@ -437,6 +437,17 @@ fn caret_blink_reuploads_the_glyph_buffer_only() {
     // …so prepare re-uploads the GLYPH buffer exactly once and RETAINS
     // the quad buffer — the GPU half of § 6.3's damage property (T7
     // landed the CPU half; this is the campaign's T8 assertion).
+    //
+    // Glyph partial-reextract Stage D note (conscious semantics): from D6,
+    // `glyph_uploads` counts every glyph upload EVENT — full `write_buffer`
+    // AND suffix `write_buffer_range` — so this "+1 per blink edge" pin holds
+    // unchanged whichever path the edge rides. THIS fixture's edge rides the
+    // Full path anyway: a 1-run scene always bails to Full at the classifier
+    // (1 changed of 1 retained run > the 50 % fraction bail), and prepare's
+    // ranged path only fires on an executed Patch. The multi-entity blink
+    // Patch is pinned extract-side by `blink_edge_patches_only_the_caret_
+    // entity_mid_scene` and upload-side by the `render_patch_upload_gpu`
+    // glyph suffix reftest.
     assert_eq!(
         after_edge.glyph_uploads,
         base.glyph_uploads + 1,

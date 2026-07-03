@@ -1317,6 +1317,11 @@ fn one_color_change_publishes_a_patch_verdict_and_republishes_once() {
     h.frame();
     assert_eq!(h.changed_frames(), publishes, "steady before the change");
 
+    // The victim's run start before the change: a re-tint is
+    // length-preserving, so it is also the D6 first dirty slot the executed
+    // splice publishes.
+    let victim_run_start = run_of(&h, victim).start;
+
     // One value-tier change on ONE resident entity.
     h.app
         .world_mut()
@@ -1333,8 +1338,10 @@ fn one_color_change_publishes_a_patch_verdict_and_republishes_once() {
         GlyphDamage::Patch {
             changed: SmallVec::from_slice(&[victim]),
             removed: SmallVec::new(),
+            first_dirty_slot: Some(victim_run_start),
         },
-        "the classifier verdicts the frame Patch-eligible with exactly the victim"
+        "the classifier verdicts the frame Patch-eligible with exactly the victim, \
+         and the executed splice publishes the victim's run start (D6)"
     );
 
     // A despawn ticks the parent's `Children` → structural → Full (the
@@ -1426,8 +1433,11 @@ fn glyph_patch_retains_sibling_slices_and_shifts_the_suffix() {
         GlyphDamage::Patch {
             changed: SmallVec::from_slice(&[b]),
             removed: SmallVec::new(),
+            first_dirty_slot: Some(b_run.start),
         },
-        "the edit executes as a Patch of exactly the victim"
+        "the edit executes as a Patch of exactly the victim, publishing the \
+         victim's run start as the D6 first dirty slot (the prefix sibling \
+         below it is the retained GPU span)"
     );
     assert_eq!(
         h.changed_frames(),
@@ -1525,8 +1535,11 @@ fn patch_noop_reemission_leaves_both_carrier_ticks_untouched() {
         GlyphDamage::Patch {
             changed: SmallVec::from_slice(&[b]),
             removed: SmallVec::new(),
+            first_dirty_slot: None,
         },
-        "the dirty frame ran the Patch path (this is not an idle frame)"
+        "the dirty frame ran the Patch path (this is not an idle frame) and \
+         published NO first dirty slot — nothing spliced, so prepare must \
+         never wake for the glyph buffer (D6)"
     );
     assert_eq!(
         h.changed_frames(),
@@ -1571,6 +1584,9 @@ fn patch_decorations_change_republishes_quads_and_retains_glyphs_mid_scene() {
         GlyphDamage::Patch {
             changed: SmallVec::from_slice(&[b]),
             removed: SmallVec::new(),
+            // A quads-only re-emission: the glyph splice is a byte-identical
+            // no-op, so no first dirty slot is published (D6).
+            first_dirty_slot: None,
         }
     );
     assert_eq!(

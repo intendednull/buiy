@@ -902,6 +902,13 @@ pub(crate) fn prepare_effect_groups(
         }
         if glyph_dirty {
             buffers.glyph.write_buffer(&render_device, &render_queue);
+            // Glyph partial-reextract D6: the fold above diverged the glyph
+            // CPU mirror from `ExtractedGlyphs` (member alphas multiplied in
+            // place). The suffix ranged upload retains the mirror's prefix,
+            // so it must not run until a full repack (which clears this)
+            // restores mirror == carrier — set conservatively whenever the
+            // degradation branch re-uploaded the glyph buffer.
+            buffers.glyph_mirror_folded = true;
         }
     }
 

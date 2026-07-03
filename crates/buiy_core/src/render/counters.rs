@@ -125,7 +125,9 @@ pub fn record_text_work_counters(
         let (full, patches, patched) = match damage.as_ref() {
             Some(d) if d.is_changed() => match &**d {
                 GlyphDamage::Full => (1, 0, 0),
-                GlyphDamage::Patch { changed, removed } => (0, 1, changed.len() + removed.len()),
+                GlyphDamage::Patch {
+                    changed, removed, ..
+                } => (0, 1, changed.len() + removed.len()),
             },
             _ => (0, 0, 0),
         };

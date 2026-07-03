@@ -208,6 +208,21 @@ pub enum GlyphDamage {
         changed: SmallVec<[Entity; 8]>,
         /// Resident despawned entities to splice-delete (Stage C).
         removed: SmallVec<[Entity; 4]>,
+        /// The minimal instance index the EXECUTED splices changed in
+        /// `ExtractedGlyphs.glyphs` (partial-reextract D6) — the run start of
+        /// the earliest spliced/deleted slice, measured at splice time, so the
+        /// prefix `[0..slot)` is byte-identical to the previously published
+        /// carrier by construction (splices only mutate indices at or after
+        /// their run start). Prepare's suffix ranged upload writes exactly
+        /// `[slot..len)`.
+        ///
+        /// `Some` IFF the glyph carrier really ticked this frame: the
+        /// classifier verdicts with `None` (it runs BEFORE execution), and the
+        /// producer fills the slot in only when a splice actually changed the
+        /// instance vec — a no-op re-emission, or a quads-only Patch (e.g. a
+        /// decoration-color edit), publishes `None` and leaves the glyph tick
+        /// untouched, so prepare never wakes for the glyph buffer at all.
+        first_dirty_slot: Option<u32>,
     },
 }
 
@@ -284,6 +299,9 @@ fn classify_glyph_damage(
     GlyphDamage::Patch {
         changed: changed_live,
         removed,
+        // The classifier runs BEFORE execution: the producer fills the slot in
+        // when it publishes the executed verdict (D6).
+        first_dirty_slot: None,
     }
 }
 
@@ -324,12 +342,17 @@ impl SpliceRun for (Entity, Range<u32>) {
 
 /// Splice-replace `entity`'s contiguous slice in a run-attributed record vec
 /// (partial-reextract D2): byte-compare first — an equal re-emission is a
-/// NO-OP (returns `false`, so the caller leaves the carrier tick untouched,
+/// NO-OP (returns `None`, so the caller leaves the carrier tick untouched,
 /// D4) — else replace the slice, renumber every subsequent run's range by
 /// the length delta (O(runs)), and memmove the tail (`Vec::splice`; an
 /// equal-length replacement overwrites in place). `fresh.is_empty()` deletes
-/// the run (the despawn / no-longer-emitting splice-delete). Returns whether
-/// the carrier really changed — records or runs.
+/// the run (the despawn / no-longer-emitting splice-delete). Returns
+/// `Some(start)` — the spliced run's start slot, measured at splice time —
+/// when the carrier really changed (records or runs), `None` on a no-op.
+/// A splice mutates NO index below its returned start, so the minimum over
+/// a Patch's returned starts bounds the changed suffix: the prefix below it
+/// is byte-identical to the pre-patch carrier (the D6 `first_dirty_slot`
+/// prepare's suffix ranged upload leans on).
 ///
 /// A Patch may never APPEND to an ordered carrier: the classifier owns
 /// order placement, and rule 2 (absence-from-retained-runs) escalates every
@@ -341,19 +364,19 @@ fn splice_run<T: PartialEq + Clone, R: SpliceRun>(
     runs: &mut Vec<R>,
     entity: Entity,
     fresh: &[T],
-) -> bool {
+) -> Option<u32> {
     let Some(pos) = runs.iter().position(|r| r.entity() == entity) else {
         debug_assert!(
             fresh.is_empty(),
             "a Patch may never append a new run — the classifier escalates \
              newly-emitting entities to Full (D3 rule 2)"
         );
-        return false;
+        return None;
     };
     let old = runs[pos].range();
     let (start, end) = (old.start as usize, old.end as usize);
     if records[start..end] == *fresh {
-        return false; // byte-identical re-emission: no splice, no tick (D4)
+        return None; // byte-identical re-emission: no splice, no tick (D4)
     }
     records.splice(start..end, fresh.iter().cloned());
     let delta = fresh.len() as i64 - (end - start) as i64;
@@ -370,7 +393,7 @@ fn splice_run<T: PartialEq + Clone, R: SpliceRun>(
             run.set_range((r.start as i64 + delta) as u32..(r.end as i64 + delta) as u32);
         }
     }
-    true
+    Some(old.start)
 }
 
 /// The quad half of the splice (partial-reextract D2, "the easy half"): the
@@ -852,8 +875,16 @@ pub fn extract_buiy_glyphs(
             &glyphs.entity_runs,
         )
     };
-    if let Some(d) = damage.as_deref_mut() {
-        *d = verdict.clone();
+    // Publish discipline (D1/D6): a FULL verdict publishes here, before the
+    // wholesale walk (nothing about it changes during execution). A PATCH
+    // verdict publishes at the END of its execution arm below, once the
+    // executed splices have determined `first_dirty_slot` — same frame, same
+    // single resource write, so `record_text_work_counters` (keyed off the
+    // write tick, running after this system) observes both arms identically.
+    if matches!(verdict, GlyphDamage::Full)
+        && let Some(d) = damage.as_deref_mut()
+    {
+        *d = GlyphDamage::Full;
     }
 
     resident.last_scale_factor = Some(scale_factor);
@@ -868,7 +899,8 @@ pub fn extract_buiy_glyphs(
     if let GlyphDamage::Patch {
         changed: patch_changed,
         removed: patch_removed,
-    } = &verdict
+        first_dirty_slot: _,
+    } = verdict
     {
         // D5 — touch-before-insert: retained entities' keys carry frame-old
         // LRU stamps, so this Patch's own atlas inserts would pick them as
@@ -932,7 +964,12 @@ pub fn extract_buiy_glyphs(
         let glyphs_store = glyphs.bypass_change_detection();
         let quads_store = text_quads.bypass_change_detection();
         let resident_store = &mut *resident;
-        let mut glyph_content_changed = false;
+        // The minimal instance slot the executed splices changed (D6): each
+        // glyph splice returns its run start (at splice time), and no splice
+        // mutates an index below its start, so the running minimum bounds the
+        // changed suffix — `Some` doubles as "the glyph carrier really
+        // changed" (the D4 tick decision below).
+        let mut first_dirty: Option<u32> = None;
         let mut quad_content_changed = false;
 
         for &entity in patch_changed.iter() {
@@ -963,13 +1000,15 @@ pub fn extract_buiy_glyphs(
             for key in &fresh_keys {
                 ctx.atlas.touch_existing(key);
             }
-            glyph_content_changed |= splice_run(
+            if let Some(start) = splice_run(
                 &mut glyphs_store.glyphs,
                 &mut glyphs_store.entity_runs,
                 entity,
                 &fresh_glyphs,
-            );
-            splice_run(
+            ) {
+                first_dirty = Some(first_dirty.map_or(start, |s| s.min(start)));
+            }
+            let _ = splice_run(
                 &mut resident_store.keys,
                 &mut resident_store.key_runs,
                 entity,
@@ -983,13 +1022,15 @@ pub fn extract_buiy_glyphs(
         // retained state, so no future touch pass warms them and the atlas
         // grace-drains them (gate #15's return-to-baseline).
         for &entity in patch_removed.iter() {
-            glyph_content_changed |= splice_run(
+            if let Some(start) = splice_run(
                 &mut glyphs_store.glyphs,
                 &mut glyphs_store.entity_runs,
                 entity,
                 &[],
-            );
-            splice_run(
+            ) {
+                first_dirty = Some(first_dirty.map_or(start, |s| s.min(start)));
+            }
+            let _ = splice_run(
                 &mut resident_store.keys,
                 &mut resident_store.key_runs,
                 entity,
@@ -1016,11 +1057,22 @@ pub fn extract_buiy_glyphs(
         // properties `partition_glyph_ranges` debug_asserts at pack time.
         debug_assert_spliced_coverage(glyphs_store, resident_store);
 
-        if glyph_content_changed {
+        if first_dirty.is_some() {
             glyphs.set_changed();
         }
         if quad_content_changed {
             text_quads.set_changed();
+        }
+        // Publish the EXECUTED Patch verdict (D1/D6), now carrying the first
+        // dirty instance slot the splices established — `Some` exactly when
+        // the glyph carrier ticked above, so prepare's suffix ranged upload
+        // and the carrier tick can never disagree.
+        if let Some(d) = damage.as_deref_mut() {
+            *d = GlyphDamage::Patch {
+                changed: patch_changed,
+                removed: patch_removed,
+                first_dirty_slot: first_dirty,
+            };
         }
         return;
     }
@@ -1966,6 +2018,7 @@ mod tests {
             GlyphDamage::Patch {
                 changed: SmallVec::from_slice(&e[..2]),
                 removed: SmallVec::new(),
+                first_dirty_slot: None,
             }
         );
     }
@@ -1981,6 +2034,7 @@ mod tests {
             GlyphDamage::Patch {
                 changed: SmallVec::from_slice(&e[..1]),
                 removed: SmallVec::new(),
+                first_dirty_slot: None,
             }
         );
     }
@@ -1994,6 +2048,7 @@ mod tests {
             GlyphDamage::Patch {
                 changed: SmallVec::new(),
                 removed: SmallVec::from_slice(&e[..1]),
+                first_dirty_slot: None,
             },
             "despawns ARE patchable: splice-delete keyed by the removal ids (D3)"
         );
@@ -2010,6 +2065,7 @@ mod tests {
             GlyphDamage::Patch {
                 changed: SmallVec::new(),
                 removed: SmallVec::new(),
+                first_dirty_slot: None,
             }
         );
     }
@@ -2025,6 +2081,7 @@ mod tests {
             GlyphDamage::Patch {
                 changed: SmallVec::new(),
                 removed: SmallVec::from_slice(&e[..1]),
+                first_dirty_slot: None,
             }
         );
     }
@@ -2061,7 +2118,11 @@ mod tests {
     fn splice_equal_length_overwrites_in_place() {
         let e = entities(3);
         let (mut records, mut runs) = splice_fixture(&e);
-        assert!(splice_run(&mut records, &mut runs, e[1], &[91, 92, 93]));
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[91, 92, 93]),
+            Some(2),
+            "the changed-start slot is the spliced run's start (D6)"
+        );
         assert_eq!(records, vec![10, 11, 91, 92, 93, 30, 31, 32]);
         assert_eq!(runs[0].instances, 0..2);
         assert_eq!(runs[1].instances, 2..5);
@@ -2072,12 +2133,10 @@ mod tests {
     fn splice_longer_shifts_the_suffix_and_renumbers() {
         let e = entities(3);
         let (mut records, mut runs) = splice_fixture(&e);
-        assert!(splice_run(
-            &mut records,
-            &mut runs,
-            e[1],
-            &[91, 92, 93, 94, 95]
-        ));
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[91, 92, 93, 94, 95]),
+            Some(2)
+        );
         assert_eq!(records, vec![10, 11, 91, 92, 93, 94, 95, 30, 31, 32]);
         assert_eq!(runs[0].instances, 0..2, "prefix run untouched");
         assert_eq!(runs[1].instances, 2..7, "the spliced run grew in place");
@@ -2088,7 +2147,7 @@ mod tests {
     fn splice_shorter_shifts_the_suffix_and_renumbers() {
         let e = entities(3);
         let (mut records, mut runs) = splice_fixture(&e);
-        assert!(splice_run(&mut records, &mut runs, e[1], &[91]));
+        assert_eq!(splice_run(&mut records, &mut runs, e[1], &[91]), Some(2));
         assert_eq!(records, vec![10, 11, 91, 30, 31, 32]);
         assert_eq!(runs[1].instances, 2..3);
         assert_eq!(runs[2].instances, 3..6, "suffix run shifted by -2");
@@ -2101,7 +2160,11 @@ mod tests {
         // structural probe, so the removal splice is pinned HERE.
         let e = entities(3);
         let (mut records, mut runs) = splice_fixture(&e);
-        assert!(splice_run(&mut records, &mut runs, e[1], &[]));
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[]),
+            Some(2),
+            "a delete's changed-start slot is the removed run's start (D6)"
+        );
         assert_eq!(records, vec![10, 11, 30, 31, 32]);
         assert_eq!(runs.len(), 2, "the deleted entity's run is GONE");
         assert_eq!(runs[0].entity, e[0]);
@@ -2117,7 +2180,10 @@ mod tests {
         let e = entities(3);
         let (mut records, mut runs) = splice_fixture(&e);
         let before = records.clone();
-        assert!(!splice_run(&mut records, &mut runs, e[1], &[20, 21, 22]));
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[20, 21, 22]),
+            None
+        );
         assert_eq!(records, before);
         assert_eq!(runs[2].instances, 5..8);
     }
@@ -2129,7 +2195,7 @@ mod tests {
         let e = entities(4);
         let (mut records, mut runs) = splice_fixture(&e);
         let before = records.clone();
-        assert!(!splice_run(&mut records, &mut runs, e[3], &[]));
+        assert_eq!(splice_run(&mut records, &mut runs, e[3], &[]), None);
         assert_eq!(records, before);
         assert_eq!(runs.len(), 3);
     }
@@ -2142,7 +2208,7 @@ mod tests {
         let e = entities(2);
         let mut keys = vec![1u8, 2, 7, 8, 9];
         let mut key_runs = vec![(e[0], 0..2u32), (e[1], 2..5u32)];
-        assert!(splice_run(&mut keys, &mut key_runs, e[0], &[4]));
+        assert_eq!(splice_run(&mut keys, &mut key_runs, e[0], &[4]), Some(0));
         assert_eq!(keys, vec![4, 7, 8, 9]);
         assert_eq!(key_runs[0].1, 0..1);
         assert_eq!(key_runs[1].1, 1..4, "key suffix renumbered by -1");

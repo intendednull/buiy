@@ -44,6 +44,7 @@ use crate::render::extract::{
 use crate::render::icon_producer::ExtractedIcons;
 use crate::render::instance::{BorderBandInstance, GradientInstance, pack_extracted};
 use crate::render::view_uniform::BuiyViewUniform;
+use crate::text::GlyphDamage;
 
 /// Render-world list of glyph-alpha instances to draw this frame, in paint
 /// order. Produced by `text::extract_buiy_glyphs` in `ExtractSchedule` (T4):
@@ -218,6 +219,22 @@ pub struct BuiyInstanceBuffers {
     /// reads it to overwrite only the changed entities' quad slots via `quad.set` +
     /// `write_buffer_range`, instead of re-uploading the whole blob.
     pub quad_slot_of: EntityHashMap<u32>,
+    /// Glyph partial-reextract D6 guard: `true` while the glyph CPU mirror
+    /// carries a degraded-group alpha-fold (`prepare_effect_groups` /
+    /// `fold_degraded_groups` multiplied member alphas IN PLACE, diverging
+    /// the mirror from `ExtractedGlyphs`), cleared by the next full repack
+    /// from source. The suffix ranged upload retains the mirror's prefix, so
+    /// a folded prefix would freeze stale dimmed alpha on the GPU — the
+    /// Patch fast path falls back to a full repack while this holds. The
+    /// fold cannot run ON a Patch frame (Patch frames are provably
+    /// effect-group-free: `write_effect_groups` re-inserts the `EffectGroup`
+    /// marker every frame a former holds, so the classifier's
+    /// `Changed<EffectGroup>` probe escalates every group-bearing dirty
+    /// frame to Full); this flag covers the CROSS-frame residue — a fold on
+    /// an earlier Full frame whose group dropped without a glyph-dirty frame
+    /// in between (test-only in practice: nothing degrades at the default
+    /// 64 MiB RT budget).
+    pub glyph_mirror_folded: bool,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -244,6 +261,7 @@ impl Default for BuiyInstanceBuffers {
             icon_flat_ranges: Vec::new(),
             gradient_anchors: Vec::new(),
             quad_slot_of: EntityHashMap::default(),
+            glyph_mirror_folded: false,
         }
     }
 }
@@ -258,12 +276,30 @@ impl Default for BuiyInstanceBuffers {
 pub struct BufferUploadStats {
     /// Quad-buffer `write_buffer` calls (the quad gate fired).
     pub quad_uploads: u64,
-    /// Glyph-buffer `write_buffer` calls (the glyph gate fired).
+    /// Glyph-buffer upload EVENTS — every glyph-dirty frame that refreshed
+    /// the GPU draw state, whether via a full `write_buffer` or a suffix
+    /// `write_buffer_range` (glyph partial-reextract D6). Counting both
+    /// keeps the caret-blink pin's semantics stable ("a blink edge uploads
+    /// the glyph buffer exactly once") across the Stage-D flip from full to
+    /// ranged uploads; [`glyph_partial_uploads`](Self::glyph_partial_uploads)
+    /// splits out the ranged ones.
     pub glyph_uploads: u64,
     /// #2 Stage D2: quad INSTANCES written this frame — `N` (the whole blob) on a Full
     /// repack, but only the changed-entity count on a pure-bg-quad Patch partial upload.
     /// The audit-#2 upload-rate signal: a single hover should move 1 instance, not N.
     pub instances_uploaded: u64,
+    /// Glyph-buffer SUFFIX ranged uploads (glyph partial-reextract D6): the
+    /// subset of [`glyph_uploads`](Self::glyph_uploads) that wrote only
+    /// `[first_dirty_slot..len)` instead of the whole buffer. A
+    /// `GlyphDamage::Patch` frame that hits any fallback (growth past GPU
+    /// capacity, cold buffer, folded mirror, ranged-write error) counts in
+    /// `glyph_uploads` only.
+    pub glyph_partial_uploads: u64,
+    /// Glyph INSTANCES written — the whole carrier length on a full upload,
+    /// only the suffix length on a ranged one. The D6 upload-rate signal the
+    /// GPU reftest gates on: a 1-entity mid-scene edit moves the suffix, not
+    /// the full buffer.
+    pub glyph_instances_uploaded: u64,
 }
 
 /// The ONE source of truth for "which tiers were repacked from source this
@@ -281,7 +317,14 @@ pub struct PreparedDamage {
     /// family buffers were repacked from source this frame.
     pub quad_dirty: bool,
     /// The glyph gate fired (`ExtractedGlyphs` changed) — the glyph buffer was
-    /// repacked from source this frame.
+    /// refreshed FROM SOURCE this frame. TRUE on glyph-Patch frames too
+    /// (partial-reextract D6): the suffix ranged upload leaves mirror == GPU
+    /// == carrier exactly like a full repack, so both consumers keep their
+    /// contracts — `prepare_effect_groups`' alpha-fold gate reads "buffer
+    /// state equals unfolded source, fold at most once" (moot on Patch
+    /// frames, which are provably group-free — the fold can't run with no
+    /// extracted groups), and the `partition_glyph_ranges` re-derivation
+    /// must still run because a splice moves run boundaries.
     pub glyph_dirty: bool,
     /// The icon gate fired (`ExtractedIcons` changed) — the icon buffer was
     /// repacked from source this frame.
@@ -329,6 +372,12 @@ pub fn prepare_buiy_instances(
     // `ExtractedNodesView` (to re-pack just that record).
     index: Res<RetainedNodeIndex>,
     damage: Res<NodeDamage>,
+    // Glyph partial-reextract D6: the glyph tier's Full|Patch verdict + first
+    // dirty slot, published by `extract_buiy_glyphs`. `Option` per the
+    // `RetainedNodeIndex`/`RenderWorkCounters` precedent — a render setup
+    // without the text plugin (which owns the registration) simply never
+    // takes the glyph fast path.
+    glyph_damage: Option<Res<GlyphDamage>>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
     mut stats: ResMut<BufferUploadStats>,
     // H6 fix: the per-tier dirty bits this run uses, published for
@@ -539,14 +588,126 @@ pub fn prepare_buiy_instances(
 
     // Glyph buffer (the coverage-glyph primitive). Gated on its own change
     // signal so a re-tint-only frame re-uploads glyphs without touching quads.
-    if glyph_dirty {
+    //
+    // Glyph partial-reextract D6: the suffix ranged fast path. When extract
+    // EXECUTED a Patch (splices confined to resident entities) it published
+    // the first dirty instance slot — the prefix `[0..slot)` is byte-identical
+    // to the previously uploaded carrier by construction — so the CPU mirror
+    // keeps its prefix (truncate + re-push the suffix from the carrier) and
+    // ONE `write_buffer_range(slot..len)` refreshes the GPU. Splice semantics
+    // make this a SUFFIX, not a slot overwrite (run lengths change on the
+    // flagship triggers — typing, caret blink), unlike the node tier's
+    // fixed-slot D2 path above.
+    //
+    // Every fallback runs the full clear+push+`write_buffer` repack below:
+    //  • `GlyphDamage::Full` (or the resource unregistered / no slot
+    //    published) — whole-set damage by definition;
+    //  • growth past the GPU buffer's capacity — `write_buffer_range` cannot
+    //    grow a buffer; the full path's `reserve` recreates it (an EXPECTED
+    //    path on any net-growth edit, so no warn);
+    //  • a cold/uninitialized buffer (first dirty frame in a fresh app) —
+    //    likewise expected, no warn;
+    //  • a shorter-than-prefix mirror (defensive: the mirror should always
+    //    hold last frame's carrier here);
+    //  • the group-free premise violated, or a degraded-group fold left the
+    //    mirror diverged from the carrier (`glyph_mirror_folded`) — see the
+    //    debug_assert below;
+    //  • a `write_buffer_range` error after the guards (unreachable by
+    //    inspection — kept as a loud belt-and-suspenders).
+    let glyph_partial_done = if glyph_dirty {
+        'glyph_partial: {
+            let Some(GlyphDamage::Patch {
+                first_dirty_slot: Some(first_dirty),
+                ..
+            }) = glyph_damage.as_deref()
+            else {
+                break 'glyph_partial false;
+            };
+            let first_dirty = *first_dirty as usize;
+            let new_len = glyphs.glyphs.len();
+            // The group-free premise (D6): `write_effect_groups` re-inserts
+            // the `EffectGroup` marker every frame a former holds, so the
+            // extract classifier's `Changed<EffectGroup>` probe escalates
+            // every group-bearing dirty frame to Full — a Patch frame can
+            // carry no live group, hence no degraded-group alpha-fold can
+            // touch glyph ranges this frame.
+            debug_assert!(
+                groups.0.is_empty(),
+                "GlyphDamage::Patch on a frame with live effect groups — the \
+                 extract classifier's Changed<EffectGroup> probe should have \
+                 escalated this frame to Full (glyph partial-reextract D6)"
+            );
+            if !groups.0.is_empty() {
+                bevy::log::warn_once!(
+                    "buiy: glyph Patch frame with live effect groups — the \
+                     D6 group-free premise is violated; falling back to the \
+                     full glyph upload (warned once)"
+                );
+                break 'glyph_partial false;
+            }
+            // Cross-frame fold residue: a degraded-group fold on an EARLIER
+            // frame diverged the mirror's prefix from the carrier — only a
+            // full repack (which clears the flag) may run until then.
+            if buffers.glyph_mirror_folded {
+                break 'glyph_partial false;
+            }
+            if first_dirty > new_len
+                || first_dirty > buffers.glyph.len()
+                || new_len > buffers.glyph.capacity()
+                || buffers.glyph.buffer().is_none()
+            {
+                break 'glyph_partial false; // growth / cold / short mirror
+            }
+            // Mirror update: retain the byte-identical prefix, re-push the
+            // suffix from the carrier — the mirror equals the carrier after
+            // this (the same end state as the full path's clear+push).
+            buffers.glyph.truncate(first_dirty);
+            for inst in &glyphs.glyphs[first_dirty..] {
+                buffers.glyph.push(*inst);
+            }
+            debug_assert_eq!(
+                buffers.glyph.len(),
+                new_len,
+                "D6: the patched mirror must equal the carrier"
+            );
+            // A pure tail-shrink publishes `first_dirty == new_len`: nothing
+            // to write — the retained prefix IS the new draw range and
+            // `glyph_count` below shortens the instanced draw.
+            if first_dirty < new_len
+                && buffers
+                    .glyph
+                    .write_buffer_range(&render_queue, first_dirty..new_len)
+                    .is_err()
+            {
+                bevy::log::warn_once!(
+                    "buiy: glyph suffix write_buffer_range failed after the \
+                     capacity/cold guards; falling back to the full glyph \
+                     upload (warned once)"
+                );
+                break 'glyph_partial false;
+            }
+            buffers.glyph_count = new_len as u32;
+            stats.glyph_uploads += 1;
+            stats.glyph_partial_uploads += 1;
+            stats.glyph_instances_uploaded += (new_len - first_dirty) as u64;
+            true
+        }
+    } else {
+        false
+    };
+
+    if glyph_dirty && !glyph_partial_done {
         buffers.glyph.clear();
         for inst in &glyphs.glyphs {
             buffers.glyph.push(*inst);
         }
         buffers.glyph_count = glyphs.glyphs.len() as u32;
         buffers.glyph.write_buffer(&render_device, &render_queue);
+        // A full repack restores mirror == carrier, repairing any
+        // degraded-group fold residue (see `glyph_mirror_folded`).
+        buffers.glyph_mirror_folded = false;
         stats.glyph_uploads += 1;
+        stats.glyph_instances_uploaded += glyphs.glyphs.len() as u64;
     }
 
     // Icon buffer (parity Wave B3 — the SAME coverage primitive as glyphs, drawn

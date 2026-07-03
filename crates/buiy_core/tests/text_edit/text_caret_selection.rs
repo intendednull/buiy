@@ -865,6 +865,18 @@ fn blink_edge_patches_only_the_caret_entity_mid_scene() {
         "visible phase: the stamp is the last instance"
     );
 
+    // The editor paints after the sibling, so its run start is the D6 first
+    // dirty slot the executed splice publishes (the splice replaces the
+    // editor's whole run; the sibling prefix below it is retained).
+    let editor_run_start = h
+        .glyphs()
+        .entity_runs
+        .iter()
+        .find(|r| r.entity == editor)
+        .expect("the editor emitted a run")
+        .instances
+        .start;
+
     // Cross the blink edge: the writer flips `visible` on the EDITOR only →
     // 1 changed of 2 retained runs = 50 % ≤ the D3 bail → an executed Patch
     // whose re-emission drops exactly the stamp (splice delta −1).
@@ -878,8 +890,10 @@ fn blink_edge_patches_only_the_caret_entity_mid_scene() {
         GlyphDamage::Patch {
             changed: SmallVec::from_slice(&[editor]),
             removed: SmallVec::new(),
+            first_dirty_slot: Some(editor_run_start),
         },
-        "the blink edge executes as a Patch of the caret entity alone"
+        "the blink edge executes as a Patch of the caret entity alone, \
+         publishing the editor's run start as the D6 first dirty slot"
     );
     assert_eq!(
         h.changed_frames(),
