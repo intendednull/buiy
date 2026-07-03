@@ -2006,23 +2006,48 @@ schedule-order-invariant in `buiy_core` (the robustness fix), or (b) have the ga
 layout-snapshot dump SKIP invisible (size-0 in a hidden subtree) nodes so the Tier-1
 gate pins only observable geometry (the cheaper, snapshot-side fix). Low severity.
 
-## Render — icon-tier keyed partial re-extract (`ExtractedIcons` mirror)
+## Render — icon-tier keyed partial re-extract — MEASURED, CLOSED (not worth building; 2026-07-03)
 
 **Originated:** the 2026-07-03 glyph partial re-extract
 (`docs/specs/2026-07-03-glyph-partial-reextract-design.md`), which names the icon
-tier a non-goal.
+tier a non-goal and mandated "measure first". Measured 2026-07-03; the numbers
+say don't build it.
 
-**Symptom:** `render::icon_producer` still rebuilds `ExtractedIcons` wholesale on
-every dirty frame — the exact pattern the glyph tier just shed. Cheap today (icon
-counts are small), so this is payoff-scaled housekeeping, not a bug.
+**What was measured** (release, adapterless `PipelineHarness` main-world pipeline
++ a bare render world running `(maintain_atlas, extract_buiy_icons).chain()`;
+48-frame warmup, extract phase timed in isolation over 400 frames; N `Icon`
+children cycling 5 real gallery paths, one icon's tint toggled per frame to force
+the wholesale rebuild):
 
-**Direction:** apply the same two-tier Full/Patch treatment: a damage classifier +
-per-entity splice over the retained carrier, shared single-entity emission,
-touch-before-insert on the shared atlas (`ResidentIconKeys` already exists), and a
-suffix ranged upload off a published first-dirty slot. The glyph tier's D1–D6
-machinery is the template; the icon record is already a `GlyphAlphaInstance`, so
-the prepare-side extension reuses the Stage D idiom directly. Weigh the classifier
-cost against the small icon counts before building — measure first.
+| scenario | N=30 | N=300 | N=1000 |
+|---|---|---|---|
+| icon-dirty (wholesale rebuild) p50 | 8.4 µs | 71 µs | 229 µs |
+| text-dirty sibling (icons untouched) p50 | 2.6 µs | 18 µs | 56 µs |
+
+Wholesale rebuild scales linearly at ~0.23 µs/icon; the pathological 1000-icon
+case is 0.23 ms — 1.4 % of a 60 Hz frame and ~60–240× below the 14–57 ms
+dirty-extract cost that justified the glyph tier's Full/Patch machinery.
+
+**Why closed, not just deferred:**
+- The dirty gate is already tight: `extract_buiy_icons` rebuilds only on
+  `Changed<Icon|GlobalTransform|ResolvedLayout|ClipRect|AncestorClip|ComputedPaintSkip|Stacking>`
+  (scoped `With<Icon>`), theme change, or scale change. A glyph-Patch frame
+  (caret blink, text value change) takes the steady touch-only path — proven by
+  the text-dirty row staying flat vs the rebuild column. There is no
+  over-triggering to fix.
+- Icon counts stay small in practice: checkbox checks, radio dots, and
+  disclosure arrows are TEXT glyphs (e.g. `checkbox.rs` `CHECK_GLYPH`), not
+  `Icon`s; the icon tier carries only real vector icons (nav rail, steppers,
+  close/search/gear), ~30 on the busiest gallery screen, and off-screen icons
+  are paint-skipped so visible counts are viewport-bounded.
+- A Full/Patch mirror would not remove the per-frame O(N) atlas
+  `touch_existing` pass (LRU-warmth maintenance, same as the glyph tier keeps),
+  so it would only shave the already-cheap rebuild while importing the
+  classifier/splice/fold-residue complexity.
+
+Reopen only if a widget starts emitting `Icon`s per row/cell at data-grid scale
+AND animates them (per-frame `Changed<GlobalTransform>` is the one realistic
+wholesale-every-frame trigger — the icon analog of active text).
 
 ## Render — stale-dim residue when an effect group drops on a glyph-clean frame (degradation-only)
 
