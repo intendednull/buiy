@@ -1,0 +1,18 @@
+[key]
+widget = "card-bordered"
+state = "default"
+theme = "dark"
+viewport = "sm"
+forced_colors = false
+backend = "Lavapipe"
+dpr = 1000
+
+[[positives]]
+file = "dark__sm__fc0__lavapipe__dpr1.0.png"
+blessed_commit = "c503cc12e4c4573163473d09fb2fca6d806dce57"
+blessed_at = "2026-07-03T23:19:42Z"
+reason = "blessed"
+
+[positives.budget]
+max_channel_delta = 0
+max_diff_pixels = 0
