@@ -136,8 +136,9 @@ fn render_pass_system_inserted_into_core2d_schedule() {
 // wired via `atlas::register` in the plugin's RenderApp branch as a
 // `(warmup_atlas, maintain_atlas).chain()`). This is the delta the membership
 // test below asserts; bump it in lockstep whenever the plugin's `ExtractSchedule`
-// registrations change.
-const BUIY_EXTRACT_SYSTEM_COUNT: usize = 5;
+// registrations change. (The 6th is `raster::extract_buiy_rasters` — the
+// textured-node canvas primitive.)
+const BUIY_EXTRACT_SYSTEM_COUNT: usize = 6;
 
 // Count the systems in a RenderApp's `ExtractSchedule`. Reads the schedule
 // graph directly (`graph().systems`), which is populated immediately at

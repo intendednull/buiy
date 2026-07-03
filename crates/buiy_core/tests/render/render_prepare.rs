@@ -203,11 +203,12 @@ fn view_uniform_carrier_is_a_valid_std140_uniform() {
 // queued in render/mod.rs), `prepare_effect_groups` (render/compositor.rs
 // `register`), `prepare_atlas_textures` (atlas/mod.rs `register` — the
 // dirty-page GPU upload + `@group(1)` bind-group build), and
-// `prepare_backdrop_blurs` (render/blur.rs `register` — parity Wave B4), all
-// `.in_set(RenderSystems::Prepare)` and queued in `build`. Bump this in
-// lockstep (with tests/render_compositor_gpu.rs) whenever the plugin's
-// `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 5;
+// `prepare_backdrop_blurs` (render/blur.rs `register` — parity Wave B4), and
+// `prepare_buiy_rasters` (render/raster.rs — the textured-node canvas
+// primitive), all `.in_set(RenderSystems::Prepare)` and queued in `build`.
+// Bump this in lockstep (with tests/render_compositor_gpu.rs) whenever the
+// plugin's `add_systems(Render, …)` registrations change.
+const BUIY_RENDER_SYSTEM_COUNT: usize = 6;
 
 // Count the systems in a RenderApp's `Render` schedule. Reads the schedule graph
 // directly (`graph().systems`), which is populated at `add_systems` time — no
