@@ -266,6 +266,28 @@ pub struct BufferUploadStats {
     pub instances_uploaded: u64,
 }
 
+/// The ONE source of truth for "which tiers were repacked from source this
+/// frame" (the H6 fix, `docs/reports/2026-06-30-mt-safety-followups.md` § H6):
+/// [`prepare_buiy_instances`] publishes the per-tier dirty bits it ACTUALLY
+/// used — overwritten unconditionally every run, so stale values never
+/// persist — and `prepare_effect_groups` reads THIS instead of re-deriving
+/// the same `is_changed()` gates from its own change ticks. The two systems
+/// previously had to agree on two independent `is_changed()` evaluations
+/// (correct only while order-pinned with nothing writable in between); the
+/// published bits are immune to reorder/`run_if` drift by construction.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedDamage {
+    /// The quad gate fired (nodes | groups | text quads changed) — the quad-
+    /// family buffers were repacked from source this frame.
+    pub quad_dirty: bool,
+    /// The glyph gate fired (`ExtractedGlyphs` changed) — the glyph buffer was
+    /// repacked from source this frame.
+    pub glyph_dirty: bool,
+    /// The icon gate fired (`ExtractedIcons` changed) — the icon buffer was
+    /// repacked from source this frame.
+    pub icon_dirty: bool,
+}
+
 /// Pure CPU half of the prepare phase: pack one view's [`ExtractedNodes`] into
 /// the flat raw quad-instance blob (every batch concatenated in
 /// `(primitive, layer)` order) and build the std140 view-uniform array. Split
@@ -309,6 +331,9 @@ pub fn prepare_buiy_instances(
     damage: Res<NodeDamage>,
     mut buffers: ResMut<BuiyInstanceBuffers>,
     mut stats: ResMut<BufferUploadStats>,
+    // H6 fix: the per-tier dirty bits this run uses, published for
+    // `prepare_effect_groups` (see the `PreparedDamage` doc).
+    mut prepared_damage: ResMut<PreparedDamage>,
 ) {
     // Damage gate (architecture.md § 3.1): extract overwrites `ExtractedNodesView`
     // ONLY on a frame where a paint input actually changed (a despawn, a theme
@@ -333,6 +358,16 @@ pub fn prepare_buiy_instances(
     // the glyph gate: an accent-swatch re-tint re-extracts only `ExtractedIcons`,
     // so the icon buffer re-uploads without touching the glyph buffer.
     let icon_dirty = icons.is_changed();
+
+    // H6 fix: publish the gate values this run ACTUALLY used, unconditionally
+    // (an overwrite every run, so a stale bit can never persist into a later
+    // frame). `prepare_effect_groups` reads these instead of re-deriving the
+    // same `is_changed()` gates — the one source of truth (`PreparedDamage`).
+    *prepared_damage = PreparedDamage {
+        quad_dirty,
+        glyph_dirty,
+        icon_dirty,
+    };
 
     // #2 Stage D2: the partial-upload fast path. When extract published a Patch (a
     // group-free, footprint-stable value change) and the ONLY dirty carrier is the node

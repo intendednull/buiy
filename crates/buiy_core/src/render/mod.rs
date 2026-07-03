@@ -296,6 +296,11 @@ impl Plugin for BuiyRenderPlugin {
             // test reads them to pin "a blink frame re-uploads the glyph
             // buffer ONLY" (decoration-and-paint § 6.3; verification § 1.3).
             .init_resource::<prepare::BufferUploadStats>()
+            // The per-tier "repacked from source this frame" bits (the H6 fix):
+            // written unconditionally by `prepare_buiy_instances`, read by
+            // `prepare_effect_groups` instead of re-deriving `is_changed()` —
+            // one source of truth for the fold/merge gates.
+            .init_resource::<prepare::PreparedDamage>()
             // Deterministic per-frame work-unit counters (perf-final P0b) — the
             // host-independent measurement gate. Registered here AND in the
             // `buiy_bench_support` harness via the same `RenderWorkCounters` type.

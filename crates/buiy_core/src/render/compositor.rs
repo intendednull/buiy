@@ -588,7 +588,9 @@ pub struct RtPoolStats {
 /// post-order ([`post_order_indices`]), and INSERTS both carriers onto the view
 /// render entity (decided fork 2 — NOT a resource, so the node's `ViewQuery`
 /// resolves them). Pinned to `Prepare` (after `prepare_buiy_instances`, so the
-/// per-group instance ranges in `BuiyInstanceBuffers` are written first) because
+/// per-group instance ranges in `BuiyInstanceBuffers` — and the per-tier dirty
+/// bits in [`PreparedDamage`](crate::render::prepare::PreparedDamage), the H6
+/// fix — are written first) because
 /// the view `scale_factor` / `ViewTarget` do not exist until `ManageViews` runs.
 /// Records the working-set size into [`RtPoolStats`] for the leak gate.
 #[allow(clippy::too_many_arguments)]
@@ -598,14 +600,13 @@ pub(crate) fn prepare_effect_groups(
     render_queue: Res<RenderQueue>,
     mut texture_cache: ResMut<TextureCache>,
     extracted: Res<ExtractedEffectGroups>,
-    // MAJOR-3: the glyph + text-quad carriers `prepare_buiy_instances` packs from,
-    // so this system can reconstruct the SAME per-tier buffer-repack signals it
-    // saw this frame (Bevy change-detection is per-system; reconstructing the
-    // `is_changed()` gates here is valid). `ExtractedNodesView` (`nodes` below)
-    // and `extracted` (= `ExtractedEffectGroups`, the `groups` term) cover the
-    // rest of the quad-dirty signal.
-    glyphs: Res<crate::render::prepare::ExtractedGlyphs>,
-    text_quads: Res<crate::render::extract::ExtractedTextQuads>,
+    // H6 fix: the per-tier buffer-repack signals `prepare_buiy_instances`
+    // ACTUALLY used this frame, published by that system (which `register` pins
+    // BEFORE us via `.after(prepare_buiy_instances)`) — the ONE source of
+    // truth, replacing the old MAJOR-3 re-derivation of the same `is_changed()`
+    // gates from this system's own change ticks
+    // (`docs/reports/2026-06-30-mt-safety-followups.md` § H6).
+    prepared_damage: Res<crate::render::prepare::PreparedDamage>,
     // ResMut so the degraded-group fold can re-tint the already-packed buffers
     // in place + re-upload the touched ones (effect-compositor.md § 2.3).
     mut buffers: ResMut<BuiyInstanceBuffers>,
@@ -625,17 +626,18 @@ pub(crate) fn prepare_effect_groups(
     views: Query<(Entity, &ViewTarget, &Msaa)>,
     nodes: Res<crate::render::extract::ExtractedNodesView>,
 ) {
-    // MAJOR-2: reconstruct the SAME per-tier BUFFER-repack signals
-    // `prepare_buiy_instances` used this frame (prepare.rs § damage gate). The
-    // degraded-group fold re-tints a buffer IFF that buffer was repacked from
-    // SOURCE this frame; a retained buffer already carries last frame's fold and
-    // must NOT be re-folded (it would compound to black). These mirror
-    // `prepare.rs` `quad_dirty`/`glyph_dirty` exactly — quad on
-    // nodes|groups|text_quads, glyph on glyphs alone (the buffer-repack signal,
-    // which DIFFERS from the wider glyph-partition signal). Computed before the
-    // `extracted.0` shadow below so the `is_changed()` reads the `Res` wrappers.
-    let quad_dirty = nodes.is_changed() || extracted.is_changed() || text_quads.is_changed();
-    let glyph_dirty = glyphs.is_changed();
+    // MAJOR-2: the per-tier BUFFER-repack signals `prepare_buiy_instances` used
+    // this frame (prepare.rs § damage gate). The degraded-group fold re-tints a
+    // buffer IFF that buffer was repacked from SOURCE this frame; a retained
+    // buffer already carries last frame's fold and must NOT be re-folded (it
+    // would compound to black). H6 fix: read the bits `prepare_buiy_instances`
+    // PUBLISHED into [`PreparedDamage`](crate::render::prepare::PreparedDamage)
+    // instead of re-deriving the same `is_changed()` gates here — one source of
+    // truth, so the two systems can never desync under a reorder or `run_if`
+    // (`docs/reports/2026-06-30-mt-safety-followups.md` § H6). Still the
+    // buffer-repack signal, which DIFFERS from the wider glyph-partition signal.
+    let quad_dirty = prepared_damage.quad_dirty;
+    let glyph_dirty = prepared_damage.glyph_dirty;
 
     let extracted = &extracted.0;
 
@@ -949,8 +951,9 @@ pub(crate) fn register(render_app: &mut SubApp) {
     super::composite::register(render_app);
     // The per-`EffectGroup` prepare pass (effect-compositor.md § 1.1) attaches
     // in `RenderSystems::Prepare`. It runs AFTER `prepare_buiy_instances` so the
-    // per-group instance ranges (`BuiyInstanceBuffers::group_ranges`) are written
-    // before this reads them. The view `scale_factor` / `ViewTarget` exist in
+    // per-group instance ranges (`BuiyInstanceBuffers::group_ranges`) and the
+    // per-tier dirty bits (`PreparedDamage`, the H6 fix) are written before
+    // this reads them. The view `scale_factor` / `ViewTarget` exist in
     // `Prepare` (after `ManageViews`). This adds a *prepare* system; the Core2d
     // render-pass slot remains owned by `node::register` (`buiy_pass`), where
     // the composite passes run inline.
