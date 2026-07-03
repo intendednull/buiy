@@ -81,6 +81,12 @@ See `examples/counter_view` and `examples/todomvc`. There is also a declarative
 `view(&Model) -> Element<Msg>` surface in `buiy::view` (`examples/counter_view`,
 `examples/todomvc_view`).
 
+For a **time-driven** model (countdowns, animations, game loops), add
+`ClockPlugin::<M>::new(Msg::Tick)` — a poll clock that folds `Msg::Tick(now)` every frame.
+Derive from `now` and store only the *derived* value (never `now` itself), so an idempotent
+steady frame is absorbed by `set_if_neq`. Drive it deterministically in a headless test with
+`advance_clock(&mut app, delta)` (no real sleeps).
+
 ## Widgets
 
 Catalog: `Button` · `Checkbox` · `Switch` · `Slider` · `Disclosure` · `Dialog` ·
