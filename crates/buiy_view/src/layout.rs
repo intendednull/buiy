@@ -158,6 +158,12 @@ pub(crate) struct LayoutProps {
     /// Pixel-center this element within its containing block (absolute + centered).
     pub center_self: bool,
     pub top_layer: bool,
+    /// Make this node transparent to pointer picking (`Pickable::IGNORE`): neither
+    /// a hit-target nor an occluder — its interactive CHILDREN stay pickable (F6,
+    /// spec §2.7). The explicit escape for the non-transparent decorative overlay;
+    /// a *transparent* top-layer container is auto-ignored by the reconciler
+    /// (structural — the invisible-occluder bug class is unwritable by default).
+    pub ignore_picking: bool,
 
     // --- Scroll ---------------------------------------------------------------
     pub scroll_x: bool,
@@ -194,6 +200,7 @@ impl Default for LayoutProps {
             inset: Sides::default(),
             center_self: false,
             top_layer: false,
+            ignore_picking: false,
             scroll_x: false,
             scroll_y: false,
             stick: false,
@@ -437,6 +444,24 @@ impl<Msg> Element<Msg> {
     /// content (`Stacking.top_layer = Popover`) — an overlay / dialog / scrim.
     pub fn top_layer(mut self) -> Self {
         self.layout.top_layer = true;
+        self
+    }
+
+    /// Make this node transparent to pointer picking (`Pickable::IGNORE`, the
+    /// `pointer-events: none` analogue): it is neither a hit-target nor an
+    /// occluder, so clicks fall THROUGH to whatever is beneath — while its
+    /// interactive CHILDREN still receive their own clicks (the
+    /// `pointer-events:none` on a container / `auto` on its children pattern).
+    ///
+    /// The **explicit escape** for a decorative, *non-transparent* overlay (F6,
+    /// spec §2.7): use it on any positioning/overlay node that must not swallow
+    /// input beneath it. A *transparent* (no-background) `.top_layer()` container
+    /// is already auto-ignored by the reconciler — the invisible-occluder bug
+    /// class is unwritable by construction, so you only reach for `.ignore_picking()`
+    /// when the node paints something (a tint, a decoration) yet must still be
+    /// click-through.
+    pub fn ignore_picking(mut self) -> Self {
+        self.layout.ignore_picking = true;
         self
     }
 
