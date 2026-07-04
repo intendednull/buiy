@@ -1,0 +1,34 @@
+{
+  "canvas_ink": 10665,
+  "countdown": 0,
+  "drawer": 0,
+  "drawer_name": "Alex",
+  "phase": "final",
+  "round": 2,
+  "scores": [
+    {
+      "name": "Alex",
+      "score": 816,
+      "seat": 0
+    },
+    {
+      "name": "Priya",
+      "score": 1052,
+      "seat": 1
+    },
+    {
+      "name": "Theo",
+      "score": 980,
+      "seat": 2
+    },
+    {
+      "name": "Sam",
+      "score": 686,
+      "seat": 3
+    }
+  ],
+  "screen": "podium",
+  "started": true,
+  "tick": 23604,
+  "total_rounds": 1
+}

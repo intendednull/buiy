@@ -1,0 +1,100 @@
+/* ============================================================
+   Protokit · base
+   Reset, document defaults, text-helper classes, layout utilities,
+   scrollbar styling, and the shared keyframe set. Everything here is
+   token-driven so it re-themes for free.
+   ============================================================ */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-weight: var(--weight-book);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button, input, select, textarea { font-family: inherit; }
+button { cursor: pointer; color: inherit; }
+a { color: var(--accent); text-decoration: none; }
+
+/* ---------- text helpers ---------- */
+.display {
+  font-family: var(--font-display);
+  font-weight: var(--weight-semi);
+  font-size: var(--text-4xl);
+  letter-spacing: var(--track-tight);
+  line-height: var(--leading-tight);
+  margin: 0;
+}
+.title {
+  font-family: var(--font-display);
+  font-weight: var(--weight-semi);
+  font-size: var(--text-2xl);
+  letter-spacing: var(--track-tight);
+  line-height: var(--leading-snug);
+  margin: 0;
+}
+.subtitle {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--track-snug);
+  margin: 0;
+}
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.num  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: var(--track-snug); }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.eyebrow.accent { color: var(--accent); }
+.muted   { color: var(--muted); }
+.ink-2   { color: var(--ink-2); }
+.accent-text { color: var(--accent); }
+.pos-text { color: var(--pos); }
+
+/* ---------- layout utilities ---------- */
+.row { display: flex; align-items: center; }
+.col { display: flex; flex-direction: column; }
+.between { justify-content: space-between; }
+.center  { align-items: center; justify-content: center; }
+.grow { flex: 1; min-width: 0; }
+.wrap { flex-wrap: wrap; }
+.gap-2 { gap: var(--sp-1); } .gap-4 { gap: var(--sp-1); }
+.gap-6 { gap: 6px; } .gap-8 { gap: var(--sp-2); }
+.gap-10 { gap: 10px; } .gap-12 { gap: var(--sp-3); }
+.gap-14 { gap: 14px; } .gap-16 { gap: var(--sp-4); }
+.gap-20 { gap: var(--sp-5); } .gap-24 { gap: var(--sp-6); }
+.hairline { height: 1px; background: var(--hair); border: 0; margin: 0; }
+
+/* ---------- scrollbar (opt-in via .scroll) ---------- */
+.scroll { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+.scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--faint); border-radius: 99px;
+  border: 3px solid var(--canvas); background-clip: content-box;
+}
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- keyframes ---------- */
+@keyframes fade-up  { from { opacity: 0; transform: translateY(10px); } }
+@keyframes fade-in  { from { opacity: 0; } }
+@keyframes pop-in   { from { opacity: 0; transform: scale(.94) translateY(8px); } }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes scrim-in { from { opacity: 0; } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px) scale(.96); } }
+@keyframes spin     { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+}
