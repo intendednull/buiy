@@ -10,7 +10,7 @@
 //! the model's [`ThemePref`]); the theme-invariant ones (white, the always-dark
 //! top bar, the scrim) stay module consts. The **accent** stays semantic
 //! (`Color::Accent`, resolved through the `Theme` resource) so it re-themes: light
-//! `#7C4FE0` ↔ dark `#A78BFA`, swapped by [`sync_theme_resource`] from the model.
+//! `#7C4FE0` ↔ dark `#A78BFA`, swapped by `sync_theme_resource` from the model.
 //!
 //! **Fonts.** Caveat (display) + Shantell Sans (body), registered by bytes.
 

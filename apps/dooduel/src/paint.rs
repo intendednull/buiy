@@ -22,7 +22,7 @@
 //! a `raster(...)` node when its screen/overlay closes and respawns it on
 //! re-entry; a `PaintSurface` component would be lost on that despawn, but the
 //! resource-held buffer survives, so the drawing persists (the game canvas across
-//! turn re-renders, the avatar across editor re-opens). [[buiy-scribbl-campaign]]
+//! turn re-renders, the avatar across editor re-opens).
 //!
 //! The model learns the image handles through the funnel
 //! (`dooduel::announce_canvases` → `Msg::CanvasesReady`); the reconciler owns the
@@ -79,7 +79,7 @@ pub const BRUSH_SIZES: [i32; 4] = [3, 6, 11, 18];
 
 /// The active tool. `Bucket` flood-fills on press; `Brush`/`Eraser` stroke. Held
 /// on the MVU model (`ToolState`) so tool selection is reducer-owned + replayable,
-/// and mirrored onto a [`PaintSurface`] each frame by [`sync_tools_to_canvases`].
+/// and mirrored onto a [`PaintSurface`] each frame by `sync_tools_to_canvases`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Reflect)]
 pub enum Tool {
     #[default]

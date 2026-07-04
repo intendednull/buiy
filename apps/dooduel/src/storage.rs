@@ -13,13 +13,13 @@
 //! profile). Wasm (W7): browser `localStorage`, under the design's keys
 //! (`dooduel-proto-theme` = the theme string, `dooduel-proto-avatar` = the avatar
 //! JSON; plus a `dooduel-proto-name` the design doesn't persist but the campaign
-//! wants round-tripping). The backend is a single [`load_persisted`] /
-//! [`save_persisted`] seam — each target owns its own encoding.
+//! wants round-tripping). The backend is a single `load_persisted` /
+//! `save_persisted` seam — each target owns its own encoding.
 //!
-//! **How it folds.** [`load_at_boot`] reads the blob ONCE at startup, restores a
+//! **How it folds.** `load_at_boot` reads the blob ONCE at startup, restores a
 //! custom avatar's pixels straight onto the paint surface (a side channel), and
 //! enqueues one [`Msg::Restore`] so the theme/name/avatar-choice fold through the
-//! funnel like any message. [`persist_on_change`] writes the blob whenever one of
+//! funnel like any message. `persist_on_change` writes the blob whenever one of
 //! the persisted fields (theme / name / avatar kind) changes — NOT every frame
 //! (the model ticks every frame; only the persisted subset triggers a write).
 //! Both live in [`StoragePlugin`], kept OUT of `install` so the GPU-free probe

@@ -433,7 +433,7 @@ pub fn doodle_avatar<Msg>(name: &str, badge_px: f32) -> Element<Msg> {
 }
 
 /// A `DoodleAvatar` with an EXPLICIT icon + tint (the avatar-editor gallery pick
-/// and the human's chosen preset). `tint_idx` indexes [`TINTS`].
+/// and the human's chosen preset). `tint_idx` indexes `TINTS`.
 pub fn doodle_avatar_forced<Msg>(icon_idx: usize, tint_idx: usize, badge_px: f32) -> Element<Msg> {
     doodle_badge(icon_idx, TINTS[tint_idx % TINTS.len()], badge_px)
 }

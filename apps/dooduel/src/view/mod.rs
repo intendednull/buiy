@@ -1,7 +1,7 @@
 //! The view layer — the `Screen` router + shared widget helpers + the six
 //! per-screen modules.
 //!
-//! One root, screens by kind-swap on [`Screen`](crate::Screen), with the floating
+//! One root, screens by kind-swap on `Screen`, with the floating
 //! light/dark theme toggle over every screen.
 //!
 //! The avatar editor is a full in-flow SCREEN, not a top-layer overlay: RUNNING the
