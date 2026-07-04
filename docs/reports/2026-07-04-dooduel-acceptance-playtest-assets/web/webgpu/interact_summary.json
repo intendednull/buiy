@@ -1,0 +1,29 @@
+{
+  "m2_boot_render": true,
+  "home": {
+    "w": 900,
+    "h": 640,
+    "cardSurface": [
+      255,
+      255,
+      255
+    ],
+    "distinctColors": 823
+  },
+  "m5a_theme_flip": true,
+  "m5a_card": {
+    "light": [
+      255,
+      255,
+      255
+    ],
+    "dark": [
+      38,
+      42,
+      51
+    ],
+    "frameChangedPct": 97.6
+  },
+  "m5b_play": "frameDiff=39.0% violetAfter=1711",
+  "consoleErrors": []
+}
