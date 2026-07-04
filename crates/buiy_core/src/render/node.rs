@@ -445,6 +445,23 @@ pub fn buiy_pass(
         pass.draw(0..4, 0..buffers.shadow_count);
     }
 
+    // --- Rounded box-shadow draw (F4b-6, SHADOW tier — behind the quad) --
+    // The rounded caster's shadow: its OWN `RoundedShadowInstance` buffer +
+    // `rounded_shadow.wgsl` pipeline (carrying a corner radius the square 68 B
+    // layout can't hold — the crisp 3D-press edge). Drawn in the SHADOW tier just
+    // after the square shadow blob (both behind all flat content; a rounded and a
+    // square shadow rarely overlap, and both being behind the quads makes their
+    // relative order visually inert). The square path stays byte-stable; a scene
+    // with no rounded shadow uploads a zero-count buffer and skips this draw.
+    if buffers.rounded_shadow_count > 0
+        && let Some(rs_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.rounded_shadow)
+        && let Some(rs_buffer) = buffers.rounded_shadow.buffer()
+    {
+        pass.set_render_pipeline(rs_pipeline);
+        pass.set_vertex_buffer(1, rs_buffer.slice(..));
+        pass.draw(0..4, 0..buffers.rounded_shadow_count);
+    }
+
     // --- Quad + background-gradient draw, INTERLEAVED in paint order -----
     // Paint order shadow < quad < gradient < glyph, with the gradient tier
     // INTERLEAVED per node: each node's background gradient paints right after

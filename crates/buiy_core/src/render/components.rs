@@ -447,6 +447,27 @@ impl Default for Opacity {
     }
 }
 
+/// A per-quad FILL alpha multiplier in `[0.0, 1.0]` — the **cheap particle fade**
+/// (F4b-5). Unlike [`Opacity`], it multiplies straight into the node's own fill
+/// quad alpha at extract and forms **NO** [`EffectGroup`]
+/// and no stacking context — so fading N particles costs N alpha writes, not N
+/// off-screen composite targets (the ~110-confetti blow-up the prototype
+/// journaled). `1.0` (default) is a no-op; absent == fully opaque.
+///
+/// **Scope: the fill quad only** — it does NOT dim a node's border / glyph /
+/// shadow / children (that is exactly what the group-forming [`Opacity`] is for).
+/// A particle is a single solid quad, which is all this is meant to fade. Drive
+/// it over time with [`QuadAlphaTween`](crate::animation::QuadAlphaTween).
+#[derive(Component, Reflect, Clone, Copy, PartialEq, Debug)]
+#[reflect(Component, Default)]
+pub struct QuadAlpha(pub f32);
+
+impl Default for QuadAlpha {
+    fn default() -> Self {
+        QuadAlpha(1.0)
+    }
+}
+
 /// Focus / selection outline, painted OUTSIDE the border box and never
 /// clipped by the element's own `ClipRect` (the render pass uses the
 /// companion `AncestorClip`). Absent == no outline.

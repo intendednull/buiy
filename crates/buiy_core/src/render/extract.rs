@@ -23,7 +23,7 @@ use crate::components::{Node, ResolvedLayout};
 use crate::layout::{BoxModel, Stacking};
 use crate::render::components::{
     AncestorClip, BackdropFilter, Background, BackgroundLayers, Border, BoxShadow, ClipRect,
-    ComputedPaintSkip, EffectGroup, EffectReason, FilterFn, Opacity, Outline,
+    ComputedPaintSkip, EffectGroup, EffectReason, FilterFn, Opacity, Outline, QuadAlpha,
 };
 use crate::render::counters::{RenderWorkCounters, record_node_counts};
 use crate::theme::UserPreferences;
@@ -170,6 +170,10 @@ pub struct ExtractedNode {
     /// instance drawn BEHIND the box (styling-f-tier.md § 2.2 — C6-b). Empty ==
     /// no shadow. Suppressed at the PRODUCER when forced-colors is active (the
     /// vec is then empty — § 2.5), and outset-only in v1 (inset warns-once).
+    /// Each term carries a corner `radius` (F4b-6): `0.0` terms pack to the
+    /// byte-stable SQUARE shadow pipeline, `> 0.0` terms to the distinct ROUNDED
+    /// pipeline. A caster's terms are homogeneous (all square OR all rounded, by
+    /// its corner radius), so a square caster's shadow blob is byte-identical.
     pub shadows: Vec<ExtractedShadow>,
     /// Resolved background gradient layers (parity Wave B1), in BACK-to-front
     /// draw order (the gradient pipeline draws this list in order, so index 0
@@ -240,6 +244,12 @@ pub struct ExtractedBorder {
     /// Per-side WIDTH `[top, right, bottom, left]`, logical px, from
     /// `BoxModel.border` (the layout-owned Taffy input — § 3.5).
     pub width: [f32; 4],
+    /// Per-side line-STYLE stipple flag `[top, right, bottom, left]` (F4b-3):
+    /// `0.0` = solid (the byte-stable path — the band draws a continuous ring),
+    /// `1.0` = dashed, `2.0` = dotted ([`encode_line_style`]). Every non-dash CSS
+    /// style (Solid/Double/Groove/…) encodes `0.0`, so a border with no dashed
+    /// side is byte-identical to before.
+    pub style: [f32; 4],
     /// Per-corner OUTER elliptical radius `(rx, ry) × 4` (TL, TR, BR, BL),
     /// resolved from `Border.radius` (clamped to the box). `[0; 8]` == square.
     pub outer_radius: [f32; 8],
@@ -285,6 +295,16 @@ pub struct ExtractedShadow {
     pub clip: Option<ClipRect>,
     /// The 2D affine basis (same source as [`ExtractedNode::affine`]).
     pub affine: [[f32; 2]; 2],
+    /// Uniform corner radius in logical px (F4b-6): `0.0` routes this term to the
+    /// byte-stable SQUARE shadow pipeline (every pre-F4b shadow golden is a square
+    /// caster); `> 0.0` routes it to the distinct ROUNDED-shadow pipeline
+    /// (`RoundedShadowInstance`), so the shadow rounds its corners to match a
+    /// rounded caster instead of drawing a rectangular blur that pokes past the
+    /// box. The value = the caster's uniform corner radius grown by `spread` (CSS:
+    /// a shadow's corner radius = border-radius + spread), clamped to
+    /// `<= min(half_w, half_h)`. It exists to render, among other cases, the CRISP
+    /// zero-blur 3D-press "sticker" edge (spec §2.5.1, §5.f — the decided Option B).
+    pub radius: f32,
 }
 
 /// One resolved background gradient layer (parity Wave B1), built at extract
@@ -679,29 +699,36 @@ pub fn resolve_border(
     theme: &Theme,
 ) -> Option<ExtractedBorder> {
     use crate::render::clip::px_or_zero;
-    use crate::render::components::{BorderSide, LineStyle};
+    use crate::render::components::BorderSide;
 
-    // Resolve one side to (linear color, width). A side paints iff its style is
-    // not `None`, its width is positive, AND its color is not transparent —
-    // otherwise it contributes a transparent color + its width (so the inner
-    // hole still shrinks correctly even if the side does not paint a color).
-    let side = |s: &BorderSide, width_len: crate::Length| -> ([f32; 4], f32, bool) {
+    // Resolve one side to (linear color, width, paints, style-flag). A side paints
+    // iff its style is not `None`, its width is positive, AND its color is not
+    // transparent — otherwise it contributes a transparent color + its width (so
+    // the inner hole still shrinks correctly even if the side does not paint a
+    // color). The style flag (F4b-3) drives the band's dash stipple: `0.0` solid
+    // (the byte-stable ring), `1.0` dashed, `2.0` dotted.
+    let side = |s: &BorderSide, width_len: crate::Length| -> ([f32; 4], f32, bool, f32) {
         let w = px_or_zero(width_len).max(0.0);
-        if s.style == LineStyle::None || w <= 0.0 {
-            return ([0.0; 4], w, false);
+        if s.style == crate::render::components::LineStyle::None || w <= 0.0 {
+            return ([0.0; 4], w, false, 0.0);
         }
         let color = crate::render::color::resolve_token(&s.color, theme);
         if color == Color::NONE {
-            return ([0.0; 4], w, false);
+            return ([0.0; 4], w, false, 0.0);
         }
         let lin = LinearRgba::from(color);
-        ([lin.red, lin.green, lin.blue, lin.alpha], w, true)
+        (
+            [lin.red, lin.green, lin.blue, lin.alpha],
+            w,
+            true,
+            encode_line_style(s.style),
+        )
     };
 
-    let (c_top, w_top, p_top) = side(&border.top, border_widths.top);
-    let (c_right, w_right, p_right) = side(&border.right, border_widths.right);
-    let (c_bottom, w_bottom, p_bottom) = side(&border.bottom, border_widths.bottom);
-    let (c_left, w_left, p_left) = side(&border.left, border_widths.left);
+    let (c_top, w_top, p_top, s_top) = side(&border.top, border_widths.top);
+    let (c_right, w_right, p_right, s_right) = side(&border.right, border_widths.right);
+    let (c_bottom, w_bottom, p_bottom, s_bottom) = side(&border.bottom, border_widths.bottom);
+    let (c_left, w_left, p_left, s_left) = side(&border.left, border_widths.left);
 
     // No side paints ⇒ no band (the byte-stable fast path).
     if !(p_top || p_right || p_bottom || p_left) {
@@ -709,6 +736,7 @@ pub fn resolve_border(
     }
 
     let width = [w_top, w_right, w_bottom, w_left];
+    let style = [s_top, s_right, s_bottom, s_left];
     let outer_radius = resolve_corner_radii(&border.radius, size);
     // Inner radius shrinks per corner by the adjacent border width (the oracle's
     // load-bearing shrink, `render_border_sdf.rs`): each corner touches two
@@ -732,11 +760,28 @@ pub fn resolve_border(
         color_bottom: c_bottom,
         color_left: c_left,
         width,
+        style,
         outer_radius,
         inner_radius,
         clip: border_clip,
         affine,
     })
+}
+
+/// Encode a border [`LineStyle`](crate::render::components::LineStyle) into the
+/// band shader's per-side stipple flag (F4b-3): `1.0` = dashed, `2.0` = dotted,
+/// and **everything else** (`Solid`/`Double`/`Groove`/`Ridge`/`Inset`/`Outset`/
+/// `None`) = `0.0` = a continuous ring — the pre-F4b behavior, so any border with
+/// no dashed/dotted side is byte-identical. (The advanced multi-stroke styles
+/// `Double`/`Groove`/… are not modeled by the single band; they render solid, as
+/// before.)
+pub fn encode_line_style(style: crate::render::components::LineStyle) -> f32 {
+    use crate::render::components::LineStyle;
+    match style {
+        LineStyle::Dashed => 1.0,
+        LineStyle::Dotted => 2.0,
+        _ => 0.0,
+    }
 }
 
 /// Resolve one entity's [`BoxShadow`] component into the per-term
@@ -756,10 +801,12 @@ pub fn resolve_border(
 /// § 3.1). A fully-transparent / zero-coverage term contributes nothing. Pure:
 /// no ECS / GPU access beyond the borrowed inputs, so it is unit-testable
 /// headless.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_shadows(
     shadows: &BoxShadow,
     position: Vec2,
     size: Vec2,
+    caster_radius: f32,
     clip: Option<ClipRect>,
     affine: [[f32; 2]; 2],
     forced_colors: bool,
@@ -798,6 +845,15 @@ pub fn resolve_shadows(
         }
         // CSS blur radius → Gaussian sigma (§ 3.2): sigma = blur / 2.
         let sigma = px_or_zero(shadow.blur) * 0.5;
+        // Shadow corner radius (F4b-6) = the caster's uniform corner radius grown
+        // by `spread` (CSS), clamped to the shadow box. `0.0` for a SQUARE caster
+        // ⇒ the byte-stable square pipeline; `> 0.0` routes to the rounded one.
+        let radius = if caster_radius > 0.0 {
+            let half = 0.5 * rect_size.min_element();
+            (caster_radius + spread).clamp(0.0, half)
+        } else {
+            0.0
+        };
 
         out.push(ExtractedShadow {
             rect_pos,
@@ -806,6 +862,7 @@ pub fn resolve_shadows(
             sigma,
             clip,
             affine,
+            radius,
         });
     }
     out
@@ -1010,6 +1067,16 @@ fn resolve_one(
     if item.animated_bg.is_some() {
         node.color = resolve_background_color(item.bg, item.animated_bg, theme);
     }
+    // F4b-5: the cheap per-quad FILL alpha multiplier (the particle fade). Absent
+    // ⇒ no change (byte-identical); present ⇒ scale the resolved fill alpha, with
+    // NO `EffectGroup` (unlike `Opacity`). Fill-quad only — border/glyph/shadow
+    // are untouched. Applied after the animated-color composite so it fades the
+    // final fill.
+    if let Some(qa) = item.quad_alpha {
+        use bevy::prelude::Alpha;
+        let scaled = (node.color.alpha() * qa.0).clamp(0.0, 1.0);
+        node.color = node.color.with_alpha(scaled);
+    }
     if let Some(outline) = item.outline {
         let outline_clip = effective_outline_clip(item.stacking, item.ancestor_clip);
         node.outline = resolve_outline(
@@ -1035,21 +1102,50 @@ fn resolve_one(
             node.affine,
             theme,
         );
-        // Borderless-rounded fill: a `Border.radius` with NO painting side rounds
-        // the FILL quad itself (the stub `pack_extracted` flagged). A painting
-        // border keeps the fill square (`node.border.is_some()`) — its band already
-        // traces the rounding — so no existing bordered golden shifts. Guarded
-        // `> 0.0` inside `borderless_fill_radius`, so a square/no-radius node stays
-        // byte-identical.
-        if node.border.is_none() {
-            node.radius = borderless_fill_radius(&border.radius, node.size);
+        // Fill corner radius (the F3 borderless case + F4b's bordered "ears" fix).
+        // The `PackedInstance` carries ONE uniform fill radius (the slot is shared
+        // with the shadow-sigma / text paths, so it stays a single f32 — no
+        // per-corner stride). Two disjoint node sets, so there is no conflict:
+        match &node.border {
+            // A painting border (F4b-1): round the FILL to the band's uniform
+            // INNER radius so no square-corner "ears" poke past a rounded border.
+            // For a UNIFORM border every inner corner is equal, so this is EXACT
+            // (the fill boundary coincides with the band's inner edge); a square
+            // bordered box has `inner_radius == [0; 8]` ⇒ `node.radius` stays 0 ⇒
+            // byte-identical to before (only rounded-bordered fixtures shift — the
+            // designed `golden_card_bordered` re-bless). A per-corner *wobble*
+            // border uses the smallest inner corner — safe (never leaves a
+            // background gap; a slight fill ear can remain at a much-larger wobble
+            // corner, journaled), since the shared slot is a single f32.
+            Some(b) => {
+                let uniform = b.inner_radius.iter().copied().fold(f32::INFINITY, f32::min);
+                if uniform.is_finite() && uniform > 0.0 {
+                    node.radius = uniform;
+                }
+            }
+            // Borderless-rounded fill (F3): a `Border.radius` with NO painting side
+            // rounds the FILL quad itself. Guarded `> 0.0` inside
+            // `borderless_fill_radius`, so a square/no-radius node stays
+            // byte-identical.
+            None => {
+                node.radius = borderless_fill_radius(&border.radius, node.size);
+            }
         }
     }
     if let Some(box_shadow) = item.box_shadow {
+        // The caster's uniform OUTER corner radius (F4b-6): a rounded caster's
+        // shadow rounds to match it. Read from the `Border.radius` (present for a
+        // bordered OR a borderless-rounded node) regardless of whether the border
+        // paints; `0.0` (no `Border`) ⇒ the byte-stable square shadow path.
+        let caster_radius = item
+            .border
+            .map(|b| borderless_fill_radius(&b.radius, node.size))
+            .unwrap_or(0.0);
         node.shadows = resolve_shadows(
             box_shadow,
             node.position,
             node.size,
+            caster_radius,
             node.clip,
             node.affine,
             forced_colors,
@@ -1223,6 +1319,11 @@ pub struct NodePaintQuery {
     // BackdropFilter/EffectGroup; `Opacity` is the alpha applied at composite). ---
     effect_group: Option<&'static EffectGroup>,
     opacity: Option<&'static Opacity>,
+    /// The cheap per-quad FILL alpha multiplier (F4b-5 — the particle fade). It
+    /// multiplies straight into the fill color's alpha in [`resolve_one`] and
+    /// forms NO `EffectGroup`, so a node with none rides the byte-stable path
+    /// unchanged.
+    quad_alpha: Option<&'static QuadAlpha>,
     /// B4: the backdrop-filter list (samples the painted window backdrop),
     /// resolved into the group's `backdrop_blur_px` below.
     backdrop_filter: Option<&'static BackdropFilter>,
@@ -1315,6 +1416,11 @@ pub fn extract_buiy_nodes(
                     Or<(
                         Changed<EffectGroup>,
                         Changed<Opacity>,
+                        // F4b-5: a per-quad particle-alpha edit (the `QuadAlpha`
+                        // multiplier or its tween) re-extracts so the fill fades.
+                        // Its `QuadAlphaTween` re-inserts `QuadAlpha` every advanced
+                        // frame (marking it `Changed`), like `AnimatedBackgroundColor`.
+                        Changed<QuadAlpha>,
                         // Parity Wave B4: a backdrop-filter EDIT (a runtime
                         // blur-radius change on an EXISTING former).
                         // `Changed<EffectGroup>` only fires when the group FORMS

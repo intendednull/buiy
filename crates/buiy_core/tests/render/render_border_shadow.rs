@@ -8,7 +8,8 @@
 //!    forced-colors producer suppression).
 //! 2. **Pack** — `pack_band_instances` (one band per node border) +
 //!    `pack_shadow_instances` (one `(Shadow, layer)` instance per shadow term),
-//!    and the byte-stable strides (the quad 68 B / band 192 B unchanged).
+//!    and the byte-stable quad stride (68 B unchanged; the band grew to 208 B on
+//!    its own distinct record for F4b's per-side dash `style` lane).
 //! 3. **End-to-end extract** — drive the REAL `extract_buiy_nodes` over a
 //!    bordered + shadowed widget, asserting `ExtractedNode.border` /
 //!    `.shadows` populate, and that `forced_colors` empties the shadow list
@@ -28,12 +29,14 @@ use buiy_core::Length;
 use buiy_core::components::Node;
 use buiy_core::layout::Edges;
 use buiy_core::render::ColorToken;
-use buiy_core::render::buckets::{pack_band_instances, pack_shadow_instances};
+use buiy_core::render::buckets::{
+    pack_band_instances, pack_rounded_shadow_instances, pack_shadow_instances,
+};
 use buiy_core::render::components::{
     Border, BorderSide, BoxShadow, Corners, LineStyle, Radius, Shadow,
 };
 use buiy_core::render::extract::{
-    ExtractedNodesView, extract_buiy_nodes, resolve_border, resolve_shadows,
+    ExtractedNodesView, encode_line_style, extract_buiy_nodes, resolve_border, resolve_shadows,
 };
 use buiy_core::render::instance::{border_band_stride_agrees, packed_raw_stride_agrees};
 use buiy_core::theme::{UserPreferences, default_light_theme};
@@ -255,6 +258,7 @@ fn resolve_shadows_pins_sigma_to_half_the_blur_and_expands_the_box() {
         &bs,
         Vec2::new(20.0, 30.0),
         Vec2::new(40.0, 50.0),
+        0.0,
         None,
         [[1.0, 0.0], [0.0, 1.0]],
         false,
@@ -297,6 +301,7 @@ fn resolve_shadows_preserves_css_list_order() {
         &bs,
         Vec2::ZERO,
         Vec2::splat(10.0),
+        0.0,
         None,
         [[1.0, 0.0], [0.0, 1.0]],
         false,
@@ -330,6 +335,7 @@ fn resolve_shadows_skips_inset_terms_in_v1() {
         &bs,
         Vec2::ZERO,
         Vec2::splat(10.0),
+        0.0,
         None,
         [[1.0, 0.0], [0.0, 1.0]],
         false,
@@ -358,6 +364,7 @@ fn resolve_shadows_suppresses_all_under_forced_colors() {
         &bs,
         Vec2::ZERO,
         Vec2::splat(10.0),
+        0.0,
         None,
         [[1.0, 0.0], [0.0, 1.0]],
         false,
@@ -368,6 +375,7 @@ fn resolve_shadows_suppresses_all_under_forced_colors() {
         &bs,
         Vec2::ZERO,
         Vec2::splat(10.0),
+        0.0,
         None,
         [[1.0, 0.0], [0.0, 1.0]],
         true, // forced_colors
@@ -403,6 +411,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
             color_bottom: [0.2, 0.45, 0.95, 1.0],
             color_left: [0.2, 0.45, 0.95, 1.0],
             width: [2.0, 2.0, 2.0, 2.0],
+            style: [0.0; 4],
             outer_radius: [0.0; 8],
             inner_radius: [0.0; 8],
             clip: None,
@@ -416,6 +425,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
                 sigma: 3.0,
                 clip: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                radius: 0.0,
             },
             ExtractedShadow {
                 rect_pos: Vec2::new(4.0, 4.0),
@@ -424,6 +434,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
                 sigma: 6.0,
                 clip: None,
                 affine: [[1.0, 0.0], [0.0, 1.0]],
+                radius: 0.0,
             },
         ],
         gradients: Vec::new(),
@@ -461,13 +472,14 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
 #[test]
 fn strides_are_byte_stable() {
     // The R1/R2-frozen quad 68 B stride is untouched (shadow reuses it — radius
-    // slot → blur sigma, NOT a stride bump), and the band record stays 192 B.
+    // slot → blur sigma, NOT a stride bump); the band record grew to 208 B on its
+    // OWN distinct record (F4b's per-side dash `style` lane), never the quad.
     assert!(packed_raw_stride_agrees(), "quad stays 68 B (= [f32;17])");
     assert_eq!(std::mem::size_of::<[f32; 17]>(), 68);
-    assert!(border_band_stride_agrees(), "band stays 192 B (= 48 f32)");
+    assert!(border_band_stride_agrees(), "band is 208 B (= 52 f32)");
     assert_eq!(
         buiy_core::render::instance::BORDER_BAND_INSTANCE_STRIDE_BYTES,
-        192
+        208
     );
 }
 
@@ -547,6 +559,10 @@ impl NodeExtractHarness {
 
     fn shadow_count(&self) -> usize {
         pack_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+    }
+
+    fn rounded_shadow_count(&self) -> usize {
+        pack_rounded_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
     }
 }
 
@@ -671,4 +687,244 @@ fn forced_colors_empties_the_shadow_but_keeps_the_border() {
         "no shadow instance under forced-colors"
     );
     assert_eq!(h.band_count(), 1, "the border band still draws");
+}
+
+// --- F4b: bordered-rounded ears fix + rounded-shadow routing + dashed stipple ---
+
+/// Spawn a bordered widget with a ROUNDED corner (`radius_px`) + a CRISP
+/// (zero-blur) shadow — the 3D-press class.
+fn spawn_bordered_rounded_shadowed(app: &mut App, radius_px: f32) -> Entity {
+    use buiy_core::layout::{Inset, Sizing, Style};
+    use buiy_core::render::components::Background;
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(40.0)),
+                    left: Sizing::Length(Length::px(40.0)),
+                    ..default()
+                })
+                .width_px(80.0)
+                .height_px(40.0)
+                .border(3.0),
+            Background {
+                color: ColorToken::SurfacePrimary,
+            },
+            four_color_border(radius_px),
+            BoxShadow(vec![Shadow {
+                color: ColorToken::TextPrimary,
+                offset_x: Length::px(0.0),
+                offset_y: Length::px(2.0),
+                blur: Length::px(0.0), // crisp — the 3D-press "sticker" edge
+                spread: Length::px(0.0),
+                inset: false,
+            }]),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[child]);
+    child
+}
+
+/// Spawn a widget with an all-DASHED border (the room-code box class), radius 0.
+fn spawn_dashed_bordered(app: &mut App) -> Entity {
+    use buiy_core::layout::{Inset, Sizing, Style};
+    use buiy_core::render::components::Background;
+
+    let dashed = BorderSide {
+        color: ColorToken::TextPrimary,
+        style: LineStyle::Dashed,
+    };
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(10.0)),
+                    left: Sizing::Length(Length::px(10.0)),
+                    ..default()
+                })
+                .width_px(60.0)
+                .height_px(24.0)
+                .border(2.0),
+            Background {
+                color: ColorToken::SurfacePrimary,
+            },
+            Border {
+                top: dashed.clone(),
+                right: dashed.clone(),
+                bottom: dashed.clone(),
+                left: dashed,
+                radius: Corners::all(Radius::circular(4.0)),
+            },
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[child]);
+    child
+}
+
+#[test]
+fn bordered_rounded_fill_rounds_and_routes_a_crisp_rounded_shadow() {
+    let mut h = NodeExtractHarness::new();
+    let widget = spawn_bordered_rounded_shadowed(&mut h.app, 8.0);
+    settle(&mut h);
+    h.extract();
+    let node = h.node_for(widget).expect("widget in display list");
+
+    // Ears fix (F4b-1): the bordered fill rounds to the band's uniform INNER
+    // radius (outer 8 − width 3 = 5), so no square corner pokes past the border.
+    assert!(
+        (node.radius - 5.0).abs() < 0.01,
+        "the bordered fill rounds to the band inner radius (8 − 3 = 5), got {}",
+        node.radius
+    );
+
+    // Rounded-shadow routing (F4b-6): the caster is rounded, so its shadow term
+    // carries a corner radius and routes to the distinct rounded pipeline.
+    assert_eq!(node.shadows.len(), 1, "one shadow term");
+    assert!(
+        node.shadows[0].radius > 0.0,
+        "the shadow of a rounded caster carries a corner radius"
+    );
+    assert_eq!(
+        node.shadows[0].sigma, 0.0,
+        "blur 0 → a crisp zero-blur shadow (the 3D-press case)"
+    );
+
+    // The two packers PARTITION the terms by radius: nothing on the square path,
+    // one on the rounded path (the disjoint split that keeps square goldens stable).
+    assert_eq!(
+        h.shadow_count(),
+        0,
+        "no term on the byte-stable square path"
+    );
+    assert_eq!(
+        h.rounded_shadow_count(),
+        1,
+        "one term on the rounded pipeline"
+    );
+}
+
+#[test]
+fn square_caster_keeps_the_byte_stable_square_shadow_path() {
+    // The existing square-bordered widget (radius 0): its shadow stays on the
+    // square pipeline — the disjoint split that keeps every square-shadow golden
+    // byte-identical.
+    let mut h = NodeExtractHarness::new();
+    let widget = spawn_bordered_shadowed(&mut h.app);
+    settle(&mut h);
+    h.extract();
+    let node = h.node_for(widget).expect("widget in display list");
+    assert_eq!(
+        node.radius, 0.0,
+        "a square-bordered fill stays square (radius 0)"
+    );
+    assert_eq!(
+        node.shadows[0].radius, 0.0,
+        "a square caster's shadow term is radius 0"
+    );
+    assert_eq!(
+        h.shadow_count(),
+        1,
+        "the square shadow draws on the square path"
+    );
+    assert_eq!(
+        h.rounded_shadow_count(),
+        0,
+        "nothing routes to the rounded path"
+    );
+}
+
+#[test]
+fn encode_line_style_maps_dashed_dotted_and_leaves_the_rest_solid() {
+    assert_eq!(encode_line_style(LineStyle::Solid), 0.0);
+    assert_eq!(encode_line_style(LineStyle::None), 0.0);
+    assert_eq!(
+        encode_line_style(LineStyle::Double),
+        0.0,
+        "advanced multi-stroke styles render solid (unchanged from before)"
+    );
+    assert_eq!(encode_line_style(LineStyle::Dashed), 1.0);
+    assert_eq!(encode_line_style(LineStyle::Dotted), 2.0);
+}
+
+#[test]
+fn dashed_border_extracts_the_per_side_stipple_flag() {
+    let mut h = NodeExtractHarness::new();
+    let widget = spawn_dashed_bordered(&mut h.app);
+    settle(&mut h);
+    h.extract();
+    let node = h.node_for(widget).expect("widget in display list");
+    let border = node.border.expect("a dashed border still extracts a band");
+    // All four sides dashed → every per-side stipple flag is 1.0 (F4b-3); the band
+    // instance carries it verbatim (pack_border copies `style`).
+    assert_eq!(
+        border.style,
+        [1.0, 1.0, 1.0, 1.0],
+        "an all-dashed border encodes the dashed flag on every side"
+    );
+    assert_eq!(h.band_count(), 1, "the dashed border still draws one band");
+}
+
+/// Spawn an opaque solid quad carrying a `QuadAlpha` fill-alpha multiplier.
+fn spawn_faded_quad(app: &mut App, alpha: f32) -> Entity {
+    use buiy_core::layout::{Inset, Sizing, Style};
+    use buiy_core::render::components::{Background, QuadAlpha};
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(10.0)),
+                    left: Sizing::Length(Length::px(10.0)),
+                    ..default()
+                })
+                .width_px(20.0)
+                .height_px(20.0),
+            Background {
+                // An opaque exact color (alpha 1.0) so the multiply is unambiguous.
+                color: ColorToken::Custom(Color::srgb(0.2, 0.6, 1.0)),
+            },
+            QuadAlpha(alpha),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[child]);
+    child
+}
+
+#[test]
+fn quad_alpha_multiplies_the_fill_alpha_without_forming_a_group() {
+    use bevy::prelude::Alpha;
+    let mut h = NodeExtractHarness::new();
+    let widget = spawn_faded_quad(&mut h.app, 0.5);
+    settle(&mut h);
+    h.extract();
+    let node = h.node_for(widget).expect("widget in display list");
+
+    // F4b-5: the opaque fill (alpha 1.0) is halved by QuadAlpha(0.5).
+    assert!(
+        (node.color.alpha() - 0.5).abs() < 0.01,
+        "QuadAlpha(0.5) halves the fill alpha, got {}",
+        node.color.alpha()
+    );
+    // It forms NO EffectGroup — the composite-free particle fade (unlike `Opacity`,
+    // a group former, whose node would carry `group: Some(..)`).
+    assert!(
+        node.group.is_none(),
+        "the faded node is drawn flat, not into an off-screen group target"
+    );
 }

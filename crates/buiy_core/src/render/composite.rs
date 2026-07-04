@@ -192,6 +192,12 @@ pub struct BuiySpecializedPipelines {
     /// (the 2-stop `GradientInstance`), NOT a new `BuiyPrimitiveKind` — the
     /// band/shadow precedent.
     pub gradient: SpecializedRenderPipelines<crate::render::primitive::BuiyGradientPipeline>,
+    /// Rounded box-shadow (`BuiyRoundedShadowPipeline`) specializations, per
+    /// `(format, samples)` (F4b-6). A distinct pipeline keyed by record (the
+    /// [`RoundedShadowInstance`](crate::render::instance::RoundedShadowInstance)),
+    /// NOT a new `BuiyPrimitiveKind` — the band/gradient/raster precedent.
+    pub rounded_shadow:
+        SpecializedRenderPipelines<crate::render::primitive::BuiyRoundedShadowPipeline>,
     /// Raster (textured-quad) (`BuiyRasterPipeline`) specializations, per
     /// `(format, samples)` (the drawing-canvas seam). A distinct pipeline keyed
     /// by record (the [`RasterInstance`](crate::render::raster::RasterInstance)),

@@ -173,6 +173,7 @@ impl Plugin for BuiyRenderPlugin {
             .register_type::<components::BoxShadow>()
             .register_type::<components::Shadow>()
             .register_type::<components::Opacity>()
+            .register_type::<components::QuadAlpha>()
             .register_type::<components::Outline>()
             .register_type::<components::Filter>()
             .register_type::<components::BackdropFilter>()
@@ -278,6 +279,14 @@ impl Plugin for BuiyRenderPlugin {
                 app,
                 raster::raster_shader_handle(),
                 "raster.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
+            // The rounded box-shadow shader (F4b-6, octet ..0A) — the blurred
+            // rounded-rect coverage + the crisp 3D-press edge.
+            bevy::asset::load_internal_asset!(
+                app,
+                pipeline::rounded_shadow_shader_handle(),
+                "rounded_shadow.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
         }

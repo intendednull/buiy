@@ -8,9 +8,9 @@ backend = "Lavapipe"
 dpr = 1000
 
 [[positives]]
-file = "dark__sm__fc0__lavapipe__dpr1.0.png"
-blessed_commit = "c503cc12e4c4573163473d09fb2fca6d806dce57"
-blessed_at = "2026-07-03T23:19:42Z"
+file = "dark__sm__fc0__lavapipe__dpr1.1.png"
+blessed_commit = "ab696bae4e1393335129822b47351f6a50dbb8f8"
+blessed_at = "2026-07-04T10:56:42Z"
 reason = "blessed"
 
 [positives.budget]

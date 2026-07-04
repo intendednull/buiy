@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use buiy_core::ResolvedLayout;
 use buiy_core::layout::{
     AlignItems, BoxModel, FlexItem, FlexParams, FlexWrap, JustifyContent, Length, Overflow,
-    OverflowMode, Position, PositionKind, ScrollOffset, Sizing, Stacking, TopLayer,
+    OverflowMode, Position, PositionKind, Rotate, ScrollOffset, Sizing, Stacking, TopLayer,
 };
 use buiy_core::mvu::{Cmd, Model};
 use buiy_core::text::TextAlign as CoreTextAlign;
@@ -584,5 +584,52 @@ fn wrap_padding_and_scroll_compose_in_one_tree() {
     assert!(
         app.world().get::<ScrollOffset>(chat).is_some(),
         "the scroll chat carries the runtime scroll bundle"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Transform: .rotate() (F4b-7).
+// ---------------------------------------------------------------------------
+
+fn v_rotate(_: &Probe) -> Element<Noop> {
+    column![text("x")].rotate(90.0)
+}
+
+fn v_unrotated(_: &Probe) -> Element<Noop> {
+    column![text("x")]
+}
+
+#[test]
+fn rotate_lowers_to_a_z_rotation_in_radians() {
+    // `.rotate(deg)` inserts a `Rotate(Quat::from_rotation_z(deg.to_radians()))`
+    // on demand — the decoration transform the confetti/ribbon ride (F4b-7).
+    let mut app = app_with(v_rotate);
+    let root = root(&mut app);
+    let r = app
+        .world()
+        .get::<Rotate>(root)
+        .expect("a rotated node gains a Rotate transform component");
+    let want = Quat::from_rotation_z(90f32.to_radians());
+    // Compare components directly: `angle_between`'s acos-of-near-1 is float-noisy
+    // even for equal quats, so a per-component tolerance is the robust witness.
+    assert!(
+        (r.0.x - want.x).abs() < 1e-4
+            && (r.0.y - want.y).abs() < 1e-4
+            && (r.0.z - want.z).abs() < 1e-4
+            && (r.0.w - want.w).abs() < 1e-4,
+        "90° lowers to a z-rotation of π/2 radians (got {:?})",
+        r.0
+    );
+}
+
+#[test]
+fn no_rotate_modifier_inserts_no_transform() {
+    // The neutral path stays byte-identical: an unrotated node carries no
+    // `Rotate` component (inserted on demand only).
+    let mut app = app_with(v_unrotated);
+    let root = root(&mut app);
+    assert!(
+        app.world().get::<Rotate>(root).is_none(),
+        "an unrotated node inserts no Rotate transform"
     );
 }

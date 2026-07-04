@@ -34,15 +34,17 @@ use std::ops::Range;
 
 use crate::render::atlas::GlyphAlphaInstance;
 use crate::render::buckets::{
-    pack_band_instances, pack_gradient_instances, pack_shadow_instances, pack_view,
-    pack_view_partitioned, packed_to_raw, partition_glyph_ranges,
+    pack_band_instances, pack_gradient_instances, pack_rounded_shadow_instances,
+    pack_shadow_instances, pack_view, pack_view_partitioned, packed_to_raw, partition_glyph_ranges,
 };
 use crate::render::extract::{
     ExtractedEffectGroups, ExtractedNodes, ExtractedNodesView, ExtractedTextQuads, NodeDamage,
     RetainedNodeIndex,
 };
 use crate::render::icon_producer::ExtractedIcons;
-use crate::render::instance::{BorderBandInstance, GradientInstance, pack_extracted};
+use crate::render::instance::{
+    BorderBandInstance, GradientInstance, RoundedShadowInstance, pack_extracted,
+};
 use crate::render::view_uniform::BuiyViewUniform;
 use crate::text::GlyphDamage;
 
@@ -138,6 +140,12 @@ pub struct BuiyInstanceBuffers {
     /// (over the solid fill), BEFORE glyphs/bands. Packed from the SAME node walk
     /// as the quad, so it rides the quad gate.
     pub gradient: RawBufferVec<GradientInstance>,
+    /// ROUNDED box-shadow instances (F4b-6). A `RawBufferVec<RoundedShadowInstance>`
+    /// — a raw `#[repr(C)]` vertex POD like `band`/`gradient`. Grows in place; the
+    /// node draws it in the SHADOW tier (before the flat quads, alongside the
+    /// square shadow blob). Packed from the same node walk, so it rides the quad
+    /// gate. The SQUARE shadow blob (`shadow`) is disjoint and byte-stable.
+    pub rounded_shadow: RawBufferVec<RoundedShadowInstance>,
     /// The per-view logical->clip + scale_factor uniform (`col0 ++ col1 ++
     /// [scale_factor, 0, 0, 0]`, [`BuiyViewUniform::as_std140_array`]).
     ///
@@ -167,6 +175,9 @@ pub struct BuiyInstanceBuffers {
     /// Background-gradient instance count written this frame (parity Wave B1).
     /// Rides the quad gate (gradients are packed from the same node walk).
     pub gradient_count: u32,
+    /// Rounded box-shadow instance count written this frame (F4b-6). Rides the
+    /// quad gate (packed from the same node walk).
+    pub rounded_shadow_count: u32,
     /// Per-effect-group contiguous quad-instance ranges (`group_ranges[g]` =
     /// group `g`'s members), recomputed each quad-buffer upload from
     /// `ExtractedNode.group` (effect-compositor.md § 1.1 / decided fork 3). The
@@ -256,6 +267,7 @@ impl Default for BuiyInstanceBuffers {
             band: RawBufferVec::new(BufferUsages::VERTEX),
             shadow: RawBufferVec::new(BufferUsages::VERTEX),
             gradient: RawBufferVec::new(BufferUsages::VERTEX),
+            rounded_shadow: RawBufferVec::new(BufferUsages::VERTEX),
             view_uniform: UniformBuffer::default(),
             quad_count: 0,
             glyph_count: 0,
@@ -263,6 +275,7 @@ impl Default for BuiyInstanceBuffers {
             band_count: 0,
             shadow_count: 0,
             gradient_count: 0,
+            rounded_shadow_count: 0,
             group_ranges: Vec::new(),
             flat_ranges: Vec::new(),
             glyph_group_ranges: Vec::new(),
@@ -566,6 +579,23 @@ pub fn prepare_buiy_instances(
         }
         buffers.shadow_count = shadows.len() as u32;
         buffers.shadow.write_buffer(&render_device, &render_queue);
+
+        // Rounded box-shadow buffer (F4b-6). Packed from the SAME node walk (it
+        // rides the quad gate); only a shadow term of a ROUNDED caster (radius > 0)
+        // lands here — a square caster's terms went to `shadow` above — so a scene
+        // with no rounded shadow uploads an empty buffer (rounded_shadow_count = 0)
+        // and the node skips the draw. Its OWN `RoundedShadowInstance` layout (the
+        // 68 B quad stride + square-shadow path are untouched). Drawn in the SHADOW
+        // tier in `node.rs`, alongside the square shadow blob.
+        let rounded_shadows = pack_rounded_shadow_instances(&nodes.0.nodes);
+        buffers.rounded_shadow.clear();
+        for rs in &rounded_shadows {
+            buffers.rounded_shadow.push(*rs);
+        }
+        buffers.rounded_shadow_count = rounded_shadows.len() as u32;
+        buffers
+            .rounded_shadow
+            .write_buffer(&render_device, &render_queue);
 
         // Background-gradient buffer (parity Wave B1). Packed from the SAME node
         // walk (it rides the quad gate); a node with no gradient layers

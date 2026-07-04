@@ -54,7 +54,7 @@ use bytemuck::{Pod, Zeroable};
 use core::marker::PhantomData;
 
 use crate::components::{Node, ResolvedLayout};
-use crate::render::components::ClipRect;
+use crate::render::components::{Border, ClipRect};
 use crate::render::pipeline::{
     BuiyPipeline, atlas_layout_descriptor, view_uniform_layout_descriptor,
 };
@@ -91,14 +91,14 @@ pub fn raster_shader_handle() -> Handle<Shader> {
 const CLIP_SENTINEL_MIN: [f32; 2] = [f32::NEG_INFINITY, f32::NEG_INFINITY];
 const CLIP_SENTINEL_MAX: [f32; 2] = [f32::INFINITY, f32::INFINITY];
 
-/// Stride of [`RasterInstance`] in bytes (12 × f32 = 48 B). Must equal the
+/// Stride of [`RasterInstance`] in bytes (13 × f32 = 52 B). Must equal the
 /// per-instance `array_stride` the raster pipeline declares.
 pub const RASTER_INSTANCE_STRIDE_BYTES: usize = std::mem::size_of::<RasterInstance>();
 
 /// One raster-quad instance in LOGICAL-pixel units (the view-uniform handoff, the
-/// quad-family convention). No color/radius — the fragment IS the sampled texel.
-/// The uv is implicit `0..1` from the unit-quad VBO, so a `RasterImage` always
-/// samples the whole image stretched to the node rect.
+/// quad-family convention). No color — the fragment IS the sampled texel. The uv
+/// is implicit `0..1` from the unit-quad VBO, so a `RasterImage` always samples
+/// the whole image stretched to the node rect.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct RasterInstance {
@@ -115,13 +115,19 @@ pub struct RasterInstance {
     /// vertex attribute, the band's WebGL2-thrifty precedent). Identity
     /// `[1, 0, 0, 1]` paints axis-aligned.
     pub affine: [f32; 4],
+    /// Uniform corner radius in LOGICAL px (F4b-4): the box-local rounded-rect SDF
+    /// clips the sampled texel so a custom-drawn avatar reads ROUND instead of a
+    /// square sticker. `0.0` = a square clip, byte-identical to the F1 raster path
+    /// (the whole `#[ignore]` raster-readback golden is a `0`-radius canvas). The
+    /// same uniform pill/circle radius the fill uses (`borderless_fill_radius`).
+    pub radius: f32,
 }
 
 /// `true` iff [`RASTER_INSTANCE_STRIDE_BYTES`] equals the actual struct size and
-/// the 48 B the pipeline declares (the parallel of `gradient_stride_agrees`).
+/// the 52 B the pipeline declares (the parallel of `gradient_stride_agrees`).
 pub fn raster_stride_agrees() -> bool {
     RASTER_INSTANCE_STRIDE_BYTES == std::mem::size_of::<RasterInstance>()
-        && RASTER_INSTANCE_STRIDE_BYTES == 12 * std::mem::size_of::<f32>()
+        && RASTER_INSTANCE_STRIDE_BYTES == 13 * std::mem::size_of::<f32>()
 }
 
 /// Render-world list of raster quads to draw this frame, rebuilt every extract
@@ -230,8 +236,9 @@ impl BuiyRasterPipeline {
     /// | clip_min          | 16     | Float32x2 | 4           |
     /// | clip_max          | 24     | Float32x2 | 5           |
     /// | affine            | 32     | Float32x4 | 6           |
+    /// | radius            | 48     | Float32   | 7           |
     ///
-    /// Total instance stride 48 B = [`RASTER_INSTANCE_STRIDE_BYTES`] (7 vertex
+    /// Total instance stride 52 B = [`RASTER_INSTANCE_STRIDE_BYTES`] (8 vertex
     /// attributes total — well under the WebGL2 16-attribute cap).
     fn raster_vertex_buffers() -> Vec<VertexBufferLayout> {
         vec![
@@ -279,6 +286,11 @@ impl BuiyRasterPipeline {
                         format: VertexFormat::Float32x4,
                         offset: 32,
                         shader_location: 6,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32,
+                        offset: 48,
+                        shader_location: 7,
                     },
                 ],
             },
@@ -341,6 +353,7 @@ pub fn raster_instance_for(
     global_transform: &GlobalTransform,
     layout: &ResolvedLayout,
     clip: Option<&ClipRect>,
+    radius: f32,
 ) -> RasterInstance {
     let m = global_transform.affine().matrix3;
     let affine = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
@@ -355,6 +368,7 @@ pub fn raster_instance_for(
         clip_min,
         clip_max,
         affine,
+        radius,
     }
 }
 
@@ -374,6 +388,7 @@ pub fn extract_buiy_rasters(
                 &ResolvedLayout,
                 &RasterImage,
                 Option<&ClipRect>,
+                Option<&Border>,
             ),
             With<Node>,
         >,
@@ -382,9 +397,16 @@ pub fn extract_buiy_rasters(
     out.instances.clear();
     out.images.clear();
     out.entities.clear();
-    for (entity, global_transform, layout, raster, clip) in &query {
+    for (entity, global_transform, layout, raster, clip, border) in &query {
+        // The rounded-clip radius (F4b-4): the node's `Border.radius` resolved to
+        // the same uniform pill/circle radius the borderless fill rounds to, so a
+        // `.radius(Radius::Full)` avatar reads round. Absent `Border` ⇒ `0.0` ⇒ a
+        // square clip, byte-identical to the F1 raster path.
+        let radius = border
+            .map(|b| crate::render::extract::borderless_fill_radius(&b.radius, layout.size))
+            .unwrap_or(0.0);
         out.instances
-            .push(raster_instance_for(global_transform, layout, clip));
+            .push(raster_instance_for(global_transform, layout, clip, radius));
         out.images.push(raster.0.id());
         // The main-world entity — the F4a join key to the node paint-order anchor.
         out.entities.push(entity);
@@ -502,21 +524,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn raster_instance_stride_is_48_bytes() {
+    fn raster_instance_stride_is_52_bytes() {
         assert!(raster_stride_agrees());
-        assert_eq!(RASTER_INSTANCE_STRIDE_BYTES, 48);
+        assert_eq!(RASTER_INSTANCE_STRIDE_BYTES, 52);
     }
 
     #[test]
     fn raster_vertex_layout_stays_within_webgl2_16_attribute_cap() {
-        // The band/glyph WebGL2 guard, applied to the raster layout: 7 attributes,
-        // max location 6 — comfortably under the 16-attribute / loc<=15 cap.
+        // The band/glyph WebGL2 guard, applied to the raster layout: 8 attributes,
+        // max location 7 — comfortably under the 16-attribute / loc<=15 cap.
         let buffers = BuiyRasterPipeline::raster_vertex_buffers();
         let locations: Vec<u32> = buffers
             .iter()
             .flat_map(|b| b.attributes.iter().map(|a| a.shader_location))
             .collect();
-        assert_eq!(locations.len(), 7);
+        assert_eq!(locations.len(), 8);
         assert!(locations.iter().copied().max().unwrap() <= 15);
     }
 
@@ -527,7 +549,7 @@ mod tests {
         let buffers = BuiyRasterPipeline::raster_vertex_buffers();
         let instance = &buffers[1];
         let offsets: Vec<u64> = instance.attributes.iter().map(|a| a.offset).collect();
-        assert_eq!(offsets, vec![0, 8, 16, 24, 32]);
+        assert_eq!(offsets, vec![0, 8, 16, 24, 32, 48]);
         assert_eq!(instance.array_stride, RASTER_INSTANCE_STRIDE_BYTES as u64);
     }
 
@@ -538,6 +560,7 @@ mod tests {
         let z = RasterInstance::zeroed();
         assert_eq!(z.rect_size, [0.0, 0.0]);
         assert_eq!(z.affine, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(z.radius, 0.0);
     }
 
     #[test]
@@ -563,11 +586,27 @@ mod tests {
 
     #[test]
     fn raster_instance_forwards_size_and_identity_affine() {
-        let inst = raster_instance_for(&GlobalTransform::IDENTITY, &layout(720.0, 450.0), None);
+        let inst =
+            raster_instance_for(&GlobalTransform::IDENTITY, &layout(720.0, 450.0), None, 0.0);
         assert_eq!(inst.rect_size, [720.0, 450.0]);
         // An identity transform paints axis-aligned at the origin.
         assert_eq!(inst.rect_pos, [0.0, 0.0]);
         assert_eq!(inst.affine, [1.0, 0.0, 0.0, 1.0]);
+        // A `0.0` radius is the square-clip byte-identical F1 path.
+        assert_eq!(inst.radius, 0.0);
+    }
+
+    #[test]
+    fn raster_instance_forwards_corner_radius() {
+        // F4b-4: the rounded-clip radius rides the instance so the shader can clip
+        // a custom avatar to a circle (a 220×220 canvas with radius 110 = a circle).
+        let inst = raster_instance_for(
+            &GlobalTransform::IDENTITY,
+            &layout(220.0, 220.0),
+            None,
+            110.0,
+        );
+        assert_eq!(inst.radius, 110.0);
     }
 
     #[test]
@@ -575,14 +614,14 @@ mod tests {
         // Position is `GlobalTransform.translation().xy` (pillar 5), exactly as
         // the node quad path takes it — not `ResolvedLayout.position`.
         let gt = GlobalTransform::from_translation(Vec3::new(30.0, 60.0, 0.0));
-        let inst = raster_instance_for(&gt, &layout(220.0, 220.0), None);
+        let inst = raster_instance_for(&gt, &layout(220.0, 220.0), None, 0.0);
         assert_eq!(inst.rect_pos, [30.0, 60.0]);
         assert_eq!(inst.rect_size, [220.0, 220.0]);
     }
 
     #[test]
     fn raster_instance_absent_clip_is_the_full_view_sentinel() {
-        let inst = raster_instance_for(&GlobalTransform::IDENTITY, &layout(10.0, 10.0), None);
+        let inst = raster_instance_for(&GlobalTransform::IDENTITY, &layout(10.0, 10.0), None, 0.0);
         assert_eq!(inst.clip_min, [f32::NEG_INFINITY, f32::NEG_INFINITY]);
         assert_eq!(inst.clip_max, [f32::INFINITY, f32::INFINITY]);
     }
@@ -597,6 +636,7 @@ mod tests {
             &GlobalTransform::IDENTITY,
             &layout(200.0, 100.0),
             Some(&clip),
+            0.0,
         );
         assert_eq!(inst.clip_min, [5.0, 6.0]);
         assert_eq!(inst.clip_max, [105.0, 86.0]);
@@ -607,7 +647,7 @@ mod tests {
         // A scaled transform packs its 2D linear part into the affine basis, so a
         // scaled canvas paints scaled (the same basis the node quad path uses).
         let gt = GlobalTransform::from_scale(Vec3::new(2.0, 3.0, 1.0));
-        let inst = raster_instance_for(&gt, &layout(10.0, 10.0), None);
+        let inst = raster_instance_for(&gt, &layout(10.0, 10.0), None, 0.0);
         assert_eq!(inst.affine, [2.0, 0.0, 0.0, 3.0]);
     }
 }

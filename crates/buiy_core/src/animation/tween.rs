@@ -38,7 +38,7 @@ use bevy::prelude::*;
 
 use super::easing::Easing;
 use crate::layout::{Length, Rotate, Scale, Translate};
-use crate::render::components::Opacity;
+use crate::render::components::{Opacity, QuadAlpha};
 
 /// Linear interpolation for an animatable value. `lerp(from, to, 0) == from`
 /// and `lerp(from, to, 1) == to`.
@@ -260,6 +260,13 @@ pub struct ScaleTween(pub Tween<Vec3>);
 #[derive(Component, Clone, Debug)]
 pub struct OpacityTween(pub Tween<f32>);
 
+/// Tween the cheap per-quad fill alpha ([`QuadAlpha`]) in `[0, 1]` — the particle
+/// fade (F4b-5). Unlike [`OpacityTween`] → [`Opacity`] (which forms an off-screen
+/// `EffectGroup`), this drives [`QuadAlpha`], which multiplies the fill quad's
+/// alpha with no compositor cost — so ~110 fading confetti stay composite-free.
+#[derive(Component, Clone, Debug)]
+pub struct QuadAlphaTween(pub Tween<f32>);
+
 /// Tween a resolved background color, written to the companion
 /// [`AnimatedBackgroundColor`].
 #[derive(Component, Clone, Debug)]
@@ -437,6 +444,31 @@ pub fn advance_opacity_tweens(
             Tick::Done(v, mark) => {
                 let mut ec = commands.entity(entity);
                 ec.insert(Opacity(v)).remove::<OpacityTween>();
+                if mark {
+                    ec.insert(OnComplete);
+                }
+            }
+        }
+    }
+}
+
+/// Drive [`QuadAlphaTween`] → [`QuadAlpha`] (the composite-free particle fade).
+pub fn advance_quad_alpha_tweens(
+    mut commands: Commands,
+    time: Res<Time>,
+    prefs: Option<Res<crate::theme::UserPreferences>>,
+    mut q: Query<(Entity, &mut QuadAlphaTween)>,
+) {
+    let dt = time.delta();
+    let rm = reduced_motion(prefs.as_deref());
+    for (entity, mut target) in &mut q {
+        match tick_tween(&mut target.0, dt, rm) {
+            Tick::Running(v) => {
+                commands.entity(entity).insert(QuadAlpha(v));
+            }
+            Tick::Done(v, mark) => {
+                let mut ec = commands.entity(entity);
+                ec.insert(QuadAlpha(v)).remove::<QuadAlphaTween>();
                 if mark {
                     ec.insert(OnComplete);
                 }

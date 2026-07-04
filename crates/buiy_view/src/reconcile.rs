@@ -37,8 +37,8 @@ use buiy_core::a11y::{A11yLabel, A11yRole, A11yToggled, Toggled};
 use buiy_core::components::Node;
 use buiy_core::layout::{
     AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset,
-    JustifyContent, Length, Overflow, OverflowMode, Position, PositionKind, ScrollOffset, Sizing,
-    Stacking, TopLayer, Translate,
+    JustifyContent, Length, Overflow, OverflowMode, Position, PositionKind, Rotate, ScrollOffset,
+    Sizing, Stacking, TopLayer, Translate,
 };
 use buiy_core::mvu::{ControlledLeaf, Envelope, Model, ToggleMsg};
 use buiy_core::render::RasterImage;
@@ -638,7 +638,39 @@ fn apply_node_layout(
     changed |= apply_top_layer(world, e, layout.top_layer);
     changed |= apply_stick_marker(world, e, layout.stick);
     changed |= apply_picking(world, e, layout.ignore_picking || auto_ignore);
+    changed |= apply_rotate(world, e, layout.rotate);
     changed
+}
+
+/// Drive a node's 2D `.rotate(deg)` transform (F4b, spec §2.2 `.rotate` row). The
+/// core transform chain already exists — `Rotate(Quat)` → the layout compose
+/// sub-pass → `ResolvedTransform` → the render bridge → `GlobalTransform`'s 2D
+/// linear part → `PackedInstance.affine` (confetti proved it cheap: `Rotate`
+/// forms only a stacking context, never an `EffectGroup`). `Node` does NOT
+/// `#[require]` `Rotate`, so it is **inserted on demand** (only when a non-zero
+/// angle is asked) and toggling back writes identity (drift-only — kept present,
+/// no `RemovedComponents`), mirroring [`apply_flex_item`].
+///
+/// The pivot is the element's center (`transform-origin`'s default). **Picking
+/// caveat:** the picking AABB is translation-anchored and does NOT model rotation
+/// (`layout/systems.rs`), so a large rotation on an interactive node mis-hits —
+/// `.rotate()` is a decoration modifier (confetti / the ribbon / a small tile
+/// tilt); a heavily-rotated interactive element wants `.ignore_picking()`.
+fn apply_rotate(world: &mut World, e: Entity, rotate: Option<f32>) -> bool {
+    let radians = rotate.unwrap_or(0.0).to_radians();
+    let want = Quat::from_rotation_z(radians);
+    if let Some(mut r) = world.get_mut::<Rotate>(e) {
+        if r.0 != want {
+            r.0 = want;
+            return true;
+        }
+        false
+    } else if radians != 0.0 {
+        world.entity_mut(e).insert(Rotate(want));
+        true
+    } else {
+        false
+    }
 }
 
 /// `set_if_neq`-patch a container's `FlexParams` (direction + justify + align +
