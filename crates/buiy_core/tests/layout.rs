@@ -34,6 +34,8 @@ mod layout_flex_distribution;
 mod layout_grid;
 #[path = "layout/layout_grid_stubs.rs"]
 mod layout_grid_stubs;
+#[path = "layout/layout_hidpi.rs"]
+mod layout_hidpi;
 #[path = "layout/layout_multicol.rs"]
 mod layout_multicol;
 #[path = "layout/layout_overflow.rs"]
