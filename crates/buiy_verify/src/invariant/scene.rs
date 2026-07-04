@@ -758,6 +758,10 @@ fn extracted_node(entity: Entity, n: &FlatNode) -> ExtractedNode {
         entity,
         position,
         size,
+        // The synthetic invariant scene carries no `Border.radius`, so its fills
+        // are square (`border: None` below); the borderless-rounded fill radius
+        // is exercised by the display-list/GPU tiers, not this invariant scene.
+        radius: 0.0,
         color,
         clip,
         group: None,

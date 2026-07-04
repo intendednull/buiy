@@ -12,9 +12,27 @@ use std::sync::Arc;
 use bevy::asset::Handle;
 use bevy::image::Image;
 use bevy::prelude::Component;
+use buiy_core::render::components::LineStyle;
+use buiy_core::text::{FamilyEntry, FontStack, GenericFamily};
 
 use crate::layout::LayoutProps;
-use crate::tokens::{Color, Radius};
+use crate::tokens::{Color, Radius, Weight};
+
+/// The `viewBox` default for the [`icon`] element (mirrors the render
+/// `ICON_VIEWBOX`) — an app authoring on the widget-catalog 24×24 space.
+pub const ICON_VIEWBOX: f32 = 24.0;
+
+/// One box-shadow term authored by [`Element::shadow`] (F3): offset, blur,
+/// spread (logical px) + [`Color`]. Chains front-to-back in CSS paint order;
+/// lowered to `buiy_core::render::components::BoxShadow`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShadowSpec {
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub color: Color,
+}
 
 /// A text-input's per-keystroke handler — `value → Msg` (design §2, #13/#17).
 ///
@@ -155,6 +173,13 @@ pub enum Kind {
     /// entity so an unrelated re-render never drops the canvas texture. Authored
     /// via [`raster`].
     Raster,
+    /// A **vector icon** node carrying `buiy_core`'s `Icon` (SVG-path → lyon
+    /// coverage). Authored via [`icon`]; the reconciler patches its path / size /
+    /// stroke / viewBox / color in place. The SAME node can also carry a
+    /// `.background()` + `.radius()` + `.width`/`.height`, so ONE icon node paints
+    /// a tinted circular badge with the doodle stroked centered over it (the fill
+    /// quad is below the icon coverage — Dooduel's doodle avatars). F3.
+    Icon,
 }
 
 /// An inert description of a piece of UI. Built by the widget builders,
@@ -217,6 +242,44 @@ pub struct Element<Msg> {
     /// to `buiy_core::render::RasterImage`; patched **by identity** (entity
     /// preserved) on change, so an unrelated fold never re-uploads the texture.
     pub(crate) raster: Option<Handle<Image>>,
+
+    // --- F3 styling additions (color / type / outline / rounding / shadow / icon)
+    /// Explicit foreground [`Color`] for a `Text` node / `Button` label / `Icon`
+    /// (`.color(..)`). `None` ⇒ the theme default ink. Lowered to `TextColor`
+    /// (text/label) or `Icon.color` (icon).
+    pub(crate) color: Option<Color>,
+    /// Explicit font family for a `Text` node / `Button` label (`.font("Caveat")`).
+    /// `None` ⇒ the default sans. Lowered to `FontFamily`.
+    pub(crate) font_family: Option<FontStack>,
+    /// Explicit font [`Weight`] for a `Text` node / `Button` label (`.weight(..)`)
+    /// — the variable-font weight axis. `None` ⇒ the family's default instance.
+    /// Lowered to `buiy_core::text::FontWeight`.
+    pub(crate) font_weight: Option<Weight>,
+    /// A uniform border `(width_px, color, style)` on any painting node
+    /// (`.border(w, c, style)`), lowered to `BoxModel.border` (width) + a 4-side
+    /// `Border` (color + style + the `.radius`/`.radius_corners` corners). The
+    /// `style` makes dashed *requestable* (its rasterization is F4b). `None` ⇒
+    /// no border.
+    pub(crate) border: Option<(f32, Color, LineStyle)>,
+    /// Explicit per-corner radius `(tl, tr, br, bl)` in logical px
+    /// (`.radius_corners(..)`, the design's asymmetric wobble). Takes precedence
+    /// over the uniform `radius` token when set. `None` ⇒ use `radius`.
+    pub(crate) radius_corners: Option<[f32; 4]>,
+    /// Box-shadow terms (`.shadow(..)`), front-to-back in CSS paint order. Empty
+    /// ⇒ no shadow. Lowered to `BoxShadow`.
+    pub(crate) shadows: Vec<ShadowSpec>,
+    /// A [`Kind::Icon`] node's SVG path `d` (authored on the `icon_viewbox`
+    /// space). Lowered to `Icon.path_d`.
+    pub(crate) icon_path: Option<String>,
+    /// A [`Kind::Icon`]'s stroke width in `icon_viewbox` units (lowered to
+    /// `Icon.stroke_width`; icons here are always stroked, round cap/join).
+    pub(crate) icon_stroke_width: f32,
+    /// A [`Kind::Icon`]'s render size in logical px (lowered to `Icon.size_px`;
+    /// the doodle paints centered in the node's box at this size).
+    pub(crate) icon_size_px: u16,
+    /// A [`Kind::Icon`]'s author viewBox extent (lowered to `Icon.viewbox`; the
+    /// coordinate space `icon_path` + `icon_stroke_width` are drawn in).
+    pub(crate) icon_viewbox: f32,
 }
 
 pub(crate) const DEFAULT_TEXT_SIZE: f32 = 24.0;
@@ -241,6 +304,16 @@ impl<Msg> Element<Msg> {
             on_input: None,
             on_submit: None,
             raster: None,
+            color: None,
+            font_family: None,
+            font_weight: None,
+            border: None,
+            radius_corners: None,
+            shadows: Vec::new(),
+            icon_path: None,
+            icon_stroke_width: 0.0,
+            icon_size_px: 0,
+            icon_viewbox: ICON_VIEWBOX,
         }
     }
 
@@ -286,6 +359,69 @@ impl<Msg> Element<Msg> {
     /// Corner radius (containers). A [`Radius`] token.
     pub fn radius(mut self, r: Radius) -> Self {
         self.radius = Some(r);
+        self
+    }
+
+    /// Explicit per-corner radius `(tl, tr, br, bl)` in logical px (F3) — the
+    /// design's asymmetric "wobble". Takes precedence over the uniform
+    /// [`radius`](Self::radius) token.
+    pub fn radius_corners(mut self, tl: f32, tr: f32, br: f32, bl: f32) -> Self {
+        self.radius_corners = Some([tl, tr, br, bl]);
+        self
+    }
+
+    /// Explicit foreground [`Color`] for a `Text` node, a `Button`'s label, or an
+    /// `Icon` (F3). Without it text renders in the theme default ink — so this is
+    /// what expresses an accent eyebrow, a muted caption, a white on-accent button
+    /// label, or a status-green score. Lowered to `TextColor` (text/label) or
+    /// `Icon.color` (icon).
+    pub fn color(mut self, c: Color) -> Self {
+        self.color = Some(c);
+        self
+    }
+
+    /// Select a font **family** by name for a `Text` node or a `Button` label
+    /// (`.font("Caveat")`, F3), with a sans-serif fallback. The family must be
+    /// registered (see `FontRegistry`) and equal the font's internal family name.
+    /// Lowered to `FontFamily`; unset ⇒ the default sans.
+    pub fn font(mut self, family: impl Into<String>) -> Self {
+        self.font_family = Some(FontStack(vec![
+            FamilyEntry::Named(family.into()),
+            FamilyEntry::Generic(GenericFamily::SansSerif),
+        ]));
+        self
+    }
+
+    /// Select a font [`Weight`] for a `Text` node or a `Button` label (F3) — the
+    /// variable-font weight axis. Unset ⇒ the family's default instance. Lowered
+    /// to `buiy_core::text::FontWeight`.
+    pub fn weight(mut self, w: Weight) -> Self {
+        self.font_weight = Some(w);
+        self
+    }
+
+    /// A uniform border of `width` logical px in [`Color`] `c` drawn with
+    /// [`LineStyle`] `style` (F3). The `style` makes dashed / dotted borders
+    /// *requestable* from the view (the design's room-code box, join input);
+    /// their rasterization lands in F4b — a `Dashed` request renders solid until
+    /// then. Pair with `.radius(..)` / `.radius_corners(..)` for a rounded outline.
+    pub fn border(mut self, width: f32, c: Color, style: LineStyle) -> Self {
+        self.border = Some((width, c, style));
+        self
+    }
+
+    /// Append a box-shadow term `(dx, dy, blur, spread)` logical px in [`Color`]
+    /// `c` (F3). Chains front-to-back in CSS paint order (the first `.shadow`
+    /// paints on top) — the ambient card shadow + the 3D-press underside stack by
+    /// repeated calls. Lowered to `BoxShadow`.
+    pub fn shadow(mut self, dx: f32, dy: f32, blur: f32, spread: f32, c: Color) -> Self {
+        self.shadows.push(ShadowSpec {
+            dx,
+            dy,
+            blur,
+            spread,
+            color: c,
+        });
         self
     }
 
@@ -446,6 +582,16 @@ impl<Msg> Element<Msg> {
             // Lift `on_submit` through its handler (`Static` maps the value, `Capturing` the fn).
             on_submit: self.on_submit.map(|h| h.map(f)),
             raster: self.raster,
+            color: self.color,
+            font_family: self.font_family,
+            font_weight: self.font_weight,
+            border: self.border,
+            radius_corners: self.radius_corners,
+            shadows: self.shadows,
+            icon_path: self.icon_path,
+            icon_stroke_width: self.icon_stroke_width,
+            icon_size_px: self.icon_size_px,
+            icon_viewbox: self.icon_viewbox,
         }
     }
 }
@@ -517,6 +663,31 @@ pub fn raster<Msg>(handle: Handle<Image>, width: f32, height: f32) -> Element<Ms
     // squish it below its size (the canvas-squish finding — a `.fill()`/`.grow()`
     // parent shrank the 450px canvas). Pin shrink off by construction.
     e.layout.shrink = 0.0;
+    e
+}
+
+/// A **vector icon** (F3): the SVG path `d` (multi-subpath), authored on a
+/// `viewbox`×`viewbox` coordinate space, rendered at `size_px` logical px with a
+/// round-cap/join stroke of `stroke_width` (in viewBox units). Defaults to the
+/// theme ink; set the stroke color with [`Element::color`].
+///
+/// Reconciles to a `Node` carrying `buiy_core`'s `Icon`, painted CENTERED in the
+/// node's box. Give the node a `.width`/`.height` + `.background()` + `.radius()`
+/// to make it a tinted circular badge with the doodle stroked on top (the
+/// doodle-avatar idiom); leave those off for a bare glyph. The `viewbox` arg lets
+/// an app author on its own design viewBox (e.g. 40×40) with no per-path
+/// pre-scale — pass [`ICON_VIEWBOX`] (24.0) for the widget-catalog space.
+pub fn icon<Msg>(
+    path_d: impl Into<String>,
+    size_px: u16,
+    stroke_width: f32,
+    viewbox: f32,
+) -> Element<Msg> {
+    let mut e = Element::new(Kind::Icon);
+    e.icon_path = Some(path_d.into());
+    e.icon_size_px = size_px;
+    e.icon_stroke_width = stroke_width;
+    e.icon_viewbox = viewbox;
     e
 }
 

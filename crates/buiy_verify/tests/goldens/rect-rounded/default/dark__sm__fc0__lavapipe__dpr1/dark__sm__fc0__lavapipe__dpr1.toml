@@ -9,9 +9,9 @@ dpr = 1000
 
 [[positives]]
 file = "dark__sm__fc0__lavapipe__dpr1.0.png"
-blessed_commit = "21693444d12a2a45eded0b194b8a332c335cfc32"
-blessed_at = "2026-06-16T20:19:20Z"
-reason = "re-blessed on CI pinned lavapipe (Mesa 24.3.4)"
+blessed_commit = "02ec3cff1a4930c99cdb23868d25df81949e5967"
+blessed_at = "2026-07-04T05:24:18Z"
+reason = "re-blessed for Dooduel F3: the borderless-rounded FILL now rounds (was square under the old stubbed pack_extracted radius 0). Stale square baseline pruned so a square-fill regression cannot pass. Pinned lavapipe (Mesa 24.3.4 / LLVM 18)."
 
 [positives.budget]
 max_channel_delta = 0

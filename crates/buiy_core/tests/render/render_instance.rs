@@ -96,6 +96,7 @@ fn node_with_clip(clip: Option<ClipRect>) -> ExtractedNode {
         entity: Entity::from_raw_u32(1).unwrap(),
         position: Vec2::new(10.0, 20.0),
         size: Vec2::new(30.0, 40.0),
+        radius: 0.0,
         color: Color::WHITE,
         clip,
         group: None,
