@@ -9,6 +9,7 @@
 //! `render::atlas`'s seam types (pinned by tests/text_touch_pass.rs's seam
 //! contract test).
 
+use std::ops::Range;
 use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -29,7 +30,9 @@ use crate::render::color::{
     resolve_caret_color, resolve_preedit_underline, resolve_selection_bg, resolve_selection_fg,
     resolve_token,
 };
-use crate::render::components::{AncestorClip, CaretColor, ClipRect, ComputedPaintSkip, TextColor};
+use crate::render::components::{
+    AncestorClip, CaretColor, ClipRect, ComputedPaintSkip, EffectGroup, Opacity, TextColor,
+};
 use crate::render::extract::{
     ExtractedTextQuads, TextQuad, context_roots, context_tree_paint_order, effective_clip,
 };
@@ -42,7 +45,10 @@ use super::components::{
     TextDecorations,
 };
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
-use super::edit::{Placeholder, PlaceholderActive, PlaceholderBuffer, TextBufferAccessReadOnly};
+use super::edit::{
+    Placeholder, PlaceholderActive, PlaceholderBuffer, TextBufferAccessReadOnly,
+    TextBufferAccessReadOnlyItem,
+};
 use super::font_system::{FontDbLineage, FontsGeneration, SharedFontSystem};
 use super::registry::PendingFontBlock;
 use super::stamp::{solid_stamp_bitmap, solid_stamp_key, stamp_uv};
@@ -142,6 +148,18 @@ pub fn pack_clip(clip: Option<&ClipRect>) -> [f32; 4] {
 pub struct ResidentTextKeys {
     /// One entry per emitted instance, in emission order.
     pub keys: Vec<AtlasKey>,
+    /// Per-entity key attribution: one contiguous range into `keys` per
+    /// emitting entity, in emission order — recorded AT emission and rebuilt
+    /// in lockstep with `keys` on every rebuild (partial-reextract D2). Keys
+    /// are NOT 1:1 with instances (the bidi secondary caret stamp pushes a
+    /// second instance but deliberately no second key), so these ranges can
+    /// NEVER be derived from `ExtractedGlyphs::entity_runs`. Lives HERE, in
+    /// the producer's retained state, NOT on [`GlyphEntityRun`]: the publish
+    /// block value-compares `(glyphs, entity_runs)` under ONE tick (T8 D4),
+    /// and key attribution is atlas bookkeeping, not published paint data —
+    /// folding it into `GlyphEntityRun` would add a non-paint input to that
+    /// compare.
+    pub key_runs: Vec<(Entity, Range<u32>)>,
     /// `None` until the first rebuild seeds it (the first frame rebuilds
     /// regardless via the Added/Changed fan).
     pub last_scale_factor: Option<f32>,
@@ -159,6 +177,323 @@ pub struct ResidentTextKeys {
 /// budget (no second eviction policy).
 #[derive(Resource, Default)]
 pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>);
+
+/// How this frame re-extracted the glyph carrier — the glyph tier's
+/// `NodeDamage` mirror (partial-reextract D1), published by
+/// [`extract_buiy_glyphs`] on EVERY dirty frame and consumed by prepare +
+/// the compositor from Stage D. `Full` = the whole set was rebuilt (cold
+/// frame, global trigger, structural change, or a Patch-ineligible change).
+/// `Patch { changed, removed }` = the damage is confined to the named
+/// RESIDENT entities: re-emit + splice-replace `changed`, splice-delete
+/// `removed` (D3: despawns ARE patchable, keyed by the
+/// `RemovedComponents<ResolvedLayout>` stream's ids). Untouched on clean
+/// frames (the § 6.2 O(0) contract), so consumers read freshness off the
+/// resource tick exactly like the carriers.
+///
+/// From Stage C the published verdict IS what the producer EXECUTED: a
+/// `Patch` frame skips the O(scene) order walk and splices only the named
+/// entities' slices (D2); a `Full` frame ran the wholesale walk. The
+/// classifier verdict and the execution can never diverge — every
+/// force-Full condition (including the `FontDbLineage` interner reseat)
+/// feeds the classifier, so `RenderWorkCounters`' candidate/executed
+/// counts coincide by construction.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub enum GlyphDamage {
+    /// Rebuild/consume the whole carrier.
+    #[default]
+    Full,
+    /// Value-tier damage confined to the named resident entities.
+    Patch {
+        /// Resident entities to re-emit + splice-replace (Stage C).
+        changed: SmallVec<[Entity; 8]>,
+        /// Resident despawned entities to splice-delete (Stage C).
+        removed: SmallVec<[Entity; 4]>,
+        /// The minimal instance index the EXECUTED splices changed in
+        /// `ExtractedGlyphs.glyphs` (partial-reextract D6) — the run start of
+        /// the earliest spliced/deleted slice, measured at splice time, so the
+        /// prefix `[0..slot)` is byte-identical to the previously published
+        /// carrier by construction (splices only mutate indices at or after
+        /// their run start). Prepare's suffix ranged upload writes exactly
+        /// `[slot..len)`.
+        ///
+        /// `Some` IFF the glyph carrier really ticked this frame: the
+        /// classifier verdicts with `None` (it runs BEFORE execution), and the
+        /// producer fills the slot in only when a splice actually changed the
+        /// instance vec — a no-op re-emission, or a quads-only Patch (e.g. a
+        /// decoration-color edit), publishes `None` and leaves the glyph tick
+        /// untouched, so prepare never wakes for the glyph buffer at all.
+        first_dirty_slot: Option<u32>,
+    },
+}
+
+/// The D3 changed-set-fraction bail threshold: a dirty frame whose changed
+/// set exceeds this percentage of the retained runs classifies Full — a
+/// scroll ticks `GlobalTransform` on every text descendant, and splice-all
+/// must never cost more than the wholesale walk it replaces. 50 % is the
+/// design default (partial-reextract D3, "~50 % of runs, tuned in Stage B");
+/// the Stage C `mt_ceiling`/gallery measurements own any retune.
+const GLYPH_PATCH_MAX_CHANGED_PERCENT: u64 = 50;
+
+/// The Full/Patch verdict (design D3: "any uncertainty → Full") — from
+/// Stage C the producer EXECUTES it.
+/// PURE — every rule branch is unit-testable headless (the
+/// [`classify_glyph_content`] discipline); the producer owns gathering the
+/// inputs. Rule order:
+///
+/// 1. Whole-set by NATURE — `global_trigger` (theme / scale-factor /
+///    `FontsGeneration` / `FontDbLineage`, all whole-set re-resolves) — or
+///    whole-set by UNCERTAINTY — `structural_changed` (the un-scoped probes:
+///    paint order or group membership may have moved), `skip_lifted`
+///    (hide→show re-insertion: the re-shown subtree's order position is
+///    unknown without the walk), `degradation_live` (the alpha-fold's
+///    "whole buffer repacked from source" invariant, compositor.rs
+///    `fold_degraded_groups`) — → Full.
+/// 2. A changed entity ABSENT from the retained runs → Full. Absence-from-
+///    retained-runs is the Added detection (D3 "no `Added` text entities"),
+///    chosen over `Added<TextBuffer>` because one rule also catches every
+///    other way an entity can NEWLY emit (first non-whitespace edit,
+///    placeholder activation, entity-tier hide→show) — its order position
+///    is equally unknown in all of them.
+/// 3. The changed-set-fraction bail: strictly more than
+///    [`GLYPH_PATCH_MAX_CHANGED_PERCENT`] of the retained runs → Full.
+///    (A 1-entity scene therefore always classifies Full — harmless: with
+///    one run, Patch and Full walk the same entity.)
+/// 4. Else → Patch: the changed residents to re-emit, plus the RESIDENT
+///    despawns to splice-delete. A non-resident removal id is dropped —
+///    EVERY node despawn rides `RemovedComponents<ResolvedLayout>`, so a
+///    text-free despawn must classify as a no-op Patch, not escalate.
+fn classify_glyph_damage(
+    global_trigger: bool,
+    structural_changed: bool,
+    skip_lifted: bool,
+    degradation_live: bool,
+    changed: &[Entity],
+    despawned: &[Entity],
+    retained_runs: &[GlyphEntityRun],
+) -> GlyphDamage {
+    if global_trigger || structural_changed || skip_lifted || degradation_live {
+        return GlyphDamage::Full;
+    }
+    let resident: std::collections::HashSet<Entity> =
+        retained_runs.iter().map(|r| r.entity).collect();
+    // A despawned id can also arrive through a value-clear stream (a despawn
+    // removes EVERY component) — it is a delete, never a re-emit.
+    let changed_live: SmallVec<[Entity; 8]> = changed
+        .iter()
+        .copied()
+        .filter(|e| !despawned.contains(e))
+        .collect();
+    if changed_live.iter().any(|e| !resident.contains(e)) {
+        return GlyphDamage::Full;
+    }
+    if changed_live.len() as u64 * 100
+        > retained_runs.len() as u64 * GLYPH_PATCH_MAX_CHANGED_PERCENT
+    {
+        return GlyphDamage::Full;
+    }
+    let removed: SmallVec<[Entity; 4]> = despawned
+        .iter()
+        .copied()
+        .filter(|e| resident.contains(e))
+        .collect();
+    GlyphDamage::Patch {
+        changed: changed_live,
+        removed,
+        // The classifier runs BEFORE execution: the producer fills the slot in
+        // when it publishes the executed verdict (D6).
+        first_dirty_slot: None,
+    }
+}
+
+/// The run-attribution shape [`splice_run`] renumbers (partial-reextract
+/// D2): one contiguous `Range<u32>` into a record vec, keyed by entity. Two
+/// carriers share the splice — `ExtractedGlyphs.entity_runs`
+/// ([`GlyphEntityRun`]) and `ResidentTextKeys.key_runs`
+/// (`(Entity, Range<u32>)`) — so the accessor is a trait, not a field.
+trait SpliceRun {
+    fn entity(&self) -> Entity;
+    fn range(&self) -> Range<u32>;
+    fn set_range(&mut self, range: Range<u32>);
+}
+
+impl SpliceRun for GlyphEntityRun {
+    fn entity(&self) -> Entity {
+        self.entity
+    }
+    fn range(&self) -> Range<u32> {
+        self.instances.clone()
+    }
+    fn set_range(&mut self, range: Range<u32>) {
+        self.instances = range;
+    }
+}
+
+impl SpliceRun for (Entity, Range<u32>) {
+    fn entity(&self) -> Entity {
+        self.0
+    }
+    fn range(&self) -> Range<u32> {
+        self.1.clone()
+    }
+    fn set_range(&mut self, range: Range<u32>) {
+        self.1 = range;
+    }
+}
+
+/// Splice-replace `entity`'s contiguous slice in a run-attributed record vec
+/// (partial-reextract D2): byte-compare first — an equal re-emission is a
+/// NO-OP (returns `None`, so the caller leaves the carrier tick untouched,
+/// D4) — else replace the slice, renumber every subsequent run's range by
+/// the length delta (O(runs)), and memmove the tail (`Vec::splice`; an
+/// equal-length replacement overwrites in place). `fresh.is_empty()` deletes
+/// the run (the despawn / no-longer-emitting splice-delete). Returns
+/// `Some(start)` — the spliced run's start slot, measured at splice time —
+/// when the carrier really changed (records or runs), `None` on a no-op.
+/// A splice mutates NO index below its returned start, so the minimum over
+/// a Patch's returned starts bounds the changed suffix: the prefix below it
+/// is byte-identical to the pre-patch carrier (the D6 `first_dirty_slot`
+/// prepare's suffix ranged upload leans on).
+///
+/// A Patch may never APPEND to an ordered carrier: the classifier owns
+/// order placement, and rule 2 (absence-from-retained-runs) escalates every
+/// newly-emitting entity to Full — so a non-resident entity with a
+/// non-empty `fresh` is unreachable here (debug-asserted; a non-resident
+/// delete is a no-op).
+fn splice_run<T: PartialEq + Clone, R: SpliceRun>(
+    records: &mut Vec<T>,
+    runs: &mut Vec<R>,
+    entity: Entity,
+    fresh: &[T],
+) -> Option<u32> {
+    let Some(pos) = runs.iter().position(|r| r.entity() == entity) else {
+        debug_assert!(
+            fresh.is_empty(),
+            "a Patch may never append a new run — the classifier escalates \
+             newly-emitting entities to Full (D3 rule 2)"
+        );
+        return None;
+    };
+    let old = runs[pos].range();
+    let (start, end) = (old.start as usize, old.end as usize);
+    if records[start..end] == *fresh {
+        return None; // byte-identical re-emission: no splice, no tick (D4)
+    }
+    records.splice(start..end, fresh.iter().cloned());
+    let delta = fresh.len() as i64 - (end - start) as i64;
+    let renumber_from = if fresh.is_empty() {
+        runs.remove(pos);
+        pos
+    } else {
+        runs[pos].set_range(old.start..old.start + fresh.len() as u32);
+        pos + 1
+    };
+    if delta != 0 {
+        for run in &mut runs[renumber_from..] {
+            let r = run.range();
+            run.set_range((r.start as i64 + delta) as u32..(r.end as i64 + delta) as u32);
+        }
+    }
+    Some(old.start)
+}
+
+/// The quad half of the splice (partial-reextract D2, "the easy half"): the
+/// quad carrier has NO run table — `entity` on each record is the splice
+/// key, per-entity CONTIGUITY is the invariant (§ 4.6 grouping), and
+/// cross-entity order is not load-bearing (quads all pack at one primitive
+/// rank; only within-entity order — selection under decoration — matters).
+/// So a resident slice is found by scan and splice-replaced in place, while
+/// an entity that newly gains quads (a selection appearing on a Patch
+/// frame) APPENDS its slice at the end — contiguous by construction.
+/// Returns whether the carrier really changed.
+fn splice_entity_quads(quads: &mut Vec<TextQuad>, entity: Entity, fresh: &[TextQuad]) -> bool {
+    debug_assert!(
+        fresh.iter().all(|q| q.entity == entity),
+        "a fresh quad slice must be single-entity (the emit is per entity)"
+    );
+    match quads.iter().position(|q| q.entity == entity) {
+        Some(start) => {
+            let end = start
+                + quads[start..]
+                    .iter()
+                    .take_while(|q| q.entity == entity)
+                    .count();
+            debug_assert!(
+                quads[end..].iter().all(|q| q.entity != entity),
+                "per-entity quad contiguity violated (§ 4.6 grouping)"
+            );
+            if quads[start..end] == *fresh {
+                return false; // byte-identical re-emission: no tick (D4)
+            }
+            quads.splice(start..end, fresh.iter().copied());
+            true
+        }
+        None => {
+            if fresh.is_empty() {
+                return false;
+            }
+            quads.extend_from_slice(fresh);
+            true
+        }
+    }
+}
+
+/// Debug tripwire (partial-reextract D2): after a Patch's splices the
+/// retained attribution must still satisfy the invariants
+/// `partition_glyph_ranges` debug_asserts at pack time — entity runs
+/// gapless from 0 and non-empty, covering every instance; key runs likewise
+/// covering every key; and the two run tables naming the same entities in
+/// the same order (the run sets coincide: every instance-emitting path
+/// pushes at least one key).
+fn debug_assert_spliced_coverage(glyphs: &ExtractedGlyphs, resident: &ResidentTextKeys) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mut next = 0u32;
+    for run in &glyphs.entity_runs {
+        debug_assert_eq!(
+            run.instances.start, next,
+            "spliced entity_runs must stay gapless from 0"
+        );
+        debug_assert!(
+            run.instances.start < run.instances.end,
+            "spliced entity_runs must stay non-empty"
+        );
+        next = run.instances.end;
+    }
+    debug_assert_eq!(
+        next as usize,
+        glyphs.glyphs.len(),
+        "spliced entity_runs must cover every instance"
+    );
+    let mut key_next = 0u32;
+    for (_, range) in &resident.key_runs {
+        debug_assert_eq!(
+            range.start, key_next,
+            "spliced key_runs must stay gapless from 0"
+        );
+        debug_assert!(
+            range.start < range.end,
+            "spliced key_runs must stay non-empty"
+        );
+        key_next = range.end;
+    }
+    debug_assert_eq!(
+        key_next as usize,
+        resident.keys.len(),
+        "spliced key_runs must cover every key"
+    );
+    debug_assert_eq!(
+        glyphs.entity_runs.len(),
+        resident.key_runs.len(),
+        "the instance and key run tables must name the same entities"
+    );
+    for (run, (entity, _)) in glyphs.entity_runs.iter().zip(&resident.key_runs) {
+        debug_assert_eq!(
+            run.entity, *entity,
+            "instance and key run order must coincide"
+        );
+    }
+}
 
 /// The render-world glyph producer (architecture § 4.4; glyph-pipeline § 6).
 /// Runs in `ExtractSchedule` `.after(maintain_atlas)` so inserts and touches
@@ -181,7 +516,10 @@ pub struct GlyphMetaCache(pub std::collections::HashMap<AtlasKey, GlyphBearing>)
 /// `Changed<SelectionVisual>` (+ its removal stream — removal IS the clear
 /// mechanism) joined in T7's selection emission; `Changed<CaretVisual>`
 /// (+ its removal stream — focus loss hides) and `Changed<CaretColor>`
-/// joined with T7's caret emission. The ledger names zero open joins.
+/// joined with T7's caret emission. The un-scoped `Changed<StackingContext>`
+/// ORDER probe joined in partial-reextract Stage B (D3) — the scoped union
+/// is blind to ancestor-driven paint reorders. The ledger names zero open
+/// joins.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn extract_buiy_glyphs(
     mut atlas: ResMut<BuiyAtlas>,
@@ -310,7 +648,77 @@ pub fn extract_buiy_glyphs(
         // quad) on commit/cancel.
         Extract<RemovedComponents<PreeditVisual>>,
     ),
-    contexts: Extract<Query<(Entity, &StackingContext)>>,
+    // Paint-order STRUCTURE (partial-reextract D3), tupled into ONE param
+    // (params nest — the `carriers`/`removed` precedent; the producer sits at
+    // Bevy's 16-param cap):
+    //  .0 — every forming entity's StackingContext: the walk's order source.
+    //  .1 — the ORDER probe, un-scoped `Changed<StackingContext>`: the § 6.2
+    //       union is `With<TextBuffer>`-scoped and therefore BLIND to an
+    //       ancestor-driven paint reorder (a wrapper z flip ticks nothing on
+    //       the text entities). `StackingContext` is written value-gated
+    //       (layout 6f's idempotent insert), so this term is O(0) on steady
+    //       frames and fires EXACTLY when painters_z / cross_root_rank — the
+    //       only order inputs this walk reads — actually changed. It JOINS
+    //       the dirty union below (the Stage B bug fix) and escalates the
+    //       classifier to Full.
+    //  .2 — the STRUCTURAL probe (classifier-only escalation; deliberately
+    //       NOT in the dirty union — see the per-member notes on the query).
+    structure: (
+        Extract<Query<(Entity, &StackingContext)>>,
+        Extract<Query<(), Changed<StackingContext>>>,
+        Extract<
+            Query<
+                (),
+                Or<(
+                    // A z / top-layer / isolation edit ANYWHERE: order-affecting
+                    // by definition. Every glyph-visible reorder also flows into
+                    // a `StackingContext` value change (probe .1 — order is
+                    // derived solely from painters_z), so this is conservative
+                    // defense-in-depth for the CLASSIFIER, mirroring the node
+                    // probe, not a dirty trigger.
+                    Changed<Stacking>,
+                    // A hierarchy mutation (insert/remove/reorder): the retained
+                    // run ORDER a Patch would splice into can no longer be
+                    // trusted without the walk. Same node-probe member, same
+                    // classifier-only role (the order consequence itself rides
+                    // probe .1).
+                    Changed<Children>,
+                    // An effect group forming/dropping re-partitions the glyph
+                    // GROUP ranges prepare derives (T8: entity→group off the
+                    // node list) — Patch-unsafe. NB `write_effect_groups`
+                    // re-inserts the marker EVERY frame a former holds, so any
+                    // dirty frame in a group-bearing scene classifies Full —
+                    // matching the node tier's `group.is_some()` Patch bail;
+                    // this is also exactly why it must NOT join the dirty gate.
+                    Changed<EffectGroup>,
+                    // The group-DROP edge `Changed<EffectGroup>` cannot see
+                    // (opacity → 1.0 REMOVES the marker; removal never ticks
+                    // Changed) — the node probe's `Opacity` member, same role.
+                    Changed<Opacity>,
+                    // Evaluated and EXCLUDED from the node-probe list
+                    // (render/extract.rs structural_changed):
+                    //  • ClipRect / AncestorClip — an ancestor clip edit
+                    //    propagates into each affected TEXT entity's own
+                    //    `AncestorClip` (render/clip.rs `reconcile_one`,
+                    //    value-gated), which the scoped § 6.2 union already
+                    //    watches; clip is per-instance VALUE data (pack_clip),
+                    //    never order or footprint → Patch-safe.
+                    //  • ComputedPaintSkip — the ADD direction marks every
+                    //    suppressed subtree entity individually (visibility.rs
+                    //    walk), so affected text rides the scoped union; the
+                    //    LIFT direction is the `skip_lifted` removal stream,
+                    //    already a Full escalation.
+                    //  • Outline / Border / BoxShadow — node-tier FOOTPRINT
+                    //    terms (band slot counts in the node buffers); the
+                    //    glyph producer reads none of them and glyph slices
+                    //    have no fixed footprint (splice semantics, D2).
+                    // No glyph-only additions: every other walk input is
+                    // either With<TextBuffer>-scoped in the union or derived
+                    // from painters_z (probe .1).
+                )>,
+            >,
+        >,
+    ),
     theme: Extract<Res<Theme>>,
     // The main-world font-set counters (T5): VALUE-compared against the
     // retained state below — the `theme` main-world-resource extraction
@@ -318,25 +726,40 @@ pub fn extract_buiy_glyphs(
     generation: Extract<Res<FontsGeneration>>,
     lineage: Extract<Res<FontDbLineage>>,
     primary: Extract<Query<&Window, With<PrimaryWindow>>>,
+    // Partial-reextract D1/D3: the published Full|Patch verdict — from
+    // Stage C it names what the producer EXECUTED.
+    // `Option` per the `NodeDamage`/`RenderWorkCounters` precedent — a harness
+    // that does not register it (buiy_verify's content-presence census) still
+    // runs the producer; no registration drift, no missing-resource skip.
+    mut damage: Option<ResMut<GlyphDamage>>,
 ) {
     let (mut glyphs, mut text_quads) = carriers;
+    let (contexts, order_probe, structural_probe) = structure;
     // Drain the removal streams FIRST so the cursors advance on every frame,
-    // including early returns (the extract.rs:409 discipline).
-    let despawned = removed.0.read().count() > 0;
+    // including early returns (the extract.rs:409 discipline). Stage B
+    // collects the IDS (previously just presence bits): despawns are the
+    // classifier's splice-delete candidates; the four value-tier clear
+    // streams name the entity to re-emit (D3).
+    let despawned_ids: SmallVec<[Entity; 8]> = removed.0.read().collect();
+    let despawned = !despawned_ids.is_empty();
     let skip_lifted = removed.1.read().count() > 0;
     // The § 7 swap-to-visible: a lifted Block (load or timeout) repaints at
     // full alpha through a normal rebuild.
-    let block_lifted = removed.2.read().count() > 0;
+    let block_lifted_ids: SmallVec<[Entity; 4]> = removed.2.read().collect();
+    let block_lifted = !block_lifted_ids.is_empty();
     // T7: a selection clear is a REMOVAL — unlike the style carriers,
     // removal here IS the hide mechanism (the T2-erratum-1 exclusion does
     // not apply), so the cleared rects must repaint away.
-    let selection_cleared = removed.3.read().count() > 0;
+    let selection_cleared_ids: SmallVec<[Entity; 4]> = removed.3.read().collect();
+    let selection_cleared = !selection_cleared_ids.is_empty();
     // T7: same for the caret — removal = focus loss, the stamp must
     // repaint away.
-    let caret_removed = removed.4.read().count() > 0;
+    let caret_removed_ids: SmallVec<[Entity; 4]> = removed.4.read().collect();
+    let caret_removed = !caret_removed_ids.is_empty();
     // E5: a preedit clear (commit / cancel / focus-loss) removes the
     // component — removal IS the clear, so the underline must repaint away.
-    let preedit_removed = removed.5.read().count() > 0;
+    let preedit_removed_ids: SmallVec<[Entity; 4]> = removed.5.read().collect();
+    let preedit_removed = !preedit_removed_ids.is_empty();
 
     let Ok(window) = primary.single() else {
         // Vanished window: clear the carriers ONCE (an unconditional clear
@@ -349,12 +772,27 @@ pub fn extract_buiy_glyphs(
             glyphs.entity_runs.clear();
             text_quads.quads.clear();
             resident.keys.clear();
+            resident.key_runs.clear();
+            // The whole set vanished — whole-set damage, once (inside the
+            // once-clear so retained no-window frames stay tick-quiet).
+            if let Some(d) = damage.as_deref_mut() {
+                *d = GlyphDamage::Full;
+            }
         }
         return;
     };
     let scale_factor = window.resolution.scale_factor();
     let scale_changed = resident.last_scale_factor != Some(scale_factor);
     let fonts_changed = resident.last_generation != Some(generation.0);
+    // Partial-reextract D3 / Stage B: an ancestor-driven paint reorder JOINS
+    // the § 6.2 union. The scoped `changed` union cannot see it (a wrapper z
+    // flip ticks nothing on any text entity), so pre-Stage-B the carrier kept
+    // STALE glyph paint order — the pre-existing under-trigger the
+    // reorder-escalation pin (`ancestor_z_reorder_rebuilds_and_flips_glyph_
+    // paint_order`) reproduces. Value-gated writes keep this O(0) on steady
+    // frames; the classifier-only `structural_probe` deliberately does NOT
+    // join (its `EffectGroup` member re-ticks every frame a former holds).
+    let paint_reordered = !order_probe.is_empty();
 
     let dirty = !changed.is_empty()
         || despawned
@@ -363,6 +801,7 @@ pub fn extract_buiy_glyphs(
         || selection_cleared
         || caret_removed
         || preedit_removed
+        || paint_reordered
         || theme.is_changed()
         || scale_changed
         || fonts_changed;
@@ -378,15 +817,267 @@ pub fn extract_buiy_glyphs(
         }
         return;
     }
-    resident.last_scale_factor = Some(scale_factor);
-    resident.last_generation = Some(generation.0);
+
     // § 3.2 (T5): a lineage advance means every fontdb ID was reissued —
     // clear the interner's ID map BEFORE any interning so keys re-seat
     // MONOTONICALLY (old entries grace-evict on their own; `GlyphMetaCache`
     // prunes via the residency retain below). In-lineage rebuilds no-op.
-    interner.begin_lineage(lineage.0);
+    // The reseat return feeds the classifier's global trigger below (D3
+    // names `FontDbLineage` a whole-set trigger): every retained key's
+    // font-u32 bytes are stale, so a Patch may never retain them. In
+    // practice every lineage bump rides a generation bump (the
+    // apply_system_font_scan contract), so `fonts_changed` already forces
+    // Full — this is the defense-in-depth that keeps verdict == execution
+    // even if that contract is ever violated.
+    let lineage_reseated = interner.begin_lineage(lineage.0);
 
-    // ---- Rebuild (wholesale, § 6.2 v1) -------------------------------
+    // ---- Classification (partial-reextract D3) ------------------------
+    // The Full|Patch verdict against the RETAINED runs (pre-rebuild state —
+    // exactly what the Patch branch splices into). From Stage C the verdict
+    // IS the execution decision, so it is computed unconditionally (a
+    // harness without the `GlyphDamage` resource still patches) and
+    // published when the resource exists — `record_text_work_counters`
+    // reads it off that write's tick.
+    let verdict = {
+        // The value-tier changed set: the § 6.2 union ∪ the four clear
+        // streams (removal IS the paint change on that entity — the cleared
+        // selection/caret/preedit/Block must repaint away/at-full-alpha).
+        let mut changed_set: Vec<Entity> = changed.iter().collect();
+        for &e in block_lifted_ids
+            .iter()
+            .chain(&selection_cleared_ids)
+            .chain(&caret_removed_ids)
+            .chain(&preedit_removed_ids)
+        {
+            if !changed_set.contains(&e) {
+                changed_set.push(e);
+            }
+        }
+        classify_glyph_damage(
+            theme.is_changed() || scale_changed || fonts_changed || lineage_reseated,
+            paint_reordered || !structural_probe.is_empty(),
+            skip_lifted,
+            // Live effect-group degradation is a PREPARE-side decision
+            // (`plan_allocation` inside `prepare_effect_groups` runs AFTER
+            // extract each frame; only last frame's `RtPoolStats` echo exists
+            // here) — the producer CANNOT see the current frame's bit. It
+            // needs no consumer-side bail either: prepare wholesale-repacks +
+            // uploads from the carrier on the glyph tick (the Stage C seam —
+            // the ranged upload is Stage D), and the spliced carrier is
+            // complete and correct, so `fold_degraded_groups`' "whole buffer
+            // repacked from source" invariant holds on Patch frames too. In
+            // practice `Changed<EffectGroup>` (probe .2) already forces Full
+            // for every group-bearing dirty frame, and degradation cannot
+            // exist without a group.
+            false,
+            &changed_set,
+            &despawned_ids,
+            &glyphs.entity_runs,
+        )
+    };
+    // Publish discipline (D1/D6): a FULL verdict publishes here, before the
+    // wholesale walk (nothing about it changes during execution). A PATCH
+    // verdict publishes at the END of its execution arm below, once the
+    // executed splices have determined `first_dirty_slot` — same frame, same
+    // single resource write, so `record_text_work_counters` (keyed off the
+    // write tick, running after this system) observes both arms identically.
+    if matches!(verdict, GlyphDamage::Full)
+        && let Some(d) = damage.as_deref_mut()
+    {
+        *d = GlyphDamage::Full;
+    }
+
+    resident.last_scale_factor = Some(scale_factor);
+    resident.last_generation = Some(generation.0);
+
+    // ---- Patch execution (Stage C — D2/D4/D5) --------------------------
+    // The damage is confined to named RESIDENT entities: splice their
+    // slices instead of rebuilding the world. The retained `entity_runs`
+    // order IS the paint order on a Patch frame (no order input changed —
+    // the structural/order probes escalate to Full), so the O(scene)
+    // painters-z walk below is not built at all (D4).
+    if let GlyphDamage::Patch {
+        changed: patch_changed,
+        removed: patch_removed,
+        first_dirty_slot: _,
+    } = verdict
+    {
+        // D5 — touch-before-insert: retained entities' keys carry frame-old
+        // LRU stamps, so this Patch's own atlas inserts would pick them as
+        // pressure-eviction victims (silent stale-UV corruption: a retained
+        // instance's embedded uv/page are NOT re-derived on a Patch frame,
+        // unlike a Full walk's). Touch every RETAINED key BEFORE any
+        // emission that could insert. Changed entities' stale ranges are
+        // skipped — their fresh keys are touched right after re-emission
+        // below — and removed entities' ranges are skipped so despawned
+        // keys go cold and grace-evict (the typing-churn return-to-baseline
+        // pin). Net effect: exactly one logical touch per POST-patch
+        // resident key — the same per-frame total the Full path's
+        // end-of-rebuild pass produces, which is the residency invariant
+        // `record_text_work_counters` derives `atlas_touch_ops` from.
+        let stale: std::collections::HashSet<Entity> = patch_changed
+            .iter()
+            .chain(patch_removed.iter())
+            .copied()
+            .collect();
+        for (entity, range) in &resident.key_runs {
+            if stale.contains(entity) {
+                continue;
+            }
+            for key in &resident.keys[range.start as usize..range.end as usize] {
+                atlas.touch_existing(key);
+            }
+        }
+
+        // The SAME shared emission context the Full walk threads — Full and
+        // Patch emit through one `emit_one_entity` signature, byte-identical
+        // by construction (D2, the node tier's `resolve_one` discipline).
+        let mut ctx = EmitContext {
+            atlas: &mut atlas,
+            meta: &mut meta,
+            fonts: &fonts,
+            font_guard: None,
+            swash: &mut swash,
+            interner: &mut interner,
+            stamp_entry: None,
+            theme: &theme,
+            scale_factor,
+        };
+
+        // FRESH per-entity accumulators, cleared per changed entity. The
+        // run vecs receive `emit_one_entity`'s 0-based single-entity
+        // attribution; the compare-and-splice below consumes the record
+        // slices (run shape — entity + length — is implied: the entity is
+        // the splice key and slice equality covers the length).
+        let mut fresh_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
+        let mut fresh_quads: Vec<TextQuad> = Vec::new();
+        let mut fresh_keys: Vec<AtlasKey> = Vec::new();
+        let mut fresh_runs: Vec<GlyphEntityRun> = Vec::new();
+        let mut fresh_key_runs: Vec<(Entity, Range<u32>)> = Vec::new();
+
+        // Mutate the carriers in place WITHOUT ticking, then ONE explicit
+        // `set_changed` per carrier that REALLY changed (D4): a no-op
+        // re-emission leaves both ticks untouched (the decorations-change /
+        // blink retention pins), glyphs + entity_runs move under ONE tick
+        // (T8 D4 — both fields live on the one resource), and the quad
+        // carrier ticks independently.
+        let glyphs_store = glyphs.bypass_change_detection();
+        let quads_store = text_quads.bypass_change_detection();
+        let resident_store = &mut *resident;
+        // The minimal instance slot the executed splices changed (D6): each
+        // glyph splice returns its run start (at splice time), and no splice
+        // mutates an index below its start, so the running minimum bounds the
+        // changed suffix — `Some` doubles as "the glyph carrier really
+        // changed" (the D4 tick decision below).
+        let mut first_dirty: Option<u32> = None;
+        let mut quad_content_changed = false;
+
+        for &entity in patch_changed.iter() {
+            fresh_glyphs.clear();
+            fresh_quads.clear();
+            fresh_keys.clear();
+            fresh_runs.clear();
+            fresh_key_runs.clear();
+            // A changed resident that no longer matches the paint query
+            // re-emits EMPTY — the splice-delete repaints it away, exactly
+            // what a Full walk (which would simply not visit it) publishes.
+            if let Ok(item) = texts.get(entity) {
+                emit_one_entity(
+                    entity,
+                    item,
+                    &mut ctx,
+                    &mut fresh_glyphs,
+                    &mut fresh_quads,
+                    &mut fresh_keys,
+                    &mut fresh_runs,
+                    &mut fresh_key_runs,
+                );
+            }
+            // The fresh keys join this frame's touch total: `resolve_glyph`
+            // reads atlas HITS through `get` (which deliberately does not
+            // touch the LRU) — on the Full path the end-of-rebuild pass
+            // covers them; here the per-entity touch does.
+            for key in &fresh_keys {
+                ctx.atlas.touch_existing(key);
+            }
+            if let Some(start) = splice_run(
+                &mut glyphs_store.glyphs,
+                &mut glyphs_store.entity_runs,
+                entity,
+                &fresh_glyphs,
+            ) {
+                first_dirty = Some(first_dirty.map_or(start, |s| s.min(start)));
+            }
+            let _ = splice_run(
+                &mut resident_store.keys,
+                &mut resident_store.key_runs,
+                entity,
+                &fresh_keys,
+            );
+            quad_content_changed |=
+                splice_entity_quads(&mut quads_store.quads, entity, &fresh_quads);
+        }
+        // Splice-DELETE the resident despawns (D3: despawns ARE patchable,
+        // keyed by the removal stream's ids). Their runs and keys leave the
+        // retained state, so no future touch pass warms them and the atlas
+        // grace-drains them (gate #15's return-to-baseline).
+        for &entity in patch_removed.iter() {
+            if let Some(start) = splice_run(
+                &mut glyphs_store.glyphs,
+                &mut glyphs_store.entity_runs,
+                entity,
+                &[],
+            ) {
+                first_dirty = Some(first_dirty.map_or(start, |s| s.min(start)));
+            }
+            let _ = splice_run(
+                &mut resident_store.keys,
+                &mut resident_store.key_runs,
+                entity,
+                &[],
+            );
+        }
+        // Quad deletion sweeps the RAW despawn stream, not `removed`: quad
+        // residency is independent of glyph residency (a selection on
+        // whitespace-only text emits quads and no instances), so a
+        // glyph-NONRESIDENT despawn — which the classifier's `removed`
+        // filter drops — can still own a quad slice.
+        for &entity in &despawned_ids {
+            quad_content_changed |= splice_entity_quads(&mut quads_store.quads, entity, &[]);
+        }
+        // Dropping the context releases lock site #3's guard (if taken) and
+        // the atlas borrow the residency prune below needs.
+        drop(ctx);
+
+        // Bearing-cache hygiene, the same clause as the Full path (decision
+        // 3) — AFTER the splice, so it prunes against post-patch residency.
+        meta.0.retain(|key, _| atlas.get(key).is_some());
+
+        // D2's coverage invariants must survive the splice — the same
+        // properties `partition_glyph_ranges` debug_asserts at pack time.
+        debug_assert_spliced_coverage(glyphs_store, resident_store);
+
+        if first_dirty.is_some() {
+            glyphs.set_changed();
+        }
+        if quad_content_changed {
+            text_quads.set_changed();
+        }
+        // Publish the EXECUTED Patch verdict (D1/D6), now carrying the first
+        // dirty instance slot the splices established — `Some` exactly when
+        // the glyph carrier ticked above, so prepare's suffix ranged upload
+        // and the carrier tick can never disagree.
+        if let Some(d) = damage.as_deref_mut() {
+            *d = GlyphDamage::Patch {
+                changed: patch_changed,
+                removed: patch_removed,
+                first_dirty_slot: first_dirty,
+            };
+        }
+        return;
+    }
+
+    // ---- Rebuild (wholesale — the Full arm; Patch returned above) ----
     let mut new_glyphs: Vec<GlyphAlphaInstance> = Vec::new();
     // The quad-tier co-carrier (T6): rebuilt alongside the glyphs on every
     // dirty frame (decision 12), PUBLISHED value-compared (T7 decision 4 —
@@ -399,20 +1090,25 @@ pub fn extract_buiy_glyphs(
     // partition's lookup key.
     let mut new_runs: Vec<GlyphEntityRun> = Vec::new();
     let mut new_keys: Vec<AtlasKey> = Vec::new();
-    // Lock site #3 (architecture § 1.2 — the LAST of the exhaustive three):
-    // taken LAZILY, once per frame, only when at least one glyph misses the
-    // atlas (the text_commit guard pattern). A hit-only rebuild takes ZERO
-    // locks; extract runs in the pipelining sync window, so the lock is
-    // uncontended by construction.
-    let mut font_guard: Option<MutexGuard<'_, FontSystem>> = None;
-    // One stamp-residency probe per frame (T6, decoration-and-paint § 4.3):
-    // the solid stamp's closure never touches the `FontSystem`, so this
-    // stays outside lock site #3; a grace-evicted stamp self-heals here on
-    // the next line-through ("re-inserted on miss like any
-    // content-addressed entry").
-    let mut stamp_entry: Option<AtlasEntry> = None;
-    let fonts: &SharedFontSystem = &fonts;
-    let theme: &Theme = &theme;
+    // Per-entity key attribution (partial-reextract D2), rebuilt in lockstep
+    // with `new_keys` — see [`ResidentTextKeys::key_runs`].
+    let mut new_key_runs: Vec<(Entity, Range<u32>)> = Vec::new();
+    // The per-frame shared emission context (the lazily-taken font guard and
+    // the stamp-residency probe live on it — see the field docs). ONE context
+    // threads through the whole walk; a future per-entity Patch path
+    // constructs its own and re-emits through the same [`emit_one_entity`]
+    // (partial-reextract D2).
+    let mut ctx = EmitContext {
+        atlas: &mut atlas,
+        meta: &mut meta,
+        fonts: &fonts,
+        font_guard: None,
+        swash: &mut swash,
+        interner: &mut interner,
+        stamp_entry: None,
+        theme: &theme,
+        scale_factor,
+    };
 
     // painters_z order — the same walk extract_buiy_nodes runs (§ 2), including the
     // cross-root rank so a parentless top-layer root (modal/popover) glyphs paint
@@ -433,441 +1129,24 @@ pub fn extract_buiy_glyphs(
         context_tree_paint_order(root, &painters_z_of, &mut order);
     }
 
-    let default_color = TextColor::default();
     for entity in order {
-        let Ok((
-            gt,
-            access,
-            computed,
-            color,
-            skip,
-            clip_rect,
-            ancestor_clip,
-            stacking,
-            pending_block,
-            decorations,
-            selection_visual,
-            caret_visual,
-            caret_color,
-            preedit_visual,
-            placeholder_buffer,
-        )) = texts.get(entity)
-        else {
+        let Ok(item) = texts.get(entity) else {
             continue; // not a text painter
         };
-        if skip.is_some() {
-            continue; // the single computed skip source (§ 5.3/§ 5.4)
-        }
-        let entity_start = new_glyphs.len() as u32;
-        // § 8: glyphs AND decorations are CONTENT — self-inclusive clip
-        // (own ClipRect ∩ ancestors); top-layer members force the unclipped
-        // sentinel.
-        let eff_clip = effective_clip(stacking, clip_rect, ancestor_clip);
-        let clip = pack_clip(eff_clip.as_ref());
-        // § 7: resolved at extract like Background, CPU-linearized,
-        // STRAIGHT alpha (premultiplying would double-dim — primitive.rs).
-        let resolved_entity_color = resolve_token(&color.unwrap_or(&default_color).0, theme);
-        let entity_color = linear_color(resolved_entity_color);
-        let origin = gt.translation().truncate() + computed.content_offset;
-        // The entity's 2D affine (GlobalTransform's linear part, cols
-        // [m00,m10,m01,m11]) + its translation — so a rotated/scaled text run
-        // paints its glyphs/decorations rotated rigidly about the transform-origin
-        // (6e-baked). `repivot_origin` moves each window-space rect's ORIGIN by the
-        // affine about `translation`; `coverage.wgsl` then applies the same affine
-        // to the box-local extent. Identity affine leaves every rect byte-identical
-        // (repivot early-returns), so untransformed text is unchanged.
-        let translation = gt.translation().truncate();
-        let m = gt.affine().matrix3;
-        let glyph_affine = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
-        let blocked = pending_block.is_some();
-        // § 3.2 tier 1: the -color token, resolved at extract against the
-        // live theme (decision 1 — retheme re-emits, never reshapes).
-        let deco_override: Option<Color> = decorations
-            .and_then(|d| d.color.as_ref())
-            .map(|t| resolve_token(t, theme));
-
-        // T7 § 5.1: the selection pre-pass — seat 2 quads for the WHOLE
-        // entity before any seat-3 decoration quad (§ 4.4; a per-run
-        // interleave could paint an underline under the next line's
-        // selection where line boxes touch). Iteration only — no locks.
-        // Collapsed selections paint nothing (a collapsed selection is a
-        // caret; skipping also removes upstream's mid-grapheme re-tint
-        // edge). Paints normally under Block (chrome, not ink —
-        // decision 9).
-        let selection = selection_visual.filter(|s| !s.is_collapsed());
-        let mut selection_fg: Option<[f32; 4]> = None;
-        if let Some(sel) = selection {
-            let bg = resolve_selection_bg(theme);
-            selection_fg = Some(linear_color(resolve_selection_fg(theme)));
-            if bg.alpha() > 0.0 {
-                // Upstream's reference width source for the line-edge
-                // extension + empty-line fill; commit guarantees Some
-                // (T3 decision 9) — computed.size.x is defense, not a
-                // path (upstream's unwrap_or(0.0) would drop the
-                // extension silently).
-                let full_w = access
-                    .with_buffer(|buffer| buffer.size().0)
-                    .unwrap_or(computed.size.x);
-                access.with_buffer(|buffer| {
-                    for run in buffer.layout_runs() {
-                        // THE caller contract (Orientation § 1 of the T7 plan):
-                        // highlight's predicate degenerates to all-selected
-                        // outside [start.line, end.line] — gate first, like
-                        // upstream (edit/editor.rs:103).
-                        if run.line_i < sel.start.line || run.line_i > sel.end.line {
-                            continue;
-                        }
-                        let spans: SmallVec<[(f32, f32); 4]> =
-                            run.highlight(sel.start, sel.end).collect();
-                        if spans.is_empty() && run.glyphs.is_empty() && sel.end.line > run.line_i {
-                            // Internal fully-selected empty line: full width.
-                            push_selection_quad(
-                                &mut new_quads,
-                                entity,
-                                origin,
-                                0.0,
-                                full_w,
-                                &run,
-                                bg,
-                                eff_clip,
-                            );
-                        } else {
-                            let len = spans.len();
-                            for (idx, (x, w)) in spans.into_iter().enumerate() {
-                                let (mut min_x, mut max_x) = (x, x + w);
-                                // Non-final selected line: the last rect
-                                // extends to the line edge (newline made
-                                // visible) — RTL-aware, upstream verbatim.
-                                if idx + 1 == len && sel.end.line > run.line_i {
-                                    if run.rtl {
-                                        min_x = 0.0;
-                                    } else {
-                                        max_x = full_w;
-                                    }
-                                }
-                                push_selection_quad(
-                                    &mut new_quads,
-                                    entity,
-                                    origin,
-                                    min_x,
-                                    max_x - min_x,
-                                    &run,
-                                    bg,
-                                    eff_clip,
-                                );
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        // E5 (editing-and-ime § 6.2; decoration-and-paint § 8): the preedit
-        // underline — a forced single underline over the composing byte
-        // range, quad-tier. Mirrors the selection pre-pass: highlight the
-        // span per run, then push a THIN underline strip (not a full-height
-        // box) at the run baseline. Reuses the quad carrier; no new GPU.
-        let preedit = preedit_visual.filter(|p| !p.is_collapsed());
-        if let Some(pre) = preedit {
-            let color = resolve_preedit_underline(theme, resolved_entity_color);
-            let color = if blocked {
-                color.with_alpha(0.0)
-            } else {
-                color
-            };
-            if color.alpha() > 0.0 {
-                access.with_buffer(|buffer| {
-                    for run in buffer.layout_runs() {
-                        if run.line_i < pre.start.line || run.line_i > pre.end.line {
-                            continue;
-                        }
-                        // Underline strip thickness: 1 logical px at the run
-                        // baseline bottom (decoration-and-paint § 8 uses the
-                        // standard underline metric; a 1px strip is the v1
-                        // forced underline — the engine has no per-font
-                        // underline metric exposed at this seat).
-                        let thickness = 1.0_f32;
-                        let strip_top = run.line_top + run.line_height - thickness;
-                        for (x, w) in run.highlight(pre.start, pre.end) {
-                            if w <= 0.0 {
-                                continue;
-                            }
-                            new_quads.push(TextQuad {
-                                entity,
-                                position: Vec2::new(origin.x + x, origin.y + strip_top),
-                                size: Vec2::new(w, thickness),
-                                color,
-                                clip: eff_clip,
-                            });
-                        }
-                    }
-                });
-            }
-        }
-
-        let runs = access.with_buffer(|buffer| {
-            let mut runs = 0usize;
-            for run in buffer.layout_runs() {
-                runs += 1;
-                // The decoration walk (§ 4.6: ONE run walk emits quads AND
-                // stamps AND glyphs, under the one damage decision).
-                // Underline/overline are quad-tier (§ 4.2) and paint UNDER the
-                // text by primitive rank; emitted before the glyph loop for
-                // § 4.4 carrier order. Line-through rects (rect, linearized
-                // color) buffer through the glyph loop into solid-stamp
-                // instances appended after it (§ 4.4 seat 5).
-                let mut strikes: SmallVec<[([f32; 4], [f32; 4]); 2]> = SmallVec::new();
-                for span in run.decorations {
-                    let Some((x_start, width)) = span_x_extent(run.glyphs, &span.glyph_range)
-                    else {
-                        continue;
-                    };
-                    for deco in span_decoration_rects(
-                        origin,
-                        run.line_y,
-                        run.line_top,
-                        x_start,
-                        width,
-                        &span.data,
-                        span.font_size,
-                        span.color_opt,
-                        scale_factor,
-                    ) {
-                        // § 3.2 precedence: token override → upstream tiers
-                        // (per-kind / span color) → currentColor.
-                        let mut color = deco_override
-                            .or(deco.color_opt.map(cosmic_color))
-                            .unwrap_or(resolved_entity_color);
-                        if blocked {
-                            // § 7 Block: paint-invisible, layout-identical.
-                            color = color.with_alpha(0.0);
-                        } else if color.alpha() == 0.0 {
-                            continue; // fully transparent: nothing to paint
-                        }
-                        match deco.kind {
-                            DecorationKind::Underline | DecorationKind::Overline => {
-                                new_quads.push(TextQuad {
-                                    entity,
-                                    position: Vec2::new(deco.rect[0], deco.rect[1]),
-                                    size: Vec2::new(deco.rect[2], deco.rect[3]),
-                                    color,
-                                    clip: eff_clip,
-                                });
-                            }
-                            // § 4.4 seat 5: buffered through the glyph loop —
-                            // the solid stamp paints OVER the run's glyphs (the
-                            // CSS Text Decoration L3 painting order).
-                            DecorationKind::LineThrough => {
-                                strikes.push((deco.rect, linear_color(color)));
-                            }
-                        }
-                    }
-                }
-                for glyph in run.glyphs.iter() {
-                    // § 5.1: cosmic-text's own binning, verbatim.
-                    let phys = glyph.physical(
-                        physical_offset(origin, run.line_y, scale_factor),
-                        scale_factor,
-                    );
-                    // T7 § 5.2: per-CLUSTER re-tint — a glyph whose bytes
-                    // intersect the selection paints with the selection fg
-                    // (over any rich-text span color, upstream-verbatim); the
-                    // atlas is never touched. Granularity is the cluster: a
-                    // partially selected ligature re-tints whole while its
-                    // RECT stays grapheme-accurate (§ 5.2's accepted
-                    // tradeoff). Upstream's text_color != selected_text_color
-                    // short-circuit is dropped — equal resolved colors emit
-                    // identical instances.
-                    let selected = selection.is_some_and(|sel| {
-                        run.line_i >= sel.start.line
-                            && run.line_i <= sel.end.line
-                            && (sel.start.line != run.line_i || glyph.end > sel.start.index)
-                            && (sel.end.line != run.line_i || glyph.start < sel.end.index)
-                    });
-                    let mut color = match (selected, selection_fg) {
-                        (true, Some(fg)) => fg,
-                        // Per-span Attrs color override rides through (§ 7).
-                        _ => glyph.color_opt.map(span_color).unwrap_or(entity_color),
-                    };
-                    if blocked {
-                        // font-assets § 7 Block: identical fallback LAYOUT,
-                        // zero-alpha PAINT — instances ARE emitted (the atlas
-                        // and the GPU buffer stay warm with the fallback's
-                        // glyphs), bypassing the transparent skip below.
-                        color[3] = 0.0;
-                    } else if color[3] == 0.0 {
-                        continue; // fully transparent: nothing to paint
-                    }
-                    // The SHARED per-glyph emit (the placeholder branch reuses it).
-                    emit_glyph(
-                        &mut atlas,
-                        &mut meta,
-                        fonts,
-                        &mut font_guard,
-                        &mut swash,
-                        &mut interner,
-                        &mut new_glyphs,
-                        &mut new_keys,
-                        &phys,
-                        color,
-                        clip,
-                        scale_factor,
-                        translation,
-                        glyph_affine,
-                    );
-                }
-                // § 4.4 seat 5: line-through paints OVER the run's glyphs —
-                // solid-stamp GlyphAlphaInstances appended after them (quad-tier
-                // rects could never paint over glyphs: § 4.1's fixed primitive
-                // rank).
-                if !strikes.is_empty() {
-                    let entry = *stamp_entry.get_or_insert_with(|| {
-                        atlas.get_or_insert(
-                            solid_stamp_key(),
-                            AtlasFormat::CoverageR8,
-                            solid_stamp_bitmap,
-                        )
-                    });
-                    if entry.page > 0 {
-                        warn_once_page_overflow(); // § 11.1 v1 mitigation
-                    }
-                    for (rect, color) in strikes {
-                        new_glyphs.push(GlyphAlphaInstance {
-                            rect: repivot_origin(rect, translation, glyph_affine),
-                            uv: stamp_uv(&entry),
-                            color,
-                            clip,
-                            page: entry.page as u32,
-                            affine: glyph_affine,
-                        });
-                        // § 6.3: one key per instance — the un-gated touch pass
-                        // keeps a live stamp LRU-warm through retained frames.
-                        new_keys.push(solid_stamp_key());
-                    }
-                }
-            }
-            runs
-        });
-        // architecture § 3.2 tripwire: layout_runs TERMINATES at the first
-        // unshaped line — a mismatch means something mutated the buffer
-        // after TextCommit.
-        debug_assert_eq!(
-            runs,
-            computed.lines.len(),
-            "TextBuffer dirty-unshaped at extract (mutated after TextCommit?)"
+        emit_one_entity(
+            entity,
+            item,
+            &mut ctx,
+            &mut new_glyphs,
+            &mut new_quads,
+            &mut new_keys,
+            &mut new_runs,
+            &mut new_key_runs,
         );
-
-        // E6 — placeholder paint (editing-and-ime § 10, decoration-and-paint
-        // § 7). A SEPARATE additive emission: the placeholder is its own display
-        // buffer with its own runs — NOT part of the editor's ComputedTextLayout,
-        // so it does NOT feed the § 3.2 run-count assert above (M4). Painted only
-        // when a shaped PlaceholderBuffer is present (sync_placeholder inserts it
-        // iff the editor value is empty ⇒ the editor loop above emitted no ink),
-        // tinted to the placeholder token. Reuses the shared per-glyph emitter.
-        if let Some(ph) = placeholder_buffer {
-            let ph_color = linear_color(resolve_token(&TextColor::placeholder().0, theme));
-            if ph_color[3] > 0.0 {
-                for run in ph.buffer.layout_runs() {
-                    for glyph in run.glyphs.iter() {
-                        let phys = glyph.physical(
-                            physical_offset(origin, run.line_y, scale_factor),
-                            scale_factor,
-                        );
-                        emit_glyph(
-                            &mut atlas,
-                            &mut meta,
-                            fonts,
-                            &mut font_guard,
-                            &mut swash,
-                            &mut interner,
-                            &mut new_glyphs,
-                            &mut new_keys,
-                            &phys,
-                            ph_color,
-                            clip,
-                            scale_factor,
-                            translation,
-                            glyph_affine,
-                        );
-                    }
-                }
-            }
-        }
-
-        // T7 § 6.1 — seat 6: the caret paints last, over glyphs and
-        // line-through, as a solid-stamp instance (pre-phase decision 2).
-        // Painted under Block too (chrome, not ink — decision 9: browsers
-        // keep the caret in a focused field whose font is loading). At a
-        // bidirectional direction boundary an OPTIONAL second (secondary-
-        // indicator) stamp follows the primary (§§ 4.1, 5) — same
-        // entry/color/clip/page, CPU geometry only, no new atlas insert.
-        if let Some(cv) = caret_visual
-            && cv.visible
-        {
-            // § 6.2: explicit token → theme caret key (presence check) →
-            // currentColor. Re-tint only — never an atlas mutation.
-            let color =
-                resolve_caret_color(caret_color.map(|c| &c.0), theme, resolved_entity_color);
-            if color.alpha() > 0.0 {
-                let entry = *stamp_entry.get_or_insert_with(|| {
-                    atlas.get_or_insert(
-                        solid_stamp_key(),
-                        AtlasFormat::CoverageR8,
-                        solid_stamp_bitmap,
-                    )
-                });
-                if entry.page > 0 {
-                    warn_once_page_overflow(); // § 11.1 v1 mitigation
-                }
-                new_glyphs.push(GlyphAlphaInstance {
-                    rect: repivot_origin(
-                        caret_stamp_rect(origin, cv.rect, scale_factor),
-                        translation,
-                        glyph_affine,
-                    ),
-                    uv: stamp_uv(&entry),
-                    color: linear_color(color),
-                    clip,
-                    page: entry.page as u32,
-                    affine: glyph_affine,
-                });
-                // §§ 4.1, 5: the SECONDARY split-caret indicator — a second
-                // solid stamp at the boundary's before-glyph logical-end edge,
-                // present only at a bidi direction boundary. Reuse the SAME
-                // entry/color/clip/page; the stamp key is already queued below
-                // (do NOT push it twice).
-                if let Some(sec) = cv.secondary {
-                    new_glyphs.push(GlyphAlphaInstance {
-                        rect: repivot_origin(
-                            caret_stamp_rect(origin, sec, scale_factor),
-                            translation,
-                            glyph_affine,
-                        ),
-                        uv: stamp_uv(&entry),
-                        color: linear_color(color),
-                        clip,
-                        page: entry.page as u32,
-                        affine: glyph_affine,
-                    });
-                }
-                // § 6.3: the stamp key joins the un-gated touch pass — a
-                // retained caret idling past eviction_grace must not lose
-                // its cell.
-                new_keys.push(solid_stamp_key());
-            }
-        }
-        // T8 D1: attribute this entity's contiguous instance slice. The
-        // prepare partition maps the entity to its ExtractedNode.group off
-        // the fresh node list — the producer learns nothing about groups.
-        let entity_end = new_glyphs.len() as u32;
-        if entity_end > entity_start {
-            new_runs.push(GlyphEntityRun {
-                entity,
-                instances: entity_start..entity_end,
-            });
-        }
     }
-    drop(font_guard);
+    // Dropping the context releases lock site #3's guard (if taken) and the
+    // producer borrows before the residency prune + publish below.
+    drop(ctx);
 
     // Bearing-cache hygiene (decision 3): prune to atlas residency, so the
     // map is bounded by the atlas's own budget — invariant: every resident
@@ -898,8 +1177,530 @@ pub fn extract_buiy_glyphs(
         text_quads.quads = new_quads;
     }
     resident.keys = new_keys;
+    resident.key_runs = new_key_runs;
     for key in &resident.keys {
         atlas.touch_existing(key);
+    }
+}
+
+/// The `texts` paint-query row, spelled once — [`extract_buiy_glyphs`]'s walk
+/// fetches it and [`emit_one_entity`] destructures it. The tuple itself (at
+/// Bevy's 15-member cap) lives on the query, which carries the per-member
+/// ledger; this is its read-only item form.
+type TextPaintItem<'w, 's> = (
+    &'w GlobalTransform,
+    TextBufferAccessReadOnlyItem<'w, 's>,
+    &'w ComputedTextLayout,
+    Option<&'w TextColor>,
+    Option<&'w ComputedPaintSkip>,
+    Option<&'w ClipRect>,
+    Option<&'w AncestorClip>,
+    Option<&'w Stacking>,
+    Option<&'w PendingFontBlock>,
+    Option<&'w TextDecorations>,
+    Option<&'w SelectionVisual>,
+    Option<&'w CaretVisual>,
+    Option<&'w CaretColor>,
+    Option<&'w PreeditVisual>,
+    Option<&'w PlaceholderBuffer>,
+);
+
+/// The per-frame shared context [`emit_one_entity`] reads (partial-reextract
+/// D2): the producer state every entity's emission touches, bundled so the
+/// Full walk and a future per-entity Patch path call ONE signature (the node
+/// tier's `resolve_one` discipline — Full and Patch byte-identical by
+/// construction). `'w` is the system-param borrow the font guard hangs off;
+/// `'a` the per-frame resource borrows.
+struct EmitContext<'w, 'a> {
+    atlas: &'a mut BuiyAtlas,
+    meta: &'a mut GlyphMetaCache,
+    fonts: &'w SharedFontSystem,
+    /// Lock site #3 (architecture § 1.2 — the LAST of the exhaustive three):
+    /// taken LAZILY, once per frame, only when at least one glyph misses the
+    /// atlas (the text_commit guard pattern). A hit-only rebuild takes ZERO
+    /// locks; extract runs in the pipelining sync window, so the lock is
+    /// uncontended by construction. Starts `None`; `resolve_glyph` fills it
+    /// on the first miss.
+    font_guard: Option<MutexGuard<'w, FontSystem>>,
+    swash: &'a mut BuiySwashCache,
+    interner: &'a mut FontKeyInterner,
+    /// One stamp-residency probe per frame (T6, decoration-and-paint § 4.3):
+    /// the solid stamp's closure never touches the `FontSystem`, so this
+    /// stays outside lock site #3; a grace-evicted stamp self-heals here on
+    /// the next line-through ("re-inserted on miss like any
+    /// content-addressed entry").
+    stamp_entry: Option<AtlasEntry>,
+    theme: &'a Theme,
+    scale_factor: f32,
+}
+
+/// Emit ONE text entity's records — the walk-loop body of
+/// [`extract_buiy_glyphs`], factored out (partial-reextract D2, the node
+/// tier's `resolve_one` discipline) so a future Patch path can re-emit a
+/// single changed entity through the SAME code against separate output vecs.
+/// Appends, in the § 4.4 seat order: selection quads (seat 2), the preedit
+/// underline, then per run decoration quads + glyphs + buffered line-through
+/// stamps (seat 5), placeholder glyphs, the caret stamp(s) (seat 6) — then
+/// attributes the appended instance range (`new_runs`) and key range
+/// (`new_key_runs`) to the entity. A paint-skipped entity appends nothing.
+#[allow(clippy::too_many_arguments)]
+fn emit_one_entity(
+    entity: Entity,
+    item: TextPaintItem<'_, '_>,
+    ctx: &mut EmitContext<'_, '_>,
+    new_glyphs: &mut Vec<GlyphAlphaInstance>,
+    new_quads: &mut Vec<TextQuad>,
+    new_keys: &mut Vec<AtlasKey>,
+    new_runs: &mut Vec<GlyphEntityRun>,
+    new_key_runs: &mut Vec<(Entity, Range<u32>)>,
+) {
+    let (
+        gt,
+        access,
+        computed,
+        color,
+        skip,
+        clip_rect,
+        ancestor_clip,
+        stacking,
+        pending_block,
+        decorations,
+        selection_visual,
+        caret_visual,
+        caret_color,
+        preedit_visual,
+        placeholder_buffer,
+    ) = item;
+    if skip.is_some() {
+        return; // the single computed skip source (§ 5.3/§ 5.4)
+    }
+    // Re-borrow the context under the names the emission body has always
+    // used — the body below is the pre-factor walk-loop body, moved verbatim
+    // (Stage A's byte-identical discipline).
+    let atlas = &mut *ctx.atlas;
+    let meta = &mut *ctx.meta;
+    let fonts = ctx.fonts;
+    let font_guard = &mut ctx.font_guard;
+    let swash = &mut *ctx.swash;
+    let interner = &mut *ctx.interner;
+    let stamp_entry = &mut ctx.stamp_entry;
+    let theme = ctx.theme;
+    let scale_factor = ctx.scale_factor;
+    let default_color = TextColor::default();
+
+    let entity_start = new_glyphs.len() as u32;
+    // The entity's key-range start (partial-reextract D2): keys append in
+    // lockstep with instances through the body below.
+    let key_start = new_keys.len() as u32;
+    // § 8: glyphs AND decorations are CONTENT — self-inclusive clip
+    // (own ClipRect ∩ ancestors); top-layer members force the unclipped
+    // sentinel.
+    let eff_clip = effective_clip(stacking, clip_rect, ancestor_clip);
+    let clip = pack_clip(eff_clip.as_ref());
+    // § 7: resolved at extract like Background, CPU-linearized,
+    // STRAIGHT alpha (premultiplying would double-dim — primitive.rs).
+    let resolved_entity_color = resolve_token(&color.unwrap_or(&default_color).0, theme);
+    let entity_color = linear_color(resolved_entity_color);
+    let origin = gt.translation().truncate() + computed.content_offset;
+    // The entity's 2D affine (GlobalTransform's linear part, cols
+    // [m00,m10,m01,m11]) + its translation — so a rotated/scaled text run
+    // paints its glyphs/decorations rotated rigidly about the transform-origin
+    // (6e-baked). `repivot_origin` moves each window-space rect's ORIGIN by the
+    // affine about `translation`; `coverage.wgsl` then applies the same affine
+    // to the box-local extent. Identity affine leaves every rect byte-identical
+    // (repivot early-returns), so untransformed text is unchanged.
+    let translation = gt.translation().truncate();
+    let m = gt.affine().matrix3;
+    let glyph_affine = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
+    let blocked = pending_block.is_some();
+    // § 3.2 tier 1: the -color token, resolved at extract against the
+    // live theme (decision 1 — retheme re-emits, never reshapes).
+    let deco_override: Option<Color> = decorations
+        .and_then(|d| d.color.as_ref())
+        .map(|t| resolve_token(t, theme));
+
+    // T7 § 5.1: the selection pre-pass — seat 2 quads for the WHOLE
+    // entity before any seat-3 decoration quad (§ 4.4; a per-run
+    // interleave could paint an underline under the next line's
+    // selection where line boxes touch). Iteration only — no locks.
+    // Collapsed selections paint nothing (a collapsed selection is a
+    // caret; skipping also removes upstream's mid-grapheme re-tint
+    // edge). Paints normally under Block (chrome, not ink —
+    // decision 9).
+    let selection = selection_visual.filter(|s| !s.is_collapsed());
+    let mut selection_fg: Option<[f32; 4]> = None;
+    if let Some(sel) = selection {
+        let bg = resolve_selection_bg(theme);
+        selection_fg = Some(linear_color(resolve_selection_fg(theme)));
+        if bg.alpha() > 0.0 {
+            // Upstream's reference width source for the line-edge
+            // extension + empty-line fill; commit guarantees Some
+            // (T3 decision 9) — computed.size.x is defense, not a
+            // path (upstream's unwrap_or(0.0) would drop the
+            // extension silently).
+            let full_w = access
+                .with_buffer(|buffer| buffer.size().0)
+                .unwrap_or(computed.size.x);
+            access.with_buffer(|buffer| {
+                for run in buffer.layout_runs() {
+                    // THE caller contract (Orientation § 1 of the T7 plan):
+                    // highlight's predicate degenerates to all-selected
+                    // outside [start.line, end.line] — gate first, like
+                    // upstream (edit/editor.rs:103).
+                    if run.line_i < sel.start.line || run.line_i > sel.end.line {
+                        continue;
+                    }
+                    let spans: SmallVec<[(f32, f32); 4]> =
+                        run.highlight(sel.start, sel.end).collect();
+                    if spans.is_empty() && run.glyphs.is_empty() && sel.end.line > run.line_i {
+                        // Internal fully-selected empty line: full width.
+                        push_selection_quad(
+                            new_quads, entity, origin, 0.0, full_w, &run, bg, eff_clip,
+                        );
+                    } else {
+                        let len = spans.len();
+                        for (idx, (x, w)) in spans.into_iter().enumerate() {
+                            let (mut min_x, mut max_x) = (x, x + w);
+                            // Non-final selected line: the last rect
+                            // extends to the line edge (newline made
+                            // visible) — RTL-aware, upstream verbatim.
+                            if idx + 1 == len && sel.end.line > run.line_i {
+                                if run.rtl {
+                                    min_x = 0.0;
+                                } else {
+                                    max_x = full_w;
+                                }
+                            }
+                            push_selection_quad(
+                                new_quads,
+                                entity,
+                                origin,
+                                min_x,
+                                max_x - min_x,
+                                &run,
+                                bg,
+                                eff_clip,
+                            );
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    // E5 (editing-and-ime § 6.2; decoration-and-paint § 8): the preedit
+    // underline — a forced single underline over the composing byte
+    // range, quad-tier. Mirrors the selection pre-pass: highlight the
+    // span per run, then push a THIN underline strip (not a full-height
+    // box) at the run baseline. Reuses the quad carrier; no new GPU.
+    let preedit = preedit_visual.filter(|p| !p.is_collapsed());
+    if let Some(pre) = preedit {
+        let color = resolve_preedit_underline(theme, resolved_entity_color);
+        let color = if blocked {
+            color.with_alpha(0.0)
+        } else {
+            color
+        };
+        if color.alpha() > 0.0 {
+            access.with_buffer(|buffer| {
+                for run in buffer.layout_runs() {
+                    if run.line_i < pre.start.line || run.line_i > pre.end.line {
+                        continue;
+                    }
+                    // Underline strip thickness: 1 logical px at the run
+                    // baseline bottom (decoration-and-paint § 8 uses the
+                    // standard underline metric; a 1px strip is the v1
+                    // forced underline — the engine has no per-font
+                    // underline metric exposed at this seat).
+                    let thickness = 1.0_f32;
+                    let strip_top = run.line_top + run.line_height - thickness;
+                    for (x, w) in run.highlight(pre.start, pre.end) {
+                        if w <= 0.0 {
+                            continue;
+                        }
+                        new_quads.push(TextQuad {
+                            entity,
+                            position: Vec2::new(origin.x + x, origin.y + strip_top),
+                            size: Vec2::new(w, thickness),
+                            color,
+                            clip: eff_clip,
+                        });
+                    }
+                }
+            });
+        }
+    }
+
+    let runs = access.with_buffer(|buffer| {
+        let mut runs = 0usize;
+        for run in buffer.layout_runs() {
+            runs += 1;
+            // The decoration walk (§ 4.6: ONE run walk emits quads AND
+            // stamps AND glyphs, under the one damage decision).
+            // Underline/overline are quad-tier (§ 4.2) and paint UNDER the
+            // text by primitive rank; emitted before the glyph loop for
+            // § 4.4 carrier order. Line-through rects (rect, linearized
+            // color) buffer through the glyph loop into solid-stamp
+            // instances appended after it (§ 4.4 seat 5).
+            let mut strikes: SmallVec<[([f32; 4], [f32; 4]); 2]> = SmallVec::new();
+            for span in run.decorations {
+                let Some((x_start, width)) = span_x_extent(run.glyphs, &span.glyph_range) else {
+                    continue;
+                };
+                for deco in span_decoration_rects(
+                    origin,
+                    run.line_y,
+                    run.line_top,
+                    x_start,
+                    width,
+                    &span.data,
+                    span.font_size,
+                    span.color_opt,
+                    scale_factor,
+                ) {
+                    // § 3.2 precedence: token override → upstream tiers
+                    // (per-kind / span color) → currentColor.
+                    let mut color = deco_override
+                        .or(deco.color_opt.map(cosmic_color))
+                        .unwrap_or(resolved_entity_color);
+                    if blocked {
+                        // § 7 Block: paint-invisible, layout-identical.
+                        color = color.with_alpha(0.0);
+                    } else if color.alpha() == 0.0 {
+                        continue; // fully transparent: nothing to paint
+                    }
+                    match deco.kind {
+                        DecorationKind::Underline | DecorationKind::Overline => {
+                            new_quads.push(TextQuad {
+                                entity,
+                                position: Vec2::new(deco.rect[0], deco.rect[1]),
+                                size: Vec2::new(deco.rect[2], deco.rect[3]),
+                                color,
+                                clip: eff_clip,
+                            });
+                        }
+                        // § 4.4 seat 5: buffered through the glyph loop —
+                        // the solid stamp paints OVER the run's glyphs (the
+                        // CSS Text Decoration L3 painting order).
+                        DecorationKind::LineThrough => {
+                            strikes.push((deco.rect, linear_color(color)));
+                        }
+                    }
+                }
+            }
+            for glyph in run.glyphs.iter() {
+                // § 5.1: cosmic-text's own binning, verbatim.
+                let phys = glyph.physical(
+                    physical_offset(origin, run.line_y, scale_factor),
+                    scale_factor,
+                );
+                // T7 § 5.2: per-CLUSTER re-tint — a glyph whose bytes
+                // intersect the selection paints with the selection fg
+                // (over any rich-text span color, upstream-verbatim); the
+                // atlas is never touched. Granularity is the cluster: a
+                // partially selected ligature re-tints whole while its
+                // RECT stays grapheme-accurate (§ 5.2's accepted
+                // tradeoff). Upstream's text_color != selected_text_color
+                // short-circuit is dropped — equal resolved colors emit
+                // identical instances.
+                let selected = selection.is_some_and(|sel| {
+                    run.line_i >= sel.start.line
+                        && run.line_i <= sel.end.line
+                        && (sel.start.line != run.line_i || glyph.end > sel.start.index)
+                        && (sel.end.line != run.line_i || glyph.start < sel.end.index)
+                });
+                let mut color = match (selected, selection_fg) {
+                    (true, Some(fg)) => fg,
+                    // Per-span Attrs color override rides through (§ 7).
+                    _ => glyph.color_opt.map(span_color).unwrap_or(entity_color),
+                };
+                if blocked {
+                    // font-assets § 7 Block: identical fallback LAYOUT,
+                    // zero-alpha PAINT — instances ARE emitted (the atlas
+                    // and the GPU buffer stay warm with the fallback's
+                    // glyphs), bypassing the transparent skip below.
+                    color[3] = 0.0;
+                } else if color[3] == 0.0 {
+                    continue; // fully transparent: nothing to paint
+                }
+                // The SHARED per-glyph emit (the placeholder branch reuses it).
+                emit_glyph(
+                    atlas,
+                    meta,
+                    fonts,
+                    font_guard,
+                    swash,
+                    interner,
+                    new_glyphs,
+                    new_keys,
+                    &phys,
+                    color,
+                    clip,
+                    scale_factor,
+                    translation,
+                    glyph_affine,
+                );
+            }
+            // § 4.4 seat 5: line-through paints OVER the run's glyphs —
+            // solid-stamp GlyphAlphaInstances appended after them (quad-tier
+            // rects could never paint over glyphs: § 4.1's fixed primitive
+            // rank).
+            if !strikes.is_empty() {
+                let entry = *stamp_entry.get_or_insert_with(|| {
+                    atlas.get_or_insert(
+                        solid_stamp_key(),
+                        AtlasFormat::CoverageR8,
+                        solid_stamp_bitmap,
+                    )
+                });
+                if entry.page > 0 {
+                    warn_once_page_overflow(); // § 11.1 v1 mitigation
+                }
+                for (rect, color) in strikes {
+                    new_glyphs.push(GlyphAlphaInstance {
+                        rect: repivot_origin(rect, translation, glyph_affine),
+                        uv: stamp_uv(&entry),
+                        color,
+                        clip,
+                        page: entry.page as u32,
+                        affine: glyph_affine,
+                    });
+                    // § 6.3: one key per instance — the un-gated touch pass
+                    // keeps a live stamp LRU-warm through retained frames.
+                    new_keys.push(solid_stamp_key());
+                }
+            }
+        }
+        runs
+    });
+    // architecture § 3.2 tripwire: layout_runs TERMINATES at the first
+    // unshaped line — a mismatch means something mutated the buffer
+    // after TextCommit.
+    debug_assert_eq!(
+        runs,
+        computed.lines.len(),
+        "TextBuffer dirty-unshaped at extract (mutated after TextCommit?)"
+    );
+
+    // E6 — placeholder paint (editing-and-ime § 10, decoration-and-paint
+    // § 7). A SEPARATE additive emission: the placeholder is its own display
+    // buffer with its own runs — NOT part of the editor's ComputedTextLayout,
+    // so it does NOT feed the § 3.2 run-count assert above (M4). Painted only
+    // when a shaped PlaceholderBuffer is present (sync_placeholder inserts it
+    // iff the editor value is empty ⇒ the editor loop above emitted no ink),
+    // tinted to the placeholder token. Reuses the shared per-glyph emitter.
+    if let Some(ph) = placeholder_buffer {
+        let ph_color = linear_color(resolve_token(&TextColor::placeholder().0, theme));
+        if ph_color[3] > 0.0 {
+            for run in ph.buffer.layout_runs() {
+                for glyph in run.glyphs.iter() {
+                    let phys = glyph.physical(
+                        physical_offset(origin, run.line_y, scale_factor),
+                        scale_factor,
+                    );
+                    emit_glyph(
+                        atlas,
+                        meta,
+                        fonts,
+                        font_guard,
+                        swash,
+                        interner,
+                        new_glyphs,
+                        new_keys,
+                        &phys,
+                        ph_color,
+                        clip,
+                        scale_factor,
+                        translation,
+                        glyph_affine,
+                    );
+                }
+            }
+        }
+    }
+
+    // T7 § 6.1 — seat 6: the caret paints last, over glyphs and
+    // line-through, as a solid-stamp instance (pre-phase decision 2).
+    // Painted under Block too (chrome, not ink — decision 9: browsers
+    // keep the caret in a focused field whose font is loading). At a
+    // bidirectional direction boundary an OPTIONAL second (secondary-
+    // indicator) stamp follows the primary (§§ 4.1, 5) — same
+    // entry/color/clip/page, CPU geometry only, no new atlas insert.
+    if let Some(cv) = caret_visual
+        && cv.visible
+    {
+        // § 6.2: explicit token → theme caret key (presence check) →
+        // currentColor. Re-tint only — never an atlas mutation.
+        let color = resolve_caret_color(caret_color.map(|c| &c.0), theme, resolved_entity_color);
+        if color.alpha() > 0.0 {
+            let entry = *stamp_entry.get_or_insert_with(|| {
+                atlas.get_or_insert(
+                    solid_stamp_key(),
+                    AtlasFormat::CoverageR8,
+                    solid_stamp_bitmap,
+                )
+            });
+            if entry.page > 0 {
+                warn_once_page_overflow(); // § 11.1 v1 mitigation
+            }
+            new_glyphs.push(GlyphAlphaInstance {
+                rect: repivot_origin(
+                    caret_stamp_rect(origin, cv.rect, scale_factor),
+                    translation,
+                    glyph_affine,
+                ),
+                uv: stamp_uv(&entry),
+                color: linear_color(color),
+                clip,
+                page: entry.page as u32,
+                affine: glyph_affine,
+            });
+            // §§ 4.1, 5: the SECONDARY split-caret indicator — a second
+            // solid stamp at the boundary's before-glyph logical-end edge,
+            // present only at a bidi direction boundary. Reuse the SAME
+            // entry/color/clip/page; the stamp key is already queued below
+            // (do NOT push it twice).
+            if let Some(sec) = cv.secondary {
+                new_glyphs.push(GlyphAlphaInstance {
+                    rect: repivot_origin(
+                        caret_stamp_rect(origin, sec, scale_factor),
+                        translation,
+                        glyph_affine,
+                    ),
+                    uv: stamp_uv(&entry),
+                    color: linear_color(color),
+                    clip,
+                    page: entry.page as u32,
+                    affine: glyph_affine,
+                });
+            }
+            // § 6.3: the stamp key joins the un-gated touch pass — a
+            // retained caret idling past eviction_grace must not lose
+            // its cell.
+            new_keys.push(solid_stamp_key());
+        }
+    }
+    // T8 D1: attribute this entity's contiguous instance slice. The
+    // prepare partition maps the entity to its ExtractedNode.group off
+    // the fresh node list — the producer learns nothing about groups.
+    let entity_end = new_glyphs.len() as u32;
+    if entity_end > entity_start {
+        new_runs.push(GlyphEntityRun {
+            entity,
+            instances: entity_start..entity_end,
+        });
+        // Partial-reextract D2: the entity's key range, recorded AT emission
+        // under the SAME push condition (every instance-emitting path pushes
+        // at least one key, so the run sets coincide). Deliberately NOT
+        // derivable from `entity_runs`: the bidi secondary caret stamp above
+        // pushes a second instance but no second key, so keys are not 1:1
+        // with instances.
+        new_key_runs.push((entity, key_start..new_keys.len() as u32));
+    } else {
+        // No instances ⇒ no keys (a key only ever accompanies an instance);
+        // an unattributed key would break `key_runs`' gapless cover of
+        // `resident.keys`.
+        debug_assert_eq!(key_start as usize, new_keys.len());
     }
 }
 
@@ -1089,6 +1890,382 @@ fn linear_color(color: Color) -> [f32; 4] {
 /// sinks: the per-span glyph override and the decoration precedence walk.
 fn cosmic_color(c: cosmic_text::Color) -> Color {
     Color::srgba_u8(c.r(), c.g(), c.b(), c.a())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `n` fabricated entities (a scratch `World` mints real ids).
+    fn entities(n: usize) -> Vec<Entity> {
+        let mut world = World::new();
+        (0..n).map(|_| world.spawn_empty().id()).collect()
+    }
+
+    /// Retained runs naming `ents`, one 1-instance run each (the classifier
+    /// reads only `entity`; the ranges are inert here).
+    fn runs(ents: &[Entity]) -> Vec<GlyphEntityRun> {
+        ents.iter()
+            .enumerate()
+            .map(|(i, &entity)| GlyphEntityRun {
+                entity,
+                instances: i as u32..i as u32 + 1,
+            })
+            .collect()
+    }
+
+    fn classify(
+        global: bool,
+        structural: bool,
+        skip_lifted: bool,
+        degraded: bool,
+        changed: &[Entity],
+        despawned: &[Entity],
+        retained: &[GlyphEntityRun],
+    ) -> GlyphDamage {
+        classify_glyph_damage(
+            global,
+            structural,
+            skip_lifted,
+            degraded,
+            changed,
+            despawned,
+            retained,
+        )
+    }
+
+    // ---- D3 rule 1: whole-set escalations --------------------------------
+
+    #[test]
+    fn global_trigger_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(true, false, false, false, &e[..1], &[], &retained),
+            GlyphDamage::Full,
+            "theme/scale/fonts are whole-set by nature (D3)"
+        );
+    }
+
+    #[test]
+    fn structural_change_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, true, false, false, &e[..1], &[], &retained),
+            GlyphDamage::Full,
+            "a paint reorder / group-membership change is Patch-unsafe (D3)"
+        );
+    }
+
+    #[test]
+    fn skip_lift_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, true, false, &[], &[], &retained),
+            GlyphDamage::Full,
+            "hide→show re-insertion: order position unknown without the walk (D3)"
+        );
+    }
+
+    #[test]
+    fn live_degradation_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, false, true, &e[..1], &[], &retained),
+            GlyphDamage::Full,
+            "the alpha-fold repacks the WHOLE buffer from source (D3)"
+        );
+    }
+
+    // ---- D3 rule 2: Added / newly-emitting detection ----------------------
+
+    #[test]
+    fn changed_entity_absent_from_retained_runs_classifies_full() {
+        let e = entities(4);
+        // e[3] never emitted (Added, or newly non-whitespace, or re-shown).
+        let retained = runs(&e[..3]);
+        assert_eq!(
+            classify(false, false, false, false, &e[3..], &[], &retained),
+            GlyphDamage::Full,
+            "absence-from-retained-runs IS the Added detection (D3)"
+        );
+    }
+
+    // ---- D3 rule 3: the changed-set-fraction bail --------------------------
+
+    #[test]
+    fn changed_fraction_above_threshold_classifies_full() {
+        let e = entities(3);
+        let retained = runs(&e);
+        // 2 of 3 = 66 % > GLYPH_PATCH_MAX_CHANGED_PERCENT (50 %): the scroll
+        // degeneracy — splice-all must not cost more than wholesale (D3).
+        assert_eq!(
+            classify(false, false, false, false, &e[..2], &[], &retained),
+            GlyphDamage::Full
+        );
+    }
+
+    #[test]
+    fn changed_fraction_at_threshold_stays_patch() {
+        let e = entities(4);
+        let retained = runs(&e);
+        // 2 of 4 = exactly 50 %: the bail is STRICTLY-greater-than.
+        assert_eq!(
+            classify(false, false, false, false, &e[..2], &[], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::from_slice(&e[..2]),
+                removed: SmallVec::new(),
+                first_dirty_slot: None,
+            }
+        );
+    }
+
+    // ---- D3 rule 4: the Patch verdicts -------------------------------------
+
+    #[test]
+    fn plain_resident_value_change_classifies_patch() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, false, false, &e[..1], &[], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::from_slice(&e[..1]),
+                removed: SmallVec::new(),
+                first_dirty_slot: None,
+            }
+        );
+    }
+
+    #[test]
+    fn resident_despawn_classifies_patch_delete() {
+        let e = entities(3);
+        let retained = runs(&e);
+        assert_eq!(
+            classify(false, false, false, false, &[], &e[..1], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::new(),
+                removed: SmallVec::from_slice(&e[..1]),
+                first_dirty_slot: None,
+            },
+            "despawns ARE patchable: splice-delete keyed by the removal ids (D3)"
+        );
+    }
+
+    #[test]
+    fn non_resident_despawn_is_a_noop_patch() {
+        let e = entities(4);
+        let retained = runs(&e[..3]);
+        // EVERY node despawn rides RemovedComponents<ResolvedLayout>; a
+        // text-free despawn must not escalate (or even splice).
+        assert_eq!(
+            classify(false, false, false, false, &[], &e[3..], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::new(),
+                removed: SmallVec::new(),
+                first_dirty_slot: None,
+            }
+        );
+    }
+
+    #[test]
+    fn despawned_id_in_the_changed_set_is_a_delete_not_a_reemit() {
+        let e = entities(3);
+        let retained = runs(&e);
+        // A despawn also fires the value-clear streams (every component is
+        // removed), so the id can arrive in BOTH inputs — delete wins.
+        assert_eq!(
+            classify(false, false, false, false, &e[..1], &e[..1], &retained),
+            GlyphDamage::Patch {
+                changed: SmallVec::new(),
+                removed: SmallVec::from_slice(&e[..1]),
+                first_dirty_slot: None,
+            }
+        );
+    }
+
+    // ---- Stage C: the splice mechanics (D2) -------------------------------
+    // Unit-level pins for `splice_run` — the shared replace/delete/renumber
+    // engine both the instance and the key carrier ride. Each asserts EXACT
+    // post-splice ranges, so an off-by-delta in the renumber (the R5
+    // corruption mode: subsequent entities' slices silently misattributed)
+    // fails here first.
+
+    /// Three runs over `records = [10,11, 20,21,22, 30,31,32]`:
+    /// a: 0..2, b: 2..5, c: 5..8.
+    fn splice_fixture(e: &[Entity]) -> (Vec<i32>, Vec<GlyphEntityRun>) {
+        let records = vec![10, 11, 20, 21, 22, 30, 31, 32];
+        let runs = vec![
+            GlyphEntityRun {
+                entity: e[0],
+                instances: 0..2,
+            },
+            GlyphEntityRun {
+                entity: e[1],
+                instances: 2..5,
+            },
+            GlyphEntityRun {
+                entity: e[2],
+                instances: 5..8,
+            },
+        ];
+        (records, runs)
+    }
+
+    #[test]
+    fn splice_equal_length_overwrites_in_place() {
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[91, 92, 93]),
+            Some(2),
+            "the changed-start slot is the spliced run's start (D6)"
+        );
+        assert_eq!(records, vec![10, 11, 91, 92, 93, 30, 31, 32]);
+        assert_eq!(runs[0].instances, 0..2);
+        assert_eq!(runs[1].instances, 2..5);
+        assert_eq!(runs[2].instances, 5..8, "zero delta: no renumber");
+    }
+
+    #[test]
+    fn splice_longer_shifts_the_suffix_and_renumbers() {
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[91, 92, 93, 94, 95]),
+            Some(2)
+        );
+        assert_eq!(records, vec![10, 11, 91, 92, 93, 94, 95, 30, 31, 32]);
+        assert_eq!(runs[0].instances, 0..2, "prefix run untouched");
+        assert_eq!(runs[1].instances, 2..7, "the spliced run grew in place");
+        assert_eq!(runs[2].instances, 7..10, "suffix run shifted by +2");
+    }
+
+    #[test]
+    fn splice_shorter_shifts_the_suffix_and_renumbers() {
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert_eq!(splice_run(&mut records, &mut runs, e[1], &[91]), Some(2));
+        assert_eq!(records, vec![10, 11, 91, 30, 31, 32]);
+        assert_eq!(runs[1].instances, 2..3);
+        assert_eq!(runs[2].instances, 3..6, "suffix run shifted by -2");
+    }
+
+    #[test]
+    fn splice_delete_removes_the_run_and_renumbers() {
+        // The splice-DELETE (despawn / no-longer-emitting) unit pin: the
+        // integration despawn path escalates Full via the `Children`
+        // structural probe, so the removal splice is pinned HERE.
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[]),
+            Some(2),
+            "a delete's changed-start slot is the removed run's start (D6)"
+        );
+        assert_eq!(records, vec![10, 11, 30, 31, 32]);
+        assert_eq!(runs.len(), 2, "the deleted entity's run is GONE");
+        assert_eq!(runs[0].entity, e[0]);
+        assert_eq!(runs[0].instances, 0..2);
+        assert_eq!(runs[1].entity, e[2]);
+        assert_eq!(runs[1].instances, 2..5, "suffix renumbered over the gap");
+    }
+
+    #[test]
+    fn splice_byte_identical_reemission_is_a_noop() {
+        // D4: an equal re-emission must not move a tick — the caller keys
+        // `set_changed` off this return.
+        let e = entities(3);
+        let (mut records, mut runs) = splice_fixture(&e);
+        let before = records.clone();
+        assert_eq!(
+            splice_run(&mut records, &mut runs, e[1], &[20, 21, 22]),
+            None
+        );
+        assert_eq!(records, before);
+        assert_eq!(runs[2].instances, 5..8);
+    }
+
+    #[test]
+    fn splice_nonresident_delete_is_a_noop() {
+        // A despawned id that never emitted (filtered `removed` should not
+        // pass one, but the engine must tolerate it) deletes nothing.
+        let e = entities(4);
+        let (mut records, mut runs) = splice_fixture(&e);
+        let before = records.clone();
+        assert_eq!(splice_run(&mut records, &mut runs, e[3], &[]), None);
+        assert_eq!(records, before);
+        assert_eq!(runs.len(), 3);
+    }
+
+    #[test]
+    fn splice_key_runs_ride_the_same_engine() {
+        // The `(Entity, Range<u32>)` impl (ResidentTextKeys.key_runs): keys
+        // are NOT 1:1 with instances, so the key carrier splices its OWN
+        // ranges — same engine, second `SpliceRun` shape.
+        let e = entities(2);
+        let mut keys = vec![1u8, 2, 7, 8, 9];
+        let mut key_runs = vec![(e[0], 0..2u32), (e[1], 2..5u32)];
+        assert_eq!(splice_run(&mut keys, &mut key_runs, e[0], &[4]), Some(0));
+        assert_eq!(keys, vec![4, 7, 8, 9]);
+        assert_eq!(key_runs[0].1, 0..1);
+        assert_eq!(key_runs[1].1, 1..4, "key suffix renumbered by -1");
+    }
+
+    // ---- Stage C: the quad splice (D2 "the easy half") ---------------------
+
+    fn quad(entity: Entity, x: f32) -> TextQuad {
+        TextQuad {
+            entity,
+            position: Vec2::new(x, 0.0),
+            size: Vec2::splat(1.0),
+            color: Color::WHITE,
+            clip: None,
+        }
+    }
+
+    #[test]
+    fn quad_splice_replaces_the_contiguous_slice() {
+        let e = entities(3);
+        let mut quads = vec![quad(e[0], 0.0), quad(e[1], 1.0), quad(e[2], 2.0)];
+        assert!(splice_entity_quads(
+            &mut quads,
+            e[1],
+            &[quad(e[1], 9.0), quad(e[1], 10.0)],
+        ));
+        assert_eq!(quads.len(), 4);
+        assert_eq!(quads[0], quad(e[0], 0.0));
+        assert_eq!(quads[1], quad(e[1], 9.0));
+        assert_eq!(quads[2], quad(e[1], 10.0));
+        assert_eq!(quads[3], quad(e[2], 2.0));
+    }
+
+    #[test]
+    fn quad_splice_appends_for_a_newly_quad_emitting_entity() {
+        // Quad residency is independent of glyph residency: a resident
+        // entity gaining its first quad (selection appears) APPENDS —
+        // cross-entity quad order is not load-bearing (§ 4.6).
+        let e = entities(2);
+        let mut quads = vec![quad(e[0], 0.0)];
+        assert!(splice_entity_quads(&mut quads, e[1], &[quad(e[1], 5.0)]));
+        assert_eq!(quads, vec![quad(e[0], 0.0), quad(e[1], 5.0)]);
+    }
+
+    #[test]
+    fn quad_splice_deletes_and_noops() {
+        let e = entities(3);
+        let mut quads = vec![quad(e[0], 0.0), quad(e[1], 1.0), quad(e[2], 2.0)];
+        // Delete the middle entity's slice.
+        assert!(splice_entity_quads(&mut quads, e[1], &[]));
+        assert_eq!(quads, vec![quad(e[0], 0.0), quad(e[2], 2.0)]);
+        // Byte-identical replacement: no change, no tick.
+        assert!(!splice_entity_quads(&mut quads, e[0], &[quad(e[0], 0.0)]));
+        // Deleting a quad-free entity: no change.
+        assert!(!splice_entity_quads(&mut quads, e[1], &[]));
+        assert_eq!(quads.len(), 2);
+    }
 }
 
 /// Per-span `LayoutGlyph.color_opt` override (§ 7) — cosmic carries sRGB8.

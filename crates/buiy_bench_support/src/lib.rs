@@ -39,8 +39,8 @@ use buiy_core::render::extract::{
 use buiy_core::render::prepare::ExtractedGlyphs;
 use buiy_core::render::{RenderWorkCounters, record_text_work_counters};
 use buiy_core::text::{
-    BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontSize, GlyphMetaCache, ResidentTextKeys,
-    SharedFontSystem, Text, extract_buiy_glyphs,
+    BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontSize, GlyphDamage, GlyphMetaCache,
+    ResidentTextKeys, SharedFontSystem, Text, extract_buiy_glyphs,
 };
 use buiy_core::{CorePlugin, Node};
 
@@ -99,6 +99,10 @@ impl PipelineHarness {
         // tests can read them — the SAME `RenderWorkCounters` the real RenderApp
         // registers (one type, one registration list).
         render.init_resource::<RenderWorkCounters>();
+        // Stage B (glyph partial-reextract D1): the glyph producer's Full|Patch
+        // verdict — the SAME registration list the real RenderApp uses
+        // (text::register_render_world), so the counter gates read it here too.
+        render.init_resource::<GlyphDamage>();
         render.init_resource::<FontKeyInterner>();
         render.init_resource::<ResidentTextKeys>();
         render.init_resource::<GlyphMetaCache>();

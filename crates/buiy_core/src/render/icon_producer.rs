@@ -9,17 +9,21 @@
 //!
 //! ## Why a SEPARATE carrier (not `ExtractedGlyphs`)
 //!
-//! The text glyph producer (`text::extract_buiy_glyphs`) rebuilds
-//! `ExtractedGlyphs` **wholesale** on every dirty frame and value-compares to
-//! publish — anything an icon producer pushed into that resource would be
-//! clobbered. And `buckets::partition_glyph_ranges` debug-asserts the entity
-//! runs are contiguous-from-0 covering every instance, so two independently
-//! rebuilt sources cannot share one partition. So icons get their OWN carrier +
-//! their OWN GPU buffer (`BuiyInstanceBuffers::icon`) + their OWN draw — but
-//! that draw reuses the EXISTING coverage pipeline + atlas bind group + the
+//! The text glyph producer (`text::extract_buiy_glyphs`) OWNS `ExtractedGlyphs`
+//! outright: it rebuilds the carrier wholesale on `GlyphDamage::Full` frames and
+//! splice-patches it in place on `Patch` frames (the 2026-07-03 keyed partial
+//! re-extract, `docs/specs/2026-07-03-glyph-partial-reextract-design.md`) —
+//! either way, anything an icon producer pushed into that resource would be
+//! clobbered or spliced over. And `buckets::partition_glyph_ranges` debug-asserts
+//! the entity runs are contiguous-from-0 covering every instance, so two
+//! independently built sources cannot share one partition. So icons get their OWN
+//! carrier + their OWN GPU buffer (`BuiyInstanceBuffers::icon`) + their OWN draw
+//! — but that draw reuses the EXISTING coverage pipeline + atlas bind group + the
 //! `coverage.wgsl` shader VERBATIM (the icon record IS a `GlyphAlphaInstance`),
 //! so there is **no new GPU shader/pipeline code**. The two producers stay fully
-//! decoupled; the text path is untouched.
+//! decoupled; the text path is untouched. This ICON tier itself still rebuilds
+//! `ExtractedIcons` wholesale on its dirty frames — a candidate for the same
+//! Full/Patch treatment (follow-up filed in `docs/plans/follow-ups.md`).
 //!
 //! ## Live re-tint
 //!

@@ -37,6 +37,7 @@ members = [
     "examples/counter_view",
     "examples/todomvc_view",
     "examples/scaling_view",
+    "examples/mt_ceiling",
 ]
 
 [workspace.package]

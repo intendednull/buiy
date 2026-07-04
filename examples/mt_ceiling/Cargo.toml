@@ -1,0 +1,35 @@
+# PROTOTYPE — MT-ceiling measurement benchmark. DO NOT MERGE (throwaway).
+# Headless scaling harness: a Buiy per-frame pipeline alongside an
+# embarrassingly-parallel user workload, to measure whether Buiy's serial /
+# main-thread-pinned work caps a multi-threaded app's throughput.
+[package]
+name = "mt_ceiling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "mt_ceiling"
+path = "src/main.rs"
+
+[features]
+# Compile Bevy's multi-threaded executor in (downstream apps get this via feature
+# unification). The binary chooses ST vs MT executor at runtime; it must be
+# compiled with the MT executor available to offer the MT path — so ALWAYS build
+# the bench with `--features mt-exec` (main() warns loudly otherwise).
+#
+# Deliberately NOT a default feature: this crate is a workspace member, and
+# `mt-exec` enables `buiy_core/multi_threaded`. If it were on by default, a plain
+# `cargo test --workspace` would unify `multi_threaded` ON across the whole
+# workspace (flipping the executor for every crate's tests + compiling out the
+# dhat alloc-budget gate — the exact hazard the MT-safety spec's D4 guards). With
+# it off-by-default, the workspace gate is untouched; the bench opts in explicitly.
+default = []
+mt-exec = ["buiy_core/multi_threaded"]
+
+[dependencies]
+bevy = { workspace = true }
+buiy_core = { path = "../../crates/buiy_core" }
+buiy_bench_support = { path = "../../crates/buiy_bench_support" }

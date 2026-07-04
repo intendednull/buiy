@@ -1174,3 +1174,439 @@ fn already_active_placeholder_string_reshape_re_emits() {
         "…and settled — the reshape is a one-shot rebuild"
     );
 }
+
+/// Partial-reextract Stage B (design D3) — THE reorder-escalation probe: a z
+/// flip on a positioned, SC-forming ANCESTOR reorders two overlapping text
+/// entities' paint order WITHOUT ticking any component on the text entities
+/// themselves (`Stacking` changes on the wrapper; the texts' layout, transform
+/// and paint inputs are untouched). The `With<TextBuffer>`-scoped § 6.2 union
+/// is blind to it by construction — only the un-scoped structural probe
+/// (`Changed<StackingContext>` — the walk's own order source) can fire the
+/// gate. This pins the CORRECT behavior: the carrier rebuilds and the run
+/// order flips. RED against pre-Stage-B code = the confirmed pre-existing
+/// ancestor-reorder under-trigger (stale glyph paint order on screen).
+#[test]
+fn ancestor_z_reorder_rebuilds_and_flips_glyph_paint_order() {
+    use buiy_core::layout::{Inset, Length, Sizing, Stacking, ZIndex};
+
+    let mut h = TextExtractHarness::new();
+    // Two absolutely-positioned wrappers OVERLAPPED at the same inset, each
+    // forming a stacking context (positioned + explicit z, 6f trigger 1), each
+    // with one text child. Distinct colors so the reorder changes instance
+    // BYTES (which color paints on top), not just run attribution.
+    let spawn_layer = |h: &mut TextExtractHarness, z: i32, color: Color| -> Entity {
+        let text = h
+            .app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default(),
+                Text(String::from("Hi!")),
+                FontSize(16.0),
+                TextColor(ColorToken::Custom(color)),
+            ))
+            .id();
+        h.app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .absolute()
+                    .inset(Inset {
+                        top: Sizing::Length(Length::px(0.0)),
+                        left: Sizing::Length(Length::px(0.0)),
+                        ..Default::default()
+                    })
+                    .width_px(200.0)
+                    .height_px(50.0)
+                    .z_index(ZIndex::Layer(z)),
+            ))
+            .add_child(text)
+            .id()
+    };
+    let layer_a = spawn_layer(&mut h, 1, Color::srgb(1.0, 0.0, 0.0));
+    let layer_b = spawn_layer(&mut h, 2, Color::srgb(0.0, 0.0, 1.0));
+    // ONE common root context: the wrappers must be siblings in the SAME
+    // painters_z (parentless nodes each form their own ROOT context — roots
+    // order by cross_root_rank, not z, so they would never reorder).
+    h.app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(300.0).height_px(100.0)))
+        .add_children(&[layer_a, layer_b]);
+    h.settle();
+
+    // Settled order: a (z=1) under b (z=2) — a's run first.
+    let runs_before: Vec<Entity> = h.glyphs().entity_runs.iter().map(|r| r.entity).collect();
+    assert_eq!(runs_before.len(), 2, "two emitting text entities");
+    let publishes = h.changed_frames();
+    h.frame();
+    assert_eq!(h.changed_frames(), publishes, "steady before the flip");
+
+    // The pure ancestor reorder: lift a OVER b. Ticks `Stacking` on the
+    // WRAPPER only; the text entities are untouched.
+    h.app
+        .world_mut()
+        .get_mut::<Stacking>(layer_a)
+        .unwrap()
+        .z_index = ZIndex::Layer(3);
+    h.frame();
+
+    assert_eq!(
+        h.changed_frames(),
+        publishes + 1,
+        "an ancestor paint reorder must rebuild the glyph carrier (the \
+         structural probe joins the dirty gate — pre-Stage-B this is the \
+         under-trigger: stale glyph paint order)"
+    );
+    let runs_after: Vec<Entity> = h.glyphs().entity_runs.iter().map(|r| r.entity).collect();
+    let mut flipped = runs_before.clone();
+    flipped.reverse();
+    assert_eq!(
+        runs_after, flipped,
+        "the glyph run order follows the new painters_z (a now paints over b)"
+    );
+}
+
+/// Partial-reextract D1/D3: one value-tier change on one of N resident text
+/// entities publishes `GlyphDamage::Patch([victim])` — and from Stage C the
+/// producer EXECUTES it (splice-replace of the victim's slice; the carrier
+/// still republishes exactly once because the victim's bytes really
+/// changed). A despawn, by contrast, escalates to `Full` at the INTEGRATION
+/// level: the parent's `Children` ticks, and hierarchy mutations are
+/// structural (the classifier's splice-delete verdict — unit-tested — is
+/// reachable only when no structural tick accompanies the removal).
+///
+/// History: authored in Stage B as `…_while_still_rebuilding` (observation-
+/// only); the assertions are UNCHANGED by the Stage C flip — one publish per
+/// real change and the Patch verdict — only the "still rebuilds wholesale"
+/// framing died.
+#[test]
+fn one_color_change_publishes_a_patch_verdict_and_republishes_once() {
+    use buiy_core::text::GlyphDamage;
+    use smallvec::SmallVec;
+
+    let mut h = TextExtractHarness::new();
+    let (victim, root) = spawn_text_with_root(&mut h);
+    // Two more siblings so the changed fraction (1 of 3) clears the D3 bail.
+    let sibling = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Yo")),
+            FontSize(16.0),
+        ))
+        .id();
+    let third = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("Ok")),
+            FontSize(16.0),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .entity_mut(root)
+        .add_children(&[sibling, third]);
+    h.settle();
+    let publishes = h.changed_frames();
+    h.frame();
+    assert_eq!(h.changed_frames(), publishes, "steady before the change");
+
+    // The victim's run start before the change: a re-tint is
+    // length-preserving, so it is also the D6 first dirty slot the executed
+    // splice publishes.
+    let victim_run_start = run_of(&h, victim).start;
+
+    // One value-tier change on ONE resident entity.
+    h.app
+        .world_mut()
+        .entity_mut(victim)
+        .insert(TextColor(ColorToken::Custom(Color::srgb(0.9, 0.1, 0.2))));
+    h.frame();
+    assert_eq!(
+        h.changed_frames(),
+        publishes + 1,
+        "the executed Patch republishes exactly once (the victim's bytes changed)"
+    );
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Patch {
+            changed: SmallVec::from_slice(&[victim]),
+            removed: SmallVec::new(),
+            first_dirty_slot: Some(victim_run_start),
+        },
+        "the classifier verdicts the frame Patch-eligible with exactly the victim, \
+         and the executed splice publishes the victim's run start (D6)"
+    );
+
+    // A despawn ticks the parent's `Children` → structural → Full (the
+    // integration-level conservatism pinned above).
+    h.app.world_mut().entity_mut(third).despawn();
+    h.frame();
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Full,
+        "a despawn escalates via the hierarchy probe at the integration level"
+    );
+}
+
+// --- Stage C: Patch EXECUTION (partial-reextract D2/D4) ---------------------
+
+/// Three sibling texts under one root, distinct strings, in paint order.
+fn spawn_three_texts(h: &mut TextExtractHarness) -> [Entity; 3] {
+    let spawn = |h: &mut TextExtractHarness, s: &str| {
+        h.app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default(),
+                Text(String::from(s)),
+                FontSize(16.0),
+            ))
+            .id()
+    };
+    let a = spawn(h, "One");
+    let b = spawn(h, "Hi!");
+    let c = spawn(h, "End");
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_children(&[a, b, c]);
+    [a, b, c]
+}
+
+/// The run of `entity`, by value.
+fn run_of(h: &TextExtractHarness, entity: Entity) -> std::ops::Range<u32> {
+    h.glyphs()
+        .entity_runs
+        .iter()
+        .find(|r| r.entity == entity)
+        .expect("entity has a run")
+        .instances
+        .clone()
+}
+
+/// THE glyph R5 sibling-retention pin (Stage C, D2): a LENGTH-CHANGING text
+/// edit on the middle of three resident entities executes a splice —
+/// the prefix sibling's instance slice is byte-identical AT THE SAME
+/// indices (never re-emitted, never moved), the suffix sibling's slice is
+/// byte-identical CONTENT correctly shifted by the delta, `entity_runs` is
+/// renumbered exactly, and `ResidentTextKeys` (keys + key_runs) stays
+/// aligned in lockstep. An off-by-delta in the renumber — the silent
+/// cross-attribution corruption a disguised rebuild can't have — fails the
+/// exact-range asserts here.
+#[test]
+fn glyph_patch_retains_sibling_slices_and_shifts_the_suffix() {
+    use buiy_core::text::{GlyphDamage, ResidentTextKeys};
+    use smallvec::SmallVec;
+
+    let mut h = TextExtractHarness::new();
+    let [a, b, c] = spawn_three_texts(&mut h);
+    h.settle();
+    let publishes = h.changed_frames();
+    h.frame();
+    assert_eq!(h.changed_frames(), publishes, "steady before the edit");
+
+    let before = h.glyphs().glyphs.clone();
+    let keys_before = h.resident_keys();
+    let (a_run, b_run, c_run) = (run_of(&h, a), run_of(&h, b), run_of(&h, c));
+    assert_eq!(b_run.end - b_run.start, 3, "'Hi!' is three instances");
+
+    // The length-changing edit: 3 glyphs → 6 (delta +3), mid-scene (1 of 3
+    // runs = 33 % ≤ the D3 bail).
+    h.app.world_mut().get_mut::<Text>(b).unwrap().0 = String::from("Hello!");
+    h.frame();
+
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Patch {
+            changed: SmallVec::from_slice(&[b]),
+            removed: SmallVec::new(),
+            first_dirty_slot: Some(b_run.start),
+        },
+        "the edit executes as a Patch of exactly the victim, publishing the \
+         victim's run start as the D6 first dirty slot (the prefix sibling \
+         below it is the retained GPU span)"
+    );
+    assert_eq!(
+        h.changed_frames(),
+        publishes + 1,
+        "the splice republishes the glyph carrier exactly once"
+    );
+
+    let after = &h.glyphs().glyphs;
+    assert_eq!(after.len(), before.len() + 3, "3 → 6 instances is delta +3");
+
+    // Prefix sibling: byte-identical AT THE SAME indices.
+    assert_eq!(run_of(&h, a), a_run, "the prefix run is untouched");
+    assert_eq!(
+        &after[a_run.start as usize..a_run.end as usize],
+        &before[a_run.start as usize..a_run.end as usize],
+        "the prefix sibling's slice is byte-identical, unmoved"
+    );
+    // The victim: grew in place.
+    assert_eq!(
+        run_of(&h, b),
+        b_run.start..b_run.start + 6,
+        "the victim's run grew in place"
+    );
+    // Suffix sibling: byte-identical CONTENT, shifted by exactly +3.
+    assert_eq!(
+        run_of(&h, c),
+        c_run.start + 3..c_run.end + 3,
+        "the suffix run is renumbered by the delta"
+    );
+    assert_eq!(
+        &after[(c_run.start + 3) as usize..(c_run.end + 3) as usize],
+        &before[c_run.start as usize..c_run.end as usize],
+        "the suffix sibling's slice is byte-identical content, shifted"
+    );
+
+    // Keys + key_runs co-spliced in lockstep (D2): sibling key segments
+    // retained (shifted for the suffix), the victim's re-keyed slice sits
+    // between them, and the run tables stay aligned.
+    let keys_after = h.resident_keys();
+    assert_eq!(keys_after.len(), keys_before.len() + 3);
+    assert_eq!(
+        &keys_after[a_run.start as usize..a_run.end as usize],
+        &keys_before[a_run.start as usize..a_run.end as usize],
+        "prefix sibling keys identical at the same indices"
+    );
+    assert_eq!(
+        &keys_after[(c_run.start + 3) as usize..(c_run.end + 3) as usize],
+        &keys_before[c_run.start as usize..c_run.end as usize],
+        "suffix sibling keys identical content, shifted"
+    );
+    let resident = h.render.resource::<ResidentTextKeys>();
+    assert_eq!(
+        resident
+            .key_runs
+            .iter()
+            .map(|(e, _)| *e)
+            .collect::<Vec<_>>(),
+        h.glyphs()
+            .entity_runs
+            .iter()
+            .map(|r| r.entity)
+            .collect::<Vec<_>>(),
+        "key runs and instance runs name the same entities in the same order"
+    );
+
+    // And settles: the next frame is retained.
+    h.frame();
+    assert_eq!(h.changed_frames(), publishes + 1, "back to steady");
+}
+
+/// D4's no-op discipline at the Patch tier: a union tick whose re-emission
+/// is byte-identical (re-inserting the SAME `TextColor` value) runs the
+/// Patch machinery — the verdict names the victim — but splices nothing and
+/// moves NEITHER carrier tick, so prepare re-uploads nothing.
+#[test]
+fn patch_noop_reemission_leaves_both_carrier_ticks_untouched() {
+    use buiy_core::text::GlyphDamage;
+    use smallvec::SmallVec;
+
+    let mut h = TextExtractHarness::new();
+    let [_, b, _] = spawn_three_texts(&mut h);
+    let color = TextColor(ColorToken::Custom(Color::srgb(0.9, 0.1, 0.2)));
+    h.app.world_mut().entity_mut(b).insert(color.clone());
+    h.settle();
+    let g0 = h.changed_frames();
+    let q0 = h.quad_changed_frames();
+
+    // Re-insert the SAME value: `Changed<TextColor>` fires (insert always
+    // ticks), the resolved paint is identical.
+    h.app.world_mut().entity_mut(b).insert(color);
+    h.frame();
+
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Patch {
+            changed: SmallVec::from_slice(&[b]),
+            removed: SmallVec::new(),
+            first_dirty_slot: None,
+        },
+        "the dirty frame ran the Patch path (this is not an idle frame) and \
+         published NO first dirty slot — nothing spliced, so prepare must \
+         never wake for the glyph buffer (D6)"
+    );
+    assert_eq!(
+        h.changed_frames(),
+        g0,
+        "byte-identical re-emission: the glyph tick did NOT move (D4)"
+    );
+    assert_eq!(
+        h.quad_changed_frames(),
+        q0,
+        "byte-identical re-emission: the quad tick did NOT move (D4)"
+    );
+}
+
+/// The T7 decoration retention pin extended to the Patch tier: a color-only
+/// `TextDecorations` edit on one of three entities executes as a Patch whose
+/// re-emission changes ONLY the quad slice — the quad carrier republishes,
+/// the glyph carrier keeps its tick (the two carriers gate independently).
+#[test]
+fn patch_decorations_change_republishes_quads_and_retains_glyphs_mid_scene() {
+    use buiy_core::text::GlyphDamage;
+    use smallvec::SmallVec;
+
+    let mut h = TextExtractHarness::new();
+    let [_, b, _] = spawn_three_texts(&mut h);
+    h.app.world_mut().entity_mut(b).insert(TextDecorations {
+        line: DecorationLines::UNDERLINE,
+        ..Default::default()
+    });
+    h.settle();
+    let g0 = h.changed_frames();
+    let q0 = h.quad_changed_frames();
+
+    h.app
+        .world_mut()
+        .get_mut::<TextDecorations>(b)
+        .unwrap()
+        .color = Some(ColorToken::Custom(Color::srgb(1.0, 0.0, 0.0)));
+    h.frame();
+
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Patch {
+            changed: SmallVec::from_slice(&[b]),
+            removed: SmallVec::new(),
+            // A quads-only re-emission: the glyph splice is a byte-identical
+            // no-op, so no first dirty slot is published (D6).
+            first_dirty_slot: None,
+        }
+    );
+    assert_eq!(
+        h.changed_frames(),
+        g0,
+        "glyph carrier RETAINED — the re-emitted instances compare equal"
+    );
+    assert_eq!(
+        h.quad_changed_frames(),
+        q0 + 1,
+        "the quad slice really changed — one quad republish"
+    );
+    assert_eq!(
+        h.text_quads()
+            .quads
+            .iter()
+            .find(|q| q.entity == b)
+            .expect("the underline quad")
+            .color,
+        Color::srgb(1.0, 0.0, 0.0),
+        "the spliced quad carries the re-resolved color"
+    );
+}
