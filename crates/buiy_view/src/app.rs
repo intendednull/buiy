@@ -6,7 +6,8 @@
 //! reconciler-state resources; spawn the model entity with a stable
 //! [`LogicalId`] + a 2D camera at `Startup`; install the press router
 //! ([`MvuSet::Enqueue`]) and the reconciler (in [`ViewSet::Reconcile`], ordered
-//! **`.before(BuiySet::Layout)`** — #10).
+//! **`.before(BuiySet::Layout)`** — #10); and the post-layout stick-to-bottom
+//! system (spec §2.2).
 
 use std::marker::PhantomData;
 
@@ -15,7 +16,7 @@ use buiy_core::BuiySet;
 use buiy_core::mvu::{Cmd, LogicalId, Model, MvuAppExt, MvuSet};
 
 use crate::element::Element;
-use crate::reconcile::{ViewWorkCounters, reconcile};
+use crate::reconcile::{ViewWorkCounters, reconcile, stick_scroll_to_bottom};
 use crate::router::{route_presses, route_text_input, route_text_submit};
 
 /// The stable [`LogicalId`] the single `ui()` model carries, so a recorded
@@ -144,6 +145,17 @@ impl BuiyViewAppExt for App {
         );
         self.configure_sets(Update, ViewSet::Reconcile.before(BuiySet::Layout));
         self.add_systems(Update, reconcile::<M>.in_set(ViewSet::Reconcile));
+
+        // The controlled stick-to-bottom (spec §2.2): non-generic, added once
+        // (P1 single-root), ordered AFTER the scroll extent cache so it pins to a
+        // fresh post-layout max. When the app carries no scroll pipeline the
+        // `.after` is a no-op ordering and the system gracefully idles (the
+        // extent stays `valid == false`). `add_systems` de-dups by system id, so
+        // a second `ui()` call would not double-schedule it.
+        self.add_systems(
+            Update,
+            stick_scroll_to_bottom.after(buiy_core::scroll::update_scroll_extent),
+        );
         self
     }
 }

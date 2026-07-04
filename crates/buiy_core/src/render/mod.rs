@@ -31,6 +31,7 @@ pub mod node;
 pub mod pipeline;
 pub mod prepare;
 pub mod primitive;
+pub mod raster;
 pub mod top_layer;
 pub mod view_uniform;
 pub mod visibility;
@@ -46,6 +47,7 @@ pub use components::{
     FilterFn, Icon, LineStyle, MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow,
     SkipReason,
 };
+pub use raster::RasterImage;
 pub use visibility::{node_skip_reason, write_paint_skip};
 
 /// One rectangle in the Phase 0 render queue. Marked `#[non_exhaustive]`
