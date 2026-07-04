@@ -70,6 +70,58 @@ impl<Msg: 'static> InputHandler<Msg> {
     }
 }
 
+/// A text-input's **submit** (Enter) handler — two shapes sharing one field (F7, spec §2.8):
+///
+/// - [`Static`](SubmitHandler::Static) — a fixed `Msg` value that ignores the submitted text
+///   ([`Element::on_submit`], the original form). The submitted text goes unread, exactly as
+///   before (byte-identical routing).
+/// - [`Capturing`](SubmitHandler::Capturing) — folds the **submitted text** into a message
+///   ([`Element::on_submit_with`]). This deletes the two-message dance an
+///   `on_input → SetDraft → on_submit → Submit` round-trip needed just to carry the value:
+///   the submit reads the editor's live value directly. Reuses [`InputHandler`] (bare or
+///   boxed), so it is replay-safe by the same rule and lifts through [`Element::map`].
+pub(crate) enum SubmitHandler<Msg> {
+    /// `on_submit(msg)` — the submitted text is ignored.
+    Static(Msg),
+    /// `on_submit_with(f)` — the submitted text is folded into the message.
+    Capturing(InputHandler<Msg>),
+}
+
+// Manual `Clone`: `Static` clones the held `Msg` (so this bound is `Msg: Clone`, which every
+// `M::Msg` satisfies — the `Model` trait requires it); `Capturing` clones its `InputHandler`
+// (a `Copy` fn or a cheap `Arc`).
+impl<Msg: Clone> Clone for SubmitHandler<Msg> {
+    fn clone(&self) -> Self {
+        match self {
+            SubmitHandler::Static(m) => SubmitHandler::Static(m.clone()),
+            SubmitHandler::Capturing(h) => SubmitHandler::Capturing(h.clone()),
+        }
+    }
+}
+
+impl<Msg: 'static> SubmitHandler<Msg> {
+    /// Lift the produced message through `f` — the `on_submit` half of [`Element::map`]. No
+    /// `Clone` bound (matching [`Element::map`]): `Static` moves its `Msg` through `f`,
+    /// `Capturing` composes its [`InputHandler`].
+    pub(crate) fn map<Parent: 'static>(self, f: fn(Msg) -> Parent) -> SubmitHandler<Parent> {
+        match self {
+            SubmitHandler::Static(m) => SubmitHandler::Static(f(m)),
+            SubmitHandler::Capturing(h) => SubmitHandler::Capturing(h.map(f)),
+        }
+    }
+}
+
+impl<Msg: Clone + 'static> SubmitHandler<Msg> {
+    /// Resolve the message a submit enqueues from the editor's live `value` (ignored by
+    /// [`Static`](SubmitHandler::Static), folded in by [`Capturing`](SubmitHandler::Capturing)).
+    pub(crate) fn resolve(&self, value: String) -> Msg {
+        match self {
+            SubmitHandler::Static(m) => m.clone(),
+            SubmitHandler::Capturing(h) => h.call(value),
+        }
+    }
+}
+
 /// Which retained widget an [`Element`] realizes into. Doubles as the component
 /// the reconciler stamps on each spawned entity so it can tell "same kind ⇒
 /// patch" from "different kind ⇒ replace".
@@ -155,8 +207,10 @@ pub struct Element<Msg> {
     /// never a captured closure (the replay-safety rule, spec §2). Consumed by
     /// `route_text_input`.
     pub(crate) on_input: Option<InputHandler<Msg>>,
-    /// A text-input's submit (Enter) message (a value, like `on_press`).
-    pub(crate) on_submit: Option<Msg>,
+    /// A text-input's submit (Enter) handler — a static message
+    /// ([`Element::on_submit`]) or a capturing fold of the submitted text
+    /// ([`Element::on_submit_with`]). Consumed by `route_text_submit`.
+    pub(crate) on_submit: Option<SubmitHandler<Msg>>,
 
     // --- F2 addition (the raster / drawing-canvas element) ------------------
     /// A [`Kind::Raster`] node's source image (authored via [`raster`]). Lowered
@@ -308,9 +362,23 @@ impl<Msg> Element<Msg> {
         self
     }
 
-    /// A **text-input**'s submit (Enter) message.
+    /// A **text-input**'s submit (Enter) message — a fixed value that ignores the
+    /// submitted text (the counterpart of [`on_press`](Element::on_press)).
     pub fn on_submit(mut self, msg: Msg) -> Self {
-        self.on_submit = Some(msg);
+        self.on_submit = Some(SubmitHandler::Static(msg));
+        self
+    }
+
+    /// A **text-input**'s **capturing** submit handler: `fn(submitted_text) -> Msg`. Folds the
+    /// editor's live value directly into the message on Enter, deleting the two-message dance a
+    /// static [`on_submit`](Element::on_submit) needs when it wants the typed text (the
+    /// `on_input → SetDraft → on_submit → Submit` round-trip through a model field). A **bare fn**
+    /// (an enum tuple-variant ctor like `Msg::SubmitGuess` is exactly `fn(String) -> Msg`), so it
+    /// is `Copy` / determinism-safe by type — the same replay-safety rule as
+    /// [`on_input`](Element::on_input). (Contrast the value-capturing inline-edit case, which
+    /// [`on_input_with`](Element::on_input_with) covers with a boxed closure.)
+    pub fn on_submit_with(mut self, f: fn(String) -> Msg) -> Self {
+        self.on_submit = Some(SubmitHandler::Capturing(InputHandler::Bare(f)));
         self
     }
 
@@ -359,7 +427,8 @@ impl<Msg> Element<Msg> {
             placeholder: self.placeholder,
             // Lift `on_input` by boxing (see the doc note — #17 closed the drop-limitation).
             on_input: self.on_input.map(|h| h.map(f)),
-            on_submit: self.on_submit.map(f),
+            // Lift `on_submit` through its handler (`Static` maps the value, `Capturing` the fn).
+            on_submit: self.on_submit.map(|h| h.map(f)),
             raster: self.raster,
         }
     }
@@ -509,4 +578,56 @@ macro_rules! text {
     ($($arg:tt)*) => {
         $crate::text(::std::format!($($arg)*))
     };
+}
+
+#[cfg(test)]
+mod submit_handler_tests {
+    use super::{Element, InputHandler, SubmitHandler};
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Msg {
+        Add,
+        Submit(String),
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    enum Parent {
+        Child(Msg),
+    }
+
+    #[test]
+    fn static_ignores_the_value_capturing_folds_it() {
+        let stat: SubmitHandler<Msg> = SubmitHandler::Static(Msg::Add);
+        assert_eq!(stat.resolve("ignored".into()), Msg::Add);
+
+        let cap: SubmitHandler<Msg> = SubmitHandler::Capturing(InputHandler::Bare(Msg::Submit));
+        assert_eq!(cap.resolve("cat".into()), Msg::Submit("cat".into()));
+    }
+
+    #[test]
+    fn map_lifts_both_shapes() {
+        let stat: SubmitHandler<Msg> = SubmitHandler::Static(Msg::Add);
+        assert_eq!(
+            stat.map(Parent::Child).resolve("x".into()),
+            Parent::Child(Msg::Add)
+        );
+
+        let cap: SubmitHandler<Msg> = SubmitHandler::Capturing(InputHandler::Bare(Msg::Submit));
+        assert_eq!(
+            cap.map(Parent::Child).resolve("dog".into()),
+            Parent::Child(Msg::Submit("dog".into())),
+        );
+    }
+
+    #[test]
+    fn builders_populate_the_field() {
+        // `on_submit` stores Static; `on_submit_with` stores Capturing.
+        let e: Element<Msg> = Element::empty().on_submit(Msg::Add);
+        assert!(matches!(e.on_submit, Some(SubmitHandler::Static(Msg::Add))));
+
+        let e: Element<Msg> = Element::empty().on_submit_with(Msg::Submit);
+        let Some(SubmitHandler::Capturing(h)) = e.on_submit else {
+            panic!("on_submit_with stores a capturing handler");
+        };
+        assert_eq!(h.call("hi".into()), Msg::Submit("hi".into()));
+    }
 }

@@ -1,0 +1,105 @@
+/* ============================================================
+   Protokit · color tokens
+   A neutral, product-grade surface + ink ladder with a single
+   swappable accent. Light is the :root default; [data-theme="dark"]
+   flips the ladder. Accent is normally set INLINE by JS (so it can
+   be swapped independent of theme) — the values here are fallbacks.
+
+   Naming:
+     --canvas      app background (behind cards)
+     --surface     card / panel
+     --surface-2   subtle fill (hover, inset)
+     --surface-3   deeper fill (rails, keys)
+     --ink         primary text
+     --ink-2       secondary text
+     --muted       tertiary / captions
+     --faint       disabled / placeholder / quiet icons
+     --hair        borders
+     --hair-2      faint dividers
+     --ink-panel   always-dark "hero" panel (stays dark in BOTH themes)
+     --accent…     brand accent + press/tint/ink
+     --pos / --warn / --danger  semantic + their tints
+     --glass-…     translucent bar fills (for blurred top/bottom bars)
+   ============================================================ */
+
+:root {
+  /* surfaces */
+  --canvas:    #f4f5f8;
+  --surface:   #ffffff;
+  --surface-2: #eff1f5;
+  --surface-3: #e5e8ee;
+
+  /* ink */
+  --ink:    #14161b;
+  --ink-2:  #444a55;
+  --muted:  #6f7783;
+  --faint:  #a4abb6;
+  --hair:   #e3e6ec;
+  --hair-2: #eef0f4;
+
+  /* always-dark hero panel (login splash, marketing rails) */
+  --ink-panel:    #14161b;
+  --ink-panel-on: #f2f4f7;
+
+  /* accent (swappable; JS usually overrides --accent + --accent-press inline) */
+  --accent:       #3a63ee;
+  --accent-press: #2f51c9;
+  --accent-tint:  #e6ecfe;
+  --accent-ink:   #ffffff;
+
+  /* semantic */
+  --pos:    #1c8a52;
+  --pos-tint: #dcefe3;
+  --warn:   #a9710f;
+  --warn-tint: #f6ecd5;
+  --danger: #cf3a36;
+  --danger-tint: #fbe4e2;
+
+  /* translucent bar fills */
+  --glass-1: rgba(255,255,255,.82);
+  --glass-2: rgba(244,245,248,.80);
+
+  /* focus ring color (derived) */
+  --ring: var(--accent-tint);
+}
+
+/* ============================================================
+   DARK — neutral near-black canvas, cool ink ladder.
+   Accent brightened for legibility on dark surfaces.
+   --accent-tint recomputed from accent via color-mix so a
+   JS-swapped accent keeps a matching tint automatically.
+   ============================================================ */
+:root[data-theme="dark"] {
+  --canvas:    #0b0c0e;
+  --surface:   #16181c;
+  --surface-2: #121417;
+  --surface-3: #1e2127;
+
+  --ink:    #f1f3f6;
+  --ink-2:  #c2c8d2;
+  --muted:  #868d99;
+  --faint:  #555c67;
+  --hair:   #262a31;
+  --hair-2: #1c1f24;
+
+  --ink-panel:    #070809;
+  --ink-panel-on: #f1f3f6;
+
+  --accent:       #5b86f5;
+  --accent-press: #6f96ff;
+  --accent-tint:  color-mix(in srgb, var(--accent) 22%, var(--surface));
+  --accent-ink:   #07101f;
+
+  --pos:    #45c07d;
+  --pos-tint:  #13291d;
+  --warn:   #d7a23f;
+  --warn-tint: #34290f;
+  --danger: #f0655b;
+  --danger-tint: #391b1a;
+
+  --glass-1: rgba(22,24,28,.82);
+  --glass-2: rgba(11,12,14,.80);
+}
+
+:root[data-theme="dark"] ::selection { background: color-mix(in srgb, var(--accent) 38%, transparent); }
+::selection { background: var(--accent-tint); }

@@ -1,0 +1,1800 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/fonts.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/colors.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/typography.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/spacing.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/elevation.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/motion.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/base.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/components.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/styles.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Shantell+Sans:wght@400;500;600;700&display=swap">
+  <script src="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/protokit.js"></script>
+  <script src="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/_ds_bundle.js"></script>
+  <style>
+    .pk-input:-webkit-autofill,
+    .pk-input:-webkit-autofill:hover,
+    .pk-input:-webkit-autofill:focus,
+    .pk-input:-webkit-autofill:active,
+    .pk-input:autofill {
+      -webkit-box-shadow: 0 0 0 1000px var(--surface) inset !important;
+      box-shadow: 0 0 0 1000px var(--surface) inset !important;
+      -webkit-text-fill-color: var(--ink) !important;
+      caret-color: var(--ink);
+      transition: background-color 9999s ease-in-out 0s;
+    }
+    .dooduel-name-input {
+      width: 100%; height: 48px; padding: 0 14px; box-sizing: border-box;
+      background: var(--surface); border: 2.5px solid var(--ink); border-radius: 12px 16px 12px 16px;
+      color: var(--ink); font-size: 17px; font-family: inherit; outline: none; font-weight: 500;
+    }
+    .dooduel-name-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+    .dooduel-name-input::placeholder { color: var(--faint); }
+    .dooduel-name-input:-webkit-autofill,
+    .dooduel-name-input:-webkit-autofill:hover,
+    .dooduel-name-input:-webkit-autofill:focus,
+    .dooduel-name-input:autofill {
+      -webkit-box-shadow: 0 0 0 1000px var(--surface) inset !important;
+      box-shadow: 0 0 0 1000px var(--surface) inset !important;
+      -webkit-text-fill-color: var(--ink) !important;
+      caret-color: var(--ink);
+      transition: background-color 9999s ease-in-out 0s;
+    }
+    @keyframes bounce-dot { 0%, 80%, 100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-7px); opacity: 1; } }
+    @keyframes party-pop-in { 0% { opacity: 0; transform: scale(.85) rotate(-1deg) translateY(10px); } 60% { opacity: 1; transform: scale(1.03) rotate(.5deg) translateY(-2px); } 100% { transform: scale(1) rotate(0) translateY(0); } }
+    @keyframes urgent-shake { 0%, 100% { transform: translate(0,0) rotate(0); } 25% { transform: translate(-2px,0) rotate(-3deg); } 75% { transform: translate(2px,0) rotate(3deg); } }
+    @keyframes score-flash-up { 0% { opacity: 0; transform: translateY(6px) scale(.8) rotate(-4deg); } 20% { opacity: 1; transform: translateY(-6px) scale(1.15) rotate(3deg); } 100% { opacity: 0; transform: translateY(-26px) scale(1) rotate(0); } }
+    @keyframes letter-pop { 0% { transform: scale(1) rotate(0); } 40% { transform: scale(1.3) rotate(-6deg); } 100% { transform: scale(1) rotate(0); } }
+    @keyframes wiggle-in { from { opacity: 0; transform: translateY(8px) rotate(-3deg); } to { opacity: 1; transform: translateY(0) rotate(0); } }
+  </style>
+</helmet>
+<div style="font-family:var(--font-sans);background:var(--canvas);min-height:100vh;color:var(--ink);">
+
+  <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Home" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:radial-gradient(900px 480px at 50% -8%, color-mix(in srgb, var(--accent) 14%, var(--canvas)), transparent 60%), var(--canvas);">
+      <div style="max-width:440px;width:100%;background:var(--surface);border:3px solid var(--ink);border-radius:26px 32px 24px 30px/30px 22px 32px 24px;box-shadow:var(--sh-md);padding:40px 36px;position:relative;">
+        <div style="position:absolute;top:-20px;right:26px;background:var(--accent);color:#fff;border:2px solid var(--ink);font-family:var(--font-display);font-weight:700;font-size:16px;padding:5px 16px;border-radius:999px 999px 999px 4px;box-shadow:var(--sh-sm);transform:rotate(6deg);">free &amp; open source</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="width:46px;height:46px;border-radius:50% 50% 45% 55%/55% 45% 55% 45%;border:2.5px solid var(--ink);background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:22px;transform:rotate(-8deg);box-shadow:var(--sh-sm);">&#9998;</span>
+          <h1 style="margin:0;font-family:var(--font-display);font-weight:700;font-size:54px;line-height:1;color:var(--ink);">Dooduel <span style="display:inline-block;transform:rotate(-6deg);font-size:32px;">🎨</span></h1>
+        </div>
+        <svg width="150" height="14" viewBox="0 0 150 14" style="margin:2px 0 0 4px;display:block;">
+          <path d="M2 8 Q 20 2, 38 8 T 74 8 T 110 8 T 146 7" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"></path>
+        </svg>
+        <p style="margin:12px 0 0;color:var(--ink-2);font-size:18px;font-weight:500;">Draw it. Guess it. Repeat! 😄</p>
+
+        <div style="margin-top:24px;display:flex;align-items:flex-end;gap:14px;">
+          <div style="position:relative;flex:none;">
+            <dc-import name="DoodleAvatar" person-name="{{ previewName }}" src="{{ myAvatarSrc }}" force-icon="{{ myAvatarForceIcon }}" force-tint="{{ myAvatarForceTint }}" size="56" hint-size="56px,56px"></dc-import>
+            <button onClick="{{ openAvatarEditor }}" title="Customize your doodle" style="{{ avatarEditBadgeStyle }}">✏️</button>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:7px;">
+            <label for="dooduel-name-field" style="font-size:15px;font-weight:700;color:var(--ink-2);">Your name</label>
+            <input id="dooduel-name-field" class="dooduel-name-input" type="text" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Type a display name" value="{{ nameInput }}" onChange="{{ handleNameChange }}" onKeyDown="{{ handleNameKeyDown }}" />
+          </div>
+        </div>
+
+        <div style="margin-top:20px;display:flex;flex-direction:column;gap:10px;">
+          <button onClick="{{ startGame }}" style="width:100%;height:58px;border:2.5px solid var(--ink);border-radius:999px;background:var(--accent);color:#fff;font-family:var(--font-display);font-weight:700;font-size:26px;cursor:pointer;box-shadow:0 5px 0 var(--ink), 0 8px 18px -6px rgba(0,0,0,.25);transition:transform .12s ease, box-shadow .12s ease;" style-hover="transform:translateY(-2px);box-shadow:0 7px 0 var(--ink), 0 10px 20px -6px rgba(0,0,0,.28);" style-active="transform:translateY(5px);box-shadow:0 0 0 var(--ink);">▶ Play</button>
+          <div style="display:flex;gap:10px;">
+            <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="soft" block="{{ true }}" onClick="{{ goToCreateRoom }}" hint-size="100%,46px">🔗 Create a room</x-import>
+            <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="soft" block="{{ true }}" onClick="{{ goToJoinScreen }}" hint-size="100%,46px">🚪 Join a room</x-import>
+          </div>
+        </div>
+
+        <div style="margin-top:24px;padding-top:20px;border-top:2.5px dashed var(--ink);">
+          <div style="font-family:var(--font-sans);font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">👋 You'll play with</div>
+          <div style="display:flex;gap:16px;">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+              <dc-import name="DoodleAvatar" person-name="Priya" size="38" hint-size="38px,38px"></dc-import>
+              <span style="font-size:13px;font-weight:600;color:var(--muted);">Priya</span>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+              <dc-import name="DoodleAvatar" person-name="Theo" size="38" hint-size="38px,38px"></dc-import>
+              <span style="font-size:13px;font-weight:600;color:var(--muted);">Theo</span>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+              <dc-import name="DoodleAvatar" person-name="Sam" size="38" hint-size="38px,38px"></dc-import>
+              <span style="font-size:13px;font-weight:600;color:var(--muted);">Sam</span>
+            </div>
+          </div>
+          <p style="margin:14px 0 0;font-size:13px;line-height:1.5;color:var(--muted);">No real opponents yet — this is a solo demo. Use the dark bar up top in-game to switch whose seat you're playing.</p>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isJoinScreen }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Join room" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:radial-gradient(900px 480px at 50% -8%, color-mix(in srgb, var(--accent) 14%, var(--canvas)), transparent 60%), var(--canvas);">
+      <div style="max-width:400px;width:100%;background:var(--surface);border:3px solid var(--ink);border-radius:24px 30px 22px 28px/28px 22px 30px 24px;box-shadow:var(--sh-md);padding:40px 36px;">
+        <button onClick="{{ goHome }}" style="display:flex;align-items:center;gap:6px;background:none;border:none;padding:0;color:var(--muted);font-size:15px;font-weight:700;cursor:pointer;">
+          <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Icon" name="back" size="14" hint-size="14px,14px"></x-import>
+          Back
+        </button>
+        <div style="margin-top:16px;">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);">🚪 Join a room</span>
+          <h1 style="margin-top:6px;font-family:var(--font-display);font-weight:700;font-size:38px;color:var(--ink);line-height:1;">Enter a room code</h1>
+          <p style="margin:8px 0 0;color:var(--ink-2);font-size:15px;">Ask whoever's hosting for their invite code or link.</p>
+        </div>
+        <div style="margin-top:22px;">
+          <input class="pk-input" style="font-family:var(--font-display);font-weight:700;font-size:28px;text-align:center;letter-spacing:.1em;text-transform:uppercase;border:2.5px dashed var(--ink);height:60px;border-radius:14px 18px 14px 18px;" value="{{ joinCodeInput }}" onChange="{{ handleJoinCodeChange }}" onKeyDown="{{ handleJoinCodeKeyDown }}" placeholder="7XQ2KP" maxlength="8" />
+        </div>
+        <div style="margin-top:18px;">
+          <button onClick="{{ submitJoinCode }}" disabled="{{ joining }}" style="{{ joinButtonStyle }}">{{ joinButtonLabel }}</button>
+        </div>
+        <p style="margin:18px 0 0;font-size:13px;color:var(--muted);text-align:center;">Solo demo — any code works, you'll drop into a mocked room.</p>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isLobby }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Lobby" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:radial-gradient(900px 480px at 50% -8%, color-mix(in srgb, var(--accent) 14%, var(--canvas)), transparent 60%), var(--canvas);">
+      <div style="max-width:440px;width:100%;background:var(--surface);border:3px solid var(--ink);border-radius:26px 32px 24px 30px/30px 22px 32px 24px;box-shadow:var(--sh-md);padding:36px 36px 32px;">
+        <span style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);">🎉 Private room</span>
+        <h1 style="margin-top:6px;font-family:var(--font-display);font-weight:700;font-size:38px;color:var(--ink);line-height:1;">{{ lobbyTitle }}</h1>
+
+        <div style="margin-top:18px;display:flex;align-items:center;gap:10px;background:var(--surface-2);border:2.5px dashed var(--ink);border-radius:14px;padding:10px 10px 10px 16px;">
+          <div style="flex:1;font-family:var(--font-display);font-weight:700;font-size:24px;letter-spacing:.08em;color:var(--ink);">{{ roomCode }}</div>
+          <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" icon="copy" onClick="{{ copyInviteLink }}" hint-size="auto,36px">Copy link</x-import>
+        </div>
+
+        <div style="margin-top:20px;display:flex;flex-direction:column;gap:6px;">
+          <sc-for list="{{ lobbyPlayers }}" as="lp" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 4px;">
+              <dc-import name="DoodleAvatar" person-name="{{ lp.name }}" src="{{ lp.avatarSrc }}" force-icon="{{ lp.avatarForceIcon }}" force-tint="{{ lp.avatarForceTint }}" size="38" hint-size="38px,38px"></dc-import>
+              <div style="flex:1;font-size:16px;font-weight:600;color:var(--ink);">{{ lp.name }}</div>
+              <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="{{ lp.badgeTone }}" hint-size="auto,22px">{{ lp.badgeText }}</x-import>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ isHost }}" hint-placeholder-val="{{ true }}">
+          <div style="margin-top:22px;">
+            <button onClick="{{ startGame }}" disabled="{{ startDisabled }}" style="{{ startButtonStyleObj }}">{{ startButtonLabel }}</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ isJoinerWaiting }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:22px;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--ink-2);font-size:15px;font-weight:600;">
+            <div style="display:flex;gap:4px;">
+              <span style="width:7px;height:7px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:0s;"></span>
+              <span style="width:7px;height:7px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:.15s;"></span>
+              <span style="width:7px;height:7px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:.3s;"></span>
+            </div>
+            Waiting for the host to start…
+          </div>
+        </sc-if>
+
+        <p style="margin:18px 0 0;font-size:13px;color:var(--muted);text-align:center;">Solo demo — this room is mocked, but the flow is real.</p>
+        <div style="margin-top:10px;text-align:center;">
+          <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="quiet" size="sm" onClick="{{ goHome }}" hint-size="auto,32px">Leave room</x-import>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isGame }}" hint-placeholder-val="{{ false }}">
+
+    <div style="position:fixed;top:0;left:0;right:0;height:60px;z-index:700;background:var(--ink-panel);color:var(--ink-panel-on);display:flex;align-items:center;gap:16px;padding:0 20px;box-shadow:var(--sh-md);">
+      <div style="display:flex;align-items:center;gap:8px;flex:none;">
+        <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Icon" name="members" size="16" hint-size="16px,16px"></x-import>
+        <span style="font-weight:700;font-size:14px;">🎭 Solo demo</span>
+      </div>
+      <div style="width:1px;height:22px;background:rgba(255,255,255,.18);flex:none;"></div>
+      <div style="font-size:13px;opacity:.72;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Playing every seat — switch who you are:</div>
+      <div style="flex:1;"></div>
+      <div style="display:flex;gap:8px;flex:none;">
+        <sc-for list="{{ switcherPlayers }}" as="sp" hint-placeholder-count="4">
+          <button onClick="{{ switchTo }}" data-id="{{ sp.id }}" title="{{ sp.name }}" style="{{ sp.btnStyle }}">
+            <dc-import name="DoodleAvatar" person-name="{{ sp.name }}" src="{{ sp.avatarSrc }}" force-icon="{{ sp.avatarForceIcon }}" force-tint="{{ sp.avatarForceTint }}" size="34" hint-size="34px,34px"></dc-import>
+            <sc-if value="{{ sp.isDrawingNow }}" hint-placeholder-val="{{ false }}">
+              <span style="position:absolute;bottom:-2px;right:-2px;width:16px;height:16px;border-radius:999px;background:var(--accent);border:2px solid var(--ink-panel);display:flex;align-items:center;justify-content:center;color:#fff;">
+                <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Icon" name="edit" size="9" hint-size="9px,9px"></x-import>
+              </span>
+            </sc-if>
+            <sc-if value="{{ sp.hasGuessed }}" hint-placeholder-val="{{ false }}">
+              <span style="position:absolute;bottom:-2px;right:-2px;width:16px;height:16px;border-radius:999px;background:var(--pos);border:2px solid var(--ink-panel);display:flex;align-items:center;justify-content:center;color:#fff;">
+                <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Icon" name="check" size="9" hint-size="9px,9px"></x-import>
+              </span>
+            </sc-if>
+          </button>
+        </sc-for>
+      </div>
+      <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" icon="logout" onClick="{{ leaveHome }}" hint-size="auto,34px">Leave</x-import>
+    </div>
+
+    <sc-if value="{{ isActiveGame }}" hint-placeholder-val="{{ true }}">
+
+      <sc-if value="{{ isMobileLayout }}" hint-placeholder-val="{{ false }}">
+        <div data-screen-label="In-game (mobile)" style="padding:84px 14px 32px;max-width:430px;margin:0 auto;display:flex;flex-direction:column;gap:12px;">
+
+          <div style="background:var(--surface);border:2.5px solid var(--ink);border-radius:18px 22px 18px 22px;box-shadow:var(--sh-sm);padding:12px 14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="font-family:var(--font-sans);font-weight:700;font-size:14px;color:var(--ink-2);">Round {{ round }} / {{ totalRoundsDisplay }}</span>
+              <div style="{{ timerPillStyle }}">
+                <svg width="30" height="30" style="transform:rotate(-90deg);">
+                  <circle cx="15" cy="15" r="12" fill="none" stroke="var(--ink)" strokeWidth="3" strokeOpacity="0.15"></circle>
+                  <circle cx="15" cy="15" r="12" fill="none" stroke="{{ timerColor }}" strokeWidth="3.5" strokeLinecap="round" strokeDasharray="{{ timerCirc }}" strokeDashoffset="{{ timerDashOffset }}"></circle>
+                </svg>
+                <span style="font-family:var(--font-display);font-weight:700;font-size:17px;color:var(--ink);">{{ drawSecondsLeftDisplay }}s</span>
+              </div>
+            </div>
+            <sc-if value="{{ showWordRow }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;justify-content:center;margin-top:8px;flex-wrap:wrap;">
+                <sc-for list="{{ wordSlots }}" as="ws" hint-placeholder-count="7">
+                  <div style="{{ ws.boxStyle }}">{{ ws.display }}</div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <div style="display:flex;justify-content:center;margin-top:8px;">
+              <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="{{ roleBadgeTone }}" hint-size="auto,24px">{{ roleBadgeText }}</x-import>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;overflow-x:auto;">
+            <sc-for list="{{ scoreboardPlayers }}" as="sb" hint-placeholder-count="4">
+              <div style="{{ sb.stripStyle }}">
+                <dc-import name="DoodleAvatar" person-name="{{ sb.name }}" src="{{ sb.avatarSrc }}" force-icon="{{ sb.avatarForceIcon }}" force-tint="{{ sb.avatarForceTint }}" size="38" hint-size="38px,38px"></dc-import>
+                <div style="font-size:13px;font-weight:600;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:76px;align-self:stretch;text-align:center;">{{ sb.name }}</div>
+                <div style="font-family:var(--font-display);font-weight:700;font-size:17px;margin-top:2px;">{{ sb.score }}</div>
+                <sc-if value="{{ sb.flashActive }}" hint-placeholder-val="{{ false }}">
+                  <span style="position:absolute;top:-8px;right:-4px;background:var(--pos);color:#fff;font-family:var(--font-display);font-weight:700;font-size:13px;padding:2px 8px;border-radius:999px;border:2px solid var(--ink);animation:score-flash-up 1.1s var(--ease) forwards;pointer-events:none;">{{ sb.flashText }}</span>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+
+          <div ref="{{ canvasWrapRef }}" style="{{ canvasWrapStyle }}">
+            <canvas ref="{{ canvasRef }}" style="{{ canvasStyle }}" onPointerDown="{{ handlePointerDown }}" onPointerMove="{{ handlePointerMove }}" onPointerUp="{{ handlePointerUp }}" onPointerLeave="{{ handlePointerUp }}" onPointerCancel="{{ handlePointerUp }}"></canvas>
+            <sc-if value="{{ showWaitingForPick }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;inset:0;background:rgba(255,255,255,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center;">
+                <div style="display:flex;gap:4px;">
+                  <span style="width:8px;height:8px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:0s;"></span>
+                  <span style="width:8px;height:8px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:.15s;"></span>
+                  <span style="width:8px;height:8px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:.3s;"></span>
+                </div>
+                <div style="font-size:15px;font-weight:600;color:var(--ink-2);">✏️ Waiting for <strong style="color:var(--ink);">{{ currentDrawerName }}</strong> to pick a word…</div>
+                <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" onClick="{{ switchToDrawer }}" hint-size="auto,34px">Switch to {{ currentDrawerName }}</x-import>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="{{ toolbarStyle }}">
+            <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Segmented" value="{{ tool }}" onChange="{{ setTool }}" options="{{ toolOptions }}" hint-size="auto,36px"></x-import>
+            <div style="display:flex;gap:6px;">
+              <sc-for list="{{ brushSizeOptions }}" as="bs" hint-placeholder-count="4">
+                <button onClick="{{ handleSizeClick }}" data-size="{{ bs.size }}" disabled="{{ sizeControlsDisabled }}" style="{{ bs.btnStyle }}">
+                  <span style="{{ bs.dotStyle }}"></span>
+                </button>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <sc-for list="{{ colorSwatches }}" as="cs" hint-placeholder-count="16">
+                <button onClick="{{ handleSwatchClick }}" data-color="{{ cs.hex }}" disabled="{{ toolsDisabled }}" style="{{ cs.style }}"></button>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:8px;width:100%;">
+              <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" icon="back" onClick="{{ undo }}" disabled="{{ toolsDisabled }}" hint-size="auto,34px">Undo</x-import>
+              <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" icon="trash" onClick="{{ clearCanvas }}" disabled="{{ toolsDisabled }}" hint-size="auto,34px">Clear</x-import>
+            </div>
+          </div>
+
+          <div style="background:var(--surface);border:2.5px solid var(--ink);border-radius:18px 22px 18px 22px;box-shadow:var(--sh-sm);display:flex;flex-direction:column;height:300px;">
+            <div style="padding:12px 14px 0;font-family:var(--font-sans);font-weight:700;font-size:13px;color:var(--ink-2);">💬 Guess the word</div>
+            <div ref="{{ chatScrollRef }}" class="scroll" style="flex:1;padding:8px 14px;display:flex;flex-direction:column;gap:5px;">
+              <sc-for list="{{ chatDisplay }}" as="m" hint-placeholder-count="3">
+                <div style="{{ m.lineStyle }}">{{ m.displayText }}</div>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:8px;padding:12px 14px;border-top:2px solid var(--ink);">
+              <input class="pk-input" value="{{ chatInput }}" onChange="{{ handleChatChange }}" onKeyDown="{{ handleChatKeyDown }}" placeholder="{{ chatPlaceholder }}" disabled="{{ chatDisabled }}" />
+              <button onClick="{{ submitGuess }}" disabled="{{ chatDisabled }}" style="{{ sendButtonStyle }}">Send</button>
+            </div>
+          </div>
+
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isDesktopLayout }}" hint-placeholder-val="{{ true }}">
+        <div data-screen-label="In-game (desktop)" style="padding:84px 28px 28px;max-width:1400px;margin:0 auto;">
+
+          <div style="display:flex;align-items:center;gap:28px;background:var(--surface);border:2.5px solid var(--ink);border-radius:18px 22px 18px 22px;box-shadow:var(--sh-sm);padding:16px 28px;margin-bottom:18px;">
+            <div style="min-width:160px;display:flex;flex-direction:column;gap:6px;">
+              <span style="font-family:var(--font-sans);font-weight:700;font-size:14px;color:var(--ink-2);">Round {{ round }} of {{ totalRoundsDisplay }}</span>
+              <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="{{ roleBadgeTone }}" hint-size="auto,24px">{{ roleBadgeText }}</x-import>
+            </div>
+            <div style="flex:1;display:flex;justify-content:center;">
+              <sc-if value="{{ showWordRow }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;">
+                  <sc-for list="{{ wordSlots }}" as="ws" hint-placeholder-count="7">
+                    <div style="{{ ws.boxStyle }}">{{ ws.display }}</div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+            <div style="{{ timerRowStyle }}">
+              <svg width="64" height="64" style="transform:rotate(-90deg);flex:none;">
+                <circle cx="32" cy="32" r="26" fill="none" stroke="var(--ink)" strokeWidth="5" strokeOpacity="0.15"></circle>
+                <circle cx="32" cy="32" r="26" fill="none" stroke="{{ timerColor }}" strokeWidth="5.5" strokeLinecap="round" strokeDasharray="{{ timerCirc }}" strokeDashoffset="{{ timerDashOffset }}"></circle>
+              </svg>
+              <span style="font-family:var(--font-display);font-weight:700;font-size:32px;color:var(--ink);">{{ drawSecondsLeftDisplay }}</span>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:240px 1fr 300px;gap:18px;align-items:start;">
+
+            <div style="background:var(--surface);border:2.5px solid var(--ink);border-radius:18px 22px 18px 22px;box-shadow:var(--sh-sm);padding:14px;">
+              <div style="margin-bottom:8px;padding:0 4px;font-family:var(--font-sans);font-weight:700;font-size:13px;color:var(--ink-2);">🏆 Scoreboard</div>
+              <sc-for list="{{ scoreboardPlayers }}" as="sb" hint-placeholder-count="4">
+                <div style="{{ sb.rowStyle }}">
+                  <span style="width:14px;color:var(--muted);font-size:13px;flex:none;font-weight:700;">{{ sb.rank }}</span>
+                  <dc-import name="DoodleAvatar" person-name="{{ sb.name }}" src="{{ sb.avatarSrc }}" force-icon="{{ sb.avatarForceIcon }}" force-tint="{{ sb.avatarForceTint }}" size="38" hint-size="38px,38px"></dc-import>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink);">{{ sb.name }}</div>
+                    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="{{ sb.roleTone }}" hint-size="auto,20px">{{ sb.roleLabel }}</x-import>
+                  </div>
+                  <span style="font-family:var(--font-display);font-weight:700;font-size:19px;color:var(--ink);flex:none;">{{ sb.score }}</span>
+                  <sc-if value="{{ sb.flashActive }}" hint-placeholder-val="{{ false }}">
+                    <span style="position:absolute;top:-6px;right:6px;background:var(--pos);color:#fff;font-family:var(--font-display);font-weight:700;font-size:13px;padding:2px 8px;border-radius:999px;border:2px solid var(--ink);animation:score-flash-up 1.1s var(--ease) forwards;pointer-events:none;">{{ sb.flashText }}</span>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <div ref="{{ canvasWrapRef }}" style="{{ canvasWrapStyle }}">
+                <canvas ref="{{ canvasRef }}" style="{{ canvasStyle }}" onPointerDown="{{ handlePointerDown }}" onPointerMove="{{ handlePointerMove }}" onPointerUp="{{ handlePointerUp }}" onPointerLeave="{{ handlePointerUp }}" onPointerCancel="{{ handlePointerUp }}"></canvas>
+                <sc-if value="{{ showWaitingForPick }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:absolute;inset:0;background:rgba(255,255,255,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;">
+                    <div style="display:flex;gap:5px;">
+                      <span style="width:9px;height:9px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:0s;"></span>
+                      <span style="width:9px;height:9px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:.15s;"></span>
+                      <span style="width:9px;height:9px;border-radius:999px;background:var(--accent);display:inline-block;animation:bounce-dot 1s ease-in-out infinite;animation-delay:.3s;"></span>
+                    </div>
+                    <div style="font-size:16px;font-weight:600;color:var(--ink-2);">✏️ Waiting for <strong style="color:var(--ink);">{{ currentDrawerName }}</strong> to pick a word…</div>
+                    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" onClick="{{ switchToDrawer }}" hint-size="auto,36px">Switch to {{ currentDrawerName }}</x-import>
+                  </div>
+                </sc-if>
+              </div>
+              <div style="{{ toolbarStyle }}">
+                <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Segmented" value="{{ tool }}" onChange="{{ setTool }}" options="{{ toolOptions }}" hint-size="auto,38px"></x-import>
+                <div style="display:flex;gap:7px;">
+                  <sc-for list="{{ brushSizeOptions }}" as="bs" hint-placeholder-count="4">
+                    <button onClick="{{ handleSizeClick }}" data-size="{{ bs.size }}" disabled="{{ sizeControlsDisabled }}" style="{{ bs.btnStyle }}">
+                      <span style="{{ bs.dotStyle }}"></span>
+                    </button>
+                  </sc-for>
+                </div>
+                <div style="display:flex;gap:7px;flex-wrap:wrap;max-width:230px;">
+                  <sc-for list="{{ colorSwatches }}" as="cs" hint-placeholder-count="16">
+                    <button onClick="{{ handleSwatchClick }}" data-color="{{ cs.hex }}" disabled="{{ toolsDisabled }}" style="{{ cs.style }}"></button>
+                  </sc-for>
+                </div>
+                <div style="flex:1;"></div>
+                <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" icon="back" onClick="{{ undo }}" disabled="{{ toolsDisabled }}" hint-size="auto,38px">Undo</x-import>
+                <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="sm" icon="trash" onClick="{{ clearCanvas }}" disabled="{{ toolsDisabled }}" hint-size="auto,38px">Clear</x-import>
+              </div>
+            </div>
+
+            <div style="background:var(--surface);border:2.5px solid var(--ink);border-radius:18px 22px 18px 22px;box-shadow:var(--sh-sm);display:flex;flex-direction:column;height:556px;">
+              <div style="padding:14px 16px 0;font-family:var(--font-sans);font-weight:700;font-size:13px;color:var(--ink-2);">💬 Guess the word</div>
+              <div ref="{{ chatScrollRef }}" class="scroll" style="flex:1;padding:10px 16px;display:flex;flex-direction:column;gap:6px;">
+                <sc-for list="{{ chatDisplay }}" as="m" hint-placeholder-count="4">
+                  <div style="{{ m.lineStyle }}">{{ m.displayText }}</div>
+                </sc-for>
+              </div>
+              <div style="display:flex;gap:8px;padding:14px 16px;border-top:2px solid var(--ink);">
+                <input class="pk-input" value="{{ chatInput }}" onChange="{{ handleChatChange }}" onKeyDown="{{ handleChatKeyDown }}" placeholder="{{ chatPlaceholder }}" disabled="{{ chatDisabled }}" />
+                <button onClick="{{ submitGuess }}" disabled="{{ chatDisabled }}" style="{{ sendButtonStyle }}">Send</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </sc-if>
+
+    </sc-if>
+
+    <sc-if value="{{ isFinal }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Final results" style="padding:100px 20px 60px;max-width:560px;margin:0 auto;display:flex;flex-direction:column;align-items:center;text-align:center;">
+        <span style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);">🎊 Game over</span>
+        <h1 style="margin-top:6px;font-family:var(--font-display);font-weight:700;font-size:56px;line-height:1;color:var(--ink);">{{ winnerName }} wins! 🏆</h1>
+        <p style="margin:10px 0 0;color:var(--ink-2);font-size:16px;font-weight:500;">Final scores after {{ roundsLabel }}</p>
+
+        <div style="margin-top:36px;display:flex;align-items:flex-end;justify-content:center;gap:14px;width:100%;">
+          <sc-for list="{{ podium }}" as="pd" hint-placeholder-count="3">
+            <div style="{{ pd.colStyle }}">
+              <div style="font-size:30px;">{{ pd.medal }}</div>
+              <dc-import name="DoodleAvatar" person-name="{{ pd.name }}" src="{{ pd.avatarSrc }}" force-icon="{{ pd.avatarForceIcon }}" force-tint="{{ pd.avatarForceTint }}" size="46" hint-size="46px,46px"></dc-import>
+              <div style="font-size:15px;font-weight:700;color:var(--ink);margin-top:6px;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ pd.name }}</div>
+              <div style="font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--ink);margin-top:2px;">{{ pd.score }}</div>
+              <div style="{{ pd.blockStyle }}">{{ pd.rank }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ hasMoreStandings }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:24px;width:100%;display:flex;flex-direction:column;gap:8px;">
+            <sc-for list="{{ restStandings }}" as="fs" hint-placeholder-count="2">
+              <div style="{{ fs.rowStyle }}">
+                <span style="width:20px;color:var(--muted);font-weight:700;font-size:14px;">{{ fs.rank }}</span>
+                <dc-import name="DoodleAvatar" person-name="{{ fs.name }}" src="{{ fs.avatarSrc }}" force-icon="{{ fs.avatarForceIcon }}" force-tint="{{ fs.avatarForceTint }}" size="34" hint-size="34px,34px"></dc-import>
+                <div style="flex:1;text-align:left;font-weight:700;color:var(--ink);">{{ fs.name }}</div>
+                <span style="font-family:var(--font-display);font-weight:700;font-size:19px;color:var(--ink);">{{ fs.score }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <div style="display:flex;gap:12px;margin-top:32px;">
+          <button onClick="{{ playAgain }}" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 30px;height:58px;border:2.5px solid var(--ink);border-radius:999px;background:var(--accent);color:#fff;font-family:var(--font-display);font-weight:700;font-size:24px;cursor:pointer;box-shadow:0 5px 0 var(--ink), 0 8px 18px -6px rgba(0,0,0,.25);transition:transform .12s ease, box-shadow .12s ease;" style-hover="transform:translateY(-2px);box-shadow:0 7px 0 var(--ink), 0 10px 20px -6px rgba(0,0,0,.28);" style-active="transform:translateY(5px);box-shadow:0 0 0 var(--ink);">🔁 Play again</button>
+          <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Button" variant="ghost" size="lg" onClick="{{ leaveHome }}" hint-size="auto,52px">Back to home</x-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Dialog" open="{{ showPickDialog }}" align="{{ dialogAlign }}" max-w="{{ dialogMaxW }}" hint-size="480px,320px">
+      <div style="padding:30px 28px 26px;animation:party-pop-in .45s var(--ease);">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);">✏️ Your turn to draw</span>
+          <span style="font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--danger);">{{ pickSecondsLeft }}s</span>
+        </div>
+        <h2 style="margin-top:10px;font-family:var(--font-display);font-weight:700;font-size:34px;color:var(--ink);line-height:1;">Pick a word!</h2>
+        <div style="display:flex;flex-direction:column;gap:14px;margin-top:22px;">
+          <sc-for list="{{ wordChoiceButtons }}" as="wc" hint-placeholder-count="3">
+            <button onClick="{{ handlePickWord }}" data-word="{{ wc.word }}" style="{{ wc.style }}" style-hover="{{ wc.hoverStyle }}">{{ wc.display }}</button>
+          </sc-for>
+        </div>
+      </div>
+    </x-import>
+
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Dialog" open="{{ isReveal }}" align="{{ dialogAlign }}" onClose="{{ advanceTurn }}" max-w="{{ dialogMaxW }}" hint-size="440px,360px">
+      <div style="padding:30px 28px 26px;animation:party-pop-in .45s var(--ease);">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);">🏁 Turn over</span>
+          <span style="font-size:14px;font-weight:700;color:var(--muted);">next in {{ revealSecondsLeft }}s</span>
+        </div>
+        <h2 style="margin-top:10px;font-family:var(--font-display);font-weight:700;font-size:32px;color:var(--ink);line-height:1.1;">The word was {{ secretWordDisplay }} 🎉</h2>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-top:20px;">
+          <sc-for list="{{ turnResultRows }}" as="tr" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface-2);border-radius:10px 12px 10px 12px;">
+              <div style="flex:1;font-size:15px;font-weight:600;color:var(--ink);">{{ tr.name }}</div>
+              <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="{{ tr.deltaTone }}" hint-size="auto,22px">{{ tr.deltaText }}</x-import>
+              <span style="width:40px;text-align:right;font-family:var(--font-display);font-weight:700;font-size:18px;color:var(--ink);">{{ tr.total }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="margin-top:24px;">
+          <button onClick="{{ advanceTurn }}" style="width:100%;height:52px;border:2.5px solid var(--ink);border-radius:999px;background:var(--accent);color:#fff;font-family:var(--font-display);font-weight:700;font-size:22px;cursor:pointer;box-shadow:0 5px 0 var(--ink), 0 8px 18px -6px rgba(0,0,0,.25);transition:transform .12s ease, box-shadow .12s ease;" style-hover="transform:translateY(-2px);box-shadow:0 7px 0 var(--ink), 0 10px 20px -6px rgba(0,0,0,.28);" style-active="transform:translateY(5px);box-shadow:0 0 0 var(--ink);">Continue →</button>
+        </div>
+      </div>
+    </x-import>
+
+  </sc-if>
+
+  <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Dialog" open="{{ showAvatarEditor }}" align="{{ avatarDialogAlign }}" onClose="{{ closeAvatarEditor }}" max-w="460" hint-size="460px,560px">
+    <div style="padding:28px 26px 26px;animation:party-pop-in .45s var(--ease);">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);">🎨 Your profile pic</span>
+        <button onClick="{{ closeAvatarEditor }}" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px;">✕</button>
+      </div>
+      <h2 style="margin:8px 0 0;font-family:var(--font-display);font-weight:700;font-size:28px;color:var(--ink);line-height:1;">Doodle yourself!</h2>
+
+      <div style="margin-top:16px;">
+        <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Segmented" value="{{ avatarEditorTab }}" onChange="{{ setAvatarEditorTab }}" options="{{ avatarTabOptions }}" hint-size="auto,38px"></x-import>
+      </div>
+
+      <sc-if value="{{ isGalleryTab }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:18px;">
+          <sc-for list="{{ galleryOptions }}" as="go" hint-placeholder-count="15">
+            <button onClick="{{ pickGalleryIcon }}" data-icon="{{ go.icon }}" data-tint="{{ go.tint }}" style="{{ go.btnStyle }}">
+              <dc-import name="DoodleAvatar" force-icon="{{ go.icon }}" force-tint="{{ go.tint }}" size="44" hint-size="44px,44px"></dc-import>
+            </button>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isDrawTab }}" hint-placeholder-val="{{ false }}">
+        <div style="margin-top:18px;">
+          <div style="display:flex;justify-content:center;">
+            <div style="border-radius:16px;border:2.5px solid var(--ink);overflow:hidden;box-shadow:var(--sh-sm);width:220px;height:220px;">
+              <canvas ref="{{ avatarCanvasRef }}" width="220" height="220" style="display:block;width:220px;height:220px;touch-action:none;cursor:crosshair;" onPointerDown="{{ handleAvatarPointerDown }}" onPointerMove="{{ handleAvatarPointerMove }}" onPointerUp="{{ handleAvatarPointerUp }}" onPointerLeave="{{ handleAvatarPointerUp }}" onPointerCancel="{{ handleAvatarPointerUp }}"></canvas>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:14px;">
+            <sc-for list="{{ avatarColorSwatches }}" as="cs" hint-placeholder-count="8">
+              <button onClick="{{ handleAvatarSwatchClick }}" data-color="{{ cs.hex }}" style="{{ cs.style }}"></button>
+            </sc-for>
+          </div>
+          <div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;">
+            <sc-for list="{{ avatarBrushOptions }}" as="bs" hint-placeholder-count="4">
+              <button onClick="{{ handleAvatarSizeClick }}" data-size="{{ bs.size }}" style="{{ bs.btnStyle }}">
+                <span style="{{ bs.dotStyle }}"></span>
+              </button>
+            </sc-for>
+            <button onClick="{{ toggleAvatarEraser }}" style="{{ avatarEraserBtnStyle }}">Eraser</button>
+            <button onClick="{{ undoAvatarStroke }}" style="{{ avatarToolBtnStyle }}">Undo</button>
+            <button onClick="{{ clearAvatarCanvas }}" style="{{ avatarToolBtnStyle }}">Clear</button>
+          </div>
+          <div style="margin-top:18px;">
+            <button onClick="{{ saveCustomAvatar }}" style="{{ saveAvatarBtnStyle }}">✅ Use this doodle</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ hasCustomAvatarSet }}" hint-placeholder-val="{{ false }}">
+        <div style="text-align:center;margin-top:16px;">
+          <button onClick="{{ resetAvatarToDefault }}" style="background:none;border:none;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;text-decoration:underline;">Reset to a random doodle</button>
+        </div>
+      </sc-if>
+    </div>
+  </x-import>
+
+  <div class="pk-toast-wrap">
+    <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="0">
+      <div class="pk-toast">{{ t.msg }}</div>
+    </sc-for>
+  </div>
+
+  <div style="position:fixed;bottom:20px;right:20px;z-index:900;box-shadow:var(--sh-md);border-radius:999px;">
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.ThemeToggle" theme="{{ theme }}" onChange="{{ handleThemeChange }}" hint-size="68px,34px"></x-import>
+  </div>
+
+  <canvas ref="{{ confettiRef }}" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:950;"></canvas>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;layout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;mobile&quot;,&quot;options&quot;:[&quot;desktop&quot;,&quot;mobile&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Display&quot;},&quot;totalRounds&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:2,&quot;min&quot;:1,&quot;max&quot;:4,&quot;step&quot;:1,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Game rules&quot;},&quot;drawSeconds&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:80,&quot;min&quot;:30,&quot;max&quot;:150,&quot;step&quot;:10,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Game rules&quot;},&quot;hintCount&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:2,&quot;min&quot;:0,&quot;max&quot;:3,&quot;step&quot;:1,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Game rules&quot;}}">
+const WORDS = ["apple","banana","guitar","robot","castle","dragon","bicycle","umbrella","snowman","rainbow","pizza","rocket","butterfly","lighthouse","octopus","volcano","dinosaur","sandwich","balloon","penguin","cactus","anchor","telescope","mushroom","campfire","kite","jellyfish","pretzel","scarecrow","igloo","windmill","accordion","beehive","cupcake","flamingo","hammer","kangaroo","lantern","mermaid","narwhal","owl","pancake","saxophone","tornado","unicorn","volleyball","waterfall","xylophone","yoyo","zeppelin","skateboard","compass"];
+const PRESET_NAMES = ["Priya", "Theo", "Sam"];
+const PALETTE = ["#14161b","#ffffff","#9aa0aa","#b3261e","#e8453f","#f08a3c","#f4c20d","#8bc34a","#1c8a52","#1f9e8d","#2f9bdb","#3a63ee","#5b46e5","#9333ea","#e0529c","#8a5a35"];
+const BRUSH_SIZES = [3, 6, 11, 18];
+const AVATAR_ICON_KEYS = ["cat","star","rocket","sun","cactus","dino","penguin","octopus","icecream","balloon","robot","ghost","cloud","mushroom","butterfly","fish","umbrella","snowman","owl","flower","turtle","heart"];
+const AVATAR_TINTS = ["#c2410c","#1f6f54","#9a5b2b","#3a6ea5","#8a5cb0","#b03a4e","#5a7d3a","#2f7d5b","#a8761c","#7a6cc4"];
+const AVATAR_KEY = 'dooduel-proto-avatar';
+function getInitialAvatar() {
+  try {
+    const saved = localStorage.getItem(AVATAR_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && (parsed.type === 'preset' || parsed.type === 'custom')) return parsed;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+const THEME_KEY = 'dooduel-proto-theme';
+
+const ACCENT_LIGHT = { accent: '#7C4FE0', accentPress: '#6438C2', accentTint: '#ECE3FB' };
+const ACCENT_DARK  = { accent: '#A78BFA', accentPress: '#C9B8FF', accentTint: null };
+const SHADOWS_LIGHT = {
+  '--sh-sm':  '0 2px 0 rgba(20,22,27,.10), 0 1px 2px rgba(20,22,27,.05)',
+  '--sh-md':  '0 4px 0 rgba(20,22,27,.12), 0 3px 12px rgba(20,22,27,.09)',
+  '--sh-lg':  '0 10px 0 rgba(20,22,27,.10), 0 22px 48px -20px rgba(20,22,27,.38)',
+  '--sh-pop': '0 6px 0 rgba(20,22,27,.14), 0 12px 26px -8px rgba(20,22,27,.24)',
+};
+const SHADOWS_DARK = {
+  '--sh-sm':  '0 2px 0 rgba(0,0,0,.36), 0 1px 2px rgba(0,0,0,.28)',
+  '--sh-md':  '0 4px 0 rgba(0,0,0,.4), 0 3px 12px rgba(0,0,0,.34)',
+  '--sh-lg':  '0 10px 0 rgba(0,0,0,.38), 0 22px 48px -18px rgba(0,0,0,.5)',
+  '--sh-pop': '0 6px 0 rgba(0,0,0,.4), 0 12px 26px -8px rgba(0,0,0,.42)',
+};
+// Softer charcoal dark theme — the DS default dark ladder crushes toward near-black;
+// this keeps it clearly "dark mode" without going to true black.
+const SURFACES_DARK = {
+  '--canvas':    '#1b1e25',
+  '--surface':   '#262a33',
+  '--surface-2': '#20232b',
+  '--surface-3': '#333948',
+  '--ink':       '#eef0f4',
+  '--ink-2':     '#c6cad4',
+  '--muted':     '#959aa5',
+  '--faint':     '#6c717b',
+  '--hair':      '#3c414c',
+  '--hair-2':    '#31353f',
+  '--ink-panel': '#16181e',
+};
+const SURFACE_KEYS = Object.keys(SURFACES_DARK);
+const CONFETTI_COLORS = ['#7C4FE0', '#FFD23F', '#FF6B4A', '#2FBF71', '#3B82F6', '#FF3EA5'];
+
+function getInitialTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch (e) { /* ignore */ }
+  return 'light';
+}
+
+class Component extends DCLogic {
+  canvasRef = React.createRef();
+  canvasWrapRef = React.createRef();
+  chatScrollRef = React.createRef();
+  confettiRef = React.createRef();
+  avatarCanvasRef = React.createRef();
+
+  state = {
+    screen: 'home',
+    theme: getInitialTheme(),
+    nameInput: '',
+    isHost: true,
+    roomCode: '',
+    joinCodeInput: '',
+    joining: false,
+    lobbyJoinedIds: [],
+    players: [],
+    round: 1,
+    seatIndex: 0,
+    phase: null,
+    wordChoices: [],
+    secretWord: '',
+    revealMask: [],
+    pickSecondsLeft: 10,
+    drawSecondsLeft: 80,
+    totalDrawSeconds: 80,
+    revealSecondsLeft: 6,
+    turnGuesses: [],
+    turnResults: [],
+    viewingAsId: null,
+    chat: [],
+    chatInput: '',
+    toasts: [],
+    tool: 'brush',
+    color: '#14161b',
+    brushSize: 6,
+    scoreFlashes: [],
+    hintPulse: false,
+    myAvatar: getInitialAvatar(),
+    showAvatarEditor: false,
+    avatarEditorTab: 'gallery',
+    avatarDraftColor: '#14161b',
+    avatarDraftSize: 6,
+    avatarDraftEraser: false,
+  };
+
+  _ctx = null;
+  _undo = [];
+  _drawingNow = false;
+  _lastPt = null;
+  _avatarCtx = null;
+  _avatarUndo = [];
+  _avatarDrawing = false;
+  _avatarLastPt = null;
+  _pickInt = null;
+  _drawInt = null;
+  _revealInt = null;
+  _usedWords = [];
+  _hintThresholds = [];
+  _lastChatLen = 0;
+  _lobbyTimers = [];
+  _hintPulseTimer = null;
+  _confettiParticles = [];
+  _confettiRunning = false;
+  _confettiRaf = null;
+
+  componentDidMount() {
+    this.applyPartyStyle();
+    this.syncTheme(this.state.theme);
+  }
+
+  applyPartyStyle() {
+    const root = document.documentElement;
+    root.style.setProperty('--font-display', "'Caveat', cursive");
+    root.style.setProperty('--font-sans', "'Shantell Sans', system-ui, sans-serif");
+    root.style.setProperty('--font-mono', "'Shantell Sans', system-ui, sans-serif");
+    root.style.setProperty('--r-sm', '10px');
+    root.style.setProperty('--r-md', '14px');
+    root.style.setProperty('--r-lg', '20px');
+    root.style.setProperty('--r-xl', '28px');
+    root.style.setProperty('--r-2xl', '34px');
+  }
+
+  syncTheme(t) {
+    const root = document.documentElement;
+    const a = t === 'dark' ? ACCENT_DARK : ACCENT_LIGHT;
+    const sh = t === 'dark' ? SHADOWS_DARK : SHADOWS_LIGHT;
+    root.style.colorScheme = t === 'dark' ? 'dark' : 'light';
+    if (window.Protokit && window.Protokit.applyTheme) {
+      window.Protokit.applyTheme(t, a);
+    } else {
+      root.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+      root.style.setProperty('--accent', a.accent);
+      root.style.setProperty('--accent-press', a.accentPress);
+      if (t === 'light' && a.accentTint) root.style.setProperty('--accent-tint', a.accentTint);
+      else root.style.removeProperty('--accent-tint');
+    }
+    Object.keys(sh).forEach((k) => root.style.setProperty(k, sh[k]));
+    if (t === 'dark') {
+      Object.keys(SURFACES_DARK).forEach((k) => root.style.setProperty(k, SURFACES_DARK[k]));
+    } else {
+      SURFACE_KEYS.forEach((k) => root.style.removeProperty(k));
+    }
+  }
+
+  handleThemeChange = (t) => {
+    this.setState({ theme: t });
+    this.syncTheme(t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* ignore */ }
+  };
+
+  componentWillUnmount() {
+    clearInterval(this._pickInt);
+    clearInterval(this._drawInt);
+    clearInterval(this._revealInt);
+    clearTimeout(this._hintPulseTimer);
+    cancelAnimationFrame(this._confettiRaf);
+    this.clearLobbyTimers();
+  }
+
+  clearLobbyTimers() {
+    this._lobbyTimers.forEach((t) => clearTimeout(t));
+    this._lobbyTimers = [];
+  }
+
+  genRoomCode() {
+    return Math.random().toString(36).slice(2, 8).toUpperCase();
+  }
+
+  goToCreateRoom = () => {
+    this.clearLobbyTimers();
+    const code = this.genRoomCode();
+    this.setState({ screen: 'lobby', isHost: true, roomCode: code, lobbyJoinedIds: [] });
+    PRESET_NAMES.forEach((_, i) => {
+      const t = setTimeout(() => {
+        this.setState((s) => ({ lobbyJoinedIds: s.lobbyJoinedIds.concat(['p' + (i + 1)]) }));
+      }, 750 * (i + 1));
+      this._lobbyTimers.push(t);
+    });
+  };
+
+  goToJoinScreen = () => {
+    this.clearLobbyTimers();
+    this.setState({ screen: 'join', joinCodeInput: '', joining: false });
+  };
+
+  handleJoinCodeChange = (e) => this.setState({ joinCodeInput: e.target.value.toUpperCase() });
+  handleJoinCodeKeyDown = (e) => { if (e.key === 'Enter') this.submitJoinCode(); };
+
+  submitJoinCode = () => {
+    if (this.state.joining) return;
+    this.setState({ joining: true });
+    const t1 = setTimeout(() => {
+      const code = this.state.joinCodeInput.trim() || this.genRoomCode();
+      this.setState({ screen: 'lobby', isHost: false, roomCode: code, joining: false, lobbyJoinedIds: ['p1', 'p2', 'p3'] });
+      const t2 = setTimeout(() => this.startGame(), 3200);
+      this._lobbyTimers.push(t2);
+    }, 800);
+    this._lobbyTimers.push(t1);
+  };
+
+  copyInviteLink = () => {
+    const link = 'dooduel.game/play/' + this.state.roomCode;
+    const done = () => this.pushToast('🔗 Invite link copied!');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done).catch(done);
+    } else {
+      done();
+    }
+  };
+
+  goHome = () => {
+    this.clearLobbyTimers();
+    this.setState({ screen: 'home' });
+  };
+
+  componentDidUpdate(prevProps) {
+    if (this.state.chat.length !== this._lastChatLen && this.chatScrollRef.current) {
+      const el = this.chatScrollRef.current;
+      el.scrollTop = el.scrollHeight;
+    }
+    this._lastChatLen = this.state.chat.length;
+
+    const wasMobile = (prevProps.layout || 'desktop') === 'mobile';
+    const isMobile = (this.props.layout || 'desktop') === 'mobile';
+    if (wasMobile !== isMobile && this.state.screen === 'game' && this.state.phase && this.state.phase !== 'final') {
+      this.resetCanvas();
+    }
+  }
+
+  rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  pickWordChoices() {
+    if (this._usedWords.length >= WORDS.length - 3) this._usedWords = [];
+    const pool = WORDS.filter((w) => this._usedWords.indexOf(w) === -1);
+    const choices = [];
+    for (let i = 0; i < 3 && pool.length; i++) {
+      const idx = Math.floor(Math.random() * pool.length);
+      choices.push(pool.splice(idx, 1)[0]);
+    }
+    return choices;
+  }
+
+  startGame = () => {
+    this.clearLobbyTimers();
+    const myName = this.state.nameInput.trim() || 'Mara';
+    const names = [myName].concat(PRESET_NAMES);
+    const players = names.map((n, i) => ({ id: 'p' + i, name: n, score: 0 }));
+    this._usedWords = [];
+    this.setState({ screen: 'game', players: players, round: 1, seatIndex: 0, chat: [], toasts: [] }, () => this.beginTurn());
+  };
+
+  beginTurn = () => {
+    clearInterval(this._pickInt);
+    clearInterval(this._drawInt);
+    clearInterval(this._revealInt);
+    const players = this.state.players, seatIndex = this.state.seatIndex, round = this.state.round;
+    const drawer = players[seatIndex];
+    const wordChoices = this.pickWordChoices();
+    const totalRounds = this.props.totalRounds || 2;
+    const sysMsg = { id: Math.random().toString(36).slice(2), kind: 'system', text: `Round ${round} of ${totalRounds} \u2014 ${drawer.name} is drawing` };
+    this.setState((s) => ({
+      phase: 'picking',
+      wordChoices: wordChoices,
+      pickSecondsLeft: 10,
+      viewingAsId: drawer.id,
+      turnGuesses: [],
+      turnResults: [],
+      chat: s.chat.concat([sysMsg]),
+    }));
+    this._pickInt = setInterval(() => {
+      this.setState((s) => {
+        const left = s.pickSecondsLeft - 1;
+        if (left <= 0) {
+          clearInterval(this._pickInt);
+          const w = this.rand(s.wordChoices);
+          setTimeout(() => this.chooseWord(w), 0);
+          return { pickSecondsLeft: 0 };
+        }
+        return { pickSecondsLeft: left };
+      });
+    }, 1000);
+  };
+
+  chooseWord = (word) => {
+    if (this.state.phase !== 'picking') return;
+    clearInterval(this._pickInt);
+    this._usedWords.push(word);
+    const totalDrawSeconds = this.props.drawSeconds || 80;
+    const letterCount = word.replace(/[^a-z]/gi, '').length;
+    const hintCount = Math.max(0, Math.min(this.props.hintCount == null ? 2 : this.props.hintCount, letterCount - 1));
+    this._hintThresholds = [];
+    for (let i = 1; i <= hintCount; i++) {
+      this._hintThresholds.push(Math.max(1, Math.floor(totalDrawSeconds * (0.6 - i * 0.18))));
+    }
+    this.setState({
+      phase: 'drawing',
+      secretWord: word,
+      revealMask: word.split('').map(() => false),
+      drawSecondsLeft: totalDrawSeconds,
+      totalDrawSeconds: totalDrawSeconds,
+      turnGuesses: [],
+    });
+    this.resetCanvas();
+    clearInterval(this._drawInt);
+    this._drawInt = setInterval(() => this.tickDraw(), 1000);
+  };
+
+  tickDraw = () => {
+    this.setState((s) => {
+      const left = s.drawSecondsLeft - 1;
+      let mask = s.revealMask;
+      let hinted = false;
+      if (this._hintThresholds.indexOf(left) !== -1) {
+        const idxs = [];
+        for (let i = 0; i < mask.length; i++) {
+          if (!mask[i] && /[a-z]/i.test(s.secretWord[i])) idxs.push(i);
+        }
+        if (idxs.length) {
+          mask = mask.slice();
+          mask[this.rand(idxs)] = true;
+          hinted = true;
+        }
+      }
+      if (hinted) {
+        clearTimeout(this._hintPulseTimer);
+        this._hintPulseTimer = setTimeout(() => this.setState({ hintPulse: false }), 500);
+      }
+      if (left <= 0) {
+        clearInterval(this._drawInt);
+        setTimeout(() => this.endTurn(), 0);
+        return { drawSecondsLeft: 0, revealMask: mask, hintPulse: hinted ? true : s.hintPulse };
+      }
+      return { drawSecondsLeft: left, revealMask: mask, hintPulse: hinted ? true : s.hintPulse };
+    });
+  };
+
+  isClose(a, b) {
+    if (!a || !b || a === b) return false;
+    if (Math.abs(a.length - b.length) > 2) return false;
+    const dp = [];
+    for (let i = 0; i <= a.length; i++) dp[i] = [i];
+    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+    return dp[a.length][b.length] <= 2;
+  }
+
+  submitGuess = () => {
+    const text = this.state.chatInput.trim();
+    const phase = this.state.phase;
+    const players = this.state.players;
+    const viewingAsId = this.state.viewingAsId;
+    if (!text || phase !== 'drawing') { this.setState({ chatInput: '' }); return; }
+    const drawer = players[this.state.seatIndex];
+    if (viewingAsId === drawer.id) { this.setState({ chatInput: '' }); return; }
+    const already = this.state.turnGuesses.some((g) => g.playerId === viewingAsId);
+    if (already) { this.setState({ chatInput: '' }); return; }
+    const me = players.find((p) => p.id === viewingAsId);
+    const norm = (str) => str.trim().toLowerCase().replace(/[^a-z0-9]/gi, '');
+    const id = Math.random().toString(36).slice(2);
+    if (norm(text) === norm(this.state.secretWord)) {
+      const order = this.state.turnGuesses.length;
+      const frac = this.state.drawSecondsLeft / this.state.totalDrawSeconds;
+      const points = Math.max(20, Math.round((50 + 450 * frac) * Math.pow(0.82, order)));
+      const newGuesses = this.state.turnGuesses.concat([{ playerId: viewingAsId, points: points, order: order }]);
+      const newPlayers = players.map((p) => (p.id === viewingAsId ? { ...p, score: p.score + points } : p));
+      const flashKey = Math.random().toString(36).slice(2);
+      this.pushToast(`\u{1F389} You guessed it! +${points}`);
+      this.burstConfetti({ count: 46 });
+      this.setState((s) => ({
+        turnGuesses: newGuesses,
+        players: newPlayers,
+        chat: s.chat.concat([{ id: id, kind: 'correct', text: `\u{1F389} ${me.name} guessed the word!` }]),
+        chatInput: '',
+        scoreFlashes: s.scoreFlashes.concat([{ key: flashKey, playerId: viewingAsId, points: points }]),
+      }), () => {
+        const totalGuessers = this.state.players.length - 1;
+        if (this.state.turnGuesses.length >= totalGuessers) this.endTurn();
+      });
+      setTimeout(() => {
+        this.setState((s) => ({ scoreFlashes: s.scoreFlashes.filter((f) => f.key !== flashKey) }));
+      }, 1200);
+    } else {
+      if (this.isClose(norm(text), norm(this.state.secretWord))) this.pushToast('So close! 👀');
+      this.setState((s) => ({
+        chat: s.chat.concat([{ id: id, kind: 'guess', playerId: viewingAsId, authorName: me.name, text: text }]),
+        chatInput: '',
+      }));
+    }
+  };
+
+  endTurn = () => {
+    if (this.state.phase !== 'drawing') return;
+    clearInterval(this._drawInt);
+    const players = this.state.players, seatIndex = this.state.seatIndex, turnGuesses = this.state.turnGuesses, secretWord = this.state.secretWord;
+    const drawer = players[seatIndex];
+    const totalGuessers = players.length - 1;
+    const correctCount = turnGuesses.length;
+    const drawerPts = correctCount > 0 ? Math.round(100 * correctCount / totalGuessers) : 0;
+    const newPlayers = players.map((p) => (p.id === drawer.id ? { ...p, score: p.score + drawerPts } : p));
+    const results = newPlayers.map((p) => {
+      let delta = 0;
+      if (p.id === drawer.id) delta = drawerPts;
+      else {
+        const g = turnGuesses.find((x) => x.playerId === p.id);
+        if (g) delta = g.points;
+      }
+      return { id: p.id, name: p.name, delta: delta, total: p.score };
+    });
+    this.setState((s) => ({
+      players: newPlayers,
+      phase: 'reveal',
+      turnResults: results,
+      revealSecondsLeft: 6,
+      chat: s.chat.concat([{ id: Math.random().toString(36).slice(2), kind: 'system', text: `The word was "${secretWord.toUpperCase()}"` }]),
+    }));
+    if (correctCount > 0) this.burstConfetti({ count: 64 });
+    clearInterval(this._revealInt);
+    this._revealInt = setInterval(() => {
+      this.setState((s) => {
+        const left = (s.revealSecondsLeft || 1) - 1;
+        if (left <= 0) {
+          clearInterval(this._revealInt);
+          setTimeout(() => this.advanceTurn(), 0);
+          return { revealSecondsLeft: 0 };
+        }
+        return { revealSecondsLeft: left };
+      });
+    }, 1000);
+  };
+
+  advanceTurn = () => {
+    if (this.state.phase !== 'reveal') return;
+    clearInterval(this._revealInt);
+    const totalRounds = this.props.totalRounds || 2;
+    this.setState((s) => {
+      let seatIndex = s.seatIndex + 1, round = s.round;
+      if (seatIndex >= s.players.length) { seatIndex = 0; round = round + 1; }
+      if (round > totalRounds) return { phase: 'final' };
+      return { seatIndex: seatIndex, round: round };
+    }, () => {
+      if (this.state.phase !== 'final') {
+        this.beginTurn();
+      } else {
+        this.burstConfetti({ count: 130 });
+        setTimeout(() => this.burstConfetti({ count: 90 }), 450);
+        setTimeout(() => this.burstConfetti({ count: 90 }), 950);
+      }
+    });
+  };
+
+  playAgain = () => {
+    const players = this.state.players.map((p) => ({ ...p, score: 0 }));
+    this._usedWords = [];
+    this.setState({ players: players, round: 1, seatIndex: 0, chat: [], toasts: [] }, () => this.beginTurn());
+  };
+
+  leaveHome = () => {
+    clearInterval(this._pickInt); clearInterval(this._drawInt); clearInterval(this._revealInt);
+    this.setState({ screen: 'home', phase: null, players: [], chat: [], wordChoices: [], secretWord: '' });
+  };
+
+  pushToast(msg) {
+    const id = Math.random().toString(36).slice(2);
+    this.setState((s) => ({ toasts: s.toasts.concat([{ id: id, msg: msg }]) }));
+    setTimeout(() => this.setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 2600);
+  }
+
+  setViewingAs(id) { this.setState({ viewingAsId: id }); }
+  switchTo = (e) => this.setViewingAs(e.currentTarget.dataset.id);
+  switchToDrawer = () => {
+    const d = this.state.players[this.state.seatIndex];
+    if (d) this.setViewingAs(d.id);
+  };
+
+  resetCanvas() {
+    const run = () => {
+      const canvas = this.canvasRef.current;
+      const wrap = this.canvasWrapRef.current;
+      if (!canvas || !wrap) return false;
+      const dpr = window.devicePixelRatio || 1;
+      const w = wrap.clientWidth || 300, h = wrap.clientHeight || 200;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      this._ctx = ctx;
+      this._undo = [];
+      return true;
+    };
+    if (!run()) setTimeout(run, 50);
+  }
+
+  isDrawerNow() {
+    const players = this.state.players, seatIndex = this.state.seatIndex;
+    return this.state.phase === 'drawing' && !!players[seatIndex] && players[seatIndex].id === this.state.viewingAsId;
+  }
+
+  saveUndo() {
+    if (!this._ctx || !this.canvasRef.current) return;
+    const c = this.canvasRef.current;
+    try {
+      this._undo.push(this._ctx.getImageData(0, 0, c.width, c.height));
+      if (this._undo.length > 30) this._undo.shift();
+    } catch (e) { /* ignore */ }
+  }
+
+  handlePointerDown = (e) => {
+    if (!this.isDrawerNow()) return;
+    const canvas = this.canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    if (this.state.tool === 'fill') {
+      this.saveUndo();
+      this.floodFill(x, y);
+      return;
+    }
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    this.saveUndo();
+    this._drawingNow = true;
+    this._lastPt = { x: x, y: y };
+    const ctx = this._ctx;
+    if (!ctx) return;
+    ctx.fillStyle = this.state.tool === 'eraser' ? '#ffffff' : this.state.color;
+    ctx.beginPath();
+    ctx.arc(this._lastPt.x, this._lastPt.y, (this.state.tool === 'eraser' ? this.state.brushSize * 1.6 : this.state.brushSize) / 2, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  handlePointerMove = (e) => {
+    if (!this._drawingNow || !this.isDrawerNow()) return;
+    const canvas = this.canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const ctx = this._ctx;
+    if (!ctx || !this._lastPt) return;
+    ctx.strokeStyle = this.state.tool === 'eraser' ? '#ffffff' : this.state.color;
+    ctx.lineWidth = this.state.tool === 'eraser' ? this.state.brushSize * 1.6 : this.state.brushSize;
+    ctx.beginPath();
+    ctx.moveTo(this._lastPt.x, this._lastPt.y);
+    ctx.lineTo(pt.x, pt.y);
+    ctx.stroke();
+    this._lastPt = pt;
+  };
+
+  handlePointerUp = () => {
+    this._drawingNow = false;
+    this._lastPt = null;
+  };
+
+  undo = () => {
+    if (!this.isDrawerNow() || !this._undo.length || !this._ctx) return;
+    const data = this._undo.pop();
+    this._ctx.putImageData(data, 0, 0);
+  };
+
+  clearCanvas = () => {
+    if (!this.isDrawerNow()) return;
+    this.saveUndo();
+    const canvas = this.canvasRef.current;
+    const dpr = window.devicePixelRatio || 1;
+    this._ctx.fillStyle = '#ffffff';
+    this._ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+  };
+
+  hexToRgb(hex) {
+    const clean = (hex || '#000000').replace('#', '');
+    const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
+    const num = parseInt(full, 16) || 0;
+    return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+  }
+
+  floodFill(cssX, cssY) {
+    const canvas = this.canvasRef.current;
+    const ctx = this._ctx;
+    if (!canvas || !ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width, h = canvas.height;
+    const sx = Math.min(w - 1, Math.max(0, Math.round(cssX * dpr)));
+    const sy = Math.min(h - 1, Math.max(0, Math.round(cssY * dpr)));
+    let imgData;
+    try { imgData = ctx.getImageData(0, 0, w, h); } catch (e) { return; }
+    const data = imgData.data;
+    const fill = this.hexToRgb(this.state.color);
+    const si = (sy * w + sx) * 4;
+    const tR = data[si], tG = data[si + 1], tB = data[si + 2], tA = data[si + 3];
+    const d0 = (tR - fill.r) * (tR - fill.r) + (tG - fill.g) * (tG - fill.g) + (tB - fill.b) * (tB - fill.b) + (tA - 255) * (tA - 255);
+    if (d0 < 120) return;
+    const TOL = 3600;
+    const matches = (x, y) => {
+      const i = (y * w + x) * 4;
+      const dr = data[i] - tR, dg = data[i + 1] - tG, db = data[i + 2] - tB, da = data[i + 3] - tA;
+      return (dr * dr + dg * dg + db * db + da * da) <= TOL;
+    };
+    const visited = new Uint8Array(w * h);
+    const stack = [[sx, sy]];
+    visited[sy * w + sx] = 1;
+    while (stack.length) {
+      const top = stack.pop();
+      const x0 = top[0], y = top[1];
+      let xl = x0;
+      while (xl > 0 && !visited[y * w + (xl - 1)] && matches(xl - 1, y)) xl--;
+      let xr = x0;
+      while (xr < w - 1 && !visited[y * w + (xr + 1)] && matches(xr + 1, y)) xr++;
+      for (let x = xl; x <= xr; x++) {
+        const vi = y * w + x;
+        visited[vi] = 1;
+        const i = vi * 4;
+        data[i] = fill.r; data[i + 1] = fill.g; data[i + 2] = fill.b; data[i + 3] = 255;
+        if (y > 0 && !visited[(y - 1) * w + x] && matches(x, y - 1)) stack.push([x, y - 1]);
+        if (y < h - 1 && !visited[(y + 1) * w + x] && matches(x, y + 1)) stack.push([x, y + 1]);
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  setTool = (t) => { if (this.isDrawerNow()) this.setState({ tool: t }); };
+  handleSizeClick = (e) => { if (this.isDrawerNow()) this.setState({ brushSize: parseInt(e.currentTarget.dataset.size, 10) }); };
+  handleSwatchClick = (e) => { if (this.isDrawerNow()) this.setState({ color: e.currentTarget.dataset.color }); };
+
+  handleNameChange = (e) => this.setState({ nameInput: e.target.value });
+  handleNameKeyDown = (e) => { if (e.key === 'Enter') this.startGame(); };
+  handleChatChange = (e) => this.setState({ chatInput: e.target.value });
+  handleChatKeyDown = (e) => { if (e.key === 'Enter') { e.preventDefault(); this.submitGuess(); } };
+  handlePickWord = (e) => this.chooseWord(e.currentTarget.dataset.word);
+
+  openAvatarEditor = () => this.setState({ showAvatarEditor: true, avatarEditorTab: 'gallery' });
+  closeAvatarEditor = () => this.setState({ showAvatarEditor: false });
+  setAvatarEditorTab = (v) => {
+    this.setState({ avatarEditorTab: v });
+    if (v === 'draw') setTimeout(() => this.resetAvatarCanvas(), 30);
+  };
+
+  persistAvatar(avatar) {
+    try {
+      if (avatar) localStorage.setItem(AVATAR_KEY, JSON.stringify(avatar));
+      else localStorage.removeItem(AVATAR_KEY);
+    } catch (e) { /* ignore */ }
+  }
+
+  pickGalleryIcon = (e) => {
+    const icon = e.currentTarget.dataset.icon;
+    const tint = e.currentTarget.dataset.tint;
+    const avatar = { type: 'preset', icon: icon, tint: tint };
+    this.setState({ myAvatar: avatar, showAvatarEditor: false });
+    this.persistAvatar(avatar);
+    this.pushToast('\u{1F5BC}\uFE0F Profile pic updated!');
+  };
+
+  resetAvatarToDefault = () => {
+    this.setState({ myAvatar: null, showAvatarEditor: false });
+    this.persistAvatar(null);
+    this.pushToast('Profile pic reset');
+  };
+
+  resetAvatarCanvas() {
+    const run = () => {
+      const canvas = this.avatarCanvasRef.current;
+      if (!canvas) return false;
+      const dpr = window.devicePixelRatio || 1;
+      const size = 220;
+      canvas.width = size * dpr;
+      canvas.height = size * dpr;
+      canvas.style.width = size + 'px';
+      canvas.style.height = size + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      this._avatarCtx = ctx;
+      this._avatarUndo = [];
+      const av = this.state.myAvatar;
+      if (av && av.type === 'custom' && av.src) {
+        const img = new Image();
+        img.onload = () => { if (this._avatarCtx) this._avatarCtx.drawImage(img, 0, 0, size, size); };
+        img.src = av.src;
+      }
+      return true;
+    };
+    if (!run()) setTimeout(run, 50);
+  }
+
+  saveAvatarUndo() {
+    if (!this._avatarCtx || !this.avatarCanvasRef.current) return;
+    const c = this.avatarCanvasRef.current;
+    try {
+      this._avatarUndo.push(this._avatarCtx.getImageData(0, 0, c.width, c.height));
+      if (this._avatarUndo.length > 25) this._avatarUndo.shift();
+    } catch (e) { /* ignore */ }
+  }
+
+  handleAvatarPointerDown = (e) => {
+    const canvas = this.avatarCanvasRef.current;
+    if (!canvas) return;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    this.saveAvatarUndo();
+    this._avatarDrawing = true;
+    const rect = canvas.getBoundingClientRect();
+    this._avatarLastPt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const ctx = this._avatarCtx;
+    if (!ctx) return;
+    ctx.fillStyle = this.state.avatarDraftEraser ? '#ffffff' : this.state.avatarDraftColor;
+    ctx.beginPath();
+    ctx.arc(this._avatarLastPt.x, this._avatarLastPt.y, (this.state.avatarDraftEraser ? this.state.avatarDraftSize * 1.6 : this.state.avatarDraftSize) / 2, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  handleAvatarPointerMove = (e) => {
+    if (!this._avatarDrawing) return;
+    const canvas = this.avatarCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const ctx = this._avatarCtx;
+    if (!ctx || !this._avatarLastPt) return;
+    ctx.strokeStyle = this.state.avatarDraftEraser ? '#ffffff' : this.state.avatarDraftColor;
+    ctx.lineWidth = this.state.avatarDraftEraser ? this.state.avatarDraftSize * 1.6 : this.state.avatarDraftSize;
+    ctx.beginPath();
+    ctx.moveTo(this._avatarLastPt.x, this._avatarLastPt.y);
+    ctx.lineTo(pt.x, pt.y);
+    ctx.stroke();
+    this._avatarLastPt = pt;
+  };
+
+  handleAvatarPointerUp = () => {
+    this._avatarDrawing = false;
+    this._avatarLastPt = null;
+  };
+
+  undoAvatarStroke = () => {
+    if (!this._avatarUndo.length || !this._avatarCtx) return;
+    const data = this._avatarUndo.pop();
+    this._avatarCtx.putImageData(data, 0, 0);
+  };
+
+  clearAvatarCanvas = () => {
+    this.saveAvatarUndo();
+    const canvas = this.avatarCanvasRef.current;
+    if (!canvas || !this._avatarCtx) return;
+    const dpr = window.devicePixelRatio || 1;
+    this._avatarCtx.fillStyle = '#ffffff';
+    this._avatarCtx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+  };
+
+  handleAvatarSwatchClick = (e) => this.setState({ avatarDraftColor: e.currentTarget.dataset.color, avatarDraftEraser: false });
+  handleAvatarSizeClick = (e) => this.setState({ avatarDraftSize: parseInt(e.currentTarget.dataset.size, 10) });
+  toggleAvatarEraser = () => this.setState((s) => ({ avatarDraftEraser: !s.avatarDraftEraser }));
+
+  saveCustomAvatar = () => {
+    const canvas = this.avatarCanvasRef.current;
+    if (!canvas) return;
+    let dataUrl;
+    try { dataUrl = canvas.toDataURL('image/png'); } catch (e) { return; }
+    const avatar = { type: 'custom', src: dataUrl };
+    this.setState({ myAvatar: avatar, showAvatarEditor: false });
+    this.persistAvatar(avatar);
+    this.pushToast('\u{1F58D}\uFE0F Nice doodle! Saved as your pic.');
+  };
+
+  burstConfetti(opts) {
+    const canvas = this.confettiRef.current;
+    if (!canvas) return;
+    const w = window.innerWidth, h = window.innerHeight;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const n = (opts && opts.count) || 60;
+    for (let i = 0; i < n; i++) {
+      this._confettiParticles.push({
+        x: w / 2 + (Math.random() - 0.5) * w * 0.7,
+        y: -20 - Math.random() * 40,
+        vx: (Math.random() - 0.5) * 6,
+        vy: Math.random() * 2 + 2,
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 0.3,
+        size: Math.random() * 6 + 6,
+        color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+        life: 0,
+        maxLife: 80 + Math.random() * 50,
+      });
+    }
+    if (this._confettiParticles.length > 500) this._confettiParticles = this._confettiParticles.slice(-500);
+    if (!this._confettiRunning) {
+      this._confettiRunning = true;
+      this.runConfetti();
+    }
+  }
+
+  runConfetti = () => {
+    const canvas = this.confettiRef.current;
+    if (!canvas) { this._confettiRunning = false; return; }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < this._confettiParticles.length; i++) {
+      const p = this._confettiParticles[i];
+      p.life++;
+      p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.rot += p.vr;
+      let alpha = 1;
+      if (p.life > p.maxLife * 0.75) alpha = Math.max(0, 1 - (p.life - p.maxLife * 0.75) / (p.maxLife * 0.25));
+      if (p.life <= p.maxLife && p.y < canvas.height + 40) {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 3, p.size, p.size * 0.66);
+        ctx.restore();
+      }
+    }
+    this._confettiParticles = this._confettiParticles.filter((p) => p.life <= p.maxLife && p.y < canvas.height + 40);
+    if (this._confettiParticles.length) {
+      this._confettiRaf = requestAnimationFrame(this.runConfetti);
+    } else {
+      this._confettiRunning = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  };
+
+  renderVals() {
+    const props = this.props || {};
+    const s = this.state;
+    const isMobileLayout = (props.layout || 'desktop') === 'mobile';
+    const isDesktopLayout = !isMobileLayout;
+    const isHome = s.screen === 'home';
+    const isJoinScreen = s.screen === 'join';
+    const isLobby = s.screen === 'lobby';
+    const isGame = s.screen === 'game';
+    const isFinal = isGame && s.phase === 'final';
+    const isActiveGame = isGame && !isFinal;
+    const totalRoundsDisplay = props.totalRounds || 2;
+
+    function chunkyBtn(opts) {
+      opts = opts || {};
+      const disabled = !!opts.disabled;
+      const sm = opts.size === 'sm';
+      const bg = opts.bg || 'var(--accent)';
+      const pressBg = opts.pressBg || 'var(--ink)';
+      return {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+        width: opts.block ? '100%' : 'auto',
+        height: sm ? '44px' : '58px',
+        padding: opts.block ? '0' : (sm ? '0 20px' : '0 30px'),
+        border: '2.5px solid var(--ink)', borderRadius: '999px',
+        background: bg, color: opts.color || '#fff',
+        fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: sm ? '18px' : '24px',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.55 : 1,
+        pointerEvents: disabled ? 'none' : 'auto',
+        boxShadow: disabled ? ('0 0 0 ' + pressBg) : ('0 ' + (sm ? '4px' : '5px') + ' 0 ' + pressBg + ', 0 8px 18px -6px rgba(0,0,0,.25)'),
+        transform: disabled ? (sm ? 'translateY(4px)' : 'translateY(5px)') : 'translateY(0)',
+        transition: 'transform .12s ease, box-shadow .12s ease, opacity .12s ease',
+        whiteSpace: 'nowrap',
+      };
+    }
+
+    function makeSwatch(hex, selected) {
+      return {
+        hex: hex,
+        style: {
+          background: hex, width: '26px', height: '26px', borderRadius: '999px',
+          border: '2px solid ' + (hex === '#ffffff' ? 'var(--ink)' : 'rgba(0,0,0,.2)'),
+          boxShadow: selected ? '0 0 0 3px var(--accent)' : 'none',
+          transform: selected ? 'scale(1.15)' : 'scale(1)',
+          transition: 'transform .15s var(--ease), box-shadow .15s var(--ease)',
+          cursor: 'pointer', flex: 'none', padding: 0,
+        },
+      };
+    }
+    function makeBrushOpt(sz, selected, colorForDot) {
+      return {
+        size: sz,
+        btnStyle: {
+          width: '34px', height: '34px', borderRadius: '999px', display: 'grid', placeItems: 'center',
+          background: selected ? 'var(--accent-tint)' : 'var(--surface)',
+          border: '2px solid ' + (selected ? 'var(--accent)' : 'var(--ink)'),
+          transform: selected ? 'scale(1.1)' : 'scale(1)',
+          transition: 'transform .15s var(--ease)',
+          cursor: 'pointer', flex: 'none', padding: 0,
+        },
+        dotStyle: { width: Math.max(3, sz * 0.85) + 'px', height: Math.max(3, sz * 0.85) + 'px', borderRadius: '999px', background: colorForDot },
+      };
+    }
+
+    const myAvatar = s.myAvatar;
+    let myAvatarSrc = '', myAvatarForceIcon = '', myAvatarForceTint = '';
+    if (myAvatar && myAvatar.type === 'custom') myAvatarSrc = myAvatar.src;
+    else if (myAvatar && myAvatar.type === 'preset') { myAvatarForceIcon = myAvatar.icon; myAvatarForceTint = myAvatar.tint; }
+    const hasCustomAvatarSet = !!myAvatar;
+    const meAvatarFields = { avatarSrc: myAvatarSrc, avatarForceIcon: myAvatarForceIcon, avatarForceTint: myAvatarForceTint };
+    const noAvatarOverrideFields = { avatarSrc: '', avatarForceIcon: '', avatarForceTint: '' };
+
+    const avatarEditBadgeStyle = {
+      position: 'absolute', bottom: '-4px', right: '-4px', width: '24px', height: '24px', borderRadius: '999px',
+      background: 'var(--accent)', color: '#fff', border: '2px solid var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: '11px', cursor: 'pointer', boxShadow: 'var(--sh-sm)', padding: 0,
+    };
+
+    const isGalleryTab = s.avatarEditorTab === 'gallery';
+    const isDrawTab = s.avatarEditorTab === 'draw';
+    const avatarTabOptions = [{ value: 'gallery', label: 'Pick a doodle' }, { value: 'draw', label: 'Draw your own' }];
+    const galleryOptions = AVATAR_ICON_KEYS.map((icon, i) => {
+      const tint = AVATAR_TINTS[i % AVATAR_TINTS.length];
+      const selected = !!(myAvatar && myAvatar.type === 'preset' && myAvatar.icon === icon);
+      return {
+        icon: icon, tint: tint,
+        btnStyle: {
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '6px',
+          background: selected ? 'var(--accent-tint)' : 'transparent',
+          border: '2px solid ' + (selected ? 'var(--accent)' : 'transparent'),
+          borderRadius: '14px', cursor: 'pointer',
+          transform: selected ? 'scale(1.06)' : 'scale(1)',
+          transition: 'transform .15s var(--ease), border-color .15s var(--ease)',
+        },
+      };
+    });
+
+    const players = s.players || [];
+    const drawer = players[s.seatIndex];
+    const currentDrawerId = drawer ? drawer.id : null;
+    const currentDrawerName = drawer ? drawer.name : '';
+    const amDrawer = !!drawer && s.viewingAsId === drawer.id;
+    const iAlreadyGuessed = s.turnGuesses.some((g) => g.playerId === s.viewingAsId);
+
+    const fullyRevealed = amDrawer || iAlreadyGuessed || s.phase === 'reveal';
+    const wordSlots = (s.secretWord || '').split('').map((ch, i) => {
+      const revealed = fullyRevealed || !!s.revealMask[i];
+      return {
+        display: revealed ? ch.toUpperCase() : '',
+        boxStyle: {
+          minWidth: isMobileLayout ? '22px' : '34px',
+          height: isMobileLayout ? '30px' : '42px',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          borderBottom: '4px solid ' + (revealed ? 'var(--accent)' : 'var(--ink)'),
+          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: isMobileLayout ? '22px' : '30px',
+          color: 'var(--ink)', margin: '0 3px',
+          animation: (revealed && s.hintPulse) ? 'letter-pop .4s var(--ease)' : 'none',
+        },
+      };
+    });
+    const showWordRow = s.phase === 'drawing' || s.phase === 'reveal';
+
+    let roleBadgeText = '', roleBadgeTone = 'neutral';
+    if (s.phase === 'picking') {
+      roleBadgeText = amDrawer ? '✏️ Choosing a word…' : ('👀 Waiting on ' + currentDrawerName);
+      roleBadgeTone = amDrawer ? 'accent' : 'neutral';
+    } else if (s.phase === 'drawing') {
+      if (amDrawer) { roleBadgeText = "✏️ You're drawing!"; roleBadgeTone = 'accent'; }
+      else if (iAlreadyGuessed) { roleBadgeText = '🎉 You guessed it!'; roleBadgeTone = 'pos'; }
+      else { roleBadgeText = '🤔 Guess the word!'; roleBadgeTone = 'neutral'; }
+    } else if (s.phase === 'reveal') {
+      roleBadgeText = '🏁 Round over'; roleBadgeTone = 'neutral';
+    }
+
+    const RADIUS = isMobileLayout ? 12 : 26;
+    const CIRC = 2 * Math.PI * RADIUS;
+    const frac = s.totalDrawSeconds > 0 ? s.drawSecondsLeft / s.totalDrawSeconds : 0;
+    const timerDashOffset = s.phase === 'drawing' ? CIRC * (1 - frac) : 0;
+    const urgent = s.phase === 'drawing' && s.drawSecondsLeft <= 10 && s.drawSecondsLeft > 0;
+    const timerColor = s.drawSecondsLeft <= 10 ? 'var(--danger)' : 'var(--accent)';
+    const timerPillStyle = {
+      display: 'flex', alignItems: 'center', gap: '6px',
+      background: urgent ? 'var(--danger-tint)' : 'var(--surface-2)',
+      borderRadius: '999px', padding: '4px 12px 4px 4px',
+      animation: urgent ? 'urgent-shake .4s ease-in-out infinite' : 'none',
+    };
+    const timerRowStyle = {
+      display: 'flex', alignItems: 'center', gap: '12px', minWidth: '160px', justifyContent: 'flex-end',
+      animation: urgent ? 'urgent-shake .4s ease-in-out infinite' : 'none',
+    };
+
+    function chatLineStyle(kind) {
+      if (kind === 'system') return { color: 'var(--muted)', fontSize: '13px', fontWeight: 700, textAlign: 'center', padding: '4px 0' };
+      if (kind === 'correct') return { color: 'var(--pos)', fontWeight: 700, fontSize: '15px', padding: '5px 10px', background: 'var(--pos-tint)', borderRadius: '10px 12px 10px 12px', margin: '2px 0' };
+      return { color: 'var(--ink-2)', fontSize: '15px', fontWeight: 500, padding: '5px 10px', lineHeight: 1.4, background: 'var(--surface-2)', borderRadius: '10px 12px 10px 12px', margin: '1px 0' };
+    }
+    const chatDisplay = s.chat.map((m) => ({
+      id: m.id,
+      lineStyle: chatLineStyle(m.kind),
+      displayText: m.kind === 'guess' ? `${m.authorName}: ${m.text}` : m.text,
+    }));
+
+    let chatPlaceholder = '';
+    let chatDisabled = true;
+    if (s.phase === 'drawing') {
+      if (amDrawer) chatPlaceholder = "You're drawing — guessing is off";
+      else if (iAlreadyGuessed) chatPlaceholder = 'You already guessed it! 🎉';
+      else { chatPlaceholder = 'Type your guess…'; chatDisabled = false; }
+    } else if (s.phase === 'picking') chatPlaceholder = 'Waiting for the word…';
+    else if (s.phase === 'reveal') chatPlaceholder = 'Round over — see results';
+    const sendButtonStyle = chunkyBtn({ size: 'sm', disabled: chatDisabled });
+
+    const sortedPlayers = players.slice().sort((a, b) => b.score - a.score);
+    const scoreboardPlayers = sortedPlayers.map((p, i) => {
+      let roleLabel = '💭 Guessing', roleTone = 'neutral';
+      if (p.id === currentDrawerId) { roleLabel = s.phase === 'picking' ? '✏️ Picking…' : '✏️ Drawing'; roleTone = 'accent'; }
+      else if (s.turnGuesses.some((g) => g.playerId === p.id)) { roleLabel = '✅ Guessed'; roleTone = 'pos'; }
+      const isMe = p.id === s.viewingAsId;
+      const isMyProfile = p.id === 'p0';
+      const flash = s.scoreFlashes.find((f) => f.playerId === p.id);
+      return {
+        id: p.id, rank: i + 1, name: p.name, score: p.score, roleLabel: roleLabel, roleTone: roleTone,
+        flashActive: !!flash, flashText: flash ? ('+' + flash.points) : '',
+        rowStyle: { position: 'relative', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '10px', background: isMe ? 'var(--accent-tint)' : 'transparent' },
+        stripStyle: { position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: isMe ? 'var(--accent-tint)' : 'var(--surface)', border: '2px solid ' + (isMe ? 'var(--accent)' : 'var(--ink)'), borderRadius: '14px 18px 14px 18px', minWidth: '84px', padding: '10px 8px', flex: 'none' },
+        ...(isMyProfile ? meAvatarFields : noAvatarOverrideFields),
+      };
+    });
+
+    const switcherPlayers = players.map((p) => ({
+      id: p.id, name: p.name,
+      isDrawingNow: p.id === currentDrawerId,
+      hasGuessed: s.turnGuesses.some((g) => g.playerId === p.id),
+      btnStyle: {
+        border: p.id === s.viewingAsId ? '2px solid var(--accent)' : '2px solid transparent',
+        borderRadius: '999px', padding: '2px', background: 'transparent', cursor: 'pointer', position: 'relative',
+        transform: p.id === s.viewingAsId ? 'scale(1.1)' : 'scale(1)',
+        transition: 'transform .15s var(--ease), border-color .15s var(--ease)',
+      },
+      ...(p.id === 'p0' ? meAvatarFields : noAvatarOverrideFields),
+    }));
+
+    const toolsDisabled = !amDrawer;
+    const sizeControlsDisabled = toolsDisabled || s.tool === 'fill';
+    const toolbarStyle = {
+      opacity: amDrawer ? 1 : 0.45, pointerEvents: amDrawer ? 'auto' : 'none', filter: amDrawer ? 'none' : 'grayscale(.4)',
+      transition: 'opacity .2s ease', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', width: '100%',
+      background: 'var(--surface)', border: '2.5px solid var(--ink)', borderRadius: '18px 22px 18px 22px', boxShadow: 'var(--sh-sm)', padding: '14px 16px',
+    };
+
+    const colorSwatches = PALETTE.map((hex) => ({
+      hex: hex,
+      style: {
+        background: hex, width: '26px', height: '26px', borderRadius: '999px',
+        border: '2px solid ' + (hex === '#ffffff' ? 'var(--ink)' : 'rgba(0,0,0,.2)'),
+        boxShadow: s.color === hex ? '0 0 0 3px var(--accent)' : 'none',
+        transform: s.color === hex ? 'scale(1.15)' : 'scale(1)',
+        transition: 'transform .15s var(--ease), box-shadow .15s var(--ease)',
+        cursor: 'pointer', flex: 'none', padding: 0,
+      },
+    }));
+    const brushSizeOptions = BRUSH_SIZES.map((sz) => ({
+      size: sz,
+      btnStyle: {
+        width: '34px', height: '34px', borderRadius: '999px', display: 'grid', placeItems: 'center',
+        background: s.brushSize === sz ? 'var(--accent-tint)' : 'var(--surface)',
+        border: '2px solid ' + (s.brushSize === sz ? 'var(--accent)' : 'var(--ink)'),
+        transform: s.brushSize === sz ? 'scale(1.1)' : 'scale(1)',
+        opacity: s.tool === 'fill' ? 0.4 : 1,
+        transition: 'transform .15s var(--ease), opacity .15s var(--ease)',
+        cursor: 'pointer', flex: 'none', padding: 0,
+      },
+      dotStyle: { width: Math.max(3, sz * 0.85) + 'px', height: Math.max(3, sz * 0.85) + 'px', borderRadius: '999px', background: s.tool === 'eraser' ? 'var(--faint)' : s.color },
+    }));
+    const toolOptions = [{ value: 'brush', label: 'Brush' }, { value: 'fill', label: 'Fill' }, { value: 'eraser', label: 'Eraser' }];
+
+    const avatarColorSwatches = PALETTE.map((hex) => makeSwatch(hex, !s.avatarDraftEraser && s.avatarDraftColor === hex));
+    const avatarBrushOptions = BRUSH_SIZES.map((sz) => makeBrushOpt(sz, s.avatarDraftSize === sz, s.avatarDraftEraser ? 'var(--faint)' : s.avatarDraftColor));
+    const avatarEraserBtnStyle = {
+      height: '34px', padding: '0 14px', borderRadius: '999px',
+      border: '2px solid ' + (s.avatarDraftEraser ? 'var(--accent)' : 'var(--ink)'),
+      background: s.avatarDraftEraser ? 'var(--accent-tint)' : 'var(--surface)',
+      color: 'var(--ink)', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+    };
+    const avatarToolBtnStyle = {
+      height: '34px', padding: '0 14px', borderRadius: '999px', border: '2px solid var(--ink)',
+      background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+    };
+    const saveAvatarBtnStyle = chunkyBtn({ block: true });
+    const avatarDialogAlign = isMobileLayout ? 'sheet' : 'center';
+
+    const canvasWrapStyle = { position: 'relative', width: '100%', height: isMobileLayout ? '280px' : '460px', borderRadius: '20px 26px 20px 26px', border: '3px solid var(--ink)', boxShadow: 'var(--sh-sm)', overflow: 'hidden' };
+    const canvasStyle = {
+      display: 'block', width: '100%', height: '100%', background: '#ffffff',
+      touchAction: 'none', cursor: amDrawer ? (s.tool === 'fill' ? 'pointer' : 'crosshair') : 'not-allowed',
+    };
+
+    const showWaitingForPick = s.phase === 'picking' && !amDrawer;
+    const showPickDialog = s.phase === 'picking' && amDrawer;
+    const dialogAlign = isMobileLayout ? 'sheet' : 'center';
+    const dialogMaxW = 480;
+
+    const CHOICE_TILTS = [-3, 2, -1.5];
+    const wordChoiceButtons = (s.wordChoices || []).map((w, i) => ({
+      word: w, display: w.toUpperCase(),
+      style: {
+        textAlign: 'center', padding: '18px', borderRadius: '16px 20px 16px 20px', border: '2.5px solid var(--ink)',
+        background: 'var(--surface-2)', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '26px',
+        color: 'var(--ink)', cursor: 'pointer', transform: 'rotate(' + (CHOICE_TILTS[i] || 0) + 'deg)',
+        boxShadow: 'var(--sh-sm)', transition: 'transform .15s var(--ease), box-shadow .15s var(--ease)',
+      },
+      hoverStyle: { transform: 'rotate(0deg) scale(1.04) translateY(-2px)', boxShadow: 'var(--sh-md)', borderColor: 'var(--accent)' },
+    }));
+
+    const turnResultRows = (s.turnResults || []).map((r) => ({
+      id: r.id, name: r.name, total: r.total,
+      deltaText: (r.delta > 0 ? '+' : '') + r.delta,
+      deltaTone: r.delta > 0 ? 'pos' : 'neutral',
+    }));
+    const secretWordDisplay = (s.secretWord || '').toUpperCase();
+
+    const PODIUM_ORDER = [1, 0, 2];
+    const MEDALS = ['🥇', '🥈', '🥉'];
+    const PODIUM_H = ['92px', '124px', '72px'];
+    const top3 = sortedPlayers.slice(0, 3);
+    const podium = PODIUM_ORDER.filter((idx) => idx < top3.length).map((idx) => {
+      const p = top3[idx];
+      return {
+        id: p.id, name: p.name, score: p.score, rank: idx + 1, medal: MEDALS[idx],
+        colStyle: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '112px' },
+        blockStyle: {
+          marginTop: '10px', width: '100%', height: PODIUM_H[idx],
+          background: idx === 0 ? 'var(--accent)' : 'var(--surface-2)',
+          border: '2.5px solid var(--ink)',
+          borderRadius: '14px 18px 0 0',
+          color: idx === 0 ? '#fff' : 'var(--ink-2)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '8px',
+          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '28px',
+          boxShadow: 'var(--sh-sm)',
+        },
+        ...(p.id === 'p0' ? meAvatarFields : noAvatarOverrideFields),
+      };
+    });
+    const restStandings = sortedPlayers.slice(3).map((p, i) => ({
+      id: p.id, rank: i + 4, name: p.name, score: p.score,
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '12px', background: 'var(--surface-2)', border: '2px solid var(--ink)' },
+      ...(p.id === 'p0' ? meAvatarFields : noAvatarOverrideFields),
+    }));
+    const hasMoreStandings = restStandings.length > 0;
+    const winnerName = sortedPlayers.length ? sortedPlayers[0].name : '';
+    const roundsLabel = totalRoundsDisplay === 1 ? '1 round' : `${totalRoundsDisplay} rounds`;
+    const previewName = (s.nameInput || '').trim() || 'Mara';
+
+    let lobbyPlayers = [], allJoined = false;
+    if (isLobby) {
+      if (s.isHost) {
+        allJoined = s.lobbyJoinedIds.length >= PRESET_NAMES.length;
+        lobbyPlayers = [{ id: 'you', name: previewName, badgeText: '👑 Host', badgeTone: 'accent', ...meAvatarFields }].concat(
+          PRESET_NAMES.map((n, i) => {
+            const pid = 'p' + (i + 1);
+            const joined = s.lobbyJoinedIds.indexOf(pid) !== -1;
+            return { id: pid, name: n, badgeText: joined ? '✅ Joined' : 'Joining…', badgeTone: joined ? 'pos' : 'neutral', ...noAvatarOverrideFields };
+          })
+        );
+      } else {
+        allJoined = true;
+        lobbyPlayers = [
+          { id: 'priya', name: 'Priya', badgeText: '👑 Host', badgeTone: 'accent', ...noAvatarOverrideFields },
+          { id: 'you', name: previewName, badgeText: 'You', badgeTone: 'pos', ...meAvatarFields },
+          { id: 'theo', name: 'Theo', badgeText: '✅ Joined', badgeTone: 'pos', ...noAvatarOverrideFields },
+          { id: 'sam', name: 'Sam', badgeText: '✅ Joined', badgeTone: 'pos', ...noAvatarOverrideFields },
+        ];
+      }
+    }
+    const lobbyTitle = s.isHost ? 'Invite your friends! 🎉' : "You're in! 🎉";
+    const startButtonLabel = allJoined ? '▶ Start game' : 'Waiting for players…';
+    const startDisabled = !allJoined;
+    const startButtonStyleObj = chunkyBtn({ block: true, disabled: startDisabled });
+    const isJoinerWaiting = isLobby && !s.isHost;
+    const joinButtonLabel = s.joining ? 'Joining…' : 'Join room';
+    const joinButtonStyle = chunkyBtn({ block: true, disabled: s.joining });
+
+    return {
+      isHome, isGame, isFinal, isActiveGame, isMobileLayout, isDesktopLayout,
+      isJoinScreen, isLobby, isHost: s.isHost, isJoinerWaiting,
+      theme: s.theme, handleThemeChange: this.handleThemeChange,
+      roundsLabel,
+      nameInput: s.nameInput, handleNameChange: this.handleNameChange, handleNameKeyDown: this.handleNameKeyDown,
+      previewName, startGame: this.startGame,
+      goToCreateRoom: this.goToCreateRoom, goToJoinScreen: this.goToJoinScreen, goHome: this.goHome,
+      joinCodeInput: s.joinCodeInput, handleJoinCodeChange: this.handleJoinCodeChange, handleJoinCodeKeyDown: this.handleJoinCodeKeyDown,
+      submitJoinCode: this.submitJoinCode, joining: s.joining, joinButtonLabel, joinButtonStyle,
+      roomCode: s.roomCode, copyInviteLink: this.copyInviteLink,
+      lobbyPlayers, lobbyTitle, allJoined, startButtonLabel, startButtonStyleObj, startDisabled,
+      switcherPlayers, switchTo: this.switchTo, leaveHome: this.leaveHome,
+      round: s.round, totalRoundsDisplay,
+      roleBadgeText, roleBadgeTone,
+      showWordRow, wordSlots,
+      timerDashOffset, timerCirc: CIRC, timerColor, timerPillStyle, timerRowStyle,
+      drawSecondsLeftDisplay: s.drawSecondsLeft,
+      scoreboardPlayers,
+      canvasRef: this.canvasRef, canvasWrapRef: this.canvasWrapRef, canvasWrapStyle, canvasStyle,
+      handlePointerDown: this.handlePointerDown, handlePointerMove: this.handlePointerMove, handlePointerUp: this.handlePointerUp,
+      showWaitingForPick, currentDrawerName, switchToDrawer: this.switchToDrawer,
+      toolbarStyle, toolOptions, tool: s.tool, setTool: this.setTool,
+      brushSizeOptions, handleSizeClick: this.handleSizeClick,
+      colorSwatches, handleSwatchClick: this.handleSwatchClick,
+      toolsDisabled, sizeControlsDisabled, undo: this.undo, clearCanvas: this.clearCanvas,
+      chatScrollRef: this.chatScrollRef, chatDisplay,
+      chatInput: s.chatInput, handleChatChange: this.handleChatChange, handleChatKeyDown: this.handleChatKeyDown,
+      chatPlaceholder, chatDisabled, submitGuess: this.submitGuess, sendButtonStyle,
+      showPickDialog, pickSecondsLeft: s.pickSecondsLeft, wordChoiceButtons, handlePickWord: this.handlePickWord,
+      dialogAlign, dialogMaxW,
+      isReveal: s.phase === 'reveal', secretWordDisplay, turnResultRows,
+      revealSecondsLeft: s.revealSecondsLeft, advanceTurn: this.advanceTurn,
+      podium, restStandings, hasMoreStandings, winnerName, playAgain: this.playAgain,
+      myAvatarSrc, myAvatarForceIcon, myAvatarForceTint, avatarEditBadgeStyle,
+      openAvatarEditor: this.openAvatarEditor, closeAvatarEditor: this.closeAvatarEditor,
+      showAvatarEditor: s.showAvatarEditor, avatarEditorTab: s.avatarEditorTab, setAvatarEditorTab: this.setAvatarEditorTab,
+      isGalleryTab, isDrawTab, avatarTabOptions, avatarDialogAlign,
+      galleryOptions, pickGalleryIcon: this.pickGalleryIcon,
+      avatarCanvasRef: this.avatarCanvasRef,
+      handleAvatarPointerDown: this.handleAvatarPointerDown, handleAvatarPointerMove: this.handleAvatarPointerMove, handleAvatarPointerUp: this.handleAvatarPointerUp,
+      avatarColorSwatches, handleAvatarSwatchClick: this.handleAvatarSwatchClick,
+      avatarBrushOptions, handleAvatarSizeClick: this.handleAvatarSizeClick,
+      avatarEraserBtnStyle, toggleAvatarEraser: this.toggleAvatarEraser,
+      avatarToolBtnStyle, undoAvatarStroke: this.undoAvatarStroke, clearAvatarCanvas: this.clearAvatarCanvas,
+      saveAvatarBtnStyle, saveCustomAvatar: this.saveCustomAvatar,
+      hasCustomAvatarSet, resetAvatarToDefault: this.resetAvatarToDefault,
+      toasts: s.toasts,
+      confettiRef: this.confettiRef,
+    };
+  }
+}
+</script>
+</body>
+</html>

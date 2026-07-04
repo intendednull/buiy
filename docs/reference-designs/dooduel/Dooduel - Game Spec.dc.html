@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/fonts.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/colors.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/typography.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/spacing.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/elevation.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/tokens/motion.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/base.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/components.css">
+  <link rel="stylesheet" href="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/styles.css">
+  <script src="_ds/protokit-design-system-47e616f7-0ce0-4ca7-937a-65e67e36862f/_ds_bundle.js"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--canvas); }
+    .toc-link:hover { color: var(--accent) !important; }
+    .toc-link:hover .toc-dot { opacity: 1 !important; }
+  </style>
+</helmet>
+<div data-screen-label="Spec" style="--accent:#5b46e5;--accent-press:#4a37c4;--accent-tint:#eae6fb;font-family:var(--font-sans);color:var(--ink);min-height:100vh;background:var(--canvas);padding:48px 24px 96px;">
+<article style="max-width:880px;margin:0 auto;background:var(--surface);border:1px solid var(--hair);border-radius:var(--r-lg);box-shadow:var(--sh-sm);padding:56px 64px 64px;">
+
+  <!-- ===== MASTHEAD ===== -->
+  <div style="display:flex;align-items:center;gap:10px;font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);">
+    <span style="width:22px;height:22px;border-radius:6px;background:var(--accent);display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:13px;">✎</span>
+    Open-source game spec · v1.1
+  </div>
+  <h1 style="margin:18px 0 0;font-family:var(--font-display);font-size:40px;line-height:1.05;font-weight:700;letter-spacing:-0.03em;color:var(--ink);">Dooduel — draw, guess, repeat</h1>
+  <p style="margin:14px 0 0;font-size:17px;line-height:1.55;color:var(--ink-2);max-width:60ch;">A complete feature spec for a free, open-source clone of <strong style="color:var(--ink);font-weight:600;">skribbl.io</strong> — the multiplayer drawing &amp; guessing game. This is our shared reference: it maps the full game, then carves out a focused MVP for the interactive prototype.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:22px;">
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="accent" hint-size="auto,24px">Reference: skribbl.io</x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" hint-size="auto,24px">Genre: party / pictionary</x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" hint-size="auto,24px">2–12 players</x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" hint-size="auto,24px">Browser · desktop + mobile</x-import>
+  </div>
+  <div style="margin-top:10px;">
+    <a href="Dooduel Prototype.dc.html" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--accent);text-decoration:none;">→ Open the interactive prototype</a>
+  </div>
+
+  <!-- ===== AT A GLANCE ===== -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:32px;">
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Card" pad="true" tone="2" hint-size="100%,84px">
+      <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);">Players</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--ink);margin-top:4px;">2–12</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">up to ~20 in private</div>
+    </x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Card" pad="true" tone="2" hint-size="100%,84px">
+      <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);">Draw time</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--ink);margin-top:4px;">80s</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">adjustable 15–240s</div>
+    </x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Card" pad="true" tone="2" hint-size="100%,84px">
+      <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);">Rounds</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--ink);margin-top:4px;">3</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">adjustable 2–10</div>
+    </x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Card" pad="true" tone="2" hint-size="100%,84px">
+      <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);">Session</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--ink);margin-top:4px;">~5–15m</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">scales with settings</div>
+    </x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Card" pad="true" tone="2" hint-size="100%,84px">
+      <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);">Account</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--ink);margin-top:4px;">None</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">pick a name &amp; play</div>
+    </x-import>
+    <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Card" pad="true" tone="2" hint-size="100%,84px">
+      <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);">Win condition</div>
+      <div style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--ink);margin-top:4px;">Most pts</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">at end of all rounds</div>
+    </x-import>
+  </div>
+
+  <!-- ===== TOC ===== -->
+  <nav style="margin-top:32px;border:1px solid var(--hair);border-radius:12px;padding:18px 22px;background:var(--surface-2);">
+    <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;">Contents</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 28px;">
+      <a class="toc-link" href="#s1" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">01</span>Concept &amp; objective</a>
+      <a class="toc-link" href="#s2" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">02</span>The core loop</a>
+      <a class="toc-link" href="#s3" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">03</span>Game flow &amp; states</a>
+      <a class="toc-link" href="#s4" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">04</span>Roles: drawer vs guesser</a>
+      <a class="toc-link" href="#s5" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">05</span>Scoring</a>
+      <a class="toc-link" href="#s6" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">06</span>Words &amp; hints</a>
+      <a class="toc-link" href="#s7" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">07</span>Drawing tools</a>
+      <a class="toc-link" href="#s8" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">08</span>Chat &amp; guessing</a>
+      <a class="toc-link" href="#s9" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">09</span>Social &amp; moderation</a>
+      <a class="toc-link" href="#s10" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">10</span>Room settings</a>
+      <a class="toc-link" href="#s11" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">11</span>Screen inventory</a>
+      <a class="toc-link" href="#s12" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">12</span>MVP scope for the prototype</a>
+      <a class="toc-link" href="#s13" style="display:flex;gap:10px;font-size:14px;color:var(--ink-2);text-decoration:none;align-items:baseline;"><span class="toc-dot" style="font-family:var(--font-mono);color:var(--accent);opacity:.7;">13</span>Open decisions</a>
+    </div>
+  </nav>
+
+  <!-- ===== 01 CONCEPT ===== -->
+  <section id="s1" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">01</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Concept &amp; objective</h2>
+    </header>
+    <p style="margin:14px 0 0;font-size:15px;line-height:1.65;color:var(--ink-2);">Dooduel is an online, real-time <strong style="color:var(--ink);font-weight:600;">pictionary</strong>. Each turn, one player is the <strong style="color:var(--ink);font-weight:600;">drawer</strong> and is given a secret word to sketch on a shared canvas. Everyone else are <strong style="color:var(--ink);font-weight:600;">guessers</strong> who race to type the word into chat. The faster you guess, the more points you score; the more people who guess your drawing (and the faster), the more the drawer scores.</p>
+    <p style="margin:12px 0 0;font-size:15px;line-height:1.65;color:var(--ink-2);">Turns rotate so everyone draws. After a set number of rounds, the player with the <strong style="color:var(--ink);font-weight:600;">most total points wins</strong>. It's light, fast, and chaotic — equal parts skill and comedy. No download, no account: pick a name and play.</p>
+  </section>
+
+  <!-- ===== 02 CORE LOOP ===== -->
+  <section id="s2" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">02</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">The core loop</h2>
+    </header>
+    <p style="margin:14px 0 18px;font-size:15px;line-height:1.65;color:var(--ink-2);">Three nested levels. A <strong style="color:var(--ink);font-weight:600;">game</strong> is several rounds; a <strong style="color:var(--ink);font-weight:600;">round</strong> gives every player exactly one turn to draw; a <strong style="color:var(--ink);font-weight:600;">turn</strong> runs three phases on a timer.</p>
+
+    <div style="border:1px solid var(--hair);border-radius:12px;padding:16px;background:var(--surface-2);">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><span style="font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);">Game</span><span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">finishes with a winner</span></div>
+      <div style="border-left:3px solid var(--accent);border-radius:0 10px 10px 0;background:var(--surface);padding:14px 16px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><span style="font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);">Round</span><span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">× 2–10 · repeats until done</span></div>
+        <div style="border-left:3px solid color-mix(in srgb, var(--accent) 55%, var(--surface));border-radius:0 10px 10px 0;background:var(--surface-2);padding:14px 16px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><span style="font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);">Turn</span><span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">× 1 per player</span></div>
+          <div style="display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;">
+            <div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:12px 14px;">
+              <div style="font-size:14px;font-weight:600;color:var(--ink);">1 · Pick a word</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.45;">Drawer chooses 1 of 3 words</div>
+            </div>
+            <div style="display:flex;align-items:center;color:var(--faint);font-size:18px;">→</div>
+            <div style="flex:1.4;min-width:170px;background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:12px 14px;">
+              <div style="font-size:14px;font-weight:600;color:var(--ink);">2 · Draw &amp; guess</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.45;">Timer runs · strokes stream live · guesses fly in chat · hints reveal</div>
+            </div>
+            <div style="display:flex;align-items:center;color:var(--faint);font-size:18px;">→</div>
+            <div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:12px 14px;">
+              <div style="font-size:14px;font-weight:600;color:var(--ink);">3 · Reveal &amp; score</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.45;">Word shown · points tallied</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p style="margin:14px 0 0;font-size:13.5px;line-height:1.6;color:var(--muted);">A turn ends early once <strong style="color:var(--ink-2);font-weight:600;">everyone has guessed</strong> — you don't always wait for the full clock.</p>
+  </section>
+
+  <!-- ===== 03 FLOW ===== -->
+  <section id="s3" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">03</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Game flow &amp; states</h2>
+    </header>
+    <p style="margin:14px 0 18px;font-size:15px;line-height:1.65;color:var(--ink-2);">The screens the player moves through, start to finish. Two entry paths — quick public match, or a private room you configure and share.</p>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+      <div style="background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;color:var(--ink);">Home<div style="font-size:11px;font-weight:400;color:var(--muted);">name · avatar · language</div></div>
+      <span style="color:var(--faint);">→</span>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div style="background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--ink-2);"><strong style="color:var(--ink);">Play</strong> — public matchmaking</div>
+        <div style="background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--ink-2);"><strong style="color:var(--ink);">Create private</strong> → Lobby</div>
+      </div>
+      <span style="color:var(--faint);">→</span>
+      <div style="background:var(--accent-tint);border:1px solid color-mix(in srgb,var(--accent) 30%,var(--surface));border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;color:var(--accent-press);">In-game loop<div style="font-size:11px;font-weight:400;color:var(--accent-press);opacity:.85;">turns × rounds (§02)</div></div>
+      <span style="color:var(--faint);">→</span>
+      <div style="background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;color:var(--ink);">Final results<div style="font-size:11px;font-weight:400;color:var(--muted);">podium · play again</div></div>
+    </div>
+    <h3 style="margin:24px 0 0;font-size:13px;font-weight:600;color:var(--ink);">Notable states &amp; overlays</h3>
+    <ul style="margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px;">
+      <li style="display:flex;gap:10px;font-size:14.5px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Lobby (private):</strong> player list, host's settings panel, copy-able invite link, "Start game" gated to host.</span></li>
+      <li style="display:flex;gap:10px;font-size:14.5px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Word-pick overlay:</strong> shown only to the drawer at the start of their turn (3 choices + a countdown to auto-pick).</span></li>
+      <li style="display:flex;gap:10px;font-size:14.5px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">"Waiting for drawer":</strong> guessers see a held state while the drawer chooses.</span></li>
+      <li style="display:flex;gap:10px;font-size:14.5px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Turn-end reveal:</strong> the word, who got it, and the points each player gained this turn.</span></li>
+    </ul>
+  </section>
+
+  <!-- ===== 04 ROLES ===== -->
+  <section id="s4" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">04</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Roles: drawer vs guesser</h2>
+    </header>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;">
+      <div style="border:1px solid var(--hair);border-radius:12px;padding:18px 20px;">
+        <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:600;">The drawer</div>
+        <div style="font-size:15px;font-weight:600;color:var(--ink);margin-top:4px;">One per turn</div>
+        <ul style="margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;">
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--accent);flex:none;">›</span>Picks 1 of 3 offered words</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--accent);flex:none;">›</span>Sees the full word at top</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--accent);flex:none;">›</span>Draws with brush, colors, fill, eraser, undo, clear</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--accent);flex:none;">›</span><strong style="color:var(--ink);font-weight:600;">May not type letters / spell the word</strong></li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--accent);flex:none;">›</span>Can't chat with active guessers mid-turn</li>
+        </ul>
+      </div>
+      <div style="border:1px solid var(--hair);border-radius:12px;padding:18px 20px;">
+        <div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);font-weight:600;">The guessers</div>
+        <div style="font-size:15px;font-weight:600;color:var(--ink);margin-top:4px;">Everyone else</div>
+        <ul style="margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;">
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--ink-2);flex:none;">›</span>Watch strokes appear live</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--ink-2);flex:none;">›</span>Type unlimited guesses in chat</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--ink-2);flex:none;">›</span>See letter-count slots + revealed hints</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--ink-2);flex:none;">›</span>On a correct guess: <strong style="color:var(--ink);font-weight:600;">locked in</strong>, word hidden from them no more</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--ink-2);flex:none;">›</span>After guessing, chat moves to a spoiler-safe stream</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 05 SCORING ===== -->
+  <section id="s5" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">05</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Scoring</h2>
+    </header>
+    <p style="margin:14px 0 16px;font-size:15px;line-height:1.65;color:var(--ink-2);">Both sides are rewarded, so drawing well and guessing fast both matter. Exact constants are tunable; the model below is representative of skribbl's behavior.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div style="border:1px solid var(--hair);border-radius:12px;padding:18px 20px;">
+        <div style="font-size:14px;font-weight:600;color:var(--ink);">Guessers</div>
+        <p style="margin:8px 0 0;font-size:13.5px;line-height:1.55;color:var(--ink-2);">Points scale with <strong style="color:var(--ink);font-weight:600;">how much time is left</strong> when you guess and your <strong style="color:var(--ink);font-weight:600;">order</strong> — the first correct guess scores highest, each later guesser a little less.</p>
+      </div>
+      <div style="border:1px solid var(--hair);border-radius:12px;padding:18px 20px;">
+        <div style="font-size:14px;font-weight:600;color:var(--ink);">Drawer</div>
+        <p style="margin:8px 0 0;font-size:13.5px;line-height:1.55;color:var(--ink-2);">Earns based on <strong style="color:var(--ink);font-weight:600;">how many</strong> players guessed correctly and <strong style="color:var(--ink);font-weight:600;">how quickly</strong> — a clear, fast-read drawing pays off.</p>
+      </div>
+    </div>
+    <h3 style="margin:22px 0 0;font-size:13px;font-weight:600;color:var(--ink);">Edge cases</h3>
+    <ul style="margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;">
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Nobody guesses:</strong> no points for anyone that turn — guessers <em>and</em> drawer.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Drawer leaves mid-turn:</strong> turn is voided, no points awarded.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Wrong guesses:</strong> no penalty — but they're visible to others and can accidentally help.</span></li>
+    </ul>
+  </section>
+
+  <!-- ===== 06 WORDS & HINTS ===== -->
+  <section id="s6" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">06</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Words &amp; hints</h2>
+      <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="warn" hint-size="auto,22px">Partial in MVP</x-import>
+    </header>
+    <h3 style="margin:16px 0 0;font-size:13px;font-weight:600;color:var(--ink);">Word selection</h3>
+    <p style="margin:8px 0 0;font-size:14.5px;line-height:1.6;color:var(--ink-2);">At the start of a turn the drawer is offered <strong style="color:var(--ink);font-weight:600;">3 random words</strong> and picks one. If they dawdle, one is auto-chosen when the pick-timer expires.</p>
+    <h3 style="margin:20px 0 0;font-size:13px;font-weight:600;color:var(--ink);">Hint reveal</h3>
+    <p style="margin:8px 0 8px;font-size:14.5px;line-height:1.6;color:var(--ink-2);">Guessers see one underscore per letter (spaces shown). As the clock ticks down, a configurable number of letters flip open:</p>
+    <div style="display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:14px 16px;font-family:var(--font-mono);">
+      <span style="font-size:22px;letter-spacing:6px;color:var(--ink);font-weight:600;">_ A _ _ _ _ _</span>
+      <span style="font-size:12px;color:var(--muted);margin-left:auto;">7 letters · 1 hint revealed</span>
+    </div>
+    <h3 style="margin:22px 0 0;font-size:13px;font-weight:600;color:var(--ink);">Word modes (advanced)</h3>
+    <ul style="margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;">
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Normal</strong> — a single word from the pool.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Hidden</strong> — the letter count isn't shown.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Combination</strong> — two pooled words joined (e.g. "apple + tree").</span></li>
+    </ul>
+    <p style="margin:14px 0 0;font-size:13.5px;line-height:1.6;color:var(--muted);">Languages: original ships ~26. Custom word lists let hosts theme a room (movies, inside jokes, class vocab).</p>
+  </section>
+
+  <!-- ===== 07 TOOLS ===== -->
+  <section id="s7" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">07</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Drawing tools</h2>
+      <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">In MVP</x-import>
+    </header>
+    <p style="margin:14px 0 16px;font-size:15px;line-height:1.65;color:var(--ink-2);">A deliberately small, approachable toolset — the point is communication, not fine art.</p>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Brush</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">freehand stroke, the default tool</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Brush sizes</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">~4 steps, small → extra-large</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Color palette</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">~20+ swatches incl. black/white</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Fill / bucket</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">flood-fill an enclosed area</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Eraser</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">paint back to canvas white</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Undo · Clear</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">step back, or wipe the canvas</div></div>
+    </div>
+    <p style="margin:14px 0 0;font-size:13.5px;line-height:1.6;color:var(--muted);">Input: mouse or touch. Desktop keyboard shortcuts speed up tool/color switching. Only the drawer can draw; strokes broadcast to everyone in real time.</p>
+  </section>
+
+  <!-- ===== 08 CHAT ===== -->
+  <section id="s8" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">08</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Chat &amp; guessing</h2>
+      <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">In MVP</x-import>
+    </header>
+    <p style="margin:14px 0 16px;font-size:15px;line-height:1.65;color:var(--ink-2);">Guessing happens entirely in one chat box — it doubles as the game's social heartbeat.</p>
+    <ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px;">
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span>Type a word; an <strong style="color:var(--ink);font-weight:600;">exact match</strong> marks you correct and is hidden from others so it isn't spoiled.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">Close-guess nudge:</strong> a near-miss gets a private "so close!" hint.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span>Once correct, you (and the drawer) drop into a <strong style="color:var(--ink);font-weight:600;">spoiler-safe side channel</strong> invisible to players still guessing.</span></li>
+      <li style="display:flex;gap:10px;font-size:14px;line-height:1.55;color:var(--ink-2);"><span style="color:var(--accent);font-weight:700;flex:none;">›</span><span><strong style="color:var(--ink);font-weight:600;">System lines</strong> mark turn start/end, who guessed, and the final word reveal.</span></li>
+    </ul>
+  </section>
+
+  <!-- ===== 09 SOCIAL ===== -->
+  <section id="s9" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">09</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Social &amp; moderation</h2>
+      <x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" hint-size="auto,22px">Light in MVP</x-import>
+    </header>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px;">
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Like / dislike</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">react to a drawing — cosmetic, no score effect</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Votekick</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">group vote to remove a disruptive player</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Avatars</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">customizable color, eyes, mouth</div></div>
+      <div style="border:1px solid var(--hair);border-radius:10px;padding:13px 16px;"><div style="font-size:14px;font-weight:600;color:var(--ink);">Live scoreboard</div><div style="font-size:12.5px;color:var(--muted);margin-top:2px;">rank, score, status (drawing / guessed / thinking)</div></div>
+    </div>
+  </section>
+
+  <!-- ===== 10 SETTINGS ===== -->
+  <section id="s10" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">10</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Room settings</h2>
+    </header>
+    <p style="margin:14px 0 16px;font-size:15px;line-height:1.65;color:var(--ink-2);">What a private-room host can configure before starting.</p>
+    <div style="border:1px solid var(--hair);border-radius:12px;overflow:hidden;">
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;background:var(--surface-2);">
+        <div style="padding:10px 16px;font-family:var(--font-mono);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);">Setting</div>
+        <div style="padding:10px 16px;font-family:var(--font-mono);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);">Range</div>
+        <div style="padding:10px 16px;font-family:var(--font-mono);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);">Default</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Players</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">2–20</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">8</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Draw time</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">15–240 seconds</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">80s</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Rounds</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">2–10</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">3</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Word mode</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">Normal / Hidden / Combination</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">Normal</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Word count</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">1–5 choices offered</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">3</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Hints</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">0–5 letters revealed</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">2</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Language</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">~26 supported</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">English</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Custom words</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">comma-separated · ≤30 chars each</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">—</div></div>
+      <div style="display:grid;grid-template-columns:1.2fr 1.8fr .8fr;border-top:1px solid var(--hair);"><div style="padding:11px 16px;font-size:14px;font-weight:500;color:var(--ink);">Use custom only</div><div style="padding:11px 16px;font-size:14px;color:var(--ink-2);">toggle</div><div style="padding:11px 16px;font-family:var(--font-mono);font-size:13px;color:var(--ink-2);">off</div></div>
+    </div>
+  </section>
+
+  <!-- ===== 11 SCREENS ===== -->
+  <section id="s11" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">11</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Screen inventory</h2>
+    </header>
+    <p style="margin:14px 0 16px;font-size:15px;line-height:1.65;color:var(--ink-2);">Every distinct surface we'd design. The badge marks what the prototype will cover.</p>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--hair);border-radius:10px;padding:12px 16px;"><span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);width:18px;">A</span><div style="flex:1;"><span style="font-size:14px;font-weight:600;color:var(--ink);">Home / entry</span><span style="font-size:12.5px;color:var(--muted);"> — name, avatar, language, Play / Create private</span></div><x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">MVP</x-import></div>
+      <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--hair);border-radius:10px;padding:12px 16px;"><span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);width:18px;">B</span><div style="flex:1;"><span style="font-size:14px;font-weight:600;color:var(--ink);">Lobby (private room)</span><span style="font-size:12.5px;color:var(--muted);"> — player list, settings, invite link, start</span></div><x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" hint-size="auto,22px">Later</x-import></div>
+      <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--hair);border-radius:10px;padding:12px 16px;"><span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);width:18px;">C</span><div style="flex:1;"><span style="font-size:14px;font-weight:600;color:var(--ink);">In-game</span><span style="font-size:12.5px;color:var(--muted);"> — canvas + toolbar + word/timer header + scoreboard + chat</span></div><x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">MVP</x-import></div>
+      <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--hair);border-radius:10px;padding:12px 16px;"><span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);width:18px;">D</span><div style="flex:1;"><span style="font-size:14px;font-weight:600;color:var(--ink);">Word-pick overlay</span><span style="font-size:12.5px;color:var(--muted);"> — drawer's 3 choices + countdown</span></div><x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">MVP</x-import></div>
+      <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--hair);border-radius:10px;padding:12px 16px;"><span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);width:18px;">E</span><div style="flex:1;"><span style="font-size:14px;font-weight:600;color:var(--ink);">Turn-end reveal</span><span style="font-size:12.5px;color:var(--muted);"> — word + points gained</span></div><x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">MVP</x-import></div>
+      <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--hair);border-radius:10px;padding:12px 16px;"><span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);width:18px;">F</span><div style="flex:1;"><span style="font-size:14px;font-weight:600;color:var(--ink);">Final results / podium</span><span style="font-size:12.5px;color:var(--muted);"> — winner + full standings + play again</span></div><x-import component-from-global-scope="ProtokitDesignSystem_47e616.Badge" tone="pos" hint-size="auto,22px">MVP</x-import></div>
+    </div>
+  </section>
+
+  <!-- ===== 12 MVP SCOPE ===== -->
+  <section id="s12" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">12</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">MVP scope for the prototype</h2>
+    </header>
+    <p style="margin:14px 0 18px;font-size:15px;line-height:1.65;color:var(--ink-2);">Your ask: a <strong style="color:var(--ink);font-weight:600;">simple, full interactive prototype</strong> — multiple players, sketching, guessing. Here's the line I'd draw so it feels like a real, complete game while staying buildable in a single file.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div style="border:1px solid color-mix(in srgb,var(--pos) 35%,var(--hair));border-radius:12px;padding:18px 20px;background:color-mix(in srgb,var(--pos-tint) 50%,var(--surface));">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:18px;height:18px;border-radius:50%;background:var(--pos);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:12px;">✓</span><span style="font-size:13px;font-weight:600;color:var(--ink);text-transform:uppercase;letter-spacing:.06em;font-family:var(--font-mono);">In the prototype</span></div>
+        <ul style="margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;">
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span>Home: enter name + pick avatar, one click to play</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span>Working canvas: brush, fill/bucket, sizes, color palette, eraser, undo, clear</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span>Timer + word with letter-slot hints revealing over time</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span>Chat with real guess detection → correct guess locks &amp; scores</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span><strong style="color:var(--ink);font-weight:600;">Dev-only "playing as" switcher</strong> — multiplayer is mocked; one human seat-hops between every player instead of bots</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span>Turn rotation, scoring, turn-end reveal, final podium</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--ink-2);"><span style="color:var(--pos);flex:none;font-weight:700;">›</span>Live scoreboard + drawer/guesser role states</li>
+        </ul>
+      </div>
+      <div style="border:1px solid var(--hair);border-radius:12px;padding:18px 20px;background:var(--surface-2);">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:18px;height:18px;border-radius:50%;background:var(--faint);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:12px;">→</span><span style="font-size:13px;font-weight:600;color:var(--ink-2);text-transform:uppercase;letter-spacing:.06em;font-family:var(--font-mono);">Deferred (full game)</span></div>
+        <ul style="margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;">
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--muted);"><span style="color:var(--faint);flex:none;font-weight:700;">›</span>Real networked multiplayer + rooms + invite links</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--muted);"><span style="color:var(--faint);flex:none;font-weight:700;">›</span>Public matchmaking</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--muted);"><span style="color:var(--faint);flex:none;font-weight:700;">›</span>Word modes (hidden / combination), custom word-list editor</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--muted);"><span style="color:var(--faint);flex:none;font-weight:700;">›</span>Full color set (20+), languages beyond English</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--muted);"><span style="color:var(--faint);flex:none;font-weight:700;">›</span>Votekick, like/dislike, avatar editor</li>
+          <li style="display:flex;gap:9px;font-size:13.5px;line-height:1.5;color:var(--muted);"><span style="color:var(--faint);flex:none;font-weight:700;">›</span>Accounts, profiles, persistent stats</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 13 OPEN DECISIONS ===== -->
+  <section id="s13" style="scroll-margin-top:24px;">
+    <header style="display:flex;align-items:baseline;gap:14px;border-top:1px solid var(--hair);padding-top:28px;margin-top:44px;">
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--accent);letter-spacing:.04em;">13</span>
+      <h2 style="margin:0;font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-0.02em;color:var(--ink);flex:1;">Key decisions</h2>
+    </header>
+    <p style="margin:14px 0 16px;font-size:15px;line-height:1.65;color:var(--ink-2);">These forks are settled — kept here so future edits stay consistent with what's actually built, not with earlier options that were considered and dropped.</p>
+    <ol style="margin:0;padding:0;list-style:none;counter-reset:dq;display:flex;flex-direction:column;gap:12px;">
+      <li style="border:1px solid color-mix(in srgb,var(--pos) 32%,var(--hair));border-radius:12px;padding:16px 18px;background:color-mix(in srgb,var(--pos-tint) 40%,var(--surface));">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:16px;height:16px;border-radius:50%;background:var(--pos);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none;">✓</span><div style="font-size:14.5px;font-weight:600;color:var(--ink);flex:1;">1 · How do we fake "multiple players" in one file?</div><span style="font-family:var(--font-mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--pos);">Decided</span></div>
+        <p style="margin:8px 0 0 24px;font-size:13.5px;line-height:1.55;color:var(--ink-2);">No bots. A <strong style="color:var(--ink);font-weight:600;">dev-only "playing as" switcher</strong> lets one human seat-hop between every player — become the drawer to pick &amp; sketch, jump to a guesser seat to answer, jump again to answer as someone else. Canvas, chat, scores and timers are all global state that keeps running no matter who's currently "in the seat."</p>
+      </li>
+      <li style="border:1px solid color-mix(in srgb,var(--pos) 32%,var(--hair));border-radius:12px;padding:16px 18px;background:color-mix(in srgb,var(--pos-tint) 40%,var(--surface));">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:16px;height:16px;border-radius:50%;background:var(--pos);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none;">✓</span><div style="font-size:14.5px;font-weight:600;color:var(--ink);flex:1;">2 · How does the game keep pace with nobody "home" by default?</div><span style="font-family:var(--font-mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--pos);">Decided</span></div>
+        <p style="margin:8px 0 0 24px;font-size:13.5px;line-height:1.55;color:var(--ink-2);">Each new turn auto-jumps the switcher to whoever is drawing next, so picking + drawing never stalls. Guessing is opt-in — manually switch to a guesser seat to answer for them. The same human will always know the secret word once they've seen it as drawer; that's an accepted quirk of solo, perspective-swapped play, not a bug.</p>
+      </li>
+      <li style="border:1px solid color-mix(in srgb,var(--pos) 32%,var(--hair));border-radius:12px;padding:16px 18px;background:color-mix(in srgb,var(--pos-tint) 40%,var(--surface));">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:16px;height:16px;border-radius:50%;background:var(--pos);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none;">✓</span><div style="font-size:14.5px;font-weight:600;color:var(--ink);flex:1;">3 · Visual direction</div><span style="font-family:var(--font-mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--pos);">Decided</span></div>
+        <p style="margin:8px 0 0 24px;font-size:13.5px;line-height:1.55;color:var(--ink-2);">Full character pass, not a Protokit-clean base: locked a single purple accent (light + dark), swapped to a hand-drawn type pairing (Caveat display + Shantell Sans UI), ink-colored sketchy borders with wobbly asymmetric corners, chunky 3D-press buttons, confetti + a podium finale, and emoji-forward copy throughout.</p>
+      </li>
+      <li style="border:1px solid color-mix(in srgb,var(--pos) 32%,var(--hair));border-radius:12px;padding:16px 18px;background:color-mix(in srgb,var(--pos-tint) 40%,var(--surface));">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:16px;height:16px;border-radius:50%;background:var(--pos);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none;">✓</span><div style="font-size:14.5px;font-weight:600;color:var(--ink);flex:1;">4 · Layout target</div><span style="font-family:var(--font-mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--pos);">Decided</span></div>
+        <p style="margin:8px 0 0 24px;font-size:13.5px;line-height:1.55;color:var(--ink-2);">Desktop-first, fixed-width layout: canvas center, scoreboard left, chat right. No responsive/mobile pass in this prototype.</p>
+      </li>
+    </ol>
+    <div style="margin-top:22px;border-top:1px solid var(--hair);padding-top:20px;display:flex;align-items:center;gap:12px;">
+      <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);letter-spacing:.04em;">STATUS</span>
+      <span style="font-size:14px;color:var(--ink-2);">Prototype is being built from this spec — see <a href="Dooduel Prototype.dc.html" style="color:var(--accent);font-weight:600;">Dooduel Prototype.dc.html</a>. If scope changes, update this spec too so the two stay in sync.</span>
+    </div>
+  </section>
+
+</article>
+</div>
+</x-dc>
+</body>
+</html>
