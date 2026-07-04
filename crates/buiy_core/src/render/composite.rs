@@ -192,6 +192,11 @@ pub struct BuiySpecializedPipelines {
     /// (the 2-stop `GradientInstance`), NOT a new `BuiyPrimitiveKind` — the
     /// band/shadow precedent.
     pub gradient: SpecializedRenderPipelines<crate::render::primitive::BuiyGradientPipeline>,
+    /// Raster (textured-quad) (`BuiyRasterPipeline`) specializations, per
+    /// `(format, samples)` (the drawing-canvas seam). A distinct pipeline keyed
+    /// by record (the [`RasterInstance`](crate::render::raster::RasterInstance)),
+    /// NOT a new `BuiyPrimitiveKind` — the band/gradient precedent.
+    pub raster: SpecializedRenderPipelines<crate::render::raster::BuiyRasterPipeline>,
 }
 
 impl FromWorld for CompositePipeline {

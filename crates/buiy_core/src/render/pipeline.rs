@@ -28,6 +28,7 @@ use crate::render::primitive::{
     BuiyBandKey, BuiyBandPipeline, BuiyGradientKey, BuiyGradientPipeline, BuiyPrimitiveKey,
     BuiyPrimitives,
 };
+use crate::render::raster::{BuiyRasterKey, BuiyRasterPipeline};
 
 /// Stable UUID for the rounded-rect shader asset.
 ///
@@ -192,6 +193,12 @@ pub struct BuiyPipeline {
     /// `BuiyGradientPipeline` specializer so the 1x default-format view's
     /// per-view key dedups onto it.
     pub gradient_id: CachedRenderPipelineId,
+    /// The `Raster@Rgba8UnormSrgb@1x` baseline id for the textured-quad pipeline
+    /// (the drawing-canvas seam). Same eager-baseline role as the others (the
+    /// node draws [`BuiyViewPipelines::raster`]); built through the
+    /// `BuiyRasterPipeline` specializer so the 1x default-format view's per-view
+    /// key dedups onto it.
+    pub raster_id: CachedRenderPipelineId,
     /// Static unit-quad vertex buffer (4 verts, TriangleStrip). Created once
     /// at pipeline registration and reused every frame. Phase 0 closeout
     /// scope: vertex emission order matches the `cull_mode: None` setting in
@@ -291,7 +298,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // compiling duplicates. `register` runs at plugin finish, before any
     // `ViewTarget` exists, so the literals stand in for the default view here;
     // a multisampled / HDR view gets its own variant from the prepare pass.
-    let (id, glyph_id, band_id, shadow_id, gradient_id) =
+    let (id, glyph_id, band_id, shadow_id, gradient_id, raster_id) =
         world.resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
             let pipeline_cache = world.resource::<PipelineCache>();
             let quad = pipelines.primitives.specialize(
@@ -345,7 +352,17 @@ pub(crate) fn register(render_app: &mut SubApp) {
                     samples: 1,
                 },
             );
-            (quad, glyph, band, shadow, gradient)
+            // The raster (textured-quad) baseline through its own
+            // `BuiyRasterPipeline` specializer + cache (the drawing-canvas seam).
+            let raster = pipelines.raster.specialize(
+                pipeline_cache,
+                &BuiyRasterPipeline,
+                BuiyRasterKey {
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
+            (quad, glyph, band, shadow, gradient, raster)
         });
     world.insert_resource(BuiyPipeline {
         id,
@@ -353,6 +370,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
         band_id,
         shadow_id,
         gradient_id,
+        raster_id,
         vertex_buffer,
         view_layout,
         atlas_layout,
@@ -385,6 +403,10 @@ pub struct BuiyViewPipelines {
     /// background-gradient draw (parity Wave B1). Drawn AFTER the solid quad,
     /// BEFORE glyphs/bands (over the fill, under text/border).
     pub gradient: CachedRenderPipelineId,
+    /// `Raster @ (view format, view samples)` — the window-pass textured-quad
+    /// (drawing-canvas) draw. Drawn in the fill tier (after quad/gradient, before
+    /// glyphs), each raster node its own `@group(1)` texture + `draw`.
+    pub raster: CachedRenderPipelineId,
 }
 
 /// `RenderSystems::Prepare` system: specialize the view-pass quad + glyph
@@ -439,12 +461,20 @@ pub(crate) fn prepare_buiy_view_pipelines(
             &BuiyGradientPipeline,
             BuiyGradientKey { format, samples },
         );
+        // The raster (textured-quad) variant rides its own specializer/cache too
+        // (the drawing-canvas seam) — a distinct pipeline keyed by record.
+        let raster = pipelines.raster.specialize(
+            &pipeline_cache,
+            &BuiyRasterPipeline,
+            BuiyRasterKey { format, samples },
+        );
         let view_pipelines = BuiyViewPipelines {
             quad,
             glyph,
             band,
             shadow,
             gradient,
+            raster,
         };
         commands.entity(entity).insert(view_pipelines);
     }

@@ -184,6 +184,9 @@ impl Plugin for BuiyRenderPlugin {
             .register_type::<color::ColorToken>()
             .register_type::<color::SystemColorKeyword>()
             .register_type::<components::Icon>()
+            // The raster (textured-quad) canvas primitive (the drawing-canvas
+            // seam). Author-set, so registered here in the main world.
+            .register_type::<raster::RasterImage>()
             .register_type::<components::TextColor>()
             // T7: the caret-color tier-1 override (decoration-and-paint
             // § 6.2). CaretVisual/SelectionVisual are machinery state and
@@ -267,6 +270,16 @@ impl Plugin for BuiyRenderPlugin {
                 "blur.wgsl",
                 bevy::shader::Shader::from_wgsl
             );
+            // The raster (textured-quad) shader (octet ..09, the drawing-canvas
+            // seam). Loaded into the MAIN world like its siblings; the raster
+            // pipeline (raster.rs `BuiyRasterPipeline::specialize`) resolves this
+            // handle through the PipelineCache's extracted GPU mirror.
+            bevy::asset::load_internal_asset!(
+                app,
+                raster::raster_shader_handle(),
+                "raster.wgsl",
+                bevy::shader::Shader::from_wgsl
+            );
         }
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -324,8 +337,17 @@ impl Plugin for BuiyRenderPlugin {
             // so the wholesale-rebuilt glyph carrier stays decoupled (§ 3.5).
             .init_resource::<icon_producer::ExtractedIcons>()
             .init_resource::<icon_producer::ResidentIconKeys>()
+            // Raster (textured-quad canvas) carriers (the drawing-canvas seam):
+            // the per-frame extracted list + the persistent instance buffer.
+            // Init'd here so the prepare/draw work even standalone; the device-
+            // owning `RasterGpu` (the Nearest sampler) inits in `finish`.
+            .init_resource::<raster::ExtractedRasters>()
+            .init_resource::<raster::RasterBuffers>()
             // The per-view extract rework (R5). architecture § 1.2/§ 3/§ 4.
             .add_systems(ExtractSchedule, extract::extract_buiy_nodes)
+            // The raster canvas extract: mirror every `RasterImage` layout node
+            // into `ExtractedRasters` (independent of the node/glyph carriers).
+            .add_systems(ExtractSchedule, raster::extract_buiy_rasters)
             // P0b: record atlas_touch_ops/resident_keys AFTER the glyph producer
             // refreshes `ResidentTextKeys` (the audit-#5 blind-spot counter).
             .add_systems(
@@ -346,6 +368,13 @@ impl Plugin for BuiyRenderPlugin {
             .add_systems(
                 Render,
                 prepare::prepare_buiy_instances.in_set(RenderSystems::Prepare),
+            )
+            // The raster canvas prepare: copy `ExtractedRasters` into the
+            // persistent `RasterBuffers` + upload (its own carrier, no ordering
+            // vs the other Prepare systems — none reads the other's output).
+            .add_systems(
+                Render,
+                raster::prepare_buiy_rasters.in_set(RenderSystems::Prepare),
             )
             // Per-view VIEW-pass pipeline specialization (quad + glyph keyed on
             // the view's attachment format AND `Msaa` sample count — a bare
@@ -410,5 +439,10 @@ impl Plugin for BuiyRenderPlugin {
         // linear clamp sampler, the unit-quad VBO). `finish` for the same reason
         // as the composite half — its `FromWorld` needs the `RenderDevice`.
         blur::register_gpu(render_app);
+        // The device-owning raster half (`RasterGpu`: the Nearest sampler every
+        // raster `@group(1)` bind group uses). `finish` because its `FromWorld`
+        // needs the `RenderDevice`. The `@group(1)` layout is reused from
+        // `BuiyPipeline::atlas_layout` (built in `pipeline::register` above).
+        render_app.init_resource::<raster::RasterGpu>();
     }
 }
