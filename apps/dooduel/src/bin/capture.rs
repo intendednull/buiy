@@ -104,26 +104,29 @@ fn main() {
             .iter(app.world())
             .next()
             .expect("model entity");
-        let mut d = app.world_mut().get_mut::<Dooduel>(e).expect("model");
-        d.game.start_match(
-            "Mara",
-            dooduel::game::Config {
-                bots_enabled: false,
-                ..Default::default()
-            },
-        );
-        d.screen = Screen::InGame;
-        let w = d.game.word_choices[0].clone();
-        d.game.choose_word(w);
-        d.game.tick(Duration::from_secs(0)); // anchor the draw clock
-        d.game.tick(Duration::from_secs(50)); // elapsed 50 > 47 ⇒ first hint reveals
-        let secret = d.game.secret_word.clone();
-        d.game.switch_seat(1); // view as a guesser (blanks + the revealed hint)
-        d.game.apply_guess(2, "windmill"); // a shared WRONG guess (everyone sees it)
-        let near = format!("{secret}{}", secret.chars().last().unwrap_or('s')); // one-off ⇒ near-miss
-        d.game.apply_guess(1, &near); // PRIVATE "So close!" nudge to the viewing seat
-        d.game.apply_guess(3, &secret); // a green CORRECT row
-        drop(d);
+        // Scope the `Mut<Dooduel>` borrow so it ends before `settle`/`capture` reborrow
+        // the world (a no-op `drop()` of a non-Drop `Mut` would not compile-clean).
+        {
+            let mut d = app.world_mut().get_mut::<Dooduel>(e).expect("model");
+            d.game.start_match(
+                "Mara",
+                dooduel::game::Config {
+                    bots_enabled: false,
+                    ..Default::default()
+                },
+            );
+            d.screen = Screen::InGame;
+            let w = d.game.word_choices[0].clone();
+            d.game.choose_word(w);
+            d.game.tick(Duration::from_secs(0)); // anchor the draw clock
+            d.game.tick(Duration::from_secs(50)); // elapsed 50 > 47 ⇒ first hint reveals
+            let secret = d.game.secret_word.clone();
+            d.game.switch_seat(1); // view as a guesser (blanks + the revealed hint)
+            d.game.apply_guess(2, "windmill"); // a shared WRONG guess (everyone sees it)
+            let near = format!("{secret}{}", secret.chars().last().unwrap_or('s')); // one-off ⇒ near-miss
+            d.game.apply_guess(1, &near); // PRIVATE "So close!" nudge to the viewing seat
+            d.game.apply_guess(3, &secret); // a green CORRECT row
+        }
         settle(&mut app);
         capture(
             &mut app,

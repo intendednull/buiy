@@ -15,16 +15,23 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+# `doc = false` on every bin: executables ship no rustdoc (the `dooduel` LIB docs
+# stay), and the generic `capture` bin name collides with the `examples/capture`
+# package's bin under a workspace-wide `cargo doc` — dropping bin docs is the clean
+# root-cause fix (rather than renaming the well-known `capture` invocation).
+
 # Windowed game (needs a display): `cargo run -p dooduel`.
 [[bin]]
 name = "dooduel"
 path = "src/main.rs"
+doc = false
 
 # Headless per-screen GPU capture → PNG (offscreen render-to-texture + readback;
 # needs a real wgpu adapter, no display). The eyeball artifact for design parity.
 [[bin]]
 name = "capture"
 path = "src/bin/capture.rs"
+doc = false
 
 # The multi-agent playtest host (GPU-free, native-only): runs the app + game with
 # a real-time clock and a file protocol under --dir, so N separate agents each
@@ -33,6 +40,7 @@ path = "src/bin/capture.rs"
 [[bin]]
 name = "playtest_host"
 path = "src/bin/playtest_host.rs"
+doc = false
 
 [dependencies]
 # `x11`/`wayland` are Linux-native windowing backends — target-gated below so the
