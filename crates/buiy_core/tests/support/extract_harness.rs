@@ -18,7 +18,7 @@ use buiy_core::render::atlas::{AtlasConfig, AtlasKey, BuiyAtlas, maintain_atlas}
 use buiy_core::render::extract::ExtractedTextQuads;
 use buiy_core::render::prepare::ExtractedGlyphs;
 use buiy_core::text::{
-    BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontsGeneration, GlyphMetaCache,
+    BuiySwashCache, BuiyTextPlugin, FontKeyInterner, FontsGeneration, GlyphDamage, GlyphMetaCache,
     ResidentTextKeys, SharedFontSystem, extract_buiy_glyphs,
 };
 
@@ -108,6 +108,9 @@ impl TextExtractHarness {
         render.insert_resource(fonts);
         render.init_resource::<GlyphChangeLog>();
         render.init_resource::<TextQuadChangeLog>();
+        // Stage B (glyph partial-reextract D1): the producer's Full|Patch
+        // verdict, so the § 12 damage tests can assert the classifier.
+        render.init_resource::<GlyphDamage>();
         // The slot the live main world is swapped into per extract step.
         render.init_resource::<MainWorld>();
 
@@ -181,6 +184,12 @@ impl TextExtractHarness {
 
     pub fn resident_keys(&self) -> Vec<AtlasKey> {
         self.render.resource::<ResidentTextKeys>().keys.clone()
+    }
+
+    /// The Stage B classifier verdict the producer published on the last
+    /// dirty frame (partial-reextract D1; `Full` until the first rebuild).
+    pub fn glyph_damage(&self) -> GlyphDamage {
+        self.render.resource::<GlyphDamage>().clone()
     }
 
     pub fn atlas(&self) -> &BuiyAtlas {

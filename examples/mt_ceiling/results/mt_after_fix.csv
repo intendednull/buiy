@@ -1,0 +1,11 @@
+label,buiy,ui,exec,threads_req,pool_threads,par_entities,par_cost,dirty,frames,min_us,p50_us,p90_us,p99_us,mean_us
+aft_text_small_S,1,text_small,mt,8,8,4000,0,0,150,728.2,810.5,899.2,1306.8,832.4
+aft_text_small_D,1,text_small,mt,8,8,4000,0,1,150,809.7,872.9,951.6,1103.3,884.1
+aft_text_large_S,1,text_large,mt,8,8,4000,0,0,150,2314.2,2443.3,2591.7,3083.5,2470.8
+aft_text_large_D,1,text_large,mt,8,8,4000,0,1,150,2507.6,2682.3,3002.7,3476.9,2734.2
+aft_text_huge_S,1,text_huge,mt,8,8,4000,0,0,150,8802.7,9388.3,9952.2,10633.0,9445.0
+aft_text_huge_D,1,text_huge,mt,8,8,4000,0,1,150,9393.5,10056.2,10537.9,11133.9,10096.8
+aft_bare_mod,0,none,mt,8,8,4000,600,0,150,8184.1,9914.3,11897.5,14141.2,10243.1
+aft_textD_mod,1,text_large,mt,8,8,4000,600,1,150,10713.9,12354.2,13721.4,16145.7,12551.1
+aft_bare_mod,0,none,mt,16,16,4000,600,0,150,4972.4,7637.2,8283.8,10368.6,7532.6
+aft_textD_mod,1,text_large,mt,16,16,4000,600,1,150,7378.0,10398.0,11149.9,12564.4,10134.4

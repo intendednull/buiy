@@ -31,6 +31,7 @@ pub mod node;
 pub mod pipeline;
 pub mod prepare;
 pub mod primitive;
+pub mod raster;
 pub mod top_layer;
 pub mod view_uniform;
 pub mod visibility;
@@ -46,6 +47,7 @@ pub use components::{
     FilterFn, Icon, LineStyle, MixBlendMode, OffscreenAuto, Opacity, Outline, Radius, Shadow,
     SkipReason,
 };
+pub use raster::RasterImage;
 pub use visibility::{node_skip_reason, write_paint_skip};
 
 /// One rectangle in the Phase 0 render queue. Marked `#[non_exhaustive]`
@@ -296,6 +298,11 @@ impl Plugin for BuiyRenderPlugin {
             // test reads them to pin "a blink frame re-uploads the glyph
             // buffer ONLY" (decoration-and-paint § 6.3; verification § 1.3).
             .init_resource::<prepare::BufferUploadStats>()
+            // The per-tier "repacked from source this frame" bits (the H6 fix):
+            // written unconditionally by `prepare_buiy_instances`, read by
+            // `prepare_effect_groups` instead of re-deriving `is_changed()` —
+            // one source of truth for the fold/merge gates.
+            .init_resource::<prepare::PreparedDamage>()
             // Deterministic per-frame work-unit counters (perf-final P0b) — the
             // host-independent measurement gate. Registered here AND in the
             // `buiy_bench_support` harness via the same `RenderWorkCounters` type.

@@ -16,7 +16,7 @@
 
 use bevy::prelude::*;
 
-use crate::text::ResidentTextKeys;
+use crate::text::{GlyphDamage, ResidentTextKeys};
 
 /// Per-frame render-world work counts. Read in a gate test via
 /// `harness.render.resource::<RenderWorkCounters>()`.
@@ -48,14 +48,33 @@ pub struct RenderWorkCounters {
     /// residency invariant holds on an idle text frame (one logical touch per
     /// resident key). See `atlas_touch_ops` for why this is NOT a #5-regression guard.
     pub resident_keys: usize,
-    /// `1` if this dirty frame is Patch-ELIGIBLE (audit #2 Stage B classifier):
-    /// the damage is value-only (no structural/hierarchy/group/despawn/theme
-    /// change), so a future Patch stage COULD re-extract only the changed slots
-    /// instead of the whole scene. `0` on a Full (structural) rebuild and on idle.
-    /// Stage B is observation-only — the extract still does a Full rebuild; this
-    /// counter measures the Patch-vs-Full mix to size the C/D Patch-path payoff
-    /// before building it.
+    /// `1` if `extract_buiy_nodes` EXECUTED a node Patch this frame (audit #2):
+    /// the damage was value-only (no structural/hierarchy/group/despawn/theme
+    /// change, no footprint flip), so only the changed entities' slots were
+    /// overwritten in place — `node_rebuilds` stays `0` and `instances_built`
+    /// counts the patched records. `0` on a Full rebuild and on idle.
     pub node_patches: u32,
+    /// `1` if `extract_buiy_glyphs` EXECUTED its wholesale rebuild this frame
+    /// (a dirty frame the classifier escalated to `GlyphDamage::Full` —
+    /// cold frame, global trigger, structural change, fraction bail), `0` on
+    /// a clean frame AND on an executed Patch (the partial-reextract Stage C
+    /// counter FLIP: a 1-entity value change records `0` here with
+    /// `glyph_patches == 1`).
+    pub glyph_full_rebuilds: u32,
+    /// `1` if the glyph classifier verdicted this dirty frame Patch-eligible
+    /// (published `GlyphDamage::Patch` — partial-reextract D3), `0` on a Full
+    /// verdict and on idle. From Stage C the verdict IS executed, so this
+    /// always equals [`glyph_patches`](Self::glyph_patches) — kept distinct
+    /// so a future consumer-side bail (a stage that classifies Patch but
+    /// executes Full) stays observable without re-plumbing the gates.
+    pub glyph_patch_candidates: u32,
+    /// `1` if `extract_buiy_glyphs` EXECUTED a Patch this frame — skipped the
+    /// order walk and spliced only the verdict's entities (Stage C, D2) —
+    /// `0` on a Full rebuild and on idle.
+    pub glyph_patches: u32,
+    /// Entities named by this frame's `GlyphDamage::Patch` verdict (re-emits
+    /// + splice-deletes); `0` on Full verdicts and clean frames.
+    pub glyph_patched_entities: usize,
 }
 
 /// Set `node_rebuilds` + `instances_built` (the `extract_buiy_nodes` work counts)
@@ -74,19 +93,45 @@ pub(crate) fn record_node_counts(
     }
 }
 
-/// Record the text/atlas work counts (`atlas_touch_ops`, `resident_keys`) AFTER
-/// `extract_buiy_glyphs` has refreshed `ResidentTextKeys`. A separate tiny system
-/// (not a param on `extract_buiy_glyphs`, which sits at Bevy's 16-param cap), and
-/// `Option<ResMut<_>>` so it is inert when the counter is unregistered.
+/// Record the text/atlas work counts (`atlas_touch_ops`, `resident_keys`) AND
+/// the glyph-damage counts AFTER `extract_buiy_glyphs` has refreshed
+/// `ResidentTextKeys` / published `GlyphDamage`. A separate tiny system (not a
+/// param on `extract_buiy_glyphs`, which sits at Bevy's 16-param cap), and
+/// `Option` so it is inert when a resource is unregistered.
 pub fn record_text_work_counters(
     resident: Res<ResidentTextKeys>,
+    damage: Option<Res<GlyphDamage>>,
     counters: Option<ResMut<RenderWorkCounters>>,
 ) {
     if let Some(mut c) = counters {
         let n = resident.keys.len();
-        // One `touch_existing` per resident key ran in `extract_buiy_glyphs` (both
-        // the idle and the dirty branch loop the full resident set once).
+        // One LOGICAL `touch_existing` per (post-frame) resident key ran in
+        // `extract_buiy_glyphs`: the idle and Full-rebuild branches loop the
+        // full resident set once; the Patch branch touches retained ranges
+        // before emission (D5) + each changed entity's fresh keys after —
+        // together exactly the post-patch resident set, once each.
         c.atlas_touch_ops = n;
         c.resident_keys = n;
+        // The producer overwrites `GlyphDamage` on every DIRTY frame and never
+        // touches it on a clean one (the § 6.2 O(0) contract), so "written
+        // since this system's last run" — both run once per extract — IS the
+        // dirty bit: no producer counter param needed (the 16-param cap).
+        // From Stage C the published verdict IS what the producer executed
+        // (every force-Full condition feeds the classifier), so Full ⇒ the
+        // wholesale rebuild ran and Patch ⇒ the splice ran — candidates and
+        // executed patches coincide by construction (see the field docs).
+        let (full, patches, patched) = match damage.as_ref() {
+            Some(d) if d.is_changed() => match &**d {
+                GlyphDamage::Full => (1, 0, 0),
+                GlyphDamage::Patch {
+                    changed, removed, ..
+                } => (0, 1, changed.len() + removed.len()),
+            },
+            _ => (0, 0, 0),
+        };
+        c.glyph_full_rebuilds = full;
+        c.glyph_patch_candidates = patches;
+        c.glyph_patches = patches;
+        c.glyph_patched_entities = patched;
     }
 }

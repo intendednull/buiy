@@ -4093,6 +4093,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt_ceiling"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy_bench_support",
+ "buiy_core",
+]
+
+[[package]]
 name = "naga"
 version = "29.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
