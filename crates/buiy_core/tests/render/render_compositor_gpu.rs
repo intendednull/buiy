@@ -70,7 +70,8 @@ fn compositor_register_adds_no_extra_core2d_pass() {
 // `.in_set(RenderSystems::Prepare)` and queued in `build`.
 // Mirrors `BUIY_RENDER_SYSTEM_COUNT` in tests/render_prepare.rs; bump in
 // lockstep whenever the plugin's `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 5;
+// (6th = `prepare_buiy_rasters`, the textured-node canvas primitive.)
+const BUIY_RENDER_SYSTEM_COUNT: usize = 6;
 
 // Count the systems in a RenderApp's `Render` schedule graph. `graph().systems`
 // is populated at `add_systems` time (in `build`), so this is pure introspection

@@ -33,23 +33,29 @@
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use buiy_core::a11y::{A11yLabel, A11yToggled, Toggled};
+use buiy_core::a11y::{A11yLabel, A11yRole, A11yToggled, Toggled};
 use buiy_core::components::Node;
 use buiy_core::layout::{
     AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset,
     JustifyContent, Length, Overflow, OverflowMode, Position, PositionKind, ScrollOffset, Sizing,
-    Stacking, TopLayer,
+    Stacking, TopLayer, Translate,
 };
 use buiy_core::mvu::{ControlledLeaf, Envelope, Model, ToggleMsg};
 use buiy_core::render::RasterImage;
-use buiy_core::render::components::{Background, Border, Opacity};
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::{
+    Background, Border, BorderSide, BoxShadow, Corners, Icon, Opacity, Shadow, TextColor,
+};
 use buiy_core::scroll::ScrollExtent;
 use buiy_core::text::edit::{EditCommand, TextEditState};
-use buiy_core::text::{FontSize, SharedFontSystem, Text, TextAlign as CoreTextAlign};
+use buiy_core::text::{
+    FontFamily, FontSize, FontStack, FontWeight, SharedFontSystem, Text, TextAlign as CoreTextAlign,
+};
 use buiy_widgets::{Button, Checkbox, TextInput};
 
 use crate::app::{UiRoot, ViewFn};
 use crate::element::{Element, Kind};
+use crate::interaction::{InteractionState, PressEffect};
 use crate::layout::{Align, Justify, LayoutProps, Positioning, Sides, TextAlign};
 use crate::router::{InputAction, PressAction, SubmitAction};
 
@@ -221,6 +227,10 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
                 changed |= set_text(world, entity, t);
             }
             changed |= set_font_size(world, entity, el.font_size);
+            // F3: explicit ink / family / weight on the text node.
+            changed |= set_text_color(world, entity, el.color);
+            changed |= set_font_family(world, entity, el.font_family.as_ref());
+            changed |= set_font_weight(world, entity, el.font_weight);
             changed |= set_text_align(world, entity, el.layout.text_align);
             // A text node is a plain `Node` (no widget contract), so the whole
             // layout surface applies to it too (`.width`/`.grow`/`.fixed`/…).
@@ -231,7 +241,24 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
                 changed |= set_button_label(world, entity, t);
             }
             update_press::<M>(world, entity, el, model);
+            // The interaction-state visual layer (spec §2.6 part 3) — a button
+            // dips while held. The route already lives on the widget's `#[require]`
+            // A11yRole; only the press VISUAL is added here.
+            update_press_visual(world, entity, el.on_press.is_some() && !el.disabled);
             changed |= update_disabled(world, entity, el.disabled);
+            // F3: styled button (fill/radius/border/shadow/size + label style),
+            // gated so an unstyled button keeps every widget default.
+            changed |= apply_button_style(world, entity, el);
+        }
+        Kind::Icon => {
+            // F3: the vector icon + its optional tinted-badge paint (background +
+            // border/radius + shadow) + the node layout (size). An icon node is a
+            // plain `Node`, so `apply_node_layout` is safe (no widget contract).
+            changed |= set_icon(world, entity, el);
+            changed |= apply_background(world, entity, el.background);
+            changed |= apply_border(world, entity, el);
+            changed |= apply_shadow(world, entity, el);
+            changed |= apply_node_layout(world, entity, &el.layout, false);
         }
         Kind::Checkbox => {
             // Controlled: re-assert the leaf `A11yToggled` from the model
@@ -246,6 +273,9 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
         }
         Kind::Column | Kind::Row => {
             changed |= apply_container_props(world, entity, el);
+            // A clickable container (pick-word tiles) routes its `on_press` — the
+            // click bubbles from a child that intercepted the hit (spec §2.6).
+            apply_pressable::<M>(world, entity, el, model);
             reconcile_children::<M>(world, entity, &el.children, model, el.keyed);
         }
         Kind::Raster => {
@@ -253,6 +283,8 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             // canvas keeps its texture across unrelated re-renders) + its layout.
             changed |= set_raster_image(world, entity, el.raster.as_ref());
             changed |= apply_node_layout(world, entity, &el.layout, false);
+            // A pressable raster (the custom-avatar seat chip) becomes activatable.
+            apply_pressable::<M>(world, entity, el, model);
         }
         // A placeholder holds a slot but has no state to patch (FW3 `when`).
         Kind::Empty => {}
@@ -413,6 +445,10 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
                     Kind::Text,
                 ))
                 .id();
+            // F3: explicit ink / family / weight, if the author set one.
+            set_text_color(world, e, el.color);
+            set_font_family(world, e, el.font_family.as_ref());
+            set_font_weight(world, e, el.font_weight);
             set_text_align(world, e, el.layout.text_align);
             apply_node_layout(world, e, &el.layout, false);
             e
@@ -429,7 +465,12 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             };
             world.entity_mut(e).insert(slot);
             update_press::<M>(world, e, el, model);
+            // The interaction-state visual layer (spec §2.6 part 3) — press-down.
+            update_press_visual(world, e, el.on_press.is_some() && !el.disabled);
             update_disabled(world, e, el.disabled);
+            // F3: a styled button — the fill / radius / border / shadow / size on
+            // the button entity, the label color / font / weight on its slot child.
+            apply_button_style(world, e, el);
             e
         }
         Kind::Checkbox => {
@@ -480,11 +521,26 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             let handle = el.raster.clone().unwrap_or_default();
             let e = world.spawn((Node, RasterImage(handle), Kind::Raster)).id();
             apply_node_layout(world, e, &el.layout, false);
+            // A pressable raster (the custom-avatar seat chip) becomes activatable.
+            apply_pressable::<M>(world, e, el, model);
+            e
+        }
+        Kind::Icon => {
+            // A layout `Node` carrying the vector `Icon` (F3). The icon paints
+            // centered in the node's box at its native `size_px`; a `.background()`
+            // + `.radius()` on the same node makes the tinted badge under it (the
+            // fill quad below the icon coverage tier).
+            let e = world.spawn((Node, icon_component(el), Kind::Icon)).id();
+            apply_background(world, e, el.background);
+            apply_border(world, e, el);
+            apply_shadow(world, e, el);
+            apply_node_layout(world, e, &el.layout, false);
             e
         }
         Kind::Column | Kind::Row => {
             let e = world.spawn((Node, el.kind)).id();
             apply_container_props(world, e, el);
+            apply_pressable::<M>(world, e, el, model);
             let kids: Vec<Entity> = el
                 .children
                 .iter()
@@ -533,19 +589,25 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -
     // The structural auto-ignore (F6, spec §2.7): a **transparent** (no painted
     // fill) `.top_layer()` container is auto-`Pickable::IGNORE`d so it can never
     // sit topmost and swallow every click beneath it (the invisible-occluder bug
-    // class, shipped 3×). "Transparent" on this surface == `background.is_none()`
-    // (paints no fill); when F3 lands `Color::NONE`, an explicit transparent fill
-    // joins this set. NB: keyed on the container itself being non-interactive —
-    // when a container gains its own press route (F5), that route must exclude it
-    // from the auto-ignore (an interactive container IS a hit target). No container
-    // routes presses today, so this is a documented forward boundary, not a guard.
-    let auto_ignore = el.layout.top_layer && el.background.is_none();
+    // class, shipped 3×). Two gates make it correct alongside F3 + F5:
+    //   * "Transparent" == paints no visible fill: no `background`, OR F3's explicit
+    //     fully-transparent `Color::Custom(_,_,_,0)` (the semantic facade tokens are
+    //     all opaque, so only an alpha-0 `Custom` reads as transparent-via-color).
+    //     See [`is_transparent_fill`].
+    //   * `on_press.is_none()` — an INTERACTIVE container (F5's container press
+    //     route, `apply_pressable`) IS a hit target, so it must never be
+    //     auto-ignored (that would swallow its own clicks). `apply_pressable` keys
+    //     on the same `on_press` and relies on the DEFAULT `Pickable`, which our
+    //     `Pickable::IGNORE` insert would clobber — hence the gate.
+    let auto_ignore =
+        el.layout.top_layer && is_transparent_fill(el.background) && el.on_press.is_none();
     // The node-layout common to containers + raster (sizing/flex-item/position/
     // scroll/stacking/stick + picking transparency).
     changed |= apply_node_layout(world, e, &el.layout, auto_ignore);
-    // Paint (containers only).
+    // Paint (containers only): fill + border/radius + shadow (F3).
     changed |= apply_background(world, e, el.background);
-    changed |= apply_radius(world, e, el.radius);
+    changed |= apply_border(world, e, el);
+    changed |= apply_shadow(world, e, el);
     changed
 }
 
@@ -729,6 +791,16 @@ fn apply_top_layer(world: &mut World, e: Entity, top_layer: bool) -> bool {
         return true;
     }
     false
+}
+
+/// Whether a container's background paints NO visible fill (F6, spec §2.7) — no
+/// `background` at all, or F3's explicit fully-transparent `Color::Custom(_,_,_,0)`.
+/// The semantic facade tokens (`Surface`, `Accent`, …) are all opaque, so only an
+/// alpha-0 `Custom` reads as transparent-via-color. The auto-ignore rule keys on
+/// this so neither the "no background" nor the "explicitly transparent" spelling of
+/// a `.top_layer()` container can occlude picks.
+fn is_transparent_fill(bg: Option<crate::tokens::Color>) -> bool {
+    matches!(bg, None | Some(crate::tokens::Color::Custom(_, _, _, 0)))
 }
 
 /// Drive a node's pointer transparency (F6, spec §2.7): `Pickable::IGNORE` when
@@ -972,24 +1044,243 @@ fn apply_background(world: &mut World, e: Entity, bg: Option<crate::tokens::Colo
     }
 }
 
-/// Patch (or remove) the container's rounded-corner `Border` in place. Returns
-/// whether the radius really changed (drift-only).
-fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) -> bool {
-    match r {
-        Some(radius) => {
-            let want = Border {
-                radius: radius.to_corners(),
-                ..Default::default()
-            };
-            if let Some(mut cur) = world.get_mut::<Border>(e) {
+/// The resolved per-corner radius for a node: `.radius_corners(..)` (the design's
+/// asymmetric wobble) takes precedence over the uniform `.radius(..)` token, else
+/// `None` (square).
+fn resolve_corners<Msg>(el: &Element<Msg>) -> Option<Corners> {
+    if let Some([tl, tr, br, bl]) = el.radius_corners {
+        Some(crate::tokens::corners_from_px(tl, tr, br, bl))
+    } else {
+        el.radius.map(|r| r.to_corners())
+    }
+}
+
+/// Patch a node's `Border` (per-side outline + per-corner radius) and its
+/// layout-owned border WIDTH (`BoxModel.border`) in place (F3, drift-only).
+///
+/// The `Border` component carries the per-side color/style + the corner radius;
+/// the WIDTH lives on `BoxModel.border` (a Taffy input). `.border(w, c, style)`
+/// sets both; `.radius(..)` / `.radius_corners(..)` alone set the corners with no
+/// painting side — which draws no band and, via the borderless-rounded-fill path
+/// (F3 `ExtractedNode.radius`), rounds the background FILL. The width is written
+/// ONLY when `.border(..)` is set, so a radius-only patch never zeroes a styled
+/// widget's own border width. Returns whether anything really changed. A
+/// `.radius(..)`-only container reproduces the pre-F3 `Border { radius, ..default }`
+/// byte-for-byte (default sides).
+fn apply_border<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    let mut changed = false;
+    let corners = resolve_corners(el);
+    // Layout-owned border width — only touched when `.border(..)` is set.
+    if let Some((w, _, _)) = el.border
+        && let Some(mut bm) = world.get_mut::<BoxModel>(e)
+    {
+        let want = Edges::all(w);
+        if bm.border != want {
+            bm.border = want;
+            changed = true;
+        }
+    }
+    // The `Border` component: painting sides (from `.border`) + corners.
+    if el.border.is_some() || corners.is_some() {
+        let side = match el.border {
+            Some((_, c, style)) => BorderSide {
+                color: c.to_token(),
+                style,
+            },
+            None => BorderSide::default(),
+        };
+        let want = Border {
+            top: side.clone(),
+            right: side.clone(),
+            bottom: side.clone(),
+            left: side,
+            radius: corners.unwrap_or(Corners::ZERO),
+        };
+        if let Some(mut cur) = world.get_mut::<Border>(e) {
+            changed |= cur.set_if_neq(want);
+        } else {
+            world.entity_mut(e).insert(want);
+            changed = true;
+        }
+    } else {
+        changed |= world.entity_mut(e).take::<Border>().is_some();
+    }
+    changed
+}
+
+/// Patch (or remove) a node's `BoxShadow` from its `.shadow(..)` terms (F3,
+/// drift-only). Front-to-back CSS paint order (index 0 frontmost); every term is
+/// outset (`inset: false`). Empty ⇒ remove. Returns whether the list changed.
+fn apply_shadow<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    if el.shadows.is_empty() {
+        return world.entity_mut(e).take::<BoxShadow>().is_some();
+    }
+    let want = BoxShadow(
+        el.shadows
+            .iter()
+            .map(|s| Shadow {
+                color: s.color.to_token(),
+                offset_x: Length::px(s.dx),
+                offset_y: Length::px(s.dy),
+                blur: Length::px(s.blur),
+                spread: Length::px(s.spread),
+                inset: false,
+            })
+            .collect(),
+    );
+    if let Some(mut cur) = world.get_mut::<BoxShadow>(e) {
+        cur.set_if_neq(want)
+    } else {
+        world.entity_mut(e).insert(want);
+        true
+    }
+}
+
+/// Patch (or remove) an explicit `TextColor` on a text / label entity (F3,
+/// drift-only). `None` removes the override so the node falls back to the theme
+/// ink (`CurrentColor`). Returns whether the color really changed.
+fn set_text_color(world: &mut World, entity: Entity, color: Option<crate::tokens::Color>) -> bool {
+    match color {
+        Some(c) => {
+            let want = TextColor(c.to_token());
+            if let Some(mut cur) = world.get_mut::<TextColor>(entity) {
                 cur.set_if_neq(want)
             } else {
-                world.entity_mut(e).insert(want);
+                world.entity_mut(entity).insert(want);
                 true
             }
         }
-        None => world.entity_mut(e).take::<Border>().is_some(),
+        None => world.entity_mut(entity).take::<TextColor>().is_some(),
     }
+}
+
+/// Patch (or remove) an explicit `FontFamily` on a text / label entity (F3,
+/// drift-only). `None` removes it so the node falls back to the default sans.
+fn set_font_family(world: &mut World, entity: Entity, family: Option<&FontStack>) -> bool {
+    match family {
+        Some(stack) => {
+            if let Some(cur) = world.get::<FontFamily>(entity)
+                && &cur.0 == stack
+            {
+                return false;
+            }
+            world.entity_mut(entity).insert(FontFamily(stack.clone()));
+            true
+        }
+        None => world.entity_mut(entity).take::<FontFamily>().is_some(),
+    }
+}
+
+/// Patch (or remove) an explicit `FontWeight` on a text / label entity (F3,
+/// drift-only) — the variable-font weight axis the shaper already threads. `None`
+/// removes it so the node renders at the family's default instance.
+fn set_font_weight(
+    world: &mut World,
+    entity: Entity,
+    weight: Option<crate::tokens::Weight>,
+) -> bool {
+    match weight {
+        Some(w) => {
+            let want = FontWeight(w.value());
+            if let Some(mut cur) = world.get_mut::<FontWeight>(entity) {
+                cur.set_if_neq(want)
+            } else {
+                world.entity_mut(entity).insert(want);
+                true
+            }
+        }
+        None => world.entity_mut(entity).take::<FontWeight>().is_some(),
+    }
+}
+
+/// Build the `Icon` component from a [`Kind::Icon`] element's props (F3). Always
+/// stroked (round cap/join); `.color(..)` sets the stroke tint, else the theme
+/// ink (`CurrentColor`). The `viewbox` carries the author coordinate space.
+fn icon_component<Msg>(el: &Element<Msg>) -> Icon {
+    Icon {
+        path_d: el.icon_path.clone().unwrap_or_default(),
+        stroke_width: el.icon_stroke_width,
+        size_px: el.icon_size_px,
+        viewbox: el.icon_viewbox,
+        fill: false,
+        color: el
+            .color
+            .map(|c| c.to_token())
+            .unwrap_or(ColorToken::CurrentColor),
+    }
+}
+
+/// Patch an icon node's `Icon` in place (F3, drift-only — `Icon` is `PartialEq`).
+/// Returns whether the icon really changed.
+fn set_icon<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    let want = icon_component(el);
+    if let Some(mut cur) = world.get_mut::<Icon>(e) {
+        cur.set_if_neq(want)
+    } else {
+        world.entity_mut(e).insert(want);
+        true
+    }
+}
+
+/// Style a `Button` (F3): the fill / radius / border / shadow / per-axis size /
+/// grow on the button entity, and the label color / font / weight / size on its
+/// recorded `ViewSlot` child. Each style applies **only when the author set it**,
+/// so an unstyled `button("x")` is a complete no-op here — it keeps every
+/// `buiy_widgets::Button` default (its fill, rounding, padding, label size), the
+/// §3 #12 suppression safety that keeps the counter / gallery goldens byte-
+/// identical. A per-axis size preserves the button's default on the axis the
+/// author did not set (never zeroing its `#[require]` box). Returns whether
+/// anything really changed.
+fn apply_button_style<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    let mut changed = false;
+    if el.background.is_some() {
+        changed |= apply_background(world, e, el.background);
+    }
+    if el.border.is_some() || el.radius.is_some() || el.radius_corners.is_some() {
+        changed |= apply_border(world, e, el);
+    }
+    if !el.shadows.is_empty() {
+        changed |= apply_shadow(world, e, el);
+    }
+    // Per-axis fixed size — set only the axis the author asked for (never padding:
+    // a button owns its own inner padding), preserving the button's `#[require]`
+    // default on the untouched axis.
+    let wants_w = el.layout.width.is_some() || el.layout.fill_width;
+    let wants_h = el.layout.height.is_some() || el.layout.fill_height;
+    if (wants_w || wants_h)
+        && let Some(mut bm) = world.get_mut::<BoxModel>(e)
+    {
+        let mut want = bm.clone();
+        if wants_w {
+            want.width = sizing_axis(el.layout.width, el.layout.fill_width);
+        }
+        if wants_h {
+            want.height = sizing_axis(el.layout.height, el.layout.fill_height);
+        }
+        changed |= bm.set_if_neq(want);
+    }
+    changed |= apply_flex_item(world, e, &el.layout);
+    // Label styling on the slot child — applied only when the button is EXPLICITLY
+    // styled (a fill / color / font / weight set), so an unstyled `button("x")`
+    // keeps every widget default incl. its label size (the shared-crate goldens).
+    let styled = el.background.is_some()
+        || el.color.is_some()
+        || el.font_family.is_some()
+        || el.font_weight.is_some();
+    let slot = world.get::<ViewSlot>(e).and_then(|s| s.label);
+    if let (true, Some(child)) = (styled, slot) {
+        if el.color.is_some() {
+            changed |= set_text_color(world, child, el.color);
+        }
+        if el.font_family.is_some() {
+            changed |= set_font_family(world, child, el.font_family.as_ref());
+        }
+        if el.font_weight.is_some() {
+            changed |= set_font_weight(world, child, el.font_weight);
+        }
+        changed |= set_font_size(world, child, el.font_size);
+    }
+    changed
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1380,82 @@ fn update_press<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg
         }
         _ => {
             world.entity_mut(entity).remove::<PressAction<M>>();
+        }
+    }
+}
+
+/// Give a **non-widget node** — a clickable container ([`Kind::Column`]/[`Kind::Row`])
+/// or a pressable [`raster`](crate::raster) — the button activation contract when
+/// it carries an [`on_press`](Element::on_press) (spec §2.6 parts 1 & 2). A `button`
+/// already owns this contract via its `#[require]`; a bare container/raster does not,
+/// so it is stamped by hand:
+/// - `A11yRole::Button` — the activatable role BOTH the pointer producer
+///   (`pointer_click_emits_on_press`) and the AT/probe path (`Action::Click` on the
+///   role-keyed `Button` contract) gate on. A container's children intercept the
+///   pointer hit and carry no role, so the role must live on the container itself;
+///   the click reaches it by the child→parent `Pointer<Click>` propagation (the
+///   producer fires for the activatable ancestor). The same role serves touch.
+/// - `A11yLabel` — the accessible name from [`Element::label`] (reuses the `text`
+///   slot), so the node is locatable by role+name and announced.
+/// - `PressAction` — the value the router enqueues, via [`update_press`] (the
+///   identical route a `button` uses).
+///
+/// Also installs the [interaction-state visual layer](crate::interaction) so the
+/// node dips while held. Drift-safe: a node that stops being pressable (disabled or
+/// handler removed) has the whole contract stripped, so it never keeps a stale
+/// button role.
+fn apply_pressable<M: Model>(world: &mut World, e: Entity, el: &Element<M::Msg>, model: Entity) {
+    let pressable = el.on_press.is_some() && !el.disabled;
+    if pressable {
+        if world.get::<A11yRole>(e) != Some(&A11yRole::Button) {
+            world.entity_mut(e).insert(A11yRole::Button);
+        }
+        let name = el.text.clone().unwrap_or_default();
+        if let Some(mut cur) = world.get_mut::<A11yLabel>(e) {
+            if cur.0 != name {
+                cur.0 = name;
+            }
+        } else {
+            world.entity_mut(e).insert(A11yLabel(name));
+        }
+        update_press::<M>(world, e, el, model);
+    } else if world.get::<A11yRole>(e).is_some() {
+        world
+            .entity_mut(e)
+            .remove::<A11yRole>()
+            .remove::<A11yLabel>()
+            .remove::<PressAction<M>>();
+    }
+    update_press_visual(world, e, pressable);
+}
+
+/// Install (or remove) the [interaction-state visual layer](crate::interaction) on
+/// a pressable entity: the [`InteractionState`] the pointer observers write, its
+/// [`PressEffect`] depth, and the `Translate` the resolver mutates in place. The
+/// three are stamped together (once, on the first reconcile a node is pressable), so
+/// the resolver only ever mutates an existing `Translate` — the press-down lands the
+/// same frame with no deferred insert. All three are layout-inert at rest (identity
+/// `Translate`, `InteractionState::None`), so this is NOT counted as a node patch.
+///
+/// A node that stops being pressable drops the state + effect and resets any
+/// lingering press-down to identity.
+fn update_press_visual(world: &mut World, e: Entity, pressable: bool) {
+    if pressable {
+        if world.get::<InteractionState>(e).is_none() {
+            world
+                .entity_mut(e)
+                .insert((InteractionState::default(), PressEffect::default()));
+        }
+        if world.get::<Translate>(e).is_none() {
+            world.entity_mut(e).insert(Translate::default());
+        }
+    } else if world.get::<InteractionState>(e).is_some() {
+        world
+            .entity_mut(e)
+            .remove::<InteractionState>()
+            .remove::<PressEffect>();
+        if let Some(mut t) = world.get_mut::<Translate>(e) {
+            t.1 = Length::ZERO;
         }
     }
 }

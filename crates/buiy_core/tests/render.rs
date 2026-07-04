@@ -90,6 +90,10 @@ mod render_primitive_dedup;
 mod render_primitive_descriptor;
 #[path = "render/render_primitive_key.rs"]
 mod render_primitive_key;
+#[path = "render/render_raster.rs"]
+mod render_raster;
+#[path = "render/render_raster_gpu.rs"]
+mod render_raster_gpu;
 #[path = "render/render_shader_wgsl.rs"]
 mod render_shader_wgsl;
 #[path = "render/render_shadow_oracle.rs"]

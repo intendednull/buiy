@@ -84,6 +84,7 @@
 
 mod app;
 mod element;
+mod interaction;
 mod layout;
 mod reconcile;
 mod router;
@@ -91,11 +92,16 @@ mod tokens;
 
 pub use app::{BuiyViewAppExt, IntoViewReducer, MODEL_LID, ViewSet};
 pub use element::{
-    Element, Kind, button, checkbox, keyed_column, raster, scroll_column, text, text_input, when,
+    Element, ICON_VIEWBOX, Kind, button, checkbox, icon, keyed_column, raster, scroll_column, text,
+    text_input, when,
 };
+pub use interaction::{DEFAULT_PRESS_DEPTH, InteractionState, PressEffect};
 pub use layout::{Align, Justify, TextAlign};
 pub use reconcile::ViewWorkCounters;
-pub use tokens::{Color, Radius, Space};
+pub use tokens::{Color, Radius, Space, Weight};
+// The border line style is authored via `.border(w, c, style)` — re-export it so
+// an app names it without reaching into `buiy_core::render::components` (F3).
+pub use buiy_core::render::components::LineStyle;
 // `column!` / `row!` / `text!` are `#[macro_export]`ed at the crate root by
 // `element` — reachable as `buiy_view::{column, row, text}` (the macro `text!`
 // and the fn `text` share one path, distinct namespaces).

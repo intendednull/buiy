@@ -46,6 +46,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 entity: Entity::from_raw_u32(1).unwrap(),
                 position: Vec2::new(10.0, 20.0),
                 size: Vec2::new(100.0, 50.0),
+                radius: 0.0,
                 color: Color::srgb(1.0, 0.0, 0.0),
                 clip: None,
                 group: None,
@@ -59,6 +60,7 @@ fn pack_extracted_nodes_populated_carrier_yields_nonempty_quad_batch() {
                 entity: Entity::from_raw_u32(2).unwrap(),
                 position: Vec2::new(30.0, 40.0),
                 size: Vec2::new(60.0, 70.0),
+                radius: 0.0,
                 color: Color::srgb(0.0, 1.0, 0.0),
                 clip: None,
                 group: None,
@@ -109,6 +111,7 @@ fn pack_extracted_nodes_carries_non_identity_affine() {
             entity: Entity::from_raw_u32(1).unwrap(),
             position: Vec2::new(10.0, 20.0),
             size: Vec2::new(100.0, 50.0),
+            radius: 0.0,
             color: Color::srgb(1.0, 0.0, 0.0),
             clip: None,
             group: None,
@@ -144,6 +147,7 @@ fn extracted_nodes_pack_view_routes_records_to_quad_layer_0() {
         entity: Entity::from_raw_u32(1).unwrap(),
         position: Vec2::new(10.0, 20.0),
         size: Vec2::new(100.0, 50.0),
+        radius: 0.0,
         color: Color::srgb(1.0, 0.0, 0.0),
         clip: None,
         group: None,
@@ -203,11 +207,12 @@ fn view_uniform_carrier_is_a_valid_std140_uniform() {
 // queued in render/mod.rs), `prepare_effect_groups` (render/compositor.rs
 // `register`), `prepare_atlas_textures` (atlas/mod.rs `register` — the
 // dirty-page GPU upload + `@group(1)` bind-group build), and
-// `prepare_backdrop_blurs` (render/blur.rs `register` — parity Wave B4), all
-// `.in_set(RenderSystems::Prepare)` and queued in `build`. Bump this in
-// lockstep (with tests/render_compositor_gpu.rs) whenever the plugin's
-// `add_systems(Render, …)` registrations change.
-const BUIY_RENDER_SYSTEM_COUNT: usize = 5;
+// `prepare_backdrop_blurs` (render/blur.rs `register` — parity Wave B4), and
+// `prepare_buiy_rasters` (render/raster.rs — the textured-node canvas
+// primitive), all `.in_set(RenderSystems::Prepare)` and queued in `build`.
+// Bump this in lockstep (with tests/render_compositor_gpu.rs) whenever the
+// plugin's `add_systems(Render, …)` registrations change.
+const BUIY_RENDER_SYSTEM_COUNT: usize = 6;
 
 // Count the systems in a RenderApp's `Render` schedule. Reads the schedule graph
 // directly (`graph().systems`), which is populated at `add_systems` time — no

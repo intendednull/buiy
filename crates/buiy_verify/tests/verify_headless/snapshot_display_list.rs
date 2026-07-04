@@ -28,6 +28,7 @@ fn two_node_scene(swap: bool) -> (ExtractedNodes, NameLookup) {
         entity: modal_e,
         position: Vec2::new(10.0, 20.0),
         size: Vec2::new(100.0, 40.0),
+        radius: 0.0,
         color: Color::srgba(0.1, 0.2, 0.3, 1.0),
         clip: None,
         group: None,
@@ -41,6 +42,7 @@ fn two_node_scene(swap: bool) -> (ExtractedNodes, NameLookup) {
         entity: tooltip_e,
         position: Vec2::new(0.0, 0.0),
         size: Vec2::new(80.0, 24.0),
+        radius: 0.0,
         color: Color::WHITE,
         clip: Some(ClipRect {
             min: Vec2::new(0.0, 0.0),
@@ -126,6 +128,7 @@ fn resolved_color_renders_as_hex_and_unnamed_entity_falls_back() {
         entity: Entity::from_raw_u32(1).unwrap(),
         position: Vec2::ZERO,
         size: Vec2::splat(10.0),
+        radius: 0.0,
         color: Color::srgb(1.0, 0.0, 1.0),
         clip: None,
         group: None,

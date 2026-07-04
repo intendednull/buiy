@@ -16,6 +16,9 @@ use buiy_core::BuiySet;
 use buiy_core::mvu::{Cmd, LogicalId, Model, MvuAppExt, MvuSet};
 
 use crate::element::Element;
+use crate::interaction::{
+    apply_press_visual, on_pointer_out, on_pointer_over, on_pointer_press, on_pointer_release,
+};
 use crate::reconcile::{ViewWorkCounters, reconcile, stick_scroll_to_bottom};
 use crate::router::{route_presses, route_text_input, route_text_submit};
 
@@ -145,6 +148,23 @@ impl BuiyViewAppExt for App {
         );
         self.configure_sets(Update, ViewSet::Reconcile.before(BuiySet::Layout));
         self.add_systems(Update, reconcile::<M>.in_set(ViewSet::Reconcile));
+
+        // F5: the widget-runtime interaction-state visual layer (spec §2.6 part
+        // 3), NON-generic (one interaction state, shared across the single P1
+        // root). The four pointer observers write `InteractionState` on the
+        // bubbling `Pointer<E>` stream (child→parent, so a clickable container
+        // updates even when a child intercepts the hit); the resolver reads
+        // `Changed<InteractionState>` and dips a pressable node while held. It runs
+        // `.before(BuiySet::Layout)` so the press-down `Translate` composes the
+        // SAME frame as the press (no one-frame lag). With no picking pipeline the
+        // observers simply never fire (the logic-only harness), so this is inert
+        // there. `add_systems`/`add_observer` on the single-root P1 app register
+        // once.
+        self.add_observer(on_pointer_over);
+        self.add_observer(on_pointer_out);
+        self.add_observer(on_pointer_press);
+        self.add_observer(on_pointer_release);
+        self.add_systems(Update, apply_press_visual.before(BuiySet::Layout));
 
         // The controlled stick-to-bottom (spec §2.2): non-generic, added once
         // (P1 single-root), ordered AFTER the scroll extent cache so it pins to a

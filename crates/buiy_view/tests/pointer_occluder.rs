@@ -255,3 +255,66 @@ fn no_reconciled_fixture_is_a_transparent_top_layer_occluder() {
         });
     }
 }
+
+// --- Integration boundaries (F5 press route + F3 Color::Custom) --------------
+
+/// F5 integration fixture: a transparent top-layer container that is ALSO
+/// interactive — it carries `on_press` (F5's container press route) and a
+/// `.label()` (the accessible name F5 wants on a non-text pressable).
+fn view_interactive_transparent_overlay(_: &M) -> Element<Msg> {
+    column![text("overlay")]
+        .fixed()
+        .fill()
+        .top_layer()
+        .on_press(Msg::Hit)
+        .label("overlay")
+}
+
+/// F3 integration fixture: a top-layer overlay whose fill is F3's explicit
+/// fully-transparent `Color::Custom(_,_,_,0)`, painted over a button. Alpha-0
+/// paints nothing, so it must be auto-ignored like a no-background overlay.
+fn view_alpha0_custom_overlay(_: &M) -> Element<Msg> {
+    column![
+        button("hit").on_press(Msg::Hit).width(200.0).height(80.0),
+        column![]
+            .fixed()
+            .fill()
+            .top_layer()
+            .background(Color::Custom(120, 80, 200, 0)),
+    ]
+}
+
+/// FIX 1 (F5 gate): an INTERACTIVE transparent top-layer container must keep its
+/// own clicks — the `on_press.is_none()` gate excludes it from the auto-ignore
+/// (an interactive container IS a hit target). Without the gate it would be
+/// `Pickable::IGNORE` and swallow its own click (hits would stay 0).
+#[test]
+fn interactive_transparent_top_layer_container_keeps_its_clicks() {
+    let mut app = common::logic_app();
+    app.ui(M::default(), update, view_interactive_transparent_overlay);
+    let mut h = ViewPointer::new(app);
+    // The overlay fills the viewport; a click anywhere lands on it.
+    h.click_at(Vec2::new(400.0, 300.0));
+    assert_eq!(
+        hits(&h),
+        1,
+        "an interactive (on_press) transparent top-layer container is NOT auto-ignored",
+    );
+}
+
+/// FIX 2 (F3 alpha-0): a fully-transparent `Color::Custom(_,_,_,0)` top-layer
+/// overlay paints nothing, so it is auto-ignored and a click penetrates to the
+/// button beneath — closing the alpha-0 spelling of the invisible-occluder class.
+#[test]
+fn alpha0_custom_top_layer_overlay_does_not_swallow_the_click() {
+    let mut app = common::logic_app();
+    app.ui(M::default(), update, view_alpha0_custom_overlay);
+    let mut h = ViewPointer::new(app);
+    let button = button_entity(&h);
+    h.click(button);
+    assert_eq!(
+        hits(&h),
+        1,
+        "a fully-transparent Color::Custom(_,_,_,0) top-layer overlay is auto-ignored (click penetrates)",
+    );
+}

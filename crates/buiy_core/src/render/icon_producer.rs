@@ -3,8 +3,8 @@
 //! Per frame, per visible [`Icon`] entity:
 //! rasterize the SVG path to an `R8` coverage bitmap (`render::icon_raster`),
 //! insert it into the SHARED glyph-alpha atlas keyed by `hash(path_d,
-//! stroke_width, size, fill)` (content-addressed dedup — the same icon authored
-//! twice is one atlas cell), and emit one [`GlyphAlphaInstance`] tinted by the
+//! stroke_width, size, viewbox, fill)` (content-addressed dedup — the same icon
+//! authored twice is one atlas cell), and emit one [`GlyphAlphaInstance`] tinted by the
 //! icon's resolved color token into the [`ExtractedIcons`] carrier.
 //!
 //! ## Why a SEPARATE carrier (not `ExtractedGlyphs`)
@@ -98,16 +98,24 @@ pub struct ResidentIconKeys {
 
 /// Build the content-addressed [`AtlasKey`] for an icon coverage cell:
 /// `[Mask kind byte, sub-id 1, <16-byte FNV-1a hash of (path_d, stroke_width,
-/// size, fill)>]`. The `Mask` kind byte is the reserved "sampled exactly like a
-/// glyph" coverage kind (atlas types.rs); sub-id **1** distinguishes icon keys
-/// from the solid stamp's `[Mask, 0]` (text/stamp.rs) so the two never alias.
-/// The hash content-addresses the icon so the same `(d, width, size, fill)`
-/// authored twice resolves to ONE atlas cell (dedup), and a different stroke
-/// width or size is a distinct cell.
-pub fn icon_atlas_key(path_d: &str, stroke_width: f32, size_px: u16, fill: bool) -> AtlasKey {
+/// size, viewbox, fill)>]`. The `Mask` kind byte is the reserved "sampled exactly
+/// like a glyph" coverage kind (atlas types.rs); sub-id **1** distinguishes icon
+/// keys from the solid stamp's `[Mask, 0]` (text/stamp.rs) so the two never alias.
+/// The hash content-addresses the icon so the same `(d, width, size, viewbox,
+/// fill)` authored twice resolves to ONE atlas cell (dedup), and a different
+/// stroke width, size, or author viewBox is a distinct cell.
+pub fn icon_atlas_key(
+    path_d: &str,
+    stroke_width: f32,
+    size_px: u16,
+    viewbox: f32,
+    fill: bool,
+) -> AtlasKey {
     // FNV-1a over the canonical content tuple. f32 hashed by its bit pattern
     // (`to_bits`) so the key is exactly content-addressed — two `Icon`s with
     // bit-identical inputs produce the same key, which is the dedup contract.
+    // `viewbox` rides the hash: the same `path_d`/`size` at a different author
+    // viewBox rasterizes at a different scale, so it MUST be a distinct cell.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut mix = |bytes: &[u8]| {
         for &b in bytes {
@@ -118,6 +126,7 @@ pub fn icon_atlas_key(path_d: &str, stroke_width: f32, size_px: u16, fill: bool)
     mix(path_d.as_bytes());
     mix(&stroke_width.to_bits().to_le_bytes());
     mix(&size_px.to_le_bytes());
+    mix(&viewbox.to_bits().to_le_bytes());
     mix(&[fill as u8]);
     // Two independent 64-bit folds → a 16-byte content hash (collision-resistant
     // enough for a ≤ few-dozen-icon atlas; the atlas is content-addressed, so a
@@ -284,13 +293,23 @@ pub fn extract_buiy_icons(
         } else {
             IconPaint::Stroke
         };
-        let key = icon_atlas_key(&icon.path_d, icon.stroke_width, icon.size_px, icon.fill);
+        let key = icon_atlas_key(
+            &icon.path_d,
+            icon.stroke_width,
+            icon.size_px,
+            icon.viewbox,
+            icon.fill,
+        );
         // Clone the rasterizer inputs so the lazy closure (run ONLY on an atlas
         // miss) owns them — a hit never rasterizes.
-        let (path_d, stroke_width, size_px) =
-            (icon.path_d.clone(), icon.stroke_width, icon.size_px);
+        let (path_d, stroke_width, size_px, viewbox) = (
+            icon.path_d.clone(),
+            icon.stroke_width,
+            icon.size_px,
+            icon.viewbox,
+        );
         let entry = atlas.get_or_insert(key.clone(), AtlasFormat::CoverageR8, move || {
-            rasterize_icon(&path_d, paint, stroke_width, size_px)
+            rasterize_icon(&path_d, paint, stroke_width, size_px, viewbox)
         });
 
         // A degenerate/empty coverage cell (e.g. an unparseable `d`) carries a

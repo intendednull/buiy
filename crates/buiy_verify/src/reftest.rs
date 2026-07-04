@@ -166,6 +166,23 @@ fn emit_report(
 /// `sdf_rounded_rect`). A *spec* error in `sdf_rounded_rect` is invisible here
 /// (both paths share it) — that is Tier 5's job.
 pub fn run_sdf_cross_check(draw: &buiy_core::render::DrawData, fuzz: &FuzzBudget) -> RefOutcome {
+    run_sdf_cross_check_vs_oracle_radius(draw, draw.radius, fuzz)
+}
+
+/// Like [`run_sdf_cross_check`] but rasterizes the CPU oracle at `oracle_radius`
+/// instead of `draw.radius` — the GPU still renders the `draw` (its own radius).
+///
+/// With `oracle_radius == draw.radius` this is the standard cross-check (the GPU
+/// rounded fill vs its own rounded oracle). With `oracle_radius == 0.0` it is the
+/// **negative control** that proves a tightened budget has TEETH: a genuinely
+/// rounded GPU fill must NOT match a SQUARE oracle within the tight budget, so a
+/// regression back to a square fill (F3's borderless-rounded-fill fold reverting)
+/// would be caught. Zero stored bytes either way.
+pub fn run_sdf_cross_check_vs_oracle_radius(
+    draw: &buiy_core::render::DrawData,
+    oracle_radius: f32,
+    fuzz: &FuzzBudget,
+) -> RefOutcome {
     let (w, h) = REFTEST_LOGICAL;
     let cfg = GoldenConfig::deterministic();
 
@@ -174,7 +191,10 @@ pub fn run_sdf_cross_check(draw: &buiy_core::render::DrawData, fuzz: &FuzzBudget
     spawn_single_primitive(&mut app, draw);
     let gpu = capture_to_image(&mut app, &cfg);
 
-    let cpu = sdf_oracle::rasterize_sdf_rect(draw, w, h);
+    // The oracle rasterizes at `oracle_radius` (an otherwise-identical DrawData).
+    let oracle_draw =
+        buiy_core::render::DrawData::new(draw.position, draw.size, draw.color, oracle_radius);
+    let cpu = sdf_oracle::rasterize_sdf_rect(&oracle_draw, w, h);
 
     let diff = compare(&gpu, &cpu, &CompareOpts::reftest_default());
     let passed = diff.passes(fuzz);
