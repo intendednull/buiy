@@ -2760,6 +2760,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dooduel"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "bevy",
+ "buiy",
+ "buiy_core",
+ "buiy_verify",
+ "buiy_view",
+ "image",
+ "serde",
+ "serde_json",
+ "web-sys",
+]
+
+[[package]]
+name = "dooduel_web"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "buiy",
+ "console_error_panic_hook",
+ "dooduel",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

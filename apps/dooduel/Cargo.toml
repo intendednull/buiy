@@ -1,0 +1,67 @@
+# Dooduel — a fully-featured skribbl.io-style draw-and-guess game, shipped ON the
+# Buiy framework (the campaign's product #1). This is the first `apps/` member: a
+# standalone product, distinct from the framework's own `examples/` smoke-tests.
+# Built on the landed F1–F9 surface (raster primitive, coherent view layout, the
+# styling/shape render fixes, press/picking safety, the MVU poll-clock).
+[package]
+name = "dooduel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Windowed game (needs a display): `cargo run -p dooduel`.
+[[bin]]
+name = "dooduel"
+path = "src/main.rs"
+
+# Headless per-screen GPU capture → PNG (offscreen render-to-texture + readback;
+# needs a real wgpu adapter, no display). The eyeball artifact for design parity.
+[[bin]]
+name = "capture"
+path = "src/bin/capture.rs"
+
+# The multi-agent playtest host (GPU-free, native-only): runs the app + game with
+# a real-time clock and a file protocol under --dir, so N separate agents each
+# drive a seat. Reads the model → per-seat honest views + state.json + canvas.png;
+# polls commands.jsonl (guesses through the funnel, strokes on the real paint path).
+[[bin]]
+name = "playtest_host"
+path = "src/bin/playtest_host.rs"
+
+[dependencies]
+# `x11`/`wayland` are Linux-native windowing backends — target-gated below so the
+# wasm build (web) never drags in unix-only winit deps. `bevy_winit` runs on wasm
+# too (winit's web backend), so it stays in the shared set.
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit"] }
+buiy = { path = "../../crates/buiy" }
+buiy_core = { path = "../../crates/buiy_core" }
+buiy_view = { path = "../../crates/buiy_view" }
+image = { workspace = true }
+# Persistence: serialize theme + name + custom avatar (the 220×220 PNG base64'd).
+# Native → a config file; wasm → localStorage (`storage.rs`). serde/base64/`image`
+# PNG are pure-Rust, so they build on wasm.
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+
+# Native-only: the Linux windowing backends (unix winit deps) — never compiled for
+# wasm. cargo unions these features with the shared `bevy` set above.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { workspace = true, features = ["x11", "wayland"] }
+
+# Wasm-only: `localStorage` for the web persistence backend (design keys
+# `dooduel-proto-theme` / `dooduel-proto-avatar`). Matches buiy_core's web-sys pin.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Storage"] }
+
+# Test-only: the F8 pointer-harness `drive_stroke` primitive drives the drawing
+# canvas through the REAL press → drag → release pipeline in the canvas e2e test
+# (the unified headless driver: probe preset + picking stack). Native-only.
+[dev-dependencies]
+buiy_verify = { path = "../../crates/buiy_verify" }

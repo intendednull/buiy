@@ -1,0 +1,36 @@
+# Dooduel in the browser — a WebGPU / WebGL2 wasm target. Reuses the whole
+# `dooduel` lib (the MVU app, the drawing canvas, theming, localStorage
+# persistence, the responsive mobile shell) with a canvas-bound window. Build with
+# ONE backend feature:
+#   trunk build apps/dooduel/dooduel_web/index.html --features webgpu --release
+#   trunk build apps/dooduel/dooduel_web/index.html --features webgl2 --release
+# or `tools/build-web.sh apps/dooduel/dooduel_web` for both artifacts + the loader.
+# The native `--workspace` build compiles this as an ordinary windowed binary and
+# enables NEITHER backend feature (wgpu auto-selects Vulkan/Metal/DX12); the `canvas`
+# window hint is a no-op off-web.
+[package]
+name = "dooduel_web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# Render backend, selected at (wasm) build time via `trunk --features webgpu|webgl2`.
+# NEITHER is default: the native build enables neither. The two bevy meta-features
+# cannot coexist in one binary (`webgpu` wins), so browser reach = two artifacts + a
+# loader (see tools/build-web.sh).
+webgpu = ["bevy/webgpu"]
+webgl2 = ["bevy/webgl2"]
+
+[dependencies]
+bevy = { workspace = true }
+buiy = { path = "../../../crates/buiy" }
+dooduel = { path = ".." }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Routes Rust panics to the browser console (the backend bevy meta-feature comes
+# from `[features]` above, selected per `trunk --features`).
+console_error_panic_hook = "0.1"
