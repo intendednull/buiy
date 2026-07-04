@@ -305,6 +305,54 @@ fn display_none_fixed_is_inert() {
     }
 }
 
+// A Fixed child with an EXPLICIT zero inset resolves to the viewport origin
+// (0,0) even when the layout ROOT carries padding. This is the property the
+// view surface's `.fixed()` modifier depends on (it emits an explicit zero
+// inset so an overlay/scrim pins to the viewport, not the padded content box):
+// Taffy insets an absolute/fixed child by the containing block's BORDER only —
+// root PADDING is excluded for an explicit inset — so `.fixed()` anchors to the
+// viewport regardless of root padding without a layout-engine change.
+#[test]
+fn fixed_explicit_zero_inset_ignores_root_padding() {
+    let mut app = app();
+    let fixed = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .position(PositionKind::Fixed)
+                .inset(inset_top_left(0.0, 0.0))
+                .width_px(50.0)
+                .height_px(50.0),
+        ))
+        .id();
+    // The root has generous padding on every side. A padded static position
+    // (the auto-inset fallback) would place the fixed child at (40,40); an
+    // explicit zero inset must ignore it and land at the viewport origin.
+    let _root = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .width_px(800.0)
+                .height_px(600.0)
+                .padding(40.0),
+        ))
+        .add_child(fixed)
+        .id();
+    app.update();
+
+    let fixed_layout = app.world().get::<ResolvedLayout>(fixed).unwrap();
+    assert_eq!(
+        fixed_layout.position,
+        Vec2::new(0.0, 0.0),
+        "an explicit-zero-inset Fixed child resolves to the viewport origin \
+         (0,0) regardless of the root's 40px padding — the property `.fixed()` \
+         relies on for a viewport-anchored overlay",
+    );
+    assert_eq!(fixed_layout.size, Vec2::new(50.0, 50.0));
+}
+
 // Two Fixed siblings both attach to the root and keep their own insets
 // (single global root, D2) — neither displaces the other.
 #[test]

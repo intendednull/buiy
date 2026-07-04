@@ -59,7 +59,10 @@ pub use layout::{
 // MVU substrate. Opt-in via `MvuCorePlugin`; the full surface
 // (`Envelope`, `MsgLog`, `RecordMode`, `LogicalId`, `enqueue`, `PureEnv`, …) lives
 // under `buiy_core::mvu`.
-pub use mvu::{Cmd, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet, MvuWorkCounters};
+pub use mvu::{
+    ClockPlugin, Cmd, Model, MvuAppExt, MvuCorePlugin, MvuModelExt, MvuSet, MvuWorkCounters,
+    advance_clock,
+};
 pub use picking::{
     BuiyPickingBackendPlugin, MultiClick, PickingPlugin, global_paint_order, hit_test,
 };

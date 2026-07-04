@@ -797,6 +797,141 @@ fn blink_edges_rebuild_glyphs_only_and_steady_phases_rebuild_nothing() {
     assert!(caret_instance(&h).is_some());
 }
 
+/// Stage C (partial-reextract D2): a caret blink edge in a MULTI-entity scene
+/// executes as a length-changing Patch of the caret's entity alone — the
+/// stamp instance splices in and out (count ±1) while the sibling text's
+/// slice stays byte-identical at the SAME indices (the sibling paints first,
+/// so it is the retained prefix). The single-entity blink pin above keeps
+/// its Full-path counts untouched by Stage C: a 1-run scene always bails to
+/// Full at the classifier (1 changed of 1 retained run > the 50 % fraction
+/// bail — pinned unit-side by `changed_fraction_above_threshold_classifies_
+/// full`), and there Patch and Full would walk the same lone entity anyway.
+#[test]
+fn blink_edge_patches_only_the_caret_entity_mid_scene() {
+    use buiy_core::text::GlyphDamage;
+    use smallvec::SmallVec;
+
+    let mut h = TextExtractHarness::new();
+    let sibling = h
+        .app
+        .world_mut()
+        .spawn((
+            buiy_core::Node,
+            buiy_core::layout::Style::default(),
+            Text("Left".into()),
+            FontSize(16.0),
+        ))
+        .id();
+    let editor = h
+        .app
+        .world_mut()
+        .spawn((
+            buiy_core::Node,
+            buiy_core::layout::Style::default(),
+            Text("Hi".into()),
+            FontSize(16.0),
+            CaretVisual {
+                visible: true,
+                rect: Rect::new(2.0, 0.0, 3.0, 19.2),
+                secondary: None,
+            },
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            buiy_core::Node,
+            buiy_core::layout::Style::default()
+                .flex_column()
+                .width_px(300.0)
+                .height_px(100.0),
+        ))
+        .add_children(&[sibling, editor]);
+    h.settle();
+
+    let g0 = h.changed_frames();
+    let count0 = h.glyph_count();
+    let before = h.glyphs().glyphs.clone();
+    let sib_run = h
+        .glyphs()
+        .entity_runs
+        .iter()
+        .find(|r| r.entity == sibling)
+        .expect("the sibling emitted a run")
+        .instances
+        .clone();
+    assert!(
+        caret_instance(&h).is_some(),
+        "visible phase: the stamp is the last instance"
+    );
+
+    // The editor paints after the sibling, so its run start is the D6 first
+    // dirty slot the executed splice publishes (the splice replaces the
+    // editor's whole run; the sibling prefix below it is retained).
+    let editor_run_start = h
+        .glyphs()
+        .entity_runs
+        .iter()
+        .find(|r| r.entity == editor)
+        .expect("the editor emitted a run")
+        .instances
+        .start;
+
+    // Cross the blink edge: the writer flips `visible` on the EDITOR only →
+    // 1 changed of 2 retained runs = 50 % ≤ the D3 bail → an executed Patch
+    // whose re-emission drops exactly the stamp (splice delta −1).
+    h.app
+        .world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_millis(600));
+    h.frame();
+    assert_eq!(
+        h.glyph_damage(),
+        GlyphDamage::Patch {
+            changed: SmallVec::from_slice(&[editor]),
+            removed: SmallVec::new(),
+            first_dirty_slot: Some(editor_run_start),
+        },
+        "the blink edge executes as a Patch of the caret entity alone, \
+         publishing the editor's run start as the D6 first dirty slot"
+    );
+    assert_eq!(
+        h.changed_frames(),
+        g0 + 1,
+        "the splice republishes the glyph carrier exactly once"
+    );
+    assert_eq!(
+        h.glyph_count(),
+        count0 - 1,
+        "exactly the stamp left the buffer (length-changing splice)"
+    );
+    assert!(caret_instance(&h).is_none(), "hidden phase: no stamp");
+    assert_eq!(
+        &h.glyphs().glyphs[sib_run.start as usize..sib_run.end as usize],
+        &before[sib_run.start as usize..sib_run.end as usize],
+        "the sibling's slice is byte-identical at the SAME indices"
+    );
+
+    // And back: the next edge splices the stamp back in; sibling untouched.
+    h.app
+        .world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_millis(500));
+    h.frame();
+    assert_eq!(h.changed_frames(), g0 + 2);
+    assert_eq!(
+        h.glyph_count(),
+        count0,
+        "the stamp is back (splice delta +1)"
+    );
+    assert!(caret_instance(&h).is_some());
+    assert_eq!(
+        &h.glyphs().glyphs[sib_run.start as usize..sib_run.end as usize],
+        &before[sib_run.start as usize..sib_run.end as usize],
+        "the sibling's slice is STILL byte-identical after both edges"
+    );
+}
+
 // --- Task 5: ::placeholder — same pipeline, one tint ------------------------
 
 #[test]

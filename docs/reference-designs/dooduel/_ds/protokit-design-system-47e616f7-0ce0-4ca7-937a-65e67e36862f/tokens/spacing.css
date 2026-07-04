@@ -1,0 +1,36 @@
+/* ============================================================
+   Protokit · spacing & radii tokens
+   A 4px-based spacing scale and a radius ramp. Components reach for
+   these so density + roundedness stay consistent and re-skinnable.
+   ============================================================ */
+
+:root {
+  /* spacing (4px base) */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-7:  32px;
+  --sp-8:  40px;
+  --sp-9:  48px;
+  --sp-10: 64px;
+
+  /* radii */
+  --r-xs:   6px;
+  --r-sm:   8px;
+  --r-md:   11px;
+  --r-lg:   16px;
+  --r-xl:   22px;
+  --r-2xl:  28px;
+  --r-full: 999px;
+
+  /* control heights (keep tap targets >= 44 on mobile) */
+  --control-sm: 34px;
+  --control:    42px;
+  --control-lg: 52px;
+
+  /* the comfortable max reading / screen width */
+  --screen-max: 1180px;
+}

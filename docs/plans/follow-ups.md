@@ -2005,3 +2005,83 @@ system addition can re-trigger it.
 schedule-order-invariant in `buiy_core` (the robustness fix), or (b) have the gallery
 layout-snapshot dump SKIP invisible (size-0 in a hidden subtree) nodes so the Tier-1
 gate pins only observable geometry (the cheaper, snapshot-side fix). Low severity.
+
+## Render — icon-tier keyed partial re-extract — MEASURED, CLOSED (not worth building; 2026-07-03)
+
+**Originated:** the 2026-07-03 glyph partial re-extract
+(`docs/specs/2026-07-03-glyph-partial-reextract-design.md`), which names the icon
+tier a non-goal and mandated "measure first". Measured 2026-07-03; the numbers
+say don't build it.
+
+**What was measured** (release, adapterless `PipelineHarness` main-world pipeline
++ a bare render world running `(maintain_atlas, extract_buiy_icons).chain()`;
+48-frame warmup, extract phase timed in isolation over 400 frames; N `Icon`
+children cycling 5 real gallery paths, one icon's tint toggled per frame to force
+the wholesale rebuild):
+
+| scenario | N=30 | N=300 | N=1000 |
+|---|---|---|---|
+| icon-dirty (wholesale rebuild) p50 | 8.4 µs | 71 µs | 229 µs |
+| text-dirty sibling (icons untouched) p50 | 2.6 µs | 18 µs | 56 µs |
+
+Wholesale rebuild scales linearly at ~0.23 µs/icon; the pathological 1000-icon
+case is 0.23 ms — 1.4 % of a 60 Hz frame and ~60–240× below the 14–57 ms
+dirty-extract cost that justified the glyph tier's Full/Patch machinery.
+
+**Why closed, not just deferred:**
+- The dirty gate is already tight: `extract_buiy_icons` rebuilds only on
+  `Changed<Icon|GlobalTransform|ResolvedLayout|ClipRect|AncestorClip|ComputedPaintSkip|Stacking>`
+  (scoped `With<Icon>`), theme change, or scale change. A glyph-Patch frame
+  (caret blink, text value change) takes the steady touch-only path — proven by
+  the text-dirty row staying flat vs the rebuild column. There is no
+  over-triggering to fix.
+- Icon counts stay small in practice: checkbox checks, radio dots, and
+  disclosure arrows are TEXT glyphs (e.g. `checkbox.rs` `CHECK_GLYPH`), not
+  `Icon`s; the icon tier carries only real vector icons (nav rail, steppers,
+  close/search/gear), ~30 on the busiest gallery screen, and off-screen icons
+  are paint-skipped so visible counts are viewport-bounded.
+- A Full/Patch mirror would not remove the per-frame O(N) atlas
+  `touch_existing` pass (LRU-warmth maintenance, same as the glyph tier keeps),
+  so it would only shave the already-cheap rebuild while importing the
+  classifier/splice/fold-residue complexity.
+
+Reopen only if a widget starts emitting `Icon`s per row/cell at data-grid scale
+AND animates them (per-frame `Changed<GlobalTransform>` is the one realistic
+wholesale-every-frame trigger — the icon analog of active text).
+
+## Render — stale-dim residue when an effect group drops on a glyph-clean frame (degradation-only) — RESOLVED (2026-07-03)
+
+**Originated:** Stage D of the 2026-07-03 glyph partial re-extract (commit
+`0f0ebeb`'s follow-up note) — pre-existing, out of scope there.
+
+**Was:** `fold_degraded_groups` mutates the glyph CPU mirror + GPU buffer in place
+on a degraded frame; when the degradation set SHRINKS (a group un-degrades or
+drops) on a frame where the glyph carrier is clean, nothing re-uploaded — the
+folded (dimmed) glyph bytes stayed on the GPU until the next glyph-dirty frame, so
+a group compositing back through its own target was DOUBLE-dimmed (folded-alpha ×
+opacity). Reachable only under a forced tiny RT-pool budget (`RtPoolBudget`
+override); production-dead at the default 64 MiB (nothing ever degrades).
+
+**Fix (direction (i) — restore-from-source on the un-degrade edge).**
+`prepare_effect_groups` now takes `Res<ExtractedGlyphs>` and, when
+`glyph_mirror_folded && !glyph_dirty`, rebuilds `BuiyInstanceBuffers::glyph` from
+that retained, never-folded source BEFORE the empty-groups early return (so a full
+group drop restores too). It treats the tier as freshly repacked
+(`fold_glyph = glyph_dirty || glyph_restore`) so a surviving degraded group
+re-folds from the clean bytes, re-uploads once, and sets `glyph_mirror_folded` to
+whether a fold actually applied this frame — clearing it on a full un-degrade /
+drop (the Patch fast path may then resume), keeping it true on a partial drop. The
+prepare.rs Patch-path guard stays as defense-in-depth.
+
+*Runner-up rejected — draw-time fold* (fold the group opacity in the shader
+instead of mutating the mirror): far larger blast radius (glyph pipeline / WGSL /
+wasm) for a production-dead bug, and the un-fold belongs in the same system that
+owns the fold (`prepare_effect_groups`), so restore-from-source is the local,
+low-risk fix.
+
+**Regression test:** `undegrade_on_glyph_clean_frame_restores_unfolded_glyphs`
+(`crates/buiy_core/tests/render_degraded_group_gpu.rs`, GPU `#[ignore]` lane) —
+budget-grow un-degrade fixture (Opacity held constant so the glyph tier is
+provably clean on the edge frame), white-glyph ink R+G parity against a cold
+never-degraded render. RED (pre-fix): App A double-dimmed `[146,146,193]` vs App B
+`[183,183,199]`.

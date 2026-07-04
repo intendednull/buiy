@@ -168,3 +168,98 @@ fn patch_retains_sibling_records_byte_identical() {
         }
     }
 }
+
+/// Glyph partial-reextract Stage C (D1/D2/D3) — THE counter FLIP gate: an
+/// idle text frame records ZERO glyph work (`GlyphDamage` untouched — the
+/// § 6.2 O(0) contract); one value-tier change on one of N text entities
+/// EXECUTES a Patch (`glyph_patches == 1`, `glyph_full_rebuilds == 0` — the
+/// wholesale rebuild did NOT run) naming exactly the victim; a structural
+/// change (a despawn ticking the parent's `Children`) still executes a Full
+/// rebuild (`glyph_full_rebuilds == 1`, `glyph_patches == 0`).
+///
+/// History: the Stage-B ancestor of this test
+/// (`glyph_classifier_idle_zeros_one_change_one_patch_candidate`) pinned
+/// `glyph_full_rebuilds == 1` on the change frame while the verdict was
+/// observation-only; Stage C's Patch execution flips that assertion —
+/// updated consciously here, per the plan's "counter FLIP" verify.
+#[test]
+fn glyph_flip_idle_zeros_one_change_executes_patch_structural_full() {
+    use bevy::prelude::Color;
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::TextColor;
+    use buiy_core::text::GlyphDamage;
+
+    let mut h = build_large_scene(4); // 8 text entities: 1 change ≤ the D3 fraction bail
+    for _ in 0..8 {
+        h.frame(); // settle (the cosmic-text reshape echo quiesces in a few frames)
+    }
+    // Pick the victim AFTER settling: `TextBuffer` is inserted by TextSync on
+    // the first Update, not at spawn.
+    let victim = {
+        let mut q = h
+            .app
+            .world_mut()
+            .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<buiy_core::text::TextBuffer>>();
+        q.iter(h.app.world()).next().expect("a text entity")
+    };
+
+    // Idle: no glyph rebuild, no patch, no patched entities.
+    h.frame();
+    let idle = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(idle.glyph_full_rebuilds, 0, "idle frame: no glyph rebuild");
+    assert_eq!(idle.glyph_patches, 0, "idle frame: no executed patch");
+    assert_eq!(
+        idle.glyph_patch_candidates, 0,
+        "idle frame: no Patch verdict"
+    );
+    assert_eq!(
+        idle.glyph_patched_entities, 0,
+        "idle frame: no patched entities"
+    );
+
+    // One value-tier change on ONE text entity → an EXECUTED Patch.
+    h.app
+        .world_mut()
+        .entity_mut(victim)
+        .insert(TextColor(ColorToken::Custom(Color::srgb(0.2, 0.7, 0.3))));
+    h.frame();
+    let changed = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(
+        changed.glyph_full_rebuilds, 0,
+        "Stage C FLIP: the wholesale rebuild did NOT run for a 1-entity value change"
+    );
+    assert_eq!(
+        changed.glyph_patches, 1,
+        "Stage C FLIP: the Patch EXECUTED (order walk skipped, victim spliced)"
+    );
+    assert_eq!(
+        changed.glyph_patch_candidates, 1,
+        "the classifier verdicted the frame Patch-eligible (D3)"
+    );
+    assert_eq!(
+        changed.glyph_patched_entities, 1,
+        "exactly the one changed entity is named by the verdict"
+    );
+    assert!(
+        matches!(
+            h.render.resource::<GlyphDamage>(),
+            GlyphDamage::Patch { changed, removed, .. }
+                if changed.as_slice() == [victim] && removed.is_empty()
+        ),
+        "GlyphDamage::Patch names exactly the victim"
+    );
+
+    // A structural change — a despawn ticks the parent's `Children` — still
+    // executes the Full rebuild (D3: "any uncertainty → Full").
+    h.app.world_mut().entity_mut(victim).despawn();
+    h.frame();
+    let structural = *h.render.resource::<RenderWorkCounters>();
+    assert_eq!(
+        structural.glyph_full_rebuilds, 1,
+        "a structural change still executes a Full rebuild"
+    );
+    assert_eq!(
+        structural.glyph_patches, 0,
+        "a structural change never executes a Patch"
+    );
+}

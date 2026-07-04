@@ -25,7 +25,7 @@ use buiy_core::interaction::OnPress;
 use buiy_core::mvu::{Model, enqueue};
 use buiy_core::text::edit::{EditSubmitted, TextChanged, TextEditState};
 
-use crate::element::InputHandler;
+use crate::element::{InputHandler, SubmitHandler};
 
 /// The message a press on this entity enqueues, and onto which model. Generic
 /// over the model `M` so the value is the concrete `M::Msg` — no type erasure,
@@ -61,11 +61,14 @@ pub(crate) struct InputAction<M: Model> {
     pub(crate) model: Entity,
 }
 
-/// A text-input's submit (Enter) message + its owning model (a value, like
-/// [`PressAction`]).
+/// A text-input's submit (Enter) handler + its owning model. The handler is either a
+/// static `Msg` value ([`Element::on_submit`](crate::element::Element::on_submit), like
+/// [`PressAction`]) or a capturing fold of the submitted text
+/// ([`Element::on_submit_with`](crate::element::Element::on_submit_with)) — both replay-safe
+/// by the same rule as [`InputAction`].
 #[derive(Component)]
 pub(crate) struct SubmitAction<M: Model> {
-    pub(crate) msg: M::Msg,
+    pub(crate) handler: SubmitHandler<M::Msg>,
     pub(crate) model: Entity,
 }
 
@@ -88,16 +91,21 @@ pub(crate) fn route_text_input<M: Model>(
 }
 
 /// The editor→MVU **submit bridge**: `EditSubmitted(entity)` (Enter on a
-/// single-line input) → [`enqueue`] the entity's `on_submit` message onto its
-/// model.
+/// single-line input) → resolve the entity's `on_submit` handler against the
+/// editor's live value → [`enqueue`] the resulting message onto its model. A
+/// static `on_submit(msg)` ignores the value (unchanged behaviour); a capturing
+/// `on_submit_with(f)` folds the submitted text in. The editor is `Option`al so a
+/// static submit still routes even on the (impossible-in-practice) entity that
+/// lacks a `TextEditState`, preserving the pre-F7 static path exactly.
 pub(crate) fn route_text_submit<M: Model>(
     mut submits: MessageReader<EditSubmitted>,
-    actions: Query<&SubmitAction<M>>,
+    actions: Query<(&SubmitAction<M>, Option<&TextEditState>)>,
     mut commands: Commands,
 ) {
     for EditSubmitted(e) in submits.read() {
-        if let Ok(action) = actions.get(*e) {
-            enqueue::<M>(&mut commands, action.model, action.msg.clone());
+        if let Ok((action, editor)) = actions.get(*e) {
+            let value = editor.map(|ed| ed.value()).unwrap_or_default();
+            enqueue::<M>(&mut commands, action.model, action.handler.resolve(value));
         }
     }
 }

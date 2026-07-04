@@ -16,6 +16,15 @@ use bevy::prelude::*;
 /// almost everything. The render world persists across frames, so one insert
 /// holds for the whole test.
 fn force_tiny_rt_budget(app: &mut App, bytes: u64) {
+    set_rt_budget(app, bytes);
+}
+
+/// Overwrite the render-world [`RtPoolBudget`] mid-test (the un-degrade edge
+/// fixture GROWS it back to the production default so a previously-degraded
+/// group re-acquires a pooled target on a MAIN-WORLD-CLEAN frame). Only the
+/// render-world resource changes; no main-world paint input ticks, so the
+/// frame that reads the new budget is glyph-clean.
+fn set_rt_budget(app: &mut App, bytes: u64) {
     use buiy_core::render::compositor::RtPoolBudget;
     app.get_sub_app_mut(bevy::render::RenderApp)
         .expect("RenderApp")
@@ -487,5 +496,145 @@ fn nested_degraded_child_forward_composites_into_parent() {
         corner,
         [0, 0, 0, 255],
         "nested inject must not mis-place the child at window level (corner clean)"
+    );
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter (real GPU or lavapipe); run with --ignored"]
+fn undegrade_on_glyph_clean_frame_restores_unfolded_glyphs() {
+    // Stale-dim residue on the UN-degrade edge (effect-compositor.md § 2.3 /
+    // glyph-pipeline degraded-fold): `fold_degraded_groups` dims a degraded
+    // group's glyph member alphas IN PLACE in the CPU mirror + GPU buffer. When
+    // the degradation LIFTS on a frame where the glyph carrier is CLEAN
+    // (`glyph_dirty == false`), the glyph buffer is RETAINED — nothing repacks
+    // it from source — so the folded (dimmed) bytes persist and the group, now
+    // compositing through its own target at `opacity`, is DOUBLE-DIMMED
+    // (folded-alpha × opacity ≈ 0.36 instead of 0.6).
+    //
+    // Budget-grow fixture (Opacity held CONSTANT so the glyph tier is provably
+    // clean on the edge frame — the quad tier re-packs every frame anyway
+    // because `write_effect_groups` re-inserts `EffectGroup`, but the glyph
+    // producer's `dirty` gate deliberately EXCLUDES that structural probe, so a
+    // live-group steady frame is glyph-idle). App A degrades under a tiny RT
+    // budget, settles, then the budget grows back to the production default and
+    // ONE main-world-clean update() drives the un-degrade edge. App B renders
+    // the SAME scene at the large budget from the start (never degrades). The
+    // fix restores the glyph mirror from `ExtractedGlyphs` on the un-degrade
+    // edge, so A's white-glyph ink must match B's at the composed 0.6 opacity.
+    //
+    // Channel discipline: assert on the white ink's RED+GREEN (orthogonal to the
+    // blue bg the glyphs sit over), the proven idiom from
+    // `degraded_glyph_fold_idempotent_under_quad_dirty_only_frame`. Under the
+    // pre-fix code A's ink R+G is measurably BELOW B's (double-dimmed); the fix
+    // pulls them into parity.
+    use buiy_core::Node;
+    use buiy_core::layout::{Inset, Length, Sizing, Style};
+    use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::{Background, Opacity, TextColor};
+    use buiy_core::text::{FontSize, Text};
+
+    const W: u32 = 96;
+    const H: u32 = 64;
+    let blue = Color::srgb(0.05, 0.05, 0.9);
+
+    // Build the shared scene (a degraded-eligible Opacity group: a blue bg quad
+    // AND a white glyph run) into an app at `budget`, settle it text-resident,
+    // and return the readback target.
+    fn scene(app: &mut App, blue: Color) {
+        let bg = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default()
+                    .absolute()
+                    .inset(Inset {
+                        top: Sizing::Length(Length::px(8.0)),
+                        left: Sizing::Length(Length::px(8.0)),
+                        ..default()
+                    })
+                    .width_px(64.0)
+                    .height_px(40.0),
+                Background {
+                    color: ColorToken::Custom(blue),
+                },
+            ))
+            .id();
+        let text = app
+            .world_mut()
+            .spawn((
+                Node,
+                Style::default().absolute().inset(Inset {
+                    top: Sizing::Length(Length::px(12.0)),
+                    left: Sizing::Length(Length::px(12.0)),
+                    ..default()
+                }),
+                Text(String::from("Hi")),
+                FontSize(24.0),
+                TextColor(ColorToken::Custom(Color::WHITE)),
+            ))
+            .id();
+        let parent = app
+            .world_mut()
+            .spawn((Node, Style::default().absolute(), Opacity(0.6)))
+            .id();
+        app.world_mut().entity_mut(parent).add_children(&[bg, text]);
+        app.world_mut()
+            .spawn((Node, Style::default()))
+            .add_children(&[parent]);
+    }
+
+    // --- App A: degrade, settle, GROW the budget, one clean update. ----------
+    let mut a = support::gpu_render_app(W, H);
+    force_tiny_rt_budget(&mut a, 64); // degrade the group.
+    let ta = support::render_to_image(&mut a, W, H);
+    support::spawn_capture_camera(&mut a, ta.clone());
+    scene(&mut a, blue);
+    support::finish_and_run(&mut a, 4);
+    support::wait_for_text_ready(&mut a, 60);
+    // Un-degrade edge: grow the RT budget to the production default. The main
+    // world is untouched, so this frame is glyph-CLEAN — the residue trigger.
+    set_rt_budget(&mut a, 64 << 20);
+    a.update();
+    let frame_a = support::readback_rgba(&mut a, ta);
+
+    // --- App B: the SAME scene at the large budget from the start (cold). -----
+    let mut b = support::gpu_render_app(W, H);
+    let tb = support::render_to_image(&mut b, W, H);
+    support::spawn_capture_camera(&mut b, tb.clone());
+    scene(&mut b, blue);
+    support::finish_and_run(&mut b, 4);
+    support::wait_for_text_ready(&mut b, 60);
+    let frame_b = support::readback_rgba(&mut b, tb);
+
+    // The white "Hi" ink, identified in the REFERENCE (App B) by high R+G (white
+    // over the blue bg never reaches that — its R+G are ~48 at 0.6). Require a
+    // real ink population so a fixture drift fails loudly, then assert A's ink
+    // matches B's per-pixel R+G — the fix pulls A's double-dimmed ink up to B's.
+    let mut ink_pixels = 0usize;
+    for y in 14..34 {
+        for x in 10..40 {
+            let bp = support::px(&frame_b, W, x, y);
+            let ap = support::px(&frame_a, W, x, y);
+            if bp[0] > 150 && bp[1] > 150 {
+                ink_pixels += 1;
+                const TOL: i32 = 4;
+                let d_r = (ap[0] as i32 - bp[0] as i32).abs();
+                let d_g = (ap[1] as i32 - bp[1] as i32).abs();
+                assert!(
+                    d_r <= TOL && d_g <= TOL,
+                    "un-degraded glyph ink (white) at ({x},{y}) must match a cold \
+                     large-budget render: App A={ap:?} App B={bp:?} (R+G ±{TOL}). \
+                     Pre-fix, the retained folded glyph mirror double-dims A \
+                     (folded-alpha × opacity ≈ 0.36 vs 0.6): the un-degrade edge \
+                     must restore the mirror from ExtractedGlyphs."
+                );
+            }
+        }
+    }
+    assert!(
+        ink_pixels >= 8,
+        "expected the white \"Hi\" run in the sampled box (found only {ink_pixels} \
+         ink pixels) — fixture drift moved the glyphs; the parity assertion would \
+         otherwise vacuously pass over background"
     );
 }

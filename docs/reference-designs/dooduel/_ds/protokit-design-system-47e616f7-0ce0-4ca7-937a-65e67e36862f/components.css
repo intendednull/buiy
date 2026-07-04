@@ -1,0 +1,194 @@
+/* ============================================================
+   Protokit · component classes
+   The visual layer for the React primitives in /components. Components
+   apply these classNames; consumers get them by linking styles.css.
+   Everything is token-driven so it re-themes and re-skins for free.
+   ============================================================ */
+
+/* ---------- Button ---------- */
+.pk-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  border: 1px solid transparent; border-radius: var(--r-full);
+  height: var(--control); padding: 0 18px;
+  font-size: var(--text-base); font-weight: var(--weight-medium); letter-spacing: var(--track-snug);
+  white-space: nowrap; user-select: none;
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease),
+              color var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
+}
+.pk-btn:active { transform: translateY(1px); }
+.pk-btn svg { width: 17px; height: 17px; flex: none; }
+.pk-btn[disabled] { opacity: .45; pointer-events: none; }
+
+.pk-btn--primary { background: var(--accent); color: var(--accent-ink); }
+.pk-btn--primary:hover { background: var(--accent-press); }
+.pk-btn--dark { background: var(--ink); color: var(--surface); }
+.pk-btn--dark:hover { filter: brightness(1.12); }
+.pk-btn--ghost { background: transparent; color: var(--ink); border-color: var(--hair); }
+.pk-btn--ghost:hover { background: var(--surface-2); border-color: var(--faint); }
+.pk-btn--soft { background: var(--surface-3); color: var(--ink); }
+.pk-btn--soft:hover { background: var(--hair); }
+.pk-btn--quiet { background: transparent; color: var(--ink-2); }
+.pk-btn--quiet:hover { background: var(--surface-2); }
+.pk-btn--pos { background: var(--pos); color: #fff; }
+.pk-btn--pos:hover { filter: brightness(.95); }
+.pk-btn--danger { background: var(--danger); color: #fff; }
+.pk-btn--danger:hover { filter: brightness(.95); }
+
+.pk-btn--lg { height: var(--control-lg); padding: 0 26px; font-size: var(--text-md); }
+.pk-btn--sm { height: var(--control-sm); padding: 0 13px; font-size: var(--text-sm); }
+.pk-btn--block { display: flex; width: 100%; }
+
+/* ---------- IconButton ---------- */
+.pk-iconbtn {
+  display: inline-grid; place-items: center;
+  width: var(--control); height: var(--control);
+  border-radius: var(--r-full); border: 1px solid var(--hair);
+  background: var(--surface); color: var(--ink-2);
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
+}
+.pk-iconbtn:hover { background: var(--surface-2); color: var(--ink); border-color: var(--faint); }
+.pk-iconbtn:active { transform: translateY(1px); }
+.pk-iconbtn--sm { width: var(--control-sm); height: var(--control-sm); }
+.pk-iconbtn--bare { border-color: transparent; background: transparent; }
+.pk-iconbtn--bare:hover { background: var(--surface-2); border-color: transparent; }
+
+/* ---------- Card ---------- */
+.pk-card {
+  background: var(--surface); border: 1px solid var(--hair);
+  border-radius: var(--r-lg); box-shadow: var(--sh-sm);
+}
+.pk-card--pad { padding: var(--sp-6); }
+.pk-card--2 { background: var(--surface-2); }
+.pk-card--flat { box-shadow: none; }
+
+/* ---------- Badge ---------- */
+.pk-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px; border-radius: var(--r-full);
+  font-size: var(--text-sm); font-weight: var(--weight-medium); letter-spacing: var(--track-snug);
+  background: var(--surface-3); color: var(--ink-2); white-space: nowrap;
+}
+.pk-badge--accent { background: var(--accent-tint); color: var(--accent-press); }
+.pk-badge--pos { background: var(--pos-tint); color: var(--pos); }
+.pk-badge--warn { background: var(--warn-tint); color: var(--warn); }
+.pk-badge--danger { background: var(--danger-tint); color: var(--danger); }
+.pk-badge--mono { font-family: var(--font-mono); letter-spacing: var(--track-wide); text-transform: uppercase; font-size: var(--text-xs); }
+.pk-badge--dot::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-full); background: currentColor; display: inline-block; }
+
+/* ---------- Avatar ---------- */
+.pk-avatar {
+  display: inline-grid; place-items: center; border-radius: var(--r-full);
+  font-weight: var(--weight-semi); font-size: .92em; color: #fff; flex: none;
+  letter-spacing: var(--track-snug); overflow: hidden;
+}
+
+/* ---------- Form fields ---------- */
+.pk-field { display: flex; flex-direction: column; gap: 7px; }
+.pk-field > label { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--ink-2); letter-spacing: var(--track-snug); }
+.pk-field > .pk-hint { font-size: var(--text-sm); color: var(--muted); }
+.pk-input, .pk-select, .pk-textarea {
+  width: 100%; height: 46px; padding: 0 14px;
+  background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r-md);
+  color: var(--ink); font-size: var(--text-md); outline: none;
+  transition: border-color var(--dur-2), box-shadow var(--dur-2), background var(--dur-2);
+}
+.pk-textarea { height: auto; min-height: 96px; padding: 12px 14px; resize: vertical; line-height: var(--leading-body); }
+.pk-input:focus, .pk-select:focus, .pk-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.pk-input::placeholder, .pk-textarea::placeholder { color: var(--faint); }
+.pk-input[disabled] { opacity: .55; pointer-events: none; }
+.pk-select { appearance: none; cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='%236f7783' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/></svg>");
+  background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px;
+}
+
+/* ---------- Checkbox ---------- */
+.pk-check {
+  appearance: none; width: 20px; height: 20px; flex: none; margin: 0;
+  border: 1.5px solid var(--faint); border-radius: var(--r-xs); background: var(--surface);
+  display: inline-grid; place-items: center; cursor: pointer;
+  transition: background var(--dur-1), border-color var(--dur-1);
+}
+.pk-check:hover { border-color: var(--accent); }
+.pk-check:checked { background: var(--accent); border-color: var(--accent); }
+.pk-check:checked::after {
+  content: ""; width: 11px; height: 7px; margin-top: -2px;
+  border-left: 2px solid var(--accent-ink); border-bottom: 2px solid var(--accent-ink);
+  transform: rotate(-45deg);
+}
+
+/* ---------- Switch ---------- */
+.pk-switch {
+  position: relative; width: 44px; height: 26px; flex: none;
+  border: 0; border-radius: var(--r-full); padding: 0; background: var(--hair);
+  transition: background var(--dur-2) var(--ease);
+}
+.pk-switch[data-on="1"] { background: var(--pos); }
+.pk-switch i {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: var(--r-full);
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform var(--dur-2) var(--ease);
+}
+.pk-switch[data-on="1"] i { transform: translateX(18px); }
+
+/* ---------- Segmented control ---------- */
+.pk-seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-3); border-radius: var(--r-full); }
+.pk-seg button {
+  border: 0; background: transparent; color: var(--ink-2);
+  font-size: var(--text-sm); font-weight: var(--weight-medium); padding: 7px 16px; border-radius: var(--r-full);
+  white-space: nowrap; transition: background var(--dur-2), color var(--dur-2);
+}
+.pk-seg button[data-on="1"] { background: var(--surface); color: var(--ink); box-shadow: var(--sh-sm); }
+
+/* ---------- Tabs (underline) ---------- */
+.pk-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hair); }
+.pk-tab {
+  position: relative; border: 0; background: transparent; color: var(--muted);
+  font-size: var(--text-base); font-weight: var(--weight-medium); padding: 11px 14px 13px;
+  transition: color var(--dur-2);
+}
+.pk-tab:hover { color: var(--ink-2); }
+.pk-tab[data-on="1"] { color: var(--ink); }
+.pk-tab[data-on="1"]::after {
+  content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px;
+  border-radius: 2px 2px 0 0; background: var(--accent);
+}
+
+/* ---------- Tag (removable chip) ---------- */
+.pk-tag {
+  display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px;
+  border-radius: var(--r-full); border: 1px solid var(--hair); background: var(--surface-2);
+  color: var(--ink-2); font-size: var(--text-sm); font-weight: var(--weight-medium);
+}
+.pk-tag-x { border: 0; background: transparent; color: currentColor; opacity: .55; padding: 0; display: grid; place-items: center; }
+.pk-tag-x:hover { opacity: 1; }
+
+/* ---------- Toast ---------- */
+.pk-toast-wrap {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  z-index: 600; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
+}
+.pk-toast {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--ink); color: var(--surface);
+  padding: 11px 16px 11px 14px; border-radius: var(--r-full);
+  font-size: var(--text-base); font-weight: var(--weight-medium);
+  box-shadow: var(--sh-pop); animation: toast-in var(--dur-3) var(--ease);
+}
+.pk-toast svg { width: 17px; height: 17px; color: var(--pos); flex: none; }
+
+/* ---------- Tooltip ---------- */
+.pk-tip-wrap { position: relative; display: inline-flex; }
+.pk-tip {
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  z-index: 50; white-space: nowrap; pointer-events: none;
+  background: var(--ink); color: var(--surface);
+  padding: 6px 9px; border-radius: var(--r-sm);
+  font-size: var(--text-sm); font-weight: var(--weight-medium);
+  box-shadow: var(--sh-pop); animation: fade-in var(--dur-2) var(--ease);
+}
+
+/* ---------- Spinner ---------- */
+.pk-spinner {
+  width: 16px; height: 16px; border-radius: var(--r-full); display: inline-block;
+  border: 2px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor; animation: spin .7s linear infinite;
+}

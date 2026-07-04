@@ -1,0 +1,57 @@
+[t=    0] host booted; dir=/home/intendednull/.claude-personal/jobs/10f07af2/tmp/playtest draw=240s pick=60s reveal=20s rounds=1 seat0="Alex" bots=OFF
+[t= 3298] start: match begun; seat0="Alex"
+[t= 3666] pick: seat 0 chose word[2] "rainbow" (funnel)
+[t= 4752] stroke: seat 0, 25 pts, color [230, 30, 30, 255], size 9
+[t= 4752] stroke: seat 0, 25 pts, color [245, 140, 20, 255], size 9
+[t= 4752] stroke: seat 0, 25 pts, color [240, 215, 30, 255], size 9
+[t= 4752] stroke: seat 0, 25 pts, color [40, 180, 60, 255], size 9
+[t= 4752] stroke: seat 0, 25 pts, color [40, 90, 220, 255], size 9
+[t= 4752] stroke: seat 0, 25 pts, color [140, 50, 200, 255], size 9
+[t= 5045] guess: seat 2 "rainbow" (funnel)
+[t= 5439] guess: seat 1 "rainbow" (funnel)
+[t= 5608] guess: seat 3 "rainbow" (funnel)
+[t= 6846] pick: seat 1 chose word[2] "castle" (funnel)
+[t= 9356] stroke: seat 1, 4 pts, color [80, 80, 95, 255], size 6
+[t= 9356] stroke: seat 1, 3 pts, color [185, 50, 45, 255], size 6
+[t= 9356] stroke: seat 1, 2 pts, color [80, 80, 95, 255], size 4
+[t= 9356] stroke: seat 1, 3 pts, color [225, 30, 30, 255], size 5
+[t= 9356] stroke: seat 1, 4 pts, color [80, 80, 95, 255], size 6
+[t= 9356] stroke: seat 1, 3 pts, color [185, 50, 45, 255], size 6
+[t= 9356] stroke: seat 1, 2 pts, color [80, 80, 95, 255], size 4
+[t= 9356] stroke: seat 1, 3 pts, color [225, 30, 30, 255], size 5
+[t= 9356] stroke: seat 1, 13 pts, color [80, 80, 95, 255], size 6
+[t= 9356] stroke: seat 1, 9 pts, color [110, 60, 25, 255], size 6
+[t= 9949] guess: seat 0 "castle" (funnel)
+[t=10006] guess: seat 2 "castle" (funnel)
+[t=10214] guess: seat 3 "castle" (funnel)
+[t=11450] pick: seat 2 chose word[2] "saxophone" (funnel)
+[t=13436] stroke: seat 2, 15 pts, color [210, 160, 35, 255], size 10
+[t=13436] stroke: seat 2, 8 pts, color [210, 160, 35, 255], size 10
+[t=13436] stroke: seat 2, 3 pts, color [45, 45, 50, 255], size 12
+[t=13436] stroke: seat 2, 2 pts, color [110, 110, 120, 255], size 8
+[t=13436] stroke: seat 2, 2 pts, color [110, 110, 120, 255], size 8
+[t=13436] stroke: seat 2, 2 pts, color [110, 110, 120, 255], size 8
+[t=13436] stroke: seat 2, 2 pts, color [110, 110, 120, 255], size 8
+[t=13830] guess: seat 1 "saxophone" (funnel)
+[t=14269] guess: seat 0 "saxophone" (funnel)
+[t=14388] guess: seat 3 "saxophone" (funnel)
+[t=14917] clear REJECTED (seat 2, phase Picking)
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=14917] stroke REJECTED (phase=Picking, not Drawing): seat 2
+[t=15715] pick: seat 3 chose word[1] "guitar" (funnel)
+[t=17280] stroke: seat 3, 19 pts, color [160, 100, 45, 255], size 6
+[t=17280] stroke: seat 3, 10 pts, color [130, 80, 35, 255], size 6
+[t=17538] stroke: seat 3, 13 pts, color [40, 25, 15, 255], size 5
+[t=17538] stroke: seat 3, 5 pts, color [60, 40, 20, 255], size 5
+[t=17538] stroke: seat 3, 2 pts, color [135, 135, 135, 255], size 2
+[t=17538] stroke: seat 3, 2 pts, color [135, 135, 135, 255], size 2
+[t=17538] stroke: seat 3, 2 pts, color [135, 135, 135, 255], size 2
+[t=17538] stroke: seat 3, 2 pts, color [135, 135, 135, 255], size 2
+[t=17899] guess: seat 1 "guitar" (funnel)
+[t=17949] guess: seat 2 "guitar" (funnel)
+[t=17963] guess: seat 0 "guitar" (funnel)
