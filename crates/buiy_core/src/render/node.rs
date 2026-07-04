@@ -53,6 +53,7 @@ use super::{
     compositor::{EffectReason, PreparedEffectGroups, PreparedEffectTargets},
     pipeline::{BuiyPipeline, BuiyViewPipelines},
     prepare::BuiyInstanceBuffers,
+    raster::{RasterBuffers, build_raster_draws},
 };
 
 /// The Buiy render pass, run as a system in the [`Core2d`] schedule. Per-view
@@ -108,15 +109,20 @@ pub fn buiy_pass(
     // uploaded). Glyphs draw even with zero quads (a pure-text frame), a band
     // draws even with zero quads/glyphs (a focus ring on a transparent
     // focusable — C6-a), a box-shadow draws even with zero of the rest (a
-    // shadow-only frame — C6-b), and a vector ICON draws even with zero of the
-    // rest (parity Wave B3 — an icon-only box, e.g. a bare rail glyph), so the
-    // skip checks ALL the primitive counts.
+    // shadow-only frame — C6-b), a vector ICON draws even with zero of the
+    // rest (parity Wave B3 — an icon-only box, e.g. a bare rail glyph), and a
+    // RASTER canvas draws even with zero of the rest (a bare drawing surface),
+    // so the skip checks ALL the primitive counts.
+    let raster_present = world
+        .get_resource::<RasterBuffers>()
+        .is_some_and(|b| b.count > 0);
     if buffers.quad_count == 0
         && buffers.glyph_count == 0
         && buffers.icon_count == 0
         && buffers.band_count == 0
         && buffers.shadow_count == 0
         && buffers.gradient_count == 0
+        && !raster_present
     {
         return;
     }
@@ -399,6 +405,13 @@ pub fn buiy_pass(
         &BindGroupEntries::single(view_binding),
     );
 
+    // Raster (drawing-canvas) `@group(1)` bind groups, built BEFORE the window
+    // pass opens (bind-group creation needs the device, which the open pass
+    // borrows — the `composite_bindings` precedent). One per raster node whose
+    // `GpuImage` is resident; empty when there are no raster nodes (the common
+    // case) or none have uploaded yet.
+    let raster_draws = build_raster_draws(world, &mut render_context);
+
     let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("buiy_pass"),
         color_attachments: &[Some(view_target.get_color_attachment())],
@@ -494,6 +507,28 @@ pub fn buiy_pass(
                     pass.draw(0..4, r);
                 }
             }
+        }
+    }
+
+    // --- Raster (drawing-canvas) draw (fill tier, after quad/gradient) ---
+    // The textured-quad primitive: each `RasterImage` node samples its OWN image
+    // (a per-node `@group(1)` texture + a Nearest sampler), so it is one bind
+    // group + one instanced `draw` per raster node. Drawn in the fill tier (over
+    // solid fills + gradients, under glyphs/bands), so a canvas paints under any
+    // overlaid text. `@group(0)` (view) + the static unit-quad VBO 0 stay bound;
+    // the raster instance buffer is VBO 1. A zero-count or not-yet-uploaded /
+    // not-yet-compiled raster simply skips without disturbing the draws around it.
+    if !raster_draws.is_empty()
+        && let Some(raster_buffers) = world.get_resource::<RasterBuffers>()
+        && raster_buffers.count > 0
+        && let Some(raster_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.raster)
+        && let Some(raster_buffer) = raster_buffers.instances.buffer()
+    {
+        pass.set_render_pipeline(raster_pipeline);
+        pass.set_vertex_buffer(1, raster_buffer.slice(..));
+        for draw in &raster_draws {
+            pass.set_bind_group(1, &draw.bind_group, &[]);
+            pass.draw(0..4, draw.instance..draw.instance + 1);
         }
     }
 

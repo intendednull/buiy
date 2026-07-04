@@ -44,7 +44,7 @@ use buiy_core::components::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style};
 use buiy_core::render::ColorToken;
 use buiy_core::render::components::{
-    Background, Border, BoxShadow, Corners, Radius, Shadow, TextColor,
+    Background, Border, BorderSide, BoxShadow, Corners, LineStyle, Radius, Shadow, TextColor,
 };
 use buiy_core::render::golden::Dpr;
 use buiy_core::text::{FamilyEntry, FontFamily, FontSize, FontStack, Text};
@@ -416,4 +416,93 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("buiy-goldens/{tag}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+// --- F1: the bordered-rounded card (first-establishment reference) -------------
+
+/// One solid ink border side (the card's visible outline color).
+fn card_ink_side() -> BorderSide {
+    BorderSide {
+        color: ColorToken::Custom(Color::srgb(0.10, 0.12, 0.16)),
+        style: LineStyle::Solid,
+    }
+}
+
+/// A widget card: a rounded opaque FILL under a VISIBLE (3px) rounded border —
+/// the bordered-rounded class. Until F3 lands the fill's own corner radius the
+/// fill corners are SQUARE under the rounded band (the "ears" F4b fixes), so this
+/// fixture is the first-establishment reference the ears fix will later re-bless.
+/// Uses `ColorToken::Custom` for fill + border so it resolves in every theme.
+fn bordered_rounded_card(app: &mut App) {
+    let card = app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .absolute()
+                .inset(Inset {
+                    top: Sizing::Length(Length::px(6.0)),
+                    left: Sizing::Length(Length::px(6.0)),
+                    ..default()
+                })
+                .width_px(36.0)
+                .height_px(28.0)
+                .border(3.0),
+            Background {
+                color: ColorToken::Custom(Color::srgb(0.85, 0.90, 0.98)),
+            },
+            Border {
+                left: card_ink_side(),
+                right: card_ink_side(),
+                top: card_ink_side(),
+                bottom: card_ink_side(),
+                radius: Corners::all(Radius::circular(8.0)),
+            },
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Node, Style::default()))
+        .add_children(&[card]);
+}
+
+// The bordered-rounded establishment golden (F1). The standing regression guard
+// for the rounded-fill corner is the Tier-4 SDF cross-check (zero stored bytes,
+// tests/verify_gpu/sdf_cross_check_gpu.rs); this stored golden is scoped to the
+// first-establishment-vs-design capture the cross-check cannot see (spec §2.1 /
+// finding H1). The committed baseline captures TODAY's faithful state — the fill
+// corners are square under the rounded band (the "ears") until F3 lands the
+// fill's own corner radius — so it is a documented re-bless target for F3 (fill
+// radius) and F4b (ears fix). Blessed against the pinned lavapipe rasterizer
+// (Mesa 24.3.4 / LLVM 18.1.8); off lavapipe the exact comparison is skipped and
+// only the non-vacuous paint check runs. Re-bless with:
+//   BUIY_BLESS=1 cargo test -p buiy_verify --test verify_gpu -- --ignored \
+//       --test-threads=1 goldens::golden_card_bordered
+#[test]
+#[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
+fn golden_card_bordered() {
+    let img = DeterministicApp::new(48, 40).capture(bordered_rounded_card);
+    // Non-vacuous on EVERY adapter: the card painted (border ink + fill), so a
+    // blank-capture regression fails here regardless of host.
+    assert!(
+        img.pixels().any(|p| p.0 != [0, 0, 0, 255]),
+        "the bordered-rounded card painted (non-vacuous)"
+    );
+
+    // The committed-baseline EXACT comparison is keyed to the pinned lavapipe
+    // corpus; on any other adapter (e.g. this host's RX 6700 XT / RADV) the rim
+    // AA pixels are non-comparable, so skip-as-pending there (the non-vacuous
+    // paint check above still ran). Mirrors golden_sdf_corner.
+    if !on_pinned_lavapipe() {
+        eprintln!(
+            "golden_card_bordered: selected adapter is not the pinned lavapipe — \
+             SKIPPING the committed-baseline EXACT comparison (cross-rasterizer \
+             pixels are non-comparable). The non-vacuous paint check above ran."
+        );
+        return;
+    }
+    assert_golden(
+        &key("card-bordered", "default", "dark", "sm", Dpr::X1),
+        &img,
+        &FuzzBudget::EXACT,
+    );
 }
