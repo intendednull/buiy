@@ -751,7 +751,9 @@ fn s5_driver_click_toggles_the_disclosure_too() {
 
 use bevy::render::{ExtractSchedule, MainWorld};
 use bevy::window::{PrimaryWindow, WindowResolution};
-use buiy_core::render::buckets::{pack_band_instances, pack_shadow_instances};
+use buiy_core::render::buckets::{
+    pack_band_instances, pack_rounded_shadow_instances, pack_shadow_instances,
+};
 use buiy_core::render::components::Outline;
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodesView, extract_buiy_nodes};
 
@@ -847,6 +849,10 @@ impl ShowcaseExtractHarness {
         pack_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
     }
 
+    fn rounded_shadow_count(&self) -> usize {
+        pack_rounded_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+    }
+
     fn band_count(&self) -> usize {
         pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
     }
@@ -927,13 +933,23 @@ fn s5_cards_and_slider_preview_extract_border_and_shadow_bands() {
     // The screen is lightly shadowed: the preview glow + the switch/slider thumb
     // drop shadows (the three switch thumbs + the slider thumb), but NO card. The
     // exact total is the design's five (1 preview + 3 switch thumbs + 1 slider
-    // thumb); assert the preview's glow is present + the count is the design's.
+    // thumb). All five casters are ROUNDED (the preview's radius-14 square, the
+    // circular thumbs), so since F4b-6 they route to the distinct ROUNDED-shadow
+    // pipeline — the SQUARE pack is empty and the design's five all land rounded.
+    // Assert the TOTAL across both pipelines is the design's five (robust to the
+    // per-caster split) and that the rounded pipeline carries them.
     assert_eq!(
-        h.shadow_count(),
+        h.shadow_count() + h.rounded_shadow_count(),
         5,
-        "five shadow instances (the preview glow + the switch/slider thumb shadows), \
-         got {}",
-        h.shadow_count()
+        "five shadow instances total (preview glow + switch/slider thumb shadows), \
+         got square={} + rounded={}",
+        h.shadow_count(),
+        h.rounded_shadow_count()
+    );
+    assert_eq!(
+        h.rounded_shadow_count(),
+        5,
+        "all five shadows are on ROUNDED casters → the rounded-shadow pipeline (F4b-6)"
     );
 }
 

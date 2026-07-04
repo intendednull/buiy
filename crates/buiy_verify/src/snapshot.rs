@@ -30,7 +30,9 @@ use bevy::prelude::*;
 use buiy_core::components::ResolvedLayout;
 #[cfg(doc)]
 use buiy_core::render::buckets::InstanceBuckets;
-use buiy_core::render::buckets::{pack_band_instances, pack_shadow_instances, pack_view};
+use buiy_core::render::buckets::{
+    pack_band_instances, pack_rounded_shadow_instances, pack_shadow_instances, pack_view,
+};
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodes};
 use buiy_core::render::instance::PackedInstance;
 
@@ -513,7 +515,14 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
     // existing `.snap` re-blesses. The shadow draws BEHIND the quad (lowest
     // paint-order), so it is dumped first among the F-tier channels.
     let shadows = pack_shadow_instances(&nodes.nodes);
-    if !shadows.is_empty() {
+    // F4b-6: a ROUNDED caster's shadow terms route to the distinct rounded-shadow
+    // pipeline instead of the square blob. The `[shadows painters_z]` listing is
+    // unchanged (it iterates every `node.shadows` term via `shadow_str`, which does
+    // not print the corner radius); a square-only fixture keeps its `[shadow
+    // draw-order]` line byte-identical (rounded empty ⇒ no rounded section), while
+    // a rounded caster's term shows in a `[rounded shadow draw-order]` section.
+    let rounded_shadows = pack_rounded_shadow_instances(&nodes.nodes);
+    if !shadows.is_empty() || !rounded_shadows.is_empty() {
         out.push_str("[shadows painters_z]\n");
         for (i, node) in nodes.nodes.iter().enumerate() {
             for s in &node.shadows {
@@ -525,8 +534,14 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
                 );
             }
         }
-        out.push_str("[shadow draw-order]\n");
-        let _ = writeln!(out, "(Shadow,layer=0) x{}", shadows.len());
+        if !shadows.is_empty() {
+            out.push_str("[shadow draw-order]\n");
+            let _ = writeln!(out, "(Shadow,layer=0) x{}", shadows.len());
+        }
+        if !rounded_shadows.is_empty() {
+            out.push_str("[rounded shadow draw-order]\n");
+            let _ = writeln!(out, "(RoundedShadow,layer=0) x{}", rounded_shadows.len());
+        }
     }
 
     // C6-a (outline) + C6-b (per-side border): the BAND channel. Emitted as
