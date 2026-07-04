@@ -84,6 +84,7 @@
 
 mod app;
 mod element;
+mod interaction;
 mod layout;
 mod reconcile;
 mod router;
@@ -94,6 +95,7 @@ pub use element::{
     Element, ICON_VIEWBOX, Kind, button, checkbox, icon, keyed_column, raster, scroll_column, text,
     text_input, when,
 };
+pub use interaction::{DEFAULT_PRESS_DEPTH, InteractionState, PressEffect};
 pub use layout::{Align, Justify, TextAlign};
 pub use reconcile::ViewWorkCounters;
 pub use tokens::{Color, Radius, Space, Weight};

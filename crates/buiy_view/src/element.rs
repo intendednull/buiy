@@ -450,6 +450,22 @@ impl<Msg> Element<Msg> {
         self
     }
 
+    /// The accessible **name** for a pressable non-text node — a clickable
+    /// container or a pressable [`raster`] (Dooduel's pick-word tiles, the
+    /// custom-avatar seat chip; and, once F3 lands the element, a clickable
+    /// `icon`). Applied by the reconciler only when the node also carries an
+    /// [`on_press`](Element::on_press): it stamps the `A11yLabel` alongside the
+    /// activatable `A11yRole::Button`, so the node is locatable by role+name
+    /// (probe `get_by_role(Button, name)`) and announced to a screen reader.
+    ///
+    /// Reuses the `text` slot (unused for painting on a container / raster). Inert
+    /// on a widget that owns its own name — a `button`'s label is already its
+    /// `text`, a `text` node names itself — and on any node with no `on_press`.
+    pub fn label(mut self, name: impl Into<String>) -> Self {
+        self.text = Some(name.into());
+        self
+    }
+
     // --- FW2: checkbox + text-input handlers ------------------------------
 
     /// A **checkbox**'s toggle handler. `f` maps the *would-be-new* checked state
