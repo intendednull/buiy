@@ -22,3 +22,6 @@ examples/*/dist/
 examples/*/dist-web/
 examples/*/dist-webgl2/
 examples/*/dist-webgpu/
+
+# App-1 lane artifacts (not committed)
+PR_BODY.md
