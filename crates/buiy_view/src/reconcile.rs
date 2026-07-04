@@ -19,8 +19,9 @@
 //!   freshly-spawned node already carries every layout component at its default;
 //!   the reconciler writes only what a prop set. Components `Node` does not
 //!   `#[require]` (`FlexItem`, the `ScrollOffset`/`ScrollExtent` bundle, the
-//!   internal `StickBottom` marker, `Background`, `Border`) are inserted on demand
-//!   and removed when their prop clears — no `RemovedComponents` dependence.
+//!   internal `StickBottom` marker, `Background`, `Border`, and `Pickable::IGNORE`
+//!   for a click-through node — F6) are inserted on demand and removed when their
+//!   prop clears — no `RemovedComponents` dependence.
 //! - **#11 drift-only writes.** Every write is a `set_if_neq` (or an explicit
 //!   `!=` guard), so an unchanged prop never trips `Changed`.
 //! - **#12 internal `ViewSlot`.** A realized `Button` records its label-child
@@ -30,6 +31,7 @@
 //! [`crate::app`] so a structurally-new node is laid out the same frame it is
 //! created (no unlaid-out flash).
 
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 use buiy_core::a11y::{A11yLabel, A11yRole, A11yToggled, Toggled};
 use buiy_core::components::Node;
@@ -232,7 +234,7 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             changed |= set_text_align(world, entity, el.layout.text_align);
             // A text node is a plain `Node` (no widget contract), so the whole
             // layout surface applies to it too (`.width`/`.grow`/`.fixed`/…).
-            changed |= apply_node_layout(world, entity, &el.layout);
+            changed |= apply_node_layout(world, entity, &el.layout, false);
         }
         Kind::Button => {
             if let Some(t) = &el.text {
@@ -256,7 +258,7 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             changed |= apply_background(world, entity, el.background);
             changed |= apply_border(world, entity, el);
             changed |= apply_shadow(world, entity, el);
-            changed |= apply_node_layout(world, entity, &el.layout);
+            changed |= apply_node_layout(world, entity, &el.layout, false);
         }
         Kind::Checkbox => {
             // Controlled: re-assert the leaf `A11yToggled` from the model
@@ -280,7 +282,7 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             // Patch the sampled image in place BY IDENTITY (entity preserved — the
             // canvas keeps its texture across unrelated re-renders) + its layout.
             changed |= set_raster_image(world, entity, el.raster.as_ref());
-            changed |= apply_node_layout(world, entity, &el.layout);
+            changed |= apply_node_layout(world, entity, &el.layout, false);
             // A pressable raster (the custom-avatar seat chip) becomes activatable.
             apply_pressable::<M>(world, entity, el, model);
         }
@@ -448,7 +450,7 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             set_font_family(world, e, el.font_family.as_ref());
             set_font_weight(world, e, el.font_weight);
             set_text_align(world, e, el.layout.text_align);
-            apply_node_layout(world, e, &el.layout);
+            apply_node_layout(world, e, &el.layout, false);
             e
         }
         Kind::Button => {
@@ -518,7 +520,8 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             // extract can size/place the sampled image; the app owns + paints it.
             let handle = el.raster.clone().unwrap_or_default();
             let e = world.spawn((Node, RasterImage(handle), Kind::Raster)).id();
-            apply_node_layout(world, e, &el.layout);
+            apply_node_layout(world, e, &el.layout, false);
+            // A pressable raster (the custom-avatar seat chip) becomes activatable.
             apply_pressable::<M>(world, e, el, model);
             e
         }
@@ -531,7 +534,7 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             apply_background(world, e, el.background);
             apply_border(world, e, el);
             apply_shadow(world, e, el);
-            apply_node_layout(world, e, &el.layout);
+            apply_node_layout(world, e, &el.layout, false);
             e
         }
         Kind::Column | Kind::Row => {
@@ -583,9 +586,24 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -
     }
     // FlexParams (container-only): direction + main/cross alignment + wrap + gap.
     changed |= apply_flex_params(world, e, &el.layout, axis);
+    // The structural auto-ignore (F6, spec §2.7): a **transparent** (no painted
+    // fill) `.top_layer()` container is auto-`Pickable::IGNORE`d so it can never
+    // sit topmost and swallow every click beneath it (the invisible-occluder bug
+    // class, shipped 3×). Two gates make it correct alongside F3 + F5:
+    //   * "Transparent" == paints no visible fill: no `background`, OR F3's explicit
+    //     fully-transparent `Color::Custom(_,_,_,0)` (the semantic facade tokens are
+    //     all opaque, so only an alpha-0 `Custom` reads as transparent-via-color).
+    //     See [`is_transparent_fill`].
+    //   * `on_press.is_none()` — an INTERACTIVE container (F5's container press
+    //     route, `apply_pressable`) IS a hit target, so it must never be
+    //     auto-ignored (that would swallow its own clicks). `apply_pressable` keys
+    //     on the same `on_press` and relies on the DEFAULT `Pickable`, which our
+    //     `Pickable::IGNORE` insert would clobber — hence the gate.
+    let auto_ignore =
+        el.layout.top_layer && is_transparent_fill(el.background) && el.on_press.is_none();
     // The node-layout common to containers + raster (sizing/flex-item/position/
-    // scroll/stacking/stick).
-    changed |= apply_node_layout(world, e, &el.layout);
+    // scroll/stacking/stick + picking transparency).
+    changed |= apply_node_layout(world, e, &el.layout, auto_ignore);
     // Paint (containers only): fill + border/radius + shadow (F3).
     changed |= apply_background(world, e, el.background);
     changed |= apply_border(world, e, el);
@@ -596,9 +614,22 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -
 /// The node-level layout shared by every `Node`-bearing kind (containers + the
 /// raster element): the box model (sizing + padding + the center-self margin),
 /// the flex item (grow/shrink), positioning (kind + inset), scroll
-/// (overflow + the runtime scroll bundle), the top-layer escape, and the
-/// stick-to-bottom marker. Returns whether anything really changed.
-fn apply_node_layout(world: &mut World, e: Entity, layout: &LayoutProps) -> bool {
+/// (overflow + the runtime scroll bundle), the top-layer escape, the
+/// stick-to-bottom marker, and picking transparency. Returns whether anything
+/// really changed.
+///
+/// `auto_ignore` is the container-level structural rule (a transparent top-layer
+/// container, [`apply_container_props`]); it ORs with the explicit
+/// `.ignore_picking()` flag so a single writer drives `Pickable::IGNORE`. A
+/// non-container caller (a `text`/`raster` node) passes `false` — only its own
+/// `.ignore_picking()` applies (a top-layer `text`/`raster` paints content, so it
+/// is not the invisible-occluder class the auto-rule guards).
+fn apply_node_layout(
+    world: &mut World,
+    e: Entity,
+    layout: &LayoutProps,
+    auto_ignore: bool,
+) -> bool {
     let mut changed = false;
     changed |= apply_box_model(world, e, layout);
     changed |= apply_flex_item(world, e, layout);
@@ -606,6 +637,7 @@ fn apply_node_layout(world: &mut World, e: Entity, layout: &LayoutProps) -> bool
     changed |= apply_scroll(world, e, layout);
     changed |= apply_top_layer(world, e, layout.top_layer);
     changed |= apply_stick_marker(world, e, layout.stick);
+    changed |= apply_picking(world, e, layout.ignore_picking || auto_ignore);
     changed
 }
 
@@ -759,6 +791,45 @@ fn apply_top_layer(world: &mut World, e: Entity, top_layer: bool) -> bool {
         return true;
     }
     false
+}
+
+/// Whether a container's background paints NO visible fill (F6, spec §2.7) — no
+/// `background` at all, or F3's explicit fully-transparent `Color::Custom(_,_,_,0)`.
+/// The semantic facade tokens (`Surface`, `Accent`, …) are all opaque, so only an
+/// alpha-0 `Custom` reads as transparent-via-color. The auto-ignore rule keys on
+/// this so neither the "no background" nor the "explicitly transparent" spelling of
+/// a `.top_layer()` container can occlude picks.
+fn is_transparent_fill(bg: Option<crate::tokens::Color>) -> bool {
+    matches!(bg, None | Some(crate::tokens::Color::Custom(_, _, _, 0)))
+}
+
+/// Drive a node's pointer transparency (F6, spec §2.7): `Pickable::IGNORE` when
+/// `want_ignore` — the node stops being a hit-target AND stops occluding picks
+/// beneath it, while its interactive CHILDREN (separate entities carrying their
+/// own `Pickable`) stay pickable. `want_ignore` folds the explicit
+/// `.ignore_picking()` with the reconciler's transparent-top-layer auto-rule.
+///
+/// `Node` does NOT `#[require]` `Pickable`, so it is inserted on demand and
+/// removed when the flag clears (the reconciler owns these container/text/raster
+/// entities, so `Pickable`'s presence tracks this decision exactly). The remove
+/// is guarded on the present value being OUR `IGNORE` marker, so a blocking
+/// `Pickable` set by some other system (e.g. a future interactive container) is
+/// never stripped. Drift-only — returns whether it changed.
+fn apply_picking(world: &mut World, e: Entity, want_ignore: bool) -> bool {
+    let present = world.get::<Pickable>(e).copied();
+    match (want_ignore, present) {
+        (true, Some(p)) if p == Pickable::IGNORE => false,
+        (true, _) => {
+            world.entity_mut(e).insert(Pickable::IGNORE);
+            true
+        }
+        // Only reclaim an IGNORE we own; leave any other `Pickable` untouched.
+        (false, Some(p)) if p == Pickable::IGNORE => {
+            world.entity_mut(e).remove::<Pickable>();
+            true
+        }
+        (false, _) => false,
+    }
 }
 
 /// Insert/remove the internal [`StickBottom`] marker from the model's stick

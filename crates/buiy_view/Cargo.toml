@@ -18,3 +18,11 @@ path = "src/lib.rs"
 bevy.workspace = true
 buiy_core = { path = "../buiy_core" }
 buiy_widgets = { path = "../buiy_widgets" }
+
+[dev-dependencies]
+# The F6 occluder-invariant test (`tests/pointer_occluder.rs`) runs the reusable
+# Tier-3 predicate `buiy_verify::invariant::no_transparent_top_layer_occluder` over
+# reconciled view fixtures, proving the auto-`Pickable::IGNORE` rule keeps the
+# invisible-occluder class unwritable. Dev-only, and acyclic: `buiy_verify` depends
+# on `buiy_core` + `buiy_widgets` and NOT on `buiy_view`.
+buiy_verify = { path = "../buiy_verify" }
