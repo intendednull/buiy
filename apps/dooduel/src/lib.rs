@@ -822,6 +822,275 @@ mod tests {
         }
     }
 
+    // --- Playtest-found gameplay-bug regression tests (pure game core) ------
+
+    /// Bug #1 — the round counter must never display the post-increment overflow.
+    /// The raw `round` field intentionally overflows to `total + 1` on the
+    /// transition to `Final` (it IS the Final trigger), which produced the podium's
+    /// "Round 2/1"; `round_display()` clamps the reading to `[1, total]`.
+    #[test]
+    fn round_display_clamps_the_final_overflow() {
+        let mut g = started();
+        let total = g.config.total_rounds;
+        drive_to_final(&mut g);
+        assert_eq!(g.phase, Phase::Final);
+        assert!(
+            g.round > total,
+            "raw round ({}) is the overflowed Final trigger past total ({total})",
+            g.round
+        );
+        assert_eq!(
+            g.round_display(),
+            total,
+            "round_display() must clamp the Final overflow (the podium 'Round 2/1' bug)"
+        );
+        assert!(g.round_display() <= total);
+    }
+
+    /// Bug #1 — `total_rounds` is authoritative from the start config, not a stale
+    /// default; the first round displays as 1.
+    #[test]
+    fn total_rounds_comes_from_the_start_config() {
+        let mut g = Game::default();
+        let cfg = Config {
+            total_rounds: 5,
+            ..Config::default()
+        };
+        g.start_match("Mara", cfg);
+        assert_eq!(
+            g.config.total_rounds, 5,
+            "start_match sets total_rounds from the config"
+        );
+        assert_eq!(g.round_display(), 1, "the first round displays as 1");
+    }
+
+    /// Bug #2 — at the podium no seat is the active drawer (the raw `seat_index`
+    /// wraps back to a real seat at `Final`, which tagged a finished-match seat as
+    /// "(drawing)" and left a stale drawer name).
+    #[test]
+    fn no_active_drawer_once_the_match_is_over() {
+        let mut g = started();
+        assert_eq!(
+            g.current_drawer(),
+            Some(0),
+            "mid-match there is an active drawer"
+        );
+        assert_eq!(g.drawer_name(), Some("Mara"));
+        drive_to_final(&mut g);
+        assert_eq!(g.phase, Phase::Final);
+        assert_eq!(
+            g.current_drawer(),
+            None,
+            "no seat draws once the match is over (the stale-drawer podium bug)"
+        );
+        assert_eq!(g.drawer_name(), None, "the podium shows no drawer name");
+    }
+
+    /// Bug #3 — the drawer is not blind: `guessed_count()` / `all_guessed()` track
+    /// correct guessers LIVE during the draw phase (so the drawer knows when the
+    /// word is already fully guessed — the wasted-redraw bug).
+    #[test]
+    fn guessed_count_tracks_correct_guessers_live_during_drawing() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.guessed_count(), 0);
+        assert!(!g.all_guessed());
+        g.apply_guess(1, "robot");
+        assert_eq!(
+            g.guessed_count(),
+            1,
+            "the drawer sees one guesser is done mid-draw"
+        );
+        assert!(!g.all_guessed());
+        g.apply_guess(2, "robot");
+        assert_eq!(g.guessed_count(), 2);
+        assert_eq!(
+            g.phase,
+            Phase::Drawing,
+            "still drawing — the count is visible in-phase"
+        );
+        // The "guessed" announcement folds into the shared chat immediately (in-phase).
+        let announced = g
+            .chat_for(g.seat_index)
+            .filter(|m| m.kind == game::ChatKind::Correct)
+            .count();
+        assert_eq!(
+            announced, 2,
+            "the drawer sees both 'guessed the word!' lines in-phase"
+        );
+    }
+
+    /// Bug #4 — the design-exact three-way: a WRONG guess broadcasts to the shared
+    /// chat (name + literal text, everyone), a NEAR-MISS fires a PRIVATE nudge only
+    /// the guesser sees, and an EXACT guess announces to all while the word stays
+    /// hidden from those who have not guessed.
+    #[test]
+    fn near_miss_nudge_is_private_and_wrong_guesses_are_shared() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        // Seat 1 (Priya) near-misses; seat 2 (Theo) makes a plain wrong guess.
+        assert_eq!(g.apply_guess(1, "robott"), game::GuessOutcome::Close);
+        assert_eq!(g.apply_guess(2, "banana"), game::GuessOutcome::Wrong);
+
+        // The WRONG guess is broadcast — every seat sees "Theo: banana".
+        for seat in 0..4 {
+            let sees = g
+                .chat_for(seat)
+                .any(|m| m.text.contains("Theo") && m.text.contains("banana"));
+            assert!(
+                sees,
+                "seat {seat} must see the shared wrong guess (name + literal)"
+            );
+        }
+        // The NEAR-MISS nudge is private to the guesser (seat 1) only.
+        assert!(
+            g.chat_for(1).any(|m| m.text.contains("So close")),
+            "the guesser sees the private 'So close' nudge"
+        );
+        for other in [0usize, 2, 3] {
+            assert!(
+                !g.chat_for(other).any(|m| m.text.contains("So close")),
+                "seat {other} must NOT see seat 1's private near-miss nudge"
+            );
+        }
+    }
+
+    /// Bug #4 — an exact guess announces to everyone but keeps the word hidden from
+    /// non-guessers (word redaction has one home, `word_display`).
+    #[test]
+    fn exact_guess_announces_but_hides_the_word_from_non_guessers() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.apply_guess(1, "robot"), game::GuessOutcome::Correct);
+        assert!(
+            g.chat_for(0)
+                .any(|m| m.kind == game::ChatKind::Correct && m.text.contains("guessed the word")),
+            "the exact guess announces to everyone"
+        );
+        let mut g1 = g.clone();
+        g1.viewing_as = 1;
+        assert!(
+            g1.word_display().contains('R'),
+            "the guesser sees the letters"
+        );
+        let mut g2 = g.clone();
+        g2.viewing_as = 2;
+        assert!(
+            !g2.word_display().contains('R') && g2.word_display().contains('_'),
+            "a non-guesser still sees blanks"
+        );
+    }
+
+    /// Bug #5 — the hint reveal fires on the THRESHOLD CROSSING (not equality, so a
+    /// poll that skips the exact second still latches the reveal), at random,
+    /// previously-unrevealed `[a-z]` positions, never exceeding
+    /// `min(hint_count, letters − 1)`.
+    #[test]
+    fn hints_reveal_on_the_crossing_at_random_unrevealed_positions() {
+        let mut g = started();
+        g.config.bots_enabled = false; // let the full draw window run (bots preempted it live)
+        g.choose_word("robot".to_string()); // 5 letters ⇒ cap = min(2, 4) = 2
+        g.tick(Duration::from_secs(0)); // anchor
+        let cap = g.config.hint_count.min("robot".len() - 1);
+        assert_eq!(cap, 2);
+        let revealed = |g: &Game| g.reveal_mask.iter().filter(|b| **b).count();
+
+        // Thresholds are 33s-left (elapsed 47) and 19s-left (elapsed 61). Poll SKIPS
+        // the exact threshold seconds; crossing semantics must still fire each hint.
+        g.tick(Duration::from_secs(46));
+        assert_eq!(
+            revealed(&g),
+            0,
+            "nothing revealed before the first threshold"
+        );
+        g.tick(Duration::from_secs(48)); // skipped 47 — crossing must fire hint 1
+        assert_eq!(
+            revealed(&g),
+            1,
+            "crossing latches hint 1 even when the poll skips the second"
+        );
+        g.tick(Duration::from_secs(60));
+        assert_eq!(revealed(&g), 1);
+        g.tick(Duration::from_secs(62)); // skipped 61 — crossing must fire hint 2
+        assert_eq!(revealed(&g), 2, "crossing latches hint 2");
+        g.tick(Duration::from_secs(79)); // ticking on never exceeds the cap
+        assert!(
+            revealed(&g) <= cap,
+            "never exceeds min(hint_count, letters − 1)"
+        );
+
+        // The revealed positions are distinct, in range, and real [a-z] letters.
+        let positions: Vec<usize> = g
+            .reveal_mask
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| **r)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(positions.len(), 2);
+        let word: Vec<char> = "robot".chars().collect();
+        for p in &positions {
+            assert!(
+                word[*p].is_ascii_lowercase(),
+                "a revealed position is an [a-z] letter"
+            );
+        }
+        assert_ne!(
+            positions[0], positions[1],
+            "the two revealed positions are distinct"
+        );
+    }
+
+    /// Bug #5 — determinism holds: the seeded reveal positions replay byte-identical
+    /// (the hint randomness comes from the carried splitmix64 stream, not wall-clock).
+    #[test]
+    fn hint_positions_are_deterministic_across_replays() {
+        let mask_after = |secs: u64| {
+            let mut g = started();
+            g.config.bots_enabled = false;
+            g.choose_word("robot".to_string());
+            g.tick(Duration::from_secs(0));
+            g.tick(Duration::from_secs(secs));
+            g.reveal_mask.clone()
+        };
+        assert_eq!(
+            mask_after(62),
+            mask_after(62),
+            "seeded hint positions replay identically"
+        );
+    }
+
+    /// Bug #6 — the draw countdown is derived from WALL-CLOCK (`now − anchor`), not
+    /// a frame/tick count: successive whole-second `now`s decrement it 1-per-second
+    /// and a sub-second re-poll (same whole second) does not move it.
+    #[test]
+    fn draw_countdown_decrements_one_per_wall_second() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.draw_seconds_left, g.config.draw_seconds);
+        g.tick(Duration::from_millis(500)); // same whole second — a steady frame
+        assert_eq!(
+            g.draw_seconds_left, g.config.draw_seconds,
+            "a sub-second re-poll does not move the countdown"
+        );
+        for s in 1..=5 {
+            g.tick(Duration::from_secs(s));
+            assert_eq!(
+                g.draw_seconds_left,
+                g.config.draw_seconds - s,
+                "one wall-second decrements the countdown by exactly one"
+            );
+        }
+    }
+
     // --- Probe integration test (GPU-free, drives the real funnel) ----------
 
     /// Boot the app GPU-free, start a match, switch the human to a guesser seat,
@@ -866,11 +1135,93 @@ mod tests {
         );
         assert!(g.players[1].score > 0, "the guess scored");
 
-        // The in-game screen renders the header (phase machine is live).
+        // The in-game screen renders the header (phase machine is live). The desktop
+        // header uses the slash form "Round r / t" (finding #20 / bug #1).
         let report = snapshot_report(app.world_mut());
         assert!(
-            report.contains("Round 1 of 2"),
-            "in-game header is on screen:\n{report}"
+            report.contains("Round 1 / 2"),
+            "in-game desktop header is on screen with the slash round form:\n{report}"
+        );
+    }
+
+    /// Boot a GPU-free probe app with Dooduel installed (no wall-clock driver, so
+    /// the phase machine is driven by injected `Tick`s / messages).
+    fn boot_probe() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+        app
+    }
+
+    /// Bug #1 (finding #20) — the round string form varies by surface: the desktop
+    /// header renders "Round r / t" (slash), the phone header "Round r of t" (word).
+    #[test]
+    fn round_string_forms_render_per_surface() {
+        // Desktop (viewport unmeasured ⇒ desktop layout).
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::StartMatch);
+        settle(&mut app);
+        let desktop = snapshot_report(app.world_mut());
+        assert!(
+            desktop.contains("Round 1 / 2"),
+            "the desktop header uses the slash form:\n{desktop}"
+        );
+
+        // Phone (a narrow viewport ⇒ mobile layout uses the word form).
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::StartMatch);
+        enqueue_msg(&mut app, Msg::SetViewport(390.0, 780.0));
+        settle(&mut app);
+        let mobile = snapshot_report(app.world_mut());
+        assert!(
+            mobile.contains("Round 1 of 2"),
+            "the phone header uses the word form:\n{mobile}"
+        );
+        assert!(
+            !mobile.contains("Round 1 / 2"),
+            "the phone header does not use the slash form:\n{mobile}"
+        );
+    }
+
+    /// Bug #3 — the drawer's header shows the LIVE guessed count during Drawing, so
+    /// the drawer is never blind to how many guessers already have the word.
+    #[test]
+    fn drawer_header_shows_the_live_guessed_count() {
+        let mut app = boot_probe();
+        // bots off so the count is driven only by the injected guess.
+        enqueue_msg(&mut app, Msg::StartMatch);
+        settle(&mut app);
+        // Seat 0 (the human drawer) picks + the clock anchors → Drawing.
+        enqueue_msg(&mut app, Msg::ChooseWord(0));
+        settle(&mut app);
+        enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(0)));
+        settle(&mut app);
+        let word = current_word(&mut app);
+        assert!(!word.is_empty());
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("0 of 3 guessed"),
+            "the drawer sees the initial live guessed count:\n{report}"
+        );
+        // A guesser gets it (routed through the shared funnel) → the count updates.
+        enqueue_msg(
+            &mut app,
+            Msg::Guess {
+                player: 1,
+                text: word,
+            },
+        );
+        settle(&mut app);
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("1 of 3 guessed"),
+            "the drawer's guessed count updates live, in-phase:\n{report}"
         );
     }
 

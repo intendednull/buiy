@@ -189,6 +189,11 @@ pub struct ChatMsg {
     pub seq: u64,
     pub kind: ChatKind,
     pub text: String,
+    /// Who may see this line. `None` = shared (broadcast to everyone, as in the
+    /// real game); `Some(seat)` = a PRIVATE line only `seat` sees — the near-miss
+    /// "So close! 👀" nudge (bug #4). Per-seat filtering has ONE home,
+    /// [`Game::chat_for`], so a private line can never leak to another seat.
+    pub to: Option<usize>,
 }
 
 /// A scheduled bot guess: seat `player` fires at `fire_at` elapsed-seconds into
@@ -499,9 +504,13 @@ impl Game {
             }
             GuessOutcome::Correct
         } else if is_close(&guess, &secret) {
-            self.push_chat(ChatKind::Close, "So close! 👀".to_string());
+            // A near-miss is a PRIVATE nudge to the guesser only (bug #4) — it must
+            // not leak a one-letter-off guess to the whole room.
+            self.push_chat_to(Some(player), ChatKind::Close, "So close! 👀".to_string());
             GuessOutcome::Close
         } else {
+            // A plain wrong guess is broadcast to the shared chat (name + literal
+            // text) exactly as in the real game — everyone sees it.
             self.push_chat(ChatKind::Guess, format!("{name}: {raw}"));
             GuessOutcome::Wrong
         }
@@ -583,6 +592,75 @@ impl Game {
         if self.phase == Phase::Reveal {
             self.advance_turn();
         }
+    }
+
+    /// The chat lines seat `seat` should see: every SHARED line plus the PRIVATE
+    /// lines addressed to `seat`. The one home for chat visibility (bug #4) — the
+    /// near-miss nudge is private, so it cannot leak to another seat.
+    pub fn chat_for(&self, seat: usize) -> impl Iterator<Item = &ChatMsg> {
+        self.chat
+            .iter()
+            .filter(move |m| m.to.is_none() || m.to == Some(seat))
+    }
+
+    /// How many guessers have guessed correctly THIS turn (live during Drawing —
+    /// the drawer's "who has it" signal, bug #3). Zero outside a turn.
+    pub fn guessed_count(&self) -> usize {
+        self.turn_guesses.len()
+    }
+
+    /// Whether every guesser has guessed correctly this turn (the turn-end trigger,
+    /// exposed live so the drawer knows when to stop, bug #3).
+    pub fn all_guessed(&self) -> bool {
+        let guesser_count = self.players.len().saturating_sub(1);
+        guesser_count > 0 && self.turn_guesses.len() >= guesser_count
+    }
+
+    /// How many hint letters will reveal over this turn (the scheduled count for the
+    /// current word — a machine-readable signal for the playtest host).
+    pub fn hint_total(&self) -> usize {
+        self.hint_reveal_at.len()
+    }
+
+    /// How many hint letters have revealed so far this turn.
+    pub fn hints_revealed(&self) -> usize {
+        self.reveal_mask.iter().filter(|r| **r).count()
+    }
+
+    /// The number of letters in the current word (visible to everyone — it is the
+    /// count of blanks — `0` outside the draw / reveal phases).
+    pub fn word_length(&self) -> usize {
+        if matches!(self.phase, Phase::Drawing | Phase::Reveal) {
+            self.secret_word.chars().count()
+        } else {
+            0
+        }
+    }
+
+    /// The round number to DISPLAY (bug #1): clamped to `[1, total_rounds]` so it
+    /// never reads as the post-increment overflow (`round == total + 1` on the
+    /// transition to `Final`, which produced the podium's "Round 2/1"). The raw
+    /// `round` field still overflows internally — it is the `Final` trigger — so
+    /// this accessor is the single display-safe reading.
+    pub fn round_display(&self) -> u32 {
+        self.round.clamp(1, self.config.total_rounds.max(1))
+    }
+
+    /// The seat drawing THIS turn, or `None` when there is no active drawer (the
+    /// match is over or not started) — bug #2. At `Final` the raw `seat_index` has
+    /// wrapped back to a real seat, so reading it directly tagged a finished-match
+    /// seat as "(drawing)". Callers must gate the drawer tag on this accessor.
+    pub fn current_drawer(&self) -> Option<usize> {
+        matches!(self.phase, Phase::Picking | Phase::Drawing | Phase::Reveal)
+            .then_some(self.seat_index)
+    }
+
+    /// The name of the seat drawing this turn, or `None` when there is no active
+    /// drawer (bug #2 — absent at the podium). Mirrors [`Game::current_drawer`].
+    pub fn drawer_name(&self) -> Option<&str> {
+        self.current_drawer()
+            .and_then(|i| self.players.get(i))
+            .map(|p| p.name.as_str())
     }
 
     /// A human-readable label for the current phase (minimal in-game header).
@@ -774,9 +852,21 @@ impl Game {
         plans
     }
 
+    /// Push a SHARED chat line (broadcast to every seat).
     fn push_chat(&mut self, kind: ChatKind, text: String) {
+        self.push_chat_to(None, kind, text);
+    }
+
+    /// Push a chat line visible only to `to` (`None` ⇒ shared). The near-miss nudge
+    /// is the sole private caller — see [`Game::chat_for`] for the read side.
+    fn push_chat_to(&mut self, to: Option<usize>, kind: ChatKind, text: String) {
         let seq = self.chat_seq;
         self.chat_seq += 1;
-        self.chat.push(ChatMsg { seq, kind, text });
+        self.chat.push(ChatMsg {
+            seq,
+            kind,
+            text,
+            to,
+        });
     }
 }

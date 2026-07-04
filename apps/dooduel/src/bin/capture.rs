@@ -91,6 +91,47 @@ fn main() {
         &format!("{OUT_DIR}/in_game_drawer.png"),
     );
 
+    // === In-game (guesser view: chat feedback + hint slot) — bugs #1/#4/#5 ===
+    // A controlled, bots-off match set directly on the model (like the playtest
+    // host's `start`) so the three-way feedback is deterministic: view as a guesser,
+    // tick past the first hint threshold (a letter reveals), then inject a shared
+    // WRONG guess, a private NEAR-MISS (by the viewing seat), and a green CORRECT row.
+    {
+        use std::time::Duration;
+        let e = app
+            .world_mut()
+            .query_filtered::<Entity, With<Dooduel>>()
+            .iter(app.world())
+            .next()
+            .expect("model entity");
+        let mut d = app.world_mut().get_mut::<Dooduel>(e).expect("model");
+        d.game.start_match(
+            "Mara",
+            dooduel::game::Config {
+                bots_enabled: false,
+                ..Default::default()
+            },
+        );
+        d.screen = Screen::InGame;
+        let w = d.game.word_choices[0].clone();
+        d.game.choose_word(w);
+        d.game.tick(Duration::from_secs(0)); // anchor the draw clock
+        d.game.tick(Duration::from_secs(50)); // elapsed 50 > 47 ⇒ first hint reveals
+        let secret = d.game.secret_word.clone();
+        d.game.switch_seat(1); // view as a guesser (blanks + the revealed hint)
+        d.game.apply_guess(2, "windmill"); // a shared WRONG guess (everyone sees it)
+        let near = format!("{secret}{}", secret.chars().last().unwrap_or('s')); // one-off ⇒ near-miss
+        d.game.apply_guess(1, &near); // PRIVATE "So close!" nudge to the viewing seat
+        d.game.apply_guess(3, &secret); // a green CORRECT row
+        drop(d);
+        settle(&mut app);
+        capture(
+            &mut app,
+            target.clone(),
+            &format!("{OUT_DIR}/in_game_feedback.png"),
+        );
+    }
+
     // === In-game (word-pick overlay) — restart a match, capture Picking ===
     enqueue(&mut app, Msg::Back);
     settle(&mut app);
