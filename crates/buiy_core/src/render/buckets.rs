@@ -251,7 +251,8 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
 
 /// Pack the ROUNDED box-shadow instances for a frame (F4b-6): every shadow term
 /// whose caster has a corner radius (`radius > 0`), into the distinct
-/// [`RoundedShadowInstance`] the rounded-shadow pipeline draws. The parallel of
+/// [`RoundedShadowInstance`](crate::render::instance::RoundedShadowInstance) the
+/// rounded-shadow pipeline draws. The parallel of
 /// [`pack_shadow_instances`] for the rounded record; the two partition a node's
 /// shadow terms by `radius` so no term is drawn twice and the square path stays
 /// byte-stable.

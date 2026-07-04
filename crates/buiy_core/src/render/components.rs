@@ -449,7 +449,7 @@ impl Default for Opacity {
 
 /// A per-quad FILL alpha multiplier in `[0.0, 1.0]` — the **cheap particle fade**
 /// (F4b-5). Unlike [`Opacity`], it multiplies straight into the node's own fill
-/// quad alpha at extract and forms **NO** [`EffectGroup`](crate::render::EffectGroup)
+/// quad alpha at extract and forms **NO** [`EffectGroup`]
 /// and no stacking context — so fading N particles costs N alpha writes, not N
 /// off-screen composite targets (the ~110-confetti blow-up the prototype
 /// journaled). `1.0` (default) is a no-op; absent == fully opaque.

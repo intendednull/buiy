@@ -801,6 +801,7 @@ pub fn encode_line_style(style: crate::render::components::LineStyle) -> f32 {
 /// § 3.1). A fully-transparent / zero-coverage term contributes nothing. Pure:
 /// no ECS / GPU access beyond the borrowed inputs, so it is unit-testable
 /// headless.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_shadows(
     shadows: &BoxShadow,
     position: Vec2,
