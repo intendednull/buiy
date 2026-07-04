@@ -198,15 +198,18 @@ pub fn scrim(overlay_panel: Element<Msg>) -> Element<Msg> {
 
 /// The floating light/dark theme toggle (design: a fixed bottom-right pill on every
 /// screen). A pressable pill on the always-dark chrome; pressing folds
-/// `SetTheme(toggled)` through the funnel. Placed via `.fixed().fill()` +
-/// `.justify_end().align_end()` so it lands bottom-right of the viewport,
-/// `.top_layer()` so it floats over content.
+/// `SetTheme(toggled)` through the funnel.
 ///
-/// The transparent container that `.fill()`s the viewport would otherwise sit
-/// topmost in the pick order and swallow every click across the whole app. F6 now
-/// AUTO-applies `Pickable::IGNORE` to a transparent (`Color::NONE`) top-layer
-/// container, so the bug is unwritable — but we keep the explicit `.ignore_picking()`
-/// as a belt-and-suspenders statement of intent (a no-op when auto-IGNORE fires).
+/// Positioned as the design specifies — `position:fixed; bottom:20px; right:20px` —
+/// with `.fixed().inset_right(20).inset_bottom(20)` (the documented offset-from-edge
+/// pattern), so the whole pill sits INSIDE the corner with a margin. The earlier
+/// `.fill()+.justify_end().align_end()+.padding()` form let the pill overflow past
+/// the bottom-right viewport edge (clipped). `.top_layer()` floats it over content.
+///
+/// The wrapping container is content-sized (it wraps only the 72×34 pill — NOT a
+/// full-viewport fill), so it is not the historical click-swallowing occluder; the
+/// explicit `.ignore_picking()` keeps the transparent container click-through so the
+/// pill child stays pressable (F6 also auto-IGNOREs it — belt-and-suspenders).
 pub fn theme_toggle(s: &Dooduel) -> Element<Msg> {
     let label = match s.theme {
         theme::ThemePref::Dark => "Dark",
@@ -222,13 +225,11 @@ pub fn theme_toggle(s: &Dooduel) -> Element<Msg> {
         .height(34.0)
         .width(72.0);
     Element::column(vec![pill])
-        .fill()
         .fixed()
         .top_layer()
         .ignore_picking()
-        .justify_end()
-        .align_end()
-        .padding(Space::Lg)
+        .inset_right(20.0)
+        .inset_bottom(20.0)
 }
 
 /// The mocked opponents preview chips ("You'll play with"). Shared by Home + Lobby.
