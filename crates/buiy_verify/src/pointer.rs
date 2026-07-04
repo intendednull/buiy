@@ -13,7 +13,9 @@ use bevy::ecs::message::Messages;
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::input::touch::TouchPhase;
 use bevy::picking::backend::PointerHits;
-use bevy::picking::events::{Click, Out, Over, Pointer, Press, Release, Scroll};
+use bevy::picking::events::{
+    Click, Drag, DragEnd, DragStart, Out, Over, Pointer, Press, Release, Scroll,
+};
 use bevy::picking::pointer::{
     Location, PointerAction, PointerButton, PointerId, PointerInput, PointerLocation,
 };
@@ -56,6 +58,46 @@ impl CapturedEvents {
 /// the scroll observer records the full payload here.
 #[derive(Resource, Default)]
 pub struct CapturedScroll(pub Vec<(Entity, MouseScrollUnit, f32, f32)>);
+
+/// Detail capture for the drag taxonomy (`Pointer<DragStart>` / `Pointer<Drag>` /
+/// `Pointer<DragEnd>`). The [`CapturedEvents`] phase log records only the event
+/// *name*, but a drag / stroke test must assert the per-move `delta` and the
+/// pointer `position`, so the drag observers record the full payload here.
+///
+/// The drag taxonomy is the one part of `bevy_picking`'s event surface the harness
+/// could not exercise before the stroke driver ([`PointerHarness::stroke`]) landed:
+/// every other input method writes `PointerLocation` directly and emits no `Move`
+/// action, so the drag machine never fired.
+#[derive(Resource, Default)]
+pub struct CapturedDrag(pub Vec<DragSample>);
+
+impl CapturedDrag {
+    /// Every recorded sample of `phase` (`"dragstart"` / `"drag"` / `"dragend"`)
+    /// that targeted `entity`, in emission order.
+    pub fn of<'a>(
+        &'a self,
+        entity: Entity,
+        phase: &'a str,
+    ) -> impl Iterator<Item = &'a DragSample> {
+        self.0
+            .iter()
+            .filter(move |s| s.entity == entity && s.phase == phase)
+    }
+}
+
+/// One captured drag-taxonomy event. `delta` carries the `Pointer<Drag>.delta`
+/// (the per-move movement) for a `"drag"` sample and the `Pointer<DragEnd>.distance`
+/// (the total start→end vector) for a `"dragend"` sample; it is `Vec2::ZERO` for the
+/// payload-less `"dragstart"`. `position` is the pointer's window-space location at
+/// the event.
+#[derive(Clone, Copy, Debug)]
+pub struct DragSample {
+    pub entity: Entity,
+    /// `"dragstart"` | `"drag"` | `"dragend"`.
+    pub phase: &'static str,
+    pub position: Vec2,
+    pub delta: Vec2,
+}
 
 /// A headless synthetic-pointer driver over the production picking path.
 pub struct PointerHarness {
@@ -117,6 +159,7 @@ impl PointerHarness {
         app.init_resource::<ButtonInput<bevy::input::keyboard::KeyCode>>();
         app.init_resource::<CapturedEvents>();
         app.init_resource::<CapturedScroll>();
+        app.init_resource::<CapturedDrag>();
         Self::record_observers(&mut app);
 
         // Pause the virtual clock so `Time` (which the `MultiClick` deriver reads
@@ -349,6 +392,45 @@ impl PointerHarness {
         });
     }
 
+    /// Drive a REAL press → drag → release **stroke** through the production
+    /// pointer pipeline, one frame per input, so `bevy_picking`'s `pointer_events`
+    /// derives `DragStart` → `Drag` → `DragEnd` on the press target.
+    ///
+    /// This is the counterpart to [`move_to`](Self::move_to). `move_to` writes
+    /// `PointerLocation` directly and emits **no** `Move` action, so it never trips
+    /// the drag machine — a naive "sequence of `move_to`s" between a press and a
+    /// release silently produces zero drags. `stroke` instead presses primary at
+    /// `path[0]`, writes a `PointerAction::Move` to each subsequent point (updating
+    /// `PointerLocation` coherently via `PointerInput::receive`), and releases at the
+    /// last point. The emitted events are recorded in
+    /// [`captured_drag`](Self::captured_drag). A `path` shorter than two points is a
+    /// no-op (nothing to drag).
+    ///
+    /// This is the harness's first driver of `bevy_picking`'s drag machine — every
+    /// other method exercises hover / press / click / scroll, none of which emit a
+    /// `Move` — so it is what a headless test (or a multi-agent playtest) uses to
+    /// drive a freehand drawing surface through the real pointer path.
+    pub fn stroke(&mut self, path: &[Vec2]) {
+        drive_stroke(&mut self.app, self.window, self.pointer, path);
+    }
+
+    /// A straight [`stroke`](Self::stroke) from `from` to `to` sampled at `steps`
+    /// equal intervals (so `steps` `Move`s fire, hence `steps` `Pointer<Drag>` events
+    /// on the press target). `steps` is clamped to at least 1.
+    pub fn drag(&mut self, from: Vec2, to: Vec2, steps: usize) {
+        let steps = steps.max(1);
+        let path: Vec<Vec2> = (0..=steps)
+            .map(|i| from.lerp(to, i as f32 / steps as f32))
+            .collect();
+        self.stroke(&path);
+    }
+
+    /// Read the drag-taxonomy capture log (the `Pointer<DragStart>` / `Drag` /
+    /// `DragEnd` payloads a [`stroke`](Self::stroke) produced).
+    pub fn captured_drag(&self) -> &CapturedDrag {
+        self.app.world().resource::<CapturedDrag>()
+    }
+
     fn write_button(&mut self, action: PointerAction) {
         self.write_action(action);
     }
@@ -404,6 +486,48 @@ impl PointerHarness {
         app.add_observer(|ev: On<MultiClick>, mut log: ResMut<CapturedEvents>| {
             log.0.push((ev.entity, "multiclick"));
         });
+        // The drag taxonomy: the phase log records the name (for `saw`), and
+        // `CapturedDrag` records the payload (`delta` / `distance` + position) the
+        // drag / stroke tests assert on. `DragStart` carries no delta.
+        app.add_observer(
+            |ev: On<Pointer<DragStart>>,
+             mut log: ResMut<CapturedEvents>,
+             mut drag: ResMut<CapturedDrag>| {
+                log.0.push((ev.entity, "dragstart"));
+                drag.0.push(DragSample {
+                    entity: ev.entity,
+                    phase: "dragstart",
+                    position: ev.pointer_location.position,
+                    delta: Vec2::ZERO,
+                });
+            },
+        );
+        app.add_observer(
+            |ev: On<Pointer<Drag>>,
+             mut log: ResMut<CapturedEvents>,
+             mut drag: ResMut<CapturedDrag>| {
+                log.0.push((ev.entity, "drag"));
+                drag.0.push(DragSample {
+                    entity: ev.entity,
+                    phase: "drag",
+                    position: ev.pointer_location.position,
+                    delta: ev.event.delta,
+                });
+            },
+        );
+        app.add_observer(
+            |ev: On<Pointer<DragEnd>>,
+             mut log: ResMut<CapturedEvents>,
+             mut drag: ResMut<CapturedDrag>| {
+                log.0.push((ev.entity, "dragend"));
+                drag.0.push(DragSample {
+                    entity: ev.entity,
+                    phase: "dragend",
+                    position: ev.pointer_location.position,
+                    delta: ev.event.distance,
+                });
+            },
+        );
     }
 
     /// Mutable world access for assertions (Checked/Pressed/Selected/
@@ -505,4 +629,107 @@ impl Default for PointerHarness {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Drive a REAL press → drag → release **stroke** over `path` through the
+/// production pointer pipeline on ANY `app`, targeting window `window` with the
+/// pointer entity `pointer` (which must carry a `PointerId` + `PointerLocation`).
+/// Presses primary at `path[0]`, writes a `PointerAction::Move` to each subsequent
+/// point — updating `PointerLocation` coherently via `PointerInput::receive` so
+/// `pointer_events` derives `DragStart` → `Drag` → `DragEnd` on the PRESS target —
+/// then releases primary at the last point, ticking one frame per input. A `path`
+/// shorter than two points is a no-op.
+///
+/// This is the reusable core [`PointerHarness::stroke`] delegates to; it is also how
+/// a *foreign* app — one that stands up its own window/camera/pointer rather than
+/// borrowing a [`PointerHarness`] (e.g. a drawing-canvas end-to-end test, or a
+/// long-running playtest host that drives agent strokes) — exercises its own canvas
+/// through the same real drag pipeline.
+///
+/// **Precondition:** `app` must run the picking stack that turns a `PointerInput`
+/// into the `Pointer<E>` taxonomy — `bevy::picking::PickingPlugin` (the
+/// `PointerInput::receive` + hit-test scheduling), Buiy's [`PickingPlugin`] (the
+/// `InteractionPlugin` hover stage) + [`BuiyPickingBackendPlugin`], plus a
+/// `Camera2d` targeting `window` so `emit_picks` resolves a camera.
+/// [`PointerHarness::new`] composes exactly this; a probe-preset app adds those four
+/// on top (the "unified headless driver" recipe — the probe preset omits picking, so
+/// re-adding it conflicts with nothing). A GPU-free host that presents a texture also
+/// needs `app.init_asset::<Image>()` (no `ImagePlugin`/`RenderPlugin` registers
+/// `Assets<Image>` under a headless preset).
+pub fn drive_stroke(app: &mut App, window: Entity, pointer: Entity, path: &[Vec2]) {
+    if path.len() < 2 {
+        return;
+    }
+    let pointer_id = *app
+        .world()
+        .get::<PointerId>(pointer)
+        .expect("pointer entity carries a PointerId");
+    let normalized = WindowRef::Entity(window)
+        .normalize(Some(window))
+        .expect("normalize window target");
+    let render_target = NormalizedRenderTarget::Window(normalized);
+    let at = |p: Vec2| Location {
+        target: render_target.clone(),
+        position: p,
+    };
+
+    // Settle a hover at the start with a DIRECT location write (no `Move` action,
+    // exactly `move_to`'s discipline) so the backend hit-tests `path[0]` and the
+    // press captures the node under it as the drag's target.
+    {
+        let mut loc = app
+            .world_mut()
+            .get_mut::<PointerLocation>(pointer)
+            .expect("pointer entity has PointerLocation");
+        *loc = PointerLocation::new(at(path[0]));
+    }
+    app.update();
+
+    // Press primary at the start.
+    write_pointer_input(
+        app,
+        pointer_id,
+        at(path[0]),
+        PointerAction::Press(PointerButton::Primary),
+    );
+
+    // Move through the rest: each `Move` updates `PointerLocation` (via
+    // `PointerInput::receive`) and derives `DragStart` / `Drag` on the press target.
+    // A zero-delta step is skipped by `pointer_events`, so only distinct points
+    // produce a `Drag`.
+    let mut prev = path[0];
+    for &p in &path[1..] {
+        write_pointer_input(
+            app,
+            pointer_id,
+            at(p),
+            PointerAction::Move { delta: p - prev },
+        );
+        prev = p;
+    }
+
+    // Release primary at the final point → `DragEnd`.
+    write_pointer_input(
+        app,
+        pointer_id,
+        at(prev),
+        PointerAction::Release(PointerButton::Primary),
+    );
+}
+
+/// Write one `PointerInput` and run a frame (the shared per-input step of
+/// [`drive_stroke`]). A free fn (not a closure) so the `&mut App` reborrows at the
+/// call site and stays usable across the many writes.
+fn write_pointer_input(
+    app: &mut App,
+    pointer_id: PointerId,
+    location: Location,
+    action: PointerAction,
+) {
+    app.world_mut().write_message(PointerInput {
+        pointer_id,
+        location,
+        action,
+    });
+    app.update();
 }
