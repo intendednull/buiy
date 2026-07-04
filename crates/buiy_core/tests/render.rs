@@ -94,6 +94,8 @@ mod render_primitive_key;
 mod render_raster;
 #[path = "render/render_raster_gpu.rs"]
 mod render_raster_gpu;
+#[path = "render/render_raster_interleave_gpu.rs"]
+mod render_raster_interleave_gpu;
 #[path = "render/render_shader_wgsl.rs"]
 mod render_shader_wgsl;
 #[path = "render/render_shadow_oracle.rs"]

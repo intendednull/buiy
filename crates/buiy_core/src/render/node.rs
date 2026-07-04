@@ -48,12 +48,12 @@ use bevy::render::{
 use super::{
     atlas::AtlasGpu,
     blur::{BlurParams, BlurPipeline, PreparedBackdropBlurs},
-    buckets::{FlatDrawStep, interleave_flat_quads_and_gradients},
+    buckets::{FlatDrawStep, interleave_flat_draw},
     composite::CompositePipeline,
     compositor::{EffectReason, PreparedEffectGroups, PreparedEffectTargets},
     pipeline::{BuiyPipeline, BuiyViewPipelines},
     prepare::BuiyInstanceBuffers,
-    raster::{RasterBuffers, build_raster_draws},
+    raster::{RasterBuffers, RasterDraw, build_raster_draws},
 };
 
 /// The Buiy render pass, run as a system in the [`Core2d`] schedule. Per-view
@@ -457,7 +457,7 @@ pub fn buiy_pass(
     //
     // `gradient_anchors[i]` is the quad-blob index just after gradient i's node's
     // own quad; gradients are in node-walk (paint) order so anchors ascend, and
-    // `interleave_flat_quads_and_gradients` walks the quad `flat_ranges` (the
+    // `interleave_flat_draw` walks the quad `flat_ranges` (the
     // effect-group double-paint complement of `group_ranges` — a group member is
     // rasterized off-screen in step 1 and composited back in step 2, never drawn
     // flat) pausing to emit each gradient at its anchor. Gradients still ride the
@@ -489,7 +489,44 @@ pub fn buiy_pass(
     } else {
         &[]
     };
-    for step in interleave_flat_quads_and_gradients(&buffers.flat_ranges, anchors) {
+
+    // --- Raster (drawing-canvas) tier, INTERLEAVED per-raster in paint order ---
+    // F4a: retire the fill-tier "raster draws after ALL quads" block. Each
+    // `RasterImage` node now splices at its OWN `node_quad_anchor` (the exact
+    // gradient-bleed precedent), so a canvas paints over every quad/gradient that
+    // precedes its node in paint order and UNDER every one that follows — its true
+    // stacking position (a non-top-layer overlay paints over it; an OPAQUE
+    // top-layer modal panel that contains a raster shows it). Resolve the raster
+    // resources up front; if the pipeline/buffer are not yet ready (async compile
+    // / not-yet-uploaded) treat as NO rasters this frame — the interleave gets
+    // empty raster anchors and reproduces the byte-stable gradient-only draw, and
+    // the rasters land once the resources warm. Each raster is still one bind
+    // group (`@group(1)` = its own image + a Nearest sampler) + one instanced
+    // `draw`; rasters draw under glyphs (a later pass), so text paints over a
+    // canvas.
+    let raster_ready = (!raster_draws.is_empty())
+        .then(|| world.get_resource::<RasterBuffers>())
+        .flatten()
+        .filter(|rb| rb.count > 0)
+        .and_then(|rb| {
+            let pl = pipeline_cache.get_render_pipeline(view_pipelines.raster)?;
+            let buf = rb.instances.buffer()?;
+            Some((pl, buf))
+        });
+    // Sort the draws by their node's paint-order anchor so the interleave sweep is
+    // monotonic (a stable sort keeps a deterministic order among rasters sharing
+    // an anchor). Empty anchors when the resources are not ready — the interleave
+    // then emits no `Raster` step (byte-identical to the pre-raster draw).
+    let mut sorted_rasters: Vec<&RasterDraw> = raster_draws.iter().collect();
+    let raster_anchors: Vec<u32> = if raster_ready.is_some() {
+        sorted_rasters.sort_by_key(|d| d.anchor);
+        sorted_rasters.iter().map(|d| d.anchor).collect()
+    } else {
+        sorted_rasters.clear();
+        Vec::new()
+    };
+
+    for step in interleave_flat_draw(&buffers.flat_ranges, anchors, &raster_anchors) {
         match step {
             FlatDrawStep::Quads(r) => {
                 if let Some(qb) = quad_buffer {
@@ -507,28 +544,19 @@ pub fn buiy_pass(
                     pass.draw(0..4, r);
                 }
             }
-        }
-    }
-
-    // --- Raster (drawing-canvas) draw (fill tier, after quad/gradient) ---
-    // The textured-quad primitive: each `RasterImage` node samples its OWN image
-    // (a per-node `@group(1)` texture + a Nearest sampler), so it is one bind
-    // group + one instanced `draw` per raster node. Drawn in the fill tier (over
-    // solid fills + gradients, under glyphs/bands), so a canvas paints under any
-    // overlaid text. `@group(0)` (view) + the static unit-quad VBO 0 stay bound;
-    // the raster instance buffer is VBO 1. A zero-count or not-yet-uploaded /
-    // not-yet-compiled raster simply skips without disturbing the draws around it.
-    if !raster_draws.is_empty()
-        && let Some(raster_buffers) = world.get_resource::<RasterBuffers>()
-        && raster_buffers.count > 0
-        && let Some(raster_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.raster)
-        && let Some(raster_buffer) = raster_buffers.instances.buffer()
-    {
-        pass.set_render_pipeline(raster_pipeline);
-        pass.set_vertex_buffer(1, raster_buffer.slice(..));
-        for draw in &raster_draws {
-            pass.set_bind_group(1, &draw.bind_group, &[]);
-            pass.draw(0..4, draw.instance..draw.instance + 1);
+            FlatDrawStep::Raster(k) => {
+                if let Some((raster_pipeline, raster_buffer)) = raster_ready {
+                    // `@group(0)` (view) + the static unit-quad VBO 0 stay bound;
+                    // the raster instance buffer is VBO 1, `@group(1)` the per-node
+                    // image. Re-bound per raster step (few rasters; a quad/gradient
+                    // step between two rasters rebinds VBO 1 + the pipeline anyway).
+                    let draw = sorted_rasters[k as usize];
+                    pass.set_render_pipeline(raster_pipeline);
+                    pass.set_vertex_buffer(1, raster_buffer.slice(..));
+                    pass.set_bind_group(1, &draw.bind_group, &[]);
+                    pass.draw(0..4, draw.instance..draw.instance + 1);
+                }
+            }
         }
     }
 

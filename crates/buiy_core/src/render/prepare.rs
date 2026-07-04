@@ -219,6 +219,12 @@ pub struct BuiyInstanceBuffers {
     /// reads it to overwrite only the changed entities' quad slots via `quad.set` +
     /// `write_buffer_range`, instead of re-uploading the whole blob.
     pub quad_slot_of: EntityHashMap<u32>,
+    /// F4a: entity -> its `node_quad_anchor` (`PackedPartition::node_quad_anchor_of`),
+    /// stored on every full quad repack. `node.rs`'s `build_raster_draws` joins each
+    /// extracted raster (which knows only its entity) to its paint-order splice
+    /// position through this, so a raster paints at its true stacking position.
+    /// Retained across a Patch (a Patch never reorders — the anchors stay valid).
+    pub node_quad_anchor_of: EntityHashMap<u32>,
     /// Glyph partial-reextract D6 guard: `true` while the glyph CPU mirror
     /// carries a degraded-group alpha-fold (`prepare_effect_groups` /
     /// `fold_degraded_groups` multiplied member alphas IN PLACE, diverging
@@ -265,6 +271,7 @@ impl Default for BuiyInstanceBuffers {
             icon_flat_ranges: Vec::new(),
             gradient_anchors: Vec::new(),
             quad_slot_of: EntityHashMap::default(),
+            node_quad_anchor_of: EntityHashMap::default(),
             glyph_mirror_folded: false,
         }
     }
@@ -509,6 +516,9 @@ pub fn prepare_buiy_instances(
         // D1: cache entity -> quad slot from this full pack so a later Patch frame (D2)
         // can overwrite just the changed slots. Additive — stored but unused until D2.
         buffers.quad_slot_of = std::mem::take(&mut partition.quad_slot_of);
+        // F4a: cache entity -> paint-order anchor from this full pack so
+        // `build_raster_draws` can splice each raster at its stacking position.
+        buffers.node_quad_anchor_of = std::mem::take(&mut partition.node_quad_anchor_of);
 
         // Repack the quad buffer in place: clear + extend (the Vec backing
         // grows; the GPU buffer grows only on capacity overflow).

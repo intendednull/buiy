@@ -483,6 +483,30 @@ fn partition_transparent_node_anchor_is_current_count() {
     assert_eq!(p.instances.len(), 1);
 }
 
+/// F4a: `node_quad_anchor_of` maps EVERY node's entity to its anchor — INCLUDING
+/// a `Color::NONE` node, which `quad_slot_of` (painting nodes only) misses. A
+/// raster node usually paints no background quad, so this map is the ONLY one that
+/// can join it to its paint-order splice position.
+#[test]
+fn partition_node_quad_anchor_of_covers_transparent_raster_nodes() {
+    let nodes = vec![
+        grouped(1, Color::WHITE, None), // own quad at 0 → anchor 1
+        grouped(2, Color::NONE, None),  // a raster node: NO quad → anchor 1
+        grouped(3, Color::WHITE, None), // own quad at 1 → anchor 2
+    ];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    let e = |n: u32| Entity::from_raw_u32(n).unwrap();
+    assert_eq!(p.node_quad_anchor_of.get(&e(1)).copied(), Some(1));
+    // The transparent (raster) node: present in the anchor map even though it has
+    // no quad_slot — it splices at anchor 1 (after node 1's quad, before node 3's).
+    assert_eq!(p.node_quad_anchor_of.get(&e(2)).copied(), Some(1));
+    assert!(
+        !p.quad_slot_of.contains_key(&e(2)),
+        "no quad slot for a Color::NONE node"
+    );
+    assert_eq!(p.node_quad_anchor_of.get(&e(3)).copied(), Some(2));
+}
+
 /// `pack_gradient_instances` tags each emitted gradient with its node's anchor;
 /// multiple gradients on one node share that anchor (the bleed-fix wiring).
 #[test]
@@ -501,7 +525,9 @@ fn pack_gradient_instances_tags_each_node_with_its_anchor() {
 
 // --- interleave_flat_quads_and_gradients (the paint-order draw schedule) -----
 
-use buiy_core::render::buckets::{FlatDrawStep, interleave_flat_quads_and_gradients};
+use buiy_core::render::buckets::{
+    FlatDrawStep, interleave_flat_draw, interleave_flat_quads_and_gradients,
+};
 
 /// Build flat quad runs from `(start, end)` pairs. Routing the ranges through a
 /// helper keeps every call uniform and sidesteps clippy's
@@ -601,6 +627,168 @@ fn interleave_gradient_anchored_in_group_gap() {
         vec![
             FlatDrawStep::Quads(0..2),
             FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(5..8),
+        ]
+    );
+}
+
+// --- interleave_flat_draw: the F4a general per-raster-anchor interleave --------
+// Each raster splices at its OWN node_quad_anchor (the exact gradient mechanism),
+// retiring the prototype's single global top-layer-suffix `Rasters` marker. These
+// prove the splice position, the raster/gradient ordering, and — the load-bearing
+// F4a contract — that a view with NO raster is byte-identical to the gradient-only
+// interleave (empty raster anchors reproduce the old draw exactly).
+
+/// THE F4a BYTE-STABILITY CONTRACT: empty raster anchors ⇒ `interleave_flat_draw`
+/// is byte-identical to `interleave_flat_quads_and_gradients` for every gradient
+/// config, so a non-raster view's flat draw is unchanged (no golden churn).
+#[test]
+fn raster_empty_anchors_is_byte_identical_to_the_gradient_interleave() {
+    let check = |flat: &[(u32, u32)], grad: &[u32]| {
+        assert_eq!(
+            interleave_flat_draw(&runs(flat), grad, &[]),
+            interleave_flat_quads_and_gradients(&runs(flat), grad),
+            "flat={flat:?} grad={grad:?}",
+        );
+    };
+    check(&[(0, 3)], &[]);
+    check(&[(0, 10)], &[3]);
+    check(&[(0, 3)], &[0]);
+    check(&[(0, 4)], &[2, 2, 2]);
+    check(&[(0, 6)], &[1, 4]);
+    check(&[(0, 2), (5, 8)], &[4]);
+}
+
+/// Empty gradients AND rasters ⇒ just the flat quad runs (across a group gap too).
+#[test]
+fn raster_and_gradient_both_empty_is_the_flat_runs() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 3), (5, 8)]), &[], &[]),
+        vec![FlatDrawStep::Quads(0..3), FlatDrawStep::Quads(5..8)]
+    );
+}
+
+/// THE F4a FIX: a raster anchored MID-run splits the flat draw — quads before its
+/// node paint UNDER it, quads after paint OVER it (a non-top-layer overlay, or an
+/// opaque modal's own panel quad, now correctly paints over the canvas).
+#[test]
+fn raster_splices_at_its_anchor_mid_run() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 10)]), &[], &[6]),
+        vec![
+            FlatDrawStep::Quads(0..6),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Quads(6..10),
+        ]
+    );
+}
+
+/// A raster anchored at 0 (its node is the first painter — a full-view backdrop
+/// canvas) draws FIRST; every quad paints over it.
+#[test]
+fn raster_anchor_zero_draws_before_all_quads() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 3)]), &[], &[0]),
+        vec![FlatDrawStep::Raster(0), FlatDrawStep::Quads(0..3)]
+    );
+}
+
+/// A raster anchored PAST every quad (its node is the last painter) draws after
+/// all the flat quads — the pre-F4a fill-tier position, preserved for that case.
+#[test]
+fn raster_after_all_quads_keeps_the_fill_tier_position() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 3)]), &[], &[3]),
+        vec![FlatDrawStep::Quads(0..3), FlatDrawStep::Raster(0)]
+    );
+}
+
+/// Multiple rasters each splice at their OWN anchor (the general interleave — no
+/// single global raster tier): distinct nodes, distinct stacking positions.
+#[test]
+fn multiple_rasters_each_splice_at_their_anchor() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 8)]), &[], &[2, 6]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Quads(2..6),
+            FlatDrawStep::Raster(1),
+            FlatDrawStep::Quads(6..8),
+        ]
+    );
+}
+
+/// Two rasters sharing an anchor keep the caller's (stable-sorted) order.
+#[test]
+fn rasters_sharing_an_anchor_keep_stable_order() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 4)]), &[], &[2, 2]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Raster(1),
+            FlatDrawStep::Quads(2..4),
+        ]
+    );
+}
+
+/// A raster and gradient at DISTINCT anchors interleave by ascending anchor,
+/// regardless of which comes first (raster-under-gradient and gradient-under-raster
+/// are both just paint order).
+#[test]
+fn raster_and_gradient_interleave_by_ascending_anchor() {
+    // gradient (anchor 2) then raster (anchor 6).
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 8)]), &[2], &[6]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(2..6),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Quads(6..8),
+        ]
+    );
+    // raster (anchor 2) then gradient (anchor 6).
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 8)]), &[6], &[2]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Quads(2..6),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(6..8),
+        ]
+    );
+}
+
+/// The tie-break at a SHARED anchor: a gradient (a node's BACKGROUND layer) paints
+/// BEFORE a raster (a node's CONTENT). A non-case in practice (rasters/gradients
+/// live on disjoint nodes) but deterministic.
+#[test]
+fn raster_paints_over_gradient_at_a_shared_anchor() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 4)]), &[2], &[2]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Quads(2..4),
+        ]
+    );
+}
+
+/// A raster whose anchor lands inside a GROUP GAP (its node's quad is in an
+/// off-screen group range, not flat) draws right after the last flat quad before
+/// the gap — the documented "on a grouped element" limitation, matching gradients,
+/// and never drops a flat quad. flat_ranges = [0..2, 5..8] (2..5 is a group gap).
+#[test]
+fn raster_anchored_in_group_gap_draws_after_last_flat_quad_before_gap() {
+    assert_eq!(
+        interleave_flat_draw(&runs(&[(0, 2), (5, 8)]), &[], &[4]),
+        vec![
+            FlatDrawStep::Quads(0..2),
+            FlatDrawStep::Raster(0),
             FlatDrawStep::Quads(5..8),
         ]
     );
