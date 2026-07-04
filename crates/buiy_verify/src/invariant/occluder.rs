@@ -108,8 +108,8 @@ mod tests {
 
     use buiy_core::Node;
     use buiy_core::layout::{Stacking, TopLayer};
-    use buiy_core::render::components::Background;
     use buiy_core::render::color::ColorToken;
+    use buiy_core::render::components::Background;
 
     /// A `Stacking` promoted to the top layer (the `.top_layer()` lowering).
     fn top_layer() -> Stacking {

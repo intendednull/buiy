@@ -2137,6 +2137,7 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "buiy_core",
+ "buiy_verify",
  "buiy_widgets",
 ]
 

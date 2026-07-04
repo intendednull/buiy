@@ -562,7 +562,12 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -
 /// non-container caller (a `text`/`raster` node) passes `false` — only its own
 /// `.ignore_picking()` applies (a top-layer `text`/`raster` paints content, so it
 /// is not the invisible-occluder class the auto-rule guards).
-fn apply_node_layout(world: &mut World, e: Entity, layout: &LayoutProps, auto_ignore: bool) -> bool {
+fn apply_node_layout(
+    world: &mut World,
+    e: Entity,
+    layout: &LayoutProps,
+    auto_ignore: bool,
+) -> bool {
     let mut changed = false;
     changed |= apply_box_model(world, e, layout);
     changed |= apply_flex_item(world, e, layout);
