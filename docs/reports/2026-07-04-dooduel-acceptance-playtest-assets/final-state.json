@@ -1,0 +1,64 @@
+{
+  "all_guessed": false,
+  "canvas_ink": 0,
+  "countdown": 0,
+  "drawer": null,
+  "drawer_name": null,
+  "guessed_count": 2,
+  "hint_total": 2,
+  "hints_revealed": 2,
+  "phase": "final",
+  "round": 1,
+  "screen": "podium",
+  "seats": [
+    {
+      "can_continue": false,
+      "can_draw": false,
+      "can_guess": false,
+      "can_pick": false,
+      "guessed": false,
+      "is_drawer": false,
+      "name": "Alex",
+      "score": 100,
+      "seat": 0
+    },
+    {
+      "can_continue": false,
+      "can_draw": false,
+      "can_guess": false,
+      "can_pick": false,
+      "guessed": true,
+      "is_drawer": false,
+      "name": "Priya",
+      "score": 924,
+      "seat": 1
+    },
+    {
+      "can_continue": false,
+      "can_draw": false,
+      "can_guess": false,
+      "can_pick": false,
+      "guessed": true,
+      "is_drawer": false,
+      "name": "Theo",
+      "score": 912,
+      "seat": 2
+    },
+    {
+      "can_continue": false,
+      "can_draw": false,
+      "can_guess": false,
+      "can_pick": false,
+      "guessed": false,
+      "is_drawer": false,
+      "name": "Sam",
+      "score": 294,
+      "seat": 3
+    }
+  ],
+  "started": true,
+  "tick": 47797,
+  "total_rounds": 1,
+  "turn": null,
+  "word_length": 0
+}
