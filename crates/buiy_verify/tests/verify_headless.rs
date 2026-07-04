@@ -59,6 +59,10 @@ mod metric;
 mod modal_showcase_c8c;
 #[path = "verify_headless/overlay_dismiss_c5b.rs"]
 mod overlay_dismiss_c5b;
+#[path = "verify_headless/pointer_canvas_e2e.rs"]
+mod pointer_canvas_e2e;
+#[path = "verify_headless/pointer_drag.rs"]
+mod pointer_drag;
 #[path = "verify_headless/pointer_events_c3b.rs"]
 mod pointer_events_c3b;
 #[path = "verify_headless/pointer_focus_c3d.rs"]
