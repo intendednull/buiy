@@ -281,11 +281,11 @@ pub fn pack_gradient_instances(
     (gradients, anchors)
 }
 
-/// One draw step in the interleaved flat quad + background-gradient window pass
-/// ([`interleave_flat_quads_and_gradients`]). The flat pass binds the quad
-/// pipeline for a [`Quads`](Self::Quads) step and the gradient pipeline for a
-/// [`Gradients`](Self::Gradients) step; each holds the instance-index sub-range
-/// to `draw`.
+/// One draw step in the interleaved flat window pass ([`interleave_flat_draw`]).
+/// The flat pass binds the quad pipeline for a [`Quads`](Self::Quads) step, the
+/// gradient pipeline for a [`Gradients`](Self::Gradients) step, and the raster
+/// pipeline for a [`Raster`](Self::Raster) step; the quad/gradient variants hold
+/// the instance-index sub-range to `draw`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlatDrawStep {
     /// Draw this sub-range of the flat quad instance blob (the quad pipeline).
@@ -293,6 +293,14 @@ pub enum FlatDrawStep {
     /// Draw this sub-range of the background-gradient instance blob (the
     /// gradient pipeline).
     Gradients(Range<u32>),
+    /// Draw ONE raster (drawing-canvas) node here — the `u32` indexes the
+    /// caller's anchor-sorted raster draw list (`node.rs` binds that draw's
+    /// per-node `@group(1)` image + the raster pipeline and draws its single
+    /// instance). F4a: a raster splices at its OWN node's `node_quad_anchor`, so
+    /// it paints OVER every quad/gradient that precedes its node in paint order
+    /// and UNDER every one that follows — its true stacking position, with no
+    /// top-layer special case and no contiguous-suffix assumption.
+    Raster(u32),
 }
 
 /// Interleave the flat quad runs with the background-gradient blob in PAINT
@@ -320,46 +328,128 @@ pub fn interleave_flat_quads_and_gradients(
     flat_ranges: &[Range<u32>],
     gradient_anchors: &[u32],
 ) -> Vec<FlatDrawStep> {
+    // The gradients-only projection of the general interleave: NO raster canvas.
+    // Kept as its own entry so the large existing gradient-interleave suite (and
+    // any gradient-only caller) reads unchanged; empty raster anchors make it
+    // byte-identical to `interleave_flat_draw` by construction (the raster
+    // splices never fire — the F4a byte-stability contract for a non-raster view).
+    interleave_flat_draw(flat_ranges, gradient_anchors, &[])
+}
+
+/// Push `Quads` steps for every not-yet-drawn flat instance with index `< limit`,
+/// advancing the `(fi, pos)` cursor across the ascending, disjoint flat runs.
+/// Hoisted out of [`interleave_flat_draw`] so the gradient walk AND the raster
+/// splices share ONE monotonic cursor (a group gap is jumped once, no flat quad
+/// is drawn twice or skipped). `limit == u32::MAX` drains every remaining run.
+fn emit_quads_up_to(
+    flat_ranges: &[Range<u32>],
+    fi: &mut usize,
+    pos: &mut u32,
+    limit: u32,
+    steps: &mut Vec<FlatDrawStep>,
+) {
+    while *fi < flat_ranges.len() {
+        let r = &flat_ranges[*fi];
+        if *pos < r.start {
+            *pos = r.start; // jump the group gap to the next flat run
+        }
+        if r.start >= limit {
+            break; // this run begins at/after the limit — nothing more yet
+        }
+        let end = r.end.min(limit);
+        if *pos < end {
+            steps.push(FlatDrawStep::Quads(*pos..end));
+            *pos = end;
+        }
+        if r.end <= limit {
+            *fi += 1; // run fully drawn — advance
+        } else {
+            break; // run drawn up to the limit — resume here next time
+        }
+    }
+}
+
+/// Interleave the flat quad runs with the background-gradient blob AND the raster
+/// (drawing-canvas) draws in PAINT ORDER (the parity gradient-bleed fix EXTENDED
+/// by the F4a general per-raster interleave). Each gradient `i` draws at its
+/// `gradient_anchors[i]` and each raster `k` at its `raster_anchors[k]` — both the
+/// quad-blob index just after that node's own quad, so the primitive paints after
+/// its node's own fill and BEFORE any descendant's quad. This retires the
+/// prototype's top-layer-suffix split: a raster now paints at its TRUE stacking
+/// position, so a non-top-layer overlay draws over the canvas and an OPAQUE
+/// top-layer modal panel that contains a raster shows it (no contiguous-suffix
+/// assumption). See [`FlatDrawStep::Raster`] for the effect-group boundary this
+/// does NOT cross.
+///
+/// Both anchor slices MUST be non-decreasing: gradients are emitted in node-walk
+/// paint order (so they ascend naturally); the caller SORTS the raster draws by
+/// anchor before calling. At a SHARED anchor, gradients (a node's background
+/// layer) paint BEFORE rasters (a node's content) — a deterministic tie-break for
+/// what is a non-case in practice (rasters and gradients live on disjoint nodes).
+///
+/// `flat_ranges` are the non-group quad runs the flat window pass draws (both
+/// gradients and rasters ride the flat draw only — a gradient/raster on a grouped
+/// element stays the documented v1 follow-up). A gradient/raster whose anchor
+/// falls inside a group gap draws right after the last flat quad before the gap
+/// (unchanged). Empty `raster_anchors` ⇒ byte-identical to
+/// [`interleave_flat_quads_and_gradients`]; empty both ⇒ the plain flat quad runs.
+///
+/// Pure (no GPU / ECS) — unit-tested headless; `node.rs` executes the returned
+/// schedule against the open render pass.
+pub fn interleave_flat_draw(
+    flat_ranges: &[Range<u32>],
+    gradient_anchors: &[u32],
+    raster_anchors: &[u32],
+) -> Vec<FlatDrawStep> {
     let mut steps: Vec<FlatDrawStep> = Vec::new();
     // Quad cursor across the ascending, disjoint flat runs: `fi` is the current
     // range index, `pos` the next undrawn instance index within it.
     let mut fi = 0usize;
     let mut pos = flat_ranges.first().map_or(0, |r| r.start);
-
-    // Push Quads steps for every not-yet-drawn flat instance with index < limit.
-    let mut emit_quads_up_to = |limit: u32, steps: &mut Vec<FlatDrawStep>| {
-        while fi < flat_ranges.len() {
-            let r = &flat_ranges[fi];
-            if pos < r.start {
-                pos = r.start; // jump the group gap to the next flat run
-            }
-            if r.start >= limit {
-                break; // this run begins at/after the limit — nothing more yet
-            }
-            let end = r.end.min(limit);
-            if pos < end {
-                steps.push(FlatDrawStep::Quads(pos..end));
-                pos = end;
-            }
-            if r.end <= limit {
-                fi += 1; // run fully drawn — advance
-            } else {
-                break; // run drawn up to the limit — resume here next time
-            }
-        }
-    };
+    // The next raster draw to splice (anchors ascending, caller-sorted).
+    let mut ri = 0usize;
 
     for (gi, &anchor) in gradient_anchors.iter().enumerate() {
-        emit_quads_up_to(anchor, &mut steps);
+        // Splice every raster STRICTLY before this gradient's anchor. A raster at
+        // the SAME anchor paints AFTER the gradient (content over background) — it
+        // is placed by a later gradient with a greater anchor, or the tail loop.
+        while ri < raster_anchors.len() && raster_anchors[ri] < anchor {
+            emit_quads_up_to(
+                flat_ranges,
+                &mut fi,
+                &mut pos,
+                raster_anchors[ri],
+                &mut steps,
+            );
+            steps.push(FlatDrawStep::Raster(ri as u32));
+            ri += 1;
+        }
+        emit_quads_up_to(flat_ranges, &mut fi, &mut pos, anchor, &mut steps);
         let g = gi as u32;
         // Coalesce consecutive gradients (same or non-increasing anchors) into
-        // one run so the pass binds the gradient pipeline once for the group.
+        // one run so the pass binds the gradient pipeline once for the group. A
+        // raster spliced between two gradients breaks the run (the last step is a
+        // Raster, not a Gradients) — correct, and the byte-stable path when
+        // `raster_anchors` is empty (the splice loop never runs).
         match steps.last_mut() {
             Some(FlatDrawStep::Gradients(run)) if run.end == g => run.end = g + 1,
             _ => steps.push(FlatDrawStep::Gradients(g..g + 1)),
         }
     }
-    emit_quads_up_to(u32::MAX, &mut steps);
+    // Rasters anchored at/after the last gradient (over every gradient), each
+    // before the quads that follow its node in paint order.
+    while ri < raster_anchors.len() {
+        emit_quads_up_to(
+            flat_ranges,
+            &mut fi,
+            &mut pos,
+            raster_anchors[ri],
+            &mut steps,
+        );
+        steps.push(FlatDrawStep::Raster(ri as u32));
+        ri += 1;
+    }
+    emit_quads_up_to(flat_ranges, &mut fi, &mut pos, u32::MAX, &mut steps);
     steps
 }
 
@@ -412,6 +502,18 @@ pub struct PackedPartition {
     /// rejection of a recorded paint-order index — see the `quads_by_entity` note in
     /// `pack_view_partitioned` — is about REORDER staleness, which a Patch precludes.)
     pub quad_slot_of: EntityHashMap<u32>,
+    /// F4a: entity -> its `node_quad_anchor` (the quad-blob index just after the
+    /// entity's own quad — the SAME value as its [`node_quad_anchors`] entry).
+    /// UNLIKE [`quad_slot_of`] this covers EVERY node, painting or `Color::NONE`,
+    /// because a raster node usually paints no background quad yet still needs its
+    /// anchor to splice at (the F4a per-raster interleave). `node.rs` joins each
+    /// extracted raster (which knows only its entity) to its paint-order position
+    /// through this map. Rebuilt every full pack; retained across a Patch (a Patch
+    /// never reorders, so the anchors stay valid).
+    ///
+    /// [`node_quad_anchors`]: Self::node_quad_anchors
+    /// [`quad_slot_of`]: Self::quad_slot_of
+    pub node_quad_anchor_of: EntityHashMap<u32>,
 }
 
 /// Pack a view's nodes into the flat quad blob AND its per-group instance-range
@@ -458,6 +560,7 @@ pub fn pack_view_partitioned(
     let mut p = Partitioner::new(nodes.len() + text_quads.len(), group_count);
     let mut node_quad_anchors = Vec::with_capacity(nodes.len());
     let mut quad_slot_of: EntityHashMap<u32> = EntityHashMap::default();
+    let mut node_quad_anchor_of: EntityHashMap<u32> = EntityHashMap::default();
     for node in nodes {
         let g = node.group.filter(|&g| g < group_count);
         if node.color != Color::NONE {
@@ -470,7 +573,13 @@ pub fn pack_view_partitioned(
         // instance count right AFTER this node's own quad (or its `Color::NONE`
         // skip) and BEFORE its text quads. The node's background gradient draws
         // here — over its own fill, under its own decorations + every descendant.
-        node_quad_anchors.push(p.len());
+        let anchor = p.len();
+        node_quad_anchors.push(anchor);
+        // F4a: the same anchor, keyed by entity, so an extracted raster (which
+        // knows only its entity) can join to its paint-order splice position.
+        // Every node lands here — a `Color::NONE` raster node has no quad_slot but
+        // still needs its anchor.
+        node_quad_anchor_of.insert(node.entity, anchor);
         // § 4.6: splice the entity's text quads IMMEDIATELY after its node
         // record, adopting the node's group — partition placement can never
         // disagree with the entity's, so contiguity holds by construction.
@@ -489,6 +598,7 @@ pub fn pack_view_partitioned(
     let mut partition = p.finish();
     partition.node_quad_anchors = node_quad_anchors;
     partition.quad_slot_of = quad_slot_of;
+    partition.node_quad_anchor_of = node_quad_anchor_of;
     partition
 }
 
@@ -533,6 +643,7 @@ impl Partitioner {
             // per-node anchor walk); empty here keeps `Partitioner` blob-only.
             node_quad_anchors: Vec::new(),
             quad_slot_of: EntityHashMap::default(),
+            node_quad_anchor_of: EntityHashMap::default(),
         }
     }
 }

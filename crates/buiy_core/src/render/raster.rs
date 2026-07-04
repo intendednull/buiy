@@ -134,6 +134,13 @@ pub struct ExtractedRasters {
     pub instances: Vec<RasterInstance>,
     /// The image each instance samples (parallel to `instances`).
     pub images: Vec<AssetId<Image>>,
+    /// The SOURCE main-world entity each instance came from (parallel to
+    /// `instances`). F4a joins each raster to its node's paint-order anchor
+    /// (`BuiyInstanceBuffers::node_quad_anchor_of`, keyed by this entity) so the
+    /// raster splices at its true stacking position rather than one global tier.
+    /// The same main-world entity `ExtractedNode::entity` carries, so the join
+    /// key matches by construction.
+    pub entities: Vec<Entity>,
 }
 
 /// Persistent per-view raster instance buffer (grow-in-place, the
@@ -144,6 +151,10 @@ pub struct RasterBuffers {
     pub instances: RawBufferVec<RasterInstance>,
     /// The image each instance samples (parallel to the uploaded buffer).
     pub images: Vec<AssetId<Image>>,
+    /// The source main-world entity of each instance (parallel to the uploaded
+    /// buffer). F4a: `build_raster_draws` joins each entity to its paint-order
+    /// anchor so the raster splices at its true stacking position.
+    pub entities: Vec<Entity>,
     /// Instance count written this frame (the draw range upper bound).
     pub count: u32,
 }
@@ -153,6 +164,7 @@ impl Default for RasterBuffers {
         Self {
             instances: RawBufferVec::new(BufferUsages::VERTEX),
             images: Vec::new(),
+            entities: Vec::new(),
             count: 0,
         }
     }
@@ -357,6 +369,7 @@ pub fn extract_buiy_rasters(
     query: Extract<
         Query<
             (
+                Entity,
                 &GlobalTransform,
                 &ResolvedLayout,
                 &RasterImage,
@@ -368,10 +381,13 @@ pub fn extract_buiy_rasters(
 ) {
     out.instances.clear();
     out.images.clear();
-    for (global_transform, layout, raster, clip) in &query {
+    out.entities.clear();
+    for (entity, global_transform, layout, raster, clip) in &query {
         out.instances
             .push(raster_instance_for(global_transform, layout, clip));
         out.images.push(raster.0.id());
+        // The main-world entity — the F4a join key to the node paint-order anchor.
+        out.entities.push(entity);
     }
 }
 
@@ -391,6 +407,7 @@ pub fn prepare_buiy_rasters(
     }
     buffers.count = extracted.instances.len() as u32;
     buffers.images.clone_from(&extracted.images);
+    buffers.entities.clone_from(&extracted.entities);
     if buffers.count > 0 {
         buffers
             .instances
@@ -399,12 +416,21 @@ pub fn prepare_buiy_rasters(
 }
 
 /// One prepared raster draw: the `@group(1)` bind group (image texture + the
-/// Nearest sampler) paired with the instance index it draws.
+/// Nearest sampler) paired with the instance index it draws AND its paint-order
+/// anchor (F4a).
 pub struct RasterDraw {
     /// `@group(1)` = (image `texture_view`, the Nearest sampler).
     pub bind_group: BindGroup,
     /// The instance index in [`RasterBuffers::instances`] this draw covers.
     pub instance: u32,
+    /// F4a: the raster node's `node_quad_anchor` — the quad-blob index just after
+    /// its own quad (`BuiyInstanceBuffers::node_quad_anchor_of`), the paint-order
+    /// position it splices into the flat draw. `node.rs` sorts the draws by this
+    /// and feeds it to `interleave_flat_draw`. `u32::MAX` when the node has no
+    /// anchor record this frame (a transient impossibility — every raster node has
+    /// an `ExtractedNode`; the fallback draws it after all flat content, the
+    /// pre-F4a fill-tier position).
+    pub anchor: u32,
 }
 
 /// Build the per-image `@group(1)` bind groups for this frame's raster draws
@@ -414,6 +440,14 @@ pub struct RasterDraw {
 /// has uploaded yet (the draw is simply skipped that frame — the established
 /// async-upload skip class). An instance whose image is not yet resident is
 /// dropped from this frame's draw list (it lands once the upload completes).
+///
+/// F4a: each draw carries its node's paint-order `anchor`, joined from the quad
+/// pack's [`node_quad_anchor_of`] map by the raster's source entity, so `node.rs`
+/// can splice it at its true stacking position. The map is absent for one warm-up
+/// frame before the first quad prepare (then every raster falls back to
+/// `u32::MAX` — the after-all-flat, pre-F4a fill-tier position).
+///
+/// [`node_quad_anchor_of`]: crate::render::prepare::BuiyInstanceBuffers::node_quad_anchor_of
 pub fn build_raster_draws(world: &World, render_context: &mut RenderContext) -> Vec<RasterDraw> {
     let (Some(buffers), Some(gpu), Some(pipeline)) = (
         world.get_resource::<RasterBuffers>(),
@@ -428,6 +462,11 @@ pub fn build_raster_draws(world: &World, render_context: &mut RenderContext) -> 
     let Some(images) = world.get_resource::<RenderAssets<GpuImage>>() else {
         return Vec::new();
     };
+    // F4a: entity -> paint-order anchor from the quad pack (absent one warm-up
+    // frame; then each raster falls back to `u32::MAX` = after all flat content).
+    let anchor_of = world
+        .get_resource::<crate::render::prepare::BuiyInstanceBuffers>()
+        .map(|b| &b.node_quad_anchor_of);
     let device = render_context.render_device();
     let mut draws = Vec::new();
     for (i, image_id) in buffers.images.iter().enumerate() {
@@ -443,9 +482,16 @@ pub fn build_raster_draws(world: &World, render_context: &mut RenderContext) -> 
             &pipeline.atlas_layout,
             &BindGroupEntries::sequential((&gpu_image.texture_view, &gpu.sampler)),
         );
+        // Join this instance's entity to its node paint-order anchor.
+        let anchor = buffers
+            .entities
+            .get(i)
+            .and_then(|e| anchor_of.and_then(|m| m.get(e)).copied())
+            .unwrap_or(u32::MAX);
         draws.push(RasterDraw {
             bind_group,
             instance: i as u32,
+            anchor,
         });
     }
     draws
