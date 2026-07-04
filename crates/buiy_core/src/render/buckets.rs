@@ -512,6 +512,7 @@ pub struct PackedPartition {
     /// never reorders, so the anchors stay valid).
     ///
     /// [`node_quad_anchors`]: Self::node_quad_anchors
+    /// [`quad_slot_of`]: Self::quad_slot_of
     pub node_quad_anchor_of: EntityHashMap<u32>,
 }
 

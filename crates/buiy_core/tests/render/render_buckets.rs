@@ -644,21 +644,19 @@ fn interleave_gradient_anchored_in_group_gap() {
 /// config, so a non-raster view's flat draw is unchanged (no golden churn).
 #[test]
 fn raster_empty_anchors_is_byte_identical_to_the_gradient_interleave() {
-    let cases: &[(&[(u32, u32)], &[u32])] = &[
-        (&[(0, 3)], &[]),
-        (&[(0, 10)], &[3]),
-        (&[(0, 3)], &[0]),
-        (&[(0, 4)], &[2, 2, 2]),
-        (&[(0, 6)], &[1, 4]),
-        (&[(0, 2), (5, 8)], &[4]),
-    ];
-    for (flat, grad) in cases {
+    let check = |flat: &[(u32, u32)], grad: &[u32]| {
         assert_eq!(
             interleave_flat_draw(&runs(flat), grad, &[]),
             interleave_flat_quads_and_gradients(&runs(flat), grad),
             "flat={flat:?} grad={grad:?}",
         );
-    }
+    };
+    check(&[(0, 3)], &[]);
+    check(&[(0, 10)], &[3]);
+    check(&[(0, 3)], &[0]);
+    check(&[(0, 4)], &[2, 2, 2]);
+    check(&[(0, 6)], &[1, 4]);
+    check(&[(0, 2), (5, 8)], &[4]);
 }
 
 /// Empty gradients AND rasters ⇒ just the flat quad runs (across a group gap too).
