@@ -48,6 +48,8 @@ mod render_extract;
 mod render_extract_background;
 #[path = "render/render_extract_composite.rs"]
 mod render_extract_composite;
+#[path = "render/render_f4b_shapes_gpu.rs"]
+mod render_f4b_shapes_gpu;
 #[path = "render/render_focus_ring.rs"]
 mod render_focus_ring;
 #[path = "render/render_focus_ring_gpu.rs"]

@@ -26,7 +26,7 @@ use crate::render::buckets::BuiyPrimitiveKind;
 use crate::render::composite::BuiySpecializedPipelines;
 use crate::render::primitive::{
     BuiyBandKey, BuiyBandPipeline, BuiyGradientKey, BuiyGradientPipeline, BuiyPrimitiveKey,
-    BuiyPrimitives,
+    BuiyPrimitives, BuiyRoundedShadowKey, BuiyRoundedShadowPipeline,
 };
 use crate::render::raster::{BuiyRasterKey, BuiyRasterPipeline};
 
@@ -96,6 +96,23 @@ const GRADIENT_SHADER_UUID: Uuid = Uuid::from_u128(0xB01A_0107_0000_0000_0000_00
 /// through the PipelineCache's extracted GPU mirror.
 pub fn gradient_shader_handle() -> Handle<Shader> {
     Handle::Uuid(GRADIENT_SHADER_UUID, PhantomData)
+}
+
+/// Stable UUID for the ROUNDED box-shadow shader (octet `..0A`, F4b-6 — the raster
+/// shader took `..09`).
+const ROUNDED_SHADOW_SHADER_UUID: Uuid =
+    Uuid::from_u128(0xB01A_010A_0000_0000_0000_0000_0000_000Au128);
+
+/// Weak handle to the rounded box-shadow WGSL shader (octet `..0A`).
+///
+/// Backed by `rounded_shadow.wgsl` (the blurred rounded-rect coverage that renders
+/// a rounded caster's shadow + the crisp zero-blur 3D-press edge — F4b-6), loaded
+/// under `ROUNDED_SHADOW_SHADER_UUID` into the MAIN world by `BuiyRenderPlugin::build`
+/// (`load_internal_asset!`). The rounded-shadow pipeline
+/// (`primitive.rs` `BuiyRoundedShadowPipeline::specialize`) resolves it through the
+/// PipelineCache's extracted GPU mirror.
+pub fn rounded_shadow_shader_handle() -> Handle<Shader> {
+    Handle::Uuid(ROUNDED_SHADOW_SHADER_UUID, PhantomData)
 }
 
 /// The bind-group-layout entries for the per-view view uniform: one
@@ -193,6 +210,12 @@ pub struct BuiyPipeline {
     /// `BuiyGradientPipeline` specializer so the 1x default-format view's
     /// per-view key dedups onto it.
     pub gradient_id: CachedRenderPipelineId,
+    /// The `RoundedShadow@Rgba8UnormSrgb@1x` baseline id for the rounded box-shadow
+    /// pipeline (F4b-6). Same eager-baseline role as the others (the node draws
+    /// [`BuiyViewPipelines::rounded_shadow`]); built through the
+    /// `BuiyRoundedShadowPipeline` specializer so the 1x default-format view's
+    /// per-view key dedups onto it.
+    pub rounded_shadow_id: CachedRenderPipelineId,
     /// The `Raster@Rgba8UnormSrgb@1x` baseline id for the textured-quad pipeline
     /// (the drawing-canvas seam). Same eager-baseline role as the others (the
     /// node draws [`BuiyViewPipelines::raster`]); built through the
@@ -298,8 +321,8 @@ pub(crate) fn register(render_app: &mut SubApp) {
     // compiling duplicates. `register` runs at plugin finish, before any
     // `ViewTarget` exists, so the literals stand in for the default view here;
     // a multisampled / HDR view gets its own variant from the prepare pass.
-    let (id, glyph_id, band_id, shadow_id, gradient_id, raster_id) =
-        world.resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
+    let (id, glyph_id, band_id, shadow_id, gradient_id, rounded_shadow_id, raster_id) = world
+        .resource_scope(|world, mut pipelines: Mut<BuiySpecializedPipelines>| {
             let pipeline_cache = world.resource::<PipelineCache>();
             let quad = pipelines.primitives.specialize(
                 pipeline_cache,
@@ -352,6 +375,16 @@ pub(crate) fn register(render_app: &mut SubApp) {
                     samples: 1,
                 },
             );
+            // The rounded box-shadow baseline through its own
+            // `BuiyRoundedShadowPipeline` specializer + cache (F4b-6).
+            let rounded_shadow = pipelines.rounded_shadow.specialize(
+                pipeline_cache,
+                &BuiyRoundedShadowPipeline,
+                BuiyRoundedShadowKey {
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    samples: 1,
+                },
+            );
             // The raster (textured-quad) baseline through its own
             // `BuiyRasterPipeline` specializer + cache (the drawing-canvas seam).
             let raster = pipelines.raster.specialize(
@@ -362,7 +395,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
                     samples: 1,
                 },
             );
-            (quad, glyph, band, shadow, gradient, raster)
+            (quad, glyph, band, shadow, gradient, rounded_shadow, raster)
         });
     world.insert_resource(BuiyPipeline {
         id,
@@ -370,6 +403,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
         band_id,
         shadow_id,
         gradient_id,
+        rounded_shadow_id,
         raster_id,
         vertex_buffer,
         view_layout,
@@ -403,6 +437,10 @@ pub struct BuiyViewPipelines {
     /// background-gradient draw (parity Wave B1). Drawn AFTER the solid quad,
     /// BEFORE glyphs/bands (over the fill, under text/border).
     pub gradient: CachedRenderPipelineId,
+    /// `RoundedShadow @ (view format, view samples)` — the window-pass rounded
+    /// box-shadow draw (F4b-6). Drawn in the SHADOW tier (before the flat quads,
+    /// alongside the square shadow blob).
+    pub rounded_shadow: CachedRenderPipelineId,
     /// `Raster @ (view format, view samples)` — the window-pass textured-quad
     /// (drawing-canvas) draw. Drawn in the fill tier (after quad/gradient, before
     /// glyphs), each raster node its own `@group(1)` texture + `draw`.
@@ -461,6 +499,13 @@ pub(crate) fn prepare_buiy_view_pipelines(
             &BuiyGradientPipeline,
             BuiyGradientKey { format, samples },
         );
+        // The rounded box-shadow variant rides its own specializer/cache too
+        // (F4b-6) — a distinct pipeline keyed by record.
+        let rounded_shadow = pipelines.rounded_shadow.specialize(
+            &pipeline_cache,
+            &BuiyRoundedShadowPipeline,
+            BuiyRoundedShadowKey { format, samples },
+        );
         // The raster (textured-quad) variant rides its own specializer/cache too
         // (the drawing-canvas seam) — a distinct pipeline keyed by record.
         let raster = pipelines.raster.specialize(
@@ -474,6 +519,7 @@ pub(crate) fn prepare_buiy_view_pipelines(
             band,
             shadow,
             gradient,
+            rounded_shadow,
             raster,
         };
         commands.entity(entity).insert(view_pipelines);

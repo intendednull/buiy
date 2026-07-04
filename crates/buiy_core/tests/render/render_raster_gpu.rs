@@ -104,3 +104,71 @@ fn raster_node_samples_authored_texels_byte_exact() {
         "paper ground at an untouched interior texel"
     );
 }
+
+/// F4b-4: a raster node with a corner radius (via `Border.radius`) CLIPS its
+/// sampled texels to a rounded silhouette — a custom-drawn avatar reads ROUND, not
+/// a square sticker. Authors a solid-cyan canvas, gives the node a full radius (a
+/// circle), and asserts the center paints the texel while an extreme corner is
+/// clipped AWAY (clear). A `radius == 0` raster (the F1 path) leaves the corner
+/// inked — the byte-identical square path this test complements.
+#[test]
+#[ignore = "GPU: run under `cargo test -- --ignored` (real adapter / lavapipe)"]
+fn rounded_raster_clips_its_corners() {
+    use buiy_core::render::ColorToken;
+    use buiy_core::render::components::{Border, BorderSide, Corners, LineStyle, Radius};
+
+    const M: u32 = 40;
+    const CYAN: [u8; 4] = [40, 210, 210, 255];
+    let mut app = crate::support::gpu_render_app(M, M);
+    // A solid-cyan canvas so any painted texel is unambiguously the raster.
+    let image = bevy::image::Image::new_fill(
+        Extent3d {
+            width: M,
+            height: M,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &CYAN,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::all(),
+    );
+    let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+    let none_side = || BorderSide {
+        color: ColorToken::Custom(Color::NONE),
+        style: LineStyle::None,
+    };
+    app.world_mut().spawn((
+        Node,
+        Style::default().width_px(M as f32).height_px(M as f32),
+        RasterImage(handle),
+        // A radius with NO painting side: no band, just the rounded clip (radius 20
+        // = a circle inscribed in the 40×40 node).
+        Border {
+            top: none_side(),
+            right: none_side(),
+            bottom: none_side(),
+            left: none_side(),
+            radius: Corners::all(Radius::circular(20.0)),
+        },
+    ));
+
+    let target = crate::support::render_to_image(&mut app, M, M);
+    crate::support::spawn_capture_camera(&mut app, target.clone());
+    crate::support::finish_and_run(&mut app, 5);
+    let pixels = crate::support::readback_rgba(&mut app, target);
+    let at = |x: u32, y: u32| crate::support::px(&pixels, M, x, y);
+
+    // The center paints the cyan texel (the raster drew, non-vacuous).
+    let center = at(20, 20);
+    assert!(
+        center[1] > 120 && center[2] > 120,
+        "the raster center paints the cyan texel, got {center:?}"
+    );
+    // The extreme corner (2,2) is OUTSIDE the radius-20 circle (dist from (20,20) ≈
+    // 25 > 20) → CLIPPED to the clear backdrop. A square raster would paint cyan here.
+    let corner = at(2, 2);
+    assert!(
+        corner[1] < 90 && corner[2] < 90,
+        "the rounded raster clips its corner (clear), not a square sticker, got {corner:?}"
+    );
+}

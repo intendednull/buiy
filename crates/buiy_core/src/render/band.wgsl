@@ -39,12 +39,17 @@ struct Instance {
     @location(10) outer_radius_br_bl: vec4<f32>,
     @location(11) inner_radius_tl_tr: vec4<f32>,
     @location(12) inner_radius_br_bl: vec4<f32>,
-    @location(13) clip_min: vec2<f32>,     // logical px (-inf = none)
-    @location(14) clip_max: vec2<f32>,     // logical px (+inf = none)
-    // Affine basis [m00, m10, m01, m11] as ONE vec4 (was two vec2 cols at
-    // @location 15/16). Folded to keep the band layout at 16 vertex attributes —
-    // WebGL2's `max_vertex_attributes` cap (downlevel_webgl2_defaults). The two
-    // 2-col reads become `.xy` / `.zw`; native/WebGPU behavior is identical.
+    // clip_min.xy + clip_max.zw folded to ONE vec4 (freeing a slot for `style`
+    // while staying at WebGL2's 16-attribute cap). -inf/+inf = the full-view
+    // sentinel; the two reads become `.xy` / `.zw`.
+    @location(13) clip: vec4<f32>,
+    // Per-side dash-stipple flag [top, right, bottom, left] (F4b-3): 0 = solid
+    // (continuous ring), 1 = dashed, 2 = dotted.
+    @location(14) style: vec4<f32>,
+    // Affine basis [m00, m10, m01, m11] as ONE vec4. Folded to keep the band
+    // layout at 16 vertex attributes — WebGL2's `max_vertex_attributes` cap
+    // (downlevel_webgl2_defaults). The two 2-col reads become `.xy` / `.zw`;
+    // native/WebGPU behavior is identical.
     @location(15) affine: vec4<f32>,
 };
 
@@ -60,9 +65,19 @@ struct VertexOut {
     @location(7) frag_logical: vec2<f32>,  // affine-transformed window-logical corner (clip discard)
     @location(8) clip_min: vec2<f32>,
     @location(9) clip_max: vec2<f32>,
-    // The uniform corner radii (TL.x used; outline rings are uniform in C6-a).
-    @location(10) outer_r: f32,
-    @location(11) inner_r: f32,
+    // Per-corner CIRCULAR radii `min(rx, ry)` for (TL, TR, BR, BL) — outer + inner.
+    // A uniform radius packs all four equal, so the SDF reduces to the old
+    // single-radius (TL.x) path byte-for-byte; a wide bordered pill (or a
+    // per-corner `.radius_corners` wobble) rounds each corner independently instead
+    // of drawing the pointed radius LENS (F4b-2). Widening the two f32 varyings to
+    // vec4 keeps 12 `@location` slots — well under the WebGL2 varying budget.
+    @location(10) outer_r4: vec4<f32>,
+    @location(11) inner_r4: vec4<f32>,
+    // Per-side dash-stipple flag [t,r,b,l] (F4b-3) + a representative stroke width
+    // (max side, logical px) that sizes the dash period. Solid (all-zero) fragments
+    // take the byte-identical continuous-ring path.
+    @location(12) style4: vec4<f32>,
+    @location(13) stroke_w: f32,
 };
 
 fn logical_to_clip(p: vec2<f32>) -> vec2<f32> {
@@ -91,12 +106,32 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
     out.color_bottom = i.color_bottom;
     out.color_left = i.color_left;
     out.frag_logical = logical;
-    out.clip_min = i.clip_min;
-    out.clip_max = i.clip_max;
-    out.outer_r = i.outer_radius_tl_tr.x;                   // TL.x (uniform in C6-a)
-    // Inner radius shrinks with the border width (the oracle's load-bearing
-    // shrink); for a square ring (outer_r == 0) this stays 0.
-    out.inner_r = i.inner_radius_tl_tr.x;
+    out.clip_min = i.clip.xy;
+    out.clip_max = i.clip.zw;
+    out.style4 = i.style;
+    // A representative dash period comes from the widest side (uniform borders —
+    // the common case — are exact; a mixed-width border approximates).
+    out.stroke_w = max(max(i.width.x, i.width.y), max(i.width.z, i.width.w));
+    // Per-corner CIRCULAR radius `min(rx, ry)` of each corner (TL, TR, BR, BL).
+    // The `*_tl_tr` vec4 packs (TL.xy, TR.xy), `*_br_bl` packs (BR.xy, BL.xy). The
+    // circular `sdf_rounded_rect` takes one radius per corner; `min(rx, ry)` is the
+    // pill/circle behavior — a wide `border-radius:9999px` box clamps to `rx=half_w`
+    // (huge) but `ry=half_h`, and using `rx` alone draws the pointed radius LENS
+    // (the W3 lens bug, visible once a pill gains a border). `min` picks the
+    // box-fitting radius so it pills; for a uniform circular radius (rx==ry) it is
+    // byte-identical to the old TL.x path. Inner radii shrink with the width.
+    out.outer_r4 = vec4<f32>(
+        min(i.outer_radius_tl_tr.x, i.outer_radius_tl_tr.y),
+        min(i.outer_radius_tl_tr.z, i.outer_radius_tl_tr.w),
+        min(i.outer_radius_br_bl.x, i.outer_radius_br_bl.y),
+        min(i.outer_radius_br_bl.z, i.outer_radius_br_bl.w)
+    );
+    out.inner_r4 = vec4<f32>(
+        min(i.inner_radius_tl_tr.x, i.inner_radius_tl_tr.y),
+        min(i.inner_radius_tl_tr.z, i.inner_radius_tl_tr.w),
+        min(i.inner_radius_br_bl.x, i.inner_radius_br_bl.y),
+        min(i.inner_radius_br_bl.z, i.inner_radius_br_bl.w)
+    );
     return out;
 }
 
@@ -105,6 +140,49 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
 fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
     let q = abs(p) - half_size + vec2<f32>(r, r);
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// Pick a fragment's corner radius from the per-corner (TL, TR, BR, BL) array by
+// which quadrant of the centered box-local point it lies in (+x right, +y down,
+// matching `local`). A uniform radius makes every branch equal (byte-identical to
+// the old TL-only path); a wobble / pill radius rounds each corner independently.
+fn corner_radius(p: vec2<f32>, r: vec4<f32>) -> f32 {
+    if p.x < 0.0 {
+        return select(r.w, r.x, p.y < 0.0);   // left: top=TL(.x), bottom=BL(.w)
+    }
+    return select(r.z, r.y, p.y < 0.0);       // right: top=TR(.y), bottom=BR(.z)
+}
+
+// Dash / dotted stipple coverage in [0,1] (F4b-3). Picks the fragment's dominant
+// side (the same quadrant split the per-side color uses), its per-side style flag
+// (`style4` = [top, right, bottom, left]: 0 solid, 1 dashed, 2 dotted), and the
+// along-border coordinate; a screen-space arc-length pulse gives an AA'd dash.
+// SOLID sides (flag 0) return 1.0 — the byte-identical continuous-ring path.
+// Computed unconditionally (no branch before `fwidth`) so derivatives stay in
+// uniform control flow (native naga is lenient, Tint/WebGPU strict).
+fn dash_stipple(local: vec2<f32>, style4: vec4<f32>, stroke_w: f32) -> f32 {
+    let ax = abs(local.x);
+    let ay = abs(local.y);
+    // Horizontal (top/bottom) sides run along x; vertical (left/right) along y.
+    let horizontal = ay >= ax;
+    let flag_h = select(style4.z, style4.x, local.y < 0.0);   // top=.x, bottom=.z
+    let flag_v = select(style4.w, style4.y, local.x < 0.0);   // left=.w, right=.y
+    let flag = select(flag_v, flag_h, horizontal);
+    let t = select(local.y, local.x, horizontal);
+    // dashed (flag 1): period 4·w, 50% duty. dotted (flag 2): period 2·w, 50% duty.
+    let dashed = flag < 1.5;
+    let period = max(select(2.0 * stroke_w, 4.0 * stroke_w, dashed), 0.001);
+    let dash = 0.5 * period;
+    let cell = fract(t / period) * period;   // px within one dash+gap cell
+    let aa = max(fwidth(t), 0.001);
+    let stipple = clamp(
+        smoothstep(-aa, aa, cell) * smoothstep(-aa, aa, dash - cell),
+        0.0,
+        1.0,
+    );
+    // Solid side or a degenerate stroke ⇒ full coverage (byte-identical).
+    let stippled = flag > 0.5 && stroke_w > 0.0;
+    return select(1.0, stipple, stippled);
 }
 
 @fragment
@@ -117,16 +195,23 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let frag_pos = in.frag_logical;
     let clipped = any(frag_pos < in.clip_min) || any(frag_pos > in.clip_max);
 
-    // Band = inside(outer) AND NOT inside(inner). AA via fwidth on each SDF.
-    let d_outer = sdf_rounded_rect(in.local, in.outer_half, in.outer_r);
-    let d_inner = sdf_rounded_rect(in.local, in.inner_half, in.inner_r);
+    // Band = inside(outer) AND NOT inside(inner). AA via fwidth on each SDF. The
+    // corner radius is selected per fragment from the per-corner array (uniform
+    // radius ⇒ the old single-radius path; wobble/pill radius ⇒ per-corner
+    // rounding, no lens).
+    let r_o = corner_radius(in.local, in.outer_r4);
+    let r_i = corner_radius(in.local, in.inner_r4);
+    let d_outer = sdf_rounded_rect(in.local, in.outer_half, r_o);
+    let d_inner = sdf_rounded_rect(in.local, in.inner_half, r_i);
 
     let aa_o = fwidth(d_outer);
     let aa_i = fwidth(d_inner);
     let inside_outer = 1.0 - smoothstep(-aa_o, aa_o, d_outer);
     let inside_inner = 1.0 - smoothstep(-aa_i, aa_i, d_inner);
-    // Coverage of the band = inside outer minus inside inner, clamped to [0,1].
-    let band = clamp(inside_outer - inside_inner, 0.0, 1.0);
+    // Coverage of the band = inside outer minus inside inner, clamped to [0,1],
+    // then stippled for a dashed/dotted side (F4b-3; solid ⇒ ×1, byte-identical).
+    let stipple = dash_stipple(in.local, in.style4, in.stroke_w);
+    let band = clamp(inside_outer - inside_inner, 0.0, 1.0) * stipple;
 
     // Per-side color: pick the dominant edge by the centered local point. For an
     // outline all four colors are equal, so this reduces to the ring color; the

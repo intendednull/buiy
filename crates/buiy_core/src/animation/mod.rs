@@ -30,9 +30,10 @@ pub mod tween;
 
 pub use easing::Easing;
 pub use tween::{
-    AnimatedBackgroundColor, BackgroundColorTween, Lerp, OnComplete, OpacityTween, Repeat,
-    RotateTween, ScaleTween, TranslateTween, Tween, advance_background_color_tweens,
-    advance_opacity_tweens, advance_rotate_tweens, advance_scale_tweens, advance_translate_tweens,
+    AnimatedBackgroundColor, BackgroundColorTween, Lerp, OnComplete, OpacityTween, QuadAlphaTween,
+    Repeat, RotateTween, ScaleTween, TranslateTween, Tween, advance_background_color_tweens,
+    advance_opacity_tweens, advance_quad_alpha_tweens, advance_rotate_tweens, advance_scale_tweens,
+    advance_translate_tweens,
 };
 
 use bevy::prelude::*;
@@ -57,6 +58,7 @@ impl Plugin for AnimationPlugin {
                 advance_rotate_tweens,
                 advance_scale_tweens,
                 advance_opacity_tweens,
+                advance_quad_alpha_tweens,
                 advance_background_color_tweens,
             )
                 .in_set(BuiySet::Animate),

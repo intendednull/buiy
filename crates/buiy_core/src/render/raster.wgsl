@@ -34,6 +34,7 @@ struct Instance {
     @location(4) clip_min: vec2<f32>,   // logical px, clip AABB min (-inf = none)
     @location(5) clip_max: vec2<f32>,   // logical px, clip AABB max (+inf = none)
     @location(6) affine: vec4<f32>,     // 2D affine basis [m00, m10, m01, m11]
+    @location(7) radius: f32,           // uniform corner radius, logical px (0 = square clip)
 };
 
 struct VertexOut {
@@ -42,6 +43,9 @@ struct VertexOut {
     @location(1) frag_logical: vec2<f32>, // affine-transformed window-logical corner
     @location(2) clip_min: vec2<f32>,
     @location(3) clip_max: vec2<f32>,
+    @location(4) local: vec2<f32>,        // box-local point, centered px (-half..+half)
+    @location(5) half_size: vec2<f32>,    // box-local SDF half-extent, px
+    @location(6) radius: f32,             // uniform corner radius, logical px
 };
 
 fn logical_to_clip(p: vec2<f32>) -> vec2<f32> {
@@ -62,7 +66,17 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
     out.frag_logical = logical;
     out.clip_min = i.clip_min;
     out.clip_max = i.clip_max;
+    out.local = (v.uv - vec2<f32>(0.5, 0.5)) * i.rect_size;  // centered box-local px
+    out.half_size = i.rect_size * 0.5;
+    out.radius = i.radius;
     return out;
+}
+
+// Signed distance to a rounded rect centered at the origin (the shared SDF, port
+// of shader.wgsl / band.wgsl `sdf_rounded_rect`).
+fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - half_size + vec2<f32>(r, r);
+    return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
 @fragment
@@ -74,5 +88,12 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let clipped = any(in.frag_logical < in.clip_min) || any(in.frag_logical > in.clip_max);
     let texel = textureSample(image_tex, image_sampler, in.uv);
     let mask = select(1.0, 0.0, clipped);
-    return vec4<f32>(texel.rgb, texel.a * mask);
+    // Rounded corner clip (F4b-4): AA'd rounded-rect coverage in box-local space
+    // (rotation-invariant, computed UNCONDITIONALLY so `fwidth` stays uniform).
+    // `radius == 0` BYPASSES it (mask 1.0) so the square F1 raster path is
+    // byte-identical; a positive radius clips a custom avatar to a circle/pill.
+    let d = sdf_rounded_rect(in.local, in.half_size, in.radius);
+    let corner_cov = 1.0 - smoothstep(-fwidth(d), fwidth(d), d);
+    let corner_mask = select(1.0, corner_cov, in.radius > 0.0);
+    return vec4<f32>(texel.rgb, texel.a * mask * corner_mask);
 }

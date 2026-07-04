@@ -113,10 +113,14 @@ pub fn pack_instance(draw: &DrawData) -> PackedInstance {
 /// Pack one R5 [`ExtractedNode`] (the per-painted-entity CPU record) into a
 /// logical-pixel [`PackedInstance`] — the prepare seam R6 packs through with no
 /// `DrawData` adapter. `ExtractedNode` carries the solid-fill quad inputs
-/// (position / size / color / a fill corner radius). The radius is non-zero only
-/// for a **borderless-rounded** node ([`ExtractedNode::radius`] — a `Border.radius`
-/// with no painting side); a bordered / square node packs `0`, so every existing
-/// golden stays byte-identical. Color is CPU-pre-linearized exactly as in
+/// (position / size / color / a fill corner radius). The radius is non-zero for a
+/// **borderless-rounded** node ([`ExtractedNode::radius`] — a `Border.radius`
+/// with no painting side, F3) OR a **bordered-rounded** node (the fill rounds to
+/// the band's uniform inner radius so no square "ears" poke past a rounded border,
+/// F4b — `extract.rs`). A **square** node (no radius, or a square border) still
+/// packs `0`, so every non-rounded golden stays byte-identical; a rounded-bordered
+/// fixture legitimately shifts (the ear pixels vanish — the `golden_card_bordered`
+/// re-bless). Color is CPU-pre-linearized exactly as in
 /// [`pack_instance`] (color-and-forced-colors.md § 1.1).
 pub fn pack_extracted(node: &ExtractedNode) -> PackedInstance {
     let lin = LinearRgba::from(node.color);
@@ -212,10 +216,10 @@ pub fn packed_raw_stride_agrees() -> bool {
 /// declares in `BuiyBandPipeline::band_vertex_buffers` and the
 /// `@location`-bound fields of `band.wgsl`.
 ///
-/// 48 f32 = 192 B: `rect_pos`(2) + `rect_size`(2) + 4 per-side colors (16) +
+/// 52 f32 = 208 B: `rect_pos`(2) + `rect_size`(2) + 4 per-side colors (16) +
 /// `width`(4) + `outer_radius`(8) + `inner_radius`(8) + `clip_min`(2) +
-/// `clip_max`(2) + `affine`(4). Computed from the struct so the two can never
-/// disagree (asserted by [`border_band_stride_agrees`]).
+/// `clip_max`(2) + `affine`(4) + `style`(4). Computed from the struct so the two
+/// can never disagree (asserted by [`border_band_stride_agrees`]).
 pub const BORDER_BAND_INSTANCE_STRIDE_BYTES: usize = std::mem::size_of::<BorderBandInstance>();
 
 /// The border / outline quad-variant instance — a record DISTINCT from
@@ -266,6 +270,13 @@ pub struct BorderBandInstance {
     /// `GlobalTransform`'s 2D linear part) — the band rides the same transform
     /// path as the fill so a rotated/scaled element's ring stays aligned.
     pub affine: [f32; 4],
+    /// Per-side dash-stipple flag `[top, right, bottom, left]` (F4b-3): `0.0`
+    /// solid (a continuous ring, byte-identical to the pre-F4b band), `1.0`
+    /// dashed, `2.0` dotted. APPENDED after `affine` so every prior field offset
+    /// stays byte-stable (existing band goldens unchanged); `band.wgsl` selects
+    /// the fragment's side flag by quadrant and stipples the coverage. An OUTLINE
+    /// (focus ring) is always solid (`[0; 4]`).
+    pub style: [f32; 4],
 }
 
 /// Pack one [`ExtractedOutline`] into a [`BorderBandInstance`]. The outline is
@@ -298,6 +309,8 @@ pub fn pack_outline(outline: &ExtractedOutline) -> BorderBandInstance {
             outline.affine[1][0],
             outline.affine[1][1],
         ],
+        // A focus ring / selection outline is always a continuous stroke.
+        style: [0.0; 4],
     }
 }
 
@@ -331,17 +344,19 @@ pub fn pack_border(border: &ExtractedBorder) -> BorderBandInstance {
             border.affine[1][0],
             border.affine[1][1],
         ],
+        // Per-side dash-stipple flag (F4b-3); `[0; 4]` for an all-solid border.
+        style: border.style,
     }
 }
 
 /// `true` iff [`BORDER_BAND_INSTANCE_STRIDE_BYTES`] equals the actual
 /// [`BorderBandInstance`] size and is the value the band pipeline declares
-/// (28 f32 = 112 B). The parallel of [`packed_raw_stride_agrees`] for the
+/// (52 f32 = 208 B). The parallel of [`packed_raw_stride_agrees`] for the
 /// distinct band record (styling-f-tier.md § 4 — C6 adds this).
 pub fn border_band_stride_agrees() -> bool {
-    // 2 + 2 + 4*4 + 4 + 8 + 8 + 2 + 2 + 4 = 48 f32 = 192 B.
+    // 2 + 2 + 4*4 + 4 + 8 + 8 + 2 + 2 + 4 + 4 = 52 f32 = 208 B.
     BORDER_BAND_INSTANCE_STRIDE_BYTES == std::mem::size_of::<BorderBandInstance>()
-        && BORDER_BAND_INSTANCE_STRIDE_BYTES == 48 * std::mem::size_of::<f32>()
+        && BORDER_BAND_INSTANCE_STRIDE_BYTES == 52 * std::mem::size_of::<f32>()
 }
 
 /// Gradient instance-kind discriminant (the `params.x` flag the gradient shader
@@ -456,4 +471,84 @@ pub fn gradient_stride_agrees() -> bool {
     // 2 + 2 + 4 + 4 + 2 + 2 + 2 + 2 + 2 + 4 = 26 f32 = 104 B.
     GRADIENT_INSTANCE_STRIDE_BYTES == std::mem::size_of::<GradientInstance>()
         && GRADIENT_INSTANCE_STRIDE_BYTES == 26 * std::mem::size_of::<f32>()
+}
+
+/// Stride of [`RoundedShadowInstance`] in bytes (the rounded-shadow quad-variant
+/// record). MUST match the per-instance `array_stride` the rounded-shadow pipeline
+/// declares in `BuiyRoundedShadowPipeline::rounded_shadow_vertex_buffers` and the
+/// `@location`-bound fields of `rounded_shadow.wgsl`. Computed from the struct so
+/// the two can never disagree (asserted by [`rounded_shadow_stride_agrees`]).
+pub const ROUNDED_SHADOW_INSTANCE_STRIDE_BYTES: usize =
+    std::mem::size_of::<RoundedShadowInstance>();
+
+/// The ROUNDED box-shadow instance (F4b-6) — a record DISTINCT from
+/// [`PackedInstance`] (the shape the SQUARE shadow reuses), exactly like
+/// [`GradientInstance`] / [`BorderBandInstance`]: its own
+/// [`bevy::render::render_resource::RawBufferVec`], its own `VertexBufferLayout`,
+/// its own shader (`rounded_shadow.wgsl`), painted through a dedicated pipeline in
+/// the SHADOW tier. The square-shadow path (the 68 B quad layout with the radius
+/// slot reused as the blur sigma) is UNTOUCHED, so every existing shadow golden is
+/// byte-identical (Option B, spec §2.5.1 — do NOT widen the byte-stable
+/// `PackedInstance`).
+///
+/// Unlike the square shadow, this carries BOTH a blur `sigma` AND a corner
+/// `radius`, so a rounded caster's shadow rounds its corners to match (the crisp
+/// zero-blur 3D-press edge = `sigma == 0`, a rounded blurred card = `sigma > 0`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct RoundedShadowInstance {
+    /// Shadow box top-left, logical px (spread-and-offset-expanded).
+    pub rect_pos: [f32; 2],
+    /// Shadow box size, logical px (positive).
+    pub rect_size: [f32; 2],
+    /// Pre-linearized shadow color (linear RGBA).
+    pub color: [f32; 4],
+    /// Effective Gaussian blur sigma in logical px (`0` = the crisp edge).
+    pub sigma: f32,
+    /// Uniform corner radius in logical px (the caster radius grown by spread,
+    /// clamped to the box) — the reason this is a distinct record.
+    pub radius: f32,
+    /// Clip AABB min in logical px; `[-INFINITY; 2]` = the full-view sentinel.
+    pub clip_min: [f32; 2],
+    /// Clip AABB max in logical px; `[+INFINITY; 2]` = the full-view sentinel.
+    pub clip_max: [f32; 2],
+    /// The 2D affine basis `[m00, m10, m01, m11]` — the shadow rides the same
+    /// transform path as the caster. Identity `[1, 0, 0, 1]` paints axis-aligned.
+    pub affine: [f32; 4],
+}
+
+/// Pack one rounded [`ExtractedShadow`] term (a term whose `radius > 0`) into a
+/// [`RoundedShadowInstance`]. The caller ([`crate::render::buckets::pack_rounded_shadow_instances`])
+/// filters to `radius > 0` terms; a `radius == 0` term stays on the square
+/// [`pack_shadow`] path. Pure field copy (the clip sentinel + affine flatten
+/// mirror [`pack_shadow`] / [`pack_gradient`]).
+pub fn pack_rounded_shadow(shadow: &ExtractedShadow) -> RoundedShadowInstance {
+    let (clip_min, clip_max) = match shadow.clip {
+        Some(c) => ([c.min.x, c.min.y], [c.max.x, c.max.y]),
+        None => (CLIP_SENTINEL_MIN, CLIP_SENTINEL_MAX),
+    };
+    RoundedShadowInstance {
+        rect_pos: [shadow.rect_pos.x, shadow.rect_pos.y],
+        rect_size: [shadow.rect_size.x, shadow.rect_size.y],
+        color: shadow.color,
+        sigma: shadow.sigma,
+        radius: shadow.radius,
+        clip_min,
+        clip_max,
+        affine: [
+            shadow.affine[0][0],
+            shadow.affine[0][1],
+            shadow.affine[1][0],
+            shadow.affine[1][1],
+        ],
+    }
+}
+
+/// `true` iff [`ROUNDED_SHADOW_INSTANCE_STRIDE_BYTES`] equals the actual
+/// [`RoundedShadowInstance`] size and the value the pipeline declares (18 f32 =
+/// 72 B). The parallel of [`gradient_stride_agrees`] for the rounded-shadow record.
+pub fn rounded_shadow_stride_agrees() -> bool {
+    // 2 + 2 + 4 + 1 + 1 + 2 + 2 + 4 = 18 f32 = 72 B.
+    ROUNDED_SHADOW_INSTANCE_STRIDE_BYTES == std::mem::size_of::<RoundedShadowInstance>()
+        && ROUNDED_SHADOW_INSTANCE_STRIDE_BYTES == 18 * std::mem::size_of::<f32>()
 }

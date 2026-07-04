@@ -238,7 +238,33 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
     let mut shadows = Vec::new();
     for n in nodes {
         for s in &n.shadows {
-            shadows.push(pack_shadow(s));
+            // SQUARE terms only (F4b-6): a `radius > 0` term is a rounded caster's
+            // shadow and rides the distinct rounded pipeline instead (a square
+            // caster's terms are all `radius == 0` ⇒ byte-identical to before).
+            if s.radius <= 0.0 {
+                shadows.push(pack_shadow(s));
+            }
+        }
+    }
+    shadows
+}
+
+/// Pack the ROUNDED box-shadow instances for a frame (F4b-6): every shadow term
+/// whose caster has a corner radius (`radius > 0`), into the distinct
+/// [`RoundedShadowInstance`] the rounded-shadow pipeline draws. The parallel of
+/// [`pack_shadow_instances`] for the rounded record; the two partition a node's
+/// shadow terms by `radius` so no term is drawn twice and the square path stays
+/// byte-stable.
+pub fn pack_rounded_shadow_instances(
+    nodes: &[ExtractedNode],
+) -> Vec<crate::render::instance::RoundedShadowInstance> {
+    use crate::render::instance::pack_rounded_shadow;
+    let mut shadows = Vec::new();
+    for n in nodes {
+        for s in &n.shadows {
+            if s.radius > 0.0 {
+                shadows.push(pack_rounded_shadow(s));
+            }
         }
     }
     shadows

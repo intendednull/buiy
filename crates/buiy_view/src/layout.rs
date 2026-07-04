@@ -173,6 +173,12 @@ pub(crate) struct LayoutProps {
 
     // --- Text -----------------------------------------------------------------
     pub text_align: Option<TextAlign>,
+
+    // --- Transform ------------------------------------------------------------
+    /// 2D rotation in DEGREES about the element center (`None` / `0.0` = unrotated).
+    /// A decoration modifier (confetti, the ribbon, a small tile tilt); the
+    /// `Rotate` component is inserted on demand by the reconciler.
+    pub rotate: Option<f32>,
 }
 
 impl Default for LayoutProps {
@@ -205,6 +211,7 @@ impl Default for LayoutProps {
             scroll_y: false,
             stick: false,
             text_align: None,
+            rotate: None,
         }
     }
 }
@@ -435,6 +442,22 @@ impl<Msg> Element<Msg> {
     /// Inline alignment for a `text` node / `button` label ([`TextAlign`]).
     pub fn text_align(mut self, align: TextAlign) -> Self {
         self.layout.text_align = Some(align);
+        self
+    }
+
+    // --- Transform ------------------------------------------------------------
+
+    /// Rotate this element by `deg` degrees about its center (a decoration
+    /// modifier — the confetti tumble, the "free & open source" ribbon, a small
+    /// pick-tile tilt). Lowers to the `Rotate` transform component, which the core
+    /// transform chain already carries into the render `affine` and which forms
+    /// only a (cheap) stacking context — never an off-screen `EffectGroup`.
+    ///
+    /// **Visual only:** the picking AABB does not model rotation, so a large angle
+    /// on an interactive node mis-hits — pair a heavily-rotated interactive element
+    /// with [`ignore_picking`](Element::ignore_picking).
+    pub fn rotate(mut self, deg: f32) -> Self {
+        self.layout.rotate = Some(deg);
         self
     }
 
