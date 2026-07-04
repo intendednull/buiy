@@ -31,12 +31,12 @@
 //! created (no unlaid-out flash).
 
 use bevy::prelude::*;
-use buiy_core::a11y::{A11yLabel, A11yToggled, Toggled};
+use buiy_core::a11y::{A11yLabel, A11yRole, A11yToggled, Toggled};
 use buiy_core::components::Node;
 use buiy_core::layout::{
     AlignItems, BoxModel, Display, Edges, FlexAxis, FlexGap, FlexItem, FlexParams, FlexWrap, Inset,
     JustifyContent, Length, Overflow, OverflowMode, Position, PositionKind, ScrollOffset, Sizing,
-    Stacking, TopLayer,
+    Stacking, TopLayer, Translate,
 };
 use buiy_core::mvu::{ControlledLeaf, Envelope, Model, ToggleMsg};
 use buiy_core::render::RasterImage;
@@ -48,6 +48,7 @@ use buiy_widgets::{Button, Checkbox, TextInput};
 
 use crate::app::{UiRoot, ViewFn};
 use crate::element::{Element, Kind};
+use crate::interaction::{InteractionState, PressEffect};
 use crate::layout::{Align, Justify, LayoutProps, Positioning, Sides, TextAlign};
 use crate::router::{InputAction, PressAction, SubmitAction};
 
@@ -229,6 +230,10 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
                 changed |= set_button_label(world, entity, t);
             }
             update_press::<M>(world, entity, el, model);
+            // The interaction-state visual layer (spec §2.6 part 3) — a button
+            // dips while held. The route already lives on the widget's `#[require]`
+            // A11yRole; only the press VISUAL is added here.
+            update_press_visual(world, entity, el.on_press.is_some() && !el.disabled);
             changed |= update_disabled(world, entity, el.disabled);
         }
         Kind::Checkbox => {
@@ -244,6 +249,9 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
         }
         Kind::Column | Kind::Row => {
             changed |= apply_container_props(world, entity, el);
+            // A clickable container (pick-word tiles) routes its `on_press` — the
+            // click bubbles from a child that intercepted the hit (spec §2.6).
+            apply_pressable::<M>(world, entity, el, model);
             reconcile_children::<M>(world, entity, &el.children, model, el.keyed);
         }
         Kind::Raster => {
@@ -251,6 +259,8 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             // canvas keeps its texture across unrelated re-renders) + its layout.
             changed |= set_raster_image(world, entity, el.raster.as_ref());
             changed |= apply_node_layout(world, entity, &el.layout);
+            // A pressable raster (the custom-avatar seat chip) becomes activatable.
+            apply_pressable::<M>(world, entity, el, model);
         }
         // A placeholder holds a slot but has no state to patch (FW3 `when`).
         Kind::Empty => {}
@@ -427,6 +437,8 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             };
             world.entity_mut(e).insert(slot);
             update_press::<M>(world, e, el, model);
+            // The interaction-state visual layer (spec §2.6 part 3) — press-down.
+            update_press_visual(world, e, el.on_press.is_some() && !el.disabled);
             update_disabled(world, e, el.disabled);
             e
         }
@@ -478,11 +490,13 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             let handle = el.raster.clone().unwrap_or_default();
             let e = world.spawn((Node, RasterImage(handle), Kind::Raster)).id();
             apply_node_layout(world, e, &el.layout);
+            apply_pressable::<M>(world, e, el, model);
             e
         }
         Kind::Column | Kind::Row => {
             let e = world.spawn((Node, el.kind)).id();
             apply_container_props(world, e, el);
+            apply_pressable::<M>(world, e, el, model);
             let kids: Vec<Entity> = el
                 .children
                 .iter()
@@ -1034,6 +1048,82 @@ fn update_press<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg
         }
         _ => {
             world.entity_mut(entity).remove::<PressAction<M>>();
+        }
+    }
+}
+
+/// Give a **non-widget node** — a clickable container ([`Kind::Column`]/[`Kind::Row`])
+/// or a pressable [`raster`](crate::raster) — the button activation contract when
+/// it carries an [`on_press`](Element::on_press) (spec §2.6 parts 1 & 2). A `button`
+/// already owns this contract via its `#[require]`; a bare container/raster does not,
+/// so it is stamped by hand:
+/// - `A11yRole::Button` — the activatable role BOTH the pointer producer
+///   (`pointer_click_emits_on_press`) and the AT/probe path (`Action::Click` on the
+///   role-keyed `Button` contract) gate on. A container's children intercept the
+///   pointer hit and carry no role, so the role must live on the container itself;
+///   the click reaches it by the child→parent `Pointer<Click>` propagation (the
+///   producer fires for the activatable ancestor). The same role serves touch.
+/// - `A11yLabel` — the accessible name from [`Element::label`] (reuses the `text`
+///   slot), so the node is locatable by role+name and announced.
+/// - `PressAction` — the value the router enqueues, via [`update_press`] (the
+///   identical route a `button` uses).
+///
+/// Also installs the [interaction-state visual layer](crate::interaction) so the
+/// node dips while held. Drift-safe: a node that stops being pressable (disabled or
+/// handler removed) has the whole contract stripped, so it never keeps a stale
+/// button role.
+fn apply_pressable<M: Model>(world: &mut World, e: Entity, el: &Element<M::Msg>, model: Entity) {
+    let pressable = el.on_press.is_some() && !el.disabled;
+    if pressable {
+        if world.get::<A11yRole>(e) != Some(&A11yRole::Button) {
+            world.entity_mut(e).insert(A11yRole::Button);
+        }
+        let name = el.text.clone().unwrap_or_default();
+        if let Some(mut cur) = world.get_mut::<A11yLabel>(e) {
+            if cur.0 != name {
+                cur.0 = name;
+            }
+        } else {
+            world.entity_mut(e).insert(A11yLabel(name));
+        }
+        update_press::<M>(world, e, el, model);
+    } else if world.get::<A11yRole>(e).is_some() {
+        world
+            .entity_mut(e)
+            .remove::<A11yRole>()
+            .remove::<A11yLabel>()
+            .remove::<PressAction<M>>();
+    }
+    update_press_visual(world, e, pressable);
+}
+
+/// Install (or remove) the [interaction-state visual layer](crate::interaction) on
+/// a pressable entity: the [`InteractionState`] the pointer observers write, its
+/// [`PressEffect`] depth, and the `Translate` the resolver mutates in place. The
+/// three are stamped together (once, on the first reconcile a node is pressable), so
+/// the resolver only ever mutates an existing `Translate` — the press-down lands the
+/// same frame with no deferred insert. All three are layout-inert at rest (identity
+/// `Translate`, `InteractionState::None`), so this is NOT counted as a node patch.
+///
+/// A node that stops being pressable drops the state + effect and resets any
+/// lingering press-down to identity.
+fn update_press_visual(world: &mut World, e: Entity, pressable: bool) {
+    if pressable {
+        if world.get::<InteractionState>(e).is_none() {
+            world
+                .entity_mut(e)
+                .insert((InteractionState::default(), PressEffect::default()));
+        }
+        if world.get::<Translate>(e).is_none() {
+            world.entity_mut(e).insert(Translate::default());
+        }
+    } else if world.get::<InteractionState>(e).is_some() {
+        world
+            .entity_mut(e)
+            .remove::<InteractionState>()
+            .remove::<PressEffect>();
+        if let Some(mut t) = world.get_mut::<Translate>(e) {
+            t.1 = Length::ZERO;
         }
     }
 }
