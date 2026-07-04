@@ -461,7 +461,10 @@ mod tests {
     #[test]
     fn hash_matches_design_js() {
         // `h = (h*31 + charCode) >>> 0`. "Mara" = ((((0*31+77)*31+97)*31+114)*31+97).
-        assert_eq!(hash_str("Mara"), ((((77u32 * 31 + 97) * 31 + 114) * 31 + 97),).0);
+        assert_eq!(
+            hash_str("Mara"),
+            ((((77u32 * 31 + 97) * 31 + 114) * 31 + 97),).0
+        );
     }
 
     #[test]

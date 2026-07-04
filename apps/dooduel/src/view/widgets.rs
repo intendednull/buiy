@@ -43,19 +43,29 @@ pub fn column_of(children: Vec<Element<Msg>>) -> Element<Msg> {
 /// band's inner radius (F4b ears fix), so the wobble reads clean with no square
 /// corner "ears". Wraps an already-built column.
 pub fn sketchy_card(el: Element<Msg>, p: Palette) -> Element<Msg> {
-    el.radius_corners(WOBBLE_CARD[0], WOBBLE_CARD[1], WOBBLE_CARD[2], WOBBLE_CARD[3])
-        .border(3.0, p.ink, LineStyle::Solid)
-        .shadow(0.0, 4.0, 0.0, 0.0, p.shadow_hard)
-        .shadow(0.0, 3.0, 12.0, 0.0, p.shadow_soft)
+    el.radius_corners(
+        WOBBLE_CARD[0],
+        WOBBLE_CARD[1],
+        WOBBLE_CARD[2],
+        WOBBLE_CARD[3],
+    )
+    .border(3.0, p.ink, LineStyle::Solid)
+    .shadow(0.0, 4.0, 0.0, 0.0, p.shadow_hard)
+    .shadow(0.0, 3.0, 12.0, 0.0, p.shadow_soft)
 }
 
 /// The sketchy PANEL treatment (in-game surfaces): a smaller per-corner wobble + a
 /// 2.5px ink outline + the tighter `--sh-sm` ambient shadow.
 pub fn sketchy_panel(el: Element<Msg>, p: Palette) -> Element<Msg> {
-    el.radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
-        .border(2.5, p.ink, LineStyle::Solid)
-        .shadow(0.0, 2.0, 0.0, 0.0, p.shadow_hard)
-        .shadow(0.0, 1.0, 2.0, 0.0, p.shadow_soft)
+    el.radius_corners(
+        WOBBLE_PANEL[0],
+        WOBBLE_PANEL[1],
+        WOBBLE_PANEL[2],
+        WOBBLE_PANEL[3],
+    )
+    .border(2.5, p.ink, LineStyle::Solid)
+    .shadow(0.0, 2.0, 0.0, 0.0, p.shadow_hard)
+    .shadow(0.0, 1.0, 2.0, 0.0, p.shadow_soft)
 }
 
 /// The card width for the current viewport: the design width on desktop, clamped to
@@ -165,7 +175,9 @@ pub fn avatar_el(s: &Dooduel, is_me: bool, name: &str, px: f32) -> Element<Msg> 
 /// The in-game surface panel: a sketchy-outlined surface card with `Md` padding.
 pub fn panel(inner: Element<Msg>, p: Palette) -> Element<Msg> {
     sketchy_panel(
-        Element::column(vec![inner]).background(p.surface).padding(Space::Md),
+        Element::column(vec![inner])
+            .background(p.surface)
+            .padding(Space::Md),
         p,
     )
 }
@@ -228,4 +240,3 @@ pub fn opponent_chip(name: &str, p: Palette) -> Element<Msg> {
     .gap(Space::Xs)
     .align_center()
 }
-

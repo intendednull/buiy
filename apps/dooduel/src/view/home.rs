@@ -36,14 +36,19 @@ pub fn home(s: &Dooduel) -> Element<Msg> {
     // Editable avatar (the human's) + the pencil "edit" affordance beside it (the
     // design's corner ✏️ badge), then the name field. The pencil is a stroked Icon
     // (the color emoji can't render); the badge opens the avatar-editor modal.
-    let edit_badge = icon::<Msg>(PENCIL_D, 16, 2.2, PENCIL_VIEWBOX)
-        .width(30.0)
-        .height(30.0)
-        .background(Color::Accent)
-        .radius(Radius::Full)
-        .color(WHITE)
-        .on_press(Msg::OpenAvatarEditor)
-        .label("Edit your avatar");
+    // The press route (F5) is wired for containers + rasters but NOT for `icon()`
+    // nodes (the `Kind::Icon` reconcile arm skips `apply_pressable`), so a pressable
+    // icon must be wrapped in a pressable CONTAINER — the click bubbles to it.
+    let edit_badge = column![
+        icon::<Msg>(PENCIL_D, 16, 2.2, PENCIL_VIEWBOX)
+            .width(30.0)
+            .height(30.0)
+            .background(Color::Accent)
+            .radius(Radius::Full)
+            .color(WHITE)
+    ]
+    .on_press(Msg::OpenAvatarEditor)
+    .label("Edit your avatar");
     let name_row = row![
         row![avatar_el(s, true, &preview, 56.0), edit_badge]
             .gap(Space::Xs)

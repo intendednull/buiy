@@ -25,7 +25,10 @@ pub fn podium(s: &Dooduel) -> Element<Msg> {
     let g = &s.game;
     let p = s.palette();
     let standings = g.standings();
-    let winner = standings.first().map(|(_, pl)| pl.name.clone()).unwrap_or_default();
+    let winner = standings
+        .first()
+        .map(|(_, pl)| pl.name.clone())
+        .unwrap_or_default();
     let rounds = g.config.total_rounds;
     let rounds_label = if rounds == 1 {
         "1 round".to_string()
@@ -57,7 +60,10 @@ pub fn podium(s: &Dooduel) -> Element<Msg> {
     let mut children = vec![
         eyebrow("Game over"),
         title(&format!("{winner} wins!"), 56.0, p),
-        text!("Final scores after {rounds_label}").size(16.0).color(p.ink_2).font(FONT_BODY),
+        text!("Final scores after {rounds_label}")
+            .size(16.0)
+            .color(p.ink_2)
+            .font(FONT_BODY),
         podium_row,
     ];
     if !rest.is_empty() {
@@ -86,7 +92,11 @@ fn podium_column(s: &Dooduel, place: usize, entry: &(usize, game::Player)) -> El
     let pal = s.palette();
     let h = PEDESTAL_H[(place - 1).min(2)];
     let spacer = PEDESTAL_H[0] - h;
-    let (bg, fg) = if place == 1 { (Color::Accent, WHITE) } else { (pal.surface_2, pal.ink_2) };
+    let (bg, fg) = if place == 1 {
+        (Color::Accent, WHITE)
+    } else {
+        (pal.surface_2, pal.ink_2)
+    };
     // The pedestal: rounded top corners, square bottom (design `14px 18px 0 0`), ink
     // outline + `--sh-sm`.
     let pedestal = column![text!("{place}").size(28.0).color(fg).font(FONT_DISPLAY)]
@@ -105,8 +115,14 @@ fn podium_column(s: &Dooduel, place: usize, entry: &(usize, game::Player)) -> El
         // heights ⇒ bottoms line up, tops stagger — the podium silhouette).
         Element::column(vec![]).height(spacer),
         avatar_el(s, orig_idx == 0, &p.name, 46.0),
-        text(p.name.as_str()).size(15.0).color(pal.ink).font(FONT_BODY),
-        text!("{}", p.score).size(22.0).color(pal.ink).font(FONT_DISPLAY),
+        text(p.name.as_str())
+            .size(15.0)
+            .color(pal.ink)
+            .font(FONT_BODY),
+        text!("{}", p.score)
+            .size(22.0)
+            .color(pal.ink)
+            .font(FONT_DISPLAY),
         pedestal,
     ]
     .width(112.0)
@@ -119,10 +135,21 @@ fn rest_standing_row(s: &Dooduel, rank: usize, entry: &(usize, game::Player)) ->
     let (orig_idx, p) = (entry.0, &entry.1);
     let pal = s.palette();
     row![
-        text!("{rank}").width(20.0).size(14.0).color(pal.muted).font(FONT_BODY),
+        text!("{rank}")
+            .width(20.0)
+            .size(14.0)
+            .color(pal.muted)
+            .font(FONT_BODY),
         avatar_el(s, orig_idx == 0, &p.name, 34.0),
-        text(p.name.as_str()).size(15.0).color(pal.ink).font(FONT_BODY).grow(),
-        text!("{}", p.score).size(19.0).color(pal.ink).font(FONT_DISPLAY),
+        text(p.name.as_str())
+            .size(15.0)
+            .color(pal.ink)
+            .font(FONT_BODY)
+            .grow(),
+        text!("{}", p.score)
+            .size(19.0)
+            .color(pal.ink)
+            .font(FONT_DISPLAY),
     ]
     .gap(Space::Sm)
     .align_center()

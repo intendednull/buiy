@@ -63,10 +63,18 @@ fn main() {
     settle(&mut app);
     enqueue(&mut app, Msg::OpenAvatarEditor);
     settle(&mut app);
-    capture(&mut app, target.clone(), &format!("{OUT_DIR}/avatar_gallery.png"));
+    capture(
+        &mut app,
+        target.clone(),
+        &format!("{OUT_DIR}/avatar_gallery.png"),
+    );
     enqueue(&mut app, Msg::SetAvatarTab(dooduel::AvatarTab::Draw));
     settle(&mut app);
-    capture(&mut app, target.clone(), &format!("{OUT_DIR}/avatar_draw.png"));
+    capture(
+        &mut app,
+        target.clone(),
+        &format!("{OUT_DIR}/avatar_draw.png"),
+    );
     enqueue(&mut app, Msg::CloseAvatarEditor);
     settle(&mut app);
 
@@ -77,14 +85,22 @@ fn main() {
     // Pick the first word to enter the Drawing phase, then advance the clock a bit.
     enqueue(&mut app, Msg::ChooseWord(0));
     settle(&mut app);
-    capture(&mut app, target.clone(), &format!("{OUT_DIR}/in_game_drawer.png"));
+    capture(
+        &mut app,
+        target.clone(),
+        &format!("{OUT_DIR}/in_game_drawer.png"),
+    );
 
     // === In-game (word-pick overlay) — restart a match, capture Picking ===
     enqueue(&mut app, Msg::Back);
     settle(&mut app);
     enqueue(&mut app, Msg::Play);
     settle(&mut app);
-    capture(&mut app, target.clone(), &format!("{OUT_DIR}/in_game_picking.png"));
+    capture(
+        &mut app,
+        target.clone(),
+        &format!("{OUT_DIR}/in_game_picking.png"),
+    );
 
     // === Podium — drive a full instant match via injected ticks ===
     drive_to_podium(&mut app);

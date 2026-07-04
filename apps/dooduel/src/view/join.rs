@@ -4,7 +4,9 @@ use buiy::view::{Element, Radius, Space, text, text_input};
 use buiy_view::LineStyle;
 
 use crate::theme::FONT_BODY;
-use crate::view::widgets::{card, card_w, eyebrow, primary_button, quiet_button, screen_root, title};
+use crate::view::widgets::{
+    card, card_w, eyebrow, primary_button, quiet_button, screen_root, title,
+};
 use crate::{Dooduel, Msg};
 
 pub fn join(s: &Dooduel) -> Element<Msg> {

@@ -56,13 +56,22 @@ fn avatar_panel(s: &Dooduel) -> Element<Msg> {
     let mut children = vec![header, title("Doodle yourself!", 28.0, p), tabs, body];
     // Offer a reset only when a custom avatar is set (design `hasCustomAvatarSet`).
     if a.kind != HumanAvatar::Default {
-        children.push(quiet_button("Reset to a random doodle", Msg::ResetAvatar, p));
+        children.push(quiet_button(
+            "Reset to a random doodle",
+            Msg::ResetAvatar,
+            p,
+        ));
     }
     Element::column(children)
         .gap(Space::Md)
         .width(card_w(s, 460.0))
         .background(p.surface)
-        .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+        .radius_corners(
+            WOBBLE_PANEL[0],
+            WOBBLE_PANEL[1],
+            WOBBLE_PANEL[2],
+            WOBBLE_PANEL[3],
+        )
         .border(2.5, p.ink, LineStyle::Solid)
         .shadow(0.0, 10.0, 0.0, 0.0, p.shadow_hard)
         .shadow(0.0, 18.0, 40.0, -10.0, p.shadow_soft)
@@ -70,9 +79,18 @@ fn avatar_panel(s: &Dooduel) -> Element<Msg> {
 }
 
 /// One segmented tab of the avatar editor (accent-filled when active).
-fn avatar_tab_btn(label: &str, tab: AvatarTab, current: AvatarTab, p: crate::theme::Palette) -> Element<Msg> {
+fn avatar_tab_btn(
+    label: &str,
+    tab: AvatarTab,
+    current: AvatarTab,
+    p: crate::theme::Palette,
+) -> Element<Msg> {
     let active = tab == current;
-    let (bg, fg) = if active { (Color::Accent, WHITE) } else { (p.surface_2, p.ink_2) };
+    let (bg, fg) = if active {
+        (Color::Accent, WHITE)
+    } else {
+        (p.surface_2, p.ink_2)
+    };
     button(label)
         .on_press(Msg::SetAvatarTab(tab))
         .background(bg)
@@ -97,14 +115,19 @@ fn avatar_gallery(s: &Dooduel) -> Element<Msg> {
     let mut cur: Vec<Element<Msg>> = Vec::new();
     for i in 0..avatar::ICON_COUNT {
         let tint = i % avatar::TINT_COUNT;
-        let cell = column![
-            avatar::doodle_avatar_forced::<Msg>(i, tint, 44.0)
-                .on_press(Msg::PickGalleryIcon(i))
-                .label(format!("Doodle {i}")),
-        ]
-        .padding(Space::Xs)
-        .radius(Radius::Lg)
-        .background(if selected == Some(i) { p.accent_tint } else { CLEAR });
+        // The press route (F5) is wired for containers, not for a bare `icon()`
+        // (the doodle badge), so the pressable is the CELL container — the click on
+        // the doodle child bubbles to it.
+        let cell = column![avatar::doodle_avatar_forced::<Msg>(i, tint, 44.0)]
+            .on_press(Msg::PickGalleryIcon(i))
+            .label(format!("Doodle {i}"))
+            .padding(Space::Xs)
+            .radius(Radius::Lg)
+            .background(if selected == Some(i) {
+                p.accent_tint
+            } else {
+                CLEAR
+            });
         cur.push(cell);
         if cur.len() == 5 {
             rows.push(Element::row(std::mem::take(&mut cur)).gap(Space::Xs));
@@ -142,7 +165,9 @@ fn avatar_draw(s: &Dooduel) -> Element<Msg> {
     }
     let swatches = Element::column(swatch_rows).gap(Space::Xs).align_center();
 
-    let sizes: Vec<Element<Msg>> = (0..paint::BRUSH_SIZES.len()).map(|i| avatar_size_dot(i, a, p)).collect();
+    let sizes: Vec<Element<Msg>> = (0..paint::BRUSH_SIZES.len())
+        .map(|i| avatar_size_dot(i, a, p))
+        .collect();
     let tools = row![
         Element::row(sizes).gap(Space::Xs),
         avatar_tool_btn("Eraser", Msg::ToggleAvatarEraser, a.draft_eraser, p),
@@ -189,7 +214,11 @@ fn avatar_size_dot(i: usize, a: &AvatarState, p: crate::theme::Palette) -> Eleme
     let active = a.draft_size_idx == i;
     let dia = paint::BRUSH_SIZES[i] as f32;
     let dot = (dia * 0.85).max(3.0);
-    let (bg, ring) = if active { (p.accent_tint, Color::Accent) } else { (p.surface, p.ink) };
+    let (bg, ring) = if active {
+        (p.accent_tint, Color::Accent)
+    } else {
+        (p.surface, p.ink)
+    };
     let dot_color = if a.draft_eraser {
         p.muted
     } else {
@@ -197,7 +226,11 @@ fn avatar_size_dot(i: usize, a: &AvatarState, p: crate::theme::Palette) -> Eleme
         Color::rgb(c[0], c[1], c[2])
     };
     column![
-        Element::column(vec![]).width(dot).height(dot).background(dot_color).radius(Radius::Full),
+        Element::column(vec![])
+            .width(dot)
+            .height(dot)
+            .background(dot_color)
+            .radius(Radius::Full),
     ]
     .width(34.0)
     .height(34.0)
@@ -213,7 +246,11 @@ fn avatar_size_dot(i: usize, a: &AvatarState, p: crate::theme::Palette) -> Eleme
 /// A small avatar-editor tool button (Eraser toggle / Undo / Clear). Accent-tinted
 /// when `active` (the eraser's on-state).
 fn avatar_tool_btn(label: &str, msg: Msg, active: bool, p: crate::theme::Palette) -> Element<Msg> {
-    let (bg, fg) = if active { (p.accent_tint, Color::Accent) } else { (p.surface, p.ink) };
+    let (bg, fg) = if active {
+        (p.accent_tint, Color::Accent)
+    } else {
+        (p.surface, p.ink)
+    };
     button(label)
         .on_press(msg)
         .background(bg)

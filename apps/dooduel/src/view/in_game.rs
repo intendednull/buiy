@@ -113,7 +113,11 @@ fn header_card_mobile(g: &Game, p: Palette, width: f32) -> Element<Msg> {
     .justify_between()
     .align_center();
 
-    let slots: Vec<Element<Msg>> = g.word_slots().into_iter().map(|slot| word_slot(slot, p)).collect();
+    let slots: Vec<Element<Msg>> = g
+        .word_slots()
+        .into_iter()
+        .map(|slot| word_slot(slot, p))
+        .collect();
     let word_row = Element::row(slots).gap(Space::Xs).justify_center();
     let role = column![badge(role_text, role_bg, role_fg)].align_center();
 
@@ -137,11 +141,21 @@ fn scoreboard_strip(s: &Dooduel, width: f32) -> Element<Msg> {
         .standings()
         .into_iter()
         .map(|(i, pl)| {
-            let bg = if i == g.viewing_as { p.accent_tint } else { p.surface_2 };
+            let bg = if i == g.viewing_as {
+                p.accent_tint
+            } else {
+                p.surface_2
+            };
             column![
                 avatar_el(s, i == 0, &pl.name, 34.0),
-                text(pl.name.as_str()).size(12.0).color(p.ink).font(FONT_BODY),
-                text!("{}", pl.score).size(15.0).color(p.ink).font(FONT_DISPLAY),
+                text(pl.name.as_str())
+                    .size(12.0)
+                    .color(p.ink)
+                    .font(FONT_BODY),
+                text!("{}", pl.score)
+                    .size(15.0)
+                    .color(p.ink)
+                    .font(FONT_DISPLAY),
             ]
             .gap(Space::Xs)
             .align_center()
@@ -188,11 +202,15 @@ fn toolbar_mobile(s: &Dooduel, width: f32) -> Element<Msg> {
         tool_seg("Eraser", paint::Tool::Eraser, t.tool, p),
     ]
     .gap(Space::Xs);
-    let sizes: Vec<Element<Msg>> = (0..paint::BRUSH_SIZES.len()).map(|i| brush_dot(i, t, p)).collect();
+    let sizes: Vec<Element<Msg>> = (0..paint::BRUSH_SIZES.len())
+        .map(|i| brush_dot(i, t, p))
+        .collect();
     let swatches: Vec<Element<Msg>> = (0..paint::PALETTE.len()).map(|i| swatch(i, t, p)).collect();
 
     let controls = column![
-        row![seg, Element::row(sizes).gap(Space::Xs)].gap(Space::Sm).align_center(),
+        row![seg, Element::row(sizes).gap(Space::Xs)]
+            .gap(Space::Sm)
+            .align_center(),
         Element::row(swatches).gap(Space::Xs).wrap(),
         row![
             tool_btn("Undo", Msg::UndoStroke, p),
@@ -205,7 +223,12 @@ fn toolbar_mobile(s: &Dooduel, width: f32) -> Element<Msg> {
     column![controls]
         .width(width)
         .background(p.surface)
-        .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+        .radius_corners(
+            WOBBLE_PANEL[0],
+            WOBBLE_PANEL[1],
+            WOBBLE_PANEL[2],
+            WOBBLE_PANEL[3],
+        )
         .border(2.5, p.ink, LineStyle::Solid)
         .padding(Space::Sm)
         .disabled(s.game.phase != Phase::Drawing || !s.game.viewer_is_drawer())
@@ -218,11 +241,22 @@ fn top_bar(s: &Dooduel) -> Element<Msg> {
     // On a phone the "— switch who you are" hint is dropped so the caption + chips
     // fit the narrow bar.
     let caption = if s.is_mobile() {
-        row![text("Solo demo").size(14.0).color(INK_PANEL_ON).font(FONT_BODY)]
+        row![
+            text("Solo demo")
+                .size(14.0)
+                .color(INK_PANEL_ON)
+                .font(FONT_BODY)
+        ]
     } else {
         row![
-            text("Solo demo").size(15.0).color(INK_PANEL_ON).font(FONT_BODY),
-            text("— switch who you are").size(13.0).color(PANEL_MUTED).font(FONT_BODY),
+            text("Solo demo")
+                .size(15.0)
+                .color(INK_PANEL_ON)
+                .font(FONT_BODY),
+            text("— switch who you are")
+                .size(13.0)
+                .color(PANEL_MUTED)
+                .font(FONT_BODY),
         ]
     }
     .gap(Space::Sm)
@@ -237,7 +271,12 @@ fn top_bar(s: &Dooduel) -> Element<Msg> {
         .enumerate()
         .map(|(i, p)| {
             let px = if i == g.viewing_as { 40.0 } else { 32.0 };
-            avatar_el(s, i == 0, &p.name, px).on_press(Msg::SwitchSeat(i)).label(&p.name)
+            // Wrap in a pressable CONTAINER: the F5 press route is wired for
+            // containers/rasters but not for a bare `icon()` (the doodle chip case),
+            // so the click must land on a container that bubbles it.
+            column![avatar_el(s, i == 0, &p.name, px)]
+                .on_press(Msg::SwitchSeat(i))
+                .label(&p.name)
         })
         .collect();
     chips.push(
@@ -271,10 +310,19 @@ fn header_card(g: &Game, p: Palette) -> Element<Msg> {
     .gap(Space::Xs)
     .width(180.0);
 
-    let slots: Vec<Element<Msg>> = g.word_slots().into_iter().map(|slot| word_slot(slot, p)).collect();
+    let slots: Vec<Element<Msg>> = g
+        .word_slots()
+        .into_iter()
+        .map(|slot| word_slot(slot, p))
+        .collect();
     let word_row = Element::row(slots).gap(Space::Xs).grow().justify_center();
 
-    panel(row![left, word_row, timer_view(g)].gap(Space::Lg).align_center(), p)
+    panel(
+        row![left, word_row, timer_view(g)]
+            .gap(Space::Lg)
+            .align_center(),
+        p,
+    )
 }
 
 /// One underlined letter slot of the word row (blank when unrevealed).
@@ -285,7 +333,10 @@ fn word_slot(slot: WordSlot, p: Palette) -> Element<Msg> {
     let underline = if slot.revealed { Color::Accent } else { p.ink };
     column![
         text(ch).size(30.0).color(p.ink).font(FONT_DISPLAY),
-        Element::column(vec![]).width(26.0).height(4.0).background(underline),
+        Element::column(vec![])
+            .width(26.0)
+            .height(4.0)
+            .background(underline),
     ]
     .gap(Space::Xs)
     .align_center()
@@ -304,7 +355,11 @@ fn timer_view(g: &Game) -> Element<Msg> {
             } else {
                 0.0
             };
-            let c = if g.draw_seconds_left <= 10 { DANGER } else { Color::Accent };
+            let c = if g.draw_seconds_left <= 10 {
+                DANGER
+            } else {
+                Color::Accent
+            };
             (f, c)
         }
         Phase::Picking => (
@@ -318,7 +373,10 @@ fn timer_view(g: &Game) -> Element<Msg> {
             .color(tcolor)
             .width(60.0)
             .height(60.0),
-        text!("{}", secs).size(32.0).color(tcolor).font(FONT_DISPLAY),
+        text!("{}", secs)
+            .size(32.0)
+            .color(tcolor)
+            .font(FONT_DISPLAY),
     ]
     .gap(Space::Sm)
     .align_center()
@@ -356,9 +414,13 @@ fn ring_path(frac: f32) -> String {
 /// top-aligned (`align_start`, so a short scoreboard is not stretched tall).
 fn three_pane(s: &Dooduel) -> Element<Msg> {
     let p = s.palette();
-    row![scoreboard_pane(s), center_pane(s), chat_pane(&s.game, p, 300.0, 556.0)]
-        .gap(Space::Md)
-        .align_start()
+    row![
+        scoreboard_pane(s),
+        center_pane(s),
+        chat_pane(&s.game, p, 300.0, 556.0)
+    ]
+    .gap(Space::Md)
+    .align_start()
 }
 
 /// The scoreboard pane: rank / avatar / name + role pill / score, sorted high→low,
@@ -366,21 +428,40 @@ fn three_pane(s: &Dooduel) -> Element<Msg> {
 fn scoreboard_pane(s: &Dooduel) -> Element<Msg> {
     let g = &s.game;
     let pal = s.palette();
-    let mut rows: Vec<Element<Msg>> = vec![text("Scoreboard").size(14.0).color(pal.ink_2).font(FONT_BODY)];
+    let mut rows: Vec<Element<Msg>> = vec![
+        text("Scoreboard")
+            .size(14.0)
+            .color(pal.ink_2)
+            .font(FONT_BODY),
+    ];
     for (rank, (i, p)) in g.standings().into_iter().enumerate() {
         let (rtext, rbg, rfg) = player_role(g, i, pal);
-        let bg = if i == g.viewing_as { pal.accent_tint } else { CLEAR };
+        let bg = if i == g.viewing_as {
+            pal.accent_tint
+        } else {
+            CLEAR
+        };
         rows.push(
             row![
-                text!("{}", rank + 1).width(16.0).size(13.0).color(pal.muted).font(FONT_BODY),
+                text!("{}", rank + 1)
+                    .width(16.0)
+                    .size(13.0)
+                    .color(pal.muted)
+                    .font(FONT_BODY),
                 avatar_el(s, i == 0, &p.name, 34.0),
                 column![
-                    text(p.name.as_str()).size(14.0).color(pal.ink).font(FONT_BODY),
+                    text(p.name.as_str())
+                        .size(14.0)
+                        .color(pal.ink)
+                        .font(FONT_BODY),
                     badge(rtext, rbg, rfg),
                 ]
                 .gap(Space::Xs)
                 .grow(),
-                text!("{}", p.score).size(19.0).color(pal.ink).font(FONT_DISPLAY),
+                text!("{}", p.score)
+                    .size(19.0)
+                    .color(pal.ink)
+                    .font(FONT_DISPLAY),
             ]
             .gap(Space::Sm)
             .align_center()
@@ -393,7 +474,12 @@ fn scoreboard_pane(s: &Dooduel) -> Element<Msg> {
         .gap(Space::Xs)
         .width(240.0)
         .background(pal.surface)
-        .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+        .radius_corners(
+            WOBBLE_PANEL[0],
+            WOBBLE_PANEL[1],
+            WOBBLE_PANEL[2],
+            WOBBLE_PANEL[3],
+        )
         .border(2.5, pal.ink, LineStyle::Solid)
         .padding(Space::Md)
 }
@@ -409,7 +495,10 @@ fn center_pane(s: &Dooduel) -> Element<Msg> {
         .border(3.0, p.ink, LineStyle::Solid)
         .align_center()
         .justify_center();
-    column![canvas, toolbar_view(s)].gap(Space::Md).grow().align_center()
+    column![canvas, toolbar_view(s)]
+        .gap(Space::Md)
+        .grow()
+        .align_center()
 }
 
 /// The toolbar: brush/fill/eraser segmented control + brush sizes + the 16-color
@@ -425,7 +514,9 @@ fn toolbar_view(s: &Dooduel) -> Element<Msg> {
     ]
     .gap(Space::Xs);
 
-    let sizes: Vec<Element<Msg>> = (0..paint::BRUSH_SIZES.len()).map(|i| brush_dot(i, t, p)).collect();
+    let sizes: Vec<Element<Msg>> = (0..paint::BRUSH_SIZES.len())
+        .map(|i| brush_dot(i, t, p))
+        .collect();
     let swatches: Vec<Element<Msg>> = (0..paint::PALETTE.len()).map(|i| swatch(i, t, p)).collect();
 
     let controls = column![
@@ -447,7 +538,12 @@ fn toolbar_view(s: &Dooduel) -> Element<Msg> {
     column![controls]
         .width(CENTER_W)
         .background(p.surface)
-        .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+        .radius_corners(
+            WOBBLE_PANEL[0],
+            WOBBLE_PANEL[1],
+            WOBBLE_PANEL[2],
+            WOBBLE_PANEL[3],
+        )
         .border(2.5, p.ink, LineStyle::Solid)
         .padding(Space::Md)
         // Dim the whole toolbar when you cannot draw (parity: tools disabled for
@@ -458,7 +554,11 @@ fn toolbar_view(s: &Dooduel) -> Element<Msg> {
 /// One segment of the brush/fill/eraser control (an accent-filled pill when active).
 fn tool_seg(label: &str, tool: paint::Tool, current: paint::Tool, p: Palette) -> Element<Msg> {
     let active = tool == current;
-    let (bg, fg) = if active { (Color::Accent, WHITE) } else { (p.surface_2, p.ink_2) };
+    let (bg, fg) = if active {
+        (Color::Accent, WHITE)
+    } else {
+        (p.surface_2, p.ink_2)
+    };
     button(label)
         .on_press(Msg::SelectTool(tool))
         .background(bg)
@@ -475,7 +575,11 @@ fn brush_dot(i: usize, t: &ToolState, p: Palette) -> Element<Msg> {
     let active = t.size_idx == i;
     let dia = paint::BRUSH_SIZES[i] as f32;
     let dot = (dia * 0.85).max(3.0);
-    let (bg, ring) = if active { (p.accent_tint, Color::Accent) } else { (p.surface, p.ink) };
+    let (bg, ring) = if active {
+        (p.accent_tint, Color::Accent)
+    } else {
+        (p.surface, p.ink)
+    };
     // The dot previews the current draw color (muted for the eraser).
     let dot_color = if t.tool == paint::Tool::Eraser {
         p.muted
@@ -484,7 +588,11 @@ fn brush_dot(i: usize, t: &ToolState, p: Palette) -> Element<Msg> {
         Color::rgb(c[0], c[1], c[2])
     };
     column![
-        Element::column(vec![]).width(dot).height(dot).background(dot_color).radius(Radius::Full),
+        Element::column(vec![])
+            .width(dot)
+            .height(dot)
+            .background(dot_color)
+            .radius(Radius::Full),
     ]
     .width(34.0)
     .height(34.0)
@@ -501,7 +609,11 @@ fn brush_dot(i: usize, t: &ToolState, p: Palette) -> Element<Msg> {
 fn swatch(i: usize, t: &ToolState, p: Palette) -> Element<Msg> {
     let c = paint::PALETTE[i];
     let fill = Color::rgb(c[0], c[1], c[2]);
-    let ring = if t.color_idx == i { Color::Accent } else { p.ink };
+    let ring = if t.color_idx == i {
+        Color::Accent
+    } else {
+        p.ink
+    };
     Element::column(vec![])
         .width(26.0)
         .height(26.0)
@@ -565,7 +677,10 @@ fn chat_pane(g: &Game, p: Palette, width: f32, height: f32) -> Element<Msg> {
     .align_center();
 
     column![
-        text("Guess the word").size(14.0).color(p.ink_2).font(FONT_BODY),
+        text("Guess the word")
+            .size(14.0)
+            .color(p.ink_2)
+            .font(FONT_BODY),
         lines,
         input,
     ]
@@ -573,7 +688,12 @@ fn chat_pane(g: &Game, p: Palette, width: f32, height: f32) -> Element<Msg> {
     .width(width)
     .height(height)
     .background(p.surface)
-    .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+    .radius_corners(
+        WOBBLE_PANEL[0],
+        WOBBLE_PANEL[1],
+        WOBBLE_PANEL[2],
+        WOBBLE_PANEL[3],
+    )
     .border(2.5, p.ink, LineStyle::Solid)
     .shadow(0.0, 6.0, 0.0, 0.0, p.shadow_hard)
     .shadow(0.0, 12.0, 26.0, -8.0, p.shadow_soft)
@@ -595,10 +715,12 @@ fn chat_line(m: &ChatMsg, p: Palette) -> Element<Msg> {
             .radius(Radius::Md)
             .padding(Space::Xs),
         // A near-miss nudge or an ordinary wrong guess: a neutral bubble.
-        ChatKind::Guess | ChatKind::Close => column![text(txt).size(15.0).color(p.ink_2).font(FONT_BODY)]
-            .background(p.surface_2)
-            .radius(Radius::Md)
-            .padding(Space::Xs),
+        ChatKind::Guess | ChatKind::Close => {
+            column![text(txt).size(15.0).color(p.ink_2).font(FONT_BODY)]
+                .background(p.surface_2)
+                .radius(Radius::Md)
+                .padding(Space::Xs)
+        }
     }
 }
 
@@ -629,7 +751,11 @@ fn role_badge_parts(g: &Game, p: Palette) -> (&'static str, Color, Color) {
 /// The per-player scoreboard role pill text + tones.
 fn player_role(g: &Game, i: usize, p: Palette) -> (&'static str, Color, Color) {
     if i == g.seat_index {
-        let t = if g.phase == Phase::Picking { "Picking" } else { "Drawing" };
+        let t = if g.phase == Phase::Picking {
+            "Picking"
+        } else {
+            "Drawing"
+        };
         (t, p.accent_tint, Color::Accent)
     } else if g.turn_guesses.iter().any(|gu| gu.player == i) {
         ("Guessed", p.pos_tint, POS)
@@ -658,7 +784,10 @@ fn pick_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     let panel = column![
         row![
             eyebrow("Your turn to draw"),
-            text!("{}s", g.pick_seconds_left).size(22.0).color(DANGER).font(FONT_DISPLAY),
+            text!("{}s", g.pick_seconds_left)
+                .size(22.0)
+                .color(DANGER)
+                .font(FONT_DISPLAY),
         ]
         .justify_between()
         .align_center(),
@@ -668,7 +797,12 @@ fn pick_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     .gap(Space::Md)
     .width(460.0_f32.min(max_w))
     .background(p.surface)
-    .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+    .radius_corners(
+        WOBBLE_PANEL[0],
+        WOBBLE_PANEL[1],
+        WOBBLE_PANEL[2],
+        WOBBLE_PANEL[3],
+    )
     .border(2.5, p.ink, LineStyle::Solid)
     .shadow(0.0, 6.0, 0.0, 0.0, p.shadow_hard)
     .shadow(0.0, 12.0, 26.0, -8.0, p.shadow_soft)
@@ -688,9 +822,16 @@ fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
                 (format!("{}", r.delta), p.hair, p.muted)
             };
             row![
-                text(r.name.as_str()).size(15.0).color(p.ink).font(FONT_BODY).grow(),
+                text(r.name.as_str())
+                    .size(15.0)
+                    .color(p.ink)
+                    .font(FONT_BODY)
+                    .grow(),
                 badge(&dtxt, dbg, dfg),
-                text!("{}", r.total).size(18.0).color(p.ink).font(FONT_DISPLAY),
+                text!("{}", r.total)
+                    .size(18.0)
+                    .color(p.ink)
+                    .font(FONT_DISPLAY),
             ]
             .gap(Space::Sm)
             .align_center()
@@ -702,11 +843,18 @@ fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     let panel = column![
         row![
             eyebrow("Turn over"),
-            text!("next in {}s", g.reveal_seconds_left).size(14.0).color(p.muted).font(FONT_BODY),
+            text!("next in {}s", g.reveal_seconds_left)
+                .size(14.0)
+                .color(p.muted)
+                .font(FONT_BODY),
         ]
         .justify_between()
         .align_center(),
-        title(&format!("The word was {}", g.secret_word.to_uppercase()), 30.0, p),
+        title(
+            &format!("The word was {}", g.secret_word.to_uppercase()),
+            30.0,
+            p
+        ),
         Element::column(rows).gap(Space::Xs),
         button("Continue")
             .on_press(Msg::Continue)
@@ -720,7 +868,12 @@ fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     .gap(Space::Md)
     .width(440.0_f32.min(max_w))
     .background(p.surface)
-    .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+    .radius_corners(
+        WOBBLE_PANEL[0],
+        WOBBLE_PANEL[1],
+        WOBBLE_PANEL[2],
+        WOBBLE_PANEL[3],
+    )
     .border(2.5, p.ink, LineStyle::Solid)
     .shadow(0.0, 6.0, 0.0, 0.0, p.shadow_hard)
     .shadow(0.0, 12.0, 26.0, -8.0, p.shadow_soft)
@@ -730,10 +883,17 @@ fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
 
 /// The "waiting for the drawer to pick" overlay (a guesser during Picking).
 fn waiting_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
-    let drawer = g.players.get(g.seat_index).map(|pl| pl.name.clone()).unwrap_or_default();
+    let drawer = g
+        .players
+        .get(g.seat_index)
+        .map(|pl| pl.name.clone())
+        .unwrap_or_default();
     let panel = column![
         title("Hang tight!", 30.0, p),
-        text!("Waiting for {} to pick a word.", drawer).size(15.0).color(p.ink_2).font(FONT_BODY),
+        text!("Waiting for {} to pick a word.", drawer)
+            .size(15.0)
+            .color(p.ink_2)
+            .font(FONT_BODY),
         button(format!("Switch to {drawer}"))
             .on_press(Msg::SwitchSeat(g.seat_index))
             .background(p.accent_tint)
@@ -747,7 +907,12 @@ fn waiting_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     .width(420.0_f32.min(max_w))
     .align_center()
     .background(p.surface)
-    .radius_corners(WOBBLE_PANEL[0], WOBBLE_PANEL[1], WOBBLE_PANEL[2], WOBBLE_PANEL[3])
+    .radius_corners(
+        WOBBLE_PANEL[0],
+        WOBBLE_PANEL[1],
+        WOBBLE_PANEL[2],
+        WOBBLE_PANEL[3],
+    )
     .border(2.5, p.ink, LineStyle::Solid)
     .shadow(0.0, 6.0, 0.0, 0.0, p.shadow_hard)
     .shadow(0.0, 12.0, 26.0, -8.0, p.shadow_soft)

@@ -591,3 +591,673 @@ fn drive_viewport(
     *last = Some(size);
     enqueue::<Dooduel>(&mut commands, *model, Msg::SetViewport(size.0, size.1));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use buiy::probe::{click, get_by_role, snapshot_report};
+
+    // --- Pure game-logic unit tests (no ECS) -------------------------------
+
+    fn started() -> Game {
+        let mut g = Game::default();
+        g.start_match("Mara", Config::default());
+        g
+    }
+
+    /// Fold `Tick`s into `g` at 1-second virtual steps from `from` to `to`
+    /// (inclusive), draining bot guesses through `apply_guess` like the funnel.
+    fn tick_to(g: &mut Game, from: u64, to: u64) {
+        for sec in from..=to {
+            let pending = g.tick(Duration::from_secs(sec));
+            for p in pending {
+                g.apply_guess(p.player, &p.text);
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_strips_and_lowercases() {
+        assert_eq!(game::normalize("  Ro-BOT! "), "robot");
+        assert_eq!(game::normalize("Ice Cream"), "icecream");
+    }
+
+    #[test]
+    fn close_matches_within_edit_distance_two() {
+        assert!(game::is_close(&game::normalize("robott"), "robot")); // one insert
+        assert!(game::is_close("robto", "robot")); // adjacent swap = distance 2
+        assert!(!game::is_close("robot", "robot")); // identical is not "close"
+        assert!(!game::is_close("banana", "robot")); // far apart
+    }
+
+    #[test]
+    fn guesser_points_match_the_spec_formula() {
+        // Full time left, first guesser: round(50 + 450) = 500.
+        assert_eq!(game::guesser_points(80, 80, 0), 500);
+        // Half time, first guesser: round(50 + 225) = 275.
+        assert_eq!(game::guesser_points(40, 80, 0), 275);
+        // Full time, second guesser: round(500 * 0.82) = 410.
+        assert_eq!(game::guesser_points(80, 80, 1), 410);
+        // Floor at 20 even with no time / high order.
+        assert_eq!(game::guesser_points(0, 80, 5), 20);
+    }
+
+    #[test]
+    fn drawer_points_scale_with_correct_fraction() {
+        assert_eq!(game::drawer_points(3, 3), 100);
+        assert_eq!(game::drawer_points(2, 3), 67); // round(200/3)
+        assert_eq!(game::drawer_points(0, 3), 0);
+    }
+
+    #[test]
+    fn match_starts_in_pick_phase_with_four_players() {
+        let g = started();
+        assert_eq!(g.players.len(), 4);
+        assert_eq!(g.players[0].name, "Mara");
+        assert_eq!(g.phase, Phase::Picking);
+        assert_eq!(g.round, 1);
+        // Seat auto-jumps to the drawer (seat 0 for turn 1).
+        assert_eq!(g.viewing_as, 0);
+        assert_eq!(g.word_choices.len(), 3);
+    }
+
+    #[test]
+    fn pick_timeout_auto_advances_to_drawing() {
+        let mut g = started();
+        tick_to(&mut g, 0, game::PICK_SECS);
+        assert_eq!(g.phase, Phase::Drawing);
+        assert!(!g.secret_word.is_empty(), "a word was auto-picked");
+        assert_eq!(g.draw_seconds_left, g.config.draw_seconds);
+    }
+
+    #[test]
+    fn choosing_a_word_starts_the_draw_countdown() {
+        let mut g = started();
+        // The drawer picks the first offered word before the pick timer expires.
+        g.choose_word(g.word_choices[0].clone());
+        assert_eq!(g.phase, Phase::Drawing);
+        // First tick anchors the clock; countdown ticks down per second.
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.draw_seconds_left, g.config.draw_seconds);
+        g.tick(Duration::from_secs(5));
+        assert_eq!(g.draw_seconds_left, g.config.draw_seconds - 5);
+    }
+
+    #[test]
+    fn hints_reveal_on_the_spec_schedule() {
+        let mut g = started();
+        g.choose_word("robot".to_string()); // 5 letters, 2 hints
+        g.tick(Duration::from_secs(0)); // anchor
+        // Thresholds (total 80): hint1 at 33s-left (elapsed 47), hint2 at 19s-left
+        // (elapsed 61). Before 47s: zero hints revealed.
+        g.tick(Duration::from_secs(46));
+        assert_eq!(g.reveal_mask.iter().filter(|b| **b).count(), 0);
+        g.tick(Duration::from_secs(47));
+        assert_eq!(g.reveal_mask.iter().filter(|b| **b).count(), 1);
+        g.tick(Duration::from_secs(61));
+        assert_eq!(g.reveal_mask.iter().filter(|b| **b).count(), 2);
+    }
+
+    #[test]
+    fn a_correct_human_guess_scores_and_locks() {
+        let mut g = started();
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0)); // anchor, 80s left
+        // Seat 1 (a guesser) submits the word: full-ish time, order 0.
+        let outcome = g.apply_guess(1, "ROBOT!");
+        assert_eq!(outcome, game::GuessOutcome::Correct);
+        assert_eq!(g.turn_guesses.len(), 1);
+        assert_eq!(g.players[1].score, 500);
+        // Guessing again is ignored (already locked).
+        assert_eq!(g.apply_guess(1, "robot"), game::GuessOutcome::Ignored);
+    }
+
+    #[test]
+    fn the_drawer_cannot_guess() {
+        let mut g = started();
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        // Seat 0 is the drawer this turn.
+        assert_eq!(g.apply_guess(0, "robot"), game::GuessOutcome::Ignored);
+        assert!(g.turn_guesses.is_empty());
+    }
+
+    #[test]
+    fn near_miss_reports_close_without_scoring() {
+        let mut g = started();
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.apply_guess(1, "robott"), game::GuessOutcome::Close);
+        assert_eq!(g.players[1].score, 0);
+        assert!(g.turn_guesses.is_empty());
+    }
+
+    #[test]
+    fn all_guessers_correct_ends_the_turn_early() {
+        let mut g = started();
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        g.apply_guess(1, "robot");
+        g.apply_guess(2, "robot");
+        assert_eq!(g.phase, Phase::Drawing);
+        g.apply_guess(3, "robot"); // the 3rd (last) guesser
+        assert_eq!(g.phase, Phase::Reveal, "turn ends once everyone has it");
+        // Drawer scored 100 (all 3 guessers correct).
+        assert_eq!(g.players[0].score, 100);
+    }
+
+    /// Drive one virtual second: fold `Tick(sec)` and apply any due bot guesses.
+    fn one_second(g: &mut Game, sec: u64) {
+        let pending = g.tick(Duration::from_secs(sec));
+        for p in pending {
+            g.apply_guess(p.player, &p.text);
+        }
+    }
+
+    /// Auto-pick each turn and run the clock until the match finishes.
+    fn drive_to_final(g: &mut Game) {
+        let mut sec = 0u64;
+        let mut guard = 0;
+        loop {
+            if g.phase == Phase::Picking {
+                g.choose_word(g.word_choices[0].clone());
+                sec = 0;
+            }
+            if g.phase == Phase::Final {
+                break;
+            }
+            one_second(g, sec);
+            sec += 1;
+            guard += 1;
+            assert!(guard < 10_000, "match should terminate");
+        }
+    }
+
+    #[test]
+    fn bots_drive_the_turn_to_reveal_on_their_own() {
+        let mut g = started();
+        g.choose_word("robot".to_string());
+        // Tick until the turn leaves the draw phase; the seeded bots guess along
+        // the way and the third correct guess ends the turn early.
+        let mut sec = 0u64;
+        while g.phase == Phase::Drawing {
+            one_second(&mut g, sec);
+            sec += 1;
+            assert!(sec < 200, "turn should end");
+        }
+        assert_eq!(g.phase, Phase::Reveal);
+        assert_eq!(g.turn_guesses.len(), 3, "all three bots guessed");
+        assert_eq!(g.players[0].score, 100, "drawer scored the full 100");
+    }
+
+    #[test]
+    fn turn_rotation_and_match_end_reach_the_podium() {
+        let mut g = started();
+        drive_to_final(&mut g);
+        assert_eq!(g.phase, Phase::Final, "the match reaches its end");
+        // Every player accrued some score across 8 turns of drawing + guessing.
+        assert!(g.players.iter().all(|p| p.score > 0));
+    }
+
+    #[test]
+    fn determinism_same_seed_same_match() {
+        let mut a = started();
+        let mut b = started();
+        let total = a.config.draw_seconds;
+        for _ in 0..3 {
+            if a.phase == Phase::Picking {
+                let wa = a.word_choices[0].clone();
+                let wb = b.word_choices[0].clone();
+                assert_eq!(wa, wb, "same seeded word choices");
+                a.choose_word(wa);
+                b.choose_word(wb);
+            }
+            tick_to(&mut a, 0, total);
+            tick_to(&mut b, 0, total);
+            assert_eq!(a, b, "identical Msg streams produce identical state");
+            if a.phase == Phase::Reveal {
+                tick_to(&mut a, 0, game::REVEAL_SECS);
+                tick_to(&mut b, 0, game::REVEAL_SECS);
+            }
+        }
+    }
+
+    // --- Probe integration test (GPU-free, drives the real funnel) ----------
+
+    /// Boot the app GPU-free, start a match, switch the human to a guesser seat,
+    /// drive a human guess through the real funnel, and assert the fold landed.
+    #[test]
+    fn probe_match_flow_scores_a_human_guess() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        // Start the match. (Home's "▶ Play" starts it directly; driven here by
+        // the message so the test doesn't depend on the button label glyphs.)
+        enqueue_msg(&mut app, Msg::StartMatch);
+        settle(&mut app);
+
+        // The drawer (seat 0) picks the first word, entering the draw phase.
+        enqueue_msg(&mut app, Msg::ChooseWord(0));
+        settle(&mut app);
+        let word = current_word(&mut app);
+        assert!(!word.is_empty(), "a secret word is set after ChooseWord");
+
+        // Anchor the draw clock at t=0 (virtual time; no GameClockPlugin here).
+        enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(0)));
+        settle(&mut app);
+
+        // Human hops to seat 1 (a guesser) and submits the exact word.
+        enqueue_msg(&mut app, Msg::SwitchSeat(1));
+        enqueue_msg(&mut app, Msg::SetChatInput(word));
+        enqueue_msg(&mut app, Msg::SubmitGuess);
+        settle(&mut app);
+
+        let g = current_game(&mut app);
+        assert!(
+            g.turn_guesses.iter().any(|gu| gu.player == 1),
+            "the human guess folded into a correct guess for seat 1"
+        );
+        assert!(g.players[1].score > 0, "the guess scored");
+
+        // The in-game screen renders the header (phase machine is live).
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Round 1 of 2"),
+            "in-game header is on screen:\n{report}"
+        );
+    }
+
+    fn settle(app: &mut App) {
+        for _ in 0..4 {
+            app.update();
+        }
+    }
+
+    fn enqueue_msg(app: &mut App, msg: Msg) {
+        let e = app
+            .world_mut()
+            .query_filtered::<Entity, With<Dooduel>>()
+            .iter(app.world())
+            .next()
+            .expect("model entity");
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<buiy_core::mvu::Envelope<Dooduel>>>()
+            .write(buiy_core::mvu::Envelope::user(e, msg));
+    }
+
+    fn current_game(app: &mut App) -> Game {
+        app.world_mut()
+            .query::<&Dooduel>()
+            .iter(app.world())
+            .next()
+            .expect("model")
+            .game
+            .clone()
+    }
+
+    fn current_word(app: &mut App) -> String {
+        current_game(app).secret_word
+    }
+
+    /// W4: the in-game screen's controls are reachable + wired, GPU-free. Drives
+    /// to the Drawing phase, then (1) locates every toolbar/chrome button by
+    /// role+name, (2) **clicks a seat-switcher avatar chip** — a *pressable icon*
+    /// (the W4 view extension: an `icon` carrying `on_press` becomes an
+    /// activatable a11y button) — and asserts the viewed seat hopped, and (3)
+    /// submits a guess by clicking Send and asserts it scored.
+    #[test]
+    fn probe_in_game_controls_are_reachable() {
+        use buiy_core::a11y::A11yRole;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        // Into the Drawing phase (seat 0 = the human drawer this turn).
+        enqueue_msg(&mut app, Msg::StartMatch);
+        settle(&mut app);
+        enqueue_msg(&mut app, Msg::ChooseWord(0));
+        settle(&mut app);
+        enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(0))); // anchor the clock
+        settle(&mut app);
+        let word = current_word(&mut app);
+        assert!(!word.is_empty(), "a secret word is set");
+
+        // (1) Every toolbar + chrome button is locatable by role + name.
+        for label in ["Brush", "Fill", "Eraser", "Undo", "Clear", "Send", "Leave"] {
+            assert!(
+                get_by_role(app.world_mut(), A11yRole::Button, Some(label), None).is_ok(),
+                "the {label:?} button is locatable by role+name"
+            );
+        }
+
+        // (2) Click the seat-1 avatar chip (a pressable ICON) → the seat hops.
+        let chip = get_by_role(app.world_mut(), A11yRole::Button, Some("Priya"), None)
+            .expect("the seat-1 avatar chip is a locatable button");
+        click(app.world_mut(), chip).expect("the avatar chip is clickable");
+        settle(&mut app);
+        assert_eq!(
+            current_game(&mut app).viewing_as,
+            1,
+            "clicking the avatar chip hopped the viewed seat to 1 (the pressable-icon route)"
+        );
+
+        // (3) Type a guess + click Send → it folds through the funnel and scores.
+        enqueue_msg(&mut app, Msg::SetChatInput(word));
+        settle(&mut app);
+        let send = get_by_role(app.world_mut(), A11yRole::Button, Some("Send"), None)
+            .expect("the Send button");
+        click(app.world_mut(), send).expect("Send is clickable");
+        settle(&mut app);
+        let g = current_game(&mut app);
+        assert!(
+            g.turn_guesses.iter().any(|gu| gu.player == 1),
+            "the Send-driven guess scored for seat 1"
+        );
+        assert!(g.players[1].score > 0, "the guess scored points");
+
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Scoreboard"),
+            "the in-game screen renders its panes:\n{report}"
+        );
+    }
+
+    /// W3 smoke: the app boots GPU-free, Home is locatable by role/name (title,
+    /// name input, the Play + Create + Join actions, an avatar), and "Create a
+    /// room" navigates to the Lobby (roster + Start).
+    #[test]
+    fn home_boots_and_create_room_navigates_to_lobby() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        // Home elements locatable by role + name.
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Dooduel"),
+            "home shows the wordmark:\n{report}"
+        );
+        for label in ["▶ Play", "Create a room", "Join a room"] {
+            assert!(
+                get_by_role(
+                    app.world_mut(),
+                    buiy_core::a11y::A11yRole::Button,
+                    Some(label),
+                    None,
+                )
+                .is_ok(),
+                "home has the {label:?} button by role+name:\n{report}"
+            );
+        }
+        // The name input is present as a text field.
+        assert!(
+            buiy_view::find_kind(app.world_mut(), buiy_view::Kind::TextInput).is_some(),
+            "home has a name input"
+        );
+        // The doodle avatars render as icon nodes (the editable preview + the
+        // three "you'll play with" opponents).
+        assert!(
+            buiy_view::entities_of_kind(app.world_mut(), buiy_view::Kind::Icon).len() >= 4,
+            "home shows doodle avatars (icon nodes)"
+        );
+
+        // "Create a room" → Lobby.
+        let create = get_by_role(
+            app.world_mut(),
+            buiy_core::a11y::A11yRole::Button,
+            Some("Create a room"),
+            None,
+        )
+        .expect("Create-a-room button");
+        click(app.world_mut(), create).expect("Create is clickable");
+        settle(&mut app);
+
+        assert_eq!(
+            current_screen(&mut app),
+            Screen::Lobby,
+            "Create a room navigates to the Lobby"
+        );
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Private room"),
+            "the Lobby shows its eyebrow:\n{report}"
+        );
+        assert!(
+            get_by_role(
+                app.world_mut(),
+                buiy_core::a11y::A11yRole::Button,
+                Some("▶ Start game"),
+                None,
+            )
+            .is_ok(),
+            "the Lobby has a Start button:\n{report}"
+        );
+    }
+
+    /// W3: the Join screen accepts a code and drops into the Lobby as a guest,
+    /// with the roster showing the guest's name.
+    #[test]
+    fn join_flow_reaches_lobby_as_guest() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        enqueue_msg(&mut app, Msg::SetName("Zed".to_string()));
+        enqueue_msg(&mut app, Msg::GoJoin);
+        settle(&mut app);
+        assert_eq!(current_screen(&mut app), Screen::Join);
+
+        enqueue_msg(&mut app, Msg::SetJoinCode("abc123".to_string()));
+        enqueue_msg(&mut app, Msg::SubmitJoin);
+        settle(&mut app);
+
+        assert_eq!(current_screen(&mut app), Screen::Lobby);
+        let m = current_model(&mut app);
+        assert!(!m.is_host, "joining lands as a guest");
+        assert_eq!(
+            m.room_code, "ABC123",
+            "the entered code is uppercased + shown"
+        );
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Zed"),
+            "the roster shows the guest:\n{report}"
+        );
+        assert!(
+            report.contains("Priya"),
+            "the roster shows the host:\n{report}"
+        );
+        // The roster shows an avatar badge (icon node) per player.
+        assert!(
+            buiy_view::entities_of_kind(app.world_mut(), buiy_view::Kind::Icon).len() >= 4,
+            "the lobby roster shows avatar badges"
+        );
+    }
+
+    fn current_screen(app: &mut App) -> Screen {
+        current_model(app).screen
+    }
+
+    fn current_model(app: &mut App) -> Dooduel {
+        app.world_mut()
+            .query::<&Dooduel>()
+            .iter(app.world())
+            .next()
+            .expect("model")
+            .clone()
+    }
+
+    // --- W5: avatar editor + podium (reducer-level) ------------------------
+
+    #[test]
+    fn avatar_editor_open_tab_and_save_round_trip() {
+        let mut m = Dooduel::default();
+        assert!(!m.avatar.editor_open);
+        assert_eq!(m.avatar.kind, HumanAvatar::Default);
+
+        update(&mut m, Msg::OpenAvatarEditor);
+        assert!(m.avatar.editor_open);
+        assert_eq!(m.avatar.tab, AvatarTab::Gallery, "opens on the gallery tab");
+
+        // Switching to Draw bumps the scratch-reset counter (the sync blanks it).
+        let reset_before = m.avatar.reset_seq;
+        update(&mut m, Msg::SetAvatarTab(AvatarTab::Draw));
+        assert_eq!(m.avatar.tab, AvatarTab::Draw);
+        assert_eq!(m.avatar.reset_seq, reset_before + 1);
+
+        // Brush edits are reducer-owned + replayable.
+        update(&mut m, Msg::SelectAvatarColor(4));
+        assert_eq!(m.avatar.draft_color_idx, 4);
+        assert!(!m.avatar.draft_eraser, "picking a color clears the eraser");
+        update(&mut m, Msg::ToggleAvatarEraser);
+        assert!(m.avatar.draft_eraser);
+        update(&mut m, Msg::SelectAvatarSize(2));
+        assert_eq!(m.avatar.draft_size_idx, 2);
+
+        // Save commits the drawing (bumps the copy counter, closes, marks custom).
+        let save_before = m.avatar.save_seq;
+        update(&mut m, Msg::SaveAvatar);
+        assert_eq!(m.avatar.save_seq, save_before + 1);
+        assert_eq!(m.avatar.kind, HumanAvatar::Custom);
+        assert!(!m.avatar.editor_open, "save closes the editor");
+    }
+
+    #[test]
+    fn gallery_pick_sets_a_preset_and_reset_returns_to_default() {
+        let mut m = Dooduel::default();
+        update(&mut m, Msg::OpenAvatarEditor);
+        update(&mut m, Msg::PickGalleryIcon(5));
+        assert_eq!(
+            m.avatar.kind,
+            HumanAvatar::Preset {
+                icon: 5,
+                tint: 5 % avatar::TINT_COUNT
+            },
+            "a gallery pick sets an explicit icon + tint preset"
+        );
+        assert!(!m.avatar.editor_open, "a gallery pick closes the editor");
+
+        update(&mut m, Msg::ResetAvatar);
+        assert_eq!(m.avatar.kind, HumanAvatar::Default);
+    }
+
+    /// The avatar editor opens from Home's pencil affordance (a pressable icon),
+    /// and Save round-trips the custom-avatar flag through the funnel (GPU-free).
+    #[test]
+    fn probe_avatar_editor_opens_from_home_and_saves() {
+        use buiy_core::a11y::A11yRole;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        // The pencil "Edit your avatar" affordance is a pressable icon → a button.
+        let edit = get_by_role(
+            app.world_mut(),
+            A11yRole::Button,
+            Some("Edit your avatar"),
+            None,
+        )
+        .expect("the pencil edit affordance is a locatable button");
+        click(app.world_mut(), edit).expect("the pencil is clickable");
+        settle(&mut app);
+        assert!(
+            current_model(&mut app).avatar.editor_open,
+            "clicking the pencil opens the avatar editor"
+        );
+
+        // Switch to the draw tab; the save button is reachable there.
+        enqueue_msg(&mut app, Msg::SetAvatarTab(AvatarTab::Draw));
+        settle(&mut app);
+        let save = get_by_role(
+            app.world_mut(),
+            A11yRole::Button,
+            Some("Use this doodle"),
+            None,
+        )
+        .expect("the save button is reachable on the draw tab");
+        click(app.world_mut(), save).expect("save is clickable");
+        settle(&mut app);
+
+        let m = current_model(&mut app);
+        assert!(!m.avatar.editor_open, "save closes the editor");
+        assert_eq!(
+            m.avatar.kind,
+            HumanAvatar::Custom,
+            "save round-trips the custom-avatar flag through the funnel"
+        );
+    }
+
+    /// A full match driven by injected virtual ticks lifts the shell to the
+    /// Podium screen (the W5 reachability probe — reuses the W2 tick pattern).
+    #[test]
+    fn probe_full_match_reaches_the_podium_screen() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        enqueue_msg(&mut app, Msg::StartMatch);
+        settle(&mut app);
+        let mut clock = 0u64;
+        for _ in 0..400 {
+            if current_screen(&mut app) == Screen::Podium {
+                break;
+            }
+            match current_game(&mut app).phase {
+                Phase::Picking => enqueue_msg(&mut app, Msg::ChooseWord(0)),
+                Phase::Reveal => enqueue_msg(&mut app, Msg::Continue),
+                _ => {
+                    clock += 30;
+                    enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(clock)));
+                }
+            }
+            settle(&mut app);
+        }
+        assert_eq!(
+            current_screen(&mut app),
+            Screen::Podium,
+            "the full match reaches the podium"
+        );
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("wins!"),
+            "the podium announces the winner:\n{report}"
+        );
+    }
+}

@@ -50,7 +50,13 @@ pub fn lobby(s: &Dooduel) -> Element<Msg> {
         v
     } else {
         vec![
-            ("Priya".to_string(), "Host", p.accent_tint, Color::Accent, false),
+            (
+                "Priya".to_string(),
+                "Host",
+                p.accent_tint,
+                Color::Accent,
+                false,
+            ),
             (preview.clone(), "You", p.pos_tint, POS, true),
             ("Theo".to_string(), "Joined", p.pos_tint, POS, false),
             ("Sam".to_string(), "Joined", p.pos_tint, POS, false),
