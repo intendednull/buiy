@@ -91,8 +91,8 @@ mod tokens;
 
 pub use app::{BuiyViewAppExt, IntoViewReducer, MODEL_LID, ViewSet};
 pub use element::{
-    Element, Kind, button, checkbox, icon, keyed_column, raster, scroll_column, text, text_input,
-    when,
+    Element, ICON_VIEWBOX, Kind, button, checkbox, icon, keyed_column, raster, scroll_column, text,
+    text_input, when,
 };
 pub use layout::{Align, Justify, TextAlign};
 pub use reconcile::ViewWorkCounters;

@@ -634,7 +634,7 @@ fn resolve_corner_radii(corners: &crate::render::components::Corners, size: Vec2
 /// The ONE uniform corner radius the FILL quad rounds to for a **borderless-
 /// rounded** node (Dooduel F3): the SMALLEST resolved corner radius across all
 /// four corners and both axes. Each corner is already clamped to
-/// `<= min(half_w, half_h)` by [`resolve_corner_radii`], so the min is a single
+/// `<= min(half_w, half_h)` by `resolve_corner_radii`, so the min is a single
 /// uniform radius that pills a wide box and circles a square one — never the
 /// per-axis elliptical "lens". Returns `0.0` for a square (no-radius) `Corners`.
 ///
