@@ -108,6 +108,17 @@ pub struct ExtractedNode {
     pub position: Vec2,
     /// Box size in logical px, from `ResolvedLayout.size`.
     pub size: Vec2,
+    /// Uniform corner radius for the FILL quad, in logical px (`0` == square).
+    /// Non-zero ONLY for a **borderless-rounded** node (a `Border.radius` with no
+    /// painting side): the fill quad rounds itself through the existing
+    /// `PackedInstance.radius` slot. A node WITH a painting border keeps `0` here
+    /// (its border band already traces the rounding), so every existing bordered
+    /// display-list / GPU golden stays byte-identical — only a rounded-but-
+    /// borderless fill is newly rounded (Dooduel F3; closes the "per-node corner
+    /// radius is not yet on the extract record" stub `pack_extracted` flagged).
+    /// F4b's bordered-rounded fill reuses this SAME field + slot on the disjoint
+    /// bordered-node set (the F3→F4b edge, spec §2.3/§6).
+    pub radius: f32,
     /// The 2D linear part of `GlobalTransform`'s affine — the box-local →
     /// window-logical basis, as column vectors `[col0, col1]` where
     /// `col0 = [m00, m10]` and `col1 = [m01, m11]`. Applied per-vertex in the
@@ -514,6 +525,9 @@ pub fn extracted_node_for(
         entity,
         position: translation.truncate(),
         size: layout.size,
+        // Square by default; `resolve_one` sets it for a borderless-rounded node.
+        // This builder (also the Tier-2 snapshot harness) leaves the fill square.
+        radius: 0.0,
         color,
         clip: clip.copied(),
         group: None,
@@ -1000,6 +1014,21 @@ fn resolve_one(
             node.affine,
             theme,
         );
+        // Borderless-rounded fill: a `Border.radius` with NO painting side rounds
+        // the FILL quad itself (the stub `pack_extracted` flagged). A painting
+        // border keeps the fill square (`node.border.is_some()`) — its band already
+        // traces the rounding — so no existing bordered golden shifts. v1 packs ONE
+        // uniform radius: the SMALLEST resolved corner radius (each already clamped
+        // to `<= min(half_w, half_h)` by `resolve_corner_radii`, so a wide box pills
+        // and a square box circles, never the per-axis elliptical "lens"). Guarded
+        // `> 0.0`, so a square/no-radius node stays byte-identical.
+        if node.border.is_none() {
+            let radii = resolve_corner_radii(&border.radius, node.size);
+            let uniform = radii.iter().copied().fold(f32::INFINITY, f32::min);
+            if uniform.is_finite() && uniform > 0.0 {
+                node.radius = uniform;
+            }
+        }
     }
     if let Some(box_shadow) = item.box_shadow {
         node.shadows = resolve_shadows(

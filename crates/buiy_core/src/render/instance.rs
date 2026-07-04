@@ -113,9 +113,11 @@ pub fn pack_instance(draw: &DrawData) -> PackedInstance {
 /// Pack one R5 [`ExtractedNode`] (the per-painted-entity CPU record) into a
 /// logical-pixel [`PackedInstance`] — the prepare seam R6 packs through with no
 /// `DrawData` adapter. `ExtractedNode` carries the solid-fill quad inputs
-/// (position / size / color); per-node corner radius is not yet on the extract
-/// record, so v1 packs square quads (radius `0`). Color is CPU-pre-linearized
-/// exactly as in [`pack_instance`] (color-and-forced-colors.md § 1.1).
+/// (position / size / color / a fill corner radius). The radius is non-zero only
+/// for a **borderless-rounded** node ([`ExtractedNode::radius`] — a `Border.radius`
+/// with no painting side); a bordered / square node packs `0`, so every existing
+/// golden stays byte-identical. Color is CPU-pre-linearized exactly as in
+/// [`pack_instance`] (color-and-forced-colors.md § 1.1).
 pub fn pack_extracted(node: &ExtractedNode) -> PackedInstance {
     let lin = LinearRgba::from(node.color);
     // The per-primitive clip AABB rides the instance; `None` is the full-view
@@ -128,7 +130,10 @@ pub fn pack_extracted(node: &ExtractedNode) -> PackedInstance {
         rect_pos: [node.position.x, node.position.y],
         rect_size: [node.size.x, node.size.y],
         color: [lin.red, lin.green, lin.blue, lin.alpha],
-        radius: 0.0,
+        // Non-zero only for a borderless-rounded node (a `Border.radius` with no
+        // painting side); a bordered / square node packs `0` exactly as before,
+        // so every existing golden is byte-identical.
+        radius: node.radius,
         clip_min,
         clip_max,
         // The 2D affine basis, flattened to columns [m00, m10, m01, m11] (R1):

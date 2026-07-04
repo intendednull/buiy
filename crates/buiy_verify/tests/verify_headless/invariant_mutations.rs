@@ -32,6 +32,7 @@ fn node(entity: Entity, size: Vec2) -> ExtractedNode {
         entity,
         position: Vec2::new(1.0, 2.0),
         size,
+        radius: 0.0,
         color: Color::WHITE,
         clip: Some(ClipRect {
             min: Vec2::ZERO,

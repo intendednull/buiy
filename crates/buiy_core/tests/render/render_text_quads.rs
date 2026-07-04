@@ -13,6 +13,7 @@ fn node(entity: Entity, x: f32, color: Color, group: Option<usize>) -> Extracted
         entity,
         position: Vec2::new(x, 0.0),
         size: Vec2::splat(10.0),
+        radius: 0.0,
         color,
         clip: None,
         group,
