@@ -40,10 +40,15 @@ use buiy_core::layout::{
 };
 use buiy_core::mvu::{ControlledLeaf, Envelope, Model, ToggleMsg};
 use buiy_core::render::RasterImage;
-use buiy_core::render::components::{Background, Border, Opacity};
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::{
+    Background, Border, BorderSide, BoxShadow, Corners, Icon, Opacity, Shadow, TextColor,
+};
 use buiy_core::scroll::ScrollExtent;
 use buiy_core::text::edit::{EditCommand, TextEditState};
-use buiy_core::text::{FontSize, SharedFontSystem, Text, TextAlign as CoreTextAlign};
+use buiy_core::text::{
+    FontFamily, FontSize, FontStack, FontWeight, SharedFontSystem, Text, TextAlign as CoreTextAlign,
+};
 use buiy_widgets::{Button, Checkbox, TextInput};
 
 use crate::app::{UiRoot, ViewFn};
@@ -219,6 +224,10 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
                 changed |= set_text(world, entity, t);
             }
             changed |= set_font_size(world, entity, el.font_size);
+            // F3: explicit ink / family / weight on the text node.
+            changed |= set_text_color(world, entity, el.color);
+            changed |= set_font_family(world, entity, el.font_family.as_ref());
+            changed |= set_font_weight(world, entity, el.font_weight);
             changed |= set_text_align(world, entity, el.layout.text_align);
             // A text node is a plain `Node` (no widget contract), so the whole
             // layout surface applies to it too (`.width`/`.grow`/`.fixed`/…).
@@ -230,6 +239,19 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             }
             update_press::<M>(world, entity, el, model);
             changed |= update_disabled(world, entity, el.disabled);
+            // F3: styled button (fill/radius/border/shadow/size + label style),
+            // gated so an unstyled button keeps every widget default.
+            changed |= apply_button_style(world, entity, el);
+        }
+        Kind::Icon => {
+            // F3: the vector icon + its optional tinted-badge paint (background +
+            // border/radius + shadow) + the node layout (size). An icon node is a
+            // plain `Node`, so `apply_node_layout` is safe (no widget contract).
+            changed |= set_icon(world, entity, el);
+            changed |= apply_background(world, entity, el.background);
+            changed |= apply_border(world, entity, el);
+            changed |= apply_shadow(world, entity, el);
+            changed |= apply_node_layout(world, entity, &el.layout);
         }
         Kind::Checkbox => {
             // Controlled: re-assert the leaf `A11yToggled` from the model
@@ -411,6 +433,10 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
                     Kind::Text,
                 ))
                 .id();
+            // F3: explicit ink / family / weight, if the author set one.
+            set_text_color(world, e, el.color);
+            set_font_family(world, e, el.font_family.as_ref());
+            set_font_weight(world, e, el.font_weight);
             set_text_align(world, e, el.layout.text_align);
             apply_node_layout(world, e, &el.layout);
             e
@@ -428,6 +454,9 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             world.entity_mut(e).insert(slot);
             update_press::<M>(world, e, el, model);
             update_disabled(world, e, el.disabled);
+            // F3: a styled button — the fill / radius / border / shadow / size on
+            // the button entity, the label color / font / weight on its slot child.
+            apply_button_style(world, e, el);
             e
         }
         Kind::Checkbox => {
@@ -477,6 +506,18 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             // extract can size/place the sampled image; the app owns + paints it.
             let handle = el.raster.clone().unwrap_or_default();
             let e = world.spawn((Node, RasterImage(handle), Kind::Raster)).id();
+            apply_node_layout(world, e, &el.layout);
+            e
+        }
+        Kind::Icon => {
+            // A layout `Node` carrying the vector `Icon` (F3). The icon paints
+            // centered in the node's box at its native `size_px`; a `.background()`
+            // + `.radius()` on the same node makes the tinted badge under it (the
+            // fill quad below the icon coverage tier).
+            let e = world.spawn((Node, icon_component(el), Kind::Icon)).id();
+            apply_background(world, e, el.background);
+            apply_border(world, e, el);
+            apply_shadow(world, e, el);
             apply_node_layout(world, e, &el.layout);
             e
         }
@@ -531,9 +572,10 @@ fn apply_container_props<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -
     // The node-layout common to containers + raster (sizing/flex-item/position/
     // scroll/stacking/stick).
     changed |= apply_node_layout(world, e, &el.layout);
-    // Paint (containers only).
+    // Paint (containers only): fill + border/radius + shadow (F3).
     changed |= apply_background(world, e, el.background);
-    changed |= apply_radius(world, e, el.radius);
+    changed |= apply_border(world, e, el);
+    changed |= apply_shadow(world, e, el);
     changed
 }
 
@@ -917,24 +959,243 @@ fn apply_background(world: &mut World, e: Entity, bg: Option<crate::tokens::Colo
     }
 }
 
-/// Patch (or remove) the container's rounded-corner `Border` in place. Returns
-/// whether the radius really changed (drift-only).
-fn apply_radius(world: &mut World, e: Entity, r: Option<crate::tokens::Radius>) -> bool {
-    match r {
-        Some(radius) => {
-            let want = Border {
-                radius: radius.to_corners(),
-                ..Default::default()
-            };
-            if let Some(mut cur) = world.get_mut::<Border>(e) {
+/// The resolved per-corner radius for a node: `.radius_corners(..)` (the design's
+/// asymmetric wobble) takes precedence over the uniform `.radius(..)` token, else
+/// `None` (square).
+fn resolve_corners<Msg>(el: &Element<Msg>) -> Option<Corners> {
+    if let Some([tl, tr, br, bl]) = el.radius_corners {
+        Some(crate::tokens::corners_from_px(tl, tr, br, bl))
+    } else {
+        el.radius.map(|r| r.to_corners())
+    }
+}
+
+/// Patch a node's `Border` (per-side outline + per-corner radius) and its
+/// layout-owned border WIDTH (`BoxModel.border`) in place (F3, drift-only).
+///
+/// The `Border` component carries the per-side color/style + the corner radius;
+/// the WIDTH lives on `BoxModel.border` (a Taffy input). `.border(w, c, style)`
+/// sets both; `.radius(..)` / `.radius_corners(..)` alone set the corners with no
+/// painting side — which draws no band and, via the borderless-rounded-fill path
+/// (F3 `ExtractedNode.radius`), rounds the background FILL. The width is written
+/// ONLY when `.border(..)` is set, so a radius-only patch never zeroes a styled
+/// widget's own border width. Returns whether anything really changed. A
+/// `.radius(..)`-only container reproduces the pre-F3 `Border { radius, ..default }`
+/// byte-for-byte (default sides).
+fn apply_border<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    let mut changed = false;
+    let corners = resolve_corners(el);
+    // Layout-owned border width — only touched when `.border(..)` is set.
+    if let Some((w, _, _)) = el.border
+        && let Some(mut bm) = world.get_mut::<BoxModel>(e)
+    {
+        let want = Edges::all(w);
+        if bm.border != want {
+            bm.border = want;
+            changed = true;
+        }
+    }
+    // The `Border` component: painting sides (from `.border`) + corners.
+    if el.border.is_some() || corners.is_some() {
+        let side = match el.border {
+            Some((_, c, style)) => BorderSide {
+                color: c.to_token(),
+                style,
+            },
+            None => BorderSide::default(),
+        };
+        let want = Border {
+            top: side.clone(),
+            right: side.clone(),
+            bottom: side.clone(),
+            left: side,
+            radius: corners.unwrap_or(Corners::ZERO),
+        };
+        if let Some(mut cur) = world.get_mut::<Border>(e) {
+            changed |= cur.set_if_neq(want);
+        } else {
+            world.entity_mut(e).insert(want);
+            changed = true;
+        }
+    } else {
+        changed |= world.entity_mut(e).take::<Border>().is_some();
+    }
+    changed
+}
+
+/// Patch (or remove) a node's `BoxShadow` from its `.shadow(..)` terms (F3,
+/// drift-only). Front-to-back CSS paint order (index 0 frontmost); every term is
+/// outset (`inset: false`). Empty ⇒ remove. Returns whether the list changed.
+fn apply_shadow<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    if el.shadows.is_empty() {
+        return world.entity_mut(e).take::<BoxShadow>().is_some();
+    }
+    let want = BoxShadow(
+        el.shadows
+            .iter()
+            .map(|s| Shadow {
+                color: s.color.to_token(),
+                offset_x: Length::px(s.dx),
+                offset_y: Length::px(s.dy),
+                blur: Length::px(s.blur),
+                spread: Length::px(s.spread),
+                inset: false,
+            })
+            .collect(),
+    );
+    if let Some(mut cur) = world.get_mut::<BoxShadow>(e) {
+        cur.set_if_neq(want)
+    } else {
+        world.entity_mut(e).insert(want);
+        true
+    }
+}
+
+/// Patch (or remove) an explicit `TextColor` on a text / label entity (F3,
+/// drift-only). `None` removes the override so the node falls back to the theme
+/// ink (`CurrentColor`). Returns whether the color really changed.
+fn set_text_color(world: &mut World, entity: Entity, color: Option<crate::tokens::Color>) -> bool {
+    match color {
+        Some(c) => {
+            let want = TextColor(c.to_token());
+            if let Some(mut cur) = world.get_mut::<TextColor>(entity) {
                 cur.set_if_neq(want)
             } else {
-                world.entity_mut(e).insert(want);
+                world.entity_mut(entity).insert(want);
                 true
             }
         }
-        None => world.entity_mut(e).take::<Border>().is_some(),
+        None => world.entity_mut(entity).take::<TextColor>().is_some(),
     }
+}
+
+/// Patch (or remove) an explicit `FontFamily` on a text / label entity (F3,
+/// drift-only). `None` removes it so the node falls back to the default sans.
+fn set_font_family(world: &mut World, entity: Entity, family: Option<&FontStack>) -> bool {
+    match family {
+        Some(stack) => {
+            if let Some(cur) = world.get::<FontFamily>(entity)
+                && &cur.0 == stack
+            {
+                return false;
+            }
+            world.entity_mut(entity).insert(FontFamily(stack.clone()));
+            true
+        }
+        None => world.entity_mut(entity).take::<FontFamily>().is_some(),
+    }
+}
+
+/// Patch (or remove) an explicit `FontWeight` on a text / label entity (F3,
+/// drift-only) — the variable-font weight axis the shaper already threads. `None`
+/// removes it so the node renders at the family's default instance.
+fn set_font_weight(
+    world: &mut World,
+    entity: Entity,
+    weight: Option<crate::tokens::Weight>,
+) -> bool {
+    match weight {
+        Some(w) => {
+            let want = FontWeight(w.value());
+            if let Some(mut cur) = world.get_mut::<FontWeight>(entity) {
+                cur.set_if_neq(want)
+            } else {
+                world.entity_mut(entity).insert(want);
+                true
+            }
+        }
+        None => world.entity_mut(entity).take::<FontWeight>().is_some(),
+    }
+}
+
+/// Build the `Icon` component from a [`Kind::Icon`] element's props (F3). Always
+/// stroked (round cap/join); `.color(..)` sets the stroke tint, else the theme
+/// ink (`CurrentColor`). The `viewbox` carries the author coordinate space.
+fn icon_component<Msg>(el: &Element<Msg>) -> Icon {
+    Icon {
+        path_d: el.icon_path.clone().unwrap_or_default(),
+        stroke_width: el.icon_stroke_width,
+        size_px: el.icon_size_px,
+        viewbox: el.icon_viewbox,
+        fill: false,
+        color: el
+            .color
+            .map(|c| c.to_token())
+            .unwrap_or(ColorToken::CurrentColor),
+    }
+}
+
+/// Patch an icon node's `Icon` in place (F3, drift-only — `Icon` is `PartialEq`).
+/// Returns whether the icon really changed.
+fn set_icon<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    let want = icon_component(el);
+    if let Some(mut cur) = world.get_mut::<Icon>(e) {
+        cur.set_if_neq(want)
+    } else {
+        world.entity_mut(e).insert(want);
+        true
+    }
+}
+
+/// Style a `Button` (F3): the fill / radius / border / shadow / per-axis size /
+/// grow on the button entity, and the label color / font / weight / size on its
+/// recorded `ViewSlot` child. Each style applies **only when the author set it**,
+/// so an unstyled `button("x")` is a complete no-op here — it keeps every
+/// `buiy_widgets::Button` default (its fill, rounding, padding, label size), the
+/// §3 #12 suppression safety that keeps the counter / gallery goldens byte-
+/// identical. A per-axis size preserves the button's default on the axis the
+/// author did not set (never zeroing its `#[require]` box). Returns whether
+/// anything really changed.
+fn apply_button_style<Msg>(world: &mut World, e: Entity, el: &Element<Msg>) -> bool {
+    let mut changed = false;
+    if el.background.is_some() {
+        changed |= apply_background(world, e, el.background);
+    }
+    if el.border.is_some() || el.radius.is_some() || el.radius_corners.is_some() {
+        changed |= apply_border(world, e, el);
+    }
+    if !el.shadows.is_empty() {
+        changed |= apply_shadow(world, e, el);
+    }
+    // Per-axis fixed size — set only the axis the author asked for (never padding:
+    // a button owns its own inner padding), preserving the button's `#[require]`
+    // default on the untouched axis.
+    let wants_w = el.layout.width.is_some() || el.layout.fill_width;
+    let wants_h = el.layout.height.is_some() || el.layout.fill_height;
+    if (wants_w || wants_h)
+        && let Some(mut bm) = world.get_mut::<BoxModel>(e)
+    {
+        let mut want = bm.clone();
+        if wants_w {
+            want.width = sizing_axis(el.layout.width, el.layout.fill_width);
+        }
+        if wants_h {
+            want.height = sizing_axis(el.layout.height, el.layout.fill_height);
+        }
+        changed |= bm.set_if_neq(want);
+    }
+    changed |= apply_flex_item(world, e, &el.layout);
+    // Label styling on the slot child — applied only when the button is EXPLICITLY
+    // styled (a fill / color / font / weight set), so an unstyled `button("x")`
+    // keeps every widget default incl. its label size (the shared-crate goldens).
+    let styled = el.background.is_some()
+        || el.color.is_some()
+        || el.font_family.is_some()
+        || el.font_weight.is_some();
+    let slot = world.get::<ViewSlot>(e).and_then(|s| s.label);
+    if let (true, Some(child)) = (styled, slot) {
+        if el.color.is_some() {
+            changed |= set_text_color(world, child, el.color);
+        }
+        if el.font_family.is_some() {
+            changed |= set_font_family(world, child, el.font_family.as_ref());
+        }
+        if el.font_weight.is_some() {
+            changed |= set_font_weight(world, child, el.font_weight);
+        }
+        changed |= set_font_size(world, child, el.font_size);
+    }
+    changed
 }
 
 // ---------------------------------------------------------------------------

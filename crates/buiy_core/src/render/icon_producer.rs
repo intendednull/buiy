@@ -3,8 +3,8 @@
 //! Per frame, per visible [`Icon`] entity:
 //! rasterize the SVG path to an `R8` coverage bitmap (`render::icon_raster`),
 //! insert it into the SHARED glyph-alpha atlas keyed by `hash(path_d,
-//! stroke_width, size, fill)` (content-addressed dedup — the same icon authored
-//! twice is one atlas cell), and emit one [`GlyphAlphaInstance`] tinted by the
+//! stroke_width, size, viewbox, fill)` (content-addressed dedup — the same icon
+//! authored twice is one atlas cell), and emit one [`GlyphAlphaInstance`] tinted by the
 //! icon's resolved color token into the [`ExtractedIcons`] carrier.
 //!
 //! ## Why a SEPARATE carrier (not `ExtractedGlyphs`)
@@ -98,12 +98,12 @@ pub struct ResidentIconKeys {
 
 /// Build the content-addressed [`AtlasKey`] for an icon coverage cell:
 /// `[Mask kind byte, sub-id 1, <16-byte FNV-1a hash of (path_d, stroke_width,
-/// size, fill)>]`. The `Mask` kind byte is the reserved "sampled exactly like a
-/// glyph" coverage kind (atlas types.rs); sub-id **1** distinguishes icon keys
-/// from the solid stamp's `[Mask, 0]` (text/stamp.rs) so the two never alias.
-/// The hash content-addresses the icon so the same `(d, width, size, fill)`
-/// authored twice resolves to ONE atlas cell (dedup), and a different stroke
-/// width or size is a distinct cell.
+/// size, viewbox, fill)>]`. The `Mask` kind byte is the reserved "sampled exactly
+/// like a glyph" coverage kind (atlas types.rs); sub-id **1** distinguishes icon
+/// keys from the solid stamp's `[Mask, 0]` (text/stamp.rs) so the two never alias.
+/// The hash content-addresses the icon so the same `(d, width, size, viewbox,
+/// fill)` authored twice resolves to ONE atlas cell (dedup), and a different
+/// stroke width, size, or author viewBox is a distinct cell.
 pub fn icon_atlas_key(
     path_d: &str,
     stroke_width: f32,
@@ -302,8 +302,12 @@ pub fn extract_buiy_icons(
         );
         // Clone the rasterizer inputs so the lazy closure (run ONLY on an atlas
         // miss) owns them — a hit never rasterizes.
-        let (path_d, stroke_width, size_px, viewbox) =
-            (icon.path_d.clone(), icon.stroke_width, icon.size_px, icon.viewbox);
+        let (path_d, stroke_width, size_px, viewbox) = (
+            icon.path_d.clone(),
+            icon.stroke_width,
+            icon.size_px,
+            icon.viewbox,
+        );
         let entry = atlas.get_or_insert(key.clone(), AtlasFormat::CoverageR8, move || {
             rasterize_icon(&path_d, paint, stroke_width, size_px, viewbox)
         });

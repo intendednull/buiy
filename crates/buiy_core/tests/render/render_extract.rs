@@ -636,3 +636,55 @@ fn tree_assembly_skips_dropped_entities_across_the_boundary() {
     let got: Vec<Entity> = out.iter().map(|n| n.entity).collect();
     assert_eq!(got, vec![root, nested, d, b]);
 }
+
+// --- Borderless-rounded FILL radius (Dooduel F3) ----------------------------
+// `borderless_fill_radius` picks the ONE uniform corner radius the fill quad
+// rounds to for a borderless-rounded node: the smallest resolved corner, already
+// clamped `<= min(half_w, half_h)`. Wide → pill, square → circle, never a lens.
+mod borderless_fill {
+    use bevy::math::Vec2;
+    use buiy_core::render::components::{Corners, Radius};
+    use buiy_core::render::extract::borderless_fill_radius;
+
+    #[test]
+    fn square_no_radius_is_zero() {
+        // A `Corners::ZERO` (no radius) node keeps a SQUARE fill (byte-stable).
+        let r = borderless_fill_radius(&Corners::ZERO, Vec2::new(40.0, 40.0));
+        assert_eq!(r, 0.0);
+    }
+
+    #[test]
+    fn full_radius_pills_a_wide_box() {
+        // `Radius::Full` (9999) on a 200×40 box clamps to half the SHORT side.
+        let corners = Corners::all(Radius::circular(9999.0));
+        let r = borderless_fill_radius(&corners, Vec2::new(200.0, 40.0));
+        assert_eq!(r, 20.0, "wide box → pill (half the short side, 20)");
+    }
+
+    #[test]
+    fn full_radius_circles_a_square_box() {
+        let corners = Corners::all(Radius::circular(9999.0));
+        let r = borderless_fill_radius(&corners, Vec2::new(48.0, 48.0));
+        assert_eq!(r, 24.0, "square box → circle (half-side, 24)");
+    }
+
+    #[test]
+    fn uniform_radius_passes_through_when_within_the_box() {
+        let corners = Corners::all(Radius::circular(22.0));
+        let r = borderless_fill_radius(&corners, Vec2::new(200.0, 120.0));
+        assert_eq!(r, 22.0, "an Xl radius well within the box is unclamped");
+    }
+
+    #[test]
+    fn asymmetric_corners_take_the_min() {
+        // v1 packs ONE uniform radius = the SMALLEST corner (no per-corner fill).
+        let corners = Corners {
+            top_left: Radius::circular(4.0),
+            top_right: Radius::circular(20.0),
+            bottom_right: Radius::circular(12.0),
+            bottom_left: Radius::circular(16.0),
+        };
+        let r = borderless_fill_radius(&corners, Vec2::new(200.0, 200.0));
+        assert_eq!(r, 4.0, "the smallest corner wins (uniform fill radius)");
+    }
+}

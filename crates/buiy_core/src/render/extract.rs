@@ -631,6 +631,27 @@ fn resolve_corner_radii(corners: &crate::render::components::Corners, size: Vec2
     [tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1]]
 }
 
+/// The ONE uniform corner radius the FILL quad rounds to for a **borderless-
+/// rounded** node (Dooduel F3): the SMALLEST resolved corner radius across all
+/// four corners and both axes. Each corner is already clamped to
+/// `<= min(half_w, half_h)` by [`resolve_corner_radii`], so the min is a single
+/// uniform radius that pills a wide box and circles a square one — never the
+/// per-axis elliptical "lens". Returns `0.0` for a square (no-radius) `Corners`.
+///
+/// This is applied ONLY when no border side paints (the caller guards on
+/// `ExtractedBorder`-is-`None`): a bordered node's band already traces the
+/// rounding, so its fill stays square (radius `0`) until F4b packs the band's
+/// inner radius. Pure — unit-testable headless.
+pub fn borderless_fill_radius(corners: &crate::render::components::Corners, size: Vec2) -> f32 {
+    let radii = resolve_corner_radii(corners, size);
+    let uniform = radii.iter().copied().fold(f32::INFINITY, f32::min);
+    if uniform.is_finite() && uniform > 0.0 {
+        uniform
+    } else {
+        0.0
+    }
+}
+
 /// Resolve one entity's [`ExtractedBorder`] from its render `Border` component
 /// (per-side color + style + per-corner radius), the layout-owned per-side
 /// WIDTH (`BoxModel.border`, a Taffy input — § 3.5), the border box
@@ -1017,17 +1038,11 @@ fn resolve_one(
         // Borderless-rounded fill: a `Border.radius` with NO painting side rounds
         // the FILL quad itself (the stub `pack_extracted` flagged). A painting
         // border keeps the fill square (`node.border.is_some()`) — its band already
-        // traces the rounding — so no existing bordered golden shifts. v1 packs ONE
-        // uniform radius: the SMALLEST resolved corner radius (each already clamped
-        // to `<= min(half_w, half_h)` by `resolve_corner_radii`, so a wide box pills
-        // and a square box circles, never the per-axis elliptical "lens"). Guarded
-        // `> 0.0`, so a square/no-radius node stays byte-identical.
+        // traces the rounding — so no existing bordered golden shifts. Guarded
+        // `> 0.0` inside `borderless_fill_radius`, so a square/no-radius node stays
+        // byte-identical.
         if node.border.is_none() {
-            let radii = resolve_corner_radii(&border.radius, node.size);
-            let uniform = radii.iter().copied().fold(f32::INFINITY, f32::min);
-            if uniform.is_finite() && uniform > 0.0 {
-                node.radius = uniform;
-            }
+            node.radius = borderless_fill_radius(&border.radius, node.size);
         }
     }
     if let Some(box_shadow) = item.box_shadow {

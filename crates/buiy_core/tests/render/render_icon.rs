@@ -51,8 +51,20 @@ fn icon_rasterizes_to_r8_with_lit_stroke_and_empty_corner() {
 /// size. (An icon-font would bake one width.)
 #[test]
 fn thicker_stroke_lights_more_coverage() {
-    let thin = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 1.7, 24, ICON_VIEWBOX);
-    let thick = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 2.4, 24, ICON_VIEWBOX);
+    let thin = rasterize_icon(
+        "M4 12.5 9 17.5 20 6.5",
+        IconPaint::Stroke,
+        1.7,
+        24,
+        ICON_VIEWBOX,
+    );
+    let thick = rasterize_icon(
+        "M4 12.5 9 17.5 20 6.5",
+        IconPaint::Stroke,
+        2.4,
+        24,
+        ICON_VIEWBOX,
+    );
     let lit = |b: &buiy_core::render::atlas::AtlasBitmap| b.data.iter().filter(|&&v| v > 0).count();
     assert!(
         lit(&thick) > lit(&thin),
