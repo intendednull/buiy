@@ -130,6 +130,8 @@ fn icon_box(
                 size_px,
                 fill: false,
                 color,
+                // Authored on the 24×24 viewBox — the `Icon` default.
+                ..Default::default()
             },
             Pickable::IGNORE,
         ))

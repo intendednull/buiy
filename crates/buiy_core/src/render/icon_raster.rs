@@ -251,9 +251,16 @@ fn rasterize_mesh(tris: &[Vert], size: u32) -> Vec<u8> {
 /// default) vs FILL (the one solid glyph). A malformed `d` or a fully-degenerate
 /// path yields an all-zero bitmap (the producer skips a zero-coverage icon —
 /// never panics on bad author input).
-pub fn rasterize_icon(d: &str, paint: IconPaint, stroke_width: f32, size_px: u16) -> AtlasBitmap {
+pub fn rasterize_icon(
+    d: &str,
+    paint: IconPaint,
+    stroke_width: f32,
+    size_px: u16,
+    viewbox: f32,
+) -> AtlasBitmap {
     let size = size_px.max(1) as u32;
-    let scale = size as f32 / ICON_VIEWBOX;
+    // `path_d` + `stroke_width` are in `viewbox` units; scale them to `size_px`.
+    let scale = size as f32 / viewbox.max(f32::MIN_POSITIVE);
     let data = match parse_path(d) {
         Some(path) => {
             let tris = tessellate(&path, paint, stroke_width, scale);
@@ -279,7 +286,7 @@ mod tests {
     /// top-left and bottom-left interior, far from any arm) stay empty.
     #[test]
     fn chevron_lights_stroke_leaves_gaps() {
-        let bmp = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 20);
+        let bmp = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 20, ICON_VIEWBOX);
         assert_eq!(bmp.format, AtlasFormat::CoverageR8);
         assert_eq!(bmp.size, UVec2::new(20, 20));
         let at = |x: u32, y: u32| bmp.data[(y * 20 + x) as usize];
@@ -307,8 +314,9 @@ mod tests {
     /// stroke (2.4 vs 1.9) lights MORE texels than a thin one at the same size.
     #[test]
     fn checkmark_thicker_stroke_lights_more() {
-        let thin = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 1.0, 24);
-        let thick = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 2.4, 24);
+        let thin = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 1.0, 24, ICON_VIEWBOX);
+        let thick =
+            rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 2.4, 24, ICON_VIEWBOX);
         let count = |b: &AtlasBitmap| b.data.iter().filter(|&&v| v > 0).count();
         assert!(count(&thin) > 0, "thin checkmark renders");
         assert!(
@@ -330,6 +338,7 @@ mod tests {
             IconPaint::Stroke,
             1.7,
             20,
+            ICON_VIEWBOX,
         );
         let lit = bmp.data.iter().filter(|&&v| v > 0).count();
         assert!(lit > 20, "search arc + handle must render a ring of stroke");
@@ -344,7 +353,7 @@ mod tests {
     /// panic (author-input robustness).
     #[test]
     fn malformed_path_is_empty_not_panic() {
-        let bmp = rasterize_icon("not a path!!!", IconPaint::Stroke, 2.0, 16);
+        let bmp = rasterize_icon("not a path!!!", IconPaint::Stroke, 2.0, 16, ICON_VIEWBOX);
         assert_eq!(bmp.size, UVec2::new(16, 16));
         assert!(
             bmp.data.iter().all(|&v| v == 0),
@@ -357,7 +366,8 @@ mod tests {
     /// dots. Proves round-cap stamping of a `h.01` near-point.
     #[test]
     fn menu_dots_render_three_caps() {
-        let bmp = rasterize_icon("M12 6h.01M12 12h.01M12 18h.01", IconPaint::Stroke, 2.4, 18);
+        let bmp =
+            rasterize_icon("M12 6h.01M12 12h.01M12 18h.01", IconPaint::Stroke, 2.4, 18, ICON_VIEWBOX);
         let lit = bmp.data.iter().filter(|&&v| v > 0).count();
         assert!(
             lit > 0,
@@ -377,8 +387,8 @@ mod tests {
     /// resident cell, never a second bake).
     #[test]
     fn deterministic_same_inputs_same_bytes() {
-        let a = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 17);
-        let b = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 17);
+        let a = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 17, ICON_VIEWBOX);
+        let b = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 17, ICON_VIEWBOX);
         assert_eq!(
             a.data, b.data,
             "identical inputs → identical coverage bytes"

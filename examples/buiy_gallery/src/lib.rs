@@ -391,6 +391,7 @@ fn icon_box(
                 size_px,
                 fill: false,
                 color,
+                ..Default::default()
             },
             Pickable::IGNORE,
         ))

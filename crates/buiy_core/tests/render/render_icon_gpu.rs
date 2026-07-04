@@ -36,6 +36,7 @@ use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Icon;
 use buiy_core::render::golden::{GoldenConfig, capture_app, capture_to_image};
 use buiy_core::render::icon_producer::{ExtractedIcons, icon_atlas_key};
+use buiy_core::render::icon_raster::ICON_VIEWBOX;
 
 use crate::support::px;
 
@@ -74,6 +75,7 @@ fn spawn_icon(app: &mut App, x: f32, y: f32, size: u16, path_d: &str, stroke: f3
                 path_d: path_d.to_string(),
                 stroke_width: stroke,
                 size_px: size,
+                viewbox: ICON_VIEWBOX,
                 fill: false,
                 color: ColorToken::Accent,
             },
@@ -124,7 +126,7 @@ fn vector_icons_paint_in_accent_and_retint_on_theme_swap() {
         );
 
         let atlas = world.resource::<BuiyAtlas>();
-        let chevron_key = icon_atlas_key(CHEVRON, 1.9, 24, false);
+        let chevron_key = icon_atlas_key(CHEVRON, 1.9, 24, ICON_VIEWBOX, false);
         let entry = atlas
             .get(&chevron_key)
             .expect("the chevron icon must be atlas-resident");
@@ -137,8 +139,8 @@ fn vector_icons_paint_in_accent_and_retint_on_theme_swap() {
         // Dedup: both identical chevrons resolved to the SAME entry (one cell),
         // and the three distinct icons are three more — 4 instances, but exactly
         // 3 DISTINCT atlas keys among them.
-        let check_key = icon_atlas_key(CHECK, 2.4, 24, false);
-        let search_key = icon_atlas_key(SEARCH, 1.7, 24, false);
+        let check_key = icon_atlas_key(CHECK, 2.4, 24, ICON_VIEWBOX, false);
+        let search_key = icon_atlas_key(SEARCH, 1.7, 24, ICON_VIEWBOX, false);
         assert!(atlas.get(&check_key).is_some(), "checkmark atlas-resident");
         assert!(atlas.get(&search_key).is_some(), "search atlas-resident");
         assert_ne!(chevron_key, check_key, "distinct icons → distinct cells");
@@ -261,6 +263,7 @@ fn rotated_icon_paints_through_coverage_affine() {
                     path_d: CHEVRON.to_string(),
                     stroke_width: 1.9,
                     size_px: 24,
+                    viewbox: ICON_VIEWBOX,
                     fill: false,
                     // Tinted by the live accent (blue, set via `set_icon_accent`
                     // above), matching the sibling icon fixtures in this file.

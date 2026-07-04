@@ -19,14 +19,14 @@
 use bevy::math::Vec2;
 use buiy_core::render::atlas::AtlasFormat;
 use buiy_core::render::icon_producer::{icon_atlas_key, icon_paints};
-use buiy_core::render::icon_raster::{IconPaint, rasterize_icon};
+use buiy_core::render::icon_raster::{ICON_VIEWBOX, IconPaint, rasterize_icon};
 
 /// The chevron (`M9 5l7 7-7 7`, stroke 1.9 — disclosure icon #24) rasterizes to
 /// an R8 cell of the requested size, with stroke texels lit and a far-off-stroke
 /// interior corner dark.
 #[test]
 fn icon_rasterizes_to_r8_with_lit_stroke_and_empty_corner() {
-    let bmp = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 20);
+    let bmp = rasterize_icon("M9 5l7 7-7 7", IconPaint::Stroke, 1.9, 20, ICON_VIEWBOX);
     assert_eq!(bmp.format, AtlasFormat::CoverageR8);
     assert_eq!(bmp.size.x, 20);
     assert_eq!(bmp.size.y, 20);
@@ -51,8 +51,8 @@ fn icon_rasterizes_to_r8_with_lit_stroke_and_empty_corner() {
 /// size. (An icon-font would bake one width.)
 #[test]
 fn thicker_stroke_lights_more_coverage() {
-    let thin = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 1.7, 24);
-    let thick = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 2.4, 24);
+    let thin = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 1.7, 24, ICON_VIEWBOX);
+    let thick = rasterize_icon("M4 12.5 9 17.5 20 6.5", IconPaint::Stroke, 2.4, 24, ICON_VIEWBOX);
     let lit = |b: &buiy_core::render::atlas::AtlasBitmap| b.data.iter().filter(|&&v| v > 0).count();
     assert!(
         lit(&thick) > lit(&thin),
@@ -67,8 +67,8 @@ fn thicker_stroke_lights_more_coverage() {
 /// dedup contract — the same icon authored twice hits the resident cell).
 #[test]
 fn identical_icons_share_one_key() {
-    let a = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, false);
-    let b = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, false);
+    let a = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, ICON_VIEWBOX, false);
+    let b = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, ICON_VIEWBOX, false);
     assert_eq!(
         a, b,
         "identical (d, width, size, fill) must dedup to one key"
@@ -79,25 +79,31 @@ fn identical_icons_share_one_key() {
 /// fill flag yields a DISTINCT key (a re-stroked / re-sized icon is a new cell).
 #[test]
 fn distinct_inputs_give_distinct_keys() {
-    let base = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, false);
+    let base = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, ICON_VIEWBOX, false);
     assert_ne!(
         base,
-        icon_atlas_key("M6 9l6 6 6-6", 1.9, 17, false),
+        icon_atlas_key("M6 9l6 6 6-6", 1.9, 17, ICON_VIEWBOX, false),
         "different d"
     );
     assert_ne!(
         base,
-        icon_atlas_key("M9 5l7 7-7 7", 2.4, 17, false),
+        icon_atlas_key("M9 5l7 7-7 7", 2.4, 17, ICON_VIEWBOX, false),
         "different width"
     );
     assert_ne!(
         base,
-        icon_atlas_key("M9 5l7 7-7 7", 1.9, 24, false),
+        icon_atlas_key("M9 5l7 7-7 7", 1.9, 24, ICON_VIEWBOX, false),
         "different size"
     );
     assert_ne!(
         base,
-        icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, true),
+        icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, 40.0, false),
+        "different viewBox (same size at a different author viewBox rasterizes at \
+         a different scale — must be a distinct cell)"
+    );
+    assert_ne!(
+        base,
+        icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, ICON_VIEWBOX, true),
         "different fill"
     );
 }
@@ -165,7 +171,7 @@ fn icon_paints_predicate_honors_every_skip_reason() {
 /// (or vice versa).
 #[test]
 fn icon_key_never_aliases_solid_stamp() {
-    let icon = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, false);
+    let icon = icon_atlas_key("M9 5l7 7-7 7", 1.9, 17, ICON_VIEWBOX, false);
     let stamp = buiy_core::text::solid_stamp_key();
     assert_ne!(icon, stamp, "icon and solid-stamp keys must be disjoint");
 }

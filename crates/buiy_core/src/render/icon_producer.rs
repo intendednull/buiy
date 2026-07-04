@@ -104,10 +104,18 @@ pub struct ResidentIconKeys {
 /// The hash content-addresses the icon so the same `(d, width, size, fill)`
 /// authored twice resolves to ONE atlas cell (dedup), and a different stroke
 /// width or size is a distinct cell.
-pub fn icon_atlas_key(path_d: &str, stroke_width: f32, size_px: u16, fill: bool) -> AtlasKey {
+pub fn icon_atlas_key(
+    path_d: &str,
+    stroke_width: f32,
+    size_px: u16,
+    viewbox: f32,
+    fill: bool,
+) -> AtlasKey {
     // FNV-1a over the canonical content tuple. f32 hashed by its bit pattern
     // (`to_bits`) so the key is exactly content-addressed — two `Icon`s with
     // bit-identical inputs produce the same key, which is the dedup contract.
+    // `viewbox` rides the hash: the same `path_d`/`size` at a different author
+    // viewBox rasterizes at a different scale, so it MUST be a distinct cell.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut mix = |bytes: &[u8]| {
         for &b in bytes {
@@ -118,6 +126,7 @@ pub fn icon_atlas_key(path_d: &str, stroke_width: f32, size_px: u16, fill: bool)
     mix(path_d.as_bytes());
     mix(&stroke_width.to_bits().to_le_bytes());
     mix(&size_px.to_le_bytes());
+    mix(&viewbox.to_bits().to_le_bytes());
     mix(&[fill as u8]);
     // Two independent 64-bit folds → a 16-byte content hash (collision-resistant
     // enough for a ≤ few-dozen-icon atlas; the atlas is content-addressed, so a
@@ -284,13 +293,19 @@ pub fn extract_buiy_icons(
         } else {
             IconPaint::Stroke
         };
-        let key = icon_atlas_key(&icon.path_d, icon.stroke_width, icon.size_px, icon.fill);
+        let key = icon_atlas_key(
+            &icon.path_d,
+            icon.stroke_width,
+            icon.size_px,
+            icon.viewbox,
+            icon.fill,
+        );
         // Clone the rasterizer inputs so the lazy closure (run ONLY on an atlas
         // miss) owns them — a hit never rasterizes.
-        let (path_d, stroke_width, size_px) =
-            (icon.path_d.clone(), icon.stroke_width, icon.size_px);
+        let (path_d, stroke_width, size_px, viewbox) =
+            (icon.path_d.clone(), icon.stroke_width, icon.size_px, icon.viewbox);
         let entry = atlas.get_or_insert(key.clone(), AtlasFormat::CoverageR8, move || {
-            rasterize_icon(&path_d, paint, stroke_width, size_px)
+            rasterize_icon(&path_d, paint, stroke_width, size_px, viewbox)
         });
 
         // A degenerate/empty coverage cell (e.g. an unparseable `d`) carries a

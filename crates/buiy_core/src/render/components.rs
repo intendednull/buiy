@@ -275,8 +275,15 @@ pub struct Icon {
     /// 1.7–2.4). Ignored when `fill` — a filled glyph has no stroke.
     pub stroke_width: f32,
     /// Render size in logical px (the SVG `width`/`height`, 13–24 in the
-    /// design). Uniformly scales the 24×24 viewBox.
+    /// design). Uniformly scales the `viewbox` coordinate space to `size_px`.
     pub size_px: u16,
+    /// The author coordinate space the `path_d` is drawn in (the SVG
+    /// `viewBox` extent — square, so one scalar). The rasterizer scales
+    /// `size_px / viewbox`, so `path_d` coords + `stroke_width` are in THESE
+    /// units. Default `24.0` (`ICON_VIEWBOX`) matches the widget-catalog icons;
+    /// an app with a different design viewBox (e.g. Dooduel's 40×40) sets it here
+    /// instead of pre-scaling every path coord + stroke by hand (Dooduel F3).
+    pub viewbox: f32,
     /// `true` for the one solid `fill` glyph (the GitHub mark); `false`
     /// (default) for every stroked line icon (round cap + round join).
     pub fill: bool,
@@ -292,6 +299,7 @@ impl Default for Icon {
             path_d: String::new(),
             stroke_width: 2.0,
             size_px: 16,
+            viewbox: crate::render::icon_raster::ICON_VIEWBOX,
             fill: false,
             color: ColorToken::CurrentColor,
         }
