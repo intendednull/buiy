@@ -103,8 +103,10 @@ fn in_game_mobile(s: &Dooduel) -> Element<Msg> {
 /// below, the role badge centered under that.
 fn header_card_mobile(g: &Game, p: Palette, width: f32) -> Element<Msg> {
     let (role_text, role_bg, role_fg) = role_badge_parts(g, p);
+    // The phone header renders the round as "Round r of t" (word — finding #20),
+    // clamped by `round_display` (bug #1).
     let top = row![
-        text!("Round {} of {}", g.round, g.config.total_rounds)
+        text!("Round {} of {}", g.round_display(), g.config.total_rounds)
             .size(14.0)
             .color(p.ink_2)
             .font(FONT_BODY),
@@ -119,7 +121,19 @@ fn header_card_mobile(g: &Game, p: Palette, width: f32) -> Element<Msg> {
         .map(|slot| word_slot(slot, p))
         .collect();
     let word_row = Element::row(slots).gap(Space::Xs).justify_center();
-    let role = column![badge(role_text, role_bg, role_fg)].align_center();
+    let progress = drawer_progress_text(g);
+    let role = column![
+        badge(role_text, role_bg, role_fg),
+        when(
+            progress.is_some(),
+            text(progress.unwrap_or_default())
+                .size(12.0)
+                .color(POS)
+                .font(FONT_BODY),
+        ),
+    ]
+    .gap(Space::Xs)
+    .align_center();
 
     sketchy_panel(
         column![top, word_row, role]
@@ -300,12 +314,22 @@ fn top_bar(s: &Dooduel) -> Element<Msg> {
 /// countdown timer ring + number (right).
 fn header_card(g: &Game, p: Palette) -> Element<Msg> {
     let (role_text, role_bg, role_fg) = role_badge_parts(g, p);
+    // The desktop header renders the round as "Round r / t" (slash — finding #20),
+    // clamped by `round_display` so it never reads the Final overflow (bug #1).
+    let progress = drawer_progress_text(g);
     let left = column![
-        text!("Round {} of {}", g.round, g.config.total_rounds)
+        text!("Round {} / {}", g.round_display(), g.config.total_rounds)
             .size(14.0)
             .color(p.ink_2)
             .font(FONT_BODY),
         badge(role_text, role_bg, role_fg),
+        when(
+            progress.is_some(),
+            text(progress.clone().unwrap_or_default())
+                .size(13.0)
+                .color(POS)
+                .font(FONT_BODY),
+        ),
     ]
     .gap(Space::Xs)
     .width(180.0);
@@ -642,11 +666,16 @@ fn tool_btn(label: &str, msg: Msg, p: Palette) -> Element<Msg> {
 /// input. Sized by the caller so the desktop (300×556) and phone (full-width,
 /// shorter) layouts share it.
 fn chat_pane(g: &Game, p: Palette, width: f32, height: f32) -> Element<Msg> {
-    // The whole log, scrolled + pinned to the bottom on append (F2 scroll surface).
-    let lines = keyed_column(g.chat.iter().cloned(), |m| m.seq, |m| chat_line(m, p))
-        .gap(Space::Xs)
-        .grow()
-        .stick_to_bottom();
+    // The log AS THIS SEAT SEES IT (bug #4): shared lines plus only the private
+    // nudges addressed to the viewer, scrolled + pinned to the bottom on append.
+    let lines = keyed_column(
+        g.chat_for(g.viewing_as).cloned(),
+        |m| m.seq,
+        |m| chat_line(m, p),
+    )
+    .gap(Space::Xs)
+    .grow()
+    .stick_to_bottom();
 
     let placeholder = match g.phase {
         Phase::Drawing if g.viewer_is_drawer() => "You're drawing — guessing is off",
@@ -714,13 +743,18 @@ fn chat_line(m: &ChatMsg, p: Palette) -> Element<Msg> {
             .background(p.pos_tint)
             .radius(Radius::Md)
             .padding(Space::Xs),
-        // A near-miss nudge or an ordinary wrong guess: a neutral bubble.
-        ChatKind::Guess | ChatKind::Close => {
-            column![text(txt).size(15.0).color(p.ink_2).font(FONT_BODY)]
-                .background(p.surface_2)
-                .radius(Radius::Md)
-                .padding(Space::Xs)
-        }
+        // A private near-miss nudge — an accent-tinted, centered pill so it reads as
+        // the "So close!" toast (bug #4; per-seat filtered, only the guesser sees it).
+        ChatKind::Close => column![text(txt).size(14.0).color(Color::Accent).font(FONT_BODY)]
+            .align_center()
+            .background(p.accent_tint)
+            .radius(Radius::Full)
+            .padding(Space::Xs),
+        // An ordinary wrong guess: a neutral bubble (broadcast to everyone).
+        ChatKind::Guess => column![text(txt).size(15.0).color(p.ink_2).font(FONT_BODY)]
+            .background(p.surface_2)
+            .radius(Radius::Md)
+            .padding(Space::Xs),
     }
 }
 
@@ -731,6 +765,19 @@ fn chat_line(m: &ChatMsg, p: Palette) -> Element<Msg> {
 fn strip_emoji(s: &str) -> String {
     let cleaned: String = s.chars().filter(|c| (*c as u32) < 0x2300).collect();
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The drawer's live "who has guessed" progress line (bug #3) — shown to the
+/// drawer during the draw phase so they are never blind to how many guessers have
+/// already gotten the word (an agent once wasted a redraw on an already-guessed
+/// turn). `None` for guessers / outside the draw phase.
+fn drawer_progress_text(g: &Game) -> Option<String> {
+    if g.phase == Phase::Drawing && g.viewer_is_drawer() {
+        let total = g.players.len().saturating_sub(1);
+        Some(format!("{} of {} guessed", g.guessed_count(), total))
+    } else {
+        None
+    }
 }
 
 /// The role badge text + tones for the header.
@@ -748,19 +795,16 @@ fn role_badge_parts(g: &Game, p: Palette) -> (&'static str, Color, Color) {
     }
 }
 
-/// The per-player scoreboard role pill text + tones.
+/// The per-player scoreboard role pill text + tones. The drawer tag is gated on the
+/// active drawer + phase (bug #2) so a finished-match seat is never mis-tagged
+/// "Drawing".
 fn player_role(g: &Game, i: usize, p: Palette) -> (&'static str, Color, Color) {
-    if i == g.seat_index {
-        let t = if g.phase == Phase::Picking {
-            "Picking"
-        } else {
-            "Drawing"
-        };
-        (t, p.accent_tint, Color::Accent)
-    } else if g.turn_guesses.iter().any(|gu| gu.player == i) {
-        ("Guessed", p.pos_tint, POS)
-    } else {
-        ("Guessing", p.hair, p.muted)
+    let is_drawer = g.current_drawer() == Some(i);
+    match (is_drawer, g.phase) {
+        (true, Phase::Picking) => ("Picking", p.accent_tint, Color::Accent),
+        (true, Phase::Drawing) => ("Drawing", p.accent_tint, Color::Accent),
+        _ if g.turn_guesses.iter().any(|gu| gu.player == i) => ("Guessed", p.pos_tint, POS),
+        _ => ("Guessing", p.hair, p.muted),
     }
 }
 

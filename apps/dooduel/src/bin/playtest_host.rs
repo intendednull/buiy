@@ -11,12 +11,18 @@
 //! - `seat_<i>_view.md` (i = 0..3) — an honest, per-seat report computed FROM THE
 //!   MODEL. It NEVER leaks the secret word to a guesser: the word is shown in full
 //!   only to the drawer, to a seat that already guessed it, and during the reveal;
-//!   everyone else sees blanks + hint-revealed letters. Refreshed after every
-//!   command and on a heartbeat (so countdowns advance).
-//! - `state.json` — machine-readable: `phase`, `drawer`, `round`, `countdown`,
-//!   `tick`, `started`, `scores`.
-//! - `canvas.png` — the 720×450 drawing surface, written (throttled ≈2 Hz) whenever
-//!   the pixels change.
+//!   everyone else sees blanks + hint-revealed letters. Its chat is per-seat
+//!   filtered, so a private near-miss nudge never leaks to another seat. Refreshed
+//!   after every command and on a heartbeat (so countdowns advance).
+//! - `state.json` — machine-readable: `phase`, `drawer` (null at the podium),
+//!   `round` (clamped display), `total_rounds`, `turn`, `countdown` (wall-clock),
+//!   `word_length`, `hint_total`/`hints_revealed`, `guessed_count`/`all_guessed`,
+//!   `tick`, `started`, and a `seats` array carrying each seat's score + "can I act
+//!   now" flags (`can_pick`/`can_guess`/`can_draw`/`can_continue`) + `guessed`.
+//! - `chat.md` — the SHARED broadcast chat as a standalone low-diff feed (private
+//!   near-miss nudges are per-seat and appear only in the addressed seat's view).
+//! - `canvas.png` — the 720×450 drawing surface, written per-stroke as the drawer
+//!   draws (and on a heartbeat), so guessers watch the art appear incrementally.
 //! - `host.log` — every applied command + every rejection reason (append-only).
 //!
 //! **Agents → host (append lines to `commands.jsonl`, one JSON object per line):**
@@ -32,6 +38,8 @@
 //!   Applied directly on the paint surface's real `stroke_segment` path (input
 //!   fidelity is already proven by the D1 drag test + W7 browser drives).
 //! - `{"seat":N,"cmd":"clear"}` — the DRAWER clears the canvas (Drawing only).
+//! - `{"seat":N,"cmd":"continue"}` — advance past the turn-end reveal (the design's
+//!   "Continue →"; Reveal phase only). Routed through the funnel (`Msg::Continue`).
 //! - `{"cmd":"status"}` — force an immediate report refresh + a log line.
 //! - `{"cmd":"quit"}` — stop the host.
 //!
@@ -53,7 +61,7 @@ use bevy::image::Image;
 use bevy::prelude::*;
 use buiy::prelude::ClockPlugin;
 use buiy_core::mvu::Envelope;
-use dooduel::game::{Config, Game, Phase};
+use dooduel::game::{ChatMsg, Config, Game, Phase};
 use dooduel::paint::{CANVAS_H, CANVAS_W, CanvasKind, PaintCanvases, Tool};
 use dooduel::{Dooduel, Msg, Screen};
 use serde_json::{Value, json};
@@ -177,6 +185,20 @@ impl Host {
             app.update();
         }
 
+        // Bug #1 (pre-start): seed the model's game config from the configured rules
+        // so the pre-start reports read the CONFIGURED `total_rounds`, not the stale
+        // `Config` default (the "total_rounds reads 2 pre-start vs 1 in-match" half of
+        // the round-counter bug). `start` re-applies the same config.
+        if let Some(e) = app
+            .world_mut()
+            .query_filtered::<Entity, With<Dooduel>>()
+            .iter(app.world())
+            .next()
+            && let Some(mut d) = app.world_mut().get_mut::<Dooduel>(e)
+        {
+            d.game.config = settings.config.clone();
+        }
+
         let log = OpenOptions::new()
             .create(true)
             .append(true)
@@ -217,6 +239,15 @@ impl Host {
             self.tick += 1;
 
             let processed = self.poll_commands();
+            // In-phase delivery (§3.4, couples with fix #3): a gameplay command
+            // (guess / pick / continue) is *enqueued* onto the funnel here, but is
+            // only *applied* on the next `app.update()`. Drain it now so the report
+            // we write this iteration reflects the command's effect immediately —
+            // otherwise the per-seat view lags by up to a heartbeat (the observed
+            // "the drawer sees the guess only after the turn flips" bug).
+            if processed {
+                self.app.update();
+            }
 
             let now = Instant::now();
             if processed || now.duration_since(self.last_view) >= self.settings.view_period {
@@ -295,6 +326,7 @@ impl Host {
             Some("pick") => self.cmd_pick(&v),
             Some("stroke") => self.cmd_stroke(&v),
             Some("clear") => self.cmd_clear(&v),
+            Some("continue") => self.cmd_continue(),
             other => self.log_line(format!("SKIP unknown cmd {other:?}: {line}")),
         }
     }
@@ -430,6 +462,10 @@ impl Host {
             "stroke: seat {seat}, {} pts, color {color:?}, size {size}",
             points.len()
         ));
+        // Per-stroke PNG flush (§3.4): stream each stroke to `canvas.png` as it lands
+        // (the content-hash gate skips a no-op), so guessers watch the art appear
+        // incrementally instead of all-at-once on the ~2 Hz heartbeat.
+        self.maybe_write_canvas();
     }
 
     fn cmd_clear(&mut self, v: &Value) {
@@ -446,6 +482,23 @@ impl Host {
             canvases.surface_mut(CanvasKind::Game).clear();
             self.log_line(format!("clear: seat {seat} cleared the canvas"));
         }
+        self.maybe_write_canvas(); // stream the cleared sheet immediately (§3.4)
+    }
+
+    /// Advance out of the turn-end reveal (the design's "Continue →", §3.4). Routed
+    /// through the real funnel (`Msg::Continue` → `Game::continue_now`). No-op in any
+    /// phase but `Reveal`.
+    fn cmd_continue(&mut self) {
+        let g = self.game();
+        if g.phase != Phase::Reveal {
+            self.log_line(format!(
+                "continue REJECTED (phase={:?}, not Reveal)",
+                g.phase
+            ));
+            return;
+        }
+        self.enqueue(Msg::Continue);
+        self.log_line("continue: advancing past the reveal (funnel)".into());
     }
 
     // --- reporting ---------------------------------------------------------
@@ -455,30 +508,66 @@ impl Host {
         let g = &model.game;
         let canvas_ink = self.canvas_ink();
 
-        let scores: Vec<Value> = g
+        // Per-seat rows carry the score PLUS the "can I act now" flags (drawer-vs-
+        // guesser gating) + guessed state, so an agent needn't re-derive them (§3.4).
+        let seats: Vec<Value> = g
             .players
             .iter()
             .enumerate()
-            .map(|(i, p)| json!({"seat": i, "name": p.name, "score": p.score}))
+            .map(|(i, p)| {
+                let is_drawer = g.current_drawer() == Some(i);
+                let guessed = g.turn_guesses.iter().any(|gu| gu.player == i);
+                json!({
+                    "seat": i,
+                    "name": p.name,
+                    "score": p.score,
+                    "is_drawer": is_drawer,
+                    "guessed": guessed,
+                    "can_pick": g.phase == Phase::Picking && is_drawer,
+                    "can_guess": g.phase == Phase::Drawing && !is_drawer && !guessed,
+                    "can_draw": g.phase == Phase::Drawing && is_drawer,
+                    "can_continue": g.phase == Phase::Reveal,
+                })
+            })
             .collect();
         let state = json!({
             "phase": phase_str(g.phase),
             "screen": screen_str(&model.screen),
             "started": self.started,
-            "drawer": g.seat_index,
-            "drawer_name": g.players.get(g.seat_index).map(|p| p.name.as_str()).unwrap_or(""),
-            "round": g.round,
+            // Bug #2: no active drawer once the match is over (null at the podium).
+            "drawer": g.current_drawer(),
+            "drawer_name": g.drawer_name(),
+            // Bug #1: the DISPLAY round is clamped to [1, total]; total is authoritative
+            // from the config (seeded at boot), so it is stable pre-start and in-match.
+            "round": g.round_display(),
             "total_rounds": g.config.total_rounds,
+            // The turn's position in the rotation (1-based seat), or null when idle/over.
+            "turn": g.current_drawer().map(|s| s + 1),
+            // Bug #6: the countdown is the wall-clock `now − anchor` accessor, NOT the
+            // frame counter (`tick`) — they are separate fields on purpose.
             "countdown": countdown(g),
+            "word_length": g.word_length(),
+            "hint_total": g.hint_total(),
+            "hints_revealed": g.hints_revealed(),
+            // Bug #3: the live "who has the word" signal, visible in-phase.
+            "guessed_count": g.guessed_count(),
+            "all_guessed": g.all_guessed(),
             "tick": self.tick,
             "canvas_ink": canvas_ink,
-            "scores": scores,
+            "seats": seats,
         });
         write_atomic(
             &self.settings.dir.join("state.json"),
             serde_json::to_string_pretty(&state)
                 .unwrap_or_default()
                 .as_bytes(),
+        );
+
+        // The shared broadcast chat as a dedicated low-diff feed (§3.4) — only the
+        // SHARED lines (private near-miss nudges stay in the addressed seat's view).
+        write_atomic(
+            &self.settings.dir.join("chat.md"),
+            render_shared_chat(g).as_bytes(),
         );
 
         for i in 0..SEATS {
@@ -576,11 +665,11 @@ impl Host {
     fn state_summary(&mut self) -> String {
         let g = self.game();
         format!(
-            "phase={:?} round={}/{} drawer={} countdown={}s tick={}",
+            "phase={:?} round={}/{} drawer={:?} countdown={}s tick={}",
             g.phase,
-            g.round,
+            g.round_display(),
             g.config.total_rounds,
-            g.seat_index,
+            g.current_drawer(),
             countdown(&g),
             self.tick
         )
@@ -678,41 +767,61 @@ fn render_seat_view(model: &Dooduel, seat: usize, started: bool) -> String {
         return out;
     }
 
-    let drawer = g.seat_index;
-    let drawer_name = g
-        .players
-        .get(drawer)
-        .map(|p| p.name.as_str())
-        .unwrap_or("—");
+    // Bug #2: read the active drawer through the accessor — `None` at the podium, so
+    // no finished-match seat is mis-labelled as drawing.
+    let drawer = g.current_drawer();
     out.push_str(&format!(
         "**Phase:** {} · **Round {}/{}** · **{}s left**\n",
         phase_str(g.phase),
-        g.round,
+        g.round_display(), // bug #1: clamped display round
         g.config.total_rounds,
-        countdown(g),
+        countdown(g), // bug #6: wall-clock `now − anchor`, not the frame count
     ));
-    let you_draw = if seat == drawer {
-        " — that's YOU"
-    } else {
-        ""
-    };
-    out.push_str(&format!(
-        "**Drawing:** {drawer_name} (seat {drawer}){you_draw}\n\n"
-    ));
+    match drawer {
+        Some(d) => {
+            let drawer_name = g.drawer_name().unwrap_or("—");
+            let you_draw = if seat == d { " — that's YOU" } else { "" };
+            out.push_str(&format!(
+                "**Drawing:** {drawer_name} (seat {d}){you_draw}\n"
+            ));
+        }
+        None => out.push_str("**Drawing:** — (no active drawer)\n"),
+    }
+    // Bug #3: the drawer sees the LIVE guessed count in-phase (never blind).
+    if g.phase == Phase::Drawing {
+        let guessers = g.players.len().saturating_sub(1);
+        out.push_str(&format!(
+            "**Guessed so far:** {} / {} guessers{}\n",
+            g.guessed_count(),
+            guessers,
+            if g.all_guessed() {
+                " — everyone has it!"
+            } else {
+                ""
+            },
+        ));
+    }
+    out.push('\n');
 
-    // Word — as THIS seat sees it (never leaks).
+    // Word — as THIS seat sees it (never leaks), with the letter count everyone knows.
     let word = word_as_seen_by(g, seat);
     if word.is_empty() {
         out.push_str("**Word:** —\n\n");
     } else {
-        out.push_str(&format!("**Word:** {word}\n\n"));
+        out.push_str(&format!(
+            "**Word:** {word}  ({} letters, {}/{} hints revealed)\n\n",
+            g.word_length(),
+            g.hints_revealed(),
+            g.hint_total(),
+        ));
     }
 
     // Scoreboard (sorted high→low), marking the drawer + correct guessers.
     out.push_str("## Scoreboard\n");
     for (rank, (i, p)) in g.standings().into_iter().enumerate() {
         let mut tags = Vec::new();
-        if i == drawer {
+        // Bug #2: only the ACTIVE drawer is tagged "drawing" (gone at the podium).
+        if drawer == Some(i) && g.phase == Phase::Drawing {
             tags.push("drawing");
         }
         if g.turn_guesses.iter().any(|gu| gu.player == i) {
@@ -730,10 +839,13 @@ fn render_seat_view(model: &Dooduel, seat: usize, started: bool) -> String {
     }
     out.push('\n');
 
-    // Chat tail (last 15) — safe for all seats (the secret only appears at reveal).
+    // Chat tail (last 15) AS THIS SEAT SEES IT (bug #4): shared lines plus only the
+    // private nudges addressed to `seat` — a near-miss "So close!" never leaks to
+    // another seat. (The secret word only appears in shared chat at the reveal.)
     out.push_str("## Chat (recent)\n");
-    let tail = g.chat.len().saturating_sub(15);
-    for m in &g.chat[tail..] {
+    let visible: Vec<&ChatMsg> = g.chat_for(seat).collect();
+    let tail = visible.len().saturating_sub(15);
+    for m in &visible[tail..] {
         out.push_str(&format!("- {}\n", m.text));
     }
     out.push('\n');
@@ -741,6 +853,22 @@ fn render_seat_view(model: &Dooduel, seat: usize, started: bool) -> String {
     // Seat-specific available actions.
     out.push_str("## Your actions\n");
     out.push_str(&seat_actions(g, seat));
+    out
+}
+
+/// The SHARED broadcast chat as a standalone markdown feed (§3.4) — only the lines
+/// everyone sees (`to == None`). Private near-miss nudges are per-seat and stay in
+/// the addressed seat's view, so this file never leaks one.
+fn render_shared_chat(g: &Game) -> String {
+    let mut out = String::from("# Dooduel — shared chat\n\n");
+    let shared: Vec<&ChatMsg> = g.chat.iter().filter(|m| m.to.is_none()).collect();
+    if shared.is_empty() {
+        out.push_str("_(no messages yet)_\n");
+        return out;
+    }
+    for m in &shared {
+        out.push_str(&format!("- {}\n", m.text));
+    }
     out
 }
 
@@ -765,7 +893,10 @@ fn seat_actions(g: &Game, seat: usize) -> String {
         Phase::Drawing => format!(
             "**Guess the word:** `{{\"seat\":{seat},\"cmd\":\"guess\",\"text\":\"...\"}}`.\n"
         ),
-        Phase::Reveal => "Turn over — the next turn starts automatically.\n".to_string(),
+        Phase::Reveal => format!(
+            "Turn over — the next turn starts automatically, or advance it now with \
+             `{{\"seat\":{seat},\"cmd\":\"continue\"}}`.\n"
+        ),
         Phase::Final | Phase::Idle => "The match is over.\n".to_string(),
     }
 }
@@ -787,4 +918,203 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dooduel::game::GuessOutcome;
+
+    /// Wrap a `Game` in a model for the pure render helpers.
+    fn model_with(game: Game) -> Dooduel {
+        Dooduel {
+            game,
+            ..Default::default()
+        }
+    }
+
+    /// A bots-off match sitting in the draw phase with a known word.
+    fn drawing_game() -> Game {
+        let mut g = Game::default();
+        g.start_match(
+            "Alex",
+            Config {
+                bots_enabled: false,
+                ..Config::default()
+            },
+        );
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0)); // anchor the clock
+        g
+    }
+
+    /// Run a bots-off match to the podium (`Final`).
+    fn drive_to_final(g: &mut Game) {
+        let mut sec = 0u64;
+        let mut guard = 0;
+        loop {
+            if g.phase == Phase::Picking {
+                g.choose_word(g.word_choices[0].clone());
+                sec = 0;
+            }
+            if g.phase == Phase::Final {
+                break;
+            }
+            let _ = g.tick(Duration::from_secs(sec));
+            sec += 1;
+            guard += 1;
+            assert!(guard < 10_000, "match should terminate");
+        }
+    }
+
+    /// The honest per-seat view: the drawer sees the word, a guesser sees blanks —
+    /// the word-leak risk is closed by construction (the single `word_display` home).
+    #[test]
+    fn seat_view_shows_the_word_to_the_drawer_and_blanks_to_a_guesser() {
+        let m = model_with(drawing_game());
+        let drawer = m.game.current_drawer().unwrap();
+        let drawer_view = render_seat_view(&m, drawer, true);
+        assert!(
+            drawer_view.contains("R O B O T"),
+            "the drawer sees the word:\n{drawer_view}"
+        );
+        let guesser = (drawer + 1) % SEATS;
+        let guesser_view = render_seat_view(&m, guesser, true);
+        assert!(
+            !guesser_view.to_uppercase().contains("ROBOT"),
+            "a guesser never sees the word:\n{guesser_view}"
+        );
+    }
+
+    /// Bug #4 (host): a near-miss nudge is private — it shows in the guesser's view
+    /// but not in any other seat's view nor in the shared chat feed.
+    #[test]
+    fn seat_view_hides_a_private_near_miss_from_other_seats() {
+        let mut g = drawing_game();
+        assert_eq!(g.apply_guess(1, "robott"), GuessOutcome::Close);
+        let m = model_with(g);
+        assert!(
+            render_seat_view(&m, 1, true).contains("So close"),
+            "the guesser sees their own private nudge"
+        );
+        for other in [0usize, 2, 3] {
+            assert!(
+                !render_seat_view(&m, other, true).contains("So close"),
+                "seat {other} must not see seat 1's private near-miss nudge"
+            );
+        }
+        assert!(
+            !render_shared_chat(&m.game).contains("So close"),
+            "the shared chat feed never carries a private nudge"
+        );
+    }
+
+    /// Bug #4 (host): a WRONG guess is broadcast — it appears in the shared chat feed
+    /// and in every seat's view (name + literal text).
+    #[test]
+    fn wrong_guess_is_broadcast_to_the_shared_chat() {
+        let mut g = drawing_game();
+        assert_eq!(g.apply_guess(2, "banana"), GuessOutcome::Wrong);
+        let m = model_with(g);
+        assert!(
+            render_shared_chat(&m.game).contains("banana"),
+            "the shared chat feed carries the broadcast wrong guess"
+        );
+        for seat in 0..SEATS {
+            assert!(
+                render_seat_view(&m, seat, true).contains("banana"),
+                "seat {seat} sees the broadcast wrong guess"
+            );
+        }
+    }
+
+    /// Bug #2 (host): at the podium no seat is tagged "drawing" and there is no
+    /// active drawer / drawer name.
+    #[test]
+    fn no_drawer_is_reported_at_the_podium() {
+        let mut g = Game::default();
+        g.start_match(
+            "Alex",
+            Config {
+                bots_enabled: false,
+                ..Config::default()
+            },
+        );
+        drive_to_final(&mut g);
+        assert_eq!(g.phase, Phase::Final);
+        assert_eq!(g.current_drawer(), None);
+        assert_eq!(g.drawer_name(), None);
+        let m = model_with(g);
+        for seat in 0..SEATS {
+            let v = render_seat_view(&m, seat, true);
+            assert!(
+                !v.contains("(drawing"),
+                "no seat is tagged drawing at the podium:\n{v}"
+            );
+            assert!(
+                v.contains("no active drawer"),
+                "the podium view names no drawer:\n{v}"
+            );
+        }
+    }
+
+    /// Bug #1 (host): the reported round is clamped by `round_display` — the podium
+    /// never reads the "Round 2/1" overflow.
+    #[test]
+    fn round_display_is_clamped_at_the_podium() {
+        let mut g = Game::default();
+        g.start_match(
+            "Alex",
+            Config {
+                bots_enabled: false,
+                ..Config::default()
+            },
+        );
+        drive_to_final(&mut g);
+        let total = g.config.total_rounds;
+        assert_eq!(g.round_display(), total);
+        let m = model_with(g);
+        let v = render_seat_view(&m, 0, true);
+        assert!(
+            v.contains(&format!("Round {total}/{total}")),
+            "the podium round reads within total:\n{v}"
+        );
+    }
+
+    /// Bug #3 (host): the drawer's view shows the live guessed count in-phase.
+    #[test]
+    fn seat_view_shows_the_live_guessed_count_during_drawing() {
+        let mut g = drawing_game();
+        g.apply_guess(1, "robot");
+        let m = model_with(g);
+        let drawer = m.game.current_drawer().unwrap();
+        let v = render_seat_view(&m, drawer, true);
+        assert!(
+            v.contains("Guessed so far:** 1 / 3"),
+            "the drawer sees the live guessed count:\n{v}"
+        );
+    }
+
+    /// Bug #6 (host): the reported countdown is the wall-clock `now − anchor`
+    /// accessor, NOT a frame/tick count — a burst of sub-second re-polls (many
+    /// frames, same wall-second) does not move it; each whole wall-second is one
+    /// step down. A frame-count countdown would race ahead of wall time.
+    #[test]
+    fn countdown_is_wall_clock_not_a_frame_count() {
+        let mut g = drawing_game();
+        assert_eq!(countdown(&g), g.config.draw_seconds);
+        for s in 1..=10 {
+            g.tick(Duration::from_secs(s));
+        }
+        assert_eq!(countdown(&g), g.config.draw_seconds - 10);
+        // 30 extra frames all inside wall-second 10 must not advance the countdown.
+        for _ in 0..30 {
+            g.tick(Duration::from_millis(10_400));
+        }
+        assert_eq!(
+            countdown(&g),
+            g.config.draw_seconds - 10,
+            "frames don't advance the countdown; only wall-seconds do"
+        );
+    }
 }
