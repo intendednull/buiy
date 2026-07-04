@@ -84,6 +84,7 @@
 
 mod app;
 mod element;
+mod interaction;
 mod layout;
 mod reconcile;
 mod router;
@@ -93,6 +94,7 @@ pub use app::{BuiyViewAppExt, IntoViewReducer, MODEL_LID, ViewSet};
 pub use element::{
     Element, Kind, button, checkbox, keyed_column, raster, scroll_column, text, text_input, when,
 };
+pub use interaction::{DEFAULT_PRESS_DEPTH, InteractionState, PressEffect};
 pub use layout::{Align, Justify, TextAlign};
 pub use reconcile::ViewWorkCounters;
 pub use tokens::{Color, Radius, Space};
