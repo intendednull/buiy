@@ -1,29 +1,37 @@
-//! Avatar editor — now a real **top-layer modal** (F4a retired the raster-under-
-//! modal limit). The prototype had to render this as a full in-flow screen because a
-//! `raster(...)` nested in a top-layer overlay was hidden under the overlay's own
-//! background; F4a's per-raster-anchor interleave makes a raster inside an OPAQUE
-//! top-layer panel visible. So the editor is the design's centered modal: the opaque
-//! surface panel over a translucent scrim sibling (the F4a boundary — the panel MUST
-//! be opaque; an effect-group-nested raster would still drop).
+//! Avatar editor — a full in-flow SCREEN (reached from Home's pencil badge).
+//!
+//! The design draws this as a centered modal over Home, and the FINAL spec's F4a
+//! re-decision assumed a top-layer modal would work. **RUNNING it disproved that:**
+//! a top-layer modal panel cannot occlude the base screen's TEXT. Glyphs draw in a
+//! single global tier AFTER all quads (`node.rs`: "shadow < quad < gradient <
+//! glyph"), with no per-top-layer glyph partition, so Home's text bleeds through any
+//! top-layer panel over it (F4a fixed RASTER interleave, not glyph-over-quad
+//! occlusion). So the editor renders as a full in-flow screen (the prototype's
+//! proven approach): when it is open the router shows THIS instead of the underlying
+//! screen, so there is no base content behind it to bleed. The design's scrim look
+//! is the one accepted deviation (also the prototype's). See the App-2 hand-off /
+//! framework follow-up: "top-layer modals cannot occlude base-layer text".
 //!
 //! Two tabs: the stock-doodle GALLERY (pick one of 22) and DRAW-YOUR-OWN (the 2nd
 //! `raster()` canvas + swatches / sizes / eraser / undo / clear / save). The draw
-//! canvas is the avatar editor's separate paint surface (`paint::CanvasKind::Avatar`).
+//! canvas is the avatar editor's separate paint surface (`paint::CanvasKind::Avatar`);
+//! in-flow it paints cleanly like the in-game canvas.
 
 use buiy::view::{Color, Element, Radius, Space, button, column, row};
 use buiy_view::{LineStyle, raster};
 
 use crate::paint;
 use crate::theme::{CLEAR, FONT_BODY, FONT_DISPLAY, WHITE, WOBBLE_PANEL};
-use crate::view::widgets::{card_w, eyebrow, quiet_button, scrim, title};
+use crate::view::widgets::{card_w, eyebrow, quiet_button, screen_root, title};
 use crate::{AvatarState, AvatarTab, Dooduel, HumanAvatar, Msg, avatar};
 
-/// The avatar editor as a centered top-layer modal (opaque panel over the scrim).
-pub fn avatar_editor_modal(s: &Dooduel) -> Element<Msg> {
-    scrim(avatar_panel(s))
+/// The avatar editor as a full in-flow screen (the editor panel centered on the app
+/// canvas background — no base content behind it, so no glyph bleed-through).
+pub fn avatar_editor_screen(s: &Dooduel) -> Element<Msg> {
+    screen_root(avatar_panel(s), s.palette())
 }
 
-/// The opaque editor panel (F4a: opaque so the draw-canvas raster inside it renders).
+/// The editor panel (in-flow: the draw-canvas raster inside it paints cleanly).
 fn avatar_panel(s: &Dooduel) -> Element<Msg> {
     let a = &s.avatar;
     let p = s.palette();
