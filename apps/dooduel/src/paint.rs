@@ -798,27 +798,42 @@ fn flush_strokes(
     }
 }
 
-/// Rasterize the authoritative canvas log for a GUESSER (spec §3.5): when this client
-/// is not the drawer this turn, its Game surface is a render of `replica.canvas_ops`
-/// (re-rastered on change) plus the transient [`CanvasProgress`] overlay stamped on
-/// top. The drawer keeps its optimistic buffer (sole producer ⇒ no reconciliation),
-/// so this is a no-op for the drawer. `Local` signatures re-raster only on a real
-/// change (a new/removed op, or a progress batch), never per steady frame.
-fn raster_guesser_canvas(
+/// Re-render the Game canvas from the authoritative log (spec §3.5) — **uniformly,
+/// every client**: the surface is a render of `replica.canvas_ops` plus the transient
+/// [`CanvasProgress`] overlay stamped on top. The drawer's "specialness" is purely
+/// OUTBOUND (optimistic paint + the finalize/clamp rules) — there is no per-role
+/// render filter, and the reducer applies every canvas event uniformly.
+///
+/// Why this is correct for the drawer WITHOUT a filter (the load-bearing detail): the
+/// server never echoes the drawer its own ops (no-echo, spec §3.5), so during its own
+/// turn `replica.canvas_ops` stays **empty** and this re-raster is never triggered —
+/// the drawer's optimistic buffer is left untouched, so an incoming `CanvasUndo` /
+/// `CanvasCleared` (idempotent against the local optimistic pop/clear) does not blank
+/// it. On a mid-turn reconnect the drawer's `CanvasLog` reseed **populates** the log,
+/// which triggers the re-raster and restores the canvas from the log.
+///
+/// The re-raster fires only when the buffer must actually change: `canvas_ops` changed
+/// (an op added/removed/cleared, or a reseed) OR the progress overlay was just cleared
+/// (a finalize, or a drawer-disconnect wipe — stale progress pixels must go). A growing
+/// progress stroke is merely stamped on top (idempotent — earlier points re-stamp), so
+/// it never blanks the buffer, and thus never fights the drawer's optimistic paint.
+fn rerender_canvas_from_log(
     model: Option<Single<&crate::Dooduel>>,
     canvases: Option<ResMut<PaintCanvases>>,
     progress: Option<Res<CanvasProgress>>,
     mut last_sig: Local<(usize, u64)>,
     mut last_prog: Local<u64>,
-    mut was_guessing: Local<bool>,
+    mut was_active: Local<bool>,
+    mut showed_progress: Local<bool>,
 ) {
     let (Some(model), Some(mut canvases)) = (model, canvases) else {
         return;
     };
     let r = &model.replica;
-    let guessing = matches!(r.phase, Phase::Drawing | Phase::Reveal) && !model.is_drawer();
-    if !guessing {
-        *was_guessing = false;
+    if !matches!(r.phase, Phase::Drawing | Phase::Reveal) {
+        // Outside a turn the buffer is left as-is (the drawer's optimistic sheet, or
+        // the last raster) — the next turn's Drawing edge re-renders it.
+        *was_active = false;
         return;
     }
     let sig = (
@@ -826,29 +841,46 @@ fn raster_guesser_canvas(
         r.canvas_ops.last().map(op_id).unwrap_or(0),
     );
     let prog_gen = progress.as_ref().map(|p| p.generation).unwrap_or(0);
-    let entered = !*was_guessing;
-    *was_guessing = true;
-    if !entered && sig == *last_sig && prog_gen == *last_prog {
-        return; // the log + overlay are unchanged since the last raster
-    }
-    *last_sig = sig;
-    *last_prog = prog_gen;
+    let prog_now = progress.as_ref().is_some_and(|p| !p.points.is_empty());
+    let entered = !*was_active;
+    *was_active = true;
 
-    let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
-    blank(buf);
-    for op in &r.canvas_ops {
-        apply_op(buf, op);
+    let ops_changed = entered || sig != *last_sig;
+    // A progress overlay that WAS shown and is now gone must be wiped by a full
+    // re-raster (a finalize's idempotent re-stamp, or a drawer-disconnect discard).
+    let progress_cleared = *showed_progress && !prog_now;
+
+    if ops_changed || progress_cleared {
+        *last_sig = sig;
+        *last_prog = prog_gen;
+        *showed_progress = prog_now;
+        let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
+        blank(buf);
+        for op in &r.canvas_ops {
+            apply_op(buf, op);
+        }
+        if let Some(p) = &progress
+            && !p.points.is_empty()
+        {
+            stamp_points(buf, &p.points, p.color, p.radius);
+        }
+        buf.dirty = true;
+    } else if prog_now && prog_gen != *last_prog {
+        // The in-progress stroke grew — stamp it on top (no blank; a growing stroke's
+        // earlier points re-stamp idempotently), so this never touches an empty-log
+        // drawer's optimistic buffer.
+        *last_prog = prog_gen;
+        *showed_progress = true;
+        if let Some(p) = &progress {
+            let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
+            stamp_points(buf, &p.points, p.color, p.radius);
+            buf.dirty = true;
+        }
     }
-    if let Some(p) = &progress
-        && !p.points.is_empty()
-    {
-        stamp_points(buf, &p.points, p.color, p.radius);
-    }
-    buf.dirty = true;
 }
 
 /// Installs the drawing canvases: setup + the CPU→Image mirror + the model→canvas
-/// tool sync + the drawer's outbound stroke relay + the guesser's op-log raster.
+/// tool sync + the drawer's outbound stroke relay + the uniform op-log re-render.
 /// Kept as a distinct plugin (NOT folded into `dooduel::install`) so the canvases are
 /// visibly decoupled from the MVU app — the coexistence story.
 pub struct CanvasPlugin;
@@ -864,7 +896,7 @@ impl Plugin for CanvasPlugin {
                 wire_canvas_node,
                 sync_tools_to_canvases,
                 flush_strokes,
-                raster_guesser_canvas,
+                rerender_canvas_from_log,
                 sync_canvases_to_images,
             )
                 .chain(),

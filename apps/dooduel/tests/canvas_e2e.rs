@@ -21,7 +21,7 @@ use buiy_core::components::ResolvedLayout;
 use buiy_core::mvu::Envelope;
 use buiy_verify::pointer::drive_stroke;
 use dooduel::paint::{CANVAS_H, CANVAS_W, CanvasKind, PAPER, PaintCanvases};
-use dooduel::{Dooduel, Msg};
+use dooduel::{CanvasOp, Dooduel, Msg, ServerEvent};
 
 /// Build the unified headless driver: the GPU-free probe preset + the real
 /// picking stack + a synthetic window/camera/pointer, then Dooduel + the canvas.
@@ -188,5 +188,114 @@ fn dragging_the_canvas_lands_ink_in_the_paint_buffer() {
     assert!(
         inked > 500,
         "the stroke painted a visible line (inked pixels = {inked})"
+    );
+}
+
+fn inked_pixels(app: &App) -> usize {
+    let canvases = app.world().resource::<PaintCanvases>();
+    let s = canvases.surface(CanvasKind::Game);
+    s.pixels.chunks_exact(4).filter(|p| *p != PAPER).count()
+}
+
+/// The drawer's canvas render is UNIFORM (no per-role filter) yet must not be blanked
+/// by an incoming canvas event: under no-echo the drawer's `replica.canvas_ops` stays
+/// empty during its own turn, so a `CanvasUndo` / `CanvasCleared` it receives (which
+/// it already applied optimistically) is idempotent — the uniform re-render is never
+/// triggered (empty log unchanged) and the optimistic ink survives. This is the
+/// concrete "fights the optimistic state" case a naive uniform re-raster would break.
+#[test]
+fn drawer_optimistic_ink_survives_an_incoming_canvas_event() {
+    let (mut app, window, pointer) = unified_driver();
+    settle(&mut app, 12);
+    enqueue(&mut app, Msg::StartMatch);
+    settle(&mut app, 16);
+    enqueue(&mut app, Msg::ChooseWord(0));
+    settle(&mut app, 16);
+
+    // The human (seat 0) is the drawer this turn — draw a line.
+    let (tl, size) = canvas_rect(&mut app);
+    let y = tl.y + size.y * 0.5;
+    let from = Vec2::new(tl.x + size.x * 0.3, y);
+    let to = Vec2::new(tl.x + size.x * 0.7, y);
+    let path: Vec<Vec2> = (0..=6).map(|i| from.lerp(to, i as f32 / 6.0)).collect();
+    drive_stroke(&mut app, window, pointer, &path);
+    let drawn = inked_pixels(&app);
+    assert!(drawn > 500, "the drawer inked its optimistic canvas");
+
+    // A spurious incoming CanvasUndo/CanvasCleared (the drawer's own confirmations are
+    // idempotent — its optimistic buffer is the truth) must NOT blank the canvas.
+    enqueue(
+        &mut app,
+        Msg::Net(ServerEvent::CanvasUndo { removed_id: 0 }),
+    );
+    settle(&mut app, 6);
+    assert_eq!(
+        inked_pixels(&app),
+        drawn,
+        "an incoming CanvasUndo did not touch the drawer's optimistic ink"
+    );
+}
+
+/// A drawer's mid-turn reconnect reseed (`CanvasLog`) DOES re-render its canvas from
+/// the authoritative log — the uniform render restores the reconnected drawer's canvas
+/// (the case a blanket drawer-ignores-canvas-events filter would break). No live
+/// session: the `CanvasLog` is scripted, exactly as the server would send on reconnect.
+#[test]
+fn drawer_canvas_reseeds_from_a_canvas_log() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::input::InputPlugin)
+        .add_plugins(buiy::BuiyProbePlugin);
+    app.init_asset::<Image>();
+    dooduel::install(&mut app);
+    app.add_plugins(dooduel::paint::CanvasPlugin);
+    settle(&mut app, 12);
+
+    // Seat this client as the drawer (seat 0) in Drawing — scripted, no session.
+    let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
+    net(
+        &mut app,
+        ServerEvent::Welcome {
+            seat: 0,
+            room_code: "SOLO".to_string(),
+            reconnect_token: String::new(),
+            protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+        },
+    );
+    net(
+        &mut app,
+        ServerEvent::PhaseChanged {
+            phase: dooduel::game::Phase::Drawing,
+            drawer: Some(0),
+            round: 1,
+            total_rounds: 2,
+            remaining: std::time::Duration::from_secs(60),
+        },
+    );
+    settle(&mut app, 8);
+    assert_eq!(inked_pixels(&app), 0, "the drawer's canvas starts blank");
+
+    // The reconnect reseed: the full current-turn op log (a stroke across the middle).
+    let mid_y = (CANVAS_H / 2) as i32;
+    let ops = vec![CanvasOp::Stroke {
+        id: 0,
+        points: (0..CANVAS_W as i32)
+            .step_by(4)
+            .map(|x| (x, mid_y))
+            .collect(),
+        color: [20, 20, 24, 255],
+        radius: 4,
+    }];
+    net(&mut app, ServerEvent::CanvasLog { ops });
+    settle(&mut app, 8);
+    assert_ne!(
+        game_pixel(&mut app, CANVAS_W / 2, CANVAS_H / 2),
+        PAPER,
+        "the drawer's canvas re-rendered from the CanvasLog reseed"
+    );
+    assert!(
+        inked_pixels(&app) > 500,
+        "the reseeded stroke is rasterized onto the drawer's canvas"
     );
 }
