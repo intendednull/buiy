@@ -19,8 +19,10 @@
 //! The `Session` holds the per-turn [`CanvasOp`] log and **rasterizes nothing** — the
 //! op log is the sync primitive; each replica (and `dooduel_mcp::get_canvas`) derives
 //! its own raster via [`crate::canvas::PaintBuffer`]. A client `Stroke` intent carries
-//! a client-chosen `stroke_id` that can span several `done: false` batches; the
-//! server reconciles it to one monotonic server op id (the `on_stroke` accumulator).
+//! a client-chosen `stroke_id` that can span several `done: false` batches; the server
+//! accumulates them and assigns a dense per-turn op id at finalize time (the `on_stroke`
+//! accumulator; ids reset each turn — spec §3.5). In-progress batches relay to guessers
+//! as transient `CanvasStrokeProgress`; an over-long stroke auto-splits at `MAX_OP_POINTS`.
 //!
 //! ## Redaction (spec §5)
 //!
@@ -34,8 +36,8 @@ use std::time::Duration;
 
 use crate::game::{ChatMsg, Config, Game, GuessOutcome, PRESET_NAMES, Phase, PlayerSpec};
 use crate::protocol::{
-    CanvasOp, ClientIntent, ErrorCode, MAX_STROKE_POINTS, PROTOCOL_VERSION, ReplicaPlayer,
-    RoomReplica, ServerEvent, WireAvatar,
+    CanvasOp, ClientIntent, ErrorCode, MAX_OP_POINTS, MAX_STROKE_POINTS, PROTOCOL_VERSION,
+    ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
 };
 
 /// The grace window a disconnected seat is held before it is vacated (spec §6.3). A
@@ -102,12 +104,11 @@ struct SeatState {
     present: bool,
 }
 
-/// A stroke being accumulated across `done: false` batches (spec §3.5). The first
-/// batch of a `stroke_id` opens it with a fresh monotonic server op id; matching
-/// batches append points; `done: true` (or any other op / a differing `stroke_id`)
-/// closes it into one [`CanvasOp::Stroke`].
+/// A stroke being accumulated across `done: false` batches (spec §3.5). No id is held
+/// — ids are allocated at **finalize** time (W2-review I5), so a cancelled, dropped, or
+/// empty open stroke never burns one. `done: true` (or any other op, a differing
+/// `stroke_id`, or an auto-split overflow) closes it into one [`CanvasOp::Stroke`].
 struct OpenStroke {
-    server_id: u64,
     stroke_id: u64,
     points: Vec<(i32, i32)>,
     color: [u8; 4],
@@ -138,8 +139,9 @@ pub struct Session {
     /// start; the raster is never held here (each replica derives its own).
     canvas_ops: Vec<CanvasOp>,
     open_stroke: Option<OpenStroke>,
-    /// Monotonic op-id source (spec §2.2 "server-assigned monotonic ids"). Never
-    /// resets; the log is what clears, so ids are unambiguous within any turn's log.
+    /// The per-turn op-id source (spec §3.5, W2-review I5): reset to 0 at each turn
+    /// start, advanced only when an op is finalized (appended). Yields the dense
+    /// `0, 1, 2, …` sequence the drawer mirrors by counting its own finalizations.
     next_op_id: u64,
     next_join_ord: u64,
     outbox: Vec<(Recipient, ServerEvent)>,
@@ -397,15 +399,27 @@ impl Session {
         if mismatched {
             self.finalize_open_stroke();
         }
+        // Auto-split (I2): if this batch would push the accumulated op past
+        // MAX_OP_POINTS, finalize it and continue a fresh op under the same stroke_id,
+        // seeded with the split point so the seam segment is still drawn (pixel-identical).
+        if let Some(op) = &self.open_stroke
+            && op.points.len() + points.len() > MAX_OP_POINTS
+        {
+            let seam = op.points.last().copied();
+            self.finalize_open_stroke();
+            self.open_stroke = Some(OpenStroke {
+                stroke_id,
+                points: seam.into_iter().collect(),
+                color,
+                radius,
+            });
+        }
         match &mut self.open_stroke {
             Some(op) => op.points.extend_from_slice(&points),
             None => {
-                let id = self.next_op_id;
-                self.next_op_id += 1;
                 self.open_stroke = Some(OpenStroke {
-                    server_id: id,
                     stroke_id,
-                    points,
+                    points: points.clone(),
                     color,
                     radius,
                 });
@@ -413,6 +427,10 @@ impl Session {
         }
         if done {
             self.finalize_open_stroke();
+        } else {
+            // Liveness relay (I6): the batch's points reach every seat but the drawer
+            // as transient progress — no id, no log entry (spec §3.5).
+            self.broadcast_progress_except(self.game.seat_index, stroke_id, points, color, radius);
         }
     }
 
@@ -613,16 +631,49 @@ impl Session {
 
     /// Close the open stroke into one [`CanvasOp::Stroke`], append it to the log, and
     /// broadcast `CanvasOpApplied` to everyone **except** the drawer (no-echo, spec §3.5).
+    /// The id is allocated **here** (I5): a dense per-turn `next_op_id`, advanced only on
+    /// a real append. An empty stroke mints no op and no id.
     fn finalize_open_stroke(&mut self) {
-        if let Some(op) = self.open_stroke.take() {
-            let canvas_op = CanvasOp::Stroke {
-                id: op.server_id,
-                points: op.points,
-                color: op.color,
-                radius: op.radius,
-            };
-            self.canvas_ops.push(canvas_op.clone());
-            self.broadcast_op_except(self.game.seat_index, canvas_op);
+        let Some(op) = self.open_stroke.take() else {
+            return;
+        };
+        if op.points.is_empty() {
+            return;
+        }
+        let id = self.next_op_id;
+        self.next_op_id += 1;
+        let canvas_op = CanvasOp::Stroke {
+            id,
+            points: op.points,
+            color: op.color,
+            radius: op.radius,
+        };
+        self.canvas_ops.push(canvas_op.clone());
+        self.broadcast_op_except(self.game.seat_index, canvas_op);
+    }
+
+    /// Relay a transient in-progress stroke batch to every seat except `except` (the
+    /// drawer). No id, no log entry (spec §3.5 I6) — replicas paint it immediately.
+    fn broadcast_progress_except(
+        &mut self,
+        except: usize,
+        stroke_id: u64,
+        points: Vec<(i32, i32)>,
+        color: [u8; 4],
+        radius: i32,
+    ) {
+        for i in 0..self.seats.len() {
+            if i != except {
+                self.outbox.push((
+                    Recipient::Seat(i),
+                    ServerEvent::CanvasStrokeProgress {
+                        stroke_id,
+                        points: points.clone(),
+                        color,
+                        radius,
+                    },
+                ));
+            }
         }
     }
 
@@ -702,9 +753,11 @@ impl Session {
         });
         match phase {
             Phase::Picking => {
-                // The op log resets at each turn start (spec §2.2).
+                // The op log + its per-turn id counter reset at each turn start
+                // (spec §2.2 / §3.5 I5).
                 self.canvas_ops.clear();
                 self.open_stroke = None;
+                self.next_op_id = 0;
                 self.broadcast(ServerEvent::CanvasCleared);
                 let drawer = self.game.seat_index;
                 let words = self.game.word_choices.clone();
@@ -1362,6 +1415,191 @@ mod tests {
             evs.iter()
                 .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::CanvasCleared)))
         );
+    }
+
+    fn op_id(op: &CanvasOp) -> u64 {
+        match op {
+            CanvasOp::Stroke { id, .. } | CanvasOp::Fill { id, .. } => *id,
+        }
+    }
+
+    fn stroke_done(sid: u64, x: i32) -> ClientIntent {
+        ClientIntent::Stroke {
+            stroke_id: sid,
+            points: vec![(x, x)],
+            color: [0, 0, 0, 255],
+            radius: 2,
+            done: true,
+        }
+    }
+
+    /// I5 — op ids are a dense per-turn `0,1,2,…` allocated at finalize; an undo removes
+    /// the op but does NOT rewind the counter (a later op gets a fresh id).
+    #[test]
+    fn op_ids_are_dense_per_turn_and_undo_does_not_rewind() {
+        let (mut s, _) = drawing_two_humans();
+        s.handle(0, stroke_done(100, 1)); // op id 0
+        s.handle(0, stroke_done(101, 2)); // op id 1
+        s.drain_events();
+        assert_eq!(
+            s.canvas_ops.iter().map(op_id).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        s.handle(0, ClientIntent::Undo); // removes op id 1
+        let evs = s.drain_events();
+        assert!(
+            evs.iter()
+                .any(|(_, e)| matches!(e, ServerEvent::CanvasUndo { removed_id: 1 }))
+        );
+        s.handle(0, stroke_done(102, 3)); // a fresh op — id 2, not a reused 1
+        s.drain_events();
+        assert_eq!(
+            s.canvas_ops.iter().map(op_id).collect::<Vec<_>>(),
+            vec![0, 2],
+            "undo removes the op but does not rewind next_op_id"
+        );
+    }
+
+    /// I5 — cancelling an OPEN stroke (undo of an in-progress `done:false`) burns no id,
+    /// so the next finalized op gets the position the open stroke would have taken.
+    #[test]
+    fn cancelling_an_open_stroke_burns_no_id() {
+        let (mut s, _) = drawing_two_humans();
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 7,
+                points: vec![(1, 1), (2, 2)],
+                color: [0, 0, 0, 255],
+                radius: 2,
+                done: false,
+            },
+        );
+        s.drain_events();
+        assert!(
+            s.canvas_ops.is_empty(),
+            "an open stroke is not yet in the log"
+        );
+        s.handle(0, ClientIntent::Undo); // cancels the open stroke silently
+        s.drain_events();
+        s.handle(0, stroke_done(8, 3)); // first finalized op ⇒ id 0
+        s.drain_events();
+        assert_eq!(
+            s.canvas_ops.iter().map(op_id).collect::<Vec<_>>(),
+            vec![0],
+            "the cancelled open stroke consumed no id"
+        );
+    }
+
+    /// I5 — a finalize with no points mints neither an op nor an id.
+    #[test]
+    fn an_empty_stroke_finalize_mints_nothing() {
+        let (mut s, _) = drawing_two_humans();
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 1,
+                points: vec![],
+                color: [0, 0, 0, 255],
+                radius: 2,
+                done: true,
+            },
+        );
+        let evs = s.drain_events();
+        assert!(s.canvas_ops.is_empty(), "empty finalize adds no op");
+        assert!(
+            !evs.iter()
+                .any(|(_, e)| matches!(e, ServerEvent::CanvasOpApplied { .. })),
+            "empty finalize broadcasts nothing"
+        );
+        s.handle(0, stroke_done(2, 5)); // the next real op still gets id 0
+        s.drain_events();
+        assert_eq!(s.canvas_ops.iter().map(op_id).collect::<Vec<_>>(), vec![0]);
+    }
+
+    /// I5 — the per-turn id counter resets at each turn start.
+    #[test]
+    fn op_ids_reset_at_turn_start() {
+        let (mut s, _) = drawing_two_humans();
+        s.handle(0, stroke_done(1, 1));
+        s.handle(0, stroke_done(2, 2));
+        s.drain_events();
+        assert_eq!(s.canvas_ops.len(), 2, "two ops this turn (ids 0,1)");
+        // Force to the next turn; seat 1 becomes the drawer.
+        s.game.force_end_turn();
+        s.drain_events();
+        s.handle(1, ClientIntent::Continue);
+        s.handle(1, ClientIntent::Pick { index: 0 });
+        s.drain_events();
+        assert!(
+            s.canvas_ops.is_empty(),
+            "the new turn starts with an empty log"
+        );
+        s.handle(1, stroke_done(9, 4)); // first op of the new turn ⇒ id 0 again
+        s.drain_events();
+        assert_eq!(s.canvas_ops.iter().map(op_id).collect::<Vec<_>>(), vec![0]);
+    }
+
+    /// I6 — a `done:false` batch relays to guessers as transient `CanvasStrokeProgress`
+    /// before any `CanvasOpApplied`; the drawer receives neither its progress nor its op.
+    #[test]
+    fn in_progress_batches_relay_to_guessers_not_the_drawer() {
+        let (mut s, _) = drawing_two_humans(); // seat 0 drawer, seat 1 guesser
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 5,
+                points: vec![(1, 1), (2, 2)],
+                color: [10, 10, 10, 255],
+                radius: 3,
+                done: false,
+            },
+        );
+        let evs = s.drain_events();
+        assert!(
+            evs.iter().any(|(r, e)| matches!(
+                (r, e),
+                (Recipient::Seat(1), ServerEvent::CanvasStrokeProgress { .. })
+            )),
+            "the guesser sees live progress"
+        );
+        assert!(
+            !evs.iter()
+                .any(|(_, e)| matches!(e, ServerEvent::CanvasOpApplied { .. })),
+            "no op is applied until done"
+        );
+        assert!(
+            !evs.iter().any(|(r, e)| matches!(
+                (r, e),
+                (Recipient::Seat(0), ServerEvent::CanvasStrokeProgress { .. })
+            )),
+            "the drawer is not relayed its own progress"
+        );
+        assert!(s.canvas_ops.is_empty(), "progress never enters the log");
+        // Finalize ⇒ CanvasOpApplied to the guesser, not the drawer.
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 5,
+                points: vec![(3, 3)],
+                color: [10, 10, 10, 255],
+                radius: 3,
+                done: true,
+            },
+        );
+        let evs = s.drain_events();
+        assert!(evs.iter().any(|(r, e)| matches!(
+            (r, e),
+            (Recipient::Seat(1), ServerEvent::CanvasOpApplied { .. })
+        )));
+        assert!(
+            !evs.iter().any(|(r, e)| matches!(
+                (r, e),
+                (Recipient::Seat(0), ServerEvent::CanvasOpApplied { .. })
+            )),
+            "no-echo of the finalized op to the drawer"
+        );
+        assert_eq!(s.canvas_ops.len(), 1);
     }
 
     #[test]

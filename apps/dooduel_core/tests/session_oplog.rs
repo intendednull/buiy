@@ -12,7 +12,7 @@ use std::time::Duration;
 use common::{Harness, canvas_op_id, fold_canvas, welcome_token};
 use dooduel_core::canvas::{PAPER, PaintBuffer, Tool, flood_fill, stamp_circle, stroke_segment};
 use dooduel_core::game::Config;
-use dooduel_core::protocol::{CanvasOp, ClientIntent};
+use dooduel_core::protocol::{CanvasOp, ClientIntent, MAX_OP_POINTS};
 
 const W: usize = 48;
 const H: usize = 36;
@@ -210,5 +210,76 @@ fn late_join_via_canvas_log_matches_from_start() {
         via_freefns(&reconnected),
         via_freefns(&survivor),
         "undo reaching a pre-join op leaves the reconnected replica pixel-identical"
+    );
+}
+
+/// I2 — a stroke that accumulates past `MAX_OP_POINTS` across many `done:false` batches
+/// auto-splits into several logged ops (bounded), whose replay is pixel-identical to the
+/// conceptual single stroke (the split carries the seam point so the joining segment is
+/// still drawn).
+#[test]
+fn a_stroke_over_max_op_points_auto_splits_pixel_identically() {
+    let config = Config {
+        total_rounds: 1,
+        draw_seconds: 200,
+        pick_seconds: 30,
+        reveal_seconds: 2,
+        hint_count: 2,
+        bots_enabled: false,
+    };
+    let mut h = Harness::new(config, 0);
+    let d0 = h.connect("Ada", None); // seat 0 drawer
+    let d1 = h.connect("Bo", None); // seat 1 guesser
+    h.send(0, ClientIntent::StartMatch);
+    h.send(0, ClientIntent::Pick { index: 0 });
+    h.tick(d(1));
+
+    // A long point walk kept inside the raster (and inside CANVAS_W/H).
+    let total = MAX_OP_POINTS + 500;
+    let all_points: Vec<(i32, i32)> = (0..total)
+        .map(|i| ((i % (W - 1)) as i32, ((i / (W - 1)) % (H - 1)) as i32))
+        .collect();
+
+    // Send under one stroke_id in ≤200-point batches; done only on the last.
+    let batch = 200;
+    let mut i = 0;
+    while i < all_points.len() {
+        let end = (i + batch).min(all_points.len());
+        h.send(
+            d0,
+            ClientIntent::Stroke {
+                stroke_id: 42,
+                points: all_points[i..end].to_vec(),
+                color: [20, 20, 24, 255],
+                radius: 2,
+                done: end == all_points.len(),
+            },
+        );
+        i = end;
+    }
+
+    let ops = fold_canvas(h.log_for(d1));
+    assert!(
+        ops.len() >= 2,
+        "the over-long stroke auto-split into multiple ops (got {})",
+        ops.len()
+    );
+    assert!(
+        ops.iter().all(|o| match o {
+            CanvasOp::Stroke { points, .. } => points.len() <= MAX_OP_POINTS,
+            _ => true,
+        }),
+        "every logged op is bounded by MAX_OP_POINTS"
+    );
+    let conceptual = vec![CanvasOp::Stroke {
+        id: 0,
+        points: all_points.clone(),
+        color: [20, 20, 24, 255],
+        radius: 2,
+    }];
+    assert_eq!(
+        via_freefns(&ops),
+        via_freefns(&conceptual),
+        "the auto-split replay is pixel-identical to the conceptual single stroke"
     );
 }

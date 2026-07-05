@@ -35,6 +35,12 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 /// The maximum points batched into one [`ClientIntent::Stroke`] frame.
 pub const MAX_STROKE_POINTS: usize = 256;
+/// The maximum points a single logged [`CanvasOp::Stroke`] may hold before the server
+/// auto-splits it (W2-review I2). A stroke that accumulates past this across many
+/// `done: false` batches is finalized and continued in a fresh op (same client
+/// `stroke_id`, next server id, seeded with the split point so the seam is drawn), so
+/// every logged op is bounded and `CanvasLog` stays within [`MAX_FRAME_BYTES`].
+pub const MAX_OP_POINTS: usize = 8192;
 /// The maximum length (chars) of a guess.
 pub const MAX_GUESS_LEN: usize = 128;
 /// The maximum length (chars) of a player name.
@@ -71,6 +77,15 @@ pub enum WireAvatar {
 /// [`crate::canvas::PAPER`] + [`crate::canvas::eraser_radius`], so replaying an op
 /// log through a [`crate::canvas::PaintBuffer`] reproduces byte-identical pixels on
 /// every replica (the integer-op determinism the sync stands on).
+///
+/// **The `id` (spec §3.5 rev-2.2, W2-review I5):** a per-turn, dense `0, 1, 2, …`
+/// sequence assigned by the server **at finalize (append) time** — the counter resets
+/// at each turn start and advances only when an op actually enters the log. An open
+/// stroke that is cancelled (undo-of-open), dropped (clear-with-open, drawer departure)
+/// or empty mints **no** id, so no id is ever consumed invisibly. Because allocation is
+/// deterministic append-order, the drawer (which is never echoed its own ops, spec §3.5)
+/// derives its optimistic ops' ids by counting its own finalizations, letting a
+/// `CanvasUndo { removed_id }` resolve against its local log.
 #[derive(Serialize, Deserialize, Reflect, Clone, Debug, PartialEq)]
 pub enum CanvasOp {
     /// A stroke: the exact post-`to_pixel` sample sequence, stamped at `radius`.
@@ -179,6 +194,19 @@ pub enum ServerEvent {
     WordChoices { words: Vec<String> },
     /// One canvas op was applied (broadcast to all but the originating drawer).
     CanvasOpApplied { op: CanvasOp },
+    /// A live, in-progress stroke batch (spec §3.5 rev-2.2, W2-review I6) — relayed to
+    /// every seat **except** the drawer as each `done: false` batch arrives so guessers
+    /// see the stroke grow before it is finalized. **Transient**: it carries no id,
+    /// never enters the op log or [`Self::CanvasLog`], and a replica paints it
+    /// immediately; the eventual [`Self::CanvasOpApplied`] re-stamps the same pixels
+    /// (idempotent), and any undo re-rasterizes the log from scratch (wiping any
+    /// orphaned progress pixels).
+    CanvasStrokeProgress {
+        stroke_id: u64,
+        points: Vec<(i32, i32)>,
+        color: [u8; 4],
+        radius: i32,
+    },
     /// The last op was removed (broadcast to all, including the drawer).
     CanvasUndo { removed_id: u64 },
     /// The canvas was cleared.
@@ -437,6 +465,12 @@ mod tests {
             },
             ServerEvent::CanvasOpApplied {
                 op: sample_ops()[0].clone(),
+            },
+            ServerEvent::CanvasStrokeProgress {
+                stroke_id: 4,
+                points: vec![(1, 2), (3, 4)],
+                color: [10, 20, 30, 255],
+                radius: 3,
             },
             ServerEvent::CanvasUndo { removed_id: 9 },
             ServerEvent::CanvasCleared,
