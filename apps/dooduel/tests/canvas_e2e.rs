@@ -17,11 +17,43 @@ use bevy::picking::pointer::{Location, PointerId, PointerLocation};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowRef, WindowResolution};
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+
 use buiy_core::components::ResolvedLayout;
 use buiy_core::mvu::Envelope;
 use buiy_verify::pointer::drive_stroke;
+use dooduel::net::{CanvasProgress, ClientNet};
 use dooduel::paint::{CANVAS_H, CANVAS_W, CanvasKind, PAPER, PaintCanvases};
-use dooduel::{CanvasOp, Dooduel, Msg, ServerEvent};
+use dooduel::{CanvasOp, Dooduel, Msg, ReplicaPlayer, ServerEvent, WireAvatar};
+use dooduel_core::protocol::ClientIntent;
+use dooduel_core::transport::{ClientTransport, ConnStatus};
+
+/// A test transport wired to two shared queues — the intents the client SENT (for
+/// asserting the outbound stream) and the events to hand it on `try_recv` (for driving
+/// the pump). `Rc`-backed, single-threaded, like `InProcClient`.
+#[derive(Clone, Default)]
+struct TestWires {
+    sent: Rc<RefCell<Vec<ClientIntent>>>,
+    recv: Rc<RefCell<VecDeque<ServerEvent>>>,
+}
+
+struct TestTransport {
+    wires: TestWires,
+}
+
+impl ClientTransport for TestTransport {
+    fn send(&mut self, intent: &ClientIntent) {
+        self.wires.sent.borrow_mut().push(intent.clone());
+    }
+    fn try_recv(&mut self) -> Option<ServerEvent> {
+        self.wires.recv.borrow_mut().pop_front()
+    }
+    fn status(&self) -> ConnStatus {
+        ConnStatus::Open
+    }
+}
 
 /// Build the unified headless driver: the GPU-free probe preset + the real
 /// picking stack + a synthetic window/camera/pointer, then Dooduel + the canvas.
@@ -325,5 +357,323 @@ fn canvas_cleared_clears_a_drawer_role_raster() {
         inked_pixels(&app),
         0,
         "CanvasCleared cleared the drawer-role client's raster (uniform application)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Drawer undo/clear intent-relay hygiene (I-1/2) — a canvas-only app with a
+// TestTransport `ClientNet` so we can assert the outbound intent stream.
+// ---------------------------------------------------------------------------
+
+/// A GPU-free canvas app (no session) with a [`TestTransport`] `ClientNet`, seated as
+/// the drawer (seat 0) in Drawing so the toolbar is `enabled` and relays intents.
+fn drawer_canvas_app_with_wires() -> (App, TestWires) {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::input::InputPlugin)
+        .add_plugins(buiy::BuiyProbePlugin);
+    app.init_asset::<Image>();
+    dooduel::install(&mut app);
+    app.add_plugins(dooduel::paint::CanvasPlugin);
+    let wires = TestWires::default();
+    app.insert_non_send(ClientNet(Some(Box::new(TestTransport {
+        wires: wires.clone(),
+    }))));
+    settle(&mut app, 12);
+
+    enqueue(
+        &mut app,
+        Msg::Net(ServerEvent::Welcome {
+            seat: 0,
+            room_code: "SOLO".to_string(),
+            reconnect_token: String::new(),
+            protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+        }),
+    );
+    enqueue(
+        &mut app,
+        Msg::Net(ServerEvent::PhaseChanged {
+            phase: dooduel::game::Phase::Drawing,
+            drawer: Some(0),
+            round: 1,
+            total_rounds: 2,
+            remaining: std::time::Duration::from_secs(60),
+        }),
+    );
+    settle(&mut app, 8);
+    (app, wires)
+}
+
+/// Directly stamp one undoable stroke into the Game buffer (each `begin` snapshots the
+/// undo ring), simulating the drawer's optimistic paint without the pointer stack.
+fn stamp_optimistic_stroke(app: &mut App, y: i32) {
+    let mut canvases = app.world_mut().resource_mut::<PaintCanvases>();
+    let g = canvases.surface_mut(CanvasKind::Game);
+    g.begin(80, y);
+    for x in (90..640).step_by(6) {
+        g.extend(x, y);
+    }
+    g.end();
+}
+
+fn undo_intent_count(wires: &TestWires) -> usize {
+    wires
+        .sent
+        .borrow()
+        .iter()
+        .filter(|i| matches!(i, ClientIntent::Undo))
+        .count()
+}
+
+/// I-1: a local Clear is NON-undoable (matches the server, where Clear mints no op),
+/// so a following Undo neither resurrects the drawing NOR relays an Undo intent.
+#[test]
+fn clear_then_undo_leaves_buffer_and_intent_stream_clean() {
+    let (mut app, wires) = drawer_canvas_app_with_wires();
+    stamp_optimistic_stroke(&mut app, (CANVAS_H / 2) as i32);
+    assert!(
+        inked_pixels(&app) > 0,
+        "optimistic ink present before clear"
+    );
+
+    enqueue(&mut app, Msg::ClearCanvas);
+    settle(&mut app, 4);
+    assert_eq!(inked_pixels(&app), 0, "Clear blanked the local buffer");
+
+    enqueue(&mut app, Msg::UndoStroke);
+    settle(&mut app, 4);
+    assert_eq!(
+        inked_pixels(&app),
+        0,
+        "Undo after a non-undoable Clear did NOT resurrect the drawing"
+    );
+    let sent = wires.sent.borrow();
+    let clears = sent
+        .iter()
+        .filter(|i| matches!(i, ClientIntent::Clear))
+        .count();
+    let undos = sent
+        .iter()
+        .filter(|i| matches!(i, ClientIntent::Undo))
+        .count();
+    assert_eq!(clears, 1, "exactly one Clear intent reached the wire");
+    assert_eq!(
+        undos, 0,
+        "no Undo intent reached the wire (the local pop found an empty ring)"
+    );
+}
+
+/// I-2: a mash-undo past the undo-ring floor stops relaying — the Undo intent count
+/// equals the number of successful local pops (the ring depth), so the local pixels
+/// stay consistent with what the intent stream implies (no over-removal on the server).
+#[test]
+fn mash_undo_stops_relaying_at_the_ring_floor() {
+    let (mut app, wires) = drawer_canvas_app_with_wires();
+    // 13 undoable strokes; the ring holds UNDO_DEPTH (12), so the oldest is dropped.
+    for i in 0..13 {
+        stamp_optimistic_stroke(&mut app, 40 + i * 10);
+    }
+    // 13 separate Undo clicks (the seq counter collapses same-frame bumps into one
+    // pop, so each Undo needs its own frame).
+    for _ in 0..13 {
+        enqueue(&mut app, Msg::UndoStroke);
+        settle(&mut app, 3);
+    }
+    assert_eq!(
+        undo_intent_count(&wires),
+        12,
+        "exactly UNDO_DEPTH (12) Undo intents relayed — the 13th (empty ring) sent none"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The net pump (drain_client_net) — progress-overlay wipe triggers (test gap 1).
+// ---------------------------------------------------------------------------
+
+/// A GPU-free app with `NetPlugin` (the pump) fed by a [`TestTransport`], so
+/// `drain_client_net` runs against a scripted `ServerEvent` queue.
+fn pump_app_with_wires() -> (App, TestWires) {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::input::InputPlugin)
+        .add_plugins(buiy::BuiyProbePlugin);
+    app.init_asset::<Image>();
+    dooduel::install(&mut app);
+    app.add_plugins(dooduel::net::NetPlugin);
+    let wires = TestWires::default();
+    // Replace NetPlugin's None transport with the scripted one.
+    app.insert_non_send(ClientNet(Some(Box::new(TestTransport {
+        wires: wires.clone(),
+    }))));
+    settle(&mut app, 8);
+    (app, wires)
+}
+
+fn push_event(wires: &TestWires, ev: ServerEvent) {
+    wires.recv.borrow_mut().push_back(ev);
+}
+
+fn progress_active(app: &App) -> bool {
+    !app.world().resource::<CanvasProgress>().points.is_empty()
+}
+
+fn four_players_drawer1_disconnected(disconnect_drawer: bool) -> Vec<ReplicaPlayer> {
+    (0..4)
+        .map(|i| ReplicaPlayer {
+            name: format!("P{i}"),
+            avatar: WireAvatar::Default,
+            connected: !(disconnect_drawer && i == 1),
+            is_bot: i != 0,
+            score: 0,
+            guessed: false,
+        })
+        .collect()
+}
+
+/// The pump fills the [`CanvasProgress`] overlay from `CanvasStrokeProgress` and wipes
+/// it on BOTH triggers (test gap 1): any authoritative canvas event, AND a `Roster`
+/// showing the drawer disconnected (the silent-discard path — previously uncovered).
+#[test]
+fn pump_fills_and_wipes_the_progress_overlay() {
+    let (mut app, wires) = pump_app_with_wires();
+    // Establish the drawer as seat 1 (so the Roster-disconnect check has a target).
+    push_event(
+        &wires,
+        ServerEvent::PhaseChanged {
+            phase: dooduel::game::Phase::Drawing,
+            drawer: Some(1),
+            round: 1,
+            total_rounds: 2,
+            remaining: std::time::Duration::from_secs(60),
+        },
+    );
+    settle(&mut app, 4);
+
+    let progress = |sid: u64| ServerEvent::CanvasStrokeProgress {
+        stroke_id: sid,
+        points: vec![(10, 10), (20, 20), (30, 30)],
+        color: [0, 0, 0, 255],
+        radius: 3,
+    };
+
+    // Trigger A — an authoritative canvas event wipes the live overlay.
+    push_event(&wires, progress(1));
+    settle(&mut app, 2);
+    assert!(progress_active(&app), "the overlay filled from progress");
+    push_event(&wires, ServerEvent::CanvasCleared);
+    settle(&mut app, 2);
+    assert!(
+        !progress_active(&app),
+        "an authoritative canvas event wiped the overlay"
+    );
+
+    // Trigger B — a Roster showing the drawer (seat 1) disconnected wipes it (the
+    // silent-discard path sends no CanvasUndo, so the Roster is the only signal).
+    push_event(&wires, progress(2));
+    settle(&mut app, 2);
+    assert!(progress_active(&app), "the overlay re-filled from progress");
+    push_event(
+        &wires,
+        ServerEvent::Roster {
+            players: four_players_drawer1_disconnected(true),
+            host: 0,
+        },
+    );
+    settle(&mut app, 2);
+    assert!(
+        !progress_active(&app),
+        "a Roster showing the drawer disconnected wiped the overlay"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Guesser re-raster on CanvasUndo (test gap 2).
+// ---------------------------------------------------------------------------
+
+/// A guesser (not the drawer) re-renders its canvas from the authoritative log on a
+/// `CanvasUndo`: two ops paint the top + bottom bands; undoing the bottom op removes
+/// its ink (the client re-rasters the shortened log).
+#[test]
+fn guesser_re_rasters_on_canvas_undo() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .add_plugins(bevy::input::InputPlugin)
+        .add_plugins(buiy::BuiyProbePlugin);
+    app.init_asset::<Image>();
+    dooduel::install(&mut app);
+    app.add_plugins(dooduel::paint::CanvasPlugin);
+    settle(&mut app, 12);
+
+    // This client is seat 1 (a guesser); seat 0 draws.
+    let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
+    net(
+        &mut app,
+        ServerEvent::Welcome {
+            seat: 1,
+            room_code: "SOLO".to_string(),
+            reconnect_token: String::new(),
+            protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+        },
+    );
+    net(
+        &mut app,
+        ServerEvent::PhaseChanged {
+            phase: dooduel::game::Phase::Drawing,
+            drawer: Some(0),
+            round: 1,
+            total_rounds: 2,
+            remaining: std::time::Duration::from_secs(60),
+        },
+    );
+    settle(&mut app, 4);
+
+    let band = |id: u64, y: i32| CanvasOp::Stroke {
+        id,
+        points: (40..680).step_by(6).map(|x| (x, y)).collect(),
+        color: [20, 20, 24, 255],
+        radius: 4,
+    };
+    let top_y = CANVAS_H / 4;
+    let bottom_y = 3 * CANVAS_H / 4;
+
+    net(
+        &mut app,
+        ServerEvent::CanvasOpApplied {
+            op: band(0, top_y as i32),
+        },
+    );
+    net(
+        &mut app,
+        ServerEvent::CanvasOpApplied {
+            op: band(1, bottom_y as i32),
+        },
+    );
+    settle(&mut app, 4);
+    assert_ne!(
+        game_pixel(&mut app, CANVAS_W / 2, top_y),
+        PAPER,
+        "the top band is inked"
+    );
+    assert_ne!(
+        game_pixel(&mut app, CANVAS_W / 2, bottom_y),
+        PAPER,
+        "the bottom band is inked"
+    );
+
+    // Undo the bottom op → the guesser re-rasters the shortened log.
+    net(&mut app, ServerEvent::CanvasUndo { removed_id: 1 });
+    settle(&mut app, 4);
+    assert_ne!(
+        game_pixel(&mut app, CANVAS_W / 2, top_y),
+        PAPER,
+        "the top band survives the undo"
+    );
+    assert_eq!(
+        game_pixel(&mut app, CANVAS_W / 2, bottom_y),
+        PAPER,
+        "the undone bottom band is gone (the guesser re-rastered on CanvasUndo)"
     );
 }
