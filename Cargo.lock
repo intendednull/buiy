@@ -2872,6 +2872,7 @@ dependencies = [
  "async-net",
  "async-tungstenite",
  "dooduel_core",
+ "dooduel_mcp",
  "futures-lite",
  "getrandom 0.3.4",
  "serde_json",

@@ -33,10 +33,13 @@ serde_json = { workspace = true }
 # Room codes + reconnect tokens (spec §6.2/§6.3).
 getrandom = { workspace = true }
 
-# The localhost e2e smoke (`tests/e2e.rs`, W4.7) drives the running server bin
-# (CARGO_BIN_EXE_dooduel_server) through real WebSocket clients — so the test build
-# pulls dooduel_core's ewebsock `ws-client` transport. Dev-only: the production server
-# binary uses async-tungstenite, never ewebsock (feature unification keeps ws-client off
-# the non-test build). W5 swaps this for a dev-dep on the `dooduel_mcp` lib.
+# The two-process e2e (`tests/e2e.rs`, W5.3) spawns the running server bin
+# (CARGO_BIN_EXE_dooduel_server) and drives it through real `dooduel_mcp::HeadlessClient`s
+# over actual WebSockets (spec §9.5). The MCP client lib pulls dooduel_core's ewebsock
+# `ws-client` transport transitively, so this test build has the client transport while the
+# PRODUCTION server bin still uses async-tungstenite (the ws-client feature unification is
+# dev-only — the non-test bin build never sees ewebsock). `dooduel_core` (default features)
+# supplies the protocol/transport TYPES the e2e names directly.
 [dev-dependencies]
 dooduel_core = { path = "../dooduel_core", features = ["ws-client"] }
+dooduel_mcp = { path = "../dooduel_mcp" }

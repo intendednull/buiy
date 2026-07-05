@@ -292,7 +292,12 @@ impl<T: ClientTransport> HeadlessClient<T> {
     }
 
     /// Join a room by code, optionally re-attaching a held seat with a token (spec §6.3).
-    pub fn join(&mut self, room: impl Into<String>, name: impl Into<String>, reconnect: Option<String>) {
+    pub fn join(
+        &mut self,
+        room: impl Into<String>,
+        name: impl Into<String>,
+        reconnect: Option<String>,
+    ) {
         self.name = name.into();
         self.send(ClientIntent::Join {
             room: room.into(),
@@ -320,7 +325,14 @@ impl<T: ClientTransport> HeadlessClient<T> {
 
     /// Send one stroke batch under an explicit `stroke_id` (spec §3.5) — the multi-batch
     /// path the e2e drives (`done: false` grows the stroke; `done: true` finalizes it).
-    pub fn stroke(&mut self, stroke_id: u64, points: Vec<(i32, i32)>, color: [u8; 4], radius: i32, done: bool) {
+    pub fn stroke(
+        &mut self,
+        stroke_id: u64,
+        points: Vec<(i32, i32)>,
+        color: [u8; 4],
+        radius: i32,
+        done: bool,
+    ) {
         self.send(ClientIntent::Stroke {
             stroke_id,
             points,
@@ -363,6 +375,14 @@ impl<T: ClientTransport> HeadlessClient<T> {
         self.send(ClientIntent::Leave);
     }
 
+    /// Send an arbitrary intent verbatim — the escape hatch the e2e uses to drive
+    /// off-nominal frames (e.g. a `Create` carrying a deliberately-wrong
+    /// `protocol_version` for the version-gate test). The tool-facing passthroughs above
+    /// always send the current [`PROTOCOL_VERSION`].
+    pub fn send_raw(&mut self, intent: ClientIntent) {
+        self.send(intent);
+    }
+
     fn send(&mut self, intent: ClientIntent) {
         self.transport.send(&intent);
     }
@@ -388,7 +408,11 @@ impl<T: ClientTransport> HeadlessClient<T> {
             .get(me)
             .map(|p| p.name.as_str())
             .filter(|n| !n.is_empty())
-            .unwrap_or(if self.name.is_empty() { "you" } else { &self.name });
+            .unwrap_or(if self.name.is_empty() {
+                "you"
+            } else {
+                &self.name
+            });
 
         let mut out = String::new();
         out.push_str(&format!("# Dooduel — you are seat {me} ({my_name})\n"));
@@ -398,7 +422,10 @@ impl<T: ClientTransport> HeadlessClient<T> {
             r.room_code.clone()
         };
         let mut line = format!("Room {room} · {}", phase_label(r.phase));
-        if r.round > 0 && r.total_rounds > 0 && matches!(r.phase, Phase::Picking | Phase::Drawing | Phase::Reveal) {
+        if r.round > 0
+            && r.total_rounds > 0
+            && matches!(r.phase, Phase::Picking | Phase::Drawing | Phase::Reveal)
+        {
             line.push_str(&format!(" · round {}/{}", r.round, r.total_rounds));
         }
         let secs = r.remaining.as_secs();
@@ -598,7 +625,14 @@ fn phase_label(phase: Phase) -> &'static str {
 
 /// Stamp a stroke's exact sample sequence (interpolating between samples) — the pure
 /// integer op the op-log sync stands on. Mirrors `paint.rs::stamp_points`.
-fn stamp_points(px: &mut [u8], w: usize, h: usize, points: &[(i32, i32)], color: [u8; 4], radius: i32) {
+fn stamp_points(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    points: &[(i32, i32)],
+    color: [u8; 4],
+    radius: i32,
+) {
     let mut last: Option<(i32, i32)> = None;
     for &(x, y) in points {
         match last {
@@ -746,7 +780,10 @@ mod tests {
             hints_revealed: 1,
         });
         let report = guesser.state_report();
-        assert!(report.contains("_ _ B _ _"), "the hint row is shown: {report}");
+        assert!(
+            report.contains("_ _ B _ _"),
+            "the hint row is shown: {report}"
+        );
         assert!(
             !report.to_lowercase().contains("robot"),
             "one hint does not leak the word"
@@ -882,7 +919,10 @@ mod tests {
             hints_revealed: 0,
         });
         let report = hc.state_report();
-        assert!(report.contains("guess(text)"), "a guesser can guess: {report}");
+        assert!(
+            report.contains("guess(text)"),
+            "a guesser can guess: {report}"
+        );
     }
 
     // --- The fold mirrors the GUI apply_event semantics ---------------------
@@ -900,7 +940,10 @@ mod tests {
             correct: true,
             points: 300,
         });
-        assert!(hc.replica().players[2].guessed, "a correct guess flags the seat");
+        assert!(
+            hc.replica().players[2].guessed,
+            "a correct guess flags the seat"
+        );
 
         hc.apply(ServerEvent::TurnEnded {
             results: vec![],
@@ -908,7 +951,13 @@ mod tests {
         });
         assert_eq!(
             hc.replica().word_slots(),
-            vec![('R', true), ('O', true), ('B', true), ('O', true), ('T', true)],
+            vec![
+                ('R', true),
+                ('O', true),
+                ('B', true),
+                ('O', true),
+                ('T', true)
+            ],
             "TurnEnded reveals the full word"
         );
     }
@@ -966,7 +1015,9 @@ mod tests {
         let mut players = four_players();
         players[0].connected = false;
         hc.apply(ServerEvent::Roster { players, host: 1 });
-        let img = image::load_from_memory(&hc.canvas_png()).expect("decodes").to_rgba8();
+        let img = image::load_from_memory(&hc.canvas_png())
+            .expect("decodes")
+            .to_rgba8();
         assert!(
             img.pixels().all(|p| p.0 == PAPER),
             "a disconnected-drawer Roster wipes the transient progress"

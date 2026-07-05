@@ -496,7 +496,11 @@ mod tests {
         }
         // Every tool carries an inputSchema (an object schema).
         for t in tools {
-            assert_eq!(t["inputSchema"]["type"], json!("object"), "tool {t:?} has a schema");
+            assert_eq!(
+                t["inputSchema"]["type"],
+                json!("object"),
+                "tool {t:?} has a schema"
+            );
         }
     }
 
@@ -559,9 +563,15 @@ mod tests {
     #[test]
     fn a_malformed_line_is_a_parse_error_with_a_null_id() {
         let mut s = server();
-        let resp = s.handle("this is not json").expect("a malformed line still answers");
+        let resp = s
+            .handle("this is not json")
+            .expect("a malformed line still answers");
         let v = parse(&resp);
-        assert_eq!(v["id"], Value::Null, "a parse error echoes a null id (JSON-RPC 2.0)");
+        assert_eq!(
+            v["id"],
+            Value::Null,
+            "a parse error echoes a null id (JSON-RPC 2.0)"
+        );
         assert_eq!(v["error"]["code"], json!(-32700), "Parse error code");
     }
 
@@ -615,7 +625,11 @@ mod tests {
             .handle(r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"draw_stroke","arguments":{"points":[[10,10],[20,20]],"color":[20,20,24,255],"size":4}}}"#)
             .expect("a response");
         let v = parse(&resp);
-        assert_eq!(v["result"]["isError"], json!(false), "a well-formed draw_stroke succeeds");
+        assert_eq!(
+            v["result"]["isError"],
+            json!(false),
+            "a well-formed draw_stroke succeeds"
+        );
 
         // A malformed color is a tool error (never a panic).
         let bad = s
