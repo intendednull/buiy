@@ -2853,6 +2853,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dooduel_mcp"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "dooduel_core",
+ "image",
+ "serde_json",
+]
+
+[[package]]
 name = "dooduel_server"
 version = "0.0.1"
 dependencies = [

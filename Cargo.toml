@@ -42,6 +42,7 @@ members = [
     "apps/dooduel",
     "apps/dooduel/dooduel_web",
     "apps/dooduel_server",
+    "apps/dooduel_mcp",
 ]
 
 [workspace.package]
