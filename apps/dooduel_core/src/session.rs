@@ -1371,6 +1371,43 @@ mod tests {
         );
     }
 
+    /// When a *guesser* vacate ends the turn inside the core (8a7b785: `vacate_seat`
+    /// re-evaluates the membership-based `all_guessed`), the Session must still stage
+    /// the turn-end events — the shared resync phase-diff path owns this, not
+    /// `force_end_turn` (which is the drawer-drop path). Vacating the last not-yet-
+    /// guessed guesser while another guesser already has it flips Drawing→Reveal.
+    #[test]
+    fn a_guesser_vacate_that_ends_the_turn_still_stages_turnended() {
+        // Three humans: seat 0 drawer, seats 1 & 2 guessers.
+        let mut s = new_session(0);
+        s.connect("Ada", WireAvatar::Default, None, d(0)).unwrap();
+        s.connect("Bo", WireAvatar::Default, None, d(0)).unwrap();
+        s.connect("Cy", WireAvatar::Default, None, d(0)).unwrap();
+        s.drain_events();
+        s.handle(0, ClientIntent::StartMatch);
+        s.handle(0, ClientIntent::Pick { index: 0 });
+        s.drain_events();
+        let secret = s.game.secret_word.clone();
+        // Seat 1 guesses correctly; seat 2 has not — the turn stays open.
+        s.handle(1, ClientIntent::Guess { text: secret });
+        s.drain_events();
+        assert_eq!(s.game.phase, Phase::Drawing, "seat 2 still owes a guess");
+        // Seat 2 leaves: the only remaining occupied guesser (seat 1) already has it,
+        // so the CORE ends the turn — the Session must stage the TurnEnded for it.
+        s.handle(2, ClientIntent::Leave);
+        assert_eq!(
+            s.game.phase,
+            Phase::Reveal,
+            "vacating the last pending guesser ends the turn in the core"
+        );
+        let evs = s.drain_events();
+        assert!(
+            evs.iter()
+                .any(|(_, e)| matches!(e, ServerEvent::TurnEnded { .. })),
+            "the Session stages TurnEnded when a core vacate (not force_end_turn) ends the turn"
+        );
+    }
+
     // --- Tick-driven transitions --------------------------------------------
 
     #[test]
