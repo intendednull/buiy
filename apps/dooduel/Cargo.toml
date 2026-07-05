@@ -47,7 +47,9 @@ bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bev
 # The pure, Bevy-free game/protocol/canvas core (spec §2.1). `game` + `canvas` are
 # re-exported through this lib so existing `crate::game::…` / `paint::…` paths stay
 # stable; the server + MCP clients depend on `dooduel_core` WITHOUT the GUI stack.
-dooduel_core = { path = "../dooduel_core" }
+# `ws-client` pulls the ewebsock `WsClientTransport` (W4) for networked Create/Join —
+# native + wasm (`dooduel_web` rides this transitively).
+dooduel_core = { path = "../dooduel_core", features = ["ws-client"] }
 buiy = { path = "../../crates/buiy" }
 buiy_core = { path = "../../crates/buiy_core" }
 buiy_view = { path = "../../crates/buiy_view" }

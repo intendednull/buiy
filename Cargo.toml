@@ -41,6 +41,7 @@ members = [
     "apps/dooduel_core",
     "apps/dooduel",
     "apps/dooduel/dooduel_web",
+    "apps/dooduel_server",
 ]
 
 [workspace.package]
@@ -161,6 +162,30 @@ dhat = "0.3"
 # compile-only scaffold here; it runs on a GPU/CI host with valgrind). MIT/Apache-2.0;
 # `cargo deny check` gates the add.
 iai-callgrind = "0.16"
+
+# --- Dooduel M1 W4: production multiplayer networking (spec §10) ------------
+# Client WebSocket transport (`dooduel_core::transport::WsClientTransport`, feature
+# `ws-client`): native (`tungstenite` on a background thread, no reactor) + wasm
+# (`web-sys` WebSocket) behind one poll-style API. Pinned per spec §10 — last release
+# 2024-11 (repo alive, unreleased); do NOT take git main (`unknown-git = "deny"`). It
+# pins tungstenite 0.24, so the lock carries TWO tungstenite versions (0.24 here /
+# 0.29 via async-tungstenite on the server), which `multiple-versions = "allow"`
+# permits (self-resolves on ewebsock's next release).
+ewebsock = "=0.8.0"
+# Server WebSocket (`dooduel_server`), runtime-agnostic core on futures-io, driven by
+# the smol family — tokio-free (spec §6.1/§10). `default-features = false` drops the
+# TLS backends (no `wss://` in M1, spec §6.2 — that lands in M3 with its own deny delta).
+async-tungstenite = { version = "0.34", default-features = false, features = ["smol-runtime"] }
+# The smol async ecosystem `dooduel_server` runs on. `async-net` is the one genuinely
+# new lock node; `async-io`/`async-executor`/`futures-lite` are already in the lock
+# (via bevy/zbus), so declaring them here adds no new supply-chain crate (spec §10).
+async-net = "2"
+async-executor = "1"
+async-io = "2"
+futures-lite = "2"
+# Server-side entropy — the room codes + reconnect tokens (spec §6.2/§6.3). Already a
+# transitive lock node (0.3.4); a DIRECT dep of `dooduel_server` only (never wasm).
+getrandom = "0.3"
 
 # --- Build profiles --------------------------------------------------------
 # Disable debuginfo for the dev + test profiles. The bulk of CI target-dir disk

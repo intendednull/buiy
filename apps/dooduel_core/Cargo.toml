@@ -13,6 +13,13 @@ bevy_reflect = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }        # WireAvatar::Custom png_base64 (W1)
+# The client WebSocket transport (`transport::WsClientTransport`, feature "ws-client";
+# W4.2). ewebsock is native + wasm behind one poll-style API. OPTIONAL — only the
+# client graph (`dooduel` / `dooduel_web`) enables it; `dooduel_server` uses
+# async-tungstenite instead, and a bare `dooduel_core` (its own tests) stays wire-free.
+ewebsock = { workspace = true, optional = true }
 
 [features]
-# wave 4 adds: ws-client = ["dep:ewebsock"]
+# The ewebsock-backed client WebSocket transport (spec §2.1, amended W4.2). Off by
+# default so the pure-core tests + the server dep-tree never pull ewebsock.
+ws-client = ["dep:ewebsock"]
