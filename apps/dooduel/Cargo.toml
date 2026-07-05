@@ -33,14 +33,11 @@ name = "capture"
 path = "src/bin/capture.rs"
 doc = false
 
-# The multi-agent playtest host (GPU-free, native-only): runs the app + game with
-# a real-time clock and a file protocol under --dir, so N separate agents each
-# drive a seat. Reads the model → per-seat honest views + state.json + canvas.png;
-# polls commands.jsonl (guesses through the funnel, strokes on the real paint path).
-[[bin]]
-name = "playtest_host"
-path = "src/bin/playtest_host.rs"
-doc = false
+# NOTE (M1 W3): the file-protocol `playtest_host` bin was DELETED here — it drove the
+# pre-replica model directly and cannot survive the client-replica refactor. Its
+# successor is `dooduel_mcp` (a headless protocol client, W5); the in-process solo
+# path (`net::LocalAuthorityPlugin`) is the interim verification harness. The branch
+# merges as one gated series, so the capability gap never reaches `main` (spec §11).
 
 [dependencies]
 # `x11`/`wayland` are Linux-native windowing backends — target-gated below so the

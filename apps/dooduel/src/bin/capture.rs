@@ -9,6 +9,7 @@
 //! adapter; works headless with Vulkan/lavapipe — no display required).
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::{CameraPlugin, RenderTarget};
@@ -21,8 +22,9 @@ use bevy::render::view::Msaa;
 
 use buiy_core::mvu::Envelope;
 use buiy_core::theme::{default_dark_theme, default_light_theme};
+use dooduel::game::{ChatKind, ChatMsg, Phase};
 use dooduel::theme::DooduelThemePlugin;
-use dooduel::{Dooduel, Msg, Screen, theme::ThemePref};
+use dooduel::{Dooduel, Msg, ReplicaPlayer, Screen, ServerEvent, WireAvatar, theme::ThemePref};
 
 const WIDTH: u32 = 1200;
 const HEIGHT: u32 = 760;
@@ -78,12 +80,18 @@ fn main() {
     enqueue(&mut app, Msg::CloseAvatarEditor);
     settle(&mut app);
 
+    // The in-game + podium screens are seeded through the REAL `Msg::Net` path (a
+    // hand-scripted `ServerEvent` stream, exactly what a live `Session` would send)
+    // — the least-code faithful port after the client-replica refactor (M1 W3): no
+    // GPU-free `Session`/clock plumbing, and it exercises the reducer's event→replica
+    // fold. `enter_game` puts the shell on the in-game screen for a fresh turn.
+
     // === In-game (drawer, mid-draw) ===
-    enqueue(&mut app, Msg::SetName("Mara".to_string()));
-    enqueue(&mut app, Msg::Play);
+    enqueue(&mut app, Msg::Back);
     settle(&mut app);
-    // Pick the first word to enter the Drawing phase, then advance the clock a bit.
-    enqueue(&mut app, Msg::ChooseWord(0));
+    enter_game(&mut app);
+    drawing(&mut app, 0, "R O B O T", 5, 0); // seat 0 draws; sees the full word
+    tick(&mut app);
     settle(&mut app);
     capture(
         &mut app,
@@ -92,53 +100,47 @@ fn main() {
     );
 
     // === In-game (guesser view: chat feedback + hint slot) — bugs #1/#4/#5 ===
-    // A controlled, bots-off match set directly on the model (like the playtest
-    // host's `start`) so the three-way feedback is deterministic: view as a guesser,
-    // tick past the first hint threshold (a letter reveals), then inject a shared
-    // WRONG guess, a private NEAR-MISS (by the viewing seat), and a green CORRECT row.
-    {
-        use std::time::Duration;
-        let e = app
-            .world_mut()
-            .query_filtered::<Entity, With<Dooduel>>()
-            .iter(app.world())
-            .next()
-            .expect("model entity");
-        // Scope the `Mut<Dooduel>` borrow so it ends before `settle`/`capture` reborrow
-        // the world (a no-op `drop()` of a non-Drop `Mut` would not compile-clean).
-        {
-            let mut d = app.world_mut().get_mut::<Dooduel>(e).expect("model");
-            d.game.start_match_solo(
-                "Mara",
-                dooduel::game::Config {
-                    bots_enabled: false,
-                    ..Default::default()
-                },
-            );
-            d.screen = Screen::InGame;
-            let w = d.game.word_choices[0].clone();
-            d.game.choose_word(w);
-            d.game.tick(Duration::from_secs(0)); // anchor the draw clock
-            d.game.tick(Duration::from_secs(50)); // elapsed 50 > 47 ⇒ first hint reveals
-            let secret = d.game.secret_word.clone();
-            d.game.switch_seat(1); // view as a guesser (blanks + the revealed hint)
-            d.game.apply_guess(2, "windmill"); // a shared WRONG guess (everyone sees it)
-            let near = format!("{secret}{}", secret.chars().last().unwrap_or('s')); // one-off ⇒ near-miss
-            d.game.apply_guess(1, &near); // PRIVATE "So close!" nudge to the viewing seat
-            d.game.apply_guess(3, &secret); // a green CORRECT row
-        }
-        settle(&mut app);
-        capture(
-            &mut app,
-            target.clone(),
-            &format!("{OUT_DIR}/in_game_feedback.png"),
-        );
-    }
-
-    // === In-game (word-pick overlay) — restart a match, capture Picking ===
+    // Seat 1 is a guesser: blanks + one revealed hint, plus the three-way chat (a
+    // shared WRONG guess, a private near-miss nudge, a green CORRECT row).
     enqueue(&mut app, Msg::Back);
     settle(&mut app);
-    enqueue(&mut app, Msg::Play);
+    enter_game_as(&mut app, 1);
+    drawing(&mut app, 0, "_ _ B _ _", 5, 1);
+    net(&mut app, chat(1, ChatKind::Guess, "Theo: windmill", None));
+    net(&mut app, chat(2, ChatKind::Close, "So close! 👀", Some(1)));
+    net(
+        &mut app,
+        chat(3, ChatKind::Correct, "🎉 Sam guessed the word!", None),
+    );
+    tick(&mut app);
+    settle(&mut app);
+    capture(
+        &mut app,
+        target.clone(),
+        &format!("{OUT_DIR}/in_game_feedback.png"),
+    );
+
+    // === In-game (word-pick overlay) — seat 0 is picking ===
+    enqueue(&mut app, Msg::Back);
+    settle(&mut app);
+    enter_game(&mut app);
+    net(
+        &mut app,
+        ServerEvent::PhaseChanged {
+            phase: Phase::Picking,
+            drawer: Some(0),
+            round: 1,
+            total_rounds: 2,
+            remaining: Duration::from_secs(15),
+        },
+    );
+    net(
+        &mut app,
+        ServerEvent::WordChoices {
+            words: vec!["robot".into(), "castle".into(), "kite".into()],
+        },
+    );
+    tick(&mut app);
     settle(&mut app);
     capture(
         &mut app,
@@ -146,8 +148,32 @@ fn main() {
         &format!("{OUT_DIR}/in_game_picking.png"),
     );
 
-    // === Podium — drive a full instant match via injected ticks ===
-    drive_to_podium(&mut app);
+    // === Podium — the `MatchEnded` event lifts the shell to the podium ===
+    enqueue(&mut app, Msg::Back);
+    settle(&mut app);
+    net(&mut app, roster());
+    net(
+        &mut app,
+        ServerEvent::PhaseChanged {
+            phase: Phase::Final,
+            drawer: None,
+            round: 2,
+            total_rounds: 2,
+            remaining: Duration::ZERO,
+        },
+    );
+    net(
+        &mut app,
+        ServerEvent::MatchEnded {
+            podium: vec![
+                (1, "Priya".into(), 1420),
+                (0, "Mara".into(), 980),
+                (2, "Theo".into(), 610),
+                (3, "Sam".into(), 300),
+            ],
+        },
+    );
+    settle(&mut app);
     capture(&mut app, target.clone(), &format!("{OUT_DIR}/podium.png"));
 
     // === Dark theme — Home. `SetTheme(Dark)` folds → `sync_theme_resource` swaps
@@ -244,19 +270,107 @@ fn settle(app: &mut App) {
     }
 }
 
-/// Drive an instant full match to the podium by injecting `Tick`s far past every
-/// phase timeout (the pure clock derives everything from `now`).
-fn drive_to_podium(app: &mut App) {
-    use std::time::Duration;
-    let mut t = 1u64;
-    for _ in 0..400 {
-        if screen(app) == Screen::Podium {
-            break;
-        }
-        enqueue(app, Msg::Tick(Duration::from_secs(t)));
-        t += 5;
-        app.update();
+/// Enqueue one authoritative event (what a live `Session` would send).
+fn net(app: &mut App, ev: ServerEvent) {
+    enqueue(app, Msg::Net(ev));
+}
+
+/// Anchor + derive the countdown (a `PhaseChanged` staged the anchor; the tick folds
+/// it to whole seconds). Capture's virtual clock sits near zero, so `from_secs(0)`
+/// derives `secs == remaining`.
+fn tick(app: &mut App) {
+    enqueue(app, Msg::Tick(Duration::ZERO));
+}
+
+/// The four-seat sample roster the in-game + podium captures share.
+fn sample_players() -> Vec<ReplicaPlayer> {
+    let mk = |name: &str, is_bot: bool, score: i64| ReplicaPlayer {
+        name: name.to_string(),
+        avatar: WireAvatar::Default,
+        connected: true,
+        is_bot,
+        score,
+        guessed: false,
+    };
+    vec![
+        mk("Mara", false, 340),
+        mk("Priya", true, 410),
+        mk("Theo", true, 180),
+        mk("Sam", true, 90),
+    ]
+}
+
+/// The shared roster event.
+fn roster() -> ServerEvent {
+    ServerEvent::Roster {
+        players: sample_players(),
+        host: 0,
     }
+}
+
+/// A chat-line event. `seq` must be UNIQUE per line (the chat `keyed_column` keys on
+/// it — a real session's `chat_seq` is monotonic).
+fn chat(seq: u64, kind: ChatKind, text: &str, to: Option<usize>) -> ServerEvent {
+    ServerEvent::ChatLine {
+        line: ChatMsg {
+            seq,
+            kind,
+            text: text.to_string(),
+            to,
+        },
+    }
+}
+
+/// Seat this client on the in-game screen for a fresh room (as seat `seat`): the
+/// `Welcome` + `Roster` seed, plus a direct screen set (capture has no `Session`, so
+/// nothing else lifts the shell into the game).
+fn enter_game_as(app: &mut App, seat: usize) {
+    net(
+        app,
+        ServerEvent::Welcome {
+            seat,
+            room_code: "SOLO".to_string(),
+            reconnect_token: String::new(),
+            protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+        },
+    );
+    net(app, roster());
+    settle(app);
+    let e = app
+        .world_mut()
+        .query_filtered::<Entity, With<Dooduel>>()
+        .iter(app.world())
+        .next()
+        .expect("model entity");
+    app.world_mut().get_mut::<Dooduel>(e).expect("model").screen = Screen::InGame;
+}
+
+/// Seat this client as the drawer (seat 0) on the in-game screen.
+fn enter_game(app: &mut App) {
+    enter_game_as(app, 0);
+}
+
+/// A `PhaseChanged(Drawing)` for `drawer` + this client's `WordUpdate` (the drawer
+/// gets the full word; a guesser gets `display` — blanks + revealed hints).
+fn drawing(app: &mut App, drawer: usize, display: &str, len: usize, hints: usize) {
+    net(
+        app,
+        ServerEvent::PhaseChanged {
+            phase: Phase::Drawing,
+            drawer: Some(drawer),
+            round: 1,
+            total_rounds: 2,
+            remaining: Duration::from_secs(60),
+        },
+    );
+    net(
+        app,
+        ServerEvent::WordUpdate {
+            display: display.to_string(),
+            len,
+            hints_revealed: hints,
+        },
+    );
 }
 
 /// One-shot `Readback` → strip wgpu row padding → PNG.
