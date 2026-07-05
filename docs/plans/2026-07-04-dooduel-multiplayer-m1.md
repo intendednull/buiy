@@ -82,7 +82,7 @@ docs/README.md                  index updates ship with each wave that changes d
 
 **Files:** Create `apps/dooduel_core/{Cargo.toml,src/lib.rs,src/game.rs,src/canvas.rs,tests/purity.rs}`. Modify root `Cargo.toml` (members + `bevy_reflect` workspace dep), `apps/dooduel/Cargo.toml`, `apps/dooduel/src/{lib.rs,paint.rs}`. Delete `apps/dooduel/src/game.rs` (moved).
 
-- [ ] **W0.1 Package skeleton.** `apps/dooduel_core/Cargo.toml`:
+- [x] **W0.1 Package skeleton.** `apps/dooduel_core/Cargo.toml`:
 
 ```toml
 [package]
@@ -107,8 +107,8 @@ base64 = { workspace = true }        # WireAvatar::Custom png_base64 (W1)
 
 Root `Cargo.toml`: add `"apps/dooduel_core"` to members (before `"apps/dooduel"`); add `bevy_reflect = "0.19.0"` to `[workspace.dependencies]` (matches the existing lock node — **no new lock entry**).
 
-- [ ] **W0.2 Move `game.rs` + extract its tests.** `git mv apps/dooduel/src/game.rs apps/dooduel_core/src/game.rs`; change `use bevy::prelude::Reflect` → `use bevy_reflect::Reflect`. In `apps/dooduel/src/lib.rs` replace `pub mod game;` with `pub use dooduel_core::game;` (path-stable for `view/`, tests, bins). **The pure game tests do NOT live in game.rs** (rev-2 correction) — they live in `apps/dooduel/src/lib.rs`'s `tests` module: extract the pure ones (`normalize_*`, `close_matches_*`, `guesser_points_*`, `drawer_points_*`, `match_starts_*`, `pick_timeout_*`, `choosing_a_word_*`, the tick/countdown suite — everything using only `Game`/`Config`, no App/probe) into a `#[cfg(test)] mod tests` in `dooduel_core/src/game.rs`, moving the `started()`/`tick_to()` helpers with them; probe/ECS tests stay in `apps/dooduel`.
-- [ ] **W0.3 Extract the pure canvas.** Create `apps/dooduel_core/src/canvas.rs`: move from `paint.rs` the pure items — `stamp_circle`, `stroke_segment`, `flood_fill`, `PAPER`, `PALETTE`, `BRUSH_SIZES`, `Tool` — and add `pub fn eraser_radius(base: i32) -> i32` (the ×1.6 rule extracted as a helper — today it is inline in the Bevy-coupled `sync_tools_to_canvases`; the wire encoder needs it too, spec §3.5). New bevy-free buffer extracted from `PaintSurface`'s pure half:
+- [x] **W0.2 Move `game.rs` + extract its tests.** `git mv apps/dooduel/src/game.rs apps/dooduel_core/src/game.rs`; change `use bevy::prelude::Reflect` → `use bevy_reflect::Reflect`. In `apps/dooduel/src/lib.rs` replace `pub mod game;` with `pub use dooduel_core::game;` (path-stable for `view/`, tests, bins). **The pure game tests do NOT live in game.rs** (rev-2 correction) — they live in `apps/dooduel/src/lib.rs`'s `tests` module: extract the pure ones (`normalize_*`, `close_matches_*`, `guesser_points_*`, `drawer_points_*`, `match_starts_*`, `pick_timeout_*`, `choosing_a_word_*`, the tick/countdown suite — everything using only `Game`/`Config`, no App/probe) into a `#[cfg(test)] mod tests` in `dooduel_core/src/game.rs`, moving the `started()`/`tick_to()` helpers with them; probe/ECS tests stay in `apps/dooduel`.
+- [x] **W0.3 Extract the pure canvas.** Create `apps/dooduel_core/src/canvas.rs`: move from `paint.rs` the pure items — `stamp_circle`, `stroke_segment`, `flood_fill`, `PAPER`, `PALETTE`, `BRUSH_SIZES`, `Tool` — and add `pub fn eraser_radius(base: i32) -> i32` (the ×1.6 rule extracted as a helper — today it is inline in the Bevy-coupled `sync_tools_to_canvases`; the wire encoder needs it too, spec §3.5). New bevy-free buffer extracted from `PaintSurface`'s pure half:
 
 ```rust
 /// The Bevy-free pixel surface: RGBA8 pixels + brush state + the undo ring.
@@ -133,8 +133,8 @@ impl PaintBuffer {
 ```
 
 `paint.rs` re-exports `Tool` (`pub use dooduel_core::canvas::Tool;`) so `Msg::SelectTool(paint::Tool)` and view code stay untouched.
-- [ ] **W0.4 Re-point `paint.rs`.** `PaintSurface` delegates pixels/brush/undo to an inner `PaintBuffer`; keeps `enabled`, `to_pixel`, Bevy `Image` mirroring, observers. All existing paint tests must pass unchanged.
-- [ ] **W0.5 Automated purity tripwire** (rev-2: the wasm check does NOT guard bevy-freeness — bevy/buiy are wasm-safe). `apps/dooduel_core/tests/purity.rs`:
+- [x] **W0.4 Re-point `paint.rs`.** `PaintSurface` delegates pixels/brush/undo to an inner `PaintBuffer`; keeps `enabled`, `to_pixel`, Bevy `Image` mirroring, observers. All existing paint tests must pass unchanged.
+- [x] **W0.5 Automated purity tripwire** (rev-2: the wasm check does NOT guard bevy-freeness — bevy/buiy are wasm-safe). `apps/dooduel_core/tests/purity.rs`:
 
 ```rust
 /// dooduel_core must stay Bevy-free (spec §2.1): the only bevy-family dep is
@@ -158,7 +158,7 @@ fn dep_tree_is_bevy_free() {
 ```
 
 (`bevy_ptr`/`bevy_utils`/`bevy_platform` are `bevy_reflect`'s own transitive family — verify the exact allow-list against `cargo tree` output when implementing and pin what's printed.)
-- [ ] **W0.6 Gate + commit.** Full SG. Expected: total workspace test count unchanged ± the relocated pure game tests (now reported under `dooduel_core`; nothing lost — compare `nextest` totals before/after). Two commits: (1) lockfile-only member addition + `cargo deny check`; (2) the move + extraction.
+- [x] **W0.6 Gate + commit.** Full SG. Expected: total workspace test count unchanged ± the relocated pure game tests (now reported under `dooduel_core`; nothing lost — compare `nextest` totals before/after). Two commits: (1) lockfile-only member addition + `cargo deny check`; (2) the move + extraction.
 
 ### Wave 1 — protocol types + the `game::Game` API delta
 

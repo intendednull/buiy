@@ -203,7 +203,7 @@ pub struct PaintBuffer {
     pub radius: i32,
     pub tool: Tool,
     /// Set on any edit. The Bevy wrapper (`PaintSurface`) clears it after mirroring
-    /// the buffer into its `Image` asset; the headless rasterizer uses ignore it.
+    /// the buffer into its `Image` asset; headless rasterizer users ignore it.
     pub dirty: bool,
     /// The previous drag sample, so `extend` interpolates from it.
     last: Option<(i32, i32)>,
