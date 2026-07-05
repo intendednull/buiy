@@ -52,8 +52,20 @@ pub fn in_game(s: &Dooduel) -> Element<Msg> {
 fn game_overlays(s: &Dooduel, max_w: f32) -> Vec<Element<Msg>> {
     let p = s.palette();
     let picking = s.replica.phase == Phase::Picking;
+    // The drawer's pick list only renders once the choices are present. During the
+    // PhaseChanged→WordChoices event gap, or a mid-Picking RECONNECT whose RoomState is
+    // choice-less until a fresh `WordChoices`/auto-pick arrives, the drawer sees a calm
+    // "getting your words" shape instead of a broken empty list (W3/W4 review).
+    let has_choices = !s.replica.word_choices.is_empty();
     vec![
-        when(picking && s.is_drawer(), pick_overlay(s, p, max_w)),
+        when(
+            picking && s.is_drawer() && has_choices,
+            pick_overlay(s, p, max_w),
+        ),
+        when(
+            picking && s.is_drawer() && !has_choices,
+            getting_words_overlay(p, max_w),
+        ),
         when(picking && !s.is_drawer(), waiting_overlay(s, p, max_w)),
         when(
             s.replica.phase == Phase::Reveal,
@@ -899,6 +911,35 @@ fn reveal_overlay(s: &Dooduel, p: Palette, max_w: f32) -> Element<Msg> {
     ]
     .gap(Space::Md)
     .width(440.0_f32.min(max_w))
+    .background(p.surface)
+    .radius_corners(
+        WOBBLE_PANEL[0],
+        WOBBLE_PANEL[1],
+        WOBBLE_PANEL[2],
+        WOBBLE_PANEL[3],
+    )
+    .border(2.5, p.ink, LineStyle::Solid)
+    .shadow(0.0, 6.0, 0.0, 0.0, p.shadow_hard)
+    .shadow(0.0, 12.0, 26.0, -8.0, p.shadow_soft)
+    .padding(Space::Xl);
+    scrim(panel)
+}
+
+/// The drawer's Picking overlay while their word choices haven't arrived yet — the
+/// PhaseChanged→WordChoices event gap, or a mid-Picking RECONNECT whose reseeded
+/// RoomState is choice-less until a fresh `WordChoices`/auto-pick lands (W3/W4 review).
+/// A calm "getting your words" shape, never a broken empty pick list.
+fn getting_words_overlay(p: Palette, max_w: f32) -> Element<Msg> {
+    let panel = column![
+        title("Your turn to draw!", 30.0, p),
+        text("Getting your words…")
+            .size(15.0)
+            .color(p.ink_2)
+            .font(FONT_BODY),
+    ]
+    .gap(Space::Md)
+    .width(420.0_f32.min(max_w))
+    .align_center()
     .background(p.surface)
     .radius_corners(
         WOBBLE_PANEL[0],

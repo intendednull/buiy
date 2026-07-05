@@ -29,13 +29,14 @@ use bevy::prelude::*;
 use buiy_core::mvu::{MvuSet, enqueue};
 
 use dooduel_core::game::Config;
-use dooduel_core::protocol::{ClientIntent, ServerEvent, WireAvatar};
+use dooduel_core::protocol::{ClientIntent, PROTOCOL_VERSION, ServerEvent, WireAvatar};
 use dooduel_core::session::{Recipient, Session, SessionOpts};
 use dooduel_core::transport::{
-    ClientTransport, ConnId, InProcClient, InProcServer, InProcessTransport, ServerTransport,
+    ClientTransport, ConnId, ConnStatus, InProcClient, InProcServer, InProcessTransport,
+    ServerTransport, WsClientTransport,
 };
 
-use crate::{Dooduel, Msg, NetState};
+use crate::{Connect, Dooduel, HumanAvatar, Msg, NetState};
 
 /// The client-side transport the reducer's intents leave through and the pump drains
 /// events from (spec §2.4). `None` until a session exists (Home / before ▶ Play). A
@@ -363,4 +364,128 @@ fn build_solo(epoch: u64, human_name: &str, now: Duration) -> (Solo, InProcClien
 /// stream (never a re-run session), so it does not affect replay determinism.
 fn solo_match_seed(epoch: u64, now: Duration) -> u64 {
     (now.as_nanos() as u64) ^ epoch.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
+// ---------------------------------------------------------------------------
+// The networked WebSocket client (spec §4.2, §6) — the production Create/Join path.
+// ---------------------------------------------------------------------------
+
+/// The default `dooduel_server` URL (matches the server's default `127.0.0.1:7878`).
+const DEFAULT_SERVER_URL: &str = "ws://127.0.0.1:7878";
+
+/// Opens + tears down the networked [`WsClientTransport`] (spec §4.2). Requires
+/// [`NetPlugin`] (it drives the shared [`ClientNet`] the transport lives in). It is the
+/// mirror of [`LocalAuthorityPlugin`] for the networked states: when the model is
+/// `Joining`/`Connected`/`Dropped` with a staged [`Dooduel::pending_connect`], it opens a
+/// socket to [`server_url`] and sends the `Create`/`Join` first frame; it detects a
+/// dropped connection and asks the reducer to re-attach with the reconnect token.
+pub struct WsClientPlugin;
+
+impl Plugin for WsClientPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, manage_ws_client.in_set(NetSet::Pump));
+    }
+}
+
+/// Own the networked transport's lifecycle (spec §4.2). `owns` (a `Local`) tracks
+/// whether THIS system installed the current [`ClientNet`] transport, so tearing down on
+/// leave never clobbers the solo [`InProcClient`] the [`LocalAuthorityPlugin`] owns (the
+/// two are mutually exclusive by [`NetState`], but both share the `ClientNet` slot).
+fn manage_ws_client(
+    mut net: NonSendMut<ClientNet>,
+    model: Query<(Entity, &Dooduel)>,
+    mut commands: Commands,
+    mut owns: Local<bool>,
+) {
+    let Ok((entity, model)) = model.single() else {
+        return;
+    };
+
+    // Only the networked states use a WS transport; Offline has none, and Solo's
+    // in-process transport is the LocalAuthorityPlugin's business.
+    if !model.net.is_networked() {
+        if *owns {
+            net.0 = None;
+            *owns = false;
+        }
+        return;
+    }
+
+    // Detect a drop of OUR live connection → ask the reducer to go Dropped + rejoin.
+    if *owns
+        && matches!(model.net, NetState::Connected { .. })
+        && net.0.as_ref().map(|t| t.status()) == Some(ConnStatus::Closed)
+    {
+        net.0 = None;
+        *owns = false;
+        enqueue::<Dooduel>(&mut commands, entity, Msg::NetDropped);
+        return;
+    }
+
+    // Open a transport for a pending connect (the initial Create/Join, or a rejoin).
+    if net.0.is_none()
+        && let Some(req) = &model.pending_connect
+    {
+        match WsClientTransport::connect(server_url()) {
+            Ok(mut transport) => {
+                transport.send(&connect_intent(req, model));
+                net.0 = Some(Box::new(transport));
+                *owns = true;
+            }
+            Err(err) => enqueue::<Dooduel>(&mut commands, entity, Msg::ConnectFailed(err)),
+        }
+    }
+}
+
+/// The server URL: `DOODUEL_SERVER_URL` (native) or the default (wasm has no env — a web
+/// deployment configures the URL out of band; native + LAN is the M1 acceptance target).
+fn server_url() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::var("DOODUEL_SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        DEFAULT_SERVER_URL.to_string()
+    }
+}
+
+/// Build the first-frame intent for a staged connect (spec §3.2). The player name
+/// defaults to a placeholder if blank (the authority rejects an empty name).
+fn connect_intent(req: &Connect, model: &Dooduel) -> ClientIntent {
+    let name = {
+        let n = model.player_name.trim();
+        if n.is_empty() {
+            "Player".to_string()
+        } else {
+            n.to_string()
+        }
+    };
+    let avatar = wire_avatar(model.avatar.kind);
+    match req {
+        Connect::Create => ClientIntent::Create {
+            name,
+            avatar,
+            protocol_version: PROTOCOL_VERSION,
+        },
+        Connect::Join { code, reconnect } => ClientIntent::Join {
+            room: code.clone(),
+            name,
+            avatar,
+            protocol_version: PROTOCOL_VERSION,
+            reconnect: reconnect.clone(),
+        },
+    }
+}
+
+/// Map the client's chosen avatar to its wire form. M1 sends `Default`/`Preset`; the
+/// custom drawn PNG is NOT sent over the wire yet (the solo path also uses `Default`, so
+/// other players see the name-hashed doodle) — a faithful custom-avatar upload is a
+/// deferred M1 tail (it needs the saved PNG bytes off the paint surface).
+fn wire_avatar(kind: HumanAvatar) -> WireAvatar {
+    match kind {
+        HumanAvatar::Default => WireAvatar::Default,
+        HumanAvatar::Preset { icon, tint } => WireAvatar::Preset { icon, tint },
+        HumanAvatar::Custom => WireAvatar::Default,
+    }
 }

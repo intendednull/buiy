@@ -56,7 +56,7 @@ use theme::ThemePref;
 /// and the [`ServerEvent`]s `Msg::Net` folds in. Re-exported so `view/*` + `net`
 /// reach them via `crate::…`.
 pub use dooduel_core::protocol::{
-    CanvasOp, ClientIntent, ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
+    CanvasOp, ClientIntent, ErrorCode, ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
 };
 
 /// The drawing canvas size in logical px (matches the paint image resolution so
@@ -152,6 +152,18 @@ pub struct Dooduel {
     /// the first measurement; [`Dooduel::is_mobile`] derives the breakpoint from it.
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// A networked connect the reducer staged for [`net::WsClientPlugin`] to open (spec
+    /// §4.2 — the pure reducer can't build the `WsClientTransport`). `#[reflect(ignore)]`:
+    /// a transient effect trigger, NOT replay state (replay re-feeds the recorded
+    /// `Msg::Net` stream, it never re-opens a socket — like [`Countdown::pending`]).
+    #[reflect(ignore)]
+    pub pending_connect: Option<Connect>,
+    /// The current reconnect token (from the latest `Welcome`; rotated every
+    /// (re)connection, spec §6.3). The auto-rejoin on a drop re-attaches with it.
+    pub reconnect_token: String,
+    /// A transient status/error banner (a rejected join, a drop + reconnect) surfaced
+    /// over the lobby / join screens. Cleared on the next successful `Welcome`.
+    pub toast: Option<String>,
 }
 
 impl Dooduel {
@@ -172,6 +184,18 @@ impl Dooduel {
     /// `Game::viewer_is_drawer` — the hot-seat viewer is gone, the seat is fixed).
     pub fn is_drawer(&self) -> bool {
         self.replica.drawer == Some(self.replica.my_seat)
+    }
+
+    /// Whether this client's seat is the room host (the authoritative, live source —
+    /// the server's `host`, which can migrate). The Lobby host-gates Start on this. Falls
+    /// back to the optimistic [`Self::is_host`] flag before the first `Roster`/`RoomState`
+    /// lands (an empty roster during `Joining`).
+    pub fn is_host_seat(&self) -> bool {
+        if self.replica.players.is_empty() {
+            self.is_host
+        } else {
+            self.replica.my_seat == self.replica.host
+        }
     }
 
     /// The roster in score order (highest first, ties keep seat order) as
@@ -197,10 +221,36 @@ pub enum NetState {
     Solo,
     /// (W4) awaiting a WebSocket connection to `dooduel_server`.
     Joining,
-    /// (W4) connected to a room on the server.
+    /// Connected to a room on the server.
     Connected { room: String },
-    /// (W4) dropped mid-session, holding a reconnect token.
+    /// Dropped mid-session, holding a reconnect token (a rejoin is auto-attempted).
     Dropped { token: String },
+}
+
+impl NetState {
+    /// Whether this session is backed by the networked `WsClientTransport` (any of the
+    /// connect/connected/dropped states) — as opposed to `Offline`/`Solo`.
+    pub fn is_networked(&self) -> bool {
+        matches!(
+            self,
+            NetState::Joining | NetState::Connected { .. } | NetState::Dropped { .. }
+        )
+    }
+}
+
+/// A networked connect request the reducer stages for [`net::WsClientPlugin`] (spec
+/// §4.2 — the reducer is pure, so it cannot build the transport itself). The net layer
+/// opens a [`dooduel_core::transport::WsClientTransport`] and sends the matching first
+/// frame ([`ClientIntent::Create`] / [`ClientIntent::Join`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Connect {
+    /// Open a fresh room — the server generates the code, returned in `Welcome`.
+    Create,
+    /// Join an existing room by code, optionally re-attaching a held seat with a token.
+    Join {
+        code: String,
+        reconnect: Option<String>,
+    },
 }
 
 /// The phase countdown as the client displays it (spec §4.3). The server sends a
@@ -457,6 +507,12 @@ pub enum Msg {
     /// session records/replays as a `Msg::Net` stream (spec §3.4). The
     /// `MatchEnded` variant lifts the shell to [`Screen::Podium`].
     Net(ServerEvent),
+    /// The net layer failed to OPEN the WebSocket (spec §4.2) — surfaced as a toast and
+    /// the session reverts to a usable screen. Enqueued by [`net::WsClientPlugin`].
+    ConnectFailed(String),
+    /// The net layer observed the live connection drop (spec §6.3) — go to
+    /// [`NetState::Dropped`] and stage a token rejoin. Enqueued by [`net::WsClientPlugin`].
+    NetDropped,
     // The clock (folded every frame; a steady frame is a `set_if_neq` no-op).
     Tick(Duration),
     /// The window's logical size changed (the `ViewportPlugin` seam). Folded
@@ -516,42 +572,65 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
         // "▶ Play" starts a solo in-process match directly (the design's primary
         // CTA); the Lobby is only reached via Create/Join.
         Msg::Play => start_solo(s),
-        Msg::CreateRoom => {
-            s.is_host = true;
-            s.room_code = gen_room_code(&s.player_name);
-            // W3: no server yet, so Create shows the cosmetic lobby (Offline). The
-            // networked create + live lobby land in W4.
-            s.net = NetState::Offline;
-            s.screen = Screen::Lobby;
-        }
+        // Networked create: the server issues the room code (we do NOT gen one locally),
+        // so we open a connection and show the Lobby's "Connecting…" state until Welcome.
+        Msg::CreateRoom => start_connect(s, Connect::Create, true),
         Msg::GoJoin => {
             s.join_code.clear();
+            s.toast = None;
             s.screen = Screen::Join;
         }
         Msg::SetJoinCode(code) => s.join_code = code.to_uppercase(),
         Msg::SubmitJoin => {
-            s.is_host = false;
-            s.room_code = if s.join_code.trim().is_empty() {
-                gen_room_code(&s.player_name)
+            let code = s.join_code.trim().to_uppercase();
+            // Client input hygiene: an empty code never opens a connection.
+            if code.is_empty() {
+                s.toast = Some("Enter a room code.".to_string());
             } else {
-                s.join_code.trim().to_uppercase()
-            };
-            // W3: cosmetic lobby (Offline); the WsClientTransport join lands in W4.
-            s.net = NetState::Offline;
-            s.screen = Screen::Lobby;
+                start_connect(
+                    s,
+                    Connect::Join {
+                        code,
+                        reconnect: None,
+                    },
+                    false,
+                );
+            }
         }
         Msg::Back => {
             s.screen = Screen::Home;
             s.net = NetState::Offline;
+            s.pending_connect = None;
+            s.reconnect_token.clear();
+            s.toast = None;
+            s.is_host = false;
             s.replica = RoomReplica::default();
             s.countdown = Countdown::default();
         }
-        // W3 has no server, so the Lobby's Start and the Podium's Play-again both
-        // launch a solo in-process match (the only functional path). W4 branches
-        // StartMatch to a networked `ClientIntent::StartMatch` in a real lobby, and
-        // Play-again to leave + re-create (spec §11 — the networked rematch is a
-        // deferred decision, structurally recorded here).
-        Msg::StartMatch | Msg::PlayAgain => start_solo(s),
+        // In a networked lobby the host starts the match on the SERVER (an intent — the
+        // server also host-gates it); the solo/offline path starts an in-process match.
+        Msg::StartMatch => {
+            if s.net.is_networked() {
+                s.net_outbox.push(ClientIntent::StartMatch);
+            } else {
+                start_solo(s);
+            }
+        }
+        // Play-again: solo replays in place; the networked in-place rematch is out of M1
+        // (spec §11), so it leaves + returns Home for the host to create a fresh room.
+        Msg::PlayAgain => {
+            if s.net.is_networked() {
+                s.net_outbox.push(ClientIntent::Leave);
+                s.screen = Screen::Home;
+                s.net = NetState::Offline;
+                s.pending_connect = None;
+                s.reconnect_token.clear();
+                s.replica = RoomReplica::default();
+                s.countdown = Countdown::default();
+            } else {
+                start_solo(s);
+            }
+        }
         Msg::SetTheme(t) => s.theme = t,
         Msg::Restore {
             theme,
@@ -580,6 +659,32 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
         // `LocalAuthorityPlugin`), and phase changes arrive only as `Msg::Net`.
         Msg::Tick(now) => s.countdown.on_tick(now),
         Msg::Net(ev) => apply_event(s, ev),
+        // The net layer failed to OPEN the socket — toast + revert Home so the user
+        // can retry (spec §4.2).
+        Msg::ConnectFailed(err) => {
+            s.toast = Some(format!("Could not connect: {err}"));
+            s.net = NetState::Offline;
+            s.pending_connect = None;
+            s.screen = Screen::Home;
+        }
+        // The live connection dropped (spec §6.3): stage a token rejoin, keeping the
+        // replica so the game keeps rendering while `WsClientPlugin` re-attaches.
+        Msg::NetDropped => {
+            if !s.reconnect_token.is_empty() && !s.room_code.is_empty() {
+                s.toast = Some("Reconnecting…".to_string());
+                s.net = NetState::Dropped {
+                    token: s.reconnect_token.clone(),
+                };
+                s.pending_connect = Some(Connect::Join {
+                    code: s.room_code.clone(),
+                    reconnect: Some(s.reconnect_token.clone()),
+                });
+            } else {
+                s.toast = Some("Disconnected.".to_string());
+                s.net = NetState::Offline;
+                s.screen = Screen::Home;
+            }
+        }
         Msg::ChooseWord(idx) => s.net_outbox.push(ClientIntent::Pick { index: idx }),
         Msg::SetChatInput(t) => s.chat_input = t,
         Msg::SubmitGuess => {
@@ -657,6 +762,22 @@ fn start_solo(s: &mut Dooduel) {
     s.screen = Screen::InGame;
 }
 
+/// Begin a networked session (spec §4.2): stage the connect for [`net::WsClientPlugin`],
+/// mark the session `Joining`, reset the replica/countdown, and show the Lobby — which
+/// renders a "Connecting…" state until `Welcome` flips it to `Connected`. The server
+/// issues the room code (for `Create`), so none is generated locally.
+fn start_connect(s: &mut Dooduel, req: Connect, is_host: bool) {
+    s.is_host = is_host;
+    s.net = NetState::Joining;
+    s.pending_connect = Some(req);
+    s.toast = None;
+    s.reconnect_token.clear();
+    s.room_code.clear();
+    s.replica = RoomReplica::default();
+    s.countdown = Countdown::default();
+    s.screen = Screen::Lobby;
+}
+
 /// The stable id of a canvas op (spec §3.5) — a `CanvasUndo { removed_id }` resolves
 /// against the log by this.
 fn op_id(op: &CanvasOp) -> u64 {
@@ -673,10 +794,24 @@ fn op_id(op: &CanvasOp) -> u64 {
 fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
     match ev {
         ServerEvent::Welcome {
-            seat, room_code, ..
+            seat,
+            room_code,
+            reconnect_token,
+            ..
         } => {
             s.replica.my_seat = seat;
-            s.replica.room_code = room_code;
+            s.replica.room_code = room_code.clone();
+            s.room_code = room_code;
+            s.reconnect_token = reconnect_token;
+            s.toast = None;
+            // A successful (re)connect: mark Connected + consume the pending connect so
+            // `WsClientPlugin` doesn't re-open. (No-op on the solo path — never networked.)
+            if s.net.is_networked() {
+                s.net = NetState::Connected {
+                    room: s.room_code.clone(),
+                };
+                s.pending_connect = None;
+            }
         }
         ServerEvent::RoomState(replica) => {
             let remaining = replica.remaining;
@@ -764,27 +899,46 @@ fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
             // The podium lift rides MatchEnded, not Tick (spec §3.3/§4.1).
             s.screen = Screen::Podium;
         }
-        // Rejected intents / protocol errors: the W4 networked UX surfaces these as
-        // toasts; the solo authority never rejects an honest client, so ignore here.
-        ServerEvent::Error { .. } => {}
+        // Rejected intents / protocol errors: surface as a toast; a fatal connect/rejoin
+        // failure reverts to a usable screen (the solo authority never rejects an honest
+        // client, so this path is networked-only in practice).
+        ServerEvent::Error { code, message } => {
+            s.toast = Some(net_error_text(&code, &message));
+            if matches!(s.net, NetState::Joining | NetState::Dropped { .. }) {
+                s.net = NetState::Offline;
+                s.pending_connect = None;
+                s.screen = match code {
+                    // A failed JOIN (a guest) drops back to the code entry to fix it;
+                    // everything else returns Home.
+                    ErrorCode::RoomNotFound | ErrorCode::RoomFull | ErrorCode::MatchInProgress
+                        if !s.is_host =>
+                    {
+                        Screen::Join
+                    }
+                    _ => Screen::Home,
+                };
+            }
+        }
     }
 }
 
-/// A deterministic 6-char room invite code from the host's name (design
-/// `genRoomCode`-style). Pure — the same name yields the same code.
-pub fn gen_room_code(name: &str) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let seed = name.bytes().fold(0x9e37_79b9u32, |h, b| {
-        h.wrapping_mul(31).wrapping_add(b as u32)
-    });
-    let mut x = seed | 1;
-    let mut out = String::with_capacity(6);
-    for _ in 0..6 {
-        x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        out.push(ALPHABET[(x >> 24) as usize % ALPHABET.len()] as char);
+/// The human-readable toast for a networked rejection (spec §4.2).
+fn net_error_text(code: &ErrorCode, message: &str) -> String {
+    match code {
+        ErrorCode::RoomNotFound => "No room with that code.".to_string(),
+        ErrorCode::RoomFull => "That room is full.".to_string(),
+        ErrorCode::MatchInProgress => "That match already started.".to_string(),
+        ErrorCode::VersionMismatch => "Version mismatch — update the app.".to_string(),
+        ErrorCode::RateLimited => "Too many attempts — try again shortly.".to_string(),
+        ErrorCode::BadToken => "Could not rejoin — the session expired.".to_string(),
+        _ => message.to_string(),
     }
-    out
 }
+
+// NOTE (M1 W4.5): the client-side `gen_room_code` (a deterministic name-hash code) is
+// RETIRED for networked play (spec §3.2 — deterministic name-hash codes collide two
+// same-named hosts into one room). The server now generates every room code with
+// `getrandom` and returns it in `Welcome`; the solo path uses the literal "SOLO".
 
 /// Install Dooduel onto an app already carrying the Buiy plugins. Does **not** add
 /// the wall-clock driver — that is the F7 [`ClockPlugin`] (added by
@@ -836,6 +990,7 @@ pub fn install_runtime(app: &mut App) -> &mut App {
     // swaps `LocalAuthorityPlugin` for a `WsClientTransport`.
     app.add_plugins(net::NetPlugin);
     app.add_plugins(net::LocalAuthorityPlugin);
+    app.add_plugins(net::WsClientPlugin);
     app.add_plugins(paint::CanvasPlugin);
     app.add_plugins(confetti::ConfettiPlugin);
     app.add_plugins(storage::StoragePlugin);
@@ -1503,16 +1658,33 @@ mod tests {
         .expect("Create-a-room button");
         click(app.world_mut(), create).expect("Create is clickable");
         settle(&mut app);
+        // Create opens a NETWORKED connection (Joining) and shows the connecting card
+        // (a probe app has no server, so it stays Joining until a scripted Welcome).
         assert_eq!(current_screen(&mut app), Screen::Lobby);
         assert_eq!(
             current_model(&mut app).net,
-            NetState::Offline,
-            "the W3 cosmetic lobby is Offline (networked create is W4)"
+            NetState::Joining,
+            "Create opens a networked connection (server-issued code)"
+        );
+        assert!(
+            snapshot_report(app.world_mut()).contains("Connecting"),
+            "the connecting card renders while Joining"
+        );
+
+        // Simulate the server admitting us as seat 0 (host); the live lobby renders.
+        seed_lobby(&mut app, 0, 0, "ABCDEF");
+        assert!(
+            matches!(current_model(&mut app).net, NetState::Connected { .. }),
+            "Welcome marks the session Connected"
         );
         let report = snapshot_report(app.world_mut());
         assert!(
             report.contains("Private room"),
-            "the Lobby renders:\n{report}"
+            "the live lobby renders:\n{report}"
+        );
+        assert!(
+            report.contains("ABCDEF"),
+            "the server-issued room code is shown:\n{report}"
         );
         assert!(
             get_by_role(
@@ -1522,27 +1694,172 @@ mod tests {
                 None
             )
             .is_ok(),
-            "the Lobby has a Start button"
+            "the host has an enabled Start button"
         );
     }
 
+    /// Simulate the server admitting this client to a lobby: a `Welcome` (which marks the
+    /// session Connected) + a `RoomState` seeding the roster at phase Idle (the lobby).
+    fn seed_lobby(app: &mut App, my_seat: usize, host: usize, code: &str) {
+        net(
+            app,
+            ServerEvent::Welcome {
+                seat: my_seat,
+                room_code: code.to_string(),
+                reconnect_token: "tok".to_string(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            },
+        );
+        let players = vec![
+            ReplicaPlayer {
+                name: "Ada".to_string(),
+                avatar: WireAvatar::Default,
+                connected: true,
+                is_bot: false,
+                score: 0,
+                guessed: false,
+            },
+            ReplicaPlayer {
+                name: "Bo".to_string(),
+                avatar: WireAvatar::Default,
+                connected: true,
+                is_bot: false,
+                score: 0,
+                guessed: false,
+            },
+        ];
+        net(
+            app,
+            ServerEvent::RoomState(RoomReplica {
+                room_code: code.to_string(),
+                my_seat,
+                host,
+                players,
+                phase: Phase::Idle,
+                ..Default::default()
+            }),
+        );
+        settle(app);
+    }
+
     #[test]
-    fn join_flow_reaches_lobby_as_guest() {
+    fn join_connects_then_the_guest_lobby_waits_for_the_host() {
         let mut app = boot_probe();
         enqueue_msg(&mut app, Msg::SetName("Zed".to_string()));
         enqueue_msg(&mut app, Msg::GoJoin);
         settle(&mut app);
         assert_eq!(current_screen(&mut app), Screen::Join);
 
-        enqueue_msg(&mut app, Msg::SetJoinCode("abc123".to_string()));
+        enqueue_msg(&mut app, Msg::SetJoinCode("abcdef".to_string()));
         enqueue_msg(&mut app, Msg::SubmitJoin);
         settle(&mut app);
-        assert_eq!(current_screen(&mut app), Screen::Lobby);
-        let m = current_model(&mut app);
-        assert!(!m.is_host, "joining lands as a guest");
         assert_eq!(
-            m.room_code, "ABC123",
-            "the entered code is uppercased + shown"
+            current_model(&mut app).net,
+            NetState::Joining,
+            "Join opens a networked connection"
+        );
+
+        // The server seats us at 1 (a guest; host is seat 0).
+        seed_lobby(&mut app, 1, 0, "ABCDEF");
+        let m = current_model(&mut app);
+        assert!(!m.is_host_seat(), "seat 1 is a guest, not the host");
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("You're in"),
+            "the guest lobby renders:\n{report}"
+        );
+        assert!(
+            report.contains("Waiting for the host"),
+            "a guest waits for the host to start:\n{report}"
+        );
+        assert!(
+            get_by_role(
+                app.world_mut(),
+                A11yRole::Button,
+                Some("▶ Start game"),
+                None
+            )
+            .is_err(),
+            "a guest has no Start button"
+        );
+    }
+
+    // --- Networked reducer paths (W4.5) -------------------------------------
+
+    #[test]
+    fn networked_start_match_sends_the_intent_not_a_solo_launch() {
+        let mut m = Dooduel {
+            net: NetState::Connected {
+                room: "ABCDEF".to_string(),
+            },
+            ..Default::default()
+        };
+        update(&mut m, Msg::StartMatch);
+        assert_eq!(
+            m.net_outbox.last(),
+            Some(&ClientIntent::StartMatch),
+            "a networked StartMatch is an intent, not a solo launch"
+        );
+        assert!(
+            matches!(m.net, NetState::Connected { .. }),
+            "the session stays networked"
+        );
+    }
+
+    #[test]
+    fn a_rejected_join_toasts_and_reverts_to_the_code_screen() {
+        let mut m = Dooduel::default();
+        start_connect(
+            &mut m,
+            Connect::Join {
+                code: "ZZZZZZ".to_string(),
+                reconnect: None,
+            },
+            false,
+        );
+        assert_eq!(m.net, NetState::Joining);
+        apply_event(
+            &mut m,
+            ServerEvent::Error {
+                code: ErrorCode::RoomNotFound,
+                message: "no such room".to_string(),
+            },
+        );
+        assert!(m.toast.is_some(), "the rejection surfaces as a toast");
+        assert_eq!(
+            m.net,
+            NetState::Offline,
+            "a failed join drops the connection"
+        );
+        assert_eq!(
+            m.screen,
+            Screen::Join,
+            "a guest returns to the code screen to retry"
+        );
+    }
+
+    #[test]
+    fn a_drop_stages_a_token_rejoin() {
+        let mut m = Dooduel {
+            net: NetState::Connected {
+                room: "ABCDEF".to_string(),
+            },
+            room_code: "ABCDEF".to_string(),
+            reconnect_token: "tok-xyz".to_string(),
+            ..Default::default()
+        };
+        update(&mut m, Msg::NetDropped);
+        assert!(
+            matches!(m.net, NetState::Dropped { .. }),
+            "a drop enters the Dropped state"
+        );
+        assert_eq!(
+            m.pending_connect,
+            Some(Connect::Join {
+                code: "ABCDEF".to_string(),
+                reconnect: Some("tok-xyz".to_string()),
+            }),
+            "a drop stages a token rejoin for WsClientPlugin"
         );
     }
 
