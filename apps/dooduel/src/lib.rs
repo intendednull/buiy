@@ -249,17 +249,20 @@ impl Countdown {
     ///
     /// Multiple events can fold in ONE batch before the next `Msg::Tick` consumes the
     /// pending value (I-3): a fresh reset is authoritative and wins outright — a
-    /// stale same-batch `CountdownSync` (delayed from the previous phase) must NOT
-    /// override it, or the display would read the stale value (or 0:00, clamping the
-    /// non-reset sync against the default-zero deadline) instead of the fresh phase's
-    /// countdown. A non-reset sync only clamps a pending non-reset downward, or
-    /// establishes one when nothing is pending.
+    /// same-batch `CountdownSync` must NOT override it, or the display would clobber to
+    /// 0:00 (a non-reset clamp against the default-zero deadline). Dropping the sync
+    /// here is a deliberate CONSERVATIVE choice, not a staleness defense: under FIFO a
+    /// sync following a reset was emitted *after* the phase change server-side, so it is
+    /// a legitimate newer value — but we can't safely fold it without re-opening the
+    /// 0:00 clobber, and its accuracy loss is at most one sync, self-healed by the next
+    /// periodic sync within ~a second. A non-reset sync only clamps a pending non-reset
+    /// downward, or establishes one when nothing is pending.
     fn anchor(&mut self, remaining: Duration, reset: bool) {
         match self.pending {
             // A fresh phase change always wins (supersedes any earlier pending).
             _ if reset => self.pending = Some((remaining, true)),
-            // A non-reset sync cannot override a pending reset — the reset is
-            // authoritative for this batch (the sync is from the old phase).
+            // A same-batch sync cannot override a pending reset — the reset is the
+            // guaranteed-correct fresh-phase anchor (dropping the sync is conservative).
             Some((_, true)) => {}
             // Fold a non-reset sync into a pending non-reset (clamp down), or take it.
             Some((prev, false)) => self.pending = Some((prev.min(remaining), false)),
@@ -1204,12 +1207,18 @@ mod tests {
     }
 
     #[test]
-    fn countdown_reset_wins_over_a_stale_same_batch_sync() {
-        // A fresh PhaseChanged (80s reset) and a stale CountdownSync (3s, delayed from
-        // the previous phase) fold in ONE batch before the next Tick. The reset must
-        // win — the display shows the fresh phase's countdown, not the stale 3s and
-        // (the I-3 bug) not 0:00 (the old code let the sync overwrite the reset, then
-        // clamped the non-reset against the default-zero deadline → 0).
+    fn countdown_reset_wins_over_a_same_batch_sync() {
+        // A fresh PhaseChanged (80s reset) and a CountdownSync (3s) fold in ONE batch
+        // before the next Tick. The I-3 bug: the old code let the sync OVERWRITE the
+        // reset, then clamped the non-reset against the default-zero deadline → 0:00.
+        //
+        // The fix drops a same-batch sync when a reset is pending. This is a deliberate
+        // CONSERVATIVE choice, NOT a staleness defense: under FIFO a sync that follows a
+        // reset in the stream was emitted AFTER the phase change server-side, so it is
+        // actually a legitimate NEWER value — dropping it costs at most one sync's worth
+        // of accuracy, self-healed by the next periodic sync within ~a second. We favor
+        // the guaranteed-correct fresh-phase anchor over a same-batch sync we cannot
+        // safely fold without re-introducing the 0:00 clobber. Here that shows 80.
         let mut m = Dooduel::default();
         apply_event(
             &mut m,
