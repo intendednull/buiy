@@ -14,3 +14,6 @@
 //!
 //! Wave 0 extracts the two pure pieces the rest of M1 builds on: the game state
 //! machine (`game`) and the canvas pixel surface (`canvas`).
+
+pub mod canvas;
+pub mod game;
