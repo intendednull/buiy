@@ -108,7 +108,7 @@ fn main() {
         // the world (a no-op `drop()` of a non-Drop `Mut` would not compile-clean).
         {
             let mut d = app.world_mut().get_mut::<Dooduel>(e).expect("model");
-            d.game.start_match(
+            d.game.start_match_solo(
                 "Mara",
                 dooduel::game::Config {
                     bots_enabled: false,

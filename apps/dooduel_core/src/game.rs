@@ -139,6 +139,24 @@ impl Default for Config {
 pub struct Player {
     pub name: String,
     pub score: i64,
+    /// Whether this seat is a bot. The built-in guesser machinery
+    /// (`seeded_bot_plans` / the due-guess drain) keys off this, replacing the
+    /// removed hot-seat `viewing_as` guard (spec §2.3.2).
+    pub is_bot: bool,
+    /// Whether this seat is currently held. A seat freed past grace is marked
+    /// **vacant** (not removed — indices are identity for rotation, `turn_guesses`,
+    /// and private chat `to`); rotation skips vacant seats and the match ends when
+    /// fewer than two seats remain occupied (spec §2.3.3).
+    pub occupied: bool,
+}
+
+/// A roster entry for [`Game::start_match`]: a display name + whether the seat is a
+/// bot. The server builds this from real connections; [`Game::start_match_solo`]
+/// builds the solo `[human, Priya(bot), Theo(bot), Sam(bot)]` roster.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerSpec {
+    pub name: String,
+    pub is_bot: bool,
 }
 
 /// The in-turn phase machine. `Idle` = no match running; `Final` = match over
@@ -347,23 +365,21 @@ pub fn drawer_points(correct_count: usize, guesser_count: usize) -> i64 {
 }
 
 impl Game {
-    /// Start a fresh match: seat 0 is the human (`human_name`), seats 1..=3 the
-    /// preset bots. Resets scores/round/used-words and begins the first turn.
-    pub fn start_match(&mut self, human_name: &str, config: Config) {
-        let name = if human_name.trim().is_empty() {
-            "You".to_string()
-        } else {
-            human_name.trim().to_string()
-        };
-        let mut players = vec![Player { name, score: 0 }];
-        for n in PRESET_NAMES {
-            players.push(Player {
-                name: n.to_string(),
+    /// Start a fresh match from an explicit `roster` (seat order = roster order):
+    /// every seat is marked occupied; scores/round/used-words reset; the first turn
+    /// begins. The server builds the roster from real connections;
+    /// [`Game::start_match_solo`] is the solo/verification shim (spec §2.3.1).
+    pub fn start_match(&mut self, roster: &[PlayerSpec], config: Config) {
+        self.players = roster
+            .iter()
+            .map(|spec| Player {
+                name: spec.name.clone(),
                 score: 0,
-            });
-        }
+                is_bot: spec.is_bot,
+                occupied: true,
+            })
+            .collect();
         self.config = config;
-        self.players = players;
         self.round = 1;
         self.seat_index = 0;
         self.chat.clear();
@@ -372,6 +388,28 @@ impl Game {
         // Seed from a fixed constant so a match is reproducible turn-for-turn.
         self.rng = 0xD00D_0000_0000_0001;
         self.begin_turn();
+    }
+
+    /// The solo / in-process verification path (spec §8): seat 0 is the human
+    /// (`human_name`, defaulting to "You" when blank), seats 1..=3 the
+    /// [`PRESET_NAMES`] bots. Delegates to [`Game::start_match`].
+    pub fn start_match_solo(&mut self, human_name: &str, config: Config) {
+        let name = if human_name.trim().is_empty() {
+            "You".to_string()
+        } else {
+            human_name.trim().to_string()
+        };
+        let mut roster = vec![PlayerSpec {
+            name,
+            is_bot: false,
+        }];
+        for n in PRESET_NAMES {
+            roster.push(PlayerSpec {
+                name: n.to_string(),
+                is_bot: true,
+            });
+        }
+        self.start_match(&roster, config);
     }
 
     /// Enter the `Picking` phase for the current `seat_index`: offer three fresh
@@ -498,9 +536,8 @@ impl Game {
                 order,
             });
             self.push_chat(ChatKind::Correct, format!("🎉 {name} guessed the word!"));
-            // End the turn early once every guesser has it.
-            let guesser_count = self.players.len().saturating_sub(1);
-            if self.turn_guesses.len() >= guesser_count {
+            // End the turn early once every occupied guesser has it.
+            if self.turn_guesses.len() >= self.guesser_count() {
                 self.end_turn();
             }
             GuessOutcome::Correct
@@ -524,24 +561,31 @@ impl Game {
         }
     }
 
-    /// The word as the *current* viewer should see it: the full word for the
-    /// drawer / anyone who has guessed / during the reveal, else blanks + hints.
-    pub fn word_display(&self) -> String {
+    /// The redaction predicate (spec §5.1, three-way): whether `seat` may see the
+    /// secret word this turn — the drawer, anyone during the reveal/final, or a
+    /// seat that has already guessed correctly. The single home `Session` calls per
+    /// recipient (a correct guesser's [`word_display_for`](Game::word_display_for)
+    /// upgrades to the full word mid-turn).
+    pub fn knows(&self, seat: usize) -> bool {
+        seat == self.seat_index
+            || matches!(self.phase, Phase::Reveal | Phase::Final)
+            || self.turn_guesses.iter().any(|g| g.player == seat)
+    }
+
+    /// The word as `seat` should see it: the full uppercase word when
+    /// [`knows`](Game::knows)`(seat)`, else blanks with the hint-revealed letters
+    /// shown. Space-joined (the design's underlined row). Empty outside
+    /// Drawing/Reveal (there is no word row then). The single redaction home
+    /// (spec §2.3.5).
+    pub fn word_display_for(&self, seat: usize) -> String {
         if !matches!(self.phase, Phase::Drawing | Phase::Reveal) {
             return String::new();
         }
-        let seat = self.viewing_as;
-        let knows = seat == self.seat_index
-            || self.phase == Phase::Reveal
-            || self.turn_guesses.iter().any(|g| g.player == seat);
-        if knows {
+        if self.knows(seat) {
             return self
                 .secret_word
                 .chars()
-                .map(|c| c.to_ascii_uppercase())
-                .collect::<Vec<_>>()
-                .iter()
-                .map(|c| c.to_string())
+                .map(|c| c.to_ascii_uppercase().to_string())
                 .collect::<Vec<_>>()
                 .join(" ");
         }
@@ -550,14 +594,20 @@ impl Game {
             .enumerate()
             .map(|(i, c)| {
                 if *self.reveal_mask.get(i).unwrap_or(&false) {
-                    c.to_ascii_uppercase()
+                    c.to_ascii_uppercase().to_string()
                 } else {
-                    '_'
+                    "_".to_string()
                 }
             })
-            .map(|c| c.to_string())
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// The word as the *current* viewer ([`viewing_as`](Game::viewing_as)) should
+    /// see it — a thin delegate to [`word_display_for`](Game::word_display_for).
+    /// (Removed in W3 when the client model owns the viewing seat, spec §2.3.6.)
+    pub fn word_display(&self) -> String {
+        self.word_display_for(self.viewing_as)
     }
 
     /// The word as **per-letter slots** for the design's underlined word row
@@ -610,11 +660,43 @@ impl Game {
         self.turn_guesses.len()
     }
 
-    /// Whether every guesser has guessed correctly this turn (the turn-end trigger,
-    /// exposed live so the drawer knows when to stop, bug #3).
+    /// Whether every occupied guesser has guessed correctly this turn (the turn-end
+    /// trigger, exposed live so the drawer knows when to stop, bug #3).
     pub fn all_guessed(&self) -> bool {
-        let guesser_count = self.players.len().saturating_sub(1);
-        guesser_count > 0 && self.turn_guesses.len() >= guesser_count
+        let gc = self.guesser_count();
+        gc > 0 && self.turn_guesses.len() >= gc
+    }
+
+    /// How many seats are currently occupied (spec §2.3.3). The match ends when
+    /// this drops below 2.
+    pub fn occupied_count(&self) -> usize {
+        self.players.iter().filter(|p| p.occupied).count()
+    }
+
+    /// The number of occupied non-drawer seats — the guessers who can score this
+    /// turn (spec §2.3.3). With every seat occupied this is `players.len() - 1`.
+    pub fn guesser_count(&self) -> usize {
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| *i != self.seat_index && p.occupied)
+            .count()
+    }
+
+    /// Free `seat` — a departure past grace: marks it vacant without removing it,
+    /// so seat indices stay stable for rotation / `turn_guesses` / private chat
+    /// `to` (spec §2.3.3). No-op on an out-of-range seat.
+    pub fn vacate_seat(&mut self, seat: usize) {
+        if let Some(p) = self.players.get_mut(seat) {
+            p.occupied = false;
+        }
+    }
+
+    /// Force the current turn to end — the drawer-drop-past-grace path (spec
+    /// §2.3.4). A public wrapper over the private turn-end; scores the drawer,
+    /// builds the reveal rows, and enters `Reveal`. No-op outside `Drawing`.
+    pub fn force_end_turn(&mut self) {
+        self.end_turn();
     }
 
     /// How many hint letters will reveal over this turn (the scheduled count for the
@@ -719,10 +801,12 @@ impl Game {
         self.reveal_mask = mask;
     }
 
-    /// Bots whose fire time has passed and who haven't guessed yet (and aren't
-    /// the human's seat or the drawer). Idempotent via `turn_guesses` membership:
-    /// once a bot's correct guess folds, it is locked and won't re-fire. Disabled
-    /// wholesale by `config.bots_enabled == false` (the W8 all-agents playtest).
+    /// Bots (`is_bot` seats) whose fire time has passed and who haven't guessed yet
+    /// (and aren't the drawer). Idempotent via `turn_guesses` membership: once a
+    /// bot's correct guess folds, it is locked and won't re-fire. Disabled wholesale
+    /// by `config.bots_enabled == false` (the all-agents playtest). The removed
+    /// `viewing_as` guard was the hot-seat filter (spec §2.3.2) — bots are now keyed
+    /// purely off `is_bot`, so a human seat is never auto-guessed.
     fn due_bot_guesses(&self, elapsed: u64) -> Vec<PendingGuess> {
         if !self.config.bots_enabled {
             return Vec::new();
@@ -732,7 +816,7 @@ impl Game {
             .filter(|p| {
                 p.fire_at <= elapsed
                     && p.player != self.seat_index
-                    && p.player != self.viewing_as
+                    && self.players.get(p.player).is_some_and(|pl| pl.is_bot)
                     && !self.turn_guesses.iter().any(|g| g.player == p.player)
             })
             .map(|p| PendingGuess {
@@ -748,7 +832,7 @@ impl Game {
             return;
         }
         let drawer = self.seat_index;
-        let guesser_count = self.players.len().saturating_sub(1);
+        let guesser_count = self.guesser_count();
         let correct = self.turn_guesses.len();
         let drawer_pts = drawer_points(correct, guesser_count);
         self.players[drawer].score += drawer_pts;
@@ -783,22 +867,44 @@ impl Game {
         self.push_chat(ChatKind::System, format!("The word was \"{word}\""));
     }
 
-    /// Rotate to the next drawer / round, or finish the match.
+    /// Rotate to the next OCCUPIED drawer / round, or finish the match. The match
+    /// ends when occupancy drops below 2 (nobody left to play against) or the round
+    /// counter passes `total_rounds`; vacant seats are skipped in the rotation
+    /// (spec §2.3.3).
     fn advance_turn(&mut self) {
         if self.phase != Phase::Reveal {
             return;
         }
-        self.seat_index += 1;
-        if self.seat_index >= self.players.len() {
-            self.seat_index = 0;
-            self.round += 1;
-        }
-        if self.round > self.config.total_rounds {
+        if self.occupied_count() < 2 {
             self.phase = Phase::Final;
             self.phase_started_at = None;
-        } else {
-            self.begin_turn();
+            return;
         }
+        // Advance to the next occupied seat, incrementing the round on wrap. The
+        // `occupied_count() >= 2` guard above bounds this loop (an occupied seat is
+        // always within one full cycle); the iteration cap is a defensive backstop.
+        for _ in 0..=self.players.len() {
+            self.seat_index += 1;
+            if self.seat_index >= self.players.len() {
+                self.seat_index = 0;
+                self.round += 1;
+            }
+            if self.round > self.config.total_rounds {
+                self.phase = Phase::Final;
+                self.phase_started_at = None;
+                return;
+            }
+            if self
+                .players
+                .get(self.seat_index)
+                .is_some_and(|p| p.occupied)
+            {
+                self.begin_turn();
+                return;
+            }
+        }
+        self.phase = Phase::Final;
+        self.phase_started_at = None;
     }
 
     /// Three distinct fresh words (no-repeat until the pool is nearly exhausted).
@@ -840,7 +946,9 @@ impl Game {
     fn seeded_bot_plans(&mut self, total: u64) -> Vec<BotPlan> {
         let mut plans = Vec::new();
         for player in 0..self.players.len() {
-            if player == self.seat_index {
+            // Only bot seats get an auto-guess plan (spec §2.3.2); the drawer never
+            // guesses. A human seat is skipped, so a 2-human roster plans nothing.
+            if player == self.seat_index || !self.players[player].is_bot {
                 continue;
             }
             // Fire time in [0.25·total, 0.75·total], seeded per bot.
@@ -884,7 +992,7 @@ mod tests {
 
     fn started() -> Game {
         let mut g = Game::default();
-        g.start_match("Mara", Config::default());
+        g.start_match_solo("Mara", Config::default());
         g
     }
 
@@ -1139,10 +1247,10 @@ mod tests {
             total_rounds: 5,
             ..Config::default()
         };
-        g.start_match("Mara", cfg);
+        g.start_match_solo("Mara", cfg);
         assert_eq!(
             g.config.total_rounds, 5,
-            "start_match sets total_rounds from the config"
+            "start_match_solo sets total_rounds from the config"
         );
         assert_eq!(g.round_display(), 1, "the first round displays as 1");
     }
@@ -1372,5 +1480,184 @@ mod tests {
                 "one wall-second decrements the countdown by exactly one"
             );
         }
+    }
+
+    // --- W1.3 Game API delta (M1 spec §2.3) --------------------------------
+
+    /// Build a match from an explicit roster (the server's entry point) —
+    /// `(name, is_bot)` pairs.
+    fn started_roster(specs: &[(&str, bool)]) -> Game {
+        let roster: Vec<PlayerSpec> = specs
+            .iter()
+            .map(|(n, bot)| PlayerSpec {
+                name: n.to_string(),
+                is_bot: *bot,
+            })
+            .collect();
+        let mut g = Game::default();
+        g.start_match(&roster, Config::default());
+        g
+    }
+
+    /// §2.3.1/§2.3.2 — the roster-parameterized start seats real players, and a
+    /// roster with NO bots never fires an auto-guess (the removed hot-seat guard
+    /// would have auto-guessed a human seat).
+    #[test]
+    fn a_two_human_roster_never_bot_guesses() {
+        let mut g = started_roster(&[("Ada", false), ("Bo", false)]);
+        assert_eq!(g.players.len(), 2);
+        assert!(g.players.iter().all(|p| !p.is_bot && p.occupied));
+        g.choose_word("robot".to_string());
+        // Across the whole draw window no bot guess is ever due.
+        for sec in 0..=g.config.draw_seconds {
+            let pending = g.tick(Duration::from_secs(sec));
+            assert!(
+                pending.is_empty(),
+                "a 2-human roster must never bot-guess (elapsed {sec})"
+            );
+        }
+    }
+
+    /// §2.3.2 — the solo shim keeps its 1-human + 3-bot roster (regression guard on
+    /// the `is_bot` switch).
+    #[test]
+    fn solo_shim_seats_one_human_and_three_bots() {
+        let g = started();
+        assert_eq!(g.players.len(), 4);
+        assert!(!g.players[0].is_bot, "seat 0 is the human");
+        assert!(
+            g.players[1..].iter().all(|p| p.is_bot),
+            "seats 1..=3 are bots"
+        );
+        assert!(
+            g.players.iter().all(|p| p.occupied),
+            "every seat is occupied"
+        );
+    }
+
+    /// §2.3.3 — rotation skips a vacant seat.
+    #[test]
+    fn rotation_skips_a_vacant_seat() {
+        let mut g = started(); // seat 0 draws turn 1
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.vacate_seat(1); // the next drawer in rotation
+        g.force_end_turn();
+        assert_eq!(g.phase, Phase::Reveal);
+        g.continue_now(); // advance the rotation
+        assert_eq!(g.phase, Phase::Picking);
+        assert_eq!(
+            g.seat_index, 2,
+            "rotation skipped the vacant seat 1 (0 → 2)"
+        );
+    }
+
+    /// §2.3.3 — `guesser_count` / `all_guessed` count only OCCUPIED non-drawer
+    /// seats, so vacating a guesser lets the remaining occupied guessers end the
+    /// turn early.
+    #[test]
+    fn guesser_count_and_all_guessed_track_occupancy() {
+        let mut g = started(); // seat 0 draws, 4 occupied
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.guesser_count(), 3, "3 occupied non-drawer seats");
+        g.vacate_seat(3);
+        assert_eq!(g.guesser_count(), 2, "vacating a guesser drops the count");
+        g.apply_guess(1, "robot");
+        assert!(!g.all_guessed(), "one of two occupied guessers");
+        g.apply_guess(2, "robot");
+        assert!(g.all_guessed(), "both occupied guessers have it");
+        assert_eq!(
+            g.phase,
+            Phase::Reveal,
+            "the turn ends once all OCCUPIED guessers guess (not all 3 original seats)"
+        );
+    }
+
+    /// §2.3.3 — the match ends (→ `Final`) when occupancy drops below 2.
+    #[test]
+    fn occupancy_below_two_ends_the_match() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.vacate_seat(1);
+        g.vacate_seat(2);
+        g.vacate_seat(3);
+        assert_eq!(g.occupied_count(), 1);
+        g.force_end_turn();
+        g.continue_now();
+        assert_eq!(
+            g.phase,
+            Phase::Final,
+            "occupancy < 2 ends the match on the next advance"
+        );
+    }
+
+    /// §2.3.4 — `force_end_turn` ends a Drawing turn to Reveal (with results) and is
+    /// a no-op in any other phase.
+    #[test]
+    fn force_end_turn_ends_drawing_to_reveal() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert_eq!(g.phase, Phase::Drawing);
+        g.force_end_turn();
+        assert_eq!(g.phase, Phase::Reveal, "force_end_turn ends to Reveal");
+        assert!(!g.turn_results.is_empty(), "the reveal rows are built");
+        // Outside Drawing it is a no-op.
+        let before = g.clone();
+        g.force_end_turn();
+        assert_eq!(g, before, "force_end_turn is a no-op outside Drawing");
+    }
+
+    /// §5.1 — `knows(seat)` is three-way: the drawer, a correct guesser (mid-turn),
+    /// or everyone at the reveal.
+    #[test]
+    fn knows_is_three_way_drawer_correct_guesser_or_reveal() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert!(g.knows(0), "the drawer knows");
+        assert!(!g.knows(1), "a guesser who hasn't guessed does not");
+        g.apply_guess(1, "robot");
+        assert!(g.knows(1), "a correct guesser knows mid-turn");
+        assert!(!g.knows(2), "another guesser still does not");
+        g.force_end_turn();
+        assert_eq!(g.phase, Phase::Reveal);
+        for seat in 0..4 {
+            assert!(g.knows(seat), "at the reveal everyone knows");
+        }
+    }
+
+    /// §2.3.5 — `word_display_for` redacts per seat, and `word_display()` delegates
+    /// to the viewing seat.
+    #[test]
+    fn word_display_for_redacts_per_seat() {
+        let mut g = started();
+        g.config.bots_enabled = false;
+        g.choose_word("robot".to_string());
+        g.tick(Duration::from_secs(0));
+        assert!(
+            g.word_display_for(0).contains('R'),
+            "the drawer sees the letters"
+        );
+        let guesser = g.word_display_for(1);
+        assert!(
+            !guesser.contains('R') && guesser.contains('_'),
+            "a guesser sees blanks: {guesser}"
+        );
+        assert!(
+            Game::default().word_display_for(0).is_empty(),
+            "no word row outside Drawing/Reveal"
+        );
+        g.viewing_as = 1;
+        assert_eq!(
+            g.word_display(),
+            g.word_display_for(1),
+            "word_display() delegates to the viewing seat"
+        );
     }
 }

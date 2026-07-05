@@ -346,7 +346,7 @@ impl Host {
         // Gameplay actions (guess/pick) still route through the real funnel below.
         let mut d = self.app.world_mut().get_mut::<Dooduel>(e).expect("model");
         d.player_name = name.clone();
-        d.game.start_match(&name, config);
+        d.game.start_match_solo(&name, config);
         d.screen = Screen::InGame;
         self.started = true;
         self.log_line(format!("start: match begun; seat0={name:?}"));
@@ -936,7 +936,7 @@ mod tests {
     /// A bots-off match sitting in the draw phase with a known word.
     fn drawing_game() -> Game {
         let mut g = Game::default();
-        g.start_match(
+        g.start_match_solo(
             "Alex",
             Config {
                 bots_enabled: false,
@@ -1033,7 +1033,7 @@ mod tests {
     #[test]
     fn no_drawer_is_reported_at_the_podium() {
         let mut g = Game::default();
-        g.start_match(
+        g.start_match_solo(
             "Alex",
             Config {
                 bots_enabled: false,
@@ -1063,7 +1063,7 @@ mod tests {
     #[test]
     fn round_display_is_clamped_at_the_podium() {
         let mut g = Game::default();
-        g.start_match(
+        g.start_match_solo(
             "Alex",
             Config {
                 bots_enabled: false,

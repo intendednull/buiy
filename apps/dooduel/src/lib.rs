@@ -332,7 +332,7 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
         // "▶ Play" starts the match directly (the design's primary CTA); the Lobby
         // is only reached via Create/Join.
         Msg::Play => {
-            s.game.start_match(&s.player_name, Config::default());
+            s.game.start_match_solo(&s.player_name, Config::default());
             s.screen = Screen::InGame;
         }
         Msg::CreateRoom => {
@@ -359,7 +359,7 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
             s.game = Game::default();
         }
         Msg::StartMatch | Msg::PlayAgain => {
-            s.game.start_match(&s.player_name, Config::default());
+            s.game.start_match_solo(&s.player_name, Config::default());
             s.screen = Screen::InGame;
         }
         Msg::SetTheme(t) => s.theme = t,
