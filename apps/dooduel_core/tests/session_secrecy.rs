@@ -71,8 +71,18 @@ fn the_secret_never_reaches_a_guesser_before_they_earn_it() {
         // Script: two guessers earn the word; the third stays silent (forces a timeout).
         let g1 = ((drawer + 1) % n_seats) as u64;
         let g2 = ((drawer + 2) % n_seats) as u64;
-        h.send(g1, ClientIntent::Guess { text: secret.clone() });
-        h.send(g2, ClientIntent::Guess { text: secret.clone() });
+        h.send(
+            g1,
+            ClientIntent::Guess {
+                text: secret.clone(),
+            },
+        );
+        h.send(
+            g2,
+            ClientIntent::Guess {
+                text: secret.clone(),
+            },
+        );
 
         // Run the clock until this turn ends (a TurnEnded lands in the drawer's stream).
         let mut guard = 0;
@@ -109,7 +119,9 @@ fn the_secret_never_reaches_a_guesser_before_they_earn_it() {
         // Sanity: the drawer's own stream DOES carry the word (the scan can see a leak).
         let drawer_seg = &h.log_for(drawer_conn)[checkpoint[drawer]..];
         assert!(
-            drawer_seg.iter().any(|e| json_lower(e).contains(&secret_lc)),
+            drawer_seg
+                .iter()
+                .any(|e| json_lower(e).contains(&secret_lc)),
             "the drawer's stream must contain the word (scan sanity), turn {turn}"
         );
 
@@ -118,13 +130,18 @@ fn the_secret_never_reaches_a_guesser_before_they_earn_it() {
         clock += 1;
         h.tick(d(clock));
 
-        if (0..n_seats)
-            .any(|c| h.log_for(c as u64).iter().any(|e| matches!(e, ServerEvent::MatchEnded { .. })))
-        {
+        if (0..n_seats).any(|c| {
+            h.log_for(c as u64)
+                .iter()
+                .any(|e| matches!(e, ServerEvent::MatchEnded { .. }))
+        }) {
             reached_podium = true;
             break;
         }
     }
 
-    assert!(reached_podium, "the scripted 2-round match reached the podium");
+    assert!(
+        reached_podium,
+        "the scripted 2-round match reached the podium"
+    );
 }

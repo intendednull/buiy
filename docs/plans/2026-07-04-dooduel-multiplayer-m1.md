@@ -267,8 +267,8 @@ Tests: serde_json round-trip for a populated value of EVERY variant; **the cap-c
 
 **Files:** Create `apps/dooduel_core/src/{session.rs,transport.rs}`. Modify `lib.rs` (exports).
 
-- [ ] **W2.1 Transport trait + InProcessTransport (red-first).** Per spec §2.4 exactly (non-blocking `try_recv`, addressed `send`, `disconnects`); `InProcessTransport` = paired `VecDeque`s (`new_pair(n_clients) -> (ServerEnd, Vec<ClientEnd>)`). Test: send/recv round-trip, per-recipient addressing isolation.
-- [ ] **W2.2 Session core.** `session.rs`:
+- [x] **W2.1 Transport trait + InProcessTransport (red-first).** Per spec §2.4 exactly (non-blocking `try_recv`, addressed `send`, `disconnects`); `InProcessTransport` = paired `VecDeque`s (`new_pair(n_clients) -> (ServerEnd, Vec<ClientEnd>)`). Test: send/recv round-trip, per-recipient addressing isolation.
+- [x] **W2.2 Session core.** `session.rs`:
 
 ```rust
 /// Injected policy — keeps dooduel_core dep-free and the in-process tests
@@ -309,10 +309,10 @@ impl Session {
 ```
 
 Build order, each red-first: (1) connect/roster/host + `Welcome`/`RoomState`/`Roster` events; (2) `StartMatch` host-gate + **bot padding** (`fill_bots_to` — test: 1 connected client, `fill_bots_to: 4` ⇒ 4-seat roster, the 3 bots guess via `tick`, the human seat is never bot-guessed) + `PhaseChanged`/`WordChoices`; (3) `Pick` + `Guess` through `apply_guess` → `GuessResult`/`ChatLine`/`WordUpdate` upgrades; (4) canvas intents → op validation/append/`CanvasOpApplied`, `Undo` → remove-last + `CanvasUndo`, `Clear`, no-echo-to-originator (spec §3.5); (5) `tick`: countdown, hint flip re-sends, auto-pick, turn end → `TurnEnded`, match end → `MatchEnded`; (6) disconnect/grace/**token rotation via `opts.token_gen`**/`force_end_turn` on drawer-drop, host migration, `Leave`, vacate.
-- [ ] **W2.3 The secrecy scan (spec §9.2 — the load-bearing test).** Scripted seeded 2-round match, 4 seats (words chosen from the pool with no substring collisions in scripted guesses); for every guesser seat and every turn: serialize every event addressed to that seat; assert the secret (case-insensitive) absent from the JSON **before** `min(that seat's correct guess, TurnEnded)`; assert the drawer's stream DOES carry it (proves the scan can see).
-- [ ] **W2.4 Op-log determinism + late-join equivalence.** (a) two `PaintBuffer`s fed the same op log are pixel-identical; (b) replay-after-undo == incremental application with the undo applied; (c) a "late joiner" seeded by `CanvasLog` mid-turn ends pixel-identical to a from-start replica after subsequent ops + an undo reaching pre-join ops.
-- [ ] **W2.5 In-process full match.** One `Session` + 4 scripted `InProcessTransport` clients play to podium (guesses, strokes, continues); assert podium scores against the same script run directly on `Game` (the authority adds no scoring drift).
-- [ ] **W2.6 Gate + commit** (likely 3–4 commits along the build order).
+- [x] **W2.3 The secrecy scan (spec §9.2 — the load-bearing test).** Scripted seeded 2-round match, 4 seats (words chosen from the pool with no substring collisions in scripted guesses); for every guesser seat and every turn: serialize every event addressed to that seat; assert the secret (case-insensitive) absent from the JSON **before** `min(that seat's correct guess, TurnEnded)`; assert the drawer's stream DOES carry it (proves the scan can see).
+- [x] **W2.4 Op-log determinism + late-join equivalence.** (a) two `PaintBuffer`s fed the same op log are pixel-identical; (b) replay-after-undo == incremental application with the undo applied; (c) a "late joiner" seeded by `CanvasLog` mid-turn ends pixel-identical to a from-start replica after subsequent ops + an undo reaching pre-join ops.
+- [x] **W2.5 In-process full match.** One `Session` + 4 scripted `InProcessTransport` clients play to podium (guesses, strokes, continues); assert podium scores against the same script run directly on `Game` (the authority adds no scoring drift).
+- [x] **W2.6 Gate + commit** (likely 3–4 commits along the build order).
 
 ### Wave 3 — the client-replica refactor + solo-over-Session (GUI runs on `RoomReplica`)
 

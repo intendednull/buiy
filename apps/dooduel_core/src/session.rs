@@ -20,7 +20,7 @@
 //! op log is the sync primitive; each replica (and `dooduel_mcp::get_canvas`) derives
 //! its own raster via [`crate::canvas::PaintBuffer`]. A client `Stroke` intent carries
 //! a client-chosen `stroke_id` that can span several `done: false` batches; the
-//! server reconciles it to one monotonic server op id — see [`Session::on_stroke`].
+//! server reconciles it to one monotonic server op id (the `on_stroke` accumulator).
 //!
 //! ## Redaction (spec §5)
 //!
@@ -32,9 +32,7 @@
 
 use std::time::Duration;
 
-use crate::game::{
-    ChatMsg, Config, Game, GuessOutcome, PRESET_NAMES, Phase, PlayerSpec,
-};
+use crate::game::{ChatMsg, Config, Game, GuessOutcome, PRESET_NAMES, Phase, PlayerSpec};
 use crate::protocol::{
     CanvasOp, ClientIntent, ErrorCode, MAX_STROKE_POINTS, PROTOCOL_VERSION, ReplicaPlayer,
     RoomReplica, ServerEvent, WireAvatar,
@@ -180,9 +178,10 @@ impl Session {
         _now: Duration,
     ) -> Result<usize, ErrorCode> {
         if let Some(tok) = reconnect {
-            let found = self.seats.iter().position(|s| {
-                s.present && !s.is_bot && !s.token.is_empty() && s.token == tok
-            });
+            let found = self
+                .seats
+                .iter()
+                .position(|s| s.present && !s.is_bot && !s.token.is_empty() && s.token == tok);
             let Some(seat) = found else {
                 return Err(ErrorCode::BadToken);
             };
@@ -235,11 +234,12 @@ impl Session {
     /// §6.3). Does not vacate or end the turn — [`Session::tick`] does that on grace
     /// expiry. A host that drops into grace stays host until the window elapses.
     pub fn disconnect(&mut self, seat: usize, now: Duration) {
-        if let Some(s) = self.seats.get_mut(seat) {
-            if s.present && s.connected {
-                s.connected = false;
-                s.away_since = Some(now);
-            }
+        if let Some(s) = self.seats.get_mut(seat)
+            && s.present
+            && s.connected
+        {
+            s.connected = false;
+            s.away_since = Some(now);
         }
         self.recompute_host();
         self.broadcast_roster();
@@ -255,7 +255,11 @@ impl Session {
         let pre = self.snapshot();
         match intent {
             ClientIntent::Create { .. } | ClientIntent::Join { .. } => {
-                self.error(from, ErrorCode::Malformed, "connection intent on a seated connection");
+                self.error(
+                    from,
+                    ErrorCode::Malformed,
+                    "connection intent on a seated connection",
+                );
             }
             ClientIntent::StartMatch => self.on_start_match(from),
             ClientIntent::Pick { index } => self.on_pick(from, index),
@@ -281,7 +285,11 @@ impl Session {
             return self.error(from, ErrorCode::WrongPhase, "the match already started");
         }
         if from != self.host {
-            return self.error(from, ErrorCode::NotHost, "only the host can start the match");
+            return self.error(
+                from,
+                ErrorCode::NotHost,
+                "only the host can start the match",
+            );
         }
         // Roster = the current seats (index-stable), padded with bots up to fill_bots_to.
         let mut roster: Vec<PlayerSpec> = self
@@ -294,7 +302,10 @@ impl Session {
             .collect();
         let mut bot_names = PRESET_NAMES.iter().cycle();
         while roster.len() < self.opts.fill_bots_to {
-            let name = bot_names.next().expect("PRESET_NAMES cycles forever").to_string();
+            let name = bot_names
+                .next()
+                .expect("PRESET_NAMES cycles forever")
+                .to_string();
             let join_ord = self.next_join_ord;
             self.next_join_ord += 1;
             self.seats.push(SeatState {
@@ -367,7 +378,11 @@ impl Session {
             return;
         }
         if points.len() > MAX_STROKE_POINTS {
-            return self.error(from, ErrorCode::TooLarge, "stroke batch exceeds MAX_STROKE_POINTS");
+            return self.error(
+                from,
+                ErrorCode::TooLarge,
+                "stroke batch exceeds MAX_STROKE_POINTS",
+            );
         }
         // A batch for a *different* stroke closes the open one first.
         let mismatched = self
@@ -494,8 +509,7 @@ impl Session {
             .filter(|(_, s)| {
                 s.present
                     && !s.connected
-                    && s.away_since
-                        .is_some_and(|t| now.saturating_sub(t) >= GRACE)
+                    && s.away_since.is_some_and(|t| now.saturating_sub(t) >= GRACE)
             })
             .map(|(i, _)| i)
             .collect();
@@ -641,14 +655,16 @@ impl Session {
         if self.game.phase != pre.phase {
             self.emit_phase_change();
         } else {
-            if self.game.phase == Phase::Drawing
-                && self.game.hints_revealed() != pre.hints_revealed
+            if self.game.phase == Phase::Drawing && self.game.hints_revealed() != pre.hints_revealed
             {
                 self.emit_word_updates();
             }
             let now_secs = self.remaining_secs();
             if now_secs != pre.remaining_secs
-                && matches!(self.game.phase, Phase::Picking | Phase::Drawing | Phase::Reveal)
+                && matches!(
+                    self.game.phase,
+                    Phase::Picking | Phase::Drawing | Phase::Reveal
+                )
             {
                 self.broadcast(ServerEvent::CountdownSync {
                     remaining: Duration::from_secs(now_secs),
@@ -886,7 +902,9 @@ mod tests {
 
     fn error_to(evs: &Events, seat: usize) -> Option<ErrorCode> {
         evs.iter().find_map(|(r, e)| match (r, e) {
-            (Recipient::Seat(s), ServerEvent::Error { code, .. }) if *s == seat => Some(code.clone()),
+            (Recipient::Seat(s), ServerEvent::Error { code, .. }) if *s == seat => {
+                Some(code.clone())
+            }
             _ => None,
         })
     }
@@ -931,15 +949,19 @@ mod tests {
         assert_eq!(s.host, 0);
         let evs = s.drain_events();
         assert!(matches!(
-            evs.iter().find(|(r, _)| *r == Recipient::Seat(0)).map(|(_, e)| e),
+            evs.iter()
+                .find(|(r, _)| *r == Recipient::Seat(0))
+                .map(|(_, e)| e),
             Some(ServerEvent::Welcome { seat: 0, .. })
         ));
-        assert!(evs
-            .iter()
-            .any(|(r, e)| matches!((r, e), (Recipient::Seat(0), ServerEvent::RoomState(_)))));
-        assert!(evs
-            .iter()
-            .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::Roster { .. }))));
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::Seat(0), ServerEvent::RoomState(_))))
+        );
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::Roster { .. })))
+        );
     }
 
     #[test]
@@ -947,7 +969,11 @@ mod tests {
         let s = two_humans();
         assert_eq!(s.seats.len(), 2);
         assert_eq!(s.host, 0, "the earliest-joined seat is host");
-        assert!(s.seats.iter().all(|x| x.connected && x.present && !x.is_bot));
+        assert!(
+            s.seats
+                .iter()
+                .all(|x| x.connected && x.present && !x.is_bot)
+        );
     }
 
     #[test]
@@ -975,16 +1001,19 @@ mod tests {
 
         s.disconnect(1, d(5));
         s.drain_events();
-        let seat = s.connect("Bo", WireAvatar::Default, Some(&t1), d(10)).unwrap();
+        let seat = s
+            .connect("Bo", WireAvatar::Default, Some(&t1), d(10))
+            .unwrap();
         assert_eq!(seat, 1, "the valid token re-attaches the same seat");
         assert!(s.seats[1].connected);
         assert!(s.seats[1].away_since.is_none(), "grace cleared");
         let evs = s.drain_events();
         let rotated = welcome_token(&evs).unwrap();
         assert_ne!(rotated, t1, "the token rotates on every (re)connection");
-        assert!(evs
-            .iter()
-            .any(|(r, e)| matches!((r, e), (Recipient::Seat(1), ServerEvent::RoomState(_)))));
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::Seat(1), ServerEvent::RoomState(_))))
+        );
     }
 
     #[test]
@@ -995,7 +1024,8 @@ mod tests {
         s.drain_events();
         s.disconnect(1, d(5));
         // Re-attach with tok-2 ⇒ rotates to tok-3.
-        s.connect("Bo", WireAvatar::Default, Some("tok-2"), d(6)).unwrap();
+        s.connect("Bo", WireAvatar::Default, Some("tok-2"), d(6))
+            .unwrap();
         s.drain_events();
         // The old token is single-use now.
         assert_eq!(
@@ -1028,11 +1058,13 @@ mod tests {
         // Seat 1 drops and rejoins with its token (tok-2).
         s.disconnect(1, d(3));
         s.drain_events();
-        s.connect("Bo", WireAvatar::Default, Some("tok-2"), d(4)).unwrap();
+        s.connect("Bo", WireAvatar::Default, Some("tok-2"), d(4))
+            .unwrap();
         let evs = s.drain_events();
-        assert!(evs
-            .iter()
-            .any(|(r, e)| matches!((r, e), (Recipient::Seat(1), ServerEvent::RoomState(_)))));
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::Seat(1), ServerEvent::RoomState(_))))
+        );
         assert!(
             evs.iter().any(|(r, e)| matches!(
                 (r, e),
@@ -1071,7 +1103,13 @@ mod tests {
         let evs = s.drain_events();
         assert!(evs.iter().any(|(r, e)| matches!(
             (r, e),
-            (Recipient::All, ServerEvent::PhaseChanged { phase: Phase::Picking, .. })
+            (
+                Recipient::All,
+                ServerEvent::PhaseChanged {
+                    phase: Phase::Picking,
+                    ..
+                }
+            )
         )));
         assert!(evs.iter().any(|(r, e)| matches!(
             (r, e),
@@ -1100,7 +1138,9 @@ mod tests {
             s.tick(d(sec));
             for (_, e) in s.drain_events() {
                 if let ServerEvent::GuessResult {
-                    seat, correct: true, ..
+                    seat,
+                    correct: true,
+                    ..
                 } = e
                 {
                     correct_seats.push(seat);
@@ -1144,24 +1184,44 @@ mod tests {
         let (mut s, secret) = drawing_two_humans();
         // Wrong phase (before Drawing) is covered elsewhere; here test drawer + correct.
         // The drawer cannot guess ⇒ Ignored (no GuessResult, no score change).
-        s.handle(0, ClientIntent::Guess { text: secret.clone() });
+        s.handle(
+            0,
+            ClientIntent::Guess {
+                text: secret.clone(),
+            },
+        );
         let evs = s.drain_events();
         assert!(
-            !evs.iter().any(|(_, e)| matches!(e, ServerEvent::GuessResult { .. })),
+            !evs.iter()
+                .any(|(_, e)| matches!(e, ServerEvent::GuessResult { .. })),
             "a drawer's guess is ignored"
         );
         assert!(s.game.turn_guesses.is_empty());
         // A non-drawer's correct guess scores and upgrades their word row.
-        s.handle(1, ClientIntent::Guess { text: secret.clone() });
+        s.handle(
+            1,
+            ClientIntent::Guess {
+                text: secret.clone(),
+            },
+        );
         let evs = s.drain_events();
         assert!(evs.iter().any(|(r, e)| matches!(
             (r, e),
-            (Recipient::All, ServerEvent::GuessResult { seat: 1, correct: true, .. })
+            (
+                Recipient::All,
+                ServerEvent::GuessResult {
+                    seat: 1,
+                    correct: true,
+                    ..
+                }
+            )
         )));
-        assert!(evs.iter().any(|(r, e)| matches!(
-            (r, e),
-            (Recipient::Seat(1), ServerEvent::WordUpdate { .. })
-        )));
+        assert!(
+            evs.iter().any(|(r, e)| matches!(
+                (r, e),
+                (Recipient::Seat(1), ServerEvent::WordUpdate { .. })
+            ))
+        );
     }
 
     #[test]
@@ -1169,7 +1229,12 @@ mod tests {
         let mut s = two_humans();
         s.handle(0, ClientIntent::StartMatch); // Picking
         s.drain_events();
-        s.handle(1, ClientIntent::Guess { text: "robot".into() });
+        s.handle(
+            1,
+            ClientIntent::Guess {
+                text: "robot".into(),
+            },
+        );
         assert_eq!(error_to(&s.drain_events(), 1), Some(ErrorCode::WrongPhase));
     }
 
@@ -1245,17 +1310,18 @@ mod tests {
         s.handle(0, ClientIntent::Undo);
         let evs = s.drain_events();
         assert_eq!(s.canvas_ops.len(), 1);
-        assert!(evs.iter().any(|(r, e)| matches!(
-            (r, e),
-            (Recipient::All, ServerEvent::CanvasUndo { .. })
-        )));
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::CanvasUndo { .. })))
+        );
         // Clear truncates the log and confirms CanvasCleared to ALL.
         s.handle(0, ClientIntent::Clear);
         let evs = s.drain_events();
         assert!(s.canvas_ops.is_empty());
-        assert!(evs
-            .iter()
-            .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::CanvasCleared))));
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::CanvasCleared)))
+        );
     }
 
     #[test]
@@ -1277,12 +1343,16 @@ mod tests {
         let (mut s, _) = drawing_two_humans();
         // Seat 1 (a guesser) leaves gracefully.
         s.handle(1, ClientIntent::Leave);
-        assert!(!s.seats[1].present, "the seat is vacated immediately (no grace)");
+        assert!(
+            !s.seats[1].present,
+            "the seat is vacated immediately (no grace)"
+        );
         assert!(!s.game.players[1].occupied);
         let evs = s.drain_events();
-        assert!(evs
-            .iter()
-            .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::Roster { .. }))));
+        assert!(
+            evs.iter()
+                .any(|(r, e)| matches!((r, e), (Recipient::All, ServerEvent::Roster { .. })))
+        );
     }
 
     #[test]
@@ -1295,7 +1365,8 @@ mod tests {
         assert_eq!(s.game.phase, Phase::Reveal);
         let evs = s.drain_events();
         assert!(
-            evs.iter().any(|(_, e)| matches!(e, ServerEvent::TurnEnded { .. })),
+            evs.iter()
+                .any(|(_, e)| matches!(e, ServerEvent::TurnEnded { .. })),
             "the dropped drawer's turn ends with a TurnEnded broadcast"
         );
     }
@@ -1312,8 +1383,13 @@ mod tests {
         for sec in 0..=crate::game::PICK_SECS {
             s.tick(d(sec));
             for (r, e) in s.drain_events() {
-                if let (Recipient::All, ServerEvent::PhaseChanged { phase: Phase::Drawing, .. }) =
-                    (r, &e)
+                if let (
+                    Recipient::All,
+                    ServerEvent::PhaseChanged {
+                        phase: Phase::Drawing,
+                        ..
+                    },
+                ) = (r, &e)
                 {
                     saw_drawing = true;
                 }

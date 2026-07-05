@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use dooduel_core::game::Config;
 use dooduel_core::protocol::{
-    ClientIntent, ErrorCode, PROTOCOL_VERSION, ServerEvent, WireAvatar,
+    CanvasOp, ClientIntent, ErrorCode, PROTOCOL_VERSION, ServerEvent, WireAvatar,
 };
 use dooduel_core::session::{Recipient, Session, SessionOpts};
 use dooduel_core::transport::{
@@ -208,11 +208,11 @@ impl Harness {
         {
             Ok(seat) => {
                 // A live-token rejoin replaces the old connection (spec §6.3).
-                if let Some(old) = self.seat_conn.insert(seat, conn) {
-                    if old != conn {
-                        self.conn_seat.remove(&old);
-                        self.server.close(old);
-                    }
+                if let Some(old) = self.seat_conn.insert(seat, conn)
+                    && old != conn
+                {
+                    self.conn_seat.remove(&old);
+                    self.server.close(old);
                 }
                 self.conn_seat.insert(conn, seat);
             }
@@ -271,6 +271,44 @@ pub fn last_word_choices(evs: &[ServerEvent]) -> Option<Vec<String>> {
         ServerEvent::WordChoices { words } => Some(words.clone()),
         _ => None,
     })
+}
+
+/// The reconnect token from a connection's first `Welcome`, if any.
+pub fn welcome_token(evs: &[ServerEvent]) -> Option<String> {
+    evs.iter().find_map(|e| match e {
+        ServerEvent::Welcome {
+            reconnect_token, ..
+        } => Some(reconnect_token.clone()),
+        _ => None,
+    })
+}
+
+/// A [`CanvasOp`]'s server-assigned id.
+pub fn canvas_op_id(op: &CanvasOp) -> u64 {
+    match op {
+        CanvasOp::Stroke { id, .. } | CanvasOp::Fill { id, .. } => *id,
+    }
+}
+
+/// Fold a connection's received events into the canvas op log a replica derives —
+/// the client-side reduction (spec §2.2/§4.4) Wave 3 implements: `RoomState`/`CanvasLog`
+/// seed the log, `CanvasOpApplied` appends, `CanvasUndo` removes by id, `CanvasCleared`
+/// truncates. The raster is then derived from this log.
+pub fn fold_canvas(evs: &[ServerEvent]) -> Vec<CanvasOp> {
+    let mut ops: Vec<CanvasOp> = Vec::new();
+    for e in evs {
+        match e {
+            ServerEvent::RoomState(r) => ops = r.canvas_ops.clone(),
+            ServerEvent::CanvasLog { ops: log } => ops = log.clone(),
+            ServerEvent::CanvasOpApplied { op } => ops.push(op.clone()),
+            ServerEvent::CanvasUndo { removed_id } => {
+                ops.retain(|o| canvas_op_id(o) != *removed_id)
+            }
+            ServerEvent::CanvasCleared => ops.clear(),
+            _ => {}
+        }
+    }
+    ops
 }
 
 /// Whether `ev` is the point at which `seat` *earns* the right to see the word — its
