@@ -1710,8 +1710,9 @@ mod tests {
         }
     }
 
-    /// §2.3.5 — `word_display_for` redacts per seat, and `word_display()` delegates
-    /// to the viewing seat.
+    /// §2.3.5 — `word_display_for` redacts per seat (the drawer sees the letters, a
+    /// guesser sees blanks); the client-side hot-seat `word_display()` delegate was
+    /// removed in M1 W3, so this is the single redaction home.
     #[test]
     fn word_display_for_redacts_per_seat() {
         let mut g = started();
