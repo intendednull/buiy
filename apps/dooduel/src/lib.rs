@@ -2,17 +2,22 @@
 //! Buiy framework.
 //!
 //! One MVU model owns the whole UI (one `ui()` per app); screens are a [`Screen`]
-//! enum matched in [`view::view`] (root kind-swap). The match state lives in a
-//! nested [`game::Game`] (that module is the pure state machine + the clock model).
-//! The reducer is one pure fold; the F7 [`ClockPlugin`] turns wall-clock into a
-//! `Msg::Tick(now)` every frame — the "game on a game engine" seam. The windowed
-//! `dooduel` bin, the wasm `dooduel_web` crate, the headless `capture` bin, and the
-//! `playtest_host` all share [`install`] / [`install_runtime`].
+//! enum matched in [`view::view`] (root kind-swap). Since M1 the match state is a
+//! [`RoomReplica`] (the client-side mirror of the authoritative session), mutated
+//! only by `Msg::Net(ServerEvent)`; the pure rules/scoring/clock core lives in the
+//! Bevy-free `dooduel_core::game` crate. The reducer is one pure fold; the F7
+//! [`ClockPlugin`] turns wall-clock into a `Msg::Tick(now)` every frame — driving the
+//! monotonic countdown. The windowed `dooduel` bin, the wasm `dooduel_web` crate, and
+//! the headless `capture` bin share [`install`] / [`install_runtime`].
 //!
 //! ## Module map (the per-screen split)
 //!
-//! - [`game`] — the PURE game core (phase machine, scoring, hints, seeded bots, the
-//!   honest `word_display()` redaction). Zero framework coupling; unit-testable.
+//! - [`game`] — the PURE game core, re-exported from `dooduel_core` (phase machine,
+//!   scoring, hints, seeded bots, the per-seat `word_display_for` redaction). Zero
+//!   framework coupling; unit-testable. The client no longer runs it — the authority
+//!   ([`net::LocalAuthorityPlugin`] solo, `dooduel_server` networked) does.
+//! - [`net`] — the transport pump ([`net::NetPlugin`]) + the in-process solo
+//!   authority ([`net::LocalAuthorityPlugin`]): intents out, `Msg::Net` events in.
 //! - [`paint`] — the keyed `PaintCanvases` resource + the model→canvas projection +
 //!   the Press/Drag/Release observers (the drawing surface skribbl.io needs).
 //! - [`storage`] — the typed per-target persistence seam (native JSON / wasm
@@ -231,8 +236,25 @@ impl Countdown {
 
     /// Record a server `remaining` to anchor on the next tick. `reset` (a
     /// `PhaseChanged`) starts a fresh phase; `!reset` (a `CountdownSync`) clamps.
+    ///
+    /// Multiple events can fold in ONE batch before the next `Msg::Tick` consumes the
+    /// pending value (I-3): a fresh reset is authoritative and wins outright — a
+    /// stale same-batch `CountdownSync` (delayed from the previous phase) must NOT
+    /// override it, or the display would read the stale value (or 0:00, clamping the
+    /// non-reset sync against the default-zero deadline) instead of the fresh phase's
+    /// countdown. A non-reset sync only clamps a pending non-reset downward, or
+    /// establishes one when nothing is pending.
     fn anchor(&mut self, remaining: Duration, reset: bool) {
-        self.pending = Some((remaining, reset));
+        match self.pending {
+            // A fresh phase change always wins (supersedes any earlier pending).
+            _ if reset => self.pending = Some((remaining, true)),
+            // A non-reset sync cannot override a pending reset — the reset is
+            // authoritative for this batch (the sync is from the old phase).
+            Some((_, true)) => {}
+            // Fold a non-reset sync into a pending non-reset (clamp down), or take it.
+            Some((prev, false)) => self.pending = Some((prev.min(remaining), false)),
+            None => self.pending = Some((remaining, false)),
+        }
     }
 
     /// Fold one monotonic `now`: consume a pending anchor, then derive the whole
@@ -1162,6 +1184,38 @@ mod tests {
         );
         update(&mut m, Msg::Tick(Duration::from_secs(15)));
         assert_eq!(m.countdown.secs(), 60, "a corrective sync pulls it down");
+    }
+
+    #[test]
+    fn countdown_reset_wins_over_a_stale_same_batch_sync() {
+        // A fresh PhaseChanged (80s reset) and a stale CountdownSync (3s, delayed from
+        // the previous phase) fold in ONE batch before the next Tick. The reset must
+        // win — the display shows the fresh phase's countdown, not the stale 3s and
+        // (the I-3 bug) not 0:00 (the old code let the sync overwrite the reset, then
+        // clamped the non-reset against the default-zero deadline → 0).
+        let mut m = Dooduel::default();
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Drawing,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(80),
+            },
+        );
+        apply_event(
+            &mut m,
+            ServerEvent::CountdownSync {
+                remaining: Duration::from_secs(3),
+            },
+        );
+        update(&mut m, Msg::Tick(Duration::from_secs(0)));
+        assert_eq!(
+            m.countdown.secs(),
+            80,
+            "the fresh phase's countdown wins over a stale same-batch sync"
+        );
     }
 
     // --- Scripted-view (probe) ---------------------------------------------
