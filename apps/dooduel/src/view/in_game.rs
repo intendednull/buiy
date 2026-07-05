@@ -1,20 +1,24 @@
 //! In-game screen — the desktop 3-pane (scoreboard | canvas + toolbar | chat) and
 //! the phone single-column layout, both under the fixed dark top bar, plus the
 //! word-pick / turn-reveal / waiting overlays (fixed + top-layer scrims).
+//!
+//! Every datum reads the [`RoomReplica`] (M1 W3): the local `game::Game` is gone,
+//! so the drawer/word/roster/countdown come from the authoritative mirror the
+//! `Msg::Net` fold maintains — the same code path solo and (W4) networked.
 
 use buiy::view::{
     Color, Element, Radius, Space, button, column, keyed_column, row, text, text_input, when,
 };
 use buiy_view::{ICON_VIEWBOX, LineStyle, icon, raster};
 
-use crate::game::{ChatKind, ChatMsg, Game, Phase, WordSlot};
+use crate::game::{ChatKind, ChatMsg, Phase};
 use crate::paint;
 use crate::theme::{
-    CLEAR, DANGER, FONT_BODY, FONT_DISPLAY, INK_PANEL, INK_PANEL_ON, PANEL_MUTED, POS, Palette,
-    WHITE, WOBBLE_PANEL,
+    CLEAR, DANGER, FONT_BODY, FONT_DISPLAY, INK_PANEL, INK_PANEL_ON, POS, Palette, WHITE,
+    WOBBLE_PANEL,
 };
 use crate::view::widgets::{avatar_el, badge, eyebrow, panel, scrim, sketchy_panel, title};
-use crate::{Dooduel, MOBILE_BREAKPOINT, Msg, ToolState};
+use crate::{Dooduel, MOBILE_BREAKPOINT, Msg, NetState, RoomReplica, ToolState};
 
 // The drawing canvas's on-screen display size (logical px). Smaller than the
 // `CANVAS_W×CANVAS_H` image (720×450) — the raster samples the texture scaled to fit
@@ -45,31 +49,29 @@ pub fn in_game(s: &Dooduel) -> Element<Msg> {
 /// The word-pick / turn-reveal / waiting overlays (fixed + top-layer, so out of flow
 /// and painting over the canvas). Shared by the desktop + mobile layouts; `max_w`
 /// clamps the modal panel to the phone width (desktop passes `f32::MAX`).
-fn game_overlays(g: &Game, p: Palette, max_w: f32) -> Vec<Element<Msg>> {
+fn game_overlays(s: &Dooduel, max_w: f32) -> Vec<Element<Msg>> {
+    let p = s.palette();
+    let picking = s.replica.phase == Phase::Picking;
     vec![
+        when(picking && s.is_drawer(), pick_overlay(s, p, max_w)),
+        when(picking && !s.is_drawer(), waiting_overlay(s, p, max_w)),
         when(
-            g.phase == Phase::Picking && g.viewer_is_drawer(),
-            pick_overlay(g, p, max_w),
+            s.replica.phase == Phase::Reveal,
+            reveal_overlay(s, p, max_w),
         ),
-        when(
-            g.phase == Phase::Picking && !g.viewer_is_drawer(),
-            waiting_overlay(g, p, max_w),
-        ),
-        when(g.phase == Phase::Reveal, reveal_overlay(g, p, max_w)),
     ]
 }
 
 fn in_game_desktop(s: &Dooduel) -> Element<Msg> {
-    let g = &s.game;
     let p = s.palette();
     let mut children = vec![
         top_bar(s),
-        Element::column(vec![header_card(g, p), three_pane(s)])
+        Element::column(vec![header_card(s), three_pane(s)])
             .gap(Space::Md)
             .padding(Space::Lg)
             .grow(),
     ];
-    children.extend(game_overlays(g, p, f32::MAX));
+    children.extend(game_overlays(s, f32::MAX));
     Element::column(children).fill().background(p.canvas)
 }
 
@@ -77,17 +79,16 @@ fn in_game_desktop(s: &Dooduel) -> Element<Msg> {
 /// horizontal scoreboard strip → canvas → toolbar → chat. Sizes derive from the
 /// measured viewport width. The overlays are the same `.fixed().top_layer()` scrims.
 fn in_game_mobile(s: &Dooduel) -> Element<Msg> {
-    let g = &s.game;
     let p = s.palette();
     // Content width inside the phone side margins, capped at the design's ≤430px.
     let content_w = (s.viewport_w - 2.0 * MOBILE_MARGIN).clamp(280.0, MOBILE_BREAKPOINT);
 
     let body = Element::column(vec![
-        header_card_mobile(g, p, content_w),
+        header_card_mobile(s, content_w),
         scoreboard_strip(s, content_w),
         canvas_mobile(s, content_w),
         toolbar_mobile(s, content_w),
-        chat_pane(g, p, content_w, 200.0),
+        chat_pane(s, content_w, 200.0),
     ])
     .gap(Space::Sm)
     .padding(Space::Md)
@@ -95,33 +96,34 @@ fn in_game_mobile(s: &Dooduel) -> Element<Msg> {
     .grow();
 
     let mut children = vec![top_bar(s), body];
-    children.extend(game_overlays(g, p, content_w));
+    children.extend(game_overlays(s, content_w));
     Element::column(children).fill().background(p.canvas)
 }
 
 /// The phone header card: Round + timer on one row, the word-slot row centered
 /// below, the role badge centered under that.
-fn header_card_mobile(g: &Game, p: Palette, width: f32) -> Element<Msg> {
-    let (role_text, role_bg, role_fg) = role_badge_parts(g, p);
-    // The phone header renders the round as "Round r of t" (word — finding #20),
-    // clamped by `round_display` (bug #1).
+fn header_card_mobile(s: &Dooduel, width: f32) -> Element<Msg> {
+    let p = s.palette();
+    let (role_text, role_bg, role_fg) = role_badge_parts(s, p);
+    // The phone header renders the round as "Round r of t" (word — finding #20).
     let top = row![
-        text!("Round {} of {}", g.round_display(), g.config.total_rounds)
+        text!("Round {} of {}", s.replica.round, s.replica.total_rounds)
             .size(14.0)
             .color(p.ink_2)
             .font(FONT_BODY),
-        timer_view(g),
+        timer_view(s),
     ]
     .justify_between()
     .align_center();
 
-    let slots: Vec<Element<Msg>> = g
+    let slots: Vec<Element<Msg>> = s
+        .replica
         .word_slots()
         .into_iter()
         .map(|slot| word_slot(slot, p))
         .collect();
     let word_row = Element::row(slots).gap(Space::Xs).justify_center();
-    let progress = drawer_progress_text(g);
+    let progress = drawer_progress_text(s);
     let role = column![
         badge(role_text, role_bg, role_fg),
         when(
@@ -147,21 +149,20 @@ fn header_card_mobile(g: &Game, p: Palette, width: f32) -> Element<Msg> {
 
 /// The phone scoreboard: a horizontally-scrolling strip of compact per-player cards
 /// (avatar + name + score). F2's `.scroll_x()` matches the design's overflow-x strip;
-/// the viewed seat is accent-tinted.
+/// this client's seat is accent-tinted.
 fn scoreboard_strip(s: &Dooduel, width: f32) -> Element<Msg> {
-    let g = &s.game;
     let p = s.palette();
-    let cards: Vec<Element<Msg>> = g
+    let cards: Vec<Element<Msg>> = s
         .standings()
         .into_iter()
         .map(|(i, pl)| {
-            let bg = if i == g.viewing_as {
+            let bg = if i == s.replica.my_seat {
                 p.accent_tint
             } else {
                 p.surface_2
             };
             column![
-                avatar_el(s, i == 0, &pl.name, 34.0),
+                avatar_el(s, i == s.replica.my_seat, &pl.name, 34.0),
                 text(pl.name.as_str())
                     .size(12.0)
                     .color(p.ink)
@@ -245,52 +246,37 @@ fn toolbar_mobile(s: &Dooduel, width: f32) -> Element<Msg> {
         )
         .border(2.5, p.ink, LineStyle::Solid)
         .padding(Space::Sm)
-        .disabled(s.game.phase != Phase::Drawing || !s.game.viewer_is_drawer())
+        .disabled(s.replica.phase != Phase::Drawing || !s.is_drawer())
 }
 
-/// The fixed dark top bar: the "solo demo" caption + the seat-switcher avatar chips
-/// (clickable — the F5 press route) + Leave.
+/// The fixed dark top bar: the session caption + the roster avatar badges (inert now
+/// the hot-seat switcher is gone — this client's seat renders larger) + Leave.
 fn top_bar(s: &Dooduel) -> Element<Msg> {
-    let g = &s.game;
-    // On a phone the "— switch who you are" hint is dropped so the caption + chips
-    // fit the narrow bar.
-    let caption = if s.is_mobile() {
-        row![
-            text("Solo demo")
-                .size(14.0)
-                .color(INK_PANEL_ON)
-                .font(FONT_BODY)
-        ]
-    } else {
-        row![
-            text("Solo demo")
-                .size(15.0)
-                .color(INK_PANEL_ON)
-                .font(FONT_BODY),
-            text("— switch who you are")
-                .size(13.0)
-                .color(PANEL_MUTED)
-                .font(FONT_BODY),
-        ]
-    }
+    // The session caption. Solo shows the demo label; a networked room shows its code.
+    let caption_text = match s.net {
+        NetState::Solo => "Solo demo".to_string(),
+        _ => s.replica.room_code.clone(),
+    };
+    let caption = row![
+        text(caption_text)
+            .size(if s.is_mobile() { 14.0 } else { 15.0 })
+            .color(INK_PANEL_ON)
+            .font(FONT_BODY),
+    ]
     .gap(Space::Sm)
     .align_center();
 
-    // Seat chips: each doodle avatar hops to that seat on click; the seat you are
-    // currently viewing renders larger (the design's scale-up highlight). The F5
-    // raster press route now makes even a custom-image seat chip activatable.
-    let mut chips: Vec<Element<Msg>> = g
+    // Roster badges: each player's doodle avatar; this client's own seat renders
+    // larger (the design's highlight). Inert now — seat switching is removed.
+    let mut chips: Vec<Element<Msg>> = s
+        .replica
         .players
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let px = if i == g.viewing_as { 40.0 } else { 32.0 };
-            // Wrap in a pressable CONTAINER: the F5 press route is wired for
-            // containers/rasters but not for a bare `icon()` (the doodle chip case),
-            // so the click must land on a container that bubbles it.
-            column![avatar_el(s, i == 0, &p.name, px)]
-                .on_press(Msg::SwitchSeat(i))
-                .label(&p.name)
+        .map(|(i, pl)| {
+            let me = i == s.replica.my_seat;
+            let px = if me { 40.0 } else { 32.0 };
+            column![avatar_el(s, me, &pl.name, px)].label(&pl.name)
         })
         .collect();
     chips.push(
@@ -312,13 +298,13 @@ fn top_bar(s: &Dooduel) -> Element<Msg> {
 
 /// The header card: round + role badge (left), the word-slot row (center), the
 /// countdown timer ring + number (right).
-fn header_card(g: &Game, p: Palette) -> Element<Msg> {
-    let (role_text, role_bg, role_fg) = role_badge_parts(g, p);
-    // The desktop header renders the round as "Round r / t" (slash — finding #20),
-    // clamped by `round_display` so it never reads the Final overflow (bug #1).
-    let progress = drawer_progress_text(g);
+fn header_card(s: &Dooduel) -> Element<Msg> {
+    let p = s.palette();
+    let (role_text, role_bg, role_fg) = role_badge_parts(s, p);
+    // The desktop header renders the round as "Round r / t" (slash — finding #20).
+    let progress = drawer_progress_text(s);
     let left = column![
-        text!("Round {} / {}", g.round_display(), g.config.total_rounds)
+        text!("Round {} / {}", s.replica.round, s.replica.total_rounds)
             .size(14.0)
             .color(p.ink_2)
             .font(FONT_BODY),
@@ -334,7 +320,8 @@ fn header_card(g: &Game, p: Palette) -> Element<Msg> {
     .gap(Space::Xs)
     .width(180.0);
 
-    let slots: Vec<Element<Msg>> = g
+    let slots: Vec<Element<Msg>> = s
+        .replica
         .word_slots()
         .into_iter()
         .map(|slot| word_slot(slot, p))
@@ -342,21 +329,27 @@ fn header_card(g: &Game, p: Palette) -> Element<Msg> {
     let word_row = Element::row(slots).gap(Space::Xs).grow().justify_center();
 
     panel(
-        row![left, word_row, timer_view(g)]
+        row![left, word_row, timer_view(s)]
             .gap(Space::Lg)
             .align_center(),
         p,
     )
 }
 
-/// One underlined letter slot of the word row (blank when unrevealed).
-fn word_slot(slot: WordSlot, p: Palette) -> Element<Msg> {
-    let ch = slot.ch.map(|c| c.to_string()).unwrap_or_else(|| " ".into());
+/// One underlined letter slot of the word row (blank when unrevealed). The replica's
+/// [`RoomReplica::word_slots`] yields `(char, revealed)` — a `'_'` char is a blank.
+fn word_slot(slot: (char, bool), p: Palette) -> Element<Msg> {
+    let (ch, revealed) = slot;
+    let ch_str = if ch == '_' {
+        " ".to_string()
+    } else {
+        ch.to_string()
+    };
     // The design underlines each slot (accent once revealed, ink while blank); a thin
     // colored bar stands in for `border-bottom` (no per-side border surface).
-    let underline = if slot.revealed { Color::Accent } else { p.ink };
+    let underline = if revealed { Color::Accent } else { p.ink };
     column![
-        text(ch).size(30.0).color(p.ink).font(FONT_DISPLAY),
+        text(ch_str).size(30.0).color(p.ink).font(FONT_DISPLAY),
         Element::column(vec![])
             .width(26.0)
             .height(4.0)
@@ -369,28 +362,15 @@ fn word_slot(slot: WordSlot, p: Palette) -> Element<Msg> {
 
 /// The countdown timer: a progress ring (an `icon` arc regenerated per displayed
 /// second — a per-frame arc would churn the icon atlas) beside the seconds number,
-/// danger-red under 10s.
-fn timer_view(g: &Game) -> Element<Msg> {
-    let secs = countdown(g);
-    let (frac, tcolor) = match g.phase {
-        Phase::Drawing => {
-            let f = if g.config.draw_seconds > 0 {
-                g.draw_seconds_left as f32 / g.config.draw_seconds as f32
-            } else {
-                0.0
-            };
-            let c = if g.draw_seconds_left <= 10 {
-                DANGER
-            } else {
-                Color::Accent
-            };
-            (f, c)
-        }
-        Phase::Picking => (
-            g.pick_seconds_left as f32 / (g.config.pick_seconds.max(1) as f32),
-            Color::Accent,
-        ),
-        _ => (1.0, Color::Accent),
+/// danger-red under 10s. The countdown is the monotonic-anchored [`crate::Countdown`]
+/// (spec §4.3), so the ring + number derive from the same whole-second value.
+fn timer_view(s: &Dooduel) -> Element<Msg> {
+    let secs = s.countdown.secs();
+    let frac = s.countdown.fraction();
+    let tcolor = if s.replica.phase == Phase::Drawing && secs <= 10 {
+        DANGER
+    } else {
+        Color::Accent
     };
     row![
         icon::<Msg>(ring_path(frac), 60, 2.2, ICON_VIEWBOX)
@@ -437,20 +417,18 @@ fn ring_path(frac: f32) -> String {
 /// The 3-pane body: scoreboard (240) | canvas + toolbar (grow) | chat (300),
 /// top-aligned (`align_start`, so a short scoreboard is not stretched tall).
 fn three_pane(s: &Dooduel) -> Element<Msg> {
-    let p = s.palette();
     row![
         scoreboard_pane(s),
         center_pane(s),
-        chat_pane(&s.game, p, 300.0, 556.0)
+        chat_pane(s, 300.0, 556.0)
     ]
     .gap(Space::Md)
     .align_start()
 }
 
 /// The scoreboard pane: rank / avatar / name + role pill / score, sorted high→low,
-/// the viewed seat tinted. (Display only — seat switching is the top bar.)
+/// this client's seat tinted.
 fn scoreboard_pane(s: &Dooduel) -> Element<Msg> {
-    let g = &s.game;
     let pal = s.palette();
     let mut rows: Vec<Element<Msg>> = vec![
         text("Scoreboard")
@@ -458,9 +436,9 @@ fn scoreboard_pane(s: &Dooduel) -> Element<Msg> {
             .color(pal.ink_2)
             .font(FONT_BODY),
     ];
-    for (rank, (i, p)) in g.standings().into_iter().enumerate() {
-        let (rtext, rbg, rfg) = player_role(g, i, pal);
-        let bg = if i == g.viewing_as {
+    for (rank, (i, pl)) in s.standings().into_iter().enumerate() {
+        let (rtext, rbg, rfg) = player_role(&s.replica, i, pal);
+        let bg = if i == s.replica.my_seat {
             pal.accent_tint
         } else {
             CLEAR
@@ -472,9 +450,9 @@ fn scoreboard_pane(s: &Dooduel) -> Element<Msg> {
                     .size(13.0)
                     .color(pal.muted)
                     .font(FONT_BODY),
-                avatar_el(s, i == 0, &p.name, 34.0),
+                avatar_el(s, i == s.replica.my_seat, &pl.name, 34.0),
                 column![
-                    text(p.name.as_str())
+                    text(pl.name.as_str())
                         .size(14.0)
                         .color(pal.ink)
                         .font(FONT_BODY),
@@ -482,7 +460,7 @@ fn scoreboard_pane(s: &Dooduel) -> Element<Msg> {
                 ]
                 .gap(Space::Xs)
                 .grow(),
-                text!("{}", p.score)
+                text!("{}", pl.score)
                     .size(19.0)
                     .color(pal.ink)
                     .font(FONT_DISPLAY),
@@ -572,7 +550,7 @@ fn toolbar_view(s: &Dooduel) -> Element<Msg> {
         .padding(Space::Md)
         // Dim the whole toolbar when you cannot draw (parity: tools disabled for
         // guessers). `.disabled(true)` on a container dims via `Opacity`.
-        .disabled(s.game.phase != Phase::Drawing || !s.game.viewer_is_drawer())
+        .disabled(s.replica.phase != Phase::Drawing || !s.is_drawer())
 }
 
 /// One segment of the brush/fill/eraser control (an accent-filled pill when active).
@@ -662,14 +640,15 @@ fn tool_btn(label: &str, msg: Msg, p: Palette) -> Element<Msg> {
 }
 
 /// The chat pane: title + the guess/chat log (F2 `.stick_to_bottom()` scroll — the
-/// design's auto-scroll-to-bottom, replacing the prototype's cap-to-12) + the guess
-/// input. Sized by the caller so the desktop (300×556) and phone (full-width,
-/// shorter) layouts share it.
-fn chat_pane(g: &Game, p: Palette, width: f32, height: f32) -> Element<Msg> {
-    // The log AS THIS SEAT SEES IT (bug #4): shared lines plus only the private
-    // nudges addressed to the viewer, scrolled + pinned to the bottom on append.
+/// design's auto-scroll-to-bottom) + the guess input. Sized by the caller so the
+/// desktop (300×556) and phone (full-width, shorter) layouts share it. The log is
+/// already per-recipient filtered by the server ([`RoomReplica::chat`]).
+fn chat_pane(s: &Dooduel, width: f32, height: f32) -> Element<Msg> {
+    let p = s.palette();
+    // The log AS THIS SEAT SEES IT (bug #4): the server addressed the private near-
+    // miss nudges only to this seat, so the replica's chat is already the honest view.
     let lines = keyed_column(
-        g.chat_for(g.viewing_as).cloned(),
+        s.replica.chat.iter().cloned(),
         |m| m.seq,
         |m| chat_line(m, p),
     )
@@ -677,18 +656,21 @@ fn chat_pane(g: &Game, p: Palette, width: f32, height: f32) -> Element<Msg> {
     .grow()
     .stick_to_bottom();
 
-    let placeholder = match g.phase {
-        Phase::Drawing if g.viewer_is_drawer() => "You're drawing — guessing is off",
-        Phase::Drawing if g.turn_guesses.iter().any(|gu| gu.player == g.viewing_as) => {
-            "You already guessed it!"
-        }
+    let guessed = s
+        .replica
+        .players
+        .get(s.replica.my_seat)
+        .is_some_and(|pl| pl.guessed);
+    let placeholder = match s.replica.phase {
+        Phase::Drawing if s.is_drawer() => "You're drawing — guessing is off",
+        Phase::Drawing if guessed => "You already guessed it!",
         Phase::Drawing => "Type your guess…",
         Phase::Picking => "Waiting for the word…",
         Phase::Reveal => "Round over — see results",
         _ => "",
     };
     let input = row![
-        text_input(g.chat_input.clone())
+        text_input(s.chat_input.clone())
             .placeholder(placeholder)
             .on_input(Msg::SetChatInput)
             .on_submit(Msg::SubmitGuess)
@@ -767,24 +749,28 @@ fn strip_emoji(s: &str) -> String {
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The drawer's live "who has guessed" progress line (bug #3) — shown to the
-/// drawer during the draw phase so they are never blind to how many guessers have
-/// already gotten the word (an agent once wasted a redraw on an already-guessed
-/// turn). `None` for guessers / outside the draw phase.
-fn drawer_progress_text(g: &Game) -> Option<String> {
-    if g.phase == Phase::Drawing && g.viewer_is_drawer() {
-        let total = g.players.len().saturating_sub(1);
-        Some(format!("{} of {} guessed", g.guessed_count(), total))
+/// The drawer's live "who has guessed" progress line (bug #3) — shown to the drawer
+/// during the draw phase so they are never blind to how many guessers already have
+/// the word. `None` for guessers / outside the draw phase.
+fn drawer_progress_text(s: &Dooduel) -> Option<String> {
+    if s.replica.phase == Phase::Drawing && s.is_drawer() {
+        let total = s.replica.players.len().saturating_sub(1);
+        let guessed = s.replica.players.iter().filter(|p| p.guessed).count();
+        Some(format!("{guessed} of {total} guessed"))
     } else {
         None
     }
 }
 
 /// The role badge text + tones for the header.
-fn role_badge_parts(g: &Game, p: Palette) -> (&'static str, Color, Color) {
-    let drawer = g.viewer_is_drawer();
-    let guessed = g.turn_guesses.iter().any(|gu| gu.player == g.viewing_as);
-    match g.phase {
+fn role_badge_parts(s: &Dooduel, p: Palette) -> (&'static str, Color, Color) {
+    let drawer = s.is_drawer();
+    let guessed = s
+        .replica
+        .players
+        .get(s.replica.my_seat)
+        .is_some_and(|pl| pl.guessed);
+    match s.replica.phase {
         Phase::Picking if drawer => ("Choosing a word", p.accent_tint, Color::Accent),
         Phase::Picking => ("Waiting for the drawer", p.hair, p.muted),
         Phase::Drawing if drawer => ("You're drawing", p.accent_tint, Color::Accent),
@@ -798,19 +784,21 @@ fn role_badge_parts(g: &Game, p: Palette) -> (&'static str, Color, Color) {
 /// The per-player scoreboard role pill text + tones. The drawer tag is gated on the
 /// active drawer + phase (bug #2) so a finished-match seat is never mis-tagged
 /// "Drawing".
-fn player_role(g: &Game, i: usize, p: Palette) -> (&'static str, Color, Color) {
-    let is_drawer = g.current_drawer() == Some(i);
-    match (is_drawer, g.phase) {
+fn player_role(r: &RoomReplica, i: usize, p: Palette) -> (&'static str, Color, Color) {
+    let is_drawer = r.drawer == Some(i);
+    let guessed = r.players.get(i).is_some_and(|pl| pl.guessed);
+    match (is_drawer, r.phase) {
         (true, Phase::Picking) => ("Picking", p.accent_tint, Color::Accent),
         (true, Phase::Drawing) => ("Drawing", p.accent_tint, Color::Accent),
-        _ if g.turn_guesses.iter().any(|gu| gu.player == i) => ("Guessed", p.pos_tint, POS),
+        _ if guessed => ("Guessed", p.pos_tint, POS),
         _ => ("Guessing", p.hair, p.muted),
     }
 }
 
 /// The word-pick overlay (drawer, Picking): the eyebrow + a big word-choice list.
-fn pick_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
-    let choices: Vec<Element<Msg>> = g
+fn pick_overlay(s: &Dooduel, p: Palette, max_w: f32) -> Element<Msg> {
+    let choices: Vec<Element<Msg>> = s
+        .replica
         .word_choices
         .iter()
         .enumerate()
@@ -828,7 +816,7 @@ fn pick_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     let panel = column![
         row![
             eyebrow("Your turn to draw"),
-            text!("{}s", g.pick_seconds_left)
+            text!("{}s", s.countdown.secs())
                 .size(22.0)
                 .color(DANGER)
                 .font(FONT_DISPLAY),
@@ -855,8 +843,9 @@ fn pick_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
 }
 
 /// The turn-end reveal overlay: the word + per-player deltas + Continue.
-fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
-    let rows: Vec<Element<Msg>> = g
+fn reveal_overlay(s: &Dooduel, p: Palette, max_w: f32) -> Element<Msg> {
+    let rows: Vec<Element<Msg>> = s
+        .replica
         .turn_results
         .iter()
         .map(|r| {
@@ -884,21 +873,20 @@ fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
             .radius(Radius::Md)
         })
         .collect();
+    // The revealed word: TurnEnded set `word_display` to the full, space-joined row,
+    // so every slot is a real letter — collect them back into the word.
+    let word: String = s.replica.word_slots().iter().map(|(c, _)| *c).collect();
     let panel = column![
         row![
             eyebrow("Turn over"),
-            text!("next in {}s", g.reveal_seconds_left)
+            text!("next in {}s", s.countdown.secs())
                 .size(14.0)
                 .color(p.muted)
                 .font(FONT_BODY),
         ]
         .justify_between()
         .align_center(),
-        title(
-            &format!("The word was {}", g.secret_word.to_uppercase()),
-            30.0,
-            p
-        ),
+        title(&format!("The word was {word}"), 30.0, p),
         Element::column(rows).gap(Space::Xs),
         button("Continue")
             .on_press(Msg::Continue)
@@ -925,11 +913,13 @@ fn reveal_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     scrim(panel)
 }
 
-/// The "waiting for the drawer to pick" overlay (a guesser during Picking).
-fn waiting_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
-    let drawer = g
-        .players
-        .get(g.seat_index)
+/// The "waiting for the drawer to pick" overlay (a guesser during Picking). The
+/// hot-seat "Switch to {drawer}" button is gone (the switcher is removed).
+fn waiting_overlay(s: &Dooduel, p: Palette, max_w: f32) -> Element<Msg> {
+    let drawer = s
+        .replica
+        .drawer
+        .and_then(|d| s.replica.players.get(d))
         .map(|pl| pl.name.clone())
         .unwrap_or_default();
     let panel = column![
@@ -938,14 +928,6 @@ fn waiting_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
             .size(15.0)
             .color(p.ink_2)
             .font(FONT_BODY),
-        button(format!("Switch to {drawer}"))
-            .on_press(Msg::SwitchSeat(g.seat_index))
-            .background(p.accent_tint)
-            .color(Color::Accent)
-            .size(16.0)
-            .font(FONT_DISPLAY)
-            .radius(Radius::Full)
-            .height(46.0),
     ]
     .gap(Space::Md)
     .width(420.0_f32.min(max_w))
@@ -962,14 +944,4 @@ fn waiting_overlay(g: &Game, p: Palette, max_w: f32) -> Element<Msg> {
     .shadow(0.0, 12.0, 26.0, -8.0, p.shadow_soft)
     .padding(Space::Xl);
     scrim(panel)
-}
-
-/// The countdown seconds to show for the current phase.
-fn countdown(g: &Game) -> u64 {
-    match g.phase {
-        Phase::Picking => g.pick_seconds_left,
-        Phase::Drawing => g.draw_seconds_left,
-        Phase::Reveal => g.reveal_seconds_left,
-        _ => 0,
-    }
 }

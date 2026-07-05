@@ -6,12 +6,14 @@
 use buiy::view::{Color, Element, Radius, Space, column, row, text};
 use buiy_view::LineStyle;
 
-use crate::game;
 use crate::theme::{FONT_BODY, FONT_DISPLAY, WHITE};
 use crate::view::widgets::{
     avatar_el, card_w, eyebrow, primary_button, quiet_button, screen_root, title,
 };
 use crate::{Dooduel, Msg};
+
+/// One podium standing as the replica carries it (spec §3.3): `(seat, name, score)`.
+type Standing = (usize, String, i64);
 
 /// The pedestal heights (logical px) by place. The design's `PODIUM_H` array is
 /// indexed by rank so the *rendered* design gives 2nd the tallest block (an apparent
@@ -22,14 +24,14 @@ use crate::{Dooduel, Msg};
 const PEDESTAL_H: [f32; 3] = [124.0, 92.0, 72.0];
 
 pub fn podium(s: &Dooduel) -> Element<Msg> {
-    let g = &s.game;
     let p = s.palette();
-    let standings = g.standings();
+    // The final standings arrive with `MatchEnded` (spec §3.3); empty before then.
+    let standings: Vec<Standing> = s.replica.podium.clone().unwrap_or_default();
     let winner = standings
         .first()
-        .map(|(_, pl)| pl.name.clone())
+        .map(|(_, name, _)| name.clone())
         .unwrap_or_default();
-    let rounds = g.config.total_rounds;
+    let rounds = s.replica.total_rounds;
     let rounds_label = if rounds == 1 {
         "1 round".to_string()
     } else {
@@ -87,8 +89,8 @@ pub fn podium(s: &Dooduel) -> Element<Msg> {
 
 /// One podium pedestal column: the stair-step top spacer, the finisher's avatar /
 /// name / score, and the colored rank pedestal (accent for 1st, else surface-2).
-fn podium_column(s: &Dooduel, place: usize, entry: &(usize, game::Player)) -> Element<Msg> {
-    let (orig_idx, p) = (entry.0, &entry.1);
+fn podium_column(s: &Dooduel, place: usize, entry: &Standing) -> Element<Msg> {
+    let (seat, name, score) = (entry.0, &entry.1, entry.2);
     let pal = s.palette();
     let h = PEDESTAL_H[(place - 1).min(2)];
     let spacer = PEDESTAL_H[0] - h;
@@ -114,12 +116,12 @@ fn podium_column(s: &Dooduel, place: usize, entry: &(usize, game::Player)) -> El
         // The stair-step: a taller pedestal lifts this whole column (equal total
         // heights ⇒ bottoms line up, tops stagger — the podium silhouette).
         Element::column(vec![]).height(spacer),
-        avatar_el(s, orig_idx == 0, &p.name, 46.0),
-        text(p.name.as_str())
+        avatar_el(s, seat == s.replica.my_seat, name, 46.0),
+        text(name.as_str())
             .size(15.0)
             .color(pal.ink)
             .font(FONT_BODY),
-        text!("{}", p.score)
+        text!("{}", score)
             .size(22.0)
             .color(pal.ink)
             .font(FONT_DISPLAY),
@@ -131,8 +133,8 @@ fn podium_column(s: &Dooduel, place: usize, entry: &(usize, game::Player)) -> El
 }
 
 /// One rank-4+ standings row (rank / avatar / name / score).
-fn rest_standing_row(s: &Dooduel, rank: usize, entry: &(usize, game::Player)) -> Element<Msg> {
-    let (orig_idx, p) = (entry.0, &entry.1);
+fn rest_standing_row(s: &Dooduel, rank: usize, entry: &Standing) -> Element<Msg> {
+    let (seat, name, score) = (entry.0, &entry.1, entry.2);
     let pal = s.palette();
     row![
         text!("{rank}")
@@ -140,13 +142,13 @@ fn rest_standing_row(s: &Dooduel, rank: usize, entry: &(usize, game::Player)) ->
             .size(14.0)
             .color(pal.muted)
             .font(FONT_BODY),
-        avatar_el(s, orig_idx == 0, &p.name, 34.0),
-        text(p.name.as_str())
+        avatar_el(s, seat == s.replica.my_seat, name, 34.0),
+        text(name.as_str())
             .size(15.0)
             .color(pal.ink)
             .font(FONT_BODY)
             .grow(),
-        text!("{}", p.score)
+        text!("{}", score)
             .size(19.0)
             .color(pal.ink)
             .font(FONT_DISPLAY),

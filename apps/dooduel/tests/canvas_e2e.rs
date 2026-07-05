@@ -81,8 +81,13 @@ fn unified_driver() -> (App, Entity, Entity) {
     // itself — the missing piece of the unified-driver recipe.
     app.init_asset::<Image>();
 
-    // Dooduel MVU + the drawing canvas (CPU paint surfaces + the paint observers).
+    // Dooduel MVU + the in-process solo authority (M1 W3 — `Msg::StartMatch` now
+    // drives a real `Session` through `LocalAuthorityPlugin`, so the match reaches
+    // Drawing over the intent/event path, not a local `Game` mutation) + the drawing
+    // canvas (CPU paint surfaces + the paint observers).
     dooduel::install(&mut app);
+    app.add_plugins(dooduel::net::NetPlugin);
+    app.add_plugins(dooduel::net::LocalAuthorityPlugin);
     app.add_plugins(dooduel::paint::CanvasPlugin);
 
     (app, window, pointer)
@@ -136,12 +141,14 @@ fn dragging_the_canvas_lands_ink_in_the_paint_buffer() {
     // the reconciler settles.
     settle(&mut app, 12);
 
-    // Into the Drawing phase as the drawer (seat 0 is the human drawer, and the
-    // human is auto-viewing the drawer — so `enabled` becomes true after sync).
+    // Into the Drawing phase as the drawer: `StartMatch` spins up the solo `Session`
+    // (seat 0 is the human drawer this turn), then `ChooseWord(0)` sends the `Pick`
+    // intent → `PhaseChanged(Drawing)` flows back → the canvas `enabled` becomes true.
+    // The extra settle frames cover the intent→event round-trips through the pump.
     enqueue(&mut app, Msg::StartMatch);
-    settle(&mut app, 8);
+    settle(&mut app, 16);
     enqueue(&mut app, Msg::ChooseWord(0));
-    settle(&mut app, 12);
+    settle(&mut app, 16);
 
     // The canvas node is laid out with a real 720×450 rect (shrink(false) keeps it
     // at its natural size, so window px → canvas texel is 1:1).
