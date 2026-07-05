@@ -618,4 +618,66 @@ mod tests {
     fn word_slots_is_empty_outside_a_turn() {
         assert!(RoomReplica::default().word_slots().is_empty());
     }
+
+    /// W1-review S2: pin the `word_slots` ↔ `Game::word_display_for` seam against
+    /// a LIVE game (the fixture-string tests above match today's format, but a
+    /// future display-format change must fail HERE, not silently break the W3
+    /// view re-point).
+    #[test]
+    fn word_slots_matches_live_word_display_for_output() {
+        use crate::game::{Config, Game};
+        let mut g = Game::default();
+        g.start_match_solo(
+            "Mara",
+            Config {
+                bots_enabled: false,
+                ..Config::default()
+            },
+        );
+        g.choose_word(g.word_choices[0].clone());
+        g.tick(Duration::from_secs(0));
+        let replica_row = |display: String, len: usize| RoomReplica {
+            word_display: display,
+            word_len: len,
+            ..RoomReplica::default()
+        };
+        for seat in 0..4 {
+            let slots = replica_row(g.word_display_for(seat), g.word_length()).word_slots();
+            assert_eq!(
+                slots.len(),
+                g.word_length(),
+                "seat {seat}: one slot per letter of the live word"
+            );
+            if g.knows(seat) {
+                assert!(
+                    slots.iter().all(|(ch, revealed)| *revealed && *ch != '_'),
+                    "the drawer sees every letter revealed: {slots:?}"
+                );
+            } else {
+                assert!(
+                    slots.iter().all(|(_, revealed)| !*revealed),
+                    "a guesser sees all blanks at t=0: {slots:?}"
+                );
+            }
+        }
+        // Tick until the first hint flips, then re-check a guesser row: revealed
+        // slots appear, are real letters, and the word is still partly hidden.
+        let mut sec = 0;
+        while g.hints_revealed() == 0 {
+            sec += 1;
+            g.tick(Duration::from_secs(sec));
+            assert!(sec < 200, "a hint must flip within the draw window");
+        }
+        let slots = replica_row(g.word_display_for(1), g.word_length()).word_slots();
+        let revealed: Vec<&(char, bool)> = slots.iter().filter(|(_, r)| *r).collect();
+        assert!(
+            !revealed.is_empty(),
+            "the hint flip reveals at least one slot"
+        );
+        assert!(
+            revealed.len() < slots.len(),
+            "a guesser's word stays partly hidden after one hint"
+        );
+        assert!(revealed.iter().all(|(ch, _)| *ch != '_'));
+    }
 }

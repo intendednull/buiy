@@ -516,8 +516,11 @@ impl Game {
         if self.phase != Phase::Drawing || player >= self.players.len() {
             return GuessOutcome::Ignored;
         }
-        // The drawer cannot guess; nobody guesses twice.
-        if player == self.seat_index || self.turn_guesses.iter().any(|g| g.player == player) {
+        // The drawer cannot guess; a vacated seat cannot guess; nobody guesses twice.
+        if player == self.seat_index
+            || !self.players[player].occupied
+            || self.turn_guesses.iter().any(|g| g.player == player)
+        {
             return GuessOutcome::Ignored;
         }
         let guess = normalize(raw);
@@ -537,8 +540,10 @@ impl Game {
                 order,
             });
             self.push_chat(ChatKind::Correct, format!("🎉 {name} guessed the word!"));
-            // End the turn early once every occupied guesser has it.
-            if self.turn_guesses.len() >= self.guesser_count() {
+            // End the turn early once every occupied guesser has it (membership,
+            // not counts — a guessed-then-vacated seat must not shrink the bar for
+            // the players still here).
+            if self.all_guessed() {
                 self.end_turn();
             }
             GuessOutcome::Correct
@@ -662,10 +667,22 @@ impl Game {
     }
 
     /// Whether every occupied guesser has guessed correctly this turn (the turn-end
-    /// trigger, exposed live so the drawer knows when to stop, bug #3).
+    /// trigger, exposed live so the drawer knows when to stop, bug #3). Membership,
+    /// not counts: every OCCUPIED non-drawer seat must itself appear in
+    /// `turn_guesses` — a guessed-then-vacated seat's entry neither counts for the
+    /// players still here nor blocks them (W1-review IMPORTANT-1).
     pub fn all_guessed(&self) -> bool {
-        let gc = self.guesser_count();
-        gc > 0 && self.turn_guesses.len() >= gc
+        let mut any = false;
+        for (i, p) in self.players.iter().enumerate() {
+            if i == self.seat_index || !p.occupied {
+                continue;
+            }
+            if !self.turn_guesses.iter().any(|g| g.player == i) {
+                return false;
+            }
+            any = true;
+        }
+        any
     }
 
     /// How many seats are currently occupied (spec §2.3.3). The match ends when
@@ -687,9 +704,17 @@ impl Game {
     /// Free `seat` — a departure past grace: marks it vacant without removing it,
     /// so seat indices stay stable for rotation / `turn_guesses` / private chat
     /// `to` (spec §2.3.3). No-op on an out-of-range seat.
+    ///
+    /// Re-evaluates the early-turn-end trigger (W1-review IMPORTANT-2): when the
+    /// last not-yet-guessed guesser leaves mid-`Drawing`, the players still here
+    /// have all guessed — the turn ends now, not at the draw-window timeout.
+    /// (The drawer-drop case is the caller's `force_end_turn`, spec §2.3.4.)
     pub fn vacate_seat(&mut self, seat: usize) {
         if let Some(p) = self.players.get_mut(seat) {
             p.occupied = false;
+        }
+        if self.phase == Phase::Drawing && self.all_guessed() {
+            self.end_turn();
         }
     }
 
@@ -1551,6 +1576,109 @@ mod tests {
             g.seat_index, 2,
             "rotation skipped the vacant seat 1 (0 → 2)"
         );
+    }
+
+    /// W1-review IMPORTANT-1 (§2.3.3): a guessed-then-vacated seat must not lower
+    /// the early-end bar — the turn ends only when every seat STILL HERE has it.
+    #[test]
+    fn a_guessed_then_vacated_seat_does_not_end_the_turn_early() {
+        let mut g = started_roster(&[("A", false), ("B", false), ("C", false), ("D", false)]);
+        g.choose_word(g.word_choices[0].clone());
+        g.tick(Duration::from_secs(0));
+        let secret = g.secret_word.clone();
+        assert_eq!(g.apply_guess(1, &secret), GuessOutcome::Correct);
+        g.vacate_seat(1);
+        assert_eq!(g.apply_guess(2, &secret), GuessOutcome::Correct);
+        assert_eq!(
+            g.phase,
+            Phase::Drawing,
+            "occupied seat 3 has not guessed — the vacated seat's entry must not end the turn"
+        );
+        assert_eq!(g.apply_guess(3, &secret), GuessOutcome::Correct);
+        assert_eq!(g.phase, Phase::Reveal, "everyone still here has it now");
+    }
+
+    /// W1-review IMPORTANT-2 (§2.3.3): when the last not-yet-guessed guesser
+    /// vacates, the turn ends immediately — not at the draw-window timeout.
+    #[test]
+    fn vacating_the_last_pending_guesser_ends_the_turn() {
+        let mut g = started_roster(&[("A", false), ("B", false), ("C", false), ("D", false)]);
+        g.choose_word(g.word_choices[0].clone());
+        g.tick(Duration::from_secs(0));
+        let secret = g.secret_word.clone();
+        assert_eq!(g.apply_guess(1, &secret), GuessOutcome::Correct);
+        assert_eq!(g.apply_guess(2, &secret), GuessOutcome::Correct);
+        assert_eq!(g.phase, Phase::Drawing, "seat 3 still pending");
+        g.vacate_seat(3);
+        assert_eq!(
+            g.phase,
+            Phase::Reveal,
+            "the remaining guessers all have it — the turn ends on the vacate"
+        );
+    }
+
+    /// W1-review S1 (§2.3.3): a vacated seat can no longer guess, score, or enter
+    /// `turn_guesses`.
+    #[test]
+    fn a_vacated_seat_cannot_guess() {
+        let mut g = started_roster(&[("A", false), ("B", false), ("C", false), ("D", false)]);
+        g.choose_word(g.word_choices[0].clone());
+        g.tick(Duration::from_secs(0));
+        let secret = g.secret_word.clone();
+        g.vacate_seat(2);
+        let before = g.players[2].score;
+        assert_eq!(g.apply_guess(2, &secret), GuessOutcome::Ignored);
+        assert_eq!(g.players[2].score, before, "no points for a vacated seat");
+        assert!(g.turn_guesses.iter().all(|gu| gu.player != 2));
+    }
+
+    /// §2.3.3/§2.3.4 composition: vacating the CURRENT drawer mid-turn does not
+    /// end the turn by itself (that is the caller's `force_end_turn`, the
+    /// Session's drawer-drop rule), and the follow-up rotation lands on an
+    /// occupied seat.
+    #[test]
+    fn vacating_the_current_drawer_then_force_end_advances_to_an_occupied_seat() {
+        let mut g = started_roster(&[("A", false), ("B", false), ("C", false), ("D", false)]);
+        g.choose_word(g.word_choices[0].clone());
+        g.tick(Duration::from_secs(0));
+        g.vacate_seat(0); // the drawer drops; no guesses yet
+        assert_eq!(
+            g.phase,
+            Phase::Drawing,
+            "vacating the drawer alone is not a turn end"
+        );
+        g.force_end_turn();
+        assert_eq!(g.phase, Phase::Reveal);
+        g.continue_now();
+        assert_eq!(g.phase, Phase::Picking);
+        assert_eq!(g.seat_index, 1, "rotation lands on the next occupied seat");
+        assert!(g.players[g.seat_index].occupied);
+    }
+
+    /// §2.3.3: wrap-around rotation skips a vacant seat 0 and still increments
+    /// the round exactly once.
+    #[test]
+    fn wrap_rotation_skips_vacant_seat_zero_and_increments_round() {
+        let mut g = started_roster(&[("A", false), ("B", false), ("C", false), ("D", false)]);
+        // Turn 1: seat 0 draws, then leaves after its turn.
+        g.choose_word(g.word_choices[0].clone());
+        g.tick(Duration::from_secs(0));
+        g.force_end_turn();
+        g.continue_now();
+        g.vacate_seat(0);
+        // Seats 1..=3 each take their turn.
+        for expected in [1usize, 2, 3] {
+            assert_eq!(g.seat_index, expected);
+            assert_eq!(g.round, 1);
+            g.choose_word(g.word_choices[0].clone());
+            g.tick(Duration::from_secs(0));
+            g.force_end_turn();
+            g.continue_now();
+        }
+        // The wrap skips vacant seat 0 straight to seat 1, round 2.
+        assert_eq!(g.phase, Phase::Picking);
+        assert_eq!(g.seat_index, 1, "wrap skipped the vacant seat 0");
+        assert_eq!(g.round, 2, "the wrap incremented the round exactly once");
     }
 
     /// §2.3.3 — `guesser_count` / `all_guessed` count only OCCUPIED non-drawer
