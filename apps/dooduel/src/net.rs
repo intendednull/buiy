@@ -387,52 +387,156 @@ impl Plugin for WsClientPlugin {
     }
 }
 
-/// Own the networked transport's lifecycle (spec §4.2). `owns` (a `Local`) tracks
-/// whether THIS system installed the current [`ClientNet`] transport, so tearing down on
-/// leave never clobbers the solo [`InProcClient`] the [`LocalAuthorityPlugin`] owns (the
-/// two are mutually exclusive by [`NetState`], but both share the `ClientNet` slot).
+/// Bounded auto-rejoin on a dropped connection (spec §6.3): a few tries with a short
+/// backoff, then give up gracefully rather than spin forever (I-1).
+const MAX_REJOIN_TRIES: u32 = 3;
+const REJOIN_BACKOFF: Duration = Duration::from_secs(3);
+
+/// The networked transport's per-frame lifecycle state (a `Local`). `owns` tracks
+/// whether THIS system installed the current [`ClientNet`] transport (so teardown never
+/// clobbers the solo [`InProcClient`] the [`LocalAuthorityPlugin`] owns); the rejoin
+/// fields bound the auto-reconnect.
+#[derive(Default)]
+struct WsClientState {
+    owns: bool,
+    rejoin_failures: u32,
+    /// The monotonic instant the next rejoin attempt may start (the backoff gate).
+    next_attempt_at: Option<Duration>,
+}
+
+/// The action [`manage_ws_client`] takes this frame. Pure + exhaustive so every
+/// connect/reconnect edge — including the failure paths I-1 flagged — has a defined
+/// outcome and a unit test (no live socket needed to exercise them).
+#[derive(Debug, PartialEq)]
+enum WsAction {
+    /// Nothing to do (still connecting, healthy, or backing off).
+    Idle,
+    /// A `Joining` transport closed without connecting → surface a connect failure.
+    ConnectFailed,
+    /// A `Connected` transport dropped → go Dropped + stage a token rejoin.
+    Dropped,
+    /// A `Dropped` rejoin attempt closed, tries remain → tear down + back off.
+    RetryRejoin,
+    /// A `Dropped` rejoin exhausted its tries → give up gracefully.
+    GiveUp,
+    /// No transport + a pending connect + the backoff elapsed → open one.
+    Connect,
+}
+
+/// Decide the transport action from the observable state (spec §4.2/§6.3). `status` is
+/// the current transport's [`ConnStatus`], or `None` when there is no transport. A
+/// transport WE own reporting `Closed` routes by the state it closed in — that closes
+/// the I-1 dead-ends: a `Joining` socket that never opens → `ConnectFailed`, a `Dropped`
+/// rejoin that keeps failing → `RetryRejoin` until exhausted → `GiveUp`.
+fn ws_decision(
+    net: &NetState,
+    owns: bool,
+    status: Option<ConnStatus>,
+    has_pending: bool,
+    tries_exhausted: bool,
+    backoff_elapsed: bool,
+) -> WsAction {
+    if !net.is_networked() {
+        return WsAction::Idle;
+    }
+    if owns && status == Some(ConnStatus::Closed) {
+        return match net {
+            NetState::Connected { .. } => WsAction::Dropped,
+            NetState::Joining => WsAction::ConnectFailed,
+            NetState::Dropped { .. } if tries_exhausted => WsAction::GiveUp,
+            NetState::Dropped { .. } => WsAction::RetryRejoin,
+            _ => WsAction::Idle,
+        };
+    }
+    if status.is_none() && has_pending && backoff_elapsed {
+        return WsAction::Connect;
+    }
+    WsAction::Idle
+}
+
+/// Own the networked transport's lifecycle (spec §4.2, §6.3): open it for a staged
+/// connect, tear it down on leave, and route a closed connection through [`ws_decision`]
+/// — a `Joining` failure, a `Connected` drop, or a bounded `Dropped` rejoin — so no
+/// connect/reconnect path dead-ends (I-1).
 fn manage_ws_client(
     mut net: NonSendMut<ClientNet>,
     model: Query<(Entity, &Dooduel)>,
+    time: Res<Time>,
     mut commands: Commands,
-    mut owns: Local<bool>,
+    mut state: Local<WsClientState>,
 ) {
     let Ok((entity, model)) = model.single() else {
         return;
     };
+    let now = time.elapsed();
 
-    // Only the networked states use a WS transport; Offline has none, and Solo's
-    // in-process transport is the LocalAuthorityPlugin's business.
+    // Leaving networked play: drop OUR transport (never the solo one) + reset the rejoin
+    // budget. Solo's in-process transport is the LocalAuthorityPlugin's business.
     if !model.net.is_networked() {
-        if *owns {
+        if state.owns {
             net.0 = None;
-            *owns = false;
+            state.owns = false;
         }
+        state.rejoin_failures = 0;
+        state.next_attempt_at = None;
         return;
     }
 
-    // Detect a drop of OUR live connection → ask the reducer to go Dropped + rejoin.
-    if *owns
-        && matches!(model.net, NetState::Connected { .. })
-        && net.0.as_ref().map(|t| t.status()) == Some(ConnStatus::Closed)
-    {
-        net.0 = None;
-        *owns = false;
-        enqueue::<Dooduel>(&mut commands, entity, Msg::NetDropped);
-        return;
+    let status = net.0.as_ref().map(|t| t.status());
+    // A healthy live connection resets the rejoin budget (a later drop starts fresh).
+    if matches!(model.net, NetState::Connected { .. }) && status == Some(ConnStatus::Open) {
+        state.rejoin_failures = 0;
+        state.next_attempt_at = None;
     }
 
-    // Open a transport for a pending connect (the initial Create/Join, or a rejoin).
-    if net.0.is_none()
-        && let Some(req) = &model.pending_connect
-    {
-        match WsClientTransport::connect(server_url()) {
-            Ok(mut transport) => {
-                transport.send(&connect_intent(req, model));
-                net.0 = Some(Box::new(transport));
-                *owns = true;
+    let tries_exhausted = state.rejoin_failures + 1 >= MAX_REJOIN_TRIES;
+    let backoff_elapsed = state.next_attempt_at.is_none_or(|t| now >= t);
+    match ws_decision(
+        &model.net,
+        state.owns,
+        status,
+        model.pending_connect.is_some(),
+        tries_exhausted,
+        backoff_elapsed,
+    ) {
+        WsAction::Idle => {}
+        WsAction::Dropped => {
+            net.0 = None;
+            state.owns = false;
+            enqueue::<Dooduel>(&mut commands, entity, Msg::NetDropped);
+        }
+        WsAction::ConnectFailed => {
+            net.0 = None;
+            state.owns = false;
+            enqueue::<Dooduel>(
+                &mut commands,
+                entity,
+                Msg::ConnectFailed("the connection closed".to_string()),
+            );
+        }
+        WsAction::RetryRejoin => {
+            net.0 = None;
+            state.owns = false;
+            state.rejoin_failures += 1;
+            state.next_attempt_at = Some(now + REJOIN_BACKOFF);
+        }
+        WsAction::GiveUp => {
+            net.0 = None;
+            state.owns = false;
+            enqueue::<Dooduel>(&mut commands, entity, Msg::NetGaveUp);
+        }
+        WsAction::Connect => {
+            state.next_attempt_at = None;
+            if let Some(req) = &model.pending_connect {
+                match WsClientTransport::connect(server_url()) {
+                    Ok(mut transport) => {
+                        transport.send(&connect_intent(req, model));
+                        net.0 = Some(Box::new(transport));
+                        state.owns = true;
+                    }
+                    Err(err) => enqueue::<Dooduel>(&mut commands, entity, Msg::ConnectFailed(err)),
+                }
             }
-            Err(err) => enqueue::<Dooduel>(&mut commands, entity, Msg::ConnectFailed(err)),
         }
     }
 }
@@ -487,5 +591,144 @@ fn wire_avatar(kind: HumanAvatar) -> WireAvatar {
         HumanAvatar::Default => WireAvatar::Default,
         HumanAvatar::Preset { icon, tint } => WireAvatar::Preset { icon, tint },
         HumanAvatar::Custom => WireAvatar::Default,
+    }
+}
+
+#[cfg(test)]
+mod ws_decision_tests {
+    //! The connect/reconnect edge machine (I-1) — every failure path has a defined
+    //! outcome, driven by feeding `ws_decision` the transport status directly (no live
+    //! socket: a test transport would only ever hand us this same `ConnStatus`).
+    use super::*;
+
+    fn connected() -> NetState {
+        NetState::Connected {
+            room: "ABCDEF".to_string(),
+        }
+    }
+    fn dropped() -> NetState {
+        NetState::Dropped {
+            token: "tok".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_joining_transport_that_closes_is_a_connect_failure_not_a_dead_end() {
+        assert_eq!(
+            ws_decision(
+                &NetState::Joining,
+                true,
+                Some(ConnStatus::Closed),
+                true,
+                false,
+                true
+            ),
+            WsAction::ConnectFailed,
+        );
+    }
+
+    #[test]
+    fn a_connected_transport_that_closes_is_a_drop() {
+        assert_eq!(
+            ws_decision(
+                &connected(),
+                true,
+                Some(ConnStatus::Closed),
+                false,
+                false,
+                true
+            ),
+            WsAction::Dropped,
+        );
+    }
+
+    #[test]
+    fn a_dropped_rejoin_retries_until_exhausted_then_gives_up() {
+        // Tries remain → back off + retry; the last try's failure → give up.
+        assert_eq!(
+            ws_decision(
+                &dropped(),
+                true,
+                Some(ConnStatus::Closed),
+                true,
+                false,
+                true
+            ),
+            WsAction::RetryRejoin,
+        );
+        assert_eq!(
+            ws_decision(&dropped(), true, Some(ConnStatus::Closed), true, true, true),
+            WsAction::GiveUp,
+        );
+    }
+
+    #[test]
+    fn no_transport_with_a_pending_connect_opens_one_only_after_backoff() {
+        assert_eq!(
+            ws_decision(&NetState::Joining, false, None, true, false, true),
+            WsAction::Connect,
+        );
+        // Still backing off → Idle (don't hammer the server between rejoin tries).
+        assert_eq!(
+            ws_decision(&NetState::Joining, false, None, true, false, false),
+            WsAction::Idle,
+        );
+        // No pending connect → nothing to open.
+        assert_eq!(
+            ws_decision(&NetState::Joining, false, None, false, false, true),
+            WsAction::Idle,
+        );
+    }
+
+    #[test]
+    fn a_healthy_or_still_connecting_transport_is_idle() {
+        assert_eq!(
+            ws_decision(
+                &connected(),
+                true,
+                Some(ConnStatus::Open),
+                false,
+                false,
+                true
+            ),
+            WsAction::Idle,
+        );
+        assert_eq!(
+            ws_decision(
+                &NetState::Joining,
+                true,
+                Some(ConnStatus::Connecting),
+                false,
+                false,
+                true
+            ),
+            WsAction::Idle,
+        );
+    }
+
+    #[test]
+    fn offline_or_solo_is_always_idle() {
+        assert_eq!(
+            ws_decision(
+                &NetState::Offline,
+                true,
+                Some(ConnStatus::Closed),
+                true,
+                true,
+                true
+            ),
+            WsAction::Idle,
+        );
+        assert_eq!(
+            ws_decision(
+                &NetState::Solo,
+                true,
+                Some(ConnStatus::Closed),
+                true,
+                true,
+                true
+            ),
+            WsAction::Idle,
+        );
     }
 }

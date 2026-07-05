@@ -513,6 +513,9 @@ pub enum Msg {
     /// The net layer observed the live connection drop (spec §6.3) — go to
     /// [`NetState::Dropped`] and stage a token rejoin. Enqueued by [`net::WsClientPlugin`].
     NetDropped,
+    /// The bounded auto-rejoin (spec §6.3) exhausted its tries — give up: "Connection
+    /// lost" + back to Offline/Home. Enqueued by [`net::WsClientPlugin`].
+    NetGaveUp,
     // The clock (folded every frame; a steady frame is a `set_if_neq` no-op).
     Tick(Duration),
     /// The window's logical size changed (the `ViewportPlugin` seam). Folded
@@ -598,6 +601,16 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
             }
         }
         Msg::Back => {
+            // Leaving a networked room releases the seat gracefully — skipping the 45s
+            // grace so it doesn't ghost (spec §3.2, I-4). Best-effort: `Back` also flips
+            // `net` to Offline, and `WsClientPlugin` tears the transport down in the SAME
+            // funnel batch — the outbox drain (MvuSet::Enqueue, before the pump) sends
+            // this `Leave` first, but a lost flush is covered by the server's own grace
+            // (an un-Left seat just vacates after 45s). The same best-effort applies to
+            // `PlayAgain`'s Leave below.
+            if s.net.is_networked() {
+                s.net_outbox.push(ClientIntent::Leave);
+            }
             s.screen = Screen::Home;
             s.net = NetState::Offline;
             s.pending_connect = None;
@@ -684,6 +697,14 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
                 s.net = NetState::Offline;
                 s.screen = Screen::Home;
             }
+        }
+        // The bounded auto-rejoin gave up (spec §6.3): a terminal "connection lost".
+        Msg::NetGaveUp => {
+            s.toast = Some("Connection lost.".to_string());
+            s.net = NetState::Offline;
+            s.pending_connect = None;
+            s.reconnect_token.clear();
+            s.screen = Screen::Home;
         }
         Msg::ChooseWord(idx) => s.net_outbox.push(ClientIntent::Pick { index: idx }),
         Msg::SetChatInput(t) => s.chat_input = t,
@@ -1861,6 +1882,52 @@ mod tests {
             }),
             "a drop stages a token rejoin for WsClientPlugin"
         );
+    }
+
+    #[test]
+    fn networked_back_stages_a_leave_before_going_offline() {
+        // I-4: leaving a networked room releases the seat gracefully (skips the 45s
+        // grace) so it doesn't ghost.
+        let mut m = Dooduel {
+            net: NetState::Connected {
+                room: "ABCDEF".to_string(),
+            },
+            ..Default::default()
+        };
+        update(&mut m, Msg::Back);
+        assert_eq!(
+            m.net_outbox.last(),
+            Some(&ClientIntent::Leave),
+            "networked Back stages a Leave intent"
+        );
+        assert_eq!(m.net, NetState::Offline);
+        assert_eq!(m.screen, Screen::Home);
+        // An offline Back has no session to leave — no intent staged.
+        let mut solo = Dooduel::default();
+        update(&mut solo, Msg::Back);
+        assert!(
+            solo.net_outbox.is_empty(),
+            "an offline Back stages no intent"
+        );
+    }
+
+    #[test]
+    fn giving_up_the_rejoin_is_a_terminal_connection_lost() {
+        // I-1: when the bounded auto-rejoin exhausts its tries, the UI reaches a terminal
+        // "connection lost" state (Offline + Home), not a spin.
+        let mut m = Dooduel {
+            net: NetState::Dropped {
+                token: "t".to_string(),
+            },
+            room_code: "ABCDEF".to_string(),
+            reconnect_token: "t".to_string(),
+            ..Default::default()
+        };
+        update(&mut m, Msg::NetGaveUp);
+        assert_eq!(m.net, NetState::Offline);
+        assert_eq!(m.screen, Screen::Home);
+        assert!(m.pending_connect.is_none(), "no further rejoin is staged");
+        assert_eq!(m.toast.as_deref(), Some("Connection lost."));
     }
 
     #[test]
