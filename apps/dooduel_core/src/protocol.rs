@@ -39,7 +39,10 @@ pub const MAX_STROKE_POINTS: usize = 256;
 /// auto-splits it (W2-review I2). A stroke that accumulates past this across many
 /// `done: false` batches is finalized and continued in a fresh op (same client
 /// `stroke_id`, next server id, seeded with the split point so the seam is drawn), so
-/// every logged op is bounded and `CanvasLog` stays within [`MAX_FRAME_BYTES`].
+/// every logged op — and each replica's per-op rasterization cost — is bounded.
+/// NOTE: this does NOT bound the whole-turn `CanvasLog` (a long turn's log can far
+/// exceed [`MAX_FRAME_BYTES`], which is a SERVER-INBOUND cap only — the client's
+/// inbound side must accept large `CanvasLog`/`RoomState` frames; W2-review R2).
 pub const MAX_OP_POINTS: usize = 8192;
 /// The maximum length (chars) of a guess.
 pub const MAX_GUESS_LEN: usize = 128;
