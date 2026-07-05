@@ -128,8 +128,15 @@ pub async fn handle_conn(
     };
 
     // The first frame must be Create/Join; the version gate runs BEFORE the registry.
-    let Some(first) = read_intent(&mut ws).await else {
-        return; // closed / undecodable before a first frame
+    let first = match read_intent(&mut ws).await {
+        FirstRead::Intent(intent) => intent,
+        // A well-formed frame that failed to decode gets Error{Malformed} before the
+        // close (minor-c — symmetry with the well-formed-but-wrong-intent Reject below).
+        FirstRead::Malformed => {
+            reject(&mut ws, ErrorCode::Malformed).await;
+            return;
+        }
+        FirstRead::Gone => return, // closed before any frame
     };
     let (name, avatar, reconnect, room_code) = match classify_first_frame(first) {
         FirstAction::Reject(code) => {
@@ -163,8 +170,9 @@ pub async fn handle_conn(
         },
     };
 
-    // Hand the room this connection + its outbox, then run the I/O loop.
-    let (obx_tx, obx_rx) = async_channel::unbounded::<ServerEvent>();
+    // Hand the room this connection + its BOUNDED outbox (I-2 — a stalled client's outbox
+    // fills and the room closes it, never buffering without bound), then run the I/O loop.
+    let (obx_tx, obx_rx) = async_channel::bounded::<ServerEvent>(crate::room::OUTBOX_CAP);
     let joined = room_tx
         .send(RoomMsg::Join {
             conn,
@@ -182,16 +190,30 @@ pub async fn handle_conn(
     run_io(ws, obx_rx, room_tx, conn).await;
 }
 
-/// Read frames until the next decodable [`ClientIntent`] (skipping control frames);
-/// `None` on close / an undecodable text frame (the caller rejects/closes).
-async fn read_intent(ws: &mut WebSocketStream<TcpStream>) -> Option<ClientIntent> {
+/// The result of reading a connection's FIRST frame (minor-c). Distinguishing
+/// `Malformed` from `Gone` lets the caller answer `Error{Malformed}` for a well-formed
+/// frame that fails to decode, rather than silently closing.
+enum FirstRead {
+    Intent(ClientIntent),
+    /// A TEXT frame arrived but did not decode to a `ClientIntent`.
+    Malformed,
+    /// The socket closed / errored before any decodable frame.
+    Gone,
+}
+
+/// Read frames (skipping control frames) until the first TEXT frame; decode it to a
+/// [`ClientIntent`] or report it `Malformed`. `Gone` on close/error before any frame.
+async fn read_intent(ws: &mut WebSocketStream<TcpStream>) -> FirstRead {
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(text))) => {
-                return serde_json::from_str::<ClientIntent>(text.as_str()).ok();
+                return match serde_json::from_str::<ClientIntent>(text.as_str()) {
+                    Ok(intent) => FirstRead::Intent(intent),
+                    Err(_) => FirstRead::Malformed,
+                };
             }
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
-            _ => return None,
+            _ => return FirstRead::Gone,
         }
     }
 }

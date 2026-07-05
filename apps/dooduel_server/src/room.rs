@@ -244,6 +244,37 @@ fn reject_message(code: &ErrorCode) -> &'static str {
     }
 }
 
+/// The bound on a per-connection outbox (spec §6, I-2). Sized generously — only a
+/// client that stops draining for a long time (a stall / a dead-but-not-yet-reset
+/// socket) fills it. On overflow the room closes that connection's binding rather than
+/// buffer without bound; the reconnect path recovers the seat. Critically, the room
+/// actor NEVER blocks on a slow client (delivery is non-blocking `try_send`), so one
+/// stalled seat can't stall the actor or the others.
+pub const OUTBOX_CAP: usize = 4096;
+
+/// Deliver the room's staged events to per-connection outboxes, dropping the binding of
+/// any connection whose bounded outbox is full (a stalled client) or already gone —
+/// non-blocking, so a slow client never stalls the actor or the other seats (I-2).
+/// Dropping the removed sender FINs that connection's write task; the reconnect path
+/// then recovers the seat.
+fn deliver_to_conns(
+    outboxes: &mut HashMap<ConnId, Sender<ServerEvent>>,
+    deliver: Vec<(ConnId, ServerEvent)>,
+) {
+    let mut overflow: Vec<ConnId> = Vec::new();
+    for (conn, ev) in deliver {
+        let Some(tx) = outboxes.get(&conn) else {
+            continue;
+        };
+        if tx.try_send(ev).is_err() && !overflow.contains(&conn) {
+            overflow.push(conn);
+        }
+    }
+    for conn in overflow {
+        outboxes.remove(&conn);
+    }
+}
+
 /// What woke the room loop: a channel message or the 100 ms tick.
 enum Wake {
     Msg(Option<RoomMsg>),
@@ -305,12 +336,7 @@ pub async fn room_task(
         }
 
         let out = room.take_outbound();
-        for (conn, ev) in out.deliver {
-            if let Some(tx) = outboxes.get(&conn) {
-                // Unbounded outbox: a send only fails if the conn's write task is gone.
-                let _ = tx.try_send(ev);
-            }
-        }
+        deliver_to_conns(&mut outboxes, out.deliver);
         for conn in out.close {
             // Dropping the outbox FINs the connection's write loop (spec §6.3).
             outboxes.remove(&conn);
@@ -371,6 +397,76 @@ mod tests {
             .filter(|(c, _)| *c == conn)
             .map(|(_, e)| e.clone())
             .collect()
+    }
+
+    #[test]
+    fn a_full_outbox_closes_its_conn_without_stalling_the_others() {
+        // I-2: a stalled client whose BOUNDED outbox fills is dropped (its binding
+        // removed), not buffered without bound; other conns still get their events, and
+        // delivery never blocks (try_send is non-blocking).
+        let mut outboxes: HashMap<ConnId, Sender<ServerEvent>> = HashMap::new();
+        // Conn 1: a tiny bounded outbox, pre-filled to capacity (a stalled reader). Its
+        // receiver stays alive so the next send fails FULL (not Closed).
+        let (a_tx, _a_rx) = async_channel::bounded::<ServerEvent>(1);
+        a_tx.try_send(ServerEvent::CanvasCleared).unwrap();
+        outboxes.insert(1, a_tx);
+        // Conn 2: a healthy outbox with room + a live receiver.
+        let (b_tx, b_rx) = async_channel::bounded::<ServerEvent>(4);
+        outboxes.insert(2, b_tx);
+
+        deliver_to_conns(
+            &mut outboxes,
+            vec![
+                (1, ServerEvent::CanvasCleared), // overflows conn 1 → close it
+                (2, ServerEvent::CanvasCleared), // conn 2 has room
+            ],
+        );
+
+        assert!(
+            !outboxes.contains_key(&1),
+            "the stalled conn's binding is dropped (its write task FINs)"
+        );
+        assert!(outboxes.contains_key(&2), "the healthy conn is unaffected");
+        assert_eq!(
+            b_rx.try_recv().ok(),
+            Some(ServerEvent::CanvasCleared),
+            "the healthy conn still received its event"
+        );
+    }
+
+    #[test]
+    fn a_disconnected_drawer_vacates_and_ends_the_turn_after_grace() {
+        // The Room-tier grace-expiry path (the injected coverage gap): a drawer that
+        // drops and never reconnects is vacated after GRACE, force-ending its turn.
+        let mut room = new_room();
+        join(&mut room, 1, "Ada", d(0)); // seat 0 host + first drawer
+        join(&mut room, 2, "Bo", d(0)); // seat 1 guesser
+        room.take_outbound();
+        room.on_intent(1, ClientIntent::StartMatch);
+        room.on_intent(1, ClientIntent::Pick { index: 0 }); // seat 0 drawing
+        room.take_outbound();
+
+        // The drawer (conn 1 / seat 0) drops; within grace nothing ends.
+        room.on_disconnect(1, d(5));
+        room.on_tick(d(5)); // grace not yet elapsed
+        let mid = room.take_outbound();
+        assert!(
+            !mid.deliver
+                .iter()
+                .any(|(_, e)| matches!(e, ServerEvent::TurnEnded { .. })),
+            "the turn is still live within the grace window"
+        );
+
+        // Tick past GRACE: seat 0 vacates + force_end_turn → a TurnEnded broadcast.
+        room.on_tick(d(5) + GRACE + d(1));
+        let out = room.take_outbound();
+        assert!(
+            out.deliver
+                .iter()
+                .any(|(_, e)| matches!(e, ServerEvent::TurnEnded { .. })),
+            "grace expiry vacates the dropped drawer and ends the turn: {:?}",
+            out.deliver.iter().map(|(_, e)| e).collect::<Vec<_>>()
+        );
     }
 
     #[test]
