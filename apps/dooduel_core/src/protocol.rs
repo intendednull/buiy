@@ -171,8 +171,12 @@ pub enum ServerEvent {
     /// The full per-recipient replica seed (sent on join/reconnect).
     RoomState(RoomReplica),
     /// The roster changed (carries `guessed` too — a deliberate superset of the
-    /// spec §3.3 sketch, so a replica needn't retain a separate guessed set).
-    Roster { players: Vec<ReplicaPlayer> },
+    /// spec §3.3 sketch — and `host`, W2-review I4, so a mid-session host migration is
+    /// visible without a full `RoomState`).
+    Roster {
+        players: Vec<ReplicaPlayer>,
+        host: usize,
+    },
     /// A phase transition + its clock (`remaining` re-anchored on receipt, §4.3).
     PhaseChanged {
         phase: Phase,
@@ -239,7 +243,11 @@ pub enum ServerEvent {
 pub enum ErrorCode {
     VersionMismatch,
     RoomNotFound,
+    /// The lobby is full (`MAX_SEATS`).
     RoomFull,
+    /// A fresh `Join` arrived while a match is already running (W2-review — M1 seats new
+    /// players only in the lobby; mid-match is reconnect-only). Distinct from `RoomFull`.
+    MatchInProgress,
     NotHost,
     NotDrawer,
     WrongPhase,
@@ -440,6 +448,7 @@ mod tests {
             ServerEvent::RoomState(sample_replica()),
             ServerEvent::Roster {
                 players: sample_replica().players,
+                host: 0,
             },
             ServerEvent::PhaseChanged {
                 phase: Phase::Drawing,
@@ -506,6 +515,7 @@ mod tests {
             ErrorCode::VersionMismatch,
             ErrorCode::RoomNotFound,
             ErrorCode::RoomFull,
+            ErrorCode::MatchInProgress,
             ErrorCode::NotHost,
             ErrorCode::NotDrawer,
             ErrorCode::WrongPhase,

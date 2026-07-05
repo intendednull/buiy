@@ -141,7 +141,7 @@ Non-blocking `try_recv` is the honest shape (gate finding `client-net-pump-unspe
 | Intent | Phase gate (server-enforced) | Notes |
 |---|---|---|
 | `Create { name, avatar, protocol_version }` | — | Server **generates** the room code, returns it in `Welcome`. Creator = host. |
-| `Join { room, name, avatar, protocol_version, reconnect: Option<Token> }` | — | Unknown code ⇒ `Error { RoomNotFound }` — **never creates** (rev-2; a typo must not spawn an empty room). With a valid token: re-attach (§6.3). |
+| `Join { room, name, avatar, protocol_version, reconnect: Option<Token> }` | — | Unknown code ⇒ `Error { RoomNotFound }` — **never creates** (rev-2; a typo must not spawn an empty room). With a valid token: re-attach (§6.3). A **fresh** join once a match is running ⇒ `Error { MatchInProgress }` (rev-2.2/W2-review — M1 seats new players only in the lobby; `RoomFull` is reserved for the `MAX_SEATS` case). |
 | `StartMatch` | Lobby, host only | |
 | `Pick { index }` | Picking, drawer only | |
 | `Guess { text }` | Drawing, non-drawer, not-yet-guessed | Via `Game::apply_guess`. |
@@ -155,14 +155,14 @@ Client-side `gen_room_code` is retired for networked play (deterministic name-ha
 
 ### 3.3 Server → client — `ServerEvent` (addressed per recipient)
 
-`Welcome { seat, room_code, reconnect_token, protocol_version }` · `RoomState { … }` (the full per-recipient replica seed, §4.1 — sent on join/reconnect) · `Roster { players: Vec<{ name, avatar, connected, is_bot, score }> }` · `PhaseChanged { phase, drawer, round, total_rounds, remaining }` · `CountdownSync { remaining }` (periodic, §4.3) · `WordUpdate { display, len, hints_revealed }` (**per-recipient**, §5) · `WordChoices { words }` (**drawer only**, Picking) · `CanvasOpApplied { op }` / `CanvasStrokeProgress { stroke_id, points, color, radius }` (**transient** live in-progress relay, W2-review I6 — to all but the drawer, never logged) / `CanvasUndo { removed_id }` / `CanvasCleared` / `CanvasLog { ops }` (late join/reconnect) · `ChatLine { line }` (shared broadcast; private near-miss nudges addressed only to their seat) · `GuessResult { seat, correct, points }` · `TurnEnded { results, word }` (the reveal — word legitimately broadcast here) · `MatchEnded { podium }` · `Error { code, message }`.
+`Welcome { seat, room_code, reconnect_token, protocol_version }` · `RoomState { … }` (the full per-recipient replica seed, §4.1 — sent on join/reconnect) · `Roster { players: Vec<{ name, avatar, connected, is_bot, score }>, host }` (rev-2.2/W2-review I4: `host` travels so a mid-session migration is visible without a full `RoomState`) · `PhaseChanged { phase, drawer, round, total_rounds, remaining }` · `CountdownSync { remaining }` (periodic, §4.3) · `WordUpdate { display, len, hints_revealed }` (**per-recipient**, §5) · `WordChoices { words }` (**drawer only**, Picking) · `CanvasOpApplied { op }` / `CanvasStrokeProgress { stroke_id, points, color, radius }` (**transient** live in-progress relay, W2-review I6 — to all but the drawer, never logged) / `CanvasUndo { removed_id }` / `CanvasCleared` / `CanvasLog { ops }` (late join/reconnect) · `ChatLine { line }` (shared broadcast; private near-miss nudges addressed only to their seat) · `GuessResult { seat, correct, points }` · `TurnEnded { results, word }` (the reveal — word legitimately broadcast here) · `MatchEnded { podium }` · `Error { code, message }`.
 
 **Event → replica mapping** (rev-2; gate finding `replica-update-mapping-undefined`) — each event names exactly the replica fields it sets:
 
 | Event | Replica fields set |
 |---|---|
 | `RoomState` | everything below, atomically (the seed) |
-| `Roster` | `players` (name/avatar/connected/bot/score) |
+| `Roster` | `players` (name/avatar/connected/bot/score), `host` |
 | `PhaseChanged` | `phase`, `drawer`, `round`, `total_rounds`, countdown re-anchor |
 | `CountdownSync` | countdown re-anchor only |
 | `WordUpdate` | `word_display`, `word_len`, `hints_revealed` (re-sent on hint flip; upgraded to full word for a seat that guesses correctly) |
@@ -267,6 +267,7 @@ A room registry `RoomCode → Room`; each `Room` is one async task that solely o
 - Token: **≥128-bit CSPRNG**, per `(room, seat)`, issued in `Welcome`, **rotated on every (re)connection** (single-use — closes the sniffed-token replay hole; prior art: Colyseus), TTL = the grace window + margin, invalidated when the seat frees or the room GCs, never logged.
 - Disconnect ⇒ seat held "away" **45 s** (server constant); roster shows it. Valid-token `Join` re-attaches and reseeds via `RoomState` + `CanvasLog`. A token `Join` while the original connection is still live **replaces it** (the old connection is closed) — supports the hung-tab rejoin, and the rotation means a thief racing the owner burns the token observably.
 - Drawer drop past grace ⇒ `force_end_turn` (§2.3.4). Mid-`Picking` drop ⇒ the existing auto-pick timeout already advances the turn (verified — no new path needed).
+- **Phantom-stroke prevention (rev-2.2/W2-review Q3b):** on a drawer `disconnect`, `Leave`, or grace-expiry vacate the server **discards** any in-progress open stroke — it is never finalized. So a drawer that reconnects mid-turn (reseeded by `CanvasLog`) and draws again produces no phantom op; the drawer's optimistic buffer discards it identically.
 
 ---
 
@@ -320,6 +321,12 @@ All verified against crates.io/advisory-db/deny.toml on 2026-07-04 (gate researc
 Deferred, each owned by a milestone: room-settings depth + copy-invite-link + lobby polish (M2 — but the **minimal live lobby** — live roster + host-gated start — is **in M1**, the acceptance bar needs it); public matchmaking + TLS (M3); word modes / custom lists / languages / palette / wire-encoding optimization (M4); social/moderation + guess-censoring (M5); P2P (M6). Accounts stay out (likely permanently).
 
 Accepted-and-documented M1 quirks: any-player `Continue` (§3.2); the substring guess leak (§5.3); `ws://`-only (§6.2); solo remains a demo/verification path, not a marketed mode (§8). The hot-seat `SwitchSeat` is removed from networked play; the `playtest_host` bin is retired at the end of the M1 PR series (superseded by `dooduel_mcp` + the in-process path).
+
+**Recorded M1 warts (W2-review, deliberately not fixed — future fix shape noted):**
+- **Mid-match seating is reconnect-only.** A fresh `Join` while a match runs gets `MatchInProgress` (§3.2); a new spectator/player joining a live match is deferred (M2 lobby/settings work). `MAX_SEATS = 8` is a fixed M1 cap (M2 makes it a host setting).
+- **`StartMatch`-from-`Final` (in-place rematch) is out of M1** — the podium's "Play again" in networked mode is a deferred decision (the client either leaves + re-creates, or M2 adds a rematch intent). *Fix shape:* a `Rematch`/`StartMatch`-in-`Final` gate that rebuilds the roster from the still-connected seats.
+- **Drawer vacated mid-`Picking`** leaves a drawerless `Drawing` only if a word is then auto-picked for an absent drawer — in practice the auto-pick timeout advances the turn (§6.3) but no *new* drawer draws; the turn runs to the draw-window timeout and rotates. *Fix shape:* on a `Picking`-drawer vacate, skip straight to the next occupied drawer instead of auto-picking for the departed one.
+- **A 2-player room where the last guesser leaves** mid-`Drawing` runs out the draw window before ending (the drawer alone can't trigger an early end). *Fix shape:* end the turn immediately when `guesser_count()` drops to 0 mid-`Drawing`. (Occupancy < 2 still ends the *match* on the next advance, §2.3.3.)
 
 ---
 

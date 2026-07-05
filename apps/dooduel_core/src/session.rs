@@ -239,7 +239,7 @@ impl Session {
         // reconnect-only (token-based). A typo'd token that missed the branch above
         // falls here and is treated as a fresh join in the lobby.
         if self.started {
-            return Err(ErrorCode::RoomFull);
+            return Err(ErrorCode::MatchInProgress);
         }
         if self.seats.iter().filter(|s| s.present).count() >= MAX_SEATS {
             return Err(ErrorCode::RoomFull);
@@ -275,6 +275,11 @@ impl Session {
         {
             s.connected = false;
             s.away_since = Some(now);
+        }
+        // Q3b: if the drawer drops, discard its in-progress stroke — it is never
+        // finalized (no phantom op survives the reconnect/grace path).
+        if self.game.current_drawer() == Some(seat) {
+            self.open_stroke = None;
         }
         self.recompute_host();
         self.broadcast_roster();
@@ -604,6 +609,10 @@ impl Session {
         s.away_since = None;
         s.token = String::new();
         let was_drawer = self.started && self.game.current_drawer() == Some(seat);
+        if was_drawer {
+            // Q3b: a departing drawer's in-progress stroke is discarded, not finalized.
+            self.open_stroke = None;
+        }
         if self.started {
             self.game.vacate_seat(seat);
         }
@@ -943,7 +952,8 @@ impl Session {
 
     fn broadcast_roster(&mut self) {
         let players = self.replica_players();
-        self.broadcast(ServerEvent::Roster { players });
+        let host = self.host;
+        self.broadcast(ServerEvent::Roster { players, host });
     }
 
     fn stage_welcome(&mut self, seat: usize) {
@@ -1087,12 +1097,13 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_join_mid_match_is_rejected_room_full() {
+    fn a_fresh_join_mid_match_is_match_in_progress() {
         let (mut s, _) = drawing_two_humans();
         assert_eq!(
             s.connect("Cy", WireAvatar::Default, None, d(1)),
-            Err(ErrorCode::RoomFull),
-            "M1 seats fresh players only in the lobby; mid-match is reconnect-only"
+            Err(ErrorCode::MatchInProgress),
+            "M1 seats fresh players only in the lobby; mid-match is reconnect-only \
+             (distinct from RoomFull, which is the MAX_SEATS case)"
         );
     }
 
