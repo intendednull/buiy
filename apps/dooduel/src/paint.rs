@@ -545,6 +545,11 @@ fn sync_tools_to_canvases(
         *was_drawing = drawing;
         if t.clear_seq != *last_clear {
             g.clear();
+            // Clear is NON-undoable locally, matching the server (Clear mints no op,
+            // so an undo cannot resurrect the cleared drawing — I-1). Without this a
+            // clear-then-undo would restore the pre-clear pixels while the server
+            // stays cleared, desyncing the two.
+            g.clear_undo();
             *last_clear = t.clear_seq;
             // Relay the drawer's clear to the authority (the guesser's toolbar is
             // disabled, so gate on the drawing-drawer `enabled` flag).
@@ -553,9 +558,13 @@ fn sync_tools_to_canvases(
             }
         }
         if t.undo_seq != *last_undo {
-            g.undo();
+            // Only relay an Undo intent if the local pop actually succeeded (I-2): a
+            // depth-exhausted undo (nothing left in the ring) changes no local pixels,
+            // so no Undo may reach the wire — else the server would over-remove ops
+            // and desync from the drawer's local buffer.
+            let popped = g.undo();
             *last_undo = t.undo_seq;
-            if enabled {
+            if enabled && popped {
                 sender.events.push(InkEvent::Undo);
             }
         }
@@ -694,14 +703,22 @@ fn send_batches(sender: &mut StrokeSender, transport: &mut dyn ClientTransport, 
             }
             break;
         }
-        let op_room = MAX_OP_POINTS.saturating_sub(sent).max(1);
+        // `op_full` (below) finalizes AT exactly the cap, so `sent < MAX_OP_POINTS`
+        // holds at the top of every iteration ⇒ `op_room >= 1` ⇒ the batch is
+        // non-empty.
+        let op_room = MAX_OP_POINTS.saturating_sub(sent);
         let take = MAX_STROKE_POINTS.min(op_room).min(queue.len());
         let batch: Vec<(i32, i32)> = queue.drain(..take).collect();
-        let last = *batch.last().expect("a non-empty batch");
+        let last = *batch
+            .last()
+            .expect("op_room >= 1 keeps the batch non-empty");
         let new_sent = sent + batch.len();
         let more = !queue.is_empty();
-        // Finalize this op if it reached the per-op cap with more points to come.
-        let op_full = new_sent >= MAX_OP_POINTS && more;
+        // Finalize at EXACTLY the per-op cap (minor-b): the old `op_room.max(1)` +
+        // `&& more` let a full op absorb one more point → MAX_OP_POINTS + 1, which
+        // trips the server's `> MAX_OP_POINTS` auto-split. Now the op closes at the
+        // cap so the server never auto-splits an honest client's stroke (R3).
+        let op_full = new_sent >= MAX_OP_POINTS;
         let done = op_full || (close && !more);
         transport.send(&ClientIntent::Stroke {
             stroke_id: id,
@@ -711,15 +728,22 @@ fn send_batches(sender: &mut StrokeSender, transport: &mut dyn ClientTransport, 
             done,
         });
         if op_full {
-            let new_id = sender.next_id;
-            sender.next_id += 1;
-            sender.open = Some(OpenWireStroke {
-                id: new_id,
-                color,
-                radius,
-                sent: 0,
-            });
-            queue.insert(0, last); // seed the continuation for pixel continuity
+            if more || !close {
+                // The pen is still down (or more points remain): continue under a
+                // fresh op, seeded with the split point for pixel continuity.
+                let new_id = sender.next_id;
+                sender.next_id += 1;
+                sender.open = Some(OpenWireStroke {
+                    id: new_id,
+                    color,
+                    radius,
+                    sent: 0,
+                });
+                queue.insert(0, last);
+            } else {
+                // Closing exactly at the cap — no continuation.
+                sender.open = None;
+            }
         } else if done {
             sender.open = None;
         } else if let Some(o) = sender.open.as_mut() {
@@ -901,5 +925,77 @@ impl Plugin for CanvasPlugin {
             )
                 .chain(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dooduel_core::protocol::ServerEvent;
+    use dooduel_core::transport::ConnStatus;
+    use std::collections::HashMap;
+
+    /// A transport that records the intents sent to it (no inbound events).
+    struct Rec(Vec<ClientIntent>);
+    impl ClientTransport for Rec {
+        fn send(&mut self, intent: &ClientIntent) {
+            self.0.push(intent.clone());
+        }
+        fn try_recv(&mut self) -> Option<ServerEvent> {
+            None
+        }
+        fn status(&self) -> ConnStatus {
+            ConnStatus::Open
+        }
+    }
+
+    fn points(n: usize) -> Vec<(i32, i32)> {
+        (0..n as i32).map(|x| (x % 100, x / 100)).collect()
+    }
+
+    fn per_op_point_counts(rec: &Rec) -> HashMap<u64, usize> {
+        let mut per_op: HashMap<u64, usize> = HashMap::new();
+        for i in &rec.0 {
+            if let ClientIntent::Stroke {
+                stroke_id, points, ..
+            } = i
+            {
+                *per_op.entry(*stroke_id).or_default() += points.len();
+            }
+        }
+        per_op
+    }
+
+    /// Minor-b: NO logged op may hold more than [`MAX_OP_POINTS`] points (which would
+    /// trip the server's `> MAX_OP_POINTS` auto-split). The bug reproduces across TWO
+    /// flushes: flush 1 fills the op to EXACTLY the cap with an empty queue, and flush
+    /// 2 adds one more point. Red evidence: the old `op_room.max(1)` + `&& more` left
+    /// the op open at the cap in flush 1, then absorbed the extra point in flush 2 →
+    /// `MAX_OP_POINTS + 1`. The fix finalizes at exactly the cap in flush 1.
+    #[test]
+    fn send_batches_never_exceeds_max_op_points_across_flushes() {
+        let mut sender = StrokeSender {
+            open: Some(OpenWireStroke {
+                id: 0,
+                color: [0, 0, 0, 255],
+                radius: 1,
+                sent: 0,
+            }),
+            next_id: 1, // the open op holds id 0; a continuation gets a distinct id
+            unsent: points(MAX_OP_POINTS), // fills the op to EXACTLY the cap
+            ..Default::default()
+        };
+        let mut rec = Rec(Vec::new());
+        send_batches(&mut sender, &mut rec, false); // flush 1: coalesce, keep open
+
+        sender.unsent = points(10); // flush 2: more points (pen still down) + close
+        send_batches(&mut sender, &mut rec, true);
+
+        for (id, n) in per_op_point_counts(&rec) {
+            assert!(
+                n <= MAX_OP_POINTS,
+                "op {id} holds {n} points, exceeding MAX_OP_POINTS ({MAX_OP_POINTS})"
+            );
+        }
     }
 }
