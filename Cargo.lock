@@ -2856,6 +2856,7 @@ dependencies = [
 name = "dooduel_server"
 version = "0.0.1"
 dependencies = [
+ "async-channel",
  "async-executor",
  "async-io",
  "async-net",

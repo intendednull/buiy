@@ -25,8 +25,18 @@ async-tungstenite = { workspace = true }
 async-net = { workspace = true }
 async-executor = { workspace = true }
 async-io = { workspace = true }
+# The actor-model room intake + per-conn outbox channels (§6.1).
+async-channel = { workspace = true }
 futures-lite = { workspace = true }
 # One protocol message per WS TEXT frame (spec §3.1).
 serde_json = { workspace = true }
 # Room codes + reconnect tokens (spec §6.2/§6.3).
 getrandom = { workspace = true }
+
+# The localhost e2e smoke (`tests/e2e.rs`, W4.7) drives the running server bin
+# (CARGO_BIN_EXE_dooduel_server) through real WebSocket clients — so the test build
+# pulls dooduel_core's ewebsock `ws-client` transport. Dev-only: the production server
+# binary uses async-tungstenite, never ewebsock (feature unification keeps ws-client off
+# the non-test build). W5 swaps this for a dev-dep on the `dooduel_mcp` lib.
+[dev-dependencies]
+dooduel_core = { path = "../dooduel_core", features = ["ws-client"] }

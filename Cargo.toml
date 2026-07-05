@@ -177,11 +177,15 @@ ewebsock = "=0.8.0"
 # TLS backends (no `wss://` in M1, spec §6.2 — that lands in M3 with its own deny delta).
 async-tungstenite = { version = "0.34", default-features = false, features = ["smol-runtime"] }
 # The smol async ecosystem `dooduel_server` runs on. `async-net` is the one genuinely
-# new lock node; `async-io`/`async-executor`/`futures-lite` are already in the lock
-# (via bevy/zbus), so declaring them here adds no new supply-chain crate (spec §10).
+# new lock node; `async-io`/`async-executor`/`futures-lite`/`async-channel` are already
+# in the lock (via bevy/zbus), so declaring them here adds no new supply-chain crate
+# (spec §10). `async-channel` carries the actor-model room intake + per-conn outboxes
+# (§6.1 — futures-lite ships no channel; it is the faithful realization of the design's
+# mandated single-owner room task, NOT a new dependency in the supply-chain sense).
 async-net = "2"
 async-executor = "1"
 async-io = "2"
+async-channel = "2"
 futures-lite = "2"
 # Server-side entropy — the room codes + reconnect tokens (spec §6.2/§6.3). Already a
 # transitive lock node (0.3.4); a DIRECT dep of `dooduel_server` only (never wasm).
