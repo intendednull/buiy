@@ -316,6 +316,18 @@ pub fn build_tree_update(
     }
     nodes.insert(0, (root_id, root));
 
+    // AccessKit REQUIRES `focus` to name a node present in this update; a focus on a
+    // node not in the tree panics the consumer (and the real platform adapter). That
+    // happens whenever the focused entity is despawned before `FocusedEntity` is
+    // reconciled — e.g. a screen swap despawns the button the pointer just focused. So
+    // only honor `focused` when it is actually in the node set; otherwise fall back to
+    // the always-present root. (Focus lands on the root for the frame until a live
+    // widget claims it — a benign transient, never a crash.)
+    let focus = match focused {
+        Some(id) if nodes.iter().any(|(nid, _)| *nid == id) => id,
+        _ => root_id,
+    };
+
     TreeUpdate {
         nodes,
         tree: Some(Tree::new(root_id)),
@@ -323,6 +335,6 @@ pub fn build_tree_update(
         // UUID) is the single root tree — exactly Buiy's one-tree-per-window
         // model; subtrees (`buiy-accessibility-design`) would key off this.
         tree_id: accesskit::TreeId::ROOT,
-        focus: focused.unwrap_or(root_id),
+        focus,
     }
 }
