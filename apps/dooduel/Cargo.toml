@@ -47,6 +47,10 @@ doc = false
 # wasm build (web) never drags in unix-only winit deps. `bevy_winit` runs on wasm
 # too (winit's web backend), so it stays in the shared set.
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit"] }
+# The pure, Bevy-free game/protocol/canvas core (spec §2.1). `game` + `canvas` are
+# re-exported through this lib so existing `crate::game::…` / `paint::…` paths stay
+# stable; the server + MCP clients depend on `dooduel_core` WITHOUT the GUI stack.
+dooduel_core = { path = "../dooduel_core" }
 buiy = { path = "../../crates/buiy" }
 buiy_core = { path = "../../crates/buiy_core" }
 buiy_view = { path = "../../crates/buiy_view" }

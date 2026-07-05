@@ -1,0 +1,18 @@
+[package]
+name = "dooduel_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# The ONE Bevy-family dep (Reflect derives for MVU record/replay of Msg::Net).
+bevy_reflect = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }        # WireAvatar::Custom png_base64 (W1)
+
+[features]
+# wave 4 adds: ws-client = ["dep:ewebsock"]

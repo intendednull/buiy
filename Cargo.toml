@@ -38,6 +38,7 @@ members = [
     "examples/todomvc_view",
     "examples/scaling_view",
     "examples/mt_ceiling",
+    "apps/dooduel_core",
     "apps/dooduel",
     "apps/dooduel/dooduel_web",
 ]
@@ -66,6 +67,11 @@ rust-version = "1.95"
 # on bevy. Still deferred: image-compare (visual harness upgrade is v0.x
 # verification work), thiserror (no error-typing pressure yet).
 bevy = { version = "0.19.0-rc.3", default-features = false, features = ["bevy_render", "bevy_core_pipeline", "bevy_winit", "bevy_window", "bevy_asset", "bevy_log", "bevy_picking", "bevy_scene", "x11", "wayland"] }
+# The one Bevy-family dep the pure `dooduel_core` package keeps (Reflect derives
+# for MVU record/replay). Already a transitive lock node via `bevy` — declaring it
+# here as a direct workspace dep adds no new supply-chain crate (the version tracks
+# the resolved bevy 0.19 node; `dooduel_core`'s purity tripwire pins the family).
+bevy_reflect = "0.19.0"
 taffy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

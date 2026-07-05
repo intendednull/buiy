@@ -2769,10 +2769,21 @@ dependencies = [
  "buiy_core",
  "buiy_verify",
  "buiy_view",
+ "dooduel_core",
  "image",
  "serde",
  "serde_json",
  "web-sys",
+]
+
+[[package]]
+name = "dooduel_core"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "bevy_reflect",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
