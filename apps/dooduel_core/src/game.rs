@@ -244,16 +244,6 @@ pub enum GuessOutcome {
     Ignored,
 }
 
-/// One letter slot of the in-game word row (the design's underlined blanks): the
-/// uppercase letter when the current viewer should see it (`Some`), else a blank
-/// (`None`). `revealed` drives the underline color (accent when shown, ink when
-/// still blank).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WordSlot {
-    pub ch: Option<char>,
-    pub revealed: bool,
-}
-
 /// A bot guess the tick wants folded back through the funnel as a real `Msg`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingGuess {
@@ -271,9 +261,6 @@ pub struct Game {
     pub round: u32,
     /// The seat drawing this turn.
     pub seat_index: usize,
-    /// The seat the human currently controls (auto-jumps to the drawer at each
-    /// turn start; movable with [`Game::switch_seat`]).
-    pub viewing_as: usize,
     pub phase: Phase,
     /// The `now` the current phase was entered at; `None` ⇒ re-anchor next tick.
     pub phase_started_at: Option<Duration>,
@@ -289,7 +276,6 @@ pub struct Game {
     /// The last turn's reveal rows (shown during `Reveal`).
     pub turn_results: Vec<TurnResult>,
     pub chat: Vec<ChatMsg>,
-    pub chat_input: String,
     chat_seq: u64,
     /// Elapsed-seconds at which each successive hint flips open (ascending).
     hint_reveal_at: Vec<u64>,
@@ -436,7 +422,6 @@ impl Game {
         self.phase = Phase::Picking;
         self.phase_started_at = None;
         self.pick_seconds_left = self.config.pick_seconds;
-        self.viewing_as = drawer;
         self.turn_guesses.clear();
         self.turn_results.clear();
         self.secret_word.clear();
@@ -574,13 +559,6 @@ impl Game {
         }
     }
 
-    /// Move the human's controlled seat (the "playing as" switcher).
-    pub fn switch_seat(&mut self, idx: usize) {
-        if idx < self.players.len() {
-            self.viewing_as = idx;
-        }
-    }
-
     /// The redaction predicate (spec §5.1, three-way): whether `seat` may see the
     /// secret word this turn — the drawer, anyone during the reveal/final, or a
     /// seat that has already guessed correctly. The single home `Session` calls per
@@ -621,39 +599,6 @@ impl Game {
             })
             .collect::<Vec<_>>()
             .join(" ")
-    }
-
-    /// The word as the *current* viewer ([`viewing_as`](Game::viewing_as)) should
-    /// see it — a thin delegate to [`word_display_for`](Game::word_display_for).
-    /// (Removed in W3 when the client model owns the viewing seat, spec §2.3.6.)
-    pub fn word_display(&self) -> String {
-        self.word_display_for(self.viewing_as)
-    }
-
-    /// The word as **per-letter slots** for the design's underlined word row
-    /// (each slot: the uppercase letter if the current viewer should see it, else
-    /// a blank). Same "who knows the word" logic as [`word_display`](Game::word_display):
-    /// the drawer / anyone who has guessed / the reveal phase see every letter;
-    /// others see only the hint-revealed positions. Empty outside Drawing/Reveal.
-    pub fn word_slots(&self) -> Vec<WordSlot> {
-        if !matches!(self.phase, Phase::Drawing | Phase::Reveal) {
-            return Vec::new();
-        }
-        let seat = self.viewing_as;
-        let knows = seat == self.seat_index
-            || self.phase == Phase::Reveal
-            || self.turn_guesses.iter().any(|g| g.player == seat);
-        self.secret_word
-            .chars()
-            .enumerate()
-            .map(|(i, c)| {
-                let revealed = knows || *self.reveal_mask.get(i).unwrap_or(&false);
-                WordSlot {
-                    ch: revealed.then(|| c.to_ascii_uppercase()),
-                    revealed,
-                }
-            })
-            .collect()
     }
 
     /// Force-advance out of the `Reveal` phase (the design's "Continue →" button;
@@ -795,11 +740,6 @@ impl Game {
             Phase::Reveal => "Turn over",
             Phase::Final => "Match over",
         }
-    }
-
-    /// Whether the current viewer is the drawer this turn.
-    pub fn viewer_is_drawer(&self) -> bool {
-        self.viewing_as == self.seat_index
     }
 
     /// Final standings, highest score first (ties keep roster order).
@@ -1087,8 +1027,7 @@ mod tests {
         assert_eq!(g.players[0].name, "Mara");
         assert_eq!(g.phase, Phase::Picking);
         assert_eq!(g.round, 1);
-        // Seat auto-jumps to the drawer (seat 0 for turn 1).
-        assert_eq!(g.viewing_as, 0);
+        assert_eq!(g.seat_index, 0, "seat 0 draws turn 1");
         assert_eq!(g.word_choices.len(), 3);
     }
 
@@ -1391,7 +1330,7 @@ mod tests {
     }
 
     /// Bug #4 — an exact guess announces to everyone but keeps the word hidden from
-    /// non-guessers (word redaction has one home, `word_display`).
+    /// non-guessers (word redaction has one home, `word_display_for`).
     #[test]
     fn exact_guess_announces_but_hides_the_word_from_non_guessers() {
         let mut g = started();
@@ -1404,16 +1343,12 @@ mod tests {
                 .any(|m| m.kind == ChatKind::Correct && m.text.contains("guessed the word")),
             "the exact guess announces to everyone"
         );
-        let mut g1 = g.clone();
-        g1.viewing_as = 1;
         assert!(
-            g1.word_display().contains('R'),
-            "the guesser sees the letters"
+            g.word_display_for(1).contains('R'),
+            "the correct guesser sees the letters"
         );
-        let mut g2 = g.clone();
-        g2.viewing_as = 2;
         assert!(
-            !g2.word_display().contains('R') && g2.word_display().contains('_'),
+            !g.word_display_for(2).contains('R') && g.word_display_for(2).contains('_'),
             "a non-guesser still sees blanks"
         );
     }
@@ -1795,12 +1730,6 @@ mod tests {
         assert!(
             Game::default().word_display_for(0).is_empty(),
             "no word row outside Drawing/Reveal"
-        );
-        g.viewing_as = 1;
-        assert_eq!(
-            g.word_display(),
-            g.word_display_for(1),
-            "word_display() delegates to the viewing seat"
         );
     }
 }
