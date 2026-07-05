@@ -62,15 +62,23 @@ apps/dooduel_core   (NEW package `dooduel_core` — pure, Bevy-free, wasm-safe)
 │              redaction. No I/O. Consumes intents, emits addressed events.
 │  transport   the trait (non-blocking try_recv + addressed send, §2.4)
 │              + InProcessTransport (channels — solo + tests)
+│              + WsClientTransport (ewebsock; native + wasm) behind feature
+│                `ws-client` — the ONE production client transport, shared by the
+│                native GUI + `dooduel_web` + `dooduel_mcp` (W4.2 amendment: this
+│                lives in the pure core, NOT in the `dooduel` GUI package, so every
+│                client — GUI, wasm, headless MCP — reuses one impl)
 │  canvas      PaintBuffer — the Bevy-free pixel surface + op types extracted from
 │              paint.rs (stroke_segment/flood_fill are already pure integer fns)
-│  deps: bevy_reflect, serde, serde_json  (NO bevy, NO buiy)
+│  deps: bevy_reflect, serde, serde_json (NO bevy, NO buiy)
+│        + ewebsock (OPTIONAL, feature `ws-client` only — the core's own tests +
+│          the server dep-tree stay wire-free)
 
 apps/dooduel        (existing package — the GUI lib + windowed bin; wasm-safe)
-│  depends on dooduel_core; keeps view/, theme, avatar, storage, confetti;
-│  paint.rs's PaintSurface becomes a thin Bevy wrapper (Image mirror + pointer
-│  observers) around dooduel_core::canvas::PaintBuffer
-│  + net client wiring: WsClientTransport (ewebsock) + NetPlugin (§4.2)
+│  depends on dooduel_core (features = ["ws-client"]); keeps view/, theme, avatar,
+│  storage, confetti; paint.rs's PaintSurface becomes a thin Bevy wrapper (Image
+│  mirror + pointer observers) around dooduel_core::canvas::PaintBuffer
+│  + net client wiring: NetPlugin drives the shared dooduel_core::transport::
+│    WsClientTransport (Create/Join, §4.2) — the transport itself is in the core
 
 apps/dooduel_server (NEW package, native-only bin)
 │  room registry + WS accept loop (async-tungstenite/smol) + per-room actor task

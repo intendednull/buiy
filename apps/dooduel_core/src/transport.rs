@@ -223,6 +223,234 @@ impl ClientTransport for InProcClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WsClientTransport — the ewebsock-backed WebSocket client (spec §2.1, W4.2).
+// ---------------------------------------------------------------------------
+
+/// The production client transport (spec §2.1, amended W4.2): a WebSocket to
+/// `dooduel_server`, native + wasm behind one poll-style API (`ewebsock` —
+/// `tungstenite` on a background thread on native, `web-sys` `WebSocket` on wasm).
+/// It serializes each [`ClientIntent`] to one `serde_json` TEXT frame and decodes
+/// inbound TEXT frames to [`ServerEvent`]s (spec §3.1).
+///
+/// Two wire-spec rules shape it:
+/// - **No inbound frame cap** (W2-review R2): the 64 KiB
+///   [`crate::protocol::MAX_FRAME_BYTES`] cap is SERVER-INBOUND only — a long turn's
+///   `CanvasLog`/`RoomState` can be MB-scale, so the client accepts frames of any
+///   size (`max_incoming_frame_size: usize::MAX`), never mirroring the cap.
+/// - **Never panic on wire input** (spec §6.1): a frame that fails to decode is
+///   logged and skipped ([`decode_event`]); `try_recv` yields the next decodable
+///   event rather than stalling or panicking.
+///
+/// It is `Send` (the ewebsock ends are), but the client integration keeps it in the
+/// [`ClientTransport`]-boxed `NonSend` slot alongside the in-process transport, so one
+/// type spans solo + networked play.
+#[cfg(feature = "ws-client")]
+pub struct WsClientTransport {
+    sender: ewebsock::WsSender,
+    receiver: ewebsock::WsReceiver,
+    status: ConnStatus,
+}
+
+#[cfg(feature = "ws-client")]
+impl WsClientTransport {
+    /// Open a WebSocket to `url` (e.g. `ws://127.0.0.1:7878`). The socket is
+    /// established asynchronously, so [`status`](ClientTransport::status) is
+    /// [`ConnStatus::Connecting`] until the first `Opened` event is drained by
+    /// `try_recv`. `Err` only on an immediate local failure (native: thread spawn;
+    /// web: the `WebSocket` API) — a *connection* failure arrives later as a drained
+    /// error event that flips the status to [`ConnStatus::Closed`].
+    pub fn connect(url: impl Into<String>) -> Result<Self, String> {
+        let options = ewebsock::Options {
+            // R2: the client never mirrors the server-inbound frame cap.
+            max_incoming_frame_size: usize::MAX,
+            ..Default::default()
+        };
+        let (sender, receiver) = ewebsock::connect(url, options)?;
+        Ok(Self {
+            sender,
+            receiver,
+            status: ConnStatus::Connecting,
+        })
+    }
+}
+
+/// Serialize one [`ClientIntent`] to its wire TEXT frame (spec §3.1). Serialization
+/// of a plain data enum is infallible in practice; the defensive `unwrap_or_default`
+/// degrades an impossible failure to an empty frame the server rejects rather than a
+/// client panic (no `unwrap` on the wire path).
+#[cfg(feature = "ws-client")]
+fn encode_intent(intent: &ClientIntent) -> String {
+    serde_json::to_string(intent).unwrap_or_default()
+}
+
+/// Decode one inbound TEXT frame to a [`ServerEvent`], logging + dropping a malformed
+/// frame (spec §6.1 — never panic on wire input). `None` = undecodable.
+#[cfg(feature = "ws-client")]
+fn decode_event(text: &str) -> Option<ServerEvent> {
+    match serde_json::from_str::<ServerEvent>(text) {
+        Ok(ev) => Some(ev),
+        Err(e) => {
+            // The pure core carries no logging facade (it stays dep-light); stderr is
+            // the honest sink on native and a no-op on wasm. The frame is dropped.
+            eprintln!("dooduel_core: dropping undecodable server frame: {e}");
+            None
+        }
+    }
+}
+
+#[cfg(feature = "ws-client")]
+impl ClientTransport for WsClientTransport {
+    fn send(&mut self, intent: &ClientIntent) {
+        self.sender
+            .send(ewebsock::WsMessage::Text(encode_intent(intent)));
+    }
+
+    fn try_recv(&mut self) -> Option<ServerEvent> {
+        // Drain the non-message events (status transitions) inline so a single call
+        // yields the next decodable ServerEvent — the pump never stalls on an
+        // Opened/Closed/error, and a malformed TEXT frame is skipped, not returned.
+        while let Some(event) = self.receiver.try_recv() {
+            match event {
+                ewebsock::WsEvent::Opened => self.status = ConnStatus::Open,
+                ewebsock::WsEvent::Message(ewebsock::WsMessage::Text(text)) => {
+                    if let Some(ev) = decode_event(&text) {
+                        return Some(ev);
+                    }
+                    // Malformed — logged + skipped; keep draining.
+                }
+                // Binary/Unknown/Ping/Pong carry no protocol payload (the wire is TEXT
+                // JSON) — ignore and keep draining.
+                ewebsock::WsEvent::Message(_) => {}
+                ewebsock::WsEvent::Error(_) | ewebsock::WsEvent::Closed => {
+                    self.status = ConnStatus::Closed;
+                }
+            }
+        }
+        None
+    }
+
+    fn status(&self) -> ConnStatus {
+        self.status
+    }
+}
+
+#[cfg(all(test, feature = "ws-client"))]
+mod ws_client_tests {
+    //! Framing round-trips (spec §3.1) — no live socket at this tier (W4.2). The
+    //! transport's send path is `encode_intent`; its recv path is `decode_event`. We
+    //! prove: an intent survives encode → the server's decode, a server event survives
+    //! its encode → the client's `decode_event`, and a malformed frame is dropped (not
+    //! a panic).
+    use super::*;
+    use crate::protocol::{
+        CanvasOp, ErrorCode, PROTOCOL_VERSION, ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn intent_round_trips_through_the_send_framing() {
+        // Every intent the client sends must survive encode_intent (client send) →
+        // serde_json decode (what the server's wire layer does).
+        let intents = vec![
+            ClientIntent::Create {
+                name: "Ada".to_string(),
+                avatar: WireAvatar::Default,
+                protocol_version: PROTOCOL_VERSION,
+            },
+            ClientIntent::Join {
+                room: "ABC123".to_string(),
+                name: "Bo".to_string(),
+                avatar: WireAvatar::Preset { icon: 2, tint: 1 },
+                protocol_version: PROTOCOL_VERSION,
+                reconnect: Some("tok-deadbeef".to_string()),
+            },
+            ClientIntent::StartMatch,
+            ClientIntent::Pick { index: 1 },
+            ClientIntent::Guess {
+                text: "robot".to_string(),
+            },
+            ClientIntent::Stroke {
+                stroke_id: 7,
+                points: vec![(1, 2), (3, 4)],
+                color: [10, 20, 30, 255],
+                radius: 4,
+                done: false,
+            },
+            ClientIntent::Fill {
+                seed: (5, 6),
+                color: [0, 128, 255, 255],
+            },
+            ClientIntent::Undo,
+            ClientIntent::Clear,
+            ClientIntent::Continue,
+            ClientIntent::Leave,
+        ];
+        for intent in &intents {
+            let frame = encode_intent(intent);
+            let back: ClientIntent =
+                serde_json::from_str(&frame).expect("the server decodes the client's frame");
+            assert_eq!(&back, intent, "intent framing round-trips via {frame}");
+        }
+    }
+
+    #[test]
+    fn server_event_round_trips_through_decode_event() {
+        // A representative populated event (incl. the large RoomState seed) must
+        // survive the server's encode → the client's decode_event.
+        let events = vec![
+            ServerEvent::Welcome {
+                seat: 1,
+                room_code: "ABC123".to_string(),
+                reconnect_token: "cafef00d".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+            },
+            ServerEvent::CanvasOpApplied {
+                op: CanvasOp::Stroke {
+                    id: 3,
+                    points: vec![(7, 8)],
+                    color: [1, 2, 3, 255],
+                    radius: 2,
+                },
+            },
+            ServerEvent::CountdownSync {
+                remaining: Duration::from_secs(42),
+            },
+            ServerEvent::Error {
+                code: ErrorCode::VersionMismatch,
+                message: "bad version".to_string(),
+            },
+            ServerEvent::RoomState(RoomReplica {
+                room_code: "ABC123".to_string(),
+                my_seat: 1,
+                players: vec![ReplicaPlayer {
+                    name: "Ada".to_string(),
+                    avatar: WireAvatar::Default,
+                    connected: true,
+                    is_bot: false,
+                    score: 0,
+                    guessed: false,
+                }],
+                ..Default::default()
+            }),
+        ];
+        for ev in &events {
+            let frame = serde_json::to_string(ev).expect("the server serializes the event");
+            let back = decode_event(&frame).expect("the client decodes the server's frame");
+            assert_eq!(&back, ev, "event framing round-trips via {frame}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_frame_is_dropped_not_a_panic() {
+        // Non-JSON, valid-JSON-wrong-shape, and empty (the encode_intent failure
+        // degrade) all decode to None — the spec §6.1 never-panic guarantee.
+        assert_eq!(decode_event("this is not json"), None);
+        assert_eq!(decode_event("{\"NoSuchVariant\":{}}"), None);
+        assert_eq!(decode_event(""), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
