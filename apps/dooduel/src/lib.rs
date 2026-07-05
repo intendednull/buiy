@@ -155,7 +155,7 @@ pub struct Dooduel {
     /// A networked connect the reducer staged for [`net::WsClientPlugin`] to open (spec
     /// §4.2 — the pure reducer can't build the `WsClientTransport`). `#[reflect(ignore)]`:
     /// a transient effect trigger, NOT replay state (replay re-feeds the recorded
-    /// `Msg::Net` stream, it never re-opens a socket — like [`Countdown::pending`]).
+    /// `Msg::Net` stream, it never re-opens a socket — like `Countdown`'s `pending`).
     #[reflect(ignore)]
     pub pending_connect: Option<Connect>,
     /// The current reconnect token (from the latest `Welcome`; rotated every

@@ -377,7 +377,7 @@ const DEFAULT_SERVER_URL: &str = "ws://127.0.0.1:7878";
 /// [`NetPlugin`] (it drives the shared [`ClientNet`] the transport lives in). It is the
 /// mirror of [`LocalAuthorityPlugin`] for the networked states: when the model is
 /// `Joining`/`Connected`/`Dropped` with a staged [`Dooduel::pending_connect`], it opens a
-/// socket to [`server_url`] and sends the `Create`/`Join` first frame; it detects a
+/// socket to `server_url` and sends the `Create`/`Join` first frame; it detects a
 /// dropped connection and asks the reducer to re-attach with the reconnect token.
 pub struct WsClientPlugin;
 

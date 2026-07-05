@@ -239,7 +239,7 @@ impl ClientTransport for InProcClient {
 ///   `CanvasLog`/`RoomState` can be MB-scale, so the client accepts frames of any
 ///   size (`max_incoming_frame_size: usize::MAX`), never mirroring the cap.
 /// - **Never panic on wire input** (spec §6.1): a frame that fails to decode is
-///   logged and skipped ([`decode_event`]); `try_recv` yields the next decodable
+///   logged and skipped (`decode_event`); `try_recv` yields the next decodable
 ///   event rather than stalling or panicking.
 ///
 /// It is `Send` (the ewebsock ends are), but the client integration keeps it in the
