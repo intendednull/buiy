@@ -631,32 +631,39 @@ impl Session {
         }
     }
 
-    /// After a mutation, stage the events its state change implies: newly-pushed chat
-    /// lines (addressed by their `to`), a phase transition's bundle, an in-phase hint
-    /// flip's per-seat word updates, or a countdown tick.
+    /// After a mutation, stage the events its state change implies. The **structural**
+    /// events go first — a phase transition's bundle, an in-phase hint flip's per-seat
+    /// word rows, or a countdown tick — then the **cosmetic** chat lines (addressed by
+    /// their `to`). Ordering the phase change ahead of chat makes `TurnEnded` the clean
+    /// reveal boundary: the reveal's "The word was X" system line follows it rather than
+    /// preceding it (which the secrecy scan would otherwise read as a pre-reveal leak).
     fn resync(&mut self, pre: Pre) {
+        if self.game.phase != pre.phase {
+            self.emit_phase_change();
+        } else {
+            if self.game.phase == Phase::Drawing
+                && self.game.hints_revealed() != pre.hints_revealed
+            {
+                self.emit_word_updates();
+            }
+            let now_secs = self.remaining_secs();
+            if now_secs != pre.remaining_secs
+                && matches!(self.game.phase, Phase::Picking | Phase::Drawing | Phase::Reveal)
+            {
+                self.broadcast(ServerEvent::CountdownSync {
+                    remaining: Duration::from_secs(now_secs),
+                });
+            }
+        }
+
         let new_chat: Vec<ChatMsg> = self.game.chat.iter().skip(pre.chat_len).cloned().collect();
         for m in new_chat {
             match m.to {
                 None => self.broadcast(ServerEvent::ChatLine { line: m }),
-                Some(s) => self.outbox.push((Recipient::Seat(s), ServerEvent::ChatLine { line: m })),
+                Some(s) => self
+                    .outbox
+                    .push((Recipient::Seat(s), ServerEvent::ChatLine { line: m })),
             }
-        }
-
-        if self.game.phase != pre.phase {
-            self.emit_phase_change();
-            return;
-        }
-        if self.game.phase == Phase::Drawing && self.game.hints_revealed() != pre.hints_revealed {
-            self.emit_word_updates();
-        }
-        let now_secs = self.remaining_secs();
-        if now_secs != pre.remaining_secs
-            && matches!(self.game.phase, Phase::Picking | Phase::Drawing | Phase::Reveal)
-        {
-            self.broadcast(ServerEvent::CountdownSync {
-                remaining: Duration::from_secs(now_secs),
-            });
         }
     }
 
