@@ -164,7 +164,7 @@ fn dep_tree_is_bevy_free() {
 
 **Files:** Create `apps/dooduel_core/src/protocol.rs`. Modify `apps/dooduel_core/src/{lib.rs,game.rs}`, `apps/dooduel/src/lib.rs`, `apps/dooduel/src/bin/{playtest_host.rs,capture.rs}` (all `start_match` call sites — rev-2: capture.rs calls it too).
 
-- [ ] **W1.1 Protocol types (red-first: round-trip tests).** `protocol.rs` per spec §3 (rev-2.1) — the exact wire surface:
+- [x] **W1.1 Protocol types (red-first: round-trip tests).** `protocol.rs` per spec §3 (rev-2.1) — the exact wire surface:
 
 ```rust
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -254,14 +254,14 @@ pub struct ReplicaPlayer { pub name: String, pub avatar: WireAvatar, pub connect
 
 `Phase`, `ChatMsg`, `ChatKind` (rev-2: `ChatMsg` contains it), `TurnResult` gain `Serialize/Deserialize` in `game.rs`.
 Tests: serde_json round-trip for a populated value of EVERY variant; **the cap-consistency boundary test (rev-2, red-first):** a `Join` carrying a `MAX_AVATAR_PNG`-sized (raw) avatar serializes to `≤ MAX_FRAME_BYTES` — this is what forced the 32 KiB cap; `word_slots()` derivation cases (blanks, hint-revealed, full word).
-- [ ] **W1.2 Run round-trips red→green; commit** `feat(dooduel_core): wire protocol types (M1 spec §3)`.
-- [ ] **W1.3 Game API delta (red-first, one sub-step each; spec §2.3).** In `game.rs`:
+- [x] **W1.2 Run round-trips red→green; commit** `feat(dooduel_core): wire protocol types (M1 spec §3)`.
+- [x] **W1.3 Game API delta (red-first, one sub-step each; spec §2.3).** In `game.rs`:
   1. `pub struct PlayerSpec { pub name: String, pub is_bot: bool }`; new `start_match(roster: &[PlayerSpec], config: Config)` — old signature becomes `start_match_solo(human_name, config)` building `[human, Priya(bot), Theo(bot), Sam(bot)]` and delegating. Call sites (all three): `apps/dooduel/src/lib.rs`, `bin/playtest_host.rs`, `bin/capture.rs`.
   2. `Player` gains `is_bot: bool, occupied: bool`; `seeded_bot_plans`/due-guess drain key off `is_bot` (test: a 2-human roster never bot-guesses on a human seat).
   3. Vacant-seat semantics: `pub fn vacate_seat(&mut self, seat)`; rotation skips `!occupied`; `guesser_count()`/`all_guessed()` count occupied non-drawer seats; occupancy < 2 ⇒ `Final` (tests: rotation-skip, count, early-final).
   4. `pub fn force_end_turn(&mut self)` — public path to the existing turn-end (test: mid-Drawing force ends to Reveal with results).
   5. `pub fn knows(&self, seat) -> bool` (three-way, spec §5.1) + `pub fn word_display_for(&self, seat) -> String`; existing `word_display()` delegates to `word_display_for(self.viewing_as)` (removed in W3). The view-side `word_slots` replacement is `RoomReplica::word_slots()` (W1.1) — no core sibling needed.
-- [ ] **W1.4 Gate + commit** `feat(dooduel_core): Game roster/redaction API delta (M1 spec §2.3)`.
+- [x] **W1.4 Gate + commit** `feat(dooduel_core): Game roster/redaction API delta (M1 spec §2.3)`.
 
 ### Wave 2 — `Session` + `InProcessTransport` (the authority, headless)
 

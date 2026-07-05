@@ -145,7 +145,7 @@ Non-blocking `try_recv` is the honest shape (gate finding `client-net-pump-unspe
 | `StartMatch` | Lobby, host only | |
 | `Pick { index }` | Picking, drawer only | |
 | `Guess { text }` | Drawing, non-drawer, not-yet-guessed | Via `Game::apply_guess`. |
-| `Stroke { stroke_id, points, color, size, tool, done }` | Drawing, drawer only | See §3.5 framing. |
+| `Stroke { stroke_id, points, color, radius, done }` | Drawing, drawer only | See §3.5 framing. *Rev-2.1: effective color+radius per §2.2 — no tool on the wire (this row lagged the amendment; synced at W1).* |
 | `Fill { seed, color }` | Drawing, drawer only | |
 | `Undo` / `Clear` | Drawing, drawer only | |
 | `Continue` | Reveal, any seat | Any-player advance is the design's semantics; accepted for M1's private rooms (documented; M5 revisits with moderation). |

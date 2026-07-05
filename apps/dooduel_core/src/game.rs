@@ -3,8 +3,9 @@
 //!
 //! Everything here is a plain data type + pure `&mut self` methods, so the whole
 //! game is unit-testable without an ECS, a GPU, or a clock. The MVU wiring in
-//! `lib.rs` is a thin shell: the reducer folds a `Msg` into a call on one of
-//! these methods; the tick driver turns wall-clock into a `Tick(now)` message.
+//! the `dooduel` app crate's `lib.rs` is a thin shell: the reducer folds a `Msg`
+//! into a call on one of these methods; the tick driver turns wall-clock into a
+//! `Tick(now)` message.
 //!
 //! ## The clock model (the game-seam pattern)
 //!
