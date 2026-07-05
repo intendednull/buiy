@@ -42,6 +42,14 @@ pub const PALETTE: [[u8; 4]; 16] = [
 /// halves it to a stamp radius.
 pub const BRUSH_SIZES: [i32; 4] = [3, 6, 11, 18];
 
+/// The in-game canvas width in pixels (the shared authority + GUI dimension). Moved
+/// here from `apps/dooduel/src/paint.rs` (W2-review I3) so the [`crate::session::Session`]
+/// can bound-check incoming stroke/fill coordinates against the same size the GUI
+/// paints; `dooduel::paint` re-exports it so view/paint code is unchanged.
+pub const CANVAS_W: usize = 720;
+/// The in-game canvas height in pixels — the companion to [`CANVAS_W`].
+pub const CANVAS_H: usize = 450;
+
 /// The active tool. `Bucket` flood-fills on press; `Brush`/`Eraser` stroke. Held
 /// on the MVU model (`ToolState`) so tool selection is reducer-owned + replayable,
 /// and mirrored onto a [`PaintBuffer`] each frame by the GUI's canvas sync.

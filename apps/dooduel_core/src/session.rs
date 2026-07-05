@@ -34,11 +34,27 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+
+use crate::canvas::{BRUSH_SIZES, CANVAS_H, CANVAS_W};
 use crate::game::{ChatMsg, Config, Game, GuessOutcome, PRESET_NAMES, Phase, PlayerSpec};
 use crate::protocol::{
-    CanvasOp, ClientIntent, ErrorCode, MAX_OP_POINTS, MAX_STROKE_POINTS, PROTOCOL_VERSION,
-    ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
+    CanvasOp, ClientIntent, ErrorCode, MAX_AVATAR_PNG, MAX_GUESS_LEN, MAX_NAME_LEN, MAX_OP_POINTS,
+    MAX_STROKE_POINTS, PROTOCOL_VERSION, ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
 };
+
+/// I3 canvas bound: a stroke point / fill seed must lie inside the canvas. Rejected
+/// (never clamped), so a bad op can't diverge from the drawer's local paint.
+fn point_in_bounds(p: (i32, i32)) -> bool {
+    p.0 >= 0 && (p.0 as usize) < CANVAS_W && p.1 >= 0 && (p.1 as usize) < CANVAS_H
+}
+
+/// I3 radius bound: `1..=2×max(BRUSH_SIZES)` — covers every brush + the ×1.6 eraser.
+fn radius_in_bounds(r: i32) -> bool {
+    let max_r = 2 * BRUSH_SIZES.iter().copied().max().unwrap_or(0);
+    (1..=max_r).contains(&r)
+}
 
 /// The grace window a disconnected seat is held before it is vacated (spec §6.3). A
 /// valid-token `Join` inside this window re-attaches; past it the seat frees.
@@ -183,6 +199,19 @@ impl Session {
         reconnect: Option<&str>,
         _now: Duration,
     ) -> Result<usize, ErrorCode> {
+        // I3: validate identity limits up front (both fresh join and reconnect).
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > MAX_NAME_LEN {
+            return Err(ErrorCode::Malformed);
+        }
+        if let WireAvatar::Custom { png_base64 } = &avatar {
+            match STANDARD.decode(png_base64) {
+                Ok(bytes) if bytes.len() <= MAX_AVATAR_PNG => {}
+                Ok(_) => return Err(ErrorCode::TooLarge),
+                Err(_) => return Err(ErrorCode::Malformed),
+            }
+        }
+
         if let Some(tok) = reconnect {
             let found = self
                 .seats
@@ -365,6 +394,9 @@ impl Session {
         if self.game.phase != Phase::Drawing {
             return self.error(from, ErrorCode::WrongPhase, "not the drawing phase");
         }
+        if text.chars().count() > MAX_GUESS_LEN {
+            return self.error(from, ErrorCode::TooLarge, "guess exceeds MAX_GUESS_LEN");
+        }
         // The drawer / an already-correct guesser are Ignored by apply_guess (a no-op,
         // no event) — the pure core's semantics; no error code exists for them.
         self.apply_guess_and_stage(from, text);
@@ -389,6 +421,16 @@ impl Session {
                 from,
                 ErrorCode::TooLarge,
                 "stroke batch exceeds MAX_STROKE_POINTS",
+            );
+        }
+        // I3: bounds-check before any mutation, so a rejected batch leaves the open
+        // stroke untouched (reject, don't clamp — a clamp would diverge from the
+        // drawer's optimistic paint).
+        if !radius_in_bounds(radius) || points.iter().any(|&p| !point_in_bounds(p)) {
+            return self.error(
+                from,
+                ErrorCode::Malformed,
+                "stroke point or radius out of bounds",
             );
         }
         // A batch for a *different* stroke closes the open one first.
@@ -437,6 +479,11 @@ impl Session {
     fn on_fill(&mut self, from: usize, seed: (i32, i32), color: [u8; 4]) {
         if !self.require_drawer_drawing(from) {
             return;
+        }
+        // I3: validate the seed before auto-closing the open stroke (a rejected fill
+        // must leave the open stroke untouched).
+        if !point_in_bounds(seed) {
+            return self.error(from, ErrorCode::Malformed, "fill seed out of bounds");
         }
         self.finalize_open_stroke();
         let id = self.next_op_id;
@@ -1600,6 +1647,167 @@ mod tests {
             "no-echo of the finalized op to the drawer"
         );
         assert_eq!(s.canvas_ops.len(), 1);
+    }
+
+    // --- I3 limits enforcement ----------------------------------------------
+
+    #[test]
+    fn connect_validates_the_name() {
+        let mut s = new_session(0);
+        assert_eq!(
+            s.connect("", WireAvatar::Default, None, d(0)),
+            Err(ErrorCode::Malformed),
+            "an empty name is rejected"
+        );
+        assert_eq!(
+            s.connect("   ", WireAvatar::Default, None, d(0)),
+            Err(ErrorCode::Malformed),
+            "a whitespace-only name is rejected"
+        );
+        assert_eq!(
+            s.connect(
+                &"N".repeat(MAX_NAME_LEN + 1),
+                WireAvatar::Default,
+                None,
+                d(0)
+            ),
+            Err(ErrorCode::Malformed),
+            "an over-long name is rejected"
+        );
+        // A valid name is trimmed and stored.
+        let seat = s
+            .connect("  Ada  ", WireAvatar::Default, None, d(0))
+            .unwrap();
+        assert_eq!(s.seats[seat].name, "Ada");
+    }
+
+    #[test]
+    fn connect_validates_a_custom_avatar() {
+        let mut s = new_session(0);
+        // Invalid base64 ⇒ Malformed.
+        assert_eq!(
+            s.connect(
+                "Ada",
+                WireAvatar::Custom {
+                    png_base64: "@@@ not base64 @@@".to_string()
+                },
+                None,
+                d(0)
+            ),
+            Err(ErrorCode::Malformed)
+        );
+        // Decoded bytes over the cap ⇒ TooLarge.
+        let oversize = STANDARD.encode(vec![0u8; MAX_AVATAR_PNG + 1]);
+        assert_eq!(
+            s.connect(
+                "Ada",
+                WireAvatar::Custom {
+                    png_base64: oversize
+                },
+                None,
+                d(0)
+            ),
+            Err(ErrorCode::TooLarge)
+        );
+        // A small valid custom avatar is accepted.
+        let ok = STANDARD.encode(vec![0u8; 64]);
+        assert!(
+            s.connect("Ada", WireAvatar::Custom { png_base64: ok }, None, d(0))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn guess_over_the_length_cap_is_too_large() {
+        let (mut s, _) = drawing_two_humans();
+        s.handle(
+            1,
+            ClientIntent::Guess {
+                text: "x".repeat(MAX_GUESS_LEN + 1),
+            },
+        );
+        assert_eq!(error_to(&s.drain_events(), 1), Some(ErrorCode::TooLarge));
+        assert!(
+            s.game.turn_guesses.is_empty(),
+            "the over-long guess was not applied"
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_stroke_is_rejected_and_leaves_the_open_stroke_untouched() {
+        let (mut s, _) = drawing_two_humans();
+        // Open an in-progress stroke first.
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 1,
+                points: vec![(10, 10)],
+                color: [0, 0, 0, 255],
+                radius: 3,
+                done: false,
+            },
+        );
+        s.drain_events();
+        // An out-of-bounds point ⇒ Malformed; the open stroke is untouched.
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 1,
+                points: vec![(CANVAS_W as i32, 10)],
+                color: [0, 0, 0, 255],
+                radius: 3,
+                done: true,
+            },
+        );
+        assert_eq!(error_to(&s.drain_events(), 0), Some(ErrorCode::Malformed));
+        assert!(
+            s.open_stroke
+                .as_ref()
+                .is_some_and(|op| op.points == vec![(10, 10)]),
+            "the rejected batch left the open stroke untouched"
+        );
+        assert!(s.canvas_ops.is_empty(), "nothing was finalized");
+        // A bad radius is likewise rejected.
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 1,
+                points: vec![(20, 20)],
+                color: [0, 0, 0, 255],
+                radius: 999,
+                done: true,
+            },
+        );
+        assert_eq!(error_to(&s.drain_events(), 0), Some(ErrorCode::Malformed));
+    }
+
+    #[test]
+    fn out_of_bounds_fill_seed_is_rejected_and_leaves_the_open_stroke_untouched() {
+        let (mut s, _) = drawing_two_humans();
+        s.handle(
+            0,
+            ClientIntent::Stroke {
+                stroke_id: 1,
+                points: vec![(10, 10)],
+                color: [0, 0, 0, 255],
+                radius: 3,
+                done: false,
+            },
+        );
+        s.drain_events();
+        s.handle(
+            0,
+            ClientIntent::Fill {
+                seed: (10, CANVAS_H as i32),
+                color: [1, 2, 3, 255],
+            },
+        );
+        assert_eq!(error_to(&s.drain_events(), 0), Some(ErrorCode::Malformed));
+        assert!(
+            s.open_stroke.is_some(),
+            "a rejected fill leaves the open stroke untouched (not auto-closed)"
+        );
+        assert!(s.canvas_ops.is_empty());
     }
 
     #[test]

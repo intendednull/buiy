@@ -41,13 +41,12 @@ use std::ops::{Deref, DerefMut};
 /// The pure pixel math + palette + [`PaintBuffer`] moved to `dooduel_core::canvas`
 /// (M1 W0.3); these re-exports keep `paint::PALETTE` / `paint::Tool` / `paint::PAPER`
 /// / `paint::BRUSH_SIZES` paths (view modules, bins) stable after the extraction.
-pub use dooduel_core::canvas::{BRUSH_SIZES, PALETTE, PAPER, Tool};
+pub use dooduel_core::canvas::{BRUSH_SIZES, CANVAS_H, CANVAS_W, PALETTE, PAPER, Tool};
 use dooduel_core::canvas::{PaintBuffer, eraser_radius};
 
-/// The in-game drawing surface size in logical px == the image resolution (kept
-/// equal so window→pixel mapping is 1:1).
-pub const CANVAS_W: usize = 720;
-pub const CANVAS_H: usize = 450;
+// The in-game drawing surface size (logical px == image resolution, 1:1 window→pixel
+// mapping) moved to `dooduel_core::canvas` (W2-review I3) so the authority bound-checks
+// against the same size; re-exported above to keep `paint::CANVAS_W` / `paint::CANVAS_H`.
 
 /// The avatar editor's draw-your-own surface (the design's 220×220 canvas, W5).
 pub const AVATAR_W: usize = 220;
