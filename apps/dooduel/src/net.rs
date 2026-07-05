@@ -534,6 +534,10 @@ fn manage_ws_client(
                         net.0 = Some(Box::new(transport));
                         state.owns = true;
                     }
+                    // An IMMEDIATE connect error (malformed URL / thread-spawn
+                    // failure) is deterministic — retrying is pointless, so this
+                    // deliberately bypasses the rejoin retry budget and fails
+                    // outright, even mid-rejoin (W4-review close note b).
                     Err(err) => enqueue::<Dooduel>(&mut commands, entity, Msg::ConnectFailed(err)),
                 }
             }

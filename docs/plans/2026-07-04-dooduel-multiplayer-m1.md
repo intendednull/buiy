@@ -358,6 +358,7 @@ Build order, each red-first: (1) connect/roster/host + `Welcome`/`RoomState`/`Ro
 
 - [ ] **W6.1 Acceptance harness.** A documented fish-safe launch recipe (bash script under `apps/dooduel_mcp/examples/` or a README section): start `dooduel_server`, N agent seats (each = one `dooduel_mcp` process an LLM agent drives), the room code handshake. The server's per-turn transcript is the evidence stream.
 - [ ] **W6.2 THE ACCEPTANCE RUN (manual, with the user).** The user in the native GUI (and/or web) + 3 MCP-agent seats play a full match to the podium over the live server (spec §1.4). Evidence: server transcript, per-seat reports, screenshots.
+- [ ] **W6.3-pre (W4-review close residuals, recorded 2026-07-05):** the follow-ups ledger MUST carry: (a) no client-side CONNECT deadline — a firewalled/DROPped handshake sits in Connecting until the OS TCP timeout (~1-2 min), escapable via Cancel; M2 polish = a Connecting-longer-than-N edge in `ws_decision`. (c) the room GC loop (idle→break→remove_room, Instant-hardwired, `room.rs`) is the ONE §6 semantic with no test at any tier — accepted for M1 (a wire assertion needs a 45 s idle wait); note the injectable-clock refactor as its fix shape.
 - [ ] **W6.3 Close the books.** Acceptance report in `docs/reports/`; spec status `draft` → `active`; docs/README index rows; follow-ups ledger for anything discovered-but-deferred; final full SG + summary for the user's push/PR/merge decision.
 
 ---
