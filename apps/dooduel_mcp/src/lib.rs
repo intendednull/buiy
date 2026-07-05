@@ -35,8 +35,29 @@ pub mod mcp;
 /// A live in-progress stroke batch buffered off the op log (spec §3.5): the guesser
 /// paints it immediately, and it is wiped on any authoritative canvas event or a `Roster`
 /// showing the drawer disconnected. It carries no id and never enters the op log.
+///
+/// **Coalesced per `stroke_id` (W5-review minor 4):** batches of one stroke arrive one per
+/// frame carrying only *their* new points; the fold **extends** the current progress with
+/// each same-id batch (so `stamp_points` interpolates across batch boundaries — no gap at
+/// the seam) and **replaces** it when a new `stroke_id` arrives (dropping any stale,
+/// abandoned batch). There is only ever one in-progress stroke (the sole drawer), so this
+/// is an `Option`, not a list — mirroring the GUI's live-relay paint.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Progress {
+struct ProgressStroke {
+    stroke_id: u64,
+    points: Vec<(i32, i32)>,
+    color: [u8; 4],
+    radius: i32,
+}
+
+/// The drawer's own in-progress stroke, accumulated on the OUTBOUND side (spec §3.5): the
+/// drawer is never echoed its own ops, so its optimistic overlay is built from the batches
+/// it sends. Finalized into an [`CanvasOp::Stroke`] on `done` / a `stroke_id` change / a
+/// fill — mirroring the server's own open-stroke accumulation, so the drawer's overlay
+/// matches the log the server builds (sole-producer order is provably identical).
+#[derive(Clone, Debug)]
+struct OwnOpenStroke {
+    stroke_id: u64,
     points: Vec<(i32, i32)>,
     color: [u8; 4],
     radius: i32,
@@ -73,8 +94,22 @@ pub struct ReplicaFold {
     /// (re)connection, spec §6.3). The reconnect path re-attaches with it.
     pub reconnect_token: String,
     /// The transient in-progress stroke overlay (spec §3.5) — painted by `canvas_png`,
-    /// wiped on any authoritative canvas event or a drawer-disconnected `Roster`.
-    live_progress: Vec<Progress>,
+    /// coalesced per `stroke_id`, wiped on any authoritative canvas event or a
+    /// drawer-disconnected `Roster`.
+    live_progress: Option<ProgressStroke>,
+    /// The drawer's OWN optimistic op overlay (W5-review Important 1): the drawer is not
+    /// echoed its own ops (spec §3.5 no-echo), so `replica.canvas_ops` stays empty during
+    /// its turn — this holds the strokes/fills it drew so `canvas_png` shows the drawer its
+    /// own ink. Finalized ops only; the open batch lives in [`Self::own_open`]. Reconciled
+    /// with the echoed `CanvasUndo`/`CanvasCleared`, replaced wholesale by a `CanvasLog`/
+    /// `RoomState` reseed, and cleared at each turn start (`PhaseChanged`→Picking).
+    own_ops: Vec<CanvasOp>,
+    /// The drawer's accumulating own stroke (across `done: false` batches).
+    own_open: Option<OwnOpenStroke>,
+    /// The dense per-turn id the drawer assigns its own finalized ops (spec §3.5 — the
+    /// drawer derives its ids by counting its own finalizations), so an echoed
+    /// `CanvasUndo { removed_id }` resolves against [`Self::own_ops`]. Resets each turn.
+    next_own_op_id: u64,
     /// The last rejected-intent / protocol error (the GUI surfaces this as a toast;
     /// off-replica by the negative invariant). Rendered in the seat view.
     last_error: Option<(ErrorCode, String)>,
@@ -100,9 +135,11 @@ impl ReplicaFold {
             ServerEvent::RoomState(replica) => {
                 self.replica = replica;
                 // A full seed is a wholesale canvas replace (a reseed) — the raster must
-                // re-render even if the log coincides, and any transient progress is stale.
+                // re-render even if the log coincides, any transient progress is stale, and
+                // the drawer's optimistic overlay is superseded by the authoritative log.
                 self.canvas_reseeds = self.canvas_reseeds.wrapping_add(1);
-                self.live_progress.clear();
+                self.live_progress = None;
+                self.reseed_own_overlay();
             }
             ServerEvent::Roster { players, host } => {
                 self.replica.players = players;
@@ -112,7 +149,7 @@ impl ReplicaFold {
                 if let Some(d) = self.replica.drawer
                     && self.replica.players.get(d).is_some_and(|p| !p.connected)
                 {
-                    self.live_progress.clear();
+                    self.live_progress = None;
                 }
             }
             ServerEvent::PhaseChanged {
@@ -135,6 +172,12 @@ impl ReplicaFold {
                     self.replica.hints_revealed = 0;
                     self.replica.word_choices.clear();
                     self.replica.turn_results.clear();
+                    // A fresh canvas: drop the drawer's optimistic overlay + its per-turn
+                    // op-id counter (the log clears server-side via CanvasCleared too).
+                    self.own_ops.clear();
+                    self.own_open = None;
+                    self.next_own_op_id = 0;
+                    self.live_progress = None;
                 }
             }
             ServerEvent::CountdownSync { remaining } => self.replica.remaining = remaining,
@@ -150,30 +193,44 @@ impl ReplicaFold {
             ServerEvent::WordChoices { words } => self.replica.word_choices = words,
             ServerEvent::CanvasOpApplied { op } => {
                 self.replica.canvas_ops.push(op);
-                self.live_progress.clear();
+                self.live_progress = None;
             }
             ServerEvent::CanvasStrokeProgress {
+                stroke_id,
                 points,
                 color,
                 radius,
-                ..
-            } => self.live_progress.push(Progress {
-                points,
-                color,
-                radius,
-            }),
+            } => match &mut self.live_progress {
+                // Same stroke: EXTEND (so stamp_points interpolates across the seam).
+                Some(p) if p.stroke_id == stroke_id => p.points.extend_from_slice(&points),
+                // A new (or first) stroke: REPLACE — drop any stale abandoned batch.
+                _ => {
+                    self.live_progress = Some(ProgressStroke {
+                        stroke_id,
+                        points,
+                        color,
+                        radius,
+                    })
+                }
+            },
             ServerEvent::CanvasUndo { removed_id } => {
+                // The undo confirmation reaches every seat (spec §3.5): remove it from the
+                // guesser's log AND the drawer's own overlay (whichever holds it).
                 self.replica.canvas_ops.retain(|op| op_id(op) != removed_id);
-                self.live_progress.clear();
+                self.own_ops.retain(|op| op_id(op) != removed_id);
+                self.live_progress = None;
             }
             ServerEvent::CanvasCleared => {
                 self.replica.canvas_ops.clear();
-                self.live_progress.clear();
+                self.own_ops.clear();
+                self.own_open = None;
+                self.live_progress = None;
             }
             ServerEvent::CanvasLog { ops } => {
                 self.replica.canvas_ops = ops;
                 self.canvas_reseeds = self.canvas_reseeds.wrapping_add(1);
-                self.live_progress.clear();
+                self.live_progress = None;
+                self.reseed_own_overlay();
             }
             ServerEvent::ChatLine { line } => self.replica.chat.push(line),
             ServerEvent::GuessResult { seat, correct, .. } => {
@@ -199,6 +256,87 @@ impl ReplicaFold {
             }
             ServerEvent::Error { code, message } => self.last_error = Some((code, message)),
         }
+    }
+
+    // --- The drawer's own optimistic overlay (spec §3.5, W5-review Important 1) ---
+    //
+    // The drawer is never echoed its own ops, so these are built from the OUTBOUND intents
+    // the `HeadlessClient` passthroughs relay here after sending. Sole-producer order is
+    // provably identical to the server's, so the dense ids match and an echoed `CanvasUndo`
+    // resolves against `own_ops`.
+
+    /// A reseed (`CanvasLog`/`RoomState`) supersedes the overlay: the drawer's surviving
+    /// ops are now in the authoritative `replica.canvas_ops`, so drop the overlay and
+    /// realign the per-turn id counter to the reseeded log length.
+    fn reseed_own_overlay(&mut self) {
+        self.own_ops.clear();
+        self.own_open = None;
+        self.next_own_op_id = self.replica.canvas_ops.len() as u64;
+    }
+
+    /// Accumulate one outbound stroke batch (finalizing on `done` / a `stroke_id` change).
+    fn own_stroke_batch(
+        &mut self,
+        stroke_id: u64,
+        points: &[(i32, i32)],
+        color: [u8; 4],
+        radius: i32,
+        done: bool,
+    ) {
+        if self
+            .own_open
+            .as_ref()
+            .is_some_and(|o| o.stroke_id != stroke_id)
+        {
+            self.finalize_own_open();
+        }
+        match &mut self.own_open {
+            Some(o) => o.points.extend_from_slice(points),
+            None => {
+                self.own_open = Some(OwnOpenStroke {
+                    stroke_id,
+                    points: points.to_vec(),
+                    color,
+                    radius,
+                })
+            }
+        }
+        if done {
+            self.finalize_own_open();
+        }
+    }
+
+    /// Finalize an outbound fill into the overlay (closing any open stroke first).
+    fn own_fill(&mut self, seed: (i32, i32), color: [u8; 4]) {
+        self.finalize_own_open();
+        let id = self.next_own_op_id;
+        self.next_own_op_id += 1;
+        self.own_ops.push(CanvasOp::Fill { id, seed, color });
+    }
+
+    /// An outbound `Undo`: the server cancels an un-finalized open stroke (mirror it); a
+    /// finalized op is removed when its `CanvasUndo` echo folds (spec §3.5).
+    fn own_undo(&mut self) {
+        self.own_open = None;
+    }
+
+    /// Close the accumulating own stroke into a finalized [`CanvasOp::Stroke`] (an empty
+    /// stroke mints no op / no id — matching the server).
+    fn finalize_own_open(&mut self) {
+        let Some(o) = self.own_open.take() else {
+            return;
+        };
+        if o.points.is_empty() {
+            return;
+        }
+        let id = self.next_own_op_id;
+        self.next_own_op_id += 1;
+        self.own_ops.push(CanvasOp::Stroke {
+            id,
+            points: o.points,
+            color: o.color,
+            radius: o.radius,
+        });
     }
 }
 
@@ -333,6 +471,10 @@ impl<T: ClientTransport> HeadlessClient<T> {
         radius: i32,
         done: bool,
     ) {
+        // Feed the drawer's own optimistic overlay before the points move onto the wire
+        // (the drawer is never echoed its own ops, so this is its only local record).
+        self.fold
+            .own_stroke_batch(stroke_id, &points, color, radius, done);
         self.send(ClientIntent::Stroke {
             stroke_id,
             points,
@@ -352,11 +494,15 @@ impl<T: ClientTransport> HeadlessClient<T> {
 
     /// Flood-fill from `seed` with `color` (drawer-only, in Drawing).
     pub fn fill(&mut self, seed: (i32, i32), color: [u8; 4]) {
+        self.fold.own_fill(seed, color);
         self.send(ClientIntent::Fill { seed, color });
     }
 
-    /// Undo the last op (drawer-only, in Drawing).
+    /// Undo the last op (drawer-only, in Drawing). A finalized op is removed from the
+    /// overlay when its `CanvasUndo` echo folds; an un-finalized open stroke is cancelled
+    /// now (the server does the same, spec §3.5).
     pub fn undo(&mut self) {
+        self.fold.own_undo();
         self.send(ClientIntent::Undo);
     }
 
@@ -415,6 +561,18 @@ impl<T: ClientTransport> HeadlessClient<T> {
             });
 
         let mut out = String::new();
+        // Lead with a connection banner whenever the socket is not live (W5-review
+        // Important 2): an unattended agent must know its replica is frozen and act (rejoin)
+        // instead of grinding a dead state that will never update.
+        match self.transport.status() {
+            ConnStatus::Open => {}
+            ConnStatus::Closed => {
+                out.push_str("> ⚠ CONNECTION LOST — reports are frozen; rejoin required.\n\n")
+            }
+            ConnStatus::Connecting => {
+                out.push_str("> ⏳ CONNECTING — not yet live; this view may be empty or stale.\n\n")
+            }
+        }
         out.push_str(&format!("# Dooduel — you are seat {me} ({my_name})\n"));
         let room = if r.room_code.is_empty() {
             "(not in a room)".to_string()
@@ -574,26 +732,35 @@ impl<T: ClientTransport> HeadlessClient<T> {
     /// plus any buffered live stroke-progress stamped on top (agents guess from
     /// in-progress drawings). No PNG ever travels on the wire (spec §2.2).
     ///
-    /// It renders the **authoritative** canvas (what a guesser sees). During its own turn
-    /// the drawer is not echoed its ops (spec §3.5 no-echo), so a drawer's `get_canvas` is
-    /// its authoritative view (empty until a reconnect reseeds a `CanvasLog`) — the drawer
-    /// draws by coordinates, not by reading its own canvas back.
+    /// A GUESSER sees the **authoritative** op log plus any in-progress stroke (agents
+    /// guess from live ink). A DRAWER is not echoed its own ops (spec §3.5 no-echo), so its
+    /// authoritative log is empty during its turn — but its own optimistic overlay
+    /// (built from the strokes/fills it sent, W5-review Important 1) is rasterized here, so
+    /// a drawer agent sees its own ink. A reconnect `CanvasLog` reseed folds the surviving
+    /// ops into the authoritative log and clears the overlay, so no op is drawn twice.
     pub fn canvas_png(&self) -> Vec<u8> {
         let pixels = self.rasterize();
         encode_png(CANVAS_W as u32, CANVAS_H as u32, &pixels)
     }
 
-    /// Rasterize the op log + the buffered progress onto a fresh `PAPER` RGBA8 buffer,
-    /// mirroring the GUI's guesser raster (`apps/dooduel/src/paint.rs` `apply_op` /
-    /// `stamp_points`) so identical ops produce identical pixels.
+    /// Rasterize the authoritative log + the drawer's own overlay + the buffered progress
+    /// onto a fresh `PAPER` RGBA8 buffer, mirroring the GUI's raster
+    /// (`apps/dooduel/src/paint.rs` `apply_op` / `stamp_points`) so identical ops produce
+    /// identical pixels. For any given seat one of the two op sources is empty (a guesser
+    /// has only the authoritative log; a drawer has only its overlay until a reseed), so
+    /// nothing is stamped twice.
     fn rasterize(&self) -> Vec<u8> {
         let (w, h) = (CANVAS_W, CANVAS_H);
         let mut px: Vec<u8> = PAPER.iter().copied().cycle().take(w * h * 4).collect();
         for op in &self.fold.replica.canvas_ops {
             apply_op(&mut px, w, h, op);
         }
+        // The drawer's own optimistic overlay (empty for a guesser).
+        for op in &self.fold.own_ops {
+            apply_op(&mut px, w, h, op);
+        }
         // The transient in-progress overlay grows the guesser's view before the finalize.
-        for p in &self.fold.live_progress {
+        if let Some(p) = &self.fold.live_progress {
             stamp_points(&mut px, w, h, &p.points, p.color, p.radius);
         }
         px
@@ -1048,5 +1215,207 @@ mod tests {
         let report = hc.state_report();
         assert!(report.contains("message 0"));
         assert!(report.contains("message 2"));
+    }
+
+    // --- The drawer's own optimistic overlay (W5-review Important 1) ---------
+
+    /// Seat `seat` as the drawer in Drawing.
+    fn seed_drawer(hc: &mut HeadlessClient<InProcClient>, seat: usize) {
+        hc.apply(ServerEvent::Welcome {
+            seat,
+            room_code: "ROOM01".to_string(),
+            reconnect_token: "t".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        });
+        hc.apply(ServerEvent::Roster {
+            players: four_players(),
+            host: 0,
+        });
+        hc.apply(ServerEvent::PhaseChanged {
+            phase: Phase::Drawing,
+            drawer: Some(seat),
+            round: 1,
+            total_rounds: 2,
+            remaining: Duration::from_secs(80),
+        });
+    }
+
+    #[test]
+    fn a_drawer_sees_its_own_optimistic_ink_and_it_clears_at_turn_end() {
+        let mut hc = client_pair().1;
+        seed_drawer(&mut hc, 0);
+        // The drawer's authoritative log stays empty (no-echo); without the overlay,
+        // canvas_png would be blank. The overlay makes the drawer see its own ink.
+        hc.draw_stroke(vec![(50, 50), (300, 200), (500, 350)], [10, 10, 12, 255], 6);
+        hc.fill((650, 400), [244, 194, 13, 255]);
+        assert!(
+            hc.replica().canvas_ops.is_empty(),
+            "the drawer is never echoed its own ops (authoritative log empty)"
+        );
+        let img = image::load_from_memory(&hc.canvas_png())
+            .expect("decodes")
+            .to_rgba8();
+        assert!(
+            img.pixels().any(|p| p.0 != PAPER),
+            "the drawer sees its own optimistic ink mid-turn"
+        );
+
+        // Turn end: a fresh Picking clears the overlay — the next turn starts blank.
+        hc.apply(ServerEvent::PhaseChanged {
+            phase: Phase::Picking,
+            drawer: Some(1),
+            round: 1,
+            total_rounds: 2,
+            remaining: Duration::from_secs(15),
+        });
+        let img2 = image::load_from_memory(&hc.canvas_png())
+            .expect("decodes")
+            .to_rgba8();
+        assert!(
+            img2.pixels().all(|p| p.0 == PAPER),
+            "the overlay is gone once the drawer's turn ends"
+        );
+    }
+
+    #[test]
+    fn the_drawer_overlay_reconciles_an_echoed_undo() {
+        let mut hc = client_pair().1;
+        seed_drawer(&mut hc, 0);
+        hc.draw_stroke(vec![(10, 10), (100, 100)], [1, 2, 3, 255], 4); // own op id 0
+        hc.draw_stroke(vec![(200, 200), (300, 300)], [1, 2, 3, 255], 4); // own op id 1
+        assert_eq!(hc.fold().own_ops.len(), 2);
+        // The server pops the last op (dense id 1) and echoes CanvasUndo to ALL incl the
+        // drawer; it resolves against the drawer's own overlay by that id.
+        hc.apply(ServerEvent::CanvasUndo { removed_id: 1 });
+        assert_eq!(
+            hc.fold().own_ops.len(),
+            1,
+            "the echoed undo removed the drawer's op 1"
+        );
+        assert!(matches!(
+            hc.fold().own_ops[0],
+            CanvasOp::Stroke { id: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn a_canvas_log_reseed_replaces_the_drawer_overlay_without_double_drawing() {
+        let mut hc = client_pair().1;
+        seed_drawer(&mut hc, 0);
+        hc.draw_stroke(vec![(10, 10), (100, 100)], [1, 2, 3, 255], 4); // own op id 0
+        assert_eq!(hc.fold().own_ops.len(), 1);
+        // A reconnect reseed: the surviving op is now in the AUTHORITATIVE log; the overlay
+        // is dropped so the op is never drawn twice, and the id counter realigns.
+        hc.apply(ServerEvent::CanvasLog {
+            ops: vec![CanvasOp::Stroke {
+                id: 0,
+                points: vec![(10, 10), (100, 100)],
+                color: [1, 2, 3, 255],
+                radius: 4,
+            }],
+        });
+        assert!(
+            hc.fold().own_ops.is_empty(),
+            "the reseed replaced the overlay"
+        );
+        assert_eq!(
+            hc.replica().canvas_ops.len(),
+            1,
+            "the op is in the authoritative log now"
+        );
+        assert_eq!(
+            hc.fold().next_own_op_id,
+            1,
+            "the per-turn id counter realigned to the log"
+        );
+    }
+
+    // --- The connection banner (W5-review Important 2) -----------------------
+
+    /// A HeadlessClient over a CLOSED in-process client (`status() == Closed`).
+    fn closed_client() -> HeadlessClient<InProcClient> {
+        let (_server, mut clients) = InProcessTransport::new_pair(1);
+        clients[0].drop_conn();
+        HeadlessClient::new(clients.remove(0))
+    }
+
+    #[test]
+    fn a_closed_transport_report_leads_with_a_connection_banner() {
+        let mut hc = closed_client();
+        assert_eq!(hc.status(), ConnStatus::Closed);
+        hc.apply(ServerEvent::Welcome {
+            seat: 0,
+            room_code: "ROOM01".to_string(),
+            reconnect_token: "t".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        });
+        let report = hc.state_report();
+        assert!(
+            report.starts_with("> ⚠ CONNECTION LOST"),
+            "a closed report leads with the connection banner: {report}"
+        );
+        assert!(report.contains("rejoin required"));
+    }
+
+    // --- Progress coalescing per stroke_id (W5-review minor 4) ---------------
+
+    #[test]
+    fn progress_batches_of_one_stroke_are_coalesced_across_the_seam() {
+        let mut hc = client_pair().1;
+        // Two batches of ONE stroke with a gap between them (150→250 at y=50), each
+        // carrying only its own points.
+        hc.apply(ServerEvent::CanvasStrokeProgress {
+            stroke_id: 7,
+            points: vec![(50, 50), (150, 50)],
+            color: [10, 10, 12, 255],
+            radius: 6,
+        });
+        hc.apply(ServerEvent::CanvasStrokeProgress {
+            stroke_id: 7,
+            points: vec![(250, 50), (350, 50)],
+            color: [10, 10, 12, 255],
+            radius: 6,
+        });
+        let img = image::load_from_memory(&hc.canvas_png())
+            .expect("decodes")
+            .to_rgba8();
+        // The seam pixel (200,50) is inked ONLY if the batches were coalesced (stamp_points
+        // interpolated across the boundary); two separately-stamped batches leave a gap.
+        assert_ne!(
+            img.get_pixel(200, 50).0,
+            PAPER,
+            "the batch seam is bridged (the stroke was coalesced per stroke_id)"
+        );
+    }
+
+    #[test]
+    fn a_new_stroke_id_replaces_stale_progress() {
+        let mut hc = client_pair().1;
+        // Stroke A top-left; then a NEW stroke_id B elsewhere — A is abandoned (replaced).
+        hc.apply(ServerEvent::CanvasStrokeProgress {
+            stroke_id: 1,
+            points: vec![(20, 20), (40, 20)],
+            color: [10, 10, 12, 255],
+            radius: 4,
+        });
+        hc.apply(ServerEvent::CanvasStrokeProgress {
+            stroke_id: 2,
+            points: vec![(600, 400)],
+            color: [10, 10, 12, 255],
+            radius: 4,
+        });
+        let img = image::load_from_memory(&hc.canvas_png())
+            .expect("decodes")
+            .to_rgba8();
+        assert_eq!(
+            img.get_pixel(30, 20).0,
+            PAPER,
+            "the abandoned stroke A was dropped when B replaced it"
+        );
+        assert_ne!(
+            img.get_pixel(600, 400).0,
+            PAPER,
+            "the current stroke B is painted"
+        );
     }
 }

@@ -273,6 +273,13 @@ fn full_networked_match_to_podium() {
             .replica()
             .drawer
             .expect("a drawer is set in Picking");
+        // W4-review carry-in (re-added, minor 7): the drawer receives its WordChoices over
+        // the wire (drawer-only, in Picking) before it can pick.
+        if turn == 0 {
+            agents[drawer].wait_event("the drawer's WordChoices wire receipt", |e| {
+                matches!(e, ServerEvent::WordChoices { .. })
+            });
+        }
         agents[drawer].hc.pick(0);
         wait_replica(&mut agents, 0, "Drawing", |r| r.phase == Phase::Drawing);
 
@@ -340,6 +347,26 @@ fn full_networked_match_to_podium() {
 
         // --- Drawing: the guessers guess the (omnisciently-read) word ---
         let word = read_word(&mut agents, drawer);
+
+        // W5-review Important 3 — LIVE secrecy over the wire: before ANY guess this turn,
+        // each guesser's honest report must NOT contain the secret; the drawer's DOES (the
+        // positive control that proves the check can see it). This asserts the load-bearing
+        // anti-cheat property at the live networked tier, every turn.
+        for (i, agent) in agents.iter().enumerate() {
+            let report = agent.hc.state_report().to_lowercase();
+            if i == drawer {
+                assert!(
+                    report.contains(word.as_str()),
+                    "the drawer (seat {i}) report carries the secret (positive control)"
+                );
+            } else {
+                assert!(
+                    !report.contains(word.as_str()),
+                    "seat {i} (guesser) must NOT see the secret {word:?} pre-guess:\n{report}"
+                );
+            }
+        }
+
         for (i, agent) in agents.iter_mut().enumerate() {
             if i != drawer {
                 agent.hc.guess(word.clone());
@@ -348,6 +375,13 @@ fn full_networked_match_to_podium() {
         wait_replica(&mut agents, 0, "Reveal (all guessed)", |r| {
             r.phase == Phase::Reveal
         });
+        if turn == 0 {
+            // W4-review carry-in (re-added, minor 7): a guesser receives a direct correct
+            // GuessResult over the wire.
+            agents[1].wait_event("a correct GuessResult wire receipt", |e| {
+                matches!(e, ServerEvent::GuessResult { correct: true, .. })
+            });
+        }
 
         // --- Reveal: advance ---
         agents[0].hc.continue_turn();
@@ -583,36 +617,53 @@ fn a_flooding_client_is_rate_limited_and_disconnected() {
 
 #[test]
 fn per_ip_join_attempts_are_throttled() {
-    // The per-IP limiter (spec §6.2 — the room-code brute-force guard): a burst of join
-    // attempts past the per-IP bucket (20) is rejected RateLimited over the wire. All
-    // attempts share the 127.0.0.1 bucket on this server's fresh registry.
+    // The per-IP limiter (spec §6.2 — the room-code brute-force guard): a CONCURRENT burst
+    // of join attempts past the per-IP bucket (20) is rejected RateLimited over the wire.
+    // Firing them concurrently (W5-review minor 5) removes the RTT-dependence a serial loop
+    // had — the burst genuinely races the bucket refill rather than being paced by each
+    // attempt's round-trip. All attempts share the 127.0.0.1 bucket on this fresh registry.
     let server = spawn_server();
-    let mut rate_limited = 0;
-    let mut other_errors = 0;
-    // 40 attempts: ~20 burst pass (→ RoomNotFound for the bogus code) then the rest throttle.
-    for i in 0..40 {
-        let mut c = Agent::connect(server.port);
-        c.hc.join("ZZZZZZ", format!("brute{i}"), None);
-        match c.wait_event("a join result", |e| matches!(e, ServerEvent::Error { .. })) {
-            ServerEvent::Error {
-                code: ErrorCode::RateLimited,
-                ..
-            } => rate_limited += 1,
-            ServerEvent::Error {
-                code: ErrorCode::RoomNotFound,
-                ..
-            } => other_errors += 1,
-            ServerEvent::Error { code, .. } => panic!("unexpected error code {code:?}"),
-            _ => unreachable!(),
-        }
-        c.wait_closed("the throttled/rejected attempt");
+    let port = server.port;
+    let handles: Vec<_> = (0..40)
+        .map(|i| {
+            std::thread::spawn(move || {
+                let mut c = Agent::connect(port);
+                c.hc.join("ZZZZZZ", format!("brute{i}"), None);
+                let code = match c
+                    .wait_event("a join result", |e| matches!(e, ServerEvent::Error { .. }))
+                {
+                    ServerEvent::Error { code, .. } => code,
+                    _ => unreachable!(),
+                };
+                c.wait_closed("the throttled/rejected attempt");
+                code
+            })
+        })
+        .collect();
+    let codes: Vec<ErrorCode> = handles
+        .into_iter()
+        .map(|h| h.join().expect("attempt thread"))
+        .collect();
+    for c in &codes {
+        assert!(
+            matches!(c, ErrorCode::RateLimited | ErrorCode::RoomNotFound),
+            "each attempt is throttled or room-not-found, got {c:?}"
+        );
     }
+    let rate_limited = codes
+        .iter()
+        .filter(|c| **c == ErrorCode::RateLimited)
+        .count();
+    let not_found = codes
+        .iter()
+        .filter(|c| **c == ErrorCode::RoomNotFound)
+        .count();
     assert!(
         rate_limited > 0,
-        "a burst of join attempts is throttled over the wire (rate_limited={rate_limited}, room_not_found={other_errors})"
+        "the concurrent burst is throttled over the wire (rate_limited={rate_limited}, room_not_found={not_found})"
     );
     assert!(
-        other_errors > 0,
+        not_found > 0,
         "the initial burst passed the per-IP bucket (got RoomNotFound)"
     );
 }

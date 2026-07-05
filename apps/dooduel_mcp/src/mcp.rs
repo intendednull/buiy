@@ -59,6 +59,13 @@ impl<T: ClientTransport> Server<T> {
             Err(_) => return Some(error_response(Value::Null, -32700, "Parse error")),
         };
 
+        // A JSON-RPC request MUST be an object. An array (a batch — unsupported here) or a
+        // bare scalar is an Invalid Request answered with a null id, never silently dropped
+        // (W5-review minor 6).
+        if !value.is_object() {
+            return Some(error_response(Value::Null, -32600, "Invalid Request"));
+        }
+
         let id = value.get("id").cloned();
         let is_notification = id.is_none();
         let method = value.get("method").and_then(Value::as_str);
@@ -573,6 +580,28 @@ mod tests {
             "a parse error echoes a null id (JSON-RPC 2.0)"
         );
         assert_eq!(v["error"]["code"], json!(-32700), "Parse error code");
+    }
+
+    #[test]
+    fn a_non_object_frame_is_invalid_request_with_a_null_id() {
+        // Arrays (batches — unsupported), and bare scalars, are Invalid Request (-32600)
+        // with a null id — NOT silently dropped (W5-review minor 6).
+        let mut s = server();
+        for line in [
+            "[1,2,3]",
+            "42",
+            "\"hello\"",
+            r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#, // a JSON-RPC batch
+        ] {
+            let resp = s.handle(line).expect("a non-object frame still answers");
+            let v = parse(&resp);
+            assert_eq!(v["id"], Value::Null, "null id for {line}");
+            assert_eq!(
+                v["error"]["code"],
+                json!(-32600),
+                "Invalid Request for {line}"
+            );
+        }
     }
 
     #[test]
