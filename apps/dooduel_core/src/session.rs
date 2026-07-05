@@ -74,6 +74,10 @@ pub struct SessionOpts {
     /// The room's invite code (server-generated; spec §6.2). Reported in `Welcome` /
     /// `RoomState`. The `Session` never generates it (that is the registry's job).
     pub room_code: String,
+    /// The per-match PRNG seed applied at `StartMatch` (spec §4.1 — the seed is
+    /// secret, so it is injected rather than hardcoded, like [`Self::token_gen`]).
+    /// Server: `getrandom`-backed. Solo/tests: a fixed seed for reproducibility.
+    pub match_seed: u64,
 }
 
 /// A seat's connection + identity state, held alongside (and index-aligned with) the
@@ -320,7 +324,8 @@ impl Session {
             });
             roster.push(PlayerSpec { name, is_bot: true });
         }
-        self.game.start_match(&roster, self.config.clone());
+        self.game
+            .start_match_with_seed(&roster, self.config.clone(), self.opts.match_seed);
         self.started = true;
         // A lobby seat that left before the start becomes a vacant game seat (indices
         // stay 1:1 with the roster so the pump's connection map never renumbers).
@@ -883,10 +888,15 @@ mod tests {
     }
 
     fn opts(fill: usize) -> SessionOpts {
+        opts_seeded(fill, crate::game::DEFAULT_MATCH_SEED)
+    }
+
+    fn opts_seeded(fill: usize, match_seed: u64) -> SessionOpts {
         SessionOpts {
             token_gen: counter_tokens(),
             fill_bots_to: fill,
             room_code: "ABC123".to_string(),
+            match_seed,
         }
     }
 
@@ -1155,6 +1165,36 @@ mod tests {
         assert!(
             !correct_seats.contains(&0),
             "the human seat is never bot-guessed"
+        );
+    }
+
+    /// C1 — the match seed is injected (spec §4.1): the RNG seed is secret, so a
+    /// hardcoded constant that makes word choices predictable from public info is a
+    /// leak. Different `match_seed`s produce different word streams; the same seed
+    /// reproduces them.
+    #[test]
+    fn injected_match_seed_varies_and_reproduces_the_word_stream() {
+        let choices_for = |seed: u64| -> Vec<String> {
+            let mut s = Session::new(Config::default(), opts_seeded(0, seed));
+            s.connect("Ada", WireAvatar::Default, None, d(0)).unwrap();
+            s.connect("Bo", WireAvatar::Default, None, d(0)).unwrap();
+            s.drain_events();
+            s.handle(0, ClientIntent::StartMatch);
+            s.drain_events()
+                .into_iter()
+                .find_map(|(_, e)| match e {
+                    ServerEvent::WordChoices { words } => Some(words),
+                    _ => None,
+                })
+                .expect("the drawer is offered word choices")
+        };
+        let a = choices_for(0xA11CE);
+        let b = choices_for(0xB0B);
+        assert_ne!(a, b, "different seeds ⇒ different word choices");
+        assert_eq!(
+            a,
+            choices_for(0xA11CE),
+            "same seed ⇒ identical word choices"
         );
     }
 

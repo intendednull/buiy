@@ -209,6 +209,8 @@ struct RoomReplica {
 
 **Negative invariant (the §5 property, stated structurally):** `secret_word`, pre-pick `word_choices` (non-drawer), the RNG seed, `used_words`, the hint schedule (`hint_positions`/reveal times), bot plans, and other seats' private chat **have no field to land in** — they never appear in any wire type.
 
+**Seed secrecy (rev-2.2, W2-review C1):** the RNG seed is a redaction target above — so a hardcoded match seed (the solo `Game::start_match` constant) makes the whole word stream predictable from public info. The authority therefore **injects** a per-match seed at `StartMatch` (`SessionOpts::match_seed`, mirroring the injected `token_gen`): the server supplies a `getrandom`-backed seed; solo/tests supply a fixed one. `Game::start_match_with_seed(roster, config, seed)` is the seam (guarded to `seed.max(1)`); `Game::start_match` delegates with `DEFAULT_MATCH_SEED` so the solo/capture/playtest paths stay reproducible.
+
 The `view/` modules re-point their reads from `game::Game` to `RoomReplica` (mostly mechanical — the accessors were designed for per-seat honesty already). Local-only UI state (tool/color/size, avatar editor, theme, viewport, `chat_input` — which **moves out of `Game`**, rev-2 §2.3.6) stays beside the replica in the model, never on the wire.
 
 ### 4.2 The net pump — a Bevy system, not `Cmd::task` (rev-2)
@@ -334,6 +336,7 @@ Accepted-and-documented M1 quirks: any-player `Continue` (§3.2); the substring 
 | 11 | *(rev-2)* Hand-rolled stdio JSON-RPC MCP | `rmcp` hard-requires tokio (verified) — defeats the one-async-ecosystem goal; the tools-only surface is ~200–400 lines | `rmcp` SDK |
 | 12 | *(rev-2)* Duration-remaining-at-send + monotonic client anchor | No cross-machine clock agreement needed; error ≈ one-way latency, safe direction; prior art | Absolute deadline (clock skew); server tick number (needless machinery) |
 | 13 | *(rev-2)* Token rotated per (re)connection, single-use; live-token join replaces the old connection | Closes sniffed-token replay; supports hung-tab rejoin (Colyseus precedent) | Static token for seat lifetime |
+| 14 | *(rev-2.2, W2-review C1)* Per-match PRNG seed **injected** via `SessionOpts::match_seed` (not a hardcoded constant) | The seed is a §4.1 redaction target — a fixed seed makes the word stream predictable from public info; injection mirrors `token_gen` (server `getrandom`, tests fixed) | Hardcoded `Game` seed (predictable); per-turn re-seed (needless, and would desync replay) |
 
 ---
 

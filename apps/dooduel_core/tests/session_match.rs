@@ -34,10 +34,10 @@ fn solo_roster() -> Vec<PlayerSpec> {
     roster
 }
 
-/// The oracle podium: a bare `Game`, same roster/config, driven purely by the clock.
-fn oracle_podium(config: Config, ticks: &[u64]) -> Vec<(usize, String, i64)> {
+/// The oracle podium: a bare `Game`, same roster/config/seed, driven purely by the clock.
+fn oracle_podium(config: Config, seed: u64, ticks: &[u64]) -> Vec<(usize, String, i64)> {
     let mut g = Game::default();
-    g.start_match(&solo_roster(), config);
+    g.start_match_with_seed(&solo_roster(), config, seed);
     for &sec in ticks {
         let pending = g.tick(d(sec));
         for p in pending {
@@ -89,8 +89,8 @@ fn in_process_full_match_matches_a_direct_game_oracle() {
     }
     let podium = podium.expect("the in-process match reached the podium");
 
-    // The oracle run over the same tick sequence.
-    let oracle = oracle_podium(config, &ticks);
+    // The oracle run over the same tick sequence AND the same injected seed.
+    let oracle = oracle_podium(config, h.match_seed(), &ticks);
 
     assert_eq!(
         podium, oracle,

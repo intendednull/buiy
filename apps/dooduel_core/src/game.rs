@@ -43,6 +43,11 @@ pub const REVEAL_SECS: u64 = 6;
 /// The three built-in bot guessers' names (the human is seat 0).
 pub const PRESET_NAMES: [&str; 3] = ["Priya", "Theo", "Sam"];
 
+/// The default match PRNG seed used by [`Game::start_match`] (the solo demo / capture /
+/// playtest paths). The networked authority injects a per-match seed instead (spec §4.1
+/// — a hardcoded seed makes word choices predictable from public info).
+pub const DEFAULT_MATCH_SEED: u64 = 0xD00D_0000_0000_0001;
+
 /// The built-in word pool (the prototype's 52-word list, verbatim).
 pub const WORDS: [&str; 52] = [
     "apple",
@@ -371,6 +376,16 @@ impl Game {
     /// begins. The server builds the roster from real connections;
     /// [`Game::start_match_solo`] is the solo/verification shim (spec §2.3.1).
     pub fn start_match(&mut self, roster: &[PlayerSpec], config: Config) {
+        self.start_match_with_seed(roster, config, DEFAULT_MATCH_SEED);
+    }
+
+    /// Start a match with an explicit PRNG `seed` (spec §4.1: the seed is secret — a
+    /// hardcoded constant makes word choices predictable from public info, so the
+    /// networked authority injects a per-match seed via `SessionOpts`). The seed is
+    /// guarded away from the degenerate zero-state (`seed.max(1)`). `start_match`
+    /// delegates here with [`DEFAULT_MATCH_SEED`] so the solo demo / capture /
+    /// playtest paths stay reproducible turn-for-turn.
+    pub fn start_match_with_seed(&mut self, roster: &[PlayerSpec], config: Config, seed: u64) {
         self.players = roster
             .iter()
             .map(|spec| Player {
@@ -386,8 +401,7 @@ impl Game {
         self.chat.clear();
         self.chat_seq = 0;
         self.used_words.clear();
-        // Seed from a fixed constant so a match is reproducible turn-for-turn.
-        self.rng = 0xD00D_0000_0000_0001;
+        self.rng = seed.max(1);
         self.begin_turn();
     }
 

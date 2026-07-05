@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use dooduel_core::game::Config;
+use dooduel_core::game::{Config, DEFAULT_MATCH_SEED};
 use dooduel_core::protocol::{
     CanvasOp, ClientIntent, ErrorCode, PROTOCOL_VERSION, ServerEvent, WireAvatar,
 };
@@ -44,11 +44,13 @@ pub struct Harness {
     seat_conn: BTreeMap<usize, ConnId>,
     log: BTreeMap<ConnId, Vec<ServerEvent>>,
     now: Duration,
+    match_seed: u64,
 }
 
 impl Harness {
     /// A fresh lobby harness. `fill` is `SessionOpts::fill_bots_to`.
     pub fn new(config: Config, fill: usize) -> Self {
+        let match_seed = DEFAULT_MATCH_SEED;
         let (server, _none) = InProcessTransport::new_pair(0);
         let session = Session::new(
             config,
@@ -56,6 +58,7 @@ impl Harness {
                 token_gen: counter_tokens(),
                 fill_bots_to: fill,
                 room_code: ROOM.to_string(),
+                match_seed,
             },
         );
         Harness {
@@ -66,7 +69,13 @@ impl Harness {
             seat_conn: BTreeMap::new(),
             log: BTreeMap::new(),
             now: Duration::ZERO,
+            match_seed,
         }
+    }
+
+    /// The PRNG seed this harness's session started from — the W2.5 oracle replays it.
+    pub fn match_seed(&self) -> u64 {
+        self.match_seed
     }
 
     /// A new connection Creates (the first one) or Joins the room; a `reconnect` token
