@@ -13,7 +13,9 @@
 //! nothing else from the Bevy/Buiy stack leaks in.
 //!
 //! Wave 0 extracts the two pure pieces the rest of M1 builds on: the game state
-//! machine (`game`) and the canvas pixel surface (`canvas`).
+//! machine (`game`) and the canvas pixel surface (`canvas`). Wave 1 adds the wire
+//! protocol (`protocol`).
 
 pub mod canvas;
 pub mod game;
+pub mod protocol;

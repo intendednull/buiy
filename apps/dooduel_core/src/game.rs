@@ -31,6 +31,7 @@
 use std::time::Duration;
 
 use bevy_reflect::Reflect;
+use serde::{Deserialize, Serialize};
 
 // --- Tunable rules (durations pinned by the Dooduel game spec) --------------
 
@@ -142,7 +143,7 @@ pub struct Player {
 
 /// The in-turn phase machine. `Idle` = no match running; `Final` = match over
 /// (the shell lifts this to `Screen::Podium`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Reflect)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 pub enum Phase {
     #[default]
     Idle,
@@ -161,7 +162,7 @@ pub struct Guess {
 }
 
 /// One row of the turn-end reveal card: the per-player delta + running total.
-#[derive(Debug, Clone, PartialEq, Reflect)]
+#[derive(Debug, Clone, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct TurnResult {
     pub player: usize,
     pub name: String,
@@ -170,7 +171,7 @@ pub struct TurnResult {
 }
 
 /// Where a chat line came from (drives its styling in later waves).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 pub enum ChatKind {
     /// Round/word announcements ("Round 1 of 2 — Priya is drawing").
     System,
@@ -184,7 +185,7 @@ pub enum ChatKind {
 
 /// One chat/guess-log line. `seq` is a monotonic per-match id used as the keyed
 /// list key (deterministic — never a random id).
-#[derive(Debug, Clone, PartialEq, Reflect)]
+#[derive(Debug, Clone, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct ChatMsg {
     pub seq: u64,
     pub kind: ChatKind,
