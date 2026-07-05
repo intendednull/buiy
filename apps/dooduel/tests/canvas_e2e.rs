@@ -236,12 +236,11 @@ fn drawer_optimistic_ink_survives_an_incoming_canvas_event() {
     );
 }
 
-/// A drawer's mid-turn reconnect reseed (`CanvasLog`) DOES re-render its canvas from
-/// the authoritative log — the uniform render restores the reconnected drawer's canvas
-/// (the case a blanket drawer-ignores-canvas-events filter would break). No live
-/// session: the `CanvasLog` is scripted, exactly as the server would send on reconnect.
-#[test]
-fn drawer_canvas_reseeds_from_a_canvas_log() {
+/// A drawer-role app (this client is seat 0, the drawer, in Drawing) whose canvas has
+/// been reseeded from a scripted `CanvasLog` — the mid-turn reconnect shape. No live
+/// session; the events are exactly what the server sends on reconnect. Returns the app
+/// with ink already on the Game canvas (asserted here).
+fn drawer_role_app_reseeded() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(bevy::asset::AssetPlugin::default())
@@ -252,7 +251,6 @@ fn drawer_canvas_reseeds_from_a_canvas_log() {
     app.add_plugins(dooduel::paint::CanvasPlugin);
     settle(&mut app, 12);
 
-    // Seat this client as the drawer (seat 0) in Drawing — scripted, no session.
     let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
     net(
         &mut app,
@@ -289,6 +287,15 @@ fn drawer_canvas_reseeds_from_a_canvas_log() {
     }];
     net(&mut app, ServerEvent::CanvasLog { ops });
     settle(&mut app, 8);
+    app
+}
+
+/// A drawer's mid-turn reconnect reseed (`CanvasLog`) DOES re-render its canvas from
+/// the authoritative log — the uniform render restores the reconnected drawer's canvas
+/// (the case a blanket drawer-ignores-canvas-events filter would break).
+#[test]
+fn drawer_canvas_reseeds_from_a_canvas_log() {
+    let mut app = drawer_role_app_reseeded();
     assert_ne!(
         game_pixel(&mut app, CANVAS_W / 2, CANVAS_H / 2),
         PAPER,
@@ -297,5 +304,26 @@ fn drawer_canvas_reseeds_from_a_canvas_log() {
     assert!(
         inked_pixels(&app) > 500,
         "the reseeded stroke is rasterized onto the drawer's canvas"
+    );
+}
+
+/// A `CanvasCleared` reaching a DRAWER-role replica clears its raster — proving the
+/// drawer applies canvas events uniformly (not just `CanvasLog`). After a reseed
+/// populated the drawer's log, a `CanvasCleared` truncates it and the uniform render
+/// blanks the canvas.
+#[test]
+fn canvas_cleared_clears_a_drawer_role_raster() {
+    let mut app = drawer_role_app_reseeded();
+    assert!(
+        inked_pixels(&app) > 500,
+        "reseeded ink present before clear"
+    );
+
+    enqueue(&mut app, Msg::Net(ServerEvent::CanvasCleared));
+    settle(&mut app, 8);
+    assert_eq!(
+        inked_pixels(&app),
+        0,
+        "CanvasCleared cleared the drawer-role client's raster (uniform application)"
     );
 }
