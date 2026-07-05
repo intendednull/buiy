@@ -845,7 +845,7 @@ fn rerender_canvas_from_log(
     model: Option<Single<&crate::Dooduel>>,
     canvases: Option<ResMut<PaintCanvases>>,
     progress: Option<Res<CanvasProgress>>,
-    mut last_sig: Local<(usize, u64)>,
+    mut last_sig: Local<(usize, u64, u64)>,
     mut last_prog: Local<u64>,
     mut was_active: Local<bool>,
     mut showed_progress: Local<bool>,
@@ -860,9 +860,14 @@ fn rerender_canvas_from_log(
         *was_active = false;
         return;
     }
+    // The reseed counter is part of the signature: op ids reset per turn, so
+    // `(len, last_op_id)` alone is degenerate across turns — a `RoomState`/`CanvasLog`
+    // reseed to a same-length log with the same dense ids (a W4 mid-turn reconnect that
+    // missed the Picking boundary) would otherwise not re-render (keeping stale ink).
     let sig = (
         r.canvas_ops.len(),
         r.canvas_ops.last().map(op_id).unwrap_or(0),
+        model.canvas_reseeds,
     );
     let prog_gen = progress.as_ref().map(|p| p.generation).unwrap_or(0);
     let prog_now = progress.as_ref().is_some_and(|p| !p.points.is_empty());

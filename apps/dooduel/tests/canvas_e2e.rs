@@ -592,11 +592,8 @@ fn pump_fills_and_wipes_the_progress_overlay() {
 // Guesser re-raster on CanvasUndo (test gap 2).
 // ---------------------------------------------------------------------------
 
-/// A guesser (not the drawer) re-renders its canvas from the authoritative log on a
-/// `CanvasUndo`: two ops paint the top + bottom bands; undoing the bottom op removes
-/// its ink (the client re-rasters the shortened log).
-#[test]
-fn guesser_re_rasters_on_canvas_undo() {
+/// A GPU-free canvas app seated as a guesser (seat 1; seat 0 draws) in Drawing.
+fn guesser_drawing_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(bevy::asset::AssetPlugin::default())
@@ -606,29 +603,46 @@ fn guesser_re_rasters_on_canvas_undo() {
     dooduel::install(&mut app);
     app.add_plugins(dooduel::paint::CanvasPlugin);
     settle(&mut app, 12);
-
-    // This client is seat 1 (a guesser); seat 0 draws.
-    let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
-    net(
+    enqueue(
         &mut app,
-        ServerEvent::Welcome {
+        Msg::Net(ServerEvent::Welcome {
             seat: 1,
             room_code: "SOLO".to_string(),
             reconnect_token: String::new(),
             protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
-        },
+        }),
     );
-    net(
+    enqueue(
         &mut app,
-        ServerEvent::PhaseChanged {
+        Msg::Net(ServerEvent::PhaseChanged {
             phase: dooduel::game::Phase::Drawing,
             drawer: Some(0),
             round: 1,
             total_rounds: 2,
             remaining: std::time::Duration::from_secs(60),
-        },
+        }),
     );
     settle(&mut app, 4);
+    app
+}
+
+/// A full-width horizontal stroke op at row `y` (dense id `id`).
+fn band_op(id: u64, y: i32) -> CanvasOp {
+    CanvasOp::Stroke {
+        id,
+        points: (40..680).step_by(6).map(|x| (x, y)).collect(),
+        color: [20, 20, 24, 255],
+        radius: 4,
+    }
+}
+
+/// A guesser (not the drawer) re-renders its canvas from the authoritative log on a
+/// `CanvasUndo`: two ops paint the top + bottom bands; undoing the bottom op removes
+/// its ink (the client re-rasters the shortened log).
+#[test]
+fn guesser_re_rasters_on_canvas_undo() {
+    let mut app = guesser_drawing_app();
+    let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
 
     let band = |id: u64, y: i32| CanvasOp::Stroke {
         id,
@@ -675,5 +689,64 @@ fn guesser_re_rasters_on_canvas_undo() {
         game_pixel(&mut app, CANVAS_W / 2, bottom_y),
         PAPER,
         "the undone bottom band is gone (the guesser re-rastered on CanvasUndo)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reseed-visible raster signature — the cross-turn (len, last_op_id) degeneracy.
+// ---------------------------------------------------------------------------
+
+/// The raster re-render signature folds in the `canvas_reseeds` counter, so a mid-turn
+/// reseed (`RoomState` / `CanvasLog`) re-renders EVEN when the new log coincidentally
+/// shares the current log's `(len, last_op_id)`. Op ids reset per turn (dense `0,1,…`),
+/// so two equal-length no-undo logs from DIFFERENT turns share that pair — a W4
+/// reconnect that missed the Picking boundary would otherwise keep stale turn-N ink
+/// over the turn-N+1 replica. Red evidence: without the reseed counter, the second
+/// CanvasLog leaves the top (turn-N) band on screen and the bottom (turn-N+1) blank.
+#[test]
+fn reseed_re_renders_even_when_len_and_ids_coincide() {
+    let mut app = guesser_drawing_app();
+    let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
+    let top_y = CANVAS_H / 4;
+    let bottom_y = 3 * CANVAS_H / 4;
+
+    // Turn-N log: two ops (dense ids 0, 1) in the TOP band.
+    net(
+        &mut app,
+        ServerEvent::CanvasLog {
+            ops: vec![band_op(0, top_y as i32), band_op(1, top_y as i32 + 8)],
+        },
+    );
+    settle(&mut app, 4);
+    assert_ne!(
+        game_pixel(&mut app, CANVAS_W / 2, top_y),
+        PAPER,
+        "turn-N top ink is present"
+    );
+    assert_eq!(
+        game_pixel(&mut app, CANVAS_W / 2, bottom_y),
+        PAPER,
+        "the bottom band is blank before the reseed"
+    );
+
+    // A reseed of the CROSS-TURN shape: two DIFFERENT ops with the SAME length + SAME
+    // dense ids (0, 1) in the BOTTOM band, WITHOUT a phase boundary. The
+    // `(len, last_op_id)` pair coincides with turn N — only `canvas_reseeds` differs.
+    net(
+        &mut app,
+        ServerEvent::CanvasLog {
+            ops: vec![band_op(0, bottom_y as i32), band_op(1, bottom_y as i32 + 8)],
+        },
+    );
+    settle(&mut app, 4);
+    assert_ne!(
+        game_pixel(&mut app, CANVAS_W / 2, bottom_y),
+        PAPER,
+        "the reseed re-rendered the new (bottom) ops despite the coinciding sig"
+    );
+    assert_eq!(
+        game_pixel(&mut app, CANVAS_W / 2, top_y),
+        PAPER,
+        "the stale turn-N (top) ink is gone"
     );
 }

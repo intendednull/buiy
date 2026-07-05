@@ -103,6 +103,16 @@ pub struct Dooduel {
     /// `Msg::Net` records the server's `remaining`, the per-frame `Msg::Tick` folds
     /// it down to derived whole seconds, clamped so the display never jumps upward.
     pub countdown: Countdown,
+    /// A monotonic count of canvas RESEED events — a wholesale replacement of the
+    /// authoritative log (`RoomState` / `CanvasLog`, i.e. a join or mid-turn
+    /// reconnect). Folded into the raster re-render signature (`paint::…`) so a
+    /// reseed always re-renders, EVEN when it coincidentally matches the current
+    /// log's `(len, last_op_id)`: op ids reset per turn (dense `0,1,…`), so two
+    /// equal-length no-undo logs from DIFFERENT turns share that pair — a client
+    /// that missed the Picking boundary (a W4 reconnect) would otherwise keep stale
+    /// turn-N ink over a turn-N+1 replica. Bumped by the `Msg::Net` fold (funnel-clean,
+    /// so it replays deterministically).
+    pub canvas_reseeds: u64,
     /// The drawing-canvas image the in-game `raster(...)` element samples (the
     /// canvas lives INSIDE the view tree, not as a side ECS root). The `paint`
     /// plugin owns the pixels + creates the `Image`, then announces its handle
@@ -668,8 +678,10 @@ fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
         ServerEvent::RoomState(replica) => {
             let remaining = replica.remaining;
             s.replica = replica;
-            // A full seed re-anchors the countdown as a fresh phase.
+            // A full seed re-anchors the countdown as a fresh phase, and is a canvas
+            // reseed (the raster must re-render even if the log coincidentally matches).
             s.countdown.anchor(remaining, true);
+            s.canvas_reseeds = s.canvas_reseeds.wrapping_add(1);
         }
         ServerEvent::Roster { players, host } => {
             s.replica.players = players;
@@ -714,7 +726,12 @@ fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
             s.replica.canvas_ops.retain(|op| op_id(op) != removed_id);
         }
         ServerEvent::CanvasCleared => s.replica.canvas_ops.clear(),
-        ServerEvent::CanvasLog { ops } => s.replica.canvas_ops = ops,
+        ServerEvent::CanvasLog { ops } => {
+            // A wholesale log replace (late join / reconnect) — a canvas reseed, so the
+            // raster re-renders even when `(len, last_op_id)` coincides across turns.
+            s.replica.canvas_ops = ops;
+            s.canvas_reseeds = s.canvas_reseeds.wrapping_add(1);
+        }
         // Transient live-stroke relay — painted immediately by the paint subsystem
         // (off-model, spec §3.5); it has no replica field.
         ServerEvent::CanvasStrokeProgress { .. } => {}
