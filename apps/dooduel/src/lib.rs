@@ -799,6 +799,24 @@ fn start_connect(s: &mut Dooduel, req: Connect, is_host: bool) {
     s.screen = Screen::Lobby;
 }
 
+/// Lift the shell out of the networked Lobby once the match is underway — the symmetric
+/// partner to the `MatchEnded`→`Podium` lift. A networked client sits in the Lobby (spec
+/// §4.2) until the server's first in-match phase arrives: the host's own `StartMatch`, a
+/// peer host's, or a mid-match reconnect's `RoomState` seed. Without this the host who
+/// pressed Start stayed welded to the lobby as the AFK first drawer (the first-playtest
+/// bug). Guarded on `Lobby`, so it never yanks a player off Home/Join and is inert once
+/// in-game (the solo path lifts to `InGame` directly, never touching the Lobby).
+fn lift_lobby_on_match_start(s: &mut Dooduel) {
+    if s.screen != Screen::Lobby {
+        return;
+    }
+    match s.replica.phase {
+        Phase::Picking | Phase::Drawing | Phase::Reveal => s.screen = Screen::InGame,
+        Phase::Final => s.screen = Screen::Podium,
+        Phase::Idle => {} // pre-start: stay in the lobby
+    }
+}
+
 /// The stable id of a canvas op (spec §3.5) — a `CanvasUndo { removed_id }` resolves
 /// against the log by this.
 fn op_id(op: &CanvasOp) -> u64 {
@@ -841,6 +859,8 @@ fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
             // reseed (the raster must re-render even if the log coincidentally matches).
             s.countdown.anchor(remaining, true);
             s.canvas_reseeds = s.canvas_reseeds.wrapping_add(1);
+            // A mid-match reconnect seed carries a live phase — lift straight to the board.
+            lift_lobby_on_match_start(s);
         }
         ServerEvent::Roster { players, host } => {
             s.replica.players = players;
@@ -868,6 +888,8 @@ fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
                 s.replica.turn_results.clear();
             }
             s.countdown.anchor(remaining, true);
+            // The match is underway — lift the host/guests out of the Lobby onto the board.
+            lift_lobby_on_match_start(s);
         }
         ServerEvent::CountdownSync { remaining } => s.countdown.anchor(remaining, false),
         ServerEvent::WordUpdate {
@@ -1824,6 +1846,82 @@ mod tests {
         assert!(
             matches!(m.net, NetState::Connected { .. }),
             "the session stays networked"
+        );
+    }
+
+    #[test]
+    fn a_networked_match_start_lifts_the_host_out_of_the_lobby() {
+        // The bug the first human playtest hit: the host reaches the Lobby, presses
+        // Start (an intent), the server broadcasts the first PhaseChanged — but the
+        // shell stayed welded to the Lobby, leaving the host the AFK first drawer. The
+        // screen must lift to InGame on match start, symmetric with MatchEnded→Podium.
+        let mut m = Dooduel::default();
+        update(&mut m, Msg::CreateRoom);
+        assert_eq!(m.screen, Screen::Lobby, "Create shows the lobby");
+        update(
+            &mut m,
+            Msg::Net(ServerEvent::Welcome {
+                seat: 0,
+                room_code: "ABCDEF".to_string(),
+                reconnect_token: "tok".to_string(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            }),
+        );
+        assert_eq!(
+            m.screen,
+            Screen::Lobby,
+            "still the lobby until the match actually starts"
+        );
+        update(
+            &mut m,
+            Msg::Net(ServerEvent::PhaseChanged {
+                phase: Phase::Picking,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(15),
+            }),
+        );
+        assert_eq!(
+            m.screen,
+            Screen::InGame,
+            "the first in-match phase lifts the host out of the lobby onto the board"
+        );
+    }
+
+    #[test]
+    fn a_reconnect_into_a_live_match_lands_on_the_board_not_the_lobby() {
+        // A mid-match reconnect replays the full RoomState seed carrying the live phase;
+        // the returning player must land on the board, not stall in the lobby.
+        let mut m = Dooduel::default();
+        start_connect(
+            &mut m,
+            Connect::Join {
+                code: "ABCDEF".to_string(),
+                reconnect: Some("tok".to_string()),
+            },
+            false,
+        );
+        assert_eq!(m.screen, Screen::Lobby);
+        apply_event(
+            &mut m,
+            ServerEvent::Welcome {
+                seat: 1,
+                room_code: "ABCDEF".to_string(),
+                reconnect_token: "tok2".to_string(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            },
+        );
+        let replica = RoomReplica {
+            room_code: "ABCDEF".to_string(),
+            phase: Phase::Drawing,
+            ..Default::default()
+        };
+        apply_event(&mut m, ServerEvent::RoomState(replica));
+        assert_eq!(
+            m.screen,
+            Screen::InGame,
+            "a live-match reconnect lands on the board"
         );
     }
 
