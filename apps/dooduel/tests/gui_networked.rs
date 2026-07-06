@@ -36,7 +36,7 @@ use buiy_core::a11y::translate::entity_for_node_id;
 use buiy_verify::pointer::drive_stroke;
 
 use dooduel_core::game::{Config, Phase};
-use dooduel_core::protocol::{ClientIntent, PROTOCOL_VERSION, WireAvatar};
+use dooduel_core::protocol::{ClientIntent, PROTOCOL_VERSION, ServerEvent, WireAvatar};
 use dooduel_core::session::{Recipient, Session, SessionOpts};
 use dooduel_core::transport::{
     ClientTransport, ConnId, InProcClient, InProcServer, InProcessTransport, ServerTransport,
@@ -68,8 +68,9 @@ struct RoomServer {
 }
 
 impl RoomServer {
-    /// A fresh room. `fill` fills the roster to N with bots (so a lone human host still
-    /// has opponents, exactly as the acceptance run's solo-plus-bots fallback does).
+    /// A fresh room. `fill` is `SessionOpts::fill_bots_to` — the real `dooduel_server`
+    /// room uses **0** (networked M1 rooms seat only real players, spec §8), so tests
+    /// pass 0 to mirror production and seat real connections instead of bots.
     fn new(fill: usize) -> Self {
         let (server, _none) = InProcessTransport::new_pair(0);
         let mut token_n: u64 = 0;
@@ -161,8 +162,16 @@ impl RoomServer {
             .session
             .connect(name, avatar, reconnect.as_deref(), self.now)
         {
-            // A live-token rejoin rebinds the seat to the new conn (spec §6.3).
-            self.conn_seat.retain(|(_, s)| *s != seat);
+            // A live-token rejoin displaces the old conn (spec §6.3): unmap AND close it,
+            // exactly as `dooduel_server`'s `Room::on_join` does. Unmapping first also
+            // means a later drop of the stale conn finds no seat and never spuriously
+            // disconnects the rebound seat (the reference `Harness`'s ownership guard).
+            if let Some(pos) = self.conn_seat.iter().position(|(_, s)| *s == seat) {
+                let (old, _) = self.conn_seat.remove(pos);
+                if old != conn {
+                    self.server.close(old);
+                }
+            }
             self.conn_seat.push((conn, seat));
         }
     }
@@ -349,6 +358,17 @@ fn connect(app: &mut App, server: &mut RoomServer) {
     app.insert_non_send(ClientNet(Some(Box::new(client))));
 }
 
+/// Drain every event a bare (non-GUI) witness connection has received so far — used to
+/// prove the server's per-`Recipient` fan-out actually reaches a SECOND connection (the
+/// case a single GUI client can't exercise).
+fn drain(client: &mut InProcClient) -> Vec<ServerEvent> {
+    let mut evs = Vec::new();
+    while let Some(ev) = client.try_recv() {
+        evs.push(ev);
+    }
+    evs
+}
+
 // ---------------------------------------------------------------------------
 // The tests.
 // ---------------------------------------------------------------------------
@@ -356,7 +376,9 @@ fn connect(app: &mut App, server: &mut RoomServer) {
 #[test]
 fn host_creates_starts_and_reaches_the_board_through_real_clicks() {
     let (mut app, window, pointer) = gui_client();
-    let mut server = RoomServer::new(4); // lone human host + 3 bots
+    // fill_bots_to: 0 — the real dooduel_server room seats only real players (spec §8), so
+    // a faithful room seats a second real connection (the `witness` below), not bots.
+    let mut server = RoomServer::new(0);
     settle(&mut app, 12);
     assert_eq!(screen(&mut app), Screen::Home, "starts on Home");
 
@@ -387,14 +409,32 @@ fn host_creates_starts_and_reaches_the_board_through_real_clicks() {
         m.replica.room_code, "TESTRM",
         "the server-issued code shows"
     );
-    // Pre-start the lobby shows only the connected players (bots backfill vacant seats
-    // at match start, not before) — here just the lone host.
-    assert_eq!(
-        m.replica.players.len(),
-        1,
-        "the lobby shows the connected roster (just the host pre-start)"
-    );
     assert_eq!(m.replica.my_seat, 0, "the host holds seat 0");
+
+    // A SECOND real player joins by code (fill_bots_to:0 → the room seats no bots), making
+    // a faithful 2-player room and exercising the authority's per-`Recipient` fan-out to
+    // MORE THAN ONE connection — the case a single GUI client cannot reach. The witness is
+    // a bare protocol connection (not a GUI); it just records what the server sends it.
+    let mut witness = server.accept();
+    witness.send(&ClientIntent::Join {
+        room: "TESTRM".to_string(),
+        name: "Witness".to_string(),
+        avatar: WireAvatar::Default,
+        protocol_version: PROTOCOL_VERSION,
+        reconnect: None,
+    });
+    let now = settle_net(&mut app, &mut server, now, 8);
+    assert!(
+        drain(&mut witness)
+            .iter()
+            .any(|e| matches!(e, ServerEvent::Welcome { .. })),
+        "the second player was admitted (received its own Welcome)"
+    );
+    assert_eq!(
+        model(&mut app).replica.players.len(),
+        2,
+        "the lobby shows both real players (host + witness); a networked room backfills no bots"
+    );
     // The host sees a real, laid-out Start button (host-gated) — proof the lobby actually
     // rendered its connected form, not the connecting spinner.
     assert!(
@@ -412,8 +452,8 @@ fn host_creates_starts_and_reaches_the_board_through_real_clicks() {
         Screen::InGame,
         "starting the match lifts the host out of the lobby onto the board",
     );
-    // The host is the first drawer, mid-match on a live phase, and the bots have now
-    // backfilled the vacant seats (the acceptance run's solo-plus-bots fallback).
+    // The host is the first drawer on a live phase; the roster stayed at the two real
+    // players (no bot backfill); and the start broadcast fanned out to the witness too.
     let m = model(&mut app);
     assert_eq!(
         m.replica.drawer,
@@ -423,8 +463,14 @@ fn host_creates_starts_and_reaches_the_board_through_real_clicks() {
     assert_ne!(m.replica.phase, Phase::Idle, "the match phase is live");
     assert_eq!(
         m.replica.players.len(),
-        4,
-        "the bots backfilled the roster to 4 at match start"
+        2,
+        "still the two real players — a networked room seats no bots"
+    );
+    assert!(
+        drain(&mut witness)
+            .iter()
+            .any(|e| matches!(e, ServerEvent::PhaseChanged { .. })),
+        "the match-start broadcast reached the second connection (Recipient::All fan-out)"
     );
 
     // And the RENDERED view actually swapped — the lobby's Start button is gone and the
