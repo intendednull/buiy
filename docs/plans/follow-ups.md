@@ -2085,3 +2085,57 @@ budget-grow un-degrade fixture (Opacity held constant so the glyph tier is
 provably clean on the edge frame), white-glyph ink R+G parity against a cold
 never-degraded render. RED (pre-fix): App A double-dimmed `[146,146,193]` vs App B
 `[183,183,199]`.
+
+## Reconcile `FocusedEntity` when its target entity despawns — OPEN
+
+**Originated:** 2026-07-05, code-review of the Dooduel a11y focus-clamp fix
+(`7c1529d`). The Dooduel networked GUI test (`apps/dooduel/tests/gui_networked.rs`)
+surfaced it: a synthetic pointer click focuses a button, the resulting screen
+transition despawns it, and the a11y tree then emitted a focus id absent from the
+node set — which panicked `accesskit_consumer` (and would panic the real platform
+adapter under a screen reader).
+
+**Status:** The CRASH is fixed centrally in `build_tree_update`
+(`crates/buiy_core/src/a11y/translate.rs`) — it now clamps `focus` to the root when
+the focused id isn't in the node set, enforcing AccessKit's TreeUpdate invariant at
+the one chokepoint feeding both the real adapter and the in-process snapshot. This
+follow-up is the RESIDUAL, lower-severity gap the clamp does **not** close.
+
+**Symptom:** nothing reconciles `FocusedEntity` when its target entity despawns
+(the only writers are `focus_on_click` / `handle_tab` / the a11y `Focus`/`Blur`
+router, all writing `Some`). After any screen swap that despawns the focused
+widget, `FocusedEntity.0` stays `Some(dead_entity)` indefinitely, so the next
+`TreeUpdate` clamps AT focus to the bare window root — a **WCAG 2.4.3 (Focus
+Order)** degradation until the user's next Tab (which recovers cleanly:
+`compute_next_focus` can't find the dead entity → lands on the first tab stop;
+entity generation is part of `node_id_for`, so a reused index never false-matches).
+`lower_focus_ring` also paints no ring in the interim (no panic).
+
+**Direction:** a focus-reconcile system (a `RemovedComponents<Focusable>` observer,
+or an existence check each frame) that clears — or better, RE-TARGETS — `FocusedEntity`
+to a sensible element on the incoming screen when its entity despawns, so AT users
+don't lose focus context on every navigation. The `focus.rs` module header already
+scopes focus *restoration* to the deferred `buiy-focus-model-design`
+(`docs/prior-art/bevy-a11y/focus-model.md`); this belongs there. Keep the
+`build_tree_update` clamp regardless (defense-in-depth for any pruned-node focus,
+e.g. `A11yHidden`).
+
+## Mouse text-selection on non-editable (static) text — CHARTERED (own /staged-development)
+
+**Originated:** 2026-07-05, Dooduel M1 playtest — the lobby room code is a static
+`text()` label and Buiy has no mouse text-selection on non-editable text, so the
+code can't be drag-selected/copied. A `Msg::CopyCode` "Copy" button
+(`apps/dooduel/src/view/lobby.rs`, commit `6e1a724`) is the shipped stop-gap.
+
+**Status:** **Deferred to its own full `/staged-development` cycle** (user request,
+2026-07-05: "useful and important"). Not started.
+
+**Scope sketch (for the design cycle, not decided here):** web-parity behavior —
+any static text selectable by mouse drag + `Ctrl/Cmd+C` to copy, a selection
+highlight, and reflection in the a11y tree. Key design questions: default-selectable
+(web-like) vs opt-in per node vs a container "selection region"; single-node MVP vs
+cross-node/cross-paragraph selection (much harder — spans the layout tree); how much
+of the editor's existing selection model / selection-highlight rendering / clipboard
+facade (`crates/buiy_core/src/text/edit/`) can be reused in a read-only mode. Aligns
+with Buiy's modern-web-parity north star. Once shipped, it SUPERSEDES the Dooduel
+Copy-button stop-gap.
