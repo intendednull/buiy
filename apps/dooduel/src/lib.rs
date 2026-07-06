@@ -486,7 +486,7 @@ pub enum Msg {
     Back,
     StartMatch,
     /// The lobby "Copy" button — stage the room code for the OS clipboard (written out by
-    /// [`drain_clipboard_outbox`]) and flash a confirmation toast. A no-op with no code.
+    /// the `drain_clipboard_outbox` system) and flash a confirmation toast. No-op with no code.
     CopyCode,
     PlayAgain,
     /// Swap the light/dark palette (the floating theme toggle). Folds through the
