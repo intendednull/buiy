@@ -443,6 +443,25 @@ fn host_creates_starts_and_reaches_the_board_through_real_clicks() {
         report(&mut app)
     );
 
+    // The lobby "Copy" button (Buiy has no text-selection on the static code label yet),
+    // exercised through a REAL click: it stages the room code for the OS clipboard and
+    // flashes the confirmation toast. (Asserted on the model — the `drain_clipboard_outbox`
+    // system that writes to the real `Clipboard` is `install_runtime`-only; the reducer
+    // arm + drain are unit-tested separately in `lib.rs`.)
+    click_button(&mut app, window, pointer, "Copy");
+    settle(&mut app, 4);
+    let m = model(&mut app);
+    assert_eq!(
+        m.clipboard_outbox,
+        vec!["TESTRM".to_string()],
+        "clicking Copy staged the room code for the clipboard"
+    );
+    assert_eq!(
+        m.toast.as_deref(),
+        Some("Copied!"),
+        "the copy confirmation toast shows"
+    );
+
     // 3. THE REGRESSION: real click "Start game" → the match starts on the authority, and
     //    the shell must LEAVE the lobby for the board. Pre-fix this stayed on the Lobby.
     click_button(&mut app, window, pointer, "▶ Start game");
