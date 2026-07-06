@@ -28,16 +28,15 @@ pub fn lobby(s: &Dooduel) -> Element<Msg> {
         "You're in!"
     };
 
-    // The invite-code box (design `2.5px dashed var(--ink)`) — the SERVER-issued code.
+    // The invite-code box (design `2.5px dashed var(--ink)`) — the SERVER-issued code +
+    // a Copy button (Buiy has no text-selection on static labels yet, so the code is not
+    // mouse-selectable; the button routes it to the OS clipboard — see `Msg::CopyCode`).
     let code_box = row![
         text(s.replica.room_code.as_str())
             .size(24.0)
             .color(p.ink)
             .font(FONT_DISPLAY),
-        text("Share this code")
-            .size(14.0)
-            .color(Color::Accent)
-            .font(FONT_BODY),
+        quiet_button("Copy", Msg::CopyCode, p),
     ]
     .justify_between()
     .align_center()

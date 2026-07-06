@@ -35,6 +35,7 @@ use bevy::image::Image;
 use buiy::prelude::*;
 use buiy::view::BuiyViewAppExt;
 use buiy_core::mvu::{Cmd, MvuSet, enqueue};
+use buiy_core::text::edit::Clipboard;
 
 pub mod avatar;
 pub mod confetti;
@@ -95,6 +96,11 @@ pub struct Dooduel {
     /// go straight from the paint subsystem, so this carries only the low-frequency
     /// gameplay intents (pick / guess / continue).
     pub net_outbox: Vec<ClientIntent>,
+    /// Text the reducer stages for the OS clipboard (the reducer is pure, so it cannot
+    /// touch the `Clipboard` resource — an append-log the `drain_clipboard_outbox`
+    /// system writes out with a cursor, mirroring [`net_outbox`](Self::net_outbox)).
+    /// The lobby's "Copy" button routes the room code through here.
+    pub clipboard_outbox: Vec<String>,
     /// Bumped to request a fresh in-process solo `Session` (▶ Play / Lobby Start /
     /// Play again). [`net::LocalAuthorityPlugin`] watches it and rebuilds the
     /// authority (a new match seed each time — spec §8).
@@ -479,6 +485,9 @@ pub enum Msg {
     SubmitJoin,
     Back,
     StartMatch,
+    /// The lobby "Copy" button — stage the room code for the OS clipboard (written out by
+    /// [`drain_clipboard_outbox`]) and flash a confirmation toast. A no-op with no code.
+    CopyCode,
     PlayAgain,
     /// Swap the light/dark palette (the floating theme toggle). Folds through the
     /// funnel (replayable) and is persisted by the storage sink.
@@ -627,6 +636,15 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
                 s.net_outbox.push(ClientIntent::StartMatch);
             } else {
                 start_solo(s);
+            }
+        }
+        // Copy the room code to the OS clipboard (Buiy has no text-selection on static
+        // labels yet — a full selectable-text pass is a follow-up), with a toast for
+        // feedback. A no-op before a code exists, so it never copies an empty string.
+        Msg::CopyCode => {
+            if !s.replica.room_code.is_empty() {
+                s.clipboard_outbox.push(s.replica.room_code.clone());
+                s.toast = Some("Copied!".to_string());
             }
         }
         // Play-again: solo replays in place; the networked in-place rematch is out of M1
@@ -1037,7 +1055,37 @@ pub fn install_runtime(app: &mut App) -> &mut App {
     app.add_plugins(paint::CanvasPlugin);
     app.add_plugins(confetti::ConfettiPlugin);
     app.add_plugins(storage::StoragePlugin);
+    // Write the reducer's staged clipboard copies (the "Copy code" button) out to the OS
+    // clipboard. Not in `install` (the probe/virtual-clock harnesses drive the reducer
+    // arm directly and add this only when they want a clipboard sink).
+    app.add_systems(Update, drain_clipboard_outbox);
     app
+}
+
+/// Write the reducer's staged [`Dooduel::clipboard_outbox`] entries to the OS clipboard
+/// (the reducer is pure, so `Msg::CopyCode` appends here and this drains). A `Local`
+/// cursor tracks progress — the mirror of [`net::NetPlugin`]'s outbox drain — and a
+/// missing [`Clipboard`] resource degrades to a no-op that still advances the cursor, so
+/// a later-inserted clipboard never replays stale copies.
+fn drain_clipboard_outbox(
+    model: Query<&Dooduel>,
+    clipboard: Option<ResMut<Clipboard>>,
+    mut cursor: Local<usize>,
+) {
+    let Ok(model) = model.single() else {
+        return;
+    };
+    let Some(mut clipboard) = clipboard else {
+        *cursor = model.clipboard_outbox.len();
+        return;
+    };
+    if *cursor > model.clipboard_outbox.len() {
+        *cursor = 0; // defensive: the outbox was reset out from under us
+    }
+    for text in &model.clipboard_outbox[*cursor..] {
+        clipboard.0.set_text(text.clone());
+    }
+    *cursor = model.clipboard_outbox.len();
 }
 
 /// Announce the drawing-canvas image handles to the model through the funnel,
@@ -1824,6 +1872,55 @@ mod tests {
             )
             .is_err(),
             "a guest has no Start button"
+        );
+    }
+
+    #[test]
+    fn copy_code_stages_the_room_code_for_the_clipboard_with_a_toast() {
+        let mut m = Dooduel {
+            replica: RoomReplica {
+                room_code: "ABCDEF".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        update(&mut m, Msg::CopyCode);
+        assert_eq!(
+            m.clipboard_outbox,
+            vec!["ABCDEF".to_string()],
+            "the code is staged for the clipboard drain"
+        );
+        assert_eq!(
+            m.toast.as_deref(),
+            Some("Copied!"),
+            "a confirmation toast flashes"
+        );
+
+        // With no code yet (never reached a lobby) it is a no-op — never an empty copy.
+        let mut blank = Dooduel::default();
+        update(&mut blank, Msg::CopyCode);
+        assert!(
+            blank.clipboard_outbox.is_empty(),
+            "no room code → nothing staged"
+        );
+    }
+
+    #[test]
+    fn drain_clipboard_outbox_writes_staged_copies_to_the_clipboard() {
+        use buiy_core::text::edit::{Clipboard, MemClipboard};
+        let mut app = App::new();
+        app.insert_resource(Clipboard(Box::new(MemClipboard::default())));
+        app.world_mut().spawn(Dooduel {
+            clipboard_outbox: vec!["ROOMXY".to_string()],
+            ..Default::default()
+        });
+        app.add_systems(Update, drain_clipboard_outbox);
+        app.update();
+        let mut clip = app.world_mut().resource_mut::<Clipboard>();
+        assert_eq!(
+            clip.0.get_text().as_deref(),
+            Some("ROOMXY"),
+            "the staged copy reached the clipboard resource"
         );
     }
 
