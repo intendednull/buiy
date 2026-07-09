@@ -300,11 +300,17 @@ GPU `#[ignore]` lane (this repo has a real adapter). Layers:
      `AtlasEntry.page > 0` via the render-world `BuiyAtlas.get(key)` (reachable, cf.
      `text_gpu.rs:224`) — not merely aggregate `page_count > 1` (which could be
      satisfied by *other* nodes while the probe sits on page 0).
-   - **Footprint match, not presence:** render the probe string **alone** in a
-     reference pass (guaranteed page 0) to capture its lit-pixel footprint
-     (count + centroid), then in the overflow scene assert the probe region's
-     footprint **matches within tolerance** — not just `channel_lit != 0`.
-   - Pre-fix: fails (blank / mismatched garbage). Post-fix: passes. Adapter-robust
+   - **Footprint match, not presence:** pin the probe at the **same absolute screen
+     rect** in both a probe-alone reference pass (guaranteed page 0) and the overflow
+     scene, then compare the **lit-pixel count** within that rect (AA-robust; absolute
+     centroid is unreliable across the two layouts) — not just `channel_lit != 0`.
+     (Force overflow cheaply via a shrunk `page_size` so the pinned probe stays
+     on-screen in a small capture.) The probe uses a **unique glyph** so its own
+     `AtlasEntry.page` is identifiable (`ResidentTextKeys` is a flat key list).
+   - **Icon coverage:** include one icon node forced onto page ≥1 in the overflow
+     scene and assert its ink post-fix (the icon path shares the coverage bind; this
+     is where icons-on-page-≥1 is proven, since no device-free icon harness exists).
+   - Pre-fix: fails (blank / count-mismatched garbage). Post-fix: passes. Adapter-robust
      (`channel_lit >= 128`, no `on_pinned_lavapipe()` gate).
 
 2. **Recreate / second-growth test (required, not a risk note)** — force page count
@@ -332,12 +338,15 @@ GPU `#[ignore]` lane (this repo has a real adapter). Layers:
    `crates/buiy_core/tests/text/text_touch_pass.rs`). Run production
    `extract_buiy_glyphs` over a scene that overflows page 0 (via
    `ExtractHarness::with_atlas_config(AtlasConfig { page_size: small, .. })`) and
-   assert **page-index encoding correctness**: `page_count(CoverageR8) > 1`, and for
-   an overflow **glyph and an overflow icon** the emitted `GlyphAlphaInstance.page ==
-   AtlasEntry.page` (the instance names the page the shader will index by). Runs on
-   every headless CI run. (This guards the CPU→instance plumbing — pre-existing and
-   unchanged by this fix — so it is a regression guard, not proof of the fix; the GPU
-   census is the proof.)
+   assert **page-index encoding correctness** for an overflow **glyph**:
+   `page_count(CoverageR8) > 1` and `instance.page == entry.page as u32` (the `u16`
+   `AtlasEntry.page` cast to the instance's `u32`; the instance names the page the
+   shader will index by). Runs on every headless CI run. (This guards the CPU→instance
+   plumbing — pre-existing and unchanged by this fix — so it is a regression guard, not
+   proof of the fix; the GPU census is the proof.) **Icons are not covered here** —
+   the extract harness doesn't run the icon producer and there is no device-free icon
+   harness, so the icon-overflow check lives in the GPU census (§ 5.1) instead, where
+   the full stack runs `extract_buiy_icons`.
 
    > **Wording reconciliation.** The follow-up note asked for "a cheap headless guard
    > that no live entry lands on page>0 within budget." That literally describes the
