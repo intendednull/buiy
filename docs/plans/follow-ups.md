@@ -2139,3 +2139,95 @@ of the editor's existing selection model / selection-highlight rendering / clipb
 facade (`crates/buiy_core/src/text/edit/`) can be reused in a read-only mode. Aligns
 with Buiy's modern-web-parity north star. Once shipped, it SUPERSEDES the Dooduel
 Copy-button stop-gap.
+
+## Dooduel — color-code digits vs letters in the room code (O/0, I/1 confusion) — OPEN
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run — the room code `SD1CI0` was read
+back as `SD1CIO` (trailing **0** vs letter **O**), so the agent seats hit `RoomNotFound`
+until cross-checked against the clipboard. The code charset is `[A-Z0-9]`
+(`apps/dooduel_server/src/util.rs` `random_room_code`), which mixes visually-ambiguous
+glyph pairs (0/O, 1/I/l, 8/B, 5/S, 2/Z).
+
+**Direction (app-level display polish):** in the lobby code box
+(`apps/dooduel/src/view/lobby.rs` `code_box`), render each character in a color keyed to
+its class — e.g. digits in the accent/positive tint and letters in `ink` — so a human
+reading the code aloud can't confuse `0`/`O`. Cheap: split the code string into
+per-character `text()` spans in a `row!` with the class-based color, rather than one label.
+Optionally also do this on the Join screen's code entry echo. A stronger, separate option
+is to shrink the *generator* alphabet to an unambiguous set (Crockford-style: drop
+`O/I/L/U`, treat `0/1` carefully) — but that's a server/protocol change affecting code
+space and existing-code assumptions, so keep it distinct from this display-only fix.
+
+## Dooduel — live scoreboard stuck at 0 + sticky `guessed ✓` badge — RESOLVED (2026-07-06)
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run. Two symptoms, one root cause:
+(a) the per-player `— N pts` in the roster/scoreboard stayed `0` all match (correct only at
+the podium), and (b) the `[guessed ✓]` badge was sticky — once a seat guessed any turn it
+read "guessed" forever (turn-4 `bicycle` was guessed only by seat 0 per the transcript, yet
+seats 1/2 both showed guessed). Confirmed in BOTH clients (the GUI scoreboard screenshot and
+the `dooduel_mcp` seat view), so it was shared, not client-specific.
+
+**Root cause (`apps/dooduel_core/src/session.rs`):** the `Session` is authoritative and both
+clients rebuild their roster from a `Roster` event applied wholesale. But `Session` only
+emitted a `Roster` on **membership** changes (join / vacate) — never on a **score** change
+or a **turn** boundary. `resync` diffed phase / chat / countdown but not scores, and a
+correct guess's `GuessResult` only carries `points` (which the clients ignore) + flips the
+guessed flag optimistically. So live scores sat at whatever the last membership Roster
+carried (0) until an unrelated join/leave happened to send one — which is exactly why the
+final scores popped in the instant the host vacated at match-end (`vacate` → `broadcast_roster`).
+The `guessed` flag (server-derived per-turn from `turn_guesses`) was never re-synced at a new
+turn because no Roster was sent at turn start.
+
+**Fix:** make the `Roster` the authoritative roster-refresh it was designed to be —
+(1) snapshot per-seat scores in `Pre` and broadcast a `Roster` from `resync` whenever any
+score moves (covers the guesser's award AND the drawer's turn-end payout); (2) broadcast a
+`Roster` at each turn's `Picking` transition (a fresh-turn sync that resets every seat's
+`guessed` badge and re-carries scores). One mechanism, in the shared core, so it fixes solo
++ networked and GUI + agents at once. Tests: `guess_gate_phase_drawer_and_correct_path` now
+asserts the Roster follow carries the awarded score; `a_new_turns_picking_broadcasts_a_fresh_roster_that_resets_guessed`
+asserts the turn-start Roster clears the flag. dooduel_core 94/94 green.
+
+## Dooduel — chat rows render as empty pills (glyph text vanishes) — FRAMEWORK BUG, root-caused, fix deferred
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run. In the in-game chat pane, once the
+chat accumulates many messages, the newest rows render as empty colored pills — the
+background bubble paints (node/quad pipeline) but the message text is blank. App code
+(`in_game.rs` `chat_pane`/`chat_line`) is blameless; the text is correctly shaped and every
+glyph is emitted and uploaded.
+
+**Root cause — a FRAMEWORK render-pipeline bug (`crates/buiy_core/src/render/`):** the
+coverage glyph atlas is paged (`atlas/types.rs` `page_size=1024`, `page_budget=8`), but the
+GPU draw binds **only page 0** (`node.rs:158-162` single `coverage_bind_group`; `atlas/gpu.rs`
+rebuilds page 0's texture only) and the shader ignores the per-instance page
+(`coverage.wgsl:78-80` `_ = i.page` — the documented v1 stub, glyph-pipeline § 11.1). When
+page 0 fills and the format is still under the 8-page budget, the allocator APPENDS page 1+
+without evicting (`atlas/atlas.rs:151-209`); `emit_glyph` emits those glyphs with `page>0`
+and fires `warn_once_page_overflow` (`text/extract.rs:1828-1848`, `2291-2299`). Overflow
+glyphs then sample page 0 at page-1 UVs → wrong/empty texels → blank ink over a painted
+background. It strikes the newest-resident keys (fresh chat glyphs) once the whole screen's
+distinct-glyph working set (scoreboard + word + chat across several sizes/families) exceeds
+one 1024² page — the first Dooduel workload to cross it. Affects ANY text-heavy long-running
+Buiy screen, not just Dooduel. (Ruled out shaping / `stick_to_bottom` / `keyed_column` /
+prepare-upload via a headless repro — all rows shape fully; the drop is purely the atlas page
+bind.)
+
+**Fix (deferred — a focused render effort, not an inline patch):** build the multi-page bind
+the code already TODOs (§ 11.1): expose all resident coverage pages as a texture-2d-array in
+`atlas/gpu.rs`, consume `i.page` in `coverage.wgsl` (`textureSampleLevel(atlas_array, …, i.page)`),
+and bind the array in `node.rs` + the flat glyph draw. The eviction/pooling/`page`-field
+machinery already exists — it's a bind + shader change, not new allocation logic. **Verify**
+on the GPU `#[ignore]` lane (this repo has a real adapter): a content-presence census that
+fills past one page, renders to texture, and asserts the last-emitted text node has non-zero
+ink — plus a cheap headless guard that no live entry lands on `page>0` within budget. Deferred
+because a shader / GPU-bind change deserves its own effort with golden verification rather than
+a rushed inline fix. **Stopgap available if needed:** cap the Dooduel chat to the last ~N
+messages so the working set stays under one page (mitigation only — not the real fix).
+
+## Dooduel — smoothly animate the turn countdown timer — OPEN
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run (user request). The turn countdown
+advances in discrete ~1 s steps (the `~Ns left` seat-view line; the GUI's countdown
+ring/label). Make it a smooth continuous animation — a per-frame-interpolated shrinking
+ring/bar driven off the wall-clock remaining fraction — instead of a 1 Hz jump. The GUI
+already holds the remaining `Duration`; drive the visual from `remaining / total` each frame
+through the existing animation/tick plumbing. Display-only polish (no authority change).
