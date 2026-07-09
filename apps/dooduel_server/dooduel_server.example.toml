@@ -1,0 +1,29 @@
+# dooduel_server.example.toml — the Dooduel server's optional configuration.
+#
+# Copy this to `dooduel_server.toml` (the default path, resolved from the server's working
+# directory) or point at it with `--config <path>` / `DOODUEL_CONFIG=<path>`. Precedence:
+# `--config` > `DOODUEL_CONFIG` > `./dooduel_server.toml`.
+#
+# The file is OPTIONAL and every field is OPTIONAL: anything omitted keeps the built-in
+# default shown below. A missing file, an unreadable one, or a parse error is non-fatal —
+# the server logs it and starts on `Config::default()`. An unknown key IS an error (a typo
+# should not silently do nothing).
+#
+# The values below are the production defaults. The M1 multi-agent acceptance run overrides
+# them (fewer rounds, wider timers, `bots = false`) so every seat is agent/human-driven and
+# slow file-protocol agents have time to draw and guess.
+
+[room]
+# Rounds per match — each seated player draws once per round.
+rounds = 2
+# Seconds the drawer has to draw before the turn auto-ends.
+draw_seconds = 80
+# Seconds to pick a word before one is auto-chosen (the safety timeout).
+pick_seconds = 10
+# Seconds the turn-end reveal card stays up before the next turn.
+reveal_seconds = 6
+# Letters progressively revealed as hints during a drawing turn.
+hints = 2
+# The built-in bot guessers. Set `false` so every seat is agent/human-driven; the auto-pick
+# safety timeout still runs so a silent drawer never wedges the match.
+bots = true

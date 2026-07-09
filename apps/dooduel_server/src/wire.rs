@@ -26,6 +26,17 @@ use crate::registry::Registry;
 use crate::room::RoomMsg;
 use crate::util::TokenBucket;
 
+/// The `Config` a freshly-created room is minted with: the effective server config resolved
+/// at startup ([`crate::config::load`] — the `[room]` knobs of `dooduel_server.toml` over
+/// `Config::default()`, stashed in [`crate::ROOM_CONFIG`]). Falls back to
+/// `Config::default()` if the global was never set (e.g. a unit test that never calls
+/// `main`). The spec leaves the phase durations / rounds / bots a `Config` knob precisely
+/// so the M1 acceptance run can widen the timers for slow file-protocol agents and disable
+/// the built-in bot guessers so every seat is agent/human-driven.
+pub(crate) fn room_config() -> Config {
+    crate::ROOM_CONFIG.get().cloned().unwrap_or_default()
+}
+
 /// The per-connection intent rate cap (spec §3.1). NOTE: set well above the honest
 /// client's ceiling. The frozen GUI emits up to **one stroke batch per rendered frame**
 /// during continuous drawing (display-refresh-bound — up to ~144/s on a 144 Hz panel),
@@ -160,7 +171,7 @@ pub async fn handle_conn(
 
     // Route: Create mints a room; Join looks one up (unknown ⇒ RoomNotFound).
     let room_tx = match room_code {
-        None => registry.create_room(Config::default()).1,
+        None => registry.create_room(room_config()).1,
         Some(code) => match registry.lookup(&code) {
             Some(tx) => tx,
             None => {

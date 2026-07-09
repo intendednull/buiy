@@ -16,12 +16,15 @@
 use std::io::Write as _;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_executor::Executor;
+use dooduel_core::game::Config;
 
 use registry::Registry;
 
+mod config;
 mod registry;
 mod room;
 mod util;
@@ -31,8 +34,16 @@ mod wire;
 /// thread; tasks are cooperative and `Send`.
 pub static EX: Executor<'static> = Executor::new();
 
+/// The effective room [`Config`] every freshly-created room is minted with, resolved once
+/// at startup from `dooduel_server.toml` ([`config::load`]) and read by [`wire::room_config`].
+/// Unset (e.g. under a unit test) ⇒ `Config::default()`.
+pub static ROOM_CONFIG: OnceLock<Config> = OnceLock::new();
+
 fn main() {
     let addr = parse_addr();
+    // Resolve the room config once (dooduel_server.toml over Config::default()) and stash it
+    // for every room the accept loop later mints (wire::room_config).
+    let _ = ROOM_CONFIG.set(config::load());
     let registry = Registry::new();
     async_io::block_on(EX.run(async move {
         let listener = match async_net::TcpListener::bind(addr).await {
@@ -50,6 +61,9 @@ fn main() {
         println!("LISTENING port={}", local.port());
         let _ = std::io::stdout().flush();
         eprintln!("dooduel_server: listening on {local} (ws://)");
+        // Record the effective room Config (dooduel_server.toml over Config::default()) in the
+        // transcript so a run's acceptance knobs (rounds / timers / bots) are self-evident.
+        eprintln!("dooduel_server: room config {:?}", wire::room_config());
         accept_loop(listener, registry).await;
     }));
 }
