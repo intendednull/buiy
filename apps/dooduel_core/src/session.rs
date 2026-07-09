@@ -138,6 +138,12 @@ struct Pre {
     hints_revealed: usize,
     chat_len: usize,
     remaining_secs: u64,
+    /// Per-seat scores at snapshot time. A score change (a correct guess's award or the
+    /// drawer's turn-end payout) carries no event of its own, so `resync` diffs this to
+    /// emit a `Roster` follow — the client's scoreboard/roster refresh (a `GuessResult`
+    /// only flips the guessed flag). Without it live scores sit at 0 until an unrelated
+    /// Roster (a join/leave) happens to carry them, or the final podium (M1 playtest bug).
+    scores: Vec<i64>,
 }
 
 /// The authoritative networked session (spec §2). One per room. Owns the game, the
@@ -754,6 +760,7 @@ impl Session {
             hints_revealed: self.game.hints_revealed(),
             chat_len: self.game.chat.len(),
             remaining_secs: self.remaining_secs(),
+            scores: self.game.players.iter().map(|p| p.score).collect(),
         }
     }
 
@@ -782,6 +789,23 @@ impl Session {
                     remaining: Duration::from_secs(now_secs),
                 });
             }
+        }
+
+        // A score move (a correct guess's award, or the drawer's turn-end payout) has no
+        // event of its own; the client scoreboard/roster is refreshed by a Roster follow
+        // (the GuessResult only flips the guessed flag). Emit one whenever any score
+        // changed so live scores track the authority instead of only surfacing at the
+        // podium (or when an unrelated join/leave Roster happens to carry them). Ordered
+        // after the structural events (PhaseChanged/TurnEnded) and before the chat lines,
+        // so a turn-end reveal reads PhaseChanged → TurnEnded → Roster → "the word was X".
+        if self
+            .game
+            .players
+            .iter()
+            .map(|p| p.score)
+            .ne(pre.scores.iter().copied())
+        {
+            self.broadcast_roster();
         }
 
         let new_chat: Vec<ChatMsg> = self.game.chat.iter().skip(pre.chat_len).cloned().collect();
@@ -815,6 +839,12 @@ impl Session {
                 self.open_stroke = None;
                 self.next_op_id = 0;
                 self.broadcast(ServerEvent::CanvasCleared);
+                // A fresh-turn roster sync: `guessed` is `turn_guesses`-derived, empty at a
+                // new turn, so this resets every client's guessed badge (M1 playtest bug:
+                // without it the flag was sticky from the first turn a seat guessed — no
+                // per-turn Roster ever reset it — so the scoreboard read "guessed ✓" for
+                // players who had not guessed THIS word). Also refreshes the carried scores.
+                self.broadcast_roster();
                 let drawer = self.game.seat_index;
                 let words = self.game.word_choices.clone();
                 self.outbox
@@ -1373,6 +1403,20 @@ mod tests {
                 (Recipient::Seat(1), ServerEvent::WordUpdate { .. })
             ))
         );
+        // The score change emits a Roster follow so the client scoreboard tracks live
+        // scores (M1 playtest bug: without it, scores sat at 0 all match — a GuessResult
+        // only flips the guessed flag — surfacing only when an unrelated join/leave Roster
+        // or the final podium carried them).
+        let roster = evs.iter().find_map(|(r, e)| match (r, e) {
+            (Recipient::All, ServerEvent::Roster { players, .. }) => Some(players),
+            _ => None,
+        });
+        let players = roster.expect("a correct guess broadcasts a Roster follow");
+        assert!(
+            players[1].score > 0,
+            "the Roster carries seat 1's awarded score, not 0 (got {})",
+            players[1].score
+        );
     }
 
     #[test]
@@ -1833,6 +1877,39 @@ mod tests {
         assert_eq!(s.game.phase, Phase::Reveal);
         s.handle(1, ClientIntent::Continue);
         assert_ne!(s.game.phase, Phase::Reveal, "Continue advanced the turn");
+    }
+
+    #[test]
+    fn a_new_turns_picking_broadcasts_a_fresh_roster_that_resets_guessed() {
+        let (mut s, secret) = drawing_two_humans(); // seat 0 drawer, seat 1 guesser, Drawing
+        // Seat 1 guesses correctly ⇒ guessed this turn.
+        s.handle(1, ClientIntent::Guess { text: secret });
+        s.drain_events();
+        assert!(s.game.turn_guesses.iter().any(|g| g.player == 1));
+        // End the turn and advance into the next turn's Picking.
+        s.game.force_end_turn();
+        s.drain_events();
+        assert_eq!(s.game.phase, Phase::Reveal);
+        s.handle(1, ClientIntent::Continue);
+        assert_eq!(
+            s.game.phase,
+            Phase::Picking,
+            "Continue starts the next turn"
+        );
+        let evs = s.drain_events();
+        // The new turn broadcasts a fresh Roster whose guessed flags are all reset (nobody
+        // has guessed the new word yet), clearing the client's sticky "guessed ✓" badge
+        // (M1 playtest bug: the flag was set on a correct guess but never reset, so it
+        // stuck from the first turn a seat guessed).
+        let roster = evs.iter().find_map(|(r, e)| match (r, e) {
+            (Recipient::All, ServerEvent::Roster { players, .. }) => Some(players),
+            _ => None,
+        });
+        let players = roster.expect("a new turn's Picking broadcasts a fresh Roster");
+        assert!(
+            players.iter().all(|p| !p.guessed),
+            "the fresh-turn Roster resets every seat's guessed flag"
+        );
     }
 
     #[test]
