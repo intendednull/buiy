@@ -475,7 +475,7 @@ env isolation, and the real-time command loop. The W0 spike `main` is replaced b
 **Files:**
 - Modify: `apps/dooduel/examples/qa_seat.rs`
 
-- [ ] **Step 1: Add the atomic writer + change-detection.**
+- [x] **Step 1: Add the atomic writer + change-detection.**
 
 Append to `qa_seat.rs`:
 
@@ -509,7 +509,7 @@ fn append_line(path: &Path, line: &str) {
 }
 ```
 
-- [ ] **Step 2: Add the byte-cursor command tail (only complete `\n`-terminated lines).**
+- [x] **Step 2: Add the byte-cursor command tail (only complete `\n`-terminated lines).**
 
 Append:
 
@@ -543,7 +543,7 @@ fn tail_commands(path: &Path, cursor: &mut u64) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 3: Commit.**
+- [x] **Step 3: Commit.**
 ```sh
 git add apps/dooduel/examples/qa_seat.rs
 git commit -m "feat(dooduel): qa_seat file protocol — atomic writes + byte-cursor tail"

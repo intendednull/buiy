@@ -6,7 +6,9 @@
 //! Run (needs a real wgpu adapter; no display required):
 //!   RUST_MIN_STACK=33554432 cargo run -p dooduel --example qa_seat -- --dir /tmp/qa-seat-1
 
-use std::path::PathBuf;
+use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use bevy::asset::RenderAssetUsages;
@@ -216,6 +218,59 @@ fn click_role(
         &[center, center + Vec2::new(1.0, 0.0)],
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// File protocol (spec §2.3): atomic tmp+rename writes, byte-cursor command tail.
+// ---------------------------------------------------------------------------
+
+/// Write `bytes` atomically (tmp + rename) unless byte-identical to what's already there.
+/// Returns true if it wrote.
+fn atomic_write_if_changed(path: &Path, bytes: &[u8]) -> bool {
+    if let Ok(existing) = fs::read(path) {
+        if existing == bytes {
+            return false;
+        }
+    }
+    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    fs::write(&tmp, bytes).unwrap_or_else(|e| panic!("write {}: {e}", tmp.display()));
+    fs::rename(&tmp, path).unwrap_or_else(|e| panic!("rename {}: {e}", path.display()));
+    true
+}
+
+/// Append a line to `path` (driver.log), creating it if absent.
+fn append_line(path: &Path, line: &str) {
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+    writeln!(f, "{line}").expect("append driver.log");
+}
+
+/// Read new complete lines from `commands.jsonl` past `*cursor`, advancing `*cursor` by the
+/// bytes consumed. EVERY whole `\n`-terminated line is returned — **including blank ones** —
+/// so the caller's `consumed: K` index equals the number of lines the agent appended
+/// (spec §2.3); blank/malformed lines are logged-and-skipped by the caller, not dropped
+/// here. A mid-write partial (no trailing `\n`) stays buffered. Empty vec if absent/no new
+/// complete line.
+fn tail_commands(path: &Path, cursor: &mut u64) -> Vec<String> {
+    let Ok(mut f) = fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len <= *cursor {
+        return Vec::new();
+    }
+    f.seek(SeekFrom::Start(*cursor)).expect("seek commands");
+    let mut buf = String::new();
+    f.read_to_string(&mut buf).expect("read commands");
+    let Some(last_nl) = buf.rfind('\n') else {
+        return Vec::new(); // no complete line yet
+    };
+    let consumed = &buf[..=last_nl];
+    *cursor += consumed.len() as u64;
+    consumed.lines().map(|s| s.to_string()).collect()
 }
 
 fn model_screen(app: &mut App) -> Screen {
