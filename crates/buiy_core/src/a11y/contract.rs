@@ -24,8 +24,9 @@ use crate::a11y::A11yRole;
 use crate::a11y::states::A11yValue;
 use crate::interaction::OnPress;
 use crate::text::SharedFontSystem;
-use crate::text::edit::{EditCommand, SingleLine, TextEditState};
+use crate::text::edit::{EditCommand, SingleLine, TextChanged, TextEditState};
 use accesskit::{Action, ActionData, NodeId};
+use bevy::ecs::message::Messages;
 use bevy::ecs::world::World;
 use bevy::prelude::{DetectChangesMut, Entity};
 
@@ -503,7 +504,31 @@ fn honor_text_set_value(
     } else {
         EditCommand::Insert(text)
     };
-    state.apply(&mut font_system, replace, single_line, false);
+    // The mutating verb carries the value-change signal (SelectAll is
+    // non-mutating). `apply`'s `EditOutcome.value_changed` is `value() != before`
+    // (input.rs) — false for a SetValue that replaces a value with the identical
+    // string, so the emit below never fires on a no-op set.
+    let value_changed = state
+        .apply(&mut font_system, replace, single_line, false)
+        .value_changed;
+    drop(font_system);
+
+    // Mirror the keyboard path (input.rs `apply_keyboard_edits`: after a
+    // value-changing edit, `changed.write(TextChanged(entity))`). Without this the
+    // host-facing bridges never see the programmatic set: `buiy_view`'s
+    // `route_text_input` fires `on_input` ONLY on `TextChanged`, so an
+    // assistive-tech `SetValue` (or `buiy::probe::set_value`) would update the
+    // editor + a11y tree but never fold into the app's model. `TextChanged` is a
+    // `Message`; from the `&mut World` dispatch context we write it onto the
+    // resource the keyboard path's `MessageWriter` funnels into. Value-gated so a
+    // no-op set (identical string) emits nothing — matching the keyboard path.
+    // NOTE: the `Messages<TextChanged>` resource exists whenever `BuiyTextPlugin`
+    // is installed (it registers the message); the SelectAll+Insert lowering above
+    // already required `SharedFontSystem`, so any harness that reaches here has the
+    // text infra and thus the message resource.
+    if value_changed && let Some(mut changed) = world.get_resource_mut::<Messages<TextChanged>>() {
+        changed.write(TextChanged(entity));
+    }
     Ok(())
 }
 
