@@ -1553,9 +1553,6 @@ fn emit_one_entity(
                         solid_stamp_bitmap,
                     )
                 });
-                if entry.page > 0 {
-                    warn_once_page_overflow(); // § 11.1 v1 mitigation
-                }
                 for (rect, color) in strikes {
                     new_glyphs.push(GlyphAlphaInstance {
                         rect: repivot_origin(rect, translation, glyph_affine),
@@ -1640,9 +1637,6 @@ fn emit_one_entity(
                     solid_stamp_bitmap,
                 )
             });
-            if entry.page > 0 {
-                warn_once_page_overflow(); // § 11.1 v1 mitigation
-            }
             new_glyphs.push(GlyphAlphaInstance {
                 rect: repivot_origin(
                     caret_stamp_rect(origin, cv.rect, scale_factor),
@@ -1831,9 +1825,6 @@ fn emit_glyph<'a>(
     else {
         return; // zero coverage (whitespace) or color-emoji skip (§ 9)
     };
-    if entry.page > 0 {
-        warn_once_page_overflow(); // § 11.1 v1 mitigation
-    }
     let rect = glyph_rect_logical(phys.x, phys.y, bearing, entry.px.size(), scale_factor);
     new_glyphs.push(GlyphAlphaInstance {
         rect: repivot_origin(rect, translation, glyph_affine),
@@ -2274,7 +2265,6 @@ fn span_color(c: cosmic_text::Color) -> [f32; 4] {
 }
 
 static WARNED_COLOR_EMOJI: AtomicBool = AtomicBool::new(false);
-static WARNED_PAGE_OVERFLOW: AtomicBool = AtomicBool::new(false);
 
 /// § 9's rate-limited warn (the components.rs warn-once precedent).
 fn warn_once_color_emoji_skipped() {
@@ -2283,17 +2273,6 @@ fn warn_once_color_emoji_skipped() {
             "buiy: color (emoji) glyphs are skipped in v1 — the ColorRgba8/\
              IconInstance path is a named C-tier seam (glyph-pipeline § 9; \
              warned once)"
-        );
-    }
-}
-
-/// § 11.1's v1 mitigation: the @group(1) bind group samples page 0 only.
-fn warn_once_page_overflow() {
-    if !WARNED_PAGE_OVERFLOW.swap(true, Ordering::Relaxed) {
-        warn!(
-            "buiy: a glyph allocated on coverage page > 0, but the glyph draw \
-             binds page 0 only — those glyphs will sample wrong texels. Time \
-             to build the multi-page bind (glyph-pipeline § 11.1; warned once)"
         );
     }
 }
