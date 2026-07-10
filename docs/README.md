@@ -108,12 +108,13 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 
 - [Buiy render-pipeline design](specs/2026-06-03-buiy-render-pipeline-design/README.md) — Bevy render-graph integration, render-side component model, clipping, top-layer compositing, effect compositor, atlasing, forced-colors; consumes layout's immutable paint inputs (multi-file). `[active]`
 - [Glyph/icon affine transform + transform-origin](specs/2026-07-01-glyph-affine-transform-design.md) — extend the R1 2D affine paint to the coverage (glyph/icon) path + honor `transform-origin` at layout 6e (center pivot), so rotated/scaled text + icons paint off-axis (fixes the disclosure chevron). `[landed]`
-- [Multi-page coverage atlas bind](specs/2026-07-09-multipage-coverage-atlas-bind-design.md) — closes glyph-pipeline § 11.1: bind ALL resident coverage atlas pages as a `texture_2d_array` (forked from the raster/image layout) and sample the per-instance `page` via explicit-LOD in `coverage.wgsl`, so glyphs/icons that spill past one 1024² page stop rendering blank (the Dooduel empty-chat-pill framework bug). Grow-to-high-water layer count; WebGL2/uniformity-clean; GPU ink-census + byte-identical-golden verification. `[draft]`
+- [Multi-page coverage atlas bind](specs/2026-07-09-multipage-coverage-atlas-bind-design.md) — closes glyph-pipeline § 11.1: bind ALL resident coverage atlas pages as a `texture_2d_array` (forked from the raster/image layout) and sample the per-instance `page` via explicit-LOD in `coverage.wgsl`, so glyphs/icons that spill past one 1024² page stop rendering blank (the Dooduel empty-chat-pill framework bug). Grow-to-high-water layer count; WebGL2/uniformity-clean; GPU ink-census + byte-identical-golden verification. `[landed]`
 - [Nested degraded effect-group forward-composite (case A)](specs/2026-07-01-nested-degraded-forward-composite-design.md) — a nested effect group that degrades under RT-pool pressure while its immediate parent kept its target now forward-composites its (folded) members directly into the parent's `Rgba16Float` target at node step-2a (effect-compositor.md § 2.3), instead of vanishing; also removes the `debug_assert!` that panicked debug builds on any nested degraded group. Corrects a false premise (bounds grow by own direct members only, so a bare-`Opacity` wrapper parent degrades first); defers the degraded-chain + kept-child-under-degraded-parent shapes with rationale + follow-ups. `[landed]`
 
 **Plans**
 
 - [2026-07-01-glyph-affine-transform](plans/2026-07-01-glyph-affine-transform.md) — wave plan for the glyph/icon affine + 6e transform-origin fix (W1 6e pivot + meter, W2 carrier+shader, W3 producers, GPU verify). `[landed]`
+- [2026-07-09-multipage-coverage-atlas-bind](plans/2026-07-09-multipage-coverage-atlas-bind.md) — wave plan realizing the [multi-page coverage atlas bind](specs/2026-07-09-multipage-coverage-atlas-bind-design.md): W0 RED GPU census + recreate + headless page-index guard, W1 the coupled fix (layout fork + `texture_2d_array` + shader), W2 retire the dead overflow warn, W3 WebGL2/SwiftShader check + docs + native app smoke. `[landed]`
 
 - [2026-06-03-buiy-render-r1-component-model](plans/2026-06-03-buiy-render-r1-component-model.md) — render-side decomposed component model; sole definer of the shared render types (`components.rs` + `color.rs`). `[landed]`
 - [2026-06-03-buiy-render-r2-clip-rects](plans/2026-06-03-buiy-render-r2-clip-rects.md) — `WriteClipRects` render-prep pass; the `ClipRect`/`AncestorClip` clip-chain components. `[landed]`
@@ -131,6 +132,10 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 - [Nested degraded forward-composite (case A)](plans/2026-07-01-nested-degraded-forward-composite.md) — realizes `2026-07-01-nested-degraded-forward-composite-design`: generalizes the degraded-group fold (rename `fold_degraded_groups`), adds the node step-2a `(child=None, parent=Some)` injection into the parent target, a headless `plan_allocation` pin + flipped fold unit test + a case-A GPU positive test. RED→GREEN on RX 6700 XT. `[landed]`
 - [Cross-phase follow-ups](plans/follow-ups.md) — rolling cross-phase deferral backlog (layout / render / text / verification items, with `LANDED` flips); intentionally undated. `[active]`
 - [Buiy follow-ups drain](plans/2026-06-18-followups-drain.md) — campaign plan to drain every actionable open follow-up in `follow-ups.md` (layout / render / text-editing tracks by file-locality), updating each spec + backlog entry as it lands and re-classifying the blocked/superseded/deferred ones. `[landed]`
+
+**Reports**
+
+- [Multi-page coverage atlas bind — acceptance](reports/2026-07-09-multipage-coverage-atlas-bind-acceptance.md) — end-to-end acceptance of the [multi-page coverage atlas bind](specs/2026-07-09-multipage-coverage-atlas-bind-design.md) (the Dooduel empty-chat-pill framework fix): GPU ink census RED→GREEN, byte-identical goldens, raster GPU guards, SwiftShader WebGL2 (0 shader errors), native Dooduel render smoke. `[landed]`
 
 ### Text
 

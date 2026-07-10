@@ -103,10 +103,13 @@ pipelines and their `@group(0)` descriptor stay byte-identical (additive `@group
   `BuiyAtlas`/`AtlasPage` therefore stay device-free (the headless allocator tests
   need no adapter); the GPU `Texture`s live in the separate `AtlasGpu` render
   resource, populated in prepare via `write_texture` (forks #1 + #3).
-- **v1 binds a single CoverageR8 page (page 0).** `GlyphAlphaInstance.page` rides
-  the instance for future multi-page selection, but the `@group(1)` bind group is
-  built against page 0 only. A texture-array (or per-page-group rebind) for the
-  multi-page case is a follow-up; the 4 tests + the v1 text seam all fit one page.
+- **~~v1 binds a single CoverageR8 page (page 0).~~ RESOLVED (2026-07-09,
+  [multi-page coverage atlas bind](../2026-07-09-multipage-coverage-atlas-bind-design.md)).**
+  `GlyphAlphaInstance.page` rode the instance for future multi-page selection, but the
+  `@group(1)` bind group was built against page 0 only — so glyphs/icons spilling to
+  page ≥1 sampled wrong texels and rendered blank. Now all resident coverage pages are
+  bound as a `texture_2d_array` (forked from the raster/image layout) and the shader
+  samples the per-instance layer via explicit-LOD; layer count grows to high-water.
 - **(Glyph, layer) paint order is enforced structurally in the node.** Glyph
   instances flow through `ExtractedGlyphs` → `BuiyInstanceBuffers.glyph` (a typed
   `RawBufferVec<GlyphAlphaInstance>`), not through the `[f32;13]`-typed quad

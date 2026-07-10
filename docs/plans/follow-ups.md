@@ -2187,7 +2187,17 @@ score moves (covers the guesser's award AND the drawer's turn-end payout); (2) b
 asserts the Roster follow carries the awarded score; `a_new_turns_picking_broadcasts_a_fresh_roster_that_resets_guessed`
 asserts the turn-start Roster clears the flag. dooduel_core 94/94 green.
 
-## Dooduel — chat rows render as empty pills (glyph text vanishes) — FRAMEWORK BUG, root-caused, fix deferred
+## Dooduel — chat rows render as empty pills (glyph text vanishes) — ✅ RESOLVED (2026-07-09)
+
+**Resolved** by [multi-page coverage atlas bind](../specs/2026-07-09-multipage-coverage-atlas-bind-design.md)
+(spec) / [plan](2026-07-09-multipage-coverage-atlas-bind.md), on `feat/dooduel-multiplayer-m1`
+(commits `90b1e44` tests, `9181f63` fix, `c592927` warn removal). All resident coverage
+atlas pages are now bound as a `texture_2d_array` (**forked** from the raster/image layout so
+the drawing canvas is untouched) and `coverage.wgsl` samples the per-instance page layer via
+explicit-LOD — uniformity-clean + WebGL2-safe. Verified end-to-end: GPU ink census (RED→GREEN)
++ recreate/re-upload-all test + byte-identical goldens + raster GPU guards + SwiftShader WebGL2
+(0 shader errors) + native Dooduel render smoke. The v1 first-page-1 warning was retired. Closes
+glyph-pipeline § 11.1. **Original root-cause analysis kept below for the record.**
 
 **Originated:** 2026-07-06, Dooduel M1 acceptance run. In the in-game chat pane, once the
 chat accumulates many messages, the newest rows render as empty colored pills — the
@@ -2222,6 +2232,15 @@ ink — plus a cheap headless guard that no live entry lands on `page>0` within 
 because a shader / GPU-bind change deserves its own effort with golden verification rather than
 a rushed inline fix. **Stopgap available if needed:** cap the Dooduel chat to the last ~N
 messages so the working set stays under one page (mitigation only — not the real fix).
+
+## Render — stale `GlyphAlphaInstance` "stride 68" comment in primitive.rs — OPEN (trivial)
+
+**Originated:** 2026-07-09, spotted during the multi-page coverage atlas bind cycle
+(spec § 7). `crates/buiy_core/src/render/primitive.rs:768` has a comment saying
+`GlyphAlphaInstance` is "stride 68", but the actual asserted stride is **84** (the
+`page @64` + `affine @68` fields the comment predates). Comment-only; the code + the
+stride assertion are correct. Fix: correct the comment to 84. Kept out of the atlas-bind
+change to preserve its scope.
 
 ## Dooduel — smoothly animate the turn countdown timer — OPEN
 
