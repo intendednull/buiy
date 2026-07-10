@@ -45,7 +45,7 @@ between cycles.
 | **KI-13** | A WRONG guess that contains the secret word as a substring is broadcast literally in chat | Accepted M1 leak; censoring is M5 | spec §5.3 |
 | **KI-14** | Connections are `ws://` only (no TLS) | `wss://` is deliberately M3 (cargo-deny landmine) | spec §6.2, §11 |
 | **KI-15** | A FRESH Join while a match is running is rejected with `MatchInProgress` | M1 seats new players only in the lobby; mid-match seating is reconnect-only | spec §3.2, §11 |
-| **KI-16** | No in-place "Play again" from the networked podium (must leave + re-create) | `StartMatch`-from-`Final` deferred to M2 | spec §11 |
+| **KI-16** | No in-place "Play again" from the networked podium (must leave + re-create) — NOTE: the podium still RENDERS a "Play again" button (`podium.rs:76`) that is inert in networked play; do not report it as a dead button | `StartMatch`-from-`Final` deferred to M2 | spec §11 |
 | **KI-17** | Drawer vacates mid-Picking → the turn runs out its draw-window timeout (no new drawer draws) rather than skipping | Auto-pick timeout advances it; the skip-to-next-drawer fix is deferred | spec §11 |
 | **KI-18** | In a 2-player room, the last guesser leaving mid-Drawing runs the draw window out before the turn ends | The lone drawer can't trigger an early end; immediate-end fix deferred | spec §11 |
 | **KI-19** | MCP agents can only `join_room` — they cannot create a room | Agents are join-only clients (no `create` tool) | spec §7 |

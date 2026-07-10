@@ -147,6 +147,32 @@ staged-development.
   → consolidated list → original drafter revises with held context) produced a
   clean rev-2 in one pass.
 
+### 2026-07-10 — briefings + runbook drafted; plan under review
+
+- Implementation plan drafted (4 waves / 7 tasks, risk front-loaded: W0
+  checkpoint-1 spike needs NO server — Create→Lobby is a synchronous reducer
+  transition; W2 smoke locates binaries via current_exe() arithmetic since
+  CARGO_BIN_EXE doesn't cross packages or cover examples). Fresh plan reviewer
+  dispatched; drafter holding for the fixes round.
+- Briefings + runbook landed (7 files): COMMON (protocol + the `say()` bash ack
+  helper that operationalizes "foreground poll with explicit timeouts" as
+  copy-paste code), 4 archetype supplements, finding template, RUNBOOK. Spot-
+  check vs spec: verbs/names exact.
+- **Load-bearing briefing decisions:** (1) QA timers widened to draw 240 /
+  pick 120 / reveal 60 (supersedes the charter's 150/30/12 — the GUI driver is
+  slower than text seats: each drawing is many acked toolbar round-trips);
+  recalibrate from cycle-1 experience. (2) Probes split along the honesty
+  contract — seats get only self-reachable probes; the orchestrator owns
+  cross-seat canvas byte-diffs + process-control probes (the charter had
+  assigned seats checks they physically can't honor without reading other
+  seat dirs). (3) The naive-first-timer seat stays deliberately under-briefed.
+- KI-16 amended: the podium renders a visible-but-inert "Play again" in
+  networked play (podium.rs:76) — suppressed as a false-positive "dead button".
+- **Skill note:** briefing-drafting surfaced charter/spec inconsistencies
+  (timer values, hint-schedule examples pinned to a specific timer config) —
+  a "recompute worked examples against the actual run config" step belongs in
+  the eventual skill.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
