@@ -282,6 +282,31 @@ staged-development.
   against the real UI surfaced an occlusion bug and a framework AT gap before
   any playtest ran. Budget for "the harness finds bugs while being built."
 
+### 2026-07-10 — Track 1 (Send occlusion) FIXED + review-approved
+
+- Root cause: the toggle is stacked at the view ROOT over every screen;
+  in-game is the one screen whose content fills the bottom-right corner. The
+  top-layer toggle wins the pick while the global glyph tier paints "Send"
+  above it — pick≠paint is a documented framework trait (view/mod.rs:8-11);
+  the app-level corner collision is the defect. Reference design keeps its
+  toggle in-game but clears Send by ~1px at exactly 800px height (fragile
+  accident, not a pattern to copy — our pick rect is 16px taller anyway).
+- Fix `e891000` (+ RED test/design note `d258825`): suppress the toggle on
+  InGame via `when(...)` — `when(false)` yields a zero-paint, non-pickable
+  `Element::empty()` (reviewer-verified). Theme remains settable on all menu
+  screens and persists into the match. Design note:
+  specs/2026-07-10-dooduel-theme-toggle-occlusion-design.md. Review:
+  APPROVE-WITH-FIXES — README index line (done) + strengthen the test with
+  the positive SubmitGuess signal (input-cleared assertion; folding now).
+- Adjacent smells logged, untouched: the glyph-single-tier pick≠paint trait
+  (framework; candidate follow-ups entry at close-out); `button()` padding
+  makes the toggle's pick rect 88×50 vs the authored 72×34 pill; our in-game
+  chat pane sits ~30px lower than the design's. The latter two are cycle-1
+  triage candidates.
+- **Skill note:** regression tests for occlusion bugs need the POSITIVE
+  signal (the intended handler fired), not just the negative (the wrong one
+  didn't) — the negative-only form misses a future different occluder.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
