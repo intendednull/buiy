@@ -886,6 +886,36 @@ git commit -m "feat(dooduel): qa_seat CLI + real-time command loop + per-seat en
 > guesser's word slots correctly blank — redaction holds). Guess submission ✗ (blocked by #2).
 > Both turns hit the 150s Reveal timeout during the root-cause investigation (podium 0-0) — a
 > reminder the real-time server needs the runbook's widened timers for slower LLM-seat cycles.
+>
+> **RE-GATE (2026-07-10, post-fixes — the previously-blocked guess→chat→score checkpoint is now
+> VERIFIED LIVE END-TO-END).** Both bugs above are fixed on this branch — the theme-toggle
+> occlusion (`e891000`, suppress the floating toggle in-game) and the `probe::set_value` missing
+> `TextChanged` (framework `23540a0`; the driver's local workaround dropped in `7931f22`). A
+> fresh 2-seat run (seats Hosta/Guessa, same config rounds=1/draw=150/pick=30/reveal=12/hints=2/
+> bots=false) drove the full match through scoring and the podium:
+> - **Theme toggle suppressed in-game (both seats):** the in-game `ui.md`/`screen.png` carry NO
+>   `Button "Light"`/`"Dark"` (Home/Podium still do); `Send` is unoccluded at `@1194,740`.
+> - **Wrong guess routes to chat (room `ADEE2T`):** seat-1 `set_value "banana"` → `Send` →
+>   `text="Guessa: banana"` appears in BOTH seats' `ui.md` and seat-1's `TextInput` clears to
+>   `[value=""]`. This alone proves the two fixes work together (Send hits Send, not the toggle;
+>   the guess text folds into the model and submits).
+> - **Correct guess scores + spoiler-safe (room `IYDCA3`, word `BUTTERFLY`):** seat-1 guessed it
+>   → chat `"Guessa guessed the word!"` (the word is NOT leaked to observers), reveal
+>   `The word was "BUTTERFLY"`, server `seat 1 guessed correctly (+182)` → the turn ended early.
+>   Scoreboard: Guessa **182**, Hosta **100** (drawer credit). Redaction held both directions
+>   (drawer sees the letters; guesser sees size-0 blanks), including after the seat/role swap in
+>   turn 2 (Guessa draws `GUITAR`, Hosta guesses it correctly). **Match podium (both seats +
+>   server agree): `Hosta 387 / Guessa 282 — "Hosta wins!"`** The Reveal auto-advanced to the
+>   podium after `reveal_seconds`; the `Continue` button is present on the mid-turn reveal card.
+> - **QA-driver robustness note (harness, NOT a product bug):** `set_value` immediately followed
+>   by `Send` **in the same `commands.jsonl` batch** can submit an EMPTY guess — the
+>   `TextChanged`→`on_input`→MVU-model fold needs a beat to settle before the `Send` reducer reads
+>   the field, and `set_value_role`'s single `app.update()` sometimes isn't enough (it landed for
+>   `banana` but not for a same-batch `butterfly`; separating the two commands, or verifying
+>   `[value=…]` before `Send`, is reliable). Worth baking into the W2 smoke / runbook: emit
+>   `set_value` and `Send` as separate settled steps. (A real human types over many frames then
+>   clicks, so this never bites the product.) Evidence: `/tmp/qa-regate/` (per-seat `ui.md`/
+>   `driver.log`, `server.stderr.log`, `evidence-seat{0,1}-{score,podium}.png`).
 
 - [x] **Step 1: Write the wide-timer server config.**
 
