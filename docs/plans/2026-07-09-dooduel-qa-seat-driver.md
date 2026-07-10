@@ -83,7 +83,7 @@ real `bevy_picking` clicks/strokes. A real-time `app.update()` loop interleaves 
 This task builds the spike-subset of the final file. W1 extends the same file. Do **not**
 add the file protocol or verbs yet — only prove the composition + render + pick path.
 
-- [ ] **Step 1: Create the file with imports + the composition builder.**
+- [x] **Step 1: Create the file with imports + the composition builder.**
 
 Write `apps/dooduel/examples/qa_seat.rs`:
 
@@ -163,7 +163,7 @@ fn build_app() -> App {
 }
 ```
 
-- [ ] **Step 2: Add the two-camera + pointer spawn + the readback Image.**
+- [x] **Step 2: Add the two-camera + pointer spawn + the readback Image.**
 
 Append to `qa_seat.rs`:
 
@@ -222,7 +222,7 @@ fn spawn_view(app: &mut App) -> (Handle<Image>, Entity, Entity) {
 }
 ```
 
-- [ ] **Step 3: Add the readback burst + the snapshot writer.**
+- [x] **Step 3: Add the readback burst + the snapshot writer.**
 
 Append to `qa_seat.rs` (the `capture.rs:377-424` readback, adapted to return bytes):
 
@@ -282,7 +282,7 @@ fn snapshot_md(app: &mut App) -> String {
 }
 ```
 
-- [ ] **Step 4: Add the click helper (address by role → real synthetic-pointer click).**
+- [x] **Step 4: Add the click helper (address by role → real synthetic-pointer click).**
 
 Append (the `gui_networked.rs:277-301` recipe as a reusable fn):
 
@@ -323,7 +323,7 @@ fn click_role(
 > right error type, so the `.ok_or(...)` arm is the only hand-built variant — if awkward,
 > replace it with `.expect("node maps to an entity")` (a resolved node always maps).
 
-- [ ] **Step 5: Add the spike `main` — boot, readback, snapshot, one click, assert.**
+- [x] **Step 5: Add the spike `main` — boot, readback, snapshot, one click, assert.**
 
 Append:
 
@@ -411,7 +411,7 @@ fn main() {
 }
 ```
 
-- [ ] **Step 6: Build the example (compile check only — not the gate).**
+- [x] **Step 6: Build the example (compile check only — not the gate).**
 
 Run:
 ```sh
@@ -420,7 +420,7 @@ RUST_MIN_STACK=33554432 cargo build -p dooduel --example qa_seat --locked
 Expected: `Finished`. If `single(...)` / `Camera::order` / `ActionError` paths differ on
 this Bevy/Buiy version, fix against the cited source files (do not stub).
 
-- [ ] **Step 7: RUN the spike (THE W0 GATE — needs the real adapter, no server).**
+- [x] **Step 7: RUN the spike (THE W0 GATE — needs the real adapter, no server).**
 
 Run:
 ```sh
@@ -429,7 +429,7 @@ RUST_MIN_STACK=33554432 cargo run -p dooduel --example qa_seat --locked -- --dir
 Expected stdout: `W0 spike OK — wrote screen.png / ui.md / driver.log to /tmp/qa-w0`
 (no panic).
 
-- [ ] **Step 8: Inspect the artifacts (the real proof — C1 retired).**
+- [x] **Step 8: Inspect the artifacts (the real proof — C1 retired).**
 
 Run:
 ```sh
@@ -449,7 +449,7 @@ the pre-click Home snapshot in memory.) **Diagnostic ladder** if it's wrong:
 - **Join screen rendered but the model is still `Screen::Home`** → the click did not resolve;
   the picking path (camera resolution / pointer target / hit-test) is the problem, not render.
 
-- [ ] **Step 9: Mechanical gate + commit.**
+- [x] **Step 9: Mechanical gate + commit.**
 
 Run the full mechanical gate (cross-cutting rules). Then:
 ```sh
