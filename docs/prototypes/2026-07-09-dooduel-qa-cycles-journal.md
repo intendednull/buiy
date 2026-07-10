@@ -121,6 +121,32 @@ staged-development.
   construction (harness artifacts), and re-reporting them would have wasted a
   fix cycle.
 
+### 2026-07-10 — seat-driver spec gated + approved (rev-2, active)
+
+- `docs/specs/2026-07-09-dooduel-qa-seat-driver-design.md` drafted, reviewed by
+  two fresh-context reviewers (feasibility-adversarial + design/right-sizing) —
+  both APPROVE-WITH-FIXES, no blockers; 12 consolidated fixes folded as rev-2
+  and re-verified against code by the drafter; status flipped to active.
+- The gate caught three would-have-shipped defects by reading code: the Join
+  flow was mis-specified (the Home button only navigates; the real CTA is
+  "Join room" on the Join screen — the scripted smoke would have NotFound'd),
+  N seat processes would have raced ONE `~/.config/dooduel/state.json` and
+  clobbered the developer's real profile (fix: per-seat `DOODUEL_STATE_DIR`),
+  and the plugin composition needed `BuiyHeadlessPlugin` + explicit picking
+  re-adds (full `BuiyPlugin` drags winit-coupled AccessKit/pointer plugins).
+- The feasibility reviewer STRENGTHENED the design: traced the two-camera
+  no-panic path through bevy 0.19 source (surfaceless window never extracted;
+  targetless view never iterated by `buiy_pass`), downgrading C1 from "unproven
+  assumption" to "well-supported; smoke confirms".
+- **Skill notes:** (1) reviewers who verify *names/labels* against view code
+  catch a class the architecture review misses (Join-flow, brush-size labels,
+  state-dependent toggle names) — playtest-harness specs need a "label audit".
+  (2) Both reviewers idled without delivering; the SendMessage nudge recovered
+  both verdicts — bake "expect idle-without-report, ping for the deliverable"
+  into the orchestration runbook. (3) The drafter-folds-fixes pattern (reviewers
+  → consolidated list → original drafter revises with held context) produced a
+  clean rev-2 in one pass.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
