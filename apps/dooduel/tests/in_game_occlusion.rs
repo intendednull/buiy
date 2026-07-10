@@ -143,21 +143,42 @@ fn into_drawing() -> (App, Entity, Entity) {
 fn in_game_chat_send_is_not_occluded_by_the_theme_toggle() {
     let (mut app, window, pointer) = into_drawing();
 
-    // The live symptom: a real synthetic pointer click at the Send button's resolved
-    // center must fold through to the chat submit path — NOT flip the theme. Before the
-    // fix, the `.top_layer()` toggle floating in the same bottom-right corner won the
-    // hit-test at Send's center and folded `SetTheme(Dark)` instead.
+    // Seed the guess field so a click that actually reaches Send leaves a POSITIVE
+    // trace: `SubmitGuess` does `mem::take(&mut chat_input)` UNCONDITIONALLY before its
+    // drawer/empty gate (lib.rs), so even for this drawing seat (chat disabled) a
+    // Send-routed click clears the field. This makes the test catch ANY future widget
+    // occluding Send — not just the theme toggle returning.
+    enqueue(&mut app, Msg::SetChatInput("banana".to_string()));
+    settle(&mut app, 4);
+    assert_eq!(
+        model(&mut app).chat_input,
+        "banana",
+        "the guess field is seeded before the click"
+    );
+
+    // A real synthetic pointer click at the Send button's resolved center.
     let theme_before = model(&mut app).theme;
     let (tl, size) = button_rect(&mut app, "Send");
     let center = tl + size * 0.5;
     let path = [center, center + Vec2::new(1.0, 0.0)];
     drive_stroke(&mut app, window, pointer, &path);
     settle(&mut app, 6);
+
+    // POSITIVE signal — the click reached Send: the guess field was cleared. Before the
+    // fix, the `.top_layer()` toggle floating in the same bottom-right corner won the
+    // hit-test at Send's center, so Send never saw the click and the field stayed
+    // "banana". This is the assertion that generalizes to any occluder.
+    assert!(
+        model(&mut app).chat_input.is_empty(),
+        "a real click at the Send button's center must route to Send (clearing the \
+         guess field) — a widget is occluding the chat Send control"
+    );
+    // NEGATIVE signal — the click did NOT land on the toggle: the theme is unchanged
+    // (before the fix it folded `SetTheme(Dark)`).
     assert_eq!(
         model(&mut app).theme,
         theme_before,
-        "a real click at the Send button's center must not flip the theme — the \
-         floating toggle occluded the chat Send control"
+        "a real click at the Send button's center must not flip the theme"
     );
 
     // And the fix itself: the floating theme toggle is suppressed on the in-game
