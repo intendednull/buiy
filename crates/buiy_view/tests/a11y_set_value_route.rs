@@ -97,3 +97,39 @@ fn a11y_set_value_folds_into_model_and_survives_rebuild() {
          now-equal editor untouched (no clobber back to the stale model value)"
     );
 }
+
+#[test]
+fn a11y_set_value_empty_clear_folds_model_to_empty() {
+    // The empty-string clear path (SetValue("") → `Delete` lowering) is a value
+    // change too: it must emit `TextChanged` so the model folds back to "".
+    let mut app = common::logic_app();
+    app.ui(Form::default(), update, view);
+    common::settle(&mut app);
+
+    // Seed a non-empty value through the same channel, then clear it.
+    let node = get_by_role(app.world_mut(), A11yRole::TextInput, None, None)
+        .expect("text input resolves in the a11y tree");
+    set_value(app.world_mut(), node, "seed").expect("seed set_value ok");
+    app.update();
+    app.update();
+    assert_eq!(draft(&mut app), "seed", "seed folded into the model");
+
+    // Re-resolve (the tree rebuilt on the seed fold) and clear via SetValue("").
+    let node = get_by_role(app.world_mut(), A11yRole::TextInput, None, None)
+        .expect("text input still resolves");
+    set_value(app.world_mut(), node, "").expect("clear set_value ok");
+    app.update();
+    app.update();
+
+    assert_eq!(
+        draft(&mut app),
+        "",
+        "LOAD-BEARING: clearing via SetValue(\"\") emits TextChanged (Delete lowering \
+         is a value change) → on_input folded the model back to empty"
+    );
+    assert_eq!(
+        editor_value(&mut app),
+        "",
+        "the editor is cleared and not re-seeded"
+    );
+}

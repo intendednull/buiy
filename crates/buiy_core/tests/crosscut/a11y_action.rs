@@ -859,9 +859,10 @@ fn space_enter_on_focused_slider_do_nothing() {
 // `SharedFontSystem`, so these use a `BuiyTextPlugin` harness.
 // ---------------------------------------------------------------------------
 
+use bevy::ecs::message::MessageCursor;
 use buiy_core::a11y::A11yReadOnly;
 use buiy_core::a11y::contract::{A11yContract, MultilineTextInputContract, TextInputContract};
-use buiy_core::text::edit::{SingleLine, TextEditState};
+use buiy_core::text::edit::{SingleLine, TextChanged, TextEditState};
 
 /// A headless app with the a11y + focus surface PLUS `BuiyTextPlugin` (the
 /// `SharedFontSystem` the text `honor` locks to apply an edit). The text honor
@@ -900,6 +901,63 @@ fn single_line_input(app: &mut App) -> Entity {
 
 fn editor_value(app: &App, e: Entity) -> String {
     app.world().get::<TextEditState>(e).unwrap().value()
+}
+
+/// Count the `TextChanged` messages written for `e` since `cursor` last read, and
+/// advance the cursor. Mirrors the message-count idiom in `text_edit_submit.rs`
+/// (`get_cursor()` + `cursor.read(messages).count()`). `dispatch_action_request`
+/// runs synchronously (no schedule tick / buffer swap between calls), so one
+/// cursor reads each dispatch's emissions incrementally.
+fn text_changed_since(world: &World, cursor: &mut MessageCursor<TextChanged>, e: Entity) -> usize {
+    let messages = world.resource::<Messages<TextChanged>>();
+    cursor.read(messages).filter(|c| c.0 == e).count()
+}
+
+#[test]
+fn dispatch_set_value_emits_textchanged_only_on_a_value_change() {
+    // The framework mirrors the keyboard path: `honor_text_set_value` emits
+    // `TextChanged` after a value-CHANGING SetValue and NONE on a no-op set, so
+    // the host bridges (`buiy_view::route_text_input`) fold exactly once per real
+    // change and never on a redundant set. This pins the emit COUNT at the
+    // contract tier; the model fold is covered at the buiy_view tier.
+    let mut app = text_setup();
+    let e = single_line_input(&mut app);
+    let mut cursor = app.world().resource::<Messages<TextChanged>>().get_cursor();
+
+    // "" → "hello": a real change ⇒ exactly one emit.
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "hello")).unwrap();
+    assert_eq!(editor_value(&app, e), "hello");
+    assert_eq!(
+        text_changed_since(app.world(), &mut cursor, e),
+        1,
+        "a value-changing SetValue emits exactly one TextChanged"
+    );
+
+    // "hello" → "hello": SelectAll+Insert lands on the same value ⇒ value_changed
+    // is false ⇒ zero emits (the value-gated no-op, matching the keyboard path).
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "hello")).unwrap();
+    assert_eq!(
+        text_changed_since(app.world(), &mut cursor, e),
+        0,
+        "an identical-value SetValue emits no TextChanged (no spurious fold)"
+    );
+
+    // "hello" → "" (empty target lowers to Delete): a real change ⇒ one emit.
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "")).unwrap();
+    assert_eq!(editor_value(&app, e), "", "empty SetValue clears the field");
+    assert_eq!(
+        text_changed_since(app.world(), &mut cursor, e),
+        1,
+        "clearing a non-empty field is a value change → one TextChanged"
+    );
+
+    // "" → "" (already empty): no change ⇒ zero emits.
+    dispatch_action_request(app.world_mut(), &set_value_request(node_id_for(e), "")).unwrap();
+    assert_eq!(
+        text_changed_since(app.world(), &mut cursor, e),
+        0,
+        "clearing an already-empty field emits no TextChanged (no value change)"
+    );
 }
 
 /// A `SetValue` carrying a string, addressed at `node`.
