@@ -241,6 +241,47 @@ staged-development.
   almost nothing; the only limbo was one uncommitted fix, and the
   leave-dirty-verify-then-commit rule handles exactly that.
 
+### 2026-07-10 — W1 gate: driver proven through DRAW; the harness catches its
+### first two real bugs before cycle 1 (commit `4b421a7`)
+
+- Task 1.4 live 2-seat gate: create → code-from-ui.md (39R5OM) → corrected
+  Join flow → 2-player rosters → Start → word pick (UMBRELLA) → toolbar clicks
+  → strokes. **Op-log sync confirmed** (the same dark-red X in BOTH seats'
+  screenshots) and **per-seat redaction held** (guesser sees 8 blank slots).
+  Calibration samples committed (ui-samples.txt) — W2's hard prerequisite met.
+- **Misdiagnosis corrected:** the inherited SETTLE_FRAMES "fix" could never
+  work (a missing signal can't be waited into existence). Kept at 8 with an
+  honest re-justification (screen-readiness between batched nav→act commands).
+  The real fix: the driver re-emits `TextChanged` after `set_value`.
+- **FINDING 1 (app, HIGH — blocks the guess checkpoint):** the floating theme
+  toggle (@1172,730 88×50) occludes the chat Send button (@1194,736 41×56) at
+  the 1280×800 default — Send's pointer center lands inside the toggle, so
+  "Send" flipped seat-1 to Dark instead of submitting. The exact occluded-hit
+  class the driver exists to catch; `theme_toggle.rs` checks the toggle is
+  clickable but not that it avoids occluding in-game controls. guess→chat→
+  score through the driver is therefore UNVERIFIED (honestly reported, not
+  papered over). → staged fix Track 1.
+- **FINDING 2 (framework):** `probe::set_value` / any AT `SetValue` performs
+  untracked `EditCommand::SelectAll+Insert` (`contract.rs:463/496/506`) and
+  never emits `TextChanged` — the only emitters are the keyboard
+  (`input.rs:741`) and IME (`ime.rs:583`) paths — so buiy_view's
+  `route_text_input` (`router.rs:80`) never fires `on_input`, the model never
+  folds, and `reconcile.rs:1552` clobbers the edit on the next rebuild.
+  Affects ALL buiy_view text inputs; existing tests assert editor/a11y state,
+  never model fold. Spec §res-Q5's "fires on_input" claim was wrong. → staged
+  fix Track 2 (framework emit mirroring the keyboard path + spec correction +
+  drop the driver workaround).
+- OBS (log, don't fix): the guesser sees the full drawing toolbar in-game
+  (design check for cycle 1 vs the reference bundle); both 150s draw windows
+  timed out during root-causing — reconfirms widened timers for LLM seats.
+- **Decisions:** W2 HOLDS until both tracks land + a combined live re-gate
+  (incl. guess→chat→score). Tracks run sequentially in this worktree (two
+  agents committing concurrently to one index is a real race). Fixing the bug
+  beats demoting the checkpoint.
+- **Skill note:** the harness build IS a QA pass — building agent eyes/hands
+  against the real UI surfaced an occlusion bug and a framework AT gap before
+  any playtest ran. Budget for "the harness finds bugs while being built."
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
