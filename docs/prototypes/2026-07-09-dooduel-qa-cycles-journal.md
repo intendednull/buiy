@@ -173,6 +173,32 @@ staged-development.
   a "recompute worked examples against the actual run config" step belongs in
   the eventual skill.
 
+### 2026-07-10 — plan gated (BLOCK → rev-2), ready to build
+
+- Fresh plan reviewer returned **BLOCK**: the W0 spike's "no server needed —
+  Create→Lobby is synchronous" premise was FALSE — its own proof cited
+  `capture.rs`, which runs `dooduel::install` (no networking), while the driver
+  runs `install_runtime`: CreateRoom → NetState::Joining → WsClientPlugin
+  connects → ECONNREFUSED → bounced back to Home with a toast. The spike would
+  have failed against a WORKING C1 and its diagnostic mis-attributed the
+  failure to the render risk. Fix: retarget the spike click to "Join a room"
+  (GoJoin — pure reducer navigation). Also caught: the W2 "PNG changed" ink
+  proxy is confounded by the ~1 Hz countdown repaint (fix: crop the header
+  rows before diffing) + 4 minors (temp-root leak, missing doc gate,
+  consumed-K blank-line desync → spec rev-2.1 clarification, a hard artifact
+  gate for the W1→W2 parser calibration).
+- Drafter's fold flagged one grounded deviation: the reviewer's crop-via-ui.md
+  mechanism is impossible — the game canvas is a role-less raster, absent from
+  both the role tree and the text section (reconcile.rs Kind::Raster;
+  report.rs `(None,None) => continue`) — substituted a header-row crop.
+  Verified both citations myself before accepting.
+- **Skill notes:** (1) "proof by a test that runs a DIFFERENT composition" is
+  a recurring trap — a cited precedent must run the same plugin/config set as
+  the thing being specced. (2) A reviewer's diagnosis can be right while its
+  fix mechanism rests on a wrong assumption — the folder must re-verify FIXES
+  against code too, not just apply them. (3) Assertion proxies (PNG changed)
+  need a confound audit: what ELSE changes the observed artifact on its own?
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,

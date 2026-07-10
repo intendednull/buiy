@@ -1,8 +1,8 @@
 # Dooduel QA seat-driver — a per-seat GUI agent driver for visual playtest
 
-**Date:** 2026-07-09 · **Status:** active · **Revision:** rev-2 (both reviewers
-APPROVE-WITH-FIXES; all fixes folded — see the change log at the end) · **Branch:**
-`feat/dooduel-multiplayer-m1`
+**Date:** 2026-07-09 · **Status:** active · **Revision:** rev-2.1 (rev-2 spec review folded;
+rev-2.1 = a one-line §2.3 `consumed: K` clarification requested by the plan review — see the
+change log) · **Branch:** `feat/dooduel-multiplayer-m1`
 
 > Companion to the M1 acceptance flow (`docs/specs/2026-07-04-dooduel-multiplayer-m1-design.md`
 > §1.4 / §7, plan `docs/plans/2026-07-04-dooduel-multiplayer-m1.md` W6.2/W6.3). Prior
@@ -183,7 +183,10 @@ precedent).
 echoes its 0-based line index `K` (`… consumed: 12 → Ok` / `… consumed: 13 → NotFound{…}`),
 so an agent can tell consumed-from-pending by comparing `K` against the number of lines it
 has appended — cheaply, without parsing the mixed log. (This is the *only* structured
-addition; the eyes stay raw per R3.)
+addition; the eyes stay raw per R3.) **`K` counts EVERY `\n`-terminated line** — a blank or
+malformed line still consumes its `K` (logged `… consumed: K → skipped …`), so `K` always
+equals the agent's appended-line count and never desyncs; only a trailing partial line with no
+`\n` yet is uncounted (it stays buffered until completed).
 
 ### 3. Command schema
 
@@ -640,6 +643,11 @@ config will starve the seats regardless of a correct driver.
 ---
 
 ## Change log
+
+**rev-2.1 (2026-07-09)** — one-line §2.3 clarification requested by the plan review (plan
+minor #5): the `consumed: K` index counts EVERY `\n`-terminated line (blank/malformed lines
+consume their `K`, logged as skipped), so `K` never desyncs from the agent's appended-line
+count. No other change; the driver's `tail_commands` is aligned to this in the plan.
 
 **rev-2 (2026-07-09)** — folded both reviewers' APPROVE-WITH-FIXES (no blockers). Each item
 re-verified against code as folded.
