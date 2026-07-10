@@ -104,6 +104,23 @@ staged-development.
 - Dispatched in parallel: the harness spec draft (to be reviewer-gated per
   staged-development before any implementation) + the known-issues consolidation.
 
+### 2026-07-09 — known-issues list landed (code-verified)
+
+- `2026-07-09-dooduel-qa-cycles/known-issues.md`: 2 regression-watch (scoreboard
+  fix @ 9eb2085, chat-pills atlas fix), 7 known-open, 15 accepted-by-design,
+  M2–M6 scope table. The four ambiguous 2026-07-04 ledger items were verified
+  against M1 code: AFK-drawer early-out + turn-N-of-M label genuinely OPEN
+  (KI-07/KI-08); the Reveal→Continue "unevenness" and drawer-side wrong-guess
+  "lag" are NOT reproducible in the M1 authority — both were artifacts of the
+  retired file-protocol harness (single any-seat Continue rule at
+  session.rs:535-540; wrong guesses broadcast Recipient::All same-tick at
+  session.rs:811-819). Playtesters re-verify those live but don't presume broken.
+- **Skill note:** "verify the known-issues ledger against current code before
+  suppressing" earned its keep immediately — 2 of 4 carried-forward complaints
+  would have been suppressed as open bugs when they're actually fixed-by-
+  construction (harness artifacts), and re-reporting them would have wasted a
+  fix cycle.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
