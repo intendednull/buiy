@@ -1,8 +1,9 @@
 # Dooduel QA seat-driver — a per-seat GUI agent driver for visual playtest
 
-**Date:** 2026-07-09 · **Status:** active · **Revision:** rev-2.1 (rev-2 spec review folded;
-rev-2.1 = a one-line §2.3 `consumed: K` clarification requested by the plan review — see the
-change log) · **Branch:** `feat/dooduel-multiplayer-m1`
+**Date:** 2026-07-09 · **Status:** active · **Revision:** rev-2.2 (rev-2 spec review folded;
+rev-2.1 = a one-line §2.3 `consumed: K` clarification requested by the plan review; rev-2.2 =
+§res-Q5 corrected — the framework now emits `TextChanged` on a value-changing `SetValue` and the
+driver workaround is removed — see the change log) · **Branch:** `feat/dooduel-multiplayer-m1`
 
 > Companion to the M1 acceptance flow (`docs/specs/2026-07-04-dooduel-multiplayer-m1-design.md`
 > §1.4 / §7, plan `docs/plans/2026-07-04-dooduel-multiplayer-m1.md` W6.2/W6.3). Prior
@@ -429,6 +430,14 @@ text into the MVU model. Each of these screens has exactly **one** `TextInput`, 
 by role alone (`get_by_role(TextInput, None, None)`; the strict single-match resolves it,
 and the placeholder is phase-dependent so role-alone beats name).
 
+> **rev-2.2 correction.** The "fires the field's `on_input` binding" claim above was **not**
+> true pre-fix: `Action::SetValue` (`honor_text_set_value`) updated the editor + a11y tree but
+> emitted no `TextChanged`, so `route_text_input` never fired `on_input` and the model never
+> folded — the framework gap the W1 gate found (a `set_value`'d Join code that `SubmitJoin`
+> read as `""`). The framework now emits `TextChanged` on a value-changing `SetValue` (mirroring
+> the keyboard path, `crates/buiy_core/src/a11y/contract.rs`), so the claim holds and the
+> driver's `TextChanged` re-emit workaround is removed.
+
 - **Guess (chat):** the field is `text_input(s.chat_input.clone()).on_input(Msg::SetChatInput)
   .on_submit(Msg::SubmitGuess)` (`in_game.rs:684-689`); submit by **clicking** `Button`
   "Send" (`in_game.rs:690` → `Msg::SubmitGuess`).
@@ -643,6 +652,13 @@ config will starve the seats regardless of a correct driver.
 ---
 
 ## Change log
+
+**rev-2.2 (2026-07-10)** — §res-Q5 correction: pre-fix, `set_value` did NOT fire the field's
+`on_input` (the framework gap the W1 gate found — `Action::SetValue` mutated the editor + a11y
+tree but emitted no `TextChanged`, so `route_text_input` never folded and the next reconcile
+clobbered the edit). The framework now emits `TextChanged` on a value-changing `SetValue`
+(`buiy_core::a11y::contract::honor_text_set_value`, mirroring the keyboard path), so the driver's
+`set_value_role` `TextChanged` re-emit workaround is removed.
 
 **rev-2.1 (2026-07-09)** — one-line §2.3 clarification requested by the plan review (plan
 minor #5): the `consumed: K` index counts EVERY `\n`-terminated line (blank/malformed lines
