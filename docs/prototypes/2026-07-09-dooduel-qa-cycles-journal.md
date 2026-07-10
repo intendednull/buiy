@@ -307,6 +307,35 @@ staged-development.
   signal (the intended handler fired), not just the negative (the wrong one
   didn't) — the negative-only form misses a future different occluder.
 
+### 2026-07-10 — Track 2 landed (APPROVE) + live re-gate PASS: W1 fully done
+
+- Track 2 (framework): `be97c94` RED at the buiy_view model-fold tier →
+  `23540a0` fix (capture EditOutcome.value_changed in honor_text_set_value,
+  write TextChanged mirroring the keyboard path, value-gated) → `7931f22`
+  driver-workaround removal + spec rev-2.2 → `5f4032b` reviewer-suggested
+  coverage (emit-count semantics at buiy_core: change=1/identical=0/
+  delete-clear=1/empty-noop=0; empty-clear fold at buiy_view). Review:
+  APPROVE — reviewer independently reproduced the RED at the pre-fix commit,
+  traced same-frame delivery on both dispatch paths, and proved no
+  emit→fold→reseed loop (the reconciler's controlled-set uses the
+  non-emitting seam by design). Full workspace 2287/0.
+- **Live re-gate (`ca9f064` plan note): PASS end-to-end** — 2-turn match with
+  role swap; both fixes confirmed live; redaction both directions; spoiler-
+  safe guess chat; scoring live (+182/+100; podium 387/282); evidence PNGs
+  kept. The W1 guess→chat→score checkpoint is VERIFIED; W2 unblocked.
+- New harness finding from the re-gate: set_value + Send in ONE batch can
+  race the fold (an empty guess submits). The briefings' say()-per-ack
+  discipline already prevents it for seat agents; W2's smoke must emit them
+  as separate settled steps; candidate driver polish (verify [value=…] before
+  acking set_value) deferred.
+- Driver code review note: the fixes + plan skeletons got dedicated fresh
+  reviews; the driver example as-built gets its review folded into the W2
+  wave review (dev-tool tier; black-box exercised by the smoke).
+- **Skill note:** a timer-starved first match (0-0, image-analysis wall-clock
+  ate the 150s draw window) re-proved the "widen timers for LLM seats" rule
+  with hard evidence — the re-gate agent's own experience mirrors what seat
+  agents will hit in cycles.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
