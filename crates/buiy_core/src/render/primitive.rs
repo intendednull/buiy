@@ -33,8 +33,8 @@ use crate::render::instance::{
     ROUNDED_SHADOW_INSTANCE_STRIDE_BYTES,
 };
 use crate::render::pipeline::{
-    atlas_layout_descriptor, band_shader_handle, coverage_shader_handle, gradient_shader_handle,
-    rounded_shadow_shader_handle, shader_handle, shadow_shader_handle,
+    band_shader_handle, coverage_atlas_layout_descriptor, coverage_shader_handle,
+    gradient_shader_handle, rounded_shadow_shader_handle, shader_handle, shadow_shader_handle,
     view_uniform_layout_descriptor,
 };
 
@@ -754,14 +754,22 @@ impl SpecializedRenderPipeline for BuiyPrimitives {
         let shader = Self::shader_for(key.kind);
         let is_glyph = key.kind == BuiyPrimitiveKind::Glyph;
         // The glyph (coverage) pipeline samples the atlas, so it declares the
-        // additive `@group(1)` (texture + sampler) ON TOP OF the shared
-        // `@group(0)` view uniform. The non-sampling quad-family pipelines keep
-        // their single `@group(0)` layout byte-identical (design fork #2): a
-        // pipeline that declared a `@group(1)` its shader never binds is just
-        // wasted layout, and one whose shader binds a group the layout omits
-        // fails wgpu validation — so the layout tracks the shader exactly.
+        // additive `@group(1)` ON TOP OF the shared `@group(0)` view uniform. It
+        // uses the COVERAGE layout (`texture_2d_array<f32>` — all resident
+        // coverage pages, sampled by the per-instance layer), FORKED from the
+        // raster/image `atlas_layout_descriptor` (D2) so the multi-page coverage
+        // bind cannot break the drawing canvas. Covers both glyph variants
+        // (`Glyph@Rgba8UnormSrgb` + the effect-group `Glyph@Rgba16Float`). The
+        // non-sampling quad-family pipelines keep their single `@group(0)` layout
+        // byte-identical (design fork #2): a pipeline that declared a `@group(1)`
+        // its shader never binds is just wasted layout, and one whose shader
+        // binds a group the layout omits fails wgpu validation — so the layout
+        // tracks the shader exactly.
         let layout = if is_glyph {
-            vec![view_uniform_layout_descriptor(), atlas_layout_descriptor()]
+            vec![
+                view_uniform_layout_descriptor(),
+                coverage_atlas_layout_descriptor(),
+            ]
         } else {
             vec![view_uniform_layout_descriptor()]
         };

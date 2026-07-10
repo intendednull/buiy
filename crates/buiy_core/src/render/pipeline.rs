@@ -16,7 +16,7 @@ use bevy::render::render_resource::{
     BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BindGroupLayoutEntry,
     Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, PipelineCache,
     SamplerBindingType, ShaderStages, TextureFormat, TextureSampleType,
-    binding_types::{sampler, texture_2d, uniform_buffer},
+    binding_types::{sampler, texture_2d, texture_2d_array, uniform_buffer},
 };
 use bevy::render::renderer::RenderDevice;
 use bevy::render::view::{Msaa, ViewTarget};
@@ -138,14 +138,17 @@ pub(crate) fn view_uniform_layout_descriptor() -> BindGroupLayoutDescriptor {
     BindGroupLayoutDescriptor::new("buiy_view_uniform_layout", &view_uniform_layout_entries())
 }
 
-/// The bind-group-layout entries for the atlas `@group(1)`: a fragment-stage
-/// `texture_2d<f32>` (binding 0) + a filtering `sampler` (binding 1). This is
-/// **additive** — only the atlas-sampling pipelines (coverage glyph) declare it;
-/// the non-sampling quad/shadow pipelines keep their single-group `@group(0)`
-/// layout byte-identical (GPU-verify design fork #2). The coverage page is
-/// `R8Unorm` (a filterable float-sampled format), so `TextureSampleType::Float
-/// { filterable: true }` + `SamplerBindingType::Filtering` match the WGSL
-/// `texture_2d<f32>` + `sampler`.
+/// The bind-group-layout entries for the RASTER/image atlas `@group(1)`: a
+/// fragment-stage `texture_2d<f32>` (binding 0) + a filtering `sampler`
+/// (binding 1). This is **additive** — only the atlas-sampling pipelines
+/// declare it; the non-sampling quad/shadow pipelines keep their single-group
+/// `@group(0)` layout byte-identical (GPU-verify design fork #2). The raster
+/// (drawing-canvas) pipeline binds a plain 2D image here (`raster.wgsl`); the
+/// COVERAGE (glyph/icon) pipeline forked to its own `texture_2d_array` layout
+/// ([`coverage_atlas_layout_entries`]) so a multi-page coverage bind cannot
+/// break the raster path. The image is a filterable float-sampled format, so
+/// `TextureSampleType::Float { filterable: true }` + `SamplerBindingType::
+/// Filtering` match the WGSL `texture_2d<f32>` + `sampler`.
 fn atlas_layout_entries() -> BindGroupLayoutEntries<2> {
     BindGroupLayoutEntries::sequential(
         ShaderStages::FRAGMENT,
@@ -156,22 +159,63 @@ fn atlas_layout_entries() -> BindGroupLayoutEntries<2> {
     )
 }
 
-/// The pipeline-layout descriptor for the atlas `@group(1)`. Shared by the
-/// coverage pipeline's `specialize` (so the descriptor declares the group the
-/// shader binds) and the concrete [`build_atlas_layout`] the bind group is built
-/// against — one source of truth, so the bind group is layout-compatible.
+/// The pipeline-layout descriptor for the raster/image atlas `@group(1)`.
+/// Shared by the raster pipeline's `specialize` (so the descriptor declares the
+/// group the shader binds) and the concrete [`build_atlas_layout`] the per-image
+/// bind group is built against — one source of truth, so the bind group is
+/// layout-compatible.
 pub(crate) fn atlas_layout_descriptor() -> BindGroupLayoutDescriptor {
     BindGroupLayoutDescriptor::new("buiy_atlas_layout", &atlas_layout_entries())
 }
 
-/// Build the concrete `@group(1)` atlas bind-group layout from the device. The
-/// atlas prepare system (`atlas::gpu::prepare_atlas_textures`) builds the
-/// coverage bind group against the copy stored on [`BuiyPipeline::atlas_layout`];
-/// this is the constructor for it. Same entries as `atlas_layout_descriptor`
-/// (the crate-private descriptor the coverage pipeline declares), so the bind
-/// group is layout-compatible with the pipeline.
+/// Build the concrete `@group(1)` raster/image atlas bind-group layout from the
+/// device. The raster pipeline builds its per-image bind group against the copy
+/// stored on [`BuiyPipeline::atlas_layout`]; this is the constructor for it.
+/// Same entries as `atlas_layout_descriptor`, so the bind group is
+/// layout-compatible with the pipeline.
 pub fn build_atlas_layout(device: &RenderDevice) -> BindGroupLayout {
     device.create_bind_group_layout("buiy_atlas_layout", &atlas_layout_entries())
+}
+
+/// The bind-group-layout entries for the COVERAGE atlas `@group(1)`: a
+/// fragment-stage `texture_2d_array<f32>` (all resident coverage pages, sampled
+/// by the per-instance layer) + a filtering `sampler`. Forked from
+/// [`atlas_layout_entries`] (which stays `texture_2d` for the raster/image
+/// pipeline) so the multi-page coverage bind cannot break the drawing canvas.
+/// The coverage page is `R8Unorm` (a filterable float-sampled format), so
+/// `TextureSampleType::Float { filterable: true }` + `SamplerBindingType::
+/// Filtering` match the WGSL `texture_2d_array<f32>` + `sampler`.
+fn coverage_atlas_layout_entries() -> BindGroupLayoutEntries<2> {
+    BindGroupLayoutEntries::sequential(
+        ShaderStages::FRAGMENT,
+        (
+            texture_2d_array(TextureSampleType::Float { filterable: true }),
+            sampler(SamplerBindingType::Filtering),
+        ),
+    )
+}
+
+/// Pipeline-layout descriptor for the coverage atlas `@group(1)` (D2Array).
+/// Declared by the glyph `specialize`; matched by [`build_coverage_atlas_layout`]
+/// — one source of truth, so the coverage bind group is layout-compatible.
+pub(crate) fn coverage_atlas_layout_descriptor() -> BindGroupLayoutDescriptor {
+    BindGroupLayoutDescriptor::new(
+        "buiy_coverage_atlas_layout",
+        &coverage_atlas_layout_entries(),
+    )
+}
+
+/// Build the concrete coverage `@group(1)` (D2Array) bind-group layout. The
+/// atlas prepare system (`atlas::gpu::prepare_atlas_textures`) builds the
+/// coverage bind group against [`BuiyPipeline::coverage_atlas_layout`]; this is
+/// its constructor. Same entries as `coverage_atlas_layout_descriptor` (the
+/// descriptor the glyph pipeline declares), so the bind group is
+/// layout-compatible with the pipeline.
+pub fn build_coverage_atlas_layout(device: &RenderDevice) -> BindGroupLayout {
+    device.create_bind_group_layout(
+        "buiy_coverage_atlas_layout",
+        &coverage_atlas_layout_entries(),
+    )
 }
 
 #[derive(Resource)]
@@ -232,12 +276,20 @@ pub struct BuiyPipeline {
     /// group from this layout against `BuiyInstanceBuffers::view_uniform` each
     /// frame; the layout itself is created once here.
     pub view_layout: BindGroupLayout,
-    /// Bind-group layout for the atlas `@group(1)` (`texture_2d<f32>` + a
-    /// `sampler`, fragment stage). The atlas prepare system builds the coverage
-    /// bind group against this; created once here from the SAME entries the
-    /// coverage pipeline descriptor declares, so the bind group is
-    /// layout-compatible. Additive — quad/shadow never bind it (design fork #2).
+    /// Bind-group layout for the RASTER/image atlas `@group(1)`
+    /// (`texture_2d<f32>` + a `sampler`, fragment stage). The raster
+    /// (drawing-canvas) pipeline builds its per-image bind group against this;
+    /// created once here from the SAME entries the raster pipeline descriptor
+    /// declares, so the bind group is layout-compatible. Additive — quad/shadow
+    /// never bind it (design fork #2).
     pub atlas_layout: BindGroupLayout,
+    /// Bind-group layout for the COVERAGE atlas `@group(1)`
+    /// (`texture_2d_array<f32>` + a `sampler`, fragment stage). Forked from
+    /// [`Self::atlas_layout`] (D2Array vs D2) so the multi-page coverage bind
+    /// cannot break the raster path. The atlas prepare system builds the
+    /// coverage bind group (all resident pages as array layers) against this,
+    /// from the SAME entries the glyph pipeline descriptor declares.
+    pub coverage_atlas_layout: BindGroupLayout,
 }
 
 pub(crate) fn register(render_app: &mut SubApp) {
@@ -264,11 +316,17 @@ pub(crate) fn register(render_app: &mut SubApp) {
         .resource::<RenderDevice>()
         .create_bind_group_layout("buiy_view_uniform_layout", &view_uniform_layout_entries());
 
-    // The concrete atlas `@group(1)` layout, from the same entries the coverage
-    // pipeline descriptor declares (one source of truth — see
-    // `atlas_layout_descriptor`). The atlas prepare system builds its coverage
-    // bind group against this copy.
+    // The concrete raster/image `@group(1)` layout (D2), from the same entries
+    // the raster pipeline descriptor declares (one source of truth — see
+    // `atlas_layout_descriptor`). The raster pipeline builds its per-image bind
+    // group against this copy.
     let atlas_layout = build_atlas_layout(world.resource::<RenderDevice>());
+
+    // The concrete coverage `@group(1)` layout (D2Array), forked from the raster
+    // one — the same entries the glyph pipeline descriptor declares (see
+    // `coverage_atlas_layout_descriptor`). The atlas prepare system builds its
+    // coverage bind group (all resident pages as array layers) against this copy.
+    let coverage_atlas_layout = build_coverage_atlas_layout(world.resource::<RenderDevice>());
 
     let render_device = world.resource::<RenderDevice>();
 
@@ -408,6 +466,7 @@ pub(crate) fn register(render_app: &mut SubApp) {
         vertex_buffer,
         view_layout,
         atlas_layout,
+        coverage_atlas_layout,
     });
 }
 
