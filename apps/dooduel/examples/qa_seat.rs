@@ -27,7 +27,8 @@ use buiy_core::a11y::report::snapshot_report;
 use buiy_core::a11y::translate::entity_for_node_id;
 use buiy_verify::pointer::drive_stroke;
 
-use dooduel::{Dooduel, Screen};
+use dooduel::paint::CanvasKind;
+use dooduel::{CANVAS_H, CANVAS_W, Dooduel, Screen};
 
 const W: u32 = 1280;
 const H: u32 = 800;
@@ -271,6 +272,120 @@ fn tail_commands(path: &Path, cursor: &mut u64) -> Vec<String> {
     let consumed = &buf[..=last_nl];
     *cursor += consumed.len() as u64;
     consumed.lines().map(|s| s.to_string()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Verbs (spec §3.1/§3.2): click / set_value / stroke / shot / quit.
+// ---------------------------------------------------------------------------
+
+/// The Game canvas node's window-space rect (top-left + size), or None if not laid out.
+fn game_canvas_rect(app: &mut App) -> Option<(Vec2, Vec2)> {
+    app.world_mut()
+        .query::<(&CanvasKind, &GlobalTransform, &ResolvedLayout)>()
+        .iter(app.world())
+        .find(|(k, ..)| **k == CanvasKind::Game)
+        .map(|(_, gt, layout)| (gt.translation().truncate(), layout.size))
+}
+
+/// Map a canvas coord (0..CANVAS_W × 0..CANVAS_H) to a window-space point — the exact
+/// inverse of paint.rs::to_pixel (spec §res-Q4). `+0.5` hits the texel center.
+fn canvas_to_window(tl: Vec2, size: Vec2, cx: f32, cy: f32) -> Vec2 {
+    Vec2::new(
+        tl.x + ((cx + 0.5) / CANVAS_W as f32) * size.x,
+        tl.y + ((cy + 0.5) / CANVAS_H as f32) * size.y,
+    )
+}
+
+fn role_from_str(s: &str) -> Option<A11yRole> {
+    match s {
+        "Button" => Some(A11yRole::Button),
+        "TextInput" => Some(A11yRole::TextInput),
+        _ => None,
+    }
+}
+
+/// Set a text field's value via the probe SetValue channel (spec §res-Q5), then settle.
+fn set_value_role(
+    app: &mut App,
+    role: A11yRole,
+    name: Option<&str>,
+    text: &str,
+) -> Result<(), buiy_core::a11y::ActionError> {
+    let node = buiy::probe::get_by_role(app.world_mut(), role, name, None)?;
+    buiy::probe::set_value(app.world_mut(), node, text)?;
+    app.update();
+    Ok(())
+}
+
+enum Applied {
+    Ok(String),
+    Quit,
+}
+
+/// Apply one command line. Returns the outcome string (logged) or Quit. A malformed line is
+/// a non-fatal BadData outcome (never a panic) — spec §2.3.
+fn apply_command(app: &mut App, window: Entity, pointer: Entity, line: &str) -> Applied {
+    let v: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return Applied::Ok(format!("BadData (malformed JSON): {e}")),
+    };
+    let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+    match cmd {
+        "click" => {
+            let Some(role) = v.get("role").and_then(|r| r.as_str()).and_then(role_from_str) else {
+                return Applied::Ok("BadData: click needs a known role".into());
+            };
+            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            match click_role(app, window, pointer, role, name) {
+                Ok(()) => Applied::Ok(format!("click {name:?} → Ok")),
+                Err(e) => Applied::Ok(format!("click {name:?} → {e:?}")),
+            }
+        }
+        "set_value" => {
+            let Some(role) = v.get("role").and_then(|r| r.as_str()).and_then(role_from_str) else {
+                return Applied::Ok("BadData: set_value needs a known role".into());
+            };
+            let name = v.get("name").and_then(|n| n.as_str());
+            let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            match set_value_role(app, role, name, text) {
+                Ok(()) => Applied::Ok(format!("set_value {text:?} → Ok")),
+                Err(e) => Applied::Ok(format!("set_value → {e:?}")),
+            }
+        }
+        "stroke" => {
+            let Some((tl, size)) = game_canvas_rect(app) else {
+                return Applied::Ok("stroke → NotFound: no Game canvas on screen".into());
+            };
+            let pts: Vec<Vec2> = v
+                .get("points")
+                .and_then(|p| p.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| {
+                            let a = p.as_array()?;
+                            let cx = a.first()?.as_f64()? as f32;
+                            let cy = a.get(1)?.as_f64()? as f32;
+                            Some(canvas_to_window(tl, size, cx, cy))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let path: Vec<Vec2> = if pts.len() == 1 {
+                vec![pts[0], pts[0] + Vec2::new(1.0, 0.0)] // 1-point tap → micro-stroke
+            } else {
+                pts
+            };
+            if path.len() < 2 {
+                return Applied::Ok("stroke → BadData: need ≥1 point".into());
+            }
+            drive_stroke(app, window, pointer, &path);
+            app.update();
+            Applied::Ok(format!("stroke ({} pts) → Ok", path.len()))
+        }
+        "shot" => Applied::Ok("shot → Ok (forced refresh)".into()),
+        "quit" => Applied::Quit,
+        other => Applied::Ok(format!("BadData: unknown cmd {other:?}")),
+    }
 }
 
 fn model_screen(app: &mut App) -> Screen {

@@ -554,7 +554,7 @@ git commit -m "feat(dooduel): qa_seat file protocol — atomic writes + byte-cur
 **Files:**
 - Modify: `apps/dooduel/examples/qa_seat.rs`
 
-- [ ] **Step 1: Add the canvas coordinate mapping (spec §res-Q4).**
+- [x] **Step 1: Add the canvas coordinate mapping (spec §res-Q4).**
 
 Append (imports: add `use dooduel::paint::CanvasKind;` and `use dooduel::{CANVAS_W, CANVAS_H};`
 to the top of the file):
@@ -579,7 +579,7 @@ fn canvas_to_window(tl: Vec2, size: Vec2, cx: f32, cy: f32) -> Vec2 {
 }
 ```
 
-- [ ] **Step 2: Add role parsing + the `set_value` helper.**
+- [x] **Step 2: Add role parsing + the `set_value` helper.**
 
 Append:
 
@@ -606,7 +606,7 @@ fn set_value_role(
 }
 ```
 
-- [ ] **Step 3: Add the command dispatcher.**
+- [x] **Step 3: Add the command dispatcher.**
 
 Append (uses `serde_json` — already a `dooduel` dependency, so available to the example):
 
@@ -685,7 +685,7 @@ fn apply_command(app: &mut App, window: Entity, pointer: Entity, line: &str) -> 
 }
 ```
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 ```sh
 git add apps/dooduel/examples/qa_seat.rs
 git commit -m "feat(dooduel): qa_seat verbs — click/set_value/stroke/shot/quit + canvas mapping"
