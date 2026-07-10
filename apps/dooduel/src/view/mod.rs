@@ -10,7 +10,7 @@
 //! glyphs — see `avatar_editor`). When the editor is open the router shows it
 //! INSTEAD of the underlying screen, so nothing is behind it to bleed.
 
-use buiy::view::{Element, column};
+use buiy::view::{Element, column, when};
 
 use crate::{Dooduel, Msg, Screen};
 
@@ -36,5 +36,17 @@ pub fn view(s: &Dooduel) -> Element<Msg> {
             Screen::Podium => podium::podium(s),
         }
     };
-    column![content, widgets::theme_toggle(s)].fill()
+    // The floating theme toggle floats bottom-right over every screen EXCEPT in-game:
+    // there the chat pane (desktop) / chat card (mobile) fills that corner, and the
+    // top-layer toggle would occlude — and steal clicks from — the chat Send control
+    // (a click at Send's center folded SetTheme instead of submitting the guess). The
+    // theme is reducer-owned and persists, so the player's menu choice carries into the
+    // match. The design keeps the toggle in-game; suppressing it there is a deliberate,
+    // documented divergence to protect the primary control — see
+    // docs/specs/2026-07-10-dooduel-theme-toggle-occlusion-design.md.
+    column![
+        content,
+        when(s.screen != Screen::InGame, widgets::theme_toggle(s)),
+    ]
+    .fill()
 }

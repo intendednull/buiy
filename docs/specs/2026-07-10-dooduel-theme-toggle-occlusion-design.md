@@ -1,7 +1,9 @@
 # Dooduel — the in-game theme toggle occludes the chat "Send" button
 
 - **Date:** 2026-07-10
-- **Status:** active
+- **Status:** landed — fix A applied in `apps/dooduel/src/view/mod.rs` (suppress the
+  toggle when `s.screen == Screen::InGame`); regression test
+  `apps/dooduel/tests/in_game_occlusion.rs`.
 - **Area:** apps/dooduel (view layer)
 - **Found by:** the QA seat driver (Track 1 of the playtest cycle, commit `4b421a7`'s gate run)
 
