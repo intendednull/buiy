@@ -219,6 +219,28 @@ staged-development.
   gate report format is a cheap, strong wave gate. Also: implementers keep
   idling without reporting — the ping-for-report step is now routine.
 
+### 2026-07-10 — W1 interrupted by the session usage limit (resumable, no loss)
+
+- Tasks 1.1/1.2/1.3 LANDED before the limit hit (`b02b935` file protocol,
+  `789e6e5` verbs + canvas mapping, `caa58bd` CLI + loop + env isolation).
+  Task 1.4 (the live 2-seat gate) was mid-run: server had started with a QA
+  config, seat dirs created, logs still empty (gate being restarted), no
+  leaked processes.
+- One UNCOMMITTED fix left in the tree (deliberately kept dirty): SETTLE_FRAMES
+  — pump 8 frames after each applied command so a batched
+  `click nav → set_value → click submit` doesn't run set_value against a
+  not-yet-initialized field (the gate caught an empty-code join). Well-reasoned
+  and mirrors the proven settle pattern, but the dead agent never re-ran the
+  gate with it — the resumed implementer must VERIFY it live before committing.
+- Plan on resume (after the ~2:50am PT window reset): fresh implementer
+  finishes Task 1.4 (verify settle fix → full 2-seat script → ink verified in
+  both seats' screen.png → save ui-samples.txt → commit), then W1 review, then
+  W2/W3.
+- **Skill note:** long implementation waves need to be RESUMABLE — per-task
+  commits (the plan's granularity) meant a hard mid-wave interruption cost
+  almost nothing; the only limbo was one uncommitted fix, and the
+  leave-dirty-verify-then-commit rule handles exactly that.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
