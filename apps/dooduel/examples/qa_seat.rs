@@ -299,7 +299,22 @@ fn role_from_str(s: &str) -> Option<A11yRole> {
     }
 }
 
-/// Set a text field's value via the probe SetValue channel (spec §res-Q5), then settle.
+/// Set a text field's value via the probe SetValue channel (spec §res-Q5), fold the edit
+/// into the MVU model, then settle.
+///
+/// **Why the extra `TextChanged`.** `probe::set_value` lowers through the editor's
+/// `SelectAll` + `Insert` channel, which mutates the field's `TextEditState` (and the next
+/// frame's `sync_text_input_a11y` reflects it into the a11y-tree value) — but it does **not**
+/// emit `TextChanged`. The real keyboard editor DOES emit `TextChanged` after any
+/// value-changing edit (`buiy_core::text::edit::input::apply_keyboard_edits`), and that is
+/// the signal `buiy_view`'s `route_text_input` bridge reads to fire the field's `on_input`
+/// handler and fold the new text into the MVU model. Without re-emitting it here the value
+/// appears in `ui.md`'s role tree (the editor + a11y value updated) yet the **model** the
+/// app's own reducers read (e.g. `Msg::SubmitJoin` reading `join_code`) stays empty — the
+/// W1 gate caught exactly this as a `set_value`'d Join code that SubmitJoin still saw as `""`
+/// (validation "Enter a room code."). So we reproduce the keyboard path's `TextChanged`, which
+/// makes the a11y edit fold identically to a keystroke. (The spec §res-Q5 claim that
+/// `set_value` alone "fires the field's on_input binding" is inaccurate — see the W1 report.)
 fn set_value_role(
     app: &mut App,
     role: A11yRole,
@@ -308,6 +323,11 @@ fn set_value_role(
 ) -> Result<(), buiy_core::a11y::ActionError> {
     let node = buiy::probe::get_by_role(app.world_mut(), role, name, None)?;
     buiy::probe::set_value(app.world_mut(), node, text)?;
+    if let Some(entity) = entity_for_node_id(node) {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<buiy_core::text::edit::TextChanged>>()
+            .write(buiy_core::text::edit::TextChanged(entity));
+    }
     app.update();
     Ok(())
 }
@@ -469,6 +489,25 @@ fn seed_name(app: &mut App, name: &str) {
     app.update();
 }
 
+/// Frames to pump after each applied command so its Msg folds and the view rebuilds before
+/// the NEXT command in the same drain batch acts on it. A batched
+/// `click "Join a room" (nav) → set_value → click "Join room"` needs the Join screen's
+/// `TextInput` to exist before `set_value` addresses it — without a settle the `set_value`
+/// would resolve `get_by_role(TextInput)` against the still-current Home screen's name field.
+/// This is a screen-readiness pump, NOT the value-fold: the model fold is handled inside
+/// [`set_value_role`] by re-emitting `TextChanged` (an earlier revision mis-attributed the
+/// empty-code join to field-init timing and "fixed" it here — that was wrong; see there).
+/// Mirrors the `gui_networked`/`canvas_e2e` `settle(app, frames)` harness pattern.
+const SETTLE_FRAMES: usize = 8;
+
+/// Pump `frames` update cycles so a just-applied command settles (fold + view rebuild) before
+/// the next — see [`SETTLE_FRAMES`].
+fn settle(app: &mut App, frames: usize) {
+    for _ in 0..frames {
+        app.update();
+    }
+}
+
 fn main() {
     let args = parse_args();
     std::fs::create_dir_all(&args.dir).expect("create seat dir");
@@ -534,6 +573,9 @@ fn main() {
                 }
                 Applied::Ok(outcome) => {
                     append_line(&log, &format!("consumed: {consumed_k} → {outcome}"));
+                    // Let this command settle (Msg fold + view rebuild) before the next in
+                    // the batch acts on the resulting screen — see SETTLE_FRAMES.
+                    settle(&mut app, SETTLE_FRAMES);
                 }
             }
             consumed_k += 1;

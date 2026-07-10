@@ -854,7 +854,40 @@ git commit -m "feat(dooduel): qa_seat CLI + real-time command loop + per-seat en
 
 **Files:** none (verification only). This is a RUN gate — do not skip.
 
-- [ ] **Step 1: Write the wide-timer server config.**
+> **RESULT (2026-07-10, run on `/tmp/qa-w1`, seats Hosta/Guessa, room `39R5OM`, config
+> rounds=1/draw=150/pick=30/reveal=12/hints=2/bots=false).** The gate RAN and did its job —
+> it caught two real bugs:
+>
+> 1. **DRIVER bug FOUND + FIXED (the inherited "settle fix" was a misdiagnosis).** The
+>    batched Join flow (`click "Join a room"` → `set_value` code → `click "Join room"`) left
+>    the code field empty and SubmitJoin failed validation. Root cause (verified by isolating
+>    a standalone set_value + standalone Join-room click, which ALSO failed): `probe::set_value`
+>    mutates the editor's `TextEditState` + the a11y-tree value but **never emits `TextChanged`**,
+>    so `buiy_view::route_text_input` never fires the field's `on_input` and the edit never folds
+>    into the MVU model — the model `SubmitJoin`/`SubmitGuess` read stays empty. `SETTLE_FRAMES`
+>    could never fix this (no amount of settling emits the missing signal). Fixed in
+>    `set_value_role` by re-emitting the exact `TextChanged` the real keyboard editor emits
+>    (`input.rs:741`); re-ran → the batched Join now succeeds (both seats show the 2-player
+>    roster). `SETTLE_FRAMES` retained (it serves screen-readiness between batched nav→act
+>    commands) with its rationale corrected. **Spec §res-Q5's claim that `set_value` alone
+>    "fires the field's on_input binding" is inaccurate — see the W1 report.**
+>
+> 2. **APP bug FOUND (reported, NOT fixed — production code).** In the in-game screen the
+>    floating "Light/Dark" theme toggle (`@1172,730 88x50`) **occludes the chat "Send" button**
+>    (`@1194,736 41x56`): Send's resolved center `(1214,764)` is inside the toggle's rect, so
+>    the synthetic pointer activates the toggle (it flipped `Light→Dark [focused]`) instead of
+>    submitting the guess. This is the occluded-hit / pick≠paint class the driver exists to
+>    catch. **It blocks the guess-submission checkpoint at the res-Q2 default 1280×800** (also a
+>    W2 checkpoint-6 concern). Guess *value-entry* works (the fixed `set_value` landed the text);
+>    only the Send *click* is blocked.
+>
+> Checkpoints verified: create ✓, join ✓ (after fix), start ✓, pick ✓ (UMBRELLA), draw ✓ (a
+> red X rendered on the drawer's canvas AND op-log-synced identically to the guesser's canvas;
+> guesser's word slots correctly blank — redaction holds). Guess submission ✗ (blocked by #2).
+> Both turns hit the 150s Reveal timeout during the root-cause investigation (podium 0-0) — a
+> reminder the real-time server needs the runbook's widened timers for slower LLM-seat cycles.
+
+- [x] **Step 1: Write the wide-timer server config.**
 
 Create `/tmp/qa-server.toml` (agents are slow — spec §6 operational dependency):
 ```toml
@@ -867,13 +900,13 @@ hints = 2
 bots = false
 ```
 
-- [ ] **Step 2: Start the server (terminal 1).**
+- [x] **Step 2: Start the server (terminal 1).**
 ```sh
 RUST_MIN_STACK=33554432 cargo run -p dooduel_server --locked -- --port 7878 --config /tmp/qa-server.toml
 ```
 Expected: `LISTENING port=7878` on stdout; per-turn transcript on stderr.
 
-- [ ] **Step 3: Start two seats (terminals 2 and 3).**
+- [x] **Step 3: Start two seats (terminals 2 and 3).**
 ```sh
 # terminal 2 (host):
 RUST_MIN_STACK=33554432 cargo run -p dooduel --example qa_seat --locked -- \
@@ -883,7 +916,7 @@ RUST_MIN_STACK=33554432 cargo run -p dooduel --example qa_seat --locked -- \
     --dir /tmp/qa-p2 --url ws://127.0.0.1:7878 --name Priya
 ```
 
-- [ ] **Step 4: Drive the host: create a room, read the code.**
+- [x] **Step 4: Drive the host: create a room, read the code.**
 ```sh
 echo '{"cmd":"click","role":"Button","name":"Create a room"}' >> /tmp/qa-host/commands.jsonl
 sleep 3
@@ -892,7 +925,7 @@ cp /tmp/qa-host/ui.md /tmp/qa-lobby-ui.md          # snapshot for the W2 calibra
 ```
 Open `/tmp/qa-host/screen.png` — the Lobby with the code should be visible.
 
-- [ ] **Step 5: Drive the guesser: join by the corrected flow.**
+- [x] **Step 5: Drive the guesser: join by the corrected flow.**
 Substitute the code from step 4 for `CODE`:
 ```sh
 printf '%s\n' \
@@ -903,7 +936,7 @@ sleep 3
 grep -c "Priya" /tmp/qa-host/ui.md    # → host sees the 2nd player in its roster
 ```
 
-- [ ] **Step 6: Start the match, pick a word, draw, guess.**
+- [x] **Step 6: Start the match, pick a word, draw, guess.**
 ```sh
 echo '{"cmd":"click","role":"Button","name":"▶ Start game"}' >> /tmp/qa-host/commands.jsonl
 sleep 3
@@ -924,7 +957,7 @@ printf '%s\n' \
 sleep 2
 ```
 
-- [ ] **Step 7: VERIFY (the gate).**
+- [x] **Step 7: VERIFY (the gate).**
 - Open `/tmp/qa-host/screen.png` — real ink on the canvas.
 - `grep -i robot /tmp/qa-p2/ui.md` — the guess shows in the chat.
 - `tail /tmp/qa-host/driver.log` + `/tmp/qa-p2/driver.log` — every command shows
@@ -932,7 +965,7 @@ sleep 2
 If any button read `NotFound`, cross-check the exact label against `ui.md` (case-sensitive —
 spec §3.1) before assuming a driver bug. Quit both: `echo '{"cmd":"quit"}' >> …/commands.jsonl`.
 
-- [ ] **Step 8: Save the W2 parser-calibration samples (HARD GATE — W2 does not start without this).**
+- [x] **Step 8: Save the W2 parser-calibration samples (HARD GATE — W2 does not start without this).**
 W2's `room_code`/`first_word_choice` parsers must match `snapshot_report`'s EXACT line format;
 this run produced the only real `ui.md`s to calibrate them. Extract the two load-bearing lines
 into a committed evidence file W2's Task 2.1 step 2 reads before writing the parsers:
@@ -949,7 +982,7 @@ Both greps MUST return a line. If either is empty, the report's format differs f
 assumption — open the snapshot, copy the real line verbatim into `ui-samples.txt`, and note the
 actual shape; W2's parsers key off THESE exact strings (indentation, quoting).
 
-- [ ] **Step 9: Commit the calibration samples (+ any fix step 7 surfaced).**
+- [x] **Step 9: Commit the calibration samples (+ any fix step 7 surfaced).**
 ```sh
 git add docs/reports/2026-07-09-qa-seat-driver-assets/ui-samples.txt
 git commit -m "test(dooduel): W1 manual-gate ui.md calibration samples for the W2 parsers"
