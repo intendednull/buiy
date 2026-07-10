@@ -28,21 +28,23 @@ use buiy_core::a11y::translate::entity_for_node_id;
 use buiy_verify::pointer::drive_stroke;
 
 use dooduel::paint::CanvasKind;
-use dooduel::{CANVAS_H, CANVAS_W, Dooduel, Screen};
+use dooduel::{CANVAS_H, CANVAS_W, Dooduel, Msg};
 
-const W: u32 = 1280;
-const H: u32 = 800;
+/// The res-Q2 desktop size: renders the full 3-pane layout without clipping. Overridable
+/// via `--size WxH` (spec §3.3); the default is the size all the layout reasoning assumes.
+const DEFAULT_W: u32 = 1280;
+const DEFAULT_H: u32 = 800;
 
 /// Build the real client on a headless render stack + picking (spec §2.1). The
 /// primary Window is created by `WindowPlugin`; the two cameras + pointer are spawned
 /// in `spawn_view`. Returns the app (not yet `finish`ed).
-fn build_app() -> App {
+fn build_app(w: u32, h: u32) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(bevy::transform::TransformPlugin)
         .add_plugins(bevy::window::WindowPlugin {
             primary_window: Some(Window {
-                resolution: bevy::window::WindowResolution::new(W, H),
+                resolution: bevy::window::WindowResolution::new(w, h),
                 ..default()
             }),
             ..default()
@@ -78,7 +80,7 @@ fn build_app() -> App {
 /// readback Image, the picking camera (Window target), the readback camera (Image target),
 /// and the synthetic mouse pointer (targets the primary window). Returns
 /// `(image, window, pointer)`.
-fn spawn_view(app: &mut App) -> (Handle<Image>, Entity, Entity) {
+fn spawn_view(app: &mut App, w: u32, h: u32) -> (Handle<Image>, Entity, Entity) {
     let window = app
         .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>()
@@ -86,7 +88,7 @@ fn spawn_view(app: &mut App) -> (Handle<Image>, Entity, Entity) {
         .expect("WindowPlugin created a primary window");
 
     // The offscreen readback texture (capture.rs:228-231 pattern).
-    let mut image = Image::new_target_texture(W, H, TextureFormat::Rgba8UnormSrgb, None);
+    let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
     image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     image.asset_usage = RenderAssetUsages::all();
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
@@ -130,9 +132,9 @@ fn spawn_view(app: &mut App) -> (Handle<Image>, Entity, Entity) {
     (target, window, pointer)
 }
 
-/// One GPU readback of `image` → tight RGBA bytes (row-padding stripped). Pumps up to 60
-/// frames until `ReadbackComplete` fires (capture.rs:377-416).
-fn readback_rgba(app: &mut App, image: &Handle<Image>) -> Vec<u8> {
+/// One GPU readback of `image` (a `w`×`h` texture) → tight RGBA bytes (row-padding
+/// stripped). Pumps up to 60 frames until `ReadbackComplete` fires (capture.rs:377-416).
+fn readback_rgba(app: &mut App, image: &Handle<Image>, w: u32, h: u32) -> Vec<u8> {
     let slot: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let sink = slot.clone();
     let rb = app
@@ -158,26 +160,19 @@ fn readback_rgba(app: &mut App, image: &Handle<Image>) -> Vec<u8> {
         .expect("GPU readback within 60 frames");
     app.world_mut().despawn(rb);
 
-    let unpadded = (W * 4) as usize;
+    let unpadded = (w * 4) as usize;
     let padded = unpadded.div_ceil(256) * 256;
-    let h = H as usize;
-    if raw.len() == unpadded * h {
+    let rows = h as usize;
+    if raw.len() == unpadded * rows {
         raw
     } else {
-        let mut out = Vec::with_capacity(unpadded * h);
-        for row in 0..h {
+        let mut out = Vec::with_capacity(unpadded * rows);
+        for row in 0..rows {
             let start = row * padded;
             out.extend_from_slice(&raw[start..start + unpadded]);
         }
         out
     }
-}
-
-/// Save the readback as a PNG.
-fn save_png(bytes: Vec<u8>, path: &std::path::Path) {
-    let img = image::RgbaImage::from_raw(W, H, bytes).expect("W*H*4 bytes");
-    img.save(path)
-        .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }
 
 /// The semantic snapshot (role tree + text/layout dump).
@@ -228,10 +223,10 @@ fn click_role(
 /// Write `bytes` atomically (tmp + rename) unless byte-identical to what's already there.
 /// Returns true if it wrote.
 fn atomic_write_if_changed(path: &Path, bytes: &[u8]) -> bool {
-    if let Ok(existing) = fs::read(path) {
-        if existing == bytes {
-            return false;
-        }
+    if let Ok(existing) = fs::read(path)
+        && existing == bytes
+    {
+        return false;
     }
     let tmp = PathBuf::from(format!("{}.tmp", path.display()));
     fs::write(&tmp, bytes).unwrap_or_else(|e| panic!("write {}: {e}", tmp.display()));
@@ -332,7 +327,11 @@ fn apply_command(app: &mut App, window: Entity, pointer: Entity, line: &str) -> 
     let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
     match cmd {
         "click" => {
-            let Some(role) = v.get("role").and_then(|r| r.as_str()).and_then(role_from_str) else {
+            let Some(role) = v
+                .get("role")
+                .and_then(|r| r.as_str())
+                .and_then(role_from_str)
+            else {
                 return Applied::Ok("BadData: click needs a known role".into());
             };
             let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -342,7 +341,11 @@ fn apply_command(app: &mut App, window: Entity, pointer: Entity, line: &str) -> 
             }
         }
         "set_value" => {
-            let Some(role) = v.get("role").and_then(|r| r.as_str()).and_then(role_from_str) else {
+            let Some(role) = v
+                .get("role")
+                .and_then(|r| r.as_str())
+                .and_then(role_from_str)
+            else {
                 return Applied::Ok("BadData: set_value needs a known role".into());
             };
             let name = v.get("name").and_then(|n| n.as_str());
@@ -388,87 +391,178 @@ fn apply_command(app: &mut App, window: Entity, pointer: Entity, line: &str) -> 
     }
 }
 
-fn model_screen(app: &mut App) -> Screen {
-    app.world_mut()
-        .query::<&Dooduel>()
+// ---------------------------------------------------------------------------
+// CLI, per-seat env isolation, and the real-time command loop (spec §2.2/§3.3).
+// ---------------------------------------------------------------------------
+
+struct Args {
+    dir: PathBuf,
+    url: String,
+    name: Option<String>,
+    interval: f32,
+    w: u32,
+    h: u32,
+}
+
+/// Parse a `WxH` size string (e.g. `1280x800`); None if malformed.
+fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once(['x', 'X'])?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+fn parse_args() -> Args {
+    let mut dir = None;
+    let mut url = None;
+    let mut name = None;
+    let mut interval = 1.0_f32;
+    let mut w = DEFAULT_W;
+    let mut h = DEFAULT_H;
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = it.next().map(PathBuf::from),
+            "--url" => url = it.next(),
+            "--name" => name = it.next(),
+            "--interval" => interval = it.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
+            "--size" => {
+                if let Some((pw, ph)) = it.next().as_deref().and_then(parse_size) {
+                    w = pw;
+                    h = ph;
+                }
+            }
+            other => eprintln!("qa_seat: ignoring unknown arg {other:?}"),
+        }
+    }
+    let dir = dir.expect("--dir <seat_dir> is required");
+    let url = url
+        .or_else(|| std::env::var("DOODUEL_SERVER_URL").ok())
+        .unwrap_or_else(|| "ws://127.0.0.1:7878".to_string());
+    Args {
+        dir,
+        url,
+        name,
+        interval,
+        w,
+        h,
+    }
+}
+
+/// Seed the player name through the MVU funnel (`Msg::SetName`) so it reaches the connect
+/// payload (`connect_intent` reads `Dooduel.player_name`, net.rs:565) AND re-renders the
+/// Home name field. Dispatched AFTER warmup: the model entity spawns at `Startup`
+/// (buiy_view app.rs:126), so it does not exist before the first `app.update()`; and going
+/// through the funnel (not a raw field write) keeps the §7.5 single-writer audit clean.
+fn seed_name(app: &mut App, name: &str) {
+    let Ok(e) = app
+        .world_mut()
+        .query_filtered::<Entity, With<Dooduel>>()
         .single(app.world())
-        .expect("model exists")
-        .screen
-        .clone()
+    else {
+        return;
+    };
+    app.world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<buiy_core::mvu::Envelope<Dooduel>>>()
+        .write(buiy_core::mvu::Envelope::user(
+            e,
+            Msg::SetName(name.to_string()),
+        ));
+    app.update();
 }
 
 fn main() {
-    let dir = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .filter(|a| a == "--dir")
-            .and(std::env::args().nth(2))
-            .unwrap_or_else(|| "/tmp/qa-seat-spike".to_string()),
-    );
-    std::fs::create_dir_all(&dir).expect("create seat dir");
+    let args = parse_args();
+    std::fs::create_dir_all(&args.dir).expect("create seat dir");
+    // Per-seat isolation (spec §2.1 / item A): the server URL WsClientPlugin reads, and a
+    // private state dir so N seats never race ~/.config/dooduel/state.json.
+    // SAFETY: set before any Bevy/App thread spawns (single-threaded here).
+    unsafe {
+        std::env::set_var("DOODUEL_SERVER_URL", &args.url);
+        std::env::set_var("DOODUEL_STATE_DIR", args.dir.join("state"));
+    }
+    std::fs::create_dir_all(args.dir.join("state")).ok();
 
-    let mut app = build_app();
-    let (image, window, pointer) = spawn_view(&mut app);
+    let mut app = build_app(args.w, args.h);
+    let (image, window, pointer) = spawn_view(&mut app, args.w, args.h);
     app.finish();
     app.cleanup();
-    // Warm up: model + cameras spawn, fonts register, tree builds, reshape settles.
+    // Warm up: Startup runs (model + cameras spawn), fonts register, tree builds, reshape
+    // settles. The model does not exist before this (Startup), so seed the name after.
     for _ in 0..90 {
         app.update();
     }
-
-    // Checkpoint 1a — one readback lands real pixels.
-    let px = readback_rgba(&mut app, &image);
-    let first = &px[0..4];
-    let differing = px.chunks_exact(4).filter(|p| *p != first).count();
-    assert!(
-        differing > 1000,
-        "screen.png is not uniform/black (differing px = {differing})"
-    );
-    save_png(px, &dir.join("screen.png"));
-
-    // Checkpoint 1b — one non-empty snapshot mentions a known Home label.
-    let ui = snapshot_md(&mut app);
-    assert!(
-        ui.contains("Create a room"),
-        "ui.md shows the Home CTA. Report:\n{ui}"
-    );
-    std::fs::write(dir.join("ui.md"), &ui).expect("write ui.md");
-
-    // Checkpoint 1c — one click resolves and lands its Msg. Click "Join a room" →
-    // Msg::GoJoin → Screen::Join: PURE reducer navigation, NO net (capture.rs:57-60
-    // asserts exactly this). Do NOT click "Create a room": under install_runtime it calls
-    // start_connect → NetState::Joining + pending_connect (lib.rs:808-817), which is
-    // networked (is_networked, lib.rs:239-244), so WsClientPlugin opens a real socket; with
-    // no server that fails (ECONNREFUSED → ConnStatus::Closed → Msg::ConnectFailed → back to
-    // Home + toast, net.rs:445,508-515 / transport.rs:325-326 / lib.rs:695-700). The
-    // assertion would be racy AND a fully-rendered Home+toast would masquerade as a render
-    // failure. GoJoin has none of that — it only sets Screen::Join.
-    assert_eq!(model_screen(&mut app), Screen::Home, "starts on Home");
-    click_role(&mut app, window, pointer, A11yRole::Button, "Join a room")
-        .expect("Join a room is clickable");
-    for _ in 0..12 {
-        app.update();
+    if let Some(n) = &args.name {
+        seed_name(&mut app, n);
     }
-    assert_eq!(
-        model_screen(&mut app),
-        Screen::Join,
-        "the click's Msg::GoJoin navigated to the Join screen (pure nav, no server)"
-    );
-    let post = snapshot_md(&mut app);
-    assert!(
-        post.contains("Join room"),
-        "the Join screen rendered — its 'Join room' CTA is present. Report:\n{post}"
-    );
-    save_png(readback_rgba(&mut app, &image), &dir.join("screen.png"));
-    std::fs::write(dir.join("ui.md"), &post).expect("write ui.md");
-    std::fs::write(
-        dir.join("driver.log"),
-        "consumed: 0 → click Join a room → Ok (screen: Home → Join)\n",
-    )
-    .expect("write driver.log");
 
-    println!(
-        "W0 spike OK — wrote screen.png / ui.md / driver.log to {}",
-        dir.display()
-    );
+    let screen_png = args.dir.join("screen.png");
+    let ui_md = args.dir.join("ui.md");
+    let commands = args.dir.join("commands.jsonl");
+    let log = args.dir.join("driver.log");
+    let mut cursor: u64 = 0;
+    let mut consumed_k: u64 = 0;
+    let mut last_refresh = std::time::Instant::now();
+    let interval = std::time::Duration::from_secs_f32(args.interval);
+    let frame_budget = std::time::Duration::from_millis(16); // ~60 Hz cap
+
+    refresh(&mut app, &image, args.w, args.h, &screen_png, &ui_md);
+    append_line(&log, "qa_seat up");
+    println!("qa_seat: {} → {}", args.url, args.dir.display());
+
+    loop {
+        let t0 = std::time::Instant::now();
+        app.update();
+
+        let mut force_refresh = false;
+        for line in tail_commands(&commands, &mut cursor) {
+            // Every \n-terminated line consumes a K (spec §2.3), so K stays equal to the
+            // agent's appended-line count. A blank line is logged-skipped (no app change, no
+            // forced refresh); a malformed non-blank line flows through apply_command and
+            // logs a BadData outcome — still one K.
+            if line.trim().is_empty() {
+                append_line(
+                    &log,
+                    &format!("consumed: {consumed_k} → skipped (blank line)"),
+                );
+                consumed_k += 1;
+                continue;
+            }
+            match apply_command(&mut app, window, pointer, &line) {
+                Applied::Quit => {
+                    append_line(&log, &format!("consumed: {consumed_k} → quit"));
+                    println!("qa_seat: quit");
+                    return;
+                }
+                Applied::Ok(outcome) => {
+                    append_line(&log, &format!("consumed: {consumed_k} → {outcome}"));
+                }
+            }
+            consumed_k += 1;
+            force_refresh = true;
+        }
+
+        if force_refresh || last_refresh.elapsed() >= interval {
+            refresh(&mut app, &image, args.w, args.h, &screen_png, &ui_md);
+            last_refresh = std::time::Instant::now();
+        }
+
+        // Pace to the frame budget (real-time ticking; readback bursts absorb their own
+        // stall — spec §2.2, don't "fix" it).
+        if let Some(rem) = frame_budget.checked_sub(t0.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+}
+
+/// Readback → screen.png + snapshot → ui.md, both atomic + change-detected.
+fn refresh(app: &mut App, image: &Handle<Image>, w: u32, h: u32, screen_png: &Path, ui_md: &Path) {
+    let png = {
+        let rgba = readback_rgba(app, image, w, h);
+        let img = image::RgbaImage::from_raw(w, h, rgba).expect("w*h*4");
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png)
+            .expect("encode png");
+        buf.into_inner()
+    };
+    atomic_write_if_changed(screen_png, &png);
+    atomic_write_if_changed(ui_md, snapshot_md(app).as_bytes());
 }

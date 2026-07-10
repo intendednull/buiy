@@ -696,7 +696,7 @@ git commit -m "feat(dooduel): qa_seat verbs — click/set_value/stroke/shot/quit
 **Files:**
 - Modify: `apps/dooduel/examples/qa_seat.rs`
 
-- [ ] **Step 1: Replace the spike `main` with a CLI parser + env setup + the loop.**
+- [x] **Step 1: Replace the spike `main` with a CLI parser + env setup + the loop.**
 
 Delete the W0 `fn main()` and the W0-only `model_screen` if unused, and replace with:
 
@@ -836,7 +836,7 @@ fn refresh(app: &mut App, image: &Handle<Image>, screen_png: &Path, ui_md: &Path
 > drop the `unsafe`. Also delete the now-unused `save_png` if the loop's `refresh` replaces
 > it (keep `readback_rgba`).
 
-- [ ] **Step 2: Build + fmt/clippy.**
+- [x] **Step 2: Build + fmt/clippy.**
 ```sh
 RUST_MIN_STACK=33554432 cargo build -p dooduel --example qa_seat --locked
 cargo fmt --all -- --check
@@ -844,7 +844,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 Expected: clean. Fix any warning (unused imports from the W0→W1 refactor are common).
 
-- [ ] **Step 3: Commit.**
+- [x] **Step 3: Commit.**
 ```sh
 git add apps/dooduel/examples/qa_seat.rs
 git commit -m "feat(dooduel): qa_seat CLI + real-time command loop + per-seat env isolation"
