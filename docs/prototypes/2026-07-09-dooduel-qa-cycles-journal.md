@@ -199,6 +199,26 @@ staged-development.
   against code too, not just apply them. (3) Assertion proxies (PNG changed)
   need a confound audit: what ELSE changes the observed artifact on its own?
 
+### 2026-07-10 — W0 spike PASSED: C1 retired on real hardware
+
+- Commit `0704f62`: apps/dooduel/examples/qa_seat.rs (304 lines, plan skeleton
+  near-verbatim). All gates green (build/run/fmt/clippy/headless tests) and I
+  verified the artifacts first-hand: screen.png = the real rendered Join
+  screen at 1280×800 (offscreen readback), ui.md = the real role tree + text
+  section, driver.log = `consumed: 0 → click Join a room → Ok (Home → Join)`.
+  The novel composition (headless RenderPlugin + picking + two cameras +
+  install_runtime) works — **the harness's one residual design risk is
+  retired**; none of the diagnostic-ladder failure branches fired.
+- Dark-theme boot mystery RESOLVED as a harness-stage artifact, not a bug:
+  W0 doesn't set DOODUEL_STATE_DIR yet (W1 does), so it READ the developer's
+  real ~/.config/dooduel profile (theme=dark). Read-only — no writes. A fresh
+  state dir boots light (the design default). Watch for this in cycle 1
+  anyway: fresh seat dirs must boot LIGHT.
+- **Skill note:** the orchestrator verifying artifacts first-hand (reading the
+  actual PNG, not trusting "it passed") + the implementer's decisive-line-per-
+  gate report format is a cheap, strong wave gate. Also: implementers keep
+  idling without reporting — the ping-for-report step is now routine.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
