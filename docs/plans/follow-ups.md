@@ -2250,3 +2250,72 @@ ring/label). Make it a smooth continuous animation — a per-frame-interpolated 
 ring/bar driven off the wall-clock remaining fraction — instead of a 1 Hz jump. The GUI
 already holds the remaining `Duration`; drive the visual from `remaining / total` each frame
 through the existing animation/tick plumbing. Display-only polish (no authority change).
+
+## Dooduel QA — 3 harness-found bugs FIXED (regression watch) — RESOLVED (2026-07-10)
+
+**Originated:** 2026-07-10, the QA seat-driver harness campaign (spec
+`docs/specs/2026-07-09-dooduel-qa-seat-driver-design.md`). Building + running the driver
+surfaced three real bugs, each staged + fresh-reviewed + covered by a regression test; logged
+here (and on known-issues §1) so a future audit sees them closed:
+
+1. **Track 1 (app) — in-game theme toggle occludes the chat Send button** (pick≠paint at
+   1280×800). Fix `e891000` (suppress the floating toggle on the InGame screen); spec
+   `docs/specs/2026-07-10-dooduel-theme-toggle-occlusion-design.md`; test
+   `apps/dooduel/tests/in_game_occlusion.rs`.
+2. **Track 2 (framework) — `probe`/AT `set_value` didn't emit `TextChanged`** so the model
+   never folded (`SubmitJoin`/`SubmitGuess` read `""`). Fix `23540a0` (emit `TextChanged` on a
+   value-changing `SetValue`), driver workaround dropped `7931f22`, spec rev-2.2; tests
+   `crates/buiy_core/tests/a11y_set_value_route.rs` + the emit-count/empty-clear cover `5f4032b`.
+3. **Track 3 (framework) — a controlled `text_input` clobbered an un-folded AT `set_value` on a
+   rebuilding screen** (the in-game chat under the countdown). Fix `e81b91f`
+   (`PendingProgrammaticEdit` marker) + placeholder re-patch `d2f4863`; design note
+   `docs/specs/2026-07-10-dooduel-controlled-input-setvalue-fold-design.md`; RED→GREEN
+   `crates/buiy_view/tests/controlled_input_rebuild_clobber.rs` + `controlled_placeholder_patch.rs`.
+
+## Dooduel/QA — benign Bevy warn on set_value-then-same-frame-navigate-away — OPEN
+
+**Originated:** 2026-07-10, Track 3 review. When a `set_value` is followed by a same-frame
+navigation that despawns the edited field, `route_text_input` clears the
+`PendingProgrammaticEdit` marker / drains the queued `TextChanged` against an already-despawned
+entity, emitting a benign Bevy "command on a despawned entity" warn. The router clear is
+unconditional **by design** (it must clear even the no-`on_input` edge so a marker never sticks);
+the warn is cosmetic — no lost edit, no wrong state. Fix (if ever): guard the clear on the entity
+still existing. Low priority; cosmetic log noise only.
+
+## Dooduel — guesser sees the full drawing toolbar in-game — OPEN (design check)
+
+**Originated:** 2026-07-10, W1 QA-gate observation. The in-game screen renders the full drawing
+toolbar (Brush / Fill / brush-size dots / the 16 swatches / Undo / Clear) for **every** seat,
+including guessers who cannot draw during another seat's turn. Verify against the reference
+Dooduel bundle whether the toolbar should be hidden/disabled for non-drawing seats; if so, gate
+its visibility on `is_current_drawer`. Design question, not a confirmed defect — confirm intent
+before changing.
+
+## Dooduel — in-game theme-toggle pick/semantic rect 88x50 vs authored 72x34 pill — OPEN
+
+**Originated:** 2026-07-10, Track 1 investigation. The floating theme-toggle button's resolved
+pick + semantic rect measured `88x50`, but the design authors a `72x34` pill — the extra size is
+`button()`'s default padding inflating the hit box beyond the painted pill. Cosmetic + a slightly
+oversized hit target; it contributed to the Track 1 occlusion (now fixed by suppressing the toggle
+in-game). Fix (if pursued): a tighter padding/size override on the toggle so pick rect == painted
+pill. Low priority.
+
+## Dooduel — in-game desktop chat pane sits ~30px low (top_bar 72 vs design 60) — OPEN
+
+**Originated:** 2026-07-10, Track 1 investigation. On the desktop in-game screen the chat pane's
+bottom edge sits ~30px lower than the reference design's, traced to the app's `top_bar` height
+being 72px where the design uses 60px (the extra 12px in the top bar cascades down the 3-pane
+column). Cosmetic layout drift vs the bundle; confirm the intended `top_bar` height and reconcile.
+Low priority.
+
+## Render/framework — single-tier glyph paint can't be occluded by a top-layer quad (pick≠paint) — OPEN
+
+**Originated:** 2026-07-10, Track 1 framework observation. Glyphs paint in a single global tier
+**after** all quads (the flat glyph draw runs once, on top), so a top-layer quad drawn *over* a
+base-screen text run cannot visually occlude that run's glyphs — the text bleeds through the quad
+even though picking (which is z/top-layer-ordered) treats the quad as on top. This pick≠paint seam
+is exactly what let the Track 1 theme toggle (a top-layer quad) win the Send *pick* while the
+underlying "Send" glyphs still painted through it. Structural: honoring per-tier/top-layer glyph
+occlusion needs glyphs to participate in the paint-order tiers (the top-layer composite pass /
+effect-group seam), not a single post-quad draw. Larger render-pipeline effort; noted, not
+scheduled.

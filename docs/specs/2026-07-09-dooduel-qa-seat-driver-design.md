@@ -1,6 +1,6 @@
 # Dooduel QA seat-driver — a per-seat GUI agent driver for visual playtest
 
-**Date:** 2026-07-09 · **Status:** active · **Revision:** rev-2.2 (rev-2 spec review folded;
+**Date:** 2026-07-09 · **Status:** landed · **Revision:** rev-2.2 (rev-2 spec review folded;
 rev-2.1 = a one-line §2.3 `consumed: K` clarification requested by the plan review; rev-2.2 =
 §res-Q5 corrected — the framework now emits `TextChanged` on a value-changing `SetValue` and the
 driver workaround is removed — see the change log) · **Branch:** `feat/dooduel-multiplayer-m1`

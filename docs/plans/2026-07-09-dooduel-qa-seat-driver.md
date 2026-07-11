@@ -5,7 +5,7 @@
 > checkbox (`- [ ]`) syntax. **Every gate is a RUN, not a compile** — this driver is an
 > integration binary; "it builds" proves nothing. Commit after every task.
 
-**Date:** 2026-07-09 · **Status:** active · **Revision:** rev-2 (plan review BLOCK verdict
+**Date:** 2026-07-09 · **Status:** landed · **Revision:** rev-2 (plan review BLOCK verdict
 folded — 1 blocker + 1 major + 4 minors; see the change log at the end) · **Spec:**
 `docs/specs/2026-07-09-dooduel-qa-seat-driver-design.md` (rev-2.1/active, `dd485aa` + the §2.3
 consumed-K clarification)
@@ -1033,7 +1033,24 @@ The test is `#[ignore]` (needs a real adapter + spawns processes), so it compile
 `--all-targets` but never runs in the headless gate. It spawns the real `dooduel_server` +
 ≥3 `qa_seat` example processes and drives them black-box through the file protocol.
 
-- [ ] **Step 1: Test scaffolding — binary location + server spawn + seat spawn + file poll.**
+> **RESULT (W2, 2026-07-10 — landed green, commit `610a5b3`).** The committed `#[ignore]`
+> GPU-lane smoke (`apps/dooduel/tests/qa_seat_smoke.rs`) runs all six checkpoints across **3
+> concurrent subprocess seats** on the AMD RX 6700 XT / RADV host and passes. Checkpoints 5–6
+> were **kept committed** (not demoted to the manual gate): the canvas-region ink diff
+> (`wait_canvas_changed`, `HEADER_SKIP_PX = 220` calibrated against a real drawing-phase
+> `screen.png`) and the guesser's guess both prove cleanly cross-process. Two amendments the
+> run required are recorded in the test: **AMENDMENT 1** — `set_value` and the following
+> submit-click must be **separate settled steps** (each gated on its `consumed: K` ack + a
+> `value="…"` on-screen check), never one drain batch, or the guess can submit empty before it
+> folds; **AMENDMENT 2** — the `HEADER_SKIP_PX` crop was re-measured against this smoke's own
+> screenshot. **Checkpoint 6 (a guesser's `set_value` into the rebuilding in-game chat field
+> reaching chat) only passes because of Track 3** — the W2 smoke is exactly what surfaced the
+> controlled-input clobber (`d344b1e`), fixed in **`e81b91f`** (`PendingProgrammaticEdit`
+> marker); without it the `wait_value` fold never lands on the countdown-rebuilt screen. Track 2
+> (`23540a0`, `set_value` emits `TextChanged`) is the prerequisite the earlier checkpoints
+> depend on.
+
+- [x] **Step 1: Test scaffolding — binary location + server spawn + seat spawn + file poll.**
 
 Create `apps/dooduel/tests/qa_seat_smoke.rs`:
 
@@ -1152,7 +1169,7 @@ fn wait_ui_contains(dir: &std::path::Path, needle: &str, secs: u64) -> String {
 }
 ```
 
-- [ ] **Step 2: Write the config-file helper + the test body (checkpoints 1-6, 3 seats).**
+- [x] **Step 2: Write the config-file helper + the test body (checkpoints 1-6, 3 seats).**
 
 Append:
 
@@ -1333,14 +1350,14 @@ fn wait_canvas_changed(dir: &std::path::Path, before: &[u8], secs: u64) {
 > exactly. W1's manual gate runs first precisely to produce these calibration samples — W2
 > does not start until `<evidence>/ui-samples.txt` exists.
 
-- [ ] **Step 3: Build the test (compile under --all-targets) + verify it's ignored.**
+- [x] **Step 3: Build the test (compile under --all-targets) + verify it's ignored.**
 ```sh
 RUST_MIN_STACK=33554432 cargo test -p dooduel --test qa_seat_smoke --locked
 ```
 Expected: compiles; runs 0 tests (the one test is `#[ignore]`d). This proves it stays out of
 the headless gate.
 
-- [ ] **Step 4: RUN it on this GPU host (THE W2 GATE).**
+- [x] **Step 4: RUN it on this GPU host (THE W2 GATE).**
 ```sh
 RUST_MIN_STACK=33554432 cargo build -p dooduel_server --locked
 RUST_MIN_STACK=33554432 cargo build -p dooduel --example qa_seat --locked
@@ -1363,7 +1380,7 @@ panic message prints the last `ui.md`.
 > or reverting to a whole-PNG byte-diff, is a silent weakening); if you split or retune, say
 > so in the test doc + the W3 journal.
 
-- [ ] **Step 5: Headless gate stays green + commit.**
+- [x] **Step 5: Headless gate stays green + commit.**
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -1383,13 +1400,23 @@ git commit -m "test(dooduel): qa_seat #[ignore] GPU-lane smoke — 3 seats, crea
 - Modify: `docs/README.md`
 - Create: `docs/reports/2026-07-09-dooduel-qa-seat-driver-report.md` (short landing journal)
 
-- [ ] **Step 1: Flip the spec status.**
+> **RESULT (W3 close-out, 2026-07-10).** Statuses flipped to `landed`: the spec header
+> (`· Status: landed`), this plan header, and both README rows (spec + plan). The two
+> QA-harness-found framework fixes (Track 2 `set_value`→`TextChanged` `23540a0`; Track 3
+> controlled-input clobber `e81b91f`) and the Track 1 app fix (theme-toggle occlusion
+> `e891000`) each shipped with their own spec/design note + regression test and are logged on
+> the known-issues §1 regression-watch. The **landing journal (Step 3) is the orchestrator-owned
+> campaign journal** under `docs/prototypes/2026-07-09-dooduel-qa-cycles/` (Steps 3–4 left to the
+> campaign close-out); the separate `docs/reports/…-report.md` skeleton file was not authored —
+> the campaign journal supersedes it.
+
+- [x] **Step 1: Flip the spec status.**
 In `docs/specs/2026-07-09-dooduel-qa-seat-driver-design.md`, change the header
 `**Revision:** rev-2 …` line's status context to note it's **landed** (add
 `· Status: landed (impl 2026-07-09)` to the Date line, or update the `Status:` field per the
 `organizing-buiy-docs` convention). Do not rewrite the body.
 
-- [ ] **Step 2: Add the docs index row.**
+- [x] **Step 2: Add the docs index row.**
 In `docs/README.md`, add a row for the spec + plan under the Dooduel area (mirror the
 existing Dooduel entries' format; mark the plan done). Follow `organizing-buiy-docs`.
 
