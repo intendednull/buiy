@@ -1652,6 +1652,207 @@ mod tests {
         );
     }
 
+    /// C2-02 regression guard (QA cycle 2): the "spurious empty chat pills at high
+    /// volume" finding. This drives a REAL 4-human [`Session`] (the exact shape of the
+    /// failing playtest — `bots_enabled=false`), captures seat 0's authoritative event
+    /// stream through a full multi-turn match, and replays it into a probe client past
+    /// the ~20-row / chat-pane-overflow point where QA saw two content-less green pills.
+    ///
+    /// It proves the app layer is clean end-to-end: the model chat carries no empty
+    /// line, seqs are unique, the keyed chat list renders exactly one row per message
+    /// (no phantom rows — the direct refutation of an app-side keyed-list bug), and the
+    /// only empty-text node in the semantic tree is the input. The phantom pills are a
+    /// GPU render-layer artifact (a `pos_tint` fill has no backing ECS node here — the
+    /// KI-02 / glyph-atlas-bind lineage), not an `apps/dooduel` model/view/reconcile bug.
+    #[test]
+    fn high_volume_chat_renders_no_empty_pills() {
+        use dooduel_core::game::Config;
+        use dooduel_core::protocol::ClientIntent;
+        use dooduel_core::session::{Recipient, Session, SessionOpts};
+
+        fn strip(s: &str) -> String {
+            let cleaned: String = s.chars().filter(|c| (*c as u32) < 0x2300).collect();
+            cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+
+        // A real 4-HUMAN room (bots_enabled=false, fill_bots_to=0) — the exact shape of
+        // the failing playtest, not the solo path (which fills bots).
+        let mut ntok = 0u64;
+        let opts = SessionOpts {
+            token_gen: Box::new(move || {
+                ntok += 1;
+                format!("tok{ntok}")
+            }),
+            fill_bots_to: 0,
+            room_code: "WGMBNQ".to_string(),
+            match_seed: 42,
+        };
+        let cfg = Config {
+            total_rounds: 2,
+            draw_seconds: 10,
+            pick_seconds: 10,
+            reveal_seconds: 2,
+            hint_count: 2,
+            bots_enabled: false,
+        };
+        let mut session = Session::new(cfg, opts);
+        let mut now = Duration::ZERO;
+        for name in ["Emmy", "Blair", "Dana", "Cruz"] {
+            session
+                .connect(name, WireAvatar::Default, None, now)
+                .expect("connect");
+        }
+        session.handle(0, ClientIntent::StartMatch);
+
+        // Drive four turns; capture every event addressed to seat 0 (All or Seat(0)).
+        let mut seat0: Vec<ServerEvent> = Vec::new();
+        let mut drawer = 0usize;
+        let mut phase = Phase::Idle;
+        let mut word = String::new();
+        let drain = |session: &mut Session,
+                     seat0: &mut Vec<ServerEvent>,
+                     drawer: &mut usize,
+                     phase: &mut Phase,
+                     word: &mut String| {
+            for (rec, ev) in session.drain_events() {
+                match &ev {
+                    ServerEvent::PhaseChanged {
+                        phase: p,
+                        drawer: d,
+                        ..
+                    } => {
+                        *phase = *p;
+                        if let Some(d) = d {
+                            *drawer = *d;
+                        }
+                    }
+                    ServerEvent::WordUpdate { display, .. } if matches!(rec, Recipient::Seat(s) if s == *drawer) =>
+                    {
+                        // The drawer's row is the full word (space-joined uppercase).
+                        *word = display
+                            .split_whitespace()
+                            .collect::<String>()
+                            .to_lowercase();
+                    }
+                    _ => {}
+                }
+                if matches!(rec, Recipient::All) || matches!(rec, Recipient::Seat(0)) {
+                    seat0.push(ev);
+                }
+            }
+        };
+        drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+
+        // Drive turns until the match ends: pick, let 2 non-drawer seats guess, then
+        // time out the turn. Two rounds × 4 seats ⇒ ~30 chat rows (well past overflow).
+        let mut turn = 0;
+        while phase != Phase::Final && turn < 12 {
+            turn += 1;
+            if phase == Phase::Picking {
+                session.handle(drawer, ClientIntent::Pick { index: 0 });
+                drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            }
+            // A near-miss (one letter off) from a non-drawer seat → a private "So
+            // close!" (Close, to that seat only) — the seq-gap path. And a plain wrong
+            // guess → a broadcast Guess row. Then 2 correct guesses.
+            let nondrawer: Vec<usize> = (0..4).filter(|s| *s != drawer).collect();
+            if !word.is_empty() {
+                let mut near = word.clone();
+                let last = near.pop().unwrap_or('a');
+                near.push(if last == 'z' { 'y' } else { 'z' });
+                session.handle(nondrawer[0], ClientIntent::Guess { text: near });
+                drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            }
+            session.handle(
+                nondrawer[0],
+                ClientIntent::Guess {
+                    text: "wrongguess".to_string(),
+                },
+            );
+            drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            // Two non-drawer seats guess the word correctly.
+            for &seat in nondrawer.iter().take(2) {
+                session.handle(seat, ClientIntent::Guess { text: word.clone() });
+                drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            }
+            now += Duration::from_secs(12);
+            session.tick(now);
+            drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            now += Duration::from_secs(3);
+            session.tick(now);
+            drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+        }
+
+        // Replay seat 0's exact stream into a probe client, settling per event.
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::Play);
+        settle(&mut app);
+        for ev in &seat0 {
+            net(&mut app, ev.clone());
+            settle(&mut app);
+        }
+
+        let m = current_model(&mut app);
+        assert_eq!(m.screen, Screen::InGame, "the replay lands on the board");
+        // High volume: past the ~20-row point where QA saw the phantom pills, and past
+        // the chat pane's overflow (so stick-to-bottom scrolling is engaged).
+        assert!(
+            m.replica.chat.len() >= 20,
+            "the driven match accumulated a high-volume chat ({} rows)",
+            m.replica.chat.len()
+        );
+
+        // (1) MODEL: no chat line is content-empty (a Correct pill with no text is the
+        // exact C2-02 artifact). Every message the core emits carries real text.
+        let empty_correct = m
+            .replica
+            .chat
+            .iter()
+            .filter(|c| c.kind == ChatKind::Correct && strip(&c.text).is_empty())
+            .count();
+        assert_eq!(
+            empty_correct, 0,
+            "no content-less Correct pill entered the model chat"
+        );
+        assert!(
+            m.replica.chat.iter().all(|c| !strip(&c.text).is_empty()),
+            "no chat line strips to empty content"
+        );
+        // Seqs are unique (a duplicate would corrupt the keyed reconcile).
+        let mut seqs: Vec<u64> = m.replica.chat.iter().map(|c| c.seq).collect();
+        let raw = seqs.len();
+        seqs.sort_unstable();
+        seqs.dedup();
+        assert_eq!(
+            seqs.len(),
+            raw,
+            "chat seqs (the keyed-list keys) are unique"
+        );
+
+        // (2) RENDER: the keyed chat list realizes EXACTLY one row per model message —
+        // no phantom rows spawned at high volume, no rows dropped. This is the direct
+        // refutation of "the keyed-list reconciler spawns phantom rows": the rendered
+        // row keys equal the model's chat seqs one-for-one.
+        let mut rows = buiy_view::keyed_rows(app.world_mut());
+        rows.sort_by_key(|(k, _)| *k);
+        let row_keys: Vec<u64> = rows.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            row_keys,
+            m.replica.chat.iter().map(|c| c.seq).collect::<Vec<_>>(),
+            "the rendered keyed chat rows match the model chat one-for-one (no phantom \
+             or dropped rows)"
+        );
+
+        // (3) SEMANTIC TREE: the only empty-text node in the whole report is the chat
+        // input field — no empty-text chat pill reached the a11y/text tree.
+        let report = snapshot_report(app.world_mut());
+        assert_eq!(
+            report.matches("text=\"\"").count(),
+            1,
+            "the only empty-text node is the chat input (no empty chat pill):\n{report}"
+        );
+    }
+
     // --- Live solo authority (integration) ---------------------------------
 
     /// The solo in-process `Session` self-drives a full match to the podium: ▶ Play
