@@ -1,0 +1,29 @@
+dooduel_server: loaded config /home/intendednull/.claude-personal/jobs/10f07af2/tmp/qa-cycle-1/qa-server.toml
+dooduel_server: listening on 127.0.0.1:7878 (ws://)
+dooduel_server: room config Config { total_rounds: 1, draw_seconds: 240, pick_seconds: 120, reveal_seconds: 60, hint_count: 2, bots_enabled: false }
+[room VQPQTB] phase=Picking drawer=Some(0) round=1/1
+[room VQPQTB] phase=Drawing drawer=Some(0) round=1/1
+[room VQPQTB] seat 2 guessed correctly (+264)
+[room VQPQTB] seat 3 guessed correctly (+210)
+[room VQPQTB] phase=Reveal drawer=Some(0) round=1/1
+[room VQPQTB] turn ended — word was 'octopus'
+[room VQPQTB] phase=Picking drawer=Some(1) round=1/1
+[room VQPQTB] phase=Drawing drawer=Some(1) round=1/1
+[room VQPQTB] seat 0 guessed correctly (+296)
+[room VQPQTB] seat 2 guessed correctly (+241)
+[room VQPQTB] seat 3 guessed correctly (+122)
+[room VQPQTB] phase=Reveal drawer=Some(1) round=1/1
+[room VQPQTB] turn ended — word was 'cupcake'
+[room VQPQTB] phase=Picking drawer=Some(2) round=1/1
+[room VQPQTB] phase=Drawing drawer=Some(2) round=1/1
+[room VQPQTB] phase=Reveal drawer=Some(2) round=1/1
+[room VQPQTB] turn ended — word was 'penguin'
+[room VQPQTB] phase=Picking drawer=Some(3) round=1/1
+[room VQPQTB] phase=Drawing drawer=Some(3) round=1/1
+[room VQPQTB] seat 2 guessed correctly (+299)
+[room VQPQTB] seat 1 guessed correctly (+186)
+[room VQPQTB] seat 0 guessed correctly (+121)
+[room VQPQTB] phase=Reveal drawer=Some(3) round=1/1
+[room VQPQTB] turn ended — word was 'bicycle'
+[room VQPQTB] phase=Final drawer=None round=1/1
+[room VQPQTB] match ended — podium [(2, "Ada", 804), (0, "Priya", 484), (3, "Sam", 432), (1, "Theo", 286)]
