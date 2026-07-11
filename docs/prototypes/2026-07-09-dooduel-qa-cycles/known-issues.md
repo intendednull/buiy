@@ -43,7 +43,7 @@ between cycles.
 | id | quirk | why accepted | source |
 |---|---|---|---|
 | **KI-10** | During Reveal, ANY seat's Continue advances the turn immediately (first-to-continue wins) | Accepted M1 private-room semantics; single consistent rule (§5, item C) | spec §3.2, §11 |
-| **KI-11** | Drawer payout is a flat +100 regardless of guesser count/speed — the best drawer can finish last | Formula operates exactly as specced; a rebalance is a logged design question, not a bug | report 2026-07-04 §Findings ledger #2 (`dooduel-followup:drawer-payout-balance`) |
+| **KI-11** | Drawer payout scales with how many guessed: `round(100·correct/guessers)`, 0 if nobody guessed (a partially-guessed word pays the drawer <100) | BY DESIGN + verified — `game.rs:351-356` `drawer_points`; matches skribbl.io; cycle-1 confirmed 4 exact data points (2/3→+67, 3/3→+100, 0/3→+0). NOTE: earlier ledgers/spec said "flat +100" — that was a **stale-doc error**, corrected here (cycle-1 F3). The `dooduel-followup:drawer-payout-balance` design question stands separately | `game.rs:351`; cycle-1 triage F3 |
 | **KI-12** | An empty-canvas turn resolves as a NORMAL scored round on hint reveals alone; the silent drawer still earns drawer credit | Open design question (whether hints may fully substitute for a drawing) — accepted for M1, not a defect | report 2026-07-04 §Findings ledger #1 (companion question) |
 | **KI-13** | A WRONG guess that contains the secret word as a substring is broadcast literally in chat | Accepted M1 leak; censoring is M5 | spec §5.3 |
 | **KI-14** | Connections are `ws://` only (no TLS) | `wss://` is deliberately M3 (cargo-deny landmine) | spec §6.2, §11 |
@@ -57,6 +57,7 @@ between cycles.
 | **KI-22** | Podium places the winner CENTER + tallest (not the design code's literal 2nd-place-tallest) | Intentional documented deviation, grounded by the live skribbl.io podium | final §5.g |
 | **KI-23** | Emoji (`🎨🎉🥇✏️✅👑…`) render as `.notdef` tofu / are dropped | Color emoji (COLR/CBDT/sbix) is deferred as its own future campaign | retro §6; final §5.f |
 | **KI-24** | Radial-gradient backgrounds render flat; the rotated "free & open source" ribbon is dropped; per-axis elliptical wobble corners render circular | Character-layer residuals — attempt-if-cheap, defer-with-note; invisible at Dooduel's ±3px wobble | retro §6; final §5.f |
+| **KI-28** | A `click "Continue"` returns a clean `NotFound` no-op when Continue is not in the current phase — i.e. during Drawing/Picking, or at Reveal after the timer/another seat already advanced (the KI-10 first-to-continue race) | Expected: Continue only exists on the Reveal card, and the reveal auto-advances; a NotFound is the driver honestly reporting "not on screen", not a bug. Do NOT file it | cycle-1 (Sam probe PASS; all seats hit it); KI-10 |
 
 ---
 

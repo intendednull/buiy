@@ -428,6 +428,43 @@ staged-development.
   build to surface framework bugs; fix them staged, don't demote the checks"
   into the skill.
 
+### 2026-07-10 — CYCLE 1: first 4-agent live playtest COMPLETE
+
+- A full networked match to the podium (Ada 804 / Priya 484 / Sam 432 / Theo
+  286), 4 LLM seats on the `qa_seat` GUI driver, wide timers (240/120/60). All
+  standing invariants held: every seat drew once (octopus/cupcake/penguin/
+  bicycle), every word guessed, per-seat word secrecy throughout, podium
+  correct. Triage: `cycle-1/triage.md`; evidence committed `cd39589`.
+- **Mechanics audited SOLID** (Theo): 4 exact drawer-payout data points, correct
+  `0.82^order` guesser decay, near-miss "So close!" private nudges (verified,
+  never broadcast), literal wrong-guess broadcast, post-lock protection, timer
+  tracks wall-clock. **All regression-watch items GREEN live** (KI-01/02/25/26/
+  27) — the 3 harness-found fixes re-confirmed by multiple seats in a real match.
+- **Findings:** F1 (S3, headline, ALL 4 SEATS) in-game countdown NUMBER freezes
+  in screen.png while the model clock ticks — app-render-invalidation vs
+  driver-readback-staleness UNDECIDED → Track A adjudicates on the live app
+  (verdict decides whether the visual-QA lane is trustworthy). F1b canvas-not-
+  cleared-between-turns (adjudicate w/ F1). F2 (S4) stale guess-draft persists
+  across turns (masks the phase placeholder) → Track B app fix. F3 KI-11 was a
+  STALE DOC (payout is proportional `round(100·correct/guessers)`, verified
+  game.rs:351 — corrected + KI-28 added for the expected Continue→NotFound).
+  F4 dashed-box (likely intended aesthetic; verify). UX-polish backlog logged.
+- **Disposition: NOT clean** (new S3 + S4) → fix, then cycle 2 (rotated
+  archetypes re-verify by a different seat).
+- **Skill notes:** (1) 4 independent seats corroborating one symptom (the
+  countdown freeze) is far stronger signal than one — the multi-archetype fleet
+  earns its cost. (2) The naive seat (Ada) surfaced the two most visceral
+  findings (frozen timer, canvas-not-clearing) precisely BECAUSE she watched
+  screens without QA-dimension steering — the under-briefed seat is a feature.
+  (3) The mechanic seat's deliberate arithmetic audit turned a 3-seat "S2 bug"
+  (proportional payout) into a "the DOC is wrong, game is right" — a scoring
+  audit needs the actual formula, else correct behavior reads as a bug. (4)
+  Harness lessons to fold into briefings before cycle 2: force `shot` before
+  visual reads (passive screen.png lags); detect phase via status/word-slots
+  not the placeholder (F2 masks it); tighten guesser cadence; front-load chaos
+  drawer-probes. (5) A finding that might be a HARNESS artifact (F1) still gets
+  first-class adjudication — if the eyes lie, every visual finding is suspect.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
