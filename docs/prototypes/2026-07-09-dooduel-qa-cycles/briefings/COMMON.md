@@ -34,6 +34,12 @@ seat dir. **Both matter — read both, every poll.**
   colors, fonts, borders, button shapes, layout, overlap, confetti, the blank-slot
   underline pattern, whether chat rows actually show text — these live in the pixels,
   not in `ui.md`. Re-read it after every action to see what changed.
+  **Force a fresh shot before any important visual read (cycle-1).** The passive
+  `screen.png` refresh lags — it updates on a throttle and after commands — so before
+  you judge *anything* visual (a screen's layout, the canvas, the countdown number,
+  whether a widget is present), emit `{"cmd":"shot"}`, wait for its `consumed: K` ack
+  (§3), **then** read `screen.png`. Never trust a `screen.png` you did not just
+  force-refresh for the judgment you are making.
 - **`ui.md`** — the raw semantic snapshot: a **role tree** (every button/textfield
   with its accessible name) plus a **`--- text & layout ---`** section listing all
   on-screen glyph text in reading order (spec §3.1, §res-Q3). Use it to:
@@ -123,7 +129,15 @@ your own draw turn, **you failed the seat** — treat that as unacceptable.
 ## 5. Playing a match — the phases and what you do in each
 
 The game runs Lobby → then per turn: **Picking → Drawing → Reveal**, rotating the
-drawer each turn. Read your role off your eyes each poll:
+drawer each turn. Read your role off your eyes each poll.
+
+**Detect the phase from the word-slot row, the status text, and the on-screen
+buttons — NOT the chat input's placeholder (cycle-1).** A known bug (F2) leaves an
+un-submitted guess draft lingering in the chat input across turns, which **masks**
+the placeholder — so keying phase detection on the placeholder ("Type your guess…")
+will strand you (one seat idled ~120 s on this in cycle 1). Read the phase off the
+word slots, the pick-overlay word buttons, the "Round over — see results" text, the
+scoreboard, and the server-driven status line instead.
 
 - **Lobby.** Everyone waits. The **host** seat clicks `"▶ Start game"` (host-gated).
   Others see "waiting for host". The roster shows joined players + avatars.
@@ -135,7 +149,11 @@ drawer each turn. Read your role off your eyes each poll:
 - **Reveal.** The word is shown to everyone; scores update. Any seat may click
   `"Continue"` to advance (first click wins — accepted, KI-10); otherwise the reveal
   timer auto-advances. Click it when you have finished reading the result:
-  `say '{"cmd":"click","role":"Button","name":"Continue"}'`.
+  `say '{"cmd":"click","role":"Button","name":"Continue"}'`. A `Continue` click that
+  returns **`NotFound` here is EXPECTED, not a finding** — the reveal auto-advances
+  and the first seat's Continue wins the race (KI-10), so the button has often already
+  despawned by the time your click applies → a clean `NotFound` no-op. Do **not** file
+  it (KI-28); just move on.
 - **Podium.** Final standings + confetti. Read it, write your report, then `quit`.
 
 ### 5.1 How to draw — real toolbar clicks, then strokes (spec §3.2)
@@ -173,11 +191,24 @@ guessed the word!") — never the text. A **wrong** guess is echoed literally in
 chat. Watch the drawing grow **live** as you guess — you should be able to guess
 from a *partial* drawing.
 
+**Cadence — lock first, chat later (cycle-1).** Your observe→reason→act cycle
+(~40 s) can be as long as a turn's remaining time, and cycle 1 lost two easy guesses
+to turn-end timing. The moment you recognize the word, submit the correct guess
+**immediately** (`set_value` then `Send`, as two separate settled steps) *before*
+anything else — don't burn time on a near-miss probe or an extra read first. Run
+exploratory / near-miss guesses **only after** you have locked in, or when you have
+ample time left.
+
 ---
 
 ## 6. Reporting — two deliverables, both required
 
-Write everything into **`report.md` in your own seat dir**. It has two parts:
+**Deliver your report as your FINAL TEXT message — and a `SendMessage` summary to
+"main" — because you most likely CANNOT write `report.md` (cycle-1).** The harness
+blocks seat agents from writing `report`/`findings` `.md` files, so do **not** treat
+a blocked `report.md` write as a failure: put the whole report in your final message
+text instead. You **can** still copy evidence PNGs into `findings/<id>.png` in your
+seat dir (that path is not blocked). Structure the text with the parts below:
 
 1. **`## Findings`** — zero or more bug reports, each a filled ```yaml block from
    **`finding-template.md`** (in this folder). Follow its severity ladder and its
@@ -198,7 +229,8 @@ Write everything into **`report.md` in your own seat dir**. It has two parts:
 
 Do not end your turn silently — if the orchestrator pings you for your report,
 that is because seats reliably go idle without delivering (journal 2026-07-10). Have
-`report.md` written and up to date **before** you `quit`.
+your full report ready to deliver as your final text (and a `SendMessage` to "main")
+**before** you `quit`.
 
 ---
 

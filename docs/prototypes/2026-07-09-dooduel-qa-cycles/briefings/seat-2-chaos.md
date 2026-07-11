@@ -12,6 +12,13 @@ the orchestrator can mark that probe green, but it is not a finding.
 **never** during another seat's scripted measurement (don't spam-guess while Seat 1
 is timing a hint reveal — space them out). You still draw your own honest turn.
 
+**Front-load your destructive drawer probes (cycle-1).** Your canvas-destructive
+probes — Undo, Clear, the out-of-bounds stroke — run on **your** own draw turn, and
+turns end fast once the other seats guess (in cycle 1 the chaos seat's turn ended
+before it could run Undo/Clear). So the moment your drawing is legible enough to
+guess, run those destructive probes **right away**, early in your draw window, before
+the turn can end out from under you.
+
 ## Probes you run directly through your driver
 
 | Probe | How | Expected (cite this in a finding) |

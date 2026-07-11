@@ -11,7 +11,9 @@ the way a real first-time player would: figure it out as you go from what you se
 `COMMON.md`.
 
 Your **main deliverable is the free-text confusion log** — the `## Session report`
-in your `report.md`, especially **"How it felt"**. It matters more than any YAML
+section of the report you **deliver as your final text message** (see `COMMON.md`
+§6 — you most likely cannot write `report.md`), especially **"How it felt"**. It
+matters more than any YAML
 finding. As you play, write down, in the moment:
 
 - **Every time you didn't know what to do next** — "I'm on this screen… what now?"

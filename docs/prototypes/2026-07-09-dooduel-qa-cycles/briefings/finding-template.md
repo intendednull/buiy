@@ -1,9 +1,11 @@
 # Dooduel QA — the finding template (copy-paste this)
 
-Every bug you file is **one fenced ```yaml block**, appended to your seat report
-under a `## Findings` heading. Machine-parsable keys, human-readable values. This
-file is the source of truth for the fields, the severity ladder, and a worked
-example — copy the block, fill every key. (Extracted from the QA charter §2/§3.)
+Every bug you file is **one fenced ```yaml block**, placed under a `## Findings`
+heading in the report you **deliver as your final text message** (see `COMMON.md`
+§6 — seat agents most likely cannot write `report.md`; copy evidence PNGs into
+`findings/<id>.png`, which is not blocked). Machine-parsable keys, human-readable
+values. This file is the source of truth for the fields, the severity ladder, and a
+worked example — copy the block, fill every key. (Extracted from the QA charter §2/§3.)
 
 Before you file anything: run the **known-issues check** (see the bottom of
 `COMMON.md`). If the symptom matches a `KI-nn` row in
