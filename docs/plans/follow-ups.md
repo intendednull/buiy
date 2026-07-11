@@ -2352,3 +2352,13 @@ no lost content). Needs a FRAMEWORK render-track investigation on the GPU lane (
 quad at volume → localize the stale instance in the render/atlas/scroll pipeline → fix +
 GPU-verify). Deferred from cycle-2 (app-clean; framework fix is a separate focused effort).
 Tracked as known-issue KI-34.
+
+## Dooduel — confetti not observed on podium / correct-guess reveals — OPEN (S5, verify)
+
+**Originated:** 2026-07-10, Dooduel QA cycle-3 (Hugo, host+visual, low confidence). No confetti
+was seen on the podium (2 static shots) or on any correct-guess reveal. The `ConfettiPlugin` IS
+in `install_runtime`, so this is most likely an animated burst missed between the ~1 Hz static
+screenshots rather than a real miss — but it was never positively confirmed firing in 3 cycles
+of playtests (agents read static frames). VERIFY: run the native app and watch a correct-guess
+reveal + the podium for a confetti burst; if it never fires, it's a real (S4) missing-celebration
+bug, possibly tied to the deferred emoji/character-layer path (KI-23). Low priority.

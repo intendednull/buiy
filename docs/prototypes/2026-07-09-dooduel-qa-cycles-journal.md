@@ -535,6 +535,41 @@ staged-development.
   committed guard) is a valid, valuable outcome even without a fix — it turns a
   vague "empty pills" into a precise, tracked framework render defect.
 
+### 2026-07-10 — ★ CYCLE 3 = CLEAN — campaign exit criterion MET ★
+
+- Full rotated match (reveal tightened to 30s), podium Gwen 675 / Iris 575 / Finn 559
+  / Hugo 388; the firewalled naive seat (Gwen) won AGAIN. Triage: `cycle-3/triage.md`.
+- **CLEAN per all four runbook conditions:** zero new S1–S3 (the one S2 candidate
+  RETRACTED); zero regressions (every fix HELD, re-verified by ≥2 rotated seats);
+  all scripted probes pass — incl. the FIRST full destructive-drawer coverage
+  (Undo+Clear+OOB, Finn front-loaded them); standing invariants hold. **First clean
+  cycle → the campaign's primary exit condition ("until no issues are reported") is
+  met at cycle 3**, before the ≥5 floor.
+- **The S2 candidate self-destructed correctly:** Hugo's "sandwich guess didn't
+  score" → he REPRO'd it (volcano, deliberately last-but-in-time → scored +93, drawer
+  3/3) and RETRACTED — the sandwich miss was a slow-cadence LATE guess at a timer-end
+  (2/3), corroborated by Iris's drawer view + a second independent 2/3 turn (Iris
+  missed xylophone the same way). A code-level turn-end-boundary adjudication ran to
+  confirm no timely-guess-drop race.
+- **The cycle-2 fix loop closed:** Iris (mechanic) verified the 1-based hint schedule
+  (KI-32) as CORRECT and did NOT re-report the C2-03 stale-briefing false positive —
+  the corrected briefing prevented the recurrence. All cycle-1/2 fixes (KI-25/26/27/
+  29/30/31/33 + KI-01/02/11) HELD.
+- Consistent cross-cycle UX signal (naive seats Dana + Gwen): dead-time / no
+  drawer-liveness feedback (40–75s blank-canvas waits) — largely AGENT latency, but
+  the KI-07 AFK-drawer early-out + drawer-active feedback would help; elevated as the
+  top UX theme. New S5 follow-up: confetti never positively observed (likely missed
+  animated burst — verify).
+- **Skill notes (final):** (1) a clean cycle is reached when the fleet's findings
+  reduce to UX-polish + known + retracted-on-repro — the SEVERITY TREND across cycles
+  (app+framework defects → one off-by-one → cosmetic/false-positive → clean) is the
+  real convergence signal. (2) A reporter RETRACTING via their own repro is the
+  system working — the seat that flags an S2 and then disproves it is higher-signal
+  than one that never flags. (3) The rotation + corrected-briefing loop demonstrably
+  prevents re-reporting a fixed false positive. (4) The naive seat winning two cycles
+  running while surfacing the top UX gripe both times is the strongest single argument
+  for the firewalled-naive archetype.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
