@@ -6,7 +6,7 @@ use buiy::view::{Color, Element, Radius, Space, row, text};
 use buiy_view::LineStyle;
 
 use crate::avatar::{doodle_avatar, doodle_avatar_forced};
-use crate::theme::{FONT_BODY, FONT_DISPLAY, POS};
+use crate::theme::{FONT_BODY, POS};
 use crate::view::widgets::{
     avatar_el, badge, card, card_w, eyebrow, primary_button, quiet_button, screen_root, title,
 };
@@ -32,10 +32,13 @@ pub fn lobby(s: &Dooduel) -> Element<Msg> {
     // a Copy button (Buiy has no text-selection on static labels yet, so the code is not
     // mouse-selectable; the button routes it to the OS clipboard — see `Msg::CopyCode`).
     let code_box = row![
+        // The invite code renders in the upright body face (Geist-Mono's stand-in for
+        // the design's mono codes/numbers role), matching the in-game top-bar code — not
+        // the hand-drawn italic Caveat display face (QA cycle-2 C2-04).
         text(s.replica.room_code.as_str())
             .size(24.0)
             .color(p.ink)
-            .font(FONT_DISPLAY),
+            .font(FONT_BODY),
         quiet_button("Copy", Msg::CopyCode, p),
     ]
     .justify_between()

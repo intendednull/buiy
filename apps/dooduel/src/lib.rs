@@ -2090,6 +2090,43 @@ mod tests {
         settle(app);
     }
 
+    /// C2-04 (QA cycle 2): the lobby invite code must render in the upright body face
+    /// (Geist-Mono's stand-in here — codes/numbers are the design's mono role), matching
+    /// the in-game top-bar code, NOT the hand-drawn italic Caveat display face.
+    #[test]
+    fn lobby_room_code_uses_the_body_font_not_the_display_face() {
+        use buiy_core::text::{FamilyEntry, FontFamily, FontStack, Text};
+
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::SetName("Zed".to_string()));
+        enqueue_msg(&mut app, Msg::GoJoin);
+        settle(&mut app);
+        enqueue_msg(&mut app, Msg::SetJoinCode("abcdef".to_string()));
+        enqueue_msg(&mut app, Msg::SubmitJoin);
+        settle(&mut app);
+        seed_lobby(&mut app, 1, 0, "ABCDEF");
+
+        // The invite-code label is the Text node whose content is the code.
+        let world = app.world_mut();
+        let mut q = world.query::<(&Text, Option<&FontFamily>)>();
+        let FontFamily(FontStack(stack)) = q
+            .iter(world)
+            .find(|(t, _)| t.0 == "ABCDEF")
+            .and_then(|(_, f)| f.cloned())
+            .expect("the room-code label renders with an explicit font");
+        // The primary named family drives the face (a sans-serif fallback follows).
+        let primary = stack.iter().find_map(|e| match e {
+            FamilyEntry::Named(name) => Some(name.as_str()),
+            FamilyEntry::Generic(_) => None,
+        });
+        assert_eq!(
+            primary,
+            Some(crate::theme::FONT_BODY),
+            "the lobby invite code uses the upright body font (FONT_BODY) like the \
+             in-game top-bar code — not the hand-drawn Caveat display face; got {stack:?}"
+        );
+    }
+
     #[test]
     fn join_connects_then_the_guest_lobby_waits_for_the_host() {
         let mut app = boot_probe();
