@@ -47,7 +47,7 @@ use buiy_core::render::components::{
     Background, Border, BorderSide, BoxShadow, Corners, Icon, Opacity, Shadow, TextColor,
 };
 use buiy_core::scroll::ScrollExtent;
-use buiy_core::text::edit::{EditCommand, PendingProgrammaticEdit, TextEditState};
+use buiy_core::text::edit::{EditCommand, PendingProgrammaticEdit, Placeholder, TextEditState};
 use buiy_core::text::{
     FontFamily, FontSize, FontStack, FontWeight, SharedFontSystem, Text, TextAlign as CoreTextAlign,
 };
@@ -277,6 +277,9 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             if world.get::<PendingProgrammaticEdit>(entity).is_none() {
                 changed |= set_editor_value(world, entity, el.value.as_deref().unwrap_or(""));
             }
+            // The placeholder is a controlled prop too — re-patch it (drift-only) so
+            // a phase-driven prompt updates on a rebuild, not only at spawn.
+            changed |= set_placeholder(world, entity, el.placeholder.as_deref().unwrap_or(""));
             update_text_actions::<M>(world, entity, el, model);
         }
         Kind::Column | Kind::Row => {
@@ -1587,6 +1590,33 @@ fn set_editor_value(world: &mut World, entity: Entity, value: &str) -> bool {
         changed = true;
     }
     changed
+}
+
+/// Re-assert a controlled text-input's placeholder from the view (drift-only, so
+/// an unchanged prompt never trips `Changed`). A real change trips the downstream
+/// `sync_placeholder` reshape + the `A11yPlaceholder` mirror. Patched every
+/// reconcile (unlike the value, it is never a "pending edit") so a phase-driven
+/// prompt (`match phase { … }`) updates on a rebuild, not only at spawn — the
+/// realized `TextInput` `#[require]`s `Placeholder`, so it is always present.
+fn set_placeholder(world: &mut World, entity: Entity, want: &str) -> bool {
+    if let Some(mut ph) = world.get_mut::<Placeholder>(entity) {
+        if ph.0 != want {
+            ph.0 = want.to_string();
+            return true;
+        }
+        false
+    } else {
+        // Defensive (a realized TextInput always carries `Placeholder`): seed one if
+        // a non-empty prompt is wanted.
+        if want.is_empty() {
+            false
+        } else {
+            world
+                .entity_mut(entity)
+                .insert(Placeholder(want.to_string()));
+            true
+        }
+    }
 }
 
 /// Attach / refresh (or remove) a text-input's `on_input` / `on_submit` handlers

@@ -120,9 +120,11 @@ internals (`TextEditState`, `TextChanged`). The stuck-marker edge (an AT set on 
 - **In scope:** the `PendingProgrammaticEdit` marker (set in `honor_text_set_value`, read by the
   reconcile's `Kind::TextInput` push, cleared in `route_text_input`). RED→GREEN:
   `controlled_input_rebuild_clobber.rs`.
-- **Separate root cause (follow-up):** the stale in-game placeholder is NOT this timing bug.
-  The reconcile's `Kind::TextInput` **patch** branch (`reconcile.rs:270-273`) patches only the
-  value + handlers; it never re-patches the placeholder, which is seeded once at spawn
-  (`reconcile.rs:504-506`). So a phase change (`Phase::Picking` → `Drawing`) never updates the
-  placeholder text. Fix = add a drift-only `set_placeholder` patch to that branch; tracked
-  separately (an optional companion commit; distinct RED/GREEN).
+- **Separate root cause (fixed in a companion commit):** the stale in-game placeholder is NOT
+  this timing bug. The reconcile's `Kind::TextInput` **patch** branch patched only the value +
+  handlers; it never re-patched the placeholder, which was seeded once at spawn. So a phase
+  change (`Phase::Picking` → `Drawing`) never updated the placeholder text. Fixed with a
+  drift-only `set_placeholder` patch (`Placeholder` `set_if_neq`, so the existing
+  `sync_placeholder` reshape + `A11yPlaceholder` mirror pick it up) in that branch. RED→GREEN:
+  `controlled_placeholder_patch.rs`. Distinct commit so the two root causes stay reviewable
+  apart.
