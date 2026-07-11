@@ -499,6 +499,42 @@ staged-development.
   seat2=naive, seat3=host+visual), rebuild (app+framework changed), re-verify
   KI-29/30/31 + the earlier fixes live by different seats, hunt new issues.
 
+### 2026-07-10 — CYCLE 2 close-out (rotated re-verify; fixes held; 2 real findings)
+
+- Full match, rotated archetypes, ALL cycle-1 + prior fixes re-verified HELD by a
+  different seat than found them (KI-29 countdown-render confirmed live end-to-end
+  — the re-verify Track A deferred), ZERO regressions, visuals ON-SPEC, mechanics
+  SOLID. Naive seat (Dana) won without stalling. Triage: `cycle-2/triage.md`.
+- Three findings → two dismissed, ONE real fixed, ONE deferred:
+  - **C2-03 hint-schedule "off-by-one" (S2) = NOT A BUG.** The 1-based schedule
+    is the intended design (FINAL spec §5(b) DECISION, explicit "not a porting
+    error" note); the false positive came from a STALE QA BRIEFING (the mechanic
+    briefing I had drafted stated the formula 0-based). Briefing + finding-template
+    corrected (`7b05679`); KI-32 added (`ba105aa`). **I made the same wrong
+    adjudication** from the formula's structure — the agent's adjudicate-against-
+    the-spec-FIRST discipline caught it and prevented a regressing "fix" that would
+    have broken 2 green design-encoding tests.
+  - **C2-04 lobby font (S4) = FIXED** (`006b9b6`): lobby code was Caveat
+    (`FONT_DISPLAY`), now `FONT_BODY` — matches the in-game code. (Emmy's "should
+    be Geist Mono" was itself slightly stale: the app has no Geist Mono; Shantell
+    Sans body is the mono-role stand-in.) KI-33 regression-watch.
+  - **C2-02 empty chat pills (S3) = REAL framework render bug, DEFERRED.** App
+    proven clean + guarded (`4ae7764`: 24-row networked repro, keyed_rows == model
+    chat); the content-less green pills are a GPU render-layer artifact (stale/extra
+    quad at volume, KI-02 atlas family). Localized but NOT fixed here — deferred to
+    a framework render track (KI-34 + follow-up). Honest scope call: the playtest's
+    job (find + localize) is done; the framework GPU fix is a separate focused effort.
+- **Skill notes:** (1) TWO of cycle-2's three "bugs" were DOC/expectation errors
+  (stale briefing formula), not code bugs — a QA campaign generates false positives
+  from its own docs; the adjudicate-against-the-spec-first gate is what separates
+  them, and even the ORCHESTRATOR must not skip it (I didn't, and was wrong). (2)
+  The rotation works: a fix found by seat A is re-verified by seat B — cycle 2
+  confirmed all of cycle-1's fixes hold. (3) The naive seat remains the highest-
+  yield finder (won the match AND found the 2 real findings). (4) An app-layer
+  agent PROVING app-cleanliness and localizing a bug to the framework (with a
+  committed guard) is a valid, valuable outcome even without a fix — it turns a
+  vague "empty pills" into a precise, tracked framework render defect.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,

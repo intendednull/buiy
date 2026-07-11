@@ -2337,3 +2337,18 @@ priority.
 `text_input` (`.fill_width()`, `join.rs:23`) renders narrower than its dashed wrapper, so the field
 looks offset/inset inside the frame — a naive first-timer read it as a glitch. Cosmetic; tighten the
 field-to-frame fit. Low priority.
+
+## Render/framework — content-less green chat pills at high volume (KI-02 atlas family) — OPEN (framework render track)
+
+**Originated:** 2026-07-10, Dooduel QA cycle-2 (C2-02), all 4 seats. Once the in-game chat
+passes ~20 rows, up to TWO content-less light-green (`ChatKind::Correct` #DCEFE3 tint) pills
+render at the chat TAIL — a stale/extra green QUAD with no glyphs and no backing node in the
+app's realized tree. The `apps/dooduel` side is PROVEN clean (core never emits empty chat
+text; a faithful 24-row networked repro shows `keyed_rows(rendered) == model chat` one-for-one,
+no phantom/dropped rows — guard test committed `4ae7764`), so the root is BELOW the app in the
+GPU render layer — a stale/extra quad instance at high volume / the atlas-page or chat-pane
+scroll edge. Same lineage as KI-02 (the multi-page coverage-atlas-bind cycle). S3 (cosmetic —
+no lost content). Needs a FRAMEWORK render-track investigation on the GPU lane (repro the extra
+quad at volume → localize the stale instance in the render/atlas/scroll pipeline → fix +
+GPU-verify). Deferred from cycle-2 (app-clean; framework fix is a separate focused effort).
+Tracked as known-issue KI-34.
