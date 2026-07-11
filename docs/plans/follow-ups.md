@@ -2362,3 +2362,16 @@ screenshots rather than a real miss — but it was never positively confirmed fi
 of playtests (agents read static frames). VERIFY: run the native app and watch a correct-guess
 reveal + the podium for a confetti burst; if it never fires, it's a real (S4) missing-celebration
 bug, possibly tied to the deferred emoji/character-layer path (KI-23). Low priority.
+
+## Dooduel — add a turn-end-boundary characterization test (after-expiry guess → WrongPhase) — OPEN (cheap, docs-expected-behavior)
+
+**Originated:** 2026-07-10, Dooduel QA cycle-3 (C3-S2-01 adjudication). NOT a bug — a guess that
+reaches the room actor after the draw-timer expiry tick is correctly WrongPhase-rejected, never
+silently dropped (traced: `session.rs:404-416` synchronous `on_guess` with a `phase != Drawing`
+guard; `room.rs:306-309` messages-before-ticks; `game.rs:535-547` all-guessed credits the last
+guesser before `end_turn`; a 2/3 end with drawer +67 can only be a timer-end). Existing coverage
+`guess_before_drawing_is_wrong_phase` (session.rs:1423) covers the Picking case but NOT the
+after-draw-expiry case. Add a cheap session-tier test: force the draw timer to expire (tick
+past `total`), submit a correct guess, assert it returns WrongPhase and does NOT enter
+`turn_guesses` / change score. Documents the boundary + guards a future refactor from silently
+dropping instead of rejecting. Low priority.
