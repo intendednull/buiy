@@ -23,7 +23,7 @@
 use bevy::prelude::*;
 use buiy_core::interaction::OnPress;
 use buiy_core::mvu::{Model, enqueue};
-use buiy_core::text::edit::{EditSubmitted, TextChanged, TextEditState};
+use buiy_core::text::edit::{EditSubmitted, PendingProgrammaticEdit, TextChanged, TextEditState};
 
 use crate::element::{InputHandler, SubmitHandler};
 
@@ -83,6 +83,13 @@ pub(crate) fn route_text_input<M: Model>(
     mut commands: Commands,
 ) {
     for TextChanged(e) in changes.read() {
+        // This `TextChanged` is being consumed, so a programmatic edit (if any) is
+        // no longer pending — clear the reconcile's clobber-guard. Cleared for every
+        // drained change (fold or not: an input with no `on_input` still must not
+        // leave the marker stuck). A no-op when the marker is absent (keyboard/live
+        // typing never sets it). The reconcile that skipped ran this frame BEFORE
+        // this system; the deferred removal flushes before the next frame's reconcile.
+        commands.entity(*e).remove::<PendingProgrammaticEdit>();
         if let Ok((action, editor)) = actions.get(*e) {
             let msg = action.handler.call(editor.value());
             enqueue::<M>(&mut commands, action.model, msg);

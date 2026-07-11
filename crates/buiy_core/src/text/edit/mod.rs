@@ -48,7 +48,10 @@ pub use ime::{
     CompositionEnd, CompositionStart, CompositionUpdate, PREEDIT_METADATA, PreeditSpan, apply_ime,
     write_ime_window,
 };
-pub use input::{EditContext, EditOutcome, EditSubmitted, TextChanged, apply_keyboard_edits};
+pub use input::{
+    EditContext, EditOutcome, EditSubmitted, PendingProgrammaticEdit, TextChanged,
+    apply_keyboard_edits,
+};
 pub use keymap::{Keymap, KeymapTable, Modifiers, default_keymap_for_platform};
 pub use lifecycle::focus_lifecycle;
 pub use placeholder::{PlaceholderActive, PlaceholderBuffer, sync_placeholder};

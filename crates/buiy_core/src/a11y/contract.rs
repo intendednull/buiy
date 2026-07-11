@@ -24,7 +24,9 @@ use crate::a11y::A11yRole;
 use crate::a11y::states::A11yValue;
 use crate::interaction::OnPress;
 use crate::text::SharedFontSystem;
-use crate::text::edit::{EditCommand, SingleLine, TextChanged, TextEditState};
+use crate::text::edit::{
+    EditCommand, PendingProgrammaticEdit, SingleLine, TextChanged, TextEditState,
+};
 use accesskit::{Action, ActionData, NodeId};
 use bevy::ecs::message::Messages;
 use bevy::ecs::world::World;
@@ -528,6 +530,12 @@ fn honor_text_set_value(
     // text infra and thus the message resource.
     if value_changed && let Some(mut changed) = world.get_resource_mut::<Messages<TextChanged>>() {
         changed.write(TextChanged(entity));
+        // Mark the editor as carrying an un-folded programmatic edit so a
+        // controlled view reconcile does not clobber it before the bridge folds
+        // the `TextChanged` into the model. The bridge (`route_text_input`) clears
+        // it when it folds; a harness with no reconcile simply never reads it.
+        // (design 2026-07-10-dooduel-controlled-input-setvalue-fold-design.md).
+        world.entity_mut(entity).insert(PendingProgrammaticEdit);
     }
     Ok(())
 }

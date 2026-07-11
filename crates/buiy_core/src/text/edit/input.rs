@@ -21,6 +21,23 @@ use super::undo::{GroupKind, UndoUnit};
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextChanged(pub Entity);
 
+/// Marks an editor that received a **programmatic** value edit (an assistive-tech
+/// / probe `Action::SetValue`, applied out of band via `&mut World`) whose
+/// `TextChanged` has not yet folded into the owning model.
+///
+/// The value flows editor→model one leg late (`route_text_input` reads
+/// `TextChanged` in `MvuSet::Enqueue`, after the front-of-frame view reconcile).
+/// A controlled reconcile that re-asserts the model value would clobber this
+/// un-folded edit before the fold reads it whenever an unrelated model change
+/// (e.g. a countdown tick) forces a same-frame rebuild
+/// (`docs/specs/2026-07-10-dooduel-controlled-input-setvalue-fold-design.md`).
+/// So `honor_text_set_value` sets this marker; the reconcile skips its clobber
+/// while it is present; the bridge that folds the `TextChanged` clears it. The
+/// keyboard path does NOT set it — a keystroke edits the editor after the
+/// reconcile and folds the same frame, so it never races.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingProgrammaticEdit;
+
 /// Emitted when a single-line editor is submitted (editing-and-ime § 11 row
 /// `EditSubmitted`, § 3.3). Born from `EditCommand::Submit` — the focused
 /// single-line Enter. Payload: the entity (the value is read via the
