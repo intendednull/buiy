@@ -2319,3 +2319,21 @@ underlying "Send" glyphs still painted through it. Structural: honoring per-tier
 occlusion needs glyphs to participate in the paint-order tiers (the top-layer composite pass /
 effect-group seam), not a single post-quad draw. Larger render-pipeline effort; noted, not
 scheduled.
+
+## Dooduel — stale guess-draft survives a mid-Drawing RECONNECT (reseed asymmetry) — OPEN
+
+**Originated:** 2026-07-10, cycle-1 Track B review (F2). The `PhaseChanged` arm now clears
+`chat_input` on every turn transition (`5320ae3`), but the `RoomState` mid-match-reconnect reseed
+arm (`apps/dooduel/src/lib.rs:873`) sets a fresh phase WITHOUT clearing `chat_input` — so a stale
+guess draft could survive a reconnect that lands mid-Drawing. Pre-existing, out of F2's
+turn-transition scope, at most cosmetic for one word (guessing is open there, draft still
+editable). Add `chat_input.clear()` to the reseed arm for reconnect symmetry if desired. Low
+priority.
+
+## Dooduel — Join/Lobby room-code field renders narrower than its dashed wrapper — OPEN (S5)
+
+**Originated:** 2026-07-10, cycle-1 finding F4. The `2.5px dashed` room-code frame is the intended
+"sketchy" aesthetic (`apps/dooduel/src/view/join.rs:15,27`, `lobby.rs:31,45`), but the inner
+`text_input` (`.fill_width()`, `join.rs:23`) renders narrower than its dashed wrapper, so the field
+looks offset/inset inside the frame — a naive first-timer read it as a glitch. Cosmetic; tighten the
+field-to-frame fit. Low priority.

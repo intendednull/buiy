@@ -465,6 +465,40 @@ staged-development.
   drawer-probes. (5) A finding that might be a HARNESS artifact (F1) still gets
   first-class adjudication — if the eyes lie, every visual finding is suspect.
 
+### 2026-07-10 — cycle-1 fixes LANDED (all 3 staged + review-approved)
+
+- **Track A / F1 (framework render — the campaign's biggest single find):**
+  `951686a` — the countdown-number freeze was a REAL render-invalidation bug,
+  reproduced on the live windowed app with zero input (frozen 9,9,9,9… for a
+  whole picking phase while the ring drained). Root cause: `extract_buiy_glyphs`
+  gated glyph re-extraction on `Changed<ComputedTextLayout>` (geometry only), so
+  a Text whose content changes without changing geometry (a ticking number in
+  Caveat) never re-extracted → stale glyphs. Fix: add `Changed<Text>` to the
+  gate, mirroring the existing placeholder-buffer precedent. Review APPROVE:
+  both GPU legs green (buiy_core 87/0, buiy_verify 24/0), ZERO golden shifts
+  (correct — single-frame goldens can't fire the changed-text term), MT-perf
+  splice intact (content-only change → one Patch, never a wholesale Full, O(0)
+  steady), workspace 2293/0. RED confirmed by revert.
+- **Track B / F2 (app):** `5320ae3` — clear the guess-draft (`chat_input`) on
+  `PhaseChanged`, so a stale un-submitted guess no longer persists across turns
+  (and no longer masks the phase placeholder). **F1b (app):** `b852ec2` — blank
+  the LOCAL canvas on the falling edge out of Drawing/Reveal (server op-log was
+  already cleared per turn; only the local pixel buffer lingered into the next
+  Picking). Both RED→GREEN, canvas_e2e 10/10 (drawer-optimistic-ink + reseed
+  unaffected), review APPROVE. **F4** dashed-box = intended aesthetic (minor
+  field-inset nit → follow-up). Reconnect-draft asymmetry → follow-up.
+- Ledger: KI-29 (countdown render), KI-30 (guess-draft), KI-31 (canvas-clear)
+  added to §1 regression-watch — cycle 2 re-verifies each by a rotated seat.
+- **THE headline lesson for the skill:** the live agent playtest found a real
+  FRAMEWORK render bug the ENTIRE existing verification suite missed — because
+  goldens/reftests are single-frame and this bug only manifests over TIME (text
+  changing while geometry is stable). Static verification is structurally blind
+  to temporal render defects; a live playtest is the only gate that observes
+  them. Generalizes far past Dooduel (any live-updating label).
+- **NEXT: cycle 2** — rotate archetypes (seat0=mechanic, seat1=chaos,
+  seat2=naive, seat3=host+visual), rebuild (app+framework changed), re-verify
+  KI-29/30/31 + the earlier fixes live by different seats, hunt new issues.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
