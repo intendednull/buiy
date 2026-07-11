@@ -336,6 +336,27 @@ staged-development.
   with hard evidence — the re-gate agent's own experience mirrors what seat
   agents will hit in cycles.
 
+### 2026-07-10 — W2 smoke interrupted by session limit (resumable, dirty)
+
+- W2 implementer hit its session limit and died before committing/reporting.
+  It left apps/dooduel/tests/qa_seat_smoke.rs UNCOMMITTED (412 lines).
+  Orchestrator assessment: it COMPILES (--no-run Finished), clippy-clean, no
+  unfinished markers; temp-dir evidence showed a real 3-seat run reaching
+  Host-draw + Priya/Theo joins via the corrected flow — so it is feature-
+  complete and its multi-seat logic works. BUT `cargo fmt --check` flags a
+  diff (agent hadn't fmt'd), so it is NOT gate-clean → left dirty, not
+  checkpoint-committed (and the orchestrator does not run fmt on source
+  itself — the delegation bright line). Orphaned /tmp/qa-smoke-* dirs cleaned.
+- Resume plan: a fresh agent runs fmt, runs the #[ignore] GPU smoke twice,
+  calibrates HEADER_SKIP_PX against a real screenshot, verifies PASS, then
+  commits. If the account is still session-limited (reset ~7:50am PT), a
+  scheduled wakeup dispatches it after the window.
+- **Skill note:** "compiles + clippy-clean + evidence-of-a-real-run" is a
+  useful cheap orchestrator triage to distinguish a nearly-done dirty file
+  from a half-written one — but fmt-dirty means don't checkpoint-commit; hand
+  the leave-dirty file to the resume agent (the delegation rule keeps the
+  orchestrator from fmt-ing/verifying implementation inline).
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
