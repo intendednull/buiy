@@ -895,6 +895,14 @@ fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
             s.replica.drawer = drawer;
             s.replica.round = round;
             s.replica.total_rounds = total_rounds;
+            // A turn/phase transition resets the guess draft (QA cycle-1 F2): an
+            // un-submitted guess is stale the moment the phase changes, and leaving it in
+            // the field masks the new phase's placeholder ("Type your guess…" / "Round
+            // over — see results" / "Waiting for the word…"), degrading the phase cue. The
+            // reducer previously cleared `chat_input` only on submit. Clearing on every
+            // phase edge is safe: the draft is only ever built up DURING Drawing, and no
+            // PhaseChanged fires mid-Drawing, so this never wipes an in-progress guess.
+            s.chat_input.clear();
             if phase == Phase::Picking {
                 // A fresh turn: last turn's word row / choices / reveal rows clear
                 // (the server sends WordChoices to the drawer + WordUpdate on
@@ -1313,6 +1321,54 @@ mod tests {
 
         update(&mut m, Msg::Continue);
         assert_eq!(m.net_outbox.last(), Some(&ClientIntent::Continue));
+    }
+
+    #[test]
+    fn a_phase_transition_clears_the_stale_guess_draft() {
+        // F2 (QA cycle-1): an un-submitted guess left in the chat field must not persist
+        // across a turn/phase transition. The reducer cleared `chat_input` only on submit,
+        // so a half-typed guess survived the reveal, the next Picking, and even the seat's
+        // own drawer turn — masking the new phase's placeholder ("Type your guess…" /
+        // "Round over — see results" / "Waiting for the word…") and degrading the phase
+        // cue. A PhaseChanged (the turn/phase transition, folded in `apply_event`) clears
+        // it.
+        // This turn ends (Drawing → Reveal) with an un-submitted draft: it clears, so the
+        // Reveal placeholder shows through instead of the retained value.
+        let mut m = Dooduel {
+            chat_input: "penguin".to_string(),
+            ..Default::default()
+        };
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Reveal,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(6),
+            },
+        );
+        assert!(
+            m.chat_input.is_empty(),
+            "a phase transition clears the stale guess draft"
+        );
+
+        // A fresh turn (Reveal → Picking) also starts clean.
+        m.chat_input = "octopus".to_string();
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Picking,
+                drawer: Some(1),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(12),
+            },
+        );
+        assert!(
+            m.chat_input.is_empty(),
+            "the next turn starts with an empty guess input"
+        );
     }
 
     #[test]
