@@ -357,6 +357,43 @@ staged-development.
   the leave-dirty file to the resume agent (the delegation rule keeps the
   orchestrator from fmt-ing/verifying implementation inline).
 
+### 2026-07-10 — W2 smoke resumed → found bug #3 (deferred W2, opened Track 3)
+
+- Resume agent (w2b): fmt'd the smoke, verified HEADER_SKIP_PX=220 against real
+  GPU frames (countdown rows 127–182, ink ≥220 — clean separation), confirmed
+  amendment (A) was already present. Checkpoints 1–5 PASS both runs; checkpoint
+  6 (the guess) FAILS deterministically (both runs, 44/45s). It correctly did
+  NOT self-approve a demotion — STOPPED and reported.
+- **FINDING 3 (framework, blocks reliable cycles):** `probe::set_value` into
+  the in-game chat `text_input` never folds. Root cause (w2b + orchestrator
+  hypothesis, to be confirmed by Track 3): the field is a long-lived CONTROLLED
+  input; the in-game screen rebuilds ~1/s (countdown Tick), and each rebuild's
+  controlled-set reconcile `set_editor_value` (reconcile.rs:1552) forces
+  editor←model("") via the silent `apply` seam (no TextChanged), clobbering the
+  set_value edit before `route_text_input` folds it. Static/fresh-navigated
+  fields (Join) escape — which is why the W1 re-gate's guesses eventually
+  landed (and why one "vanished"). Same bug-family as #98, one layer deeper.
+  Correlated: the in-game chat placeholder renders stale ("Waiting for the
+  word…" during Drawing). Failing assertion: qa_seat_smoke.rs:404
+  `wait_value` (Priya, expected the lowercased word).
+- **DECISION — FIX, don't demote (Track 3).** Every playtest guesser types via
+  set_value into this exact field, so a racy fold makes every cycle's guessing
+  flaky — a blocker for the harness, not a deferrable test nicety. Demoting
+  checkpoint 6 would ship the campaign on an unreliable guess path. The smoke
+  test stays dirty+uncommitted (correct as written); it passes once the fold
+  is fixed, then W2 commits.
+- Track 3 = staged framework fix (systematic-debugging root-cause → design note,
+  since ordering-vs-clobber-guard-vs-fold-at-source is a real 2+-approach
+  decision → RED at the buiy_view rebuilding-controlled-input tier → fix →
+  review). Evidence handed off (the two /tmp/qa-smoke-* dirs + header-verify).
+- **Skill note:** the harness has now found THREE real bugs (app occlusion +
+  two framework AT-fold bugs) BEFORE cycle 1 — the "the harness finds bugs
+  while being built" budget line is not hypothetical. Each was caught because
+  the driver exercises the REAL widget/AT surface the protocol seats bypass.
+  Also: the smoke test itself (an automated multi-seat GUI runner) is a
+  higher-signal gate than a human playtest for THIS class — deterministic,
+  re-runnable, bisectable.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
