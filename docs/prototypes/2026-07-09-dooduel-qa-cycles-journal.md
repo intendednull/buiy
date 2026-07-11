@@ -394,6 +394,40 @@ staged-development.
   higher-signal gate than a human playtest for THIS class — deterministic,
   re-runnable, bisectable.
 
+### 2026-07-10 — Track 3 fixed + APPROVED; W2 smoke fully green
+
+- Track 3: `9bb9feb` RED (controlled input on a per-frame-rebuilding view) →
+  `e81b91f` fix (b) the `PendingProgrammaticEdit` marker: set by
+  honor_text_set_value alongside the #98 TextChanged emit, honored by the
+  controlled reconcile to skip its one clobber, cleared by route_text_input on
+  every drained TextChanged → `d2f4863` the separate stale-placeholder fix (the
+  reconcile patch branch never re-patched the placeholder across a phase
+  change). Design note: specs/2026-07-10-dooduel-controlled-input-setvalue-fold-design.md.
+- Root cause PROVEN: reconcile (ViewSet::Reconcile, .before(Layout)) runs
+  front-of-frame ahead of the AT fold (route_text_input, late MvuSet::Enqueue);
+  on a Changed<M>-every-frame screen it re-asserts the stale model over the
+  un-folded edit before the fold reads it — the Changed<M> early-out is exactly
+  why static Join escapes and the ticking in-game screen doesn't.
+- The (d)→(b) discovery is the lesson: the agent implemented rejected-option
+  (d) "push only on prop change" first, the FULL suite caught it breaking
+  on_submit_with (whose post-submit clear relies on the reconcile re-asserting
+  a constant "" — so "prop unchanged" ≠ "leave editor alone"; the right
+  discriminator is "in-flight un-folded edit"). The test suite disproving a
+  plausible fix is the mechanism working.
+- Review: APPROVE — all four marker-lifecycle cases traced stuck-free, silent
+  seam intact, #98/emit-count/on_submit_with/keyboard/IME all green, MT-safe;
+  reviewer independently ran the W2 smoke green (checkpoint 6, guess scores
+  +488). Non-blocking N1: a benign Bevy warn on the rare set_value-then-
+  navigate-away edge (remove queued on a despawned entity) — logged, not fixed.
+- **W2 smoke checkpoint 6 now PASSES** → the guess path is robust for cycles.
+  Smoke test committed; W2 done.
+- **Skill note (campaign-level):** 3 bugs, 3 clean staged fixes, each with an
+  adversarial fresh-review gate, all BEFORE cycle 1. The harness-build phase
+  doubles as the deepest QA pass — it exercises framework AT paths that neither
+  the human playtest nor the protocol seats reach. Bake "expect the harness
+  build to surface framework bugs; fix them staged, don't demote the checks"
+  into the skill.
+
 ## Skill-distillation notes (seed questions)
 
 - What makes an agent playtest *reliable*? (settle-waits vs stale screenshots,
