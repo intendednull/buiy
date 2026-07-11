@@ -26,14 +26,15 @@ seat: <0-3> (<Name>)                # and your role at the time: drawer|guesser|
 build: <git short sha under test>   # the orchestrator gives you this in your launch message
 turn: <round.turn or "lobby"/"pre-match"/"podium">
 repro:                              # numbered, from a known state, the EXACT commands you sent
-  - "1. As guesser in Drawing phase, ui.md countdown read 143 s-left"
+  - "1. As guesser in Drawing phase, ui.md countdown read 101 s-left"
   - "2. Observed the first hint letter appear in the word slots"
 expected: >                        # what SHOULD happen, and CITE the source of that expectation
   With draw_seconds=240 + hints=2, the first hint reveals at
-  floor(240*(0.6 - 0*0.18)) = 144 s-left (charter §1.B hint formula).
+  floor(240*(0.6 - 1*0.18)) = floor(240*0.42) = 100 s-left (design §5(b),
+  1-based i in 1..=hints).
 actual: >
-  The first letter appeared at 143 s-left. (Within 1 poll — likely fine; logging
-  to confirm the schedule tracks the widened timer, not the charter's 150 s example.)
+  The first letter appeared at 100 s-left. (On schedule — logging to confirm the
+  schedule tracks the widened timer, not the design's 80s reference example.)
 evidence:                          # files IN YOUR SEAT DIR — copy the relevant screen.png to findings/<id>.png
   - findings/C1-S1-04.png
   - "ui.md excerpt: word slots '_ _ B _ _', countdown 143"

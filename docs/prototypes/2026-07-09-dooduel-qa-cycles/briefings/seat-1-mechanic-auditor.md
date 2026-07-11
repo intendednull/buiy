@@ -24,10 +24,14 @@ is **240**). Use *that* value everywhere below — do **not** assume 150.
 ## 2. Hint schedule — time it against the formula (charter §1.B)
 
 - Revealed count `= clamp(hints, 0, letters−1)`. Thresholds at
-  `floor(totalDraw·(0.6 − i·0.18))` **seconds-left**, for i = 0, 1, …
-- **Compute for the ACTUAL draw_seconds.** With draw **240** + 2 hints: reveal 0 at
-  `floor(240·0.6) = 144` s-left; reveal 1 at `floor(240·0.42) = 100` s-left. (The
-  charter's "~90 / ~63 s" numbers assume draw 150 — recompute for your config.)
+  `floor(totalDraw·(0.6 − i·0.18)).max(1)` **seconds-left**, for **i = 1, 2, … hints**
+  (**1-based** — `i` in `1..=hints`, per the FINAL design
+  `docs/specs/2026-07-03-dooduel-final-design.md` §5(b) DECISION. The `0.6` base is
+  the linear intercept, never a standalone threshold; the first reveal uses i=1 ⇒ 0.42.)
+- **Compute for the ACTUAL draw_seconds.** With draw **240** + 2 hints: hint 1 at
+  `floor(240·(0.6 − 1·0.18)) = floor(240·0.42) = 100` s-left; hint 2 at
+  `floor(240·(0.6 − 2·0.18)) = floor(240·0.24) = 57` s-left. (At the design's 80s
+  reference draw these are the pinned **33 s / 19 s**-left — recompute for your config.)
 - Log the countdown when each hint letter appears; compare. Off-schedule or a missing
   hint is **S2**.
 
