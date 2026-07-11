@@ -750,3 +750,76 @@ fn reseed_re_renders_even_when_len_and_ids_coincide() {
         "the stale turn-N (top) ink is gone"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The local canvas blanks on the turn boundary (QA cycle-1 F1b).
+// ---------------------------------------------------------------------------
+
+/// F1b: the previous turn's drawing must NOT linger through the next drawer's Picking
+/// phase. The local raster used to clear only on the Drawing-phase entry
+/// (`sync_tools_to_canvases`'s `drawing && !was_drawing` edge), while
+/// `rerender_canvas_from_log` early-returns during Picking — so the stale drawing showed
+/// (mostly under the waiting scrim) through the whole Picking phase. The fix blanks the
+/// local buffer ONCE on the turn boundary (Reveal/Drawing → Picking/Idle/Final).
+///
+/// This is a purely LOCAL display reset: the authoritative op log (`replica.canvas_ops`)
+/// is already emptied by the server's per-turn `CanvasCleared` and is untouched here, so
+/// nothing is relayed and replay/late-join are unaffected. The reveal still shows the
+/// finished drawing (blanking fires on leaving Reveal, not on entering it).
+#[test]
+fn local_canvas_blanks_on_the_turn_boundary() {
+    let mut app = guesser_drawing_app();
+    let net = |app: &mut App, ev: ServerEvent| enqueue(app, Msg::Net(ev));
+    let mid_y = CANVAS_H / 2;
+
+    // Ink the current turn's canvas (the drawer's stroke, echoed to this guesser).
+    net(
+        &mut app,
+        ServerEvent::CanvasOpApplied {
+            op: band_op(0, mid_y as i32),
+        },
+    );
+    settle(&mut app, 4);
+    assert!(
+        inked_pixels(&app) > 500,
+        "the current turn's drawing is inked"
+    );
+
+    // Turn ends → Reveal: the finished drawing STILL shows (the reveal exposes it).
+    net(
+        &mut app,
+        ServerEvent::PhaseChanged {
+            phase: dooduel::game::Phase::Reveal,
+            drawer: Some(0),
+            round: 1,
+            total_rounds: 2,
+            remaining: std::time::Duration::from_secs(6),
+        },
+    );
+    settle(&mut app, 4);
+    assert!(
+        inked_pixels(&app) > 500,
+        "the drawing persists through the reveal"
+    );
+
+    // Next turn → Picking (a new drawer), mirroring the server's per-turn bundle
+    // (`PhaseChanged(Picking)` + `CanvasCleared`). The local canvas must be blank for
+    // this pick — not the previous turn's lingering drawing (F1b).
+    net(
+        &mut app,
+        ServerEvent::PhaseChanged {
+            phase: dooduel::game::Phase::Picking,
+            drawer: Some(2),
+            round: 1,
+            total_rounds: 2,
+            remaining: std::time::Duration::from_secs(12),
+        },
+    );
+    net(&mut app, ServerEvent::CanvasCleared);
+    settle(&mut app, 4);
+    assert_eq!(
+        inked_pixels(&app),
+        0,
+        "the local canvas blanked on the turn boundary — the next Picking shows a clean sheet"
+    );
+}

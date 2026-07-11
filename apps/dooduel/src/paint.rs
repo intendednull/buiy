@@ -855,8 +855,21 @@ fn rerender_canvas_from_log(
     };
     let r = &model.replica;
     if !matches!(r.phase, Phase::Drawing | Phase::Reveal) {
-        // Outside a turn the buffer is left as-is (the drawer's optimistic sheet, or
-        // the last raster) — the next turn's Drawing edge re-renders it.
+        // On LEAVING a turn (Reveal/Drawing → Picking/Idle/Final) blank the local canvas
+        // ONCE, so the next drawer's Picking phase shows a clean sheet instead of the
+        // previous turn's ink lingering (mostly under the waiting scrim) until the next
+        // Drawing edge (QA cycle-1 F1b). This is a purely LOCAL display reset: the
+        // authoritative op log (`replica.canvas_ops`) is already emptied by the server's
+        // per-turn `CanvasCleared` (session.rs) and is untouched here, nothing is relayed
+        // on the wire, and the Drawing edge re-renders from the (now-empty) log anyway —
+        // so replay / late-join and the drawer's optimistic paint are unaffected. Blanking
+        // on the FALLING edge (not while IN Reveal) keeps the finished drawing visible
+        // through the reveal, then clears it for the next pick.
+        if *was_active {
+            let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
+            blank(buf);
+            buf.dirty = true;
+        }
         *was_active = false;
         return;
     }
