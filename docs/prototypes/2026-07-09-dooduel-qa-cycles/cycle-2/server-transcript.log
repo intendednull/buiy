@@ -1,0 +1,31 @@
+dooduel_server: loaded config /home/intendednull/.claude-personal/jobs/10f07af2/tmp/qa-cycle-2/qa-server.toml
+dooduel_server: listening on 127.0.0.1:7878 (ws://)
+dooduel_server: room config Config { total_rounds: 1, draw_seconds: 240, pick_seconds: 120, reveal_seconds: 60, hint_count: 2, bots_enabled: false }
+[room WGMBNQ] phase=Picking drawer=Some(0) round=1/1
+[room WGMBNQ] phase=Drawing drawer=Some(0) round=1/1
+[room WGMBNQ] seat 3 guessed correctly (+299)
+[room WGMBNQ] seat 2 guessed correctly (+232)
+[room WGMBNQ] seat 1 guessed correctly (+64)
+[room WGMBNQ] phase=Reveal drawer=Some(0) round=1/1
+[room WGMBNQ] turn ended — word was 'owl'
+[room WGMBNQ] phase=Picking drawer=Some(1) round=1/1
+[room WGMBNQ] phase=Drawing drawer=Some(1) round=1/1
+[room WGMBNQ] seat 2 guessed correctly (+343)
+[room WGMBNQ] seat 3 guessed correctly (+216)
+[room WGMBNQ] phase=Reveal drawer=Some(1) round=1/1
+[room WGMBNQ] turn ended — word was 'kite'
+[room WGMBNQ] phase=Picking drawer=Some(2) round=1/1
+[room WGMBNQ] phase=Drawing drawer=Some(2) round=1/1
+[room WGMBNQ] seat 3 guessed correctly (+234)
+[room WGMBNQ] seat 0 guessed correctly (+133)
+[room WGMBNQ] seat 1 guessed correctly (+56)
+[room WGMBNQ] phase=Reveal drawer=Some(2) round=1/1
+[room WGMBNQ] turn ended — word was 'robot'
+[room WGMBNQ] phase=Picking drawer=Some(3) round=1/1
+[room WGMBNQ] phase=Drawing drawer=Some(3) round=1/1
+[room WGMBNQ] seat 0 guessed correctly (+363)
+[room WGMBNQ] seat 2 guessed correctly (+281)
+[room WGMBNQ] phase=Reveal drawer=Some(3) round=1/1
+[room WGMBNQ] turn ended — word was 'anchor'
+[room WGMBNQ] phase=Final drawer=None round=1/1
+[room WGMBNQ] match ended — podium [(2, "Dana", 956), (3, "Cruz", 816), (0, "Emmy", 596), (1, "Blair", 187)]
