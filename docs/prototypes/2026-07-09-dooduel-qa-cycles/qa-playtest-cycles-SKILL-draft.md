@@ -5,10 +5,12 @@ description: Use when QA-testing an interactive app (a game, a rich UI, a multi-
 
 # Agent-driven QA playtest cycles
 
-> **DRAFT** — proposed for promotion to a personal skill (`~/.claude-personal/skills/`)
-> or a project skill; the orchestrator decides final placement after review. Worked
-> example: the Dooduel campaign in `docs/prototypes/2026-07-09-dooduel-qa-cycles/`
-> (+ journal, retrospective, and seat-driver spec).
+> **PROMOTED (2026-07-10)** — this draft was reviewed and promoted to the live personal
+> skill `~/.claude-personal/skills/qa-playtest-cycles/SKILL.md` (the method is general;
+> a personal skill composes with the existing global skills rather than duplicating
+> them). This file is retained as the campaign record. Worked example: the Dooduel
+> campaign in `docs/prototypes/2026-07-09-dooduel-qa-cycles/` (+ journal, retrospective,
+> and seat-driver spec).
 
 ## Overview
 
