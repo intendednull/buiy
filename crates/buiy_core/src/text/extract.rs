@@ -41,7 +41,7 @@ use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
 use super::components::{
-    CaretVisual, ComputedTextLayout, FontSize, PreeditVisual, SelectionVisual, TextBuffer,
+    CaretVisual, ComputedTextLayout, FontSize, PreeditVisual, SelectionVisual, Text, TextBuffer,
     TextDecorations,
 };
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
@@ -625,10 +625,24 @@ pub fn extract_buiy_glyphs(
                     //    (the empty editor value is unchanged), so without these
                     //    the screen keeps the stale placeholder glyphs. Both are
                     //    small runtime-mutable components — cheap, exact gates.
+                    //  • Text — the display-content sibling of the placeholder
+                    //    terms above: a content change that shapes to the SAME
+                    //    geometry (e.g. an equal-width monospace digit swap —
+                    //    the countdown-render-invalidation bug) leaves
+                    //    ComputedTextLayout idempotent, so the entity would
+                    //    otherwise keep its stale glyphs. `set_text`
+                    //    (buiy_view/reconcile.rs) mutates `Text` iff the string
+                    //    differs, so this fires exactly on a content change and
+                    //    stays O(0) on steady frames — the display-`Text`
+                    //    analogue of the placeholder fix above. Deliberately
+                    //    NOT `Changed<TextBuffer>` (see the union comment
+                    //    above: measure/commit writes bypass its ticks and it
+                    //    is noisy).
                     Or<(
                         Changed<PlaceholderActive>,
                         Changed<Placeholder>,
                         Changed<FontSize>,
+                        Changed<Text>,
                     )>,
                 )>,
             ),
