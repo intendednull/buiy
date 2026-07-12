@@ -2308,7 +2308,18 @@ being 72px where the design uses 60px (the extra 12px in the top bar cascades do
 column). Cosmetic layout drift vs the bundle; confirm the intended `top_bar` height and reconcile.
 Low priority.
 
-## Render/framework — single-tier glyph paint can't be occluded by a top-layer quad (pick≠paint) — OPEN
+## Render/framework — single-tier glyph paint can't be occluded by a top-layer quad (pick≠paint) — LANDED
+
+**Status:** **Landed** 2026-07-12 by the top-layer stacking composite refactor (spec
+`docs/specs/2026-07-10-toplayer-stacking-composite-design.md` rev-4, plan
+`docs/plans/2026-07-10-toplayer-stacking-composite.md`, waves W0–W6 on `feat/dooduel-multiplayer-m1`).
+`buiy_pass` now draws each `.top_layer()` subtree's COMPLETE tier-stack (glyphs, icons, bands
+included) over the base block on the same window surface, so a top-layer overlay occludes base
+text/icons/borders — not just fills. The pick≠paint seam is closed (`toplayer_paint_pick`).
+GPU-verified on the RX 6700 XT: `scrim_tier_bleed_gpu` flipped bands/glyphs/icons BLEED→DIM; 8
+`toplayer_occludes_all_tiers_gpu` fixtures GREEN; both legs byte-stable (buiy_core 95/0,
+buiy_verify 24/0). Proven in the real dooduel app: base top-bar text dims ~34% under the word-pick
+scrim (`in_game_picking` vs `in_game_drawer`).
 
 **Originated:** 2026-07-10, Track 1 framework observation. Glyphs paint in a single global tier
 **after** all quads (the flat glyph draw runs once, on top), so a top-layer quad drawn *over* a
@@ -2318,7 +2329,48 @@ is exactly what let the Track 1 theme toggle (a top-layer quad) win the Send *pi
 underlying "Send" glyphs still painted through it. Structural: honoring per-tier/top-layer glyph
 occlusion needs glyphs to participate in the paint-order tiers (the top-layer composite pass /
 effect-group seam), not a single post-quad draw. Larger render-pipeline effort; noted, not
-scheduled.
+scheduled. *(This is the observation the LANDED refactor above resolved.)*
+
+## Render/framework — top-layer per-context ordering (overlapping overlays) — DEFERRED (single-boundary-v1)
+
+**Originated:** 2026-07-12, top-layer stacking composite refactor (W6 close-out). The landed v1
+draws ALL top-layer content as ONE block over the base. When two `.top_layer()` overlays OVERLAP,
+the lower does not occlude the higher's base-bleed within the top block (they share one boundary,
+not a per-context ordering). Characterized by the GPU gate
+`toplayer_occludes_all_tiers_gpu::single_boundary_v1_scrim_dims_base_band_not_a_fellow_top_layer_band`
+(the scrim dims a BASE band but NOT a fellow top-layer tooltip band, Δ0 — the accepted v1 limit).
+No current app hits it (Dooduel overlays don't overlap each other). Per-context v1 = carry a
+per-top-layer-ROOT id on the extract record (mirror the `nearest_group_entity` climb) + an N-range
+`RangePartitioner` + `cross_root_rank` ordering per block; spike-confirmed cheap. Marked
+`FIXME(per-context-v1)` in the fixture. Deferred.
+
+## Render/framework — top-layer same-block backdrop-blur vs composite spatial overlap — DEFERRED
+
+**Originated:** 2026-07-12, top-layer stacking composite refactor (W6 close-out). Within a single
+block the sub-pass order is LOCKED to today's tier-stack → backdrop-blur → backdrop-filter-fills →
+composite (§3.3). A same-block backdrop-blur and an effect-group composite that spatially OVERLAP
+could in principle order-depend; no fixture constructs this (the fixtures test cross-block ordering,
+which is correct). Named for completeness; revisit if a real overlay stacks a backdrop-blur under a
+composited sibling in the same context.
+
+## Dooduel (app) — avatar editor can now be a top-layer overlay (top-layer occludes correctly) — OPEN
+
+**Originated:** 2026-07-12, top-layer stacking composite refactor (W6 close-out). The avatar editor
+was authored as a full in-flow SCREEN (not a `.top_layer()` overlay) specifically because the old
+global-tier rendering meant a top-layer overlay couldn't occlude base text/icons (see the LANDED
+pick≠paint entry above + the note at `apps/dooduel/src/view/mod.rs`). That constraint is now lifted
+— a top-layer overlay occludes all tiers. The avatar editor (and any other full-screen takeover)
+could be re-authored as a top-layer modal overlay if desired. App-side; not scheduled.
+
+## Dooduel (app) — dark-mode scrim near-iso-luminant with the background — OPEN
+
+**Originated:** 2026-07-10 (root-caused), reconfirmed 2026-07-12. `SCRIM = 0x14161b` (rgba
+20,22,27,~0.61) is theme-invariant and, in DARK mode, near-iso-luminant with the dark backgrounds
+(the in-game canvas `0x1b1e25` is actually *lighter* than the scrim), so even a correctly-composited
+scrim reads as a very subtle dim in dark mode. The tier-bleed refactor fixed the OCCLUSION (base
+text now dims — proven ~34% in LIGHT mode); this is the SEPARATE, lower-priority COLOR issue: give
+the scrim a theme-aware (darker / higher-alpha) value in dark mode so the dim is perceptible.
+Independent of the framework refactor.
 
 ## Dooduel — stale guess-draft survives a mid-Drawing RECONNECT (reseed asymmetry) — OPEN
 

@@ -1,8 +1,13 @@
 # Buiy render — top-layer stacking composite (all-tiers occlusion)
 
 - **Date:** 2026-07-10
-- **Status:** active (rev-4 — folds the plan-review fixes on the spike-validated
-  rev-3; Approach A validated on real GPU + byte-stability confirmed)
+- **Status:** **LANDED** 2026-07-12 (rev-4; Approach A, single-boundary-v1). Waves
+  W0–W6 executed on `feat/dooduel-multiplayer-m1`; GPU-verified on the RX 6700 XT
+  (buiy_core 95/0 + buiy_verify 24/0 byte-stable, `scrim_tier_bleed` acceptance
+  BLEED→DIM + 8 `toplayer_occludes_all_tiers_gpu` fixtures GREEN) and proven in the
+  real dooduel app (base top-bar text dims ~34% under the word-pick scrim). Drift #1
+  (bare gradient/raster-only occlusion) closed with the authoritative `any_top_layer`
+  gate. See the plan for the wave commits.
 - **Area:** `buiy_core` render pipeline — the draw sequencing in
   `crates/buiy_core/src/render/node.rs`, the extract record in
   `crates/buiy_core/src/render/extract.rs`, and the per-tier instance partition

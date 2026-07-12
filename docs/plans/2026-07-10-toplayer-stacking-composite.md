@@ -1,5 +1,18 @@
 # Top-Layer Stacking Composite — Implementation Plan
 
+> **STATUS: ✅ COMPLETE (2026-07-12).** All 7 waves (W0–W6) executed on
+> `feat/dooduel-multiplayer-m1`, each RED-first + fresh-review-gated. Final verification:
+> full workspace gate green (fmt/clippy/doc + `cargo test --workspace` 2328/0/138 across
+> 153 binaries), both GPU legs byte-stable on the RX 6700 XT (buiy_core 95/0 + buiy_verify
+> 24/0, zero non-top-layer shift), `scrim_tier_bleed` acceptance flipped BLEED→DIM, 8
+> `toplayer_occludes_all_tiers_gpu` fixtures GREEN, and the real dooduel app proven (base
+> top-bar text dims ~34% under the word-pick scrim, `in_game_picking` vs `in_game_drawer`).
+> Drift #1 (bare gradient/raster-only occlusion) was found in W2 review and closed with the
+> authoritative `any_top_layer` gate (`aacddfc`). Self-review at the end of this file. Wave
+> commits: W0 `c72461f`/`27126ba` · W1 `b86b879`/`70e6c34`/`998eba2`/`7d2c9bb`/`391bc22`/`926e820` ·
+> W2 `d3991c3`/`ef8c282`/`556fd22`/`aacddfc` · W3 `96147d0` · W4 `3d7b252` · W5 `b2f06b5` ·
+> W6 (this docs close-out). UNPUSHED — awaiting the user's push/PR/merge go.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **This is a render-pipeline refactor — RUN the GPU lane, do not trust headless alone.**
 
 **Goal:** Make a `.top_layer()` subtree occlude the base across ALL paint tiers (text, icons, borders — not just fills), by drawing each block's complete tier-stack in sequence on the same window surface, instead of the current global-tier-per-primitive draw.
@@ -268,3 +281,25 @@ Each is a `buiy_verify` (or `buiy_core`) GPU reftest, `#[ignore]`, dominant-chan
 - **The tripwire is your friend:** keep the tail-contiguity `debug_assert` in every partition — it turns the §3.1-class bug into a loud panic, not a silent wrong pixel.
 - **Don't route top-layer through the effect-group compositor** (Approach B, rejected — drops rasters). This is same-surface paint-order relocation only.
 - **Commit per task; do NOT push** (the team-lead gates push/merge).
+
+---
+
+## Self-review (W6, 2026-07-12)
+
+**Spec coverage — every §3/§4 item landed:**
+- §3.1 extract top-layer signal (ancestor climb, after `assemble_context_tree`, `top_layer_formers` set) → **W0** (`c72461f`).
+- §3.2 per-tier packer boundaries (quad/shadow/rounded-shadow/band + entity-keyed glyph/icon `top_layer_of`; gradient dropped per rev-4/m2) + `cut_ranges` straddle helper + tail-contiguity tripwire → **W1**.
+- §3.3 the FOUR per-block sub-passes (tier-stack → backdrop-blur → `draw_backdrop_filter_fills` → composite), `block_interleave` re-offset, `PreparedBackdropBlur.top_layer` flag, Clear/Load reuse → **W2**.
+- §3.4 no-group-straddles-boundary invariant + `debug_assert` tripwire (ran active on GPU, never fired) → **W1/W2**.
+- §3.6 Patch-path exclusion (`extract.rs` `|| old.top_layer`) → **W3** (`96147d0`).
+- §4 verification: flipped `scrim_tier_bleed` acceptance, byte-stability both legs, base-group-under-scrim, backdrop both directions, raster-inside-overlay, single-boundary-bleed characterization gate, paint==pick, F9 draw-step-count → **W4/W5**.
+
+**Deviations from the written plan (all deliberate, all better):**
+- **Drift #1 (found in W2 review):** the `has_top_layer` gate must be the authoritative `any_top_layer` bit (on `PackedPartition`, tracker-sourced), NOT the per-tier disjunction — gradient/raster have no retained boundary (rev-4/m2), so a bare gradient/raster-only overlay would fail to occlude. Closed in `aacddfc`. The `u32::MAX` no-top sentinel is kept (not `quad_count`, which would drop a trailing `Color::NONE` gradient). The invisible-container empty-pass is a documented pixel-safe v1 non-case (a non-emptiness guard would re-introduce per-tier + composite-membership fragility and risk silently dropping top content).
+- **F9 (rev-4/M4):** a deterministic headless `FlatDrawStep`-count test in `render_buckets.rs`, NOT an iai-callgrind bench (iai counts CPU instructions, not draw calls).
+- **Additional packer callers** beyond the plan's list (found via `rg`): `render_focus_ring`, `render_border_shadow`, 6 `render_buckets` test sites (W1).
+- **Line drift:** the Patch guard is at `extract.rs:1669` (plan cited 1643); `partition_glyph_ranges` is `buckets.rs:786` (rev-3 docs wrongly said `text/extract.rs:442`).
+
+**Real-app proof (the cycle's origin):** the user reported a see-through overlay in the actual dooduel app. Offscreen capture (`in_game_picking` = `.top_layer()` word-pick scrim vs `in_game_drawer` = no scrim, light theme) measures the base top-bar glyph luminance dropping **~34%** under the scrim (175→115; bright glyphs 230→152). The tier-bleed is fixed end-to-end; the dark-mode near-iso-luminance is a separate app follow-up (filed).
+
+**Deferred (filed in `follow-ups.md`):** per-context ordering for overlapping overlays (single-boundary-v1); same-block backdrop-vs-composite spatial overlap; avatar-editor-as-overlay (now unblocked); dark-mode scrim color. The pick≠paint framework follow-up (`follow-ups.md`) is retired as LANDED.
