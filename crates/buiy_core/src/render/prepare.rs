@@ -570,7 +570,10 @@ pub fn prepare_buiy_instances(
         // shadow reuses the 68 B `[f32; 17]` quad layout (radius → blur sigma), so
         // it shares the `packed_to_raw` flatten. Drawn FIRST in `node.rs` (before
         // the quad), so a shadow paints BEHIND its caster.
-        let shadows = pack_shadow_instances(&nodes.0.nodes);
+        // The boundary is retained on `buffers.top_layer` in Task 1.6 (the
+        // per-block draw consumes it in W2); dropped here to keep this task's
+        // signature change compiling without the retention plumbing.
+        let (shadows, _shadow_top_layer_boundary) = pack_shadow_instances(&nodes.0.nodes);
         buffers.shadow.clear();
         for shadow in &shadows {
             buffers
@@ -587,7 +590,8 @@ pub fn prepare_buiy_instances(
         // and the node skips the draw. Its OWN `RoundedShadowInstance` layout (the
         // 68 B quad stride + square-shadow path are untouched). Drawn in the SHADOW
         // tier in `node.rs`, alongside the square shadow blob.
-        let rounded_shadows = pack_rounded_shadow_instances(&nodes.0.nodes);
+        let (rounded_shadows, _rounded_shadow_top_layer_boundary) =
+            pack_rounded_shadow_instances(&nodes.0.nodes);
         buffers.rounded_shadow.clear();
         for rs in &rounded_shadows {
             buffers.rounded_shadow.push(*rs);

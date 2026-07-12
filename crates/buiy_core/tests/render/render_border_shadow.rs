@@ -463,8 +463,9 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
     // The band carries the per-side widths verbatim.
     assert_eq!(bands[0].width, [2.0, 2.0, 2.0, 2.0]);
 
-    // One shadow instance per shadow TERM (two on the shadowed node).
-    let shadows = pack_shadow_instances(&nodes);
+    // One shadow instance per shadow TERM (two on the shadowed node). `.1` is the
+    // top-layer boundary (additive draw scalar, W2) — dropped here.
+    let (shadows, _shadow_top_layer_boundary) = pack_shadow_instances(&nodes);
     assert_eq!(shadows.len(), 2, "two shadow instances (two shadow terms)");
     // The radius slot carries the blur sigma (§ 2.2 — shadow.wgsl reads it as blur).
     assert_eq!(shadows[0].radius, 3.0);
@@ -560,11 +561,16 @@ impl NodeExtractHarness {
     }
 
     fn shadow_count(&self) -> usize {
-        pack_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        // `.0` = the shadow blob; `.1` = the top-layer boundary (additive, unused).
+        pack_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 
     fn rounded_shadow_count(&self) -> usize {
-        pack_rounded_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        pack_rounded_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 }
 

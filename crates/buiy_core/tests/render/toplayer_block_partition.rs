@@ -270,3 +270,74 @@ fn quad_base_after_top_layer_trips_the_tripwire() {
     let nodes = [fill(1, false), fill(2, true), fill(3, false)];
     let _ = pack_view_partitioned(&nodes, 0, &[]);
 }
+
+// --- Task 1.2: shadow + rounded-shadow packer boundaries ---------------------
+
+use buiy_core::render::buckets::{pack_rounded_shadow_instances, pack_shadow_instances};
+use buiy_core::render::extract::ExtractedShadow;
+
+/// One shadow term; `rounded` routes it to the ROUNDED pipeline (radius > 0),
+/// else the SQUARE pipeline (radius 0) — the two packers partition a node's terms
+/// by radius, so a fixture drives exactly one of them.
+fn shadow_term(rounded: bool) -> ExtractedShadow {
+    ExtractedShadow {
+        rect_pos: Vec2::ZERO,
+        rect_size: Vec2::splat(10.0),
+        color: [0.0, 0.0, 0.0, 0.5],
+        sigma: 2.0,
+        clip: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
+        radius: if rounded { 4.0 } else { 0.0 },
+    }
+}
+
+/// A fill node carrying one shadow term (square or rounded).
+fn fill_with_shadow(entity: u32, top_layer: bool, rounded: bool) -> ExtractedNode {
+    let mut n = fill(entity, top_layer);
+    n.shadows = vec![shadow_term(rounded)];
+    n
+}
+
+#[test]
+fn shadow_boundary_at_first_top_layer_caster() {
+    // [base square shadow, TOP square shadow] — the square-shadow boundary is the
+    // instance index of the top-layer caster's first shadow term (1).
+    let nodes = [
+        fill_with_shadow(1, false, false),
+        fill_with_shadow(2, true, false),
+    ];
+    let (shadows, boundary) = pack_shadow_instances(&nodes);
+    assert_eq!(shadows.len(), 2, "one square shadow per caster");
+    assert_eq!(boundary, 1, "boundary at the top-layer caster's shadow");
+}
+
+#[test]
+fn rounded_shadow_boundary_at_first_top_layer_caster() {
+    // [base rounded shadow, TOP rounded shadow] — the rounded caster's shadow
+    // lands in the top-layer range; the boundary is 1. (Square terms of these
+    // casters are empty — the two blobs partition by radius.)
+    let nodes = [
+        fill_with_shadow(1, false, true),
+        fill_with_shadow(2, true, true),
+    ];
+    let (square, sq_boundary) = pack_shadow_instances(&nodes);
+    let (rounded, rn_boundary) = pack_rounded_shadow_instances(&nodes);
+    assert!(square.is_empty(), "rounded casters emit no square shadow");
+    assert_eq!(rounded.len(), 2, "one rounded shadow per caster");
+    // The square blob is empty ⇒ its boundary is the count (0). The rounded
+    // boundary is the top-layer caster's rounded-shadow index (1).
+    assert_eq!(sq_boundary, 0);
+    assert_eq!(rn_boundary, 1, "boundary at the top-layer rounded caster");
+}
+
+#[test]
+fn shadow_boundary_is_count_when_no_top_layer() {
+    // No top-layer caster ⇒ the boundary is the shadow count (empty top block).
+    let nodes = [
+        fill_with_shadow(1, false, false),
+        fill_with_shadow(2, false, false),
+    ];
+    let (shadows, boundary) = pack_shadow_instances(&nodes);
+    assert_eq!(boundary, shadows.len() as u32);
+    assert_eq!(boundary, 2);
+}

@@ -514,14 +514,17 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
     // with no shadows dumps byte-identically to the pre-C6-b format, so no
     // existing `.snap` re-blesses. The shadow draws BEHIND the quad (lowest
     // paint-order), so it is dumped first among the F-tier channels.
-    let shadows = pack_shadow_instances(&nodes.nodes);
+    // The display-list dump lists shadow terms/counts, not the top-layer boundary
+    // (an additive draw-partition scalar, W2), so the boundary is dropped here.
+    let (shadows, _shadow_top_layer_boundary) = pack_shadow_instances(&nodes.nodes);
     // F4b-6: a ROUNDED caster's shadow terms route to the distinct rounded-shadow
     // pipeline instead of the square blob. The `[shadows painters_z]` listing is
     // unchanged (it iterates every `node.shadows` term via `shadow_str`, which does
     // not print the corner radius); a square-only fixture keeps its `[shadow
     // draw-order]` line byte-identical (rounded empty ⇒ no rounded section), while
     // a rounded caster's term shows in a `[rounded shadow draw-order]` section.
-    let rounded_shadows = pack_rounded_shadow_instances(&nodes.nodes);
+    let (rounded_shadows, _rounded_shadow_top_layer_boundary) =
+        pack_rounded_shadow_instances(&nodes.nodes);
     if !shadows.is_empty() || !rounded_shadows.is_empty() {
         out.push_str("[shadows painters_z]\n");
         for (i, node) in nodes.nodes.iter().enumerate() {

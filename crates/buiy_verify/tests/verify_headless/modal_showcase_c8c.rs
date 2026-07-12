@@ -846,11 +846,17 @@ impl ShowcaseExtractHarness {
     }
 
     fn shadow_count(&self) -> usize {
-        pack_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        // `.0` = the shadow blob; `.1` = the top-layer boundary (an additive draw
+        // scalar, unused by the count helper).
+        pack_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 
     fn rounded_shadow_count(&self) -> usize {
-        pack_rounded_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        pack_rounded_shadow_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 
     fn band_count(&self) -> usize {

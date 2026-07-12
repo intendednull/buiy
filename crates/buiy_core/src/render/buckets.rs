@@ -280,9 +280,18 @@ pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
 /// Reuses the frozen 68 B [`PackedInstance`] (radius slot → blur sigma — no
 /// stride change). Like the band, v1 rides the FLAT window draw only (no
 /// effect-group partitioning).
-pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
+///
+/// Returns the blob PLUS the base↔top-layer boundary (top-layer stacking
+/// composite, § 3.2): the instance index of the first top-layer caster's first
+/// SQUARE shadow term, or the shadow count when no top-layer caster has one. The
+/// per-block draw (W2) draws base shadows `[0..boundary)` then top-layer shadows
+/// `[boundary..)`. A tail-contiguity `debug_assert` ([`TopLayerBoundaryTracker`])
+/// guards the § 3.4 invariant.
+pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> (Vec<PackedInstance>, u32) {
     let mut shadows = Vec::new();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for n in nodes {
+        top_layer.observe(n, shadows.len() as u32);
         for s in &n.shadows {
             // SQUARE terms only (F4b-6): a `radius > 0` term is a rounded caster's
             // shadow and rides the distinct rounded pipeline instead (a square
@@ -292,7 +301,8 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
             }
         }
     }
-    shadows
+    let boundary = top_layer.finish(shadows.len() as u32);
+    (shadows, boundary)
 }
 
 /// Pack the ROUNDED box-shadow instances for a frame (F4b-6): every shadow term
@@ -301,20 +311,25 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
 /// rounded-shadow pipeline draws. The parallel of
 /// [`pack_shadow_instances`] for the rounded record; the two partition a node's
 /// shadow terms by `radius` so no term is drawn twice and the square path stays
-/// byte-stable.
+/// byte-stable. Returns the blob PLUS its base↔top-layer boundary (the rounded
+/// mirror of [`pack_shadow_instances`]'s boundary — same § 3.2 semantics + § 3.4
+/// tripwire, over the ROUNDED-caster terms).
 pub fn pack_rounded_shadow_instances(
     nodes: &[ExtractedNode],
-) -> Vec<crate::render::instance::RoundedShadowInstance> {
+) -> (Vec<crate::render::instance::RoundedShadowInstance>, u32) {
     use crate::render::instance::pack_rounded_shadow;
     let mut shadows = Vec::new();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for n in nodes {
+        top_layer.observe(n, shadows.len() as u32);
         for s in &n.shadows {
             if s.radius > 0.0 {
                 shadows.push(pack_rounded_shadow(s));
             }
         }
     }
-    shadows
+    let boundary = top_layer.finish(shadows.len() as u32);
+    (shadows, boundary)
 }
 
 /// Pack a view's node list into the flat background-gradient instance blob, in
