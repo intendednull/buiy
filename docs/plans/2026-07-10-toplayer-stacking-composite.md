@@ -1,6 +1,6 @@
 # Top-Layer Stacking Composite — Implementation Plan
 
-> **STATUS: ✅ COMPLETE (2026-07-12).** All 7 waves (W0–W6) executed on
+> **STATUS: ✅ COMPLETE (2026-07-12).** All 8 waves (W0–W7) executed on
 > `feat/dooduel-multiplayer-m1`, each RED-first + fresh-review-gated. Final verification:
 > full workspace gate green (fmt/clippy/doc + `cargo test --workspace` 2328/0/138 across
 > 153 binaries), both GPU legs byte-stable on the RX 6700 XT (buiy_core 95/0 + buiy_verify
@@ -8,10 +8,17 @@
 > `toplayer_occludes_all_tiers_gpu` fixtures GREEN, and the real dooduel app proven (base
 > top-bar text dims ~34% under the word-pick scrim, `in_game_picking` vs `in_game_drawer`).
 > Drift #1 (bare gradient/raster-only occlusion) was found in W2 review and closed with the
-> authoritative `any_top_layer` gate (`aacddfc`). Self-review at the end of this file. Wave
-> commits: W0 `c72461f`/`27126ba` · W1 `b86b879`/`70e6c34`/`998eba2`/`7d2c9bb`/`391bc22`/`926e820` ·
+> authoritative `any_top_layer` gate (`aacddfc`). **W7 (`9e6b16e`): W5's real-app capture caught a
+> PODIUM multi-root contiguity regression — a base confetti root (independent, higher entity id)
+> sorting AFTER the parented-escaped `.top_layer()` toggle broke the "top-layer is one global
+> contiguous suffix" invariant. Fixed by a STABLE GLOBAL PARTITION (top-layer → true trailing suffix)
+> applied consistently across the node/glyph/icon producers via a shared helper; independently
+> re-verified (my own podium capture panic-free + both GPU legs 95/0+24/0 byte-stable + APPROVE
+> review — the node-climb vs glyph/icon `cross_root_rank>0` classifications proven to agree on every
+> emitted entity).** Self-review at the end of this file. Wave commits: W0 `c72461f`/`27126ba` ·
+> W1 `b86b879`/`70e6c34`/`998eba2`/`7d2c9bb`/`391bc22`/`926e820` ·
 > W2 `d3991c3`/`ef8c282`/`556fd22`/`aacddfc` · W3 `96147d0` · W4 `3d7b252` · W5 `b2f06b5` ·
-> W6 (this docs close-out). UNPUSHED — awaiting the user's push/PR/merge go.
+> W6 (docs close-out) · W7 `9e6b16e` (podium global-suffix fix). UNPUSHED — awaiting the user's push/PR/merge go.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **This is a render-pipeline refactor — RUN the GPU lane, do not trust headless alone.**
 
