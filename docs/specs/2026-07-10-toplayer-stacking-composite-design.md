@@ -1,8 +1,9 @@
 # Buiy render — top-layer stacking composite (all-tiers occlusion)
 
 - **Date:** 2026-07-10
-- **Status:** draft (rev-2 — folds both spec reviews; the flip to accepted waits
-  on the prototype spike + the team-lead's read)
+- **Status:** active (rev-3 — the prototype spike carved the boundary on real GPU,
+  validated Approach A across all fixtures, and confirmed byte-stability; the
+  spike's empirical findings are the validation, folded below)
 - **Area:** `buiy_core` render pipeline — the draw sequencing in
   `crates/buiy_core/src/render/node.rs`, the extract record in
   `crates/buiy_core/src/render/extract.rs`, and the per-tier instance partition
@@ -197,6 +198,22 @@ Each tier packer then takes a `top_layer_of` (or `top_layer_root_of`) input — 
 closure mirroring the existing `group_by_entity` map threaded to the packers
 (`prepare.rs:780-791`, `804-813`).
 
+**Correction (rev-3, spike-proven) — the discriminator is INHERITED, computed by
+an ancestor CLIMB, not each node's own `Stacking.top_layer`.** `Stacking.top_layer`
+is a **per-node** component: layout only tags the entity that itself called
+`.top_layer(...)` — it is NOT propagated to descendants. So a plain CHILD of a
+top-layer overlay — a raster canvas, a nested panel, a text run — reads
+`top_layer == None` on its OWN component and would be **misclassified as base**,
+splitting what must be one contiguous top-layer tail. (The spike hit this as a hard
+`debug_assert` panic — § 3.4 — the instant it tested a raster INSIDE an overlay; it
+was masked earlier only because the first fixtures used childless flat quads.) The
+correct signal: a node is top-layer iff **itself or any ancestor** has
+`top_layer != None`, derived by a `ChildOf` ancestor **climb structurally identical
+to the landed `nearest_group_entity` EffectGroup-membership climb**, run **after**
+`assemble_context_tree` (where `ExtractedNode.group` is assigned) — NOT in
+`resolve_one`, which has no ancestor access. The spike confirmed this shape makes
+all six GPU fixtures pass clean.
+
 ### 3.2 The tier packers that gain the per-block partition
 
 Every tier's blob is partitioned by the base↔top-layer boundary (and, for
@@ -223,12 +240,18 @@ block):
 2. `run_backdrop_blurs` (`node.rs:668`);
 3. the effect-group **step-2b** root-group composite (`node.rs:696`).
 
-**Intra-block order is spike-locked (F2 / § 6).** Today's *global* order is
-`tier-stack → backdrop-blur → root-composite`. Whether the per-block order keeps
-that or becomes `tier-stack → group-composite → backdrop` (a base group under a
-top-layer overlay + a top-layer backdrop over base is the fixture that pins it) is
-one of the two things the prototype spike LOCKS. The spec does not assert it; the
-spike's base-group-under-overlay + backdrop-both-directions fixtures decide it.
+**Intra-block order — LOCKED (rev-3) to today's global order, per block:**
+`tier-stack → backdrop-blur → root-composite`. The spike ran base-group-under-
+overlay (dims 146→96) and backdrop-blur both directions (variance 59.9→1.3 each
+way) GREEN under this order. **Honest caveat (do not overclaim):** those fixtures
+exercise *cross-block* ordering (the base block fully finishes — in either
+intra-block order — before the top-layer block starts), which today's order
+satisfies trivially; they do **not** discriminate the `composite-before-backdrop`
+alternative, because backdrop-filter groups and opacity/isolation groups are
+**disjoint** mechanisms that can only conflict when BOTH live in the SAME block AND
+spatially overlap — a case no fixture constructed. Ship today's order (zero
+incremental risk vs current behavior); `same-block backdrop-vs-composite spatial
+overlap` is a **named open follow-up** (§ 7), not resolved by this effort.
 
 ### 3.4 Load-bearing invariant — no group straddles the boundary (design-F5)
 
@@ -238,6 +261,11 @@ top-layer. This is what keeps the group-range axis and the per-context axis
 independent (§ 2.1). The packer can enforce it with a `debug_assert` — a straddling
 group is a tripwire, exactly like the existing `PackedPartition` contiguity
 assert (`buckets.rs:576`, `738`; `tests/render_group_contiguity_gpu.rs`).
+
+**Ship the tripwire in production (rev-3, spike-proven).** The spike added an
+equivalent tail-contiguity `debug_assert` and it caught the § 3.1
+per-node-vs-climb bug in ONE GPU run — a hard panic, not a silent wrong-pixel
+regression. Keep the boundary/contiguity `debug_assert` in the production packers.
 
 ### 3.5 What stays; blast radius
 
@@ -255,6 +283,17 @@ getting-words scrims; and, framework-wide, tooltips, menus, dialogs, popovers
 workaround (via the app follow-up, § 5). It is the "top-layer stacking" render
 item — schedule it and retire the follow-up.
 
+### 3.6 Patch-path exclusion (rev-3, plan-critical)
+
+The partial re-extract **Patch** fast path (the retain-damage path that mutates the
+retained buffers in place, `extract.rs` / `text/extract.rs`) calls `resolve_one`
+**directly** and does NOT go through the post-assembly ancestor climb (§ 3.1). It is
+restricted to group-free nodes today but has **no top-layer-subtree exclusion**. The
+spike exercised only first-frame / Full builds, so this is **untested**: the
+implementation MUST add a Patch-path exclusion for top-layer subtrees (mirroring the
+existing group exclusion) OR run the climb on the Patch path. Treat it as a required
+task with its own test, not an afterthought.
+
 ## 4. Verification design
 
 - **Acceptance witness (RED → GREEN):** `scrim_tier_bleed_gpu.rs`, assertions
@@ -267,15 +306,22 @@ item — schedule it and retire the follow-up.
   reftest suite — the `buiy_core` `#[ignore]` GPU lane AND the `buiy_verify` GPU
   lane — must not shift for any **non-top-layer** fixture. A golden that shifts
   MUST be a top-layer fixture and is blessed with justification (it now occludes).
+  **Spike-confirmed clean:** under the throwaway carve, buiy_core GPU 89/89 +
+  buiy_verify GPU 24/24 + the full headless workspace passed with **zero**
+  non-top-layer shift (incl. `render_group_contiguity`, `render_msaa`,
+  `render_compositor`, `render_degraded_group`, `render_backdrop_blur`, the text
+  goldens).
 - **Draw-call-count stability (design-F9):** the `iai-callgrind` gate asserts a
   **no-top-layer scene issues the SAME draw calls** as today (the partition adds
   zero draws when the top-layer block is empty), and a top-layer scene adds only a
   bounded delta (≈ tiers × blocks) with **no off-screen-target allocation** — not
   just a pixel golden.
 - **New reftests / goldens (design-F3):**
-  - (a) **multi-overlay** (a tooltip over a dialog): a permanent gate ONLY if the
-    spike adopts per-context-v1; otherwise a *deferred-follow-up* gate that
-    documents the known single-boundary bleed-between-overlays.
+  - (a) **multi-overlay** (a tooltip over a dialog): since v1 ships single-boundary
+    (§ 6), this is the **deferred-follow-up gate** documenting the known
+    bleed-between-overlapping-overlays (spike-confirmed Δ0) — it asserts the CURRENT
+    single-boundary behavior and carries a `// FIXME(per-context-v1)` so it flips
+    when per-context lands.
   - (b) **base effect group UNDER a top-layer overlay** — the prototype spike's
     fixture graduates into a permanent golden (locks the § 3.3 ordering).
   - (c) **backdrop-blur × top-layer, both directions** — a top-layer subtree with
@@ -286,6 +332,10 @@ item — schedule it and retire the follow-up.
 - **Paint == pick across tiers:** a test asserting the new paint order equals the
   existing pick order for a top-layer-over-base fixture (the pick≠paint seam is
   now closed at the paint layer).
+- **Assertion metric (spike gotcha).** GPU dim assertions use a **dominant- /
+  per-channel** delta, NOT a color-sum: a dark scrim ADDS R/B while cutting G on a
+  saturated base, so a naive sum under-reports the dim (`scrim_tier_bleed_gpu.rs`
+  already does this right).
 
 ## 5. Dependent follow-ups (separate PRs, not in the framework PR)
 
@@ -325,35 +375,39 @@ tail. So there is a real choice:
 - **Per-context v1:** each top-layer ROOT drawn as its own tier-stack in z-order —
   fixes the overlapping case too.
 
-**The prototype spike decides single-boundary-v1 vs per-context-v1**, by measuring
-whether per-root identity is a cheap add.
+**DECIDED (rev-3): single-boundary-v1 ships; per-context is a deferred follow-up.**
+The spike confirmed single-boundary fixes the reported bug + the base-group +
+backdrop-both + raster-in-overlay cases, and it empirically reproduced the
+single-boundary gap (a Tooltip-tier bordered overlay under a Modal-tier scrim →
+Δ0, still bleeds between the two overlays). Per-context is a **cheap, well-scoped
+follow-up**, not this PR: the tail is already **context-contiguous**
+(`context_tree_paint_order` descends each top-layer root's subtree *as a unit* via
+`assemble_context_tree`, roots ordered by `(cross_root_rank, entity)` — the
+existing landed tests prove it), so per-root ranges are well-defined by carrying
+the escaped top-layer **root entity** (or a per-root ordinal) on the extract record
+(§ 3.1); a change in that value marks a new per-context range, no new sort/walk.
+The per-root partition then mirrors the effect-group `RangePartitioner` N-range
+walk. Low-risk, but out of scope for the first PR.
 
-**Per-root-id design sketch (named either way).** The tail is already
-**context-contiguous**: `context_tree_paint_order` descends each top-layer root's
-subtree *as a unit* (`assemble_context_tree`), and roots are ordered by
-`(cross_root_rank, entity)`, so each top-layer root's instances form a contiguous
-run at the tail. Per-root ranges are therefore well-defined **if** we carry the
-escaped top-layer **root entity** (or a monotonic per-root ordinal assigned during
-the tail walk) on the extract record (§ 3.1); a change in that value marks a new
-per-context range — no new sort, no new walk. The spike CONFIRMS the tail is
-context-contiguous (so these ranges are well-defined) and measures the cost of
-carrying the id; if cheap, per-context-v1 ships, else single-boundary-v1 ships and
-per-context is a named follow-up.
+### 6.1 Spike outcome (DONE)
 
-### 6.1 Spike charter alignment
+The prototype spike ran (throwaway carve on the RX 6700 XT, reverted clean): it
+carved the single base↔top-layer boundary + one per-context split, ran the § 4
+fixtures on the GPU lane, confirmed byte-stability on the existing suite, and
+confirmed the tail is context-contiguous. Outcomes folded into this rev-3: the
+§ 3.3 order is LOCKED (today's, per block); § 6 is DECIDED (single-boundary-v1);
+the § 3.1 signal is CORRECTED to an ancestor climb; the § 3.6 Patch-path risk +
+the § 3.4 production tripwire were surfaced.
 
-The prototype spike (chartered separately) should: carve the single base↔top-layer
-boundary + ONE per-context split; run on the GPU lane the § 4 fixtures
-(base-group-under-overlay, backdrop+overlay both directions, raster-inside-overlay);
-confirm byte-stability on the existing suite; and confirm the top-layer tail is
-context-contiguous (so per-root ranges are well-defined). It **LOCKS** the § 3.3
-intra-block sequencing and **DECIDES** single-boundary-v1 vs per-context-v1. This
-matches § 6 above.
+## 7. Open questions / risks / named follow-ups
 
-## 7. Open questions / risks
-
-- **Intra-block sequencing (§ 3.3)** — locked by the spike.
-- **Granularity (§ 6)** — decided by the spike.
+- **Intra-block sequencing (§ 3.3)** — LOCKED to today's order; the residual
+  `same-block backdrop-vs-composite spatial overlap` case is a **named follow-up**
+  (disjoint mechanisms; no fixture constructs it today).
+- **Granularity (§ 6)** — DECIDED single-boundary-v1; **per-context-v1 is a named
+  follow-up** (overlapping overlays bleed between each other; cheap per-root-id add).
+- **Patch-path exclusion (§ 3.6)** — a required implementation task; untested by
+  the spike.
 - **`::backdrop`.** Out of scope (an open question, render README § 5 #3); this
   spec does not add it, but the same-surface top-layer pass is where it would land.
 
@@ -408,6 +462,36 @@ Each item verified against code before folding.
 11. **[MEDIUM/F7] dark-mode scrim reclassified to FAST-FOLLOW (§ 5)**, still a
     separate app PR, with a done-verification (render the actual dark in-game screen
     after A lands; if still iso-luminant, the dark-scrim tweak ships WITH this).
+
+## Change log — rev-3
+
+Folds the prototype-spike findings (throwaway carve run on the RX 6700 XT, reverted
+clean to `ad170d3`; the empirical results are the validation — no re-review). Status
+flipped draft→active.
+
+1. **§ 3.1 CORRECTED (load-bearing):** the top-layer discriminator is INHERITED —
+   computed by a `ChildOf` ancestor CLIMB (node is top-layer iff itself-or-any-
+   ancestor has `top_layer != None`), mirroring the landed `nearest_group_entity`
+   climb, run AFTER `assemble_context_tree` (NOT `resolve_one`). rev-2's "persist
+   `is_top_layer` verbatim" was WRONG: `Stacking.top_layer` is per-node, not
+   inherited, so a child raster/panel/text of an overlay misclassifies as base and
+   the tail-contiguity `debug_assert` PANICS on raster-inside-overlay.
+2. **§ 3.3 LOCKED:** intra-block order = today's `tier-stack → backdrop → composite`
+   per block (base-group-under-scrim 146→96; backdrop both directions 59.9→1.3).
+   Honest caveat recorded: fixtures test cross-block only; `same-block backdrop-vs-
+   composite spatial overlap` is a named follow-up (§ 7).
+3. **§ 6 DECIDED:** single-boundary-v1 ships; per-context = a cheap deferred
+   follow-up (overlapping-overlays bleed empirically confirmed Δ0; tail already
+   context-contiguous; per-root-id mirrors the group climb + `RangePartitioner`).
+4. **§ 3.6 NEW — Patch-path exclusion (plan-critical):** the partial re-extract
+   fast path calls `resolve_one` directly, bypasses the climb, has no top-layer
+   exclusion (untested by the spike) → a required impl task.
+5. **§ 3.4 + § 4:** keep the tail-contiguity `debug_assert` as a production tripwire
+   (it caught the § 3.1 bug in one GPU run); GPU dim assertions use a dominant-/
+   per-channel metric, not color-sum.
+6. **Byte-stability CONFIRMED:** buiy_core GPU 89/89, buiy_verify GPU 24/24, full
+   headless workspace green, zero non-top-layer shift.
+7. **§ 6.1** rewritten from "spike charter alignment" to "spike outcome (DONE)".
 
 ---
 
