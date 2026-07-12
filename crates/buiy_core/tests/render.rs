@@ -118,3 +118,5 @@ mod render_top_layer_paint_gpu;
 mod render_transform_bridge;
 #[path = "render/render_view_uniform.rs"]
 mod render_view_uniform;
+#[path = "render/toplayer_block_partition.rs"]
+mod toplayer_block_partition;
