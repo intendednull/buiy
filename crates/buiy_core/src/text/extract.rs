@@ -732,6 +732,14 @@ pub fn extract_buiy_glyphs(
                 )>,
             >,
         >,
+        //  .3 — the `ChildOf` parent link over ALL `Node`s: the top-layer ancestor
+        //       climb (§ 3.1) that stable-partitions the paint-order walk so
+        //       top-layer text is the global SUFFIX (the glyph mirror of the node
+        //       producer's post-assembly climb). Read over every `Node` so the climb
+        //       reaches a non-text overlay former ancestor of a text entity. Nested
+        //       here (rather than a standalone param) because the producer is AT
+        //       Bevy's 16-param function-system cap.
+        Extract<Query<&ChildOf, With<Node>>>,
     ),
     theme: Extract<Res<Theme>>,
     // The main-world font-set counters (T5): VALUE-compared against the
@@ -748,7 +756,7 @@ pub fn extract_buiy_glyphs(
     mut damage: Option<ResMut<GlyphDamage>>,
 ) {
     let (mut glyphs, mut text_quads) = carriers;
-    let (contexts, order_probe, structural_probe) = structure;
+    let (contexts, order_probe, structural_probe, child_of) = structure;
     // Drain the removal streams FIRST so the cursors advance on every frame,
     // including early returns (the extract.rs:409 discipline). Stage B
     // collects the IDS (previously just presence bits): despawns are the
@@ -1141,6 +1149,28 @@ pub fn extract_buiy_glyphs(
         rank_by_entity.get(&e).copied().unwrap_or(0)
     }) {
         context_tree_paint_order(root, &painters_z_of, &mut order);
+    }
+
+    // Stable-partition the paint-order walk so top-layer text is the global SUFFIX
+    // (the glyph mirror of the node producer's post-assembly climb + partition). A
+    // PARENTED overlay's text escapes to its own root's `painters_z` tail, but a
+    // SEPARATE base root (a higher-entity-id stacking context) sorts AFTER that
+    // root, so without this a base entity's run follows a top-layer one and
+    // `partition_glyph_ranges`'s tail-contiguity `debug_assert` trips at prepare
+    // time. The classification matches the node producer's climb: a former is an SC
+    // with `cross_root_rank > 0` (layout 6f stamps that iff `top_layer != None`, so
+    // it agrees with the node tier's `Stacking.top_layer` classification on every
+    // EMITTED entity). Skipped when no former exists — `order` stays the plain walk
+    // (byte-stable), and an already-suffix scene reorders to the identical order.
+    if rank_by_entity.values().any(|&r| r > 0) {
+        let parent_of = |e: Entity| child_of.get(e).ok().map(|p| p.parent());
+        crate::render::top_layer::stable_top_layer_suffix(&mut order, |&e| {
+            crate::render::top_layer::in_top_layer(
+                e,
+                |x| rank_by_entity.get(&x).copied().unwrap_or(0) > 0,
+                parent_of,
+            )
+        });
     }
 
     for entity in order {

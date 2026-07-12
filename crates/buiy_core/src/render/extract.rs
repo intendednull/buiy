@@ -1898,21 +1898,29 @@ pub fn extract_buiy_nodes(
     // access to. Skipped entirely when the scene has no top-layer former, leaving
     // every node's default `false` (the byte-stable base-only path).
     if !top_layer_formers.is_empty() {
-        let in_top_layer = |start: Entity| -> bool {
-            let mut cur = start;
-            loop {
-                if top_layer_formers.contains(&cur) {
-                    return true;
-                }
-                match child_of.get(cur) {
-                    Ok(parent) => cur = parent.parent(),
-                    Err(_) => return false,
-                }
-            }
-        };
+        let parent_of = |e: Entity| child_of.get(e).ok().map(|p| p.parent());
         for node in &mut all.nodes {
-            node.top_layer = in_top_layer(node.entity);
+            node.top_layer = crate::render::top_layer::in_top_layer(
+                node.entity,
+                |e| top_layer_formers.contains(&e),
+                parent_of,
+            );
         }
+        // Materialize the single-boundary invariant: stable-partition the assembled
+        // node list so every top-layer node is the trailing SUFFIX (base + top-layer
+        // relative order both preserved). Without this a PARENTED top-layer node
+        // escapes to its own root's `painters_z` tail while a SEPARATE base root (a
+        // rank-0 stacking context with a HIGHER entity id — the podium confetti)
+        // still sorts after it, so top-layer content is NOT a natural global suffix
+        // and the per-tier tail-contiguity `debug_assert`
+        // (buckets::`TopLayerBoundaryTracker`) trips. The group tag rides each node;
+        // a group is uniformly base or top-layer (a mixed group would already break
+        // group contiguity via escape), so the partition never splits a group's
+        // contiguous run. Every node-order-derived index rebuilds from this
+        // post-partition order: `pack_view_partitioned`'s
+        // quad_slot_of/node_quad_anchors/top_layer_boundary at prepare time, and the
+        // `RetainedNodeIndex` below.
+        crate::render::top_layer::stable_top_layer_suffix(&mut all.nodes, |n| n.top_layer);
     }
 
     // Write the per-view ExtractedNodes onto the primary render view entity.

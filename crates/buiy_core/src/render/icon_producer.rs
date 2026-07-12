@@ -45,7 +45,7 @@ use bevy::math::Vec2;
 use bevy::prelude::*;
 use bevy::render::Extract;
 
-use crate::components::{Node, ResolvedLayout};
+use crate::components::{Node, ResolvedLayout, StackingContext};
 use crate::layout::Stacking;
 use crate::render::atlas::{AtlasEntryKind, AtlasFormat, AtlasKey, BuiyAtlas, GlyphAlphaInstance};
 use crate::render::color::resolve_token;
@@ -62,7 +62,9 @@ use crate::theme::Theme;
 /// new GPU code.
 #[derive(Resource, Default)]
 pub struct ExtractedIcons {
-    /// One instance per visible icon, in entity-iteration order. (Icons paint at
+    /// One instance per visible icon, in entity-iteration (query) order, STABLE-
+    /// partitioned so every top-layer icon is the trailing suffix (§ 3.1 — so the
+    /// per-block draw's `top_layer.icon` boundary is a single split). (Icons paint at
     /// the coverage tier, right after text glyphs — both are coverage stamps.)
     pub icons: Vec<GlyphAlphaInstance>,
     /// One run per emitting entity, contiguous-from-0 covering `icons`, for the
@@ -79,6 +81,18 @@ pub struct ExtractedIcons {
 pub struct IconEntityRun {
     pub entity: Entity,
     pub instances: std::ops::Range<u32>,
+}
+
+/// One emitted icon pending the top-layer stable partition: its coverage instance,
+/// atlas key, source entity, and top-layer classification. Icons emit in QUERY
+/// order (no paint-order walk), so they are collected here and stable-partitioned
+/// into a top-layer SUFFIX before the carriers are rebuilt — the tail-contiguity
+/// invariant every tier packer shares (`partition_glyph_ranges`).
+struct IconEmit {
+    instance: GlyphAlphaInstance,
+    key: AtlasKey,
+    entity: Entity,
+    top_layer: bool,
 }
 
 /// The producer's retained touch-key set (the [`ResidentTextKeys`] mirror): every
@@ -242,6 +256,15 @@ pub fn extract_buiy_icons(
     >,
     mut removed: Extract<RemovedComponents<Icon>>,
     primary: Extract<Query<&Window, With<bevy::window::PrimaryWindow>>>,
+    // Top-layer ordering inputs (the glyph/node mirror): every forming context's
+    // `StackingContext` (`cross_root_rank > 0` iff it is a top-layer former — layout
+    // 6f) plus the `ChildOf` parent link, so the emitted icons stable-partition into
+    // a top-layer SUFFIX (below). Icons emit in QUERY order, so — unlike the
+    // walk-ordered node/glyph tiers — nothing else keeps their top-layer runs
+    // contiguous; without the partition a base icon after a top-layer icon trips
+    // `partition_glyph_ranges`'s tail-contiguity `debug_assert` at prepare time.
+    contexts: Extract<Query<(Entity, &StackingContext)>>,
+    child_of: Extract<Query<&ChildOf, With<Node>>>,
 ) {
     // Drain the removal stream every frame (cursor must advance even on an early
     // return) — an icon despawn/hide must repaint the cleared cell away.
@@ -265,9 +288,20 @@ pub fn extract_buiy_icons(
     }
     resident.last_scale_factor = Some(scale_factor);
 
-    let mut new_icons: Vec<GlyphAlphaInstance> = Vec::new();
-    let mut new_runs: Vec<IconEntityRun> = Vec::new();
-    let mut new_keys: Vec<AtlasKey> = Vec::new();
+    // The top-layer classifier (§ 3.1), mirroring the node/glyph tiers: a former is
+    // an SC with `cross_root_rank > 0` (layout 6f stamps that iff `top_layer !=
+    // None`, so it agrees with `ExtractedNode.top_layer` on every emitted entity);
+    // an icon is top-layer iff it or a `ChildOf` ancestor is such a former.
+    let rank_by_entity: std::collections::HashMap<Entity, u8> = contexts
+        .iter()
+        .map(|(e, sc)| (e, sc.cross_root_rank))
+        .collect();
+    let any_former = rank_by_entity.values().any(|&r| r > 0);
+    let is_former = |e: Entity| rank_by_entity.get(&e).copied().unwrap_or(0) > 0;
+    let parent_of = |e: Entity| child_of.get(e).ok().map(|p| p.parent());
+
+    // Collect emits in query order, then stable-partition into a top-layer suffix.
+    let mut emits: Vec<IconEmit> = Vec::new();
     let theme: &Theme = &theme;
 
     for (entity, gt, layout, icon, skip, clip_rect, ancestor_clip, stacking) in icons.iter() {
@@ -346,24 +380,51 @@ pub fn extract_buiy_icons(
             ],
         };
 
-        let start = new_icons.len() as u32;
-        new_icons.push(GlyphAlphaInstance {
-            rect: [pos.x, pos.y, size.x, size.y],
-            uv: [
-                entry.uv.min.x,
-                entry.uv.min.y,
-                entry.uv.max.x,
-                entry.uv.max.y,
-            ],
-            color: linear_color(color),
-            clip,
-            page: entry.page as u32,
-            affine,
-        });
-        new_keys.push(key);
-        new_runs.push(IconEntityRun {
+        // Top-layer classification (skipped — always base — when the scene has no
+        // former, so a no-overlay scene never climbs and stays byte-stable).
+        let top_layer =
+            any_former && crate::render::top_layer::in_top_layer(entity, is_former, parent_of);
+        emits.push(IconEmit {
+            instance: GlyphAlphaInstance {
+                rect: [pos.x, pos.y, size.x, size.y],
+                uv: [
+                    entry.uv.min.x,
+                    entry.uv.min.y,
+                    entry.uv.max.x,
+                    entry.uv.max.y,
+                ],
+                color: linear_color(color),
+                clip,
+                page: entry.page as u32,
+                affine,
+            },
+            key,
             entity,
-            instances: start..new_icons.len() as u32,
+            top_layer,
+        });
+    }
+
+    // Stable-partition the query-order emits so top-layer icons form the SUFFIX
+    // (base + top-layer relative order both preserved) — the icon mirror of the
+    // node/glyph tiers. Skipped when no former exists (`emits` stays in query order,
+    // byte-stable); an already-suffix scene reorders to the identical order.
+    if any_former {
+        crate::render::top_layer::stable_top_layer_suffix(&mut emits, |e| e.top_layer);
+    }
+
+    // Rebuild the parallel carriers from the (possibly reordered) emits. v1 emits
+    // exactly one instance per icon, so each entity's run is a single index in the
+    // post-partition emission order.
+    let mut new_icons: Vec<GlyphAlphaInstance> = Vec::with_capacity(emits.len());
+    let mut new_runs: Vec<IconEntityRun> = Vec::with_capacity(emits.len());
+    let mut new_keys: Vec<AtlasKey> = Vec::with_capacity(emits.len());
+    for (i, em) in emits.into_iter().enumerate() {
+        let start = i as u32;
+        new_icons.push(em.instance);
+        new_keys.push(em.key);
+        new_runs.push(IconEntityRun {
+            entity: em.entity,
+            instances: start..start + 1,
         });
     }
 

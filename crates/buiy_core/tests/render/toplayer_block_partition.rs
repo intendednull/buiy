@@ -110,6 +110,12 @@ impl NodeExtractHarness {
             .cloned()
     }
 
+    /// The full assembled node list in published paint order — the multi-root
+    /// suffix-partition tests inspect the ordering directly.
+    fn nodes(&self) -> Vec<ExtractedNode> {
+        self.render.resource::<ExtractedNodesView>().0.nodes.clone()
+    }
+
     /// The work-unit counters from the most recent extract (Full vs Patch tag).
     fn counters(&self) -> RenderWorkCounters {
         *self.render.resource::<RenderWorkCounters>()
@@ -860,4 +866,228 @@ fn any_top_layer_true_when_a_top_node_has_a_quad() {
     let p = pack_view_partitioned(&nodes, 0, &[]);
     assert!(p.any_top_layer);
     assert_eq!(p.top_layer_boundary, 1);
+}
+
+// === Wave 7b: multi-root global-suffix partition (the podium bug) =============
+//
+// The dooduel PODIUM crashes because a PARENTED `.top_layer()` node escapes to the
+// tail of the MAIN root's `painters_z` (rank 0, LOW entity id), while the confetti
+// are ~110 INDEPENDENT rank-0 roots with HIGHER entity ids spawned at podium entry.
+// `context_roots` sorts roots by `(cross_root_rank, entity)`, so the confetti roots
+// sort AFTER the main root: the cross-root walk emits [main base…, escaped TOP],
+// then [confetti base…] — a BASE node follows a TOP-LAYER one, so top-layer content
+// is NOT a natural global suffix and the per-tier tail-contiguity `debug_assert`
+// (`TopLayerBoundaryTracker` / `partition_glyph_ranges`) trips. The fix
+// stable-partitions each producer's paint order into a global top-layer SUFFIX.
+// These tests reproduce the MULTI-ROOT violation end-to-end through the real
+// producers (quad tier via the node extract, glyph tier via the glyph extract).
+
+/// The QUAD (node) tier: a view root with a PARENTED `.top_layer()` toggle (a quad),
+/// plus an INDEPENDENT base root (a confetti stand-in) spawned LATER so its entity id
+/// is higher and it sorts AFTER the view root. RED before the fix: the escaped
+/// top-layer toggle precedes the later base root, so the node list is not
+/// suffix-partitioned and `pack_view_partitioned` would trip the tripwire. GREEN
+/// after: the toggle is the trailing global suffix.
+#[test]
+fn multi_root_quad_tier_top_layer_is_global_suffix() {
+    let mut h = NodeExtractHarness::new();
+
+    // An INDEPENDENT base root (the confetti stand-in): a top-level node with its own
+    // rank-0 stacking context (the root trigger). Spawned FIRST. `Entity`'s `Ord`
+    // (NonMaxU32-inverted) makes a LATER-spawned root sort BEFORE an earlier one, so
+    // spawning the confetti first makes it sort AFTER the view root below — exactly
+    // the podium's "a base root follows the escaped top-layer tail" arrangement.
+    let confetti = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(30.0).height_px(30.0),
+            surface(),
+        ))
+        .id();
+
+    // The view root (the MAIN root), spawned LATER so it sorts FIRST. A PARENTED
+    // `.top_layer()` toggle escapes to this root's painters_z tail but keeps this
+    // root's rank-0 cross-root slot — so it lands BEFORE the confetti base root.
+    let toggle = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            abs(50.0, 50.0, 40.0, 40.0).top_layer(TopLayer::Popover),
+            surface(),
+        ))
+        .id();
+    let view_root = h
+        .app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(200.0).height_px(150.0)))
+        .id();
+    h.app
+        .world_mut()
+        .entity_mut(view_root)
+        .add_children(&[toggle]);
+
+    settle(&mut h);
+    h.extract();
+
+    let nodes = h.nodes();
+    let toggle_idx = nodes
+        .iter()
+        .position(|n| n.entity == toggle)
+        .expect("toggle extracted");
+    let confetti_idx = nodes
+        .iter()
+        .position(|n| n.entity == confetti)
+        .expect("confetti extracted");
+    // RED witness: pre-fix the escaped top-layer toggle (in the earlier root)
+    // precedes the later base root, so this fails; post-fix the top-layer content is
+    // the trailing suffix, so every base node precedes it.
+    assert!(
+        confetti_idx < toggle_idx,
+        "the later base root must sort BEFORE the escaped top-layer toggle after the \
+         global-suffix partition (confetti_idx {confetti_idx}, toggle_idx {toggle_idx})"
+    );
+    // The full invariant: once a top-layer node appears, every later node is
+    // top-layer (one contiguous global suffix).
+    if let Some(first_top) = nodes.iter().position(|n| n.top_layer) {
+        assert!(
+            nodes[first_top..].iter().all(|n| n.top_layer),
+            "top-layer nodes form one contiguous global suffix"
+        );
+    }
+    // And the quad packer runs WITHOUT tripping the tail-contiguity tripwire (pre-fix
+    // this panics). The view root paints no quad (Color::NONE), so the two quads are
+    // [confetti (base), toggle (top)] — the boundary is the last instance.
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert!(p.any_top_layer, "the scene has a top-layer node");
+    assert_eq!(
+        p.instances.len(),
+        2,
+        "confetti + toggle quads (view root is Color::NONE)"
+    );
+    assert_eq!(
+        p.top_layer_boundary, 1,
+        "exactly the last quad (the toggle) is the top-layer block"
+    );
+}
+
+/// The GLYPH tier: the SAME multi-root shape carrying TEXT. A view root with a
+/// PARENTED `.top_layer()` container whose text child inherits top-layer, plus an
+/// INDEPENDENT base root (spawned later, higher id) whose text is base. RED before
+/// the fix: the glyph producer walks [view root's escaped TOP text, later base
+/// root's text] → a base entity's run follows a top-layer one, so
+/// `partition_glyph_ranges` trips. GREEN after: the producer stable-partitions its
+/// walk so the top-layer text run is the trailing suffix.
+#[test]
+fn multi_root_glyph_tier_top_layer_is_global_suffix() {
+    use crate::support::extract_harness::TextExtractHarness;
+    use buiy_core::render::buckets::partition_glyph_ranges;
+    use buiy_core::text::{FontSize, Text};
+
+    let mut h = TextExtractHarness::new();
+
+    // An INDEPENDENT base root (confetti stand-in), spawned FIRST. `Entity`'s `Ord`
+    // (NonMaxU32-inverted) makes a LATER-spawned root sort BEFORE an earlier one, so
+    // spawning the base root first makes it sort AFTER the view root below — its base
+    // text run follows the earlier root's escaped top-layer text run. Its text is
+    // base (no top-layer ancestor).
+    let base_text = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("BASE")),
+            FontSize(16.0),
+        ))
+        .id();
+    let _base_root = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(200.0)
+                .height_px(80.0),
+        ))
+        .add_child(base_text)
+        .id();
+
+    // View root (MAIN), spawned LATER so it sorts FIRST: a sized column with a
+    // PARENTED `.top_layer()` container whose TEXT child inherits top-layer via the
+    // climb.
+    let toggle_text = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("TOP")),
+            FontSize(16.0),
+        ))
+        .id();
+    let toggle = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(120.0)
+                .height_px(40.0)
+                .top_layer(TopLayer::Popover),
+        ))
+        .add_child(toggle_text)
+        .id();
+    let _view_root = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(200.0)
+                .height_px(150.0),
+        ))
+        .add_child(toggle)
+        .id();
+
+    for _ in 0..5 {
+        h.frame();
+    }
+
+    let runs = &h.glyphs().entity_runs;
+    let toggle_pos = runs
+        .iter()
+        .position(|r| r.entity == toggle_text)
+        .expect("top-layer text emitted glyphs");
+    let base_pos = runs
+        .iter()
+        .position(|r| r.entity == base_text)
+        .expect("base text emitted glyphs");
+    // RED witness: pre-fix the top-layer text (earlier root) precedes the later base
+    // root's text; post-fix the top-layer run is the trailing suffix.
+    assert!(
+        base_pos < toggle_pos,
+        "the later base root's text run must precede the top-layer text run after the \
+         global-suffix partition (base_pos {base_pos}, toggle_pos {toggle_pos})"
+    );
+    // And the glyph partition packs WITHOUT tripping the tail-contiguity tripwire
+    // (pre-fix this panics), with the boundary at the top-layer run's start.
+    let total = h.glyphs().glyphs.len() as u32;
+    let toggle_start = runs[toggle_pos].instances.start;
+    let (_g, _f, boundary) = partition_glyph_ranges(
+        runs.iter().map(|r| (r.entity, r.instances.clone())),
+        total,
+        0,
+        |_| None,
+        move |e| e == toggle_text,
+    );
+    assert_eq!(
+        boundary, toggle_start,
+        "the glyph boundary is the top-layer text run's start"
+    );
 }

@@ -300,6 +300,22 @@ equivalent tail-contiguity `debug_assert` and it caught the § 3.1
 per-node-vs-climb bug in ONE GPU run — a hard panic, not a silent wrong-pixel
 regression. Keep the boundary/contiguity `debug_assert` in the production packers.
 
+**The single-boundary suffix must be MATERIALIZED across roots, not assumed
+(W7, 2026-07-12).** The tail-contiguity invariant ("once a top-layer node is seen
+no base node may follow") holds automatically only WITHIN one root's walk. Across
+roots it does NOT: `context_tree_paint_order` + `cross_root_rank` (§ 3.5) produce a
+top-layer suffix per root, but the cross-root concatenation can place a base root
+(a rank-0 stacking context) AFTER a different root's escaped top-layer tail — the
+dooduel podium (a parented `.top_layer()` toggle in the main root + ~110
+independent rank-0 confetti roots) trips the quad-tier tripwire exactly this way.
+The fix makes the invariant TRUE rather than weakening the tripwire: after the
+§ 3.1 ancestor climb, each producer applies a **stable partition**
+(`top_layer::stable_top_layer_suffix`) that hoists every top-layer element to the
+trailing global suffix, base + top-layer relative order both preserved. All three
+tiers (node quad, glyph, icon) share the one `top_layer::in_top_layer` climb so
+their orders agree. Byte-stable: a no-top-layer scene skips it; an already-suffix
+single-root scene reorders to the identical order. See the plan's **Wave 7**.
+
 ### 3.5 What stays; blast radius
 
 **Stays unchanged:** the extract *walk* + display list ordering;
