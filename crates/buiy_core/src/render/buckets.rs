@@ -699,6 +699,17 @@ pub struct PackedPartition {
     /// `ExtractedNode.top_layer` (the flag rides the record), guarded by a
     /// tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`).
     pub top_layer_boundary: u32,
+    /// Whether ANY node in this view is top-layer (the authoritative Signal-B bit
+    /// — top-layer stacking composite § 3.3). Unlike every per-tier boundary —
+    /// each of which equals its tier count for a bare gradient/raster-only overlay
+    /// member (a `Color::NONE` node pushes no quad/shadow/band/glyph/icon instance)
+    /// — this rides the SAME `TopLayerBoundaryTracker`, which observes EVERY node
+    /// regardless of what it paints, so it flips true for a top-layer node even
+    /// when no tier boundary can see it. `node.rs` gates the whole top-layer block
+    /// on this: tier- AND anchor-independent, and `false` for a no-top-layer view
+    /// (the byte-stable base-only path). It closes the bare-overlay occlusion gap
+    /// a per-tier `any boundary < count` gate silently dropped.
+    pub any_top_layer: bool,
 }
 
 /// Pack a view's nodes into the flat quad blob AND its per-group instance-range
@@ -788,12 +799,17 @@ pub fn pack_view_partitioned(
             }
         }
     }
+    // The authoritative Signal-B bit: any node top-layer, read off the SAME
+    // tracker BEFORE `finish` consumes it (it observes every node, so it sees a
+    // bare gradient/raster-only overlay member no per-tier boundary can).
+    let any_top_layer = top_layer.seen_top_layer;
     let top_layer_boundary = top_layer.finish(p.len());
     let mut partition = p.finish();
     partition.node_quad_anchors = node_quad_anchors;
     partition.quad_slot_of = quad_slot_of;
     partition.node_quad_anchor_of = node_quad_anchor_of;
     partition.top_layer_boundary = top_layer_boundary;
+    partition.any_top_layer = any_top_layer;
     partition
 }
 
@@ -844,6 +860,9 @@ impl Partitioner {
             quad_slot_of: EntityHashMap::default(),
             node_quad_anchor_of: EntityHashMap::default(),
             top_layer_boundary,
+            // `Partitioner` is top-layer-unaware; `pack_view_partitioned` overwrites
+            // this from the tracker after `finish` (the flag lives on the walk).
+            any_top_layer: false,
         }
     }
 }

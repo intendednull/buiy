@@ -633,3 +633,84 @@ fn block_interleave_all_top_layer_leaves_the_base_empty() {
         "the whole schedule is the top block, indices unchanged"
     );
 }
+
+#[test]
+fn block_interleave_routes_an_at_boundary_gradient_to_the_top_block() {
+    // A bare gradient-only top-layer node's gradient anchors AT the quad boundary
+    // (its Color::NONE node pushes no quad, so its anchor == the quad count == the
+    // boundary tl.quad). `a < boundary` is FALSE at the boundary, so the gradient
+    // routes to the TOP block — where Signal B's has_top_layer gate opens the top
+    // pass so it occludes. This is exactly what the bare-gradient-only occlusion
+    // gap depended on (drift-#1 fix).
+    let (base, top) = block_interleave(&runs(&[(0, 3)]), &[3], &[], 3);
+    assert_eq!(
+        base,
+        vec![FlatDrawStep::Quads(0..3)],
+        "the base block draws its quads, NOT the at-boundary gradient"
+    );
+    assert_eq!(
+        top,
+        vec![FlatDrawStep::Gradients(0..1)],
+        "the at-boundary gradient routes to the TOP block"
+    );
+}
+
+// === Signal B: PackedPartition.any_top_layer authoritative bit (drift-#1 fix) ==
+//
+// The per-tier boundaries CANNOT detect a bare gradient/raster-only top-layer
+// node: it pushes NO quad/shadow/band/glyph/icon instance, so every per-tier
+// boundary == its count. The pre-fix `has_top_layer` gate (any per-tier boundary
+// < count) reads such a scene as "no top-layer content" and SKIPS the top block,
+// so the overlay's gradient/raster never occludes base text/icons/borders (the
+// bare-overlay gap). `PackedPartition.any_top_layer` is the authoritative fix: it
+// rides the SAME TopLayerBoundaryTracker (which observes EVERY node, quad or not),
+// so a Color::NONE top-layer node still flips it true — tier- AND anchor-
+// independent, and byte-IDENTICAL for no-top scenes (u32::MAX boundary → base).
+
+/// A Color::NONE top-layer node — a bare gradient/raster-only overlay member. It
+/// pushes NO quad instance, so it moves no per-tier boundary; only the node-level
+/// `any_top_layer` bit (the tracker observes it regardless) can see it.
+fn bare_top(entity: u32) -> ExtractedNode {
+    ExtractedNode {
+        color: Color::NONE,
+        ..fill(entity, true)
+    }
+}
+
+#[test]
+fn any_top_layer_true_for_a_bare_gradient_or_raster_only_top_node() {
+    // [base fill, bare TOP (Color::NONE)]: the top node pushes no quad, so the QUAD
+    // boundary is the full count — the RED witness that the pre-fix per-tier gate
+    // (boundary < count) MISSES it. any_top_layer is TRUE regardless.
+    let nodes = [fill(1, false), bare_top(2)];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.instances.len(), 1, "only the base fill pushes a quad");
+    assert_eq!(
+        p.top_layer_boundary,
+        p.instances.len() as u32,
+        "the QUAD boundary is the count — no per-tier boundary can see the bare top node"
+    );
+    assert!(
+        p.any_top_layer,
+        "any_top_layer is TRUE — the authoritative bit sees the Color::NONE top-layer node"
+    );
+}
+
+#[test]
+fn any_top_layer_false_for_a_no_top_layer_scene() {
+    // No top-layer node ⇒ any_top_layer false (the byte-stable base-only path;
+    // node.rs then routes quad_boundary to u32::MAX — identical draws).
+    let nodes = [fill(1, false), fill(2, false)];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert!(!p.any_top_layer, "no top-layer node ⇒ any_top_layer false");
+}
+
+#[test]
+fn any_top_layer_true_when_a_top_node_has_a_quad() {
+    // The common case (a scrim fill): any_top_layer true AND the quad boundary <
+    // count — both signals agree, so Signal B strictly SUBSUMES the per-tier gate.
+    let nodes = [fill(1, false), fill(2, true)];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert!(p.any_top_layer);
+    assert_eq!(p.top_layer_boundary, 1);
+}

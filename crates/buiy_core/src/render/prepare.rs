@@ -291,6 +291,17 @@ pub struct BuiyInstanceBuffers {
     /// draw the base block then the top-layer block of every tier. Every field is
     /// the tier's instance count for a no-top-layer view (byte-stable).
     pub top_layer: TopLayerBoundaries,
+    /// Whether ANY node this frame is top-layer (`PackedPartition::any_top_layer`,
+    /// the authoritative Signal-B gate — top-layer stacking composite § 3.3).
+    /// `node.rs` opens the top-layer block iff this is set: unlike the per-tier
+    /// [`top_layer`](Self::top_layer) boundaries (which all equal their counts for
+    /// a bare gradient/raster-only overlay member), this sees a top-layer node
+    /// regardless of what it paints, so a translucent gradient/raster-only overlay
+    /// still occludes base content. Recomputed off the fresh node list on the Full
+    /// quad-repack path; RETAINED across a Patch (a Patch never changes top-layer
+    /// membership — a changed top-layer node forces a Full rebuild, W3). `false`
+    /// for a no-top-layer view (the byte-stable base-only path).
+    pub any_top_layer: bool,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -322,6 +333,7 @@ impl Default for BuiyInstanceBuffers {
             node_quad_anchor_of: EntityHashMap::default(),
             glyph_mirror_folded: false,
             top_layer: TopLayerBoundaries::default(),
+            any_top_layer: false,
         }
     }
 }
@@ -586,6 +598,10 @@ pub fn prepare_buiy_instances(
         buffers.flat_ranges = partition.flat_ranges;
         // Retain the quad base↔top-layer boundary for W2's per-block draw (§ 3.2).
         buffers.top_layer.quad = partition.top_layer_boundary;
+        // The authoritative Signal-B gate: any node top-layer this frame (§ 3.3).
+        // Recomputed on the Full path; a Patch retains it (a Patch never changes
+        // top-layer membership — a changed top-layer node forces a Full rebuild).
+        buffers.any_top_layer = partition.any_top_layer;
 
         // Border/outline band buffer (C6-a outline + C6-b per-side border).
         // Packed from the SAME node walk, so it rides the quad gate; a node with

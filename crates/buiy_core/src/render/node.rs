@@ -473,13 +473,18 @@ pub fn buiy_pass(
     // flat pass owns the window Clear); the top block runs only when there IS
     // top-layer content, else a no-op extra pass would be redundant.
     let tl = buffers.top_layer;
-    let has_top_layer = tl.quad < buffers.quad_count
-        || tl.shadow < buffers.shadow_count
-        || tl.rounded_shadow < buffers.rounded_shadow_count
-        || tl.band < buffers.band_count
-        || tl.glyph < buffers.glyph_count
-        || tl.icon < buffers.icon_count
-        || prepared_blurs.is_some_and(|pb| pb.blurs.iter().any(|b| b.top_layer));
+    // Signal B — the AUTHORITATIVE top-layer gate: is ANY node this frame
+    // top-layer (`buffers.any_top_layer`, `PackedPartition::any_top_layer`). This
+    // replaces a per-tier `any boundary < count OR any top blur` heuristic that
+    // SILENTLY DROPPED a bare gradient/raster-only overlay: a `Color::NONE`
+    // top-layer node (a translucent gradient scrim, a raster-only overlay) pushes
+    // no quad/shadow/band/glyph/icon instance, so it moves no per-tier boundary —
+    // the heuristic read "no top-layer content" and skipped the top block, so the
+    // overlay never occluded base text/icons/borders. The authoritative bit is
+    // tier- AND anchor-independent (future-proof: a new flat tier needs no gate
+    // change) and subsumes the blur term (a backdrop-filter former is a node, so
+    // the bit already covers it).
+    let has_top_layer = buffers.any_top_layer;
     // The quad boundary the flat interleave splits gradients/rasters at (rev-4/m2:
     // no separate gradient boundary — `block_interleave` splits them by anchor vs
     // this). `u32::MAX` routes EVERYTHING to the base block, so `block_interleave`
@@ -754,12 +759,27 @@ pub fn buiy_pass(
         false,
     );
     // The TOP-LAYER block draws its complete tier-stack `[boundary..)` OVER the
-    // base — only when there IS top-layer content, so a no-top-layer view issues
-    // the IDENTICAL draws to the pre-split pass (byte-stability + F9). This closes
-    // the paint half of the pick≠paint seam: a top-layer subtree now occludes base
-    // text/icons/borders, not just fills (spec § 1.4). (Retires the v1 "top-layer
-    // is the tail of the single flat draw" approximation — `partition_top_layer`
-    // in `render/top_layer.rs` is now unused by the draw path.)
+    // base — gated on the authoritative `has_top_layer` bit, so a no-top-layer view
+    // issues the IDENTICAL draws to the pre-split pass (byte-stability + F9). This
+    // closes the paint half of the pick≠paint seam: a top-layer subtree now
+    // occludes base text/icons/borders, not just fills (spec § 1.4). (Retires the
+    // v1 "top-layer is the tail of the single flat draw" approximation —
+    // `partition_top_layer` in `render/top_layer.rs` is now unused by the draw
+    // path.)
+    //
+    // Pass-open decision (drift-#1): gate ONLY on the authoritative bit, not on a
+    // per-tier "top block is non-empty" guard. A precise emptiness guard would have
+    // to enumerate every tier AND check top-layer effect-group composite membership
+    // (a top-layer `opacity < 1` overlay is COMPOSITE-only — its fill is a group
+    // member, invisible to any flat/tier check), reintroducing exactly the per-tier
+    // fragility Signal B was chosen to eliminate (a forgotten tier silently drops
+    // top content). The only cost of gating on the bit alone is that a degenerate
+    // INVISIBLE top-layer container (any_top_layer true but painting nothing in any
+    // tier/group/blur) opens ONE empty top flat pass — a provably pixel-safe no-op
+    // (`LoadOp::Load` preserves, zero draws, the resolve reproduces the base
+    // pixels; the existing composite path already relies on repeated Load+resolve).
+    // That invisible-container case is a documented v1 non-case (no fixture / app
+    // use); every overlay that paints anything routes correctly.
     if has_top_layer {
         draw_block(
             &top_steps,
