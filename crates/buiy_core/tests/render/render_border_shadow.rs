@@ -457,8 +457,9 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
     };
 
     let nodes = [bordered_and_shadowed, plain];
-    // One band per node border (the bordered node), zero for the plain node.
-    let bands = pack_band_instances(&nodes);
+    // One band per node border (the bordered node), zero for the plain node. `.1`
+    // is the top-layer boundary (additive draw scalar, W2) — dropped here.
+    let (bands, _band_top_layer_boundary) = pack_band_instances(&nodes);
     assert_eq!(bands.len(), 1, "one band instance for the bordered node");
     // The band carries the per-side widths verbatim.
     assert_eq!(bands[0].width, [2.0, 2.0, 2.0, 2.0]);
@@ -557,7 +558,9 @@ impl NodeExtractHarness {
     }
 
     fn band_count(&self) -> usize {
-        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 
     fn shadow_count(&self) -> usize {

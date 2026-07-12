@@ -341,3 +341,52 @@ fn shadow_boundary_is_count_when_no_top_layer() {
     assert_eq!(boundary, shadows.len() as u32);
     assert_eq!(boundary, 2);
 }
+
+// --- Task 1.4: band (border/outline) packer boundary -------------------------
+
+use buiy_core::render::buckets::pack_band_instances;
+use buiy_core::render::extract::ExtractedBorder;
+
+/// A solid yellow border term (one band instance).
+fn border_term() -> ExtractedBorder {
+    ExtractedBorder {
+        outer_pos: Vec2::ZERO,
+        outer_size: Vec2::splat(10.0),
+        color_top: [1.0, 1.0, 0.0, 1.0],
+        color_right: [1.0, 1.0, 0.0, 1.0],
+        color_bottom: [1.0, 1.0, 0.0, 1.0],
+        color_left: [1.0, 1.0, 0.0, 1.0],
+        width: [2.0, 2.0, 2.0, 2.0],
+        style: [0.0, 0.0, 0.0, 0.0],
+        outer_radius: [0.0; 8],
+        inner_radius: [0.0; 8],
+        clip: None,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
+    }
+}
+
+/// A fill node carrying one border band.
+fn fill_with_border(entity: u32, top_layer: bool) -> ExtractedNode {
+    let mut n = fill(entity, top_layer);
+    n.border = Some(border_term());
+    n
+}
+
+#[test]
+fn band_boundary_at_first_top_layer_border() {
+    // [base border, TOP border] — the band boundary is the instance index of the
+    // top-layer node's border band (1).
+    let nodes = [fill_with_border(1, false), fill_with_border(2, true)];
+    let (bands, boundary) = pack_band_instances(&nodes);
+    assert_eq!(bands.len(), 2, "one band per bordered node");
+    assert_eq!(boundary, 1, "boundary at the top-layer node's band");
+}
+
+#[test]
+fn band_boundary_is_count_when_no_top_layer() {
+    // No top-layer band ⇒ the boundary is the band count (empty top block).
+    let nodes = [fill_with_border(1, false), fill_with_border(2, false)];
+    let (bands, boundary) = pack_band_instances(&nodes);
+    assert_eq!(boundary, bands.len() as u32);
+    assert_eq!(boundary, 2);
+}

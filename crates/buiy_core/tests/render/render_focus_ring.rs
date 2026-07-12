@@ -221,8 +221,9 @@ fn pack_band_instances_emits_one_band_per_outlined_node() {
         shadows: Vec::new(),
         gradients: Vec::new(),
     };
-    assert_eq!(pack_band_instances(std::slice::from_ref(&plain)).len(), 0);
-    assert_eq!(pack_band_instances(&[outlined, plain.clone()]).len(), 1);
+    // `.0` = the band blob; `.1` = the top-layer boundary (additive draw scalar).
+    assert_eq!(pack_band_instances(std::slice::from_ref(&plain)).0.len(), 0);
+    assert_eq!(pack_band_instances(&[outlined, plain.clone()]).0.len(), 1);
 }
 
 // --- Tier 2: end-to-end through the REAL extract system ---------------------
@@ -307,7 +308,9 @@ impl NodeExtractHarness {
     }
 
     fn band_count(&self) -> usize {
-        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 }
 

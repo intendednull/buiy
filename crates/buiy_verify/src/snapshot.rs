@@ -554,7 +554,7 @@ pub fn display_list_dump(nodes: &ExtractedNodes, names: &NameLookup) -> String {
     // `pack_band_instances` (one band per node border + one per node outline),
     // and it draws AFTER the quad bucket (the border/ring sits on top of the
     // fill within the box).
-    let bands = pack_band_instances(&nodes.nodes);
+    let (bands, _band_top_layer_boundary) = pack_band_instances(&nodes.nodes);
     if !bands.is_empty() {
         out.push_str("[bands painters_z]\n");
         for (i, node) in nodes.nodes.iter().enumerate() {

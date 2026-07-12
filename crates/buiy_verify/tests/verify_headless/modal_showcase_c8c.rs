@@ -860,7 +860,9 @@ impl ShowcaseExtractHarness {
     }
 
     fn band_count(&self) -> usize {
-        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes).len()
+        pack_band_instances(&self.render.resource::<ExtractedNodesView>().0.nodes)
+            .0
+            .len()
     }
 }
 

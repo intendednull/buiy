@@ -555,7 +555,7 @@ pub fn prepare_buiy_instances(
         // empty band buffer (band_count = 0) and the node skips the band draw.
         // The band draws flat (after quad/glyph) and is NOT effect-group-
         // partitioned in v1 (styling-f-tier.md § 2.3).
-        let bands = pack_band_instances(&nodes.0.nodes);
+        let (bands, _band_top_layer_boundary) = pack_band_instances(&nodes.0.nodes);
         buffers.band.clear();
         for band in &bands {
             buffers.band.push(*band);

@@ -254,9 +254,18 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
 /// v1: the band rides the FLAT window draw only — it is not partitioned into
 /// effect-group off-screen targets (a ring/border on a grouped element is a
 /// follow-up; the common case is a top-level widget).
-pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
+///
+/// Returns the blob PLUS its base↔top-layer boundary (top-layer stacking
+/// composite, § 3.2): the instance index of the first top-layer node's first band
+/// (border before outline), or the band count when no top-layer node has one. The
+/// per-block draw (W2) draws base bands `[0..boundary)` then top-layer bands over
+/// the top-layer tier-stack, so a base border no longer bleeds through a scrim. A
+/// tail-contiguity `debug_assert` ([`TopLayerBoundaryTracker`]) guards § 3.4.
+pub fn pack_band_instances(nodes: &[ExtractedNode]) -> (Vec<BorderBandInstance>, u32) {
     let mut bands = Vec::new();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for n in nodes {
+        top_layer.observe(n, bands.len() as u32);
         // Border first (inside the box), then outline (outside, on top).
         if let Some(border) = n.border.as_ref() {
             bands.push(pack_border(border));
@@ -265,7 +274,8 @@ pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
             bands.push(pack_outline(outline));
         }
     }
-    bands
+    let boundary = top_layer.finish(bands.len() as u32);
+    (bands, boundary)
 }
 
 /// Pack a view's node list into the flat box-shadow instance blob, in paint
