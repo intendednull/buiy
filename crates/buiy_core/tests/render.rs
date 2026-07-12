@@ -98,6 +98,8 @@ mod render_raster;
 mod render_raster_gpu;
 #[path = "render/render_raster_interleave_gpu.rs"]
 mod render_raster_interleave_gpu;
+#[path = "render/scrim_tier_bleed_gpu.rs"]
+mod scrim_tier_bleed_gpu;
 #[path = "render/render_shader_wgsl.rs"]
 mod render_shader_wgsl;
 #[path = "render/render_shadow_oracle.rs"]
