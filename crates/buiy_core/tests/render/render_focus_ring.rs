@@ -190,6 +190,7 @@ fn pack_band_instances_emits_one_band_per_outlined_node() {
         color: Color::WHITE,
         clip: None,
         group: None,
+        top_layer: false,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: Some(ExtractedOutline {
             outer_pos: Vec2::splat(-2.0),
@@ -213,6 +214,7 @@ fn pack_band_instances_emits_one_band_per_outlined_node() {
         color: Color::WHITE,
         clip: None,
         group: None,
+        top_layer: false,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: None,
         border: None,

@@ -401,6 +401,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
         color: Color::WHITE,
         clip: None,
         group: None,
+        top_layer: false,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: None,
         border: Some(ExtractedBorder {
@@ -447,6 +448,7 @@ fn pack_routes_border_to_band_and_shadow_to_shadow_blob() {
         color: Color::WHITE,
         clip: None,
         group: None,
+        top_layer: false,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: None,
         border: None,

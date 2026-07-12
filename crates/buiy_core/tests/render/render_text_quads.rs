@@ -17,6 +17,7 @@ fn node(entity: Entity, x: f32, color: Color, group: Option<usize>) -> Extracted
         color,
         clip: None,
         group,
+        top_layer: false,
         affine: [[1.0, 0.0], [0.0, 1.0]],
         outline: None,
         border: None,
