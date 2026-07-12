@@ -6,7 +6,7 @@
 
 **Architecture:** Approach A (same-surface per-block tier ordering), single-boundary-v1. Persist a **top-layer discriminator** on the extract record — computed by a `ChildOf` ancestor **climb** (mirroring the landed `nearest_group_entity` climb), run after `assemble_context_tree`. Each tier packer partitions its instance blob into a **base range** + a **top-layer range** at the boundary (with a tail-contiguity `debug_assert` tripwire). `node.rs::buiy_pass` then draws the **base block's full tier-stack** (shadows → quads+raster+gradient → glyphs → icons → bands → backdrop → root-composite) then the **top-layer block's full tier-stack** over it. All top-layer content is ONE block (per-context is a deferred follow-up). No off-screen target.
 
-**Tech Stack:** Rust, Bevy 0.19 render (`Core2d` systems), wgpu, `buiy_core` render pipeline; `buiy_verify` GPU reftests; `iai-callgrind` perf gate. GPU host: AMD RX 6700 XT / RADV, `DISPLAY=:0`, `env RUST_MIN_STACK=33554432`.
+**Tech Stack:** Rust, Bevy 0.19 render (`Core2d` systems), wgpu, `buiy_core` render pipeline; `buiy_verify` GPU reftests; deterministic headless `FlatDrawStep`-count gate (F9, rev-4/M4 — not iai). GPU host: AMD RX 6700 XT / RADV, `DISPLAY=:0`, `env RUST_MIN_STACK=33554432`.
 
 **Spec:** `docs/specs/2026-07-10-toplayer-stacking-composite-design.md` (rev-4, active). Read §§ 3.1–3.6, 4, 6 before starting. **Schedules `docs/plans/follow-ups.md:2311`.**
 
