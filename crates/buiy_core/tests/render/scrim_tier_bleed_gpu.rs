@@ -13,10 +13,15 @@
 //!
 //! This renders ONE scene twice — identical except the scrim's alpha (156 vs 0)
 //! — at the real capture's `Msaa::Sample4`, and reads back one pixel of EACH
-//! tier, reporting the WITH-vs-WITHOUT dim table:
+//! tier, reporting the WITH-vs-WITHOUT dim table. This file is now the
+//! RED→GREEN **acceptance witness** for the top-layer stacking composite (W2):
+//! after the per-block draw restructure a top-layer scrim occludes base content
+//! across ALL tiers, so every row DIMS (the band/glyph/icon rows FAIL on pre-W2
+//! code, where they bled through undimmed, and PASS after it):
 //!   * a base QUAD fill      → EXPECT: dims (scrim is a quad, drawn over it)
-//!   * a bordered-box BAND   → EXPECT: bleeds (band tier draws after the quad)
-//!   * a base GLYPH (text)   → EXPECT: bleeds (glyph tier draws after the quad)
+//!   * a bordered-box BAND   → EXPECT: dims (base block draws it before the scrim)
+//!   * a base GLYPH (text)   → EXPECT: dims (base block draws it before the scrim)
+//!   * a base ICON (stroke)  → EXPECT: dims (base block draws it before the scrim)
 //!   * the RASTER canvas     → EXPECT: dims (raster interleaves in the quad tier)
 //!
 //! Plus a DARK-base quad variant → EXPECT: near-zero delta (iso-luminance).
@@ -34,8 +39,9 @@ use buiy_core::components::Node;
 use buiy_core::layout::{Inset, Sizing, Style};
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::{
-    Background, Border, BorderSide, Corners, LineStyle, TextColor,
+    Background, Border, BorderSide, Corners, Icon, LineStyle, TextColor,
 };
+use buiy_core::render::icon_raster::ICON_VIEWBOX;
 use buiy_core::render::raster::RasterImage;
 use buiy_core::text::Text;
 
@@ -51,6 +57,9 @@ const SCRIM: (u8, u8, u8, u8) = (0x14, 0x16, 0x1b, 0x9c);
 /// The dooduel DARK canvas token (`0x1b1e25`) — the dark-theme iso-luminance case.
 const DARK_CANVAS: (u8, u8, u8) = (0x1b, 0x1e, 0x25);
 const CANVAS_RED: [u8; 4] = [220, 40, 40, 255];
+/// The base ICON's bright cyan tint (dominant channel = blue, 2) — a saturated
+/// color the dark scrim clearly cuts, so its DIM is unambiguous.
+const ICON_CYAN: (u8, u8, u8) = (40, 210, 220);
 
 fn solid_canvas(app: &mut App, rgba: [u8; 4]) -> Handle<Image> {
     let img = Image::new_fill(
@@ -145,8 +154,31 @@ fn render(scrim_alpha: u8, base: (u8, u8, u8)) -> Vec<u8> {
             RasterImage(canvas),
         ))
         .id();
+    // A base vector ICON: a thick cyan horizontal stroke at (76,10) 40×40 — ICON
+    // tier (drawn after the glyph tier). Sits in the green gap BETWEEN the
+    // bordered box (whose 8px border extends its outer edge to ≈x70) and the
+    // raster (left edge x120), well clear of the glyph text (which overflows its
+    // 120px box to the right at y≈74+). Its ink is a horizontal band across the
+    // box mid-height; `brightest_in` over a tight pure-cyan window locates it
+    // robustly (the cyan sum beats the green base beneath).
+    let icon_e = app
+        .world_mut()
+        .spawn((
+            Node,
+            Name::new("icon"),
+            abs(76.0, 10.0, 40.0, 40.0),
+            Icon {
+                path_d: String::from("M2 12 L22 12"),
+                stroke_width: 8.0,
+                size_px: 40,
+                viewbox: ICON_VIEWBOX,
+                fill: false,
+                color: ColorToken::Custom(Color::srgb_u8(ICON_CYAN.0, ICON_CYAN.1, ICON_CYAN.2)),
+            },
+        ))
+        .id();
 
-    let mut kids = vec![base_e, box_e, text_e, raster_e];
+    let mut kids = vec![base_e, box_e, text_e, raster_e, icon_e];
     // The translucent full-viewport TOP-LAYER scrim (alpha 156 or 0), painted last.
     let scrim_e = app
         .world_mut()
@@ -241,6 +273,9 @@ fn per_tier_scrim_bleed_table() {
     let glyph_b = brightest_in(&b, 8, 74, 128, 112);
     let raster_a = px(&a, W, 150, 32);
     let raster_b = px(&b, W, 150, 32);
+    //  * icon (ICON):   brightest cyan ink in the icon stroke x∈[86,110] y∈[26,34].
+    let icon_a = brightest_in(&a, 86, 26, 110, 34);
+    let icon_b = brightest_in(&b, 86, 26, 110, 34);
 
     let row = |name: &str, wa: [u8; 4], wb: [u8; 4]| {
         eprintln!(
@@ -257,6 +292,7 @@ fn per_tier_scrim_bleed_table() {
     row("BAND border", band_a, band_b);
     row("GLYPH text", glyph_a, glyph_b);
     row("RASTER canvas", raster_a, raster_b);
+    row("ICON stroke", icon_a, icon_b);
 
     // --- DARK-theme iso-luminance: the scrim over the dooduel dark canvas ---
     let da = render(SCRIM.3, DARK_CANVAS);
@@ -272,9 +308,16 @@ fn per_tier_scrim_bleed_table() {
         dbase_b[2] as i32 - dbase_a[2] as i32
     );
 
-    // --- The witnesses: quads/raster dim; band/glyph BLEED (don't dim). ---
+    // --- The witnesses: EVERY tier dims under the top-layer scrim. ---
     // Dimming metric = the DOMINANT channel drop (the scrim tints toward its own
     // dark blue-gray, so a channel-SUM understates a dim on a saturated base).
+    //
+    // ACCEPTANCE (top-layer stacking composite, W2): after the per-block draw
+    // restructure, a top-layer scrim occludes base content across ALL tiers —
+    // quad, raster, AND band/glyph/icon. Before the restructure the band/glyph/
+    // icon tiers BLED THROUGH undimmed (drawn in a later GLOBAL tier over the
+    // scrim quad), so these three assertions FAIL on pre-W2 code (Δ≈0) and PASS
+    // after it (Δ > DIM) — this file is the RED→GREEN acceptance witness.
     const DIM: i32 = 30;
     let drop = |dom: usize, wa: [u8; 4], wb: [u8; 4]| wb[dom] as i32 - wa[dom] as i32;
     assert!(
@@ -296,17 +339,28 @@ fn per_tier_scrim_bleed_table() {
         raster_b[0],
         raster_a[0]
     );
-    // The ROOT-CAUSE witnesses: the band + glyph tiers BLEED — their ink is
-    // essentially UNCHANGED by the scrim (drawn in a later global tier over it).
-    const BLEED_TOL: i32 = 18; // near-identical WITH vs WITHOUT
+    // The FLIPPED witnesses (W2 acceptance): the band + glyph + icon tiers now
+    // DIM too — the top-layer block draws its scrim quad OVER the base tier-stack,
+    // so base borders/text/icons are occluded exactly like base fills.
     assert!(
-        (sum(band_a) - sum(band_b)).abs() < BLEED_TOL,
-        "BAND (border) BLEEDS THROUGH the top-layer scrim (undimmed) — the tiered-render \
-         root cause. WITH={band_a:?} WITHOUT={band_b:?}"
+        drop(0, band_a, band_b) >= DIM,
+        "BAND (border) must DIM under the top-layer scrim (all-tiers occlusion, W2): \
+         yellow R {} -> {} (WITH={band_a:?} WITHOUT={band_b:?})",
+        band_b[0],
+        band_a[0]
     );
     assert!(
-        (sum(glyph_a) - sum(glyph_b)).abs() < BLEED_TOL,
-        "GLYPH (text) BLEEDS THROUGH the top-layer scrim (undimmed) — the tiered-render \
-         root cause. WITH={glyph_a:?} WITHOUT={glyph_b:?}"
+        drop(1, glyph_a, glyph_b) >= DIM,
+        "GLYPH (text) must DIM under the top-layer scrim (all-tiers occlusion, W2): \
+         white G {} -> {} (WITH={glyph_a:?} WITHOUT={glyph_b:?})",
+        glyph_b[1],
+        glyph_a[1]
+    );
+    assert!(
+        drop(2, icon_a, icon_b) >= DIM,
+        "ICON (vector stroke) must DIM under the top-layer scrim (all-tiers occlusion, W2): \
+         cyan B {} -> {} (WITH={icon_a:?} WITHOUT={icon_b:?})",
+        icon_b[2],
+        icon_a[2]
     );
 }
