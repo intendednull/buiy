@@ -22,11 +22,13 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 
 use buiy_core::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style, TopLayer};
+use buiy_core::render::RenderWorkCounters;
 use buiy_core::render::buckets::pack_view_partitioned;
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::render::extract::{
-    ExtractedEffectGroups, ExtractedNode, ExtractedNodesView, extract_buiy_nodes,
+    ExtractedEffectGroups, ExtractedNode, ExtractedNodesView, NodeDamage, RetainedNodeIndex,
+    extract_buiy_nodes,
 };
 
 /// Adapterless extract harness: swap the live main world into a bare render
@@ -63,6 +65,14 @@ impl NodeExtractHarness {
         render.init_resource::<ExtractedNodesView>();
         render.init_resource::<ExtractedEffectGroups>();
         render.init_resource::<MainWorld>();
+        // Patch-path resources (§ 3.6): the retained entity->slot index, the
+        // Full/Patch damage tag, and the work counters. With these present the
+        // partial re-extract PATCH fast path activates (they are `Option` params
+        // in `extract_buiy_nodes`, so without them the system always takes the
+        // Full build). Mirrors `buiy_bench_support::PipelineHarness`.
+        render.init_resource::<RetainedNodeIndex>();
+        render.init_resource::<NodeDamage>();
+        render.init_resource::<RenderWorkCounters>();
 
         let mut schedule = Schedule::new(ExtractSchedule);
         schedule.add_systems(extract_buiy_nodes);
@@ -98,6 +108,11 @@ impl NodeExtractHarness {
             .iter()
             .find(|n| n.entity == entity)
             .cloned()
+    }
+
+    /// The work-unit counters from the most recent extract (Full vs Patch tag).
+    fn counters(&self) -> RenderWorkCounters {
+        *self.render.resource::<RenderWorkCounters>()
     }
 }
 
@@ -193,6 +208,138 @@ fn toplayer_child_inherits() {
     assert!(
         !h.node_for(base).expect("base is extracted").top_layer,
         "a base node is not top-layer"
+    );
+}
+
+// === Wave 3: Patch-path exclusion (§ 3.6) ====================================
+//
+// The partial re-extract PATCH fast path re-resolves a changed entity through
+// `resolve_one`, which does NOT run the post-assembly ancestor climb that sets
+// `top_layer` (§ 3.1). A value-only Patch touching a top-layer node — or a plain
+// descendant tagged top-layer only by inheritance — would therefore re-resolve it
+// with `top_layer = false`, silently dropping the tag until the next Full build
+// (breaking the W2 all-tier occlusion for that frame). The node-side guard extends
+// the existing group-free Patch guard to `if old.group.is_some() || old.top_layer`:
+// a changed record that WAS top-layer forces a Full rebuild, which re-runs the
+// climb and preserves the tag. This test is the RED->GREEN witness.
+
+/// A value-only `Background` re-tint on BOTH a `.top_layer()` former AND its plain
+/// (inheritance-tagged) descendant induces a Patch-eligible frame (no footprint /
+/// structural change). WITHOUT the `|| old.top_layer` guard the Patch fast path
+/// re-resolves each via `resolve_one` and drops their `top_layer` tag (RED: the
+/// frame is a Patch and both tags read `false`). WITH it, the changed top-layer
+/// records force a Full rebuild, so the ancestor climb re-runs and the tags survive
+/// (GREEN). The disjoint base node stays untagged throughout — the guard does NOT
+/// disturb non-top-layer nodes.
+#[test]
+fn toplayer_survives_a_patch_frame() {
+    let mut h = NodeExtractHarness::new();
+
+    // Same shape as `toplayer_child_inherits`: a `.top_layer()` former with a plain
+    // in-flow child (tagged only by the climb) + a disjoint base node under one root.
+    let child = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default().width_px(30.0).height_px(30.0),
+            surface(),
+        ))
+        .id();
+    let parent = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            abs(50.0, 50.0, 60.0, 60.0).top_layer(TopLayer::Popover),
+            surface(),
+        ))
+        .id();
+    h.app.world_mut().entity_mut(parent).add_children(&[child]);
+    let base = h
+        .app
+        .world_mut()
+        .spawn((Node, abs(10.0, 10.0, 40.0, 40.0), surface()))
+        .id();
+    let root = h
+        .app
+        .world_mut()
+        .spawn((Node, Style::default().width_px(200.0).height_px(150.0)))
+        .id();
+    h.app
+        .world_mut()
+        .entity_mut(root)
+        .add_children(&[base, parent]);
+
+    // Settle to a steady render world: several update+extract cycles quiesce change
+    // detection (the first extract sees everything Added -> Full; the idempotent
+    // `StackingContext` write stops re-firing once the value stabilizes), so the
+    // next value-only change is an ISOLATED Patch candidate (structural_changed
+    // empty).
+    for _ in 0..8 {
+        h.update();
+        h.extract();
+    }
+
+    // Sanity: the settled Full build tagged the former + its plain child, not the base.
+    assert!(
+        h.node_for(parent).expect("parent extracted").top_layer,
+        "precondition: the settled Full build tagged the top-layer former"
+    );
+    assert!(
+        h.node_for(child).expect("child extracted").top_layer,
+        "precondition: the settled Full build tagged the plain descendant (climb)"
+    );
+    assert!(
+        !h.node_for(base).expect("base extracted").top_layer,
+        "precondition: the base node is not top-layer"
+    );
+
+    // A value-only `Background` re-tint on BOTH the former and its plain descendant.
+    // `set_changed()` marks `Changed<Background>` without a footprint change (exactly
+    // like the work-counters Patch tests), so the frame is Patch-eligible.
+    h.app
+        .world_mut()
+        .get_mut::<Background>(parent)
+        .unwrap()
+        .set_changed();
+    h.app
+        .world_mut()
+        .get_mut::<Background>(child)
+        .unwrap()
+        .set_changed();
+    h.update();
+    h.extract();
+
+    // The guard forced a Full rebuild (not a Patch) BECAUSE the changed records were
+    // top-layer — so the ancestor climb re-ran. WITHOUT the guard this frame is an
+    // in-place Patch (`node_patches == 1`, `node_rebuilds == 0`) that drops the tags.
+    let c = h.counters();
+    assert_eq!(
+        c.node_patches, 0,
+        "a Patch touching a top-layer node must NOT take the fast path (the guard forces Full)"
+    );
+    assert_eq!(
+        c.node_rebuilds, 1,
+        "the changed top-layer records force a Full rebuild (which re-runs the climb)"
+    );
+
+    // The discriminating witness: the tags SURVIVE the frame. WITHOUT the guard the
+    // Patch re-resolves both via `resolve_one` (no climb) -> `top_layer = false`.
+    assert!(
+        h.node_for(parent)
+            .expect("parent still extracted")
+            .top_layer,
+        "the top-layer former keeps its tag across a value-only Patch frame"
+    );
+    assert!(
+        h.node_for(child).expect("child still extracted").top_layer,
+        "a plain descendant keeps its inherited top_layer tag across a Patch frame \
+         (the exact hole the guard closes)"
+    );
+    assert!(
+        !h.node_for(base).expect("base still extracted").top_layer,
+        "the base node stays untagged — the guard does not disturb non-top-layer nodes"
     );
 }
 

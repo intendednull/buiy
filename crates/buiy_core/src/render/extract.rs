@@ -1665,8 +1665,14 @@ pub fn extract_buiy_nodes(
                     break;
                 };
                 // v1 scope: group-free quad-only. A grouped node would re-pack its group's
-                // off-screen target; defer to Full.
-                if old.group.is_some() {
+                // off-screen target; defer to Full. A top-layer node (or a plain descendant
+                // tagged top-layer by inheritance) is ALSO deferred to Full (§ 3.6): its
+                // `top_layer` tag is derived by the post-assembly ancestor climb, which the
+                // Patch's `resolve_one` does NOT run — so re-resolving it here would drop the
+                // tag. Forcing Full re-runs the climb and preserves it (the group precedent —
+                // both are climb-derived). A NEW overlay is a structural change that already
+                // forces Full; this closes the value-only-Patch hole.
+                if old.group.is_some() || old.top_layer {
                     patchable = false;
                     break;
                 }
