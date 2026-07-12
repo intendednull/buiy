@@ -163,6 +163,52 @@ const _ASSERT_POD: fn() = || {
     _is_pod::<PackedInstance>();
 };
 
+/// Tracks the base↔top-layer boundary as a per-node tier packer walks `nodes` in
+/// paint order (the top-layer stacking composite, § 3.2). Every packer that
+/// partitions its blob at the top-layer boundary drives one of these: call
+/// [`observe`](Self::observe) for each node BEFORE pushing that node's
+/// instances, passing the tier's current instance count; [`finish`](Self::finish)
+/// yields the boundary — the instance index of the first top-layer node's first
+/// instance, or the total count when the view has no top-layer node (an empty
+/// top-layer block `[count..count)`, the byte-stable path).
+///
+/// The tail-contiguity `debug_assert` in `observe` is the production tripwire
+/// (spec § 3.4): top-layer content is a contiguous suffix of the paint order
+/// (`context_tree_paint_order` + `cross_root_rank`), so once a top-layer node is
+/// seen no base node may follow. It caught the § 3.1 per-node-vs-ancestor-climb
+/// classification bug in one GPU run — a hard panic, not a silent wrong pixel.
+#[derive(Default)]
+struct TopLayerBoundaryTracker {
+    boundary: Option<u32>,
+    seen_top_layer: bool,
+}
+
+impl TopLayerBoundaryTracker {
+    /// Observe `node` (in paint order) with the tier's current `instance_count`
+    /// (the index the node's first instance is about to occupy). Records the
+    /// boundary at the first top-layer node and trips the tail-contiguity
+    /// `debug_assert` on a base node after a top-layer one.
+    fn observe(&mut self, node: &ExtractedNode, instance_count: u32) {
+        debug_assert!(
+            !(self.seen_top_layer && !node.top_layer),
+            "top-layer nodes must form a contiguous tail: a base node followed a \
+             top-layer node in the paint-order walk (the ancestor-climb classifier \
+             drifted from the top-layer materialization, or the tail is not \
+             context-contiguous)"
+        );
+        if node.top_layer {
+            self.boundary.get_or_insert(instance_count);
+            self.seen_top_layer = true;
+        }
+    }
+
+    /// The tier's boundary: the first top-layer instance index, or `total` (the
+    /// tier's final instance count) when the view has no top-layer node.
+    fn finish(self, total: u32) -> u32 {
+        self.boundary.unwrap_or(total)
+    }
+}
+
 /// Pack a per-view node list — R5's [`ExtractedNode`] records — into
 /// typed-primitive `(primitive, layer)` buckets. v1 routes every node to
 /// `(Quad, layer 0)` — the only primitive the v1 set emits — packing each via
@@ -541,6 +587,17 @@ pub struct PackedPartition {
     /// [`node_quad_anchors`]: Self::node_quad_anchors
     /// [`quad_slot_of`]: Self::quad_slot_of
     pub node_quad_anchor_of: EntityHashMap<u32>,
+    /// The base↔top-layer boundary of the flat quad blob (top-layer stacking
+    /// composite, § 3.2): the instance index of the first top-layer node's first
+    /// quad. `[0..top_layer_boundary)` is the base block, `[top_layer_boundary..
+    /// instances.len())` the top-layer block — the per-block draw restructure (W2)
+    /// draws the base block's complete tier-stack, then the top-layer block's over
+    /// it, so a top-layer subtree occludes base text/icons/borders, not just fills.
+    /// Equals `instances.len()` when the view has no top-layer node (an empty
+    /// top-layer block — the byte-stable path). The quad packer records it off
+    /// `ExtractedNode.top_layer` (the flag rides the record), guarded by a
+    /// tail-contiguity `debug_assert` ([`TopLayerBoundaryTracker`]).
+    pub top_layer_boundary: u32,
 }
 
 /// Pack a view's nodes into the flat quad blob AND its per-group instance-range
@@ -588,7 +645,15 @@ pub fn pack_view_partitioned(
     let mut node_quad_anchors = Vec::with_capacity(nodes.len());
     let mut quad_slot_of: EntityHashMap<u32> = EntityHashMap::default();
     let mut node_quad_anchor_of: EntityHashMap<u32> = EntityHashMap::default();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for node in nodes {
+        // Record the base↔top-layer boundary at the first top-layer node's first
+        // instance (its own quad, or — for a `Color::NONE` node — its first text
+        // quad), before pushing any of this node's instances. The tracker's
+        // tail-contiguity `debug_assert` fires if a base node follows a top-layer
+        // one (§ 3.4). Text quads inherit their anchoring node's classification
+        // (they splice in the same iteration), so no separate handling is needed.
+        top_layer.observe(node, p.len());
         let g = node.group.filter(|&g| g < group_count);
         if node.color != Color::NONE {
             // D1: record this painting node's quad slot (the index it is about to
@@ -622,10 +687,12 @@ pub fn pack_view_partitioned(
             }
         }
     }
+    let top_layer_boundary = top_layer.finish(p.len());
     let mut partition = p.finish();
     partition.node_quad_anchors = node_quad_anchors;
     partition.quad_slot_of = quad_slot_of;
     partition.node_quad_anchor_of = node_quad_anchor_of;
+    partition.top_layer_boundary = top_layer_boundary;
     partition
 }
 
@@ -662,6 +729,10 @@ impl Partitioner {
 
     fn finish(self) -> PackedPartition {
         let (group_ranges, flat_ranges) = self.ranges.finish();
+        // The no-top-layer default (empty top-layer block); `pack_view_partitioned`
+        // overwrites it with the tracked boundary. `Partitioner` stays top-layer-
+        // unaware — the flag lives on `ExtractedNode`, not the range bookkeeping.
+        let top_layer_boundary = self.instances.len() as u32;
         PackedPartition {
             instances: self.instances,
             group_ranges,
@@ -671,6 +742,7 @@ impl Partitioner {
             node_quad_anchors: Vec::new(),
             quad_slot_of: EntityHashMap::default(),
             node_quad_anchor_of: EntityHashMap::default(),
+            top_layer_boundary,
         }
     }
 }

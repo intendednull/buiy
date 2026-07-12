@@ -22,6 +22,7 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 
 use buiy_core::Node;
 use buiy_core::layout::{Inset, Length, Sizing, Style, TopLayer};
+use buiy_core::render::buckets::pack_view_partitioned;
 use buiy_core::render::color::ColorToken;
 use buiy_core::render::components::Background;
 use buiy_core::render::extract::{
@@ -193,4 +194,79 @@ fn toplayer_child_inherits() {
         !h.node_for(base).expect("base is extracted").top_layer,
         "a base node is not top-layer"
     );
+}
+
+// === Wave 1: per-tier packer boundaries ======================================
+//
+// The extract signal above rides `ExtractedNode.top_layer`. Each tier packer
+// walks its producer in paint order and records the instance index where the
+// first top-layer-tagged instance begins = the tier's `top_layer_boundary`, plus
+// a tail-contiguity `debug_assert` tripwire (spec § 3.4): once a top-layer node
+// is seen no base node may follow, because top-layer content is a contiguous
+// suffix of the paint order. These headless unit tests drive the packers
+// directly off literal `ExtractedNode`s (the flag rides the record — no extract
+// needed), which is far less brittle than round-tripping the extract harness.
+
+/// A minimal opaque fill node with an explicit `top_layer` flag. Reused by the
+/// quad/shadow/band boundary tests: each packer reads `ExtractedNode.top_layer`
+/// directly, so a literal fixture is enough to exercise the boundary + tripwire.
+fn fill(entity: u32, top_layer: bool) -> ExtractedNode {
+    ExtractedNode {
+        entity: Entity::from_raw_u32(entity).unwrap(),
+        position: Vec2::ZERO,
+        size: Vec2::splat(10.0),
+        radius: 0.0,
+        color: Color::WHITE,
+        clip: None,
+        group: None,
+        top_layer,
+        affine: [[1.0, 0.0], [0.0, 1.0]],
+        outline: None,
+        border: None,
+        shadows: Vec::new(),
+        gradients: Vec::new(),
+    }
+}
+
+// --- Task 1.1: quad packer `PackedPartition.top_layer_boundary` ---------------
+
+#[test]
+fn quad_boundary_at_first_top_layer_instance() {
+    // nodes = [base, base, TOP, TOP] — the boundary is the instance index of the
+    // first top-layer node's quad (2), so [0..2) is the base block and [2..4) the
+    // top-layer block.
+    let nodes = [fill(1, false), fill(2, false), fill(3, true), fill(4, true)];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.instances.len(), 4);
+    assert_eq!(
+        p.top_layer_boundary, 2,
+        "boundary at the first top-layer instance"
+    );
+}
+
+#[test]
+fn quad_boundary_is_count_when_no_top_layer() {
+    // No top-layer node ⇒ boundary == the instance count (the whole blob is the
+    // base block; the empty top-layer block is [count..count)). Byte-stable path.
+    let nodes = [fill(1, false), fill(2, false), fill(3, false)];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.top_layer_boundary, 3);
+}
+
+#[test]
+fn quad_boundary_all_top_layer_is_zero() {
+    // Every node top-layer ⇒ boundary 0 (the base block is empty).
+    let nodes = [fill(1, true), fill(2, true)];
+    let p = pack_view_partitioned(&nodes, 0, &[]);
+    assert_eq!(p.top_layer_boundary, 0);
+}
+
+#[test]
+#[should_panic(expected = "contiguous tail")]
+fn quad_base_after_top_layer_trips_the_tripwire() {
+    // [base, TOP, base] — a base node AFTER a top-layer node violates
+    // tail-contiguity; the packer's `debug_assert` fires (the § 3.1-class bug the
+    // spike caught as a hard panic, not a silent wrong pixel).
+    let nodes = [fill(1, false), fill(2, true), fill(3, false)];
+    let _ = pack_view_partitioned(&nodes, 0, &[]);
 }
