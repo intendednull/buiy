@@ -783,7 +783,13 @@ pub fn prepare_buiy_instances(
         let group_count = groups.0.len();
         let group_by_entity: HashMap<Entity, Option<usize>> =
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
-        let (group_ranges, flat_ranges) = partition_glyph_ranges(
+        // The top-layer stacking composite (§ 3.2): the parallel entity→top_layer
+        // map, off the fresh node list's `ExtractedNode.top_layer` (mirroring
+        // `group_by_entity`). The boundary is retained on `buffers.top_layer` in
+        // Task 1.6; dropped here so the closure lands without the retention.
+        let top_layer_by_entity: HashMap<Entity, bool> =
+            nodes.0.nodes.iter().map(|n| (n.entity, n.top_layer)).collect();
+        let (group_ranges, flat_ranges, _glyph_top_layer_boundary) = partition_glyph_ranges(
             glyphs
                 .entity_runs
                 .iter()
@@ -793,6 +799,7 @@ pub fn prepare_buiy_instances(
             glyphs.glyphs.len() as u32,
             group_count,
             |e| group_by_entity.get(&e).copied().flatten(),
+            |e| top_layer_by_entity.get(&e).copied().unwrap_or(false),
         );
         buffers.glyph_group_ranges = group_ranges;
         buffers.glyph_flat_ranges = flat_ranges;
@@ -807,7 +814,11 @@ pub fn prepare_buiy_instances(
         let group_count = groups.0.len();
         let group_by_entity: HashMap<Entity, Option<usize>> =
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
-        let (group_ranges, flat_ranges) = partition_glyph_ranges(
+        // Icon mirror of the glyph partition's parallel top-layer map (§ 3.2). The
+        // boundary is retained on `buffers.top_layer` in Task 1.6.
+        let top_layer_by_entity: HashMap<Entity, bool> =
+            nodes.0.nodes.iter().map(|n| (n.entity, n.top_layer)).collect();
+        let (group_ranges, flat_ranges, _icon_top_layer_boundary) = partition_glyph_ranges(
             icons
                 .entity_runs
                 .iter()
@@ -815,6 +826,7 @@ pub fn prepare_buiy_instances(
             icons.icons.len() as u32,
             group_count,
             |e| group_by_entity.get(&e).copied().flatten(),
+            |e| top_layer_by_entity.get(&e).copied().unwrap_or(false),
         );
         buffers.icon_group_ranges = group_ranges;
         buffers.icon_flat_ranges = flat_ranges;

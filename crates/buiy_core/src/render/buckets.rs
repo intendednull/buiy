@@ -880,20 +880,48 @@ impl RangePartitioner {
 /// carriers rebuild together; fact (a): every painted entity has a node
 /// record), kept as the conservative fallback rather than a drop because the
 /// instances are already in the buffer.
+///
+/// `top_layer_of` is the PARALLEL top-layer classifier (top-layer stacking
+/// composite, § 3.2): a per-entity `top_layer_of: Fn(Entity) -> bool` (mirroring
+/// `group_of`), off the fresh node list's `ExtractedNode.top_layer`. The third
+/// return is the tier's base↔top-layer boundary — the first top-layer entity's
+/// run START, or `total` when no run is top-layer. GLYPH and ICON share this
+/// FUNCTION + the entity map (called twice, one boundary each — separate carriers
+/// / instance spaces). A tail-contiguity `debug_assert` guards § 3.4. NOTE the
+/// flat runs split on GROUP only, so a base + top-layer non-group run COALESCES
+/// across the boundary; the per-block draw (W2) slices it with [`cut_ranges`].
 pub fn partition_glyph_ranges(
     runs: impl IntoIterator<Item = (Entity, Range<u32>)>,
     total: u32,
     group_count: usize,
     group_of: impl Fn(Entity) -> Option<usize>,
-) -> (Vec<Range<u32>>, Vec<Range<u32>>) {
+    top_layer_of: impl Fn(Entity) -> bool,
+) -> (Vec<Range<u32>>, Vec<Range<u32>>, u32) {
     let mut p = RangePartitioner::new(group_count);
     let mut covered = 0u32;
+    let mut top_layer_boundary: Option<u32> = None;
+    let mut seen_top_layer = false;
     for (entity, range) in runs {
         debug_assert_eq!(
             range.start, covered,
             "entity runs must be contiguous from 0 (the producer emits one \
              run per entity, gapless, in emission order)"
         );
+        // The glyph/icon boundary at the first top-layer entity's run start. A run
+        // is uniformly base or top-layer (one entity), so the boundary always
+        // falls on a run edge; the tail-contiguity `debug_assert` (§ 3.4) fires if
+        // a base entity's run follows a top-layer one — the glyph mirror of the
+        // node-walk tripwire (`TopLayerBoundaryTracker`).
+        let is_top = top_layer_of(entity);
+        debug_assert!(
+            !(seen_top_layer && !is_top),
+            "glyph/icon top-layer runs must form a contiguous tail: a base \
+             entity's run followed a top-layer entity's run"
+        );
+        if is_top {
+            top_layer_boundary.get_or_insert(range.start);
+            seen_top_layer = true;
+        }
         covered = range.end;
         let g = group_of(entity).filter(|&g| g < group_count);
         for _ in range {
@@ -904,5 +932,28 @@ pub fn partition_glyph_ranges(
         covered, total,
         "entity runs must cover every glyph instance"
     );
-    p.finish()
+    let (group_ranges, flat_ranges) = p.finish();
+    (group_ranges, flat_ranges, top_layer_boundary.unwrap_or(total))
+}
+
+/// Intersect a range-list with the half-open window `[lo, hi)`, dropping empty
+/// results and clipping partial overlaps (top-layer stacking composite, § 3.2 /
+/// Task 1.5). The glyph/icon flat runs ([`partition_glyph_ranges`]) — and the
+/// quad `flat_ranges` inside `block_interleave` (W2) — split on GROUP only, so a
+/// non-group run spanning base + top-layer instances COALESCES into one flat run
+/// that STRADDLES the base↔top-layer boundary. The per-block draw slices each
+/// tier's flat-range list to its block's window with this: the base block draws
+/// `cut_ranges(flat, 0, boundary)`, the top-layer block `cut_ranges(flat,
+/// boundary, total)`, so a straddling run is CUT at the boundary, not drawn whole
+/// in both blocks. Pure — unit-tested headless. Example: `[2..8]` cut at `[0,5)`
+/// → `[2..5]`, cut at `[5,8)` → `[5..8]`.
+pub fn cut_ranges(ranges: &[Range<u32>], lo: u32, hi: u32) -> Vec<Range<u32>> {
+    ranges
+        .iter()
+        .filter_map(|r| {
+            let start = r.start.max(lo);
+            let end = r.end.min(hi);
+            (start < end).then_some(start..end)
+        })
+        .collect()
 }

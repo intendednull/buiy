@@ -390,3 +390,86 @@ fn band_boundary_is_count_when_no_top_layer() {
     assert_eq!(boundary, bands.len() as u32);
     assert_eq!(boundary, 2);
 }
+
+// --- Task 1.5: glyph/icon partition (entity-keyed) + cut_ranges straddle ------
+
+use buiy_core::render::buckets::{cut_ranges, partition_glyph_ranges};
+use std::ops::Range;
+
+/// One producer entity-run `(entity, instance range)` — the carrier-agnostic
+/// shape of `ExtractedGlyphs`/`ExtractedIcons::entity_runs`.
+fn grun(entity: u32, range: Range<u32>) -> (Entity, Range<u32>) {
+    (Entity::from_raw_u32(entity).unwrap(), range)
+}
+
+/// True for the given entity id — a per-entity `top_layer_of` closure for the
+/// glyph/icon partition (parallel to the group `group_of` closure).
+fn is_entity(id: u32) -> impl Fn(Entity) -> bool {
+    move |e: Entity| e == Entity::from_raw_u32(id).unwrap()
+}
+
+#[test]
+fn glyph_boundary_at_first_top_layer_entity_run() {
+    // runs: entity 1 [0..3] base, entity 2 [3..5] TOP — the glyph boundary is the
+    // first top-layer entity's run start (3). Glyph + icon share this FUNCTION +
+    // closure (called twice, distinct boundary each — separate instance spaces).
+    let (_groups, _flat, boundary) =
+        partition_glyph_ranges([grun(1, 0..3), grun(2, 3..5)], 5, 0, |_| None, is_entity(2));
+    assert_eq!(boundary, 3, "boundary at the first top-layer entity's run");
+}
+
+#[test]
+fn glyph_boundary_is_total_when_no_top_layer() {
+    let (_groups, _flat, boundary) =
+        partition_glyph_ranges([grun(1, 0..3), grun(2, 3..5)], 5, 0, |_| None, |_| false);
+    assert_eq!(boundary, 5, "no top-layer entity ⇒ boundary == total");
+}
+
+#[test]
+fn glyph_flat_run_coalesces_across_the_top_layer_boundary() {
+    // The `RangePartitioner` splits flat runs on GROUP only, NOT on top_layer, so
+    // a base + top-layer NON-group run COALESCES into ONE flat run that STRADDLES
+    // the boundary — the motivation for `cut_ranges`. entity 1 [0..3] base +
+    // entity 2 [3..8] TOP, both group=None ⇒ one flat run [0..8], boundary 3.
+    let (_groups, flat, boundary) =
+        partition_glyph_ranges([grun(1, 0..3), grun(2, 3..8)], 8, 0, |_| None, is_entity(2));
+    assert_eq!(flat, vec![0..8], "flat run coalesces across the boundary");
+    assert_eq!(boundary, 3);
+    // The per-block draw slices this straddling run with `cut_ranges`.
+    assert_eq!(cut_ranges(&flat, 0, boundary), vec![0..3], "base block");
+    assert_eq!(cut_ranges(&flat, boundary, 8), vec![3..8], "top-layer block");
+}
+
+#[test]
+#[should_panic(expected = "contiguous tail")]
+fn glyph_base_run_after_top_layer_run_trips_the_tripwire() {
+    // A base entity's run AFTER a top-layer entity's run violates tail-contiguity.
+    let _ = partition_glyph_ranges(
+        [grun(1, 0..2), grun(2, 2..4), grun(3, 4..6)],
+        6,
+        0,
+        |_| None,
+        is_entity(2), // only entity 2 is top-layer; entity 3 (base) follows it
+    );
+}
+
+// --- cut_ranges (the straddle-cut helper, pure) ------------------------------
+
+#[test]
+fn cut_ranges_cuts_a_straddling_run_at_the_boundary() {
+    // The plan's witness: `[2..8]` cut at boundary 5 yields base `[2..5]` + top
+    // `[5..8]` — the straddling run is CUT, not dropped.
+    let ranges = [2..8];
+    assert_eq!(cut_ranges(&ranges, 0, 5), vec![2..5], "base half [0,5)");
+    assert_eq!(cut_ranges(&ranges, 5, 8), vec![5..8], "top half [5,8)");
+}
+
+#[test]
+fn cut_ranges_drops_runs_fully_outside_the_window() {
+    // A run entirely outside `[lo,hi)` is dropped; partial overlap is clipped;
+    // multiple runs are each intersected.
+    let ranges = [0..2, 4..6, 8..10];
+    assert_eq!(cut_ranges(&ranges, 3, 7), vec![4..6], "only the middle run overlaps");
+    assert_eq!(cut_ranges(&ranges, 1, 9), vec![1..2, 4..6, 8..9], "clip both ends");
+    assert!(cut_ranges(&ranges, 20, 30).is_empty(), "window past every run");
+}

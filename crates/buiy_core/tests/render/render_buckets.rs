@@ -379,7 +379,9 @@ fn run(entity: u32, range: Range<u32>) -> (Entity, Range<u32>) {
 /// stays byte-for-byte the pre-T8 `0..glyph_count` (the quad precedent).
 #[test]
 fn glyph_partition_no_groups_is_single_full_flat_run() {
-    let (groups, flat) = partition_glyph_ranges([run(1, 0..3), run(2, 3..5)], 5, 0, |_| None);
+    // `|_| false` = no top-layer entity; the 3rd return (the top-layer boundary)
+    // is exercised in `toplayer_block_partition.rs` — dropped here.
+    let (groups, flat, _) = partition_glyph_ranges([run(1, 0..3), run(2, 3..5)], 5, 0, |_| None, |_| false);
     assert!(groups.is_empty());
     assert_eq!(flat, vec![0..5]);
 }
@@ -389,8 +391,8 @@ fn glyph_partition_no_groups_is_single_full_flat_run() {
 #[test]
 fn glyph_partition_grouped_middle_run() {
     let g = |e: Entity| (e == Entity::from_raw_u32(2).unwrap()).then_some(0);
-    let (groups, flat) =
-        partition_glyph_ranges([run(1, 0..2), run(2, 2..6), run(3, 6..9)], 9, 1, g);
+    let (groups, flat, _) =
+        partition_glyph_ranges([run(1, 0..2), run(2, 2..6), run(3, 6..9)], 9, 1, g, |_| false);
     assert_eq!(groups, vec![2..6]);
     assert_eq!(flat, vec![0..2, 6..9]);
 }
@@ -399,7 +401,7 @@ fn glyph_partition_grouped_middle_run() {
 /// its index (the group_ranges[g] == prepared group g alignment).
 #[test]
 fn glyph_partition_empty_group_slot() {
-    let (groups, flat) = partition_glyph_ranges([run(1, 0..4)], 4, 2, |_| Some(1));
+    let (groups, flat, _) = partition_glyph_ranges([run(1, 0..4)], 4, 2, |_| Some(1), |_| false);
     assert_eq!(groups, vec![0..0, 0..4]);
     assert!(flat.is_empty());
 }
@@ -408,7 +410,8 @@ fn glyph_partition_empty_group_slot() {
 /// (two text entities inside one card).
 #[test]
 fn glyph_partition_coalesces_adjacent_same_group_runs() {
-    let (groups, flat) = partition_glyph_ranges([run(1, 0..2), run(2, 2..5)], 5, 1, |_| Some(0));
+    let (groups, flat, _) =
+        partition_glyph_ranges([run(1, 0..2), run(2, 2..5)], 5, 1, |_| Some(0), |_| false);
     assert_eq!(groups, vec![0..5]);
     assert!(flat.is_empty());
 }
@@ -417,7 +420,7 @@ fn glyph_partition_coalesces_adjacent_same_group_runs() {
 /// `pack_view_partitioned` `g < group_count` filter, mirrored.
 #[test]
 fn glyph_partition_out_of_bounds_group_is_flat() {
-    let (groups, flat) = partition_glyph_ranges([run(1, 0..3)], 3, 1, |_| Some(7));
+    let (groups, flat, _) = partition_glyph_ranges([run(1, 0..3)], 3, 1, |_| Some(7), |_| false);
     assert_eq!(groups, vec![0..0]);
     assert_eq!(flat, vec![0..3]);
 }
@@ -427,7 +430,7 @@ fn glyph_partition_out_of_bounds_group_is_flat() {
 #[test]
 #[should_panic(expected = "entity runs must be contiguous")]
 fn glyph_partition_gap_trips_the_debug_assert() {
-    let _ = partition_glyph_ranges([run(1, 0..2), run(2, 3..4)], 4, 0, |_| None);
+    let _ = partition_glyph_ranges([run(1, 0..2), run(2, 3..4)], 4, 0, |_| None, |_| false);
 }
 
 // --- node_quad_anchors + pack_gradient_instances (parity gradient-bleed fix) -
