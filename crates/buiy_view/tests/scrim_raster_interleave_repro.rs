@@ -28,9 +28,9 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 
 use buiy_core::layout::TopLayer;
 use buiy_core::mvu::{Cmd, Model};
+use buiy_core::render::RasterImage;
 use buiy_core::render::buckets::{FlatDrawStep, interleave_flat_draw, pack_view_partitioned};
 use buiy_core::render::extract::{ExtractedNode, ExtractedNodesView, extract_buiy_nodes};
-use buiy_core::render::RasterImage;
 use buiy_core::{Background, Stacking};
 use buiy_view::{BuiyViewAppExt, Color, Element, raster};
 
@@ -222,8 +222,15 @@ fn dump_nodes(nodes: &[ExtractedNode]) {
         let lin = LinearRgba::from(n.color);
         eprintln!(
             "[{i}] entity={:?} pos=({:.1},{:.1}) size=({:.1},{:.1}) color=[{:.3},{:.3},{:.3},{:.3}]",
-            n.entity, n.position.x, n.position.y, n.size.x, n.size.y,
-            lin.red, lin.green, lin.blue, lin.alpha
+            n.entity,
+            n.position.x,
+            n.position.y,
+            n.size.x,
+            n.size.y,
+            lin.red,
+            lin.green,
+            lin.blue,
+            lin.alpha
         );
     }
 }
@@ -286,9 +293,7 @@ fn scrim_quad_paints_after_raster_in_the_real_interleave() {
         FlatDrawStep::Quads(r) => r.contains(&scrim_slot),
         _ => false,
     });
-    eprintln!(
-        "raster_step_idx={raster_step_idx} scrim_quads_step_idx={scrim_quads_step_idx:?}"
-    );
+    eprintln!("raster_step_idx={raster_step_idx} scrim_quads_step_idx={scrim_quads_step_idx:?}");
 
     // --- CORRECT-behavior assertions (this is the witness — RED if the CPU
     // interleave is where the bug lives) ---

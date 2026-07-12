@@ -33,7 +33,9 @@ use buiy_core::Length;
 use buiy_core::components::Node;
 use buiy_core::layout::{Inset, Sizing, Style};
 use buiy_core::render::color::ColorToken;
-use buiy_core::render::components::{Background, Border, BorderSide, Corners, LineStyle, TextColor};
+use buiy_core::render::components::{
+    Background, Border, BorderSide, Corners, LineStyle, TextColor,
+};
 use buiy_core::render::raster::RasterImage;
 use buiy_core::text::Text;
 
@@ -92,7 +94,12 @@ fn render(scrim_alpha: u8, base: (u8, u8, u8)) -> Vec<u8> {
     // Base: opaque full-viewport quad (the "game" background) — QUAD tier.
     let base_e = app
         .world_mut()
-        .spawn((Node, Name::new("base"), abs(0.0, 0.0, W as f32, H as f32), opaque(base.0, base.1, base.2)))
+        .spawn((
+            Node,
+            Name::new("base"),
+            abs(0.0, 0.0, W as f32, H as f32),
+            opaque(base.0, base.1, base.2),
+        ))
         .id();
     // A bordered box: blue fill (QUAD tier) + a thick yellow border (BAND tier),
     // at (10,10) 44×44, 8px border. Fill hole center ~ (32,32); left band ~ (13,32).
@@ -131,7 +138,12 @@ fn render(scrim_alpha: u8, base: (u8, u8, u8)) -> Vec<u8> {
     // A RASTER (drawing canvas): red, at (120,10) 60×44 — quad-tier interleave.
     let raster_e = app
         .world_mut()
-        .spawn((Node, Name::new("raster"), abs(120.0, 10.0, 60.0, 44.0), RasterImage(canvas)))
+        .spawn((
+            Node,
+            Name::new("raster"),
+            abs(120.0, 10.0, 60.0, 44.0),
+            RasterImage(canvas),
+        ))
         .id();
 
     let mut kids = vec![base_e, box_e, text_e, raster_e];
@@ -149,7 +161,11 @@ fn render(scrim_alpha: u8, base: (u8, u8, u8)) -> Vec<u8> {
         .id();
     kids.push(scrim_e);
     app.world_mut()
-        .spawn((Node, Name::new("root"), Style::default().width_px(W as f32).height_px(H as f32)))
+        .spawn((
+            Node,
+            Name::new("root"),
+            Style::default().width_px(W as f32).height_px(H as f32),
+        ))
         .add_children(&kids);
 
     let target = render_to_image(&mut app, W, H);

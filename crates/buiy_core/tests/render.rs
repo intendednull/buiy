@@ -98,8 +98,6 @@ mod render_raster;
 mod render_raster_gpu;
 #[path = "render/render_raster_interleave_gpu.rs"]
 mod render_raster_interleave_gpu;
-#[path = "render/scrim_tier_bleed_gpu.rs"]
-mod scrim_tier_bleed_gpu;
 #[path = "render/render_shader_wgsl.rs"]
 mod render_shader_wgsl;
 #[path = "render/render_shadow_oracle.rs"]
@@ -118,5 +116,7 @@ mod render_top_layer_paint_gpu;
 mod render_transform_bridge;
 #[path = "render/render_view_uniform.rs"]
 mod render_view_uniform;
+#[path = "render/scrim_tier_bleed_gpu.rs"]
+mod scrim_tier_bleed_gpu;
 #[path = "render/toplayer_block_partition.rs"]
 mod toplayer_block_partition;
