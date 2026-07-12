@@ -8,7 +8,9 @@
 
 **Tech Stack:** Rust, Bevy 0.19 render (`Core2d` systems), wgpu, `buiy_core` render pipeline; `buiy_verify` GPU reftests; `iai-callgrind` perf gate. GPU host: AMD RX 6700 XT / RADV, `DISPLAY=:0`, `env RUST_MIN_STACK=33554432`.
 
-**Spec:** `docs/specs/2026-07-10-toplayer-stacking-composite-design.md` (rev-3, active). Read §§ 3.1–3.6, 4, 6 before starting. **Schedules `docs/plans/follow-ups.md:2311`.**
+**Spec:** `docs/specs/2026-07-10-toplayer-stacking-composite-design.md` (rev-4, active). Read §§ 3.1–3.6, 4, 6 before starting. **Schedules `docs/plans/follow-ups.md:2311`.**
+
+**Revised per plan-review (rev-4, all 12 findings + 1 note verified against the branch APIs, none skipped):** the extract climb collects a `top_layer_formers` set in the extract loop (Stacking access); the packer signature change updates `prepare.rs` + `buiy_verify/src/snapshot.rs` + the `modal_showcase` count helpers (NOT node.rs); `partition_glyph_ranges` is in **buckets.rs:786** (entity-keyed, needs a parallel `top_layer_of` closure + a `top_layer_by_entity` map); the **gradient boundary is dropped** (block_interleave splits it); the node restructure has **FOUR** per-block sub-passes (adds `draw_backdrop_filter_fills`), stamps `PreparedBackdropBlur.top_layer` for the blur split, reuses `get_color_attachment()` (Clear-then-Load), and `cut_ranges`-slices straddling glyph/icon runs; the Patch fix is a node-side guard (`extract.rs:1643`, no `text/extract.rs` change); F9 is a **deterministic headless** `FlatDrawStep` test (not iai).
 
 **Gate command (full):**
 ```sh
@@ -37,11 +39,11 @@ env RUST_MIN_STACK=33554432 cargo test -p buiy_verify -j 2 -- --ignored --test-t
 
 **Modified (production):**
 - `crates/buiy_core/src/render/extract.rs` — add `ExtractedNode.top_layer: bool`; add the post-assembly ancestor-climb pass in `extract_buiy_nodes` (after `assemble_context_tree`), mirroring the `nearest_group_entity` climb; the Patch-path exclusion.
-- `crates/buiy_core/src/render/buckets.rs` — `PackedPartition` gains `top_layer_boundary: u32`; `pack_view_partitioned` computes it + a tail-contiguity `debug_assert`; the shadow/rounded-shadow/gradient/band packers read `node.top_layer` **directly** (the flag rides the `ExtractedNode` record) and return their per-tier boundary.
-- `crates/buiy_core/src/text/extract.rs` — `partition_glyph_ranges` gains the per-block boundary (glyph + icon share it), read off `node.top_layer`.
-- `crates/buiy_core/src/render/prepare.rs` — retain the per-tier boundaries on `BuiyInstanceBuffers`; provide the **raster path's** entity→`top_layer` lookup (an `EntityHashMap<bool>` mirroring `group_by_entity` — the raster draw is entity-keyed, unlike the node-iterating tier packers).
-- `crates/buiy_core/src/render/node.rs` — the `buiy_pass` per-block restructure; the `block_interleave` wrapper; `run_backdrop_blurs` per-block; the step-2b composite per-block.
-- `crates/buiy_core/src/render/blur.rs` — `run_backdrop_blurs` signature (`&[PreparedBackdropBlur]` + a block filter).
+- `crates/buiy_core/src/render/buckets.rs` — `PackedPartition` gains `top_layer_boundary: u32`; `pack_view_partitioned` computes it + a tail-contiguity `debug_assert`; the shadow/rounded-shadow/band packers read `node.top_layer` **directly** and return their per-tier boundary (**NO gradient** — rev-4/m2: `block_interleave` splits gradients); `partition_glyph_ranges` (**here, ~786** — entity-keyed) gains a parallel `top_layer_of` closure; new `block_interleave` + a `cut_ranges` straddle helper.
+- `crates/buiy_core/src/text/extract.rs` — **no change** (rev-4/M3: `partition_glyph_ranges` is in `buckets.rs`, not here; rev-4/m5: the Patch path is in `render/extract.rs`, not here — `text/extract.rs` does not call `resolve_one`).
+- `crates/buiy_core/src/render/prepare.rs` — retain the per-tier boundaries on `BuiyInstanceBuffers`; build the `top_layer_by_entity` map (mirroring `group_by_entity`) and pass it as `top_layer_of` to both `partition_glyph_ranges` calls (`:782`/`:806`) + to `prepare_backdrop_blurs` (the blur flag, M1). (rev-4/m3: this entity map feeds the entity-keyed **blur + composite** paths — NOT rasters, which split by anchor inside `block_interleave`.)
+- `crates/buiy_core/src/render/node.rs` — the `buiy_pass` per-block restructure; the `block_interleave` wrapper; `run_backdrop_blurs` per-block; **`draw_backdrop_filter_fills` per-block (rev-4/M2)**; the step-2b composite per-block.
+- `crates/buiy_core/src/render/blur.rs` — add `pub top_layer: bool` to `PreparedBackdropBlur` (rev-4/M1), stamp it in `prepare_backdrop_blurs`; `run_backdrop_blurs` signature → `&[PreparedBackdropBlur]` + a per-block filter on the flag.
 
 **Modified (tests, existing):**
 - `crates/buiy_core/tests/render/scrim_tier_bleed_gpu.rs` — flip the band/glyph/icon assertions to DIM (the acceptance witness).
@@ -50,7 +52,7 @@ env RUST_MIN_STACK=33554432 cargo test -p buiy_verify -j 2 -- --ignored --test-t
 **Created (tests):**
 - `crates/buiy_core/tests/render/toplayer_block_partition.rs` — headless unit tests (climb classification, packer boundaries, `block_interleave`, tripwire panics).
 - `crates/buiy_verify/tests/verify_gpu/toplayer_occludes_all_tiers.rs` (or the existing GPU-reftest module) — base-group-under-scrim, backdrop both directions, raster-inside-overlay, single-boundary-bleed (deferred gate), paint==pick.
-- `crates/buiy_core/benches/` (existing iai harness) — the F9 draw-call-count-stability gate.
+- `crates/buiy_core/tests/render/render_buckets.rs` (existing) — the F9 draw-STEP-count-stability headless assertions (rev-4/M4: a deterministic `FlatDrawStep` test, not an iai bench).
 
 ---
 
@@ -73,12 +75,14 @@ assert!(node_for(child).top_layer,   "a plain CHILD of a top-layer root inherits
 assert!(!node_for(base).top_layer,   "a base node is not top-layer");
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (`top_layer` field does not exist / is false for the child).
-Run: `env RUST_MIN_STACK=33554432 cargo test -p buiy_core --locked --test render toplayer_child_inherits -- --nocapture`
+- [ ] **Step 2: Compile-check — the field is missing** (a compile-fail, not a runtime RED — `ExtractedNode` has no `top_layer` field yet).
 
-- [ ] **Step 3: Add the field + the climb.** Add `pub top_layer: bool` to `ExtractedNode` (default `false` in `extracted_node_for`). In `extract_buiy_nodes`, AFTER `assemble_context_tree` builds `all.nodes` and the `nearest_group_entity` climb assigns `node.group`, add a second pass that sets `node.top_layer` by an ancestor climb over the SAME `ChildOf` chain: a node is top-layer iff itself or any ancestor has `Stacking.top_layer != TopLayer::None`. Reuse the exact climb structure `nearest_group_entity` uses (an `EntityHashMap` cache keyed by entity + an O(depth) parent walk with memoization). Do NOT compute it in `resolve_one` (no ancestor access there).
+- [ ] **Step 3a: Add the field → runtime RED (rev-4/m7).** Add `pub top_layer: bool` to `ExtractedNode`; set `top_layer: false` in the ONE prod constructor `extracted_node_for` (`extract.rs:527`; its external caller `snapshot.rs:710` needs no change). Compile + run — the CHILD assertion now FAILS at runtime (the child is `false`: per-node, not inherited). THIS is the real RED.
+Run: `env RUST_MIN_STACK=33554432 cargo test -p buiy_core --locked --test render toplayer_child_inherits -- --nocapture` → FAIL on the child assertion.
 
-- [ ] **Step 4: Run it — expect PASS.**
+- [ ] **Step 3b: Collect the former set + climb → GREEN (rev-4 note).** In `extract_buiy_nodes`, INSIDE the `for item in nodes.iter()` loop (where `Stacking` IS accessible — mirror the `group_formers` collection at `extract.rs:1685-1698`), collect a `top_layer_formers: EntityHashSet` of entities whose OWN `Stacking.top_layer != TopLayer::None`. THEN, AFTER `assemble_context_tree` assigns `node.group` (the `nearest_group_entity` climb), add a second pass setting `node.top_layer` by a `ChildOf` ancestor climb: a node is top-layer iff itself or any ancestor is in `top_layer_formers`. Reuse the exact climb structure `nearest_group_entity` uses (an `EntityHashMap` memo + O(depth) parent walk). Do NOT compute it in `resolve_one` (no ancestor access there).
+
+- [ ] **Step 4: Run it — expect PASS** (the child now inherits `top_layer`).
 
 - [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(render): ExtractedNode.top_layer via ancestor climb (top-layer subtree tag)"`
 
@@ -122,41 +126,43 @@ Plus a `#[should_panic]` test: a node list `[base, TOP, base]` (a base after a t
 
 - [ ] **Step 1: Failing test** — `pack_shadow_instances` and `pack_rounded_shadow_instances` each return `(Vec<..>, u32 boundary)`; a top-layer rounded caster's shadow lands in the top-layer range.
 - [ ] **Step 2: FAIL.**
-- [ ] **Step 3:** Change both to return the boundary (the instance index of the first top-layer node's first shadow term), same tripwire. Update callers (`node.rs`, the `ShowcaseExtractHarness` count helpers).
+- [ ] **Step 3:** Change both to return `(Vec, u32 boundary)` — the instance index of the first top-layer node's first shadow term — same tripwire. **Update ALL callers (rev-4/M3):** `prepare.rs:573` (shadow) + `:590` (rounded); `crates/buiy_verify/src/snapshot.rs:517`/`:524`; the `modal_showcase_c8c.rs:849`/`:853` count helpers. **NOT `node.rs`** — packing lives in `prepare.rs`; node.rs never calls these packers.
 - [ ] **Step 4: PASS.**
 - [ ] **Step 5: Commit** — `feat(render): shadow + rounded-shadow packer boundaries`
 
-### Task 1.3: Gradient partition
+### Task 1.3: Gradient partition — REMOVED (rev-4/m2)
 
-**Files:** `crates/buiy_core/src/render/buckets.rs` (`pack_gradient_instances` ~295) + `text/extract.rs` anchor source; test.
-
-- [ ] **Step 1: Failing test** — `pack_gradient_instances` returns the gradient-blob top-layer boundary alongside its `(Vec, anchors)`.
-- [ ] **Step 2–4:** implement + tripwire + PASS.
-- [ ] **Step 5: Commit** — `feat(render): gradient packer boundary`
+No separate gradient boundary is needed: `block_interleave` (Task 2.1) already splits the gradient blob base/top-layer by `partition_point`-ing `gradient_anchors` at the quad boundary, and `node.rs` draws gradients ONLY via `block_interleave` steps — a retained gradient boundary would never be consumed. `pack_gradient_instances` is UNCHANGED. (The 1.4/1.5/1.6 labels are kept for cross-reference stability.)
 
 ### Task 1.4: Band partition
 
-**Files:** `crates/buiy_core/src/render/buckets.rs` (`pack_band_instances` ~211); test.
+**Files:** `crates/buiy_core/src/render/buckets.rs` (`pack_band_instances` ~211); Test: `toplayer_block_partition.rs`.
 
-- [ ] **Step 1: Failing test** — a top-layer node's border/outline band lands in the top-layer range; boundary returned.
-- [ ] **Step 2–4:** implement + tripwire + PASS.
+- [ ] **Step 1: Failing test** — a top-layer node's border/outline band lands in the top-layer range; `pack_band_instances` returns `(Vec, u32 boundary)`.
+- [ ] **Step 2: FAIL.**
+- [ ] **Step 3:** Add the boundary + the tail-contiguity tripwire (mirror Task 1.1). **Update ALL callers (rev-4/M3):** `prepare.rs:558`; `snapshot.rs:554`; `modal_showcase_c8c.rs:857`. NOT `node.rs`.
+- [ ] **Step 4: PASS.**
 - [ ] **Step 5: Commit** — `feat(render): band packer boundary`
 
-### Task 1.5: Glyph/icon partition
+### Task 1.5: Glyph/icon partition (entity-keyed) + the straddle-cut helper
 
-**Files:** `crates/buiy_core/src/text/extract.rs` (`partition_glyph_ranges` ~442 — it already has a contiguity `debug_assert`); test.
+**Files:** `crates/buiy_core/src/render/buckets.rs` (`partition_glyph_ranges` **~786** — rev-4/M3 location fix; it is entity-keyed via a `group_of: Fn(Entity) -> Option<usize>` closure and has a contiguity `debug_assert`); Test: `toplayer_block_partition.rs`.
 
-- [ ] **Step 1: Failing test** — glyphs/icons of a top-layer subtree are a contiguous tail; `partition_glyph_ranges` returns the glyph boundary (and the icon boundary if icons are a separate blob).
-- [ ] **Step 2–4:** extend the existing partition with the per-block boundary axis (reuse its contiguity assert); PASS.
-- [ ] **Step 5: Commit** — `feat(text): glyph/icon top-layer boundary in partition_glyph_ranges`
+- [ ] **Step 1: Failing test (boundary).** `partition_glyph_ranges` takes a **parallel** `top_layer_of: Fn(Entity) -> bool` closure and returns the glyph top-layer boundary; glyphs/icons of a top-layer subtree are a contiguous tail. (Glyph + icon are **separate carriers / instance spaces** — same FUNCTION + closure, called twice, distinct boundary each.)
+- [ ] **Step 2: FAIL.**
+- [ ] **Step 3:** Add the `top_layer_of` param + the per-block boundary (reuse the existing contiguity assert). Callers `prepare.rs:782` (glyph) / `:806` (icon) build a `top_layer_by_entity: HashMap<Entity,bool>` from `nodes.iter().map(|n|(n.entity, n.top_layer))`, mirroring the existing `group_by_entity` maps there.
+- [ ] **Step 4: PASS.**
+- [ ] **Step 5 (rev-4/m4): the straddle-cut helper + its test.** The `RangePartitioner` splits flat runs on GROUP only (`buckets.rs:751-757`), NOT on `top_layer` — so a base + top-layer non-group run COALESCES into one flat run that STRADDLES the boundary. Add a pure helper `cut_ranges(ranges: &[Range<u32>], lo: u32, hi: u32) -> Vec<Range<u32>>` that intersects a range-list with `[lo,hi)` (cutting a straddling run), for the glyph/icon flat-range block-slice (and the quad `flat_ranges` inside `block_interleave`). RED-first: a unit test that `[2..8]` cut at boundary 5 yields base `[2..5]` + top `[5..8]` (the straddle is CUT, not dropped).
+- [ ] **Step 6: Commit** — `feat(render): glyph/icon top-layer boundary + cut_ranges straddle helper`
 
-### Task 1.6: Thread `top_layer_of` + retain the boundaries in prepare
+### Task 1.6: Retain the boundaries in prepare + the entity→top_layer map
 
-**Files:** `crates/buiy_core/src/render/prepare.rs` (`group_by_entity` threading ~780-813; `BuiyInstanceBuffers` ~233); test = the existing prepare tests stay green.
+**Files:** `crates/buiy_core/src/render/prepare.rs` (`BuiyInstanceBuffers` ~233; packer calls ~558/573/590/613, glyph/icon partition ~782/806); test = the existing prepare tests stay green.
 
-- [ ] **Step 1:** The per-tier boundaries are returned from the packers directly off `ExtractedNode.top_layer` (no separate closure — the flag rides the record). Retain each tier's `top_layer_boundary` on `BuiyInstanceBuffers` (a small struct `TopLayerBoundaries { quad, shadow, rounded_shadow, gradient, band, glyph, icon }`). The ONE exception is the RASTER draw path (`build_raster_draws`, entity-keyed) — give it an `EntityHashMap<bool>` `top_layer_of` lookup, built exactly like its existing `node_quad_anchor_of` lookup, so a top-layer raster splices into the top-layer block.
-- [ ] **Step 2:** `cargo test -p buiy_core --locked` (headless) green.
-- [ ] **Step 3: Commit** — `feat(render): retain per-tier top-layer boundaries on BuiyInstanceBuffers`
+- [ ] **Step 1:** The per-tier boundaries are returned from the packers directly off `ExtractedNode.top_layer` (no closure — the flag rides the record). Retain them on `BuiyInstanceBuffers` as `TopLayerBoundaries { quad, shadow, rounded_shadow, band, glyph, icon }` — **NO `gradient`** (rev-4/m2: `block_interleave` splits it). Build the `top_layer_by_entity` map once and pass it as `top_layer_of` to both `partition_glyph_ranges` calls (Task 1.5).
+- [ ] **Step 2 (rev-4/m3):** The entity-keyed `top_layer` lookup is for the **blur** (Task 2.2 / M1) and **composite** (step-2b, per-group) paths — NOT rasters (rasters split by anchor vs the quad boundary inside `block_interleave`, so `build_raster_draws` needs NO `top_layer_of`).
+- [ ] **Step 3:** `cargo test -p buiy_core --locked` (headless) green.
+- [ ] **Step 4: Commit** — `feat(render): retain per-tier top-layer boundaries on BuiyInstanceBuffers`
 
 ---
 
@@ -176,19 +182,20 @@ Plus a `#[should_panic]` test: a node list `[base, TOP, base]` (a base after a t
 
 **Files:** `crates/buiy_core/src/render/blur.rs` (`run_backdrop_blurs` signature) + `node.rs` caller; test = the existing `render_backdrop_blur_gpu` stays green (byte-stable when no top-layer).
 
-- [ ] **Step 1:** Change `run_backdrop_blurs` to take `&[PreparedBackdropBlur]` (from `Option<&PreparedBackdropBlurs>`). The caller builds two filtered clones — base blurs (former is base) and top-layer blurs (former is top-layer) — via `blurs.iter().filter(|b| top_layer_of(b.entity) == want).cloned().collect()` (clone is handle-vecs, cheap).
+- [ ] **Step 1a (rev-4/M1): stamp the flag.** `PreparedBackdropBlur` (`blur.rs:406`) has NO `entity` field, so it can't be filtered by `top_layer_of(b.entity)`. Add `pub top_layer: bool` to `PreparedBackdropBlur`; set it in `prepare_backdrop_blurs` (`blur.rs:467`) from the former entity's `ExtractedNode.top_layer` (via the `top_layer_by_entity` map, Task 1.6).
+- [ ] **Step 1b:** Change `run_backdrop_blurs` to take `&[PreparedBackdropBlur]` (from `Option<&PreparedBackdropBlurs>`). The caller builds two filtered clones — base + top-layer — via `blurs.iter().filter(|b| b.top_layer == want).cloned().collect()` (clone is handle-vecs, cheap).
 - [ ] **Step 2:** GPU: `render_backdrop_blur_gpu` unchanged (no top-layer former → all base → byte-identical).
 - [ ] **Step 3: Commit** — `refactor(render): run_backdrop_blurs takes a per-block blur slice`
 
 ### Task 2.3: Restructure `buiy_pass` into base-block → top-layer-block
 
-**Files:** `crates/buiy_core/src/render/node.rs` (`buiy_pass` ~75; the flat pass ~428-655; backdrop ~668; step-2b ~696). Acceptance test = the FLIPPED `scrim_tier_bleed_gpu.rs`.
+**Files:** `crates/buiy_core/src/render/node.rs` (`buiy_pass` ~75; the flat pass ~428-655; backdrop ~668; `draw_backdrop_filter_fills` ~683 / defn ~1036; step-2b ~696). Acceptance test = the FLIPPED (+ICON-extended) `scrim_tier_bleed_gpu.rs`.
 
-- [ ] **Step 1: RED — flip the acceptance witness.** In `crates/buiy_core/tests/render/scrim_tier_bleed_gpu.rs`, change the BAND, GLYPH, and (add) ICON assertions from BLEED (Δ0) to DIM (dominant-channel Δ>0), matching the quad/raster assertions. Run on GPU: it FAILS on current code (bleed).
+- [ ] **Step 1: RED — flip the acceptance witness (+ extend for icon, rev-4/m8).** `scrim_tier_bleed_gpu.rs` currently probes QUAD/BAND/GLYPH/RASTER only (lines 92-131, **no icon element**). So: (i) ADD a base ICON element (a vector `Icon`) under the scrim + a readback point over it; (ii) flip the BAND, GLYPH, and new ICON assertions from BLEED (Δ0) to DIM (dominant-channel Δ>0), matching quad/raster. Run on GPU: FAILS on current code (band/glyph/icon still bleed).
 Run: `env RUST_MIN_STACK=33554432 cargo test -p buiy_core -j 2 -- --ignored --test-threads=1 scrim_tier_bleed`
-Expected: FAIL (bands/glyphs still bleed).
+Expected: FAIL (bands/glyphs/icons still bleed).
 
-- [ ] **Step 2: Implement the two-block draw.** Restructure `buiy_pass` so the flat pass runs TWICE, gated on the boundaries: **base block** = shadows[0..b_shadow] → `block_interleave` base steps (quads+gradient+raster) → glyphs[0..b_glyph] → icons[0..b_icon] → bands[0..b_band]; then base `run_backdrop_blurs(base_blurs)`; then step-2b composite for BASE groups. **Top-layer block** = the same tiers over `[boundary..]` ranges; then top-layer backdrop; then top-layer composite. Intra-block order = today's `tier-stack → backdrop → composite` (§3.3 LOCKED). Use the `block_interleave` result for the quad/gradient/raster tier; slice each other tier's `pass.draw(0..4, base_range)` / `(top_range)`. Skip an empty block (boundary==count) so a no-top-layer scene issues the SAME draws (byte-stability + F9).
+- [ ] **Step 2: Implement the two-block draw (FOUR per-block sub-passes).** Restructure `buiy_pass` so the flat pass runs TWICE, gated on the boundaries. **Base block:** shadows[0..b_shadow] + rounded[0..b_rshadow] → `block_interleave` base steps (quads+gradient+raster) → glyphs (base flat ranges) → icons (base) → bands[0..b_band]; then base `run_backdrop_blurs(base_blurs)`; then base **`draw_backdrop_filter_fills`** (rev-4/M2 — its group-range draws + `!blurs.is_empty()` guard become per-block); then step-2b composite for BASE groups. **Top-layer block:** the same four tiers over the `[boundary..]` ranges + top blurs + top backdrop-filter fills + top composite. Intra-block order = today's `tier-stack → backdrop-blur → backdrop-filter-fills → composite` (§3.3 LOCKED). **(rev-4/m6)** the top block's flat pass MUST reuse `view_target.get_color_attachment()` (Clear-then-Load; precedent `node.rs:732`), NEVER a hand-built `RenderPassColorAttachment { load: LoadOp::Clear }` (that wipes the base). **(rev-4/m4)** glyph/icon draw a LIST of flat ranges (`buffers.glyph_flat_ranges`, `node.rs:608`) and a run can STRADDLE the boundary — slice each with the `cut_ranges` helper (Task 1.5), not whole-range selection. Skip an empty block (boundary==count) so a no-top-layer scene issues the SAME draws (byte-stability + F9).
 - [ ] **Step 3: GREEN.** Re-run the flipped `scrim_tier_bleed` on GPU → PASS (bands/glyphs/icons now DIM).
 - [ ] **Step 4: Byte-stability check** — run BOTH full GPU legs; confirm zero non-top-layer shift (spike: 89/89 + 24/24). Any shift must be an intended top-layer fixture.
 - [ ] **Step 5: Commit** — `feat(render): draw base then top-layer tier-stacks per block (all-tiers occlusion)`
@@ -199,11 +206,11 @@ Expected: FAIL (bands/glyphs still bleed).
 
 ### Task 3.1: Exclude top-layer subtrees from the partial re-extract Patch path
 
-**Files:** `crates/buiy_core/src/render/extract.rs` + `crates/buiy_core/src/text/extract.rs` (the Patch / retain-damage fast path that calls `resolve_one` directly).
+**Files:** `crates/buiy_core/src/render/extract.rs` ONLY (rev-4/m5 — the Patch group guard `if old.group.is_some()` at `:1643`; `text/extract.rs` does NOT call `resolve_one`, so no change there).
 
 - [ ] **Step 1: RED — a Patch-frame test.** Build an app, settle a frame with a top-layer overlay present, then trigger a Patch frame (a change that does NOT rebuild the node list — mirror the retain-damage tests). Assert the overlay's descendants stay tagged `top_layer` after the Patch (today they'd be misclassified because the Patch path skips the post-assembly climb).
 - [ ] **Step 2: FAIL** (Patch path bypasses the climb).
-- [ ] **Step 3: Implement.** Mirror the existing group exclusion: the Patch fast path must either (a) exclude a top-layer subtree from the in-place patch and force a Full rebuild for it, or (b) run the ancestor climb on the patched entity. Prefer the same shape the group exclusion already uses (the Patch path is "group-free-only" today — extend that guard to "group-free AND top-layer-free", falling back to Full).
+- [ ] **Step 3: Implement (rev-4/m5).** Extend the node-side Patch guard at `extract.rs:1643` from `if old.group.is_some()` to `if old.group.is_some() || old.top_layer` — a changed top-layer node forces a Full rebuild (which re-runs the climb, setting `top_layer` correctly). A NEW overlay is a structural change that already forces Full. No `text/extract.rs` change (the glyph top-layer signal is re-derived in `prepare.rs:782/806` from the retained-or-Full node records).
 - [ ] **Step 4: GREEN.**
 - [ ] **Step 5: Commit** — `fix(render): exclude top-layer subtrees from the Patch fast path`
 
@@ -232,9 +239,10 @@ Each is a `buiy_verify` (or `buiy_core`) GPU reftest, `#[ignore]`, dominant-chan
 
 ## Wave 5 — perf gate + full gates
 
-### Task 5.1: F9 draw-call-count-stability (iai)
-- [ ] **Step 1:** Add an `iai-callgrind` bench asserting: a NO-top-layer scene issues the SAME draw calls as the pre-refactor baseline (empty-block-skip → zero extra draws), and a top-layer scene adds only a bounded delta (≈ tiers × 1 extra block) with NO off-screen-target allocation.
-- [ ] **Step 2: Commit** — `test(perf): draw-call-count-stability gate for the top-layer block split`
+### Task 5.1: F9 draw-STEP-count stability (deterministic headless — rev-4/M4)
+**Files:** `crates/buiy_core/tests/render/render_buckets.rs` (it already asserts exact `Vec<FlatDrawStep>` sequences at `:546-635`).
+- [ ] **Step 1:** Add a deterministic HEADLESS test — NOT iai-callgrind (that counts valgrind CPU *instructions*, not draw calls): (a) `block_interleave` with an empty top-layer block == byte-identical steps to `interleave_flat_draw` (also Task 2.1 Step 4); (b) a no-top-layer scene's per-tier draw/step count == the baseline, and a top-layer scene adds only a bounded delta with NO off-screen-target allocation. CPU-only + deterministic.
+- [ ] **Step 2: Commit** — `test(render): draw-step-count stability gate for the top-layer block split`
 
 ### Task 5.2: Full gate + both GPU legs
 - [ ] Run the full gate command + BOTH GPU legs. Confirm: fmt/clippy/doc/workspace green; buiy_core GPU + buiy_verify GPU green; the flipped acceptance GREEN; zero non-top-layer golden shift. Fix any fallout. Commit any golden re-bless (top-layer fixtures only) with justification.
@@ -247,8 +255,8 @@ Each is a `buiy_verify` (or `buiy_core`) GPU reftest, `#[ignore]`, dominant-chan
 - [ ] Mark `docs/plans/follow-ups.md:2311` (single-tier glyph occlusion / pick≠paint) as CLOSED-by this work. Add two OPEN app follow-ups: (F4) avatar-editor-as-overlay (restructure `apps/dooduel/src/view/avatar_editor.rs` back to a top-layer overlay — the true end-to-end raster-in-overlay acceptance); (F7) dark-mode scrim iso-luminance (fast-follow, with the render-the-dark-screen done-verification). Add the two named framework follow-ups: `same-block backdrop-vs-composite spatial overlap` and `per-context-v1` (overlapping-overlays bleed). Update the spec Status if the review requires. Commit.
 
 ### Task 6.2: Plan self-review (checklist, not a subagent)
-- [ ] Spec coverage: every §3 scope item has a task (extract signal 0.1; each tier packer 1.1-1.5; node restructure 2.3; Patch 3.1; §4 gates 4.x/5.x). Confirm no gap.
-- [ ] Type consistency: `top_layer` (field), `top_layer_boundary` (per-tier), `block_interleave` (fn), `TopLayerBoundaries` (struct) used consistently across tasks.
+- [ ] Spec coverage: every §3 scope item has a task (extract signal 0.1; tier packers 1.1/1.2/1.4/1.5 — gradient 1.3 removed per m2; block_interleave 2.1; backdrop 2.2; node restructure 2.3 incl the 4th sub-pass `draw_backdrop_filter_fills`; Patch 3.1; §4 gates 4.x/5.x). Confirm no gap.
+- [ ] Type consistency: `top_layer` (field), `top_layer_boundary` (per-tier), `TopLayerBoundaries` (struct, no gradient), `block_interleave` + `cut_ranges` (fns), `top_layer_of` (closure), `top_layer_by_entity` (map), `top_layer_formers` (set) used consistently across tasks.
 - [ ] Placeholder scan: no TBD/TODO in the executed plan.
 
 ---

@@ -1,9 +1,8 @@
 # Buiy render — top-layer stacking composite (all-tiers occlusion)
 
 - **Date:** 2026-07-10
-- **Status:** active (rev-3 — the prototype spike carved the boundary on real GPU,
-  validated Approach A across all fixtures, and confirmed byte-stability; the
-  spike's empirical findings are the validation, folded below)
+- **Status:** active (rev-4 — folds the plan-review fixes on the spike-validated
+  rev-3; Approach A validated on real GPU + byte-stability confirmed)
 - **Area:** `buiy_core` render pipeline — the draw sequencing in
   `crates/buiy_core/src/render/node.rs`, the extract record in
   `crates/buiy_core/src/render/extract.rs`, and the per-tier instance partition
@@ -223,22 +222,51 @@ per-context v1, by top-layer root):
 - **square shadow** — `pack_shadow_instances`.
 - **rounded shadow** — `pack_rounded_shadow_instances` (drawn flat at
   `node.rs:448`; a top-layer rounded caster's shadow would bleed without this).
-- **gradient** — `pack_gradient_instances`.
+- **gradient** — `pack_gradient_instances`. **(rev-4/m2: no retained boundary —
+  gradients split base/top-layer INSIDE `block_interleave` by anchor vs the quad
+  boundary, § 3.3; a separate gradient boundary would never be consumed.)**
 - **band** (border/outline) — `pack_band_instances`.
-- **glyph + icon** — the coverage tier's partition is **`partition_glyph_ranges`
-  in `text/extract.rs:442`** (NOT `buckets.rs`); it already carries its own
-  pack-time contiguity `debug_assert`. Extend it with the same per-block axis.
+- **glyph + icon** — the coverage tier's partition is **`partition_glyph_ranges` in
+  `buckets.rs:786`** (rev-4/M3 location fix — `text/extract.rs` only *mentions* it
+  in doc-comments). It is **entity-keyed** via a `group_of: Fn(Entity) ->
+  Option<usize>` closure (not node-keyed), so it needs a **parallel**
+  `top_layer_of: Fn(Entity) -> bool` closure + a `top_layer_by_entity` map built at
+  BOTH `prepare.rs` call sites (`:782` glyph, `:806` icon), mirroring the existing
+  `group_by_entity` maps. Glyph and icon are **separate carriers / instance
+  spaces** — they share the FUNCTION + the map, NOT a boundary value. It already
+  carries a pack-time contiguity `debug_assert`.
 
-### 3.3 The three sub-passes that become block-partitioned (design-F2)
+### 3.3 The FOUR sub-passes that become block-partitioned (design-F2)
 
 The `node.rs` flat pass restructures from "one draw per tier" to "one **tier
-stack** per block." Three sub-passes stop being global and run **per block** (base
-versions before the top-layer block; a top-layer subtree's own versions within its
-block):
+stack** per block." **Four** sub-passes (rev-4/M2 — was three) stop being global
+and run **per block** (base versions before the top-layer block; a top-layer
+subtree's own versions within its block):
 
 1. the **gradient/raster interleave** `interleave_flat_draw` (`node.rs:546`);
 2. `run_backdrop_blurs` (`node.rs:668`);
-3. the effect-group **step-2b** root-group composite (`node.rs:696`).
+3. **(rev-4/M2)** `draw_backdrop_filter_fills` (`node.rs:683`, defn `:1036`) — it
+   draws each backdrop-filter former's fill out of the group / glyph-group /
+   icon-group ranges, BETWEEN the blur and the composite; a top-layer
+   backdrop-filter former's fill must draw in the TOP block (after the top blur),
+   else the top flat pass overpaints it. Its `!blurs.is_empty()` guard + group-range
+   draws become per-block.
+4. the effect-group **step-2b** root-group composite (`node.rs:696`).
+
+**(rev-4/M1) The blur block-split needs a flag on the prepared record.**
+`PreparedBackdropBlur` (`blur.rs:406`) has NO `entity` field, so it cannot be
+filtered by `top_layer_of(entity)`. Stamp `pub top_layer: bool` on each
+`PreparedBackdropBlur` in `prepare_backdrop_blurs` (`blur.rs:467`, where the former
+entity → its `ExtractedNode.top_layer` is known) and split the blur slice on that
+flag.
+
+**(rev-4/m6) Two-flat-pass Clear/Load footgun.** The restructure opens the flat
+window pass TWICE (base, then top-layer), because the blur/composite between them
+need the pass closed to sample. The top block's flat pass MUST reuse
+`view_target.get_color_attachment()` (`node.rs:417`) — which auto-returns `Clear`
+on the FIRST call and `Load` after (precedent: the second call at `node.rs:732`) —
+never a hand-built `RenderPassColorAttachment { load: LoadOp::Clear }`, which would
+wipe the base block.
 
 **Intra-block order — LOCKED (rev-3) to today's global order, per block:**
 `tier-stack → backdrop-blur → root-composite`. The spike ran base-group-under-
@@ -283,16 +311,21 @@ getting-words scrims; and, framework-wide, tooltips, menus, dialogs, popovers
 workaround (via the app follow-up, § 5). It is the "top-layer stacking" render
 item — schedule it and retire the follow-up.
 
-### 3.6 Patch-path exclusion (rev-3, plan-critical)
+### 3.6 Patch-path exclusion (rev-3, plan-critical; rev-4/m5 refined)
 
-The partial re-extract **Patch** fast path (the retain-damage path that mutates the
-retained buffers in place, `extract.rs` / `text/extract.rs`) calls `resolve_one`
-**directly** and does NOT go through the post-assembly ancestor climb (§ 3.1). It is
-restricted to group-free nodes today but has **no top-layer-subtree exclusion**. The
-spike exercised only first-frame / Full builds, so this is **untested**: the
-implementation MUST add a Patch-path exclusion for top-layer subtrees (mirroring the
-existing group exclusion) OR run the climb on the Patch path. Treat it as a required
-task with its own test, not an afterthought.
+The partial re-extract **Patch** fast path in `render/extract.rs` re-resolves a
+changed entity through `resolve_one` (`extract.rs:1651`/`1702`), which does NOT set
+the post-assembly ancestor-climb `top_layer` (§ 3.1). Today it is guarded to
+group-free nodes (`extract.rs:1643` `if old.group.is_some()` → force Full) but has
+**no top-layer exclusion**. FIX (rev-4/m5): extend that node-side guard to
+`if old.group.is_some() || old.top_layer` — forcing a Full rebuild (which re-runs
+the climb) for any changed top-layer node; a NEW overlay is a structural change that
+already forces Full. **`text/extract.rs` does NOT call `resolve_one`** (its Patch
+classifier is `GlyphDamage`; the glyph top-layer signal is re-derived in
+`prepare.rs:782`/`806` from the retained-or-Full node records), so **no**
+`text/extract.rs` change is needed — the node-side guard suffices. The spike
+exercised only first-frame / Full builds, so this stays a required task with its own
+test.
 
 ## 4. Verification design
 
@@ -311,11 +344,15 @@ task with its own test, not an afterthought.
   non-top-layer shift (incl. `render_group_contiguity`, `render_msaa`,
   `render_compositor`, `render_degraded_group`, `render_backdrop_blur`, the text
   goldens).
-- **Draw-call-count stability (design-F9):** the `iai-callgrind` gate asserts a
-  **no-top-layer scene issues the SAME draw calls** as today (the partition adds
-  zero draws when the top-layer block is empty), and a top-layer scene adds only a
-  bounded delta (≈ tiers × blocks) with **no off-screen-target allocation** — not
-  just a pixel golden.
+- **Draw-step-count stability (design-F9, rev-4/M4 reframed):** a **deterministic
+  HEADLESS** `FlatDrawStep` / draw-count test in the existing `render_buckets.rs`
+  style (it already asserts exact `Vec<FlatDrawStep>` sequences at `:546-635`) —
+  NOT an `iai-callgrind` bench (that counts valgrind CPU *instructions*, not draw
+  calls — the wrong tool). Assert: (a) `block_interleave` with an empty top-layer
+  block == byte-identical steps to `interleave_flat_draw` (also Task 2.1); (b) a
+  no-top-layer scene issues the SAME tier draws as the baseline, and a top-layer
+  scene adds only a bounded delta with **no off-screen-target allocation**.
+  CPU-only + deterministic.
 - **New reftests / goldens (design-F3):**
   - (a) **multi-overlay** (a tooltip over a dialog): since v1 ships single-boundary
     (§ 6), this is the **deferred-follow-up gate** documenting the known
@@ -492,6 +529,33 @@ flipped draft→active.
 6. **Byte-stability CONFIRMED:** buiy_core GPU 89/89, buiy_verify GPU 24/24, full
    headless workspace green, zero non-top-layer shift.
 7. **§ 6.1** rewritten from "spike charter alignment" to "spike outcome (DONE)".
+
+## Change log — rev-4
+
+Folds the plan-review (APPROVE-WITH-FIXES, 4 MAJOR + 8 MINOR + 1 note; each
+verified against the branch APIs — all correct, none skipped). Spec-touching items:
+
+1. **§ 3.3 → FOUR sub-passes (M2).** Added `draw_backdrop_filter_fills`
+   (`node.rs:683`, defn `:1036`) as the 4th block-partitioned sub-pass (it draws
+   backdrop-filter-former fills between the blur and the composite — a top-layer
+   former's fill must draw in the top block).
+2. **§ 3.3 blur flag (M1).** `PreparedBackdropBlur` has no `entity` field → stamp
+   `pub top_layer: bool` in `prepare_backdrop_blurs` and split the blur slice on it.
+3. **§ 3.3 Clear/Load footgun (m6).** The top block's flat pass must reuse
+   `view_target.get_color_attachment()` (Clear-then-Load), never a hand-built Clear.
+4. **§ 3.2 location fix (M3).** `partition_glyph_ranges` lives in `buckets.rs:786`
+   (entity-keyed), not `text/extract.rs:442`; it needs a parallel `top_layer_of`
+   closure + a `top_layer_by_entity` map at both `prepare.rs` call sites; glyph +
+   icon share the function + map, NOT a boundary.
+5. **§ 3.2 gradient (m2).** No retained gradient boundary — `block_interleave`
+   already splits gradients by anchor vs the quad boundary.
+6. **§ 4 F9 reframe (M4).** From an `iai-callgrind` "draw-call" bench (wrong tool —
+   iai counts CPU instructions) to a deterministic headless `FlatDrawStep` /
+   draw-count test in the `render_buckets.rs` style.
+
+Plan-only items (M3 caller list drops `node.rs` + adds `snapshot.rs` /
+`modal_showcase`; m1/m3/m4/m5/m7/m8 + the group-formers-collection note) are folded
+into `docs/plans/2026-07-10-toplayer-stacking-composite.md` directly.
 
 ---
 
