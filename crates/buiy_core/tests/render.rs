@@ -120,3 +120,7 @@ mod render_view_uniform;
 mod scrim_tier_bleed_gpu;
 #[path = "render/toplayer_block_partition.rs"]
 mod toplayer_block_partition;
+#[path = "render/toplayer_occludes_all_tiers_gpu.rs"]
+mod toplayer_occludes_all_tiers_gpu;
+#[path = "render/toplayer_paint_pick.rs"]
+mod toplayer_paint_pick;
