@@ -824,8 +824,12 @@ pub fn prepare_buiy_instances(
         // The top-layer stacking composite (§ 3.2): the parallel entity→top_layer
         // map, off the fresh node list's `ExtractedNode.top_layer` (mirroring
         // `group_by_entity`), + the retained glyph boundary for W2's per-block draw.
-        let top_layer_by_entity: HashMap<Entity, bool> =
-            nodes.0.nodes.iter().map(|n| (n.entity, n.top_layer)).collect();
+        let top_layer_by_entity: HashMap<Entity, bool> = nodes
+            .0
+            .nodes
+            .iter()
+            .map(|n| (n.entity, n.top_layer))
+            .collect();
         let (group_ranges, flat_ranges, glyph_top_layer_boundary) = partition_glyph_ranges(
             glyphs
                 .entity_runs
@@ -854,8 +858,12 @@ pub fn prepare_buiy_instances(
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
         // Icon mirror of the glyph partition's parallel top-layer map (§ 3.2) + the
         // retained icon boundary for W2's per-block draw.
-        let top_layer_by_entity: HashMap<Entity, bool> =
-            nodes.0.nodes.iter().map(|n| (n.entity, n.top_layer)).collect();
+        let top_layer_by_entity: HashMap<Entity, bool> = nodes
+            .0
+            .nodes
+            .iter()
+            .map(|n| (n.entity, n.top_layer))
+            .collect();
         let (group_ranges, flat_ranges, icon_top_layer_boundary) = partition_glyph_ranges(
             icons
                 .entity_runs

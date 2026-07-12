@@ -189,8 +189,10 @@ impl TopLayerBoundaryTracker {
     /// boundary at the first top-layer node and trips the tail-contiguity
     /// `debug_assert` on a base node after a top-layer one.
     fn observe(&mut self, node: &ExtractedNode, instance_count: u32) {
+        // Tail-contiguity: once a top-layer node is seen, every later node is
+        // top-layer (`!seen_top_layer || node.top_layer`, § 3.4).
         debug_assert!(
-            !(self.seen_top_layer && !node.top_layer),
+            !self.seen_top_layer || node.top_layer,
             "top-layer nodes must form a contiguous tail: a base node followed a \
              top-layer node in the paint-order walk (the ancestor-climb classifier \
              drifted from the top-layer materialization, or the tail is not \
@@ -260,7 +262,7 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
 /// (border before outline), or the band count when no top-layer node has one. The
 /// per-block draw (W2) draws base bands `[0..boundary)` then top-layer bands over
 /// the top-layer tier-stack, so a base border no longer bleeds through a scrim. A
-/// tail-contiguity `debug_assert` ([`TopLayerBoundaryTracker`]) guards § 3.4.
+/// tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`) guards § 3.4.
 pub fn pack_band_instances(nodes: &[ExtractedNode]) -> (Vec<BorderBandInstance>, u32) {
     let mut bands = Vec::new();
     let mut top_layer = TopLayerBoundaryTracker::default();
@@ -295,7 +297,7 @@ pub fn pack_band_instances(nodes: &[ExtractedNode]) -> (Vec<BorderBandInstance>,
 /// composite, § 3.2): the instance index of the first top-layer caster's first
 /// SQUARE shadow term, or the shadow count when no top-layer caster has one. The
 /// per-block draw (W2) draws base shadows `[0..boundary)` then top-layer shadows
-/// `[boundary..)`. A tail-contiguity `debug_assert` ([`TopLayerBoundaryTracker`])
+/// `[boundary..)`. A tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`)
 /// guards the § 3.4 invariant.
 pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> (Vec<PackedInstance>, u32) {
     let mut shadows = Vec::new();
@@ -621,7 +623,7 @@ pub struct PackedPartition {
     /// Equals `instances.len()` when the view has no top-layer node (an empty
     /// top-layer block — the byte-stable path). The quad packer records it off
     /// `ExtractedNode.top_layer` (the flag rides the record), guarded by a
-    /// tail-contiguity `debug_assert` ([`TopLayerBoundaryTracker`]).
+    /// tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`).
     pub top_layer_boundary: u32,
 }
 
@@ -914,7 +916,7 @@ pub fn partition_glyph_ranges(
         // node-walk tripwire (`TopLayerBoundaryTracker`).
         let is_top = top_layer_of(entity);
         debug_assert!(
-            !(seen_top_layer && !is_top),
+            !seen_top_layer || is_top,
             "glyph/icon top-layer runs must form a contiguous tail: a base \
              entity's run followed a top-layer entity's run"
         );
@@ -933,7 +935,11 @@ pub fn partition_glyph_ranges(
         "entity runs must cover every glyph instance"
     );
     let (group_ranges, flat_ranges) = p.finish();
-    (group_ranges, flat_ranges, top_layer_boundary.unwrap_or(total))
+    (
+        group_ranges,
+        flat_ranges,
+        top_layer_boundary.unwrap_or(total),
+    )
 }
 
 /// Intersect a range-list with the half-open window `[lo, hi)`, dropping empty

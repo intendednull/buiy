@@ -437,7 +437,11 @@ fn glyph_flat_run_coalesces_across_the_top_layer_boundary() {
     assert_eq!(boundary, 3);
     // The per-block draw slices this straddling run with `cut_ranges`.
     assert_eq!(cut_ranges(&flat, 0, boundary), vec![0..3], "base block");
-    assert_eq!(cut_ranges(&flat, boundary, 8), vec![3..8], "top-layer block");
+    assert_eq!(
+        cut_ranges(&flat, boundary, 8),
+        vec![3..8],
+        "top-layer block"
+    );
 }
 
 #[test]
@@ -457,11 +461,14 @@ fn glyph_base_run_after_top_layer_run_trips_the_tripwire() {
 
 #[test]
 fn cut_ranges_cuts_a_straddling_run_at_the_boundary() {
-    // The plan's witness: `[2..8]` cut at boundary 5 yields base `[2..5]` + top
-    // `[5..8]` — the straddling run is CUT, not dropped.
-    let ranges = [2..8];
-    assert_eq!(cut_ranges(&ranges, 0, 5), vec![2..5], "base half [0,5)");
-    assert_eq!(cut_ranges(&ranges, 5, 8), vec![5..8], "top half [5,8)");
+    // The plan's witness: `2..8` cut at boundary 5 yields base `[2..5]` + top
+    // `[5..8]` — the straddling run is CUT, not dropped. (`slice::from_ref` of the
+    // single run, not a `[2..8]` array literal — the latter reads ambiguously as
+    // `[2; 8]` to clippy.)
+    let straddling = 2u32..8;
+    let ranges = std::slice::from_ref(&straddling);
+    assert_eq!(cut_ranges(ranges, 0, 5), vec![2..5], "base half [0,5)");
+    assert_eq!(cut_ranges(ranges, 5, 8), vec![5..8], "top half [5,8)");
 }
 
 #[test]
@@ -469,7 +476,18 @@ fn cut_ranges_drops_runs_fully_outside_the_window() {
     // A run entirely outside `[lo,hi)` is dropped; partial overlap is clipped;
     // multiple runs are each intersected.
     let ranges = [0..2, 4..6, 8..10];
-    assert_eq!(cut_ranges(&ranges, 3, 7), vec![4..6], "only the middle run overlaps");
-    assert_eq!(cut_ranges(&ranges, 1, 9), vec![1..2, 4..6, 8..9], "clip both ends");
-    assert!(cut_ranges(&ranges, 20, 30).is_empty(), "window past every run");
+    assert_eq!(
+        cut_ranges(&ranges, 3, 7),
+        vec![4..6],
+        "only the middle run overlaps"
+    );
+    assert_eq!(
+        cut_ranges(&ranges, 1, 9),
+        vec![1..2, 4..6, 8..9],
+        "clip both ends"
+    );
+    assert!(
+        cut_ranges(&ranges, 20, 30).is_empty(),
+        "window past every run"
+    );
 }

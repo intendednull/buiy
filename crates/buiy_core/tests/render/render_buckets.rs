@@ -381,7 +381,8 @@ fn run(entity: u32, range: Range<u32>) -> (Entity, Range<u32>) {
 fn glyph_partition_no_groups_is_single_full_flat_run() {
     // `|_| false` = no top-layer entity; the 3rd return (the top-layer boundary)
     // is exercised in `toplayer_block_partition.rs` — dropped here.
-    let (groups, flat, _) = partition_glyph_ranges([run(1, 0..3), run(2, 3..5)], 5, 0, |_| None, |_| false);
+    let (groups, flat, _) =
+        partition_glyph_ranges([run(1, 0..3), run(2, 3..5)], 5, 0, |_| None, |_| false);
     assert!(groups.is_empty());
     assert_eq!(flat, vec![0..5]);
 }
@@ -392,7 +393,9 @@ fn glyph_partition_no_groups_is_single_full_flat_run() {
 fn glyph_partition_grouped_middle_run() {
     let g = |e: Entity| (e == Entity::from_raw_u32(2).unwrap()).then_some(0);
     let (groups, flat, _) =
-        partition_glyph_ranges([run(1, 0..2), run(2, 2..6), run(3, 6..9)], 9, 1, g, |_| false);
+        partition_glyph_ranges([run(1, 0..2), run(2, 2..6), run(3, 6..9)], 9, 1, g, |_| {
+            false
+        });
     assert_eq!(groups, vec![2..6]);
     assert_eq!(flat, vec![0..2, 6..9]);
 }
