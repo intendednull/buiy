@@ -37,8 +37,8 @@ use bevy::core_pipeline::{Core2d, Core2dSystems};
 use bevy::prelude::*;
 use bevy::render::{
     render_resource::{
-        BindGroupEntries, BufferInitDescriptor, BufferUsages, LoadOp, Operations, PipelineCache,
-        RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
+        BindGroupEntries, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, LoadOp,
+        Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
     },
     renderer::{RenderContext, ViewQuery},
     texture::CachedTexture,
@@ -47,7 +47,7 @@ use bevy::render::{
 
 use super::{
     atlas::AtlasGpu,
-    blur::{BlurParams, BlurPipeline, PreparedBackdropBlurs},
+    blur::{BlurParams, BlurPipeline, PreparedBackdropBlur, PreparedBackdropBlurs},
     buckets::{FlatDrawStep, interleave_flat_draw},
     composite::CompositePipeline,
     compositor::{EffectReason, PreparedEffectGroups, PreparedEffectTargets},
@@ -665,13 +665,18 @@ pub fn buiy_pass(
     // OWN fill over the blurred backdrop. This sits between the flat draw and the
     // root-group composites so a modal scrim blurs the content behind it. See
     // `render/blur.rs` for why this is NOT an off-screen effect group.
-    run_backdrop_blurs(
-        world,
-        view_target,
-        prepared_blurs,
-        pipeline_cache,
-        &mut render_context,
-    );
+    if let Some(pb) = prepared_blurs {
+        run_backdrop_blurs(
+            world,
+            view_target,
+            &pb.blurs,
+            pb.down_pipeline,
+            pb.up_pipeline,
+            pb.blit_pipeline,
+            pipeline_cache,
+            &mut render_context,
+        );
+    }
     if let (Some(prepared), Some(blurs)) = (prepared, prepared_blurs)
         && !blurs.blurs.is_empty()
     {
@@ -788,17 +793,18 @@ fn is_pure_backdrop_filter(reason: EffectReason) -> bool {
 /// there is never a read-write hazard on one texture. A no-op when there are no
 /// blurs, the pipelines have not async-compiled, or the `BlurPipeline` resource
 /// is absent.
+#[allow(clippy::too_many_arguments)]
 fn run_backdrop_blurs(
     world: &World,
     view_target: &ViewTarget,
-    prepared_blurs: Option<&PreparedBackdropBlurs>,
+    blurs: &[PreparedBackdropBlur],
+    down_pipeline: Option<CachedRenderPipelineId>,
+    up_pipeline: Option<CachedRenderPipelineId>,
+    blit_pipeline: Option<CachedRenderPipelineId>,
     pipeline_cache: &PipelineCache,
     render_context: &mut RenderContext,
 ) {
-    let Some(blurs) = prepared_blurs else {
-        return;
-    };
-    if blurs.blurs.is_empty() {
+    if blurs.is_empty() {
         return;
     }
     let Some(blur_pipeline) = world.get_resource::<BlurPipeline>() else {
@@ -806,9 +812,10 @@ fn run_backdrop_blurs(
     };
     // All three pipeline variants must have compiled (the established skip-on-
     // async-compile behavior class — a not-yet-ready frame leaves the backdrop
-    // un-blurred, then resolves once the pipelines land).
-    let (Some(down_id), Some(up_id), Some(blit_id)) =
-        (blurs.down_pipeline, blurs.up_pipeline, blurs.blit_pipeline)
+    // un-blurred, then resolves once the pipelines land). The ids ride the
+    // per-view `PreparedBackdropBlurs`; the per-block caller (top-layer stacking
+    // composite, § 3.3) passes a filtered `blurs` slice but the SAME ids.
+    let (Some(down_id), Some(up_id), Some(blit_id)) = (down_pipeline, up_pipeline, blit_pipeline)
     else {
         return;
     };
@@ -820,7 +827,7 @@ fn run_backdrop_blurs(
         return;
     };
 
-    for blur in &blurs.blurs {
+    for blur in blurs {
         if blur.levels.is_empty() {
             continue;
         }

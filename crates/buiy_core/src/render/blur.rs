@@ -425,6 +425,13 @@ pub struct PreparedBackdropBlur {
     /// — the node reads these for each pass's `1/source_size` instead of querying
     /// the wgpu `Texture` (the plan owns the sizing).
     pub level_extents: Vec<UVec2>,
+    /// Whether this backdrop-filter former is in a top-layer subtree (top-layer
+    /// stacking composite, § 3.3 / rev-4/M1). Stamped from the former entity's
+    /// `ExtractedNode.top_layer`; `PreparedBackdropBlur` carries no `entity`, so
+    /// the node's per-block draw filters the blur slice on THIS flag (base blurs
+    /// run in the base block, top-layer blurs in the top block, so a top-layer
+    /// backdrop samples the base beneath it — not the un-drawn top block).
+    pub top_layer: bool,
 }
 
 /// Per-view carrier for the prepared backdrop blurs (parallel to
@@ -481,6 +488,17 @@ pub(crate) fn prepare_backdrop_blurs(
 ) {
     let scale_factor = nodes.0.scale_factor;
     let view_physical = (nodes.0.logical_size * scale_factor).ceil().as_uvec2();
+
+    // The top-layer stacking composite (§ 3.3 / M1): the former entity → its
+    // `ExtractedNode.top_layer`, mirroring the `top_layer_by_entity` map prepare.rs
+    // builds for the glyph/icon partition. `PreparedBackdropBlur` has no `entity`,
+    // so this stamps the flag now for the node's per-block blur filter.
+    let top_layer_by_entity: std::collections::HashMap<bevy::prelude::Entity, bool> = nodes
+        .0
+        .nodes
+        .iter()
+        .map(|n| (n.entity, n.top_layer))
+        .collect();
 
     // The window main-texture format + sample count the final blit-back writes
     // (per-view; v1/D2 single primary view — specialize for the first view, reuse
@@ -572,6 +590,9 @@ pub(crate) fn prepare_backdrop_blurs(
             window_physical: view_physical,
             levels,
             level_extents,
+            // A former with no node record (a transient impossibility) is treated
+            // as base — the byte-stable default (§ 3.3).
+            top_layer: top_layer_by_entity.get(&g.entity).copied().unwrap_or(false),
         });
     }
 
