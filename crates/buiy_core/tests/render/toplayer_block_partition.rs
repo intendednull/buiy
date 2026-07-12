@@ -491,3 +491,145 @@ fn cut_ranges_drops_runs_fully_outside_the_window() {
         "window past every run"
     );
 }
+
+// === Task 2.1: block_interleave (base/top-layer split of the flat draw) =======
+//
+// `block_interleave` splits the interleaved flat-draw schedule at the quad
+// boundary into a BASE block + a TOP-LAYER block, both with ABSOLUTE indices. The
+// base block draws every flat instance BEFORE the boundary; the top-layer block
+// draws every one AT/after it (its `Gradients`/`Raster` indices re-offset back to
+// absolute after `interleave_flat_draw` re-bases the sliced sub-array to 0). The
+// quad `flat_ranges` are `cut_ranges`-sliced so a straddling run is cut, not
+// dropped or double-drawn. This is the pure/headless heart of the W2 per-block
+// draw restructure.
+
+use buiy_core::render::buckets::{FlatDrawStep, block_interleave, interleave_flat_draw};
+
+/// Build flat quad runs from `(start, end)` pairs (the `render_buckets.rs` idiom —
+/// a helper sidesteps clippy's `single_range_in_vec_init`).
+fn runs(pairs: &[(u32, u32)]) -> Vec<Range<u32>> {
+    pairs.iter().map(|&(s, e)| s..e).collect()
+}
+
+#[test]
+fn block_interleave_splits_quads_and_rasters_at_the_boundary() {
+    // flat run [0..4], quad_boundary 2; a raster at anchor 1 (base) + a raster at
+    // anchor 3 (top-layer). The base block draws only the [0..2) quads + the base
+    // raster (index 0); the top block draws only the [2..4) quads + the top raster
+    // (re-offset to absolute index 1). NO base step references a top-layer
+    // instance (a quad >= 2 or the raster at anchor 3).
+    let (base, top) = block_interleave(&runs(&[(0, 4)]), &[], &[1, 3], 2);
+    assert_eq!(
+        base,
+        vec![
+            FlatDrawStep::Quads(0..1),
+            FlatDrawStep::Raster(0),
+            FlatDrawStep::Quads(1..2),
+        ],
+        "base block: quads [0..2) split by the base raster (anchor 1)"
+    );
+    assert_eq!(
+        top,
+        vec![
+            FlatDrawStep::Quads(2..3),
+            FlatDrawStep::Raster(1),
+            FlatDrawStep::Quads(3..4),
+        ],
+        "top block: quads [2..4) split by the top raster (re-offset to absolute index 1)"
+    );
+    // The load-bearing guarantee: no base step references a top-layer instance.
+    for step in &base {
+        match step {
+            FlatDrawStep::Quads(r) => {
+                assert!(r.end <= 2, "base quad run {r:?} stays below the boundary")
+            }
+            FlatDrawStep::Raster(k) => assert_eq!(*k, 0, "base references only the base raster"),
+            FlatDrawStep::Gradients(_) => {}
+        }
+    }
+}
+
+#[test]
+fn block_interleave_re_offsets_top_gradient_indices_to_absolute() {
+    // flat run [0..6], quad_boundary 4; gradients at anchors [1 (base), 5 (top)].
+    // The base gradient keeps absolute index 0; the top gradient is re-offset from
+    // the sliced sub-array's 0 back to absolute index 1, and its quad ranges stay
+    // absolute (>= 4).
+    let (base, top) = block_interleave(&runs(&[(0, 6)]), &[1, 5], &[], 4);
+    assert_eq!(
+        base,
+        vec![
+            FlatDrawStep::Quads(0..1),
+            FlatDrawStep::Gradients(0..1),
+            FlatDrawStep::Quads(1..4),
+        ],
+        "base block: [0..4) quads, base gradient at absolute index 0"
+    );
+    assert_eq!(
+        top,
+        vec![
+            FlatDrawStep::Quads(4..5),
+            FlatDrawStep::Gradients(1..2),
+            FlatDrawStep::Quads(5..6),
+        ],
+        "top block: [4..6) quads, top gradient re-offset to absolute index 1"
+    );
+}
+
+#[test]
+fn block_interleave_cuts_a_straddling_flat_run() {
+    // A single flat run [0..8] with NO group gap STRADDLES the boundary 3 (the
+    // RangePartitioner splits on group only). `cut_ranges` cuts it: base draws
+    // [0..3), top draws [3..8) — the run is not dropped or double-drawn.
+    let (base, top) = block_interleave(&runs(&[(0, 8)]), &[], &[], 3);
+    assert_eq!(
+        base,
+        vec![FlatDrawStep::Quads(0..3)],
+        "base half of the straddling run"
+    );
+    assert_eq!(
+        top,
+        vec![FlatDrawStep::Quads(3..8)],
+        "top half of the straddling run"
+    );
+}
+
+#[test]
+fn block_interleave_empty_top_block_is_byte_identical_to_the_single_interleave() {
+    // Byte-stability (F9): with `quad_boundary` at/above the quad count, EVERY
+    // anchor is base — the base block equals a single `interleave_flat_draw` call
+    // and the top block is empty. `node.rs` passes `u32::MAX` on a no-top-layer
+    // view, so it issues the identical draws.
+    let flat = runs(&[(0, 6)]);
+    let grad = [2u32];
+    let raster = [4u32];
+    // boundary == the quad count (6): all anchors < 6 stay base.
+    let (base, top) = block_interleave(&flat, &grad, &raster, 6);
+    assert_eq!(
+        base,
+        interleave_flat_draw(&flat, &grad, &raster),
+        "base == today's single interleave"
+    );
+    assert!(top.is_empty(), "empty top-layer block");
+    // `u32::MAX` (node.rs's no-top-layer sentinel) is equivalent.
+    let (base_max, top_max) = block_interleave(&flat, &grad, &raster, u32::MAX);
+    assert_eq!(base_max, interleave_flat_draw(&flat, &grad, &raster));
+    assert!(top_max.is_empty());
+}
+
+#[test]
+fn block_interleave_all_top_layer_leaves_the_base_empty() {
+    // quad_boundary 0 ⇒ every instance is top-layer; the base block is empty and
+    // the top block is byte-identical to a single interleave (indices unchanged —
+    // grad_split/raster_split are 0, so no re-offset).
+    let flat = runs(&[(0, 5)]);
+    let grad = [1u32, 3];
+    let raster = [2u32];
+    let (base, top) = block_interleave(&flat, &grad, &raster, 0);
+    assert!(base.is_empty(), "no base instances");
+    assert_eq!(
+        top,
+        interleave_flat_draw(&flat, &grad, &raster),
+        "the whole schedule is the top block, indices unchanged"
+    );
+}

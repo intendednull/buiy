@@ -553,6 +553,80 @@ pub fn interleave_flat_draw(
     steps
 }
 
+/// Split the interleaved flat-draw schedule into a BASE block and a TOP-LAYER
+/// block at the quad `quad_boundary` (the top-layer stacking composite, § 3.3 —
+/// W2's per-block draw). Returns `(base, top)`: two ordered [`FlatDrawStep`]
+/// schedules whose `Quads`/`Gradients`/`Raster` indices are ABSOLUTE. The base
+/// block draws every flat instance BEFORE the boundary; the top-layer block draws
+/// every flat instance AT/after it. `node.rs` draws the base block's tier-stack,
+/// then the top-layer block's over it, so a top-layer subtree occludes base
+/// text/icons/borders — not just fills.
+///
+/// The split key is the `quad_boundary` (`PackedPartition::top_layer_boundary`):
+/// - the quad `flat_ranges` are sliced by [`cut_ranges`] at the boundary (a run
+///   that STRADDLES the boundary — the `RangePartitioner` splits on GROUP only —
+///   is CUT, not drawn whole in both blocks);
+/// - the `gradient_anchors` and `raster_anchors` are `partition_point`-split at
+///   the boundary. Both are non-decreasing (gradients in node-walk paint order;
+///   rasters caller-sorted), so an anchor `< quad_boundary` is base and `>=` is
+///   top-layer — the same boundary the quad blob uses, per rev-4/m2 (NO separate
+///   gradient boundary: `block_interleave` splits the gradient blob HERE).
+///
+/// [`interleave_flat_draw`] is called UNCHANGED per sub-array; since it re-bases
+/// each sliced sub-array's step indices to 0, the top block's `Gradients`/`Raster`
+/// indices are RE-OFFSET back to absolute by the base sub-array's length (the quad
+/// ranges are already absolute — they come from [`cut_ranges`], not a re-based
+/// slice). A base sub-array is a PREFIX of the full anchor list, so its indices
+/// are already absolute and need no offset.
+///
+/// Byte-stability (F9): pass `quad_boundary == u32::MAX` (or any value at/above
+/// the quad count) to route EVERYTHING to the base block — the base is then
+/// byte-identical to a single [`interleave_flat_draw`] call and the top is empty.
+/// `node.rs` does exactly that on a no-top-layer view, so it issues the identical
+/// draws (no extra pass).
+///
+/// Pure (no GPU / ECS) — unit-tested headless.
+pub fn block_interleave(
+    flat_ranges: &[Range<u32>],
+    gradient_anchors: &[u32],
+    raster_anchors: &[u32],
+    quad_boundary: u32,
+) -> (Vec<FlatDrawStep>, Vec<FlatDrawStep>) {
+    // Split the anchor lists at the boundary. `partition_point` yields the count
+    // of BASE entries (the non-decreasing prefix with `anchor < quad_boundary`);
+    // the remainder is the top-layer block.
+    let grad_split = gradient_anchors.partition_point(|&a| a < quad_boundary);
+    let raster_split = raster_anchors.partition_point(|&a| a < quad_boundary);
+    let (base_grad, top_grad) = gradient_anchors.split_at(grad_split);
+    let (base_raster, top_raster) = raster_anchors.split_at(raster_split);
+
+    // Slice the flat quad runs to each block's window; a straddling run is CUT.
+    let base_flat = cut_ranges(flat_ranges, 0, quad_boundary);
+    let top_flat = cut_ranges(flat_ranges, quad_boundary, u32::MAX);
+
+    // A base sub-array is a PREFIX, so `interleave_flat_draw`'s 0-based step
+    // indices ARE the absolute ones — no re-offset.
+    let base = interleave_flat_draw(&base_flat, base_grad, base_raster);
+
+    // The top sub-arrays are SLICES starting at `grad_split`/`raster_split`, so
+    // `interleave_flat_draw` re-bases their step indices to 0 — RE-OFFSET back to
+    // absolute. Quad ranges stay absolute (they came from `cut_ranges`).
+    let mut top = interleave_flat_draw(&top_flat, top_grad, top_raster);
+    let grad_offset = grad_split as u32;
+    let raster_offset = raster_split as u32;
+    for step in &mut top {
+        match step {
+            FlatDrawStep::Gradients(r) => {
+                r.start += grad_offset;
+                r.end += grad_offset;
+            }
+            FlatDrawStep::Raster(k) => *k += raster_offset,
+            FlatDrawStep::Quads(_) => {}
+        }
+    }
+    (base, top)
+}
+
 /// The instance-range partition of a packed view (effect-compositor.md § 1.1 /
 /// decided fork 3): the flat quad blob plus, per effect group, the contiguous
 /// `[start, end)` instance range its members occupy, and the complement
