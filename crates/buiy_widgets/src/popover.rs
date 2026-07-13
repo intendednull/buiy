@@ -200,6 +200,26 @@ impl Popover {
             ..Default::default()
         }
     }
+
+    /// Read whether this popover is currently **open** (shown), as a plain `bool` —
+    /// the domain accessor over its [`CssVisibility`] show/hide state (the
+    /// `Checkbox::checked` / `Disclosure::expanded` pattern: read widget state through
+    /// the marker rather than matching the `CssVisibility` variants by hand — the enum
+    /// stays un-preluded). Delegates to the shared [`crate::popover::is_open`] free
+    /// function, the single source of truth for the open/closed channel
+    /// (`Visible`/absent = open, `Hidden`/`Collapse` = closed). Query the visibility
+    /// alongside the marker and pass it in:
+    ///
+    /// ```ignore
+    /// fn read(q: Query<Option<&CssVisibility>, With<Popover>>) {
+    ///     for vis in &q {
+    ///         if Popover::is_open(vis) { /* … */ }
+    ///     }
+    /// }
+    /// ```
+    pub fn is_open(vis: Option<&CssVisibility>) -> bool {
+        crate::popover::is_open(vis)
+    }
 }
 
 /// Lower each [`Popover`] onto its required [`Anchor`] (§B.2): translate the

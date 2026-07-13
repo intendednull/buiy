@@ -183,6 +183,32 @@ impl TooltipTrigger {
     }
 }
 
+impl TooltipNode {
+    /// Read whether this tooltip is currently **open** (shown), as a plain `bool` —
+    /// the domain accessor over its [`CssVisibility`] show/hide state (the
+    /// `Checkbox::checked` / `Disclosure::expanded` pattern: read widget state through
+    /// the marker rather than matching the `CssVisibility` variants by hand — the enum
+    /// stays un-preluded). The open state rides the [`TooltipNode`] (the child that
+    /// carries the `CssVisibility` the `ShowTooltip`/`HideTooltip` honor flips — the
+    /// trigger itself is always shown), so the reader lives on `TooltipNode`, not
+    /// [`TooltipTrigger`]. A tooltip starts hidden (`CssVisibility::Hidden`).
+    /// Delegates to the shared [`crate::popover::is_open`] free function, the single
+    /// source of truth for the open/closed channel (`Visible`/absent = open,
+    /// `Hidden`/`Collapse` = closed). Query the visibility alongside the marker and
+    /// pass it in:
+    ///
+    /// ```ignore
+    /// fn read(q: Query<Option<&CssVisibility>, With<TooltipNode>>) {
+    ///     for vis in &q {
+    ///         if TooltipNode::is_open(vis) { /* … */ }
+    ///     }
+    /// }
+    /// ```
+    pub fn is_open(vis: Option<&CssVisibility>) -> bool {
+        crate::popover::is_open(vis)
+    }
+}
+
 /// The query data [`wire_tooltip_described_by`] reads per trigger: the trigger
 /// entity, its `Children` (to find the tooltip), and its current `A11yRelations`
 /// (to preserve author-set edges + check idempotency). Aliased so the system

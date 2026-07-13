@@ -215,6 +215,27 @@ impl Dialog {
             ],
         )
     }
+
+    /// Read whether this dialog is currently **open** (shown), as a plain `bool` —
+    /// the domain accessor over its [`CssVisibility`] show/hide state (the
+    /// `Checkbox::checked` / `Disclosure::expanded` pattern: read widget state through
+    /// the marker rather than matching the `CssVisibility` variants by hand — the enum
+    /// stays un-preluded). A dialog starts closed (`CssVisibility::Hidden` via
+    /// `#[require]`); the invoker opens it. Delegates to the shared
+    /// [`crate::popover::is_open`] free function, the single source of truth for the
+    /// open/closed channel (`Visible`/absent = open, `Hidden`/`Collapse` = closed).
+    /// Query the visibility alongside the marker and pass it in:
+    ///
+    /// ```ignore
+    /// fn read(q: Query<Option<&CssVisibility>, With<Dialog>>) {
+    ///     for vis in &q {
+    ///         if Dialog::is_open(vis) { /* … */ }
+    ///     }
+    /// }
+    /// ```
+    pub fn is_open(vis: Option<&CssVisibility>) -> bool {
+        crate::popover::is_open(vis)
+    }
 }
 
 /// The query data [`wire_dialog_relations`] reads per dialog: the dialog entity,

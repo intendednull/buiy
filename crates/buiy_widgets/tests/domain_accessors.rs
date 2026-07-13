@@ -3,7 +3,9 @@
 //! These assert the marker-namespaced accessors over their state components.
 
 use buiy_core::a11y::{A11yExpanded, A11yTextValue, A11yToggled, A11yValue, Toggled};
-use buiy_widgets::{Checkbox, Disclosure, Slider, Switch, TextInput};
+use buiy_core::render::components::CssVisibility;
+use buiy_widgets::tooltip::TooltipNode;
+use buiy_widgets::{Checkbox, Dialog, Disclosure, Menu, Popover, Slider, Switch, TextInput};
 
 #[test]
 fn checkbox_checked_and_indeterminate_map_the_tri_state() {
@@ -67,4 +69,28 @@ fn text_input_value_reads_the_projected_string() {
         "hello"
     );
     assert_eq!(TextInput::value(&A11yTextValue(String::new())), "");
+}
+
+#[test]
+fn overlay_is_open_reads_the_visibility_channel() {
+    // Every overlay's open-state rides the CssVisibility show/hide channel:
+    // Visible (or absent — the default) = open; Hidden/Collapse = closed. Each
+    // marker exposes the SAME reader, delegating to the shared `popover::is_open`
+    // (Track F — namespace the holdout free fn onto the widget markers).
+    assert!(Popover::is_open(None)); // absent ⇒ open (the default)
+    assert!(Popover::is_open(Some(&CssVisibility::Visible)));
+    assert!(!Popover::is_open(Some(&CssVisibility::Hidden)));
+    assert!(!Popover::is_open(Some(&CssVisibility::Collapse)));
+
+    assert!(Menu::is_open(None));
+    assert!(Menu::is_open(Some(&CssVisibility::Visible)));
+    assert!(!Menu::is_open(Some(&CssVisibility::Hidden)));
+
+    // A dialog starts closed (CssVisibility::Hidden); the invoker opens it.
+    assert!(Dialog::is_open(Some(&CssVisibility::Visible)));
+    assert!(!Dialog::is_open(Some(&CssVisibility::Hidden)));
+
+    // A tooltip starts hidden; the open-state reader lives on the TooltipNode.
+    assert!(TooltipNode::is_open(Some(&CssVisibility::Visible)));
+    assert!(!TooltipNode::is_open(Some(&CssVisibility::Hidden)));
 }
