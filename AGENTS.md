@@ -87,6 +87,10 @@ Derive from `now` and store only the *derived* value (never `now` itself), so an
 steady frame is absorbed by `set_if_neq`. Drive it deterministically in a headless test with
 `advance_clock(&mut app, delta)` (no real sleeps).
 
+Full task-oriented recipes (reducer/register/enqueue/read/clock/test), the tiers, and the
+silent-wrong gotchas (`set_if_neq`, enqueue-not-fold, the LogicalId dead-letter) live in the
+`using-mvu` skill; unit-test a model in ~5 lines with `buiy::test::MvuTestApp`.
+
 ## Widgets
 
 Catalog: `Button` · `Checkbox` · `Switch` · `Slider` · `Disclosure` · `Dialog` ·

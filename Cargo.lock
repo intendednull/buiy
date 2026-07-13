@@ -2064,6 +2064,7 @@ name = "buiy"
 version = "0.0.1"
 dependencies = [
  "bevy",
+ "buiy",
  "buiy_bsn",
  "buiy_core",
  "buiy_view",

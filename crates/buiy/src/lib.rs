@@ -415,6 +415,14 @@ pub mod probe {
     pub use buiy_core::a11y::{ActionError, NotActionableReason};
 }
 
+/// Ergonomic **MVU unit-test harness** ([`MvuTestApp`](crate::test::MvuTestApp)) —
+/// Track C 5b-2. Behind the opt-in `test-support` feature so it is compiled out of
+/// release builds; it wraps the shipped headless preset + `mvu_model` + the inbox +
+/// `advance_clock` + the probe so a model can be driven in a test in ~5 lines. See
+/// the [module docs](crate::test) for usage.
+#[cfg(feature = "test-support")]
+pub mod test;
+
 /// The Buiy prelude. `use buiy::prelude::*;` brings the common Buiy surface —
 /// components, plugins, widgets, the MVU state funnel — the BSN authoring macros
 /// (`bsn!`, `bsn_list!`) + spawn ext traits, **and a curated set of Bevy ECS

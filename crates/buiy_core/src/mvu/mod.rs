@@ -3,6 +3,8 @@
 //! Buiy's primary state interface: a recordable message substrate in `buiy_core` that
 //! widgets route state changes through, governed by one ordered funnel. Design + rationale:
 //! `docs/specs/2026-06-29-mvu-as-core-design.md` (§2 the substrate, §3 tiered granularity).
+//! Task-oriented app-author how-to (recipes, tiers, silent-wrong gotchas, headless testing
+//! with `buiy::test::MvuTestApp`): the `using-mvu` skill.
 //!
 //! Three load-bearing pieces:
 //!
