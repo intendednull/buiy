@@ -387,6 +387,23 @@ fn replay_of_add_toggle_remove_session_reproduces_the_model_and_tree() {
     let rec_rows = keyed_rows(rec.world_mut()).len();
     assert_eq!(rec_rows, 3, "recorded tree has 3 rows");
 
+    // Track A (1a-ii/1a-iii) must NOT false-positive on the normal buiy_view path: the one
+    // root model carries `MODEL_LID`, and every controlled leaf (the checkboxes) is exempt via
+    // `ControlledLeaf` (their id-less recorded folds are intentionally model-reconstructed on
+    // replay). So a full record session raises ZERO MVU id-diagnostics.
+    #[cfg(debug_assertions)]
+    {
+        let diags = &rec
+            .world()
+            .resource::<buiy_core::mvu::MvuDiagnostics>()
+            .violations;
+        assert!(
+            diags.is_empty(),
+            "buiy_view raises ZERO MVU id-diagnostics on a normal record session \
+             (root=MODEL_LID, leaves=ControlledLeaf-exempt); got: {diags:?}"
+        );
+    }
+
     // How much did the session log, and of what kinds? (Reported, not exact.)
     let (widget_entries, edit_entries, off_model) = {
         let world = rec.world();

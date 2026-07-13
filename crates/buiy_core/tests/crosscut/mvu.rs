@@ -927,3 +927,160 @@ mod cmd_task {
         );
     }
 }
+
+// ============================================================================
+// Track A (fail-loud diagnostics) — the LogicalId footgun auditor (spec 1a-ii/1a-iii).
+//
+// Two fail-SILENT MVU footguns made fail-LOUD in dev/test (compiled OUT of release):
+//   1a-ii  A RECORDED fold on a `Model` entity with NO `LogicalId` stamps the log entry
+//          `UNRESOLVED` (`LogicalId::UNRESOLVED`), which dead-letters on replay — corrupting
+//          the log *before* the (already loud) replay-time dead-letter fires. Surfaced at the
+//          record site (`fold_one_with`), recording-gated, `ControlledLeaf`-exempt (buiy_view
+//          owns those leaves' state — their id-less entries are intentionally
+//          model-reconstructed, so they are NOT the footgun).
+//   1a-iii Two entities of the SAME model type sharing one `LogicalId`: replay's `resolve_lid`
+//          silently picks the first, mis-routing folds. Detected in the debug `count_binds`
+//          auditor (change-gated). (Cross-type collisions surface as replay dead-letters — the
+//          already-loud path — so the silent case is the within-type one.)
+//
+// Both route through the ONE shared helper (`MvuDiagnostics::report`): a per-operation `warn!`
+// PLUS an append to a typed log a test asserts on (mirrors the §7.5 `FunnelAuditLog` shape).
+// The whole module is `cfg(debug_assertions)` — the resource + checks do not exist in release.
+// ============================================================================
+#[cfg(debug_assertions)]
+mod id_diagnostics {
+    use super::*;
+    use buiy_core::mvu::{ControlledLeaf, MvuDiagnostic, MvuDiagnostics};
+
+    fn diagnostics(app: &App) -> Vec<MvuDiagnostic> {
+        app.world().resource::<MvuDiagnostics>().violations.clone()
+    }
+
+    fn start_recording(app: &mut App) {
+        app.world_mut().resource_mut::<RecordSession>().start();
+    }
+
+    /// Spawn a `Counter` with NO `LogicalId` — the raw-MVU-author footgun (buiy_view always
+    /// seeds `MODEL_LID`, so this bites only hand-rolled models).
+    fn spawn_idless(app: &mut App) -> Entity {
+        app.world_mut().spawn(Counter::default()).id()
+    }
+
+    #[test]
+    fn unresolved_recorded_fold_is_loud_recording_gated_and_leaf_exempt() {
+        // (A) id-less model + RECORDING + a fold → the loud diagnostic, naming the entity.
+        {
+            let mut app = counter_app();
+            let e = spawn_idless(&mut app);
+            settle(&mut app);
+            start_recording(&mut app);
+            write(&mut app, e, CounterMsg::Add(1));
+            app.update();
+            let named: Vec<Entity> = diagnostics(&app)
+                .into_iter()
+                .filter_map(|d| match d {
+                    MvuDiagnostic::UnresolvedRecordedFold { entity, .. } => Some(entity),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                named,
+                vec![e],
+                "(A) recording a fold on an id-less model fires the loud diagnostic once, naming it"
+            );
+        }
+
+        // (B) id-less model but NOT recording → SILENT (no log entry is created, so nothing
+        //     is corrupted; the diagnostic must not fire).
+        {
+            let mut app = counter_app();
+            let e = spawn_idless(&mut app);
+            settle(&mut app);
+            write(&mut app, e, CounterMsg::Add(1));
+            app.update();
+            assert!(
+                diagnostics(&app).is_empty(),
+                "(B) not recording: an id-less fold corrupts nothing — no diagnostic"
+            );
+        }
+
+        // (C) a model WITH a stable `LogicalId`, recording → clean (the common, correct case).
+        {
+            let mut app = counter_app();
+            let e = spawn_counter(&mut app, 5); // carries LogicalId(5)
+            settle(&mut app);
+            start_recording(&mut app);
+            write(&mut app, e, CounterMsg::Add(1));
+            app.update();
+            assert!(
+                diagnostics(&app)
+                    .iter()
+                    .all(|d| !matches!(d, MvuDiagnostic::UnresolvedRecordedFold { .. })),
+                "(C) an id'd model records cleanly — no unresolved diagnostic"
+            );
+        }
+
+        // (D) `ControlledLeaf` exemption — the buiy_view-controlled leaf: id-less BUT its state
+        //     is model-reconstructed, so its id-less recorded fold is intentional, not a bug.
+        {
+            let mut app = counter_app();
+            let e = app
+                .world_mut()
+                .spawn((Counter::default(), ControlledLeaf))
+                .id();
+            settle(&mut app);
+            start_recording(&mut app);
+            write(&mut app, e, CounterMsg::Add(1));
+            app.update();
+            assert!(
+                diagnostics(&app)
+                    .iter()
+                    .all(|d| !matches!(d, MvuDiagnostic::UnresolvedRecordedFold { .. })),
+                "(D) a ControlledLeaf's id-less fold is intentionally model-reconstructed — exempt"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_logical_id_is_loud_within_type() {
+        // Two `Counter`s sharing `LogicalId(7)` → replay's `resolve_lid` would pick the first.
+        let mut app = counter_app();
+        let e1 = app
+            .world_mut()
+            .spawn((Counter::default(), LogicalId(7)))
+            .id();
+        let e2 = app
+            .world_mut()
+            .spawn((Counter::default(), LogicalId(7)))
+            .id();
+        app.update(); // count_binds runs; Changed<LogicalId> is set on the spawn frame → scan.
+
+        let dups: Vec<(LogicalId, Vec<Entity>)> = diagnostics(&app)
+            .into_iter()
+            .filter_map(|d| match d {
+                MvuDiagnostic::DuplicateLogicalId { id, entities } => Some((id, entities)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dups.len(), 1, "exactly one within-type duplicate reported");
+        let (id, entities) = &dups[0];
+        assert_eq!(*id, LogicalId(7), "the colliding id is named");
+        assert_eq!(entities.len(), 2, "both colliding entities are named");
+        assert!(
+            entities.contains(&e1) && entities.contains(&e2),
+            "the two offending entities are named"
+        );
+
+        // Distinct ids → no duplicate diagnostic.
+        let mut clean = counter_app();
+        clean.world_mut().spawn((Counter::default(), LogicalId(1)));
+        clean.world_mut().spawn((Counter::default(), LogicalId(2)));
+        clean.update();
+        assert!(
+            diagnostics(&clean)
+                .iter()
+                .all(|d| !matches!(d, MvuDiagnostic::DuplicateLogicalId { .. })),
+            "distinct ids raise no duplicate diagnostic"
+        );
+    }
+}
