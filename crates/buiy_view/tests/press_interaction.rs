@@ -27,8 +27,10 @@ use buiy_core::ResolvedLayout;
 use buiy_core::a11y::{A11yRole, inprocess};
 use buiy_core::layout::{Length, Translate};
 use buiy_core::mvu::{Cmd, Model};
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::Background;
 use buiy_view::{
-    BuiyViewAppExt, DEFAULT_PRESS_DEPTH, Element, InteractionState, Kind, button, column,
+    BuiyViewAppExt, Color, DEFAULT_PRESS_DEPTH, Element, InteractionState, Kind, button, column,
     find_kind, find_press_target, raster, text,
 };
 
@@ -215,6 +217,47 @@ impl Live {
             _ => 0.0,
         }
     }
+
+    /// The node's resolved `Background` fill token (`None` if it carries no
+    /// `Background` component).
+    fn background_token(&self, entity: Entity) -> Option<ColorToken> {
+        self.app.world().get::<Background>(entity).map(|b| b.color)
+    }
+
+    /// The `ui()`-spawned model entity (the sole `M`).
+    fn model_entity(&mut self) -> Entity {
+        self.app
+            .world_mut()
+            .query_filtered::<Entity, With<M>>()
+            .iter(self.app.world())
+            .next()
+            .expect("model entity exists")
+    }
+
+    /// Apply `mutate` to the model (tripping `Changed<M>`, exactly as a reducer
+    /// fold does) then run **one** frame. This reproduces the §2 shared-`Background`
+    /// write race with SAME-FRAME precision: `Changed<M>` is guaranteed present at
+    /// the top of this single frame, so the reconciler definitely re-derives (and
+    /// clobbers) `Background` this frame, and the hover resolver must re-win it in
+    /// the same frame — a multi-frame settle would mask a one-frame ordering lag
+    /// (the fill would recover the frame after a mis-ordered resolver, hiding the
+    /// bug). A direct mutation (not the `Envelope` inbox) is used deliberately: the
+    /// `MvuSet::Drain → ViewSet::Reconcile` order is not pinned, so a folded msg's
+    /// clobber may land a frame later — non-deterministic for a teeth test. The
+    /// realistic inbox→fold→reconcile→resolve path is exercised by the live test's
+    /// `release()`. The pointer stays parked, so `InteractionState` never changes —
+    /// only the reconcile `Background` write does.
+    fn model_changed_frame(&mut self, mutate: impl FnOnce(&mut M)) {
+        let model = self.model_entity();
+        mutate(
+            &mut self
+                .app
+                .world_mut()
+                .get_mut::<M>(model)
+                .expect("model exists"),
+        );
+        self.app.update();
+    }
 }
 
 // --- Part 2: the general container / raster press route -------------------
@@ -355,5 +398,189 @@ fn a_plain_container_gets_no_role_and_no_interaction_state() {
     assert!(
         live.app.world().get::<InteractionState>(col).is_none(),
         "and no interaction-state visual layer (opt-in — existing containers untouched)"
+    );
+}
+
+// --- Track D: the declarative :hover / :active fill (spec §3) ---------------
+
+/// A styled, pressable button with a declarative hover fill: resting
+/// `Color::Surface` (`SurfacePrimary`), hover `Color::Accent` (`Accent`).
+fn hover_button_view(_: &M) -> Element<Msg> {
+    button("Go")
+        .on_press(Msg::Go)
+        .background(Color::Surface)
+        .hover_bg(Color::Accent)
+        .width(140.0)
+        .height(52.0)
+}
+
+#[test]
+fn hover_paints_the_hover_fill_and_press_composes_with_the_depth_dip() {
+    let mut live = Live::new(hover_button_view);
+    let go = find_press_target::<M>(live.app.world_mut(), &Msg::Go).expect("the button is a route");
+
+    // The pointer spawns at the window origin, which sits inside a root-placed
+    // button's box — park it off-target first for a deterministic resting state.
+    live.move_to(Vec2::new(4000.0, 4000.0));
+
+    // Resting: the resting fill (SurfacePrimary), no dip.
+    assert_eq!(
+        live.background_token(go),
+        Some(ColorToken::SurfacePrimary),
+        "a resting node paints its resting fill"
+    );
+    assert_eq!(live.translate_y(go), 0.0, "a resting node is not dipped");
+
+    // Hover (pointer over, no press): the hover fill (Accent), still no dip.
+    let center = live.global_center(go);
+    live.move_to(center);
+    assert_eq!(
+        live.background_token(go),
+        Some(ColorToken::Accent),
+        "hover (None→Hover) paints the hover fill"
+    );
+    assert_eq!(live.translate_y(go), 0.0, "hover alone does not dip");
+
+    // Press: the hover fill AND the press-down depth together (:active folds into
+    // the hover fill; the depth dip is the distinct pressed look).
+    live.press();
+    assert_eq!(
+        live.background_token(go),
+        Some(ColorToken::Accent),
+        "a held node keeps the hover fill (Press ⇒ hover token)"
+    );
+    assert_eq!(
+        live.translate_y(go),
+        DEFAULT_PRESS_DEPTH,
+        "a held node dips — the hover fill and the depth compose"
+    );
+
+    // Release then leave (a real Pointer<Out>): revert to the resting fill + no dip.
+    live.release();
+    live.move_to(Vec2::new(4000.0, 4000.0)); // far off the button → Pointer<Out>
+    assert_eq!(
+        live.background_token(go),
+        Some(ColorToken::SurfacePrimary),
+        "leaving (Hover→None) reverts to the resting fill"
+    );
+    assert_eq!(live.translate_y(go), 0.0, "leaving reverts the dip");
+}
+
+#[test]
+fn a_model_change_while_hovering_does_not_clobber_the_hover_fill() {
+    // The §2 crux, as a regression with TEETH. `Background` is shared-ownership:
+    // the reconciler re-derives it from `Element::background` on every `Changed<M>`
+    // frame. While the node is hovered, a model change triggers that reconcile
+    // write in the SAME frame the hover fill should hold — the resolver must re-win.
+    //
+    // This test FAILS if `apply_hover_visual` drops the `Or<Changed<Background>>`
+    // half of its gate (then the reconcile write is never re-visited — the fill
+    // stays clobbered to resting), OR if it is no longer ordered
+    // `.after(reconcile::<M>)` (then it runs BEFORE the clobber and never sees it).
+    // Proven by removing each: the assertion below goes red.
+    let mut live = Live::new(hover_button_view);
+    let go = find_press_target::<M>(live.app.world_mut(), &Msg::Go).expect("the button is a route");
+
+    // Park the pointer over the node — it stays hovered for the rest of the test.
+    let center = live.global_center(go);
+    live.move_to(center);
+    assert_eq!(
+        live.background_token(go),
+        Some(ColorToken::Accent),
+        "precondition: the node is hovered and painting the hover fill"
+    );
+
+    // Change the model with the pointer parked: `InteractionState` stays Hover (no
+    // `Changed<InteractionState>`), so ONLY the reconcile `Background` write (its
+    // `set_if_neq` back to the resting `SurfacePrimary`) can re-trip the resolver —
+    // the exact same-frame race, in a single deterministic frame.
+    live.model_changed_frame(|m| m.go_clicks += 1);
+
+    assert_eq!(
+        live.background_token(go),
+        Some(ColorToken::Accent),
+        "the hover fill SURVIVED a same-frame reconcile Background write (the §2 race)"
+    );
+    // The model change really reached the reconciler this frame (else the assertion
+    // above would be vacuous — no clobber to survive).
+    assert_eq!(
+        live.model().go_clicks,
+        1,
+        "the model change reconciled this frame (the clobber really happened)"
+    );
+}
+
+/// An UNSTYLED (no `.background()`), hover-styled, pressable CONTAINER — a `column!`
+/// carrying `.on_press` + `.hover_bg` but no explicit fill. This is the path that
+/// takes `apply_background`'s `None` arm (the companion fix), **not** a button's
+/// `apply_button_style` (which never touches `Background` when unstyled). Resting
+/// fill is transparent (an unstyled container has no default fill), hover fill Accent.
+fn hover_container_view(_: &M) -> Element<Msg> {
+    column![text("tap").size(20.0)]
+        .on_press(Msg::Tile)
+        .hover_bg(Color::Accent)
+        .label("tap tile")
+        .width(160.0)
+        .height(80.0)
+}
+
+#[test]
+fn a_model_change_while_hovering_an_unstyled_container_keeps_the_hover_fill() {
+    // The **companion-fix branch** (`apply_background`'s `None` arm, reconcile.rs).
+    // An unstyled but hover-styled CONTAINER has no `Element::background`, so the
+    // reconciler re-derives its `Background` via that `None` arm on every
+    // `Changed<M>` frame. The fix makes the arm `HoverStyle`-aware — restoring the
+    // fill to the resting token instead of stripping the `Background` the resolver's
+    // non-optional `&mut Background` query requires. The existing styled-button race
+    // test above exercises the DIFFERENT `apply_button_style` path; this is the only
+    // coverage of the unstyled-container `None`-arm branch.
+    let mut live = Live::new(hover_container_view);
+    let tile =
+        find_press_target::<M>(live.app.world_mut(), &Msg::Tile).expect("the container is a route");
+
+    // The pointer spawns at the window origin, which sits inside a root-placed
+    // container's box — park it off-target first for a deterministic resting state.
+    live.move_to(Vec2::new(4000.0, 4000.0));
+    assert_eq!(
+        live.background_token(tile),
+        Some(ColorToken::Transparent),
+        "an unstyled hover-styled container rests transparent — a PRESENT Background \
+         at the resting token, not a stripped/absent one"
+    );
+
+    // Hover (pointer over, no press): the resolver paints the hover fill (Accent).
+    let center = live.global_center(tile);
+    live.move_to(center);
+    assert_eq!(
+        live.background_token(tile),
+        Some(ColorToken::Accent),
+        "hovering the unstyled container paints the hover fill"
+    );
+
+    // A same-frame model change WHILE hovering (the §2 race on the `None`-arm path):
+    // the reconciler re-derives `Background` via the `None` arm THIS exact frame; the
+    // fix keeps it present at the resting token, and the `.after(reconcile)` resolver
+    // re-wins it to Accent — one deterministic `Changed<M>` frame (a multi-frame
+    // settle would mask a one-frame ordering lag).
+    live.model_changed_frame(|m| m.tile_clicks += 1);
+    assert_eq!(
+        live.background_token(tile),
+        Some(ColorToken::Accent),
+        "the hover fill SURVIVED the same-frame `None`-arm re-derive (companion fix)"
+    );
+    // The model change really reached the reconciler this frame (else the assertion
+    // above would be vacuous — no re-derive to survive).
+    assert_eq!(
+        live.model().tile_clicks,
+        1,
+        "the model change reconciled this frame (the `None`-arm re-derive really ran)"
+    );
+
+    // Un-hover (a real `Pointer<Out>`): revert to the resting token (transparent).
+    live.move_to(Vec2::new(4000.0, 4000.0));
+    assert_eq!(
+        live.background_token(tile),
+        Some(ColorToken::Transparent),
+        "leaving reverts the unstyled container to its resting (transparent) fill"
     );
 }

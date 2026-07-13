@@ -17,7 +17,8 @@ use buiy_core::mvu::{Cmd, LogicalId, Model, MvuAppExt, MvuSet};
 
 use crate::element::Element;
 use crate::interaction::{
-    apply_press_visual, on_pointer_out, on_pointer_over, on_pointer_press, on_pointer_release,
+    apply_hover_visual, apply_press_visual, on_pointer_out, on_pointer_over, on_pointer_press,
+    on_pointer_release,
 };
 use crate::reconcile::{ViewWorkCounters, reconcile, stick_scroll_to_bottom};
 use crate::router::{route_presses, route_text_input, route_text_submit};
@@ -165,6 +166,19 @@ impl BuiyViewAppExt for App {
         self.add_observer(on_pointer_press);
         self.add_observer(on_pointer_release);
         self.add_systems(Update, apply_press_visual.before(BuiySet::Layout));
+        // Track D: the declarative `:hover`/`:active` fill resolver. Unlike
+        // `apply_press_visual` it MUST run `.after(reconcile::<M>)`: it writes
+        // `Background`, a component `reconcile` re-derives every `Changed<M>`
+        // frame, so it has to re-win AFTER that write (its `Or<Changed<Background>>`
+        // gate re-trips it that same frame). Still `.before(BuiySet::Layout)` so the
+        // fill is settled before extract. See `apply_hover_visual`'s doc for the
+        // race the ordering + gate together defeat.
+        self.add_systems(
+            Update,
+            apply_hover_visual
+                .after(reconcile::<M>)
+                .before(BuiySet::Layout),
+        );
 
         // The controlled stick-to-bottom (spec §2.2): non-generic, added once
         // (P1 single-root), ordered AFTER the scroll extent cache so it pins to a

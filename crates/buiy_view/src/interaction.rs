@@ -30,6 +30,8 @@ use bevy::picking::events::{Out, Over, Pointer, Press, Release};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use buiy_core::layout::{Length, Translate};
+use buiy_core::render::color::ColorToken;
+use buiy_core::render::components::Background;
 
 /// The default press-down depth (logical px) a pressable node dips while held — a
 /// modest, general value. F3 / the app raise it via [`PressEffect`] for a chunky
@@ -73,6 +75,46 @@ impl Default for PressEffect {
         Self {
             depth: DEFAULT_PRESS_DEPTH,
         }
+    }
+}
+
+/// The declarative `:hover`/`:active` fill (Track D, spec §3) — a node's
+/// [`Background`] token while its [`InteractionState`] is [`Hover`](InteractionState::Hover)
+/// or [`Press`](InteractionState::Press), authored by `Element::hover_bg`. Owned by
+/// the widget runtime (never the model): the *intent* is pure `Element` data, the
+/// *resolved* fill is transient non-model state — the same place the press-down
+/// lives, and for the same replay-safety reason.
+///
+/// **Background only in v1.** `:active` is folded into the same `hover` token (the
+/// existing depth dip is the distinct pressed look), so the resolver applies it
+/// under `Hover` OR `Press` — see [`resolve_hover_background`].
+///
+/// Unlike [`PressEffect`]'s `Translate` (which nothing else writes), `Background`
+/// is **shared-ownership**: `reconcile` re-derives it from `Element::background`
+/// every `Changed<M>` frame. So [`resting`](HoverStyle::resting) records the fill
+/// to return to (the author's `.background()` token, or the node's own default
+/// captured once at install — e.g. a `button()`'s `SurfaceSecondary`), and the
+/// resolver ([`apply_hover_visual`]) re-wins the frame after a reconcile write via
+/// its `Or<Changed<Background>>` gate.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub(crate) struct HoverStyle {
+    /// The fill to return to when the node is resting ([`InteractionState::None`]).
+    /// `None` ⇒ [`ColorToken::Transparent`] (an unstyled container with no default
+    /// fill). Tracks the author's `.background()` token when set, else the fill
+    /// captured once at install.
+    pub(crate) resting: Option<ColorToken>,
+    /// The fill applied while the node is hovered or pressed.
+    pub(crate) hover: ColorToken,
+}
+
+/// The pure hover-fill resolver (spec §3) — unit-testable without the picking
+/// pipeline. Priority folds `:active` into `:hover`: a held or hovered node reads
+/// [`HoverStyle::hover`]; a resting node reads [`HoverStyle::resting`], defaulting
+/// to [`ColorToken::Transparent`] when the node has no resting fill.
+pub(crate) fn resolve_hover_background(state: InteractionState, style: HoverStyle) -> ColorToken {
+    match state {
+        InteractionState::Hover | InteractionState::Press => style.hover,
+        InteractionState::None => style.resting.unwrap_or(ColorToken::Transparent),
     }
 }
 
@@ -176,11 +218,49 @@ pub(crate) fn apply_press_visual(
     }
 }
 
+/// The **hover-style resolver** (Track D, spec §3): paint a node's declarative
+/// [`HoverStyle`] fill from its [`InteractionState`]. Writes [`Background`] to the
+/// hover token while `Hover`/`Press`, back to the resting token otherwise
+/// ([`resolve_hover_background`]), `set_if_neq` so an unchanged fill never re-marks
+/// the component.
+///
+/// **The gate is materially different from [`apply_press_visual`]'s — do not
+/// copy-paste it.** The press resolver gates on `Changed<InteractionState>` alone,
+/// safe only because nothing else writes its `Translate`. `Background` is
+/// **shared-ownership**: `reconcile` re-derives it from `Element::background` every
+/// `Changed<M>` frame (`apply_background` / `apply_button_style`). Gating on
+/// `Changed<InteractionState>` alone would be **silently clobbered** whenever a
+/// hovered node's model also changes that frame (e.g. a running clock tick) —
+/// intermittent hover-fill flicker. The `Or<(Changed<InteractionState>,
+/// Changed<Background>)>` filter re-trips this system when an earlier
+/// reconcile write in the *same* frame touched `Background`, so it re-wins the race
+/// — provided it is scheduled `.after(reconcile::<M>)` (see `app.rs`). A steady
+/// frame with neither input changed is a true no-op (empty query), so the 60 Hz
+/// idle floor is unaffected.
+#[allow(clippy::type_complexity)] // the `Or` race gate is load-bearing; see the doc above.
+pub(crate) fn apply_hover_visual(
+    mut q: Query<
+        (&InteractionState, &HoverStyle, &mut Background),
+        Or<(Changed<InteractionState>, Changed<Background>)>,
+    >,
+) {
+    for (state, style, mut bg) in &mut q {
+        let want = Background {
+            color: resolve_hover_background(*state, *style),
+        };
+        bg.set_if_neq(want);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_PRESS_DEPTH, InteractionState, PointerPhase, PressEffect, transition};
+    use super::{
+        DEFAULT_PRESS_DEPTH, HoverStyle, InteractionState, PointerPhase, PressEffect,
+        resolve_hover_background, transition,
+    };
     use InteractionState::{Hover, None, Press};
     use PointerPhase::{Enter, Leave, PrimaryDown, PrimaryUp};
+    use buiy_core::render::color::ColorToken;
 
     #[test]
     fn discrete_transitions_cover_the_press_lifecycle() {
@@ -215,5 +295,46 @@ mod tests {
     #[test]
     fn press_effect_default_is_the_documented_depth() {
         assert_eq!(PressEffect::default().depth, DEFAULT_PRESS_DEPTH);
+    }
+
+    // --- The declarative hover-fill resolver (Track D, spec §3) -------------
+
+    #[test]
+    fn hover_and_press_both_resolve_to_the_hover_token() {
+        // `:active` folds into `:hover`: the fill is applied under BOTH Hover and
+        // Press (else it would flash back to resting during a press, since the
+        // state priority is Press > Hover > None).
+        let style = HoverStyle {
+            resting: Some(ColorToken::SurfaceSecondary),
+            hover: ColorToken::Accent,
+        };
+        assert_eq!(resolve_hover_background(Hover, style), ColorToken::Accent);
+        assert_eq!(resolve_hover_background(Press, style), ColorToken::Accent);
+    }
+
+    #[test]
+    fn resting_resolves_to_the_resting_token() {
+        let style = HoverStyle {
+            resting: Some(ColorToken::SurfaceSecondary),
+            hover: ColorToken::Accent,
+        };
+        assert_eq!(
+            resolve_hover_background(None, style),
+            ColorToken::SurfaceSecondary
+        );
+    }
+
+    #[test]
+    fn resting_with_no_resting_token_is_transparent() {
+        // An unstyled container (no `.background()`, no captured default fill)
+        // reverts to transparent — the pre-hover appearance.
+        let style = HoverStyle {
+            resting: Option::None,
+            hover: ColorToken::Accent,
+        };
+        assert_eq!(
+            resolve_hover_background(None, style),
+            ColorToken::Transparent
+        );
     }
 }
