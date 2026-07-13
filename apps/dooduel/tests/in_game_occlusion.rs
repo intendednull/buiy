@@ -20,6 +20,7 @@ use buiy_core::ResolvedLayout;
 use buiy_core::a11y::A11yRole;
 use buiy_core::a11y::translate::entity_for_node_id;
 use buiy_core::mvu::Envelope;
+use buiy_verify::invariant::no_transparent_top_layer_occluder;
 use buiy_verify::pointer::drive_stroke;
 
 use dooduel::{Dooduel, Msg, Screen};
@@ -188,4 +189,31 @@ fn in_game_chat_send_is_not_occluded_by_the_theme_toggle() {
         buiy::probe::get_by_role(app.world_mut(), A11yRole::Button, Some("Light"), None).is_err(),
         "the floating theme toggle must be absent on the in-game screen"
     );
+}
+
+/// Structural companion to the click-route test above (Tier-3 invariant, F6 /
+/// app-author-ergonomics 4b-invariant): sweep the reusable
+/// `no_transparent_top_layer_occluder` predicate over the reconciled dooduel world.
+/// This is **additive** to the native-pointer assertion — a structural check that
+/// no screen leaves the invisible-occluder class at all, not just that Send is
+/// reachable. Dooduel's `.top_layer()` nodes are all `buiy_view`-reconciled: the
+/// floating theme toggle is `.ignore_picking()` (auto-`Pickable::IGNORE`) and the
+/// modal scrims paint a translucent `background(SCRIM)` fill, so the sweep is green.
+#[test]
+fn dooduel_screens_have_no_transparent_top_layer_occluder() {
+    // Home: the floating theme toggle is a transparent `.top_layer()` container,
+    // safe ONLY because it carries `Pickable::IGNORE` — exactly the case the sweep
+    // must PASS (a reconciler-auto-ignored transparent top-layer node).
+    let (mut app, _window, _pointer) = driver();
+    settle(&mut app, 12);
+    no_transparent_top_layer_occluder(app.world()).unwrap_or_else(|v| {
+        panic!("the dooduel Home screen leaves a transparent top-layer occluder: {v}")
+    });
+
+    // In-game Drawing (the toggle is suppressed here; any word-pick scrim paints a
+    // fill). A distinct reconciled screen state, swept the same way.
+    let (app, _window, _pointer) = into_drawing();
+    no_transparent_top_layer_occluder(app.world()).unwrap_or_else(|v| {
+        panic!("the dooduel in-game screen leaves a transparent top-layer occluder: {v}")
+    });
 }

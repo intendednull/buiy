@@ -151,6 +151,24 @@ impl Plugin for BuiyRenderPlugin {
                 .before(crate::BuiySet::Picking),
         );
 
+        // Debug-only pick-occlusion coherence (4b-scope): DEBUG-PANIC on a
+        // hand-authored transparent `.top_layer()` `Node` that lacks
+        // `Pickable::IGNORE` (the invisible-occluder bug class). Scheduled HERE, in
+        // `Last`, because this plugin owns `write_paint_skip` above — so a closed
+        // (`Display::None` / `CssVisibility::Hidden`) overlay has a settled
+        // `ComputedPaintSkip` by `Last` and is correctly excluded (no false
+        // positive on a hidden overlay). Fail-loud, NOT a silent auto-`IGNORE`: the
+        // `buiy_view` reconciler's auto-ignore-at-construction stays the ONLY place
+        // a transparent top-layer container is auto-repaired; every other surface
+        // (hand-authored core/widgets/`bsn!`) must fix its own tree, loudly. The
+        // system is read-only (`Query<EntityRef>`), so it is MT-executor sound.
+        // Compiled out of release builds entirely.
+        #[cfg(debug_assertions)]
+        app.add_systems(
+            bevy::app::Last,
+            crate::picking::coherence::assert_no_transparent_top_layer_occluder,
+        );
+
         // Register author-set render components (reflection / BSN / inspectors)
         // in the MAIN world, before the RenderApp branch, so registration
         // happens even on headless hosts with no RenderApp (component-model.md

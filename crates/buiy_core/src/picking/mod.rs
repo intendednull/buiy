@@ -11,11 +11,16 @@ use bevy::prelude::*;
 
 pub mod activation;
 pub mod backend;
+pub mod coherence;
 pub mod depth;
 pub mod gesture;
 
 pub use activation::pointer_click_emits_on_press;
 pub use backend::BuiyPickingBackendPlugin;
+/// The canonical transparent-top-layer-occluder predicate (F6, spec §2.7). Shared
+/// by `buiy_verify`'s Tier-3 invariant and the debug-only `Last` coherence system
+/// so the two nets can never drift.
+pub use coherence::is_transparent_top_layer_occluder;
 /// Re-exported at the `picking` module root so consumers reach it as
 /// `buiy_core::picking::global_paint_order` (the SC-3 surface the agent-interface
 /// campaign's `inprocess.rs` consumes), alongside `picking::hit_test`.

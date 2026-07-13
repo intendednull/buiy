@@ -33,59 +33,33 @@
 //! App-agnostic (it names only `buiy_core` + `bevy` component types), so it runs
 //! over any Buiy `World` — a reconciled `buiy_view` tree or a hand-authored
 //! retained one.
+//!
+//! The per-entity class test is NOT duplicated here: it is the canonical
+//! [`buiy_core::is_transparent_top_layer_occluder`] predicate, which `buiy_core`'s
+//! own debug-only `Last` coherence system also upholds — so the test-time invariant
+//! (this sweep) and the run-time fail-loud panic can never disagree about what the
+//! class is. This module is the world-sweep wrapper: it collects the offenders into
+//! a [`Violation`] so a failing fixture names exactly which box re-introduced the
+//! invisible-occluder class.
 
-use bevy::picking::Pickable;
 use bevy::prelude::{Entity, World};
 
-use buiy_core::Node;
-use buiy_core::layout::{Stacking, TopLayer};
-use buiy_core::render::RasterImage;
-use buiy_core::render::components::{Background, ComputedPaintSkip};
-use buiy_core::text::Text;
+use buiy_core::is_transparent_top_layer_occluder;
 
 use super::predicates::Violation;
 
 /// The Tier-3 invariant (F6, spec §2.7): assert **no transparent top-layer node
-/// occludes picks** across `world`. Returns the offending entities in the
-/// `Violation` detail so a failing fixture names exactly which box re-introduced
-/// the invisible-occluder class.
+/// occludes picks** across `world`. Delegates the per-entity class test to the
+/// canonical [`buiy_core::is_transparent_top_layer_occluder`] predicate and returns
+/// the offending entities in the `Violation` detail.
 ///
 /// See the [module docs](self) for the exact structural definition.
 pub fn no_transparent_top_layer_occluder(world: &World) -> Result<(), Violation> {
-    let mut offenders: Vec<Entity> = Vec::new();
-    for entity in world.iter_entities() {
-        // A real layout node in the top layer (Stacking is `#[require]`d by Node,
-        // so a top-layer stacking only ever rides a Node — the explicit Node check
-        // documents the intent and skips a stray hand-added Stacking).
-        if !entity.contains::<Node>() {
-            continue;
-        }
-        let Some(stacking) = entity.get::<Stacking>() else {
-            continue;
-        };
-        if stacking.top_layer == TopLayer::None {
-            continue;
-        }
-        // A hidden node is not a pick candidate (the backend skips
-        // `ComputedPaintSkip`), so it cannot occlude.
-        if entity.contains::<ComputedPaintSkip>() {
-            continue;
-        }
-        // Paints something visible ⇒ not the *invisible*-occluder class.
-        let paints = entity.contains::<Background>()
-            || entity.contains::<Text>()
-            || entity.contains::<RasterImage>();
-        if paints {
-            continue;
-        }
-        // Transparent + top-layer + visible-to-picking. Safe ONLY as
-        // `Pickable::IGNORE`; anything else (no `Pickable` ⇒ the blocking default,
-        // or a blocking `Pickable`) makes it a pick occluder — the bug.
-        let is_ignore = entity.get::<Pickable>().copied() == Some(Pickable::IGNORE);
-        if !is_ignore {
-            offenders.push(entity.id());
-        }
-    }
+    let offenders: Vec<Entity> = world
+        .iter_entities()
+        .filter(|entity| is_transparent_top_layer_occluder(*entity))
+        .map(|entity| entity.id())
+        .collect();
     if offenders.is_empty() {
         Ok(())
     } else {

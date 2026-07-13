@@ -2291,14 +2291,28 @@ Dooduel bundle whether the toolbar should be hidden/disabled for non-drawing sea
 its visibility on `is_current_drawer`. Design question, not a confirmed defect — confirm intent
 before changing.
 
-## Dooduel — in-game theme-toggle pick/semantic rect 88x50 vs authored 72x34 pill — OPEN
+## Dooduel — in-game theme-toggle pick/semantic rect 88x50 vs authored 72x34 pill — CLOSED (no-violation)
+
+**Status:** **Closed as no-violation** 2026-07-13 (app-author-ergonomics campaign, Track B
+4b-pickrect). Confirmed by reading the code: pick and paint BOTH read `ResolvedLayout.size` (the
+**border box**) — pick at `crates/buiy_core/src/picking/backend.rs:99,153` (`point_in_node(cursor,
+abs_pos, layout.size, clip)`), paint at `crates/buiy_core/src/render/extract.rs:109-110,249-250`
+(`ExtractedNode.size = ResolvedLayout.size`). So the toggle's pick == paint == **88×50 border
+box** — there is **no pick≠paint violation** (the invariant Track B protects is intact). The
+`72×34` is the `ContentBox` *content* box (border box minus `button()`'s 8px padding), NOT a
+"painted pill" that pick overshoots. Nothing to fix here; no picking/button change.
+
+**The real residual is a *sizing* surprise, not a picking bug → Track C guidance.** `BoxSizing`
+defaults to `ContentBox`, so `.width(72)` on a padded `button()` renders an 88px border box (the
+authored width is the *content* width, not the outer size). That footgun is documented as a Track
+C app-author guidance item (the `using-mvu` / view-layout `BoxSizing`/`ContentBox`+padding gotcha),
+not a code change here.
 
 **Originated:** 2026-07-10, Track 1 investigation. The floating theme-toggle button's resolved
-pick + semantic rect measured `88x50`, but the design authors a `72x34` pill — the extra size is
-`button()`'s default padding inflating the hit box beyond the painted pill. Cosmetic + a slightly
-oversized hit target; it contributed to the Track 1 occlusion (now fixed by suppressing the toggle
-in-game). Fix (if pursued): a tighter padding/size override on the toggle so pick rect == painted
-pill. Low priority.
+pick + semantic rect measured `88×50` where the design authors a `72×34` pill; the extra size is
+`button()`'s default padding, read as an oversized *hit box beyond the painted pill*. That reading
+was corrected above (pick == paint == border box). It contributed to the Track 1 occlusion, since
+fixed by suppressing the toggle in-game.
 
 ## Dooduel — in-game desktop chat pane sits ~30px low (top_bar 72 vs design 60) — OPEN
 
