@@ -530,13 +530,16 @@ no one routes a quad-seat visual through the glyph path or vice versa.
 
 ## § 11 Known limitations and follow-ups
 
-1. **Single page-0 bind.** `AtlasGpu` builds the `@group(1)` bind group against
-   coverage page 0 only (`gpu.rs:47-51, 198-206`) and `coverage.wgsl:72`
-   ignores `i.page`. Heavy glyph load (CJK, many sizes) overflowing to page 1
-   would silently sample wrong texels. v1 mitigation: the producer **warns at
-   first page-1 allocation** (`AtlasEntry.page > 0`). Multi-page bind
-   (texture-array or per-page batches) is the first follow-up, triggered by
-   that warning firing in practice.
+1. **~~Single page-0 bind.~~ RESOLVED (2026-07-09,
+   [multi-page coverage atlas bind](../2026-07-09-multipage-coverage-atlas-bind-design.md)).**
+   `AtlasGpu` built the `@group(1)` bind group against coverage page 0 only and
+   `coverage.wgsl` ignored `i.page`, so glyph/icon load overflowing to page ≥1
+   silently sampled wrong texels and rendered blank (surfaced as Dooduel's empty
+   chat pills). Now the coverage pages are bound as a `texture_2d_array` (a
+   **forked** layout, leaving the raster/image layout `texture_2d`) and the shader
+   samples the per-instance layer via `textureSampleLevel(atlas, samp, uv, page, 0.0)`
+   — uniformity-clean (explicit-LOD) and WebGL2-safe (`sampler2DArray`); layer count
+   grows to high-water. The v1 first-page-1 warning was retired with the fix.
 2. **Glyphs bypass effect groups — LANDED (T8,
    [2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md](../../plans/2026-06-11-buiy-text-t8-glyphs-in-effect-groups.md)).**
    The glyph buffer is partitioned into flat/group ranges exactly like the

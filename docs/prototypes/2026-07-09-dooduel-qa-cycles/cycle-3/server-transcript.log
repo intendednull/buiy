@@ -1,0 +1,31 @@
+dooduel_server: loaded config /home/intendednull/.claude-personal/jobs/10f07af2/tmp/qa-cycle-3/qa-server.toml
+dooduel_server: listening on 127.0.0.1:7878 (ws://)
+dooduel_server: room config Config { total_rounds: 1, draw_seconds: 240, pick_seconds: 120, reveal_seconds: 30, hint_count: 2, bots_enabled: false }
+[room 795PCA] phase=Picking drawer=Some(0) round=1/1
+[room 795PCA] phase=Drawing drawer=Some(0) round=1/1
+[room 795PCA] seat 3 guessed correctly (+258)
+[room 795PCA] seat 2 guessed correctly (+93)
+[room 795PCA] phase=Reveal drawer=Some(0) round=1/1
+[room 795PCA] turn ended — word was 'xylophone'
+[room 795PCA] phase=Picking drawer=Some(1) round=1/1
+[room 795PCA] phase=Drawing drawer=Some(1) round=1/1
+[room 795PCA] seat 2 guessed correctly (+204)
+[room 795PCA] seat 3 guessed correctly (+106)
+[room 795PCA] phase=Reveal drawer=Some(1) round=1/1
+[room 795PCA] turn ended — word was 'sandwich'
+[room 795PCA] phase=Picking drawer=Some(2) round=1/1
+[room 795PCA] phase=Drawing drawer=Some(2) round=1/1
+[room 795PCA] seat 0 guessed correctly (+228)
+[room 795PCA] seat 1 guessed correctly (+152)
+[room 795PCA] seat 3 guessed correctly (+95)
+[room 795PCA] phase=Reveal drawer=Some(2) round=1/1
+[room 795PCA] turn ended — word was 'bicycle'
+[room 795PCA] phase=Picking drawer=Some(3) round=1/1
+[room 795PCA] phase=Drawing drawer=Some(3) round=1/1
+[room 795PCA] seat 1 guessed correctly (+356)
+[room 795PCA] seat 2 guessed correctly (+278)
+[room 795PCA] seat 0 guessed correctly (+93)
+[room 795PCA] phase=Reveal drawer=Some(3) round=1/1
+[room 795PCA] turn ended — word was 'volcano'
+[room 795PCA] phase=Final drawer=None round=1/1
+[room 795PCA] match ended — podium [(2, "Gwen", 675), (1, "Iris", 575), (3, "Finn", 559), (0, "Hugo", 388)]

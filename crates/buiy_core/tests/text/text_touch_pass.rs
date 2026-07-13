@@ -221,6 +221,88 @@ fn patch_inserts_evict_stale_keys_never_retained_ones() {
     }
 }
 
+/// Headless page-index encoding guard (multi-page coverage bind plan, Task
+/// 0.3): device-free proof that a coverage GLYPH resident on a page ≥1 carries
+/// that page in its emitted instance. This is the CPU→instance plumbing the
+/// GPU multi-page bind fix relies on — pre-existing and UNCHANGED by the fix,
+/// so it is a regression guard (passes today), not fix-proof (the GPU census
+/// in `text_gpu.rs` is the proof). Forces page 0 to overflow with a tiny page
+/// and many distinct large glyphs, then asserts `page_count > 1` and, for every
+/// emitted glyph, `instance.page == entry.page as u32` (the exact u16→u32 cast
+/// the producer emits). Icons are NOT covered here — the extract harness runs
+/// no icon producer, so the icon-overflow proof lives in the GPU census.
+#[test]
+fn overflow_glyph_instances_encode_their_atlas_page() {
+    use buiy_core::render::atlas::AtlasFormat;
+    use buiy_core::text::FontSize;
+
+    // A 64-texel page + a dozen-plus distinct ~30px glyphs → residency crosses
+    // page 0 (a handful of pages, well under the 8-page budget so no eviction).
+    let mut h = TextExtractHarness::with_atlas_config(AtlasConfig {
+        page_size: 64,
+        page_budget: 8,
+        eviction_grace: 1_000_000,
+    });
+    let text = h
+        .app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default(),
+            Text(String::from("ABCDEFGHIJKLMNOP")),
+            FontSize(30.0),
+        ))
+        .id();
+    h.app
+        .world_mut()
+        .spawn((
+            Node,
+            Style::default()
+                .flex_column()
+                .width_px(600.0)
+                .height_px(400.0),
+        ))
+        .add_child(text);
+    h.settle();
+    for _ in 0..3 {
+        h.frame();
+    }
+
+    assert!(
+        h.atlas().page_count(AtlasFormat::CoverageR8) > 1,
+        "the fixture must overflow page 0 (page_count > 1)"
+    );
+
+    // Plain LTR display text: keys are index-parallel with instances (the D5
+    // test's 1:1 invariant), so guard that alignment, then assert each glyph's
+    // emitted page mirrors its atlas entry's page (the u16 → u32 cast).
+    let keys = h.resident_keys();
+    let glyphs = &h.glyphs().glyphs;
+    assert_eq!(
+        glyphs.len(),
+        keys.len(),
+        "plain LTR text: one key per glyph instance"
+    );
+    let mut saw_overflow = false;
+    for (inst, key) in glyphs.iter().zip(&keys) {
+        let entry = h
+            .atlas()
+            .get(key)
+            .expect("every emitted glyph is atlas-resident");
+        assert_eq!(
+            inst.page, entry.page as u32,
+            "the emitted instance page must mirror its atlas entry page (u16→u32)"
+        );
+        if entry.page > 0 {
+            saw_overflow = true;
+        }
+    }
+    assert!(
+        saw_overflow,
+        "at least one glyph must be resident on a page ≥1 (else the guard is vacuous)"
+    );
+}
+
 /// verification § 1.2's seam-contract row, half 1: the whole producer flow
 /// is expressible against the render seam types alone — an `AtlasKey` is
 /// opaque bytes, residency is `get_or_insert` with an `AtlasBitmap`, and

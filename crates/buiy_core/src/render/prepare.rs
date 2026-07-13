@@ -82,6 +82,35 @@ pub struct GlyphEntityRun {
     pub instances: Range<u32>,
 }
 
+/// The per-tier base↔top-layer boundaries retained for the per-block draw
+/// restructure (top-layer stacking composite, § 3.2 — W2's `node.rs` consumes
+/// these). Each is the instance index where that tier's first top-layer instance
+/// begins, so the node draws the base block `[0..boundary)` then the top-layer
+/// block `[boundary..count)` of every tier — a top-layer subtree occludes base
+/// text/icons/borders, not just fills. Each equals the tier's instance count when
+/// the view has no top-layer node (an empty top-layer block — the byte-stable
+/// path). Recomputed off `ExtractedNode.top_layer` under the same per-tier gate as
+/// the tier's buffer (so a Patch frame retains them alongside the buffer).
+///
+/// NO gradient field (rev-4/m2): `block_interleave` (W2) splits the gradient blob
+/// base/top-layer by `partition_point`-ing the gradient anchors at the QUAD
+/// boundary, so a retained gradient boundary would never be consumed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TopLayerBoundaries {
+    /// Flat quad blob boundary (`PackedPartition::top_layer_boundary`).
+    pub quad: u32,
+    /// Square box-shadow blob boundary (`pack_shadow_instances`).
+    pub shadow: u32,
+    /// Rounded box-shadow blob boundary (`pack_rounded_shadow_instances`).
+    pub rounded_shadow: u32,
+    /// Border/outline band blob boundary (`pack_band_instances`).
+    pub band: u32,
+    /// Glyph blob boundary (`partition_glyph_ranges`, glyph carrier).
+    pub glyph: u32,
+    /// Vector-icon blob boundary (`partition_glyph_ranges`, icon carrier).
+    pub icon: u32,
+}
+
 /// Persistent per-view GPU instance buffers (architecture.md § 3.2): one
 /// growable buffer per primitive, allocated once and reused frame-to-frame
 /// (grow-in-place; never reallocated per frame), plus the view-uniform UBO.
@@ -256,6 +285,23 @@ pub struct BuiyInstanceBuffers {
     /// in between (test-only in practice: nothing degrades at the default
     /// 64 MiB RT budget).
     pub glyph_mirror_folded: bool,
+    /// The per-tier base↔top-layer draw boundaries (top-layer stacking composite,
+    /// § 3.2). Additive CPU-side draw metadata — NOT uploaded — retained per tier
+    /// under the same gate as that tier's buffer. W2's `node.rs` reads these to
+    /// draw the base block then the top-layer block of every tier. Every field is
+    /// the tier's instance count for a no-top-layer view (byte-stable).
+    pub top_layer: TopLayerBoundaries,
+    /// Whether ANY node this frame is top-layer (`PackedPartition::any_top_layer`,
+    /// the authoritative Signal-B gate — top-layer stacking composite § 3.3).
+    /// `node.rs` opens the top-layer block iff this is set: unlike the per-tier
+    /// [`top_layer`](Self::top_layer) boundaries (which all equal their counts for
+    /// a bare gradient/raster-only overlay member), this sees a top-layer node
+    /// regardless of what it paints, so a translucent gradient/raster-only overlay
+    /// still occludes base content. Recomputed off the fresh node list on the Full
+    /// quad-repack path; RETAINED across a Patch (a Patch never changes top-layer
+    /// membership — a changed top-layer node forces a Full rebuild, W3). `false`
+    /// for a no-top-layer view (the byte-stable base-only path).
+    pub any_top_layer: bool,
 }
 
 impl Default for BuiyInstanceBuffers {
@@ -286,6 +332,8 @@ impl Default for BuiyInstanceBuffers {
             quad_slot_of: EntityHashMap::default(),
             node_quad_anchor_of: EntityHashMap::default(),
             glyph_mirror_folded: false,
+            top_layer: TopLayerBoundaries::default(),
+            any_top_layer: false,
         }
     }
 }
@@ -548,6 +596,12 @@ pub fn prepare_buiy_instances(
         // path stays byte-for-byte the pre-compositor draw.
         buffers.group_ranges = partition.group_ranges;
         buffers.flat_ranges = partition.flat_ranges;
+        // Retain the quad base↔top-layer boundary for W2's per-block draw (§ 3.2).
+        buffers.top_layer.quad = partition.top_layer_boundary;
+        // The authoritative Signal-B gate: any node top-layer this frame (§ 3.3).
+        // Recomputed on the Full path; a Patch retains it (a Patch never changes
+        // top-layer membership — a changed top-layer node forces a Full rebuild).
+        buffers.any_top_layer = partition.any_top_layer;
 
         // Border/outline band buffer (C6-a outline + C6-b per-side border).
         // Packed from the SAME node walk, so it rides the quad gate; a node with
@@ -555,12 +609,13 @@ pub fn prepare_buiy_instances(
         // empty band buffer (band_count = 0) and the node skips the band draw.
         // The band draws flat (after quad/glyph) and is NOT effect-group-
         // partitioned in v1 (styling-f-tier.md § 2.3).
-        let bands = pack_band_instances(&nodes.0.nodes);
+        let (bands, band_top_layer_boundary) = pack_band_instances(&nodes.0.nodes);
         buffers.band.clear();
         for band in &bands {
             buffers.band.push(*band);
         }
         buffers.band_count = bands.len() as u32;
+        buffers.top_layer.band = band_top_layer_boundary;
         buffers.band.write_buffer(&render_device, &render_queue);
 
         // Box-shadow buffer (C6-b). Packed from the SAME node walk (it rides the
@@ -570,7 +625,7 @@ pub fn prepare_buiy_instances(
         // shadow reuses the 68 B `[f32; 17]` quad layout (radius → blur sigma), so
         // it shares the `packed_to_raw` flatten. Drawn FIRST in `node.rs` (before
         // the quad), so a shadow paints BEHIND its caster.
-        let shadows = pack_shadow_instances(&nodes.0.nodes);
+        let (shadows, shadow_top_layer_boundary) = pack_shadow_instances(&nodes.0.nodes);
         buffers.shadow.clear();
         for shadow in &shadows {
             buffers
@@ -578,6 +633,7 @@ pub fn prepare_buiy_instances(
                 .push(crate::render::buckets::packed_to_raw(shadow));
         }
         buffers.shadow_count = shadows.len() as u32;
+        buffers.top_layer.shadow = shadow_top_layer_boundary;
         buffers.shadow.write_buffer(&render_device, &render_queue);
 
         // Rounded box-shadow buffer (F4b-6). Packed from the SAME node walk (it
@@ -587,12 +643,14 @@ pub fn prepare_buiy_instances(
         // and the node skips the draw. Its OWN `RoundedShadowInstance` layout (the
         // 68 B quad stride + square-shadow path are untouched). Drawn in the SHADOW
         // tier in `node.rs`, alongside the square shadow blob.
-        let rounded_shadows = pack_rounded_shadow_instances(&nodes.0.nodes);
+        let (rounded_shadows, rounded_shadow_top_layer_boundary) =
+            pack_rounded_shadow_instances(&nodes.0.nodes);
         buffers.rounded_shadow.clear();
         for rs in &rounded_shadows {
             buffers.rounded_shadow.push(*rs);
         }
         buffers.rounded_shadow_count = rounded_shadows.len() as u32;
+        buffers.top_layer.rounded_shadow = rounded_shadow_top_layer_boundary;
         buffers
             .rounded_shadow
             .write_buffer(&render_device, &render_queue);
@@ -779,7 +837,16 @@ pub fn prepare_buiy_instances(
         let group_count = groups.0.len();
         let group_by_entity: HashMap<Entity, Option<usize>> =
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
-        let (group_ranges, flat_ranges) = partition_glyph_ranges(
+        // The top-layer stacking composite (§ 3.2): the parallel entity→top_layer
+        // map, off the fresh node list's `ExtractedNode.top_layer` (mirroring
+        // `group_by_entity`), + the retained glyph boundary for W2's per-block draw.
+        let top_layer_by_entity: HashMap<Entity, bool> = nodes
+            .0
+            .nodes
+            .iter()
+            .map(|n| (n.entity, n.top_layer))
+            .collect();
+        let (group_ranges, flat_ranges, glyph_top_layer_boundary) = partition_glyph_ranges(
             glyphs
                 .entity_runs
                 .iter()
@@ -789,9 +856,11 @@ pub fn prepare_buiy_instances(
             glyphs.glyphs.len() as u32,
             group_count,
             |e| group_by_entity.get(&e).copied().flatten(),
+            |e| top_layer_by_entity.get(&e).copied().unwrap_or(false),
         );
         buffers.glyph_group_ranges = group_ranges;
         buffers.glyph_flat_ranges = flat_ranges;
+        buffers.top_layer.glyph = glyph_top_layer_boundary;
     }
 
     // Icon partition (parity Wave B3 — the glyph-partition mirror over the icon
@@ -803,7 +872,15 @@ pub fn prepare_buiy_instances(
         let group_count = groups.0.len();
         let group_by_entity: HashMap<Entity, Option<usize>> =
             nodes.0.nodes.iter().map(|n| (n.entity, n.group)).collect();
-        let (group_ranges, flat_ranges) = partition_glyph_ranges(
+        // Icon mirror of the glyph partition's parallel top-layer map (§ 3.2) + the
+        // retained icon boundary for W2's per-block draw.
+        let top_layer_by_entity: HashMap<Entity, bool> = nodes
+            .0
+            .nodes
+            .iter()
+            .map(|n| (n.entity, n.top_layer))
+            .collect();
+        let (group_ranges, flat_ranges, icon_top_layer_boundary) = partition_glyph_ranges(
             icons
                 .entity_runs
                 .iter()
@@ -811,9 +888,11 @@ pub fn prepare_buiy_instances(
             icons.icons.len() as u32,
             group_count,
             |e| group_by_entity.get(&e).copied().flatten(),
+            |e| top_layer_by_entity.get(&e).copied().unwrap_or(false),
         );
         buffers.icon_group_ranges = group_ranges;
         buffers.icon_flat_ranges = flat_ranges;
+        buffers.top_layer.icon = icon_top_layer_boundary;
     }
 }
 

@@ -2085,3 +2085,345 @@ budget-grow un-degrade fixture (Opacity held constant so the glyph tier is
 provably clean on the edge frame), white-glyph ink R+G parity against a cold
 never-degraded render. RED (pre-fix): App A double-dimmed `[146,146,193]` vs App B
 `[183,183,199]`.
+
+## Reconcile `FocusedEntity` when its target entity despawns — OPEN
+
+**Originated:** 2026-07-05, code-review of the Dooduel a11y focus-clamp fix
+(`7c1529d`). The Dooduel networked GUI test (`apps/dooduel/tests/gui_networked.rs`)
+surfaced it: a synthetic pointer click focuses a button, the resulting screen
+transition despawns it, and the a11y tree then emitted a focus id absent from the
+node set — which panicked `accesskit_consumer` (and would panic the real platform
+adapter under a screen reader).
+
+**Status:** The CRASH is fixed centrally in `build_tree_update`
+(`crates/buiy_core/src/a11y/translate.rs`) — it now clamps `focus` to the root when
+the focused id isn't in the node set, enforcing AccessKit's TreeUpdate invariant at
+the one chokepoint feeding both the real adapter and the in-process snapshot. This
+follow-up is the RESIDUAL, lower-severity gap the clamp does **not** close.
+
+**Symptom:** nothing reconciles `FocusedEntity` when its target entity despawns
+(the only writers are `focus_on_click` / `handle_tab` / the a11y `Focus`/`Blur`
+router, all writing `Some`). After any screen swap that despawns the focused
+widget, `FocusedEntity.0` stays `Some(dead_entity)` indefinitely, so the next
+`TreeUpdate` clamps AT focus to the bare window root — a **WCAG 2.4.3 (Focus
+Order)** degradation until the user's next Tab (which recovers cleanly:
+`compute_next_focus` can't find the dead entity → lands on the first tab stop;
+entity generation is part of `node_id_for`, so a reused index never false-matches).
+`lower_focus_ring` also paints no ring in the interim (no panic).
+
+**Direction:** a focus-reconcile system (a `RemovedComponents<Focusable>` observer,
+or an existence check each frame) that clears — or better, RE-TARGETS — `FocusedEntity`
+to a sensible element on the incoming screen when its entity despawns, so AT users
+don't lose focus context on every navigation. The `focus.rs` module header already
+scopes focus *restoration* to the deferred `buiy-focus-model-design`
+(`docs/prior-art/bevy-a11y/focus-model.md`); this belongs there. Keep the
+`build_tree_update` clamp regardless (defense-in-depth for any pruned-node focus,
+e.g. `A11yHidden`).
+
+## Mouse text-selection on non-editable (static) text — CHARTERED (own /staged-development)
+
+**Originated:** 2026-07-05, Dooduel M1 playtest — the lobby room code is a static
+`text()` label and Buiy has no mouse text-selection on non-editable text, so the
+code can't be drag-selected/copied. A `Msg::CopyCode` "Copy" button
+(`apps/dooduel/src/view/lobby.rs`, commit `6e1a724`) is the shipped stop-gap.
+
+**Status:** **Deferred to its own full `/staged-development` cycle** (user request,
+2026-07-05: "useful and important"). Not started.
+
+**Scope sketch (for the design cycle, not decided here):** web-parity behavior —
+any static text selectable by mouse drag + `Ctrl/Cmd+C` to copy, a selection
+highlight, and reflection in the a11y tree. Key design questions: default-selectable
+(web-like) vs opt-in per node vs a container "selection region"; single-node MVP vs
+cross-node/cross-paragraph selection (much harder — spans the layout tree); how much
+of the editor's existing selection model / selection-highlight rendering / clipboard
+facade (`crates/buiy_core/src/text/edit/`) can be reused in a read-only mode. Aligns
+with Buiy's modern-web-parity north star. Once shipped, it SUPERSEDES the Dooduel
+Copy-button stop-gap.
+
+## Dooduel — color-code digits vs letters in the room code (O/0, I/1 confusion) — OPEN
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run — the room code `SD1CI0` was read
+back as `SD1CIO` (trailing **0** vs letter **O**), so the agent seats hit `RoomNotFound`
+until cross-checked against the clipboard. The code charset is `[A-Z0-9]`
+(`apps/dooduel_server/src/util.rs` `random_room_code`), which mixes visually-ambiguous
+glyph pairs (0/O, 1/I/l, 8/B, 5/S, 2/Z).
+
+**Direction (app-level display polish):** in the lobby code box
+(`apps/dooduel/src/view/lobby.rs` `code_box`), render each character in a color keyed to
+its class — e.g. digits in the accent/positive tint and letters in `ink` — so a human
+reading the code aloud can't confuse `0`/`O`. Cheap: split the code string into
+per-character `text()` spans in a `row!` with the class-based color, rather than one label.
+Optionally also do this on the Join screen's code entry echo. A stronger, separate option
+is to shrink the *generator* alphabet to an unambiguous set (Crockford-style: drop
+`O/I/L/U`, treat `0/1` carefully) — but that's a server/protocol change affecting code
+space and existing-code assumptions, so keep it distinct from this display-only fix.
+
+## Dooduel — live scoreboard stuck at 0 + sticky `guessed ✓` badge — RESOLVED (2026-07-06)
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run. Two symptoms, one root cause:
+(a) the per-player `— N pts` in the roster/scoreboard stayed `0` all match (correct only at
+the podium), and (b) the `[guessed ✓]` badge was sticky — once a seat guessed any turn it
+read "guessed" forever (turn-4 `bicycle` was guessed only by seat 0 per the transcript, yet
+seats 1/2 both showed guessed). Confirmed in BOTH clients (the GUI scoreboard screenshot and
+the `dooduel_mcp` seat view), so it was shared, not client-specific.
+
+**Root cause (`apps/dooduel_core/src/session.rs`):** the `Session` is authoritative and both
+clients rebuild their roster from a `Roster` event applied wholesale. But `Session` only
+emitted a `Roster` on **membership** changes (join / vacate) — never on a **score** change
+or a **turn** boundary. `resync` diffed phase / chat / countdown but not scores, and a
+correct guess's `GuessResult` only carries `points` (which the clients ignore) + flips the
+guessed flag optimistically. So live scores sat at whatever the last membership Roster
+carried (0) until an unrelated join/leave happened to send one — which is exactly why the
+final scores popped in the instant the host vacated at match-end (`vacate` → `broadcast_roster`).
+The `guessed` flag (server-derived per-turn from `turn_guesses`) was never re-synced at a new
+turn because no Roster was sent at turn start.
+
+**Fix:** make the `Roster` the authoritative roster-refresh it was designed to be —
+(1) snapshot per-seat scores in `Pre` and broadcast a `Roster` from `resync` whenever any
+score moves (covers the guesser's award AND the drawer's turn-end payout); (2) broadcast a
+`Roster` at each turn's `Picking` transition (a fresh-turn sync that resets every seat's
+`guessed` badge and re-carries scores). One mechanism, in the shared core, so it fixes solo
++ networked and GUI + agents at once. Tests: `guess_gate_phase_drawer_and_correct_path` now
+asserts the Roster follow carries the awarded score; `a_new_turns_picking_broadcasts_a_fresh_roster_that_resets_guessed`
+asserts the turn-start Roster clears the flag. dooduel_core 94/94 green.
+
+## Dooduel — chat rows render as empty pills (glyph text vanishes) — ✅ RESOLVED (2026-07-09)
+
+**Resolved** by [multi-page coverage atlas bind](../specs/2026-07-09-multipage-coverage-atlas-bind-design.md)
+(spec) / [plan](2026-07-09-multipage-coverage-atlas-bind.md), on `feat/dooduel-multiplayer-m1`
+(commits `90b1e44` tests, `9181f63` fix, `c592927` warn removal). All resident coverage
+atlas pages are now bound as a `texture_2d_array` (**forked** from the raster/image layout so
+the drawing canvas is untouched) and `coverage.wgsl` samples the per-instance page layer via
+explicit-LOD — uniformity-clean + WebGL2-safe. Verified end-to-end: GPU ink census (RED→GREEN)
++ recreate/re-upload-all test + byte-identical goldens + raster GPU guards + SwiftShader WebGL2
+(0 shader errors) + native Dooduel render smoke. The v1 first-page-1 warning was retired. Closes
+glyph-pipeline § 11.1. **Original root-cause analysis kept below for the record.**
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run. In the in-game chat pane, once the
+chat accumulates many messages, the newest rows render as empty colored pills — the
+background bubble paints (node/quad pipeline) but the message text is blank. App code
+(`in_game.rs` `chat_pane`/`chat_line`) is blameless; the text is correctly shaped and every
+glyph is emitted and uploaded.
+
+**Root cause — a FRAMEWORK render-pipeline bug (`crates/buiy_core/src/render/`):** the
+coverage glyph atlas is paged (`atlas/types.rs` `page_size=1024`, `page_budget=8`), but the
+GPU draw binds **only page 0** (`node.rs:158-162` single `coverage_bind_group`; `atlas/gpu.rs`
+rebuilds page 0's texture only) and the shader ignores the per-instance page
+(`coverage.wgsl:78-80` `_ = i.page` — the documented v1 stub, glyph-pipeline § 11.1). When
+page 0 fills and the format is still under the 8-page budget, the allocator APPENDS page 1+
+without evicting (`atlas/atlas.rs:151-209`); `emit_glyph` emits those glyphs with `page>0`
+and fires `warn_once_page_overflow` (`text/extract.rs:1828-1848`, `2291-2299`). Overflow
+glyphs then sample page 0 at page-1 UVs → wrong/empty texels → blank ink over a painted
+background. It strikes the newest-resident keys (fresh chat glyphs) once the whole screen's
+distinct-glyph working set (scoreboard + word + chat across several sizes/families) exceeds
+one 1024² page — the first Dooduel workload to cross it. Affects ANY text-heavy long-running
+Buiy screen, not just Dooduel. (Ruled out shaping / `stick_to_bottom` / `keyed_column` /
+prepare-upload via a headless repro — all rows shape fully; the drop is purely the atlas page
+bind.)
+
+**Fix (deferred — a focused render effort, not an inline patch):** build the multi-page bind
+the code already TODOs (§ 11.1): expose all resident coverage pages as a texture-2d-array in
+`atlas/gpu.rs`, consume `i.page` in `coverage.wgsl` (`textureSampleLevel(atlas_array, …, i.page)`),
+and bind the array in `node.rs` + the flat glyph draw. The eviction/pooling/`page`-field
+machinery already exists — it's a bind + shader change, not new allocation logic. **Verify**
+on the GPU `#[ignore]` lane (this repo has a real adapter): a content-presence census that
+fills past one page, renders to texture, and asserts the last-emitted text node has non-zero
+ink — plus a cheap headless guard that no live entry lands on `page>0` within budget. Deferred
+because a shader / GPU-bind change deserves its own effort with golden verification rather than
+a rushed inline fix. **Stopgap available if needed:** cap the Dooduel chat to the last ~N
+messages so the working set stays under one page (mitigation only — not the real fix).
+
+## Render — stale `GlyphAlphaInstance` "stride 68" comment in primitive.rs — OPEN (trivial)
+
+**Originated:** 2026-07-09, spotted during the multi-page coverage atlas bind cycle
+(spec § 7). `crates/buiy_core/src/render/primitive.rs:768` has a comment saying
+`GlyphAlphaInstance` is "stride 68", but the actual asserted stride is **84** (the
+`page @64` + `affine @68` fields the comment predates). Comment-only; the code + the
+stride assertion are correct. Fix: correct the comment to 84. Kept out of the atlas-bind
+change to preserve its scope.
+
+## Dooduel — smoothly animate the turn countdown timer — OPEN
+
+**Originated:** 2026-07-06, Dooduel M1 acceptance run (user request). The turn countdown
+advances in discrete ~1 s steps (the `~Ns left` seat-view line; the GUI's countdown
+ring/label). Make it a smooth continuous animation — a per-frame-interpolated shrinking
+ring/bar driven off the wall-clock remaining fraction — instead of a 1 Hz jump. The GUI
+already holds the remaining `Duration`; drive the visual from `remaining / total` each frame
+through the existing animation/tick plumbing. Display-only polish (no authority change).
+
+## Dooduel QA — 3 harness-found bugs FIXED (regression watch) — RESOLVED (2026-07-10)
+
+**Originated:** 2026-07-10, the QA seat-driver harness campaign (spec
+`docs/specs/2026-07-09-dooduel-qa-seat-driver-design.md`). Building + running the driver
+surfaced three real bugs, each staged + fresh-reviewed + covered by a regression test; logged
+here (and on known-issues §1) so a future audit sees them closed:
+
+1. **Track 1 (app) — in-game theme toggle occludes the chat Send button** (pick≠paint at
+   1280×800). Fix `e891000` (suppress the floating toggle on the InGame screen); spec
+   `docs/specs/2026-07-10-dooduel-theme-toggle-occlusion-design.md`; test
+   `apps/dooduel/tests/in_game_occlusion.rs`.
+2. **Track 2 (framework) — `probe`/AT `set_value` didn't emit `TextChanged`** so the model
+   never folded (`SubmitJoin`/`SubmitGuess` read `""`). Fix `23540a0` (emit `TextChanged` on a
+   value-changing `SetValue`), driver workaround dropped `7931f22`, spec rev-2.2; tests
+   `crates/buiy_core/tests/a11y_set_value_route.rs` + the emit-count/empty-clear cover `5f4032b`.
+3. **Track 3 (framework) — a controlled `text_input` clobbered an un-folded AT `set_value` on a
+   rebuilding screen** (the in-game chat under the countdown). Fix `e81b91f`
+   (`PendingProgrammaticEdit` marker) + placeholder re-patch `d2f4863`; design note
+   `docs/specs/2026-07-10-dooduel-controlled-input-setvalue-fold-design.md`; RED→GREEN
+   `crates/buiy_view/tests/controlled_input_rebuild_clobber.rs` + `controlled_placeholder_patch.rs`.
+
+## Dooduel/QA — benign Bevy warn on set_value-then-same-frame-navigate-away — OPEN
+
+**Originated:** 2026-07-10, Track 3 review. When a `set_value` is followed by a same-frame
+navigation that despawns the edited field, `route_text_input` clears the
+`PendingProgrammaticEdit` marker / drains the queued `TextChanged` against an already-despawned
+entity, emitting a benign Bevy "command on a despawned entity" warn. The router clear is
+unconditional **by design** (it must clear even the no-`on_input` edge so a marker never sticks);
+the warn is cosmetic — no lost edit, no wrong state. Fix (if ever): guard the clear on the entity
+still existing. Low priority; cosmetic log noise only.
+
+## Dooduel — guesser sees the full drawing toolbar in-game — OPEN (design check)
+
+**Originated:** 2026-07-10, W1 QA-gate observation. The in-game screen renders the full drawing
+toolbar (Brush / Fill / brush-size dots / the 16 swatches / Undo / Clear) for **every** seat,
+including guessers who cannot draw during another seat's turn. Verify against the reference
+Dooduel bundle whether the toolbar should be hidden/disabled for non-drawing seats; if so, gate
+its visibility on `is_current_drawer`. Design question, not a confirmed defect — confirm intent
+before changing.
+
+## Dooduel — in-game theme-toggle pick/semantic rect 88x50 vs authored 72x34 pill — OPEN
+
+**Originated:** 2026-07-10, Track 1 investigation. The floating theme-toggle button's resolved
+pick + semantic rect measured `88x50`, but the design authors a `72x34` pill — the extra size is
+`button()`'s default padding inflating the hit box beyond the painted pill. Cosmetic + a slightly
+oversized hit target; it contributed to the Track 1 occlusion (now fixed by suppressing the toggle
+in-game). Fix (if pursued): a tighter padding/size override on the toggle so pick rect == painted
+pill. Low priority.
+
+## Dooduel — in-game desktop chat pane sits ~30px low (top_bar 72 vs design 60) — OPEN
+
+**Originated:** 2026-07-10, Track 1 investigation. On the desktop in-game screen the chat pane's
+bottom edge sits ~30px lower than the reference design's, traced to the app's `top_bar` height
+being 72px where the design uses 60px (the extra 12px in the top bar cascades down the 3-pane
+column). Cosmetic layout drift vs the bundle; confirm the intended `top_bar` height and reconcile.
+Low priority.
+
+## Render/framework — single-tier glyph paint can't be occluded by a top-layer quad (pick≠paint) — LANDED
+
+**Status:** **Landed** 2026-07-12 by the top-layer stacking composite refactor (spec
+`docs/specs/2026-07-10-toplayer-stacking-composite-design.md` rev-4, plan
+`docs/plans/2026-07-10-toplayer-stacking-composite.md`, waves W0–W6 on `feat/dooduel-multiplayer-m1`).
+`buiy_pass` now draws each `.top_layer()` subtree's COMPLETE tier-stack (glyphs, icons, bands
+included) over the base block on the same window surface, so a top-layer overlay occludes base
+text/icons/borders — not just fills. The pick≠paint seam is closed (`toplayer_paint_pick`).
+GPU-verified on the RX 6700 XT: `scrim_tier_bleed_gpu` flipped bands/glyphs/icons BLEED→DIM; 8
+`toplayer_occludes_all_tiers_gpu` fixtures GREEN; both legs byte-stable (buiy_core 95/0,
+buiy_verify 24/0). Proven in the real dooduel app: base top-bar text dims ~34% under the word-pick
+scrim (`in_game_picking` vs `in_game_drawer`).
+
+**Originated:** 2026-07-10, Track 1 framework observation. Glyphs paint in a single global tier
+**after** all quads (the flat glyph draw runs once, on top), so a top-layer quad drawn *over* a
+base-screen text run cannot visually occlude that run's glyphs — the text bleeds through the quad
+even though picking (which is z/top-layer-ordered) treats the quad as on top. This pick≠paint seam
+is exactly what let the Track 1 theme toggle (a top-layer quad) win the Send *pick* while the
+underlying "Send" glyphs still painted through it. Structural: honoring per-tier/top-layer glyph
+occlusion needs glyphs to participate in the paint-order tiers (the top-layer composite pass /
+effect-group seam), not a single post-quad draw. Larger render-pipeline effort; noted, not
+scheduled. *(This is the observation the LANDED refactor above resolved.)*
+
+## Render/framework — top-layer per-context ordering (overlapping overlays) — DEFERRED (single-boundary-v1)
+
+**Originated:** 2026-07-12, top-layer stacking composite refactor (W6 close-out). The landed v1
+draws ALL top-layer content as ONE block over the base. When two `.top_layer()` overlays OVERLAP,
+the lower does not occlude the higher's base-bleed within the top block (they share one boundary,
+not a per-context ordering). Characterized by the GPU gate
+`toplayer_occludes_all_tiers_gpu::single_boundary_v1_scrim_dims_base_band_not_a_fellow_top_layer_band`
+(the scrim dims a BASE band but NOT a fellow top-layer tooltip band, Δ0 — the accepted v1 limit).
+No current app hits it (Dooduel overlays don't overlap each other). Per-context v1 = carry a
+per-top-layer-ROOT id on the extract record (mirror the `nearest_group_entity` climb) + an N-range
+`RangePartitioner` + `cross_root_rank` ordering per block; spike-confirmed cheap. Marked
+`FIXME(per-context-v1)` in the fixture. Deferred.
+
+## Render/framework — top-layer same-block backdrop-blur vs composite spatial overlap — DEFERRED
+
+**Originated:** 2026-07-12, top-layer stacking composite refactor (W6 close-out). Within a single
+block the sub-pass order is LOCKED to today's tier-stack → backdrop-blur → backdrop-filter-fills →
+composite (§3.3). A same-block backdrop-blur and an effect-group composite that spatially OVERLAP
+could in principle order-depend; no fixture constructs this (the fixtures test cross-block ordering,
+which is correct). Named for completeness; revisit if a real overlay stacks a backdrop-blur under a
+composited sibling in the same context.
+
+## Dooduel (app) — avatar editor can now be a top-layer overlay (top-layer occludes correctly) — OPEN
+
+**Originated:** 2026-07-12, top-layer stacking composite refactor (W6 close-out). The avatar editor
+was authored as a full in-flow SCREEN (not a `.top_layer()` overlay) specifically because the old
+global-tier rendering meant a top-layer overlay couldn't occlude base text/icons (see the LANDED
+pick≠paint entry above + the note at `apps/dooduel/src/view/mod.rs`). That constraint is now lifted
+— a top-layer overlay occludes all tiers. The avatar editor (and any other full-screen takeover)
+could be re-authored as a top-layer modal overlay if desired. App-side; not scheduled.
+
+## Dooduel (app) — dark-mode scrim near-iso-luminant with the background — OPEN
+
+**Originated:** 2026-07-10 (root-caused), reconfirmed 2026-07-12. `SCRIM = 0x14161b` (rgba
+20,22,27,~0.61) is theme-invariant and, in DARK mode, near-iso-luminant with the dark backgrounds
+(the in-game canvas `0x1b1e25` is actually *lighter* than the scrim), so even a correctly-composited
+scrim reads as a very subtle dim in dark mode. The tier-bleed refactor fixed the OCCLUSION (base
+text now dims — proven ~34% in LIGHT mode); this is the SEPARATE, lower-priority COLOR issue: give
+the scrim a theme-aware (darker / higher-alpha) value in dark mode so the dim is perceptible.
+Independent of the framework refactor.
+
+## Dooduel — stale guess-draft survives a mid-Drawing RECONNECT (reseed asymmetry) — OPEN
+
+**Originated:** 2026-07-10, cycle-1 Track B review (F2). The `PhaseChanged` arm now clears
+`chat_input` on every turn transition (`5320ae3`), but the `RoomState` mid-match-reconnect reseed
+arm (`apps/dooduel/src/lib.rs:873`) sets a fresh phase WITHOUT clearing `chat_input` — so a stale
+guess draft could survive a reconnect that lands mid-Drawing. Pre-existing, out of F2's
+turn-transition scope, at most cosmetic for one word (guessing is open there, draft still
+editable). Add `chat_input.clear()` to the reseed arm for reconnect symmetry if desired. Low
+priority.
+
+## Dooduel — Join/Lobby room-code field renders narrower than its dashed wrapper — OPEN (S5)
+
+**Originated:** 2026-07-10, cycle-1 finding F4. The `2.5px dashed` room-code frame is the intended
+"sketchy" aesthetic (`apps/dooduel/src/view/join.rs:15,27`, `lobby.rs:31,45`), but the inner
+`text_input` (`.fill_width()`, `join.rs:23`) renders narrower than its dashed wrapper, so the field
+looks offset/inset inside the frame — a naive first-timer read it as a glitch. Cosmetic; tighten the
+field-to-frame fit. Low priority.
+
+## Render/framework — content-less green chat pills at high volume (KI-02 atlas family) — OPEN (framework render track)
+
+**Originated:** 2026-07-10, Dooduel QA cycle-2 (C2-02), all 4 seats. Once the in-game chat
+passes ~20 rows, up to TWO content-less light-green (`ChatKind::Correct` #DCEFE3 tint) pills
+render at the chat TAIL — a stale/extra green QUAD with no glyphs and no backing node in the
+app's realized tree. The `apps/dooduel` side is PROVEN clean (core never emits empty chat
+text; a faithful 24-row networked repro shows `keyed_rows(rendered) == model chat` one-for-one,
+no phantom/dropped rows — guard test committed `4ae7764`), so the root is BELOW the app in the
+GPU render layer — a stale/extra quad instance at high volume / the atlas-page or chat-pane
+scroll edge. Same lineage as KI-02 (the multi-page coverage-atlas-bind cycle). S3 (cosmetic —
+no lost content). Needs a FRAMEWORK render-track investigation on the GPU lane (repro the extra
+quad at volume → localize the stale instance in the render/atlas/scroll pipeline → fix +
+GPU-verify). Deferred from cycle-2 (app-clean; framework fix is a separate focused effort).
+Tracked as known-issue KI-34.
+
+## Dooduel — confetti not observed on podium / correct-guess reveals — OPEN (S5, verify)
+
+**Originated:** 2026-07-10, Dooduel QA cycle-3 (Hugo, host+visual, low confidence). No confetti
+was seen on the podium (2 static shots) or on any correct-guess reveal. The `ConfettiPlugin` IS
+in `install_runtime`, so this is most likely an animated burst missed between the ~1 Hz static
+screenshots rather than a real miss — but it was never positively confirmed firing in 3 cycles
+of playtests (agents read static frames). VERIFY: run the native app and watch a correct-guess
+reveal + the podium for a confetti burst; if it never fires, it's a real (S4) missing-celebration
+bug, possibly tied to the deferred emoji/character-layer path (KI-23). Low priority.
+
+## Dooduel — add a turn-end-boundary characterization test (after-expiry guess → WrongPhase) — OPEN (cheap, docs-expected-behavior)
+
+**Originated:** 2026-07-10, Dooduel QA cycle-3 (C3-S2-01 adjudication). NOT a bug — a guess that
+reaches the room actor after the draw-timer expiry tick is correctly WrongPhase-rejected, never
+silently dropped (traced: `session.rs:404-416` synchronous `on_guess` with a `phase != Drawing`
+guard; `room.rs:306-309` messages-before-ticks; `game.rs:535-547` all-guessed credits the last
+guesser before `end_turn`; a 2/3 end with drawer +67 can only be a timer-end). Existing coverage
+`guess_before_drawing_is_wrong_phase` (session.rs:1423) covers the Picking case but NOT the
+after-draw-expiry case. Add a cheap session-tier test: force the draw timer to expire (tick
+past `total`), submit a correct guess, assert it returns WrongPhase and does NOT enter
+`turn_guesses` / change score. Documents the boundary + guards a future refactor from silently
+dropping instead of rejecting. Low priority.

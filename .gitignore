@@ -25,3 +25,7 @@ examples/*/dist-webgpu/
 
 # App-1 lane artifacts (not committed)
 PR_BODY.md
+
+# Live dooduel_server runtime config (local per-run knobs; the committed reference is
+# apps/dooduel_server/dooduel_server.example.toml).
+/dooduel_server.toml

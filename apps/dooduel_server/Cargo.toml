@@ -1,0 +1,49 @@
+# Dooduel M1 W4: the authoritative networked server (spec §2.1, §6). A native-only
+# binary that owns one `dooduel_core::Session` per room behind a real WebSocket, with
+# NO Bevy/Buiy GUI stack (locked decision 5) — it depends on `dooduel_core` only, plus
+# the tokio-free smol async ecosystem. `ws://` only in M1 (no TLS — spec §6.2).
+[package]
+name = "dooduel_server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# `doc = false` per the repo's bin convention (the rustdoc bin-collision precedent).
+[[bin]]
+name = "dooduel_server"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+# The pure authority/protocol/canvas core (Bevy-free). The server serves it verbatim.
+dooduel_core = { path = "../dooduel_core" }
+# The server WebSocket + its smol runtime (tokio-free, spec §6.1/§10).
+async-tungstenite = { workspace = true }
+async-net = { workspace = true }
+async-executor = { workspace = true }
+async-io = { workspace = true }
+# The actor-model room intake + per-conn outbox channels (§6.1).
+async-channel = { workspace = true }
+futures-lite = { workspace = true }
+# One protocol message per WS TEXT frame (spec §3.1).
+serde_json = { workspace = true }
+# The optional `dooduel_server.toml` room/game config (src/config.rs) — deserialized with
+# serde's derive; the phase-timer/rounds/bots knobs the M1 acceptance run overrides.
+serde = { workspace = true }
+toml = { workspace = true }
+# Room codes + reconnect tokens (spec §6.2/§6.3).
+getrandom = { workspace = true }
+
+# The two-process e2e (`tests/e2e.rs`, W5.3) spawns the running server bin
+# (CARGO_BIN_EXE_dooduel_server) and drives it through real `dooduel_mcp::HeadlessClient`s
+# over actual WebSockets (spec §9.5). The MCP client lib pulls dooduel_core's ewebsock
+# `ws-client` transport transitively, so this test build has the client transport while the
+# PRODUCTION server bin still uses async-tungstenite (the ws-client feature unification is
+# dev-only — the non-test bin build never sees ewebsock). `dooduel_core` (default features)
+# supplies the protocol/transport TYPES the e2e names directly.
+[dev-dependencies]
+dooduel_core = { path = "../dooduel_core", features = ["ws-client"] }
+dooduel_mcp = { path = "../dooduel_mcp" }

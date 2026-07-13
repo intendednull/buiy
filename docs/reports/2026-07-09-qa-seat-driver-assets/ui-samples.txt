@@ -1,0 +1,23 @@
+# qa_seat ui.md calibration samples — the EXACT snapshot_report line formats the W2
+# parsers (qa_seat_smoke.rs Task 2.1 room_code / first_word_choice) must match.
+#
+# Provenance: captured verbatim from a real 2-seat manual gate run (W1 Task 1.4) on
+# 2026-07-10, host AMD RX 6700 XT / RADV, server config rounds=1 draw=150 pick=30
+# reveal=12 hints=2 bots=false, room 39R5OM. Do not hand-edit — these are the ground
+# truth for the parser format, indentation, and quoting.
+
+# --- room-code line ---
+# From the Lobby ui.md's "--- text & layout ---" text section (the room code is a bare,
+# role-less Text, so it appears here, NOT in the role tree — spec res-Q3). The code is the
+# 6-char [A-Z0-9] value inside text="...". A W2 parser scans text-section lines for
+# text="<6 uppercase/digit chars>". Exact line (from /tmp/qa-w1/lobby-seat0-ui.md):
+size=75x29 text="39R5OM"
+
+# --- word-choice Button line ---
+# From the Picking-overlay ui.md's ROLE TREE section (word choices are real
+# A11yRole::Button, name = the UPPERCASED word — spec §3.1, in_game.rs:818). A W2 parser
+# scans role-tree lines for Button "<UPPERCASE word>". The overlay shows three; any one is
+# a valid calibration sample. Exact lines (from /tmp/qa-w1/pick-seat0-ui.md):
+Button "UMBRELLA" @411,315 460x80
+Button "ZEPPELIN" @411,411 460x80
+Button "JELLYFISH" @411,507 460x80

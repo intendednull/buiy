@@ -1,6 +1,6 @@
 //! Join screen — the room-code field + join CTA (reached from Home's "Join a room").
 
-use buiy::view::{Element, Radius, Space, text, text_input};
+use buiy::view::{Color, Element, Radius, Space, text, text_input};
 use buiy_view::LineStyle;
 
 use crate::theme::FONT_BODY;
@@ -27,24 +27,22 @@ pub fn join(s: &Dooduel) -> Element<Msg> {
     .border(2.5, p.ink, LineStyle::Dashed)
     .padding(Space::Sm);
 
-    let inner = card(
-        card_w(s, 400.0),
-        vec![
-            quiet_button("‹ Back", Msg::Back, p),
-            eyebrow("Join a room"),
-            title("Enter a room code", 38.0, p),
-            text("Ask whoever's hosting for their invite code or link.")
-                .size(15.0)
-                .color(p.ink_2)
-                .font(FONT_BODY),
-            code_field,
-            primary_button("Join room", Msg::SubmitJoin, p),
-            text("Solo demo — any code works, you'll drop into a mocked room.")
-                .size(13.0)
-                .color(p.muted)
-                .font(FONT_BODY),
-        ],
-        p,
-    );
+    let mut children = vec![
+        quiet_button("‹ Back", Msg::Back, p),
+        eyebrow("Join a room"),
+        title("Enter a room code", 38.0, p),
+        text("Ask whoever's hosting for their 6-character invite code.")
+            .size(15.0)
+            .color(p.ink_2)
+            .font(FONT_BODY),
+        code_field,
+        primary_button("Join room", Msg::SubmitJoin, p),
+    ];
+    // Surface a rejected join (e.g. an unknown code) here so the user can fix it.
+    if let Some(msg) = &s.toast {
+        children.push(text(msg).size(14.0).color(Color::Accent).font(FONT_BODY));
+    }
+
+    let inner = card(card_w(s, 400.0), children, p);
     screen_root(inner, p)
 }

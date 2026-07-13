@@ -21,6 +21,8 @@ mod text_auto_scroll;
 mod text_commit;
 #[path = "text/text_components.rs"]
 mod text_components;
+#[path = "text/text_content_change_extract.rs"]
+mod text_content_change_extract;
 #[path = "text/text_decoration.rs"]
 mod text_decoration;
 #[path = "text/text_decoration_extract.rs"]

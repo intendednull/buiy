@@ -163,6 +163,54 @@ const _ASSERT_POD: fn() = || {
     _is_pod::<PackedInstance>();
 };
 
+/// Tracks the base↔top-layer boundary as a per-node tier packer walks `nodes` in
+/// paint order (the top-layer stacking composite, § 3.2). Every packer that
+/// partitions its blob at the top-layer boundary drives one of these: call
+/// [`observe`](Self::observe) for each node BEFORE pushing that node's
+/// instances, passing the tier's current instance count; [`finish`](Self::finish)
+/// yields the boundary — the instance index of the first top-layer node's first
+/// instance, or the total count when the view has no top-layer node (an empty
+/// top-layer block `[count..count)`, the byte-stable path).
+///
+/// The tail-contiguity `debug_assert` in `observe` is the production tripwire
+/// (spec § 3.4): top-layer content is a contiguous suffix of the paint order
+/// (`context_tree_paint_order` + `cross_root_rank`), so once a top-layer node is
+/// seen no base node may follow. It caught the § 3.1 per-node-vs-ancestor-climb
+/// classification bug in one GPU run — a hard panic, not a silent wrong pixel.
+#[derive(Default)]
+struct TopLayerBoundaryTracker {
+    boundary: Option<u32>,
+    seen_top_layer: bool,
+}
+
+impl TopLayerBoundaryTracker {
+    /// Observe `node` (in paint order) with the tier's current `instance_count`
+    /// (the index the node's first instance is about to occupy). Records the
+    /// boundary at the first top-layer node and trips the tail-contiguity
+    /// `debug_assert` on a base node after a top-layer one.
+    fn observe(&mut self, node: &ExtractedNode, instance_count: u32) {
+        // Tail-contiguity: once a top-layer node is seen, every later node is
+        // top-layer (`!seen_top_layer || node.top_layer`, § 3.4).
+        debug_assert!(
+            !self.seen_top_layer || node.top_layer,
+            "top-layer nodes must form a contiguous tail: a base node followed a \
+             top-layer node in the paint-order walk (the ancestor-climb classifier \
+             drifted from the top-layer materialization, or the tail is not \
+             context-contiguous)"
+        );
+        if node.top_layer {
+            self.boundary.get_or_insert(instance_count);
+            self.seen_top_layer = true;
+        }
+    }
+
+    /// The tier's boundary: the first top-layer instance index, or `total` (the
+    /// tier's final instance count) when the view has no top-layer node.
+    fn finish(self, total: u32) -> u32 {
+        self.boundary.unwrap_or(total)
+    }
+}
+
 /// Pack a per-view node list — R5's [`ExtractedNode`] records — into
 /// typed-primitive `(primitive, layer)` buckets. v1 routes every node to
 /// `(Quad, layer 0)` — the only primitive the v1 set emits — packing each via
@@ -208,9 +256,18 @@ pub fn pack_view(nodes: &[ExtractedNode]) -> InstanceBuckets {
 /// v1: the band rides the FLAT window draw only — it is not partitioned into
 /// effect-group off-screen targets (a ring/border on a grouped element is a
 /// follow-up; the common case is a top-level widget).
-pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
+///
+/// Returns the blob PLUS its base↔top-layer boundary (top-layer stacking
+/// composite, § 3.2): the instance index of the first top-layer node's first band
+/// (border before outline), or the band count when no top-layer node has one. The
+/// per-block draw (W2) draws base bands `[0..boundary)` then top-layer bands over
+/// the top-layer tier-stack, so a base border no longer bleeds through a scrim. A
+/// tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`) guards § 3.4.
+pub fn pack_band_instances(nodes: &[ExtractedNode]) -> (Vec<BorderBandInstance>, u32) {
     let mut bands = Vec::new();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for n in nodes {
+        top_layer.observe(n, bands.len() as u32);
         // Border first (inside the box), then outline (outside, on top).
         if let Some(border) = n.border.as_ref() {
             bands.push(pack_border(border));
@@ -219,7 +276,8 @@ pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
             bands.push(pack_outline(outline));
         }
     }
-    bands
+    let boundary = top_layer.finish(bands.len() as u32);
+    (bands, boundary)
 }
 
 /// Pack a view's node list into the flat box-shadow instance blob, in paint
@@ -234,9 +292,18 @@ pub fn pack_band_instances(nodes: &[ExtractedNode]) -> Vec<BorderBandInstance> {
 /// Reuses the frozen 68 B [`PackedInstance`] (radius slot → blur sigma — no
 /// stride change). Like the band, v1 rides the FLAT window draw only (no
 /// effect-group partitioning).
-pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
+///
+/// Returns the blob PLUS the base↔top-layer boundary (top-layer stacking
+/// composite, § 3.2): the instance index of the first top-layer caster's first
+/// SQUARE shadow term, or the shadow count when no top-layer caster has one. The
+/// per-block draw (W2) draws base shadows `[0..boundary)` then top-layer shadows
+/// `[boundary..)`. A tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`)
+/// guards the § 3.4 invariant.
+pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> (Vec<PackedInstance>, u32) {
     let mut shadows = Vec::new();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for n in nodes {
+        top_layer.observe(n, shadows.len() as u32);
         for s in &n.shadows {
             // SQUARE terms only (F4b-6): a `radius > 0` term is a rounded caster's
             // shadow and rides the distinct rounded pipeline instead (a square
@@ -246,7 +313,8 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
             }
         }
     }
-    shadows
+    let boundary = top_layer.finish(shadows.len() as u32);
+    (shadows, boundary)
 }
 
 /// Pack the ROUNDED box-shadow instances for a frame (F4b-6): every shadow term
@@ -255,20 +323,25 @@ pub fn pack_shadow_instances(nodes: &[ExtractedNode]) -> Vec<PackedInstance> {
 /// rounded-shadow pipeline draws. The parallel of
 /// [`pack_shadow_instances`] for the rounded record; the two partition a node's
 /// shadow terms by `radius` so no term is drawn twice and the square path stays
-/// byte-stable.
+/// byte-stable. Returns the blob PLUS its base↔top-layer boundary (the rounded
+/// mirror of [`pack_shadow_instances`]'s boundary — same § 3.2 semantics + § 3.4
+/// tripwire, over the ROUNDED-caster terms).
 pub fn pack_rounded_shadow_instances(
     nodes: &[ExtractedNode],
-) -> Vec<crate::render::instance::RoundedShadowInstance> {
+) -> (Vec<crate::render::instance::RoundedShadowInstance>, u32) {
     use crate::render::instance::pack_rounded_shadow;
     let mut shadows = Vec::new();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for n in nodes {
+        top_layer.observe(n, shadows.len() as u32);
         for s in &n.shadows {
             if s.radius > 0.0 {
                 shadows.push(pack_rounded_shadow(s));
             }
         }
     }
-    shadows
+    let boundary = top_layer.finish(shadows.len() as u32);
+    (shadows, boundary)
 }
 
 /// Pack a view's node list into the flat background-gradient instance blob, in
@@ -480,6 +553,80 @@ pub fn interleave_flat_draw(
     steps
 }
 
+/// Split the interleaved flat-draw schedule into a BASE block and a TOP-LAYER
+/// block at the quad `quad_boundary` (the top-layer stacking composite, § 3.3 —
+/// W2's per-block draw). Returns `(base, top)`: two ordered [`FlatDrawStep`]
+/// schedules whose `Quads`/`Gradients`/`Raster` indices are ABSOLUTE. The base
+/// block draws every flat instance BEFORE the boundary; the top-layer block draws
+/// every flat instance AT/after it. `node.rs` draws the base block's tier-stack,
+/// then the top-layer block's over it, so a top-layer subtree occludes base
+/// text/icons/borders — not just fills.
+///
+/// The split key is the `quad_boundary` (`PackedPartition::top_layer_boundary`):
+/// - the quad `flat_ranges` are sliced by [`cut_ranges`] at the boundary (a run
+///   that STRADDLES the boundary — the `RangePartitioner` splits on GROUP only —
+///   is CUT, not drawn whole in both blocks);
+/// - the `gradient_anchors` and `raster_anchors` are `partition_point`-split at
+///   the boundary. Both are non-decreasing (gradients in node-walk paint order;
+///   rasters caller-sorted), so an anchor `< quad_boundary` is base and `>=` is
+///   top-layer — the same boundary the quad blob uses, per rev-4/m2 (NO separate
+///   gradient boundary: `block_interleave` splits the gradient blob HERE).
+///
+/// [`interleave_flat_draw`] is called UNCHANGED per sub-array; since it re-bases
+/// each sliced sub-array's step indices to 0, the top block's `Gradients`/`Raster`
+/// indices are RE-OFFSET back to absolute by the base sub-array's length (the quad
+/// ranges are already absolute — they come from [`cut_ranges`], not a re-based
+/// slice). A base sub-array is a PREFIX of the full anchor list, so its indices
+/// are already absolute and need no offset.
+///
+/// Byte-stability (F9): pass `quad_boundary == u32::MAX` (or any value at/above
+/// the quad count) to route EVERYTHING to the base block — the base is then
+/// byte-identical to a single [`interleave_flat_draw`] call and the top is empty.
+/// `node.rs` does exactly that on a no-top-layer view, so it issues the identical
+/// draws (no extra pass).
+///
+/// Pure (no GPU / ECS) — unit-tested headless.
+pub fn block_interleave(
+    flat_ranges: &[Range<u32>],
+    gradient_anchors: &[u32],
+    raster_anchors: &[u32],
+    quad_boundary: u32,
+) -> (Vec<FlatDrawStep>, Vec<FlatDrawStep>) {
+    // Split the anchor lists at the boundary. `partition_point` yields the count
+    // of BASE entries (the non-decreasing prefix with `anchor < quad_boundary`);
+    // the remainder is the top-layer block.
+    let grad_split = gradient_anchors.partition_point(|&a| a < quad_boundary);
+    let raster_split = raster_anchors.partition_point(|&a| a < quad_boundary);
+    let (base_grad, top_grad) = gradient_anchors.split_at(grad_split);
+    let (base_raster, top_raster) = raster_anchors.split_at(raster_split);
+
+    // Slice the flat quad runs to each block's window; a straddling run is CUT.
+    let base_flat = cut_ranges(flat_ranges, 0, quad_boundary);
+    let top_flat = cut_ranges(flat_ranges, quad_boundary, u32::MAX);
+
+    // A base sub-array is a PREFIX, so `interleave_flat_draw`'s 0-based step
+    // indices ARE the absolute ones — no re-offset.
+    let base = interleave_flat_draw(&base_flat, base_grad, base_raster);
+
+    // The top sub-arrays are SLICES starting at `grad_split`/`raster_split`, so
+    // `interleave_flat_draw` re-bases their step indices to 0 — RE-OFFSET back to
+    // absolute. Quad ranges stay absolute (they came from `cut_ranges`).
+    let mut top = interleave_flat_draw(&top_flat, top_grad, top_raster);
+    let grad_offset = grad_split as u32;
+    let raster_offset = raster_split as u32;
+    for step in &mut top {
+        match step {
+            FlatDrawStep::Gradients(r) => {
+                r.start += grad_offset;
+                r.end += grad_offset;
+            }
+            FlatDrawStep::Raster(k) => *k += raster_offset,
+            FlatDrawStep::Quads(_) => {}
+        }
+    }
+    (base, top)
+}
+
 /// The instance-range partition of a packed view (effect-compositor.md § 1.1 /
 /// decided fork 3): the flat quad blob plus, per effect group, the contiguous
 /// `[start, end)` instance range its members occupy, and the complement
@@ -541,6 +688,28 @@ pub struct PackedPartition {
     /// [`node_quad_anchors`]: Self::node_quad_anchors
     /// [`quad_slot_of`]: Self::quad_slot_of
     pub node_quad_anchor_of: EntityHashMap<u32>,
+    /// The base↔top-layer boundary of the flat quad blob (top-layer stacking
+    /// composite, § 3.2): the instance index of the first top-layer node's first
+    /// quad. `[0..top_layer_boundary)` is the base block, `[top_layer_boundary..
+    /// instances.len())` the top-layer block — the per-block draw restructure (W2)
+    /// draws the base block's complete tier-stack, then the top-layer block's over
+    /// it, so a top-layer subtree occludes base text/icons/borders, not just fills.
+    /// Equals `instances.len()` when the view has no top-layer node (an empty
+    /// top-layer block — the byte-stable path). The quad packer records it off
+    /// `ExtractedNode.top_layer` (the flag rides the record), guarded by a
+    /// tail-contiguity `debug_assert` (`TopLayerBoundaryTracker`).
+    pub top_layer_boundary: u32,
+    /// Whether ANY node in this view is top-layer (the authoritative Signal-B bit
+    /// — top-layer stacking composite § 3.3). Unlike every per-tier boundary —
+    /// each of which equals its tier count for a bare gradient/raster-only overlay
+    /// member (a `Color::NONE` node pushes no quad/shadow/band/glyph/icon instance)
+    /// — this rides the SAME `TopLayerBoundaryTracker`, which observes EVERY node
+    /// regardless of what it paints, so it flips true for a top-layer node even
+    /// when no tier boundary can see it. `node.rs` gates the whole top-layer block
+    /// on this: tier- AND anchor-independent, and `false` for a no-top-layer view
+    /// (the byte-stable base-only path). It closes the bare-overlay occlusion gap
+    /// a per-tier `any boundary < count` gate silently dropped.
+    pub any_top_layer: bool,
 }
 
 /// Pack a view's nodes into the flat quad blob AND its per-group instance-range
@@ -588,7 +757,15 @@ pub fn pack_view_partitioned(
     let mut node_quad_anchors = Vec::with_capacity(nodes.len());
     let mut quad_slot_of: EntityHashMap<u32> = EntityHashMap::default();
     let mut node_quad_anchor_of: EntityHashMap<u32> = EntityHashMap::default();
+    let mut top_layer = TopLayerBoundaryTracker::default();
     for node in nodes {
+        // Record the base↔top-layer boundary at the first top-layer node's first
+        // instance (its own quad, or — for a `Color::NONE` node — its first text
+        // quad), before pushing any of this node's instances. The tracker's
+        // tail-contiguity `debug_assert` fires if a base node follows a top-layer
+        // one (§ 3.4). Text quads inherit their anchoring node's classification
+        // (they splice in the same iteration), so no separate handling is needed.
+        top_layer.observe(node, p.len());
         let g = node.group.filter(|&g| g < group_count);
         if node.color != Color::NONE {
             // D1: record this painting node's quad slot (the index it is about to
@@ -622,10 +799,17 @@ pub fn pack_view_partitioned(
             }
         }
     }
+    // The authoritative Signal-B bit: any node top-layer, read off the SAME
+    // tracker BEFORE `finish` consumes it (it observes every node, so it sees a
+    // bare gradient/raster-only overlay member no per-tier boundary can).
+    let any_top_layer = top_layer.seen_top_layer;
+    let top_layer_boundary = top_layer.finish(p.len());
     let mut partition = p.finish();
     partition.node_quad_anchors = node_quad_anchors;
     partition.quad_slot_of = quad_slot_of;
     partition.node_quad_anchor_of = node_quad_anchor_of;
+    partition.top_layer_boundary = top_layer_boundary;
+    partition.any_top_layer = any_top_layer;
     partition
 }
 
@@ -662,6 +846,10 @@ impl Partitioner {
 
     fn finish(self) -> PackedPartition {
         let (group_ranges, flat_ranges) = self.ranges.finish();
+        // The no-top-layer default (empty top-layer block); `pack_view_partitioned`
+        // overwrites it with the tracked boundary. `Partitioner` stays top-layer-
+        // unaware — the flag lives on `ExtractedNode`, not the range bookkeeping.
+        let top_layer_boundary = self.instances.len() as u32;
         PackedPartition {
             instances: self.instances,
             group_ranges,
@@ -671,6 +859,10 @@ impl Partitioner {
             node_quad_anchors: Vec::new(),
             quad_slot_of: EntityHashMap::default(),
             node_quad_anchor_of: EntityHashMap::default(),
+            top_layer_boundary,
+            // `Partitioner` is top-layer-unaware; `pack_view_partitioned` overwrites
+            // this from the tracker after `finish` (the flag lives on the walk).
+            any_top_layer: false,
         }
     }
 }
@@ -783,20 +975,48 @@ impl RangePartitioner {
 /// carriers rebuild together; fact (a): every painted entity has a node
 /// record), kept as the conservative fallback rather than a drop because the
 /// instances are already in the buffer.
+///
+/// `top_layer_of` is the PARALLEL top-layer classifier (top-layer stacking
+/// composite, § 3.2): a per-entity `top_layer_of: Fn(Entity) -> bool` (mirroring
+/// `group_of`), off the fresh node list's `ExtractedNode.top_layer`. The third
+/// return is the tier's base↔top-layer boundary — the first top-layer entity's
+/// run START, or `total` when no run is top-layer. GLYPH and ICON share this
+/// FUNCTION + the entity map (called twice, one boundary each — separate carriers
+/// / instance spaces). A tail-contiguity `debug_assert` guards § 3.4. NOTE the
+/// flat runs split on GROUP only, so a base + top-layer non-group run COALESCES
+/// across the boundary; the per-block draw (W2) slices it with [`cut_ranges`].
 pub fn partition_glyph_ranges(
     runs: impl IntoIterator<Item = (Entity, Range<u32>)>,
     total: u32,
     group_count: usize,
     group_of: impl Fn(Entity) -> Option<usize>,
-) -> (Vec<Range<u32>>, Vec<Range<u32>>) {
+    top_layer_of: impl Fn(Entity) -> bool,
+) -> (Vec<Range<u32>>, Vec<Range<u32>>, u32) {
     let mut p = RangePartitioner::new(group_count);
     let mut covered = 0u32;
+    let mut top_layer_boundary: Option<u32> = None;
+    let mut seen_top_layer = false;
     for (entity, range) in runs {
         debug_assert_eq!(
             range.start, covered,
             "entity runs must be contiguous from 0 (the producer emits one \
              run per entity, gapless, in emission order)"
         );
+        // The glyph/icon boundary at the first top-layer entity's run start. A run
+        // is uniformly base or top-layer (one entity), so the boundary always
+        // falls on a run edge; the tail-contiguity `debug_assert` (§ 3.4) fires if
+        // a base entity's run follows a top-layer one — the glyph mirror of the
+        // node-walk tripwire (`TopLayerBoundaryTracker`).
+        let is_top = top_layer_of(entity);
+        debug_assert!(
+            !seen_top_layer || is_top,
+            "glyph/icon top-layer runs must form a contiguous tail: a base \
+             entity's run followed a top-layer entity's run"
+        );
+        if is_top {
+            top_layer_boundary.get_or_insert(range.start);
+            seen_top_layer = true;
+        }
         covered = range.end;
         let g = group_of(entity).filter(|&g| g < group_count);
         for _ in range {
@@ -807,5 +1027,32 @@ pub fn partition_glyph_ranges(
         covered, total,
         "entity runs must cover every glyph instance"
     );
-    p.finish()
+    let (group_ranges, flat_ranges) = p.finish();
+    (
+        group_ranges,
+        flat_ranges,
+        top_layer_boundary.unwrap_or(total),
+    )
+}
+
+/// Intersect a range-list with the half-open window `[lo, hi)`, dropping empty
+/// results and clipping partial overlaps (top-layer stacking composite, § 3.2 /
+/// Task 1.5). The glyph/icon flat runs ([`partition_glyph_ranges`]) — and the
+/// quad `flat_ranges` inside `block_interleave` (W2) — split on GROUP only, so a
+/// non-group run spanning base + top-layer instances COALESCES into one flat run
+/// that STRADDLES the base↔top-layer boundary. The per-block draw slices each
+/// tier's flat-range list to its block's window with this: the base block draws
+/// `cut_ranges(flat, 0, boundary)`, the top-layer block `cut_ranges(flat,
+/// boundary, total)`, so a straddling run is CUT at the boundary, not drawn whole
+/// in both blocks. Pure — unit-tested headless. Example: `[2..8]` cut at `[0,5)`
+/// → `[2..5]`, cut at `[5,8)` → `[5..8]`.
+pub fn cut_ranges(ranges: &[Range<u32>], lo: u32, hi: u32) -> Vec<Range<u32>> {
+    ranges
+        .iter()
+        .filter_map(|r| {
+            let start = r.start.max(lo);
+            let end = r.end.min(hi);
+            (start < end).then_some(start..end)
+        })
+        .collect()
 }

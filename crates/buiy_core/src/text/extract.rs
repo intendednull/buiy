@@ -41,7 +41,7 @@ use crate::theme::Theme;
 
 use super::atlas_key::{FontKeyInterner, glyph_atlas_key};
 use super::components::{
-    CaretVisual, ComputedTextLayout, FontSize, PreeditVisual, SelectionVisual, TextBuffer,
+    CaretVisual, ComputedTextLayout, FontSize, PreeditVisual, SelectionVisual, Text, TextBuffer,
     TextDecorations,
 };
 use super::decoration::{DecorationKind, span_decoration_rects, span_x_extent};
@@ -625,10 +625,24 @@ pub fn extract_buiy_glyphs(
                     //    (the empty editor value is unchanged), so without these
                     //    the screen keeps the stale placeholder glyphs. Both are
                     //    small runtime-mutable components — cheap, exact gates.
+                    //  • Text — the display-content sibling of the placeholder
+                    //    terms above: a content change that shapes to the SAME
+                    //    geometry (e.g. an equal-width monospace digit swap —
+                    //    the countdown-render-invalidation bug) leaves
+                    //    ComputedTextLayout idempotent, so the entity would
+                    //    otherwise keep its stale glyphs. `set_text`
+                    //    (buiy_view/reconcile.rs) mutates `Text` iff the string
+                    //    differs, so this fires exactly on a content change and
+                    //    stays O(0) on steady frames — the display-`Text`
+                    //    analogue of the placeholder fix above. Deliberately
+                    //    NOT `Changed<TextBuffer>` (see the union comment
+                    //    above: measure/commit writes bypass its ticks and it
+                    //    is noisy).
                     Or<(
                         Changed<PlaceholderActive>,
                         Changed<Placeholder>,
                         Changed<FontSize>,
+                        Changed<Text>,
                     )>,
                 )>,
             ),
@@ -718,6 +732,14 @@ pub fn extract_buiy_glyphs(
                 )>,
             >,
         >,
+        //  .3 — the `ChildOf` parent link over ALL `Node`s: the top-layer ancestor
+        //       climb (§ 3.1) that stable-partitions the paint-order walk so
+        //       top-layer text is the global SUFFIX (the glyph mirror of the node
+        //       producer's post-assembly climb). Read over every `Node` so the climb
+        //       reaches a non-text overlay former ancestor of a text entity. Nested
+        //       here (rather than a standalone param) because the producer is AT
+        //       Bevy's 16-param function-system cap.
+        Extract<Query<&ChildOf, With<Node>>>,
     ),
     theme: Extract<Res<Theme>>,
     // The main-world font-set counters (T5): VALUE-compared against the
@@ -734,7 +756,7 @@ pub fn extract_buiy_glyphs(
     mut damage: Option<ResMut<GlyphDamage>>,
 ) {
     let (mut glyphs, mut text_quads) = carriers;
-    let (contexts, order_probe, structural_probe) = structure;
+    let (contexts, order_probe, structural_probe, child_of) = structure;
     // Drain the removal streams FIRST so the cursors advance on every frame,
     // including early returns (the extract.rs:409 discipline). Stage B
     // collects the IDS (previously just presence bits): despawns are the
@@ -1127,6 +1149,28 @@ pub fn extract_buiy_glyphs(
         rank_by_entity.get(&e).copied().unwrap_or(0)
     }) {
         context_tree_paint_order(root, &painters_z_of, &mut order);
+    }
+
+    // Stable-partition the paint-order walk so top-layer text is the global SUFFIX
+    // (the glyph mirror of the node producer's post-assembly climb + partition). A
+    // PARENTED overlay's text escapes to its own root's `painters_z` tail, but a
+    // SEPARATE base root (a higher-entity-id stacking context) sorts AFTER that
+    // root, so without this a base entity's run follows a top-layer one and
+    // `partition_glyph_ranges`'s tail-contiguity `debug_assert` trips at prepare
+    // time. The classification matches the node producer's climb: a former is an SC
+    // with `cross_root_rank > 0` (layout 6f stamps that iff `top_layer != None`, so
+    // it agrees with the node tier's `Stacking.top_layer` classification on every
+    // EMITTED entity). Skipped when no former exists — `order` stays the plain walk
+    // (byte-stable), and an already-suffix scene reorders to the identical order.
+    if rank_by_entity.values().any(|&r| r > 0) {
+        let parent_of = |e: Entity| child_of.get(e).ok().map(|p| p.parent());
+        crate::render::top_layer::stable_top_layer_suffix(&mut order, |&e| {
+            crate::render::top_layer::in_top_layer(
+                e,
+                |x| rank_by_entity.get(&x).copied().unwrap_or(0) > 0,
+                parent_of,
+            )
+        });
     }
 
     for entity in order {
@@ -1553,9 +1597,6 @@ fn emit_one_entity(
                         solid_stamp_bitmap,
                     )
                 });
-                if entry.page > 0 {
-                    warn_once_page_overflow(); // § 11.1 v1 mitigation
-                }
                 for (rect, color) in strikes {
                     new_glyphs.push(GlyphAlphaInstance {
                         rect: repivot_origin(rect, translation, glyph_affine),
@@ -1640,9 +1681,6 @@ fn emit_one_entity(
                     solid_stamp_bitmap,
                 )
             });
-            if entry.page > 0 {
-                warn_once_page_overflow(); // § 11.1 v1 mitigation
-            }
             new_glyphs.push(GlyphAlphaInstance {
                 rect: repivot_origin(
                     caret_stamp_rect(origin, cv.rect, scale_factor),
@@ -1831,9 +1869,6 @@ fn emit_glyph<'a>(
     else {
         return; // zero coverage (whitespace) or color-emoji skip (§ 9)
     };
-    if entry.page > 0 {
-        warn_once_page_overflow(); // § 11.1 v1 mitigation
-    }
     let rect = glyph_rect_logical(phys.x, phys.y, bearing, entry.px.size(), scale_factor);
     new_glyphs.push(GlyphAlphaInstance {
         rect: repivot_origin(rect, translation, glyph_affine),
@@ -2274,7 +2309,6 @@ fn span_color(c: cosmic_text::Color) -> [f32; 4] {
 }
 
 static WARNED_COLOR_EMOJI: AtomicBool = AtomicBool::new(false);
-static WARNED_PAGE_OVERFLOW: AtomicBool = AtomicBool::new(false);
 
 /// § 9's rate-limited warn (the components.rs warn-once precedent).
 fn warn_once_color_emoji_skipped() {
@@ -2283,17 +2317,6 @@ fn warn_once_color_emoji_skipped() {
             "buiy: color (emoji) glyphs are skipped in v1 — the ColorRgba8/\
              IconInstance path is a named C-tier seam (glyph-pipeline § 9; \
              warned once)"
-        );
-    }
-}
-
-/// § 11.1's v1 mitigation: the @group(1) bind group samples page 0 only.
-fn warn_once_page_overflow() {
-    if !WARNED_PAGE_OVERFLOW.swap(true, Ordering::Relaxed) {
-        warn!(
-            "buiy: a glyph allocated on coverage page > 0, but the glyph draw \
-             binds page 0 only — those glyphs will sample wrong texels. Time \
-             to build the multi-page bind (glyph-pipeline § 11.1; warned once)"
         );
     }
 }

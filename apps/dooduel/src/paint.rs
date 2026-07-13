@@ -31,62 +31,35 @@
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::image::Image;
 use bevy::math::Vec2;
-use bevy::prelude::{Added, Entity, GlobalTransform, On, Query, Reflect};
+use bevy::prelude::{
+    Added, Entity, GlobalTransform, NonSendMut, On, Query, Reflect, Res, Resource,
+};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::time::Time;
 use buiy::prelude::*;
 use buiy_core::render::{Border, Corners, Radius, RasterImage};
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
+use std::time::Duration;
 
-/// The in-game drawing surface size in logical px == the image resolution (kept
-/// equal so window→pixel mapping is 1:1).
-pub const CANVAS_W: usize = 720;
-pub const CANVAS_H: usize = 450;
+/// The pure pixel math + palette + [`PaintBuffer`] moved to `dooduel_core::canvas`
+/// (M1 W0.3); these re-exports keep `paint::PALETTE` / `paint::Tool` / `paint::PAPER`
+/// / `paint::BRUSH_SIZES` paths (view modules, bins) stable after the extraction.
+pub use dooduel_core::canvas::{BRUSH_SIZES, CANVAS_H, CANVAS_W, PALETTE, PAPER, Tool};
+use dooduel_core::canvas::{PaintBuffer, eraser_radius, flood_fill, stamp_circle, stroke_segment};
+use dooduel_core::protocol::{CanvasOp, ClientIntent, MAX_OP_POINTS, MAX_STROKE_POINTS};
+use dooduel_core::transport::ClientTransport;
+
+use crate::game::Phase;
+use crate::net::{CanvasProgress, ClientNet};
+
+// The in-game drawing surface size (logical px == image resolution, 1:1 window→pixel
+// mapping) moved to `dooduel_core::canvas` (W2-review I3) so the authority bound-checks
+// against the same size; re-exported above to keep `paint::CANVAS_W` / `paint::CANVAS_H`.
 
 /// The avatar editor's draw-your-own surface (the design's 220×220 canvas, W5).
 pub const AVATAR_W: usize = 220;
 pub const AVATAR_H: usize = 220;
-
-/// The white paper the canvas starts on (skribbl.io's blank sheet).
-pub const PAPER: [u8; 4] = [255, 255, 255, 255];
-
-/// The design's 16-color toolbar palette (`PALETTE`, in order), as exact sRGB.
-/// The model's `ToolState.color_idx` (in-game) / `AvatarState.draft_color_idx`
-/// (editor) indexes this; the view renders it as swatches, the sync maps the
-/// selected index to [`PaintSurface::color`].
-pub const PALETTE: [[u8; 4]; 16] = [
-    [0x14, 0x16, 0x1b, 255], // ink
-    [0xff, 0xff, 0xff, 255], // white
-    [0x9a, 0xa0, 0xaa, 255], // grey
-    [0xb3, 0x26, 0x1e, 255], // dark red
-    [0xe8, 0x45, 0x3f, 255], // red
-    [0xf0, 0x8a, 0x3c, 255], // orange
-    [0xf4, 0xc2, 0x0d, 255], // yellow
-    [0x8b, 0xc3, 0x4a, 255], // lime
-    [0x1c, 0x8a, 0x52, 255], // green
-    [0x1f, 0x9e, 0x8d, 255], // teal
-    [0x2f, 0x9b, 0xdb, 255], // blue
-    [0x3a, 0x63, 0xee, 255], // indigo
-    [0x5b, 0x46, 0xe5, 255], // violet
-    [0x93, 0x33, 0xea, 255], // purple
-    [0xe0, 0x52, 0x9c, 255], // pink
-    [0x8a, 0x5a, 0x35, 255], // brown
-];
-
-/// The design's four brush **diameters** (`BRUSH_SIZES`, logical px). The model's
-/// `ToolState.size_idx` / `AvatarState.draft_size_idx` indexes this; the sync
-/// halves it to a stamp radius.
-pub const BRUSH_SIZES: [i32; 4] = [3, 6, 11, 18];
-
-/// The active tool. `Bucket` flood-fills on press; `Brush`/`Eraser` stroke. Held
-/// on the MVU model (`ToolState`) so tool selection is reducer-owned + replayable,
-/// and mirrored onto a [`PaintSurface`] each frame by `sync_tools_to_canvases`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Reflect)]
-pub enum Tool {
-    #[default]
-    Brush,
-    Eraser,
-    Bucket,
-}
 
 /// Which drawing surface a `raster(...)` node paints into. A marker component the
 /// pointer observers read to route an edit to the right [`PaintSurface`] in the
@@ -102,285 +75,114 @@ pub enum CanvasKind {
 }
 
 // ---------------------------------------------------------------------------
-// Pure paint math — no bevy, unit-testable headless. Operates on a flat RGBA
-// `[u8]` buffer of `width * height * 4` bytes, row-major, top-left origin.
+// The drawer's outbound canvas intents (spec §3.5) — the drawer paints its Game
+// canvas optimistically AND relays the ops to the authority.
 // ---------------------------------------------------------------------------
 
-/// Read the RGBA at `(x, y)` (caller guarantees in-bounds).
-fn get(px: &[u8], w: usize, x: usize, y: usize) -> [u8; 4] {
-    let i = (y * w + x) * 4;
-    [px[i], px[i + 1], px[i + 2], px[i + 3]]
+/// How often a held stroke coalesces its accumulated points into a `done: false`
+/// batch (spec §3.5 — transport batching, never decimation). A short press-release
+/// finalizes immediately; a long drag flushes every ~this.
+const COALESCE: Duration = Duration::from_millis(40);
+
+/// One raw ink action the Game-canvas pointer observers record for the wire (the
+/// paint stays optimistic; these mirror it to the authority). Tool-change / undo /
+/// clear from the toolbar enter as [`InkEvent::Clear`] / [`InkEvent::Undo`].
+enum InkEvent {
+    /// Pen down: a fresh stroke's first sample + its effective stamp (eraser is
+    /// already resolved to `PAPER` + the ×1.6 radius, spec §2.2 — no tool on the wire).
+    Begin {
+        x: i32,
+        y: i32,
+        color: [u8; 4],
+        radius: i32,
+    },
+    /// A drag sample (the exact post-`to_pixel` integer coordinate).
+    Point { x: i32, y: i32 },
+    /// Pen up: finalize the open stroke (`done: true`).
+    End,
+    /// A bucket fill (a discrete op).
+    Fill { x: i32, y: i32, color: [u8; 4] },
+    /// The toolbar Clear (drop the open stroke, truncate the log).
+    Clear,
+    /// The toolbar Undo (finalize the open stroke FIRST — undo-of-open is
+    /// unreachable from an honest client, R1 — then remove the last op).
+    Undo,
 }
 
-/// Write the RGBA at `(x, y)` (caller guarantees in-bounds).
-fn set(px: &mut [u8], w: usize, x: usize, y: usize, c: [u8; 4]) {
-    let i = (y * w + x) * 4;
-    px[i..i + 4].copy_from_slice(&c);
-}
-
-/// Stamp a filled circle of `radius` logical px centered at `(cx, cy)`, clipped
-/// to the buffer. `radius == 0` writes the single center pixel (a 1px dot).
-pub fn stamp_circle(
-    px: &mut [u8],
-    w: usize,
-    h: usize,
-    cx: i32,
-    cy: i32,
-    radius: i32,
+/// The stroke the drawer currently has open on the wire (spans batches under one
+/// client `stroke_id`, spec §3.5). `sent` is the count already relayed for THIS op —
+/// the drawer finalizes locally at [`MAX_OP_POINTS`] (R3) so the server never
+/// auto-splits an honest client's stroke.
+struct OpenWireStroke {
+    id: u64,
     color: [u8; 4],
-) {
-    let r = radius.max(0);
-    let r2 = r * r;
-    let x0 = (cx - r).max(0);
-    let x1 = (cx + r).min(w as i32 - 1);
-    let y0 = (cy - r).max(0);
-    let y1 = (cy + r).min(h as i32 - 1);
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let (dx, dy) = (x - cx, y - cy);
-            if dx * dx + dy * dy <= r2 {
-                set(px, w, x as usize, y as usize, color);
-            }
-        }
-    }
-}
-
-/// Stamp circles along the segment `from -> to` at ≤1px spacing, so a fast drag
-/// never leaves gaps between pointer samples (the line-interpolation property).
-/// Endpoints inclusive.
-pub fn stroke_segment(
-    px: &mut [u8],
-    w: usize,
-    h: usize,
-    from: (i32, i32),
-    to: (i32, i32),
     radius: i32,
-    color: [u8; 4],
-) {
-    let (x0, y0) = from;
-    let (x1, y1) = to;
-    let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
-    for s in 0..=steps {
-        let t = s as f32 / steps as f32;
-        let x = (x0 as f32 + (x1 - x0) as f32 * t).round() as i32;
-        let y = (y0 as f32 + (y1 - y0) as f32 * t).round() as i32;
-        stamp_circle(px, w, h, x, y, radius, color);
-    }
+    sent: usize,
 }
 
-/// Stack-based scanline flood fill from `(x, y)`: replace the contiguous region
-/// of the seed's color with `new_color`. Bounded (each pixel is set at most once;
-/// the seed-color != new_color guard rules out re-visits), so it always
-/// terminates. A seed outside the buffer, or already `new_color`, is a no-op.
-pub fn flood_fill(px: &mut [u8], w: usize, h: usize, x: i32, y: i32, new_color: [u8; 4]) {
-    if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-        return;
-    }
-    let (sx, sy) = (x as usize, y as usize);
-    let target = get(px, w, sx, sy);
-    if target == new_color {
-        return; // nothing to do — avoids the infinite-loop degenerate.
-    }
-    let mut stack = vec![(sx, sy)];
-    while let Some((seed_x, seed_y)) = stack.pop() {
-        if get(px, w, seed_x, seed_y) != target {
-            continue; // already filled via another span
-        }
-        // Expand the span to the row's contiguous target run.
-        let mut lx = seed_x;
-        while lx > 0 && get(px, w, lx - 1, seed_y) == target {
-            lx -= 1;
-        }
-        let mut rx = seed_x;
-        while rx + 1 < w && get(px, w, rx + 1, seed_y) == target {
-            rx += 1;
-        }
-        for fx in lx..=rx {
-            set(px, w, fx, seed_y, new_color);
-        }
-        // Seed each contiguous target run in the rows above and below.
-        for ny in [
-            seed_y.checked_sub(1),
-            (seed_y + 1 < h).then_some(seed_y + 1),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let mut fx = lx;
-            while fx <= rx {
-                if get(px, w, fx, ny) == target {
-                    stack.push((fx, ny));
-                    while fx <= rx && get(px, w, fx, ny) == target {
-                        fx += 1;
-                    }
-                } else {
-                    fx += 1;
-                }
-            }
-        }
-    }
+/// The drawer→authority stroke relay (spec §3.5). The Game-canvas observers push
+/// [`InkEvent`]s (Send data); [`flush_strokes`] replays them through [`ClientNet`],
+/// coalescing points into batches, finalizing at [`MAX_OP_POINTS`], and finalizing
+/// before an Undo. Only the Game canvas feeds this — the avatar editor is local.
+#[derive(Resource, Default)]
+struct StrokeSender {
+    /// This frame's ink, in pointer/toolbar order.
+    events: Vec<InkEvent>,
+    /// The stroke open on the wire (persists across frames — a drag spans flushes).
+    open: Option<OpenWireStroke>,
+    /// Accumulated, not-yet-batched points for the open op (the coalescing buffer).
+    unsent: Vec<(i32, i32)>,
+    /// The next client `stroke_id` (a batching handle; never travels in a logged op).
+    next_id: u64,
+    /// Elapsed at the last coalesce flush.
+    last_flush: Duration,
 }
 
 // ---------------------------------------------------------------------------
-// One drawing surface — the CPU pixel state + brush, mirrored into one `Image`.
+// One drawing surface — the Bevy-free pixel buffer + its `Image` mirror.
 // ---------------------------------------------------------------------------
 
-/// The CPU-authoritative state of a single drawing surface: the pixel buffer, the
-/// current brush, and the handle to the [`Image`] asset the buffer mirrors into.
-/// Shared verbatim by the in-game canvas and the avatar editor (W5).
+/// The bevy-facing state of one drawing surface: the pure [`PaintBuffer`] (the
+/// pixels, brush, and undo ring, in `dooduel_core::canvas`) plus the bevy `Image`
+/// handle it mirrors into, the canvas layout node, and whether painting is accepted.
+///
+/// [`Deref`]s to the inner [`PaintBuffer`], so `.pixels` / `.tool` / `.begin()` /
+/// `.clear()` / … stay reachable unchanged (the buffer's own `dirty` flag drives
+/// the CPU→`Image` mirror). Shared verbatim by the in-game canvas and the avatar
+/// editor (W5).
 pub struct PaintSurface {
-    pub width: usize,
-    pub height: usize,
-    pub pixels: Vec<u8>,
-    pub bg: [u8; 4],
+    /// The pure pixel state + brush + undo ring (Bevy-free).
+    buffer: PaintBuffer,
     pub handle: Handle<Image>,
     /// The canvas layout node (the pointer→pixel mapping reads its transform+rect).
     pub canvas_entity: Entity,
-    pub color: [u8; 4],
-    pub radius: i32,
-    pub tool: Tool,
     /// Whether painting is accepted (the drawer in-game / the open editor). The
     /// pointer observers early-out when `false`. Synced from the model each frame.
     pub enabled: bool,
-    /// Undo snapshots (full-buffer copies, newest last), pushed BEFORE each edit.
-    /// Capped at [`UNDO_DEPTH`] — the design's snapshot undo.
-    undo_stack: Vec<Vec<u8>>,
-    /// The previous drag sample, so `extend` interpolates from it.
-    last: Option<(i32, i32)>,
-    /// Set on any paint edit; `sync_canvases_to_images` clears it after upload.
-    dirty: bool,
 }
 
-/// How many undo snapshots the ring keeps (each is `w*h*4` bytes).
-const UNDO_DEPTH: usize = 12;
+impl Deref for PaintSurface {
+    type Target = PaintBuffer;
+    fn deref(&self) -> &PaintBuffer {
+        &self.buffer
+    }
+}
+
+impl DerefMut for PaintSurface {
+    fn deref_mut(&mut self) -> &mut PaintBuffer {
+        &mut self.buffer
+    }
+}
 
 impl PaintSurface {
     /// A blank surface filled with `bg`, mirroring `handle`.
     pub fn new(width: usize, height: usize, bg: [u8; 4], handle: Handle<Image>) -> Self {
         Self {
-            width,
-            height,
-            pixels: bg
-                .iter()
-                .copied()
-                .cycle()
-                .take(width * height * 4)
-                .collect(),
-            bg,
+            buffer: PaintBuffer::new(width, height, bg),
             handle,
             canvas_entity: Entity::PLACEHOLDER,
-            color: [20, 20, 24, 255], // ink: near-black
-            radius: 4,
-            tool: Tool::Brush,
             enabled: false,
-            undo_stack: Vec::new(),
-            last: None,
-            dirty: true, // upload the blank sheet on frame 1
         }
-    }
-
-    /// Push the current buffer onto the undo ring BEFORE an edit (bounded to
-    /// [`UNDO_DEPTH`] — the oldest snapshot is dropped when full).
-    fn snapshot(&mut self) {
-        if self.undo_stack.len() >= UNDO_DEPTH {
-            self.undo_stack.remove(0);
-        }
-        self.undo_stack.push(self.pixels.clone());
-    }
-
-    /// Restore the most recent snapshot (the toolbar Undo). No-op when empty.
-    pub fn undo(&mut self) {
-        if let Some(prev) = self.undo_stack.pop() {
-            self.pixels = prev;
-            self.last = None;
-            self.dirty = true;
-        }
-    }
-
-    /// The color a stamp paints: the eraser paints the background (paper).
-    fn effective_color(&self) -> [u8; 4] {
-        match self.tool {
-            Tool::Eraser => self.bg,
-            _ => self.color,
-        }
-    }
-
-    /// Begin a stroke: snapshot for undo, stamp at `(x, y)`, anchor interpolation.
-    pub fn begin(&mut self, x: i32, y: i32) {
-        self.snapshot();
-        let color = self.effective_color();
-        stamp_circle(
-            &mut self.pixels,
-            self.width,
-            self.height,
-            x,
-            y,
-            self.radius,
-            color,
-        );
-        self.last = Some((x, y));
-        self.dirty = true;
-    }
-
-    /// Extend the stroke to `(x, y)`, interpolating from the last sample.
-    pub fn extend(&mut self, x: i32, y: i32) {
-        let color = self.effective_color();
-        match self.last {
-            Some(last) => stroke_segment(
-                &mut self.pixels,
-                self.width,
-                self.height,
-                last,
-                (x, y),
-                self.radius,
-                color,
-            ),
-            None => stamp_circle(
-                &mut self.pixels,
-                self.width,
-                self.height,
-                x,
-                y,
-                self.radius,
-                color,
-            ),
-        }
-        self.last = Some((x, y));
-        self.dirty = true;
-    }
-
-    /// End the current stroke (drop the interpolation anchor).
-    pub fn end(&mut self) {
-        self.last = None;
-    }
-
-    /// Flood-fill the region under `(x, y)` with the current color.
-    pub fn fill(&mut self, x: i32, y: i32) {
-        self.snapshot();
-        flood_fill(&mut self.pixels, self.width, self.height, x, y, self.color);
-        self.dirty = true;
-    }
-
-    /// Handle a primary press per the active tool (bucket fills, others stroke).
-    pub fn press(&mut self, x: i32, y: i32) {
-        match self.tool {
-            Tool::Bucket => self.fill(x, y),
-            _ => self.begin(x, y),
-        }
-    }
-
-    /// Reset to the blank background sheet.
-    pub fn clear(&mut self) {
-        self.snapshot();
-        for chunk in self.pixels.chunks_exact_mut(4) {
-            chunk.copy_from_slice(&self.bg);
-        }
-        self.dirty = true;
-    }
-
-    /// Drop the undo history (used on a fresh-turn / editor-open reset).
-    pub fn clear_undo(&mut self) {
-        self.undo_stack.clear();
     }
 
     /// Map a window-space pointer position to canvas pixel coords via the canvas
@@ -567,10 +369,24 @@ fn kind_of(q: &Query<&CanvasKind>, e: Entity) -> Option<CanvasKind> {
     q.get(e).ok().copied()
 }
 
-/// Primary press → stroke start (or bucket fill); secondary press → bucket fill.
+/// The effective stamp a stroke op carries on the wire (spec §2.2): the eraser is
+/// resolved to `PAPER` + its already-`eraser_radius`-adjusted radius, so color +
+/// radius alone determine the stamp (no tool travels).
+fn wire_stamp(surface: &PaintSurface) -> ([u8; 4], i32) {
+    let color = if surface.tool == Tool::Eraser {
+        PAPER
+    } else {
+        surface.color
+    };
+    (color, surface.radius)
+}
+
+/// Primary press → stroke start (or bucket fill); secondary press → bucket fill. The
+/// Game canvas also records the wire op (the drawer relays its ops to the authority).
 fn on_canvas_press(
     press: On<Pointer<Press>>,
     mut canvases: ResMut<PaintCanvases>,
+    mut sender: ResMut<StrokeSender>,
     kinds: Query<&CanvasKind>,
     xf: Query<(&GlobalTransform, &ResolvedLayout)>,
 ) {
@@ -587,10 +403,30 @@ fn on_canvas_press(
     let Some((x, y)) = surface.to_pixel(press.pointer_location.position, gt, layout) else {
         return;
     };
-    match press.event.button {
+    let button = press.event.button;
+    match button {
         PointerButton::Primary => surface.press(x, y),
         PointerButton::Secondary => surface.fill(x, y),
-        _ => {}
+        _ => return,
+    }
+    if kind == CanvasKind::Game {
+        // Mirror the optimistic op onto the wire. A bucket press (or any secondary
+        // press) is a Fill; a brush/eraser primary press opens a stroke.
+        if surface.tool == Tool::Bucket || button == PointerButton::Secondary {
+            sender.events.push(InkEvent::Fill {
+                x,
+                y,
+                color: surface.color,
+            });
+        } else {
+            let (color, radius) = wire_stamp(surface);
+            sender.events.push(InkEvent::Begin {
+                x,
+                y,
+                color,
+                radius,
+            });
+        }
     }
 }
 
@@ -598,6 +434,7 @@ fn on_canvas_press(
 fn on_canvas_drag(
     drag: On<Pointer<Drag>>,
     mut canvases: ResMut<PaintCanvases>,
+    mut sender: ResMut<StrokeSender>,
     kinds: Query<&CanvasKind>,
     xf: Query<(&GlobalTransform, &ResolvedLayout)>,
 ) {
@@ -611,19 +448,28 @@ fn on_canvas_drag(
         return;
     };
     let surface = canvases.surface_mut(kind);
+    // `to_pixel` returns `None` off-canvas, so an edge-drag sample is dropped, never
+    // clamped — the exact in-bounds samples the authority accepts whole (R4).
     if let Some((x, y)) = surface.to_pixel(drag.pointer_location.position, gt, layout) {
         surface.extend(x, y);
+        if kind == CanvasKind::Game {
+            sender.events.push(InkEvent::Point { x, y });
+        }
     }
 }
 
-/// Release → end the stroke.
+/// Release → end the stroke (finalize the wire op).
 fn on_canvas_release(
     release: On<Pointer<Release>>,
     mut canvases: ResMut<PaintCanvases>,
+    mut sender: ResMut<StrokeSender>,
     kinds: Query<&CanvasKind>,
 ) {
     if let Some(kind) = kind_of(&kinds, release.entity) {
         canvases.surface_mut(kind).end();
+        if kind == CanvasKind::Game {
+            sender.events.push(InkEvent::End);
+        }
     }
 }
 
@@ -663,6 +509,7 @@ fn sync_canvases_to_images(mut canvases: ResMut<PaintCanvases>, mut images: ResM
 fn sync_tools_to_canvases(
     model: Option<Single<&crate::Dooduel>>,
     canvases: Option<ResMut<PaintCanvases>>,
+    mut sender: ResMut<StrokeSender>,
     mut last_clear: Local<u64>,
     mut last_undo: Local<u64>,
     mut was_drawing: Local<bool>,
@@ -684,12 +531,13 @@ fn sync_tools_to_canvases(
         g.color = PALETTE[t.color_idx.min(PALETTE.len() - 1)];
         let base = (BRUSH_SIZES[t.size_idx.min(BRUSH_SIZES.len() - 1)] / 2).max(0);
         g.radius = if t.tool == Tool::Eraser {
-            ((base as f32) * 1.6).round() as i32
+            eraser_radius(base)
         } else {
             base
         };
-        let drawing = model.game.phase == crate::game::Phase::Drawing;
-        g.enabled = drawing && model.game.viewer_is_drawer();
+        let drawing = model.replica.phase == Phase::Drawing;
+        g.enabled = drawing && model.is_drawer();
+        let enabled = g.enabled;
         if drawing && !*was_drawing {
             g.clear();
             g.clear_undo();
@@ -697,11 +545,28 @@ fn sync_tools_to_canvases(
         *was_drawing = drawing;
         if t.clear_seq != *last_clear {
             g.clear();
+            // Clear is NON-undoable locally, matching the server (Clear mints no op,
+            // so an undo cannot resurrect the cleared drawing — I-1). Without this a
+            // clear-then-undo would restore the pre-clear pixels while the server
+            // stays cleared, desyncing the two.
+            g.clear_undo();
             *last_clear = t.clear_seq;
+            // Relay the drawer's clear to the authority (the guesser's toolbar is
+            // disabled, so gate on the drawing-drawer `enabled` flag).
+            if enabled {
+                sender.events.push(InkEvent::Clear);
+            }
         }
         if t.undo_seq != *last_undo {
-            g.undo();
+            // Only relay an Undo intent if the local pop actually succeeded (I-2): a
+            // depth-exhausted undo (nothing left in the ring) changes no local pixels,
+            // so no Undo may reach the wire — else the server would over-remove ops
+            // and desync from the drawer's local buffer.
+            let popped = g.undo();
             *last_undo = t.undo_seq;
+            if enabled && popped {
+                sender.events.push(InkEvent::Undo);
+            }
         }
     }
 
@@ -717,7 +582,7 @@ fn sync_tools_to_canvases(
         surface.color = PALETTE[a.draft_color_idx.min(PALETTE.len() - 1)];
         let base = (BRUSH_SIZES[a.draft_size_idx.min(BRUSH_SIZES.len() - 1)] / 2).max(0);
         surface.radius = if a.draft_eraser {
-            ((base as f32) * 1.6).round() as i32
+            eraser_radius(base)
         } else {
             base
         };
@@ -752,20 +617,328 @@ fn sync_tools_to_canvases(
     }
 }
 
+impl StrokeSender {
+    /// Drop all pending ink (no session to relay to — a canvas-only test, or between
+    /// matches). Keeps the buffer from growing unbounded.
+    fn reset(&mut self) {
+        self.events.clear();
+        self.open = None;
+        self.unsent.clear();
+    }
+}
+
+/// The stable id of a canvas op (spec §3.5).
+fn op_id(op: &CanvasOp) -> u64 {
+    match op {
+        CanvasOp::Stroke { id, .. } | CanvasOp::Fill { id, .. } => *id,
+    }
+}
+
+/// Blank a buffer to [`PAPER`] without pushing an undo snapshot (the guesser raster
+/// owns the whole surface — it re-rasters, it never undoes).
+fn blank(buf: &mut PaintBuffer) {
+    for chunk in buf.pixels.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&PAPER);
+    }
+}
+
+/// Stamp a stroke's exact sample sequence (interpolating between samples), the pure
+/// integer op the whole op-log sync stands on (spec §2.2).
+fn stamp_points(buf: &mut PaintBuffer, points: &[(i32, i32)], color: [u8; 4], radius: i32) {
+    let mut last: Option<(i32, i32)> = None;
+    for &(x, y) in points {
+        match last {
+            Some(l) => stroke_segment(
+                &mut buf.pixels,
+                buf.width,
+                buf.height,
+                l,
+                (x, y),
+                radius,
+                color,
+            ),
+            None => stamp_circle(&mut buf.pixels, buf.width, buf.height, x, y, radius, color),
+        }
+        last = Some((x, y));
+    }
+}
+
+/// Replay one [`CanvasOp`] onto a buffer — the guesser rasterizer + (W5) the MCP
+/// `get_canvas` share this shape (identical ops ⇒ identical pixels).
+fn apply_op(buf: &mut PaintBuffer, op: &CanvasOp) {
+    match op {
+        CanvasOp::Stroke {
+            points,
+            color,
+            radius,
+            ..
+        } => stamp_points(buf, points, *color, *radius),
+        CanvasOp::Fill { seed, color, .. } => flood_fill(
+            &mut buf.pixels,
+            buf.width,
+            buf.height,
+            seed.0,
+            seed.1,
+            *color,
+        ),
+    }
+}
+
+/// Send the accumulated stroke points as batches (spec §3.5): ≤ [`MAX_STROKE_POINTS`]
+/// per batch, finalizing (`done: true`) at [`MAX_OP_POINTS`] and continuing a fresh
+/// op seeded with the split point (so the server never auto-splits an honest client,
+/// R3). `close` finalizes the open stroke (pen up / a fill / an undo).
+fn send_batches(sender: &mut StrokeSender, transport: &mut dyn ClientTransport, close: bool) {
+    let mut queue = std::mem::take(&mut sender.unsent);
+    // Bind COPIES of the open stroke's fields in the condition, so the borrow of
+    // `sender.open` ends before the body (which reassigns it on a split/finalize).
+    while let Some((id, color, radius, sent)) = sender
+        .open
+        .as_ref()
+        .map(|o| (o.id, o.color, o.radius, o.sent))
+    {
+        if queue.is_empty() {
+            if close {
+                sender.open = None;
+            }
+            break;
+        }
+        // `op_full` (below) finalizes AT exactly the cap, so `sent < MAX_OP_POINTS`
+        // holds at the top of every iteration ⇒ `op_room >= 1` ⇒ the batch is
+        // non-empty.
+        let op_room = MAX_OP_POINTS.saturating_sub(sent);
+        let take = MAX_STROKE_POINTS.min(op_room).min(queue.len());
+        let batch: Vec<(i32, i32)> = queue.drain(..take).collect();
+        let last = *batch
+            .last()
+            .expect("op_room >= 1 keeps the batch non-empty");
+        let new_sent = sent + batch.len();
+        let more = !queue.is_empty();
+        // Finalize at EXACTLY the per-op cap (minor-b): the old `op_room.max(1)` +
+        // `&& more` let a full op absorb one more point → MAX_OP_POINTS + 1, which
+        // trips the server's `> MAX_OP_POINTS` auto-split. Now the op closes at the
+        // cap so the server never auto-splits an honest client's stroke (R3).
+        let op_full = new_sent >= MAX_OP_POINTS;
+        let done = op_full || (close && !more);
+        transport.send(&ClientIntent::Stroke {
+            stroke_id: id,
+            points: batch,
+            color,
+            radius,
+            done,
+        });
+        if op_full {
+            if more || !close {
+                // The pen is still down (or more points remain): continue under a
+                // fresh op, seeded with the split point for pixel continuity.
+                let new_id = sender.next_id;
+                sender.next_id += 1;
+                sender.open = Some(OpenWireStroke {
+                    id: new_id,
+                    color,
+                    radius,
+                    sent: 0,
+                });
+                queue.insert(0, last);
+            } else {
+                // Closing exactly at the cap — no continuation.
+                sender.open = None;
+            }
+        } else if done {
+            sender.open = None;
+        } else if let Some(o) = sender.open.as_mut() {
+            o.sent = new_sent;
+        }
+    }
+    sender.unsent = queue;
+}
+
+/// Relay the drawer's recorded ink to the authority (spec §3.5): replay this frame's
+/// [`InkEvent`]s through [`ClientNet`], coalescing points, finalizing before an undo
+/// (R1) and at [`MAX_OP_POINTS`] (R3). `Option<NonSendMut<ClientNet>>` so a
+/// canvas-only harness (no `NetPlugin`) simply drops the ink.
+fn flush_strokes(
+    mut sender: ResMut<StrokeSender>,
+    net: Option<NonSendMut<ClientNet>>,
+    time: Res<Time>,
+) {
+    let now = time.elapsed();
+    let Some(mut net) = net else {
+        sender.reset();
+        return;
+    };
+    let Some(transport) = net.0.as_mut() else {
+        sender.reset();
+        return;
+    };
+    let transport: &mut dyn ClientTransport = &mut **transport;
+    let sender = &mut *sender;
+    for ev in std::mem::take(&mut sender.events) {
+        match ev {
+            InkEvent::Begin {
+                x,
+                y,
+                color,
+                radius,
+            } => {
+                send_batches(sender, transport, true); // finalize any lingering open
+                let id = sender.next_id;
+                sender.next_id += 1;
+                sender.open = Some(OpenWireStroke {
+                    id,
+                    color,
+                    radius,
+                    sent: 0,
+                });
+                sender.unsent.push((x, y));
+            }
+            InkEvent::Point { x, y } => sender.unsent.push((x, y)),
+            InkEvent::End => send_batches(sender, transport, true),
+            InkEvent::Fill { x, y, color } => {
+                send_batches(sender, transport, true);
+                transport.send(&ClientIntent::Fill {
+                    seed: (x, y),
+                    color,
+                });
+            }
+            InkEvent::Clear => {
+                sender.open = None;
+                sender.unsent.clear();
+                transport.send(&ClientIntent::Clear);
+            }
+            InkEvent::Undo => {
+                send_batches(sender, transport, true); // finalize before undo (R1)
+                transport.send(&ClientIntent::Undo);
+            }
+        }
+    }
+    // Coalesce a held stroke's accumulated points into a `done: false` batch.
+    if sender.open.is_some()
+        && !sender.unsent.is_empty()
+        && now.saturating_sub(sender.last_flush) >= COALESCE
+    {
+        send_batches(sender, transport, false);
+        sender.last_flush = now;
+    }
+}
+
+/// Re-render the Game canvas from the authoritative log (spec §3.5) — **uniformly,
+/// every client**: the surface is a render of `replica.canvas_ops` plus the transient
+/// [`CanvasProgress`] overlay stamped on top. The drawer's "specialness" is purely
+/// OUTBOUND (optimistic paint + the finalize/clamp rules) — there is no per-role
+/// render filter, and the reducer applies every canvas event uniformly.
+///
+/// Why this is correct for the drawer WITHOUT a filter (the load-bearing detail): the
+/// server never echoes the drawer its own ops (no-echo, spec §3.5), so during its own
+/// turn `replica.canvas_ops` stays **empty** and this re-raster is never triggered —
+/// the drawer's optimistic buffer is left untouched, so an incoming `CanvasUndo` /
+/// `CanvasCleared` (idempotent against the local optimistic pop/clear) does not blank
+/// it. On a mid-turn reconnect the drawer's `CanvasLog` reseed **populates** the log,
+/// which triggers the re-raster and restores the canvas from the log.
+///
+/// The re-raster fires only when the buffer must actually change: `canvas_ops` changed
+/// (an op added/removed/cleared, or a reseed) OR the progress overlay was just cleared
+/// (a finalize, or a drawer-disconnect wipe — stale progress pixels must go). A growing
+/// progress stroke is merely stamped on top (idempotent — earlier points re-stamp), so
+/// it never blanks the buffer, and thus never fights the drawer's optimistic paint.
+fn rerender_canvas_from_log(
+    model: Option<Single<&crate::Dooduel>>,
+    canvases: Option<ResMut<PaintCanvases>>,
+    progress: Option<Res<CanvasProgress>>,
+    mut last_sig: Local<(usize, u64, u64)>,
+    mut last_prog: Local<u64>,
+    mut was_active: Local<bool>,
+    mut showed_progress: Local<bool>,
+) {
+    let (Some(model), Some(mut canvases)) = (model, canvases) else {
+        return;
+    };
+    let r = &model.replica;
+    if !matches!(r.phase, Phase::Drawing | Phase::Reveal) {
+        // On LEAVING a turn (Reveal/Drawing → Picking/Idle/Final) blank the local canvas
+        // ONCE, so the next drawer's Picking phase shows a clean sheet instead of the
+        // previous turn's ink lingering (mostly under the waiting scrim) until the next
+        // Drawing edge (QA cycle-1 F1b). This is a purely LOCAL display reset: the
+        // authoritative op log (`replica.canvas_ops`) is already emptied by the server's
+        // per-turn `CanvasCleared` (session.rs) and is untouched here, nothing is relayed
+        // on the wire, and the Drawing edge re-renders from the (now-empty) log anyway —
+        // so replay / late-join and the drawer's optimistic paint are unaffected. Blanking
+        // on the FALLING edge (not while IN Reveal) keeps the finished drawing visible
+        // through the reveal, then clears it for the next pick.
+        if *was_active {
+            let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
+            blank(buf);
+            buf.dirty = true;
+        }
+        *was_active = false;
+        return;
+    }
+    // The reseed counter is part of the signature: op ids reset per turn, so
+    // `(len, last_op_id)` alone is degenerate across turns — a `RoomState`/`CanvasLog`
+    // reseed to a same-length log with the same dense ids (a W4 mid-turn reconnect that
+    // missed the Picking boundary) would otherwise not re-render (keeping stale ink).
+    let sig = (
+        r.canvas_ops.len(),
+        r.canvas_ops.last().map(op_id).unwrap_or(0),
+        model.canvas_reseeds,
+    );
+    let prog_gen = progress.as_ref().map(|p| p.generation).unwrap_or(0);
+    let prog_now = progress.as_ref().is_some_and(|p| !p.points.is_empty());
+    let entered = !*was_active;
+    *was_active = true;
+
+    let ops_changed = entered || sig != *last_sig;
+    // A progress overlay that WAS shown and is now gone must be wiped by a full
+    // re-raster (a finalize's idempotent re-stamp, or a drawer-disconnect discard).
+    let progress_cleared = *showed_progress && !prog_now;
+
+    if ops_changed || progress_cleared {
+        *last_sig = sig;
+        *last_prog = prog_gen;
+        *showed_progress = prog_now;
+        let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
+        blank(buf);
+        for op in &r.canvas_ops {
+            apply_op(buf, op);
+        }
+        if let Some(p) = &progress
+            && !p.points.is_empty()
+        {
+            stamp_points(buf, &p.points, p.color, p.radius);
+        }
+        buf.dirty = true;
+    } else if prog_now && prog_gen != *last_prog {
+        // The in-progress stroke grew — stamp it on top (no blank; a growing stroke's
+        // earlier points re-stamp idempotently), so this never touches an empty-log
+        // drawer's optimistic buffer.
+        *last_prog = prog_gen;
+        *showed_progress = true;
+        if let Some(p) = &progress {
+            let buf: &mut PaintBuffer = canvases.surface_mut(CanvasKind::Game);
+            stamp_points(buf, &p.points, p.color, p.radius);
+            buf.dirty = true;
+        }
+    }
+}
+
 /// Installs the drawing canvases: setup + the CPU→Image mirror + the model→canvas
-/// tool sync. Kept as a distinct plugin (NOT folded into `dooduel::install`) so
-/// the canvases are visibly decoupled from the MVU app — the coexistence story.
+/// tool sync + the drawer's outbound stroke relay + the uniform op-log re-render.
+/// Kept as a distinct plugin (NOT folded into `dooduel::install`) so the canvases are
+/// visibly decoupled from the MVU app — the coexistence story.
 pub struct CanvasPlugin;
 
 impl Plugin for CanvasPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<CanvasKind>();
+        app.init_resource::<StrokeSender>();
         app.add_systems(Startup, setup_canvases);
         app.add_systems(
             Update,
             (
                 wire_canvas_node,
                 sync_tools_to_canvases,
+                flush_strokes,
+                rerender_canvas_from_log,
                 sync_canvases_to_images,
             )
                 .chain(),
@@ -776,107 +949,71 @@ impl Plugin for CanvasPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dooduel_core::protocol::ServerEvent;
+    use dooduel_core::transport::ConnStatus;
+    use std::collections::HashMap;
 
-    fn blank(w: usize, h: usize) -> Vec<u8> {
-        vec![0u8; w * h * 4]
-    }
-
-    #[test]
-    fn stamp_circle_radius_zero_is_one_pixel() {
-        let (w, h) = (5, 5);
-        let mut px = blank(w, h);
-        stamp_circle(&mut px, w, h, 2, 2, 0, [1, 2, 3, 4]);
-        assert_eq!(get(&px, w, 2, 2), [1, 2, 3, 4]);
-        // Neighbors untouched.
-        assert_eq!(get(&px, w, 1, 2), [0, 0, 0, 0]);
-        assert_eq!(get(&px, w, 2, 1), [0, 0, 0, 0]);
-    }
-
-    #[test]
-    fn stamp_circle_clips_at_edges_without_panicking() {
-        let (w, h) = (4, 4);
-        let mut px = blank(w, h);
-        // Center off the top-left corner — the clip must keep every write in-bounds.
-        stamp_circle(&mut px, w, h, 0, 0, 3, [9, 9, 9, 9]);
-        assert_eq!(get(&px, w, 0, 0), [9, 9, 9, 9]);
-    }
-
-    #[test]
-    fn stroke_segment_leaves_no_gaps_on_a_fast_diagonal() {
-        // A near-diagonal jump with radius 0: every stepped pixel on the line must
-        // be painted (the line-interpolation gap guarantee).
-        let (w, h) = (16, 16);
-        let mut px = blank(w, h);
-        stroke_segment(&mut px, w, h, (1, 1), (12, 9), 0, [7, 7, 7, 7]);
-        // Endpoints painted.
-        assert_eq!(get(&px, w, 1, 1), [7, 7, 7, 7]);
-        assert_eq!(get(&px, w, 12, 9), [7, 7, 7, 7]);
-        // No 2px gap: every column between the endpoints has at least one painted
-        // pixel (dx=11 >= dy=8, so the walk steps once per column).
-        for x in 1..=12usize {
-            let any = (0..h).any(|y| get(&px, w, x, y) == [7, 7, 7, 7]);
-            assert!(any, "column {x} has a gap");
+    /// A transport that records the intents sent to it (no inbound events).
+    struct Rec(Vec<ClientIntent>);
+    impl ClientTransport for Rec {
+        fn send(&mut self, intent: &ClientIntent) {
+            self.0.push(intent.clone());
+        }
+        fn try_recv(&mut self) -> Option<ServerEvent> {
+            None
+        }
+        fn status(&self) -> ConnStatus {
+            ConnStatus::Open
         }
     }
 
-    #[test]
-    fn flood_fill_recolors_a_bounded_region_and_stops_at_a_wall() {
-        // A 5x5 field split by a vertical wall at x=2; filling the left half must
-        // not cross the wall.
-        let (w, h) = (5, 5);
-        let mut px = vec![0u8; w * h * 4]; // all target (0,0,0,0)
-        for y in 0..h {
-            set(&mut px, w, 2, y, [1, 1, 1, 1]); // the wall (non-target)
+    fn points(n: usize) -> Vec<(i32, i32)> {
+        (0..n as i32).map(|x| (x % 100, x / 100)).collect()
+    }
+
+    fn per_op_point_counts(rec: &Rec) -> HashMap<u64, usize> {
+        let mut per_op: HashMap<u64, usize> = HashMap::new();
+        for i in &rec.0 {
+            if let ClientIntent::Stroke {
+                stroke_id, points, ..
+            } = i
+            {
+                *per_op.entry(*stroke_id).or_default() += points.len();
+            }
         }
-        flood_fill(&mut px, w, h, 0, 0, [5, 5, 5, 5]);
-        // Left of the wall: filled.
-        assert_eq!(get(&px, w, 0, 0), [5, 5, 5, 5]);
-        assert_eq!(get(&px, w, 1, 4), [5, 5, 5, 5]);
-        // The wall: untouched.
-        assert_eq!(get(&px, w, 2, 2), [1, 1, 1, 1]);
-        // Right of the wall: NOT filled (still target).
-        assert_eq!(get(&px, w, 3, 0), [0, 0, 0, 0]);
-        assert_eq!(get(&px, w, 4, 4), [0, 0, 0, 0]);
+        per_op
     }
 
+    /// Minor-b: NO logged op may hold more than [`MAX_OP_POINTS`] points (which would
+    /// trip the server's `> MAX_OP_POINTS` auto-split). The bug reproduces across TWO
+    /// flushes: flush 1 fills the op to EXACTLY the cap with an empty queue, and flush
+    /// 2 adds one more point. Red evidence: the old `op_room.max(1)` + `&& more` left
+    /// the op open at the cap in flush 1, then absorbed the extra point in flush 2 →
+    /// `MAX_OP_POINTS + 1`. The fix finalizes at exactly the cap in flush 1.
     #[test]
-    fn flood_fill_same_color_is_a_noop() {
-        let (w, h) = (3, 3);
-        let mut px = vec![5u8; w * h * 4];
-        // Seed color == new color: must return immediately, buffer unchanged.
-        flood_fill(&mut px, w, h, 1, 1, [5, 5, 5, 5]);
-        assert!(px.iter().all(|&b| b == 5));
-    }
+    fn send_batches_never_exceeds_max_op_points_across_flushes() {
+        let mut sender = StrokeSender {
+            open: Some(OpenWireStroke {
+                id: 0,
+                color: [0, 0, 0, 255],
+                radius: 1,
+                sent: 0,
+            }),
+            next_id: 1, // the open op holds id 0; a continuation gets a distinct id
+            unsent: points(MAX_OP_POINTS), // fills the op to EXACTLY the cap
+            ..Default::default()
+        };
+        let mut rec = Rec(Vec::new());
+        send_batches(&mut sender, &mut rec, false); // flush 1: coalesce, keep open
 
-    #[test]
-    fn flood_fill_out_of_bounds_seed_is_a_noop() {
-        let (w, h) = (3, 3);
-        let mut px = blank(w, h);
-        flood_fill(&mut px, w, h, -1, 0, [9, 9, 9, 9]);
-        flood_fill(&mut px, w, h, 3, 3, [9, 9, 9, 9]);
-        assert!(px.iter().all(|&b| b == 0));
-    }
+        sender.unsent = points(10); // flush 2: more points (pen still down) + close
+        send_batches(&mut sender, &mut rec, true);
 
-    #[test]
-    fn eraser_stamps_the_background_color() {
-        let mut c = PaintSurface::new(4, 4, [255, 255, 255, 255], Handle::default());
-        c.color = [10, 20, 30, 255];
-        c.tool = Tool::Brush;
-        c.begin(1, 1);
-        assert_eq!(get(&c.pixels, 4, 1, 1), [10, 20, 30, 255]);
-        c.tool = Tool::Eraser;
-        c.begin(1, 1);
-        assert_eq!(get(&c.pixels, 4, 1, 1), [255, 255, 255, 255]);
-    }
-
-    #[test]
-    fn undo_restores_the_prior_buffer() {
-        let mut c = PaintSurface::new(4, 4, [255, 255, 255, 255], Handle::default());
-        c.color = [1, 2, 3, 255];
-        c.begin(2, 2);
-        assert_eq!(get(&c.pixels, 4, 2, 2), [1, 2, 3, 255]);
-        c.undo();
-        // Back to blank paper.
-        assert_eq!(get(&c.pixels, 4, 2, 2), [255, 255, 255, 255]);
+        for (id, n) in per_op_point_counts(&rec) {
+            assert!(
+                n <= MAX_OP_POINTS,
+                "op {id} holds {n} points, exceeding MAX_OP_POINTS ({MAX_OP_POINTS})"
+            );
+        }
     }
 }

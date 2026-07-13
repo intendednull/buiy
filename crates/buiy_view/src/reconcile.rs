@@ -47,7 +47,7 @@ use buiy_core::render::components::{
     Background, Border, BorderSide, BoxShadow, Corners, Icon, Opacity, Shadow, TextColor,
 };
 use buiy_core::scroll::ScrollExtent;
-use buiy_core::text::edit::{EditCommand, TextEditState};
+use buiy_core::text::edit::{EditCommand, PendingProgrammaticEdit, Placeholder, TextEditState};
 use buiy_core::text::{
     FontFamily, FontSize, FontStack, FontWeight, SharedFontSystem, Text, TextAlign as CoreTextAlign,
 };
@@ -268,7 +268,18 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             update_press::<M>(world, entity, el, model);
         }
         Kind::TextInput => {
-            changed |= set_editor_value(world, entity, el.value.as_deref().unwrap_or(""));
+            // The controlled model→editor push — SKIPPED while an out-of-band AT /
+            // probe `SetValue` is pending fold (`PendingProgrammaticEdit`), so this
+            // front-of-frame reconcile does not clobber that un-folded edit before
+            // `route_text_input` reads it (the rebuilding-screen race). Keyboard
+            // edits fold same-frame and never carry the marker, so live typing and
+            // the post-submit clear (an already-consumed editor) are unaffected.
+            if world.get::<PendingProgrammaticEdit>(entity).is_none() {
+                changed |= set_editor_value(world, entity, el.value.as_deref().unwrap_or(""));
+            }
+            // The placeholder is a controlled prop too — re-patch it (drift-only) so
+            // a phase-driven prompt updates on a rebuild, not only at spawn.
+            changed |= set_placeholder(world, entity, el.placeholder.as_deref().unwrap_or(""));
             update_text_actions::<M>(world, entity, el, model);
         }
         Kind::Column | Kind::Row => {
@@ -1547,6 +1558,16 @@ fn set_checkbox_checked(world: &mut World, entity: Entity, checked: bool) -> boo
 /// `TextChanged` and writes no `EditLog` entry — the controlled set is invisible
 /// to both bridges + the record stream, avoiding a feedback loop / log flood.
 ///
+/// **Pending-edit guard.** The reconcile calls this only when the editor carries
+/// no [`PendingProgrammaticEdit`] (design
+/// `docs/specs/2026-07-10-dooduel-controlled-input-setvalue-fold-design.md`): the
+/// reconcile runs at the front of the frame (`.before(BuiySet::Layout)`), one leg
+/// ahead of the editor→model fold (`route_text_input` in `MvuSet::Enqueue`, late),
+/// so on a screen that rebuilds every frame it would otherwise re-assert the STALE
+/// model value over an out-of-band AT/probe `SetValue` before that edit folds —
+/// destroying it. The marker (set by `honor_text_set_value`, cleared by
+/// `route_text_input` when it folds) suppresses exactly that one clobber.
+///
 /// `clear ≠ Insert("")`: an empty insert deletes nothing, so clearing is
 /// `SelectAll` + `Delete` (select the whole buffer, then delete the selection).
 fn set_editor_value(world: &mut World, entity: Entity, value: &str) -> bool {
@@ -1569,6 +1590,33 @@ fn set_editor_value(world: &mut World, entity: Entity, value: &str) -> bool {
         changed = true;
     }
     changed
+}
+
+/// Re-assert a controlled text-input's placeholder from the view (drift-only, so
+/// an unchanged prompt never trips `Changed`). A real change trips the downstream
+/// `sync_placeholder` reshape + the `A11yPlaceholder` mirror. Patched every
+/// reconcile (unlike the value, it is never a "pending edit") so a phase-driven
+/// prompt (`match phase { … }`) updates on a rebuild, not only at spawn — the
+/// realized `TextInput` `#[require]`s `Placeholder`, so it is always present.
+fn set_placeholder(world: &mut World, entity: Entity, want: &str) -> bool {
+    if let Some(mut ph) = world.get_mut::<Placeholder>(entity) {
+        if ph.0 != want {
+            ph.0 = want.to_string();
+            return true;
+        }
+        false
+    } else {
+        // Defensive (a realized TextInput always carries `Placeholder`): seed one if
+        // a non-empty prompt is wanted.
+        if want.is_empty() {
+            false
+        } else {
+            world
+                .entity_mut(entity)
+                .insert(Placeholder(want.to_string()));
+            true
+        }
+    }
 }
 
 /// Attach / refresh (or remove) a text-input's `on_input` / `on_submit` handlers

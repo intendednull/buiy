@@ -19,9 +19,11 @@ struct BuiyView {
 };
 @group(0) @binding(0) var<uniform> view: BuiyView;
 
-// The atlas page texture + its sampler (`@group(1)`). R8Unorm coverage sampled
-// as a float; `.r` is the coverage in [0,1].
-@group(1) @binding(0) var atlas: texture_2d<f32>;
+// The atlas page textures + their sampler (`@group(1)`). ALL resident coverage
+// pages are bound as one `texture_2d_array`; the per-instance `page` selects the
+// array layer, so a glyph/icon on any page samples its own texels. R8Unorm
+// coverage sampled as a float; `.r` is the coverage in [0,1].
+@group(1) @binding(0) var atlas: texture_2d_array<f32>;
 @group(1) @binding(1) var atlas_samp: sampler;
 
 struct Vertex {
@@ -48,6 +50,9 @@ struct VertexOut {
     @location(2) frag_pos: vec2<f32>,   // logical px, window-relative (for the clip test)
     @location(3) clip_min: vec2<f32>,   // logical px (clip AABB, ClipRect space)
     @location(4) clip_max: vec2<f32>,   // logical px (clip AABB, ClipRect space)
+    // The atlas array layer this instance samples. FLAT: a per-instance integer
+    // is never perspective-interpolated.
+    @location(5) @interpolate(flat) page: u32,
 };
 
 fn logical_to_clip(p: vec2<f32>) -> vec2<f32> {
@@ -75,9 +80,9 @@ fn vertex(v: Vertex, i: Instance) -> VertexOut {
     out.frag_pos = logical;
     out.clip_min = i.clip.xy;
     out.clip_max = i.clip.zw;
-    // `page` rides the instance for multi-page selection; v1 binds a single
-    // CoverageR8 page, so it is not yet consumed here (no array binding).
-    _ = i.page;
+    // `page` rides the instance and selects the atlas array layer the fragment
+    // samples (all resident coverage pages are bound as one `texture_2d_array`).
+    out.page = i.page;
     return out;
 }
 
@@ -86,15 +91,17 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // Per-primitive clip AABB: discard fragments outside [clip_min, clip_max] in
     // logical-px window space — the same encoding as shader.wgsl (±inf sentinel =
     // unclipped / top-layer, never fires).
-    // WebGPU/Tint requires `textureSample` (implicit-LOD = a derivative op) in
-    // UNIFORM control flow, so sample unconditionally and apply the clip as an
-    // alpha mask rather than an early return. Behavior-identical on native;
-    // native naga accepts the early return, Tint rejects it.
+    // The clip is applied as an alpha mask rather than an early return, so the
+    // sample stays in UNIFORM control flow. The sample below is `textureSampleLevel`
+    // (EXPLICIT LOD) — NOT a derivative op — so it is exempt from Tint's
+    // uniform-control-flow rule regardless; the mask pattern is kept for
+    // consistency with the quad path, not out of uniformity necessity.
     let clipped = any(in.frag_pos < in.clip_min) || any(in.frag_pos > in.clip_max);
     // Alpha-as-color (§ 4.1): the R8 coverage modulates the per-instance linear
     // tint. The color is straight-alpha linear (matching the quad path); the
-    // pipeline's ALPHA_BLENDING blends it SrcOver in linear space.
-    let coverage = textureSample(atlas, atlas_samp, in.atlas_uv).r;
+    // pipeline's ALPHA_BLENDING blends it SrcOver in linear space. Sample the
+    // instance's array layer (`in.page`) at explicit LOD 0 (nearest, single-mip).
+    let coverage = textureSampleLevel(atlas, atlas_samp, in.atlas_uv, in.page, 0.0).r;
     let mask = select(1.0, 0.0, clipped);
     return vec4<f32>(in.color.rgb, in.color.a * coverage * mask);
 }

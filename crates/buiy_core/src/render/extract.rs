@@ -14,7 +14,7 @@
 //! Spec: architecture.md § 1.2/§ 3/§ 4, paint-order-and-top-layer.md § 1/§ 5.
 
 use crate::theme::Theme;
-use bevy::ecs::entity::EntityHashMap;
+use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
@@ -151,6 +151,20 @@ pub struct ExtractedNode {
     /// into contiguous per-group ranges off this tag (off-screen targets), so a
     /// group member is drawn once into its target, never flat.
     pub group: Option<usize>,
+    /// `true` iff this node belongs to a top-layer subtree — itself OR any
+    /// ancestor formed a top-layer stacking context (`Stacking.top_layer !=
+    /// TopLayer::None`). INHERITED, computed by a `ChildOf` ancestor CLIMB in
+    /// `extract_buiy_nodes` (after `assemble_context_tree`, mirroring the
+    /// `nearest_group_entity` climb that assigns `group`), NOT the node's own
+    /// per-node `Stacking` — a plain child (raster/panel/text) of an overlay
+    /// carries no `top_layer` of its own and would misclassify as base, splitting
+    /// the contiguous top-layer tail. Downstream, the render pass partitions each
+    /// tier's instance blob at the base↔top-layer boundary off this flag so a
+    /// top-layer subtree's complete tier-stack draws over the base's — occluding
+    /// base text/icons/borders, not just fills
+    /// (top-layer-stacking-composite-design.md § 3.1). `false` for every in-flow /
+    /// base node (the byte-stable path).
+    pub top_layer: bool,
     /// Resolved `Outline` (the focus ring / selection outline), painted OUTSIDE
     /// the border box through the distinct band-pipeline record
     /// [`BorderBandInstance`](crate::render::instance::BorderBandInstance).
@@ -551,6 +565,11 @@ pub fn extracted_node_for(
         color,
         clip: clip.copied(),
         group: None,
+        // The top-layer tag is an INHERITED ancestor-climb signal (needs the
+        // main-world `ChildOf` chain, absent here), so — like `group` — this
+        // builder starts it `false`; `extract_buiy_nodes` overwrites it in the
+        // post-`assemble_context_tree` climb.
+        top_layer: false,
         affine,
         // The outline rides a distinct record + clip (`AncestorClip`, not the
         // own box), so it is resolved separately by `extract_buiy_nodes` via
@@ -1608,6 +1627,13 @@ pub fn extract_buiy_nodes(
     // pass needs it to plan the dual-Kawase pyramid (parity Wave B4).
     let mut group_formers: EntityHashMap<(EffectReason, f32, Option<f32>)> =
         EntityHashMap::default();
+    // Top-layer FORMERS seen this frame: entities whose OWN `Stacking.top_layer`
+    // is non-`None` (the ones that called `.top_layer(...)`). The INHERITED
+    // per-node `ExtractedNode.top_layer` is derived below by an ancestor climb
+    // over this set (a plain descendant of a former has no `Stacking.top_layer`
+    // of its own — § 3.1). Collected here while the paint fan is borrowed,
+    // exactly like `group_formers`.
+    let mut top_layer_formers: EntityHashSet = EntityHashSet::default();
     let forced_colors = prefs.forced_colors;
 
     // #2 Stage C3b: attempt an in-place PATCH before the O(N) Full build. A Patch
@@ -1639,8 +1665,14 @@ pub fn extract_buiy_nodes(
                     break;
                 };
                 // v1 scope: group-free quad-only. A grouped node would re-pack its group's
-                // off-screen target; defer to Full.
-                if old.group.is_some() {
+                // off-screen target; defer to Full. A top-layer node (or a plain descendant
+                // tagged top-layer by inheritance) is ALSO deferred to Full (§ 3.6): its
+                // `top_layer` tag is derived by the post-assembly ancestor climb, which the
+                // Patch's `resolve_one` does NOT run — so re-resolving it here would drop the
+                // tag. Forcing Full re-runs the climb and preserves it (the group precedent —
+                // both are climb-derived). A NEW overlay is a structural change that already
+                // forces Full; this closes the value-only-Patch hole.
+                if old.group.is_some() || old.top_layer {
                     patchable = false;
                     break;
                 }
@@ -1695,6 +1727,18 @@ pub fn extract_buiy_nodes(
                 None
             };
             group_formers.insert(item.entity, (eg.reason, a, blur));
+        }
+        // Capture each TOP-LAYER former (own `Stacking.top_layer != None`) the same
+        // way — while the paint fan is borrowed. The inherited `top_layer` tag is
+        // an ancestor climb over this set, applied after `assemble_context_tree`
+        // (§ 3.1). Guarded by `paint_skip.is_none()` to mirror `group_formers` (a
+        // paint-skipped subtree emits no records, so its former is inert either way).
+        if item.paint_skip.is_none()
+            && item
+                .stacking
+                .is_some_and(|s| s.top_layer != crate::layout::TopLayer::None)
+        {
+            top_layer_formers.insert(item.entity);
         }
         // #2 Stage C3a: the per-node record via the shared single-entity resolver.
         // The Patch path re-resolves a changed entity through the SAME `resolve_one`,
@@ -1841,6 +1885,42 @@ pub fn extract_buiy_nodes(
                 b.max = b.max.max(node.position + node.size);
             }
         }
+    }
+
+    // Tag every assembled node top-layer iff itself OR any ancestor formed a
+    // top-layer stacking context (§ 3.1). This is a `ChildOf` ancestor CLIMB
+    // structurally identical to `nearest_group_entity` above — NOT the node's own
+    // per-node `Stacking.top_layer` (a plain descendant of an overlay carries
+    // `None` on its own component and would misclassify as base, splitting the
+    // contiguous top-layer tail every tier packer partitions at). Run HERE, after
+    // `assemble_context_tree`, because the climb needs the main-world `ChildOf`
+    // chain that `resolve_one` (the per-node builder + the Patch fast path) has no
+    // access to. Skipped entirely when the scene has no top-layer former, leaving
+    // every node's default `false` (the byte-stable base-only path).
+    if !top_layer_formers.is_empty() {
+        let parent_of = |e: Entity| child_of.get(e).ok().map(|p| p.parent());
+        for node in &mut all.nodes {
+            node.top_layer = crate::render::top_layer::in_top_layer(
+                node.entity,
+                |e| top_layer_formers.contains(&e),
+                parent_of,
+            );
+        }
+        // Materialize the single-boundary invariant: stable-partition the assembled
+        // node list so every top-layer node is the trailing SUFFIX (base + top-layer
+        // relative order both preserved). Without this a PARENTED top-layer node
+        // escapes to its own root's `painters_z` tail while a SEPARATE base root (a
+        // rank-0 stacking context with a HIGHER entity id — the podium confetti)
+        // still sorts after it, so top-layer content is NOT a natural global suffix
+        // and the per-tier tail-contiguity `debug_assert`
+        // (buckets::`TopLayerBoundaryTracker`) trips. The group tag rides each node;
+        // a group is uniformly base or top-layer (a mixed group would already break
+        // group contiguity via escape), so the partition never splits a group's
+        // contiguous run. Every node-order-derived index rebuilds from this
+        // post-partition order: `pack_view_partitioned`'s
+        // quad_slot_of/node_quad_anchors/top_layer_boundary at prepare time, and the
+        // `RetainedNodeIndex` below.
+        crate::render::top_layer::stable_top_layer_suffix(&mut all.nodes, |n| n.top_layer);
     }
 
     // Write the per-view ExtractedNodes onto the primary render view entity.

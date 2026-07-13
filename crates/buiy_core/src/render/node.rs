@@ -37,8 +37,8 @@ use bevy::core_pipeline::{Core2d, Core2dSystems};
 use bevy::prelude::*;
 use bevy::render::{
     render_resource::{
-        BindGroupEntries, BufferInitDescriptor, BufferUsages, LoadOp, Operations, PipelineCache,
-        RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
+        BindGroupEntries, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, LoadOp,
+        Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
     },
     renderer::{RenderContext, ViewQuery},
     texture::CachedTexture,
@@ -47,8 +47,8 @@ use bevy::render::{
 
 use super::{
     atlas::AtlasGpu,
-    blur::{BlurParams, BlurPipeline, PreparedBackdropBlurs},
-    buckets::{FlatDrawStep, interleave_flat_draw},
+    blur::{BlurParams, BlurPipeline, PreparedBackdropBlur, PreparedBackdropBlurs},
+    buckets::{FlatDrawStep, block_interleave, cut_ranges},
     composite::CompositePipeline,
     compositor::{EffectReason, PreparedEffectGroups, PreparedEffectTargets},
     pipeline::{BuiyPipeline, BuiyViewPipelines},
@@ -412,84 +412,12 @@ pub fn buiy_pass(
     // case) or none have uploaded yet.
     let raster_draws = build_raster_draws(world, &mut render_context);
 
-    let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
-        label: Some("buiy_pass"),
-        color_attachments: &[Some(view_target.get_color_attachment())],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    // The view uniform `@group(0)` is shared by both the quad and glyph
-    // pipelines, so it is bound once for the whole pass.
-    pass.set_bind_group(0, &view_bind_group, &[]);
-    pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
-
-    // --- Box-shadow draw (paint order: shadow FIRST, behind the quad) ----
-    // C6-b: the box-shadow primitive, drawn BEFORE the quad so a shadow paints
-    // behind its caster (shadow < quad < glyph < path). It reuses the 68 B quad
-    // instance layout (radius slot → blur sigma) but its OWN pipeline
-    // (`shadow.wgsl`); the shadow buffer is the distinct `shadow` RawBufferVec.
-    // Binds only the shared `@group(0)` view uniform (no atlas `@group(1)`).
-    // v1 draws the whole shadow blob flat (no effect-group partition — § 2.2).
-    // A zero-count or not-yet-uploaded / not-yet-compiled shadow buffer simply
-    // skips this draw without disturbing the quad draw below.
-    if buffers.shadow_count > 0
-        && let Some(shadow_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.shadow)
-        && let Some(shadow_buffer) = buffers.shadow.buffer()
-    {
-        pass.set_render_pipeline(shadow_pipeline);
-        // `@group(0)` (view) stays bound for the whole pass; the static unit-quad
-        // VBO 0 also stays bound. The shadow instance buffer is VBO 1.
-        pass.set_vertex_buffer(1, shadow_buffer.slice(..));
-        pass.draw(0..4, 0..buffers.shadow_count);
-    }
-
-    // --- Rounded box-shadow draw (F4b-6, SHADOW tier — behind the quad) --
-    // The rounded caster's shadow: its OWN `RoundedShadowInstance` buffer +
-    // `rounded_shadow.wgsl` pipeline (carrying a corner radius the square 68 B
-    // layout can't hold — the crisp 3D-press edge). Drawn in the SHADOW tier just
-    // after the square shadow blob (both behind all flat content; a rounded and a
-    // square shadow rarely overlap, and both being behind the quads makes their
-    // relative order visually inert). The square path stays byte-stable; a scene
-    // with no rounded shadow uploads a zero-count buffer and skips this draw.
-    if buffers.rounded_shadow_count > 0
-        && let Some(rs_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.rounded_shadow)
-        && let Some(rs_buffer) = buffers.rounded_shadow.buffer()
-    {
-        pass.set_render_pipeline(rs_pipeline);
-        pass.set_vertex_buffer(1, rs_buffer.slice(..));
-        pass.draw(0..4, 0..buffers.rounded_shadow_count);
-    }
-
-    // --- Quad + background-gradient draw, INTERLEAVED in paint order -----
-    // Paint order shadow < quad < gradient < glyph, with the gradient tier
-    // INTERLEAVED per node: each node's background gradient paints right after
-    // that node's OWN quad and BEFORE any descendant's quad, so an ANCESTOR's
-    // gradient layer (e.g. the viewport dotted-grid `RadialGradient`) never
-    // overpaints a descendant card's opaque fill. The pre-fix pass drew the
-    // WHOLE quad blob (the `flat_ranges`) then the WHOLE gradient blob (one
-    // `draw(0..gradient_count)`), so every gradient painted over every quad — an
-    // ancestor gradient bled onto its descendants (parity gradient-bleed bug).
-    //
-    // `gradient_anchors[i]` is the quad-blob index just after gradient i's node's
-    // own quad; gradients are in node-walk (paint) order so anchors ascend, and
-    // `interleave_flat_draw` walks the quad `flat_ranges` (the
-    // effect-group double-paint complement of `group_ranges` — a group member is
-    // rasterized off-screen in step 1 and composited back in step 2, never drawn
-    // flat) pausing to emit each gradient at its anchor. Gradients still ride the
-    // flat draw ONLY (no effect-group partition; a gradient on a grouped element
-    // stays the documented v1 follow-up). A gradient still paints OVER its own
-    // node's solid fill (its anchor is AFTER that quad) and UNDER its own
-    // text/icons (the glyph/icon tiers draw in their own later passes below).
-    // When no group is live, `flat_ranges` is the single full `0..quad_count` run
-    // and the only re-sequencing is the gradient interleave; an empty
-    // `gradient_anchors` yields exactly the pre-fix flat quad draw.
-    //
-    // Effect-group safety: this ONLY re-sequences the flat-window draws that
-    // already happened here — the same `flat_ranges` quads + the same gradient
-    // blob. The off-screen group passes (above) and the backdrop-blur + root/
-    // nested composites (below, after `drop(pass)`) are untouched.
+    // --- Flat-pass resources (shared by the base + top-layer blocks) -----
+    // The quad/gradient/raster pipeline+buffer readiness, resolved ONCE and
+    // reused by both blocks below (the top-layer stacking composite § 3.3
+    // per-block draw). Each tier stays gated on its OWN readiness exactly as the
+    // pre-split single pass was — a not-yet-compiled / not-yet-uploaded tier
+    // simply draws nothing that frame.
     let quad_buffer = (buffers.quad_count > 0)
         .then(|| buffers.quad.buffer())
         .flatten();
@@ -506,21 +434,10 @@ pub fn buiy_pass(
     } else {
         &[]
     };
-
-    // --- Raster (drawing-canvas) tier, INTERLEAVED per-raster in paint order ---
-    // F4a: retire the fill-tier "raster draws after ALL quads" block. Each
-    // `RasterImage` node now splices at its OWN `node_quad_anchor` (the exact
-    // gradient-bleed precedent), so a canvas paints over every quad/gradient that
-    // precedes its node in paint order and UNDER every one that follows — its true
-    // stacking position (a non-top-layer overlay paints over it; an OPAQUE
-    // top-layer modal panel that contains a raster shows it). Resolve the raster
-    // resources up front; if the pipeline/buffer are not yet ready (async compile
-    // / not-yet-uploaded) treat as NO rasters this frame — the interleave gets
-    // empty raster anchors and reproduces the byte-stable gradient-only draw, and
-    // the rasters land once the resources warm. Each raster is still one bind
-    // group (`@group(1)` = its own image + a Nearest sampler) + one instanced
-    // `draw`; rasters draw under glyphs (a later pass), so text paints over a
-    // canvas.
+    // Raster (drawing-canvas) resources: each `RasterImage` splices at its OWN
+    // `node_quad_anchor` (the gradient-bleed precedent). If the pipeline/buffer
+    // are not yet ready, treat as NO rasters this frame (empty anchors → the
+    // interleave emits no `Raster` step, byte-identical to the pre-raster draw).
     let raster_ready = (!raster_draws.is_empty())
         .then(|| world.get_resource::<RasterBuffers>())
         .flatten()
@@ -532,8 +449,7 @@ pub fn buiy_pass(
         });
     // Sort the draws by their node's paint-order anchor so the interleave sweep is
     // monotonic (a stable sort keeps a deterministic order among rasters sharing
-    // an anchor). Empty anchors when the resources are not ready — the interleave
-    // then emits no `Raster` step (byte-identical to the pre-raster draw).
+    // an anchor). Empty anchors when the resources are not ready.
     let mut sorted_rasters: Vec<&RasterDraw> = raster_draws.iter().collect();
     let raster_anchors: Vec<u32> = if raster_ready.is_some() {
         sorted_rasters.sort_by_key(|d| d.anchor);
@@ -543,228 +459,364 @@ pub fn buiy_pass(
         Vec::new()
     };
 
-    for step in interleave_flat_draw(&buffers.flat_ranges, anchors, &raster_anchors) {
-        match step {
-            FlatDrawStep::Quads(r) => {
-                if let Some(qb) = quad_buffer {
-                    pass.set_render_pipeline(pipeline);
-                    pass.set_vertex_buffer(1, qb.slice(..));
-                    pass.draw(0..4, r);
-                }
-            }
-            FlatDrawStep::Gradients(r) => {
-                if let (Some(gp), Some(gb)) = (gradient_pipeline, gradient_buffer) {
-                    // `@group(0)` (view) + the static unit-quad VBO 0 stay bound;
-                    // the gradient instance buffer is VBO 1.
-                    pass.set_render_pipeline(gp);
-                    pass.set_vertex_buffer(1, gb.slice(..));
-                    pass.draw(0..4, r);
-                }
-            }
-            FlatDrawStep::Raster(k) => {
-                if let Some((raster_pipeline, raster_buffer)) = raster_ready {
-                    // `@group(0)` (view) + the static unit-quad VBO 0 stay bound;
-                    // the raster instance buffer is VBO 1, `@group(1)` the per-node
-                    // image. Re-bound per raster step (few rasters; a quad/gradient
-                    // step between two rasters rebinds VBO 1 + the pipeline anyway).
-                    let draw = sorted_rasters[k as usize];
-                    pass.set_render_pipeline(raster_pipeline);
-                    pass.set_vertex_buffer(1, raster_buffer.slice(..));
-                    pass.set_bind_group(1, &draw.bind_group, &[]);
-                    pass.draw(0..4, draw.instance..draw.instance + 1);
-                }
-            }
-        }
-    }
-
-    // --- Glyph draw (paint order: glyph after quad) ----------------------
-    // The coverage-glyph (alpha-as-color) primitive, drawn AFTER the quad so
-    // text paints over fills (shadow < quad < glyph < path). Requires: the
-    // glyph pipeline compiled, the atlas `@group(1)` bind group built by
-    // `prepare_atlas_textures` (a coverage page exists), and a non-empty
-    // uploaded glyph buffer. Any missing piece skips the glyph draw without
-    // disturbing the quad draw above (e.g. before the pipeline async-compiles
-    // or before the first glyph warms an atlas page).
-    //
-    // Effect-group double-paint exclusion, glyph tier (T8 — the quad
-    // precedent above, verbatim semantics): draw ONLY the non-group glyph
-    // ranges. A group member's glyphs rasterized into its off-screen target
-    // in step 1 and composite back in step 2. `glyph_flat_ranges` is the
-    // complement of `glyph_group_ranges`: with no live group it is the
-    // single full `0..glyph_count` run (byte-for-byte the pre-T8 draw);
-    // when every glyph is a group member it is empty and this loop is
-    // correctly a no-op.
-    if buffers.glyph_count > 0
-        && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
-        && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
-        && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
-        && let Some(glyph_buffer) = buffers.glyph.buffer()
-    {
-        pass.set_render_pipeline(glyph_pipeline);
-        // `@group(0)` (view) is already bound for the pass; add the atlas
-        // `@group(1)` (texture + sampler) the coverage shader samples.
-        pass.set_bind_group(1, atlas_bind_group, &[]);
-        pass.set_vertex_buffer(1, glyph_buffer.slice(..));
-        for r in &buffers.glyph_flat_ranges {
-            pass.draw(0..4, r.clone());
-        }
-    }
-
-    // --- Vector-icon draw (parity Wave B3) -------------------------------
-    // Icons ARE coverage stamps (an icon instance is a `GlyphAlphaInstance`), so
-    // they reuse the EXACT glyph pipeline + the EXACT atlas `@group(1)` coverage
-    // bind group + `coverage.wgsl` — NO new GPU code (§ 3.5). A SEPARATE buffer +
-    // draw (not appended to the glyph buffer) keeps the icon producer decoupled
-    // from the wholesale-rebuilt glyph carrier. Drawn right after the glyph draw
-    // (both coverage tier, so an icon paints over fills like text). Same
-    // effect-group flat/group partition as glyphs (`icon_flat_ranges`); any
-    // missing piece skips without disturbing the glyph draw above.
-    if buffers.icon_count > 0
-        && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
-        && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
-        && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
-        && let Some(icon_buffer) = buffers.icon.buffer()
-    {
-        pass.set_render_pipeline(glyph_pipeline);
-        pass.set_bind_group(1, atlas_bind_group, &[]);
-        pass.set_vertex_buffer(1, icon_buffer.slice(..));
-        for r in &buffers.icon_flat_ranges {
-            pass.draw(0..4, r.clone());
-        }
-    }
-
-    // --- Border/outline band draw (paint order: outline ON TOP) ----------
-    // C6-a: the focus-ring / selection-outline band, drawn AFTER the quad +
-    // glyph so the ring sits over the fill and text within the box. Uses the
-    // distinct `BorderBandInstance` blob + `band.wgsl` pipeline (the byte-stable
-    // 68 B quad stride is untouched). Binds only the shared `@group(0)` view
-    // uniform (no atlas `@group(1)`). The outline's clip is the entity's
-    // `AncestorClip` (packed at extract), so a ring outside an `overflow:hidden`
-    // ancestor still paints (styling-f-tier.md § 2.4). A zero-count or
-    // not-yet-uploaded band buffer simply skips this draw.
-    if buffers.band_count > 0
-        && let Some(band_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.band)
-        && let Some(band_buffer) = buffers.band.buffer()
-    {
-        pass.set_render_pipeline(band_pipeline);
-        // `@group(0)` (view) stays bound for the whole pass; the band binds no
-        // additional group. The static unit-quad VBO 0 also stays bound.
-        pass.set_vertex_buffer(1, band_buffer.slice(..));
-        pass.draw(0..4, 0..buffers.band_count);
-    }
-
-    // End the flat window pass before the root-group composites: a composite
-    // is a SEPARATE pass into the same window attachment (LoadOp::Load), so it
-    // must not overlap the borrow of `pass`.
-    drop(pass);
-
-    // --- Backdrop-blur (parity Wave B4) ----------------------------------
-    // Now that the flat window pass painted the BACKDROP (every non-group
-    // primitive — the dotted bg, scrolled content, etc.), run the in-place
-    // dual-Kawase blur for each backdrop-filter element, then draw the element's
-    // OWN fill over the blurred backdrop. This sits between the flat draw and the
-    // root-group composites so a modal scrim blurs the content behind it. See
-    // `render/blur.rs` for why this is NOT an off-screen effect group.
-    run_backdrop_blurs(
-        world,
-        view_target,
-        prepared_blurs,
-        pipeline_cache,
-        &mut render_context,
+    // --- Base ↔ top-layer block split (top-layer stacking composite § 3.3) --
+    // v1 drew ONE global tier-stack, so a top-layer subtree's quad occluded base
+    // FILLS but the later GLOBAL glyph/icon/band tiers (base AND top) painted OVER
+    // it — a top-layer scrim never dimmed base text/icons/borders (the reported
+    // Dooduel scrim bug, spec § 1). Now the flat pass runs per BLOCK: the base
+    // block draws its COMPLETE tier-stack (shadow → quad+gradient+raster → glyph →
+    // icon → band → backdrop-blur → backdrop-filter fills → composite), then the
+    // top-layer block draws its complete stack OVER it on the SAME window surface
+    // — so a top-layer subtree occludes base content across ALL tiers. When the
+    // view has no top-layer content the split collapses to the base block ALONE,
+    // byte-identical to the pre-split draw (F9). The base block ALWAYS runs (its
+    // flat pass owns the window Clear); the top block runs only when there IS
+    // top-layer content, else a no-op extra pass would be redundant.
+    let tl = buffers.top_layer;
+    // Signal B — the AUTHORITATIVE top-layer gate: is ANY node this frame
+    // top-layer (`buffers.any_top_layer`, `PackedPartition::any_top_layer`). This
+    // replaces a per-tier `any boundary < count OR any top blur` heuristic that
+    // SILENTLY DROPPED a bare gradient/raster-only overlay: a `Color::NONE`
+    // top-layer node (a translucent gradient scrim, a raster-only overlay) pushes
+    // no quad/shadow/band/glyph/icon instance, so it moves no per-tier boundary —
+    // the heuristic read "no top-layer content" and skipped the top block, so the
+    // overlay never occluded base text/icons/borders. The authoritative bit is
+    // tier- AND anchor-independent (future-proof: a new flat tier needs no gate
+    // change) and subsumes the blur term (a backdrop-filter former is a node, so
+    // the bit already covers it).
+    let has_top_layer = buffers.any_top_layer;
+    // The quad boundary the flat interleave splits gradients/rasters at (rev-4/m2:
+    // no separate gradient boundary — `block_interleave` splits them by anchor vs
+    // this). `u32::MAX` routes EVERYTHING to the base block, so `block_interleave`
+    // is byte-identical to a single `interleave_flat_draw` on a no-top-layer view.
+    let quad_boundary = if has_top_layer { tl.quad } else { u32::MAX };
+    let (base_steps, top_steps) = block_interleave(
+        &buffers.flat_ranges,
+        anchors,
+        &raster_anchors,
+        quad_boundary,
     );
-    if let (Some(prepared), Some(blurs)) = (prepared, prepared_blurs)
-        && !blurs.blurs.is_empty()
-    {
-        // The backdrop-filter elements' OWN fills draw flat over the blurred
-        // backdrop (their ranges live in `group_ranges`/`glyph_group_ranges`,
-        // EXCLUDED from `flat_ranges`, because they are EffectGroup members; the
-        // off-screen loops skip them — `is_pure_backdrop_filter` — so this is
-        // where they paint). A LoadOp::Load window pass preserves the blur.
-        draw_backdrop_filter_fills(
+    // The glyph/icon flat runs split on GROUP only, so a base+top run STRADDLES
+    // the boundary — `cut_ranges`-slice each to its block's window (a straddling
+    // run is cut, not double-drawn). Shadows/bands are single contiguous blobs,
+    // split by index range directly (no group partition).
+    let base_glyph_flat = cut_ranges(&buffers.glyph_flat_ranges, 0, tl.glyph);
+    let top_glyph_flat = cut_ranges(&buffers.glyph_flat_ranges, tl.glyph, buffers.glyph_count);
+    let base_icon_flat = cut_ranges(&buffers.icon_flat_ranges, 0, tl.icon);
+    let top_icon_flat = cut_ranges(&buffers.icon_flat_ranges, tl.icon, buffers.icon_count);
+    // The backdrop blurs split base/top on the stamped `top_layer` flag (M1); the
+    // three pipeline ids are shared by both blocks. `partition` splits into
+    // (base = !top_layer, top).
+    let (base_blurs, top_blurs): (Vec<PreparedBackdropBlur>, Vec<PreparedBackdropBlur>) =
+        prepared_blurs
+            .map(|pb| pb.blurs.iter().cloned().partition(|b| !b.top_layer))
+            .unwrap_or_default();
+    let blur_ids = prepared_blurs
+        .map(|pb| (pb.down_pipeline, pb.up_pipeline, pb.blit_pipeline))
+        .unwrap_or((None, None, None));
+
+    // Draw ONE block's full tier-stack → backdrop-blur → backdrop-filter fills →
+    // root-group composite (the intra-block order LOCKED to the pre-split global
+    // order, § 3.3). `want_top` selects the base or top-layer effect groups for
+    // the backdrop-filter + composite sub-passes. The flat pass reuses
+    // `view_target.get_color_attachment()` (m6): it auto-returns Clear on the
+    // FIRST call (the base block's flat pass clears the window) and Load on every
+    // later call (the top block, blur blits, composites) — never a hand-built
+    // Clear, which would wipe the base block.
+    let mut draw_block = |steps: &[FlatDrawStep],
+                          shadow: std::ops::Range<u32>,
+                          rounded_shadow: std::ops::Range<u32>,
+                          glyph_flat: &[std::ops::Range<u32>],
+                          icon_flat: &[std::ops::Range<u32>],
+                          band: std::ops::Range<u32>,
+                          blurs: &[PreparedBackdropBlur],
+                          want_top: bool| {
+        let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+            label: Some("buiy_pass"),
+            color_attachments: &[Some(view_target.get_color_attachment())],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        // The view uniform `@group(0)` is shared by both the quad and glyph
+        // pipelines, so it is bound once for the whole pass.
+        pass.set_bind_group(0, &view_bind_group, &[]);
+        pass.set_vertex_buffer(0, buiy_pipeline.vertex_buffer.slice(..));
+
+        // --- Box-shadow (paint order: shadow FIRST, behind the quad) — this
+        // block's `[shadow]` sub-range of the square-shadow blob (C6-b). Its OWN
+        // `shadow.wgsl` pipeline; binds only `@group(0)`. Empty range / not-ready
+        // buffer skips it.
+        if !shadow.is_empty()
+            && let Some(shadow_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.shadow)
+            && let Some(shadow_buffer) = buffers.shadow.buffer()
+        {
+            pass.set_render_pipeline(shadow_pipeline);
+            pass.set_vertex_buffer(1, shadow_buffer.slice(..));
+            pass.draw(0..4, shadow);
+        }
+
+        // --- Rounded box-shadow (F4b-6, SHADOW tier) — this block's sub-range of
+        // the rounded-caster blob. Its OWN `rounded_shadow.wgsl` pipeline.
+        if !rounded_shadow.is_empty()
+            && let Some(rs_pipeline) =
+                pipeline_cache.get_render_pipeline(view_pipelines.rounded_shadow)
+            && let Some(rs_buffer) = buffers.rounded_shadow.buffer()
+        {
+            pass.set_render_pipeline(rs_pipeline);
+            pass.set_vertex_buffer(1, rs_buffer.slice(..));
+            pass.draw(0..4, rounded_shadow);
+        }
+
+        // --- Quad + gradient + raster, INTERLEAVED in paint order — this block's
+        // `steps` (`block_interleave`, § 3.3). A gradient still paints over its
+        // node's own fill and under its descendants' quads; a raster splices at
+        // its node's stacking position. Absolute instance indices.
+        for step in steps {
+            match step {
+                FlatDrawStep::Quads(r) => {
+                    if let Some(qb) = quad_buffer {
+                        pass.set_render_pipeline(pipeline);
+                        pass.set_vertex_buffer(1, qb.slice(..));
+                        pass.draw(0..4, r.clone());
+                    }
+                }
+                FlatDrawStep::Gradients(r) => {
+                    if let (Some(gp), Some(gb)) = (gradient_pipeline, gradient_buffer) {
+                        // `@group(0)` (view) + the static unit-quad VBO 0 stay
+                        // bound; the gradient instance buffer is VBO 1.
+                        pass.set_render_pipeline(gp);
+                        pass.set_vertex_buffer(1, gb.slice(..));
+                        pass.draw(0..4, r.clone());
+                    }
+                }
+                FlatDrawStep::Raster(k) => {
+                    if let Some((raster_pipeline, raster_buffer)) = raster_ready {
+                        // `@group(1)` the per-node image; re-bound per raster step.
+                        let draw = sorted_rasters[*k as usize];
+                        pass.set_render_pipeline(raster_pipeline);
+                        pass.set_vertex_buffer(1, raster_buffer.slice(..));
+                        pass.set_bind_group(1, &draw.bind_group, &[]);
+                        pass.draw(0..4, draw.instance..draw.instance + 1);
+                    }
+                }
+            }
+        }
+
+        // --- Glyph draw (paint order: glyph after quad) — this block's
+        // `glyph_flat` runs (`cut_ranges`-sliced from `glyph_flat_ranges` at the
+        // top-layer boundary; the group double-paint exclusion is already folded
+        // into `glyph_flat_ranges`). Any missing piece (async-compile / cold
+        // atlas) skips the draw. A base+top run coalesces on group only, so the
+        // slice CUTS it (never drawn whole in both blocks).
+        if !glyph_flat.is_empty()
+            && buffers.glyph_count > 0
+            && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
+            && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
+            && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
+            && let Some(glyph_buffer) = buffers.glyph.buffer()
+        {
+            pass.set_render_pipeline(glyph_pipeline);
+            // `@group(0)` (view) is already bound; add the atlas `@group(1)`.
+            pass.set_bind_group(1, atlas_bind_group, &[]);
+            pass.set_vertex_buffer(1, glyph_buffer.slice(..));
+            for r in glyph_flat {
+                pass.draw(0..4, r.clone());
+            }
+        }
+
+        // --- Vector-icon draw (parity Wave B3) — this block's `icon_flat` runs.
+        // Icons ARE coverage stamps (the EXACT glyph pipeline + atlas `@group(1)`),
+        // drawn through the separate icon buffer right after the glyphs.
+        if !icon_flat.is_empty()
+            && buffers.icon_count > 0
+            && let Some(glyph_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.glyph)
+            && let Some(atlas_gpu) = world.get_resource::<AtlasGpu>()
+            && let Some(atlas_bind_group) = atlas_gpu.coverage_bind_group()
+            && let Some(icon_buffer) = buffers.icon.buffer()
+        {
+            pass.set_render_pipeline(glyph_pipeline);
+            pass.set_bind_group(1, atlas_bind_group, &[]);
+            pass.set_vertex_buffer(1, icon_buffer.slice(..));
+            for r in icon_flat {
+                pass.draw(0..4, r.clone());
+            }
+        }
+
+        // --- Border/outline band (paint order: outline ON TOP) — this block's
+        // `[band]` sub-range of the band blob (C6-a/C6-b). Its OWN `band.wgsl`
+        // pipeline; binds only `@group(0)`.
+        if !band.is_empty()
+            && let Some(band_pipeline) = pipeline_cache.get_render_pipeline(view_pipelines.band)
+            && let Some(band_buffer) = buffers.band.buffer()
+        {
+            pass.set_render_pipeline(band_pipeline);
+            pass.set_vertex_buffer(1, band_buffer.slice(..));
+            pass.draw(0..4, band);
+        }
+
+        // End this block's flat pass before its backdrop-blur / composites (each a
+        // SEPARATE `LoadOp::Load` pass into the same attachment, so it must not
+        // overlap the borrow of `pass`).
+        drop(pass);
+
+        // --- Backdrop-blur — THIS block's backdrop-filter formers (M1 split): a
+        // base blur samples the base backdrop; a top-layer blur samples the base
+        // block ALREADY painted beneath it (the whole point of the split).
+        run_backdrop_blurs(
             world,
             view_target,
-            prepared,
-            buffers,
-            view_pipelines,
-            buiy_pipeline,
+            blurs,
+            blur_ids.0,
+            blur_ids.1,
+            blur_ids.2,
             pipeline_cache,
-            &view_bind_group,
             &mut render_context,
         );
-    }
-
-    // Effect-group composite — step 2b (ROOT groups → window): composite each
-    // root group's target into the window, in post-order, AFTER the flat draw
-    // (the group paints over the in-flow content). The composite samples the
-    // group target (`Rgba16Float`, straight-alpha linear) and blends SrcOver
-    // with `sampled.a * opacity` in the WINDOW's space (the `Rgba8UnormSrgb`
-    // attachment re-encodes linear→sRGB8 on write) — the GPU form of
-    // `composite_src_over` (compositor.rs). A nested child's result is already
-    // in the parent target (step 2a), so overlapping children inside an
-    // `opacity < 1` group composite ONCE as a unit and do not double-darken
-    // (the correct semantics, § 4). The targets stay resident through here;
-    // `update_texture_cache_system` (render `Cleanup`) un-`taken`s them next
-    // frame (§ 2.2).
-    if let (Some(prepared), Some(targets)) = (prepared, prepared_targets) {
-        let composite = world.resource::<CompositePipeline>();
-        for &gi in &prepared.composite_order {
-            let group = &prepared.groups[gi];
-            if group.parent.is_some() {
-                continue; // nested → composited into its parent (step 2a).
-            }
-            if is_pure_backdrop_filter(group.reason) {
-                continue; // backdrop-filter: no off-screen target to composite.
-            }
-            let Some(src) = targets.targets.get(gi).and_then(|t| t.as_ref()) else {
-                continue; // degraded root group (no target).
-            };
-            let placement = &targets.placements[gi];
-            let Some(comp_id) = placement.composite_pipeline else {
-                continue;
-            };
-            let Some(comp_pipeline) = pipeline_cache.get_render_pipeline(comp_id) else {
-                continue;
-            };
-            // Bind groups before the pass (device borrow); then composite into
-            // the window attachment (LoadOp::Load preserves the flat draw).
-            let (uniform_bg, source_bg) =
-                composite_bindings(&mut render_context, composite, src, placement);
-            let attachment = view_target.get_color_attachment();
-            let mut cpass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
-                label: Some("buiy_effect_composite_window_pass"),
-                color_attachments: &[Some(attachment)],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            cpass.set_render_pipeline(comp_pipeline);
-            cpass.set_bind_group(0, &uniform_bg, &[]);
-            cpass.set_bind_group(1, &source_bg, &[]);
-            cpass.set_vertex_buffer(0, composite.vertex_buffer.slice(..));
-            cpass.draw(0..4, 0..1);
+        // The backdrop-filter formers' OWN fills over the blurred backdrop (M2 —
+        // per block: a top-layer former's fill draws in the TOP block, else the
+        // top flat pass would overpaint it). Filtered to THIS block's groups.
+        if !blurs.is_empty()
+            && let Some(prepared) = prepared
+        {
+            draw_backdrop_filter_fills(
+                world,
+                view_target,
+                prepared,
+                buffers,
+                view_pipelines,
+                buiy_pipeline,
+                pipeline_cache,
+                &view_bind_group,
+                want_top,
+                &mut render_context,
+            );
         }
-    }
 
-    // Effect-group composite — step 3 (top-layer): ONE draw suffices in v1,
-    // no second pass (effect-compositor.md § 3 step 3).
+        // --- Effect-group composite — step 2b (ROOT groups → window), for THIS
+        // block's groups (§ 3.3). A base group composites in the base block, a
+        // top-layer group in the top block, so it lands over the right block's
+        // flat content. The composite samples the group's `Rgba16Float` target and
+        // blends SrcOver in the window's space; a nested child was already folded
+        // into its parent at step 2a. Group→block classification by the no-straddle
+        // member range (§ 3.4).
+        if let (Some(prepared), Some(targets)) = (prepared, prepared_targets) {
+            let composite = world.resource::<CompositePipeline>();
+            for &gi in &prepared.composite_order {
+                let group = &prepared.groups[gi];
+                if group.parent.is_some() {
+                    continue; // nested → composited into its parent (step 2a).
+                }
+                if is_pure_backdrop_filter(group.reason) {
+                    continue; // backdrop-filter: no off-screen target to composite.
+                }
+                if group_is_top_layer(gi, buffers) != want_top {
+                    continue; // this group belongs to the OTHER block.
+                }
+                let Some(src) = targets.targets.get(gi).and_then(|t| t.as_ref()) else {
+                    continue; // degraded root group (no target).
+                };
+                let placement = &targets.placements[gi];
+                let Some(comp_id) = placement.composite_pipeline else {
+                    continue;
+                };
+                let Some(comp_pipeline) = pipeline_cache.get_render_pipeline(comp_id) else {
+                    continue;
+                };
+                // Bind groups before the pass (device borrow); then composite into
+                // the window attachment (LoadOp::Load preserves this block's draw).
+                let (uniform_bg, source_bg) =
+                    composite_bindings(&mut render_context, composite, src, placement);
+                let attachment = view_target.get_color_attachment();
+                let mut cpass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                    label: Some("buiy_effect_composite_window_pass"),
+                    color_attachments: &[Some(attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                cpass.set_render_pipeline(comp_pipeline);
+                cpass.set_bind_group(0, &uniform_bg, &[]);
+                cpass.set_bind_group(1, &source_bg, &[]);
+                cpass.set_vertex_buffer(0, composite.vertex_buffer.slice(..));
+                cpass.draw(0..4, 0..1);
+            }
+        }
+    };
+
+    // The BASE block always runs — its flat pass owns the window Clear (drawing
+    // the base tier-stack `[0..boundary)` of every tier).
+    draw_block(
+        &base_steps,
+        0..tl.shadow,
+        0..tl.rounded_shadow,
+        &base_glyph_flat,
+        &base_icon_flat,
+        0..tl.band,
+        &base_blurs,
+        false,
+    );
+    // The TOP-LAYER block draws its complete tier-stack `[boundary..)` OVER the
+    // base — gated on the authoritative `has_top_layer` bit, so a no-top-layer view
+    // issues the IDENTICAL draws to the pre-split pass (byte-stability + F9). This
+    // closes the paint half of the pick≠paint seam: a top-layer subtree now
+    // occludes base text/icons/borders, not just fills (spec § 1.4). (Retires the
+    // v1 "top-layer is the tail of the single flat draw" approximation —
+    // `partition_top_layer` in `render/top_layer.rs` is now unused by the draw
+    // path.)
     //
-    // Top-layer members are NOT a separate render pass in v1. Layout
-    // sub-pass 6f already places them at the TAIL of the root `painters_z`
-    // (paint-order-and-top-layer.md § 6f), so they extract last → pack last
-    // → draw last in the single instanced flat `draw` above — painting over
-    // all in-flow content for free. Their `ExtractedNode.clip` is forced to
-    // `None` (§ 3.2), packed to the `[±INFINITY]` full-view sentinel, so the
-    // fragment-discard clip never fires and they paint unclipped over the
-    // whole view. `painters_z` order is preserved VERBATIM here — render
-    // never groups or re-sorts (pillar 1) — so a second pass is unnecessary.
-    // A top-layer entry that is *itself* an effect group (a modal at
-    // `opacity: 0.9`) composites its own target in steps 1–2 like any other
-    // group, then draws here in top-layer order — the two mechanisms compose
-    // without special-casing (§ 3 step 3). `partition_top_layer`
-    // (render/top_layer.rs) is the landed helper that splits the in-flow and
-    // top-layer instance ranges should a top-layer subtree ever need an
-    // explicit separate pass.
+    // Pass-open decision (drift-#1): gate ONLY on the authoritative bit, not on a
+    // per-tier "top block is non-empty" guard. A precise emptiness guard would have
+    // to enumerate every tier AND check top-layer effect-group composite membership
+    // (a top-layer `opacity < 1` overlay is COMPOSITE-only — its fill is a group
+    // member, invisible to any flat/tier check), reintroducing exactly the per-tier
+    // fragility Signal B was chosen to eliminate (a forgotten tier silently drops
+    // top content). The only cost of gating on the bit alone is that a degenerate
+    // INVISIBLE top-layer container (any_top_layer true but painting nothing in any
+    // tier/group/blur) opens ONE empty top flat pass — a provably pixel-safe no-op
+    // (`LoadOp::Load` preserves, zero draws, the resolve reproduces the base
+    // pixels; the existing composite path already relies on repeated Load+resolve).
+    // That invisible-container case is a documented v1 non-case (no fixture / app
+    // use); every overlay that paints anything routes correctly.
+    if has_top_layer {
+        draw_block(
+            &top_steps,
+            tl.shadow..buffers.shadow_count,
+            tl.rounded_shadow..buffers.rounded_shadow_count,
+            &top_glyph_flat,
+            &top_icon_flat,
+            tl.band..buffers.band_count,
+            &top_blurs,
+            true,
+        );
+    }
+}
+
+/// Classify effect group `gi` as base or top-layer for the per-block composite
+/// (top-layer stacking composite § 3.3). No `EffectGroup` straddles the base↔
+/// top-layer boundary (the no-straddle invariant § 3.4), so a group's members are
+/// wholly base OR wholly top-layer: classify by the FIRST non-empty member range
+/// (quad, then glyph, then icon) against that tier's boundary. An empty group
+/// (no members) is base — the byte-stable default (it composites nothing anyway).
+fn group_is_top_layer(gi: usize, buffers: &BuiyInstanceBuffers) -> bool {
+    if let Some(r) = buffers.group_ranges.get(gi)
+        && r.start < r.end
+    {
+        return r.start >= buffers.top_layer.quad;
+    }
+    if let Some(r) = buffers.glyph_group_ranges.get(gi)
+        && r.start < r.end
+    {
+        return r.start >= buffers.top_layer.glyph;
+    }
+    if let Some(r) = buffers.icon_group_ranges.get(gi)
+        && r.start < r.end
+    {
+        return r.start >= buffers.top_layer.icon;
+    }
+    false
 }
 
 /// Does this effect group form ONLY for `backdrop-filter` (no opacity /
@@ -788,17 +840,18 @@ fn is_pure_backdrop_filter(reason: EffectReason) -> bool {
 /// there is never a read-write hazard on one texture. A no-op when there are no
 /// blurs, the pipelines have not async-compiled, or the `BlurPipeline` resource
 /// is absent.
+#[allow(clippy::too_many_arguments)]
 fn run_backdrop_blurs(
     world: &World,
     view_target: &ViewTarget,
-    prepared_blurs: Option<&PreparedBackdropBlurs>,
+    blurs: &[PreparedBackdropBlur],
+    down_pipeline: Option<CachedRenderPipelineId>,
+    up_pipeline: Option<CachedRenderPipelineId>,
+    blit_pipeline: Option<CachedRenderPipelineId>,
     pipeline_cache: &PipelineCache,
     render_context: &mut RenderContext,
 ) {
-    let Some(blurs) = prepared_blurs else {
-        return;
-    };
-    if blurs.blurs.is_empty() {
+    if blurs.is_empty() {
         return;
     }
     let Some(blur_pipeline) = world.get_resource::<BlurPipeline>() else {
@@ -806,9 +859,10 @@ fn run_backdrop_blurs(
     };
     // All three pipeline variants must have compiled (the established skip-on-
     // async-compile behavior class — a not-yet-ready frame leaves the backdrop
-    // un-blurred, then resolves once the pipelines land).
-    let (Some(down_id), Some(up_id), Some(blit_id)) =
-        (blurs.down_pipeline, blurs.up_pipeline, blurs.blit_pipeline)
+    // un-blurred, then resolves once the pipelines land). The ids ride the
+    // per-view `PreparedBackdropBlurs`; the per-block caller (top-layer stacking
+    // composite, § 3.3) passes a filtered `blurs` slice but the SAME ids.
+    let (Some(down_id), Some(up_id), Some(blit_id)) = (down_pipeline, up_pipeline, blit_pipeline)
     else {
         return;
     };
@@ -820,7 +874,7 @@ fn run_backdrop_blurs(
         return;
     };
 
-    for blur in &blurs.blurs {
+    for blur in blurs {
         if blur.levels.is_empty() {
             continue;
         }
@@ -1032,6 +1086,12 @@ fn blur_bindings(
 /// styling-f-tier.md § 2.3 / Wave B1), so a gradient/border on a backdrop-filter
 /// element paints into the backdrop and is blurred; the gallery's two uses (solid
 /// header bg + solid modal scrim) are unaffected. Documented follow-up.
+///
+/// `want_top` selects the block: this runs once per block (top-layer stacking
+/// composite § 3.3), drawing ONLY the backdrop-filter formers whose
+/// [`group_is_top_layer`] matches `want_top`, so a top-layer former's fill draws
+/// in the TOP block (after the top blur) — else the top flat pass would overpaint
+/// it.
 #[allow(clippy::too_many_arguments)]
 fn draw_backdrop_filter_fills(
     world: &World,
@@ -1042,6 +1102,7 @@ fn draw_backdrop_filter_fills(
     buiy_pipeline: &BuiyPipeline,
     pipeline_cache: &PipelineCache,
     view_bind_group: &bevy::render::render_resource::BindGroup,
+    want_top: bool,
     render_context: &mut RenderContext,
 ) {
     let quad_pl = pipeline_cache.get_render_pipeline(view_pipelines.quad);
@@ -1068,6 +1129,9 @@ fn draw_backdrop_filter_fills(
             if !is_pure_backdrop_filter(group.reason) {
                 continue;
             }
+            if group_is_top_layer(group.index, buffers) != want_top {
+                continue; // this former belongs to the OTHER block (§ 3.3).
+            }
             if let Some(range) = buffers.group_ranges.get(group.index)
                 && range.start < range.end
             {
@@ -1089,6 +1153,9 @@ fn draw_backdrop_filter_fills(
                 if !is_pure_backdrop_filter(group.reason) {
                     continue;
                 }
+                if group_is_top_layer(group.index, buffers) != want_top {
+                    continue; // this former belongs to the OTHER block (§ 3.3).
+                }
                 if let Some(range) = buffers.glyph_group_ranges.get(group.index)
                     && range.start < range.end
                 {
@@ -1101,6 +1168,9 @@ fn draw_backdrop_filter_fills(
             for group in &prepared.groups {
                 if !is_pure_backdrop_filter(group.reason) {
                     continue;
+                }
+                if group_is_top_layer(group.index, buffers) != want_top {
+                    continue; // this former belongs to the OTHER block (§ 3.3).
                 }
                 if let Some(range) = buffers.icon_group_ranges.get(group.index)
                     && range.start < range.end

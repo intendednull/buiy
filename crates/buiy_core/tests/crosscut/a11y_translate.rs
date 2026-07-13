@@ -67,6 +67,36 @@ fn focused_node_id_round_trips() {
 }
 
 #[test]
+fn a_focus_on_a_node_not_in_the_update_falls_back_to_root() {
+    use buiy_core::a11y::translate::{ROOT_NODE_ID, node_id_for};
+    // AccessKit requires `focus` to name a node present in the update; a focus on a
+    // despawned entity (its node absent from the views) violates that and panics the
+    // consumer / real platform adapter. This is exactly the case a screen swap creates:
+    // the pointer focuses a button, the transition despawns it before `FocusedEntity`
+    // is reconciled. `build_tree_update` must clamp such a focus to the always-present
+    // root rather than emit the dangling id.
+    let views = vec![A11yNodeView {
+        entity: Entity::from_raw_u32(7).unwrap(),
+        role: A11yRole::Button,
+        name: "Live".into(),
+        focusable: true,
+        ..Default::default()
+    }];
+    // A NodeId for an entity that is NOT among the views (the "despawned focused" node).
+    let ghost = node_id_for(Entity::from_raw_u32(999).unwrap());
+    let update = build_tree_update(&views, Some(ghost), None);
+    assert_eq!(
+        update.focus, ROOT_NODE_ID,
+        "a focus on an absent node must clamp to the root, never emit the dangling id"
+    );
+    // And it is a valid update: `focus` names a node actually present.
+    assert!(
+        update.nodes.iter().any(|(id, _)| *id == update.focus),
+        "the emitted focus must reference a node in the update"
+    );
+}
+
+#[test]
 fn description_round_trips() {
     let view = A11yNodeView {
         entity: Entity::from_raw_u32(1).unwrap(),

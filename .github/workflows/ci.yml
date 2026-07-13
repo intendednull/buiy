@@ -396,6 +396,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # The Dooduel web client graph must stay wasm-safe (M1 W4.6): a break in
+      # ewebsock's `ws-client` transport, or a `dooduel_core` purity regression, would
+      # otherwise only surface at a browser deploy. The job-level RUSTFLAGS
+      # (-D warnings --cfg=web_sys_unstable_apis) apply. (bevy-freeness of dooduel_core
+      # is separately guarded by its cargo-tree purity tripwire — the wasm check cannot
+      # catch a bevy leak, bevy is wasm-safe.)
+      - name: Check the dooduel_web client graph (wasm — ewebsock ws-client)
+        run: cargo check --target wasm32-unknown-unknown -p dooduel_web --locked
       - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
         with:
           tool: trunk@0.21.14,wasm-bindgen-cli@0.2.125

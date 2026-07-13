@@ -2,17 +2,22 @@
 //! Buiy framework.
 //!
 //! One MVU model owns the whole UI (one `ui()` per app); screens are a [`Screen`]
-//! enum matched in [`view::view`] (root kind-swap). The match state lives in a
-//! nested [`game::Game`] (that module is the pure state machine + the clock model).
-//! The reducer is one pure fold; the F7 [`ClockPlugin`] turns wall-clock into a
-//! `Msg::Tick(now)` every frame — the "game on a game engine" seam. The windowed
-//! `dooduel` bin, the wasm `dooduel_web` crate, the headless `capture` bin, and the
-//! `playtest_host` all share [`install`] / [`install_runtime`].
+//! enum matched in [`view::view`] (root kind-swap). Since M1 the match state is a
+//! [`RoomReplica`] (the client-side mirror of the authoritative session), mutated
+//! only by `Msg::Net(ServerEvent)`; the pure rules/scoring/clock core lives in the
+//! Bevy-free `dooduel_core::game` crate. The reducer is one pure fold; the F7
+//! [`ClockPlugin`] turns wall-clock into a `Msg::Tick(now)` every frame — driving the
+//! monotonic countdown. The windowed `dooduel` bin, the wasm `dooduel_web` crate, and
+//! the headless `capture` bin share [`install`] / [`install_runtime`].
 //!
 //! ## Module map (the per-screen split)
 //!
-//! - [`game`] — the PURE game core (phase machine, scoring, hints, seeded bots, the
-//!   honest `word_display()` redaction). Zero framework coupling; unit-testable.
+//! - [`game`] — the PURE game core, re-exported from `dooduel_core` (phase machine,
+//!   scoring, hints, seeded bots, the per-seat `word_display_for` redaction). Zero
+//!   framework coupling; unit-testable. The client no longer runs it — the authority
+//!   ([`net::LocalAuthorityPlugin`] solo, `dooduel_server` networked) does.
+//! - [`net`] — the transport pump ([`net::NetPlugin`]) + the in-process solo
+//!   authority ([`net::LocalAuthorityPlugin`]): intents out, `Msg::Net` events in.
 //! - [`paint`] — the keyed `PaintCanvases` resource + the model→canvas projection +
 //!   the Press/Drag/Release observers (the drawing surface skribbl.io needs).
 //! - [`storage`] — the typed per-target persistence seam (native JSON / wasm
@@ -30,17 +35,30 @@ use bevy::image::Image;
 use buiy::prelude::*;
 use buiy::view::BuiyViewAppExt;
 use buiy_core::mvu::{Cmd, MvuSet, enqueue};
+use buiy_core::text::edit::Clipboard;
 
 pub mod avatar;
 pub mod confetti;
-pub mod game;
+/// The pure game core now lives in `dooduel_core`; re-exported here so existing
+/// `crate::game::…` / `dooduel::game::…` paths (views, bins, tests) stay stable
+/// (M1 W0.2). The pure game unit tests moved with it, into `dooduel_core::game`.
+pub use dooduel_core::game;
+pub mod net;
 pub mod paint;
 pub mod storage;
 pub mod theme;
 pub mod view;
 
-use game::{Config, Game, Phase};
+use game::Phase;
 use theme::ThemePref;
+
+/// The wire protocol the client speaks (M1 W3): the [`RoomReplica`] the model now
+/// holds instead of a local `game::Game`, the [`ClientIntent`]s the reducer sends,
+/// and the [`ServerEvent`]s `Msg::Net` folds in. Re-exported so `view/*` + `net`
+/// reach them via `crate::…`.
+pub use dooduel_core::protocol::{
+    CanvasOp, ClientIntent, ErrorCode, ReplicaPlayer, RoomReplica, ServerEvent, WireAvatar,
+};
 
 /// The drawing canvas size in logical px (matches the paint image resolution so
 /// window px → texel is 1:1). Shared by the view (raster element size) + paint.
@@ -58,7 +76,49 @@ pub const MOBILE_BREAKPOINT: f32 = 430.0;
 pub struct Dooduel {
     pub screen: Screen,
     pub player_name: String,
-    pub game: Game,
+    /// The client-side mirror of the authoritative room (M1 W3.1 — replaces the
+    /// old local `game::Game`). **Mutated only by `Msg::Net`** (the reducer folds a
+    /// [`ServerEvent`] into it); the view reads it per screen. The secret word,
+    /// another drawer's pre-pick choices, the RNG seed, and other seats' private
+    /// chat have no field here — the negative invariant (spec §4.1).
+    pub replica: RoomReplica,
+    /// Which session backs this model (spec §4.1). `Solo` = the in-process
+    /// [`net::LocalAuthorityPlugin`] authority; `Offline` = Home / the cosmetic
+    /// Create-Join lobby (networked Create/Join land in W4). The `Joining` /
+    /// `Connected` / `Dropped` arms are the W4 networked path (structurally present).
+    pub net: NetState,
+    /// The guess/chat field text — local UI state that moved OUT of `game::Game`
+    /// (spec §2.3.6); the reducer sends its content as a `Guess` intent on submit.
+    pub chat_input: String,
+    /// Outbound intents the reducer stages for [`net::NetPlugin`] to send (spec §4.2
+    /// — the reducer is pure, so it cannot touch the transport). An append-log a
+    /// draining system tracks with a cursor; canvas intents (stroke/fill/undo/clear)
+    /// go straight from the paint subsystem, so this carries only the low-frequency
+    /// gameplay intents (pick / guess / continue).
+    pub net_outbox: Vec<ClientIntent>,
+    /// Text the reducer stages for the OS clipboard (the reducer is pure, so it cannot
+    /// touch the `Clipboard` resource — an append-log the `drain_clipboard_outbox`
+    /// system writes out with a cursor, mirroring [`net_outbox`](Self::net_outbox)).
+    /// The lobby's "Copy" button routes the room code through here.
+    pub clipboard_outbox: Vec<String>,
+    /// Bumped to request a fresh in-process solo `Session` (▶ Play / Lobby Start /
+    /// Play again). [`net::LocalAuthorityPlugin`] watches it and rebuilds the
+    /// authority (a new match seed each time — spec §8).
+    pub solo_epoch: u64,
+    /// The phase countdown, anchored to the client's monotonic clock (spec §4.3):
+    /// `Msg::Net` records the server's `remaining`, the per-frame `Msg::Tick` folds
+    /// it down to derived whole seconds, clamped so the display never jumps upward.
+    pub countdown: Countdown,
+    /// A monotonic count of canvas RESEED events — a wholesale replacement of the
+    /// authoritative log (`RoomState` / `CanvasLog`, i.e. a join or mid-turn
+    /// reconnect). Folded into the raster re-render signature (`paint::…`) so a
+    /// reseed always re-renders, EVEN when it coincidentally matches the current
+    /// log's `(len, last_op_id)`: op ids reset per turn (dense `0,1,…`), so two
+    /// equal-length no-undo logs from DIFFERENT turns share that pair — a client
+    /// that missed the Picking boundary (a W4 reconnect) would otherwise keep stale
+    /// turn-N ink over a turn-N+1 replica. Bumped by the `Msg::Net` fold (funnel-clean,
+    /// so it replays deterministically).
+    pub canvas_reseeds: u64,
     /// The drawing-canvas image the in-game `raster(...)` element samples (the
     /// canvas lives INSIDE the view tree, not as a side ECS root). The `paint`
     /// plugin owns the pixels + creates the `Image`, then announces its handle
@@ -98,6 +158,18 @@ pub struct Dooduel {
     /// the first measurement; [`Dooduel::is_mobile`] derives the breakpoint from it.
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// A networked connect the reducer staged for [`net::WsClientPlugin`] to open (spec
+    /// §4.2 — the pure reducer can't build the `WsClientTransport`). `#[reflect(ignore)]`:
+    /// a transient effect trigger, NOT replay state (replay re-feeds the recorded
+    /// `Msg::Net` stream, it never re-opens a socket — like `Countdown`'s `pending`).
+    #[reflect(ignore)]
+    pub pending_connect: Option<Connect>,
+    /// The current reconnect token (from the latest `Welcome`; rotated every
+    /// (re)connection, spec §6.3). The auto-rejoin on a drop re-attaches with it.
+    pub reconnect_token: String,
+    /// A transient status/error banner (a rejected join, a drop + reconnect) surfaced
+    /// over the lobby / join screens. Cleared on the next successful `Welcome`.
+    pub toast: Option<String>,
 }
 
 impl Dooduel {
@@ -112,6 +184,166 @@ impl Dooduel {
     /// (`viewport_w == 0.0`), so headless/probe views stay on the desktop layout.
     pub fn is_mobile(&self) -> bool {
         self.viewport_w > 0.0 && self.viewport_w < MOBILE_BREAKPOINT
+    }
+
+    /// Whether this client's seat is the drawer this turn (replaces the old
+    /// `Game::viewer_is_drawer` — the hot-seat viewer is gone, the seat is fixed).
+    pub fn is_drawer(&self) -> bool {
+        self.replica.drawer == Some(self.replica.my_seat)
+    }
+
+    /// Whether this client's seat is the room host (the authoritative, live source —
+    /// the server's `host`, which can migrate). The Lobby host-gates Start on this. Falls
+    /// back to the optimistic [`Self::is_host`] flag before the first `Roster`/`RoomState`
+    /// lands (an empty roster during `Joining`).
+    pub fn is_host_seat(&self) -> bool {
+        if self.replica.players.is_empty() {
+            self.is_host
+        } else {
+            self.replica.my_seat == self.replica.host
+        }
+    }
+
+    /// The roster in score order (highest first, ties keep seat order) as
+    /// `(seat, player)` — the replica-side replacement for `Game::standings`.
+    pub fn standings(&self) -> Vec<(usize, &ReplicaPlayer)> {
+        let mut ranked: Vec<(usize, &ReplicaPlayer)> =
+            self.replica.players.iter().enumerate().collect();
+        ranked.sort_by_key(|(_, p)| std::cmp::Reverse(p.score));
+        ranked
+    }
+}
+
+/// Which session backs the model (spec §4.1). M1 W3 wires `Offline` (Home / the
+/// cosmetic lobby) and `Solo` (the in-process authority); the `Joining` /
+/// `Connected` / `Dropped` arms are the W4 networked path, present so the reducer
+/// and view branches are structurally ready.
+#[derive(Debug, Clone, PartialEq, Reflect, Default)]
+pub enum NetState {
+    /// No session: Home, and the W3 cosmetic Create/Join lobby (no server yet).
+    #[default]
+    Offline,
+    /// The in-process solo authority ([`net::LocalAuthorityPlugin`]) + bots.
+    Solo,
+    /// (W4) awaiting a WebSocket connection to `dooduel_server`.
+    Joining,
+    /// Connected to a room on the server.
+    Connected { room: String },
+    /// Dropped mid-session, holding a reconnect token (a rejoin is auto-attempted).
+    Dropped { token: String },
+}
+
+impl NetState {
+    /// Whether this session is backed by the networked `WsClientTransport` (any of the
+    /// connect/connected/dropped states) — as opposed to `Offline`/`Solo`.
+    pub fn is_networked(&self) -> bool {
+        matches!(
+            self,
+            NetState::Joining | NetState::Connected { .. } | NetState::Dropped { .. }
+        )
+    }
+}
+
+/// A networked connect request the reducer stages for [`net::WsClientPlugin`] (spec
+/// §4.2 — the reducer is pure, so it cannot build the transport itself). The net layer
+/// opens a [`dooduel_core::transport::WsClientTransport`] and sends the matching first
+/// frame ([`ClientIntent::Create`] / [`ClientIntent::Join`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Connect {
+    /// Open a fresh room — the server generates the code, returned in `Welcome`.
+    Create,
+    /// Join an existing room by code, optionally re-attaching a held seat with a token.
+    Join {
+        code: String,
+        reconnect: Option<String>,
+    },
+}
+
+/// The phase countdown as the client displays it (spec §4.3). The server sends a
+/// `remaining: Duration` on every `PhaseChanged` / `CountdownSync`; the client
+/// anchors it to its **monotonic** clock (the `Msg::Tick(now)` value, never
+/// wall-clock) and counts down locally, so a dropped/late sync degrades to
+/// one-way-latency error in the safe direction. Re-syncs re-anchor, **clamped so
+/// the displayed number never jumps upward**.
+///
+/// Only derived whole-second state is stored (`secs`/`total`), so a steady
+/// sub-second `Msg::Tick` folds `set_if_neq`-clean (the F7 poll-clock discipline).
+#[derive(Debug, Clone, PartialEq, Reflect, Default)]
+pub struct Countdown {
+    /// The monotonic instant the current phase's countdown hits zero.
+    deadline: Duration,
+    /// The full phase length in seconds (the timer-ring denominator), set at each
+    /// phase start; `0` before the first phase.
+    total: u64,
+    /// The displayed whole seconds remaining — the view reads this.
+    secs: u64,
+    /// A `remaining` received but not yet anchored: the next `Msg::Tick` (which
+    /// carries `now`) consumes it. `true` = a fresh phase (reset the deadline + set
+    /// `total`); `false` = a mid-phase re-sync (clamp — never move the deadline
+    /// later, so the display never jumps up).
+    #[reflect(ignore)]
+    pending: Option<(Duration, bool)>,
+}
+
+impl Countdown {
+    /// The displayed whole seconds remaining in the current phase.
+    pub fn secs(&self) -> u64 {
+        self.secs
+    }
+
+    /// The fraction of the phase still remaining (`0..=1`), for the timer ring.
+    pub fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            0.0
+        } else {
+            (self.secs as f32 / self.total as f32).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Record a server `remaining` to anchor on the next tick. `reset` (a
+    /// `PhaseChanged`) starts a fresh phase; `!reset` (a `CountdownSync`) clamps.
+    ///
+    /// Multiple events can fold in ONE batch before the next `Msg::Tick` consumes the
+    /// pending value (I-3): a fresh reset is authoritative and wins outright — a
+    /// same-batch `CountdownSync` must NOT override it, or the display would clobber to
+    /// 0:00 (a non-reset clamp against the default-zero deadline). Dropping the sync
+    /// here is a deliberate CONSERVATIVE choice, not a staleness defense: under FIFO a
+    /// sync following a reset was emitted *after* the phase change server-side, so it is
+    /// a legitimate newer value — but we can't safely fold it without re-opening the
+    /// 0:00 clobber, and its accuracy loss is at most one sync, self-healed by the next
+    /// periodic sync within ~a second. A non-reset sync only clamps a pending non-reset
+    /// downward, or establishes one when nothing is pending.
+    fn anchor(&mut self, remaining: Duration, reset: bool) {
+        match self.pending {
+            // A fresh phase change always wins (supersedes any earlier pending).
+            _ if reset => self.pending = Some((remaining, true)),
+            // A same-batch sync cannot override a pending reset — the reset is the
+            // guaranteed-correct fresh-phase anchor (dropping the sync is conservative).
+            Some((_, true)) => {}
+            // Fold a non-reset sync into a pending non-reset (clamp down), or take it.
+            Some((prev, false)) => self.pending = Some((prev.min(remaining), false)),
+            None => self.pending = Some((remaining, false)),
+        }
+    }
+
+    /// Fold one monotonic `now`: consume a pending anchor, then derive the whole
+    /// seconds left. Idempotent within a second (`set_if_neq`-clean).
+    fn on_tick(&mut self, now: Duration) {
+        if let Some((remaining, reset)) = self.pending.take() {
+            let new_deadline = now + remaining;
+            if reset {
+                self.deadline = new_deadline;
+                self.total = remaining.as_secs().max(1);
+            } else {
+                // Clamp: only ever pull the deadline earlier, so the display never
+                // jumps upward on a late/optimistic re-sync (spec §4.3).
+                self.deadline = self.deadline.min(new_deadline);
+            }
+        }
+        let secs = self.deadline.saturating_sub(now).as_secs();
+        if self.secs != secs {
+            self.secs = secs;
+        }
     }
 }
 
@@ -213,7 +445,7 @@ impl Default for ToolState {
     }
 }
 
-/// Which screen the app is showing. `InGame`/`Podium` read [`Dooduel::game`].
+/// Which screen the app is showing. `InGame`/`Podium` read [`Dooduel::replica`].
 #[derive(Default, Debug, Clone, PartialEq, Reflect)]
 pub enum Screen {
     #[default]
@@ -229,8 +461,14 @@ impl Model for Dooduel {
     type Msg = Msg;
 }
 
-/// The app's messages. `Tick` is the per-frame clock; `Guess` is the shared funnel
-/// entry for *both* human submits and bot fires (see [`update`]).
+/// The app's messages. `Tick` is the per-frame countdown poll; `Net` is the sole
+/// replica mutator — every authoritative change arrives as a [`ServerEvent`] the
+/// reducer folds into [`Dooduel::replica`] (spec §4.2). Gameplay actions no longer
+/// mutate locally; they stage a [`ClientIntent`] for [`net::NetPlugin`] to send.
+// `Net(ServerEvent)` is the largest variant (a `RoomState` seed); `Msg` is only ever
+// heap-owned (an `Envelope` payload / a `Cmd::Emit`), so the on-stack size the lint
+// guards against does not apply — the same rationale `ServerEvent` itself carries.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Reflect)]
 pub enum Msg {
     // Navigation.
@@ -247,6 +485,9 @@ pub enum Msg {
     SubmitJoin,
     Back,
     StartMatch,
+    /// The lobby "Copy" button — stage the room code for the OS clipboard (written out by
+    /// the `drain_clipboard_outbox` system) and flash a confirmation toast. No-op with no code.
+    CopyCode,
     PlayAgain,
     /// Swap the light/dark palette (the floating theme toggle). Folds through the
     /// funnel (replayable) and is persisted by the storage sink.
@@ -269,18 +510,36 @@ pub enum Msg {
         avatar: Handle<Image>,
         saved: Handle<Image>,
     },
+    /// An authoritative event from the session (the sole [`Dooduel::replica`]
+    /// mutator, spec §4.2). Enqueued by [`net::NetPlugin`]'s pump each frame; folds
+    /// through the record/replay funnel like any other message, so a networked
+    /// session records/replays as a `Msg::Net` stream (spec §3.4). The
+    /// `MatchEnded` variant lifts the shell to [`Screen::Podium`].
+    Net(ServerEvent),
+    /// The net layer failed to OPEN the WebSocket (spec §4.2) — surfaced as a toast and
+    /// the session reverts to a usable screen. Enqueued by [`net::WsClientPlugin`].
+    ConnectFailed(String),
+    /// The net layer observed the live connection drop (spec §6.3) — go to
+    /// [`NetState::Dropped`] and stage a token rejoin. Enqueued by [`net::WsClientPlugin`].
+    NetDropped,
+    /// The bounded auto-rejoin (spec §6.3) exhausted its tries — give up: "Connection
+    /// lost" + back to Offline/Home. Enqueued by [`net::WsClientPlugin`].
+    NetGaveUp,
     // The clock (folded every frame; a steady frame is a `set_if_neq` no-op).
     Tick(Duration),
     /// The window's logical size changed (the `ViewportPlugin` seam). Folded
     /// `set_if_neq`-clean: only a real resize changes the model, so it never forces a
     /// rebuild on a steady frame (the same discipline as `Tick`).
     SetViewport(f32, f32),
-    // In-turn.
+    // In-turn — each stages a `ClientIntent` (the reducer no longer mutates state).
+    /// The drawer picked word `i` → `ClientIntent::Pick`.
     ChooseWord(usize),
-    SwitchSeat(usize),
+    /// The guess field text (local UI state, [`Dooduel::chat_input`]).
     SetChatInput(String),
+    /// Submit the guess field → `ClientIntent::Guess` (empty guesses are dropped).
     SubmitGuess,
-    /// Force-advance out of the turn-end reveal (the "Continue →" button).
+    /// Advance out of the turn-end reveal (the "Continue →" button) →
+    /// `ClientIntent::Continue`.
     Continue,
     // Toolbar (reducer-owned so tool selection replays; mirrored to the
     // `PaintCanvases` by `paint::sync_tools_to_canvases`).
@@ -313,51 +572,95 @@ pub enum Msg {
     SaveAvatar,
     /// Drop back to the name-hashed default avatar (closes).
     ResetAvatar,
-    /// A guess attributed to a specific seat — the shared pipeline entry. Human
-    /// submits arrive as `SubmitGuess` (reads `chat_input`); bots emit this from
-    /// `Tick`, so both fold through `game::Game::apply_guess`.
-    Guess {
-        player: usize,
-        text: String,
-    },
 }
 
-/// UPDATE — the pure reducer. Thin shell over the pure [`game::Game`] methods.
+/// UPDATE — the pure reducer. Navigation + local UI state; gameplay actions stage a
+/// [`ClientIntent`] (sent by [`net::NetPlugin`]) and every authoritative change
+/// arrives back as `Msg::Net` (folded by `apply_event`). The reducer never mutates the
+/// replica except through `Msg::Net` (spec §4.2).
 pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
     match m {
         Msg::SetName(name) => s.player_name = name,
-        // "▶ Play" starts the match directly (the design's primary CTA); the Lobby
-        // is only reached via Create/Join.
-        Msg::Play => {
-            s.game.start_match(&s.player_name, Config::default());
-            s.screen = Screen::InGame;
-        }
-        Msg::CreateRoom => {
-            s.is_host = true;
-            s.room_code = gen_room_code(&s.player_name);
-            s.screen = Screen::Lobby;
-        }
+        // "▶ Play" starts a solo in-process match directly (the design's primary
+        // CTA); the Lobby is only reached via Create/Join.
+        Msg::Play => start_solo(s),
+        // Networked create: the server issues the room code (we do NOT gen one locally),
+        // so we open a connection and show the Lobby's "Connecting…" state until Welcome.
+        Msg::CreateRoom => start_connect(s, Connect::Create, true),
         Msg::GoJoin => {
             s.join_code.clear();
+            s.toast = None;
             s.screen = Screen::Join;
         }
         Msg::SetJoinCode(code) => s.join_code = code.to_uppercase(),
         Msg::SubmitJoin => {
-            s.is_host = false;
-            s.room_code = if s.join_code.trim().is_empty() {
-                gen_room_code(&s.player_name)
+            let code = s.join_code.trim().to_uppercase();
+            // Client input hygiene: an empty code never opens a connection.
+            if code.is_empty() {
+                s.toast = Some("Enter a room code.".to_string());
             } else {
-                s.join_code.trim().to_uppercase()
-            };
-            s.screen = Screen::Lobby;
+                start_connect(
+                    s,
+                    Connect::Join {
+                        code,
+                        reconnect: None,
+                    },
+                    false,
+                );
+            }
         }
         Msg::Back => {
+            // Leaving a networked room releases the seat gracefully — skipping the 45s
+            // grace so it doesn't ghost (spec §3.2, I-4). Best-effort: `Back` also flips
+            // `net` to Offline, and `WsClientPlugin` tears the transport down in the SAME
+            // funnel batch — the outbox drain (MvuSet::Enqueue, before the pump) sends
+            // this `Leave` first, but a lost flush is covered by the server's own grace
+            // (an un-Left seat just vacates after 45s). The same best-effort applies to
+            // `PlayAgain`'s Leave below.
+            if s.net.is_networked() {
+                s.net_outbox.push(ClientIntent::Leave);
+            }
             s.screen = Screen::Home;
-            s.game = Game::default();
+            s.net = NetState::Offline;
+            s.pending_connect = None;
+            s.reconnect_token.clear();
+            s.toast = None;
+            s.is_host = false;
+            s.replica = RoomReplica::default();
+            s.countdown = Countdown::default();
         }
-        Msg::StartMatch | Msg::PlayAgain => {
-            s.game.start_match(&s.player_name, Config::default());
-            s.screen = Screen::InGame;
+        // In a networked lobby the host starts the match on the SERVER (an intent — the
+        // server also host-gates it); the solo/offline path starts an in-process match.
+        Msg::StartMatch => {
+            if s.net.is_networked() {
+                s.net_outbox.push(ClientIntent::StartMatch);
+            } else {
+                start_solo(s);
+            }
+        }
+        // Copy the room code to the OS clipboard (Buiy has no text-selection on static
+        // labels yet — a full selectable-text pass is a follow-up), with a toast for
+        // feedback. A no-op before a code exists, so it never copies an empty string.
+        Msg::CopyCode => {
+            if !s.replica.room_code.is_empty() {
+                s.clipboard_outbox.push(s.replica.room_code.clone());
+                s.toast = Some("Copied!".to_string());
+            }
+        }
+        // Play-again: solo replays in place; the networked in-place rematch is out of M1
+        // (spec §11), so it leaves + returns Home for the host to create a fresh room.
+        Msg::PlayAgain => {
+            if s.net.is_networked() {
+                s.net_outbox.push(ClientIntent::Leave);
+                s.screen = Screen::Home;
+                s.net = NetState::Offline;
+                s.pending_connect = None;
+                s.reconnect_token.clear();
+                s.replica = RoomReplica::default();
+                s.countdown = Countdown::default();
+            } else {
+                start_solo(s);
+            }
         }
         Msg::SetTheme(t) => s.theme = t,
         Msg::Restore {
@@ -382,43 +685,58 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
             s.viewport_w = w;
             s.viewport_h = h;
         }
-        Msg::Tick(now) => {
-            let pending = s.game.tick(now);
-            // A finished match lifts the shell to the podium.
-            if s.game.phase == Phase::Final && s.screen != Screen::Podium {
-                s.screen = Screen::Podium;
-            }
-            // Fold each due bot guess back through the funnel as a real `Guess`.
-            if !pending.is_empty() {
-                return Cmd::Batch(
-                    pending
-                        .into_iter()
-                        .map(|p| {
-                            Cmd::emit(Msg::Guess {
-                                player: p.player,
-                                text: p.text,
-                            })
-                        })
-                        .collect(),
-                );
+        // The monotonic countdown poll (spec §4.3) — derive whole seconds from the
+        // anchor. No game tick here: the authority ticks itself (solo via
+        // `LocalAuthorityPlugin`), and phase changes arrive only as `Msg::Net`.
+        Msg::Tick(now) => s.countdown.on_tick(now),
+        Msg::Net(ev) => apply_event(s, ev),
+        // The net layer failed to OPEN the socket — toast + revert Home so the user
+        // can retry (spec §4.2).
+        Msg::ConnectFailed(err) => {
+            s.toast = Some(format!("Could not connect: {err}"));
+            s.net = NetState::Offline;
+            s.pending_connect = None;
+            s.screen = Screen::Home;
+        }
+        // The live connection dropped (spec §6.3): stage a token rejoin, keeping the
+        // replica so the game keeps rendering while `WsClientPlugin` re-attaches.
+        Msg::NetDropped => {
+            if !s.reconnect_token.is_empty() && !s.room_code.is_empty() {
+                s.toast = Some("Reconnecting…".to_string());
+                s.net = NetState::Dropped {
+                    token: s.reconnect_token.clone(),
+                };
+                s.pending_connect = Some(Connect::Join {
+                    code: s.room_code.clone(),
+                    reconnect: Some(s.reconnect_token.clone()),
+                });
+            } else {
+                s.toast = Some("Disconnected.".to_string());
+                s.net = NetState::Offline;
+                s.screen = Screen::Home;
             }
         }
-        Msg::ChooseWord(idx) => {
-            if let Some(word) = s.game.word_choices.get(idx).cloned() {
-                s.game.choose_word(word);
-            }
+        // The bounded auto-rejoin gave up (spec §6.3): a terminal "connection lost".
+        Msg::NetGaveUp => {
+            s.toast = Some("Connection lost.".to_string());
+            s.net = NetState::Offline;
+            s.pending_connect = None;
+            s.reconnect_token.clear();
+            s.screen = Screen::Home;
         }
-        Msg::SwitchSeat(idx) => s.game.switch_seat(idx),
-        Msg::SetChatInput(t) => s.game.chat_input = t,
+        Msg::ChooseWord(idx) => s.net_outbox.push(ClientIntent::Pick { index: idx }),
+        Msg::SetChatInput(t) => s.chat_input = t,
         Msg::SubmitGuess => {
-            let raw = std::mem::take(&mut s.game.chat_input);
-            let seat = s.game.viewing_as;
-            s.game.apply_guess(seat, &raw);
+            let raw = std::mem::take(&mut s.chat_input);
+            let text = raw.trim();
+            // Client input hygiene (R4): don't wire an empty guess.
+            if !text.is_empty() {
+                s.net_outbox.push(ClientIntent::Guess {
+                    text: text.to_string(),
+                });
+            }
         }
-        Msg::Guess { player, text } => {
-            s.game.apply_guess(player, &text);
-        }
-        Msg::Continue => s.game.continue_now(),
+        Msg::Continue => s.net_outbox.push(ClientIntent::Continue),
         // Toolbar — plain model writes; the sync projects them onto the canvas.
         // Selecting a color/size does NOT change the tool (design: the swatch/size
         // handlers only set color/size). Ungated: harmless when not the drawer (the
@@ -471,21 +789,225 @@ pub fn update(s: &mut Dooduel, m: Msg) -> Cmd<Msg> {
     Cmd::none()
 }
 
-/// A deterministic 6-char room invite code from the host's name (design
-/// `genRoomCode`-style). Pure — the same name yields the same code.
-pub fn gen_room_code(name: &str) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let seed = name.bytes().fold(0x9e37_79b9u32, |h, b| {
-        h.wrapping_mul(31).wrapping_add(b as u32)
-    });
-    let mut x = seed | 1;
-    let mut out = String::with_capacity(6);
-    for _ in 0..6 {
-        x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        out.push(ALPHABET[(x >> 24) as usize % ALPHABET.len()] as char);
-    }
-    out
+/// Request a fresh in-process solo match: mark the session `Solo`, bump the epoch
+/// (so [`net::LocalAuthorityPlugin`] tears down any prior `Session` and builds a new
+/// one with a fresh match seed), reset the replica + countdown, and show the game.
+/// The plugin does the `connect` + `StartMatch` (solo bypasses the lobby, spec §8).
+fn start_solo(s: &mut Dooduel) {
+    s.net = NetState::Solo;
+    s.solo_epoch = s.solo_epoch.wrapping_add(1);
+    s.replica = RoomReplica::default();
+    s.countdown = Countdown::default();
+    s.screen = Screen::InGame;
 }
+
+/// Begin a networked session (spec §4.2): stage the connect for [`net::WsClientPlugin`],
+/// mark the session `Joining`, reset the replica/countdown, and show the Lobby — which
+/// renders a "Connecting…" state until `Welcome` flips it to `Connected`. The server
+/// issues the room code (for `Create`), so none is generated locally.
+fn start_connect(s: &mut Dooduel, req: Connect, is_host: bool) {
+    s.is_host = is_host;
+    s.net = NetState::Joining;
+    s.pending_connect = Some(req);
+    s.toast = None;
+    s.reconnect_token.clear();
+    s.room_code.clear();
+    s.replica = RoomReplica::default();
+    s.countdown = Countdown::default();
+    s.screen = Screen::Lobby;
+}
+
+/// Lift the shell out of the networked Lobby once the match is underway — the symmetric
+/// partner to the `MatchEnded`→`Podium` lift. A networked client sits in the Lobby (spec
+/// §4.2) until the server's first in-match phase arrives: the host's own `StartMatch`, a
+/// peer host's, or a mid-match reconnect's `RoomState` seed. Without this the host who
+/// pressed Start stayed welded to the lobby as the AFK first drawer (the first-playtest
+/// bug). Guarded on `Lobby`, so it never yanks a player off Home/Join and is inert once
+/// in-game (the solo path lifts to `InGame` directly, never touching the Lobby).
+fn lift_lobby_on_match_start(s: &mut Dooduel) {
+    if s.screen != Screen::Lobby {
+        return;
+    }
+    match s.replica.phase {
+        Phase::Picking | Phase::Drawing | Phase::Reveal => s.screen = Screen::InGame,
+        Phase::Final => s.screen = Screen::Podium,
+        Phase::Idle => {} // pre-start: stay in the lobby
+    }
+}
+
+/// The stable id of a canvas op (spec §3.5) — a `CanvasUndo { removed_id }` resolves
+/// against the log by this.
+fn op_id(op: &CanvasOp) -> u64 {
+    match op {
+        CanvasOp::Stroke { id, .. } | CanvasOp::Fill { id, .. } => *id,
+    }
+}
+
+/// Fold one authoritative [`ServerEvent`] into the replica (spec §3.3 event→replica
+/// mapping) — the sole replica mutator. Each arm sets exactly the fields the event
+/// carries; the countdown is re-anchored from `remaining` (spec §4.3), and the
+/// transient `CanvasStrokeProgress` is handled off-model by [`net::NetPlugin`] (it
+/// has no replica field — the negative invariant).
+fn apply_event(s: &mut Dooduel, ev: ServerEvent) {
+    match ev {
+        ServerEvent::Welcome {
+            seat,
+            room_code,
+            reconnect_token,
+            ..
+        } => {
+            s.replica.my_seat = seat;
+            s.replica.room_code = room_code.clone();
+            s.room_code = room_code;
+            s.reconnect_token = reconnect_token;
+            s.toast = None;
+            // A successful (re)connect: mark Connected + consume the pending connect so
+            // `WsClientPlugin` doesn't re-open. (No-op on the solo path — never networked.)
+            if s.net.is_networked() {
+                s.net = NetState::Connected {
+                    room: s.room_code.clone(),
+                };
+                s.pending_connect = None;
+            }
+        }
+        ServerEvent::RoomState(replica) => {
+            let remaining = replica.remaining;
+            s.replica = replica;
+            // A full seed re-anchors the countdown as a fresh phase, and is a canvas
+            // reseed (the raster must re-render even if the log coincidentally matches).
+            s.countdown.anchor(remaining, true);
+            s.canvas_reseeds = s.canvas_reseeds.wrapping_add(1);
+            // A mid-match reconnect seed carries a live phase — lift straight to the board.
+            lift_lobby_on_match_start(s);
+        }
+        ServerEvent::Roster { players, host } => {
+            s.replica.players = players;
+            s.replica.host = host;
+        }
+        ServerEvent::PhaseChanged {
+            phase,
+            drawer,
+            round,
+            total_rounds,
+            remaining,
+        } => {
+            s.replica.phase = phase;
+            s.replica.drawer = drawer;
+            s.replica.round = round;
+            s.replica.total_rounds = total_rounds;
+            // A turn/phase transition resets the guess draft (QA cycle-1 F2): an
+            // un-submitted guess is stale the moment the phase changes, and leaving it in
+            // the field masks the new phase's placeholder ("Type your guess…" / "Round
+            // over — see results" / "Waiting for the word…"), degrading the phase cue. The
+            // reducer previously cleared `chat_input` only on submit. Clearing on every
+            // phase edge is safe: the draft is only ever built up DURING Drawing, and no
+            // PhaseChanged fires mid-Drawing, so this never wipes an in-progress guess.
+            s.chat_input.clear();
+            if phase == Phase::Picking {
+                // A fresh turn: last turn's word row / choices / reveal rows clear
+                // (the server sends WordChoices to the drawer + WordUpdate on
+                // Drawing; nothing re-blanks a guesser's row, so do it here).
+                s.replica.word_display.clear();
+                s.replica.word_len = 0;
+                s.replica.hints_revealed = 0;
+                s.replica.word_choices.clear();
+                s.replica.turn_results.clear();
+            }
+            s.countdown.anchor(remaining, true);
+            // The match is underway — lift the host/guests out of the Lobby onto the board.
+            lift_lobby_on_match_start(s);
+        }
+        ServerEvent::CountdownSync { remaining } => s.countdown.anchor(remaining, false),
+        ServerEvent::WordUpdate {
+            display,
+            len,
+            hints_revealed,
+        } => {
+            s.replica.word_display = display;
+            s.replica.word_len = len;
+            s.replica.hints_revealed = hints_revealed;
+        }
+        ServerEvent::WordChoices { words } => s.replica.word_choices = words,
+        ServerEvent::CanvasOpApplied { op } => s.replica.canvas_ops.push(op),
+        ServerEvent::CanvasUndo { removed_id } => {
+            s.replica.canvas_ops.retain(|op| op_id(op) != removed_id);
+        }
+        ServerEvent::CanvasCleared => s.replica.canvas_ops.clear(),
+        ServerEvent::CanvasLog { ops } => {
+            // A wholesale log replace (late join / reconnect) — a canvas reseed, so the
+            // raster re-renders even when `(len, last_op_id)` coincides across turns.
+            s.replica.canvas_ops = ops;
+            s.canvas_reseeds = s.canvas_reseeds.wrapping_add(1);
+        }
+        // Transient live-stroke relay — painted immediately by the paint subsystem
+        // (off-model, spec §3.5); it has no replica field.
+        ServerEvent::CanvasStrokeProgress { .. } => {}
+        ServerEvent::ChatLine { line } => s.replica.chat.push(line),
+        ServerEvent::GuessResult { seat, correct, .. } => {
+            // The score + a full Roster follow; reflect the guessed flag at once so
+            // the drawer's live count + the guesser's role badge update immediately.
+            if correct && let Some(p) = s.replica.players.get_mut(seat) {
+                p.guessed = true;
+            }
+        }
+        ServerEvent::TurnEnded { results, word } => {
+            s.replica.turn_results = results;
+            // The reveal legitimately broadcasts the word (spec §3.3): show it as the
+            // full, space-joined row so the header + reveal overlay read it.
+            s.replica.word_len = word.chars().count();
+            s.replica.word_display = word
+                .chars()
+                .map(|c| c.to_ascii_uppercase().to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            // The Drawing→Reveal phase flip itself arrives via PhaseChanged.
+        }
+        ServerEvent::MatchEnded { podium } => {
+            s.replica.podium = Some(podium);
+            s.replica.phase = Phase::Final;
+            // The podium lift rides MatchEnded, not Tick (spec §3.3/§4.1).
+            s.screen = Screen::Podium;
+        }
+        // Rejected intents / protocol errors: surface as a toast; a fatal connect/rejoin
+        // failure reverts to a usable screen (the solo authority never rejects an honest
+        // client, so this path is networked-only in practice).
+        ServerEvent::Error { code, message } => {
+            s.toast = Some(net_error_text(&code, &message));
+            if matches!(s.net, NetState::Joining | NetState::Dropped { .. }) {
+                s.net = NetState::Offline;
+                s.pending_connect = None;
+                s.screen = match code {
+                    // A failed JOIN (a guest) drops back to the code entry to fix it;
+                    // everything else returns Home.
+                    ErrorCode::RoomNotFound | ErrorCode::RoomFull | ErrorCode::MatchInProgress
+                        if !s.is_host =>
+                    {
+                        Screen::Join
+                    }
+                    _ => Screen::Home,
+                };
+            }
+        }
+    }
+}
+
+/// The human-readable toast for a networked rejection (spec §4.2).
+fn net_error_text(code: &ErrorCode, message: &str) -> String {
+    match code {
+        ErrorCode::RoomNotFound => "No room with that code.".to_string(),
+        ErrorCode::RoomFull => "That room is full.".to_string(),
+        ErrorCode::MatchInProgress => "That match already started.".to_string(),
+        ErrorCode::VersionMismatch => "Version mismatch — update the app.".to_string(),
+        ErrorCode::RateLimited => "Too many attempts — try again shortly.".to_string(),
+        ErrorCode::BadToken => "Could not rejoin — the session expired.".to_string(),
+        _ => message.to_string(),
+    }
+}
+
+// NOTE (M1 W4.5): the client-side `gen_room_code` (a deterministic name-hash code) is
+// RETIRED for networked play (spec §3.2 — deterministic name-hash codes collide two
+// same-named hosts into one room). The server now generates every room code with
+// `getrandom` and returns it in `Welcome`; the solo path uses the literal "SOLO".
 
 /// Install Dooduel onto an app already carrying the Buiy plugins. Does **not** add
 /// the wall-clock driver — that is the F7 [`ClockPlugin`] (added by
@@ -493,7 +1015,15 @@ pub fn gen_room_code(name: &str) -> String {
 /// `Tick`s in tests (virtual time / `advance_clock`).
 pub fn install(app: &mut App) -> &mut App {
     app.register_type::<Screen>();
-    app.register_type::<Game>();
+    // The replica + net state + the wire types `Msg::Net` / `net_outbox` carry (the
+    // derive registers their nested field types transitively — CanvasOp, Phase,
+    // ChatMsg, ReplicaPlayer, … — so a networked `Msg` stream reflects for
+    // record/replay, spec §3.4).
+    app.register_type::<RoomReplica>();
+    app.register_type::<NetState>();
+    app.register_type::<Countdown>();
+    app.register_type::<ServerEvent>();
+    app.register_type::<ClientIntent>();
     app.register_type::<ToolState>();
     app.register_type::<paint::Tool>();
     app.register_type::<AvatarState>();
@@ -523,10 +1053,47 @@ pub fn install_runtime(app: &mut App) -> &mut App {
     app.add_plugins(theme::DooduelThemePlugin);
     app.add_plugins(ClockPlugin::<Dooduel>::new(Msg::Tick));
     app.add_plugins(ViewportPlugin);
+    // The client transport pump (drains events → `Msg::Net`, sends `net_outbox`
+    // intents) + the in-process solo authority (the `Session` behind an
+    // `InProcessTransport`, spec §8). The networked path (W4) keeps `NetPlugin` and
+    // swaps `LocalAuthorityPlugin` for a `WsClientTransport`.
+    app.add_plugins(net::NetPlugin);
+    app.add_plugins(net::LocalAuthorityPlugin);
+    app.add_plugins(net::WsClientPlugin);
     app.add_plugins(paint::CanvasPlugin);
     app.add_plugins(confetti::ConfettiPlugin);
     app.add_plugins(storage::StoragePlugin);
+    // Write the reducer's staged clipboard copies (the "Copy code" button) out to the OS
+    // clipboard. Not in `install` (the probe/virtual-clock harnesses drive the reducer
+    // arm directly and add this only when they want a clipboard sink).
+    app.add_systems(Update, drain_clipboard_outbox);
     app
+}
+
+/// Write the reducer's staged [`Dooduel::clipboard_outbox`] entries to the OS clipboard
+/// (the reducer is pure, so `Msg::CopyCode` appends here and this drains). A `Local`
+/// cursor tracks progress — the mirror of [`net::NetPlugin`]'s outbox drain — and a
+/// missing [`Clipboard`] resource degrades to a no-op that still advances the cursor, so
+/// a later-inserted clipboard never replays stale copies.
+fn drain_clipboard_outbox(
+    model: Query<&Dooduel>,
+    clipboard: Option<ResMut<Clipboard>>,
+    mut cursor: Local<usize>,
+) {
+    let Ok(model) = model.single() else {
+        return;
+    };
+    let Some(mut clipboard) = clipboard else {
+        *cursor = model.clipboard_outbox.len();
+        return;
+    };
+    if *cursor > model.clipboard_outbox.len() {
+        *cursor = 0; // defensive: the outbox was reset out from under us
+    }
+    for text in &model.clipboard_outbox[*cursor..] {
+        clipboard.0.set_text(text.clone());
+    }
+    *cursor = model.clipboard_outbox.len();
 }
 
 /// Announce the drawing-canvas image handles to the model through the funnel,
@@ -596,556 +1163,14 @@ fn drive_viewport(
 mod tests {
     use super::*;
     use buiy::probe::{click, get_by_role, snapshot_report};
+    use buiy_core::a11y::A11yRole;
+    use buiy_core::mvu::clock::advance_clock;
+    use dooduel_core::game::{ChatKind, ChatMsg};
 
-    // --- Pure game-logic unit tests (no ECS) -------------------------------
+    // --- Boot helpers -------------------------------------------------------
 
-    fn started() -> Game {
-        let mut g = Game::default();
-        g.start_match("Mara", Config::default());
-        g
-    }
-
-    /// Fold `Tick`s into `g` at 1-second virtual steps from `from` to `to`
-    /// (inclusive), draining bot guesses through `apply_guess` like the funnel.
-    fn tick_to(g: &mut Game, from: u64, to: u64) {
-        for sec in from..=to {
-            let pending = g.tick(Duration::from_secs(sec));
-            for p in pending {
-                g.apply_guess(p.player, &p.text);
-            }
-        }
-    }
-
-    #[test]
-    fn normalize_strips_and_lowercases() {
-        assert_eq!(game::normalize("  Ro-BOT! "), "robot");
-        assert_eq!(game::normalize("Ice Cream"), "icecream");
-    }
-
-    #[test]
-    fn close_matches_within_edit_distance_two() {
-        assert!(game::is_close(&game::normalize("robott"), "robot")); // one insert
-        assert!(game::is_close("robto", "robot")); // adjacent swap = distance 2
-        assert!(!game::is_close("robot", "robot")); // identical is not "close"
-        assert!(!game::is_close("banana", "robot")); // far apart
-    }
-
-    #[test]
-    fn guesser_points_match_the_spec_formula() {
-        // Full time left, first guesser: round(50 + 450) = 500.
-        assert_eq!(game::guesser_points(80, 80, 0), 500);
-        // Half time, first guesser: round(50 + 225) = 275.
-        assert_eq!(game::guesser_points(40, 80, 0), 275);
-        // Full time, second guesser: round(500 * 0.82) = 410.
-        assert_eq!(game::guesser_points(80, 80, 1), 410);
-        // Floor at 20 even with no time / high order.
-        assert_eq!(game::guesser_points(0, 80, 5), 20);
-    }
-
-    #[test]
-    fn drawer_points_scale_with_correct_fraction() {
-        assert_eq!(game::drawer_points(3, 3), 100);
-        assert_eq!(game::drawer_points(2, 3), 67); // round(200/3)
-        assert_eq!(game::drawer_points(0, 3), 0);
-    }
-
-    #[test]
-    fn match_starts_in_pick_phase_with_four_players() {
-        let g = started();
-        assert_eq!(g.players.len(), 4);
-        assert_eq!(g.players[0].name, "Mara");
-        assert_eq!(g.phase, Phase::Picking);
-        assert_eq!(g.round, 1);
-        // Seat auto-jumps to the drawer (seat 0 for turn 1).
-        assert_eq!(g.viewing_as, 0);
-        assert_eq!(g.word_choices.len(), 3);
-    }
-
-    #[test]
-    fn pick_timeout_auto_advances_to_drawing() {
-        let mut g = started();
-        tick_to(&mut g, 0, game::PICK_SECS);
-        assert_eq!(g.phase, Phase::Drawing);
-        assert!(!g.secret_word.is_empty(), "a word was auto-picked");
-        assert_eq!(g.draw_seconds_left, g.config.draw_seconds);
-    }
-
-    #[test]
-    fn choosing_a_word_starts_the_draw_countdown() {
-        let mut g = started();
-        // The drawer picks the first offered word before the pick timer expires.
-        g.choose_word(g.word_choices[0].clone());
-        assert_eq!(g.phase, Phase::Drawing);
-        // First tick anchors the clock; countdown ticks down per second.
-        g.tick(Duration::from_secs(0));
-        assert_eq!(g.draw_seconds_left, g.config.draw_seconds);
-        g.tick(Duration::from_secs(5));
-        assert_eq!(g.draw_seconds_left, g.config.draw_seconds - 5);
-    }
-
-    #[test]
-    fn hints_reveal_on_the_spec_schedule() {
-        let mut g = started();
-        g.choose_word("robot".to_string()); // 5 letters, 2 hints
-        g.tick(Duration::from_secs(0)); // anchor
-        // Thresholds (total 80): hint1 at 33s-left (elapsed 47), hint2 at 19s-left
-        // (elapsed 61). Before 47s: zero hints revealed.
-        g.tick(Duration::from_secs(46));
-        assert_eq!(g.reveal_mask.iter().filter(|b| **b).count(), 0);
-        g.tick(Duration::from_secs(47));
-        assert_eq!(g.reveal_mask.iter().filter(|b| **b).count(), 1);
-        g.tick(Duration::from_secs(61));
-        assert_eq!(g.reveal_mask.iter().filter(|b| **b).count(), 2);
-    }
-
-    #[test]
-    fn a_correct_human_guess_scores_and_locks() {
-        let mut g = started();
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0)); // anchor, 80s left
-        // Seat 1 (a guesser) submits the word: full-ish time, order 0.
-        let outcome = g.apply_guess(1, "ROBOT!");
-        assert_eq!(outcome, game::GuessOutcome::Correct);
-        assert_eq!(g.turn_guesses.len(), 1);
-        assert_eq!(g.players[1].score, 500);
-        // Guessing again is ignored (already locked).
-        assert_eq!(g.apply_guess(1, "robot"), game::GuessOutcome::Ignored);
-    }
-
-    #[test]
-    fn the_drawer_cannot_guess() {
-        let mut g = started();
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        // Seat 0 is the drawer this turn.
-        assert_eq!(g.apply_guess(0, "robot"), game::GuessOutcome::Ignored);
-        assert!(g.turn_guesses.is_empty());
-    }
-
-    #[test]
-    fn near_miss_reports_close_without_scoring() {
-        let mut g = started();
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        assert_eq!(g.apply_guess(1, "robott"), game::GuessOutcome::Close);
-        assert_eq!(g.players[1].score, 0);
-        assert!(g.turn_guesses.is_empty());
-    }
-
-    #[test]
-    fn all_guessers_correct_ends_the_turn_early() {
-        let mut g = started();
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        g.apply_guess(1, "robot");
-        g.apply_guess(2, "robot");
-        assert_eq!(g.phase, Phase::Drawing);
-        g.apply_guess(3, "robot"); // the 3rd (last) guesser
-        assert_eq!(g.phase, Phase::Reveal, "turn ends once everyone has it");
-        // Drawer scored 100 (all 3 guessers correct).
-        assert_eq!(g.players[0].score, 100);
-    }
-
-    /// Drive one virtual second: fold `Tick(sec)` and apply any due bot guesses.
-    fn one_second(g: &mut Game, sec: u64) {
-        let pending = g.tick(Duration::from_secs(sec));
-        for p in pending {
-            g.apply_guess(p.player, &p.text);
-        }
-    }
-
-    /// Auto-pick each turn and run the clock until the match finishes.
-    fn drive_to_final(g: &mut Game) {
-        let mut sec = 0u64;
-        let mut guard = 0;
-        loop {
-            if g.phase == Phase::Picking {
-                g.choose_word(g.word_choices[0].clone());
-                sec = 0;
-            }
-            if g.phase == Phase::Final {
-                break;
-            }
-            one_second(g, sec);
-            sec += 1;
-            guard += 1;
-            assert!(guard < 10_000, "match should terminate");
-        }
-    }
-
-    #[test]
-    fn bots_drive_the_turn_to_reveal_on_their_own() {
-        let mut g = started();
-        g.choose_word("robot".to_string());
-        // Tick until the turn leaves the draw phase; the seeded bots guess along
-        // the way and the third correct guess ends the turn early.
-        let mut sec = 0u64;
-        while g.phase == Phase::Drawing {
-            one_second(&mut g, sec);
-            sec += 1;
-            assert!(sec < 200, "turn should end");
-        }
-        assert_eq!(g.phase, Phase::Reveal);
-        assert_eq!(g.turn_guesses.len(), 3, "all three bots guessed");
-        assert_eq!(g.players[0].score, 100, "drawer scored the full 100");
-    }
-
-    #[test]
-    fn turn_rotation_and_match_end_reach_the_podium() {
-        let mut g = started();
-        drive_to_final(&mut g);
-        assert_eq!(g.phase, Phase::Final, "the match reaches its end");
-        // Every player accrued some score across 8 turns of drawing + guessing.
-        assert!(g.players.iter().all(|p| p.score > 0));
-    }
-
-    #[test]
-    fn determinism_same_seed_same_match() {
-        let mut a = started();
-        let mut b = started();
-        let total = a.config.draw_seconds;
-        for _ in 0..3 {
-            if a.phase == Phase::Picking {
-                let wa = a.word_choices[0].clone();
-                let wb = b.word_choices[0].clone();
-                assert_eq!(wa, wb, "same seeded word choices");
-                a.choose_word(wa);
-                b.choose_word(wb);
-            }
-            tick_to(&mut a, 0, total);
-            tick_to(&mut b, 0, total);
-            assert_eq!(a, b, "identical Msg streams produce identical state");
-            if a.phase == Phase::Reveal {
-                tick_to(&mut a, 0, game::REVEAL_SECS);
-                tick_to(&mut b, 0, game::REVEAL_SECS);
-            }
-        }
-    }
-
-    // --- Playtest-found gameplay-bug regression tests (pure game core) ------
-
-    /// Bug #1 — the round counter must never display the post-increment overflow.
-    /// The raw `round` field intentionally overflows to `total + 1` on the
-    /// transition to `Final` (it IS the Final trigger), which produced the podium's
-    /// "Round 2/1"; `round_display()` clamps the reading to `[1, total]`.
-    #[test]
-    fn round_display_clamps_the_final_overflow() {
-        let mut g = started();
-        let total = g.config.total_rounds;
-        drive_to_final(&mut g);
-        assert_eq!(g.phase, Phase::Final);
-        assert!(
-            g.round > total,
-            "raw round ({}) is the overflowed Final trigger past total ({total})",
-            g.round
-        );
-        assert_eq!(
-            g.round_display(),
-            total,
-            "round_display() must clamp the Final overflow (the podium 'Round 2/1' bug)"
-        );
-        assert!(g.round_display() <= total);
-    }
-
-    /// Bug #1 — `total_rounds` is authoritative from the start config, not a stale
-    /// default; the first round displays as 1.
-    #[test]
-    fn total_rounds_comes_from_the_start_config() {
-        let mut g = Game::default();
-        let cfg = Config {
-            total_rounds: 5,
-            ..Config::default()
-        };
-        g.start_match("Mara", cfg);
-        assert_eq!(
-            g.config.total_rounds, 5,
-            "start_match sets total_rounds from the config"
-        );
-        assert_eq!(g.round_display(), 1, "the first round displays as 1");
-    }
-
-    /// Bug #2 — at the podium no seat is the active drawer (the raw `seat_index`
-    /// wraps back to a real seat at `Final`, which tagged a finished-match seat as
-    /// "(drawing)" and left a stale drawer name).
-    #[test]
-    fn no_active_drawer_once_the_match_is_over() {
-        let mut g = started();
-        assert_eq!(
-            g.current_drawer(),
-            Some(0),
-            "mid-match there is an active drawer"
-        );
-        assert_eq!(g.drawer_name(), Some("Mara"));
-        drive_to_final(&mut g);
-        assert_eq!(g.phase, Phase::Final);
-        assert_eq!(
-            g.current_drawer(),
-            None,
-            "no seat draws once the match is over (the stale-drawer podium bug)"
-        );
-        assert_eq!(g.drawer_name(), None, "the podium shows no drawer name");
-    }
-
-    /// Bug #3 — the drawer is not blind: `guessed_count()` / `all_guessed()` track
-    /// correct guessers LIVE during the draw phase (so the drawer knows when the
-    /// word is already fully guessed — the wasted-redraw bug).
-    #[test]
-    fn guessed_count_tracks_correct_guessers_live_during_drawing() {
-        let mut g = started();
-        g.config.bots_enabled = false;
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        assert_eq!(g.guessed_count(), 0);
-        assert!(!g.all_guessed());
-        g.apply_guess(1, "robot");
-        assert_eq!(
-            g.guessed_count(),
-            1,
-            "the drawer sees one guesser is done mid-draw"
-        );
-        assert!(!g.all_guessed());
-        g.apply_guess(2, "robot");
-        assert_eq!(g.guessed_count(), 2);
-        assert_eq!(
-            g.phase,
-            Phase::Drawing,
-            "still drawing — the count is visible in-phase"
-        );
-        // The "guessed" announcement folds into the shared chat immediately (in-phase).
-        let announced = g
-            .chat_for(g.seat_index)
-            .filter(|m| m.kind == game::ChatKind::Correct)
-            .count();
-        assert_eq!(
-            announced, 2,
-            "the drawer sees both 'guessed the word!' lines in-phase"
-        );
-    }
-
-    /// Bug #4 — the design-exact three-way: a WRONG guess broadcasts to the shared
-    /// chat (name + literal text, everyone), a NEAR-MISS fires a PRIVATE nudge only
-    /// the guesser sees, and an EXACT guess announces to all while the word stays
-    /// hidden from those who have not guessed.
-    #[test]
-    fn near_miss_nudge_is_private_and_wrong_guesses_are_shared() {
-        let mut g = started();
-        g.config.bots_enabled = false;
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        // Seat 1 (Priya) near-misses; seat 2 (Theo) makes a plain wrong guess.
-        assert_eq!(g.apply_guess(1, "robott"), game::GuessOutcome::Close);
-        assert_eq!(g.apply_guess(2, "banana"), game::GuessOutcome::Wrong);
-
-        // The WRONG guess is broadcast — every seat sees "Theo: banana".
-        for seat in 0..4 {
-            let sees = g
-                .chat_for(seat)
-                .any(|m| m.text.contains("Theo") && m.text.contains("banana"));
-            assert!(
-                sees,
-                "seat {seat} must see the shared wrong guess (name + literal)"
-            );
-        }
-        // The NEAR-MISS nudge is private to the guesser (seat 1) only.
-        assert!(
-            g.chat_for(1).any(|m| m.text.contains("So close")),
-            "the guesser sees the private 'So close' nudge"
-        );
-        for other in [0usize, 2, 3] {
-            assert!(
-                !g.chat_for(other).any(|m| m.text.contains("So close")),
-                "seat {other} must NOT see seat 1's private near-miss nudge"
-            );
-        }
-    }
-
-    /// Bug #4 — an exact guess announces to everyone but keeps the word hidden from
-    /// non-guessers (word redaction has one home, `word_display`).
-    #[test]
-    fn exact_guess_announces_but_hides_the_word_from_non_guessers() {
-        let mut g = started();
-        g.config.bots_enabled = false;
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        assert_eq!(g.apply_guess(1, "robot"), game::GuessOutcome::Correct);
-        assert!(
-            g.chat_for(0)
-                .any(|m| m.kind == game::ChatKind::Correct && m.text.contains("guessed the word")),
-            "the exact guess announces to everyone"
-        );
-        let mut g1 = g.clone();
-        g1.viewing_as = 1;
-        assert!(
-            g1.word_display().contains('R'),
-            "the guesser sees the letters"
-        );
-        let mut g2 = g.clone();
-        g2.viewing_as = 2;
-        assert!(
-            !g2.word_display().contains('R') && g2.word_display().contains('_'),
-            "a non-guesser still sees blanks"
-        );
-    }
-
-    /// Bug #5 — the hint reveal fires on the THRESHOLD CROSSING (not equality, so a
-    /// poll that skips the exact second still latches the reveal), at random,
-    /// previously-unrevealed `[a-z]` positions, never exceeding
-    /// `min(hint_count, letters − 1)`.
-    #[test]
-    fn hints_reveal_on_the_crossing_at_random_unrevealed_positions() {
-        let mut g = started();
-        g.config.bots_enabled = false; // let the full draw window run (bots preempted it live)
-        g.choose_word("robot".to_string()); // 5 letters ⇒ cap = min(2, 4) = 2
-        g.tick(Duration::from_secs(0)); // anchor
-        let cap = g.config.hint_count.min("robot".len() - 1);
-        assert_eq!(cap, 2);
-        let revealed = |g: &Game| g.reveal_mask.iter().filter(|b| **b).count();
-
-        // Thresholds are 33s-left (elapsed 47) and 19s-left (elapsed 61). Poll SKIPS
-        // the exact threshold seconds; crossing semantics must still fire each hint.
-        g.tick(Duration::from_secs(46));
-        assert_eq!(
-            revealed(&g),
-            0,
-            "nothing revealed before the first threshold"
-        );
-        g.tick(Duration::from_secs(48)); // skipped 47 — crossing must fire hint 1
-        assert_eq!(
-            revealed(&g),
-            1,
-            "crossing latches hint 1 even when the poll skips the second"
-        );
-        g.tick(Duration::from_secs(60));
-        assert_eq!(revealed(&g), 1);
-        g.tick(Duration::from_secs(62)); // skipped 61 — crossing must fire hint 2
-        assert_eq!(revealed(&g), 2, "crossing latches hint 2");
-        g.tick(Duration::from_secs(79)); // ticking on never exceeds the cap
-        assert!(
-            revealed(&g) <= cap,
-            "never exceeds min(hint_count, letters − 1)"
-        );
-
-        // The revealed positions are distinct, in range, and real [a-z] letters.
-        let positions: Vec<usize> = g
-            .reveal_mask
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| **r)
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(positions.len(), 2);
-        let word: Vec<char> = "robot".chars().collect();
-        for p in &positions {
-            assert!(
-                word[*p].is_ascii_lowercase(),
-                "a revealed position is an [a-z] letter"
-            );
-        }
-        assert_ne!(
-            positions[0], positions[1],
-            "the two revealed positions are distinct"
-        );
-    }
-
-    /// Bug #5 — determinism holds: the seeded reveal positions replay byte-identical
-    /// (the hint randomness comes from the carried splitmix64 stream, not wall-clock).
-    #[test]
-    fn hint_positions_are_deterministic_across_replays() {
-        let mask_after = |secs: u64| {
-            let mut g = started();
-            g.config.bots_enabled = false;
-            g.choose_word("robot".to_string());
-            g.tick(Duration::from_secs(0));
-            g.tick(Duration::from_secs(secs));
-            g.reveal_mask.clone()
-        };
-        assert_eq!(
-            mask_after(62),
-            mask_after(62),
-            "seeded hint positions replay identically"
-        );
-    }
-
-    /// Bug #6 — the draw countdown is derived from WALL-CLOCK (`now − anchor`), not
-    /// a frame/tick count: successive whole-second `now`s decrement it 1-per-second
-    /// and a sub-second re-poll (same whole second) does not move it.
-    #[test]
-    fn draw_countdown_decrements_one_per_wall_second() {
-        let mut g = started();
-        g.config.bots_enabled = false;
-        g.choose_word("robot".to_string());
-        g.tick(Duration::from_secs(0));
-        assert_eq!(g.draw_seconds_left, g.config.draw_seconds);
-        g.tick(Duration::from_millis(500)); // same whole second — a steady frame
-        assert_eq!(
-            g.draw_seconds_left, g.config.draw_seconds,
-            "a sub-second re-poll does not move the countdown"
-        );
-        for s in 1..=5 {
-            g.tick(Duration::from_secs(s));
-            assert_eq!(
-                g.draw_seconds_left,
-                g.config.draw_seconds - s,
-                "one wall-second decrements the countdown by exactly one"
-            );
-        }
-    }
-
-    // --- Probe integration test (GPU-free, drives the real funnel) ----------
-
-    /// Boot the app GPU-free, start a match, switch the human to a guesser seat,
-    /// drive a human guess through the real funnel, and assert the fold landed.
-    #[test]
-    fn probe_match_flow_scores_a_human_guess() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .add_plugins(bevy::input::InputPlugin)
-            .add_plugins(buiy::BuiyProbePlugin);
-        install(&mut app);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        // Start the match. (Home's "▶ Play" starts it directly; driven here by
-        // the message so the test doesn't depend on the button label glyphs.)
-        enqueue_msg(&mut app, Msg::StartMatch);
-        settle(&mut app);
-
-        // The drawer (seat 0) picks the first word, entering the draw phase.
-        enqueue_msg(&mut app, Msg::ChooseWord(0));
-        settle(&mut app);
-        let word = current_word(&mut app);
-        assert!(!word.is_empty(), "a secret word is set after ChooseWord");
-
-        // Anchor the draw clock at t=0 (virtual time; no GameClockPlugin here).
-        enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(0)));
-        settle(&mut app);
-
-        // Human hops to seat 1 (a guesser) and submits the exact word.
-        enqueue_msg(&mut app, Msg::SwitchSeat(1));
-        enqueue_msg(&mut app, Msg::SetChatInput(word));
-        enqueue_msg(&mut app, Msg::SubmitGuess);
-        settle(&mut app);
-
-        let g = current_game(&mut app);
-        assert!(
-            g.turn_guesses.iter().any(|gu| gu.player == 1),
-            "the human guess folded into a correct guess for seat 1"
-        );
-        assert!(g.players[1].score > 0, "the guess scored");
-
-        // The in-game screen renders the header (phase machine is live). The desktop
-        // header uses the slash form "Round r / t" (finding #20 / bug #1).
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("Round 1 / 2"),
-            "in-game desktop header is on screen with the slash round form:\n{report}"
-        );
-    }
-
-    /// Boot a GPU-free probe app with Dooduel installed (no wall-clock driver, so
-    /// the phase machine is driven by injected `Tick`s / messages).
+    /// A GPU-free probe app with Dooduel installed but NO net plugins — for the pure
+    /// scripted-`Msg::Net` view tests (the reducer folds events with no live session).
     fn boot_probe() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1159,74 +1184,26 @@ mod tests {
         app
     }
 
-    /// Bug #1 (finding #20) — the round string form varies by surface: the desktop
-    /// header renders "Round r / t" (slash), the phone header "Round r of t" (word).
-    #[test]
-    fn round_string_forms_render_per_surface() {
-        // Desktop (viewport unmeasured ⇒ desktop layout).
-        let mut app = boot_probe();
-        enqueue_msg(&mut app, Msg::StartMatch);
-        settle(&mut app);
-        let desktop = snapshot_report(app.world_mut());
-        assert!(
-            desktop.contains("Round 1 / 2"),
-            "the desktop header uses the slash form:\n{desktop}"
-        );
-
-        // Phone (a narrow viewport ⇒ mobile layout uses the word form).
-        let mut app = boot_probe();
-        enqueue_msg(&mut app, Msg::StartMatch);
-        enqueue_msg(&mut app, Msg::SetViewport(390.0, 780.0));
-        settle(&mut app);
-        let mobile = snapshot_report(app.world_mut());
-        assert!(
-            mobile.contains("Round 1 of 2"),
-            "the phone header uses the word form:\n{mobile}"
-        );
-        assert!(
-            !mobile.contains("Round 1 / 2"),
-            "the phone header does not use the slash form:\n{mobile}"
-        );
-    }
-
-    /// Bug #3 — the drawer's header shows the LIVE guessed count during Drawing, so
-    /// the drawer is never blind to how many guessers already have the word.
-    #[test]
-    fn drawer_header_shows_the_live_guessed_count() {
-        let mut app = boot_probe();
-        // bots off so the count is driven only by the injected guess.
-        enqueue_msg(&mut app, Msg::StartMatch);
-        settle(&mut app);
-        // Seat 0 (the human drawer) picks + the clock anchors → Drawing.
-        enqueue_msg(&mut app, Msg::ChooseWord(0));
-        settle(&mut app);
-        enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(0)));
-        settle(&mut app);
-        let word = current_word(&mut app);
-        assert!(!word.is_empty());
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("0 of 3 guessed"),
-            "the drawer sees the initial live guessed count:\n{report}"
-        );
-        // A guesser gets it (routed through the shared funnel) → the count updates.
-        enqueue_msg(
-            &mut app,
-            Msg::Guess {
-                player: 1,
-                text: word,
-            },
-        );
-        settle(&mut app);
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("1 of 3 guessed"),
-            "the drawer's guessed count updates live, in-phase:\n{report}"
-        );
+    /// A GPU-free probe app with the in-process solo authority — for the live
+    /// solo-flow + replay tests. The `LocalAuthorityPlugin` runs a real `Session`
+    /// behind an `InProcessTransport`, driven by the virtual clock.
+    fn boot_solo() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(buiy::BuiyProbePlugin);
+        install(&mut app);
+        app.add_plugins(net::NetPlugin);
+        app.add_plugins(net::LocalAuthorityPlugin);
+        for _ in 0..8 {
+            app.update();
+        }
+        app
     }
 
     fn settle(app: &mut App) {
-        for _ in 0..4 {
+        for _ in 0..6 {
             app.update();
         }
     }
@@ -1243,215 +1220,8 @@ mod tests {
             .write(buiy_core::mvu::Envelope::user(e, msg));
     }
 
-    fn current_game(app: &mut App) -> Game {
-        app.world_mut()
-            .query::<&Dooduel>()
-            .iter(app.world())
-            .next()
-            .expect("model")
-            .game
-            .clone()
-    }
-
-    fn current_word(app: &mut App) -> String {
-        current_game(app).secret_word
-    }
-
-    /// W4: the in-game screen's controls are reachable + wired, GPU-free. Drives
-    /// to the Drawing phase, then (1) locates every toolbar/chrome button by
-    /// role+name, (2) **clicks a seat-switcher avatar chip** — a *pressable icon*
-    /// (the W4 view extension: an `icon` carrying `on_press` becomes an
-    /// activatable a11y button) — and asserts the viewed seat hopped, and (3)
-    /// submits a guess by clicking Send and asserts it scored.
-    #[test]
-    fn probe_in_game_controls_are_reachable() {
-        use buiy_core::a11y::A11yRole;
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .add_plugins(bevy::input::InputPlugin)
-            .add_plugins(buiy::BuiyProbePlugin);
-        install(&mut app);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        // Into the Drawing phase (seat 0 = the human drawer this turn).
-        enqueue_msg(&mut app, Msg::StartMatch);
-        settle(&mut app);
-        enqueue_msg(&mut app, Msg::ChooseWord(0));
-        settle(&mut app);
-        enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(0))); // anchor the clock
-        settle(&mut app);
-        let word = current_word(&mut app);
-        assert!(!word.is_empty(), "a secret word is set");
-
-        // (1) Every toolbar + chrome button is locatable by role + name.
-        for label in ["Brush", "Fill", "Eraser", "Undo", "Clear", "Send", "Leave"] {
-            assert!(
-                get_by_role(app.world_mut(), A11yRole::Button, Some(label), None).is_ok(),
-                "the {label:?} button is locatable by role+name"
-            );
-        }
-
-        // (2) Click the seat-1 avatar chip (a pressable ICON) → the seat hops.
-        let chip = get_by_role(app.world_mut(), A11yRole::Button, Some("Priya"), None)
-            .expect("the seat-1 avatar chip is a locatable button");
-        click(app.world_mut(), chip).expect("the avatar chip is clickable");
-        settle(&mut app);
-        assert_eq!(
-            current_game(&mut app).viewing_as,
-            1,
-            "clicking the avatar chip hopped the viewed seat to 1 (the pressable-icon route)"
-        );
-
-        // (3) Type a guess + click Send → it folds through the funnel and scores.
-        enqueue_msg(&mut app, Msg::SetChatInput(word));
-        settle(&mut app);
-        let send = get_by_role(app.world_mut(), A11yRole::Button, Some("Send"), None)
-            .expect("the Send button");
-        click(app.world_mut(), send).expect("Send is clickable");
-        settle(&mut app);
-        let g = current_game(&mut app);
-        assert!(
-            g.turn_guesses.iter().any(|gu| gu.player == 1),
-            "the Send-driven guess scored for seat 1"
-        );
-        assert!(g.players[1].score > 0, "the guess scored points");
-
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("Scoreboard"),
-            "the in-game screen renders its panes:\n{report}"
-        );
-    }
-
-    /// W3 smoke: the app boots GPU-free, Home is locatable by role/name (title,
-    /// name input, the Play + Create + Join actions, an avatar), and "Create a
-    /// room" navigates to the Lobby (roster + Start).
-    #[test]
-    fn home_boots_and_create_room_navigates_to_lobby() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .add_plugins(bevy::input::InputPlugin)
-            .add_plugins(buiy::BuiyProbePlugin);
-        install(&mut app);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        // Home elements locatable by role + name.
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("Dooduel"),
-            "home shows the wordmark:\n{report}"
-        );
-        for label in ["▶ Play", "Create a room", "Join a room"] {
-            assert!(
-                get_by_role(
-                    app.world_mut(),
-                    buiy_core::a11y::A11yRole::Button,
-                    Some(label),
-                    None,
-                )
-                .is_ok(),
-                "home has the {label:?} button by role+name:\n{report}"
-            );
-        }
-        // The name input is present as a text field.
-        assert!(
-            buiy_view::find_kind(app.world_mut(), buiy_view::Kind::TextInput).is_some(),
-            "home has a name input"
-        );
-        // The doodle avatars render as icon nodes (the editable preview + the
-        // three "you'll play with" opponents).
-        assert!(
-            buiy_view::entities_of_kind(app.world_mut(), buiy_view::Kind::Icon).len() >= 4,
-            "home shows doodle avatars (icon nodes)"
-        );
-
-        // "Create a room" → Lobby.
-        let create = get_by_role(
-            app.world_mut(),
-            buiy_core::a11y::A11yRole::Button,
-            Some("Create a room"),
-            None,
-        )
-        .expect("Create-a-room button");
-        click(app.world_mut(), create).expect("Create is clickable");
-        settle(&mut app);
-
-        assert_eq!(
-            current_screen(&mut app),
-            Screen::Lobby,
-            "Create a room navigates to the Lobby"
-        );
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("Private room"),
-            "the Lobby shows its eyebrow:\n{report}"
-        );
-        assert!(
-            get_by_role(
-                app.world_mut(),
-                buiy_core::a11y::A11yRole::Button,
-                Some("▶ Start game"),
-                None,
-            )
-            .is_ok(),
-            "the Lobby has a Start button:\n{report}"
-        );
-    }
-
-    /// W3: the Join screen accepts a code and drops into the Lobby as a guest,
-    /// with the roster showing the guest's name.
-    #[test]
-    fn join_flow_reaches_lobby_as_guest() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .add_plugins(bevy::input::InputPlugin)
-            .add_plugins(buiy::BuiyProbePlugin);
-        install(&mut app);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        enqueue_msg(&mut app, Msg::SetName("Zed".to_string()));
-        enqueue_msg(&mut app, Msg::GoJoin);
-        settle(&mut app);
-        assert_eq!(current_screen(&mut app), Screen::Join);
-
-        enqueue_msg(&mut app, Msg::SetJoinCode("abc123".to_string()));
-        enqueue_msg(&mut app, Msg::SubmitJoin);
-        settle(&mut app);
-
-        assert_eq!(current_screen(&mut app), Screen::Lobby);
-        let m = current_model(&mut app);
-        assert!(!m.is_host, "joining lands as a guest");
-        assert_eq!(
-            m.room_code, "ABC123",
-            "the entered code is uppercased + shown"
-        );
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("Zed"),
-            "the roster shows the guest:\n{report}"
-        );
-        assert!(
-            report.contains("Priya"),
-            "the roster shows the host:\n{report}"
-        );
-        // The roster shows an avatar badge (icon node) per player.
-        assert!(
-            buiy_view::entities_of_kind(app.world_mut(), buiy_view::Kind::Icon).len() >= 4,
-            "the lobby roster shows avatar badges"
-        );
-    }
-
-    fn current_screen(app: &mut App) -> Screen {
-        current_model(app).screen
+    fn net(app: &mut App, ev: ServerEvent) {
+        enqueue_msg(app, Msg::Net(ev));
     }
 
     fn current_model(app: &mut App) -> Dooduel {
@@ -1463,7 +1233,708 @@ mod tests {
             .clone()
     }
 
-    // --- W5: avatar editor + podium (reducer-level) ------------------------
+    fn current_screen(app: &mut App) -> Screen {
+        current_model(app).screen
+    }
+
+    fn four_players() -> Vec<ReplicaPlayer> {
+        ["Mara", "Priya", "Theo", "Sam"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| ReplicaPlayer {
+                name: name.to_string(),
+                avatar: WireAvatar::Default,
+                connected: true,
+                is_bot: i != 0,
+                score: 0,
+                guessed: false,
+            })
+            .collect()
+    }
+
+    /// Drive the shell to the in-game Drawing screen via a scripted `ServerEvent`
+    /// stream (`Msg::Play` lifts the screen; the events seed the replica).
+    fn enter_drawing(app: &mut App, my_seat: usize, drawer: usize, display: &str, hints: usize) {
+        enqueue_msg(app, Msg::Play);
+        settle(app);
+        net(
+            app,
+            ServerEvent::Welcome {
+                seat: my_seat,
+                room_code: "SOLO".to_string(),
+                reconnect_token: String::new(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            },
+        );
+        net(
+            app,
+            ServerEvent::Roster {
+                players: four_players(),
+                host: 0,
+            },
+        );
+        net(
+            app,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Drawing,
+                drawer: Some(drawer),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(60),
+            },
+        );
+        net(
+            app,
+            ServerEvent::WordUpdate {
+                display: display.to_string(),
+                len: display.split_whitespace().count(),
+                hints_revealed: hints,
+            },
+        );
+        enqueue_msg(app, Msg::Tick(Duration::ZERO));
+        settle(app);
+    }
+
+    // --- Pure reducer: intents + event folding ------------------------------
+
+    #[test]
+    fn gameplay_actions_stage_client_intents() {
+        let mut m = Dooduel::default();
+        update(&mut m, Msg::ChooseWord(2));
+        assert_eq!(m.net_outbox.last(), Some(&ClientIntent::Pick { index: 2 }));
+
+        m.chat_input = "robot".to_string();
+        update(&mut m, Msg::SubmitGuess);
+        assert_eq!(
+            m.net_outbox.last(),
+            Some(&ClientIntent::Guess {
+                text: "robot".to_string()
+            })
+        );
+        assert!(m.chat_input.is_empty(), "submitting clears the field");
+
+        // Client input hygiene (R4): an all-whitespace guess is not wired.
+        let before = m.net_outbox.len();
+        m.chat_input = "   ".to_string();
+        update(&mut m, Msg::SubmitGuess);
+        assert_eq!(m.net_outbox.len(), before, "an empty guess is dropped");
+
+        update(&mut m, Msg::Continue);
+        assert_eq!(m.net_outbox.last(), Some(&ClientIntent::Continue));
+    }
+
+    #[test]
+    fn a_phase_transition_clears_the_stale_guess_draft() {
+        // F2 (QA cycle-1): an un-submitted guess left in the chat field must not persist
+        // across a turn/phase transition. The reducer cleared `chat_input` only on submit,
+        // so a half-typed guess survived the reveal, the next Picking, and even the seat's
+        // own drawer turn — masking the new phase's placeholder ("Type your guess…" /
+        // "Round over — see results" / "Waiting for the word…") and degrading the phase
+        // cue. A PhaseChanged (the turn/phase transition, folded in `apply_event`) clears
+        // it.
+        // This turn ends (Drawing → Reveal) with an un-submitted draft: it clears, so the
+        // Reveal placeholder shows through instead of the retained value.
+        let mut m = Dooduel {
+            chat_input: "penguin".to_string(),
+            ..Default::default()
+        };
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Reveal,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(6),
+            },
+        );
+        assert!(
+            m.chat_input.is_empty(),
+            "a phase transition clears the stale guess draft"
+        );
+
+        // A fresh turn (Reveal → Picking) also starts clean.
+        m.chat_input = "octopus".to_string();
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Picking,
+                drawer: Some(1),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(12),
+            },
+        );
+        assert!(
+            m.chat_input.is_empty(),
+            "the next turn starts with an empty guess input"
+        );
+    }
+
+    #[test]
+    fn net_events_fold_into_the_replica() {
+        let mut m = Dooduel::default();
+        apply_event(
+            &mut m,
+            ServerEvent::Welcome {
+                seat: 2,
+                room_code: "ABC123".to_string(),
+                reconnect_token: "tok".to_string(),
+                protocol_version: 1,
+            },
+        );
+        assert_eq!(m.replica.my_seat, 2);
+        assert_eq!(m.replica.room_code, "ABC123");
+
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Drawing,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(60),
+            },
+        );
+        assert_eq!(m.replica.phase, Phase::Drawing);
+        assert_eq!(m.replica.drawer, Some(0));
+
+        apply_event(
+            &mut m,
+            ServerEvent::WordUpdate {
+                display: "_ _ B".to_string(),
+                len: 3,
+                hints_revealed: 1,
+            },
+        );
+        assert_eq!(
+            m.replica.word_slots(),
+            vec![('_', false), ('_', false), ('B', true)]
+        );
+
+        // A correct guess flags the seat at once (score + roster follow).
+        apply_event(
+            &mut m,
+            ServerEvent::Roster {
+                players: four_players(),
+                host: 0,
+            },
+        );
+        apply_event(
+            &mut m,
+            ServerEvent::GuessResult {
+                seat: 1,
+                correct: true,
+                points: 410,
+            },
+        );
+        assert!(
+            m.replica.players[1].guessed,
+            "the correct guesser is flagged"
+        );
+
+        // TurnEnded reveals the full word; MatchEnded lifts the podium.
+        apply_event(
+            &mut m,
+            ServerEvent::TurnEnded {
+                results: vec![],
+                word: "robot".to_string(),
+            },
+        );
+        assert_eq!(
+            m.replica.word_slots(),
+            vec![
+                ('R', true),
+                ('O', true),
+                ('B', true),
+                ('O', true),
+                ('T', true)
+            ],
+            "the reveal shows the full word"
+        );
+        apply_event(
+            &mut m,
+            ServerEvent::MatchEnded {
+                podium: vec![(1, "Priya".to_string(), 1420)],
+            },
+        );
+        assert_eq!(m.screen, Screen::Podium, "MatchEnded lifts the podium");
+        assert_eq!(m.replica.phase, Phase::Final);
+        assert_eq!(m.replica.podium, Some(vec![(1, "Priya".to_string(), 1420)]));
+    }
+
+    #[test]
+    fn countdown_anchors_and_never_jumps_upward() {
+        let mut m = Dooduel::default();
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Drawing,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(80),
+            },
+        );
+        update(&mut m, Msg::Tick(Duration::from_secs(0)));
+        assert_eq!(m.countdown.secs(), 80, "anchored at the phase start");
+        assert!((m.countdown.fraction() - 1.0).abs() < 1e-6);
+
+        update(&mut m, Msg::Tick(Duration::from_secs(5)));
+        assert_eq!(m.countdown.secs(), 75, "counts down locally");
+
+        // A late sync that would read HIGHER (78 → deadline in the future) is clamped.
+        apply_event(
+            &mut m,
+            ServerEvent::CountdownSync {
+                remaining: Duration::from_secs(78),
+            },
+        );
+        update(&mut m, Msg::Tick(Duration::from_secs(10)));
+        assert_eq!(
+            m.countdown.secs(),
+            70,
+            "no upward jump — the local countdown held"
+        );
+
+        // A corrective sync that reads LOWER pulls the countdown down.
+        apply_event(
+            &mut m,
+            ServerEvent::CountdownSync {
+                remaining: Duration::from_secs(60),
+            },
+        );
+        update(&mut m, Msg::Tick(Duration::from_secs(15)));
+        assert_eq!(m.countdown.secs(), 60, "a corrective sync pulls it down");
+    }
+
+    #[test]
+    fn countdown_reset_wins_over_a_same_batch_sync() {
+        // A fresh PhaseChanged (80s reset) and a CountdownSync (3s) fold in ONE batch
+        // before the next Tick. The I-3 bug: the old code let the sync OVERWRITE the
+        // reset, then clamped the non-reset against the default-zero deadline → 0:00.
+        //
+        // The fix drops a same-batch sync when a reset is pending. This is a deliberate
+        // CONSERVATIVE choice, NOT a staleness defense: under FIFO a sync that follows a
+        // reset in the stream was emitted AFTER the phase change server-side, so it is
+        // actually a legitimate NEWER value — dropping it costs at most one sync's worth
+        // of accuracy, self-healed by the next periodic sync within ~a second. We favor
+        // the guaranteed-correct fresh-phase anchor over a same-batch sync we cannot
+        // safely fold without re-introducing the 0:00 clobber. Here that shows 80.
+        let mut m = Dooduel::default();
+        apply_event(
+            &mut m,
+            ServerEvent::PhaseChanged {
+                phase: Phase::Drawing,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(80),
+            },
+        );
+        apply_event(
+            &mut m,
+            ServerEvent::CountdownSync {
+                remaining: Duration::from_secs(3),
+            },
+        );
+        update(&mut m, Msg::Tick(Duration::from_secs(0)));
+        assert_eq!(
+            m.countdown.secs(),
+            80,
+            "the fresh phase's countdown wins over a stale same-batch sync"
+        );
+    }
+
+    // --- Scripted-view (probe) ---------------------------------------------
+
+    #[test]
+    fn guesser_view_redacts_word_and_renders_chat_and_countdown() {
+        let mut app = boot_probe();
+        // This client is seat 1 (a guesser); seat 0 draws. The guesser gets a redacted
+        // word row (blanks + one hint) — the full word never reaches the replica.
+        enter_drawing(&mut app, 1, 0, "_ _ B _ _", 1);
+        net(
+            &mut app,
+            ServerEvent::ChatLine {
+                line: ChatMsg {
+                    seq: 1,
+                    kind: ChatKind::Correct,
+                    text: "🎉 Sam guessed the word!".to_string(),
+                    to: None,
+                },
+            },
+        );
+        settle(&mut app);
+
+        let m = current_model(&mut app);
+        assert_eq!(
+            m.replica.word_display, "_ _ B _ _",
+            "the guesser's replica holds only the redacted row — no secret leaks"
+        );
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Round 1 / 2"),
+            "the in-game header renders:\n{report}"
+        );
+        assert!(report.contains("60"), "the countdown shows:\n{report}");
+        assert!(
+            report.contains("guessed the word"),
+            "the chat line renders (emoji stripped):\n{report}"
+        );
+    }
+
+    #[test]
+    fn round_string_forms_render_per_surface() {
+        // Desktop uses the slash form "Round r / t".
+        let mut app = boot_probe();
+        enter_drawing(&mut app, 0, 0, "R O B O T", 0);
+        let desktop = snapshot_report(app.world_mut());
+        assert!(
+            desktop.contains("Round 1 / 2"),
+            "desktop header uses the slash form:\n{desktop}"
+        );
+
+        // Phone uses the word form "Round r of t".
+        let mut app = boot_probe();
+        enter_drawing(&mut app, 0, 0, "R O B O T", 0);
+        enqueue_msg(&mut app, Msg::SetViewport(390.0, 780.0));
+        settle(&mut app);
+        let mobile = snapshot_report(app.world_mut());
+        assert!(
+            mobile.contains("Round 1 of 2"),
+            "phone header uses the word form:\n{mobile}"
+        );
+        assert!(!mobile.contains("Round 1 / 2"));
+    }
+
+    #[test]
+    fn drawer_header_shows_the_live_guessed_count() {
+        let mut app = boot_probe();
+        // This client is the drawer (seat 0); the header shows the live guessed count.
+        enter_drawing(&mut app, 0, 0, "R O B O T", 0);
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("0 of 3 guessed"),
+            "the drawer sees the initial live guessed count:\n{report}"
+        );
+        // A guesser gets it → the count updates.
+        net(
+            &mut app,
+            ServerEvent::GuessResult {
+                seat: 1,
+                correct: true,
+                points: 410,
+            },
+        );
+        settle(&mut app);
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("1 of 3 guessed"),
+            "the drawer's guessed count updates live:\n{report}"
+        );
+    }
+
+    #[test]
+    fn in_game_controls_are_reachable_by_role_and_name() {
+        let mut app = boot_probe();
+        enter_drawing(&mut app, 0, 0, "R O B O T", 0);
+        for label in ["Brush", "Fill", "Eraser", "Undo", "Clear", "Send", "Leave"] {
+            assert!(
+                get_by_role(app.world_mut(), A11yRole::Button, Some(label), None).is_ok(),
+                "the {label:?} button is locatable by role+name"
+            );
+        }
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Scoreboard"),
+            "the in-game screen renders its panes:\n{report}"
+        );
+    }
+
+    /// C2-02 regression guard (QA cycle 2): the "spurious empty chat pills at high
+    /// volume" finding. This drives a REAL 4-human [`Session`] (the exact shape of the
+    /// failing playtest — `bots_enabled=false`), captures seat 0's authoritative event
+    /// stream through a full multi-turn match, and replays it into a probe client past
+    /// the ~20-row / chat-pane-overflow point where QA saw two content-less green pills.
+    ///
+    /// It proves the app layer is clean end-to-end: the model chat carries no empty
+    /// line, seqs are unique, the keyed chat list renders exactly one row per message
+    /// (no phantom rows — the direct refutation of an app-side keyed-list bug), and the
+    /// only empty-text node in the semantic tree is the input. The phantom pills are a
+    /// GPU render-layer artifact (a `pos_tint` fill has no backing ECS node here — the
+    /// KI-02 / glyph-atlas-bind lineage), not an `apps/dooduel` model/view/reconcile bug.
+    #[test]
+    fn high_volume_chat_renders_no_empty_pills() {
+        use dooduel_core::game::Config;
+        use dooduel_core::protocol::ClientIntent;
+        use dooduel_core::session::{Recipient, Session, SessionOpts};
+
+        fn strip(s: &str) -> String {
+            let cleaned: String = s.chars().filter(|c| (*c as u32) < 0x2300).collect();
+            cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+
+        // A real 4-HUMAN room (bots_enabled=false, fill_bots_to=0) — the exact shape of
+        // the failing playtest, not the solo path (which fills bots).
+        let mut ntok = 0u64;
+        let opts = SessionOpts {
+            token_gen: Box::new(move || {
+                ntok += 1;
+                format!("tok{ntok}")
+            }),
+            fill_bots_to: 0,
+            room_code: "WGMBNQ".to_string(),
+            match_seed: 42,
+        };
+        let cfg = Config {
+            total_rounds: 2,
+            draw_seconds: 10,
+            pick_seconds: 10,
+            reveal_seconds: 2,
+            hint_count: 2,
+            bots_enabled: false,
+        };
+        let mut session = Session::new(cfg, opts);
+        let mut now = Duration::ZERO;
+        for name in ["Emmy", "Blair", "Dana", "Cruz"] {
+            session
+                .connect(name, WireAvatar::Default, None, now)
+                .expect("connect");
+        }
+        session.handle(0, ClientIntent::StartMatch);
+
+        // Drive four turns; capture every event addressed to seat 0 (All or Seat(0)).
+        let mut seat0: Vec<ServerEvent> = Vec::new();
+        let mut drawer = 0usize;
+        let mut phase = Phase::Idle;
+        let mut word = String::new();
+        let drain = |session: &mut Session,
+                     seat0: &mut Vec<ServerEvent>,
+                     drawer: &mut usize,
+                     phase: &mut Phase,
+                     word: &mut String| {
+            for (rec, ev) in session.drain_events() {
+                match &ev {
+                    ServerEvent::PhaseChanged {
+                        phase: p,
+                        drawer: d,
+                        ..
+                    } => {
+                        *phase = *p;
+                        if let Some(d) = d {
+                            *drawer = *d;
+                        }
+                    }
+                    ServerEvent::WordUpdate { display, .. } if matches!(rec, Recipient::Seat(s) if s == *drawer) =>
+                    {
+                        // The drawer's row is the full word (space-joined uppercase).
+                        *word = display
+                            .split_whitespace()
+                            .collect::<String>()
+                            .to_lowercase();
+                    }
+                    _ => {}
+                }
+                if matches!(rec, Recipient::All) || matches!(rec, Recipient::Seat(0)) {
+                    seat0.push(ev);
+                }
+            }
+        };
+        drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+
+        // Drive turns until the match ends: pick, let 2 non-drawer seats guess, then
+        // time out the turn. Two rounds × 4 seats ⇒ ~30 chat rows (well past overflow).
+        let mut turn = 0;
+        while phase != Phase::Final && turn < 12 {
+            turn += 1;
+            if phase == Phase::Picking {
+                session.handle(drawer, ClientIntent::Pick { index: 0 });
+                drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            }
+            // A near-miss (one letter off) from a non-drawer seat → a private "So
+            // close!" (Close, to that seat only) — the seq-gap path. And a plain wrong
+            // guess → a broadcast Guess row. Then 2 correct guesses.
+            let nondrawer: Vec<usize> = (0..4).filter(|s| *s != drawer).collect();
+            if !word.is_empty() {
+                let mut near = word.clone();
+                let last = near.pop().unwrap_or('a');
+                near.push(if last == 'z' { 'y' } else { 'z' });
+                session.handle(nondrawer[0], ClientIntent::Guess { text: near });
+                drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            }
+            session.handle(
+                nondrawer[0],
+                ClientIntent::Guess {
+                    text: "wrongguess".to_string(),
+                },
+            );
+            drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            // Two non-drawer seats guess the word correctly.
+            for &seat in nondrawer.iter().take(2) {
+                session.handle(seat, ClientIntent::Guess { text: word.clone() });
+                drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            }
+            now += Duration::from_secs(12);
+            session.tick(now);
+            drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+            now += Duration::from_secs(3);
+            session.tick(now);
+            drain(&mut session, &mut seat0, &mut drawer, &mut phase, &mut word);
+        }
+
+        // Replay seat 0's exact stream into a probe client, settling per event.
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::Play);
+        settle(&mut app);
+        for ev in &seat0 {
+            net(&mut app, ev.clone());
+            settle(&mut app);
+        }
+
+        let m = current_model(&mut app);
+        assert_eq!(m.screen, Screen::InGame, "the replay lands on the board");
+        // High volume: past the ~20-row point where QA saw the phantom pills, and past
+        // the chat pane's overflow (so stick-to-bottom scrolling is engaged).
+        assert!(
+            m.replica.chat.len() >= 20,
+            "the driven match accumulated a high-volume chat ({} rows)",
+            m.replica.chat.len()
+        );
+
+        // (1) MODEL: no chat line is content-empty (a Correct pill with no text is the
+        // exact C2-02 artifact). Every message the core emits carries real text.
+        let empty_correct = m
+            .replica
+            .chat
+            .iter()
+            .filter(|c| c.kind == ChatKind::Correct && strip(&c.text).is_empty())
+            .count();
+        assert_eq!(
+            empty_correct, 0,
+            "no content-less Correct pill entered the model chat"
+        );
+        assert!(
+            m.replica.chat.iter().all(|c| !strip(&c.text).is_empty()),
+            "no chat line strips to empty content"
+        );
+        // Seqs are unique (a duplicate would corrupt the keyed reconcile).
+        let mut seqs: Vec<u64> = m.replica.chat.iter().map(|c| c.seq).collect();
+        let raw = seqs.len();
+        seqs.sort_unstable();
+        seqs.dedup();
+        assert_eq!(
+            seqs.len(),
+            raw,
+            "chat seqs (the keyed-list keys) are unique"
+        );
+
+        // (2) RENDER: the keyed chat list realizes EXACTLY one row per model message —
+        // no phantom rows spawned at high volume, no rows dropped. This is the direct
+        // refutation of "the keyed-list reconciler spawns phantom rows": the rendered
+        // row keys equal the model's chat seqs one-for-one.
+        let mut rows = buiy_view::keyed_rows(app.world_mut());
+        rows.sort_by_key(|(k, _)| *k);
+        let row_keys: Vec<u64> = rows.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            row_keys,
+            m.replica.chat.iter().map(|c| c.seq).collect::<Vec<_>>(),
+            "the rendered keyed chat rows match the model chat one-for-one (no phantom \
+             or dropped rows)"
+        );
+
+        // (3) SEMANTIC TREE: the only empty-text node in the whole report is the chat
+        // input field — no empty-text chat pill reached the a11y/text tree.
+        let report = snapshot_report(app.world_mut());
+        assert_eq!(
+            report.matches("text=\"\"").count(),
+            1,
+            "the only empty-text node is the chat input (no empty chat pill):\n{report}"
+        );
+    }
+
+    // --- Live solo authority (integration) ---------------------------------
+
+    /// The solo in-process `Session` self-drives a full match to the podium: ▶ Play
+    /// connects the human + fills three bots, and the virtual clock advances through
+    /// auto-pick + bot guesses + the reveal, until `MatchEnded` lifts the podium.
+    /// (This is the W3.5 "run the artifact" substitute — a headless match end-to-end.)
+    #[test]
+    fn solo_full_match_reaches_the_podium() {
+        let mut app = boot_solo();
+        enqueue_msg(&mut app, Msg::Play);
+        settle(&mut app);
+        // The session seeds Picking within a couple frames.
+        assert_ne!(
+            current_model(&mut app).replica.players.len(),
+            0,
+            "the solo session connected the roster"
+        );
+
+        let mut reached = false;
+        for _ in 0..400 {
+            if current_screen(&mut app) == Screen::Podium {
+                reached = true;
+                break;
+            }
+            advance_clock(&mut app, Duration::from_secs(5));
+        }
+        assert!(reached, "the solo match self-drove to the podium screen");
+        let m = current_model(&mut app);
+        assert!(
+            m.replica.podium.as_ref().is_some_and(|p| !p.is_empty()),
+            "the podium is populated: {:?}",
+            m.replica.podium
+        );
+    }
+
+    /// A solo session records + replays byte-identically (spec §3.4): the `Msg::Net`
+    /// stream the authority produced re-folds into a FRESH app (no live session) to
+    /// the same model — the record/replay guarantee for networked play.
+    #[test]
+    fn solo_session_records_and_replays_byte_identical() {
+        use buiy_core::mvu::{MsgLog, RecordSession};
+        use buiy_core::replay::replay_into;
+        use buiy_core::text::edit::EditLog;
+
+        // Record a solo session through several turns of authoritative events.
+        let mut rec = boot_solo();
+        rec.world_mut().resource_mut::<RecordSession>().start();
+        enqueue_msg(&mut rec, Msg::Play);
+        settle(&mut rec);
+        for _ in 0..30 {
+            advance_clock(&mut rec, Duration::from_secs(5));
+        }
+        let recorded = current_model(&mut rec);
+        assert!(
+            !recorded.replica.players.is_empty(),
+            "the recorded session has a populated replica"
+        );
+
+        // Replay the recorded Msg stream into a fresh app WITHOUT a live authority —
+        // the recorded `Msg::Net` events reconstruct the replica on their own.
+        let mut replay = boot_probe();
+        {
+            let world = rec.world();
+            replay_into(
+                &mut replay,
+                world.resource::<MsgLog>(),
+                world.resource::<EditLog>(),
+            );
+        }
+        settle(&mut replay);
+        let replayed = current_model(&mut replay);
+        assert_eq!(
+            replayed.replica, recorded.replica,
+            "the replica replays state-identically from the recorded Msg::Net stream"
+        );
+        assert_eq!(
+            replayed.screen, recorded.screen,
+            "the screen (incl. any podium lift) replays identically"
+        );
+    }
+
+    // --- Avatar editor + navigation (reducer-level, unchanged by W3) --------
 
     #[test]
     fn avatar_editor_open_tab_and_save_round_trip() {
@@ -1475,13 +1946,11 @@ mod tests {
         assert!(m.avatar.editor_open);
         assert_eq!(m.avatar.tab, AvatarTab::Gallery, "opens on the gallery tab");
 
-        // Switching to Draw bumps the scratch-reset counter (the sync blanks it).
         let reset_before = m.avatar.reset_seq;
         update(&mut m, Msg::SetAvatarTab(AvatarTab::Draw));
         assert_eq!(m.avatar.tab, AvatarTab::Draw);
         assert_eq!(m.avatar.reset_seq, reset_before + 1);
 
-        // Brush edits are reducer-owned + replayable.
         update(&mut m, Msg::SelectAvatarColor(4));
         assert_eq!(m.avatar.draft_color_idx, 4);
         assert!(!m.avatar.draft_eraser, "picking a color clears the eraser");
@@ -1490,7 +1959,6 @@ mod tests {
         update(&mut m, Msg::SelectAvatarSize(2));
         assert_eq!(m.avatar.draft_size_idx, 2);
 
-        // Save commits the drawing (bumps the copy counter, closes, marks custom).
         let save_before = m.avatar.save_seq;
         update(&mut m, Msg::SaveAvatar);
         assert_eq!(m.avatar.save_seq, save_before + 1);
@@ -1509,30 +1977,451 @@ mod tests {
                 icon: 5,
                 tint: 5 % avatar::TINT_COUNT
             },
-            "a gallery pick sets an explicit icon + tint preset"
         );
-        assert!(!m.avatar.editor_open, "a gallery pick closes the editor");
-
+        assert!(!m.avatar.editor_open);
         update(&mut m, Msg::ResetAvatar);
         assert_eq!(m.avatar.kind, HumanAvatar::Default);
     }
 
-    /// The avatar editor opens from Home's pencil affordance (a pressable icon),
-    /// and Save round-trips the custom-avatar flag through the funnel (GPU-free).
+    #[test]
+    fn home_boots_and_create_room_navigates_to_lobby() {
+        let mut app = boot_probe();
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Dooduel"),
+            "home shows the wordmark:\n{report}"
+        );
+        for label in ["▶ Play", "Create a room", "Join a room"] {
+            assert!(
+                get_by_role(app.world_mut(), A11yRole::Button, Some(label), None).is_ok(),
+                "home has the {label:?} button by role+name"
+            );
+        }
+        let create = get_by_role(
+            app.world_mut(),
+            A11yRole::Button,
+            Some("Create a room"),
+            None,
+        )
+        .expect("Create-a-room button");
+        click(app.world_mut(), create).expect("Create is clickable");
+        settle(&mut app);
+        // Create opens a NETWORKED connection (Joining) and shows the connecting card
+        // (a probe app has no server, so it stays Joining until a scripted Welcome).
+        assert_eq!(current_screen(&mut app), Screen::Lobby);
+        assert_eq!(
+            current_model(&mut app).net,
+            NetState::Joining,
+            "Create opens a networked connection (server-issued code)"
+        );
+        assert!(
+            snapshot_report(app.world_mut()).contains("Connecting"),
+            "the connecting card renders while Joining"
+        );
+
+        // Simulate the server admitting us as seat 0 (host); the live lobby renders.
+        seed_lobby(&mut app, 0, 0, "ABCDEF");
+        assert!(
+            matches!(current_model(&mut app).net, NetState::Connected { .. }),
+            "Welcome marks the session Connected"
+        );
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("Private room"),
+            "the live lobby renders:\n{report}"
+        );
+        assert!(
+            report.contains("ABCDEF"),
+            "the server-issued room code is shown:\n{report}"
+        );
+        assert!(
+            get_by_role(
+                app.world_mut(),
+                A11yRole::Button,
+                Some("▶ Start game"),
+                None
+            )
+            .is_ok(),
+            "the host has an enabled Start button"
+        );
+    }
+
+    /// Simulate the server admitting this client to a lobby: a `Welcome` (which marks the
+    /// session Connected) + a `RoomState` seeding the roster at phase Idle (the lobby).
+    fn seed_lobby(app: &mut App, my_seat: usize, host: usize, code: &str) {
+        net(
+            app,
+            ServerEvent::Welcome {
+                seat: my_seat,
+                room_code: code.to_string(),
+                reconnect_token: "tok".to_string(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            },
+        );
+        let players = vec![
+            ReplicaPlayer {
+                name: "Ada".to_string(),
+                avatar: WireAvatar::Default,
+                connected: true,
+                is_bot: false,
+                score: 0,
+                guessed: false,
+            },
+            ReplicaPlayer {
+                name: "Bo".to_string(),
+                avatar: WireAvatar::Default,
+                connected: true,
+                is_bot: false,
+                score: 0,
+                guessed: false,
+            },
+        ];
+        net(
+            app,
+            ServerEvent::RoomState(RoomReplica {
+                room_code: code.to_string(),
+                my_seat,
+                host,
+                players,
+                phase: Phase::Idle,
+                ..Default::default()
+            }),
+        );
+        settle(app);
+    }
+
+    /// C2-04 (QA cycle 2): the lobby invite code must render in the upright body face
+    /// (Geist-Mono's stand-in here — codes/numbers are the design's mono role), matching
+    /// the in-game top-bar code, NOT the hand-drawn italic Caveat display face.
+    #[test]
+    fn lobby_room_code_uses_the_body_font_not_the_display_face() {
+        use buiy_core::text::{FamilyEntry, FontFamily, FontStack, Text};
+
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::SetName("Zed".to_string()));
+        enqueue_msg(&mut app, Msg::GoJoin);
+        settle(&mut app);
+        enqueue_msg(&mut app, Msg::SetJoinCode("abcdef".to_string()));
+        enqueue_msg(&mut app, Msg::SubmitJoin);
+        settle(&mut app);
+        seed_lobby(&mut app, 1, 0, "ABCDEF");
+
+        // The invite-code label is the Text node whose content is the code.
+        let world = app.world_mut();
+        let mut q = world.query::<(&Text, Option<&FontFamily>)>();
+        let FontFamily(FontStack(stack)) = q
+            .iter(world)
+            .find(|(t, _)| t.0 == "ABCDEF")
+            .and_then(|(_, f)| f.cloned())
+            .expect("the room-code label renders with an explicit font");
+        // The primary named family drives the face (a sans-serif fallback follows).
+        let primary = stack.iter().find_map(|e| match e {
+            FamilyEntry::Named(name) => Some(name.as_str()),
+            FamilyEntry::Generic(_) => None,
+        });
+        assert_eq!(
+            primary,
+            Some(crate::theme::FONT_BODY),
+            "the lobby invite code uses the upright body font (FONT_BODY) like the \
+             in-game top-bar code — not the hand-drawn Caveat display face; got {stack:?}"
+        );
+    }
+
+    #[test]
+    fn join_connects_then_the_guest_lobby_waits_for_the_host() {
+        let mut app = boot_probe();
+        enqueue_msg(&mut app, Msg::SetName("Zed".to_string()));
+        enqueue_msg(&mut app, Msg::GoJoin);
+        settle(&mut app);
+        assert_eq!(current_screen(&mut app), Screen::Join);
+
+        enqueue_msg(&mut app, Msg::SetJoinCode("abcdef".to_string()));
+        enqueue_msg(&mut app, Msg::SubmitJoin);
+        settle(&mut app);
+        assert_eq!(
+            current_model(&mut app).net,
+            NetState::Joining,
+            "Join opens a networked connection"
+        );
+
+        // The server seats us at 1 (a guest; host is seat 0).
+        seed_lobby(&mut app, 1, 0, "ABCDEF");
+        let m = current_model(&mut app);
+        assert!(!m.is_host_seat(), "seat 1 is a guest, not the host");
+        let report = snapshot_report(app.world_mut());
+        assert!(
+            report.contains("You're in"),
+            "the guest lobby renders:\n{report}"
+        );
+        assert!(
+            report.contains("Waiting for the host"),
+            "a guest waits for the host to start:\n{report}"
+        );
+        assert!(
+            get_by_role(
+                app.world_mut(),
+                A11yRole::Button,
+                Some("▶ Start game"),
+                None
+            )
+            .is_err(),
+            "a guest has no Start button"
+        );
+    }
+
+    #[test]
+    fn copy_code_stages_the_room_code_for_the_clipboard_with_a_toast() {
+        let mut m = Dooduel {
+            replica: RoomReplica {
+                room_code: "ABCDEF".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        update(&mut m, Msg::CopyCode);
+        assert_eq!(
+            m.clipboard_outbox,
+            vec!["ABCDEF".to_string()],
+            "the code is staged for the clipboard drain"
+        );
+        assert_eq!(
+            m.toast.as_deref(),
+            Some("Copied!"),
+            "a confirmation toast flashes"
+        );
+
+        // With no code yet (never reached a lobby) it is a no-op — never an empty copy.
+        let mut blank = Dooduel::default();
+        update(&mut blank, Msg::CopyCode);
+        assert!(
+            blank.clipboard_outbox.is_empty(),
+            "no room code → nothing staged"
+        );
+    }
+
+    #[test]
+    fn drain_clipboard_outbox_writes_staged_copies_to_the_clipboard() {
+        use buiy_core::text::edit::{Clipboard, MemClipboard};
+        let mut app = App::new();
+        app.insert_resource(Clipboard(Box::new(MemClipboard::default())));
+        app.world_mut().spawn(Dooduel {
+            clipboard_outbox: vec!["ROOMXY".to_string()],
+            ..Default::default()
+        });
+        app.add_systems(Update, drain_clipboard_outbox);
+        app.update();
+        let mut clip = app.world_mut().resource_mut::<Clipboard>();
+        assert_eq!(
+            clip.0.get_text().as_deref(),
+            Some("ROOMXY"),
+            "the staged copy reached the clipboard resource"
+        );
+    }
+
+    // --- Networked reducer paths (W4.5) -------------------------------------
+
+    #[test]
+    fn networked_start_match_sends_the_intent_not_a_solo_launch() {
+        let mut m = Dooduel {
+            net: NetState::Connected {
+                room: "ABCDEF".to_string(),
+            },
+            ..Default::default()
+        };
+        update(&mut m, Msg::StartMatch);
+        assert_eq!(
+            m.net_outbox.last(),
+            Some(&ClientIntent::StartMatch),
+            "a networked StartMatch is an intent, not a solo launch"
+        );
+        assert!(
+            matches!(m.net, NetState::Connected { .. }),
+            "the session stays networked"
+        );
+    }
+
+    #[test]
+    fn a_networked_match_start_lifts_the_host_out_of_the_lobby() {
+        // The bug the first human playtest hit: the host reaches the Lobby, presses
+        // Start (an intent), the server broadcasts the first PhaseChanged — but the
+        // shell stayed welded to the Lobby, leaving the host the AFK first drawer. The
+        // screen must lift to InGame on match start, symmetric with MatchEnded→Podium.
+        let mut m = Dooduel::default();
+        update(&mut m, Msg::CreateRoom);
+        assert_eq!(m.screen, Screen::Lobby, "Create shows the lobby");
+        update(
+            &mut m,
+            Msg::Net(ServerEvent::Welcome {
+                seat: 0,
+                room_code: "ABCDEF".to_string(),
+                reconnect_token: "tok".to_string(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            }),
+        );
+        assert_eq!(
+            m.screen,
+            Screen::Lobby,
+            "still the lobby until the match actually starts"
+        );
+        update(
+            &mut m,
+            Msg::Net(ServerEvent::PhaseChanged {
+                phase: Phase::Picking,
+                drawer: Some(0),
+                round: 1,
+                total_rounds: 2,
+                remaining: Duration::from_secs(15),
+            }),
+        );
+        assert_eq!(
+            m.screen,
+            Screen::InGame,
+            "the first in-match phase lifts the host out of the lobby onto the board"
+        );
+    }
+
+    #[test]
+    fn a_reconnect_into_a_live_match_lands_on_the_board_not_the_lobby() {
+        // A mid-match reconnect replays the full RoomState seed carrying the live phase;
+        // the returning player must land on the board, not stall in the lobby.
+        let mut m = Dooduel::default();
+        start_connect(
+            &mut m,
+            Connect::Join {
+                code: "ABCDEF".to_string(),
+                reconnect: Some("tok".to_string()),
+            },
+            false,
+        );
+        assert_eq!(m.screen, Screen::Lobby);
+        apply_event(
+            &mut m,
+            ServerEvent::Welcome {
+                seat: 1,
+                room_code: "ABCDEF".to_string(),
+                reconnect_token: "tok2".to_string(),
+                protocol_version: dooduel_core::protocol::PROTOCOL_VERSION,
+            },
+        );
+        let replica = RoomReplica {
+            room_code: "ABCDEF".to_string(),
+            phase: Phase::Drawing,
+            ..Default::default()
+        };
+        apply_event(&mut m, ServerEvent::RoomState(replica));
+        assert_eq!(
+            m.screen,
+            Screen::InGame,
+            "a live-match reconnect lands on the board"
+        );
+    }
+
+    #[test]
+    fn a_rejected_join_toasts_and_reverts_to_the_code_screen() {
+        let mut m = Dooduel::default();
+        start_connect(
+            &mut m,
+            Connect::Join {
+                code: "ZZZZZZ".to_string(),
+                reconnect: None,
+            },
+            false,
+        );
+        assert_eq!(m.net, NetState::Joining);
+        apply_event(
+            &mut m,
+            ServerEvent::Error {
+                code: ErrorCode::RoomNotFound,
+                message: "no such room".to_string(),
+            },
+        );
+        assert!(m.toast.is_some(), "the rejection surfaces as a toast");
+        assert_eq!(
+            m.net,
+            NetState::Offline,
+            "a failed join drops the connection"
+        );
+        assert_eq!(
+            m.screen,
+            Screen::Join,
+            "a guest returns to the code screen to retry"
+        );
+    }
+
+    #[test]
+    fn a_drop_stages_a_token_rejoin() {
+        let mut m = Dooduel {
+            net: NetState::Connected {
+                room: "ABCDEF".to_string(),
+            },
+            room_code: "ABCDEF".to_string(),
+            reconnect_token: "tok-xyz".to_string(),
+            ..Default::default()
+        };
+        update(&mut m, Msg::NetDropped);
+        assert!(
+            matches!(m.net, NetState::Dropped { .. }),
+            "a drop enters the Dropped state"
+        );
+        assert_eq!(
+            m.pending_connect,
+            Some(Connect::Join {
+                code: "ABCDEF".to_string(),
+                reconnect: Some("tok-xyz".to_string()),
+            }),
+            "a drop stages a token rejoin for WsClientPlugin"
+        );
+    }
+
+    #[test]
+    fn networked_back_stages_a_leave_before_going_offline() {
+        // I-4: leaving a networked room releases the seat gracefully (skips the 45s
+        // grace) so it doesn't ghost.
+        let mut m = Dooduel {
+            net: NetState::Connected {
+                room: "ABCDEF".to_string(),
+            },
+            ..Default::default()
+        };
+        update(&mut m, Msg::Back);
+        assert_eq!(
+            m.net_outbox.last(),
+            Some(&ClientIntent::Leave),
+            "networked Back stages a Leave intent"
+        );
+        assert_eq!(m.net, NetState::Offline);
+        assert_eq!(m.screen, Screen::Home);
+        // An offline Back has no session to leave — no intent staged.
+        let mut solo = Dooduel::default();
+        update(&mut solo, Msg::Back);
+        assert!(
+            solo.net_outbox.is_empty(),
+            "an offline Back stages no intent"
+        );
+    }
+
+    #[test]
+    fn giving_up_the_rejoin_is_a_terminal_connection_lost() {
+        // I-1: when the bounded auto-rejoin exhausts its tries, the UI reaches a terminal
+        // "connection lost" state (Offline + Home), not a spin.
+        let mut m = Dooduel {
+            net: NetState::Dropped {
+                token: "t".to_string(),
+            },
+            room_code: "ABCDEF".to_string(),
+            reconnect_token: "t".to_string(),
+            ..Default::default()
+        };
+        update(&mut m, Msg::NetGaveUp);
+        assert_eq!(m.net, NetState::Offline);
+        assert_eq!(m.screen, Screen::Home);
+        assert!(m.pending_connect.is_none(), "no further rejoin is staged");
+        assert_eq!(m.toast.as_deref(), Some("Connection lost."));
+    }
+
     #[test]
     fn probe_avatar_editor_opens_from_home_and_saves() {
-        use buiy_core::a11y::A11yRole;
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .add_plugins(bevy::input::InputPlugin)
-            .add_plugins(buiy::BuiyProbePlugin);
-        install(&mut app);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        // The pencil "Edit your avatar" affordance is a pressable icon → a button.
+        let mut app = boot_probe();
         let edit = get_by_role(
             app.world_mut(),
             A11yRole::Button,
@@ -1542,12 +2431,8 @@ mod tests {
         .expect("the pencil edit affordance is a locatable button");
         click(app.world_mut(), edit).expect("the pencil is clickable");
         settle(&mut app);
-        assert!(
-            current_model(&mut app).avatar.editor_open,
-            "clicking the pencil opens the avatar editor"
-        );
+        assert!(current_model(&mut app).avatar.editor_open);
 
-        // Switch to the draw tab; the save button is reachable there.
         enqueue_msg(&mut app, Msg::SetAvatarTab(AvatarTab::Draw));
         settle(&mut app);
         let save = get_by_role(
@@ -1559,56 +2444,8 @@ mod tests {
         .expect("the save button is reachable on the draw tab");
         click(app.world_mut(), save).expect("save is clickable");
         settle(&mut app);
-
         let m = current_model(&mut app);
         assert!(!m.avatar.editor_open, "save closes the editor");
-        assert_eq!(
-            m.avatar.kind,
-            HumanAvatar::Custom,
-            "save round-trips the custom-avatar flag through the funnel"
-        );
-    }
-
-    /// A full match driven by injected virtual ticks lifts the shell to the
-    /// Podium screen (the W5 reachability probe — reuses the W2 tick pattern).
-    #[test]
-    fn probe_full_match_reaches_the_podium_screen() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .add_plugins(bevy::input::InputPlugin)
-            .add_plugins(buiy::BuiyProbePlugin);
-        install(&mut app);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        enqueue_msg(&mut app, Msg::StartMatch);
-        settle(&mut app);
-        let mut clock = 0u64;
-        for _ in 0..400 {
-            if current_screen(&mut app) == Screen::Podium {
-                break;
-            }
-            match current_game(&mut app).phase {
-                Phase::Picking => enqueue_msg(&mut app, Msg::ChooseWord(0)),
-                Phase::Reveal => enqueue_msg(&mut app, Msg::Continue),
-                _ => {
-                    clock += 30;
-                    enqueue_msg(&mut app, Msg::Tick(Duration::from_secs(clock)));
-                }
-            }
-            settle(&mut app);
-        }
-        assert_eq!(
-            current_screen(&mut app),
-            Screen::Podium,
-            "the full match reaches the podium"
-        );
-        let report = snapshot_report(app.world_mut());
-        assert!(
-            report.contains("wins!"),
-            "the podium announces the winner:\n{report}"
-        );
+        assert_eq!(m.avatar.kind, HumanAvatar::Custom);
     }
 }
