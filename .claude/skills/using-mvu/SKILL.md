@@ -165,7 +165,8 @@ enum ClockMsg { Tick(Duration) }
 
 impl Model for Countdown { type Msg = ClockMsg; }
 
-fn countdown(m: &mut Countdown, ClockMsg::Tick(now): ClockMsg) -> Cmd<ClockMsg> {
+fn countdown(m: &mut Countdown, msg: ClockMsg) -> Cmd<ClockMsg> {
+    let ClockMsg::Tick(now) = msg; // irrefutable: ClockMsg has one variant
     m.remaining = 10u64.saturating_sub(now.as_secs()); // DERIVED — never store `now`
     Cmd::none()
 }
@@ -231,7 +232,7 @@ state honestly:
 
 | Tier | What it is | How to reach it |
 |---|---|---|
-| **Leaf** | one scalar/toggle owned by a shared reducer (the built-in `Checkbox`/`Switch` use the `A11yToggled` toggle leaf). Folds in an **early** caller-chosen window (`.after(Picking).before(A11yUpdate)`) so an AT-driver click reflects in the a11y tree the same frame. | built-in for the toggle widgets; add `ControlledLeaf` to a leaf to make its value **controlled by a parent model** (the view reconciler drives it; the built-in press-to-toggle is suppressed). |
+| **Leaf** | one scalar/toggle owned by a shared reducer (the built-in `Checkbox`/`Switch` use the `A11yToggled` toggle leaf). Folds in an **early** caller-chosen window (`.after(Picking).before(A11yUpdate)`) so an AT-driver click reflects in the a11y tree the same frame. | built-in for the toggle widgets; add `ControlledLeaf` (`use buiy_core::mvu::ControlledLeaf;` — not re-exported through `buiy::prelude`) to a leaf to make its value **controlled by a parent model** (the view reconciler drives it; the built-in press-to-toggle is suppressed). |
 | **Machine** | a **whole-state** `Model` + reducer — the default for a screen/app/list (a counter, a menu machine, a form, the TodoMVC list). Folds in the late `MvuSet::Drain`. | `mvu_model(reducer)`. |
 | **Raw-ECS** | mutate components directly, **outside** MVU — no record/replay, no `set_if_neq`. | only for transient/derived view state that must NOT be recorded; anything that should replay belongs in a model. |
 

@@ -9,6 +9,52 @@ and a sketch of the implementation direction. When a follow-up gets
 chartered into its own phase or plan, move the entry to that plan and link
 back here.
 
+## App-author ergonomics campaign (2026-07-13) — deferrals & minor follow-ups
+
+The campaign (`docs/specs/2026-07-13-app-author-ergonomics-campaign-design.md`,
+resolving the open items of the 2026-07-13 learnings report per the reconciliation
+ledger `docs/reports/2026-07-13-app-author-ergonomics-reconciliation.md`) landed
+Tracks A–F. What it deliberately did NOT do, plus minor follow-ups surfaced in review:
+
+### DEFERRED — 7a-lint: §4.1c required-component suppression at compile/lint time
+
+XL / high-uncertainty. The suppression lives inside upstream Bevy's `bsn!` proc-macro
+Buiy does not own; there is no in-repo dylint/clippy-driver infra; a runtime
+debug-assert cannot substitute (it can't distinguish a legit partial-patch from an
+accidental require-suppression — the signal is author-time-only). Interim mitigation is
+landed: a scene-fn for every styleable widget (all 14) + a round-trip regression test
+pinning the behavior. **Revisit** if Buiy adopts a lint toolchain or forks `bsn!`.
+
+### ROUTED → web-firstclass #143 — 1d web capability inertness (loud-surface + CI guard)
+
+Outbound web a11y is solved (`WebA11ySinkPlugin`). The residual (inbound web AT still
+inert; best-effort clipboard/IME degrade silently; no web-a11y CI conformance guard) is
+owned by the active web-firstclass campaign (draft PR #144). Not duplicated here; the
+campaign's Track A fail-loud mechanism (`buiy_core::mvu::MvuDiagnostics`) is the natural
+home if #143 later routes an inertness signal.
+
+### Minor follow-ups (surfaced in review; none blocking)
+
+- **Prelude `ControlledLeaf`** (Track C): the `using-mvu` guide recommends
+  `ControlledLeaf` for the leaf tier, but it is not re-exported through `buiy::prelude`
+  (only `buiy_core::mvu::ControlledLeaf`). The guide shows the import; consider adding it
+  to the facade prelude for 5c self-sufficiency.
+- **Occluder predicate strictness** (Track B): `is_transparent_top_layer_occluder` flags
+  any top-layer transparent node whose `Pickable != IGNORE`, stricter than "blocks every
+  click" (a non-blocking-but-hoverable `Pickable` is also flagged). No false-positive
+  today; if an intentional hoverable-non-blocking transparent overlay ever arises, tighten
+  the predicate to the actual `should_block_lower` semantics or document the escape.
+- **`workflow_dispatch` runs the full matrix** (Track E): a manual GPU-lane dispatch also
+  runs the informational `llvm-cov` job (gated `!= pull_request`). Harmless, opt-in;
+  inherent to the single-workflow-file design.
+- **`TooltipNode::is_open` not root-re-exported** (Track F): reachable via
+  `buiy_widgets::tooltip::TooltipNode`, unlike the root-level Popover/Menu/Dialog
+  accessors (TooltipNode is an internal render node, not an author-facing marker).
+- **Informational** — Track A's env-reducer diagnostic is compile-only (no runtime caller
+  exists); Track D's companion `apply_background` fix + `update_hover_style` backstop are
+  twin guards of the "Background always present on a HoverStyle node" invariant (the
+  companion fix additionally avoids remove+insert churn at rest).
+
 ## Descendant invalidation on ancestor-resolved-size changes — LANDED
 
 **Originated:** Phase 5 (container queries), Task 10 implementer finding +
