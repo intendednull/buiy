@@ -33,8 +33,9 @@
 //! auto-`Pickable::IGNORE`**: silently auto-repairing a hand-authored bug is the
 //! exact fail-silent anti-pattern the app-author-ergonomics campaign exists to
 //! kill (a corrupted intent is masked, not surfaced). The escape hatches are
-//! explicit and visible in the tree: paint a fill (`Background`/`Text`/
-//! `RasterImage`), or opt the container out of picking with `Pickable::IGNORE`
+//! explicit and visible in the tree: paint a fill (any render-tier fill —
+//! `Background`/`BackgroundLayers`/`RasterImage`/`Text`/`Icon`/`Border`/`Outline`/
+//! `BoxShadow`), or opt the container out of picking with `Pickable::IGNORE`
 //! (the `buiy_view` `.ignore_picking()` lowering, or a direct insert).
 //!
 //! ## The one intentional case, and its escape hatch
@@ -57,7 +58,9 @@ use bevy::prelude::*;
 use crate::Node;
 use crate::layout::{Stacking, TopLayer};
 use crate::render::RasterImage;
-use crate::render::components::{Background, ComputedPaintSkip};
+use crate::render::components::{
+    Background, BackgroundLayers, Border, BoxShadow, ComputedPaintSkip, Icon, Outline,
+};
 use crate::text::Text;
 
 /// The **canonical** predicate: is `entity` a *transparent top-layer pick
@@ -70,9 +73,12 @@ use crate::text::Text;
 /// - it is **not** paint-skipped ([`ComputedPaintSkip`] absent) — a hidden node
 ///   (`Display::None` / `CssVisibility::Hidden` / offscreen) is already dropped by
 ///   the picking backend, so it cannot occlude;
-/// - it **paints nothing** the user can see: no [`Background`] fill, no [`Text`],
-///   no [`RasterImage`] (a node painting any of these is *visibly present*, not the
-///   *invisible*-occluder class);
+/// - it **paints nothing** the user can see: none of the render-tier fill
+///   components — no [`Background`] (solid quad), [`BackgroundLayers`] (gradient /
+///   layered fill), [`RasterImage`] (textured quad), [`Text`] (glyphs), [`Icon`]
+///   (icon coverage), [`Border`] (border band), [`Outline`] (outline band), or
+///   [`BoxShadow`] (drop shadow) — a node carrying any of these is *visibly
+///   present*, not the *invisible*-occluder class;
 /// - it is **not** [`Pickable::IGNORE`] — a transparent top-layer node is safe
 ///   ONLY when it neither hit-targets nor occludes; anything else (no `Pickable` ⇒
 ///   the blocking default, or a blocking `Pickable`) makes it an occluder.
@@ -100,10 +106,29 @@ pub fn is_transparent_top_layer_occluder(entity: EntityRef) -> bool {
     if entity.contains::<ComputedPaintSkip>() {
         return false;
     }
-    // Paints something visible ⇒ not the *invisible*-occluder class.
+    // Paints something visible ⇒ not the *invisible*-occluder class. This set
+    // MUST mirror the render tier producers (extract.rs / icon_producer / raster),
+    // so a node painting ANY visible primitive is excluded — otherwise a
+    // gradient-only or border-only overlay is a false positive (the two GPU
+    // fixtures `bare_gradient_only_top_layer_overlay_occludes_base_glyph` and
+    // `single_boundary_v1_scrim_dims_base_band_not_a_fellow_top_layer_band`). The
+    // fill set: solid quad (`Background`), gradient / layered fill
+    // (`BackgroundLayers`, which carries `LinearGradient` / `RadialGradient` /
+    // layered `Solid`), textured quad (`RasterImage`), glyphs (`Text`), icon
+    // coverage (`Icon`), border band (`Border`), outline band (`Outline`), and box
+    // shadow (`BoxShadow`, which carries the `Shadow` terms). It is a PRESENCE
+    // check, matching the long-standing `Background` idiom: attaching a fill
+    // component signals visible intent, so a defaulted / transparent fill is out
+    // of the *invisible*-occluder class (a value check would risk drifting from
+    // the extract's own paint logic).
     if entity.contains::<Background>()
-        || entity.contains::<Text>()
+        || entity.contains::<BackgroundLayers>()
         || entity.contains::<RasterImage>()
+        || entity.contains::<Text>()
+        || entity.contains::<Icon>()
+        || entity.contains::<Border>()
+        || entity.contains::<Outline>()
+        || entity.contains::<BoxShadow>()
     {
         return false;
     }
@@ -143,8 +168,9 @@ pub(crate) fn assert_no_transparent_top_layer_occluder(entities: Query<EntityRef
         offenders.is_empty(),
         "{n} transparent top-layer node(s) occlude picks while painting nothing — the \
          invisible-occluder bug class. A transparent `.top_layer()` container must either paint a \
-         visible fill (`Background`/`Text`/`RasterImage`) OR carry `Pickable::IGNORE` (a hand-\
-         authored insert, or `.ignore_picking()` in `buiy_view`). Offending entities: {offenders:?}",
+         visible fill (any of `Background`/`BackgroundLayers`/`RasterImage`/`Text`/`Icon`/`Border`/\
+         `Outline`/`BoxShadow`) OR carry `Pickable::IGNORE` (a hand-authored insert, or \
+         `.ignore_picking()` in `buiy_view`). Offending entities: {offenders:?}",
         n = offenders.len(),
     );
 }
@@ -191,6 +217,68 @@ mod tests {
             ))
             .id();
         assert!(!is_transparent_top_layer_occluder(world.entity(painted)));
+    }
+
+    /// A gradient-only overlay (no solid [`Background`]) still paints a visible
+    /// fill, so it is NOT the class — the headless twin of the GPU fixture
+    /// `bare_gradient_only_top_layer_overlay_occludes_base_glyph`.
+    #[test]
+    fn a_gradient_only_top_layer_node_is_not_the_class() {
+        use crate::render::color::ColorToken;
+        use crate::render::components::{
+            BackgroundLayer, BackgroundLayers, ColorStop, LinearGradient,
+        };
+
+        let mut world = World::new();
+        let gradient = world
+            .spawn((
+                Node,
+                top_layer(),
+                BackgroundLayers(vec![BackgroundLayer::Linear(LinearGradient {
+                    angle_deg: 90.0,
+                    stops: vec![
+                        ColorStop {
+                            color: ColorToken::SurfacePrimary,
+                            position: 0.0,
+                        },
+                        ColorStop {
+                            color: ColorToken::SurfacePrimary,
+                            position: 1.0,
+                        },
+                    ],
+                })]),
+            ))
+            .id();
+        assert!(!is_transparent_top_layer_occluder(world.entity(gradient)));
+    }
+
+    /// A border-only overlay (a painted band, no solid [`Background`]) is visibly
+    /// present, so it is NOT the class — the headless twin of the GPU fixture
+    /// `single_boundary_v1_scrim_dims_base_band_not_a_fellow_top_layer_band`.
+    #[test]
+    fn a_border_only_top_layer_node_is_not_the_class() {
+        use crate::render::color::ColorToken;
+        use crate::render::components::{Border, BorderSide, Corners, LineStyle};
+
+        let side = BorderSide {
+            color: ColorToken::SurfacePrimary,
+            style: LineStyle::Solid,
+        };
+        let mut world = World::new();
+        let bordered = world
+            .spawn((
+                Node,
+                top_layer(),
+                Border {
+                    top: side.clone(),
+                    right: side.clone(),
+                    bottom: side.clone(),
+                    left: side,
+                    radius: Corners::ZERO,
+                },
+            ))
+            .id();
+        assert!(!is_transparent_top_layer_occluder(world.entity(bordered)));
     }
 
     #[test]

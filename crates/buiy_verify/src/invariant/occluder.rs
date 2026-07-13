@@ -23,9 +23,12 @@
 //!   != TopLayer::None`);
 //! - it is **not** hidden (`ComputedPaintSkip` absent — a paint-skipped node is
 //!   already dropped by the picking backend, so it cannot occlude);
-//! - it **paints nothing** the user can see: no `Background` fill, no `Text`, no
-//!   `RasterImage` (a node painting any of these is visibly present, not the
-//!   *invisible*-occluder class);
+//! - it **paints nothing** the user can see: none of the render-tier fill
+//!   components — no `Background` (solid), `BackgroundLayers` (gradient / layered),
+//!   `RasterImage` (textured quad), `Text` (glyphs), `Icon` (icon coverage),
+//!   `Border` (border band), `Outline` (outline band), or `BoxShadow` (drop
+//!   shadow) — a node painting any of these is visibly present, not the
+//!   *invisible*-occluder class;
 //! - it is **not** `Pickable::IGNORE` (so it still occludes — the bug). A
 //!   transparent top-layer node is safe ONLY when it carries `Pickable::IGNORE`
 //!   (neither hit-target nor occluder).
