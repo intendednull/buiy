@@ -138,6 +138,7 @@ If a doc spans areas, file it under its primary area only. Reference any adjacen
 **Reports**
 
 - [Multi-page coverage atlas bind — acceptance](reports/2026-07-09-multipage-coverage-atlas-bind-acceptance.md) — end-to-end acceptance of the [multi-page coverage atlas bind](specs/2026-07-09-multipage-coverage-atlas-bind-design.md) (the Dooduel empty-chat-pill framework fix): GPU ink census RED→GREEN, byte-identical goldens, raster GPU guards, SwiftShader WebGL2 (0 shader errors), native Dooduel render smoke. `[landed]`
+- [Buiy app-author ergonomics — cross-campaign learnings](reports/2026-07-13-buiy-app-author-ergonomics-learnings.md) — synthesis of DX learnings across six dogfooding campaigns (MVU/state, buiy_view, BSN/decomposed-components, widget/gallery parity, the Dooduel full-app build, LLM/agent DX, web/mobile). Through-line: the core authoring bets (pure Model+Msg+reducer, `view(&Model)->Element`, `#[require]`-materialized components) held from a counter to a whole real-time game, every framework gap was *additive*, and the dominant cost is **silent failure** + headless-green / typecheck-clean being unreliable proxies for "works". Covers wins, friction, the cross-cutting gotchas (the pick≠paint invisible-click-swallower — 3rd appearance; the render-world / live-loop headless blind spot; the fail-silent failure *shape*), patterns that work, and leverage-ranked recommendations. `[reference]`
 
 ### Text
 
