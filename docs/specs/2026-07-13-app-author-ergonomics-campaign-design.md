@@ -4,11 +4,19 @@
 # Buiy — App-Author Ergonomics Campaign (charter)
 
 - **Date:** 2026-07-13
-- **Status:** APPROVED — spec-gate passed (3-lens adversarial review, all
-  APPROVE_WITH_CHANGES, zero BLOCK; every finding applied: Track A de-scoped to the
-  §7.5 precedent + minimal 1e, 4b-scope resolved to fail-loud debug-panic,
-  4b-pickrect corrected to no-violation + sizing gotcha → Track C, reconciliation
-  ledger persisted). Executing.
+- **Status:** COMPLETE (on the campaign branch; landing held for the M1 merge).
+  Spec-gate passed (3-lens adversarial review, all APPROVE_WITH_CHANGES, zero BLOCK;
+  every finding applied). All six tracks A–F executed, each implement→adversarial-
+  review→(fix)→gate, committed, and **fully verified**: both GPU legs on the RX 6700 XT
+  (buiy_core 55/0 incl the top-layer occlusion fixtures, buiy_verify GPU), workspace
+  headless (155 suites / 0 failed), release (`-p buiy_core`, debug diagnostics compile
+  out), `clippy -D warnings`, `fmt`. The GPU lane earned its keep — it caught a real
+  Track B predicate false-positive (occluder predicate missed gradient/band paint) the
+  headless review missed (fixed, commit `0cfafb9`; reinforces rec 2 / Track E). Two
+  benign snapshot classes re-blessed (Bevy-0.19 resource-as-entity +1 anonymous-entity
+  shift from Track A's debug `MvuDiagnostics`; each verified layout-identical + both
+  executor lanes). **Landing:** rebase onto post-M1-merge `main`, re-run the gate, then
+  PR — per the owner's "rebase when the merge is in".
 - **Base:** `campaign/app-author-ergonomics`, cut from `feat/dooduel-multiplayer-m1`
   (which fully contains `origin/main` + the 142 Dooduel M1 commits). Landing is
   **gated on the M1 merge**; the campaign branch will be **rebased onto

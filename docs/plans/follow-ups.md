@@ -39,11 +39,19 @@ home if #143 later routes an inertness signal.
   `ControlledLeaf` for the leaf tier, but it is not re-exported through `buiy::prelude`
   (only `buiy_core::mvu::ControlledLeaf`). The guide shows the import; consider adding it
   to the facade prelude for 5c self-sufficiency.
-- **Occluder predicate strictness** (Track B): `is_transparent_top_layer_occluder` flags
-  any top-layer transparent node whose `Pickable != IGNORE`, stricter than "blocks every
-  click" (a non-blocking-but-hoverable `Pickable` is also flagged). No false-positive
-  today; if an intentional hoverable-non-blocking transparent overlay ever arises, tighten
-  the predicate to the actual `should_block_lower` semantics or document the escape.
+- **Occluder predicate paint-set** (Track B): the predicate `is_transparent_top_layer_occluder`
+  originally counted only `Background`/`Text`/`RasterImage` as "visible paint", so a
+  gradient- or border/band-only top-layer node was misflagged and the debug coherence assert
+  DEBUG-PANICKED during GPU frame-pumping. **FIXED** (commit `0cfafb9`): the predicate now
+  recognizes the full render-tier paint set (`Background`, `BackgroundLayers`, `RasterImage`,
+  `Text`, `Icon`, `Border`, `Outline`, `BoxShadow`). **Lesson (reinforces rec 2 / Track E):**
+  the headless review's "no false-positive" check missed this — only the `--ignored` GPU lane
+  (real frame-pumping through `Last`) surfaced it. Run BOTH GPU legs before landing any change
+  touching the render/picking coherence path.
+  - Residual (latent, minor): the predicate treats any `Pickable != IGNORE` as pickable,
+    stricter than "blocks every click" (a non-blocking-but-hoverable `Pickable` is also
+    flagged). No false-positive today; if an intentional hoverable-non-blocking transparent
+    overlay ever arises, tighten to the actual `should_block_lower` semantics or document the escape.
 - **`workflow_dispatch` runs the full matrix** (Track E): a manual GPU-lane dispatch also
   runs the informational `llvm-cov` job (gated `!= pull_request`). Harmless, opt-in;
   inherent to the single-workflow-file design.
