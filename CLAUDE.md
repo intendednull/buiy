@@ -112,6 +112,41 @@ keep `#[ignore]` on it and build it on `crates/buiy_core/tests/support/mod.rs`
 (`gpu_test_app` / `gpu_render_app` / `render_to_image` / `readback_rgba`). The
 campaign that established this lane: `docs/plans/2026-06-07-render-gpu-verify-campaign.md`.
 
+#### Get the CI GPU lane running on your branch EARLY (open a draft PR)
+
+CI's `gpu` job (pinned-lavapipe, ~90 min) fires on **push-to-main**, on any
+**open pull request** (every push to it), and **weekly** — but **NOT** on a
+campaign/feature branch that has no PR open yet. So a lavapipe-only regression
+can hide on a long branch and only surface the moment you open the PR — which is
+exactly how the widget-catalog branch (#80) shipped a real regression that CI's
+first lavapipe run caught at PR-open, after the whole branch was "done."
+
+**Do this, in preference order:**
+
+1. **Open a DRAFT PR at the START of any GPU-touching branch** (render, text,
+   goldens, `buiy_verify`, anything under the `--ignored` lane). A draft PR is
+   the primary fix: it is `pull_request`-triggered, so **every push then runs the
+   full lane, including GPU, at zero cost beyond having a PR open** — you get the
+   lavapipe signal per-push instead of all at once at PR-open. Draft PRs don't
+   request review and don't merge, so this is free to do speculatively; mark it
+   "Ready for review" when the work is. `gh pr create --draft --fill` at branch
+   start is the one-liner.
+2. **No draft PR? Dispatch the lane on-demand.** The workflow has a
+   `workflow_dispatch` trigger, so you can run the full CI workflow (including the
+   GPU lane) against any branch without a PR:
+   `gh workflow run ci.yml --ref <your-branch>` (or the Actions tab → CI → "Run
+   workflow"). Use this for a one-off check when a draft PR isn't warranted.
+3. **Always run BOTH GPU legs locally before pushing** (the two `--ignored`
+   commands above) if you have an adapter — CI GPU is the backstop, not the
+   first line of defense.
+
+Why not just run the 90-min lane on every push to every branch? Cost: it is a
+pinned-software-rasterizer, disk-heavy, ~90-min job; blanket per-push on all
+branches would burn it on every commit everywhere. The draft-PR practice gets the
+same per-push GPU signal for the branches that actually need it, and
+`workflow_dispatch` covers the rest on-demand — both at near-zero standing cost.
+Rec 2c, `docs/specs/2026-07-13-app-author-ergonomics-campaign-design.md` (Track E).
+
 Supply-chain check (run before bumping any dep):
 
 ```sh

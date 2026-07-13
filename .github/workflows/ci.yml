@@ -4,6 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual, on-demand trigger (Track E / rec 2c of the app-author-ergonomics
+  # campaign, docs/specs/2026-07-13-app-author-ergonomics-campaign-design.md).
+  # The heavy `gpu` lane (~90 min, pinned lavapipe) fires on push-to-main, on any
+  # OPEN pull_request (every synchronize), and weekly — but NOT on a campaign or
+  # feature branch that has no PR open yet. That gap once hid a real lavapipe
+  # regression until PR-open (widget-catalog #80). This lets anyone run the FULL
+  # workflow — including the GPU lane — on-demand against ANY branch, via
+  # `gh workflow run ci.yml --ref <branch>` or the Actions "Run workflow" button,
+  # to de-risk before opening the PR. The PRIMARY, zero-infra fix stays the
+  # draft-PR-early practice (CLAUDE.md § "GPU lane"); this is the manual escape
+  # hatch for when a draft PR isn't open. Deliberately NOT a blanket per-push
+  # trigger on all branches: that would run the 90-min lane on every commit
+  # everywhere, which is prohibitively costly for a software-rasterizer lane.
+  workflow_dispatch:
   # Weekly cadence (audit #15 + #30): re-exercise the EXACT(0,0) Mesa-brittle
   # goldens and the proptest invariants on a schedule so a silent Mesa/toolchain
   # drift is caught within a week rather than only on the next unrelated PR.
