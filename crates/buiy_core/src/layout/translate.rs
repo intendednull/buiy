@@ -849,7 +849,7 @@ fn track_to_sizing(t: &TrackSize) -> TrackSizingFunction {
             | Length::Cqmax(_)
             // anchor-size() has no anchor box in a track template → 0.
             | Length::AnchorSize(_),
-        ) => length(0.0),
+        ) => length(0.0_f32),
         // `MinMax` carries a Vec<TrackSize>; spec/Phase3 invariant is
         // exactly 2 elements [min, max]. Other arities warn-once and
         // degrade to Auto. (Bevy 0.18 Reflect lacks a Box<T> impl, so we
@@ -894,7 +894,7 @@ fn track_to_min(t: &TrackSize) -> MinTrackSizingFunction {
             | Length::Cqmax(_)
             // anchor-size() has no anchor box in a track template → 0.
             | Length::AnchorSize(_),
-        ) => length(0.0),
+        ) => length(0.0_f32),
         // CSS forbids these in MinMax's min slot:
         // - Fr (fr-in-min is grammar-invalid)
         // - FitContent (Min has no TaffyFitContent impl in Taffy 0.10)
@@ -933,7 +933,7 @@ fn track_to_max(t: &TrackSize) -> MaxTrackSizingFunction {
             | Length::Cqmax(_)
             // anchor-size() has no anchor box in a track template → 0.
             | Length::AnchorSize(_),
-        ) => length(0.0),
+        ) => length(0.0_f32),
         TrackSize::MinMax(_) | TrackSize::Repeat(_, _) | TrackSize::Subgrid => {
             warn_once_invalid_track_nesting();
             auto()
