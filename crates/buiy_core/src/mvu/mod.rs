@@ -3,6 +3,8 @@
 //! Buiy's primary state interface: a recordable message substrate in `buiy_core` that
 //! widgets route state changes through, governed by one ordered funnel. Design + rationale:
 //! `docs/specs/2026-06-29-mvu-as-core-design.md` (§2 the substrate, §3 tiered granularity).
+//! Task-oriented app-author how-to (recipes, tiers, silent-wrong gotchas, headless testing
+//! with `buiy::test::MvuTestApp`): the `using-mvu` skill.
 //!
 //! Three load-bearing pieces:
 //!
@@ -593,6 +595,85 @@ pub struct FunnelAuditLog {
 }
 
 // ---------------------------------------------------------------------------
+// Debug-only `LogicalId` footgun auditor (Track A — fail-loud diagnostics 1a-ii/1a-iii)
+// ---------------------------------------------------------------------------
+
+/// One detected `LogicalId` footgun — a fail-**silent** replay-log corruption the auditor
+/// surfaces at the moment it happens, in dev/test builds only. Both variants dead-letter (or
+/// mis-route) on replay if left unfixed; the point is to catch them *live* instead of at the
+/// much-later (already loud) replay-time dead-letter.
+///
+/// The typed shape (an enum a test can `match` on) mirrors the §7.5 [`FunnelViolation`]
+/// precedent — a diagnostic that both `warn!`s per-operation AND records a structured entry.
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug)]
+pub enum MvuDiagnostic {
+    /// **1a-ii.** A fold was RECORDED (a [`RecordSession`] is active) for a [`Model`] entity that
+    /// carries no [`LogicalId`], so the log entry stamps [`LogicalId::UNRESOLVED`] and will
+    /// [dead-letter](crate::replay) on replay — the log is corrupted *now*, silently, long before
+    /// replay surfaces it. `ControlledLeaf` leaves are exempt (their id-less entries are
+    /// intentionally model-reconstructed by the `buiy_view` reconciler, not a bug).
+    UnresolvedRecordedFold {
+        /// The actor whose recorded fold has no stable identity.
+        entity: Entity,
+        /// The `Model` component type (`type_name`) that folded id-less.
+        model: &'static str,
+    },
+    /// **1a-iii.** Two+ entities of the SAME model type share one [`LogicalId`]. Replay's
+    /// [`resolve_lid`](crate::replay) resolves an id to the FIRST match, so a fold silently lands
+    /// on the wrong (same-type) actor. (A cross-*type* collision instead surfaces as a replay
+    /// dead-letter — the already-loud path — so the silent case this catches is within-type.)
+    DuplicateLogicalId {
+        /// The colliding logical identity.
+        id: LogicalId,
+        /// Every entity of this model type carrying `id`.
+        entities: Vec<Entity>,
+    },
+}
+
+/// The append-only log of [`MvuDiagnostic`]s the Track A auditor detected (debug builds only).
+/// Empty in a clean app; a non-empty list flags a `LogicalId` footgun (an id-less recorded fold
+/// or a duplicate id). Tests read this to assert the loud path fired on a genuine footgun (and
+/// **only** then — not on the normal `buiy_view` path, whose controlled leaves are exempt and
+/// whose one root model carries `MODEL_LID`).
+///
+/// Entirely `cfg(debug_assertions)` — this resource, its `report` helper, and every check that
+/// writes it compile OUT of release/bench builds (the perf gate is untouched), exactly like the
+/// §7.5 [`FunnelAuditLog`].
+#[cfg(debug_assertions)]
+#[derive(Resource, Default)]
+pub struct MvuDiagnostics {
+    /// Every diagnostic observed since the app started (or since a test cleared it).
+    pub violations: Vec<MvuDiagnostic>,
+}
+
+#[cfg(debug_assertions)]
+impl MvuDiagnostics {
+    /// **The single fail-loud funnel both Track A checks route through (campaign 1e).** Emits one
+    /// diagnostic as a per-operation `warn!` (loud in dev/test — NOT warn-once, so each corrupting
+    /// operation is surfaced) AND appends a typed entry a test asserts on — the shared piece
+    /// extracted from 1a-ii + 1a-iii, on the §7.5 `warn!`-plus-typed-log pattern.
+    fn report(&mut self, diagnostic: MvuDiagnostic) {
+        match &diagnostic {
+            MvuDiagnostic::UnresolvedRecordedFold { entity, model } => warn!(
+                "MVU diagnostic (1a-ii): recorded a fold on {entity:?} (model `{model}`) that has \
+                 no `LogicalId` — the log entry stamps `UNRESOLVED` and WILL dead-letter on \
+                 replay. Give the actor a stable `LogicalId` (buiy_view seeds `MODEL_LID` \
+                 automatically); a view-owned leaf is exempt via `ControlledLeaf`."
+            ),
+            MvuDiagnostic::DuplicateLogicalId { id, entities } => warn!(
+                "MVU diagnostic (1a-iii): {} entities share `LogicalId({})` ({entities:?}) — \
+                 replay's `resolve_lid` silently picks the first, mis-routing folds. Assign each \
+                 actor a unique `LogicalId`.",
+                entities.len(),
+                id.0,
+            ),
+        }
+        self.violations.push(diagnostic);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scheduling
 // ---------------------------------------------------------------------------
 
@@ -845,7 +926,34 @@ fn count_binds<M: Model>(
     stamps: Option<Res<FunnelWriteStamps>>,
     mut audit: Option<ResMut<FunnelAuditLog>>,
     mut counters: Option<ResMut<MvuWorkCounters>>,
+    // Track A 1a-iii: all id-bearing entities of THIS model type + a change gate, so the
+    // duplicate scan runs only when an id is (re)assigned this frame (a persistent duplicate
+    // would otherwise re-warn every frame — the §7.5 audit is change-gated for the same reason).
+    all_ids: Query<(Entity, &LogicalId), With<M>>,
+    id_changed: Query<(), (With<M>, Changed<LogicalId>)>,
+    mut diagnostics: Option<ResMut<MvuDiagnostics>>,
 ) {
+    // 1a-iii (fail-loud): two entities of the SAME model type sharing a `LogicalId` make replay's
+    // `resolve_lid` pick the first, silently mis-routing folds. Scan for within-type collisions
+    // (a cross-type collision instead dead-letters on replay — the already-loud path). Gated on a
+    // this-frame id (re)assignment so it fires per-operation, not every frame.
+    if !id_changed.is_empty()
+        && let Some(diagnostics) = diagnostics.as_deref_mut()
+    {
+        let mut by_id: HashMap<u64, Vec<Entity>> = HashMap::new();
+        for (entity, lid) in &all_ids {
+            by_id.entry(lid.0).or_default().push(entity);
+        }
+        for (id, entities) in by_id {
+            if entities.len() > 1 {
+                diagnostics.report(MvuDiagnostic::DuplicateLogicalId {
+                    id: LogicalId(id),
+                    entities,
+                });
+            }
+        }
+    }
+
     let mut n = 0u64;
     for (entity, model) in &changed {
         n += 1;
@@ -947,6 +1055,21 @@ where
             world
                 .resource_mut::<MsgLog>()
                 .record(seq, &registry, lid, &msg, origin);
+            // 1a-ii (fail-loud): the entry just recorded stamps `lid`. When the actor has no
+            // `LogicalId` that stamp is `UNRESOLVED` (resolved above), so the entry will
+            // dead-letter on replay — the silent corruption. Surface it LOUD at record time.
+            // `ControlledLeaf` leaves are exempt: the `buiy_view` reconciler owns their state
+            // and re-derives it on replay, so their id-less entries are intentional, not a bug.
+            #[cfg(debug_assertions)]
+            if lid == LogicalId::UNRESOLVED && world.get::<ControlledLeaf>(target).is_none() {
+                let model = core::any::type_name::<M>();
+                if let Some(mut diagnostics) = world.get_resource_mut::<MvuDiagnostics>() {
+                    diagnostics.report(MvuDiagnostic::UnresolvedRecordedFold {
+                        entity: target,
+                        model,
+                    });
+                }
+            }
             if let Some(mut c) = world.get_resource_mut::<MvuWorkCounters>() {
                 c.messages_recorded += 1;
             }
@@ -1224,99 +1347,120 @@ impl MvuAppExt for App {
         // touches the common env-free path (`ui()`, the widgets) and causes no entity-id drift
         // there; it only keeps the env path's task support correct-by-construction.
         self.init_resource::<PendingTasks<M>>();
-        let drain = move |mut inbox: MessageReader<Envelope<M>>,
-                          mut models: Query<&mut M>,
-                          ids: Query<&LogicalId>,
-                          mut log: ResMut<MsgLog>,
-                          mut session: ResMut<RecordSession>,
-                          registry: Res<AppTypeRegistry>,
-                          mut counters: Option<ResMut<MvuWorkCounters>>,
-                          mut pending: Option<ResMut<PendingTasks<M>>>,
-                          env: StaticSystemParam<E>| {
-            // Snapshot the inbox so we can fold `Emit`s run-to-completion without holding the
-            // reader borrow. Each work item carries its [`Origin`] (spec §7.2): the initial
-            // inbox items are `User`; `Cmd::Emit` push_backs are `Folded`. This is contained
-            // to the drain + `LoggedEntry` + `MsgLog::record` — `Envelope`/`enqueue` are
-            // untouched (the origin is drain-local provenance, not part of the transport).
-            // Each envelope carries its own `Origin` (spec §7.2): inbox items keep their
-            // transport origin (`User` from `enqueue`, `Command` from the async-task poll); a
-            // `Cmd::Emit` re-fold re-pushes with `Folded`.
-            let mut work: VecDeque<Envelope<M>> = inbox.read().cloned().collect();
-            if work.is_empty() {
-                return;
-            }
-            // Fetch the env once; reuse `&env` across every fold this pass.
-            let env = env.into_inner();
-            let registry = registry.read();
-            while let Some(Envelope {
-                target,
-                msg,
-                origin,
-            }) = work.pop_front()
-            {
-                let lid = ids.get(target).copied().unwrap_or(LogicalId::UNRESOLVED);
-                // Record tap, stamped with the SHARED global `seq` (the unified session) + the
-                // item's `origin`. Free under `RecordMode::Off` — `tick_seq` returns `None`,
-                // so nothing is built, serialized, or stored. Records intent even for a
-                // dead-letter; counts only a real write.
-                if let Some(seq) = session.tick_seq() {
-                    log.record(seq, &registry, lid, &msg, origin);
-                    if let Some(c) = counters.as_deref_mut() {
-                        c.messages_recorded += 1;
-                    }
+        let drain =
+            move |mut inbox: MessageReader<Envelope<M>>,
+                  mut models: Query<&mut M>,
+                  ids: Query<&LogicalId>,
+                  mut log: ResMut<MsgLog>,
+                  mut session: ResMut<RecordSession>,
+                  registry: Res<AppTypeRegistry>,
+                  mut counters: Option<ResMut<MvuWorkCounters>>,
+                  mut pending: Option<ResMut<PendingTasks<M>>>,
+                  // 1a-ii (debug only): the same id-less-recorded-fold auditor the
+                  // env-FREE `fold_one_with` carries. `ControlledLeaf` cannot appear on
+                  // an env-reducer model (leaves are env-free), so the exemption is
+                  // defensive symmetry with `fold_one_with`. `#[cfg]`-on-param compiles
+                  // the closure without these in release (nothing to compile out).
+                  #[cfg(debug_assertions)] mut diagnostics: Option<ResMut<MvuDiagnostics>>,
+                  #[cfg(debug_assertions)] controlled: Query<(), With<ControlledLeaf>>,
+                  env: StaticSystemParam<E>| {
+                // Snapshot the inbox so we can fold `Emit`s run-to-completion without holding the
+                // reader borrow. Each work item carries its [`Origin`] (spec §7.2): the initial
+                // inbox items are `User`; `Cmd::Emit` push_backs are `Folded`. This is contained
+                // to the drain + `LoggedEntry` + `MsgLog::record` — `Envelope`/`enqueue` are
+                // untouched (the origin is drain-local provenance, not part of the transport).
+                // Each envelope carries its own `Origin` (spec §7.2): inbox items keep their
+                // transport origin (`User` from `enqueue`, `Command` from the async-task poll); a
+                // `Cmd::Emit` re-fold re-pushes with `Folded`.
+                let mut work: VecDeque<Envelope<M>> = inbox.read().cloned().collect();
+                if work.is_empty() {
+                    return;
                 }
-                let Ok(mut model) = models.get_mut(target) else {
-                    // Dead-letter: target gone (despawned). The drain drops it (the
-                    // everywhere-safe path) and does NOT count it as a fold; replay's typed
-                    // `DeadLetter` is where a genuine miss surfaces loudly (spec §7.4).
-                    continue;
-                };
-                // === The load-bearing rule (set_if_neq, spec §2) =====================
-                // Fold onto a CLONE, then commit via `set_if_neq`: `Changed<M>` is tripped
-                // (and the bind → re-extract cascade fires) ONLY on a real change. An
-                // idempotent fold leaves change-detection untripped — `models_mutated == 0`.
-                let mut next = (*model).clone();
-                let cmd = reducer.fold(&mut next, msg, &env);
-                let changed = model.set_if_neq(next);
-                // ======================================================================
-                // Apply effects: `None` / `Emit` (re-fold) / `Batch` / `Task` (async).
-                let mut emits = 0u64;
-                let mut stack = vec![cmd];
-                while let Some(c) = stack.pop() {
-                    match c {
-                        Cmd::None => {}
-                        Cmd::Emit(m) => {
-                            // A re-fold within the same drain pass — provenance `Folded`.
-                            work.push_back(Envelope {
-                                target,
-                                msg: m,
-                                origin: Origin::Folded,
-                            });
-                            emits += 1;
+                // Fetch the env once; reuse `&env` across every fold this pass.
+                let env = env.into_inner();
+                let registry = registry.read();
+                while let Some(Envelope {
+                    target,
+                    msg,
+                    origin,
+                }) = work.pop_front()
+                {
+                    let lid = ids.get(target).copied().unwrap_or(LogicalId::UNRESOLVED);
+                    // Record tap, stamped with the SHARED global `seq` (the unified session) + the
+                    // item's `origin`. Free under `RecordMode::Off` — `tick_seq` returns `None`,
+                    // so nothing is built, serialized, or stored. Records intent even for a
+                    // dead-letter; counts only a real write.
+                    if let Some(seq) = session.tick_seq() {
+                        log.record(seq, &registry, lid, &msg, origin);
+                        if let Some(c) = counters.as_deref_mut() {
+                            c.messages_recorded += 1;
                         }
-                        Cmd::Batch(v) => stack.extend(v),
-                        Cmd::Task(fut) => {
-                            // Launch on the compute pool + track for the poll system, UNLESS a
-                            // replay is in progress (then the recorded `Origin::Command` result is
-                            // re-folded and the effect must NOT re-run — buiy_view design §3 #15).
-                            if !session.is_replaying()
-                                && let Some(p) = pending.as_deref_mut()
-                            {
-                                p.push(target, AsyncComputeTaskPool::get().spawn(fut));
+                        // 1a-ii: the recorded entry stamps `UNRESOLVED` when the actor has no
+                        // `LogicalId` → dead-letters on replay. Surface it LOUD at record time
+                        // (mirrors the env-free `fold_one_with` check).
+                        #[cfg(debug_assertions)]
+                        if lid == LogicalId::UNRESOLVED
+                            && controlled.get(target).is_err()
+                            && let Some(diagnostics) = diagnostics.as_deref_mut()
+                        {
+                            diagnostics.report(MvuDiagnostic::UnresolvedRecordedFold {
+                                entity: target,
+                                model: core::any::type_name::<M>(),
+                            });
+                        }
+                    }
+                    let Ok(mut model) = models.get_mut(target) else {
+                        // Dead-letter: target gone (despawned). The drain drops it (the
+                        // everywhere-safe path) and does NOT count it as a fold; replay's typed
+                        // `DeadLetter` is where a genuine miss surfaces loudly (spec §7.4).
+                        continue;
+                    };
+                    // === The load-bearing rule (set_if_neq, spec §2) =====================
+                    // Fold onto a CLONE, then commit via `set_if_neq`: `Changed<M>` is tripped
+                    // (and the bind → re-extract cascade fires) ONLY on a real change. An
+                    // idempotent fold leaves change-detection untripped — `models_mutated == 0`.
+                    let mut next = (*model).clone();
+                    let cmd = reducer.fold(&mut next, msg, &env);
+                    let changed = model.set_if_neq(next);
+                    // ======================================================================
+                    // Apply effects: `None` / `Emit` (re-fold) / `Batch` / `Task` (async).
+                    let mut emits = 0u64;
+                    let mut stack = vec![cmd];
+                    while let Some(c) = stack.pop() {
+                        match c {
+                            Cmd::None => {}
+                            Cmd::Emit(m) => {
+                                // A re-fold within the same drain pass — provenance `Folded`.
+                                work.push_back(Envelope {
+                                    target,
+                                    msg: m,
+                                    origin: Origin::Folded,
+                                });
+                                emits += 1;
+                            }
+                            Cmd::Batch(v) => stack.extend(v),
+                            Cmd::Task(fut) => {
+                                // Launch on the compute pool + track for the poll system, UNLESS a
+                                // replay is in progress (then the recorded `Origin::Command` result is
+                                // re-folded and the effect must NOT re-run — buiy_view design §3 #15).
+                                if !session.is_replaying()
+                                    && let Some(p) = pending.as_deref_mut()
+                                {
+                                    p.push(target, AsyncComputeTaskPool::get().spawn(fut));
+                                }
                             }
                         }
                     }
-                }
-                // One counter touch per folded message (drain_folds + the conditional fields).
-                if let Some(c) = counters.as_deref_mut() {
-                    c.drain_folds += 1;
-                    if changed {
-                        c.models_mutated += 1;
+                    // One counter touch per folded message (drain_folds + the conditional fields).
+                    if let Some(c) = counters.as_deref_mut() {
+                        c.drain_folds += 1;
+                        if changed {
+                            c.models_mutated += 1;
+                        }
+                        c.emits_refolded += emits;
                     }
-                    c.emits_refolded += emits;
                 }
-            }
-        };
+            };
         self.add_systems(Update, drain.in_set(set));
         self
     }
@@ -1432,10 +1576,13 @@ impl Plugin for MvuCorePlugin {
 
         // §7.5 single-writer auditor state (debug builds only — compiled out of release/bench,
         // so the perf gate is untouched). The audit is folded into the per-model `count_binds`
-        // system (see `add_model`).
+        // system (see `add_model`). The Track A `LogicalId` footgun log (1a-ii/1a-iii) shares the
+        // same debug-only lifetime: id-less recorded folds are flagged at the record site, and
+        // within-type duplicate ids by `count_binds`.
         #[cfg(debug_assertions)]
         app.init_resource::<FunnelWriteStamps>()
-            .init_resource::<FunnelAuditLog>();
+            .init_resource::<FunnelAuditLog>()
+            .init_resource::<MvuDiagnostics>();
 
         // The MVU sub-chain, pinned late in `Update` between a11y and render (spec §3).
         app.configure_sets(

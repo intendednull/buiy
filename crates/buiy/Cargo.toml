@@ -15,6 +15,14 @@ description = "A comprehensive UI library for Bevy with web-quality accessibilit
 # See docs/specs/2026-06-30-mt-safety-design.md (D1).
 multi_threaded = ["buiy_core/multi_threaded"]
 
+# Opt-in ergonomic MVU unit-test harness (`buiy::test`, Track C 5b-2). OFF by
+# default so it is COMPILED OUT of release builds — a normal `cargo build` /
+# `--release` never sees it. Buiy's own dev/test builds turn it on via the self
+# `dev-dependency` below (so `cargo test -p buiy` and the workspace gate compile
+# the harness + its dogfood/guide examples), but a release binary never pays for
+# it. See docs/specs/2026-07-13-app-author-ergonomics-campaign-design.md (Track C).
+test-support = []
+
 # Render all feature-gated public items on docs.rs (badges + otherwise-hidden items).
 [package.metadata.docs.rs]
 all-features = true
@@ -25,3 +33,11 @@ buiy_bsn = { path = "../buiy_bsn" }
 buiy_core = { path = "../buiy_core" }
 buiy_view = { path = "../buiy_view" }
 buiy_widgets = { path = "../buiy_widgets" }
+
+[dev-dependencies]
+# Self-dependency with `test-support` enabled: turns the feature on for buiy's OWN
+# dev targets (its `tests/`, doctests, examples, benches) so the harness + the
+# compile-checked guide examples run under `cargo test -p buiy` — WITHOUT making
+# `test-support` a default feature (which would ship it in release). Release/normal
+# builds do not compile dev-dependencies, so the harness is provably absent there.
+buiy = { path = ".", features = ["test-support"] }

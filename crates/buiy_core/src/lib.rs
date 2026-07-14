@@ -65,6 +65,7 @@ pub use mvu::{
 };
 pub use picking::{
     BuiyPickingBackendPlugin, MultiClick, PickingPlugin, global_paint_order, hit_test,
+    is_transparent_top_layer_occluder,
 };
 pub use render::color::{ColorToken, SystemColorKeyword};
 pub use render::components::{

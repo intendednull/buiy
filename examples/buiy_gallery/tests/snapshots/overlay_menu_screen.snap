@@ -55,5 +55,5 @@ expression: overlay_menu_screen
     InfoPopover pos=0,4 size=0,0
       InfoPopoverText pos=0,0 size=0,0
     InfoTip pos=0,0 size=0,0
-      entity#149 pos=0,0 size=0,0
-      entity#150 pos=0,6 size=0,0
+      entity#150 pos=0,0 size=0,0
+      entity#151 pos=0,6 size=0,0

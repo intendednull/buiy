@@ -112,6 +112,41 @@ keep `#[ignore]` on it and build it on `crates/buiy_core/tests/support/mod.rs`
 (`gpu_test_app` / `gpu_render_app` / `render_to_image` / `readback_rgba`). The
 campaign that established this lane: `docs/plans/2026-06-07-render-gpu-verify-campaign.md`.
 
+#### Get the CI GPU lane running on your branch EARLY (open a draft PR)
+
+CI's `gpu` job (pinned-lavapipe, ~90 min) fires on **push-to-main**, on any
+**open pull request** (every push to it), and **weekly** — but **NOT** on a
+campaign/feature branch that has no PR open yet. So a lavapipe-only regression
+can hide on a long branch and only surface the moment you open the PR — which is
+exactly how the widget-catalog branch (#80) shipped a real regression that CI's
+first lavapipe run caught at PR-open, after the whole branch was "done."
+
+**Do this, in preference order:**
+
+1. **Open a DRAFT PR at the START of any GPU-touching branch** (render, text,
+   goldens, `buiy_verify`, anything under the `--ignored` lane). A draft PR is
+   the primary fix: it is `pull_request`-triggered, so **every push then runs the
+   full lane, including GPU, at zero cost beyond having a PR open** — you get the
+   lavapipe signal per-push instead of all at once at PR-open. Draft PRs don't
+   request review and don't merge, so this is free to do speculatively; mark it
+   "Ready for review" when the work is. `gh pr create --draft --fill` at branch
+   start is the one-liner.
+2. **No draft PR? Dispatch the lane on-demand.** The workflow has a
+   `workflow_dispatch` trigger, so you can run the full CI workflow (including the
+   GPU lane) against any branch without a PR:
+   `gh workflow run ci.yml --ref <your-branch>` (or the Actions tab → CI → "Run
+   workflow"). Use this for a one-off check when a draft PR isn't warranted.
+3. **Always run BOTH GPU legs locally before pushing** (the two `--ignored`
+   commands above) if you have an adapter — CI GPU is the backstop, not the
+   first line of defense.
+
+Why not just run the 90-min lane on every push to every branch? Cost: it is a
+pinned-software-rasterizer, disk-heavy, ~90-min job; blanket per-push on all
+branches would burn it on every commit everywhere. The draft-PR practice gets the
+same per-push GPU signal for the branches that actually need it, and
+`workflow_dispatch` covers the rest on-demand — both at near-zero standing cost.
+Rec 2c, `docs/specs/2026-07-13-app-author-ergonomics-campaign-design.md` (Track E).
+
 Supply-chain check (run before bumping any dep):
 
 ```sh
@@ -138,6 +173,7 @@ Other useful one-offs:
 - **Docs entry point:** `docs/README.md` is the master index of specs, plans, reports, prototypes, and prior-art folders, grouped by area. Read it before adding any new doc or before searching for an existing one. The `organizing-buiy-docs` skill mirrors the conventions for on-demand loading. Cemented in `docs/specs/2026-05-07-docs-organization-design.md`.
 - **Prior-art workflow:** the `researching-prior-art` skill drives the 7-stage parallel-agent creation of a `docs/prior-art/<system>/` folder; the `using-prior-art` skill is the consumer-side flow that surfaces relevant folders during spec/plan/review work.
 - **Visual-bug verification (`buiy_verify`):** before adding/changing any visual, layout, paint-order, color, or render test — or adding a widget fixture, writing a reftest, or blessing a golden — use the `using-buiy-verification` skill (the task-oriented how-to: pick a tier, add a fixture, run the gates, gotchas). It mirrors the design spec `docs/specs/2026-06-15-buiy-verification-design/` and the crate root doc `crates/buiy_verify/src/lib.rs`. Rule of thumb: add a test at the **lowest tier that can observe the bug** (layout snapshot → display-list snapshot → invariant → reftest → golden); goldens are the last resort for the rasterization residue only. The GPU `--ignored` lane (Tiers 4–5) is additive and must pass on a GPU host; the headless gate must stay green without an adapter.
+- **MVU state authoring/testing (`buiy_core::mvu`):** before adding/changing app or widget state — defining a `Model` + reducer, wiring `mvu_model`, enqueuing, reading widget state, clock-driving, or writing an MVU test — use the `using-mvu` skill (the task-oriented how-to: reducer/register/enqueue/read/clock recipes, the leaf/machine/raw-ECS tiers, and the silent-wrong gotchas — `set_if_neq`, enqueue-not-fold, the loud-in-debug LogicalId check, `BoxSizing::ContentBox` sizing). It mirrors the design spec `docs/specs/2026-06-29-mvu-as-core-design.md` and the crate root doc `crates/buiy_core/src/mvu/mod.rs`. Unit-test a model headlessly in ~5 lines with `buiy::test::MvuTestApp` (behind the `test-support` feature — compiled out of release); its recipes are compile-checked in `crates/buiy/tests/using_mvu_examples.rs`.
 - **BSN authoring (`buiy_bsn`):** the thin `buiy_bsn` crate re-exports Bevy 0.19's `bsn!` / `bsn_list!` + spawn ext traits (no new syntax); it is reached via `buiy::bsn` and folded into `buiy::prelude`, so `use buiy::prelude::*;` brings `bsn!` into scope. Author the **decomposed components directly** (`bsn! { BoxModel { … } Background(…) }`) — `Style` is a `Bundle` builder, not a Component, so it is not `bsn!`-authorable. Widgets carry `#[require(...)]` contracts; **style them via the parameterized scene-fns in `buiy_widgets`** (`button("…")`, `text_input_*`, re-exported through `buiy::prelude`), never a single-field patch of a `#[require]`'d component (that drops the widget's other defaults — the § 4.1c suppression gotcha). Pin: `docs/specs/2026-06-18-buiy-bsn-integration-design.md`.
 
 _TODO: add language- and project-specific conventions (naming, error handling, testing, serialization, etc.) as they are established._

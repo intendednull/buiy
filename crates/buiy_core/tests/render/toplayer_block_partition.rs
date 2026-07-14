@@ -16,6 +16,7 @@
 //! Adapterless (no wgpu adapter / `RenderApp`): the `MainWorld`-swap idiom the
 //! sibling `render_extract_composite` node harness uses.
 
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld};
 use bevy::window::{PrimaryWindow, WindowResolution};
@@ -1039,6 +1040,14 @@ fn multi_root_glyph_tier_top_layer_is_global_suffix() {
                 .width_px(120.0)
                 .height_px(40.0)
                 .top_layer(TopLayer::Popover),
+            // This transparent `.top_layer()` container models the floating-toggle
+            // pattern (a wrapper whose only visible content is its text child), so it
+            // must carry `Pickable::IGNORE` — the correct shape for a transparent
+            // top-layer container (the theme-toggle idiom / the reconciler auto-rule),
+            // and the shape the `BuiyRenderPlugin` `Last` occluder-coherence assert
+            // requires. Inert for the glyph-partition assertions below (`Pickable` is
+            // a picking component the render extract never reads).
+            Pickable::IGNORE,
         ))
         .add_child(toggle_text)
         .id();

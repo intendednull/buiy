@@ -217,6 +217,11 @@ whole list in one model (`cargo run -p todomvc`). See the
 [MVU design](../specs/2026-06-29-mvu-as-core-design.md) for the tiers (leaf / machine / raw-ECS),
 record/replay, and the `enqueue`-not-fold rule.
 
+The **task-oriented how-to** — reducer/register/enqueue/read/clock recipes, the tiers, the
+silent-wrong gotchas (`set_if_neq`, enqueue-not-fold, the loud-in-debug LogicalId check), and
+headless-testing a model in ~5 lines with `buiy::test::MvuTestApp` — is the **`using-mvu`
+skill** (mirrors `using-buiy-verification`). Reach for it whenever you author or test state.
+
 ## 9. Testing your UI
 
 Buiy treats verification as a deliverable. For visual / layout / render / a11y tests, follow the

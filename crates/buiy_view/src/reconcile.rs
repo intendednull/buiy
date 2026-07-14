@@ -55,7 +55,7 @@ use buiy_widgets::{Button, Checkbox, TextInput};
 
 use crate::app::{UiRoot, ViewFn};
 use crate::element::{Element, Kind};
-use crate::interaction::{InteractionState, PressEffect};
+use crate::interaction::{HoverStyle, InteractionState, PressEffect};
 use crate::layout::{Align, Justify, LayoutProps, Positioning, Sides, TextAlign};
 use crate::router::{InputAction, PressAction, SubmitAction};
 
@@ -244,7 +244,10 @@ fn patch_node<M: Model>(world: &mut World, entity: Entity, el: &Element<M::Msg>,
             // The interaction-state visual layer (spec §2.6 part 3) — a button
             // dips while held. The route already lives on the widget's `#[require]`
             // A11yRole; only the press VISUAL is added here.
-            update_press_visual(world, entity, el.on_press.is_some() && !el.disabled);
+            let pressable = el.on_press.is_some() && !el.disabled;
+            update_press_visual(world, entity, pressable);
+            // Track D: the declarative `:hover`/`:active` fill (inert unless `.hover_bg`).
+            update_hover_style(world, entity, el, pressable);
             changed |= update_disabled(world, entity, el.disabled);
             // F3: styled button (fill/radius/border/shadow/size + label style),
             // gated so an unstyled button keeps every widget default.
@@ -477,7 +480,10 @@ fn spawn_node<M: Model>(world: &mut World, el: &Element<M::Msg>, model: Entity) 
             world.entity_mut(e).insert(slot);
             update_press::<M>(world, e, el, model);
             // The interaction-state visual layer (spec §2.6 part 3) — press-down.
-            update_press_visual(world, e, el.on_press.is_some() && !el.disabled);
+            let pressable = el.on_press.is_some() && !el.disabled;
+            update_press_visual(world, e, pressable);
+            // Track D: the declarative `:hover`/`:active` fill (inert unless `.hover_bg`).
+            update_hover_style(world, e, el, pressable);
             update_disabled(world, e, el.disabled);
             // F3: a styled button — the fill / radius / border / shadow / size on
             // the button entity, the label color / font / weight on its slot child.
@@ -1070,6 +1076,17 @@ fn set_text_align(world: &mut World, e: Entity, align: Option<TextAlign>) -> boo
 
 /// Patch (or remove) the container's `Background` fill in place. Returns whether
 /// the fill really changed (drift-only).
+///
+/// **HoverStyle companion (Track D, spec §3).** The `None` arm normally *removes*
+/// `Background`. For a `HoverStyle`-bearing node that would strip the fill every
+/// `Changed<M>` frame, breaking the hover resolver's always-present `&mut
+/// Background` invariant. So when the node carries a `HoverStyle`, the `None` arm
+/// *restores* the fill to the hover style's `resting` token (default transparent)
+/// instead of removing it; the resolver (`apply_hover_visual`, ordered
+/// `.after(reconcile)`) re-wins to the hover token that same frame if the node is
+/// currently hovered. Additive and gated on `HoverStyle` presence — a node without
+/// hover styling takes the exact old `take::<Background>()` path, so there is no
+/// golden / byte-stability regression.
 fn apply_background(world: &mut World, e: Entity, bg: Option<crate::tokens::Color>) -> bool {
     match bg {
         Some(c) => {
@@ -1083,7 +1100,20 @@ fn apply_background(world: &mut World, e: Entity, bg: Option<crate::tokens::Colo
                 true
             }
         }
-        None => world.entity_mut(e).take::<Background>().is_some(),
+        None => match world.get::<HoverStyle>(e).map(|h| h.resting) {
+            Some(resting) => {
+                let want = Background {
+                    color: resting.unwrap_or(ColorToken::Transparent),
+                };
+                if let Some(mut cur) = world.get_mut::<Background>(e) {
+                    cur.set_if_neq(want)
+                } else {
+                    world.entity_mut(e).insert(want);
+                    true
+                }
+            }
+            None => world.entity_mut(e).take::<Background>().is_some(),
+        },
     }
 }
 
@@ -1470,6 +1500,8 @@ fn apply_pressable<M: Model>(world: &mut World, e: Entity, el: &Element<M::Msg>,
             .remove::<PressAction<M>>();
     }
     update_press_visual(world, e, pressable);
+    // Track D: the declarative `:hover`/`:active` fill (inert unless `.hover_bg`).
+    update_hover_style(world, e, el, pressable);
 }
 
 /// Install (or remove) the [interaction-state visual layer](crate::interaction) on
@@ -1499,6 +1531,58 @@ fn update_press_visual(world: &mut World, e: Entity, pressable: bool) {
             .remove::<PressEffect>();
         if let Some(mut t) = world.get_mut::<Translate>(e) {
             t.1 = Length::ZERO;
+        }
+    }
+}
+
+/// Install / update / tear down the declarative [`HoverStyle`] on a pressable node
+/// (Track D, spec §3). Called alongside every [`update_press_visual`] site (the two
+/// `Kind::Button` arms + [`apply_pressable`] for `Kind::Column`/`Row`/`Raster`), so
+/// the hover fill installs exactly where the press-down does — **pressable-gated**:
+/// `.hover_bg()` is inert on a node without an enabled `on_press` in v1.
+///
+/// - `resting` tracks the author's `.background()` token when set, else is captured
+///   once at install from the node's then-current [`Background`] (a widget default
+///   like a `button()`'s `SurfaceSecondary`), else `None` (⇒ transparent).
+/// - Guarantees `Background` is present on a `HoverStyle`-bearing entity, so the
+///   resolver's non-optional `&mut Background` query always matches. A `button`
+///   already carries one via its `#[require]`; a bare container/raster is given a
+///   resting fill here.
+/// - Teardown (node no longer pressable/hover-styled) drops `HoverStyle` and
+///   restores `Background` to `resting`, so a stale hover fill never lingers.
+///
+/// Layout-inert (a fill token change is drift the paint tier absorbs), so this is
+/// NOT counted as a node patch — matching [`update_press_visual`].
+fn update_hover_style<Msg>(world: &mut World, e: Entity, el: &Element<Msg>, pressable: bool) {
+    if pressable && let Some(hover) = el.hover_background {
+        let hover = hover.to_token();
+        let authored_resting = el.background.map(|c| c.to_token());
+        if let Some(mut cur) = world.get_mut::<HoverStyle>(e) {
+            // Refresh: `hover` always tracks the latest builder value; an authored
+            // `.background()` re-tracks `resting`, else keep the captured default.
+            let resting = authored_resting.or(cur.resting);
+            cur.set_if_neq(HoverStyle { resting, hover });
+        } else {
+            // Install: capture the current fill as `resting` when the author set no
+            // explicit `.background()` (the widget's own default).
+            let resting = authored_resting.or_else(|| world.get::<Background>(e).map(|b| b.color));
+            world.entity_mut(e).insert(HoverStyle { resting, hover });
+        }
+        // The resolver's always-present invariant: a bare container/raster with no
+        // fill needs a `Background` to write into.
+        if world.get::<Background>(e).is_none() {
+            let color = el
+                .background
+                .map(|c| c.to_token())
+                .unwrap_or(ColorToken::Transparent);
+            world.entity_mut(e).insert(Background { color });
+        }
+    } else if let Some(resting) = world.get::<HoverStyle>(e).map(|h| h.resting) {
+        world.entity_mut(e).remove::<HoverStyle>();
+        if let Some(color) = resting
+            && let Some(mut bg) = world.get_mut::<Background>(e)
+        {
+            bg.set_if_neq(Background { color });
         }
     }
 }

@@ -202,6 +202,12 @@ pub struct Element<Msg> {
     pub(crate) disabled: bool,
     /// Background fill token (containers). Lowered to `Background`.
     pub(crate) background: Option<Color>,
+    /// Declarative `:hover`/`:active` fill (Track D). `Some` ⇒ the reconciler
+    /// stamps a `HoverStyle` so the runtime paints this token while the node is
+    /// hovered or pressed. Pure `Element` intent (replay-safe); the resolved fill
+    /// is runtime-only. Background only in v1; inert on a non-pressable node.
+    /// Lowered via `update_hover_style`.
+    pub(crate) hover_background: Option<Color>,
     /// Corner radius token (containers). Lowered to the render `Border`.
     pub(crate) radius: Option<Radius>,
     /// The typed message a press enqueues. `None` ⇒ inert (or disabled). Also
@@ -293,6 +299,7 @@ impl<Msg> Element<Msg> {
             layout: LayoutProps::default(),
             disabled: false,
             background: None,
+            hover_background: None,
             radius: None,
             on_press: None,
             children: Vec::new(),
@@ -353,6 +360,22 @@ impl<Msg> Element<Msg> {
     /// Background fill (containers). A theme-resolved [`Color`] token.
     pub fn background(mut self, c: Color) -> Self {
         self.background = Some(c);
+        self
+    }
+
+    /// Declarative `:hover`/`:active` background fill (Track D) — the node paints
+    /// [`Color`] `c` while the pointer is over it **or** it is pressed, and reverts
+    /// to its resting fill (its [`background`](Self::background), or the widget's
+    /// own default) otherwise. A flat modifier mirroring [`background`](Self::background);
+    /// the runtime applies it from the interaction state, never the model, so it
+    /// stays out of the pure-view replay log.
+    ///
+    /// **v1 scope:** background only, and **pressable-only** — inert on a node
+    /// without an [`on_press`](Self::on_press) handler (the same install scope as
+    /// the press-down visual). `:active` folds into this same fill; the existing
+    /// press-down depth is the distinct pressed look.
+    pub fn hover_bg(mut self, c: Color) -> Self {
+        self.hover_background = Some(c);
         self
     }
 
@@ -569,6 +592,7 @@ impl<Msg> Element<Msg> {
             layout: self.layout,
             disabled: self.disabled,
             background: self.background,
+            hover_background: self.hover_background,
             radius: self.radius,
             on_press: self.on_press.map(f),
             children: self.children.into_iter().map(|c| c.map(f)).collect(),
